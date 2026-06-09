@@ -1,0 +1,28 @@
+{
+  "name": "@keel/webhooks",
+  "version": "0.0.0",
+  "description": "Keel webhooks — HMAC-signed outbound delivery (retried on @keel/queue) and inbound signature verification.",
+  "type": "module",
+  "private": true,
+
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+
+  "dependencies": {
+    "@keel/errors": "workspace:*",
+    "@keel/queue": "workspace:*"
+  },
+
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  }
+}

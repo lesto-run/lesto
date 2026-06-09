@@ -1,0 +1,38 @@
+{
+  "name": "@keel/cli",
+  "version": "0.0.0",
+  "description": "Keel's `keel` command-line tool — load a project's keel.app.ts and run, serve, migrate, or inspect routes.",
+  "type": "module",
+  "private": true,
+
+  "bin": {
+    "keel": "./src/bin.ts"
+  },
+
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+
+  "dependencies": {
+    "@keel/content-core": "workspace:*",
+    "@keel/content-store": "workspace:*",
+    "@keel/errors": "workspace:*",
+    "@keel/kernel": "workspace:*",
+    "@keel/migrate": "workspace:*",
+    "@keel/router": "workspace:*",
+    "@keel/runtime": "workspace:*",
+    "@keel/web": "workspace:*"
+  }
+}

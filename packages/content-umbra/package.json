@@ -1,0 +1,60 @@
+{
+  "name": "@keel/content-umbra",
+  "version": "0.1.0",
+  "description": "Fast frontmatter parsing for markdown files",
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "keywords": [
+    "frontmatter",
+    "yaml",
+    "json",
+    "markdown",
+    "parser"
+  ],
+  "author": "Docks Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usedocks/docks.git",
+    "directory": "packages/umbra"
+  },
+  "bugs": {
+    "url": "https://github.com/usedocks/docks/issues"
+  },
+  "homepage": "https://github.com/usedocks/docks/tree/main/packages/umbra#readme",
+  "dependencies": {
+    "@keel/content-shared": "workspace:*",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "fastmatter": "^2.1.1",
+    "front-matter": "^4.0.2",
+    "gray-matter": "^4.0.3",
+    "tsdown": "^0.17.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}

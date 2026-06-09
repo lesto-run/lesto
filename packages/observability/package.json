@@ -1,0 +1,23 @@
+{
+  "name": "@keel/observability",
+  "version": "0.0.0",
+  "description": "Keel's in-house distributed-tracing core — OpenTelemetry-shaped, with no OpenTelemetry dependency.",
+  "type": "module",
+  "private": true,
+
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "type": "Page",
+  "props": {
+    "title": "SaaS"
+  },
+  "children": [
+    {
+      "type": "Navbar",
+      "props": {
+        "brand": "SaaS",
+        "links": [
+          {
+            "label": "Features",
+            "href": "#features"
+          },
+          {
+            "label": "Pricing",
+            "href": "#pricing"
+          },
+          {
+            "label": "Sign in",
+            "href": "#"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Hero",
+      "props": {
+        "eyebrow": "AI-NATIVE",
+        "title": "SaaS landing page for an AI dev tool",
+        "subtitle": "Everything you need to ship faster, beautifully composed and shipped in minutes.",
+        "ctaLabel": "Get started free",
+        "ctaHref": "#"
+      }
+    },
+    {
+      "type": "Section",
+      "props": {
+        "align": "center"
+      },
+      "children": [
+        {
+          "type": "Heading",
+          "props": {
+            "text": "Why teams choose us",
+            "level": "2"
+          }
+        },
+        {
+          "type": "Grid",
+          "props": {
+            "columns": 3
+          },
+          "children": [
+            {
+              "type": "Feature",
+              "props": {
+                "icon": "⚡",
+                "title": "Blazing fast",
+                "description": "Rendered at native speed with no model in the request path."
+              }
+            },
+            {
+              "type": "Feature",
+              "props": {
+                "icon": "🛡️",
+                "title": "Safe by default",
+                "description": "Generated UI is validated against a vetted component registry."
+              }
+            },
+            {
+              "type": "Feature",
+              "props": {
+                "icon": "🎨",
+                "title": "On-brand",
+                "description": "Every output uses your design tokens, so nothing looks off."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Section",
+      "props": {
+        "background": "subtle",
+        "align": "center"
+      },
+      "children": [
+        {
+          "type": "Heading",
+          "props": {
+            "text": "Simple, honest pricing",
+            "level": "2"
+          }
+        },
+        {
+          "type": "Grid",
+          "props": {
+            "columns": 3
+          },
+          "children": [
+            {
+              "type": "PricingTier",
+              "props": {
+                "name": "Hobby",
+                "price": "Free",
+                "features": [
+                  "1 project",
+                  "Community support"
+                ],
+                "ctaLabel": "Start"
+              }
+            },
+            {
+              "type": "PricingTier",
+              "props": {
+                "name": "Pro",
+                "price": "$29/mo",
+                "features": [
+                  "Unlimited projects",
+                  "Priority support",
+                  "Custom domains"
+                ],
+                "featured": true,
+                "ctaLabel": "Go Pro"
+              }
+            },
+            {
+              "type": "PricingTier",
+              "props": {
+                "name": "Team",
+                "price": "$99/mo",
+                "features": [
+                  "Everything in Pro",
+                  "SSO",
+                  "Audit logs"
+                ],
+                "ctaLabel": "Contact us"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Footer",
+      "props": {
+        "text": "© SaaS. Woven by Loom."
+      }
+    }
+  ]
+}

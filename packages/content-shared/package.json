@@ -1,0 +1,99 @@
+{
+  "name": "@keel/content-shared",
+  "version": "0.1.0",
+  "description": "Shared utilities for the Docks monorepo",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./sanitize": {
+      "types": "./src/sanitize.ts",
+      "import": "./src/sanitize.ts"
+    },
+    "./cache": {
+      "types": "./src/cache.ts",
+      "import": "./src/cache.ts"
+    },
+    "./errors": {
+      "types": "./src/errors.ts",
+      "import": "./src/errors.ts"
+    },
+    "./validation": {
+      "types": "./src/validation.ts",
+      "import": "./src/validation.ts"
+    },
+    "./mutex": {
+      "types": "./src/mutex.ts",
+      "import": "./src/mutex.ts"
+    },
+    "./markdown": {
+      "types": "./src/markdown.ts",
+      "import": "./src/markdown.ts"
+    },
+    "./encoding": {
+      "types": "./src/encoding.ts",
+      "import": "./src/encoding.ts"
+    },
+    "./slugify": {
+      "types": "./src/slugify.ts",
+      "import": "./src/slugify.ts"
+    },
+    "./shutdown": {
+      "types": "./src/shutdown.ts",
+      "import": "./src/shutdown.ts"
+    },
+    "./xml": {
+      "types": "./src/xml.ts",
+      "import": "./src/xml.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "dependencies": {
+    "dompurify": "^3.0.0",
+    "github-slugger": "^2.0.0",
+    "he": "^1.2.0",
+    "lru-cache": "^10.0.0",
+    "serialize-javascript": "^6.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/dompurify": "^3.0.0",
+    "@types/he": "^1.2.0",
+    "@types/serialize-javascript": "^5.0.0",
+    "jsdom": "^24.0.0",
+    "mdast-util-to-string": "^4.0.0",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.0",
+    "unist-util-visit": "^5.0.0"
+  },
+  "peerDependencies": {
+    "mdast-util-to-string": "^4.0.0",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.0",
+    "unist-util-visit": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "unified": {
+      "optional": true
+    },
+    "remark-parse": {
+      "optional": true
+    },
+    "unist-util-visit": {
+      "optional": true
+    },
+    "mdast-util-to-string": {
+      "optional": true
+    }
+  },
+  "private": true
+}

@@ -1,0 +1,35 @@
+{
+  "name": "@keel/mcp",
+  "version": "0.0.0",
+  "description": "Keel's MCP control plane — exposes Keel operations to AI agents as MCP tools over @modelcontextprotocol/sdk.",
+  "type": "module",
+  "private": true,
+
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+
+  "dependencies": {
+    "@keel/content-core": "workspace:*",
+    "@keel/content-store": "workspace:*",
+    "@keel/errors": "workspace:*",
+    "@keel/kernel": "workspace:*",
+    "@keel/migrate": "workspace:*",
+    "@keel/orm": "workspace:*",
+    "@keel/router": "workspace:*",
+    "@keel/web": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  }
+}

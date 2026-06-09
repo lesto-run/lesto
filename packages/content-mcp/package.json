@@ -1,0 +1,52 @@
+{
+  "name": "@keel/content-mcp",
+  "version": "0.1.0",
+  "description": "MCP (Model Context Protocol) server for Docks content engine",
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./client": {
+      "types": "./src/client.ts",
+      "import": "./src/client.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "keywords": [
+    "docks",
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "ai"
+  ],
+  "author": "Docks Contributors",
+  "license": "MIT",
+  "dependencies": {
+    "@keel/content-core": "workspace:*",
+    "@keel/content-shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@keel/content-umbra": "workspace:*",
+    "zod": "^4.2.1",
+    "zod-to-json-schema": "^3.24.1"
+  },
+  "devDependencies": {
+    "tsdown": "^0.17.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}

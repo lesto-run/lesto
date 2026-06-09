@@ -1,0 +1,30 @@
+{
+  "name": "@keel/kernel",
+  "version": "0.0.0",
+  "description": "Keel's application kernel — assembles the database, migrations, router, and controllers into one bootable app.",
+  "type": "module",
+  "private": true,
+
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+
+  "dependencies": {
+    "@keel/orm": "workspace:*",
+    "@keel/migrate": "workspace:*",
+    "@keel/router": "workspace:*",
+    "@keel/web": "workspace:*"
+  },
+
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  }
+}

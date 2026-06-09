@@ -1,0 +1,25 @@
+{
+  "name": "loom",
+  "version": "0.1.0",
+  "description": "An AI-native React rendering engine. The AI emits a validated UI tree; Loom weaves it into React. Built on Vite 6.",
+  "type": "module",
+  "bin": {
+    "loom": "./bin/loom.js"
+  },
+  "scripts": {
+    "dev": "node server.js",
+    "test": "vitest run",
+    "manifest": "node bin/loom.js manifest"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.102.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "vite": "^6.4.3",
+    "vitest": "^2.1.9"
+  }
+}

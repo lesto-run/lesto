@@ -1,0 +1,69 @@
+{
+  "name": "@keel/content-search",
+  "version": "0.1.0",
+  "description": "Client-safe vector search for semantic content discovery",
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./react": {
+      "types": "./src/react.tsx",
+      "import": "./src/react.tsx"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "keywords": [
+    "docks",
+    "search",
+    "semantic-search",
+    "vector-search",
+    "browser"
+  ],
+  "author": "Docks Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usedocks/docks.git",
+    "directory": "packages/search"
+  },
+  "bugs": {
+    "url": "https://github.com/usedocks/docks/issues"
+  },
+  "homepage": "https://usedocks.dev",
+  "dependencies": {
+    "@keel/content-shared": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "tsdown": "^0.17.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}

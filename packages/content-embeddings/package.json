@@ -1,0 +1,47 @@
+{
+  "name": "@keel/content-embeddings",
+  "version": "0.1.0",
+  "description": "Build-time embedding generation for semantic search",
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "keywords": [
+    "docks",
+    "embeddings",
+    "semantic-search",
+    "ai",
+    "build-time"
+  ],
+  "author": "Docks Contributors",
+  "license": "MIT",
+  "dependencies": {
+    "@huggingface/transformers": "^3.3.3",
+    "@keel/content-shared": "workspace:*"
+  },
+  "devDependencies": {
+    "tsdown": "^0.17.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}

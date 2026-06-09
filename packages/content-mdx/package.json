@@ -1,0 +1,78 @@
+{
+  "name": "@keel/content-mdx",
+  "version": "0.1.0",
+  "description": "MDX compilation and React components for Docks",
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./components": {
+      "types": "./src/components/index.ts",
+      "import": "./src/components/index.ts"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "keywords": [
+    "docks",
+    "mdx",
+    "react",
+    "markdown"
+  ],
+  "author": "Docks Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usedocks/docks.git",
+    "directory": "packages/mdx"
+  },
+  "bugs": {
+    "url": "https://github.com/usedocks/docks/issues"
+  },
+  "homepage": "https://usedocks.dev",
+  "dependencies": {
+    "@keel/content-shared": "workspace:*",
+    "mdx-bundler": "^10.0.0",
+    "rehype-pretty-code": "^0.14.1",
+    "rehype-slug": "^6.0.0",
+    "remark-gfm": "^4.0.0",
+    "shiki": "^3.20.0",
+    "unified": "^11.0.0",
+    "unist-util-visit": "^5.0.0"
+  },
+  "devDependencies": {
+    "@content-collections/mdx": "^0.2.2",
+    "@mdx-js/mdx": "^3.0.0",
+    "@types/hast": "^3.0.0",
+    "@types/mdast": "^4.0.4",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "tsdown": "^0.17.3",
+    "vfile": "^6.0.3"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}

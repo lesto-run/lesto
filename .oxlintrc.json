@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+
+  "plugins": ["typescript", "unicorn", "oxc", "promise"],
+
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "warn"
+  },
+
+  "rules": {
+    "no-console": "off",
+    "no-unused-vars": "error",
+    "eqeqeq": ["error", "smart"],
+    "typescript/no-explicit-any": "error",
+    "typescript/consistent-type-imports": "error",
+    "unicorn/prefer-node-protocol": "error",
+
+    "promise/avoid-new": "off",
+    "promise/prefer-await-to-callbacks": "off",
+    "unicorn/no-await-expression-member": "off",
+    "unicorn/no-null": "off",
+    "no-await-in-loop": "off",
+    "no-unmodified-loop-condition": "off"
+  },
+
+  "ignorePatterns": ["**/dist/**", "**/node_modules/**", "**/*.d.ts"]
+}

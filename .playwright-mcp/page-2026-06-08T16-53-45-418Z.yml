@@ -1,0 +1,61 @@
+- main [ref=e4]:
+  - navigation [ref=e5]:
+    - generic [ref=e6]: SaaS
+    - generic [ref=e7]:
+      - link "Features" [ref=e8] [cursor=pointer]:
+        - /url: "#features"
+      - link "Pricing" [ref=e9] [cursor=pointer]:
+        - /url: "#pricing"
+      - link "Sign in" [ref=e10] [cursor=pointer]:
+        - /url: "#"
+  - generic [ref=e11]:
+    - generic [ref=e12]: AI-NATIVE
+    - heading "SaaS landing page for an AI dev tool" [level=1] [ref=e13]
+    - paragraph [ref=e14]: Everything you need to ship faster, beautifully composed and shipped in minutes.
+    - link "Get started free" [ref=e15] [cursor=pointer]:
+      - /url: "#"
+  - generic [ref=e16]:
+    - heading "Why teams choose us" [level=2] [ref=e17]
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - generic [ref=e20]: ⚡
+        - generic [ref=e21]: Blazing fast
+        - generic [ref=e22]: Rendered at native speed with no model in the request path.
+      - generic [ref=e23]:
+        - generic [ref=e24]: 🛡️
+        - generic [ref=e25]: Safe by default
+        - generic [ref=e26]: Generated UI is validated against a vetted component registry.
+      - generic [ref=e27]:
+        - generic [ref=e28]: 🎨
+        - generic [ref=e29]: On-brand
+        - generic [ref=e30]: Every output uses your design tokens, so nothing looks off.
+  - generic [ref=e31]:
+    - heading "Simple, honest pricing" [level=2] [ref=e32]
+    - generic [ref=e33]:
+      - generic [ref=e34]:
+        - generic [ref=e35]: Hobby
+        - generic [ref=e36]: Free
+        - list [ref=e37]:
+          - listitem [ref=e38]: ✓ 1 project
+          - listitem [ref=e39]: ✓ Community support
+        - link "Start" [ref=e40] [cursor=pointer]:
+          - /url: "#"
+      - generic [ref=e41]:
+        - generic [ref=e42]: Pro
+        - generic [ref=e43]: $29/mo
+        - list [ref=e44]:
+          - listitem [ref=e45]: ✓ Unlimited projects
+          - listitem [ref=e46]: ✓ Priority support
+          - listitem [ref=e47]: ✓ Custom domains
+        - link "Go Pro" [ref=e48] [cursor=pointer]:
+          - /url: "#"
+      - generic [ref=e49]:
+        - generic [ref=e50]: Team
+        - generic [ref=e51]: $99/mo
+        - list [ref=e52]:
+          - listitem [ref=e53]: ✓ Everything in Pro
+          - listitem [ref=e54]: ✓ SSO
+          - listitem [ref=e55]: ✓ Audit logs
+        - link "Contact us" [ref=e56] [cursor=pointer]:
+          - /url: "#"
+  - generic [ref=e57]: © SaaS. Woven by Loom.

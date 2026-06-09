@@ -1,0 +1,14 @@
+/**
+ * @keel/errors — the shared error foundation every Keel package builds on.
+ *
+ *   class QueueError extends KeelError<"QUEUE_HANDLER_NOT_FOUND"> { ... }
+ *
+ *   const result = mightFail();
+ *   if (isErr(result)) return result.error;
+ *   use(unwrap(result));
+ */
+
+export { hasCode, isKeelError, KeelError } from "./errors";
+
+export { err, isErr, isOk, ok, unwrap } from "./result";
+export type { Result } from "./result";

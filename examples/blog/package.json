@@ -1,0 +1,24 @@
+{
+  "name": "@keel/example-blog",
+  "version": "0.0.0",
+  "description": "A runnable end-to-end Keel app: ORM model + migration + UI registry + controller + router, booted by the kernel.",
+  "type": "module",
+  "private": true,
+
+  "scripts": {
+    "start": "bun run run.ts"
+  },
+
+  "dependencies": {
+    "@keel/kernel": "workspace:*",
+    "@keel/orm": "workspace:*",
+    "@keel/migrate": "workspace:*",
+    "@keel/router": "workspace:*",
+    "@keel/runtime": "workspace:*",
+    "@keel/ui": "workspace:*",
+    "@keel/web": "workspace:*",
+    "better-sqlite3": "^11.10.0",
+    "react": "^19",
+    "react-dom": "^19"
+  }
+}

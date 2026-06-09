@@ -1,0 +1,41 @@
+#!/usr/bin/env bun
+/**
+ * The `keel` executable — pure wiring, no logic.
+ *
+ * It builds the real dependencies (load the project's `keel.app.ts`, the real
+ * runtime `serve`, `console.log`) and hands them to the covered `run` core.
+ * `serve`/`dev` resolve once listening; the process stays alive on its own
+ * open socket, so we only exit non-`serve` commands.
+ */
+
+import { join } from "node:path";
+
+import { serve } from "@keel/runtime";
+import type { AppConfig } from "@keel/kernel";
+
+import { createNewEntry, runPipeline } from "@keel/content-core/build";
+import type { RuntimeEntry } from "@keel/content-core";
+
+import { run } from "./run";
+
+const argv = process.argv.slice(2);
+
+const loadApp = async (): Promise<AppConfig> => {
+  const module = (await import(join(process.cwd(), "keel.app.ts"))) as { default: AppConfig };
+
+  return module.default;
+};
+
+// Run the pipeline for its entries; the project's keel.app.ts owns the cwd and
+// the collections, so the bin needs no arguments here.
+const buildContent = async (): Promise<readonly RuntimeEntry[]> =>
+  (await runPipeline({ skipWrite: true })).entries;
+
+const createEntry = (collection: string, title: string): Promise<void> =>
+  createNewEntry(process.cwd(), collection, title);
+
+const code = await run(argv, { loadApp, serve, buildContent, createEntry, out: console.log });
+
+// Long-running commands keep the process alive on their own socket; everything
+// else has said all it has to say, so exit with the code the core returned.
+if (argv[0] !== "serve" && argv[0] !== "dev") process.exit(code);

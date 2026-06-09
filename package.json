@@ -1,0 +1,46 @@
+{
+  "name": "tracks",
+  "version": "0.1.0",
+  "description": "A full-stack, convention-over-configuration MVC web framework for Node.js. Rails, but it's JavaScript.",
+  "type": "commonjs",
+  "bin": {
+    "tracks": "./bin/tracks.js"
+  },
+  "main": "lib/index.js",
+  "workspaces": ["packages/*"],
+  "packageManager": "bun@1.3.5",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node test/run.js && node test/queue.test.js",
+    "test:durability": "node test/durability-demo.js",
+    "lint": "oxlint packages",
+    "format:check": "oxfmt --check packages",
+    "ws:test": "bun run --filter '@keel/*' test",
+    "ws:lint": "bun run --filter '@keel/*' lint",
+    "ws:format:check": "bun run --filter '@keel/*' format:check",
+    "ws:typecheck": "bun run --filter '@keel/*' typecheck"
+  },
+  "keywords": ["framework", "mvc", "rails", "orm", "fullstack", "activerecord"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.102.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^11.10.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.8",
+    "oxfmt": "^0.54.0",
+    "oxlint": "^1.69.0",
+    "react": "^19",
+    "react-dom": "^19",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.8"
+  }
+}

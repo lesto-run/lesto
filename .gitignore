@@ -1,0 +1,9 @@
+node_modules/
+coverage/
+dist/
+.docks/
+*.db
+*.db-journal
+*.tsbuildinfo
+.DS_Store
+out/

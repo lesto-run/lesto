@@ -1,0 +1,33 @@
+{
+  "name": "@keel/content-store",
+  "version": "0.0.0",
+  "description": "Keel content on the SQL substrate — persists @keel/content-core entries to the database and hydrates the runtime from it.",
+  "type": "module",
+  "private": true,
+
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+
+  "dependencies": {
+    "@keel/content-core": "workspace:*",
+    "@keel/errors": "workspace:*",
+    "@keel/migrate": "workspace:*"
+  },
+
+  "devDependencies": {
+    "better-sqlite3": "^11.10.0"
+  }
+}

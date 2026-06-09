@@ -1,0 +1,91 @@
+{
+  "name": "@keel/content-core",
+  "version": "0.1.0",
+  "description": "Schema-driven content engine for markdown in TypeScript applications",
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./build": {
+      "types": "./src/build.ts",
+      "import": "./src/build.ts"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "keywords": [
+    "docks",
+    "content",
+    "markdown",
+    "collections",
+    "vite",
+    "typescript"
+  ],
+  "author": "Docks Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usedocks/docks.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/usedocks/docks/issues"
+  },
+  "homepage": "https://usedocks.dev",
+  "dependencies": {
+    "@standard-schema/spec": "^1.0.0",
+    "@keel/content-embeddings": "workspace:*",
+    "@keel/content-markdown": "workspace:*",
+    "@keel/content-search": "workspace:*",
+    "@keel/content-shared": "workspace:*",
+    "@keel/content-umbra": "workspace:*",
+    "chokidar": "^4.0.3",
+    "fast-glob": "^3.3.3",
+    "fast-json-stringify": "^6.1.1",
+    "jiti": "^2.6.1",
+    "p-limit": "^7.2.0",
+    "picomatch": "^4.0.2",
+    "serialize-javascript": "^7.0.2",
+    "xxhash-wasm": "^1.1.0"
+  },
+  "devDependencies": {
+    "@content-collections/core": "^0.9.0",
+    "@types/picomatch": "^3.0.2",
+    "@types/serialize-javascript": "^5.0.4",
+    "@keel/content-mdx": "workspace:*",
+    "tsdown": "^0.17.3",
+    "valibot": "^1.2.0",
+    "zod": "^4.1.13"
+  },
+  "peerDependencies": {
+    "@keel/content-mdx": "workspace:*",
+    "zod": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@keel/content-mdx": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}

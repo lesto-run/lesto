@@ -1,0 +1,29 @@
+/**
+ * @keel/runtime — the transport tier.
+ *
+ * The pure, transport-free MVC core (`@keel/web`) and the assembled app
+ * (`@keel/kernel`) know nothing of sockets. This package is the thin adapter
+ * that stands a real node:http server in front of an `App`, plus the runner
+ * that drives a `@keel/queue` worker — the two long-lived processes a Keel
+ * deployment runs.
+ *
+ *   const server = await serve(app, { port: 0 });
+ *   // ... server.port is the bound ephemeral port ...
+ *   await server.close();
+ *
+ *   const worker = runWorker(queue, { concurrency: 4 });
+ *   // ... on SIGTERM ...
+ *   await worker.stop();
+ */
+
+export { toKeelRequest } from "./request";
+export type { RawRequest } from "./request";
+
+export { applyResponse } from "./response";
+export type { WritableResponse } from "./response";
+
+export { serve } from "./server";
+export type { Server, ServeOptions } from "./server";
+
+export { runWorker } from "./worker";
+export type { RunWorkerOptions } from "./worker";

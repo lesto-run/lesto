@@ -1,0 +1,78 @@
+{
+  "name": "@keel/content-markdown",
+  "version": "0.1.0",
+  "description": "Markdown rendering for Docks content collections",
+  "type": "module",
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "keywords": [
+    "docks",
+    "markdown",
+    "renderer",
+    "unified",
+    "remark",
+    "rehype"
+  ],
+  "author": "Docks Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usedocks/docks.git",
+    "directory": "packages/markdown"
+  },
+  "bugs": {
+    "url": "https://github.com/usedocks/docks/issues"
+  },
+  "homepage": "https://github.com/usedocks/docks/tree/main/packages/markdown#readme",
+  "dependencies": {
+    "@rehype-pretty/transformers": "^0.13.2",
+    "@keel/content-shared": "workspace:*",
+    "rehype-parse": "^9.0.1",
+    "rehype-pretty-code": "^0.14.1",
+    "rehype-sanitize": "^6.0.0",
+    "rehype-slug": "^6.0.0",
+    "rehype-stringify": "^10.0.0",
+    "remark-gfm": "^4.0.0",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.0.0",
+    "shiki": "^3.20.0",
+    "unified": "^11.0.0",
+    "unist-util-visit": "^5.0.0"
+  },
+  "devDependencies": {
+    "@content-collections/markdown": "^0.1.4",
+    "@types/hast": "^3.0.0",
+    "@types/markdown-it": "^14.0.0",
+    "@types/mdast": "^4.0.4",
+    "@types/remarkable": "^2.0.8",
+    "markdown-it": "^14.0.0",
+    "marked": "^12.0.0",
+    "md4w": "^0.2.7",
+    "remarkable": "^2.0.1",
+    "tsdown": "^0.17.3",
+    "vfile": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}
