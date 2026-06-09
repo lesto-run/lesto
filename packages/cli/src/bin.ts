@@ -10,7 +10,7 @@
 
 import { join } from "node:path";
 
-import { serve } from "@keel/runtime";
+import { nodeStaticReader, serve } from "@keel/runtime";
 import type { AppConfig } from "@keel/kernel";
 
 import { createNewEntry, runPipeline } from "@keel/content-core/build";
@@ -19,7 +19,12 @@ import type { RuntimeEntry } from "@keel/content-core";
 import { nodeSink } from "@keel/sites";
 import type { Site } from "@keel/sites";
 
+import { nodeUploader } from "@keel/deploy";
+
 import { run } from "./run";
+
+/** Where `keel dev` looks for built client assets (e.g. a bundled `/client.js`). */
+const DEV_ASSET_DIR = "out";
 
 const argv = process.argv.slice(2);
 
@@ -54,6 +59,8 @@ const code = await run(argv, {
   createEntry,
   loadSites,
   sink: nodeSink,
+  readAsset: nodeStaticReader(join(process.cwd(), DEV_ASSET_DIR)),
+  uploader: nodeUploader,
   out: console.log,
 });
 

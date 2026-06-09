@@ -51,6 +51,7 @@
       "dependencies": {
         "@keel/content-core": "workspace:*",
         "@keel/content-store": "workspace:*",
+        "@keel/deploy": "workspace:*",
         "@keel/errors": "workspace:*",
         "@keel/kernel": "workspace:*",
         "@keel/migrate": "workspace:*",
@@ -365,6 +366,14 @@
     "packages/csrf": {
       "name": "@keel/csrf",
       "version": "0.0.0",
+    },
+    "packages/deploy": {
+      "name": "@keel/deploy",
+      "version": "0.0.0",
+      "dependencies": {
+        "@keel/errors": "workspace:*",
+        "@keel/sites": "workspace:*",
+      },
     },
     "packages/errors": {
       "name": "@keel/errors",
@@ -782,6 +791,8 @@
     "@keel/cors": ["@keel/cors@workspace:packages/cors"],
 
     "@keel/csrf": ["@keel/csrf@workspace:packages/csrf"],
+
+    "@keel/deploy": ["@keel/deploy@workspace:packages/deploy"],
 
     "@keel/errors": ["@keel/errors@workspace:packages/errors"],
 

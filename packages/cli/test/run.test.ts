@@ -87,6 +87,7 @@ function depsWith(overrides: Partial<CliDeps> = {}): CliDeps {
     createEntry: vi.fn(() => Promise.resolve()),
     loadSites: () => Promise.resolve([]),
     sink: () => () => Promise.resolve(),
+    uploader: () => ({ read: () => Promise.resolve(""), put: () => Promise.resolve() }),
     out: (line) => lines.push(line),
     ...overrides,
   };
@@ -186,15 +187,58 @@ describe("run serve / dev", () => {
 
     expect(lines).toEqual(["listening on http://127.0.0.1:3000"]);
   });
+});
 
-  it('"dev" is an alias for serve', async () => {
-    const serve = fakeServe(4321);
+// A reader that answers the client bundle with bytes, everything else absent.
+// The dev dispatcher passes a root-relative path, so the key has no leading slash.
+const clientBundleReader = (file: string): Promise<string | undefined> =>
+  Promise.resolve(file === "client.js" ? "/* island bundle */" : undefined);
 
-    const code = await run(["dev"], depsWith({ serve }));
+describe("run dev", () => {
+  const sites: readonly Site[] = [
+    { name: "marketing", render: "static", basePath: "/", pages: ["/"] },
+    { name: "mls", render: "dynamic", basePath: "/mls" },
+  ];
+
+  it("serves every zone live on one origin and prints the dev URL", async () => {
+    const serve = fakeServe(5173);
+
+    const code = await run(
+      ["dev", "--port", "5173"],
+      depsWith({ serve, loadSites: () => Promise.resolve(sites) }),
+    );
 
     expect(code).toBe(0);
     expect(serve).toHaveBeenCalledTimes(1);
-    expect(lines).toEqual(["listening on http://127.0.0.1:4321"]);
+
+    // The server fronts the dev dispatcher (a handle), not a bare app.
+    const [app, options] = serve.mock.calls[0]!;
+    expect(typeof app.handle).toBe("function");
+    expect(options?.port).toBe(5173);
+    expect(lines).toEqual(["dev server on http://127.0.0.1:5173"]);
+  });
+
+  it("serves the client bundle through readAsset when one is provided", async () => {
+    const serve = fakeServe(3000);
+
+    await run(
+      ["dev"],
+      depsWith({ serve, readAsset: clientBundleReader, loadSites: () => Promise.resolve(sites) }),
+    );
+
+    const [app] = serve.mock.calls[0]!;
+
+    // The dev dispatcher the server received serves the asset live.
+    const asset = await app.handle("GET", "/client.js");
+    expect(asset.status).toBe(200);
+    expect(asset.body).toBe("/* island bundle */");
+
+    // ...and a non-asset path renders live through the app: the 404 body is the
+    // app's own "Not Found" (this config has no "/" route), proving the dev
+    // dispatcher delegated to the live handler rather than reading a static file.
+    const page = await app.handle("GET", "/");
+    expect(page.status).toBe(404);
+    expect(page.body).toBe("Not Found");
   });
 });
 
@@ -314,6 +358,105 @@ describe("run build", () => {
   });
 });
 
+// A capturing uploader: every shipped key lands in the map.
+function recordingUploader(): {
+  uploader: CliDeps["uploader"];
+  shipped: Map<string, string>;
+  distDirs: string[];
+} {
+  const shipped = new Map<string, string>();
+  const distDirs: string[] = [];
+
+  const uploader: CliDeps["uploader"] = (distDir) => {
+    distDirs.push(distDir);
+
+    return {
+      read: (_outRoot, file) => Promise.resolve(`bytes:${file}`),
+      put: (key, contents) => {
+        shipped.set(key, contents);
+
+        return Promise.resolve();
+      },
+    };
+  };
+
+  return { uploader, shipped, distDirs };
+}
+
+describe("run deploy", () => {
+  // Two zones: a static marketing root (two pages) and a dynamic mls app. Both
+  // marketing routes map to posts#index so they render 200 and ship as 2 routes.
+  const sites: readonly Site[] = [
+    { name: "marketing", render: "static", basePath: "/", pages: ["/posts", "/more"] },
+    { name: "mls", render: "dynamic", basePath: "/mls" },
+  ];
+
+  function twoRouteConfig(): AppConfig {
+    const router = new Router().get("/posts", "posts#index").get("/more", "posts#index");
+
+    return {
+      db: adapt(database),
+      router,
+      controllers: { posts: PostsController as ControllerClass },
+      migrations,
+    };
+  }
+
+  const loadApp = (): Promise<AppConfig> => Promise.resolve(twoRouteConfig());
+
+  it("builds, ships the static target into --dist, and prints the routing plan", async () => {
+    const { sink } = recordingSink();
+    const { uploader, shipped, distDirs } = recordingUploader();
+
+    const code = await run(
+      ["deploy", "--dist", "build-out"],
+      depsWith({ loadApp, loadSites: () => Promise.resolve(sites), sink, uploader }),
+    );
+
+    expect(code).toBe(0);
+
+    // The uploader was rooted at the --dist value, and both static pages shipped.
+    expect(distDirs).toEqual(["build-out"]);
+    expect(shipped.size).toBe(2);
+
+    // Output: the static ship (plural routes), the dynamic run hint, and the
+    // routing manifest — most-specific prefix first, so an edge sends /mls/* to
+    // node, else the CDN.
+    expect(lines).toEqual([
+      "shipped marketing: 2 routes",
+      "mls: run `keel serve` (dynamic)",
+      "route /mls → dynamic",
+      "route / → static",
+    ]);
+  });
+
+  it("with --target, deploys only the named site", async () => {
+    const { sink } = recordingSink();
+    const { uploader, shipped } = recordingUploader();
+
+    // A single-page marketing site (default app routes "/posts") — ships one
+    // route, exercising the singular noun against the plural case above.
+    const oneSite: readonly Site[] = [
+      { name: "marketing", render: "static", basePath: "/", pages: ["/posts"] },
+    ];
+
+    const code = await run(
+      ["deploy", "--target", "marketing"],
+      depsWith({ loadSites: () => Promise.resolve(oneSite), sink, uploader }),
+    );
+
+    expect(code).toBe(0);
+    expect(shipped.size).toBe(1);
+    expect(lines).toEqual(["shipped marketing: 1 route", "route / → static"]);
+  });
+
+  it("refuses an unknown --target", async () => {
+    await expect(
+      run(["deploy", "--target", "ghost"], depsWith({ loadSites: () => Promise.resolve(sites) })),
+    ).rejects.toMatchObject({ code: "CLI_UNKNOWN_TARGET" });
+  });
+});
+
 describe("run help", () => {
   it("prints usage and returns 0", async () => {
     const code = await run(["help"], depsWith());
@@ -322,7 +465,7 @@ describe("run help", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("keel — the Keel command-line tool");
     expect(lines[0]).toContain("routes");
-    expect(lines[0]).toContain("serve, dev");
+    expect(lines[0]).toContain("deploy");
   });
 
   it("prints usage for an empty command", async () => {

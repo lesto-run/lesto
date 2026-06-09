@@ -22,7 +22,11 @@ import type { RuntimeEntry } from "@keel/content-core";
 import { buildStaticSites } from "@keel/sites";
 import type { OutputSink, Site } from "@keel/sites";
 
-import type { serve } from "@keel/runtime";
+import { dispatchSitesDev } from "@keel/runtime";
+import type { serve, StaticReader } from "@keel/runtime";
+
+import { planDeploy, shipStatic } from "@keel/deploy";
+import type { ShipDeps } from "@keel/deploy";
 
 import { CliError } from "./errors";
 import { parsePort, parseStringFlag } from "./flags";
@@ -55,6 +59,17 @@ export interface CliDeps {
   /** Build a sink rooted at `outDir` for the static build (the bin passes `nodeSink`). */
   sink: (outDir: string) => OutputSink;
 
+  /**
+   * Read a client build asset (e.g. `/client.js`) for the dev server, or absent
+   * to disable asset serving. The bin passes `nodeStaticReader` over the asset
+   * dir; without it, `keel dev` still live-renders every zone — islands just show
+   * their server fallback until a bundle is present.
+   */
+  readAsset?: StaticReader;
+
+  /** Build a static-deploy uploader rooted at `distDir` (the bin passes `nodeUploader`). */
+  uploader: (distDir: string) => ShipDeps;
+
   /** Where a line of output goes (the bin passes `console.log`). */
   out: (line: string) => void;
 }
@@ -68,8 +83,10 @@ const USAGE = [
   "Commands:",
   "  routes            List the application's routes",
   "  migrate           Run pending migrations and print the applied versions",
-  "  serve, dev        Boot the app over HTTP (--port, default 3000)",
+  "  serve             Boot the app over HTTP (--port, default 3000)",
+  "  dev               Run every site live on one origin for local development (--port)",
   "  build             Prerender static sites to disk (--target <name>, --out <dir>, default out)",
+  "  deploy            Build and ship static sites; print the routing plan (--target, --out, --dist)",
   "  content:build     Compile markdown content into the content store (--prune drops stale rows)",
   "  content:new       Scaffold a new content entry: content:new <collection> <title>",
   "  content:delete    Delete a content entry: content:delete <collection> <slug>",
@@ -260,6 +277,95 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
   return 0;
 }
 
+/**
+ * Run every site live on one origin, for local development.
+ *
+ * Unlike `serve` (a single production app) and `build` (a one-shot prerender),
+ * `dev` renders *every* zone live through the app's own `handle` — so a static
+ * zone needs no prebuild and an edit shows on the next refresh. With a
+ * `readAsset` seam it also serves the client bundle (`/client.js`) so islands
+ * hydrate. One origin, so the same-origin session just works.
+ */
+async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
+  const config = await deps.loadApp();
+
+  const app = createApp(config);
+
+  const sites = await deps.loadSites();
+
+  const dispatch = dispatchSitesDev({
+    sites,
+    handle: app.handle,
+    ...(deps.readAsset === undefined ? {} : { readAsset: deps.readAsset }),
+  });
+
+  const { port } = parsePort(args, DEFAULT_PORT);
+
+  // Wrap the dev dispatcher as the app the server fronts; migrations already ran.
+  const server = await deps.serve(
+    { handle: dispatch, migrationsApplied: app.migrationsApplied },
+    { port },
+  );
+
+  deps.out(`dev server on http://127.0.0.1:${server.port}`);
+
+  return 0;
+}
+
+/** The default dist directory `deploy` ships static artifacts into. */
+const DEFAULT_DIST_DIR = "dist";
+
+/** "route" or "routes" — the count noun the deploy output reads with. */
+function routeNoun(count: number): string {
+  return count === 1 ? "route" : "routes";
+}
+
+/**
+ * Build the static sites, then ship them and print the deploy plan.
+ *
+ * Prerenders (failing on a broken page, via `buildStaticSites`), plans the
+ * deploy (static targets for the CDN, a `keel serve` node target for the live
+ * tier), ships each static target through the injected uploader, and prints the
+ * routing manifest — the single source that splits `/` (static) from `/mls/*`
+ * (node) at the edge.
+ */
+async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number> {
+  const config = await deps.loadApp();
+
+  const app = createApp(config);
+
+  const sites = await deps.loadSites();
+
+  const target = parseStringFlag(args, "target");
+  const outDir = parseStringFlag(args, "out") ?? DEFAULT_OUT_DIR;
+  const distDir = parseStringFlag(args, "dist") ?? DEFAULT_DIST_DIR;
+
+  const selected = selectTarget(sites, target);
+
+  const manifest = await buildStaticSites(selected, app.handle, deps.sink(outDir));
+
+  const plan = planDeploy(selected, manifest);
+  const uploader = deps.uploader(distDir);
+
+  for (const deployTarget of plan.targets) {
+    if (deployTarget.kind === "static") {
+      const result = await shipStatic(deployTarget, outDir, uploader);
+
+      deps.out(
+        `shipped ${result.site}: ${result.routes.length} ${routeNoun(result.routes.length)}`,
+      );
+    } else {
+      deps.out(`${deployTarget.site}: run \`${deployTarget.run}\` (dynamic)`);
+    }
+  }
+
+  for (const rule of plan.routing) {
+    deps.out(`route ${rule.basePath} → ${rule.mode}`);
+  }
+
+  return 0;
+}
+
 /** Print usage. Shared by `help`, the empty command, and unknown commands. */
 function printUsage(deps: CliDeps): void {
   deps.out(USAGE);
@@ -280,9 +386,13 @@ export async function run(argv: readonly string[], deps: CliDeps): Promise<numbe
 
   if (command === "migrate") return runMigrate(deps);
 
-  if (command === "serve" || command === "dev") return runServe(args, deps);
+  if (command === "serve") return runServe(args, deps);
+
+  if (command === "dev") return runDev(args, deps);
 
   if (command === "build") return runBuild(args, deps);
+
+  if (command === "deploy") return runDeploy(args, deps);
 
   if (command === "content:build") return runContentBuild(args, deps);
 

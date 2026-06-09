@@ -14,6 +14,21 @@ One origin means one cookie: the session set by `/mls` is seen by the static
 
 ## Run it
 
+**Local development** — live render, instant edits, real island hydration:
+
+```bash
+bun run examples/estate/dev.ts        # or, in a real project: keel dev
+```
+
+`dev.ts` bundles the island client to `out/client.js`, then serves _every_ zone
+**live** through the app's own `handle` (no prerender) on one port. Edit a
+marketing page and refresh — it's there, no rebuild. Open
+`http://127.0.0.1:3000` in a browser: the header shows "Sign in"; go to `/mls`
+and sign in; back on `/`, the `My Account` island has hydrated and greets you —
+one origin, one cookie.
+
+**Production shape** — prerender then path-mount:
+
 ```bash
 bun run examples/estate/serve.ts
 ```
@@ -38,14 +53,14 @@ verbatim — that is what makes the same-origin session work.
 
 ## How the pieces compose
 
-| Concern | Package |
-|---|---|
-| Declare the two zones | `@keel/sites` `defineSites` |
-| Prerender the static zone (fail on a broken page) | `@keel/sites` `buildStaticSites` |
-| Path-mount both zones on one origin | `@keel/runtime` `dispatchSites` + `nodeStaticReader` |
-| The island + its hydration manifest | `@keel/ui` `island` / `renderPage` |
-| Mount the island in the browser | `@keel/ui/client` `hydrateIslands` |
-| Sessions (mint / verify / revoke) | `@keel/auth` |
+| Concern                                           | Package                                              |
+| ------------------------------------------------- | ---------------------------------------------------- |
+| Declare the two zones                             | `@keel/sites` `defineSites`                          |
+| Prerender the static zone (fail on a broken page) | `@keel/sites` `buildStaticSites`                     |
+| Path-mount both zones on one origin               | `@keel/runtime` `dispatchSites` + `nodeStaticReader` |
+| The island + its hydration manifest               | `@keel/ui` `island` / `renderPage`                   |
+| Mount the island in the browser                   | `@keel/ui/client` `hydrateIslands`                   |
+| Sessions (mint / verify / revoke)                 | `@keel/auth`                                         |
 
 ## The auth island, tested
 
@@ -58,10 +73,28 @@ user. Run it:
 ./node_modules/.bin/vitest run examples/estate/test/auth-island.test.tsx
 ```
 
-## What's a follow-up, not done here
+## Deploy
 
-The document references `/client.js` — the bundled browser entry
-(`client.tsx`). Wire any bundler (e.g. Vite) to emit it; until then the pages
-degrade gracefully to the island's signed-out fallback (progressive
-enhancement). Promoting the client `resolveSession` helper into a shared
-framework package is the other natural next step.
+```bash
+bun run --filter @keel/cli keel deploy   # or: keel deploy --target marketing --dist dist
+```
+
+`keel deploy` builds the static sites (failing on any broken page), ships them
+through an uploader, and prints the **routing manifest** — the single artifact
+that tells a CDN/edge to send `/mls/*` to the node app and everything else to
+the static bundle:
+
+```
+shipped marketing: 2 routes
+mls: run `keel serve` (dynamic)
+route /mls → dynamic
+route / → static
+```
+
+## Notes
+
+- The browser bundle is produced by `bun build client.tsx` (see `dev.ts`); any
+  bundler works. Without it, pages degrade gracefully to the island's signed-out
+  fallback (progressive enhancement).
+- Promoting the client `resolveSession` helper into a shared framework package
+  is a natural next step.

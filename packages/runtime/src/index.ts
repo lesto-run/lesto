@@ -31,6 +31,9 @@ export type { RunWorkerOptions } from "./worker";
 export { dispatchSites } from "./sites";
 export type { AppHandler, DispatchSitesDeps, RequestOptions, StaticReader } from "./sites";
 
+export { dispatchSitesDev } from "./sites-dev";
+export type { DispatchSitesDevDeps } from "./sites-dev";
+
 export { nodeStaticReader } from "./static-reader";
 
 export { KeelError, RuntimeError } from "./errors";

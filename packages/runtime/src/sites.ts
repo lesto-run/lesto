@@ -64,14 +64,27 @@ const STATIC_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD"]);
 /**
  * Pick a `Content-Type` from a file's extension.
  *
- * Prerendered files are pages and a handful of endpoints (`sitemap.xml`,
- * `robots.txt`, a JSON feed). Anything unrecognized is HTML — the overwhelming
+ * Two kinds of file flow through here, and one table serves both. Prerendered
+ * pages are HTML plus a handful of endpoints (`sitemap.xml`, `robots.txt`, a
+ * JSON feed); client build assets are scripts, styles, and source maps. Each
+ * known extension maps to its type; anything unrecognized is HTML — the page
  * common case, since a clean-URL page is always `index.html`.
+ *
+ * Exported because the dev dispatcher serves the very same file kinds (a `.js`
+ * island bundle, a `.css` sheet) and must label them identically — one table,
+ * not two that can drift.
  */
-function contentTypeOf(filePath: string): string {
+export function contentTypeOf(filePath: string): string {
+  if (filePath.endsWith(".js")) return "text/javascript; charset=utf-8";
+
+  if (filePath.endsWith(".css")) return "text/css; charset=utf-8";
+
   if (filePath.endsWith(".xml")) return "application/xml";
 
   if (filePath.endsWith(".txt")) return "text/plain; charset=utf-8";
+
+  // A source map is JSON; group it with the `.json` feed case.
+  if (filePath.endsWith(".map")) return "application/json";
 
   if (filePath.endsWith(".json")) return "application/json";
 
@@ -85,8 +98,11 @@ function contentTypeOf(filePath: string): string {
  * that lands on a segment boundary — so `/mls/x` picks `mls` over the root, and
  * a `basePath` of `/ml` never claims `/mls`. `basePath: "/"` is the catch-all,
  * matching anything no more specific site has claimed.
+ *
+ * Exported so the dev dispatcher selects by the exact same rule — shared code,
+ * never a copy that could drift from production's boundary semantics.
  */
-function selectSite(sites: readonly Site[], path: string): Site | undefined {
+export function selectSite(sites: readonly Site[], path: string): Site | undefined {
   let best: Site | undefined;
 
   for (const site of sites) {

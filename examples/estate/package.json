@@ -1,16 +1,14 @@
 {
   "name": "@keel/example-estate",
   "version": "0.0.0",
+  "private": true,
   "description": "Auth-aware static: a static marketing site at / and a dynamic authed app at /mls, two zones on one origin sharing one session.",
   "type": "module",
-  "private": true,
-
   "scripts": {
     "start": "bun run serve.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
-
   "dependencies": {
     "@keel/auth": "workspace:*",
     "@keel/runtime": "workspace:*",
