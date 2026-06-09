@@ -27,3 +27,11 @@ export type { Server, ServeOptions } from "./server";
 
 export { runWorker } from "./worker";
 export type { RunWorkerOptions } from "./worker";
+
+export { dispatchSites } from "./sites";
+export type { AppHandler, DispatchSitesDeps, StaticReader } from "./sites";
+
+export { nodeStaticReader } from "./static-reader";
+
+export { KeelError, RuntimeError } from "./errors";
+export type { RuntimeErrorCode } from "./errors";

@@ -24,6 +24,9 @@ export { prerenderSite } from "./prerender";
 
 export { writePages, nodeSink } from "./write";
 
+export { buildStaticSites } from "./build";
+export type { SiteManifest } from "./build";
+
 export { SitesError } from "./errors";
 export type { SitesErrorCode } from "./errors";
 

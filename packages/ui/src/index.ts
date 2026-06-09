@@ -22,8 +22,16 @@ export { componentCatalog, treeJsonSchema } from "./schema";
 export { validateTree } from "./validate";
 export type { TreeError } from "./validate";
 
-export { renderTree } from "./render";
-export type { RenderError } from "./render";
+export { renderPage, renderTree } from "./render";
+export type { Page, RenderError } from "./render";
+
+export { island, ISLAND_ATTR } from "./island";
+export type { ClientComponentDef, IslandMount } from "./island";
+
+// The hydration runtime is browser-only (it touches `document`), so it lives
+// behind the `@keel/ui/client` subpath — server-side importers of `@keel/ui`
+// never pull DOM code into a build without the DOM lib. Mirrors react-dom's
+// server/client split.
 
 export { KeelError, UiError } from "./errors";
 export type { UiErrorCode } from "./errors";

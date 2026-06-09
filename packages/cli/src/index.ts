@@ -17,7 +17,7 @@ export type { AppConfig } from "@keel/kernel";
 export { run } from "./run";
 export type { CliDeps } from "./run";
 
-export { parsePort } from "./flags";
+export { parsePort, parseStringFlag } from "./flags";
 export type { PortFlag } from "./flags";
 
 export { CliError, KeelError } from "./errors";

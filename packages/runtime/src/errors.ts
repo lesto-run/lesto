@@ -10,16 +10,13 @@ import { KeelError } from "@keel/errors";
 
 export { KeelError };
 
-export type CliErrorCode =
-  | "CLI_UNKNOWN_COMMAND"
-  | "CLI_CONTENT_MISSING_ARGS"
-  | "CLI_UNKNOWN_TARGET";
+export type RuntimeErrorCode = "RUNTIME_STATIC_PATH_TRAVERSAL";
 
-/** Anything the CLI can refuse to do. */
-export class CliError extends KeelError<CliErrorCode> {
-  constructor(code: CliErrorCode, message: string, details?: Record<string, unknown>) {
+/** Anything the transport tier can refuse to do. */
+export class RuntimeError extends KeelError<RuntimeErrorCode> {
+  constructor(code: RuntimeErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 
-    this.name = "CliError";
+    this.name = "RuntimeError";
   }
 }

@@ -33,6 +33,7 @@
     "@keel/migrate": "workspace:*",
     "@keel/router": "workspace:*",
     "@keel/runtime": "workspace:*",
+    "@keel/sites": "workspace:*",
     "@keel/web": "workspace:*"
   }
 }

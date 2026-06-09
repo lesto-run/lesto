@@ -16,6 +16,9 @@ import type { AppConfig } from "@keel/kernel";
 import { createNewEntry, runPipeline } from "@keel/content-core/build";
 import type { RuntimeEntry } from "@keel/content-core";
 
+import { nodeSink } from "@keel/sites";
+import type { Site } from "@keel/sites";
+
 import { run } from "./run";
 
 const argv = process.argv.slice(2);
@@ -34,7 +37,25 @@ const buildContent = async (): Promise<readonly RuntimeEntry[]> =>
 const createEntry = (collection: string, title: string): Promise<void> =>
   createNewEntry(process.cwd(), collection, title);
 
-const code = await run(argv, { loadApp, serve, buildContent, createEntry, out: console.log });
+// The project declares its sites in `keel.sites.ts`, mirroring `keel.app.ts`;
+// the build reads its default export.
+const loadSites = async (): Promise<readonly Site[]> => {
+  const module = (await import(join(process.cwd(), "keel.sites.ts"))) as {
+    default: readonly Site[];
+  };
+
+  return module.default;
+};
+
+const code = await run(argv, {
+  loadApp,
+  serve,
+  buildContent,
+  createEntry,
+  loadSites,
+  sink: nodeSink,
+  out: console.log,
+});
 
 // Long-running commands keep the process alive on their own socket; everything
 // else has said all it has to say, so exit with the code the core returned.

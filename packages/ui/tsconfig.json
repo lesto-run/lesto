@@ -4,6 +4,11 @@
   "compilerOptions": {
     "rootDir": ".",
     "types": ["node"],
+
+    // This package now ships a browser client runtime (island hydration), so the
+    // DOM lib joins ES2023 — `document`, `Element`, and friends are real here.
+    "lib": ["ES2023", "DOM"],
+
     "jsx": "react-jsx"
   },
 

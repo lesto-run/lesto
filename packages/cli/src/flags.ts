@@ -37,3 +37,18 @@ export function parsePort(args: readonly string[], fallback: number): PortFlag {
 
   return { port: value };
 }
+
+/**
+ * Read `--<name> <value>` out of the command's args.
+ *
+ * The flag's value is the token immediately after it. A missing flag — or a
+ * trailing flag with no value — returns `undefined`, leaving the caller to apply
+ * whatever default the command wants.
+ */
+export function parseStringFlag(args: readonly string[], name: string): string | undefined {
+  const index = args.indexOf(`--${name}`);
+
+  if (index === -1) return undefined;
+
+  return args[index + 1];
+}

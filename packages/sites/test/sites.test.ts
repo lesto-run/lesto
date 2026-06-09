@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  buildStaticSites,
   defineSites,
   nodeSink,
   prerenderSite,
@@ -13,6 +14,7 @@ import {
   type OutputSink,
   type PageHandler,
   type RenderedPage,
+  type Site,
   type StaticSite,
 } from "../src/index";
 
@@ -27,6 +29,24 @@ function echoHandler(): { handle: PageHandler; calls: string[] } {
   };
 
   return { handle, calls };
+}
+
+// A capturing sink: each written page lands in the map, keyed by its path.
+function mapSink(): { sink: OutputSink; written: Map<string, string> } {
+  const written = new Map<string, string>();
+
+  const sink: OutputSink = (path, contents) => {
+    written.set(path, contents);
+
+    return Promise.resolve();
+  };
+
+  return { sink, written };
+}
+
+// A handler that answers every page with a fixed status, echoing the path.
+function statusHandler(status: number): PageHandler {
+  return (_method, path) => Promise.resolve({ status, body: `<html>${path}</html>` });
 }
 
 describe("defineSites", () => {
@@ -180,5 +200,110 @@ describe("nodeSink", () => {
     await expect(sink("../escaped.html", "x")).rejects.toMatchObject({
       code: "SITES_PATH_ESCAPE",
     });
+  });
+});
+
+describe("buildStaticSites", () => {
+  it("prerenders every static site, writes them, and returns a manifest", async () => {
+    const { handle, calls } = echoHandler();
+    const { sink, written } = mapSink();
+
+    const sites: readonly Site[] = [
+      { name: "marketing", render: "static", basePath: "/", pages: ["/", "/about"] },
+      { name: "listings", render: "static", basePath: "/mls", pages: ["/"] },
+    ];
+
+    const manifest = await buildStaticSites(sites, handle, sink);
+
+    // Every static page was rendered through the app's own handler. Sites
+    // prerender concurrently, so assert the set rather than the interleaving.
+    expect(calls.toSorted()).toEqual(["GET /", "GET /about", "GET /mls"]);
+
+    // And every rendered page was written through the sink.
+    expect(written.get("marketing/index.html")).toBe("<html>/</html>");
+    expect(written.get("marketing/about/index.html")).toBe("<html>/about</html>");
+    expect(written.get("listings/index.html")).toBe("<html>/mls</html>");
+
+    expect(manifest).toEqual([
+      {
+        site: "marketing",
+        pages: [
+          { path: "/", outputPath: "marketing/index.html", status: 200 },
+          { path: "/about", outputPath: "marketing/about/index.html", status: 200 },
+        ],
+      },
+      {
+        site: "listings",
+        pages: [{ path: "/mls", outputPath: "listings/index.html", status: 200 }],
+      },
+    ]);
+  });
+
+  it("skips dynamic sites entirely", async () => {
+    const { handle, calls } = echoHandler();
+    const { sink, written } = mapSink();
+
+    const sites: readonly Site[] = [
+      { name: "marketing", render: "static", basePath: "/", pages: ["/"] },
+      { name: "app", render: "dynamic", basePath: "/app" },
+    ];
+
+    const manifest = await buildStaticSites(sites, handle, sink);
+
+    // The dynamic site is served live — it is neither rendered nor written.
+    expect(calls).toEqual(["GET /"]);
+    expect(written.has("app/index.html")).toBe(false);
+    expect(manifest.map((entry) => entry.site)).toEqual(["marketing"]);
+  });
+
+  it("fails the build on a non-2xx page and writes nothing", async () => {
+    const calls: string[] = [];
+
+    // The second page 404s; the build must refuse the whole set.
+    const handle: PageHandler = (_method, path) => {
+      calls.push(path);
+
+      return Promise.resolve(
+        path === "/missing"
+          ? { status: 404, body: "not found" }
+          : { status: 200, body: `<html>${path}</html>` },
+      );
+    };
+
+    const { sink, written } = mapSink();
+
+    const sites: readonly Site[] = [
+      { name: "marketing", render: "static", basePath: "/", pages: ["/", "/missing"] },
+    ];
+
+    try {
+      await buildStaticSites(sites, handle, sink);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(SitesError);
+      expect((error as SitesError).code).toBe("SITES_PAGE_FAILED");
+      expect((error as SitesError).details["failures"]).toEqual([
+        { site: "marketing", path: "/missing", status: 404 },
+      ]);
+    }
+
+    // Nothing is written when any page fails — the build is all-or-nothing, even
+    // for the pages that did render cleanly before the failure.
+    expect(written.size).toBe(0);
+  });
+
+  it("treats any 2xx (e.g. 204) as a clean render", async () => {
+    const handle = statusHandler(204);
+
+    const { sink, written } = mapSink();
+
+    const sites: readonly Site[] = [
+      { name: "marketing", render: "static", basePath: "/", pages: ["/"] },
+    ];
+
+    const manifest = await buildStaticSites(sites, handle, sink);
+
+    expect(manifest[0]?.pages[0]?.status).toBe(204);
+    expect(written.get("marketing/index.html")).toBe("<html>/</html>");
   });
 });

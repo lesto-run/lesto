@@ -19,10 +19,13 @@ import type { AppConfig } from "@keel/kernel";
 import { deleteEntry, persistEntries, pruneEntries } from "@keel/content-store";
 import type { RuntimeEntry } from "@keel/content-core";
 
+import { buildStaticSites } from "@keel/sites";
+import type { OutputSink, Site } from "@keel/sites";
+
 import type { serve } from "@keel/runtime";
 
 import { CliError } from "./errors";
-import { parsePort } from "./flags";
+import { parsePort, parseStringFlag } from "./flags";
 
 /** The default port for `serve`/`dev` when no `--port` flag is given. */
 const DEFAULT_PORT = 3000;
@@ -46,6 +49,12 @@ export interface CliDeps {
   /** Scaffold a new entry into a collection (the bin passes `createNewEntry`). */
   createEntry: (collection: string, title: string) => Promise<void>;
 
+  /** Load the project's declared sites (the bin imports `keel.sites.ts`'s default). */
+  loadSites: () => Promise<readonly Site[]>;
+
+  /** Build a sink rooted at `outDir` for the static build (the bin passes `nodeSink`). */
+  sink: (outDir: string) => OutputSink;
+
   /** Where a line of output goes (the bin passes `console.log`). */
   out: (line: string) => void;
 }
@@ -60,6 +69,7 @@ const USAGE = [
   "  routes            List the application's routes",
   "  migrate           Run pending migrations and print the applied versions",
   "  serve, dev        Boot the app over HTTP (--port, default 3000)",
+  "  build             Prerender static sites to disk (--target <name>, --out <dir>, default out)",
   "  content:build     Compile markdown content into the content store (--prune drops stale rows)",
   "  content:new       Scaffold a new content entry: content:new <collection> <title>",
   "  content:delete    Delete a content entry: content:delete <collection> <slug>",
@@ -190,6 +200,66 @@ async function runContentDelete(args: readonly string[], deps: CliDeps): Promise
   return 0;
 }
 
+/** The default output directory for `build` when no `--out` flag is given. */
+const DEFAULT_OUT_DIR = "out";
+
+/** "page" or "pages" — the count noun the build output reads with. */
+function pageNoun(count: number): string {
+  return count === 1 ? "page" : "pages";
+}
+
+/**
+ * Narrow the site set to a single `--target`, or refuse an unknown name.
+ *
+ * No `--target` builds every site. A `--target` that names a declared site
+ * builds just that one; a name that matches nothing is a mistake the caller must
+ * fix — surfaced by a stable code, not a confusing empty build.
+ */
+function selectTarget(sites: readonly Site[], target: string | undefined): readonly Site[] {
+  if (target === undefined) return sites;
+
+  const chosen = sites.filter((site) => site.name === target);
+
+  if (chosen.length === 0) {
+    throw new CliError("CLI_UNKNOWN_TARGET", `No site named "${target}".`, {
+      target,
+      known: sites.map((site) => site.name),
+    });
+  }
+
+  return chosen;
+}
+
+/**
+ * Prerender the project's static sites to disk.
+ *
+ * Boots the app, loads its declared sites, and hands the app's own `handle` to
+ * `buildStaticSites` — which fails the build on any page that did not render
+ * before writing a single file. `--target <name>` builds one site; `--out <dir>`
+ * picks the output root (default `out`). One line per built site reports its
+ * page count.
+ */
+async function runBuild(args: readonly string[], deps: CliDeps): Promise<number> {
+  const config = await deps.loadApp();
+
+  const app = createApp(config);
+
+  const sites = await deps.loadSites();
+
+  const target = parseStringFlag(args, "target");
+  const outDir = parseStringFlag(args, "out") ?? DEFAULT_OUT_DIR;
+
+  const selected = selectTarget(sites, target);
+
+  const manifest = await buildStaticSites(selected, app.handle, deps.sink(outDir));
+
+  for (const site of manifest) {
+    deps.out(`built ${site.site}: ${site.pages.length} ${pageNoun(site.pages.length)}`);
+  }
+
+  return 0;
+}
+
 /** Print usage. Shared by `help`, the empty command, and unknown commands. */
 function printUsage(deps: CliDeps): void {
   deps.out(USAGE);
@@ -211,6 +281,8 @@ export async function run(argv: readonly string[], deps: CliDeps): Promise<numbe
   if (command === "migrate") return runMigrate(deps);
 
   if (command === "serve" || command === "dev") return runServe(args, deps);
+
+  if (command === "build") return runBuild(args, deps);
 
   if (command === "content:build") return runContentBuild(args, deps);
 

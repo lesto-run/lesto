@@ -9,6 +9,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./client": {
+      "types": "./src/hydrate.tsx",
+      "import": "./src/hydrate.tsx"
     }
   },
 

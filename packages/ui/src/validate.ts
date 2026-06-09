@@ -55,6 +55,27 @@ function walk(registry: Registry, node: unknown, path: string, errors: TreeError
     return;
   }
 
+  // An island validates against its client schema and is, to the server tree, a
+  // leaf: the client component owns whatever lives inside it, so the JSON tree
+  // never describes an island's children.
+  const client = registry.getClient(node.type);
+
+  if (client !== undefined) {
+    const { errors: islandErrors } = validateProps(client.props ?? {}, node.props ?? {});
+
+    for (const detail of islandErrors) {
+      errors.push({ path, type: "invalid_props", detail });
+    }
+
+    for (const [index, child] of (node.children ?? []).entries()) {
+      const detail = isNodeObject(child) ? child.type : typeof child;
+
+      errors.push({ path: `${path}.children[${index}]`, type: "disallowed_child", detail });
+    }
+
+    return;
+  }
+
   const def = registry.get(node.type);
 
   // Unknown component: we can't validate props or children against nothing.

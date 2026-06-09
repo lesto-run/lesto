@@ -12,6 +12,8 @@ import type { MigrationEntry } from "@keel/migrate";
 import type { RuntimeEntry } from "@keel/content-core";
 import type { Server, ServeOptions } from "@keel/runtime";
 
+import type { OutputSink, Site } from "@keel/sites";
+
 import { CliError, parsePort, run } from "../src/index";
 import type { CliDeps } from "../src/index";
 
@@ -83,6 +85,8 @@ function depsWith(overrides: Partial<CliDeps> = {}): CliDeps {
     serve: vi.fn(),
     buildContent: () => Promise.resolve([]),
     createEntry: vi.fn(() => Promise.resolve()),
+    loadSites: () => Promise.resolve([]),
+    sink: () => () => Promise.resolve(),
     out: (line) => lines.push(line),
     ...overrides,
   };
@@ -191,6 +195,122 @@ describe("run serve / dev", () => {
     expect(code).toBe(0);
     expect(serve).toHaveBeenCalledTimes(1);
     expect(lines).toEqual(["listening on http://127.0.0.1:4321"]);
+  });
+});
+
+// A capturing sink built per outDir, so a test can assert both the directory it
+// was rooted at and exactly which pages were written through it.
+function recordingSink(): {
+  sink: (outDir: string) => OutputSink;
+  outDirs: string[];
+  written: Map<string, string>;
+} {
+  const outDirs: string[] = [];
+  const written = new Map<string, string>();
+
+  const sink = (outDir: string): OutputSink => {
+    outDirs.push(outDir);
+
+    return (path, contents) => {
+      written.set(path, contents);
+
+      return Promise.resolve();
+    };
+  };
+
+  return { sink, outDirs, written };
+}
+
+// The fixture app answers `GET /posts` with 200 (resources("posts")#index) and
+// anything unmatched with 404 — so these build over real renders, not fakes.
+function staticSite(name: string, pages: readonly string[]): Site {
+  return { name, render: "static", basePath: "/", pages };
+}
+
+describe("run build", () => {
+  it("prerenders the project's static sites to disk and reports each", async () => {
+    const { sink, outDirs, written } = recordingSink();
+
+    const code = await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink,
+      }),
+    );
+
+    expect(code).toBe(0);
+
+    // Default output root, and the page written through the sink for it.
+    expect(outDirs).toEqual(["out"]);
+    expect(written.get("marketing/posts/index.html")).toContain('"posts"');
+
+    expect(lines).toEqual(["built marketing: 1 page"]);
+  });
+
+  it("says 'pages' (plural) and honors --out", async () => {
+    const { sink, outDirs } = recordingSink();
+
+    const code = await run(
+      ["build", "--out", "dist"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts", "/posts"])]),
+        sink,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(outDirs).toEqual(["dist"]);
+    expect(lines).toEqual(["built marketing: 2 pages"]);
+  });
+
+  it("with --target, builds only the named site", async () => {
+    const { sink } = recordingSink();
+
+    const code = await run(
+      ["build", "--target", "marketing"],
+      depsWith({
+        loadSites: () =>
+          Promise.resolve([staticSite("marketing", ["/posts"]), staticSite("docs", ["/posts"])]),
+        sink,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(lines).toEqual(["built marketing: 1 page"]);
+  });
+
+  it("throws CLI_UNKNOWN_TARGET for a target that names no site", async () => {
+    try {
+      await run(
+        ["build", "--target", "ghost"],
+        depsWith({ loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]) }),
+      );
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).code).toBe("CLI_UNKNOWN_TARGET");
+      expect((error as CliError).details).toEqual({ target: "ghost", known: ["marketing"] });
+    }
+  });
+
+  it("fails the build (SITES_PAGE_FAILED) on a non-2xx page", async () => {
+    const { sink, written } = recordingSink();
+
+    await expect(
+      run(
+        ["build"],
+        depsWith({
+          // `/missing` is unmatched → 404; the build must refuse it.
+          loadSites: () => Promise.resolve([staticSite("marketing", ["/posts", "/missing"])]),
+          sink,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "SITES_PAGE_FAILED" });
+
+    // Nothing was written — the build failed before committing a page.
+    expect(written.size).toBe(0);
+    expect(lines).toEqual([]);
   });
 });
 

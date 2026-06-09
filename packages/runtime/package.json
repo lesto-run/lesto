@@ -24,6 +24,8 @@
   "dependencies": {
     "@keel/web": "workspace:*",
     "@keel/kernel": "workspace:*",
-    "@keel/queue": "workspace:*"
+    "@keel/queue": "workspace:*",
+    "@keel/sites": "workspace:*",
+    "@keel/errors": "workspace:*"
   }
 }
