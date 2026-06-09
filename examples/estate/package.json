@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "bun run serve.ts",
+    "build": "bun run build.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

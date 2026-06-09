@@ -114,17 +114,17 @@ The runbook — three commands from `examples/estate/`, with
 `wrangler login` done:
 
 ```bash
-keel build --target marketing                              # prerender → out/marketing
-bun build client.tsx --outfile out/marketing/client.js \
-  --target browser                                         # the island bundle, beside the pages
-wrangler secret put SESSION_SECRET                         # the signing secret; never committed
-wrangler deploy                                            # ship the Worker + the static assets
+bun run build.ts                     # prerender marketing + bundle client.js → out/marketing
+wrangler login                       # once, if not already authenticated
+wrangler secret put SESSION_SECRET   # the signing secret; the trust root, never committed
+wrangler deploy                      # ship the Worker (worker.ts) + the static assets
 ```
 
-The `client.js` bundle step matters: the prerendered pages load `/client.js` to
-hydrate the island, and it must sit in the assets directory (`out/marketing`)
-next to them so Static Assets serves it. (`serve.ts` does this same bundle at
-boot for the local production run.)
+`build.ts` runs the same assembly `serve.ts` does (`buildProductionSite`),
+leaving `out/marketing/` with the prerendered pages and `client.js` beside them
+— which is what `wrangler.jsonc` binds as the `ASSETS` static site. (estate runs
+in-process, so it has no `keel.app.ts` and there is no global `keel` command to
+invoke — `bun run build.ts` is its build entry.)
 
 `wrangler.jsonc` is already written (by `@keel/cloudflare`'s `wranglerConfig`):
 `main` → `worker.ts`, `nodejs_compat` on (for the `node:crypto` HMAC), and
