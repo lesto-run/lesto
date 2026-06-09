@@ -143,9 +143,7 @@ export class MlsController extends Controller {
     // Mint the CSRF token for whichever form we render: bound to the session
     // for sign-out, or to the anon id for the signed-out sign-in form.
     const csrf =
-      user !== undefined && token !== undefined
-        ? csrfTokenForSession(token)
-        : csrfTokenForAnon();
+      user !== undefined && token !== undefined ? csrfTokenForSession(token) : csrfTokenForAnon();
 
     const tree: UiNode = {
       type: "Page",

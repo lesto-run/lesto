@@ -93,6 +93,42 @@ route /mls → dynamic
 route / → static
 ```
 
+## Deploy to Cloudflare (the edge)
+
+The same app runs on a Cloudflare Worker (see
+[ADR 0002](../../docs/adr/0002-edge-cloudflare.md)). `worker.ts` composes the app
+through `@keel/cloudflare`'s `toFetchHandler` + `withAssets`; `src/edge.ts` is the
+edge twin that swaps the in-memory session store for **stateless signed
+sessions** (`@keel/auth`'s `SignedSessions`) — a Worker isolate is ephemeral and
+per-PoP, so a token must carry its own proof, not point at a store the next
+isolate doesn't have.
+
+The whole loop is proven in `test/edge-auth.e2e.test.ts`, driving the actual
+Worker `fetch` handler over Node's standard `Request`/`Response`: signed-out →
+401, sign-in → signed `__Host-` cookie, cookie → gated resource, forged cookie →
+401, and **a cookie from one handler verifies in a second with the same secret
+and no shared store** (the property that makes auth work across isolates).
+
+The runbook — three commands from `examples/estate/`, with
+[wrangler](https://developers.cloudflare.com/workers/wrangler/) installed and
+`wrangler login` done:
+
+```bash
+keel build --target marketing       # prerender the static zone → out/marketing
+wrangler secret put SESSION_SECRET   # the signing secret; the trust root, never committed
+wrangler deploy                      # ship the Worker + the static assets
+```
+
+`wrangler.jsonc` is already written (by `@keel/cloudflare`'s `wranglerConfig`):
+`main` → `worker.ts`, `nodejs_compat` on (for the `node:crypto` HMAC), and
+`out/marketing` bound as the `ASSETS` static site. After deploy the marketing
+site is a cached CDN asset and `/mls` runs the Worker — one origin, one signed
+session across both.
+
+> This repo's build environment has no `wrangler` or Cloudflare credentials, so
+> those three commands are the operator's step. Everything they invoke is built
+> and tested here; the deploy is the only unautomated hop.
+
 ## Notes
 
 - The browser bundle is produced by `bun build client.tsx` (see `dev.ts`); any

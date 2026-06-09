@@ -95,7 +95,11 @@ describe("CSRF tokens", () => {
 
 describe("renderDocument", () => {
   it("HTML-escapes the title so it cannot break out of <title> (XSS)", () => {
-    const html = renderDocument(registry, { type: "Page", children: [] }, "</title><script>x</script>");
+    const html = renderDocument(
+      registry,
+      { type: "Page", children: [] },
+      "</title><script>x</script>",
+    );
 
     expect(html).not.toContain("</title><script>x");
     expect(html).toContain("&lt;/title&gt;&lt;script&gt;");
