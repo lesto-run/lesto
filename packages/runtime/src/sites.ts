@@ -21,15 +21,30 @@ import type { KeelResponse } from "@keel/web";
 /** Reads a prerendered file's contents, or `undefined` if it is not there. */
 export type StaticReader = (filePath: string) => Promise<string | undefined>;
 
+/** The per-request inputs a dynamic site needs threaded through to it. */
+export interface RequestOptions {
+  readonly query?: Record<string, string>;
+
+  readonly headers?: Record<string, string>;
+
+  readonly body?: unknown;
+}
+
 /**
  * The live app's request handler, for dynamic sites.
  *
- * It returns the *full* {@link KeelResponse} — status, headers, and body — and
- * the dispatcher passes it through verbatim. That is load-bearing: a dynamic
- * zone's `Set-Cookie` is how a same-origin session is established, so headers
- * must not be dropped. `App.handle` from `@keel/kernel` satisfies this exactly.
+ * It takes the request options (query, headers, body) and returns the *full*
+ * {@link KeelResponse} — status, headers, and body — which the dispatcher passes
+ * through verbatim in both directions. That is load-bearing: a dynamic zone
+ * reads the session cookie from the request `headers` and sets it via the
+ * response `Set-Cookie`, so neither may be dropped. `App.handle` from
+ * `@keel/kernel` satisfies this exactly.
  */
-export type AppHandler = (method: string, path: string) => Promise<KeelResponse>;
+export type AppHandler = (
+  method: string,
+  path: string,
+  options?: RequestOptions,
+) => Promise<KeelResponse>;
 
 /** Everything the site dispatcher needs, injected so the core stays pure. */
 export interface DispatchSitesDeps {
@@ -148,17 +163,18 @@ async function serveStatic(
  */
 export function dispatchSites(
   deps: DispatchSitesDeps,
-): (method: string, path: string) => Promise<KeelResponse> {
+): (method: string, path: string, options?: RequestOptions) => Promise<KeelResponse> {
   const { sites, handle, readStatic } = deps;
 
-  return async (method, path) => {
+  return async (method, path, options) => {
     const site = selectSite(sites, path);
 
     if (site === undefined) return emptyResponse(404);
 
-    // A dynamic zone delegates to the live app, verbatim — headers (and so the
-    // session cookie) flow straight through.
-    if (site.render === "dynamic") return handle(method, path);
+    // A dynamic zone delegates to the live app, verbatim — the request options
+    // (query, headers, body) flow in and the full response, `Set-Cookie` and
+    // all, flows back. That round trip is what carries the same-origin session.
+    if (site.render === "dynamic") return handle(method, path, options);
 
     return serveStatic(site, method, path, readStatic);
   };

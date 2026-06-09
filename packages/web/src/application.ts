@@ -23,9 +23,11 @@ export interface ApplicationOptions {
   controllers: Record<string, ControllerClass>;
 }
 
-/** Per-request inputs the router cannot supply: the query string and decoded body. */
+/** Per-request inputs the router cannot supply: the query string, headers, and body. */
 export interface HandleOptions {
   query?: Record<string, string>;
+
+  headers?: Record<string, string>;
 
   body?: unknown;
 }
@@ -77,6 +79,7 @@ export class Application {
       path,
       params: resolution.params,
       query: options?.query ?? {},
+      headers: options?.headers ?? {},
       body: options?.body,
     };
 

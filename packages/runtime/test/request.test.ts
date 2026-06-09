@@ -19,6 +19,25 @@ describe("toKeelRequest", () => {
     expect(request.params).toEqual({});
   });
 
+  it("normalizes headers: lowercased keys, first value of a list, dropping the absent", () => {
+    const request = toKeelRequest({
+      method: "GET",
+      url: "/",
+      headers: {
+        Cookie: "keel_session=abc",
+        "Set-Cookie": ["a=1", "b=2"], // a list keeps its first value
+        "X-Empty": [], // an empty list flattens to ""
+        "X-Absent": undefined, // an absent value is dropped entirely
+      },
+      body: "",
+    });
+
+    expect(request.headers["cookie"]).toBe("keel_session=abc");
+    expect(request.headers["set-cookie"]).toBe("a=1");
+    expect(request.headers["x-empty"]).toBe("");
+    expect("x-absent" in request.headers).toBe(false);
+  });
+
   it("parses a JSON body when the content-type is application/json", () => {
     const request = toKeelRequest({
       method: "POST",

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { dispatchSites } from "../src/index";
 
-import type { AppHandler, StaticReader } from "../src/index";
+import type { AppHandler, RequestOptions, StaticReader } from "../src/index";
 
 import type { Site } from "@keel/sites";
 
@@ -13,19 +13,19 @@ function fakeReader(files: Record<string, string>): StaticReader {
   return async (filePath) => files[filePath];
 }
 
-/** An app handler that records its calls and echoes a fixed response. */
+/** An app handler that records each call (with its options) and echoes a response. */
 function recordingHandler(response: {
   status: number;
   body: string;
   headers?: Record<string, string>;
 }): {
   handle: AppHandler;
-  calls: Array<{ method: string; path: string }>;
+  calls: Array<{ method: string; path: string; options: RequestOptions | undefined }>;
 } {
-  const calls: Array<{ method: string; path: string }> = [];
+  const calls: Array<{ method: string; path: string; options: RequestOptions | undefined }> = [];
 
-  const handle: AppHandler = async (method, path) => {
-    calls.push({ method, path });
+  const handle: AppHandler = async (method, path, options) => {
+    calls.push({ method, path, options });
 
     return { status: response.status, headers: response.headers ?? {}, body: response.body };
   };
@@ -165,6 +165,24 @@ describe("dispatchSites — dynamic sites", () => {
     expect(response.body).toBe("redirecting");
     expect(response.headers).toEqual({ "set-cookie": "session=abc; HttpOnly", location: "/mls" });
     expect(calls).toEqual([{ method: "POST", path: "/mls/session" }]);
+  });
+
+  it("forwards the request options (query, headers, body) to the dynamic app", async () => {
+    // The reverse of header passthrough: a dynamic zone reads the session cookie
+    // from the *request* headers, so the options must reach it intact.
+    const { handle, calls } = recordingHandler({ status: 200, body: "ok" });
+
+    const dispatch = dispatchSites({ sites: [mls], handle, readStatic: fakeReader({}) });
+
+    const options: RequestOptions = {
+      query: { as: "jade" },
+      headers: { cookie: "keel_session=abc" },
+      body: { saved: true },
+    };
+
+    await dispatch("POST", "/mls/saved", options);
+
+    expect(calls[0]?.options).toEqual(options);
   });
 });
 

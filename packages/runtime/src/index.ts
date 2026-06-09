@@ -29,7 +29,7 @@ export { runWorker } from "./worker";
 export type { RunWorkerOptions } from "./worker";
 
 export { dispatchSites } from "./sites";
-export type { AppHandler, DispatchSitesDeps, StaticReader } from "./sites";
+export type { AppHandler, DispatchSitesDeps, RequestOptions, StaticReader } from "./sites";
 
 export { nodeStaticReader } from "./static-reader";
 

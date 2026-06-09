@@ -99,6 +99,7 @@ async function handle(app: App, req: IncomingMessage, res: ServerResponse): Prom
 
   const response = await app.handle(request.method, request.path, {
     query: request.query,
+    headers: request.headers,
     body: request.body,
   });
 

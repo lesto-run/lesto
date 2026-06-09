@@ -56,6 +56,7 @@
         "@keel/migrate": "workspace:*",
         "@keel/router": "workspace:*",
         "@keel/runtime": "workspace:*",
+        "@keel/sites": "workspace:*",
         "@keel/web": "workspace:*",
       },
     },
@@ -492,8 +493,10 @@
       "name": "@keel/runtime",
       "version": "0.0.0",
       "dependencies": {
+        "@keel/errors": "workspace:*",
         "@keel/kernel": "workspace:*",
         "@keel/queue": "workspace:*",
+        "@keel/sites": "workspace:*",
         "@keel/web": "workspace:*",
       },
     },

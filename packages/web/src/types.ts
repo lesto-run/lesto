@@ -18,6 +18,9 @@ export interface KeelRequest {
   /** Parsed query-string pairs. */
   query: Record<string, string>;
 
+  /** Request headers, keyed by lowercased name — where a controller reads cookies. */
+  headers: Record<string, string>;
+
   /** The decoded request body, shape unknown until a controller narrows it. */
   body: unknown;
 }

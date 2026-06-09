@@ -36,6 +36,29 @@ function headerValue(
   return undefined;
 }
 
+/**
+ * Flatten raw socket headers into a plain record the dispatch core can read.
+ *
+ * Keys are lowercased (HTTP headers are case-insensitive); a header that arrived
+ * as a list keeps its first value; an absent value is dropped. This is the form
+ * a controller reads — `request.headers["cookie"]`.
+ */
+function parseHeaders(
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string> {
+  const flat: Record<string, string> = {};
+
+  for (const key of Object.keys(headers)) {
+    const value = headers[key];
+
+    if (value === undefined) continue;
+
+    flat[key.toLowerCase()] = Array.isArray(value) ? (value[0] ?? "") : value;
+  }
+
+  return flat;
+}
+
 /** Flatten URLSearchParams into a plain record; the last value wins on repeats. */
 function parseQuery(search: string): Record<string, string> {
   const query: Record<string, string> = {};
@@ -84,6 +107,7 @@ export function toKeelRequest(input: RawRequest): KeelRequest {
     path: url.pathname,
     params: {},
     query: parseQuery(url.search),
+    headers: parseHeaders(input.headers),
     body,
   };
 }
