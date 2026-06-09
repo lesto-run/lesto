@@ -89,7 +89,7 @@ export function reference(collectionName: string): unknown {
   if (!z) {
     throw new Error(
       `The 'reference()' function requires Zod to be installed. ` +
-      `Either install Zod ('npm install zod') or use 'markAsReference()' with your schema library.`
+        `Either install Zod ('npm install zod') or use 'markAsReference()' with your schema library.`,
     );
   }
 

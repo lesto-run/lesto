@@ -30,13 +30,7 @@
 export { lint, lintA11y, lintStructural } from "./rules.js";
 
 // A11y check functions
-export {
-  checkAltText,
-  checkHeadings,
-  checkLinks,
-  checkCodeBlocks,
-  checkEmbeds,
-} from "./rules.js";
+export { checkAltText, checkHeadings, checkLinks, checkCodeBlocks, checkEmbeds } from "./rules.js";
 
 // Structural check functions
 export {

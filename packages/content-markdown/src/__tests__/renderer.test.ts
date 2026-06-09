@@ -287,7 +287,9 @@ describe("edge cases", () => {
   describe("headings edge cases", () => {
     it("ignores headings inside code blocks", async () => {
       const renderer = createRenderer({ headingLevels: [1, 2, 3] });
-      const result = await renderer.render("## Real Heading\n```\n## Fake Heading\n```\n## Another Real");
+      const result = await renderer.render(
+        "## Real Heading\n```\n## Fake Heading\n```\n## Another Real",
+      );
 
       expect(result.headings).toHaveLength(2);
       expect(result.headings[0]?.text).toBe("Real Heading");
@@ -350,12 +352,10 @@ describe("edge cases", () => {
 
     it("extracts all 6 heading levels when configured", async () => {
       const renderer = createRenderer({ headingLevels: [1, 2, 3, 4, 5, 6] });
-      const result = await renderer.render(
-        "# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6"
-      );
+      const result = await renderer.render("# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6");
 
       expect(result.headings).toHaveLength(6);
-      expect(result.headings.map(h => h.depth)).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(result.headings.map((h) => h.depth)).toEqual([1, 2, 3, 4, 5, 6]);
     });
   });
 
@@ -422,7 +422,7 @@ describe("edge cases", () => {
     it("handles content with multiple code blocks", async () => {
       const renderer = createRenderer();
       const result = await renderer.render(
-        "Word1\n```\ncode block 1\n```\nWord2\n```\ncode block 2\n```\nWord3"
+        "Word1\n```\ncode block 1\n```\nWord2\n```\ncode block 2\n```\nWord3",
       );
 
       expect(result.readingTime.words).toBe(3);
@@ -474,7 +474,7 @@ describe("edge cases", () => {
     it("handles deeply nested lists", async () => {
       const renderer = createRenderer();
       const result = await renderer.render(
-        "- Level 1\n  - Level 2\n    - Level 3\n      - Level 4"
+        "- Level 1\n  - Level 2\n    - Level 3\n      - Level 4",
       );
 
       expect(result.html).toContain("<ul>");

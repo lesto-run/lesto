@@ -31,7 +31,7 @@ describe("escapeXml", () => {
 
   it("handles multiple special characters", () => {
     expect(escapeXml('<script>"alert(1)"</script>')).toBe(
-      "&lt;script&gt;&quot;alert(1)&quot;&lt;/script&gt;"
+      "&lt;script&gt;&quot;alert(1)&quot;&lt;/script&gt;",
     );
   });
 
@@ -65,7 +65,7 @@ describe("decodeXml", () => {
   });
 
   it("roundtrips with escapeXml", () => {
-    const original = '<test attr="value">&\'content\'</test>';
+    const original = "<test attr=\"value\">&'content'</test>";
     expect(decodeXml(escapeXml(original))).toBe(original);
   });
 
@@ -111,7 +111,7 @@ describe("wrapCdata", () => {
 
   it("handles content with special characters", () => {
     expect(wrapCdata('<script>alert("xss")</script>')).toBe(
-      '<![CDATA[<script>alert("xss")</script>]]>'
+      '<![CDATA[<script>alert("xss")</script>]]>',
     );
   });
 

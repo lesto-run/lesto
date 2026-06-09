@@ -34,7 +34,14 @@ describe("cache persistence", () => {
         data: { title: "Test" },
         content: "# Test",
         slug: "test",
-        meta: { path: "test.md", fileName: "test.md", extension: ".md", directory: "", pathSegments: [], isIndex: false },
+        meta: {
+          path: "test.md",
+          fileName: "test.md",
+          extension: ".md",
+          directory: "",
+          pathSegments: [],
+          isIndex: false,
+        },
       };
 
       const transformResult = {
@@ -76,7 +83,14 @@ describe("cache persistence", () => {
         data: {},
         content: "",
         slug: "test",
-        meta: { path: "", fileName: "", extension: "", directory: "", pathSegments: [], isIndex: false },
+        meta: {
+          path: "",
+          fileName: "",
+          extension: "",
+          directory: "",
+          pathSegments: [],
+          isIndex: false,
+        },
       };
       manager.setParseCache("posts", "test.md", parseResult);
 
@@ -103,7 +117,14 @@ describe("cache persistence", () => {
         data: { title: "Persisted" },
         content: "# Persisted",
         slug: "persisted",
-        meta: { path: "test.md", fileName: "test.md", extension: ".md", directory: "", pathSegments: [], isIndex: false },
+        meta: {
+          path: "test.md",
+          fileName: "test.md",
+          extension: ".md",
+          directory: "",
+          pathSegments: [],
+          isIndex: false,
+        },
       };
 
       manager.setParseCache("posts", "test.md", parseResult);
@@ -128,7 +149,14 @@ describe("cache persistence", () => {
         data: {},
         content: "",
         slug: "test",
-        meta: { path: "", fileName: "", extension: "", directory: "", pathSegments: [], isIndex: false },
+        meta: {
+          path: "",
+          fileName: "",
+          extension: "",
+          directory: "",
+          pathSegments: [],
+          isIndex: false,
+        },
       };
 
       manager.setParseCache("posts", "test.md", parseResult);
@@ -163,7 +191,14 @@ describe("cache persistence", () => {
         data: {},
         content: "",
         slug: "test",
-        meta: { path: "", fileName: "", extension: "", directory: "", pathSegments: [], isIndex: false },
+        meta: {
+          path: "",
+          fileName: "",
+          extension: "",
+          directory: "",
+          pathSegments: [],
+          isIndex: false,
+        },
       };
 
       manager.setParseCache("posts", "test.md", parseResult);
@@ -249,7 +284,14 @@ describe("collection staleness", () => {
       data: { title: "Test" },
       content: "# Test",
       slug: "test",
-      meta: { path: "test.md", fileName: "test.md", extension: ".md", directory: "", pathSegments: [], isIndex: false },
+      meta: {
+        path: "test.md",
+        fileName: "test.md",
+        extension: ".md",
+        directory: "",
+        pathSegments: [],
+        isIndex: false,
+      },
     };
 
     manager.setParseCache("posts", "test.md", parseResult);
@@ -306,7 +348,14 @@ describe("collection staleness", () => {
       data: { title: "Test" },
       content: "# Test",
       slug: "test",
-      meta: { path: "test.md", fileName: "test.md", extension: ".md", directory: "", pathSegments: [], isIndex: false },
+      meta: {
+        path: "test.md",
+        fileName: "test.md",
+        extension: ".md",
+        directory: "",
+        pathSegments: [],
+        isIndex: false,
+      },
     };
 
     manager.setParseCache("posts", "test.md", parseResult);

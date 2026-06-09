@@ -106,6 +106,17 @@ export interface WorkOptions {
 
   /** Injected so tests can drive the poll loop without real time. */
   readonly sleep?: (ms: number) => Promise<void>;
+
+  /**
+   * The observability seam for worker-loop failures.
+   *
+   * A handler that throws routes through {@link Queue#fail} (retry/backoff) and
+   * never reaches here. This fires only for errors raised *outside* the
+   * handler — a transient DB fault on claim/reclaim — which would otherwise
+   * kill the worker. The error arrives as a coded `QUEUE_WORKER_POLL_FAILED`
+   * `QueueError`; branch on its code, log it, ship it to your tracer.
+   */
+  readonly onError?: (error: QueueError) => void;
 }
 
 export interface Worker {
@@ -263,13 +274,46 @@ export class Queue {
     const pollMs = options.pollMs ?? 200;
     const concurrency = options.concurrency ?? 1;
     const sleep = options.sleep ?? defaultSleep;
+    const onError = options.onError;
 
     let running = true;
 
+    // Surface a poll failure through the observability seam without ever letting
+    // the report itself break the loop — a broken reporter must not resurrect
+    // the very fault this boundary exists to contain.
+    const report = (error: unknown): void => {
+      if (!onError) {
+        return;
+      }
+
+      const failure =
+        error instanceof QueueError
+          ? error
+          : new QueueError("QUEUE_WORKER_POLL_FAILED", "The worker poll loop hit an error.", {
+              cause: error instanceof Error ? error.message : String(error),
+            });
+
+      try {
+        onError(failure);
+      } catch {
+        // A throwing error-reporter is not allowed to kill the worker.
+      }
+    };
+
+    // The poll loop's error boundary: a transient fault on claim/reclaim must
+    // not kill the worker permanently. We report it, back off `pollMs` to avoid
+    // hot-spinning on a persistent fault, and keep polling. At-least-once holds:
+    // a job claimed before the throw stays `running` until its visibility
+    // deadline lapses, then RECLAIM returns it for a later attempt.
     const loop = async (): Promise<void> => {
       while (running) {
-        const result = await this.runOnce({ queue, visibilityMs });
-        if (result === null) {
+        try {
+          const result = await this.runOnce({ queue, visibilityMs });
+          if (result === null) {
+            await sleep(pollMs);
+          }
+        } catch (error) {
+          report(error);
           await sleep(pollMs);
         }
       }

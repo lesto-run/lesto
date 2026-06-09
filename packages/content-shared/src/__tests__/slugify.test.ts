@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  createSlugger,
-  slugify,
-  slugifyOnce,
-  resetSlugger,
-} from "../slugify.js";
+import { createSlugger, slugify, slugifyOnce, resetSlugger } from "../slugify.js";
 
 describe("createSlugger", () => {
   it("creates a new slugger instance", () => {

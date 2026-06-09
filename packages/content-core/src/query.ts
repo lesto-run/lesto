@@ -1,6 +1,7 @@
 import type { RuntimeEntry, CollectionEntry, CollectionRegistry, WorkflowConfig } from "./types";
 import { getCollection } from "./runtime";
 import { safeParseDate } from "./utils";
+import { validateRange } from "@keel/content-shared/validation";
 
 type WhereOp = "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "contains";
 
@@ -166,7 +167,7 @@ export class Query<T extends Record<string, unknown> = RuntimeEntry> {
     // Immutable pipeline - per AGENTS.md
     const filtered = this.whereClauses.reduce(
       (acc, clause) => acc.filter((e) => this.evaluate(e, clause)),
-      getCollection(this.collectionName) as T[]
+      getCollection(this.collectionName) as T[],
     );
     const sorted = this.sortEntries(this.applyDateFilters(filtered));
 
@@ -179,10 +180,16 @@ export class Query<T extends Record<string, unknown> = RuntimeEntry> {
   paginate(options: PaginationOptions): PaginatedResult<T> {
     const { page, perPage } = options;
 
+    // Reject nonsensical pagination up front: page < 1 yields a negative offset
+    // (wrong slice) and perPage < 1 makes totalPages = Infinity / NaN. Throw a
+    // coded ValidationError, mirroring @keel/content-query's paginate.
+    validateRange(page, 1, Number.MAX_SAFE_INTEGER, "page");
+    validateRange(perPage, 1, Number.MAX_SAFE_INTEGER, "perPage");
+
     // Immutable pipeline - per AGENTS.md
     const filtered = this.whereClauses.reduce(
       (acc, clause) => acc.filter((e) => this.evaluate(e, clause)),
-      getCollection(this.collectionName) as T[]
+      getCollection(this.collectionName) as T[],
     );
     const sorted = this.sortEntries(this.applyDateFilters(filtered));
 

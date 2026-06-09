@@ -50,6 +50,51 @@ describe("hashPassword / verifyPassword", () => {
   it("returns false for a stored string with the wrong algorithm prefix", () => {
     expect(verifyPassword("anything", "bcrypt$abcd$ef01")).toBe(false);
   });
+
+  // Fail-closed regression: a malformed stored hash must reject EVERY password.
+  // Before the fix, the candidate key was derived to the stored hash's length,
+  // so an empty/short stored hash made timingSafeEqual return true for all.
+  //
+  // hashPassword fixes the salt at 16 bytes and the scrypt key at 64 bytes, so
+  // a well-formed stored string carries 32 + 128 hex chars respectively.
+  const SALT_HEX = "a".repeat(16 * 2);
+  const KEY_HEX = "b".repeat(64 * 2);
+
+  it("rejects every password when the stored hash is empty (auth fails closed)", () => {
+    const empty = `scrypt$${SALT_HEX}$`;
+
+    expect(verifyPassword("", empty)).toBe(false);
+    expect(verifyPassword("any password at all", empty)).toBe(false);
+    expect(verifyPassword(" ", empty)).toBe(false);
+  });
+
+  it("rejects every password when the stored hash is truncated", () => {
+    // One byte short of the 64-byte key.
+    const truncated = `scrypt$${SALT_HEX}$${"b".repeat((64 - 1) * 2)}`;
+
+    expect(verifyPassword("any password at all", truncated)).toBe(false);
+  });
+
+  it("rejects every password when the stored hash is oversized", () => {
+    // One byte longer than the 64-byte key.
+    const oversized = `scrypt$${SALT_HEX}$${"b".repeat((64 + 1) * 2)}`;
+
+    expect(verifyPassword("any password at all", oversized)).toBe(false);
+  });
+
+  it("rejects when the salt is the wrong length", () => {
+    const shortSalt = "ab"; // 1 byte, not the expected 16
+    const badSalt = `scrypt$${shortSalt}$${KEY_HEX}`;
+
+    expect(verifyPassword("any password at all", badSalt)).toBe(false);
+  });
+
+  it("still verifies a correctly-shaped, correct password", () => {
+    const stored = hashPassword("the right password");
+
+    expect(verifyPassword("the right password", stored)).toBe(true);
+    expect(verifyPassword("the wrong password", stored)).toBe(false);
+  });
 });
 
 describe("generateToken", () => {

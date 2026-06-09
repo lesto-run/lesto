@@ -7,7 +7,7 @@ import { createSynchronizer, type Synchronizer } from "./synchronizer";
 import { generateTypes } from "./typegen";
 import type { Collection, EngineConfig, Engine, WatchCallback, WatchEvent } from "./types";
 import type { AnyTaxonomy } from "./taxonomy";
-import { setTaxonomies } from "./runtime";
+import { setTaxonomies, setWorkflowConfigs, type CollectionWorkflowConfig } from "./runtime";
 
 export function createEngine(config: EngineConfig): Engine {
   const cwd = config.cwd ?? process.cwd();
@@ -32,6 +32,18 @@ export function createEngine(config: EngineConfig): Engine {
         taxonomyRecord[taxonomy.name] = taxonomy;
       }
       setTaxonomies(taxonomyRecord);
+
+      // Register per-collection workflow configs so the runtime's
+      // getCollection/getEntry auto-filter unpublished content. Without this the
+      // filterUnpublished feature is inert — getWorkflowConfig always returns
+      // undefined and drafts leak through the runtime API.
+      const workflowConfigs: CollectionWorkflowConfig = {};
+      for (const collection of result.config.collections) {
+        if (collection.workflow) {
+          workflowConfigs[collection.name] = collection.workflow;
+        }
+      }
+      setWorkflowConfigs(workflowConfigs);
 
       // Initialize synchronizer with results
       synchronizer = createSynchronizer(result.config);

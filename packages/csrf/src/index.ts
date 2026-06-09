@@ -1,8 +1,8 @@
 /**
  * @keel/csrf — stateless double-submit CSRF tokens.
  *
- *   const token = generateToken(secret);   // hand to the client (cookie + form field)
- *   verifyToken(token, secret);            // true iff the signature checks out
+ *   const token = generateToken(sessionId, secret); // hand to the client (cookie + form field)
+ *   verifyToken(token, sessionId, secret);           // true iff the signature checks out for this session
  *
  * No server-side state: the HMAC signature is the proof. `verifyToken` is total —
  * it returns a boolean for every input and never throws.

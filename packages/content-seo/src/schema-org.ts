@@ -89,7 +89,7 @@ function normalizeUrl(siteUrl: string): string {
 function generateEntryUrl(
   entry: SchemaEntry,
   siteUrl: string,
-  urlGenerator?: (entry: SchemaEntry) => string
+  urlGenerator?: (entry: SchemaEntry) => string,
 ): string {
   if (urlGenerator) {
     const customUrl = urlGenerator(entry);
@@ -145,7 +145,7 @@ function createImageSchema(imageUrl: string): Record<string, unknown> {
 function generateArticleSchema(
   entry: SchemaEntry,
   type: "Article" | "BlogPosting" | "TechArticle" | "NewsArticle",
-  options: SchemaOrgOptions
+  options: SchemaOrgOptions,
 ): Record<string, unknown> {
   const {
     siteUrl,
@@ -181,7 +181,7 @@ function generateArticleSchema(
     "og_image",
     "ogImage",
     "featuredImage",
-    "cover"
+    "cover",
   );
 
   const schema: Record<string, unknown> = {
@@ -211,7 +211,7 @@ function generateArticleSchema(
 
 function generateProductSchema(
   entry: SchemaEntry,
-  options: SchemaOrgOptions
+  options: SchemaOrgOptions,
 ): Record<string, unknown> {
   const { siteUrl, descriptionField = "description", imageField, urlGenerator } = options;
 
@@ -294,7 +294,7 @@ export function generateFAQSchema(items: FAQItem[]): Record<string, unknown> {
 export function generateHowToSchema(
   name: string,
   steps: HowToStep[],
-  options?: { description?: string; image?: string }
+  options?: { description?: string; image?: string },
 ): Record<string, unknown> {
   const schema: Record<string, unknown> = {
     "@context": "https://schema.org",
@@ -340,7 +340,7 @@ export function generateBreadcrumbSchema(items: BreadcrumbItem[]): Record<string
 
 function generateWebPageSchema(
   entry: SchemaEntry,
-  options: SchemaOrgOptions
+  options: SchemaOrgOptions,
 ): Record<string, unknown> {
   const { siteUrl, descriptionField = "description", urlGenerator } = options;
 
@@ -390,7 +390,7 @@ function generateWebPageSchema(
 export function generateSchemaOrg(
   entry: SchemaEntry,
   type: EntrySchemaType,
-  options: SchemaOrgOptions
+  options: SchemaOrgOptions,
 ): Record<string, unknown> {
   // Use mapping to ensure exhaustive handling of all schema types
   const schemaGenerators: Record<EntrySchemaType, () => Record<string, unknown>> = {

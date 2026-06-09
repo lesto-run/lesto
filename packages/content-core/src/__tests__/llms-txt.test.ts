@@ -54,9 +54,7 @@ describe("llms-txt", () => {
 
       const lines = txt.split("\n");
       const blockquoteIndex = lines.findIndex((l) => l.startsWith(">"));
-      const overviewIndex = lines.findIndex((l) =>
-        l.includes("This documentation covers"),
-      );
+      const overviewIndex = lines.findIndex((l) => l.includes("This documentation covers"));
 
       expect(blockquoteIndex).toBeGreaterThan(-1);
       expect(overviewIndex).toBeGreaterThan(blockquoteIndex);
@@ -97,9 +95,7 @@ describe("llms-txt", () => {
     });
 
     it("formats entries without descriptions correctly", () => {
-      const entries = [
-        createEntry("intro", "docs", { title: "Introduction" }),
-      ];
+      const entries = [createEntry("intro", "docs", { title: "Introduction" })];
 
       const txt = generateLlmsTxt(entries, {
         name: "Docs",
@@ -141,9 +137,7 @@ describe("llms-txt", () => {
     });
 
     it("supports custom collection names", () => {
-      const entries = [
-        createEntry("test", "api-reference", { title: "Test" }),
-      ];
+      const entries = [createEntry("test", "api-reference", { title: "Test" })];
 
       const txt = generateLlmsTxt(entries, {
         name: "Docs",
@@ -310,15 +304,12 @@ describe("llms-txt", () => {
       const txt = generateLlmsTxt(entries, {
         name: "MyApp Documentation",
         description: "Comprehensive documentation for MyApp API and SDK",
-        overview:
-          "MyApp provides a powerful API for building integrations.",
+        overview: "MyApp provides a powerful API for building integrations.",
         siteUrl: "https://docs.myapp.com",
         sections: [
           {
             heading: "Resources",
-            entries: [
-              { title: "GitHub", path: "https://github.com/myapp/sdk" },
-            ],
+            entries: [{ title: "GitHub", path: "https://github.com/myapp/sdk" }],
           },
         ],
         optionalSection: {

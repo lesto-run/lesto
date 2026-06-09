@@ -18,11 +18,23 @@ import {
 
 import type { SqlDatabase, SqlStatement } from "../src/index";
 
+// The last SQL strings prepared, so tests can assert how identifiers were quoted.
+let preparedSql: string[] = [];
+
+// Run a block and return the SQL it prepared (used to assert injection neutralization).
+function capturedSql(run: () => void): string {
+  preparedSql = [];
+  run();
+
+  return preparedSql.join("\n");
+}
+
 // The DI boundary: the ORM speaks "array of positional params"; this adapter
 // maps that onto better-sqlite3's variadic bind. A Postgres adapter looks the same.
 function adapt(raw: Database.Database): SqlDatabase {
   return {
     prepare(sql: string): SqlStatement {
+      preparedSql.push(sql);
       const statement = raw.prepare(sql);
 
       return {
@@ -237,6 +249,20 @@ describe("Model — persistence", () => {
     expect(row.get("note")).toBeNull();
   });
 
+  it("honors an explicitly-provided primary key on create", () => {
+    const post = Post.create({ id: 4242, title: "Pinned" });
+
+    expect(post.id).toBe(4242);
+    expect(Post.find(4242).get("title")).toBe("Pinned"); // the row was written under the chosen id
+  });
+
+  it("still assigns a primary key when none is given", () => {
+    const post = Post.create({ title: "Auto" });
+
+    expect(typeof post.id).toBe("number");
+    expect(Post.find(post.id).get("title")).toBe("Auto");
+  });
+
   it("exposes get/set/assign/toJSON", () => {
     const post = new Post();
     post.set("title", "Set").assign({ body: "Assigned" });
@@ -287,5 +313,121 @@ describe("Model — querying (Relation)", () => {
     expect(Post.count()).toBe(3);
     expect(Post.where({ published: true }).exists()).toBe(true);
     expect(Post.where({ title: "nope" }).exists()).toBe(false);
+  });
+
+  it("compiles an empty IN to a constant-false predicate (no syntax error)", () => {
+    // `IN ()` is invalid SQL on Postgres; an empty set should simply match nothing.
+    expect(Post.where({ title: [] }).all()).toEqual([]);
+    expect(Post.where({ title: [] }).count()).toBe(0);
+  });
+
+  it("offset without limit returns the tail (emits LIMIT -1 OFFSET n)", () => {
+    // A bare `OFFSET` with no `LIMIT` is a syntax error in SQLite — this must not throw.
+    const tail = Post.order("views", "asc").offset(1).all();
+
+    expect(tail.map((post) => post.get("title"))).toEqual(["Charlie", "Bravo"]);
+  });
+});
+
+describe("Relation — SQL identifier safety", () => {
+  beforeEach(() => {
+    Post.create({ title: "Alpha", views: 10 });
+  });
+
+  it("quotes column identifiers so a where key cannot inject SQL", () => {
+    // Without quoting, the malicious key would terminate the statement and run a second one.
+    // Quoted, it is treated as a (non-existent) column name and the query simply runs.
+    const sql = capturedSql(() => {
+      try {
+        Post.where({ 'title"; DROP TABLE posts; --': "x" }).all();
+      } catch {
+        // SQLite raises "no such column" — the point is the table still exists.
+      }
+    });
+
+    expect(sql).toContain('"title""; DROP TABLE posts; --"');
+    expect(Post.count()).toBe(1); // table survived
+  });
+
+  it("quotes order keys", () => {
+    const sql = capturedSql(() => {
+      try {
+        Post.order("views; DROP TABLE posts").all();
+      } catch {
+        // ignored — order key is quoted as a single identifier
+      }
+    });
+
+    expect(sql).toContain('ORDER BY "views; DROP TABLE posts"');
+    expect(Post.count()).toBe(1);
+  });
+
+  it("quotes the pluck column", () => {
+    expect(Post.all().pluck("title")).toEqual(["Alpha"]);
+  });
+
+  it("rejects an identifier containing a NUL byte", () => {
+    try {
+      Post.where({ "ti\0tle": "x" }).all();
+      expect.unreachable();
+    } catch (error) {
+      expect((error as OrmError).code).toBe("ORM_UNKNOWN_COLUMN");
+    }
+  });
+
+  it("enforces a declared column allowlist, rejecting unknown columns", () => {
+    class Guarded extends Model {
+      static override tableName = "posts";
+
+      static override columns = ["id", "title", "views"];
+    }
+
+    expect(Guarded.where({ title: "Alpha" }).count()).toBe(1);
+    expect(Guarded.order("views").all()).toHaveLength(1);
+
+    try {
+      Guarded.where({ secret: "x" }).all();
+      expect.unreachable();
+    } catch (error) {
+      expect((error as OrmError).code).toBe("ORM_UNKNOWN_COLUMN");
+    }
+
+    try {
+      Guarded.order("secret").all();
+      expect.unreachable();
+    } catch (error) {
+      expect((error as OrmError).code).toBe("ORM_UNKNOWN_COLUMN");
+    }
+
+    try {
+      Guarded.all().pluck("secret");
+      expect.unreachable();
+    } catch (error) {
+      expect((error as OrmError).code).toBe("ORM_UNKNOWN_COLUMN");
+    }
+  });
+
+  it("includes the primary key and timestamps implicitly in the allowlist", () => {
+    class Timed extends Model {
+      static override tableName = "posts";
+
+      static override timestamps = true;
+
+      static override columns = ["title"];
+    }
+
+    // first() orders by the primary key, and create() writes created_at/updated_at —
+    // all must pass the allowlist even though only "title" was declared.
+    const row = Timed.create({ title: "Implicit" });
+    expect(row.isPersisted).toBe(true);
+    expect(Timed.all().first()?.get("title")).toBe("Alpha");
+
+    class Untimed extends Model {
+      static override tableName = "weird_table";
+
+      static override columns = ["name"];
+    }
+
+    expect(Untimed.create({ name: "ok" }).isPersisted).toBe(true);
   });
 });

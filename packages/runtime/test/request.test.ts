@@ -49,6 +49,17 @@ describe("toKeelRequest", () => {
     expect(request.body).toEqual({ title: "Hello" });
   });
 
+  it("rejects a malformed JSON body with a typed RUNTIME_INVALID_JSON error", () => {
+    expect(() =>
+      toKeelRequest({
+        method: "POST",
+        url: "/posts",
+        headers: { "content-type": "application/json" },
+        body: "{not json",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "RUNTIME_INVALID_JSON" }));
+  });
+
   it("keeps a non-JSON body as the raw string", () => {
     const request = toKeelRequest({
       method: "POST",

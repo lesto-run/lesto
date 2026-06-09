@@ -1,6 +1,6 @@
-import type { LineIndex } from './position.js';
+import type { LineIndex } from "./position.js";
 
-export type Severity = 'error' | 'warning';
+export type Severity = "error" | "warning";
 
 export interface Diagnostic {
   /** Unique identifier for deduplication and tracking */

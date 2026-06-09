@@ -155,7 +155,7 @@ async function buildTransformedEntry(
 async function buildMdxEntry(
   doc: ParsedDocument,
   collection: AnyCollection,
-  entryId: string
+  entryId: string,
 ): Promise<RuntimeEntry> {
   // Lazy-load MDX module
   const mdx = await getMdxModule();
@@ -163,7 +163,7 @@ async function buildMdxEntry(
     throw new Error(
       `MDX file detected (${doc.file.absolutePath}) but @keel/content-mdx is not installed.\n` +
         `Install it with: bun add @keel/content-mdx\n` +
-        `Or use .md extension instead of .mdx for plain markdown.`
+        `Or use .md extension instead of .mdx for plain markdown.`,
     );
   }
 
@@ -171,9 +171,7 @@ async function buildMdxEntry(
   // The core PluginConfig type is string-based for config serialization,
   // but actual runtime values are plugin functions. We cast to the expected
   // PluggableList type which the compileMDX function accepts.
-  type PluggableList = NonNullable<
-    Parameters<typeof mdx.compileMDX>[0]["remarkPlugins"]
-  >;
+  type PluggableList = NonNullable<Parameters<typeof mdx.compileMDX>[0]["remarkPlugins"]>;
   const mdxResult = await mdx.compileMDX({
     source: doc.document.content,
     cwd: path.dirname(doc.file.absolutePath),
@@ -290,7 +288,7 @@ function tryGetCachedResult(
   doc: ParsedDocument,
   collection: AnyCollection,
   entryId: string,
-  getParseHash: () => string
+  getParseHash: () => string,
 ): DocResult | null {
   if (!cache || !syncHasher) return null;
 
@@ -309,7 +307,7 @@ async function buildEntry(
   doc: ParsedDocument,
   collection: AnyCollection,
   store: ContextStore,
-  entryId: string
+  entryId: string,
 ): Promise<{ entry: RuntimeEntry; transformResult: Record<string, unknown> | null }> {
   if (collection.transform) {
     return buildTransformedEntry(doc, collection, store, entryId);
@@ -327,7 +325,7 @@ function handleSkipDocumentError(
   collection: AnyCollection,
   entryId: string,
   doc: ParsedDocument,
-  getParseHash: () => string
+  getParseHash: () => string,
 ): DocResult {
   if (cache && syncHasher) {
     cache.setTransformCache(collection.name, entryId, {
@@ -344,7 +342,7 @@ function handleTransformError(
   error: unknown,
   entryId: string,
   doc: ParsedDocument,
-  mode: string
+  mode: string,
 ): DocResult {
   const transformError = new TransformError(entryId, doc.file.absolutePath, error);
   if (mode === "production") throw transformError;
@@ -361,7 +359,7 @@ function processSuccessfulTransform(
   config: ResolvedConfig,
   cache: CacheManager | undefined,
   syncHasher: ReturnType<typeof createSyncHasher> | undefined,
-  getParseHash: () => string
+  getParseHash: () => string,
 ): DocResult {
   applyComputedFields(entry, doc, collection);
 
@@ -388,13 +386,28 @@ async function transformDocument(
   const entryId = `${collection.name}/${doc.slug}`;
   const getParseHash = syncHasher ? createParseHashGetter(doc, collection, syncHasher) : () => "";
 
-  const cachedResult = tryGetCachedResult(cache, syncHasher, doc, collection, entryId, getParseHash);
+  const cachedResult = tryGetCachedResult(
+    cache,
+    syncHasher,
+    doc,
+    collection,
+    entryId,
+    getParseHash,
+  );
   if (cachedResult) return cachedResult;
 
   try {
     const { entry, transformResult } = await buildEntry(doc, collection, store, entryId);
     return processSuccessfulTransform(
-      entry, transformResult, doc, collection, entryId, config, cache, syncHasher, getParseHash
+      entry,
+      transformResult,
+      doc,
+      collection,
+      entryId,
+      config,
+      cache,
+      syncHasher,
+      getParseHash,
     );
   } catch (error) {
     if (error instanceof SkipDocumentError) {

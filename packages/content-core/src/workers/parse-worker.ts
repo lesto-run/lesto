@@ -1,5 +1,10 @@
 import { parentPort } from "node:worker_threads";
-import { resolveParser, FrontmatterParseError, YamlParseError, JsonParseError } from "@keel/content-umbra";
+import {
+  resolveParser,
+  FrontmatterParseError,
+  YamlParseError,
+  JsonParseError,
+} from "@keel/content-umbra";
 import type { ParserPreset } from "@keel/content-umbra";
 
 interface WorkerMessage {

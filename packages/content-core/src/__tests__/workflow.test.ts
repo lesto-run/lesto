@@ -198,7 +198,14 @@ describe("Workflow", () => {
         {
           id: "posts/no-date",
           collection: "posts",
-          file: { path: "no-date.md", fileName: "no-date", extension: "md", directory: ".", pathSegments: [], isIndex: false },
+          file: {
+            path: "no-date.md",
+            fileName: "no-date",
+            extension: "md",
+            directory: ".",
+            pathSegments: [],
+            isIndex: false,
+          },
           slug: "no-date",
           status: "published",
           content: "",
@@ -219,7 +226,14 @@ describe("Workflow", () => {
         {
           id: "posts/string-date",
           collection: "posts",
-          file: { path: "string-date.md", fileName: "string-date", extension: "md", directory: ".", pathSegments: [], isIndex: false },
+          file: {
+            path: "string-date.md",
+            fileName: "string-date",
+            extension: "md",
+            directory: ".",
+            pathSegments: [],
+            isIndex: false,
+          },
           slug: "string-date",
           status: "published",
           publishedAt: "2024-06-01T12:00:00Z", // String instead of Date
@@ -284,7 +298,14 @@ describe("Runtime auto-filtering", () => {
     {
       id: "posts/published",
       collection: "posts",
-      file: { path: "published.md", fileName: "published", extension: "md", directory: ".", pathSegments: [], isIndex: false },
+      file: {
+        path: "published.md",
+        fileName: "published",
+        extension: "md",
+        directory: ".",
+        pathSegments: [],
+        isIndex: false,
+      },
       slug: "published",
       status: "published",
       publishedAt: pastDate,
@@ -293,7 +314,14 @@ describe("Runtime auto-filtering", () => {
     {
       id: "posts/draft",
       collection: "posts",
-      file: { path: "draft.md", fileName: "draft", extension: "md", directory: ".", pathSegments: [], isIndex: false },
+      file: {
+        path: "draft.md",
+        fileName: "draft",
+        extension: "md",
+        directory: ".",
+        pathSegments: [],
+        isIndex: false,
+      },
       slug: "draft",
       status: "draft",
       content: "",
@@ -301,7 +329,14 @@ describe("Runtime auto-filtering", () => {
     {
       id: "posts/scheduled",
       collection: "posts",
-      file: { path: "scheduled.md", fileName: "scheduled", extension: "md", directory: ".", pathSegments: [], isIndex: false },
+      file: {
+        path: "scheduled.md",
+        fileName: "scheduled",
+        extension: "md",
+        directory: ".",
+        pathSegments: [],
+        isIndex: false,
+      },
       slug: "scheduled",
       status: "published",
       publishedAt: futureDate,
@@ -310,7 +345,14 @@ describe("Runtime auto-filtering", () => {
     {
       id: "posts/expired",
       collection: "posts",
-      file: { path: "expired.md", fileName: "expired", extension: "md", directory: ".", pathSegments: [], isIndex: false },
+      file: {
+        path: "expired.md",
+        fileName: "expired",
+        extension: "md",
+        directory: ".",
+        pathSegments: [],
+        isIndex: false,
+      },
       slug: "expired",
       status: "published",
       publishedAt: pastDate,
@@ -426,6 +468,39 @@ describe("Runtime auto-filtering", () => {
       const entry = runtime.getEntry("posts", "draft");
       expect(entry).toBeDefined();
       expect(entry?.slug).toBe("draft");
+    });
+  });
+
+  describe("getCollections with filterUnpublished", () => {
+    it("hides unpublished entries (no draft/scheduled/expired leak)", () => {
+      // Regression: getCollections() previously bypassed the unpublished filter,
+      // leaking drafts/scheduled/expired entries that getCollection() hides.
+      runtime.setData({ posts: mockEntries });
+      runtime.setWorkflowConfigs({
+        posts: {
+          statusField: "status",
+          publishDateField: "publishedAt",
+          expirationField: "expiresAt",
+          filterUnpublished: true,
+        },
+      });
+
+      const collections = runtime.getCollections();
+      const posts = collections.find((c) => c.name === "posts");
+      expect(posts).toBeDefined();
+      // Only the published, non-expired, already-published entry survives.
+      expect(posts?.entries).toHaveLength(1);
+      expect(posts?.entries[0]?.slug).toBe("published");
+    });
+
+    it("returns all entries when filterUnpublished is false", () => {
+      runtime.setData({ posts: mockEntries });
+      runtime.setWorkflowConfigs({
+        posts: { statusField: "status", filterUnpublished: false },
+      });
+
+      const posts = runtime.getCollections().find((c) => c.name === "posts");
+      expect(posts?.entries).toHaveLength(4);
     });
   });
 

@@ -42,7 +42,9 @@ function getMDXComponent(code: string, globals?: Record<string, unknown>) {
     ...globals,
   };
   const fn = new Function(...Object.keys(scope), code);
-  const result = fn(...Object.values(scope)) as { default: ComponentType<{ components?: Record<string, MDXComponent> }> };
+  const result = fn(...Object.values(scope)) as {
+    default: ComponentType<{ components?: Record<string, MDXComponent> }>;
+  };
   return result.default;
 }
 
@@ -64,12 +66,7 @@ function getMDXComponent(code: string, globals?: Record<string, unknown>) {
  * }
  * ```
  */
-export function MDXContent({
-  code,
-  components,
-  globals,
-  className,
-}: MDXContentProps) {
+export function MDXContent({ code, components, globals, className }: MDXContentProps) {
   // Memoize component creation to avoid expensive new Function() call on every render
   const Component = useMemo(() => getMDXComponent(code, globals), [code, globals]);
 
@@ -79,7 +76,7 @@ export function MDXContent({
       pre: CodeBlock,
       ...components,
     }),
-    [components]
+    [components],
   );
 
   return (

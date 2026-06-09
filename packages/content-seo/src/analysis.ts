@@ -92,7 +92,7 @@ class SEORecommendationFactory {
     type: SEORecommendation["type"],
     message: string,
     details?: string,
-    fix?: string
+    fix?: string,
   ): SEORecommendation {
     return {
       id: `seo-rec-${++this.idCounter}`,
@@ -181,7 +181,7 @@ interface FrontmatterMetadata {
  */
 function findFirstField<T extends readonly string[]>(
   frontmatter: Record<string, unknown>,
-  fields: T
+  fields: T,
 ): { field: T[number]; value: string } | undefined {
   for (const field of fields) {
     const value = frontmatter[field];
@@ -219,21 +219,23 @@ function stripFrontmatter(content: string): string {
  * Removes code blocks, inline code, images, links (keeping text), formatting, headers, and HTML.
  */
 function stripMarkdown(content: string): string {
-  return stripFrontmatter(content)
-    // Remove code blocks
-    .replace(/```[\s\S]*?```/g, "")
-    // Remove inline code
-    .replace(/`[^`]+`/g, "")
-    // Remove images
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "")
-    // Remove links but keep text
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    // Remove formatting
-    .replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, "$1")
-    // Remove headers
-    .replace(/^#{1,6}\s+/gm, "")
-    // Remove HTML
-    .replace(/<[^>]+>/g, "");
+  return (
+    stripFrontmatter(content)
+      // Remove code blocks
+      .replace(/```[\s\S]*?```/g, "")
+      // Remove inline code
+      .replace(/`[^`]+`/g, "")
+      // Remove images
+      .replace(/!\[([^\]]*)\]\([^)]+\)/g, "")
+      // Remove links but keep text
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      // Remove formatting
+      .replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, "$1")
+      // Remove headers
+      .replace(/^#{1,6}\s+/gm, "")
+      // Remove HTML
+      .replace(/<[^>]+>/g, "")
+  );
 }
 
 // --- Word/Paragraph Counting ---
@@ -333,14 +335,14 @@ function calculateScore(metrics: Omit<SEOMetrics, "score">): number {
 
 function getTitleRecommendations(
   title: SEOMetrics["title"],
-  f: SEORecommendationFactory
+  f: SEORecommendationFactory,
 ): SEORecommendation[] {
   if (!title.value) {
     return [
       f.error(
         "Missing title",
         "Add a title to your frontmatter for better SEO.",
-        'Add `title: "Your Title"` to your frontmatter.'
+        'Add `title: "Your Title"` to your frontmatter.',
       ),
     ];
   }
@@ -349,7 +351,7 @@ function getTitleRecommendations(
       f.warning(
         "Title is too short",
         `Your title is ${title.length} characters. Aim for 50-60 characters.`,
-        "Expand your title to be more descriptive."
+        "Expand your title to be more descriptive.",
       ),
     ];
   }
@@ -358,23 +360,28 @@ function getTitleRecommendations(
       f.warning(
         "Title is too long",
         `Your title is ${title.length} characters. Keep it under 60 for best display.`,
-        "Shorten your title to prevent truncation in search results."
+        "Shorten your title to prevent truncation in search results.",
       ),
     ];
   }
-  return [f.success("Title length is optimal", `${title.length} characters is within the ideal 50-60 range.`)];
+  return [
+    f.success(
+      "Title length is optimal",
+      `${title.length} characters is within the ideal 50-60 range.`,
+    ),
+  ];
 }
 
 function getMetaRecommendations(
   meta: SEOMetrics["metaDescription"],
-  f: SEORecommendationFactory
+  f: SEORecommendationFactory,
 ): SEORecommendation[] {
   if (!meta.value) {
     return [
       f.error(
         "Missing meta description",
         "Add a description to your frontmatter for search result snippets.",
-        'Add `description: "Your description"` to your frontmatter.'
+        'Add `description: "Your description"` to your frontmatter.',
       ),
     ];
   }
@@ -383,7 +390,7 @@ function getMetaRecommendations(
       f.warning(
         "Meta description is too short",
         `Your description is ${meta.length} characters. Aim for 150-160.`,
-        "Expand your description to better summarize the content."
+        "Expand your description to better summarize the content.",
       ),
     ];
   }
@@ -392,19 +399,22 @@ function getMetaRecommendations(
       f.warning(
         "Meta description is too long",
         `Your description is ${meta.length} characters. Keep it under 160.`,
-        "Shorten your description to prevent truncation."
+        "Shorten your description to prevent truncation.",
       ),
     ];
   }
   return [
-    f.success("Meta description length is optimal", `${meta.length} characters is within the ideal 150-160 range.`),
+    f.success(
+      "Meta description length is optimal",
+      `${meta.length} characters is within the ideal 150-160 range.`,
+    ),
   ];
 }
 
 function getHeadingRecommendations(
   headings: SEOMetrics["headings"],
   wordCount: number,
-  f: SEORecommendationFactory
+  f: SEORecommendationFactory,
 ): SEORecommendation[] {
   const recs: SEORecommendation[] = [];
   if (!headings.hasH1) {
@@ -412,23 +422,26 @@ function getHeadingRecommendations(
       f.warning(
         "Missing H1 heading",
         "Consider adding an H1 heading to your content.",
-        "Add a main heading using # at the start of a line."
-      )
+        "Add a main heading using # at the start of a line.",
+      ),
     );
   } else if (headings.h1Count > 1) {
     recs.push(
       f.warning(
         "Multiple H1 headings",
         `Found ${headings.h1Count} H1 headings. Use only one per page.`,
-        "Change extra H1s to H2 or lower."
-      )
+        "Change extra H1s to H2 or lower.",
+      ),
     );
   } else {
     recs.push(f.success("H1 heading is properly used"));
   }
   if (headings.h2Count === 0 && wordCount > 150) {
     recs.push(
-      f.info("Consider adding subheadings", "Break up longer content with H2 and H3 headings for better readability.")
+      f.info(
+        "Consider adding subheadings",
+        "Break up longer content with H2 and H3 headings for better readability.",
+      ),
     );
   }
   return recs;
@@ -436,14 +449,14 @@ function getHeadingRecommendations(
 
 function getImageRecommendations(
   images: SEOMetrics["images"],
-  f: SEORecommendationFactory
+  f: SEORecommendationFactory,
 ): SEORecommendation[] {
   if (images.missingAlt > 0) {
     return [
       f.warning(
         `${images.missingAlt} image(s) missing alt text`,
         "Alt text helps with accessibility and SEO.",
-        "Add descriptive alt text to all images: ![alt text](image.jpg)"
+        "Add descriptive alt text to all images: ![alt text](image.jpg)",
       ),
     ];
   }
@@ -455,14 +468,14 @@ function getImageRecommendations(
 
 function getContentRecommendations(
   content: SEOMetrics["content"],
-  f: SEORecommendationFactory
+  f: SEORecommendationFactory,
 ): SEORecommendation[] {
   if (content.wordCount < 300) {
     return [
       f.warning(
         "Content may be too short",
         `${content.wordCount} words. Search engines prefer at least 300 words.`,
-        "Consider expanding your content with more detail."
+        "Consider expanding your content with more detail.",
       ),
     ];
   }
@@ -472,21 +485,31 @@ function getContentRecommendations(
 function getLinkRecommendations(
   links: SEOMetrics["links"],
   wordCount: number,
-  f: SEORecommendationFactory
+  f: SEORecommendationFactory,
 ): SEORecommendation[] {
   const recs: SEORecommendation[] = [];
   if (links.internal === 0 && wordCount > 150) {
-    recs.push(f.info("Consider adding internal links", "Linking to other content helps with navigation and SEO."));
+    recs.push(
+      f.info(
+        "Consider adding internal links",
+        "Linking to other content helps with navigation and SEO.",
+      ),
+    );
   }
   if (links.external === 0 && wordCount > 300) {
-    recs.push(f.info("Consider adding external links", "Citing sources with external links can improve credibility."));
+    recs.push(
+      f.info(
+        "Consider adding external links",
+        "Citing sources with external links can improve credibility.",
+      ),
+    );
   }
   return recs;
 }
 
 function getFrontmatterRecommendations(
   frontmatter: SEOMetrics["frontmatter"],
-  f: SEORecommendationFactory
+  f: SEORecommendationFactory,
 ): SEORecommendation[] {
   const recs: SEORecommendation[] = [];
 
@@ -495,15 +518,15 @@ function getFrontmatterRecommendations(
       f.warning(
         "Missing Open Graph image",
         "Social shares will use a generic preview without a featured image.",
-        'Add `og_image: "/images/my-post-og.png"` to your frontmatter.'
-      )
+        'Add `og_image: "/images/my-post-og.png"` to your frontmatter.',
+      ),
     );
   } else {
     recs.push(
       f.success(
         "Open Graph image configured",
-        `Using ${frontmatter.ogImageField}: "${frontmatter.ogImageValue}"`
-      )
+        `Using ${frontmatter.ogImageField}: "${frontmatter.ogImageValue}"`,
+      ),
     );
   }
 
@@ -659,7 +682,7 @@ export function getSEOScoreLabel(score: number): string {
 export function analyzeKeywordDensity(
   content: string,
   keywords: string[],
-  options: KeywordDensityOptions = {}
+  options: KeywordDensityOptions = {},
 ): KeywordDensityResult {
   const { contextLength = 50, maxLocations = 3, caseInsensitive = true } = options;
 
@@ -728,30 +751,30 @@ export function analyzeKeywordDensity(
         f.warning(
           `Keyword "${keyword}" not found`,
           "Consider adding this keyword to your content for better targeting.",
-          `Include "${keyword}" naturally in your content.`
-        )
+          `Include "${keyword}" naturally in your content.`,
+        ),
       );
     } else if (density < 0.5) {
       recommendations.push(
         f.info(
           `Low density for "${keyword}"`,
-          `Appears ${count} time(s) (${density.toFixed(1)}%). Consider adding more mentions to reach 1-3% density.`
-        )
+          `Appears ${count} time(s) (${density.toFixed(1)}%). Consider adding more mentions to reach 1-3% density.`,
+        ),
       );
     } else if (density > 3) {
       recommendations.push(
         f.warning(
           `High density for "${keyword}"`,
           `Appears ${count} time(s) (${density.toFixed(1)}%). May appear as keyword stuffing.`,
-          `Reduce usage of "${keyword}" to maintain natural readability.`
-        )
+          `Reduce usage of "${keyword}" to maintain natural readability.`,
+        ),
       );
     } else {
       recommendations.push(
         f.success(
           `Good density for "${keyword}"`,
-          `Appears ${count} time(s) (${density.toFixed(1)}%). Optimal range is 1-3%.`
-        )
+          `Appears ${count} time(s) (${density.toFixed(1)}%). Optimal range is 1-3%.`,
+        ),
       );
     }
   }

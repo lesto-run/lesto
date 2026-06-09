@@ -51,7 +51,14 @@ export function verifyPassword(password: string, stored: string): boolean {
   const salt = Buffer.from(saltHex, "hex");
   const expected = Buffer.from(hashHex, "hex");
 
-  const actual = scryptSync(password, salt, expected.length);
+  // Fail closed on malformed stored material. We must NOT derive the candidate
+  // key to `expected.length`: an empty or truncated stored hash would then make
+  // scrypt produce a same-length (e.g. zero-length) buffer and timingSafeEqual
+  // would report equality for EVERY password — auth failing open. The salt and
+  // key widths are fixed by hashPassword, so anything else cannot be ours.
+  if (salt.length !== SALT_BYTES || expected.length !== KEY_BYTES) return false;
+
+  const actual = scryptSync(password, salt, KEY_BYTES);
 
   return timingSafeEqual(actual, expected);
 }

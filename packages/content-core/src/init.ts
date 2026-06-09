@@ -32,7 +32,10 @@ function createReadlineInterface() {
   });
 }
 
-async function prompt(rl: ReturnType<typeof createReadlineInterface>, question: string): Promise<string> {
+async function prompt(
+  rl: ReturnType<typeof createReadlineInterface>,
+  question: string,
+): Promise<string> {
   return new Promise((resolve) => {
     rl.question(question, (answer) => {
       resolve(answer.trim());
@@ -106,10 +109,7 @@ function getFrameworkDisplayName(framework: Framework): string {
   return names[framework];
 }
 
-async function updatePackageJson(
-  cwd: string,
-  packageJson: PackageJson | undefined
-): Promise<void> {
+async function updatePackageJson(cwd: string, packageJson: PackageJson | undefined): Promise<void> {
   const pkgPath = path.join(cwd, "package.json");
   const pkg: PackageJson = packageJson ?? {};
 
@@ -151,7 +151,7 @@ async function updateViteConfig(cwd: string, viteConfigFile: string): Promise<vo
     // Add import at the top
     .replace(
       /(import .* from ['"]vite['"];?)/,
-      '$1\nimport docks from "@keel/content-vite-plugin";'
+      '$1\nimport docks from "@keel/content-vite-plugin";',
     )
     // Add plugin to plugins array
     .replace(/plugins:\s*\[/, "plugins: [docks(), ");
@@ -176,7 +176,9 @@ async function updateNextConfig(cwd: string, nextConfigFile: string): Promise<vo
     return;
   }
 
-  console.log(`  Could not auto-update ${nextConfigFile}. Please add the Docks configuration manually:`);
+  console.log(
+    `  Could not auto-update ${nextConfigFile}. Please add the Docks configuration manually:`,
+  );
   console.log('    import { withDocks } from "@keel/content-next";');
   console.log("    export default withDocks(nextConfig);");
 }

@@ -9,11 +9,7 @@
  */
 
 import { encodeBase64 } from "@keel/content-shared/encoding";
-import type {
-  EmbeddingResult,
-  SearchIndex,
-  GenerateSearchIndexOptions,
-} from "./types";
+import type { EmbeddingResult, SearchIndex, GenerateSearchIndexOptions } from "./types";
 import { MODEL_NAME, EMBEDDING_DIMENSIONS } from "./constants";
 
 // ============================================================================
@@ -99,7 +95,7 @@ function toCompactEntry(entry: EmbeddingResult): CompactEntry {
  */
 export function serializeSearchIndex(
   entries: EmbeddingResult[],
-  options: GenerateSearchIndexOptions = {}
+  options: GenerateSearchIndexOptions = {},
 ): string {
   const { model = MODEL_NAME, compact = true } = options;
 

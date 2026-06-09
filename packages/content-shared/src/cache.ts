@@ -43,15 +43,17 @@ export interface CacheOptions<V> {
   /** Maximum total size (requires sizeCalculation) */
   maxSize?: number;
   /** Called when an entry is evicted */
-  onEviction?: (value: V, key: string, reason: "evict" | "set" | "delete" | "expire" | "fetch") => void;
+  onEviction?: (
+    value: V,
+    key: string,
+    reason: "evict" | "set" | "delete" | "expire" | "fetch",
+  ) => void;
 }
 
 /**
  * Create a typed LRU cache with standard configuration.
  */
-export function createCache<V extends {}>(
-  options: CacheOptions<V>
-): LRUCache<string, V> {
+export function createCache<V extends {}>(options: CacheOptions<V>): LRUCache<string, V> {
   const cacheOptions: LRUCache.Options<string, V, unknown> = {
     max: options.max,
     allowStale: false,
@@ -80,7 +82,7 @@ export function createCache<V extends {}>(
  */
 export function createImmutableCache<V extends {}>(
   options: CacheOptions<V>,
-  clone: (value: V) => V
+  clone: (value: V) => V,
 ): {
   get: (key: string) => V | undefined;
   set: (key: string, value: V) => void;
@@ -128,9 +130,7 @@ export function deepClone<T>(value: T): T {
     return new Date(value.getTime()) as unknown as T;
   }
   if (value instanceof Map) {
-    return new Map(
-      Array.from(value.entries()).map(([k, v]) => [k, deepClone(v)])
-    ) as unknown as T;
+    return new Map(Array.from(value.entries()).map(([k, v]) => [k, deepClone(v)])) as unknown as T;
   }
   if (value instanceof Set) {
     return new Set(Array.from(value).map(deepClone)) as unknown as T;

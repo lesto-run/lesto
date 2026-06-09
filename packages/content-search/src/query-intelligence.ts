@@ -48,8 +48,25 @@ const STEP_3_SUFFIXES: Array<[string, string]> = [
 ];
 
 const STEP_4_SUFFIXES = [
-  "al", "ance", "ence", "er", "ic", "able", "ible", "ant", "ement",
-  "ment", "ent", "ion", "ou", "ism", "ate", "iti", "ous", "ive", "ize",
+  "al",
+  "ance",
+  "ence",
+  "er",
+  "ic",
+  "able",
+  "ible",
+  "ant",
+  "ement",
+  "ment",
+  "ent",
+  "ion",
+  "ou",
+  "ism",
+  "ate",
+  "iti",
+  "ous",
+  "ive",
+  "ize",
 ];
 
 function isConsonant(word: string, i: number): boolean {
@@ -86,11 +103,7 @@ function endsWithDoubleConsonant(word: string): boolean {
   if (word.length < 2) return false;
   const last = word[word.length - 1];
   const secondLast = word[word.length - 2];
-  return (
-    last === secondLast &&
-    last !== undefined &&
-    isConsonant(word, word.length - 1)
-  );
+  return last === secondLast && last !== undefined && isConsonant(word, word.length - 1);
 }
 
 function endsCVC(word: string): boolean {
@@ -253,11 +266,7 @@ export function levenshteinDistance(a: string, b: string): number {
       const cost = longer[i - 1] === shorter[j - 1] ? 0 : 1;
       row[j - 1] = prev;
       const prevRow = row[j]!;
-      prev = Math.min(
-        prevRow + 1,
-        prev + 1,
-        current + cost
-      );
+      prev = Math.min(prevRow + 1, prev + 1, current + cost);
     }
     row[shorter.length] = prev;
   }
@@ -345,7 +354,7 @@ export class BKTree {
     }
 
     return results.toSorted((a, b) =>
-      a.distance !== b.distance ? a.distance - b.distance : a.word.localeCompare(b.word)
+      a.distance !== b.distance ? a.distance - b.distance : a.word.localeCompare(b.word),
     );
   }
 
@@ -568,13 +577,12 @@ export function createQueryProcessor(options?: QueryIntelligenceOptions): QueryP
  */
 export function preprocessQuery(
   query: string,
-  options: Pick<QueryIntelligenceOptions, "enableStemming" | "enableSynonyms" | "customSynonyms"> = {}
+  options: Pick<
+    QueryIntelligenceOptions,
+    "enableStemming" | "enableSynonyms" | "customSynonyms"
+  > = {},
 ): ProcessedQuery {
-  const {
-    enableStemming = true,
-    enableSynonyms = true,
-    customSynonyms = {},
-  } = options;
+  const { enableStemming = true, enableSynonyms = true, customSynonyms = {} } = options;
 
   const original = query;
   const mustMatch = extractQuotedPhrases(query);

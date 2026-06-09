@@ -80,10 +80,7 @@ function formatSection(section: LlmsTxtSection): string {
  * });
  * ```
  */
-export function generateLlmsTxt(
-  entries: FeedEntry[],
-  options: LlmsTxtOptions,
-): string {
+export function generateLlmsTxt(entries: FeedEntry[], options: LlmsTxtOptions): string {
   const {
     name,
     description,
@@ -127,22 +124,18 @@ export function generateLlmsTxt(
   // Group entries by collection or treat as single list
   if (groupByCollection && entries.length > 0) {
     // Group by collection field
-    const grouped = entries.reduce<Record<string, FeedEntry[]>>(
-      (acc, entry) => {
-        const collection = entry.collection;
-        if (!acc[collection]) {
-          acc[collection] = [];
-        }
-        acc[collection].push(entry);
-        return acc;
-      },
-      {},
-    );
+    const grouped = entries.reduce<Record<string, FeedEntry[]>>((acc, entry) => {
+      const collection = entry.collection;
+      if (!acc[collection]) {
+        acc[collection] = [];
+      }
+      acc[collection].push(entry);
+      return acc;
+    }, {});
 
     // Generate section for each collection
     Object.entries(grouped).forEach(([collectionName, collectionEntries]) => {
-      const sectionName =
-        collectionNames[collectionName] ?? titleCase(collectionName);
+      const sectionName = collectionNames[collectionName] ?? titleCase(collectionName);
       const sectionEntries: LlmsTxtEntry[] = collectionEntries.map((entry) => {
         const desc = getFieldValue(entry, descriptionField);
         const base: LlmsTxtEntry = {
@@ -184,9 +177,7 @@ export function generateLlmsTxt(
 
   // Optional section (semantic meaning per spec - can be skipped for shorter context)
   if (optionalSection && optionalSection.entries.length > 0) {
-    lines.push(
-      formatSection({ heading: "Optional", entries: optionalSection.entries }),
-    );
+    lines.push(formatSection({ heading: "Optional", entries: optionalSection.entries }));
     lines.push("");
   }
 

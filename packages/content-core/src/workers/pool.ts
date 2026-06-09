@@ -196,9 +196,7 @@ class WorkerPoolImpl implements WorkerPool {
     const terminateWithTimeout = (worker: Worker) =>
       Promise.race([
         worker.terminate(),
-        new Promise<number>((resolve) =>
-          setTimeout(() => resolve(-1), TERMINATION_TIMEOUT)
-        ),
+        new Promise<number>((resolve) => setTimeout(() => resolve(-1), TERMINATION_TIMEOUT)),
       ]);
 
     await Promise.all(this.workers.map(terminateWithTimeout));

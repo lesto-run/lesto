@@ -1,10 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import {
-  resolveAIConfig,
-  isAIConfigured,
-  validateAIConfig,
-  getAIConfigStatus,
-} from "../ai-config";
+import { resolveAIConfig, isAIConfigured, validateAIConfig, getAIConfigStatus } from "../ai-config";
 import type { AIConfig } from "../types";
 
 /** Coerce an arbitrary object into {@link AIConfig} to exercise runtime validation. */

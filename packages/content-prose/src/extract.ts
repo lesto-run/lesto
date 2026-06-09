@@ -5,7 +5,7 @@
  * This approach is faster and works in web workers (no DOM dependency).
  */
 
-import type { TextSpan } from './types.js';
+import type { TextSpan } from "./types.js";
 
 /**
  * Extract text spans from markdown content.
@@ -39,27 +39,27 @@ export function extract(content: string): TextSpan[] {
   let workingContent = content;
 
   // Replace inline code with spaces (preserves offsets)
-  workingContent = workingContent.replace(/`[^`\n]+`/g, (m) => ' '.repeat(m.length));
+  workingContent = workingContent.replace(/`[^`\n]+`/g, (m) => " ".repeat(m.length));
 
   // Replace image syntax with spaces
-  workingContent = workingContent.replace(/!\[([^\]]*)\]\([^)]+\)/g, (m) => ' '.repeat(m.length));
+  workingContent = workingContent.replace(/!\[([^\]]*)\]\([^)]+\)/g, (m) => " ".repeat(m.length));
 
   // Replace link URLs but keep bracket text: [text](url) -> [text]
-  workingContent = workingContent.replace(/\]\([^)]+\)/g, (m) => ']' + ' '.repeat(m.length - 1));
+  workingContent = workingContent.replace(/\]\([^)]+\)/g, (m) => "]" + " ".repeat(m.length - 1));
 
   // Replace HTML tags with spaces
-  workingContent = workingContent.replace(/<[^>]+>/g, (m) => ' '.repeat(m.length));
+  workingContent = workingContent.replace(/<[^>]+>/g, (m) => " ".repeat(m.length));
 
   // Replace markdown formatting markers with spaces (bold, italic, strikethrough)
   // Order matters: ** before *, __ before _
-  workingContent = workingContent.replace(/\*\*/g, '  ');
-  workingContent = workingContent.replace(/__/g, '  ');
-  workingContent = workingContent.replace(/(?<!\*)\*(?!\*)/g, ' '); // single * not adjacent to another *
-  workingContent = workingContent.replace(/(?<!_)_(?!_)/g, ' '); // single _ not adjacent to another _
-  workingContent = workingContent.replace(/~~/g, '  ');
+  workingContent = workingContent.replace(/\*\*/g, "  ");
+  workingContent = workingContent.replace(/__/g, "  ");
+  workingContent = workingContent.replace(/(?<!\*)\*(?!\*)/g, " "); // single * not adjacent to another *
+  workingContent = workingContent.replace(/(?<!_)_(?!_)/g, " "); // single _ not adjacent to another _
+  workingContent = workingContent.replace(/~~/g, "  ");
 
   // Replace brackets from links: [text] -> text (brackets already handled above for URLs)
-  workingContent = workingContent.replace(/\[([^\]]*)\]/g, (_m, text: string) => ' ' + text + ' ');
+  workingContent = workingContent.replace(/\[([^\]]*)\]/g, (_m, text: string) => " " + text + " ");
 
   // Step 3: Sort skip ranges and merge overlapping
   skipRanges.sort((a, b) => a.start - b.start);
@@ -101,12 +101,12 @@ function extractSpansFromRegion(
   content: string,
   start: number,
   end: number,
-  spans: TextSpan[]
+  spans: TextSpan[],
 ): void {
   const region = content.slice(start, end);
 
   // Split into lines to handle markdown line-level syntax
-  const lines = region.split('\n');
+  const lines = region.split("\n");
   let lineOffset = start;
 
   for (const line of lines) {
@@ -117,7 +117,7 @@ function extractSpansFromRegion(
     // Calculate prefix length directly - indexOf can return wrong position
     // if the captured text happens to appear earlier in the line
     // e.g., "## ## ##" - indexOf("## ##") returns 0, but prefix is 3 chars
-    const textStart = textMatch ? (line.length - text.length) : 0;
+    const textStart = textMatch ? line.length - text.length : 0;
 
     if (text.trim()) {
       // Find contiguous text runs (split by multiple spaces or special chars)

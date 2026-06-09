@@ -164,13 +164,14 @@ export function parseBinaryIndex(json: string): BinarySearchIndex {
   const parsed: unknown = JSON.parse(json);
 
   if (!isCompactBinaryIndex(parsed)) {
-    const version = typeof parsed === "object" && parsed !== null
-      ? (parsed as Record<string, unknown>)["v"]
-      : undefined;
+    const version =
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as Record<string, unknown>)["v"]
+        : undefined;
     throw new Error(
       version !== undefined
         ? `Unsupported binary index version: ${version}`
-        : "Invalid binary index format"
+        : "Invalid binary index format",
     );
   }
 
@@ -218,7 +219,7 @@ export async function loadBinaryIndex(url: string): Promise<BinarySearchIndex> {
 export function binarySearch(
   queryEmbedding: number[],
   index: BinarySearchIndex,
-  options: SearchOptions = {}
+  options: SearchOptions = {},
 ): SearchResult[] {
   const { collections, limit = 10, threshold = 0.3 } = options;
 
@@ -259,7 +260,7 @@ export function binarySearch(
 export function hybridSearch(
   queryEmbedding: number[],
   index: BinarySearchIndex,
-  options: SearchOptions = {}
+  options: SearchOptions = {},
 ): SearchResult[] {
   const { collections, limit = 10, threshold = 0.3 } = options;
 

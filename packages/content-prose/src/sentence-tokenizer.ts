@@ -4,9 +4,39 @@
  */
 
 const ABBREVIATIONS = new Set([
-  'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'vs', 'etc', 'inc', 'ltd',
-  'corp', 'co', 'eg', 'ie', 'al', 'ca', 'cf', 'ed', 'est', 'vol', 'no',
-  'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+  "mr",
+  "mrs",
+  "ms",
+  "dr",
+  "prof",
+  "sr",
+  "jr",
+  "vs",
+  "etc",
+  "inc",
+  "ltd",
+  "corp",
+  "co",
+  "eg",
+  "ie",
+  "al",
+  "ca",
+  "cf",
+  "ed",
+  "est",
+  "vol",
+  "no",
+  "jan",
+  "feb",
+  "mar",
+  "apr",
+  "jun",
+  "jul",
+  "aug",
+  "sep",
+  "oct",
+  "nov",
+  "dec",
 ]);
 
 const SENTENCE_END_PATTERN = /([.!?]+)(\s+)(?=[A-Z"'([])/g;
@@ -60,7 +90,7 @@ export function tokenizeSentences(text: string, baseOffset = 0): Sentence[] {
   let match: RegExpExecArray | null;
 
   // Clone regex for safe iteration
-  const pattern = new RegExp(SENTENCE_END_PATTERN.source, 'g');
+  const pattern = new RegExp(SENTENCE_END_PATTERN.source, "g");
 
   while ((match = pattern.exec(text)) !== null) {
     const sentenceEnd = match.index + (match[1]?.length ?? 0);

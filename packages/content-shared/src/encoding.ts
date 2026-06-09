@@ -38,9 +38,7 @@ export function decodeBase64(base64: string): Uint8Array {
 export function decodeFloat32Array(base64: string): Float32Array {
   const bytes = decodeBase64(base64);
   if (bytes.length % 4 !== 0) {
-    throw new Error(
-      `Invalid Float32Array base64: length ${bytes.length} is not multiple of 4`
-    );
+    throw new Error(`Invalid Float32Array base64: length ${bytes.length} is not multiple of 4`);
   }
   const alignedBuffer = new ArrayBuffer(bytes.length);
   new Uint8Array(alignedBuffer).set(bytes);

@@ -1,14 +1,16 @@
 /**
- * Stateless double-submit CSRF tokens.
+ * Stateless double-submit CSRF tokens, bound to a session.
  *
  * A token is a random nonce paired with an HMAC-SHA256 signature of that nonce
- * under a server-held secret:
+ * AND the session id, under a server-held secret:
  *
- *   token = nonce + "." + HMAC-SHA256(nonce, secret)
+ *   token = nonce + "." + HMAC-SHA256(nonce + "\0" + sessionId, secret)
  *
- * Verification recomputes the signature and compares in constant time, so no
- * per-token state lives on the server — the signature *is* the proof. A request
- * that echoes a token it could only have received from us proves same-origin.
+ * Verification recomputes the signature for the *presenting* session and
+ * compares in constant time, so no per-token state lives on the server — the
+ * signature *is* the proof. Binding to the session id closes a lateral gap: a
+ * token minted for session A no longer verifies under session B, so a token
+ * captured from one user cannot be replayed against another's session.
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -16,30 +18,44 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 // The two halves of a token, joined by a single ".".
 const SEPARATOR = ".";
 
+// Separates nonce from session id inside the signed payload. A byte that can
+// never appear in the hex nonce, so (nonce, sessionId) maps to one payload
+// unambiguously — no splicing of a long nonce into a short session id.
+const BINDING_DELIMITER = "\0";
+
 const NONCE_BYTES = 16;
 
-/** Sign a nonce with the secret, returning the signature as lowercase hex. */
-const sign = (nonce: string, secret: string): string =>
-  createHmac("sha256", secret).update(nonce).digest("hex");
+/**
+ * Sign a nonce, bound to a session, with the secret. Lowercase hex.
+ *
+ * The session id is folded into the signed payload so the signature is only
+ * valid for the session it was minted for.
+ */
+const sign = (nonce: string, sessionId: string, secret: string): string =>
+  createHmac("sha256", secret)
+    .update(nonce + BINDING_DELIMITER + sessionId)
+    .digest("hex");
 
 /**
- * Mint a fresh CSRF token: a random nonce and its signature under `secret`.
- * Two calls never collide — the nonce is 16 bytes of cryptographic randomness.
+ * Mint a fresh CSRF token bound to `sessionId`: a random nonce and its
+ * signature over (nonce, sessionId) under `secret`. Two calls never collide —
+ * the nonce is 16 bytes of cryptographic randomness.
  */
-export const generateToken = (secret: string): string => {
+export const generateToken = (sessionId: string, secret: string): string => {
   const nonce = randomBytes(NONCE_BYTES).toString("hex");
 
-  return nonce + SEPARATOR + sign(nonce, secret);
+  return nonce + SEPARATOR + sign(nonce, sessionId, secret);
 };
 
 /**
- * Total predicate: does `token` carry a valid signature under `secret`?
+ * Total predicate: does `token` carry a valid signature for `sessionId` under
+ * `secret`?
  *
  * Never throws — any malformed shape is simply `false`. We guard the signature
  * length before the timing-safe compare, since `timingSafeEqual` throws on
  * buffers of unequal length.
  */
-export const verifyToken = (token: string, secret: string): boolean => {
+export const verifyToken = (token: string, sessionId: string, secret: string): boolean => {
   const parts = token.split(SEPARATOR);
 
   // Invariant: a token is exactly two parts — nonce and signature.
@@ -47,7 +63,7 @@ export const verifyToken = (token: string, secret: string): boolean => {
 
   const [nonce, signature] = parts as [string, string];
 
-  const expected = sign(nonce, secret);
+  const expected = sign(nonce, sessionId, secret);
 
   // Length guard before timingSafeEqual, which throws on a size mismatch.
   if (signature.length !== expected.length) return false;

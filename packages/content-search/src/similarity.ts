@@ -5,12 +5,7 @@
  * Embeddings are generated at build time using @keel/content-embeddings.
  */
 
-import type {
-  EmbeddingResult,
-  SearchResult,
-  SearchOptions,
-  SearchIndex,
-} from "./types";
+import type { EmbeddingResult, SearchResult, SearchOptions, SearchIndex } from "./types";
 
 // ============================================================================
 // Similarity Functions
@@ -69,7 +64,7 @@ export function normalizeVector(vec: number[]): number[] {
 export function searchByEmbedding(
   queryEmbedding: number[],
   index: SearchIndex,
-  options: SearchOptions = {}
+  options: SearchOptions = {},
 ): SearchResult[] {
   const { collections, limit = 10, threshold = 0.3 } = options;
 
@@ -107,7 +102,7 @@ export function searchByEmbedding(
 export function search(
   queryEmbedding: number[],
   entries: EmbeddingResult[],
-  options: SearchOptions = {}
+  options: SearchOptions = {},
 ): SearchResult[] {
   // Handle empty entries array
   if (entries.length === 0) {
@@ -137,11 +132,7 @@ export function search(
  * @param k - Number of similar entries to return
  * @returns Similar entries (excluding the input entry)
  */
-export function findSimilar(
-  entryId: string,
-  entries: EmbeddingResult[],
-  k = 5
-): SearchResult[] {
+export function findSimilar(entryId: string, entries: EmbeddingResult[], k = 5): SearchResult[] {
   const sourceEntry = entries.find((e) => e.id === entryId);
   if (!sourceEntry) return [];
 
@@ -162,9 +153,7 @@ export function findSimilar(
  * @param entries - Entry embeddings
  * @returns nxn similarity matrix (empty array if no entries)
  */
-export function computeSimilarityMatrix(
-  entries: EmbeddingResult[]
-): number[][] {
+export function computeSimilarityMatrix(entries: EmbeddingResult[]): number[][] {
   const n = entries.length;
 
   // Handle empty input
@@ -172,10 +161,7 @@ export function computeSimilarityMatrix(
     return [];
   }
 
-  const matrix: number[][] = Array.from(
-    { length: n },
-    () => Array(n).fill(0) as number[]
-  );
+  const matrix: number[][] = Array.from({ length: n }, () => Array(n).fill(0) as number[]);
 
   for (let i = 0; i < n; i++) {
     const entryI = entries[i];

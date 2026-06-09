@@ -19,7 +19,11 @@ const DEFAULT_MAX_ENTRIES = 10000; // Max entries per cache Map to prevent unbou
 export interface CacheManager {
   init(): Promise<void>;
   /** Get cached parse result by content hash. Content hash is the source of truth. */
-  getParseCache(collection: string, filePath: string, contentHash: string): CachedParseResult | null;
+  getParseCache(
+    collection: string,
+    filePath: string,
+    contentHash: string,
+  ): CachedParseResult | null;
   setParseCache(collection: string, filePath: string, result: CachedParseResult): void;
   getTransformCache(
     collection: string,
@@ -144,9 +148,15 @@ async function initializeManifest(
 ): Promise<CacheManifest> {
   const collectionEntries = await Promise.all(
     collections.map(async (c) => {
-      const meta = await processCollectionForManifest(cacheDir, c, existingManifest, parseCache, transformCache);
+      const meta = await processCollectionForManifest(
+        cacheDir,
+        c,
+        existingManifest,
+        parseCache,
+        transformCache,
+      );
       return [c.name, meta] as const;
-    })
+    }),
   );
 
   return {
@@ -211,15 +221,14 @@ export async function createCacheManager(
     await mkdir(path.join(cacheDir, "parse"), { recursive: true });
     await mkdir(path.join(cacheDir, "transform"), { recursive: true });
 
-    const loadedManifest = await loadCacheFile<CacheManifest>(
-      path.join(cacheDir, "manifest.json")
-    ) as CacheManifest | null;
+    const loadedManifest = (await loadCacheFile<CacheManifest>(
+      path.join(cacheDir, "manifest.json"),
+    )) as CacheManifest | null;
 
     let existingManifest = loadedManifest;
     if (existingManifest) {
       const cacheValid =
-        existingManifest.version === CACHE_VERSION &&
-        existingManifest.coreVersion === CORE_VERSION;
+        existingManifest.version === CACHE_VERSION && existingManifest.coreVersion === CORE_VERSION;
       if (!cacheValid) {
         await rm(cacheDir, { recursive: true, force: true }).catch(() => {});
         await mkdir(path.join(cacheDir, "parse"), { recursive: true });
@@ -233,7 +242,7 @@ export async function createCacheManager(
       collections,
       existingManifest,
       parseCache,
-      transformCache
+      transformCache,
     );
     manifestDirty = true;
   }
@@ -319,10 +328,14 @@ export async function createCacheManager(
 
   async function flushDirtyCaches(): Promise<void> {
     const parseWrites = [...parseCacheDirty].map((collection) =>
-      writeCacheEntries(parseCache, collection, buildCachePath(cacheDir, "parse", collection))
+      writeCacheEntries(parseCache, collection, buildCachePath(cacheDir, "parse", collection)),
     );
     const transformWrites = [...transformCacheDirty].map((collection) =>
-      writeCacheEntries(transformCache, collection, buildCachePath(cacheDir, "transform", collection))
+      writeCacheEntries(
+        transformCache,
+        collection,
+        buildCachePath(cacheDir, "transform", collection),
+      ),
     );
     await Promise.all([...parseWrites, ...transformWrites]);
   }

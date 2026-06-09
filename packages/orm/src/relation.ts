@@ -1,3 +1,6 @@
+import { quoteColumn, quoteIdentifier } from "./identifier";
+
+import type { KnownColumns } from "./identifier";
 import type { Attributes, SortDirection, SqlDatabase, WhereConditions } from "./types";
 
 /**
@@ -13,6 +16,8 @@ import type { Attributes, SortDirection, SqlDatabase, WhereConditions } from "./
 export interface QuerySource<T> {
   readonly table: string;
   readonly primaryKey: string;
+  /** The model's declared columns, or `undefined` to skip allowlist enforcement. */
+  readonly columns: KnownColumns;
   database(): SqlDatabase;
   instantiate(row: Attributes): T;
 }
@@ -74,17 +79,25 @@ export class Relation<T> implements Iterable<T> {
 
   where(conditions: WhereConditions): Relation<T> {
     const added: Condition[] = Object.entries(conditions).map(([column, value]) => {
+      const quoted = quoteColumn(column, this.source.columns);
+
       if (value === null) {
-        return { sql: `${column} IS NULL`, params: [] };
+        return { sql: `${quoted} IS NULL`, params: [] };
       }
 
       if (Array.isArray(value)) {
+        // `IN ()` is a syntax error on Postgres; an empty set matches nothing,
+        // so compile it to a constant-false predicate that binds no params.
+        if (value.length === 0) {
+          return { sql: "1 = 0", params: [] };
+        }
+
         const placeholders = value.map(() => "?").join(", ");
 
-        return { sql: `${column} IN (${placeholders})`, params: value.map(bindable) };
+        return { sql: `${quoted} IN (${placeholders})`, params: value.map(bindable) };
       }
 
-      return { sql: `${column} = ?`, params: [bindable(value)] };
+      return { sql: `${quoted} = ?`, params: [bindable(value)] };
     });
 
     return this.extend({ wheres: [...this.wheres, ...added] });
@@ -92,8 +105,9 @@ export class Relation<T> implements Iterable<T> {
 
   order(column: string, direction: SortDirection = "asc"): Relation<T> {
     const dir = direction === "desc" ? "DESC" : "ASC";
+    const quoted = quoteColumn(column, this.source.columns);
 
-    return this.extend({ orders: [...this.orders, `${column} ${dir}`] });
+    return this.extend({ orders: [...this.orders, `${quoted} ${dir}`] });
   }
 
   limit(count: number): Relation<T> {
@@ -133,7 +147,7 @@ export class Relation<T> implements Iterable<T> {
   }
 
   pluck(column: string): unknown[] {
-    const { sql, params } = this.build(column);
+    const { sql, params } = this.build(quoteColumn(column, this.source.columns));
 
     return this.source
       .database()
@@ -148,7 +162,7 @@ export class Relation<T> implements Iterable<T> {
 
   private build(select: string): { sql: string; params: unknown[] } {
     const params: unknown[] = [];
-    const parts = [`SELECT ${select} FROM ${this.source.table}`];
+    const parts = [`SELECT ${select} FROM ${quoteIdentifier(this.source.table)}`];
 
     if (this.wheres.length > 0) {
       parts.push(`WHERE ${this.wheres.map((where) => where.sql).join(" AND ")}`);
@@ -162,8 +176,12 @@ export class Relation<T> implements Iterable<T> {
       parts.push(`ORDER BY ${this.orders.join(", ")}`);
     }
 
+    // SQLite (and Postgres) reject a bare `OFFSET` with no `LIMIT`. The
+    // portable spelling of "skip n, then take everything" is `LIMIT -1`.
     if (this.limitValue !== undefined) {
       parts.push(`LIMIT ${Number(this.limitValue)}`);
+    } else if (this.offsetValue !== undefined) {
+      parts.push("LIMIT -1");
     }
 
     if (this.offsetValue !== undefined) {

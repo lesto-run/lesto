@@ -127,7 +127,11 @@ export function createSynchronizer(config: ResolvedConfig) {
     }
   }
 
-  function handleIdChange(existingId: string | undefined, entry: RuntimeEntry, collectionName: string): void {
+  function handleIdChange(
+    existingId: string | undefined,
+    entry: RuntimeEntry,
+    collectionName: string,
+  ): void {
     if (existingId && existingId !== entry.id) {
       state.entries.delete(existingId);
       const oldEntries = state.byCollection.get(collectionName);

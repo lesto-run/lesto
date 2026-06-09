@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { Migrator, Schema, TableBuilder } from "../src/index";
+import { MigrateError, Migrator, Schema, TableBuilder } from "../src/index";
 
 import type { Migration, MigrationEntry, SqlDatabase, SqlStatement } from "../src/index";
 
@@ -320,5 +320,76 @@ describe("Migrator", () => {
     const migrator = new Migrator(db, migrations);
 
     expect(migrator.rollback()).toBeUndefined();
+  });
+
+  // M6: a migration's up() and its version record must be one atomic unit.
+  it("rolls back a failing migration's DDL and leaves no record, keeping earlier ones", () => {
+    // 001 succeeds. 002's up() creates a table then throws — proving the
+    // partial DDL is undone and no record is written for the failure, while
+    // 001 (applied earlier in the SAME run) stays applied.
+    const failing: Migration = {
+      up: (s) => {
+        s.createTable("half", (t) => t.string("x"));
+
+        throw new Error("boom");
+      },
+    };
+
+    const migrator = new Migrator(db, [
+      { version: "001_create_posts", migration: createPosts },
+      { version: "002_boom", migration: failing },
+    ]);
+
+    // (a) the failure rethrows.
+    expect(() => migrator.migrate()).toThrow("boom");
+
+    // (b) no schema_migrations row for the failing version.
+    const recorded = database.prepare("SELECT version FROM schema_migrations").all() as {
+      version: string;
+    }[];
+
+    expect(recorded.map((r) => r.version)).toEqual(["001_create_posts"]);
+
+    // (c) the DDL the failing migration started was rolled back.
+    expect(() => database.prepare("SELECT * FROM half").all()).toThrow();
+
+    // (d) the migration applied earlier in the same run remains applied.
+    expect(tableInfo("posts").length).toBeGreaterThan(0);
+    expect(migrator.status().find((s) => s.version === "001_create_posts")?.applied).toBe(true);
+  });
+
+  // M5: the latest-applied version is authoritative from the DB, not from the
+  // loaded entries — rolling back must never reverse the wrong migration.
+  it("refuses to roll back when the latest applied migration's definition is missing", () => {
+    // Apply both with a full migrator.
+    new Migrator(db, migrations).migrate();
+
+    // A new migrator that has lost the definition of 002 (file deleted) while
+    // the DB still records it applied.
+    const partial = new Migrator(db, [{ version: "001_create_posts", migration: createPosts }]);
+
+    let thrown: unknown;
+
+    try {
+      partial.rollback();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(MigrateError);
+    expect((thrown as MigrateError).code).toBe("MIGRATE_MISSING_MIGRATION");
+    expect((thrown as MigrateError).details["version"]).toBe("002_create_users");
+
+    // It must NOT have rolled back the older 001 instead.
+    expect(partial.status().find((s) => s.version === "001_create_posts")?.applied).toBe(true);
+
+    const recorded = database.prepare("SELECT version FROM schema_migrations").all() as {
+      version: string;
+    }[];
+
+    expect(recorded.map((r) => r.version).toSorted()).toEqual([
+      "001_create_posts",
+      "002_create_users",
+    ]);
   });
 });

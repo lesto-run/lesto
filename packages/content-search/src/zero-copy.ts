@@ -12,7 +12,7 @@
 const MAGIC = new Uint8Array([0x51, 0x53, 0x45, 0x41, 0x52, 0x43, 0x48, 0x00]);
 const VERSION = 1;
 const ENTRY_SIZE = 72;
-const EMPTY_STRING_SENTINEL = 0xFFFFFFFF;
+const EMPTY_STRING_SENTINEL = 0xffffffff;
 
 export enum IndexFlags {
   HAS_SIGNATURES = 1 << 0,
@@ -99,9 +99,10 @@ export class ZeroCopyIndex {
     const entriesLength = this.header.entryCount * ENTRY_SIZE;
     this.entriesView = new Uint8Array(buffer, this.header.entriesOffset, entriesLength);
 
-    const stringsLength = this.header.bloomOffset > 0
-      ? this.header.bloomOffset - this.header.stringsOffset
-      : buffer.byteLength - this.header.stringsOffset;
+    const stringsLength =
+      this.header.bloomOffset > 0
+        ? this.header.bloomOffset - this.header.stringsOffset
+        : buffer.byteLength - this.header.stringsOffset;
     this.stringsView = new Uint8Array(buffer, this.header.stringsOffset, stringsLength);
   }
 
@@ -174,7 +175,7 @@ export class ZeroCopyIndex {
 
   searchBinary(
     querySignature: Uint8Array,
-    options: { limit?: number; maxDistance?: number } = {}
+    options: { limit?: number; maxDistance?: number } = {},
   ): ZeroCopySearchResult[] {
     const { limit = 10, maxDistance = Infinity } = options;
     const results: ZeroCopySearchResult[] = [];
@@ -232,7 +233,9 @@ export class ZeroCopyIndex {
 
     // Bounds check: offset must be within stringsView
     if (offset < 0 || offset >= this.stringsView.length) {
-      throw new RangeError(`Invalid string offset: ${offset} (max: ${this.stringsView.length - 1})`);
+      throw new RangeError(
+        `Invalid string offset: ${offset} (max: ${this.stringsView.length - 1})`,
+      );
     }
 
     let end = offset;

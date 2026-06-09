@@ -1,5 +1,7 @@
 import type { KeelRequest } from "@keel/web";
 
+import { RuntimeError } from "./errors";
+
 /** The raw transport-level input the http server hands us, before normalization. */
 export interface RawRequest {
   method: string;
@@ -76,6 +78,12 @@ function parseQuery(search: string): Record<string, string> {
  * JSON content-types are parsed into a value; everything else stays the raw
  * string. An empty body is `undefined` regardless of type — there is nothing to
  * decode, and a controller should see "no body", not an empty string.
+ *
+ * Malformed JSON is a *client* error, not ours: an unhandled `SyntaxError` from
+ * `JSON.parse` would otherwise reject the request promise and crash the process
+ * (Node >=22 exits on an unhandled rejection). We catch it and raise a typed
+ * `RuntimeError` the server maps to a 400 — the invariant being that no
+ * attacker-supplied bytes can ever escape as an uncaught throw.
  */
 function parseBody(contentType: string | undefined, body: string): unknown {
   if (body.length === 0) {
@@ -83,7 +91,11 @@ function parseBody(contentType: string | undefined, body: string): unknown {
   }
 
   if (contentType !== undefined && contentType.startsWith("application/json")) {
-    return JSON.parse(body) as unknown;
+    try {
+      return JSON.parse(body) as unknown;
+    } catch {
+      throw new RuntimeError("RUNTIME_INVALID_JSON", "Request body is not valid JSON.");
+    }
   }
 
   return body;

@@ -105,10 +105,7 @@ export function getTaxonomies(): AnyTaxonomy[] {
  * Get label for a single taxonomy term.
  * Returns the term's label if defined, otherwise returns the slug.
  */
-export function getTermLabel<K extends keyof TaxonomyRegistry>(
-  taxonomy: K,
-  slug: string,
-): string;
+export function getTermLabel<K extends keyof TaxonomyRegistry>(taxonomy: K, slug: string): string;
 export function getTermLabel(taxonomy: string, slug: string): string;
 export function getTermLabel(taxonomy: string, slug: string): string {
   const terms = getTaxonomyTerms(taxonomy);
@@ -127,14 +124,10 @@ export function getTermLabels<K extends keyof TaxonomyRegistry>(
 export function getTermLabels(taxonomy: string): Record<string, string>;
 export function getTermLabels(taxonomy: string): Record<string, string> {
   const terms = getTaxonomyTerms(taxonomy);
-  return Object.fromEntries(
-    terms.map((t) => [t.slug, t.label ?? t.slug]),
-  );
+  return Object.fromEntries(terms.map((t) => [t.slug, t.label ?? t.slug]));
 }
 
-export function getCollection<K extends keyof CollectionRegistry>(
-  name: K,
-): CollectionEntry<K>[];
+export function getCollection<K extends keyof CollectionRegistry>(name: K): CollectionEntry<K>[];
 export function getCollection(name: string): RuntimeEntry[];
 export function getCollection(name: string): RuntimeEntry[] {
   const collections = loadData();
@@ -150,7 +143,11 @@ export function getCollection(name: string): RuntimeEntry[] {
 }
 
 /** Check if entry passes publish date filter (true = passes, false = filtered out) */
-function passesPublishDateFilter(entry: RuntimeEntry, field: string | undefined, now: Date): boolean {
+function passesPublishDateFilter(
+  entry: RuntimeEntry,
+  field: string | undefined,
+  now: Date,
+): boolean {
   if (!field) return true;
   const publishDate = entry[field];
   if (publishDate === undefined || publishDate === null) return true;
@@ -160,7 +157,11 @@ function passesPublishDateFilter(entry: RuntimeEntry, field: string | undefined,
 }
 
 /** Check if entry passes expiration filter (true = passes, false = filtered out) */
-function passesExpirationFilter(entry: RuntimeEntry, field: string | undefined, now: Date): boolean {
+function passesExpirationFilter(
+  entry: RuntimeEntry,
+  field: string | undefined,
+  now: Date,
+): boolean {
   if (!field) return true;
   const expiresAt = entry[field];
   if (expiresAt === undefined || expiresAt === null) return true;
@@ -173,10 +174,11 @@ function filterPublishedEntries(entries: RuntimeEntry[], config: WorkflowConfig)
   const now = new Date();
   const { statusField, publishDateField, expirationField } = config;
 
-  return entries.filter((entry) =>
-    entry[statusField] === "published" &&
-    passesPublishDateFilter(entry, publishDateField, now) &&
-    passesExpirationFilter(entry, expirationField, now)
+  return entries.filter(
+    (entry) =>
+      entry[statusField] === "published" &&
+      passesPublishDateFilter(entry, publishDateField, now) &&
+      passesExpirationFilter(entry, expirationField, now),
   );
 }
 
@@ -185,10 +187,7 @@ export function getEntry<K extends keyof CollectionRegistry>(
   slug: string,
 ): CollectionEntry<K> | undefined;
 export function getEntry(collection: string, slug: string): RuntimeEntry | undefined;
-export function getEntry(
-  collection: string,
-  slug: string,
-): RuntimeEntry | undefined {
+export function getEntry(collection: string, slug: string): RuntimeEntry | undefined {
   const collections = loadData();
   let entries = collections[collection];
   if (!entries) return undefined;
@@ -204,8 +203,10 @@ export function getEntry(
 
 export function getCollections(): Collection[] {
   const collections = loadData();
-  return Object.entries(collections).map(([name, entries]) => ({
+  // Route through getCollection so the SAME unpublished-filtering is applied —
+  // listing collections must never leak drafts that single-collection access hides.
+  return Object.keys(collections).map((name) => ({
     name,
-    entries,
+    entries: getCollection(name),
   }));
 }

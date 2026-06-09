@@ -8,5 +8,22 @@
  *   if (!verify(rawBody, req.headers["x-keel-signature"], secret)) reject();
  */
 
-export { EVENT_HEADER, sign, SIGNATURE_HEADER, verify, WebhookError, Webhooks } from "./webhooks";
-export type { FetchLike, WebhookErrorCode, WebhookResponse, WebhooksOptions } from "./webhooks";
+export {
+  defaultUrlGuard,
+  EVENT_HEADER,
+  sign,
+  SIGNATURE_HEADER,
+  systemResolver,
+  verify,
+  WebhookError,
+  Webhooks,
+} from "./webhooks";
+export type {
+  FetchLike,
+  Resolver,
+  SecretSource,
+  UrlGuard,
+  WebhookErrorCode,
+  WebhookResponse,
+  WebhooksOptions,
+} from "./webhooks";

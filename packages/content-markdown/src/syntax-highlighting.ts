@@ -8,7 +8,7 @@ import type { SyntaxHighlightingOptions } from "./types";
  * Parse syntax highlighting options into a normalized form.
  */
 export function parseSyntaxHighlightingOptions(
-  option: boolean | SyntaxHighlightingOptions | undefined
+  option: boolean | SyntaxHighlightingOptions | undefined,
 ): SyntaxHighlightingOptions | null {
   if (!option) return null;
   if (option === true) {
@@ -38,9 +38,13 @@ export async function buildSyntaxHighlightingPlugin(options: SyntaxHighlightingO
 
   const transformers = [];
   if (options.copyButton) {
-    const copyButtonOptions = options.copyButton === true
-      ? { visibility: "hover" as const, feedbackDuration: 2000 }
-      : { visibility: options.copyButton.visibility ?? "hover" as const, feedbackDuration: options.copyButton.feedbackDuration ?? 2000 };
+    const copyButtonOptions =
+      options.copyButton === true
+        ? { visibility: "hover" as const, feedbackDuration: 2000 }
+        : {
+            visibility: options.copyButton.visibility ?? ("hover" as const),
+            feedbackDuration: options.copyButton.feedbackDuration ?? 2000,
+          };
     transformers.push(transformerCopyButton(copyButtonOptions));
   }
 

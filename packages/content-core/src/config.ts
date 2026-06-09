@@ -71,33 +71,21 @@ function assertRequired<T>(
 }
 
 /** Assert value is a non-empty string */
-function assertString(
-  value: unknown,
-  source: string,
-  fieldPath: string,
-): asserts value is string {
+function assertString(value: unknown, source: string, fieldPath: string): asserts value is string {
   if (typeof value !== "string" || !value) {
     validationError(source, fieldPath, "must be a non-empty string");
   }
 }
 
 /** Assert value is an array */
-function assertArray<T>(
-  value: unknown,
-  source: string,
-  fieldPath: string,
-): asserts value is T[] {
+function assertArray<T>(value: unknown, source: string, fieldPath: string): asserts value is T[] {
   if (!Array.isArray(value)) {
     validationError(source, fieldPath, "must be an array");
   }
 }
 
 /** Assert value is an object (not null, not array) */
-function assertObject(
-  value: unknown,
-  source: string,
-  fieldPath: string,
-): asserts value is object {
+function assertObject(value: unknown, source: string, fieldPath: string): asserts value is object {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     validationError(source, fieldPath, "must be an object");
   }

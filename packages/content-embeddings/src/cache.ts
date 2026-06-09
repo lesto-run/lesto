@@ -17,11 +17,7 @@ import type {
   EmbeddingCacheStats,
 } from "./types";
 import { generateEmbedding, stripMarkdown } from "./embeddings";
-import {
-  MODEL_NAME,
-  DEFAULT_MAX_TEXT_LENGTH,
-  DEFAULT_SNIPPET_LENGTH,
-} from "./constants";
+import { MODEL_NAME, DEFAULT_MAX_TEXT_LENGTH, DEFAULT_SNIPPET_LENGTH } from "./constants";
 
 // ============================================================================
 // Hashing
@@ -69,7 +65,7 @@ async function loadCache(cacheDir: string): Promise<EmbeddingCache | null> {
     // Validate version
     if (cache.version !== 1) {
       console.warn(
-        `[embeddings] Cache file version mismatch (expected 1, got ${cache.version}), regenerating cache`
+        `[embeddings] Cache file version mismatch (expected 1, got ${cache.version}), regenerating cache`,
       );
       return null;
     }
@@ -83,13 +79,9 @@ async function loadCache(cacheDir: string): Promise<EmbeddingCache | null> {
 
     // JSON parse error or other corruption - warn user
     if (error instanceof SyntaxError) {
-      console.warn(
-        `[embeddings] Cache file corrupted at ${cachePath}, regenerating cache`
-      );
+      console.warn(`[embeddings] Cache file corrupted at ${cachePath}, regenerating cache`);
     } else if (error instanceof Error) {
-      console.warn(
-        `[embeddings] Failed to read cache file: ${error.message}, regenerating cache`
-      );
+      console.warn(`[embeddings] Failed to read cache file: ${error.message}, regenerating cache`);
     }
 
     return null;
@@ -99,10 +91,7 @@ async function loadCache(cacheDir: string): Promise<EmbeddingCache | null> {
 /**
  * Save embedding cache to disk.
  */
-async function saveCache(
-  cacheDir: string,
-  cache: EmbeddingCache
-): Promise<void> {
+async function saveCache(cacheDir: string, cache: EmbeddingCache): Promise<void> {
   try {
     await mkdir(cacheDir, { recursive: true });
     const cachePath = getCachePath(cacheDir);
@@ -111,7 +100,7 @@ async function saveCache(
     throw new DocksError(
       `Failed to save embedding cache: ${error instanceof Error ? error.message : String(error)}`,
       "CACHE_WRITE_ERROR",
-      { cacheDir }
+      { cacheDir },
     );
   }
 }
@@ -130,7 +119,7 @@ async function saveCache(
  */
 export async function generateEmbeddingsWithCache(
   entries: SearchableEntry[],
-  options: CachedEmbeddingsOptions = {}
+  options: CachedEmbeddingsOptions = {},
 ): Promise<{ results: EmbeddingResult[]; stats: EmbeddingCacheStats }> {
   const {
     cacheDir = ".docks/cache",
@@ -165,7 +154,7 @@ export async function generateEmbeddingsWithCache(
   // Log warning if entries were filtered
   if (skippedEntries.length > 0) {
     console.warn(
-      `[embeddings] Skipped ${skippedEntries.length} entries due to missing required fields:`
+      `[embeddings] Skipped ${skippedEntries.length} entries due to missing required fields:`,
     );
     for (const { index, reason } of skippedEntries.slice(0, 5)) {
       console.warn(`  - Entry at index ${index}: ${reason}`);
@@ -227,13 +216,13 @@ export async function generateEmbeddingsWithCache(
     stats.misses++;
 
     // Prepare text for embedding
-    const content =
-      typeof entry["content"] === "string" ? entry["content"] : "";
+    const content = typeof entry["content"] === "string" ? entry["content"] : "";
     const cleanContent = stripMarkdown(content);
     const title = typeof entry["title"] === "string" ? entry["title"] : "";
-    const embeddingText = (
-      title ? `${title}\n\n${cleanContent}` : cleanContent
-    ).slice(0, maxTextLength);
+    const embeddingText = (title ? `${title}\n\n${cleanContent}` : cleanContent).slice(
+      0,
+      maxTextLength,
+    );
 
     const embedding = await generateEmbedding(embeddingText);
 
@@ -244,10 +233,7 @@ export async function generateEmbeddingsWithCache(
     } else {
       const cut = cleanContent.slice(0, snippetLength);
       const lastSpace = cut.lastIndexOf(" ");
-      snippet =
-        lastSpace > snippetLength * 0.8
-          ? cut.slice(0, lastSpace) + "..."
-          : cut + "...";
+      snippet = lastSpace > snippetLength * 0.8 ? cut.slice(0, lastSpace) + "..." : cut + "...";
     }
 
     const result: EmbeddingResult = {
@@ -280,9 +266,7 @@ export async function generateEmbeddingsWithCache(
 /**
  * Clear the embedding cache.
  */
-export async function clearEmbeddingCache(
-  cacheDir = ".docks/cache"
-): Promise<void> {
+export async function clearEmbeddingCache(cacheDir = ".docks/cache"): Promise<void> {
   try {
     await rm(getCachePath(cacheDir));
   } catch {

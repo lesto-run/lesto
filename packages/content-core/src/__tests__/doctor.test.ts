@@ -20,7 +20,7 @@ describe("doctor", () => {
     collection: string,
     slug: string,
     content: string,
-    directory?: string
+    directory?: string,
   ): RuntimeEntry {
     const dir = directory ?? path.join(tempDir, "content", collection);
     return {
@@ -61,7 +61,7 @@ describe("doctor", () => {
         createEntry(
           "posts",
           "hello",
-          "Check out [Google](https://google.com) and [HTTP](http://example.com)"
+          "Check out [Google](https://google.com) and [HTTP](http://example.com)",
         ),
       ];
 
@@ -72,9 +72,7 @@ describe("doctor", () => {
     });
 
     it("ignores anchor links (#section)", async () => {
-      const entries = [
-        createEntry("posts", "hello", "Jump to [section](#my-section)"),
-      ];
+      const entries = [createEntry("posts", "hello", "Jump to [section](#my-section)")];
 
       const result = await doctor(entries, { cwd: tempDir });
 
@@ -83,9 +81,7 @@ describe("doctor", () => {
     });
 
     it("ignores mailto links", async () => {
-      const entries = [
-        createEntry("posts", "hello", "Email [me](mailto:test@example.com)"),
-      ];
+      const entries = [createEntry("posts", "hello", "Email [me](mailto:test@example.com)")];
 
       const result = await doctor(entries, { cwd: tempDir });
 
@@ -131,11 +127,7 @@ describe("doctor", () => {
 
     it("detects multiple broken links in one file", async () => {
       const entries = [
-        createEntry(
-          "posts",
-          "hello",
-          "Links: [one](/posts/missing1) and [two](/posts/missing2)"
-        ),
+        createEntry("posts", "hello", "Links: [one](/posts/missing1) and [two](/posts/missing2)"),
       ];
 
       const result = await doctor(entries, { cwd: tempDir });
@@ -148,9 +140,7 @@ describe("doctor", () => {
 
   describe("image checking", () => {
     it("detects missing images", async () => {
-      const entries = [
-        createEntry("posts", "hello", "![alt text](/missing.png)"),
-      ];
+      const entries = [createEntry("posts", "hello", "![alt text](/missing.png)")];
 
       const result = await doctor(entries, { cwd: tempDir });
 
@@ -167,7 +157,7 @@ describe("doctor", () => {
         createEntry(
           "posts",
           "hello",
-          "![alt](https://example.com/image.png) ![data](data:image/png;base64,abc)"
+          "![alt](https://example.com/image.png) ![data](data:image/png;base64,abc)",
         ),
       ];
 
@@ -183,9 +173,7 @@ describe("doctor", () => {
       await mkdir(publicDir, { recursive: true });
       await writeFile(path.join(publicDir, "logo.png"), "fake image");
 
-      const entries = [
-        createEntry("posts", "hello", "![Logo](/logo.png)"),
-      ];
+      const entries = [createEntry("posts", "hello", "![Logo](/logo.png)")];
 
       const result = await doctor(entries, { cwd: tempDir });
 
@@ -199,9 +187,7 @@ describe("doctor", () => {
       await mkdir(contentDir, { recursive: true });
       await writeFile(path.join(contentDir, "diagram.png"), "fake image");
 
-      const entries = [
-        createEntry("posts", "hello", "![Diagram](./diagram.png)", contentDir),
-      ];
+      const entries = [createEntry("posts", "hello", "![Diagram](./diagram.png)", contentDir)];
 
       const result = await doctor(entries, { cwd: tempDir });
 
@@ -211,11 +197,7 @@ describe("doctor", () => {
 
     it("detects multiple missing images", async () => {
       const entries = [
-        createEntry(
-          "posts",
-          "hello",
-          "Images: ![one](/missing1.png) and ![two](/missing2.png)"
-        ),
+        createEntry("posts", "hello", "Images: ![one](/missing1.png) and ![two](/missing2.png)"),
       ];
 
       const result = await doctor(entries, { cwd: tempDir });
@@ -266,8 +248,8 @@ describe("doctor", () => {
       const result = await doctor(entries, { cwd: tempDir });
 
       expect(result.errors).toHaveLength(2);
-      expect(result.errors.some(e => e.message.includes("/missing.png"))).toBe(true);
-      expect(result.errors.some(e => e.message.includes("/docs/missing"))).toBe(true);
+      expect(result.errors.some((e) => e.message.includes("/missing.png"))).toBe(true);
+      expect(result.errors.some((e) => e.message.includes("/docs/missing"))).toBe(true);
     });
   });
 
@@ -302,8 +284,8 @@ describe("doctor", () => {
       const result = await doctor(entries, { cwd: tempDir }, { checks: ["links", "images"] });
 
       expect(result.errors).toHaveLength(2);
-      expect(result.errors.filter(e => e.type === "link")).toHaveLength(1);
-      expect(result.errors.filter(e => e.type === "image")).toHaveLength(1);
+      expect(result.errors.filter((e) => e.type === "link")).toHaveLength(1);
+      expect(result.errors.filter((e) => e.type === "image")).toHaveLength(1);
     });
 
     it("defaults to all checks when not specified", async () => {
@@ -319,9 +301,7 @@ describe("doctor", () => {
 
   describe("result structure", () => {
     it("separates errors and warnings", async () => {
-      const entries = [
-        createEntry("posts", "hello", "[broken](/posts/missing)"),
-      ];
+      const entries = [createEntry("posts", "hello", "[broken](/posts/missing)")];
 
       const result = await doctor(entries, { cwd: tempDir });
 
@@ -332,9 +312,7 @@ describe("doctor", () => {
     });
 
     it("includes file path in issues", async () => {
-      const entries = [
-        createEntry("posts", "hello", "[broken](/posts/missing)"),
-      ];
+      const entries = [createEntry("posts", "hello", "[broken](/posts/missing)")];
 
       const result = await doctor(entries, { cwd: tempDir });
 

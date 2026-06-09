@@ -31,9 +31,7 @@ export const HtmlContent = defineComponent({
     },
   },
   setup(props) {
-    const safeHtml = computed(() =>
-      props.unsanitized ? props.html : sanitizeHtml(props.html)
-    );
+    const safeHtml = computed(() => (props.unsanitized ? props.html : sanitizeHtml(props.html)));
     return () => h("div", { class: props.class, innerHTML: safeHtml.value });
   },
 });

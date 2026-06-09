@@ -176,3 +176,29 @@ describe("Query.pagination()", () => {
     });
   });
 });
+
+describe("Query.paginate()", () => {
+  // Guards against the page<=0 / perPage<=0 bug: paginate validates its input via
+  // validateRange and throws a coded error rather than slicing with a negative
+  // offset or dividing by a zero/negative page size.
+  it("rejects page <= 0", () => {
+    expect(() => query(items).paginate({ page: 0, perPage: 2 })).toThrow();
+    expect(() => query(items).paginate({ page: -3, perPage: 2 })).toThrow();
+  });
+
+  it("rejects perPage <= 0", () => {
+    expect(() => query(items).paginate({ page: 1, perPage: 0 })).toThrow();
+    expect(() => query(items).paginate({ page: 1, perPage: -1 })).toThrow();
+  });
+
+  it("paginates valid input", () => {
+    const result = query(items).paginate({ page: 1, perPage: 2 });
+    expect(result.items).toHaveLength(2);
+    expect(result.page).toBe(1);
+    expect(result.perPage).toBe(2);
+    expect(result.total).toBe(5);
+    expect(result.totalPages).toBe(3);
+    expect(result.hasNext).toBe(true);
+    expect(result.hasPrev).toBe(false);
+  });
+});

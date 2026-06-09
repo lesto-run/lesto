@@ -5,7 +5,8 @@ import type { Heading } from "./types";
 const HEADING_REGEX = /^(#{1,6})\s+(.+)$/gm;
 const FENCED_CODE_BLOCK_REGEX = /```[\s\S]*?```/g;
 // Match indented code blocks: lines starting with 4+ spaces or tab (after a blank line)
-const INDENTED_CODE_BLOCK_REGEX = /(?:^|\n\n)((?:[ ]{4}|\t)[^\n]*(?:\n(?:[ ]{4}|\t)[^\n]*|\n(?=[ ]{4}|\t))*)/g;
+const INDENTED_CODE_BLOCK_REGEX =
+  /(?:^|\n\n)((?:[ ]{4}|\t)[^\n]*(?:\n(?:[ ]{4}|\t)[^\n]*|\n(?=[ ]{4}|\t))*)/g;
 // Match URLs in heading text to strip them before slugification
 const URL_REGEX = /https?:\/\/[^\s)]+/g;
 

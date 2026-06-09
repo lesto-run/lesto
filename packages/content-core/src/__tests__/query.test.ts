@@ -325,16 +325,11 @@ describe("Query", () => {
         .get();
 
       expect(result).toHaveLength(3);
-      expect(
-        result.every((e) => e.draft === false && e.category === "tech"),
-      ).toBe(true);
+      expect(result.every((e) => e.draft === false && e.category === "tech")).toBe(true);
     });
 
     it("filters with multiple conditions: count > 5 AND count < 15", async () => {
-      const result = await query("posts")
-        .where("count", ">", 5)
-        .where("count", "<", 15)
-        .get();
+      const result = await query("posts").where("count", ">", 5).where("count", "<", 15).get();
 
       expect(result).toHaveLength(2);
       expect(result.map((e) => e.count)).toEqual([10, 8]);

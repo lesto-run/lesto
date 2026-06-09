@@ -30,7 +30,7 @@ export function createLineIndex(source: string): LineIndex {
  */
 export function offsetToPositionFast(
   index: LineIndex,
-  offset: number
+  offset: number,
 ): { line: number; column: number } {
   const { lineStarts } = index;
 

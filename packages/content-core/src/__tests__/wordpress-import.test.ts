@@ -3,11 +3,7 @@ import { nn } from "./test-utils";
 import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import {
-  parseWxrItems,
-  htmlToMarkdown,
-  importWordPress,
-} from "../import/wordpress";
+import { parseWxrItems, htmlToMarkdown, importWordPress } from "../import/wordpress";
 
 // =============================================================================
 // Test Data
@@ -259,14 +255,12 @@ describe("htmlToMarkdown", () => {
   describe("links and images", () => {
     it("converts links", () => {
       expect(htmlToMarkdown('<a href="https://example.com">Click here</a>')).toBe(
-        "[Click here](https://example.com)"
+        "[Click here](https://example.com)",
       );
     });
 
     it("converts images with alt text", () => {
-      expect(htmlToMarkdown('<img src="image.jpg" alt="My Image">')).toBe(
-        "![My Image](image.jpg)"
-      );
+      expect(htmlToMarkdown('<img src="image.jpg" alt="My Image">')).toBe("![My Image](image.jpg)");
     });
 
     it("converts images without alt text", () => {
@@ -353,7 +347,7 @@ describe("htmlToMarkdown", () => {
       expect(htmlToMarkdown("a&amp;b")).toBe("a&b");
       expect(htmlToMarkdown("a&lt;b")).toBe("a<b");
       expect(htmlToMarkdown("a&gt;b")).toBe("a>b");
-      expect(htmlToMarkdown('a&quot;b')).toBe('a"b');
+      expect(htmlToMarkdown("a&quot;b")).toBe('a"b');
       expect(htmlToMarkdown("a&nbsp;b")).toBe("a b"); // nbsp becomes regular space
     });
 
@@ -532,7 +526,7 @@ describe("importWordPress", () => {
         collection: "posts",
         cwd: tempDir,
         directory: postsDir,
-      })
+      }),
     ).rejects.toThrow();
   });
 

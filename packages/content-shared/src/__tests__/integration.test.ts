@@ -8,12 +8,7 @@
 import { describe, it, expect } from "vitest";
 
 // Import from multiple modules to test integration
-import {
-  sanitizeHtml,
-  serializeJsonLd,
-  sanitizeObject,
-  sanitizePath,
-} from "../sanitize.js";
+import { sanitizeHtml, serializeJsonLd, sanitizeObject, sanitizePath } from "../sanitize.js";
 import {
   DocksError,
   ValidationError,
@@ -25,13 +20,7 @@ import {
   unwrap,
   unwrapOr,
 } from "../errors.js";
-import {
-  createCache,
-  createImmutableCache,
-  deepClone,
-  CACHE_LIMITS,
-  CACHE_TTL,
-} from "../cache.js";
+import { createCache, createImmutableCache, deepClone, CACHE_LIMITS, CACHE_TTL } from "../cache.js";
 import {
   validateUrl,
   validatePagination,
@@ -42,12 +31,7 @@ import {
 import { AsyncMutex, ReadWriteLock, createSingletonLoader } from "../mutex.js";
 import { escapeXml, decodeXml, formatXmlDate, wrapCdata } from "../xml.js";
 import { slugify, createSlugger, slugifyOnce } from "../slugify.js";
-import {
-  encodeBase64,
-  decodeBase64,
-  encodeFloat32Array,
-  decodeFloat32Array,
-} from "../encoding.js";
+import { encodeBase64, decodeBase64, encodeFloat32Array, decodeFloat32Array } from "../encoding.js";
 import { DANGEROUS_HTML_SAMPLES } from "./fixtures.js";
 
 const safeValidateSlug = (slug: string) => {
@@ -58,12 +42,7 @@ const safeValidateSlug = (slug: string) => {
   }
 };
 
-const validateDocument = (doc: {
-  title: string;
-  slug: string;
-  url: string;
-  page: number;
-}) => {
+const validateDocument = (doc: { title: string; slug: string; url: string; page: number }) => {
   const errors: ValidationError[] = [];
 
   try {
@@ -153,7 +132,7 @@ describe("Integration: Cache with Sanitization", () => {
   it("caches sanitized HTML results", () => {
     const cache = createCache<string>({ max: 100 });
 
-    const rawHtml = '<div><script>evil()</script>Safe content</div>';
+    const rawHtml = "<div><script>evil()</script>Safe content</div>";
     const cacheKey = `html:${rawHtml}`;
 
     // First call - sanitize and cache
@@ -169,10 +148,7 @@ describe("Integration: Cache with Sanitization", () => {
   });
 
   it("immutable cache prevents mutation of cached sanitized objects", () => {
-    const cache = createImmutableCache<Record<string, unknown>>(
-      { max: 50 },
-      deepClone
-    );
+    const cache = createImmutableCache<Record<string, unknown>>({ max: 50 }, deepClone);
 
     const originalObj = { title: "Test", __proto__: { bad: true } };
     const sanitized = sanitizeObject(originalObj);
@@ -239,15 +215,11 @@ describe("Integration: Mutex with Cache", () => {
       return sanitizeHtml(html);
     };
 
-    const dangerousHtml = '<div><script>alert(1)</script>Content</div>';
+    const dangerousHtml = "<div><script>alert(1)</script>Content</div>";
     const getSanitized = createSingletonLoader(() => expensiveSanitize(dangerousHtml));
 
     // Call multiple times concurrently
-    const results = await Promise.all([
-      getSanitized(),
-      getSanitized(),
-      getSanitized(),
-    ]);
+    const results = await Promise.all([getSanitized(), getSanitized(), getSanitized()]);
 
     // Should only sanitize once
     expect(sanitizeCallCount).toBe(1);
@@ -278,11 +250,7 @@ describe("Integration: Mutex with Cache", () => {
     };
 
     // Multiple concurrent reads should all succeed
-    const results = await Promise.all([
-      readCache(),
-      readCache(),
-      readCache(),
-    ]);
+    const results = await Promise.all([readCache(), readCache(), readCache()]);
 
     expect(maxConcurrentReads).toBe(3);
     results.forEach((result) => {
@@ -582,7 +550,7 @@ describe("Integration: Deep Clone with Complex Types", () => {
     expect(cloned.metadata.date.getTime()).toBe(original.metadata.date.getTime());
     expect(Array.from(cloned.metadata.tags)).toEqual(Array.from(original.metadata.tags));
     expect(Array.from(cloned.metadata.counts.entries())).toEqual(
-      Array.from(original.metadata.counts.entries())
+      Array.from(original.metadata.counts.entries()),
     );
     expect(cloned.nested.deep.value).toEqual(original.nested.deep.value);
 
@@ -635,14 +603,10 @@ describe("Integration: Zod Schema with Custom Validators", () => {
     expect(() => validatePaginatedRequest({ limit: 10, offset: 0 })).not.toThrow();
 
     // Zod validation fails
-    expect(() => validatePaginatedRequest({ limit: -1, offset: 0 })).toThrow(
-      ValidationError
-    );
+    expect(() => validatePaginatedRequest({ limit: -1, offset: 0 })).toThrow(ValidationError);
 
     // Custom validation fails
-    expect(() => validatePaginatedRequest({ limit: 0, offset: 10 })).toThrow(
-      ValidationError
-    );
+    expect(() => validatePaginatedRequest({ limit: 0, offset: 10 })).toThrow(ValidationError);
   });
 });
 

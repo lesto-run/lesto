@@ -1,11 +1,27 @@
 /**
- * CORS header computation — pure, dependency-free.
+ * CORS header computation — pure, with one coded config guard.
  *
  * Given the request's `Origin` and a policy, resolve the `Access-Control-*`
  * response headers a server should send. Deciding is separated from any I/O:
  * this is a plain function of its inputs, fully testable with no clock, no
  * socket, no framework.
  */
+
+import { KeelError } from "@keel/errors";
+
+export type CorsErrorCode = "CORS_WILDCARD_WITH_CREDENTIALS";
+
+/**
+ * A misconfigured CORS policy. Carries a stable `code` so callers branch on the
+ * machine-readable reason, never the prose.
+ */
+export class CorsError extends KeelError<CorsErrorCode> {
+  constructor(code: CorsErrorCode, message: string, details?: Record<string, unknown>) {
+    super(code, message, details);
+
+    this.name = "CorsError";
+  }
+}
 
 export interface CorsOptions {
   /** Who may call us. `"*"` (the default) allows any origin. */
@@ -17,7 +33,12 @@ export interface CorsOptions {
   /** Headers advertised on `Access-Control-Allow-Headers`. */
   headers?: string[];
 
-  /** Whether to send `Access-Control-Allow-Credentials: true`. */
+  /**
+   * Whether to send `Access-Control-Allow-Credentials: true`.
+   *
+   * Requires an explicit `origin` (a string or array allow-list). Pairing this
+   * with the wildcard `"*"` throws {@link CorsError} `CORS_WILDCARD_WITH_CREDENTIALS`.
+   */
   credentials?: boolean;
 
   /** Preflight cache lifetime, in seconds, for `Access-Control-Max-Age`. */
@@ -43,21 +64,20 @@ interface ResolvedOrigin {
 /**
  * Resolve `Access-Control-Allow-Origin` from the policy and the request origin.
  *
- * Wildcard is the default. But `"*"` plus credentials is invalid per the
- * Fetch standard, so when credentials are on we echo the caller's origin
- * instead — the only way to both allow this origin and permit credentials.
+ * Wildcard is the default. `"*"` plus credentials is rejected before we get
+ * here (see `corsHeaders`), because reflecting an arbitrary `Origin` with
+ * `Access-Control-Allow-Credentials: true` is a credentialed-CORS bypass — any
+ * site could then read authenticated responses. To allow credentials you must
+ * name the origins explicitly (a string or array allow-list), and only a member
+ * of that list is ever echoed back.
  */
 function resolveOrigin(
   requestOrigin: string | undefined,
   policy: "*" | string | string[],
-  credentials: boolean,
 ): ResolvedOrigin {
-  // Wildcard policy.
+  // Wildcard policy. Credentials with "*" never reaches here, so a plain "*"
+  // is always safe to advertise — it can never be paired with credentials.
   if (policy === "*") {
-    if (credentials && requestOrigin !== undefined) {
-      return { allowOrigin: requestOrigin, echoed: true };
-    }
-
     return { allowOrigin: "*", echoed: false };
   }
 
@@ -92,7 +112,18 @@ export function corsHeaders(
   const policy = options.origin ?? "*";
   const credentials = options.credentials ?? false;
 
-  const { allowOrigin, echoed } = resolveOrigin(requestOrigin, policy, credentials);
+  // Fail loud, at config time, on the one combination the Fetch standard forbids:
+  // a wildcard origin with credentials. Silently reflecting `Origin` here would
+  // let any site read authenticated responses. To use credentials, name origins.
+  if (credentials && policy === "*") {
+    throw new CorsError(
+      "CORS_WILDCARD_WITH_CREDENTIALS",
+      'CORS origin "*" cannot be combined with credentials: true. ' +
+        "Specify an explicit origin or allow-list so credentialed responses are never exposed to arbitrary sites.",
+    );
+  }
+
+  const { allowOrigin, echoed } = resolveOrigin(requestOrigin, policy);
 
   // A denied origin gets no headers at all — the browser will block the read.
   if (allowOrigin === undefined) {

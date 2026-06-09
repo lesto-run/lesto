@@ -15,11 +15,7 @@ export {
 } from "./embeddings";
 
 // Caching
-export {
-  generateEmbeddingsWithCache,
-  clearEmbeddingCache,
-  getEmbeddingCacheStats,
-} from "./cache";
+export { generateEmbeddingsWithCache, clearEmbeddingCache, getEmbeddingCacheStats } from "./cache";
 
 // Index serialization
 export { serializeSearchIndex, estimateIndexSize } from "./index-format";

@@ -168,7 +168,7 @@ describe("reference validation in pipeline", () => {
 
       const refWarnings = warnings.filter((w) => w.includes("Reference error"));
       expect(refWarnings.length).toBeGreaterThan(0);
-      expect(refWarnings[0]).toContain('references non-existent authors/jane');
+      expect(refWarnings[0]).toContain("references non-existent authors/jane");
     } finally {
       console.warn = originalWarn;
     }

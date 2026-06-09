@@ -64,11 +64,17 @@ export function createDocumentMeta(overrides: CreateDocumentMetaOptions = {}): D
   const fileName = overrides.fileName ?? "test";
   const extension = overrides.extension ?? "md";
   const directory = overrides.directory ?? ".";
-  const isIndex = overrides.isIndex ?? (fileName === "index" || fileName.toLowerCase() === "readme");
+  const isIndex =
+    overrides.isIndex ?? (fileName === "index" || fileName.toLowerCase() === "readme");
   // Derive pathSegments from directory and fileName if not provided
-  const defaultSegments = directory === "."
-    ? (isIndex ? [] : [fileName])
-    : (isIndex ? directory.split("/") : [...directory.split("/"), fileName]);
+  const defaultSegments =
+    directory === "."
+      ? isIndex
+        ? []
+        : [fileName]
+      : isIndex
+        ? directory.split("/")
+        : [...directory.split("/"), fileName];
   return {
     path: overrides.path ?? `${fileName}.${extension}`,
     fileName,
@@ -128,9 +134,9 @@ export interface CreateParsedDocumentOptions<TData extends Record<string, unknow
   collection?: CreateCollectionOptions;
 }
 
-export function createParsedDocument<TData extends Record<string, unknown> = Record<string, unknown>>(
-  options: CreateParsedDocumentOptions<TData> = {},
-): ParsedDocument {
+export function createParsedDocument<
+  TData extends Record<string, unknown> = Record<string, unknown>,
+>(options: CreateParsedDocumentOptions<TData> = {}): ParsedDocument {
   const slug = options.slug ?? "test";
   const collectionName = options.collectionName ?? "posts";
   const relativePath = options.relativePath ?? `${slug}.md`;
@@ -231,10 +237,7 @@ export interface FileSetupOptions {
   content: string;
 }
 
-export async function setupTestFiles(
-  tempDir: string,
-  files: FileSetupOptions[],
-): Promise<void> {
+export async function setupTestFiles(tempDir: string, files: FileSetupOptions[]): Promise<void> {
   await Promise.all(
     files.map(async (file) => {
       const fullPath = path.join(tempDir, file.path);

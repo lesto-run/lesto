@@ -1,16 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { nn } from "./test-utils";
-import {
-  buildRAGContext,
-  formatContextForLLM,
-  estimateTokens,
-} from "../rag";
+import { buildRAGContext, formatContextForLLM, estimateTokens } from "../rag";
 import type { RuntimeEntry } from "../types";
 
 const createEntry = (
   slug: string,
   collection: string,
-  data: Record<string, unknown> = {}
+  data: Record<string, unknown> = {},
 ): RuntimeEntry => ({
   ...data,
   slug,
@@ -79,9 +75,7 @@ describe("RAG Context Primitives", () => {
 
     it("truncates content to excerptLength", () => {
       const longContent = "A".repeat(1000);
-      const entries = [
-        createEntry("doc-1", "docs", { title: "Doc 1", content: longContent }),
-      ];
+      const entries = [createEntry("doc-1", "docs", { title: "Doc 1", content: longContent })];
 
       const context = buildRAGContext(entries, {
         maxTokens: 10000,
@@ -100,9 +94,7 @@ describe("RAG Context Primitives", () => {
     });
 
     it("supports custom titleField", () => {
-      const entries = [
-        createEntry("doc-1", "docs", { name: "Custom Title", content: "Content" }),
-      ];
+      const entries = [createEntry("doc-1", "docs", { name: "Custom Title", content: "Content" })];
 
       const context = buildRAGContext(entries, { titleField: "name" });
 
@@ -110,9 +102,7 @@ describe("RAG Context Primitives", () => {
     });
 
     it("excludes content when includeContent is false", () => {
-      const entries = [
-        createEntry("doc-1", "docs", { title: "Doc 1", content: "Some content" }),
-      ];
+      const entries = [createEntry("doc-1", "docs", { title: "Doc 1", content: "Some content" })];
 
       const context = buildRAGContext(entries, { includeContent: false });
 
@@ -220,6 +210,27 @@ describe("RAG Context Primitives", () => {
         expect(formatted).toContain("A &lt; B &amp; C &gt; D");
         expect(formatted).toContain("&quot;test&quot;");
       });
+
+      it("escapes slug and collection attribute values (no XML injection)", () => {
+        // Regression: slug/collection attribute values were interpolated raw, so a
+        // crafted slug could break out of the attribute and inject XML.
+        const entries = [
+          createEntry('"><inject>&', '"evil&<col>', {
+            title: "Injection Attempt",
+            content: "body",
+          }),
+        ];
+        const context = buildRAGContext(entries);
+        const formatted = formatContextForLLM(context, { format: "xml" });
+
+        // The raw injection payload must NOT appear verbatim in attribute position.
+        expect(formatted).not.toContain('slug=""><inject>&"');
+        expect(formatted).not.toContain('collection=""evil&<col>"');
+        // Special chars are escaped instead.
+        expect(formatted).toContain("&lt;inject&gt;");
+        expect(formatted).toContain("&amp;");
+        expect(formatted).toContain("&quot;");
+      });
     });
 
     describe("json format", () => {
@@ -250,10 +261,10 @@ describe("RAG Context Primitives", () => {
       const context = buildRAGContext([]);
 
       expect(formatContextForLLM(context, { format: "markdown" })).toBe(
-        "No relevant content available."
+        "No relevant content available.",
       );
       expect(formatContextForLLM(context, { format: "xml" })).toBe(
-        "<context>No relevant content available.</context>"
+        "<context>No relevant content available.</context>",
       );
     });
 

@@ -2,7 +2,7 @@
  * Test custom rule using default export.
  * Flags all TODO comments.
  */
-export default function(spans, file, _lineIndex) {
+export default function (spans, file, _lineIndex) {
   const diagnostics = [];
 
   for (const span of spans) {
@@ -20,13 +20,13 @@ export default function(spans, file, _lineIndex) {
 
       diagnostics.push({
         id: `todo-${offset}`,
-        rule: 'custom-todo',
-        message: 'Unresolved TODO found',
+        rule: "custom-todo",
+        message: "Unresolved TODO found",
         file,
         offset,
         line: 1,
         column: offset + 1,
-        severity: 'warning',
+        severity: "warning",
       });
     }
   }

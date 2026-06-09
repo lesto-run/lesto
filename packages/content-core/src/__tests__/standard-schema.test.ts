@@ -13,11 +13,7 @@ import os from "node:os";
 import { z } from "zod";
 import * as v from "valibot";
 import { runPipeline } from "../pipeline";
-import {
-  isStandardSchema,
-  getSchemaDef,
-  schemaToJsonSchema,
-} from "../schema-introspector";
+import { isStandardSchema, getSchemaDef, schemaToJsonSchema } from "../schema-introspector";
 import { markAsReference, isReference, getReferenceTarget } from "../reference";
 import type { CollectionSchema } from "../types";
 
@@ -39,7 +35,7 @@ describe("Standard Schema Multi-Library Support", () => {
       .join("\n");
     await writeFile(
       path.join(tempDir, "content", "posts", `${slug}.md`),
-      `---\n${fm}\n---\n\n${content}`
+      `---\n${fm}\n---\n\n${content}`,
     );
   };
 
@@ -181,8 +177,8 @@ describe("Standard Schema Multi-Library Support", () => {
 
         // Invalid entries are filtered out of the result
         // But validation errors are logged
-        expect(warnings.some(w => w.includes("Validation failed"))).toBe(true);
-        expect(warnings.some(w => w.includes("title"))).toBe(true);
+        expect(warnings.some((w) => w.includes("Validation failed"))).toBe(true);
+        expect(warnings.some((w) => w.includes("title"))).toBe(true);
       } finally {
         console.warn = originalWarn;
       }
@@ -245,7 +241,7 @@ describe("Standard Schema Multi-Library Support", () => {
 
         // Invalid entries are filtered out of the result
         // But validation errors are logged
-        expect(warnings.some(w => w.includes("Validation failed"))).toBe(true);
+        expect(warnings.some((w) => w.includes("Validation failed"))).toBe(true);
       } finally {
         console.warn = originalWarn;
       }

@@ -191,7 +191,10 @@ describe("parser", () => {
 
       const { documents } = await parse([file]);
 
-      expect(nn(documents[0]).document.file.pathSegments).toEqual(["getting-started", "introduction"]);
+      expect(nn(documents[0]).document.file.pathSegments).toEqual([
+        "getting-started",
+        "introduction",
+      ]);
       expect(nn(documents[0]).document.file.isIndex).toBe(false);
     });
 
@@ -231,11 +234,18 @@ describe("parser", () => {
         { title: "getCollection" },
         "",
       );
-      const file = createCollectedFile(filePath, path.join("api", "reference", "get-collection.md"));
+      const file = createCollectedFile(
+        filePath,
+        path.join("api", "reference", "get-collection.md"),
+      );
 
       const { documents } = await parse([file]);
 
-      expect(nn(documents[0]).document.file.pathSegments).toEqual(["api", "reference", "get-collection"]);
+      expect(nn(documents[0]).document.file.pathSegments).toEqual([
+        "api",
+        "reference",
+        "get-collection",
+      ]);
       expect(nn(documents[0]).document.file.isIndex).toBe(false);
     });
   });

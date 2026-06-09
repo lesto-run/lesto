@@ -162,7 +162,7 @@ function adjustChunkSize(
     const extendedBreakPoint = findBestBreakPoint(
       remainingText,
       minWords + 50,
-      tokenizeWords(remainingText)
+      tokenizeWords(remainingText),
     );
     if (extendedBreakPoint > breakPoint) {
       adjustedChunk = remainingText.slice(0, extendedBreakPoint).trim();
@@ -175,7 +175,7 @@ function adjustChunkSize(
     const shrunkBreakPoint = findBestBreakPoint(
       remainingText,
       maxWords - 50,
-      tokenizeWords(remainingText)
+      tokenizeWords(remainingText),
     );
     if (shrunkBreakPoint > 0) {
       adjustedChunk = remainingText.slice(0, shrunkBreakPoint).trim();
@@ -211,7 +211,7 @@ function processChunkIteration(
   const initialBreakPoint = findBestBreakPoint(
     remainingText,
     targetBreakWords,
-    tokenizeWords(remainingText)
+    tokenizeWords(remainingText),
   );
 
   const initialChunk = remainingText.slice(0, initialBreakPoint).trim();
@@ -223,24 +223,27 @@ function processChunkIteration(
     initialChunk,
     initialWordCount,
     minWords,
-    maxWords
+    maxWords,
   );
 
   if (chunk) chunks.push(chunk);
 
   // Use explicit zero check to avoid treating breakPoint=0 as falsy
-  const advancement = breakPoint !== 0 ? breakPoint : (chunk.length || 1);
+  const advancement = breakPoint !== 0 ? breakPoint : chunk.length || 1;
   return advancement;
 }
 
-export function chunkContent(
-  content: string,
-  options: ChunkingOptions = {}
-): string[] {
+export function chunkContent(content: string, options: ChunkingOptions = {}): string[] {
   const opts = { ...DEFAULT_CHUNKING_OPTIONS, ...options };
   const { minWords, maxWords, targetWords, allowShortContent } = opts;
 
-  const shortResult = handleShortContent(content, countWords(content), minWords, maxWords, allowShortContent);
+  const shortResult = handleShortContent(
+    content,
+    countWords(content),
+    minWords,
+    maxWords,
+    allowShortContent,
+  );
   if (shortResult !== null) return shortResult;
 
   const chunks: string[] = [];
@@ -255,9 +258,17 @@ export function chunkContent(
       break;
     }
 
-    const advancement = processChunkIteration(remainingText, targetWords, maxWords, minWords, chunks);
+    const advancement = processChunkIteration(
+      remainingText,
+      targetWords,
+      maxWords,
+      minWords,
+      chunks,
+    );
     if (advancement === 0) {
-      console.warn('[Voice Training] Zero advancement in chunking loop, breaking to prevent infinite loop');
+      console.warn(
+        "[Voice Training] Zero advancement in chunking loop, breaking to prevent infinite loop",
+      );
       break;
     }
     currentPosition += advancement;
@@ -278,7 +289,7 @@ function generateChunkId(entryId: string, chunkIndex: number): string {
  */
 export function chunkVoiceSample(
   sample: VoiceSample,
-  options: ChunkingOptions = {}
+  options: ChunkingOptions = {},
 ): ContentChunk[] {
   const textChunks = chunkContent(sample.content, options);
 
@@ -304,7 +315,7 @@ export function chunkVoiceSample(
  */
 export function chunkVoiceSamples(
   samples: VoiceSample[],
-  options: ChunkingOptions = {}
+  options: ChunkingOptions = {},
 ): ContentChunk[] {
   return samples.flatMap((sample) => chunkVoiceSample(sample, options));
 }
@@ -409,10 +420,13 @@ function extractTopic(content: string): string {
  */
 export function generateInstruction(
   chunk: ContentChunk,
-  type: InstructionType = "write"
+  type: InstructionType = "write",
 ): InstructionPair {
   const templates = INSTRUCTION_TEMPLATES[type];
-  const template = templates[Math.floor(Math.random() * templates.length)] ?? templates[0] ?? "Write about {topic}";
+  const template =
+    templates[Math.floor(Math.random() * templates.length)] ??
+    templates[0] ??
+    "Write about {topic}";
 
   const topic = extractTopic(chunk.text);
   const instruction = template.replace("{topic}", topic);
@@ -436,7 +450,7 @@ export function generateInstruction(
  */
 export function generateInstructionsForChunk(
   chunk: ContentChunk,
-  types: InstructionType[] = ["write", "explain", "elaborate"]
+  types: InstructionType[] = ["write", "explain", "elaborate"],
 ): InstructionPair[] {
   return types.map((type) => generateInstruction(chunk, type));
 }
@@ -446,7 +460,7 @@ export function generateInstructionsForChunk(
  */
 export function generateInstructionsForChunks(
   chunks: ContentChunk[],
-  types: InstructionType[] = ["write"]
+  types: InstructionType[] = ["write"],
 ): InstructionPair[] {
   return chunks.flatMap((chunk) => generateInstructionsForChunk(chunk, types));
 }
@@ -532,7 +546,7 @@ const DEFAULT_TRAINING_DATA_OPTIONS: Required<TrainingDataOptions> = {
  */
 export function generateTrainingData(
   samples: VoiceSample[],
-  options: TrainingDataOptions = {}
+  options: TrainingDataOptions = {},
 ): TrainingPair[] {
   const opts = { ...DEFAULT_TRAINING_DATA_OPTIONS, ...options };
   const { instructionTypes, prioritizeExemplary, exemplaryMultiplier } = opts;
@@ -548,9 +562,7 @@ export function generateTrainingData(
     const exemplaryInstructions = instructions.filter((i) => i.isExemplary);
     for (let i = 1; i < exemplaryMultiplier; i++) {
       instructions = instructions.concat(
-        exemplaryInstructions.map((inst) =>
-          Object.assign({}, inst, { id: `${inst.id}:dup:${i}` })
-        )
+        exemplaryInstructions.map((inst) => Object.assign({}, inst, { id: `${inst.id}:dup:${i}` })),
       );
     }
   }
@@ -575,10 +587,7 @@ export interface JSONLExportOptions {
  * Export training pairs as JSONL string.
  * Each line is a JSON object with instruction/output.
  */
-export function exportAsJSONL(
-  pairs: TrainingPair[],
-  options: JSONLExportOptions = {}
-): string {
+export function exportAsJSONL(pairs: TrainingPair[], options: JSONLExportOptions = {}): string {
   const { includeMetadata = false } = options;
 
   return pairs
@@ -666,8 +675,7 @@ export function calculateTrainingStats(pairs: TrainingPair[]): TrainingDataStats
       acc.byCollection[pair.metadata.collection] =
         (acc.byCollection[pair.metadata.collection] || 0) + 1;
       if (pair.metadata.author) {
-        acc.byAuthor[pair.metadata.author] =
-          (acc.byAuthor[pair.metadata.author] || 0) + 1;
+        acc.byAuthor[pair.metadata.author] = (acc.byAuthor[pair.metadata.author] || 0) + 1;
       }
       return acc;
     },
@@ -677,7 +685,7 @@ export function calculateTrainingStats(pairs: TrainingPair[]): TrainingDataStats
       byType: { continue: 0, write: 0, explain: 0, summarize: 0, elaborate: 0, rewrite: 0 },
       byCollection: {},
       byAuthor: {},
-    }
+    },
   );
 
   return {

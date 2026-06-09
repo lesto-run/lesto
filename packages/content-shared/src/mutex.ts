@@ -95,9 +95,7 @@ export class ReadWriteLock {
 /**
  * Create a singleton loader that prevents race conditions during initialization.
  */
-export function createSingletonLoader<T>(
-  loader: () => Promise<T>
-): () => Promise<T> {
+export function createSingletonLoader<T>(loader: () => Promise<T>): () => Promise<T> {
   let instance: T | null = null;
   let loadPromise: Promise<T> | null = null;
 
@@ -125,7 +123,7 @@ export function createSingletonLoader<T>(
  */
 export function createDebouncedAsync<T extends (...args: unknown[]) => Promise<unknown>>(
   fn: T,
-  delayMs: number
+  delayMs: number,
 ): T & { cancel: () => void; flush: () => Promise<void> } {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let pendingPromise: Promise<unknown> | null = null;

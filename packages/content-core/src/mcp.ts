@@ -2,10 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { resolveConfig, type ResolvedConfig } from "./config";
 import { createEngine } from "./engine";
@@ -34,11 +31,14 @@ function hasControlCharacter(value: string): boolean {
 // JSON Schema type for MCP tool input schemas
 interface McpInputSchema {
   type: "object";
-  properties?: Record<string, {
-    type?: string;
-    description?: string;
-    [key: string]: unknown;
-  }>;
+  properties?: Record<
+    string,
+    {
+      type?: string;
+      description?: string;
+      [key: string]: unknown;
+    }
+  >;
   required?: string[];
   additionalProperties?: boolean;
   [key: string]: unknown;
@@ -53,7 +53,8 @@ interface McpInputSchema {
 const TOOLS: Tool[] = [
   {
     name: "list_collections",
-    description: "List all content collections in the Docks project, including their names and entry counts. Use this to discover what content is available.",
+    description:
+      "List all content collections in the Docks project, including their names and entry counts. Use this to discover what content is available.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -62,7 +63,8 @@ const TOOLS: Tool[] = [
   },
   {
     name: "get_collection_schema",
-    description: "Get the JSON Schema for a collection's frontmatter. Use this BEFORE creating or updating entries to understand what fields are required and their types.",
+    description:
+      "Get the JSON Schema for a collection's frontmatter. Use this BEFORE creating or updating entries to understand what fields are required and their types.",
     inputSchema: {
       type: "object",
       properties: {
@@ -74,7 +76,8 @@ const TOOLS: Tool[] = [
   },
   {
     name: "get_entry",
-    description: "Get a single content entry by collection name and slug. Returns the entry's frontmatter data, content, and metadata.",
+    description:
+      "Get a single content entry by collection name and slug. Returns the entry's frontmatter data, content, and metadata.",
     inputSchema: {
       type: "object",
       properties: {
@@ -87,7 +90,8 @@ const TOOLS: Tool[] = [
   },
   {
     name: "search_content",
-    description: "Search for content entries by text query. Searches in both frontmatter data and markdown content. Returns matching entries with context.",
+    description:
+      "Search for content entries by text query. Searches in both frontmatter data and markdown content. Returns matching entries with context.",
     inputSchema: {
       type: "object",
       properties: {
@@ -101,13 +105,21 @@ const TOOLS: Tool[] = [
   },
   {
     name: "create_entry",
-    description: "Create a new content entry in a collection. Validates against the collection schema and writes the file with proper frontmatter formatting.",
+    description:
+      "Create a new content entry in a collection. Validates against the collection schema and writes the file with proper frontmatter formatting.",
     inputSchema: {
       type: "object",
       properties: {
         collection: { type: "string", description: "The name of the collection" },
-        slug: { type: "string", description: "The slug/filename for the new entry (without extension)" },
-        data: { type: "object", description: "The frontmatter data as a JSON object", additionalProperties: true },
+        slug: {
+          type: "string",
+          description: "The slug/filename for the new entry (without extension)",
+        },
+        data: {
+          type: "object",
+          description: "The frontmatter data as a JSON object",
+          additionalProperties: true,
+        },
         content: { type: "string", description: "The markdown content body" },
       },
       required: ["collection", "slug", "data"],
@@ -116,13 +128,18 @@ const TOOLS: Tool[] = [
   },
   {
     name: "update_entry",
-    description: "Update an existing content entry's frontmatter data or markdown content. Merges frontmatter changes with existing data.",
+    description:
+      "Update an existing content entry's frontmatter data or markdown content. Merges frontmatter changes with existing data.",
     inputSchema: {
       type: "object",
       properties: {
         collection: { type: "string", description: "The name of the collection" },
         slug: { type: "string", description: "The slug/ID of the entry to update" },
-        data: { type: "object", description: "Frontmatter data to merge/update", additionalProperties: true },
+        data: {
+          type: "object",
+          description: "Frontmatter data to merge/update",
+          additionalProperties: true,
+        },
         content: { type: "string", description: "New markdown content body (replaces existing)" },
       },
       required: ["collection", "slug"],
@@ -150,10 +167,7 @@ function handleListCollections(engine: Engine): string {
   return JSON.stringify(result, null, 2);
 }
 
-function handleGetSchema(
-  config: ResolvedConfig,
-  args: { collection: string },
-): string {
+function handleGetSchema(config: ResolvedConfig, args: { collection: string }): string {
   const collectionConfig = config.collections.find((c) => c.name === args.collection);
 
   if (!collectionConfig) {
@@ -169,10 +183,7 @@ function handleGetSchema(
   }
 }
 
-function handleGetEntry(
-  engine: Engine,
-  args: { collection: string; slug: string },
-): string {
+function handleGetEntry(engine: Engine, args: { collection: string; slug: string }): string {
   const entry = engine.getEntry(args.collection, args.slug);
 
   if (!entry) {
@@ -198,10 +209,7 @@ function extractContentMatch(content: string, query: string): string | null {
   return `Content: ...${content.slice(start, end)}...`;
 }
 
-function searchEntry(
-  entry: RuntimeEntry,
-  query: string,
-): SearchResult | null {
+function searchEntry(entry: RuntimeEntry, query: string): SearchResult | null {
   const matches: string[] = [];
   const content = (entry["content"] as string) || "";
   const slug = entry["slug"] as string;
@@ -370,16 +378,34 @@ async function handleUpdateEntry(
 type ToolHandler = (
   engine: Engine,
   config: ResolvedConfig,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
 ) => Promise<string> | string;
 
 const TOOL_HANDLERS: Record<string, ToolHandler> = {
   list_collections: (engine) => handleListCollections(engine),
-  get_collection_schema: (_, config, args) => handleGetSchema(config, args as { collection: string }),
-  get_entry: (engine, _, args) => handleGetEntry(engine, args as { collection: string; slug: string }),
-  search_content: (engine, _, args) => handleSearchContent(engine, args as { query: string; collection?: string; limit?: number }),
-  create_entry: (engine, config, args) => handleCreateEntry(engine, config, args as { collection: string; slug: string; data: Record<string, unknown>; content?: string }),
-  update_entry: (engine, config, args) => handleUpdateEntry(engine, config, args as { collection: string; slug: string; data?: Record<string, unknown>; content?: string }),
+  get_collection_schema: (_, config, args) =>
+    handleGetSchema(config, args as { collection: string }),
+  get_entry: (engine, _, args) =>
+    handleGetEntry(engine, args as { collection: string; slug: string }),
+  search_content: (engine, _, args) =>
+    handleSearchContent(engine, args as { query: string; collection?: string; limit?: number }),
+  create_entry: (engine, config, args) =>
+    handleCreateEntry(
+      engine,
+      config,
+      args as { collection: string; slug: string; data: Record<string, unknown>; content?: string },
+    ),
+  update_entry: (engine, config, args) =>
+    handleUpdateEntry(
+      engine,
+      config,
+      args as {
+        collection: string;
+        slug: string;
+        data?: Record<string, unknown>;
+        content?: string;
+      },
+    ),
 };
 
 async function handleToolCall(

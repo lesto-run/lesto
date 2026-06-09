@@ -129,11 +129,7 @@ export {
   FrontmatterParseError,
 } from "@keel/content-umbra";
 
-export type {
-  Parser,
-  ParserOption,
-  ParserPreset,
-} from "@keel/content-umbra";
+export type { Parser, ParserOption, ParserPreset } from "@keel/content-umbra";
 
 // Markdown rendering
 export { createRenderer } from "@keel/content-markdown";
@@ -178,12 +174,7 @@ export type {
 } from "./voice";
 
 // AI configuration
-export {
-  resolveAIConfig,
-  isAIConfigured,
-  validateAIConfig,
-  getAIConfigStatus,
-} from "./ai-config";
+export { resolveAIConfig, isAIConfigured, validateAIConfig, getAIConfigStatus } from "./ai-config";
 
 export type { AIConfig, AIProvider, ResolvedAIConfig } from "./types";
 

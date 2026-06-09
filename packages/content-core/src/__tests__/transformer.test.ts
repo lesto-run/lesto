@@ -25,7 +25,14 @@ const createDoc = (
   document: {
     data,
     content,
-    file: { path: `${slug}.md`, fileName: slug, extension: "md", directory: ".", pathSegments: [], isIndex: false },
+    file: {
+      path: `${slug}.md`,
+      fileName: slug,
+      extension: "md",
+      directory: ".",
+      pathSegments: [],
+      isIndex: false,
+    },
   },
   slug,
   isMDX: false,
@@ -103,7 +110,7 @@ describe("transformer", () => {
       };
       // With headingLevels: [1, 2, 3], h4 should be excluded
       expect(rendered.headings).toHaveLength(3);
-      expect(rendered.headings.map(h => h.depth)).toEqual([1, 2, 3]);
+      expect(rendered.headings.map((h) => h.depth)).toEqual([1, 2, 3]);
     });
 
     it("provides reading time and excerpt in render result", async () => {
@@ -116,7 +123,7 @@ describe("transformer", () => {
         "hello",
         "posts",
         {},
-        "# Title\n\n" + "word ".repeat(300) + "\n\n## Section"
+        "# Title\n\n" + "word ".repeat(300) + "\n\n## Section",
       );
       doc.file.collection = collection;
 
@@ -130,7 +137,7 @@ describe("transformer", () => {
       expect(rendered.readingTime.words).toBeGreaterThan(300);
       expect(rendered.readingTime.minutes).toBeGreaterThan(0);
       expect(rendered.excerpt).toBeTruthy();
-      expect(rendered.headings.find(h => h.text === "Section")).toBeDefined();
+      expect(rendered.headings.find((h) => h.text === "Section")).toBeDefined();
     });
 
     it("transform function overrides auto-rendering", async () => {

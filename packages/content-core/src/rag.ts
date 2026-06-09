@@ -6,7 +6,7 @@
  * UI and wire to their preferred AI provider.
  */
 
-import { escapeXml } from "@keel/content-shared/xml";
+import { escapeXml, escapeXmlAttr } from "@keel/content-shared/xml";
 import type { RuntimeEntry } from "./types";
 
 // --- Types ---
@@ -127,11 +127,7 @@ function truncateContent(content: string, maxLength: number): string {
 
 // --- Prioritization ---
 
-function sortByDate(
-  entries: RuntimeEntry[],
-  dateField: string,
-  descending = true
-): RuntimeEntry[] {
+function sortByDate(entries: RuntimeEntry[], dateField: string, descending = true): RuntimeEntry[] {
   return [...entries].toSorted((a, b) => {
     const dateA = getFieldValue(a, dateField);
     const dateB = getFieldValue(b, dateField);
@@ -153,10 +149,7 @@ function sortByDate(
   });
 }
 
-function sortByExemplary(
-  entries: RuntimeEntry[],
-  exemplaryField: string
-): RuntimeEntry[] {
+function sortByExemplary(entries: RuntimeEntry[], exemplaryField: string): RuntimeEntry[] {
   return [...entries].toSorted((a, b) => {
     const aExemplary = Boolean(getFieldValue(a, exemplaryField));
     const bExemplary = Boolean(getFieldValue(b, exemplaryField));
@@ -178,16 +171,9 @@ const PRIORITIZATION_HANDLERS: Record<
     // For "relevant", sort by a combination of recency and exemplary status
     const exemplarySorted = sortByExemplary(entries, exemplaryField);
     // Within each group (exemplary/not), sort by date
-    const exemplary = exemplarySorted.filter((e) =>
-      Boolean(getFieldValue(e, exemplaryField))
-    );
-    const nonExemplary = exemplarySorted.filter(
-      (e) => !getFieldValue(e, exemplaryField)
-    );
-    return [
-      ...sortByDate(exemplary, dateField),
-      ...sortByDate(nonExemplary, dateField),
-    ];
+    const exemplary = exemplarySorted.filter((e) => Boolean(getFieldValue(e, exemplaryField)));
+    const nonExemplary = exemplarySorted.filter((e) => !getFieldValue(e, exemplaryField));
+    return [...sortByDate(exemplary, dateField), ...sortByDate(nonExemplary, dateField)];
   },
 };
 
@@ -195,7 +181,7 @@ function prioritizeEntries(
   entries: RuntimeEntry[],
   prioritize: RAGPrioritization,
   dateField: string,
-  exemplaryField: string
+  exemplaryField: string,
 ): RuntimeEntry[] {
   const handler = PRIORITIZATION_HANDLERS[prioritize] ?? PRIORITIZATION_HANDLERS.relevant;
   return handler(entries, dateField, exemplaryField);
@@ -222,10 +208,7 @@ function prioritizeEntries(
  * });
  * ```
  */
-export function buildRAGContext(
-  entries: RuntimeEntry[],
-  options: RAGOptions = {}
-): RAGContext {
+export function buildRAGContext(entries: RuntimeEntry[], options: RAGOptions = {}): RAGContext {
   const {
     maxTokens = 4000,
     prioritize = "relevant",
@@ -305,13 +288,15 @@ function formatXml(context: RAGContext, includeCollection: boolean): string {
 
   const entries = context.entries
     .map((entry) => {
+      // Attribute values are escaped with attribute-safe escaping (quotes too)
+      // to prevent XML injection via slug/collection containing &, <, >, ", '.
       const collectionAttr = includeCollection
-        ? ` collection="${entry.collection}"`
+        ? ` collection="${escapeXmlAttr(entry.collection)}"`
         : "";
       const contentTag = entry.content
         ? `\n    <content>${escapeXml(entry.content)}</content>`
         : "";
-      return `  <entry${collectionAttr} slug="${entry.slug}">
+      return `  <entry${collectionAttr} slug="${escapeXmlAttr(entry.slug)}">
     <title>${escapeXml(entry.title)}</title>${contentTag}
   </entry>`;
     })
@@ -365,10 +350,7 @@ const FORMAT_HANDLERS: Record<RAGFormat, (ctx: RAGContext, incColl: boolean) => 
   markdown: formatMarkdown,
 };
 
-export function formatContextForLLM(
-  context: RAGContext,
-  options: FormatOptions = {}
-): string {
+export function formatContextForLLM(context: RAGContext, options: FormatOptions = {}): string {
   const { format = "markdown", includeCollection = true } = options;
   const handler = FORMAT_HANDLERS[format] ?? FORMAT_HANDLERS.markdown;
   return handler(context, includeCollection);

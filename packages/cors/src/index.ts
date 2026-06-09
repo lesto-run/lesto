@@ -9,5 +9,5 @@
  *   for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
  */
 
-export { corsHeaders } from "./cors";
-export type { CorsOptions } from "./cors";
+export { corsHeaders, CorsError } from "./cors";
+export type { CorsErrorCode, CorsOptions } from "./cors";

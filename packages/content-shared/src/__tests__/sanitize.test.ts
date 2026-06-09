@@ -48,7 +48,7 @@ describe("sanitizeHtml", () => {
   });
 
   it("removes style tags", () => {
-    const html = '<style>.evil { background: url(tracking.gif) }</style><p>Text</p>';
+    const html = "<style>.evil { background: url(tracking.gif) }</style><p>Text</p>";
     expect(sanitizeHtml(html)).toBe("<p>Text</p>");
   });
 
@@ -91,7 +91,7 @@ describe("sanitizeHtml", () => {
   });
 
   it("handles nested elements correctly", () => {
-    const html = '<div><p><strong>Bold <em>and italic</em></strong></p></div>';
+    const html = "<div><p><strong>Bold <em>and italic</em></strong></p></div>";
     expect(sanitizeHtml(html)).toBe(html);
   });
 
@@ -104,7 +104,7 @@ describe("sanitizeHtml", () => {
   });
 
   it("handles malformed HTML gracefully", () => {
-    const html = '<div><p>Unclosed tags';
+    const html = "<div><p>Unclosed tags";
     const result = sanitizeHtml(html);
     expect(result).toContain("Unclosed tags");
   });
@@ -126,7 +126,7 @@ describe("sanitizeHtml", () => {
   });
 
   it("accepts custom config options", () => {
-    const html = '<div><p>Paragraph</p></div>';
+    const html = "<div><p>Paragraph</p></div>";
     const result = sanitizeHtml(html, { ALLOWED_TAGS: ["p"] });
     expect(result).toBe("<p>Paragraph</p>");
   });
@@ -140,7 +140,7 @@ describe("sanitizeHtml", () => {
 
 describe("isDangerousHtml", () => {
   it("returns true for HTML with script tags", () => {
-    const html = '<div><script>alert(1)</script></div>';
+    const html = "<div><script>alert(1)</script></div>";
     expect(isDangerousHtml(html)).toBe(true);
   });
 

@@ -8,7 +8,10 @@ import { extractHeadings } from "./headings";
 import { generateExcerpt } from "./excerpt";
 import { calculateReadingTime } from "./reading-time";
 import { createHybridRenderer } from "./hybrid-renderer";
-import { parseSyntaxHighlightingOptions, buildSyntaxHighlightingPlugin } from "./syntax-highlighting";
+import {
+  parseSyntaxHighlightingOptions,
+  buildSyntaxHighlightingPlugin,
+} from "./syntax-highlighting";
 import { rehypeStripFirstHeading, remarkStripLumenComments } from "./plugins";
 import type { RenderOptions, RenderResult, Renderer } from "./types";
 
@@ -60,16 +63,18 @@ export function createUnifiedRenderer(options: RenderOptions = {}): Renderer {
         allRehypePlugins.push(rehypeStripFirstHeading);
       }
 
-      return unified()
-        .use(remarkParse)
-        .use(remarkGfm)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .use(remarkPlugins as any)
-        .use(remarkStripLumenComments)
-        .use(remarkRehype)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .use(allRehypePlugins as any)
-        .use(rehypeStringify);
+      return (
+        unified()
+          .use(remarkParse)
+          .use(remarkGfm)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .use(remarkPlugins as any)
+          .use(remarkStripLumenComments)
+          .use(remarkRehype)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .use(allRehypePlugins as any)
+          .use(rehypeStringify)
+      );
     })();
 
     return processorPromise;

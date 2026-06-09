@@ -10,6 +10,14 @@
  * shape of the canonical blog example.
  */
 
+/**
+ * The version specifier every `@keel/*` dependency is scaffolded with.
+ *
+ * A real npm dist-tag, resolvable by any package manager outside this monorepo —
+ * deliberately NOT the `workspace:*` protocol, which only resolves in-workspace.
+ */
+const keelDep = "latest";
+
 /** `package.json` for the scaffolded app: starter deps + a `keel dev` script. */
 export function packageJson(name: string): string {
   const manifest = {
@@ -23,13 +31,17 @@ export function packageJson(name: string): string {
     },
 
     dependencies: {
-      "@keel/kernel": "workspace:*",
-      "@keel/migrate": "workspace:*",
-      "@keel/orm": "workspace:*",
-      "@keel/router": "workspace:*",
-      "@keel/runtime": "workspace:*",
-      "@keel/ui": "workspace:*",
-      "@keel/web": "workspace:*",
+      // Resolvable specifiers for a freshly scaffolded app: `latest` is a real
+      // npm dist-tag that any package manager can install OUTSIDE this monorepo.
+      // The `workspace:*` protocol resolves only within the workspace, so a
+      // generated app would fail to install — emit `latest` instead.
+      "@keel/kernel": keelDep,
+      "@keel/migrate": keelDep,
+      "@keel/orm": keelDep,
+      "@keel/router": keelDep,
+      "@keel/runtime": keelDep,
+      "@keel/ui": keelDep,
+      "@keel/web": keelDep,
       "better-sqlite3": "^11.10.0",
       react: "^19",
       "react-dom": "^19",

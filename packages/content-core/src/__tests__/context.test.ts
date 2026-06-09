@@ -9,11 +9,7 @@ function collectionStub(name: string): AnyCollection {
 }
 
 /** Build a runtime entry with the metadata fields `documents()` may carry. */
-function entryStub(
-  id: string,
-  collection: string,
-  extra: Record<string, unknown>,
-): RuntimeEntry {
+function entryStub(id: string, collection: string, extra: Record<string, unknown>): RuntimeEntry {
   const [, ...rest] = id.split("/");
   const slug = rest.join("/") || id;
   return {
@@ -41,9 +37,7 @@ describe("TransformContext", () => {
 
   describe("documents()", () => {
     it("returns entries from earlier collections", () => {
-      const entries = [
-        entryStub("authors/john", "authors", { data: { name: "John" } }),
-      ];
+      const entries = [entryStub("authors/john", "authors", { data: { name: "John" } })];
       store.collections.set("authors", entries);
 
       const ctx = createTransformContext("posts", "content/posts", "/path/to/file.md", store);

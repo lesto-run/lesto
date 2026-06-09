@@ -14,7 +14,7 @@ import { offsetToPositionFast } from "./position.js";
 export class LintContext {
   constructor(
     readonly file: string,
-    readonly lineIndex: LineIndex
+    readonly lineIndex: LineIndex,
   ) {}
 
   /**
@@ -27,7 +27,7 @@ export class LintContext {
     message: string,
     severity: Severity,
     help?: string,
-    fix?: Fix
+    fix?: Fix,
   ): Diagnostic {
     const { line, column } = offsetToPositionFast(this.lineIndex, offset);
     // Use deterministic ID format: rule-offset-length
@@ -53,7 +53,7 @@ export class LintContext {
    */
   *scan(
     content: string,
-    pattern: RegExp
+    pattern: RegExp,
   ): Generator<{ match: RegExpExecArray; offset: number; length: number }> {
     pattern.lastIndex = 0;
     for (let m; (m = pattern.exec(content)); ) {

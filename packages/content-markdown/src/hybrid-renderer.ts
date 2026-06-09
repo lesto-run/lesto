@@ -20,10 +20,12 @@ import { dirname, join } from "node:path";
 import { extractHeadings } from "./headings";
 import { generateExcerpt } from "./excerpt";
 import { calculateReadingTime } from "./reading-time";
-import { parseSyntaxHighlightingOptions, buildSyntaxHighlightingPlugin } from "./syntax-highlighting";
+import {
+  parseSyntaxHighlightingOptions,
+  buildSyntaxHighlightingPlugin,
+} from "./syntax-highlighting";
 import { rehypeStripFirstHeading } from "./plugins";
 import type { RenderOptions, RenderResult, Renderer } from "./types";
-
 
 const DEFAULT_WORDS_PER_MINUTE = 250;
 const DEFAULT_EXCERPT_LENGTH = 200;
@@ -44,7 +46,6 @@ const sanitizeSchema: SanitizeOptions = {
   // Disable the "user-content-" prefix for IDs
   clobberPrefix: "",
 };
-
 
 // md4w initialization state
 let md4wInitPromise: Promise<boolean> | null = null;
@@ -74,7 +75,9 @@ async function ensureMd4wInit(): Promise<boolean> {
         return true;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn(`md4w WASM initialization failed, falling back to unified renderer: ${message}`);
+        console.warn(
+          `md4w WASM initialization failed, falling back to unified renderer: ${message}`,
+        );
         // Reset promise to allow retry on next render
         md4wInitPromise = null;
         return false;
@@ -84,7 +87,7 @@ async function ensureMd4wInit(): Promise<boolean> {
   return md4wInitPromise;
 }
 
-export interface HybridRenderOptions extends Omit<RenderOptions, 'remarkPlugins'> {
+export interface HybridRenderOptions extends Omit<RenderOptions, "remarkPlugins"> {
   // Note: remarkPlugins not supported in hybrid mode - we skip the MDAST layer
 }
 
@@ -170,7 +173,11 @@ export function createHybridRenderer(options: HybridRenderOptions = {}): Rendere
 
       // Step 1: Fast markdown → HTML with md4w
       let html = md4w.mdToHtml(markdown, {
-        parseFlags: md4w.ParseFlags.DEFAULT | md4w.ParseFlags.TABLES | md4w.ParseFlags.STRIKETHROUGH | md4w.ParseFlags.TASKLISTS,
+        parseFlags:
+          md4w.ParseFlags.DEFAULT |
+          md4w.ParseFlags.TABLES |
+          md4w.ParseFlags.STRIKETHROUGH |
+          md4w.ParseFlags.TASKLISTS,
       });
 
       // Step 2: Process HTML with rehype (always run for security sanitization)

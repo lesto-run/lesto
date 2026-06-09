@@ -4,12 +4,7 @@ import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { z } from "zod";
-import {
-  defineTaxonomy,
-  isEnumTaxonomy,
-  isSchemaTaxonomy,
-  getTaxonomySlugs,
-} from "../taxonomy";
+import { defineTaxonomy, isEnumTaxonomy, isSchemaTaxonomy, getTaxonomySlugs } from "../taxonomy";
 import { reference } from "../reference";
 import { runPipeline } from "../pipeline";
 import { generateTypes } from "../typegen";
@@ -379,9 +374,7 @@ describe("taxonomy validation in pipeline", () => {
               schema: z.object({ title: z.string() }),
             },
           ],
-          taxonomies: [
-            defineTaxonomy({ name: "posts", terms: ["draft", "published"] }),
-          ],
+          taxonomies: [defineTaxonomy({ name: "posts", terms: ["draft", "published"] })],
         },
         skipWrite: true,
       });
@@ -417,9 +410,7 @@ describe("taxonomy validation in pipeline", () => {
               schema: z.object({ title: z.string() }),
             },
           ],
-          taxonomies: [
-            defineTaxonomy({ name: "empty", terms: [] }),
-          ],
+          taxonomies: [defineTaxonomy({ name: "empty", terms: [] })],
         },
         skipWrite: true,
       });
@@ -455,9 +446,7 @@ describe("taxonomy validation in pipeline", () => {
               schema: z.object({ title: z.string() }),
             },
           ],
-          taxonomies: [
-            defineTaxonomy({ name: "status", terms: ["draft", "draft", "published"] }),
-          ],
+          taxonomies: [defineTaxonomy({ name: "status", terms: ["draft", "draft", "published"] })],
         },
         skipWrite: true,
       });
@@ -488,12 +477,12 @@ describe("taxonomy type generation", () => {
 
     const types = generateTypes(collections, taxonomies);
 
-    expect(types).toContain('TaxonomyRegistry');
+    expect(types).toContain("TaxonomyRegistry");
     expect(types).toContain('"status"');
     expect(types).toContain('"draft"');
     expect(types).toContain('"published"');
     expect(types).toContain('"archived"');
-    expect(types).toContain('export type Status');
+    expect(types).toContain("export type Status");
   });
 
   it("generates types for schema taxonomy", () => {
@@ -517,11 +506,11 @@ describe("taxonomy type generation", () => {
 
     const types = generateTypes(collections, taxonomies);
 
-    expect(types).toContain('TaxonomyRegistry');
+    expect(types).toContain("TaxonomyRegistry");
     expect(types).toContain('"tags"');
     expect(types).toContain('"javascript"');
     expect(types).toContain('"typescript"');
-    expect(types).toContain('export type Tags');
+    expect(types).toContain("export type Tags");
   });
 
   it("generates types for multiple taxonomies", () => {
@@ -541,8 +530,8 @@ describe("taxonomy type generation", () => {
 
     expect(types).toContain('"status"');
     expect(types).toContain('"category"');
-    expect(types).toContain('export type Status');
-    expect(types).toContain('export type Category');
+    expect(types).toContain("export type Status");
+    expect(types).toContain("export type Category");
   });
 
   it("handles no taxonomies", () => {
@@ -556,7 +545,7 @@ describe("taxonomy type generation", () => {
 
     const types = generateTypes(collections, []);
 
-    expect(types).toContain('CollectionRegistry');
-    expect(types).not.toContain('TaxonomyRegistry');
+    expect(types).toContain("CollectionRegistry");
+    expect(types).not.toContain("TaxonomyRegistry");
   });
 });

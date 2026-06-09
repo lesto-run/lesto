@@ -233,7 +233,14 @@ describe("cache manager", () => {
         data: {},
         content: "",
         slug: "test",
-        meta: { path: "", fileName: "", extension: "", directory: "", pathSegments: [], isIndex: false },
+        meta: {
+          path: "",
+          fileName: "",
+          extension: "",
+          directory: "",
+          pathSegments: [],
+          isIndex: false,
+        },
       };
 
       manager.setParseCache("posts", "test.md", result);
@@ -258,7 +265,14 @@ describe("cache manager", () => {
         data: { title: "Post 1" },
         content: "# Post 1",
         slug: "post-1",
-        meta: { path: "post-1.md", fileName: "post-1.md", extension: ".md", directory: "", pathSegments: [], isIndex: false },
+        meta: {
+          path: "post-1.md",
+          fileName: "post-1.md",
+          extension: ".md",
+          directory: "",
+          pathSegments: [],
+          isIndex: false,
+        },
       };
 
       const result2 = {
@@ -266,7 +280,14 @@ describe("cache manager", () => {
         data: { title: "Post 2" },
         content: "# Post 2",
         slug: "post-2",
-        meta: { path: "post-2.md", fileName: "post-2.md", extension: ".md", directory: "", pathSegments: [], isIndex: false },
+        meta: {
+          path: "post-2.md",
+          fileName: "post-2.md",
+          extension: ".md",
+          directory: "",
+          pathSegments: [],
+          isIndex: false,
+        },
       };
 
       manager.setParseCache("posts", "post-1.md", result1);
@@ -292,7 +313,14 @@ describe("cache manager", () => {
         data: { title: "Post" },
         content: "# Post",
         slug: "post",
-        meta: { path: "post.md", fileName: "post.md", extension: ".md", directory: "", pathSegments: [], isIndex: false },
+        meta: {
+          path: "post.md",
+          fileName: "post.md",
+          extension: ".md",
+          directory: "",
+          pathSegments: [],
+          isIndex: false,
+        },
       };
 
       const pagesResult = {
@@ -300,7 +328,14 @@ describe("cache manager", () => {
         data: { title: "Page" },
         content: "# Page",
         slug: "page",
-        meta: { path: "page.md", fileName: "page.md", extension: ".md", directory: "", pathSegments: [], isIndex: false },
+        meta: {
+          path: "page.md",
+          fileName: "page.md",
+          extension: ".md",
+          directory: "",
+          pathSegments: [],
+          isIndex: false,
+        },
       };
 
       manager.setParseCache("posts", "post.md", postsResult);

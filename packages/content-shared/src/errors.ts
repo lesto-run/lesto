@@ -7,11 +7,7 @@ export class DocksError extends Error {
   readonly context: Record<string, unknown>;
   readonly timestamp: Date;
 
-  constructor(
-    message: string,
-    code: string,
-    context: Record<string, unknown> = {}
-  ) {
+  constructor(message: string, code: string, context: Record<string, unknown> = {}) {
     super(message);
     this.name = "DocksError";
     this.code = code;
@@ -20,7 +16,9 @@ export class DocksError extends Error {
 
     // Maintains proper stack trace for where error was thrown
     if ("captureStackTrace" in Error) {
-      (Error as { captureStackTrace: (target: object, constructor?: Function) => void }).captureStackTrace(this, DocksError);
+      (
+        Error as { captureStackTrace: (target: object, constructor?: Function) => void }
+      ).captureStackTrace(this, DocksError);
     }
   }
 
@@ -55,7 +53,7 @@ export class ParseError extends DocksError {
 
   constructor(
     message: string,
-    context?: Record<string, unknown> & { line?: number; column?: number }
+    context?: Record<string, unknown> & { line?: number; column?: number },
   ) {
     super(message, "PARSE_ERROR", context);
     this.name = "ParseError";
@@ -73,7 +71,7 @@ export class NetworkError extends DocksError {
 
   constructor(
     message: string,
-    context?: Record<string, unknown> & { statusCode?: number; url?: string }
+    context?: Record<string, unknown> & { statusCode?: number; url?: string },
   ) {
     super(message, "NETWORK_ERROR", context);
     this.name = "NetworkError";
@@ -106,9 +104,7 @@ export class ConfigError extends DocksError {
  * Result type for operations that can fail.
  * Use instead of throwing for recoverable errors.
  */
-export type Result<T, E = DocksError> =
-  | { success: true; data: T }
-  | { success: false; error: E };
+export type Result<T, E = DocksError> = { success: true; data: T } | { success: false; error: E };
 
 export function ok<T>(data: T): Result<T, never> {
   return { success: true, data };

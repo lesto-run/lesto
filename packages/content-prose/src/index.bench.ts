@@ -21,17 +21,17 @@
  * - textlint write-good: ~8 rules (passive, illusion, so, thereIs,
  *   weasel, adverb, tooWordy, cliches)
  */
-import { bench, describe, beforeAll, afterAll } from 'vitest';
-import { spawnSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { bench, describe, beforeAll, afterAll } from "vitest";
+import { spawnSync } from "node:child_process";
+import { writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 // Paths to CLI binaries
-const lumenBin = join(import.meta.dirname, '../bin/lumen.js');
-const textlintBin = join(import.meta.dirname, '../node_modules/.bin/textlint');
+const lumenBin = join(import.meta.dirname, "../bin/lumen.js");
+const textlintBin = join(import.meta.dirname, "../node_modules/.bin/textlint");
 
 // Temp directory for benchmark fixtures
-const tmpDir = join(import.meta.dirname, '../.bench-tmp');
+const tmpDir = join(import.meta.dirname, "../.bench-tmp");
 
 // Sample content with various issues to detect
 const shortContent = `---
@@ -67,9 +67,9 @@ ${Array(10)
 Various features were implemented to help you. Perhaps you want to leverage the API, or maybe utilize the CLI. It's really just a matter of preference.
 
 The system was built to be extremely fast and basically handles everything automatically. Some developers think it's obviously the best choice.
-`
+`,
   )
-  .join('\n')}
+  .join("\n")}
 `;
 
 const longContent = `---
@@ -105,16 +105,16 @@ function process(data) {
 \`\`\`
 
 > Obviously, this is just the beginning. Many more features are available.
-`
+`,
   )
-  .join('\n')}
+  .join("\n")}
 `;
 
 function setupFiles() {
   mkdirSync(tmpDir, { recursive: true });
-  writeFileSync(join(tmpDir, 'short.md'), shortContent);
-  writeFileSync(join(tmpDir, 'medium.md'), mediumContent);
-  writeFileSync(join(tmpDir, 'long.md'), longContent);
+  writeFileSync(join(tmpDir, "short.md"), shortContent);
+  writeFileSync(join(tmpDir, "medium.md"), mediumContent);
+  writeFileSync(join(tmpDir, "long.md"), longContent);
 }
 
 function cleanupFiles() {
@@ -127,16 +127,16 @@ function cleanupFiles() {
 
 // CLI runner helpers
 function runLumen(fileOrPattern: string) {
-  return spawnSync('node', [lumenBin, fileOrPattern], {
-    encoding: 'utf8',
-    stdio: 'pipe',
+  return spawnSync("node", [lumenBin, fileOrPattern], {
+    encoding: "utf8",
+    stdio: "pipe",
   });
 }
 
 function runTextlint(fileOrPattern: string) {
-  return spawnSync(textlintBin, ['--rule', 'write-good', fileOrPattern], {
-    encoding: 'utf8',
-    stdio: 'pipe',
+  return spawnSync(textlintBin, ["--rule", "write-good", fileOrPattern], {
+    encoding: "utf8",
+    stdio: "pipe",
   });
 }
 
@@ -157,50 +157,50 @@ afterAll(() => {
  * This includes process startup overhead, which is representative of how
  * users actually invoke the tool.
  */
-describe('CLI Benchmark: Short Content (~100 words)', () => {
-  const file = join(tmpDir, 'short.md');
+describe("CLI Benchmark: Short Content (~100 words)", () => {
+  const file = join(tmpDir, "short.md");
 
-  bench('lumen', () => {
+  bench("lumen", () => {
     runLumen(file);
   });
 
-  bench('textlint (write-good)', () => {
+  bench("textlint (write-good)", () => {
     runTextlint(file);
   });
 });
 
-describe('CLI Benchmark: Medium Content (~500 words)', () => {
-  const file = join(tmpDir, 'medium.md');
+describe("CLI Benchmark: Medium Content (~500 words)", () => {
+  const file = join(tmpDir, "medium.md");
 
-  bench('lumen', () => {
+  bench("lumen", () => {
     runLumen(file);
   });
 
-  bench('textlint (write-good)', () => {
+  bench("textlint (write-good)", () => {
     runTextlint(file);
   });
 });
 
-describe('CLI Benchmark: Long Content (~2500 words)', () => {
-  const file = join(tmpDir, 'long.md');
+describe("CLI Benchmark: Long Content (~2500 words)", () => {
+  const file = join(tmpDir, "long.md");
 
-  bench('lumen', () => {
+  bench("lumen", () => {
     runLumen(file);
   });
 
-  bench('textlint (write-good)', () => {
+  bench("textlint (write-good)", () => {
     runTextlint(file);
   });
 });
 
-describe('CLI Benchmark: Multiple Files (glob pattern)', () => {
-  const pattern = join(tmpDir, '*.md');
+describe("CLI Benchmark: Multiple Files (glob pattern)", () => {
+  const pattern = join(tmpDir, "*.md");
 
-  bench('lumen', () => {
+  bench("lumen", () => {
     runLumen(pattern);
   });
 
-  bench('textlint (write-good)', () => {
+  bench("textlint (write-good)", () => {
     runTextlint(pattern);
   });
 });

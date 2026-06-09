@@ -39,10 +39,7 @@ export {
 // Index Loading & Parsing
 // ============================================================================
 
-export {
-  parseSearchIndex,
-  loadSearchIndex,
-} from "./index-format";
+export { parseSearchIndex, loadSearchIndex } from "./index-format";
 
 // ============================================================================
 // Progressive Loading
@@ -62,26 +59,15 @@ export {
 // Zero-Copy Index
 // ============================================================================
 
-export {
-  ZeroCopyIndex,
-  loadZeroCopyIndex,
-  IndexFlags,
-} from "./zero-copy";
+export { ZeroCopyIndex, loadZeroCopyIndex, IndexFlags } from "./zero-copy";
 
-export type {
-  ZeroCopyEntry,
-  DecodedEntry,
-  ZeroCopySearchResult,
-} from "./zero-copy";
+export type { ZeroCopyEntry, DecodedEntry, ZeroCopySearchResult } from "./zero-copy";
 
 // ============================================================================
 // Search Client
 // ============================================================================
 
-export {
-  createSearch,
-  createSearchFromIndex,
-} from "./client";
+export { createSearch, createSearchFromIndex } from "./client";
 
 // ============================================================================
 // Query Intelligence
@@ -112,10 +98,7 @@ export {
   getResultSource,
 } from "./rag-fallback";
 
-export type {
-  RAGFallbackOptions,
-  RAGClientOptions,
-} from "./rag-fallback";
+export type { RAGFallbackOptions, RAGClientOptions } from "./rag-fallback";
 
 // ============================================================================
 // Types

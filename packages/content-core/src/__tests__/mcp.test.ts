@@ -51,7 +51,7 @@ publishedAt: 2024-01-15
 draft: false
 ---
 
-This is the content of the hello world post.`
+This is the content of the hello world post.`,
     );
 
     await writeFile(
@@ -62,7 +62,7 @@ publishedAt: 2024-01-20
 draft: true
 ---
 
-This is a draft post.`
+This is a draft post.`,
     );
 
     await writeFile(
@@ -72,7 +72,7 @@ name: "John Doe"
 bio: "A test author"
 ---
 
-Author bio content.`
+Author bio content.`,
     );
   });
 
@@ -125,9 +125,7 @@ Author bio content.`
 
       expect(entry).toBeDefined();
       expect((entry as Record<string, unknown>).title).toBe("Hello World");
-      expect((entry as Record<string, unknown>).content).toContain(
-        "hello world post"
-      );
+      expect((entry as Record<string, unknown>).content).toContain("hello world post");
     });
 
     it("returns undefined for non-existent entry", async () => {
@@ -149,13 +147,9 @@ Author bio content.`
 
       for (const col of collections) {
         for (const entry of col.entries) {
-          const content =
-            ((entry as Record<string, unknown>).content as string) || "";
+          const content = ((entry as Record<string, unknown>).content as string) || "";
           const entryStr = JSON.stringify(entry).toLowerCase();
-          if (
-            content.toLowerCase().includes(query) ||
-            entryStr.includes(query)
-          ) {
+          if (content.toLowerCase().includes(query) || entryStr.includes(query)) {
             results.push({
               collection: col.name,
               slug: (entry as Record<string, unknown>).slug as string,
@@ -170,17 +164,14 @@ Author bio content.`
 
     it("can filter by collection", async () => {
       const engine = await createTestEngine();
-      const collections = engine
-        .getCollections()
-        .filter((c) => c.name === "authors");
+      const collections = engine.getCollections().filter((c) => c.name === "authors");
 
       const query = "content";
       const results: Array<{ collection: string; slug: string }> = [];
 
       for (const col of collections) {
         for (const entry of col.entries) {
-          const content =
-            ((entry as Record<string, unknown>).content as string) || "";
+          const content = ((entry as Record<string, unknown>).content as string) || "";
           if (content.toLowerCase().includes(query)) {
             results.push({
               collection: col.name,
@@ -234,12 +225,7 @@ Author bio content.`
       const entryRecord = entry as Record<string, unknown>;
       const existingData: Record<string, unknown> = {};
       for (const key of Object.keys(entryRecord)) {
-        if (
-          !key.startsWith("_") &&
-          key !== "content" &&
-          key !== "slug" &&
-          key !== "rendered"
-        ) {
+        if (!key.startsWith("_") && key !== "content" && key !== "slug" && key !== "rendered") {
           existingData[key] = entryRecord[key];
         }
       }
@@ -266,12 +252,7 @@ Author bio content.`
       const entryRecord = entry as Record<string, unknown>;
       const existingData: Record<string, unknown> = {};
       for (const key of Object.keys(entryRecord)) {
-        if (
-          !key.startsWith("_") &&
-          key !== "content" &&
-          key !== "slug" &&
-          key !== "rendered"
-        ) {
+        if (!key.startsWith("_") && key !== "content" && key !== "slug" && key !== "rendered") {
           existingData[key] = entryRecord[key];
         }
       }
@@ -302,7 +283,9 @@ Author bio content.`
       expect(jsonSchema).toBeDefined();
       expect(jsonSchema).toHaveProperty("type", "object");
       expect(jsonSchema).toHaveProperty("properties");
-      expect((jsonSchema as { properties: Record<string, unknown> }).properties).toHaveProperty("title");
+      expect((jsonSchema as { properties: Record<string, unknown> }).properties).toHaveProperty(
+        "title",
+      );
     });
   });
 });

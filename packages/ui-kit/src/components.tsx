@@ -71,7 +71,10 @@ export const Stack: ComponentDef = {
   render: (props, children) => {
     const direction = props["direction"] as "vertical" | "horizontal";
 
-    const gap = props["gap"] as number;
+    // Coerce to a finite number before it ever touches a style string: a prop
+    // that arrived as NaN/Infinity or a CSS-bearing string falls back to the
+    // declared default rather than being interpolated verbatim.
+    const gap = numericProp(props["gap"], 2);
 
     const style: CSSProperties = {
       display: "flex",
@@ -96,7 +99,10 @@ export const Grid: ComponentDef = {
   },
   children: true,
   render: (props, children) => {
-    const columns = props["columns"] as number;
+    // `columns` is interpolated into a CSS grid-template string, so it must be a
+    // real finite number — never an attacker-shaped string that could smuggle
+    // extra CSS through the template. A non-number falls back to the default.
+    const columns = numericProp(props["columns"], 2);
 
     const style: CSSProperties = {
       display: "grid",
@@ -304,6 +310,19 @@ export const kitComponents: readonly ComponentDef[] = [
   Badge,
   Divider,
 ];
+
+/**
+ * Coerce a numeric prop to a real finite number before it reaches a style.
+ *
+ * The prop validator coerces numeric *strings* to numbers but, by design, lets
+ * anything it can't coerce pass through unchanged — so a value shaped to inject
+ * CSS (a string carrying `)` and extra declarations, or a non-finite NaN/
+ * Infinity) can still arrive here. We never interpolate such a value: only a
+ * genuine finite number survives; everything else collapses to `fallback`.
+ */
+function numericProp(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
 
 /** Resolve a spacing-scale index to a CSS pixel string. */
 function gapPx(index: number): string {

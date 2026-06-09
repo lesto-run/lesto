@@ -28,6 +28,12 @@ afterEach(() => {
   database.close();
 });
 
+// A macrotask-yielding sleep: an instantly-resolved promise would starve the
+// test's own timers inside a tight poll loop.
+const yieldingSleep = async (): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, 1));
+};
+
 // Poll a real condition (used only for the live-worker tests).
 const waitUntil = async (predicate: () => boolean, timeoutMs = 1000): Promise<void> => {
   const start = Date.now();
@@ -227,6 +233,149 @@ describe("work", () => {
     await worker.stop();
 
     expect(slept).toBeGreaterThanOrEqual(2);
+  });
+
+  // Wrap the real db so the FIRST prepare() throws a transient fault, then every
+  // call after delegates normally. This models a DB blip on a single poll.
+  const dbThatFailsOnce = (transient: Error): { db: SqlDatabase; failed: () => boolean } => {
+    let thrown = false;
+
+    const wrapped: SqlDatabase = {
+      exec: (sql) => db.exec(sql),
+      prepare: (sql) => {
+        if (!thrown) {
+          thrown = true;
+          throw transient;
+        }
+
+        return db.prepare(sql);
+      },
+    };
+
+    return { db: wrapped, failed: () => thrown };
+  };
+
+  it("survives a transient poll error: reports it and keeps processing", async () => {
+    const transient = new Error("db unavailable");
+    const { db: flaky, failed } = dbThatFailsOnce(transient);
+
+    const reported: QueueError[] = [];
+    const resilient = new Queue({ db: flaky, clock });
+    const done: string[] = [];
+    resilient.define<{ tag: string }>("t", (payload) => {
+      done.push(payload.tag);
+    });
+
+    const worker = resilient.work({
+      pollMs: 1,
+      sleep: yieldingSleep,
+      onError: (error) => reported.push(error),
+    });
+
+    // The very first poll throws; the loop must survive it. Once the db heals we
+    // enqueue a job and it must be processed — proof the loop did not die.
+    await waitUntil(() => failed());
+    resilient.enqueue("t", { tag: "after-failure" });
+
+    await waitUntil(() => done.length === 1);
+    await worker.stop();
+
+    expect(done).toEqual(["after-failure"]);
+
+    // The fault was surfaced through the seam as a coded, frozen QueueError that
+    // carries the original cause — never swallowed.
+    expect(reported.length).toBeGreaterThanOrEqual(1);
+    const first = reported[0] as QueueError;
+    expect(first.code).toBe("QUEUE_WORKER_POLL_FAILED");
+    expect(first.details).toMatchObject({ cause: "db unavailable" });
+    expect(Object.isFrozen(first.details)).toBe(true);
+  });
+
+  it("passes an already-coded QueueError through the seam unchanged", async () => {
+    const coded = new QueueError("QUEUE_WORKER_POLL_FAILED", "already coded", { origin: "claim" });
+    const { db: flaky } = dbThatFailsOnce(coded);
+
+    const reported: QueueError[] = [];
+    const resilient = new Queue({ db: flaky, clock });
+    const worker = resilient.work({
+      pollMs: 1,
+      sleep: yieldingSleep,
+      onError: (error) => reported.push(error),
+    });
+
+    await waitUntil(() => reported.length >= 1);
+    await worker.stop();
+
+    // Not re-wrapped: the original coded error reaches the seam verbatim.
+    expect(reported[0]).toBe(coded);
+  });
+
+  it("stringifies a non-Error poll fault for the seam", async () => {
+    let thrown = false;
+    const flaky: SqlDatabase = {
+      exec: (sql) => db.exec(sql),
+      prepare: (sql) => {
+        if (!thrown) {
+          thrown = true;
+          throw "stringy fault"; // eslint-disable-line -- exercising the non-Error branch
+        }
+
+        return db.prepare(sql);
+      },
+    };
+
+    const reported: QueueError[] = [];
+    const resilient = new Queue({ db: flaky, clock });
+    const worker = resilient.work({
+      pollMs: 1,
+      sleep: yieldingSleep,
+      onError: (error) => reported.push(error),
+    });
+
+    await waitUntil(() => reported.length >= 1);
+    await worker.stop();
+
+    expect((reported[0] as QueueError).details).toMatchObject({ cause: "stringy fault" });
+  });
+
+  it("survives a poll error with no onError seam, and a throwing reporter", async () => {
+    const { db: flaky } = dbThatFailsOnce(new Error("blip"));
+
+    const resilient = new Queue({ db: flaky, clock });
+    const done: string[] = [];
+    resilient.define<{ tag: string }>("t", (payload) => {
+      done.push(payload.tag);
+    });
+
+    // No onError seam at all (covers the early return), AND we exercise the
+    // throwing-reporter guard on a second worker below.
+    const silent = resilient.work({ pollMs: 1, sleep: yieldingSleep });
+    resilient.enqueue("t", { tag: "no-seam" });
+
+    await waitUntil(() => done.includes("no-seam"));
+    await silent.stop();
+
+    // A reporter that itself throws must not kill the loop.
+    const { db: flaky2 } = dbThatFailsOnce(new Error("blip"));
+    const q2 = new Queue({ db: flaky2, clock });
+    q2.define<{ tag: string }>("t", (payload) => {
+      done.push(payload.tag);
+    });
+
+    const loud = q2.work({
+      pollMs: 1,
+      sleep: yieldingSleep,
+      onError: () => {
+        throw new Error("reporter exploded");
+      },
+    });
+    q2.enqueue("t", { tag: "throwing-reporter" });
+
+    await waitUntil(() => done.includes("throwing-reporter"));
+    await loud.stop();
+
+    expect(done).toContain("no-seam");
+    expect(done).toContain("throwing-reporter");
   });
 });
 

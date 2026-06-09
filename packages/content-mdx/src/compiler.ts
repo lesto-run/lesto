@@ -86,7 +86,7 @@ function generateExcerpt(content: string, length: number): string {
 function createMdxOptionsBuilder(
   remarkPlugins: unknown,
   rehypePlugins: unknown,
-  onHeadingsExtracted: (headings: Heading[]) => void
+  onHeadingsExtracted: (headings: Heading[]) => void,
 ) {
   return (mdxOptions: { remarkPlugins?: unknown[]; rehypePlugins?: unknown[] }) => {
     mdxOptions.remarkPlugins = [
@@ -113,12 +113,15 @@ function createMdxOptionsBuilder(
   };
 }
 
-function createEsbuildOptionsBuilder(
-  options: MDXCompileOptions,
-  isFileMode: boolean
-) {
+function createEsbuildOptionsBuilder(options: MDXCompileOptions, isFileMode: boolean) {
   return (esbuildOptions: { alias?: Record<string, string>; define?: Record<string, string> }) => {
-    if (isFileMode && "aliases" in options && options.aliases && "projectRoot" in options && options.projectRoot) {
+    if (
+      isFileMode &&
+      "aliases" in options &&
+      options.aliases &&
+      "projectRoot" in options &&
+      options.projectRoot
+    ) {
       esbuildOptions.alias = {};
       for (const [alias, target] of Object.entries(options.aliases)) {
         const key = alias.replace("/*", "");
@@ -150,9 +153,7 @@ function handleCompilationError(error: unknown, location: string): never {
  * Unlike @keel/content-markdown, this does NOT add copy buttons via transformers.
  * Use the CodeBlock component from @keel/content-mdx/components for copy functionality.
  */
-export async function compileMDX(
-  options: MDXCompileOptions
-): Promise<MDXCompileResult> {
+export async function compileMDX(options: MDXCompileOptions): Promise<MDXCompileResult> {
   const {
     remarkPlugins = [],
     rehypePlugins = [],
@@ -172,7 +173,9 @@ export async function compileMDX(
     let extractedHeadings: Heading[] = [];
 
     const baseOptions = {
-      mdxOptions: createMdxOptionsBuilder(remarkPlugins, rehypePlugins, (h) => { extractedHeadings = h; }),
+      mdxOptions: createMdxOptionsBuilder(remarkPlugins, rehypePlugins, (h) => {
+        extractedHeadings = h;
+      }),
       esbuildOptions: createEsbuildOptionsBuilder(options, isFileMode),
     };
 

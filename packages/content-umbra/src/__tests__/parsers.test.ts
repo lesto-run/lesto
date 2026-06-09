@@ -484,7 +484,7 @@ Content`;
       });
 
       it("handles ---json with CRLF", () => {
-        const content = "---json\r\n{\"title\": \"Test\"}\r\n---\r\n\r\nContent";
+        const content = '---json\r\n{"title": "Test"}\r\n---\r\n\r\nContent';
         const result = frontmatterParser.parse(content, "test.md");
 
         expect(result.data).toEqual({ title: "Test" });

@@ -20,13 +20,13 @@ export function rule(spans, file, _lineIndex) {
 
       diagnostics.push({
         id: `fixme-${offset}`,
-        rule: 'custom-fixme',
-        message: 'Unresolved FIXME found',
+        rule: "custom-fixme",
+        message: "Unresolved FIXME found",
         file,
         offset,
         line: 1,
         column: offset + 1,
-        severity: 'error',
+        severity: "error",
       });
     }
   }

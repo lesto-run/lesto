@@ -5,22 +5,11 @@
  * Embeddings are 384-dimensional vectors used for semantic search.
  */
 
-import {
-  pipeline,
-  type FeatureExtractionPipeline,
-} from "@huggingface/transformers";
+import { pipeline, type FeatureExtractionPipeline } from "@huggingface/transformers";
 import { createSingletonLoader } from "@keel/content-shared/mutex";
 import { DocksError } from "@keel/content-shared/errors";
-import type {
-  SearchableEntry,
-  EmbeddingResult,
-  GenerateEmbeddingsOptions,
-} from "./types";
-import {
-  MODEL_NAME,
-  DEFAULT_MAX_TEXT_LENGTH,
-  DEFAULT_SNIPPET_LENGTH,
-} from "./constants";
+import type { SearchableEntry, EmbeddingResult, GenerateEmbeddingsOptions } from "./types";
+import { MODEL_NAME, DEFAULT_MAX_TEXT_LENGTH, DEFAULT_SNIPPET_LENGTH } from "./constants";
 
 // ============================================================================
 // Embedder
@@ -44,7 +33,7 @@ const loadPipeline = createSingletonLoader(async () => {
     throw new DocksError(
       `Failed to load embedding model: ${error instanceof Error ? error.message : String(error)}`,
       "EMBEDDING_MODEL_ERROR",
-      { model: MODEL_NAME }
+      { model: MODEL_NAME },
     );
   }
 });
@@ -68,7 +57,7 @@ async function generateEmbeddingInternal(text: string): Promise<number[]> {
     throw new DocksError(
       "Embedding model returned invalid result structure",
       "EMBEDDING_RESULT_ERROR",
-      { hasData: "data" in (result ?? {}) }
+      { hasData: "data" in (result ?? {}) },
     );
   }
 
@@ -77,7 +66,7 @@ async function generateEmbeddingInternal(text: string): Promise<number[]> {
     throw new DocksError(
       "Embedding model returned non-Float32Array data",
       "EMBEDDING_RESULT_ERROR",
-      { dataType: data?.constructor?.name ?? typeof data }
+      { dataType: data?.constructor?.name ?? typeof data },
     );
   }
 
@@ -144,9 +133,7 @@ function extractSnippet(entry: SearchableEntry, length: number): string {
   // Cut at word boundary
   const cut = clean.slice(0, length);
   const lastSpace = cut.lastIndexOf(" ");
-  return lastSpace > length * 0.8
-    ? cut.slice(0, lastSpace) + "..."
-    : cut + "...";
+  return lastSpace > length * 0.8 ? cut.slice(0, lastSpace) + "..." : cut + "...";
 }
 
 /**
@@ -159,7 +146,7 @@ function extractSnippet(entry: SearchableEntry, length: number): string {
  */
 export async function generateEmbeddings(
   entries: SearchableEntry[],
-  options: GenerateEmbeddingsOptions = {}
+  options: GenerateEmbeddingsOptions = {},
 ): Promise<EmbeddingResult[]> {
   const {
     onProgress,
@@ -192,7 +179,7 @@ export async function generateEmbeddings(
   // Log warning if entries were filtered
   if (skippedEntries.length > 0) {
     console.warn(
-      `[embeddings] Skipped ${skippedEntries.length} entries due to missing required fields:`
+      `[embeddings] Skipped ${skippedEntries.length} entries due to missing required fields:`,
     );
     for (const { index, reason } of skippedEntries.slice(0, 5)) {
       console.warn(`  - Entry at index ${index}: ${reason}`);
@@ -220,10 +207,7 @@ export async function generateEmbeddings(
       id: entry["id"] as string,
       slug: entry["slug"] as string,
       collection: entry["collection"] as string,
-      title:
-        typeof entry["title"] === "string"
-          ? entry["title"]
-          : (entry["slug"] as string),
+      title: typeof entry["title"] === "string" ? entry["title"] : (entry["slug"] as string),
       snippet: extractSnippet(entry, snippetLength),
       embedding,
     });

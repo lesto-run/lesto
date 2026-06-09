@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { corsHeaders } from "../src/cors";
+import { corsHeaders, CorsError } from "../src/cors";
 
 const DEFAULT_METHODS = "GET, HEAD, PUT, PATCH, POST, DELETE";
 
@@ -19,21 +19,31 @@ describe("corsHeaders — wildcard origin", () => {
     });
   });
 
-  it("echoes the request origin when `*` is combined with credentials", () => {
-    // "*" + credentials is invalid per Fetch, so we reflect the caller instead.
-    expect(corsHeaders("https://app.example.com", { origin: "*", credentials: true })).toEqual({
-      "Access-Control-Allow-Origin": "https://app.example.com",
-      "Access-Control-Allow-Methods": DEFAULT_METHODS,
-      "Access-Control-Allow-Credentials": "true",
-      Vary: "Origin",
-    });
+  it("rejects `*` combined with credentials — never reflects an arbitrary origin", () => {
+    // The credentialed-CORS bypass: reflecting Origin with credentials lets any
+    // site read authenticated responses. We fail loud at config time instead.
+    expect(() =>
+      corsHeaders("https://evil.example.com", { origin: "*", credentials: true }),
+    ).toThrow(CorsError);
+
+    try {
+      corsHeaders("https://evil.example.com", { origin: "*", credentials: true });
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CorsError);
+      expect((error as CorsError).code).toBe("CORS_WILDCARD_WITH_CREDENTIALS");
+    }
   });
 
-  it("falls back to `*` under credentials when the request has no origin", () => {
-    expect(corsHeaders(undefined, { origin: "*", credentials: true })).toEqual({
+  it("rejects the *default* (implicit `*`) origin combined with credentials", () => {
+    // origin omitted defaults to "*", so the guard must fire here too.
+    expect(() => corsHeaders("https://evil.example.com", { credentials: true })).toThrow(CorsError);
+  });
+
+  it("still allows a plain wildcard without credentials", () => {
+    expect(corsHeaders("https://evil.example.com", { origin: "*", credentials: false })).toEqual({
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": DEFAULT_METHODS,
-      "Access-Control-Allow-Credentials": "true",
     });
   });
 });
@@ -75,6 +85,21 @@ describe("corsHeaders — array origin allow-list", () => {
 
   it("returns no headers when the request has no origin", () => {
     expect(corsHeaders(undefined, { origin: allow })).toEqual({});
+  });
+
+  it("echoes a member origin WITH credentials, but never a non-member", () => {
+    // Credentials are safe only against an explicit allow-list: members get
+    // reflected, outsiders get nothing — no credentialed reflection of attackers.
+    expect(corsHeaders("https://a.example.com", { origin: allow, credentials: true })).toEqual({
+      "Access-Control-Allow-Origin": "https://a.example.com",
+      "Access-Control-Allow-Methods": DEFAULT_METHODS,
+      "Access-Control-Allow-Credentials": "true",
+      Vary: "Origin",
+    });
+
+    expect(corsHeaders("https://evil.example.com", { origin: allow, credentials: true })).toEqual(
+      {},
+    );
   });
 });
 

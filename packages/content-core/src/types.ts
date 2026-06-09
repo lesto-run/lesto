@@ -13,9 +13,7 @@ export interface CacheOptions {
  * Plugin configuration for remark/rehype plugins.
  * Can be a plugin module name, or a tuple with plugin and options.
  */
-export type PluginConfig =
-  | string
-  | [string, Record<string, unknown>];
+export type PluginConfig = string | [string, Record<string, unknown>];
 
 /**
  * Configuration for MDX compilation in a collection.
@@ -89,7 +87,11 @@ export interface WorkflowConfig {
   publishDateField?: string;
   /** Field name for content expiration date (e.g., "expiresAt") */
   expirationField?: string;
-  /** Whether to auto-filter unpublished content. Defaults to false. */
+  /**
+   * Whether to auto-filter unpublished content out of getCollection/getEntry.
+   * Defaults to true (the safe default — drafts are hidden unless you opt out
+   * with `filterUnpublished: false`).
+   */
   filterUnpublished?: boolean;
 }
 
@@ -227,9 +229,10 @@ export type ComputedFields<TSchema extends CollectionSchema> = Record<
  * Infer the type of computed fields from a ComputedFields object.
  * Extracts return types of all computed field functions.
  */
-export type InferComputedFields<T> = T extends Record<string, (entry: never) => unknown>
-  ? { [K in keyof T]: T[K] extends (entry: never) => infer TOutput ? TOutput : never }
-  : Record<string, never>;
+export type InferComputedFields<T> =
+  T extends Record<string, (entry: never) => unknown>
+    ? { [K in keyof T]: T[K] extends (entry: never) => infer TOutput ? TOutput : never }
+    : Record<string, never>;
 
 export interface DocumentMeta {
   path: string;
@@ -262,8 +265,8 @@ export interface EntryMeta {
   readonly file: DocumentMeta;
 }
 
-export type DefaultEntry<TData extends Record<string, unknown> = Record<string, unknown>> =
-  TData & EntryMeta & {
+export type DefaultEntry<TData extends Record<string, unknown> = Record<string, unknown>> = TData &
+  EntryMeta & {
     readonly content: string;
     readonly slug: string;
     readonly rendered?: RenderResult;
@@ -284,10 +287,7 @@ export interface TransformContext {
 export type TransformFn<
   TData extends Record<string, unknown> = Record<string, unknown>,
   TOutput extends Record<string, unknown> = Record<string, unknown>,
-> = (
-  document: Document<TData>,
-  context: TransformContext,
-) => TOutput | Promise<TOutput>;
+> = (document: Document<TData>, context: TransformContext) => TOutput | Promise<TOutput>;
 
 export interface CollectionConfig<
   TSchema extends CollectionSchema = CollectionSchema,
@@ -396,12 +396,18 @@ export type AnyCollection = CollectionConfig<
 
 export type InferEntry<T extends AnyCollection> = T["transformedSchema"] extends CollectionSchema
   ? Entry<InferOutput<T["transformedSchema"]>> &
-      (T["computed"] extends Record<string, (entry: never) => unknown> ? InferComputedFields<T["computed"]> : Record<string, never>)
+      (T["computed"] extends Record<string, (entry: never) => unknown>
+        ? InferComputedFields<T["computed"]>
+        : Record<string, never>)
   : T["transform"] extends TransformFn<never, infer O>
     ? Entry<O> &
-        (T["computed"] extends Record<string, (entry: never) => unknown> ? InferComputedFields<T["computed"]> : Record<string, never>)
+        (T["computed"] extends Record<string, (entry: never) => unknown>
+          ? InferComputedFields<T["computed"]>
+          : Record<string, never>)
     : DefaultEntry<InferOutput<T["schema"]>> &
-        (T["computed"] extends Record<string, (entry: never) => unknown> ? InferComputedFields<T["computed"]> : Record<string, never>);
+        (T["computed"] extends Record<string, (entry: never) => unknown>
+          ? InferComputedFields<T["computed"]>
+          : Record<string, never>);
 
 /** Entry type used at runtime when schema/transform types are not known statically */
 export type RuntimeEntry = Record<string, unknown> & EntryMeta;
@@ -687,17 +693,26 @@ export type GetSchemaByName<
   TCollection extends AnyCollection = GetCollectionByName<TConfig, TName> & AnyCollection,
 > = InferOutput<TCollection["schema"]>;
 
-export type CollectionEntry<K extends keyof CollectionRegistry> =
-  CollectionRegistry[K] extends { entry: infer E } ? E : RuntimeEntry;
+export type CollectionEntry<K extends keyof CollectionRegistry> = CollectionRegistry[K] extends {
+  entry: infer E;
+}
+  ? E
+  : RuntimeEntry;
 
-export type CollectionSchema_<K extends keyof CollectionRegistry> =
-  CollectionRegistry[K] extends { schema: infer S } ? S : Record<string, unknown>;
+export type CollectionSchema_<K extends keyof CollectionRegistry> = CollectionRegistry[K] extends {
+  schema: infer S;
+}
+  ? S
+  : Record<string, unknown>;
 
 /**
  * @deprecated Use CollectionEntry instead. This type exists for migration compatibility.
  */
-export type CollectionData<K extends keyof CollectionRegistry> =
-  CollectionRegistry[K] extends { entry: infer E } ? E : Record<string, unknown>;
+export type CollectionData<K extends keyof CollectionRegistry> = CollectionRegistry[K] extends {
+  entry: infer E;
+}
+  ? E
+  : Record<string, unknown>;
 
 /**
  * @deprecated Transformed data is now merged into the entry. Use CollectionEntry instead.

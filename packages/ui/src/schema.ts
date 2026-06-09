@@ -71,6 +71,11 @@ function propsObjectSchema(specs: Record<string, PropSpec>): Record<string, unkn
  * the runtime `validateTree` policy exactly — leaves get no `children` property,
  * so the model is constrained no more loosely than the validator enforces.
  */
+/** Does any of a component's props carry `required: true`? */
+function hasRequiredProp(specs: Record<string, PropSpec>): boolean {
+  return Object.values(specs).some((spec) => spec.required === true);
+}
+
 function acceptsChildren(policy: ChildrenPolicy): boolean {
   if (policy === true) return true;
 
@@ -100,7 +105,11 @@ export function treeJsonSchema(registry: Registry): object {
       // omit it so the schema is as strict as the runtime policy.
       ...(acceptsChildren(def.children) ? { children: { type: "array", items: nodeRef } } : {}),
     },
-    required: ["type"],
+    // A component with required props must require the `props` object itself —
+    // otherwise the nested `props.required` never bites (a model could omit
+    // `props` wholesale, passing the schema yet failing `validateTree`'s
+    // missing-required-prop check). The two must agree, so require `props` here.
+    required: hasRequiredProp(def.props) ? ["type", "props"] : ["type"],
     additionalProperties: false,
   }));
 

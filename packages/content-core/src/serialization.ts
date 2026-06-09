@@ -12,11 +12,20 @@ export interface ValidationResult {
 type IssueType = SerializationIssue["type"];
 
 /** Handler registry for non-serializable primitive types - per AGENTS.md pattern */
-const PRIMITIVE_ISSUE_HANDLERS: Record<string, { type: IssueType; message: (path: string) => string }> = {
+const PRIMITIVE_ISSUE_HANDLERS: Record<
+  string,
+  { type: IssueType; message: (path: string) => string }
+> = {
   function: { type: "function", message: (p) => `Function at "${p}" is not serializable` },
   symbol: { type: "symbol", message: (p) => `Symbol at "${p}" is not serializable` },
-  bigint: { type: "bigint", message: (p) => `BigInt at "${p}" is not serializable. Convert to string or number first` },
-  undefined: { type: "undefined", message: (p) => `undefined at "${p}" will be omitted during serialization` },
+  bigint: {
+    type: "bigint",
+    message: (p) => `BigInt at "${p}" is not serializable. Convert to string or number first`,
+  },
+  undefined: {
+    type: "undefined",
+    message: (p) => `undefined at "${p}" will be omitted during serialization`,
+  },
 };
 
 /** Check and report primitive type serialization issues */

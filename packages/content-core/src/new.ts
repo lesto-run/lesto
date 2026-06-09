@@ -8,7 +8,10 @@ import { promisify } from "node:util";
 const execAsync = promisify(exec);
 
 function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 interface GitUserInfo {
@@ -54,9 +57,8 @@ function getDefaultValue(fieldName: string, schema: unknown, title: string): str
 
   // Check if it has a default value
   if (def?.type === "default" && def.defaultValue !== undefined) {
-    const defaultVal = typeof def.defaultValue === "function"
-      ? def.defaultValue()
-      : def.defaultValue;
+    const defaultVal =
+      typeof def.defaultValue === "function" ? def.defaultValue() : def.defaultValue;
     if (typeof defaultVal === "boolean") {
       return String(defaultVal);
     }
@@ -89,7 +91,8 @@ const TYPE_DEFAULT_HANDLERS: Record<string, () => string> = {
 function generateFrontmatter(schema: unknown, title: string): string {
   // Access the shape from schema def
   const def = getSchemaDef(schema);
-  const shape = def?.type === "object" ? (def as { shape?: Record<string, unknown> }).shape : undefined;
+  const shape =
+    def?.type === "object" ? (def as { shape?: Record<string, unknown> }).shape : undefined;
 
   if (!shape) {
     // Fallback if we can't read the schema
@@ -116,7 +119,11 @@ title: "${title}"
   return lines.join("\n");
 }
 
-export async function createNewEntry(cwd: string, collectionName: string, title: string): Promise<void> {
+export async function createNewEntry(
+  cwd: string,
+  collectionName: string,
+  title: string,
+): Promise<void> {
   // Load config
   const config = await resolveConfig(cwd);
 

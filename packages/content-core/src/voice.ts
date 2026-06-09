@@ -1,7 +1,13 @@
 import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod/v4";
-import type { AnyCollection, RuntimeEntry, VoiceConfig, GlobalVoiceConfig, TerminologyEntry } from "./types";
+import type {
+  AnyCollection,
+  RuntimeEntry,
+  VoiceConfig,
+  GlobalVoiceConfig,
+  TerminologyEntry,
+} from "./types";
 import { hashString } from "./cache/hash";
 
 const VOICE_SAMPLES_DIR = ".docks/voice-samples";
@@ -18,15 +24,17 @@ const VOICE_CACHE_DIR = ".docks/voice-cache";
  * that reflects writing style (headings, emphasis, lists).
  */
 export function stripCodeBlocks(content: string): string {
-  return content
-    // Remove fenced code blocks (```...``` or ~~~...~~~)
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/~~~[\s\S]*?~~~/g, "")
-    // Remove inline code (`...`)
-    .replace(/`[^`\n]+`/g, "")
-    // Collapse multiple newlines to at most two
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return (
+    content
+      // Remove fenced code blocks (```...``` or ~~~...~~~)
+      .replace(/```[\s\S]*?```/g, "")
+      .replace(/~~~[\s\S]*?~~~/g, "")
+      // Remove inline code (`...`)
+      .replace(/`[^`\n]+`/g, "")
+      // Collapse multiple newlines to at most two
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
 }
 
 // ============================================================================
@@ -45,12 +53,15 @@ const VoiceSampleSchema = z.object({
   title: z.string().optional(),
   isExemplary: z.boolean(),
   // Date can be a string (ISO format) or will be parsed
-  date: z.union([z.string(), z.date()]).optional().transform((val) => {
-    if (!val) return undefined;
-    if (val instanceof Date) return val;
-    const parsed = new Date(val);
-    return isNaN(parsed.getTime()) ? undefined : parsed;
-  }),
+  date: z
+    .union([z.string(), z.date()])
+    .optional()
+    .transform((val) => {
+      if (!val) return undefined;
+      if (val instanceof Date) return val;
+      const parsed = new Date(val);
+      return isNaN(parsed.getTime()) ? undefined : parsed;
+    }),
 });
 
 const VoiceSamplesArraySchema = z.array(VoiceSampleSchema);
@@ -181,7 +192,9 @@ export function sanitizePathSegment(segment: string): string {
 
   // Check if we have a valid result
   if (!sanitized || sanitized === "" || /^_*$/.test(sanitized)) {
-    throw new PathTraversalError(`Invalid path segment: "${segment}" sanitizes to empty or invalid value`);
+    throw new PathTraversalError(
+      `Invalid path segment: "${segment}" sanitizes to empty or invalid value`,
+    );
   }
 
   return sanitized;
@@ -199,10 +212,11 @@ export function validatePathWithinBase(resolvedPath: string, basePath: string): 
 
   // Ensure the resolved path starts with the base path
   // We add a separator to prevent matching /base-other when base is /base
-  if (!normalizedResolved.startsWith(normalizedBase + path.sep) && normalizedResolved !== normalizedBase) {
-    throw new PathTraversalError(
-      `Path "${resolvedPath}" escapes base directory "${basePath}"`
-    );
+  if (
+    !normalizedResolved.startsWith(normalizedBase + path.sep) &&
+    normalizedResolved !== normalizedBase
+  ) {
+    throw new PathTraversalError(`Path "${resolvedPath}" escapes base directory "${basePath}"`);
   }
 }
 
@@ -313,7 +327,9 @@ const DEFAULT_VOICE_CONFIG: Required<Omit<VoiceConfig, "perAuthor">> & { perAuth
 /**
  * Get the resolved voice config with defaults applied.
  */
-export function resolveVoiceConfig(config?: VoiceConfig): Required<Omit<VoiceConfig, "perAuthor">> & { perAuthor: boolean } {
+export function resolveVoiceConfig(
+  config?: VoiceConfig,
+): Required<Omit<VoiceConfig, "perAuthor">> & { perAuthor: boolean } {
   if (!config) return DEFAULT_VOICE_CONFIG;
   return {
     perAuthor: config.perAuthor ?? DEFAULT_VOICE_CONFIG.perAuthor,
@@ -345,10 +361,7 @@ function extractDate(entry: RuntimeEntry): Date | undefined {
  * Sample entries from a collection for voice profile building.
  * Prioritizes exemplary entries, then sorts by recency.
  */
-export function sampleEntries(
-  entries: RuntimeEntry[],
-  collection: AnyCollection,
-): VoiceSample[] {
+export function sampleEntries(entries: RuntimeEntry[], collection: AnyCollection): VoiceSample[] {
   const config = resolveVoiceConfig(collection.voice);
 
   // Not enough entries to build a profile
@@ -478,10 +491,7 @@ export async function readVoiceSamples(
  * List all authors with voice samples for a collection.
  * @throws {PathTraversalError} if collection contains malicious characters
  */
-export async function listVoiceSampleAuthors(
-  cwd: string,
-  collection: string,
-): Promise<string[]> {
+export async function listVoiceSampleAuthors(cwd: string, collection: string): Promise<string[]> {
   const voiceSamples = new PathContext(cwd, VOICE_SAMPLES_DIR);
   const dir = voiceSamples.getDirPath(collection);
 
@@ -530,11 +540,15 @@ export function buildVoiceExamplesPrompt(context: VoiceContext): string {
   if (context.author) {
     lines.push(`## Writing Style Examples from ${context.author}`);
     lines.push("");
-    lines.push(`The following are examples of ${context.author}'s writing. Study these carefully to understand their unique voice, tone, style, and word choices. When generating content, write exactly as this author would - matching their sentence structure, vocabulary, rhythm, and personality.`);
+    lines.push(
+      `The following are examples of ${context.author}'s writing. Study these carefully to understand their unique voice, tone, style, and word choices. When generating content, write exactly as this author would - matching their sentence structure, vocabulary, rhythm, and personality.`,
+    );
   } else {
     lines.push(`## Writing Style Examples from the "${context.collection}" collection`);
     lines.push("");
-    lines.push(`The following are examples of content from this collection. Study these carefully to understand the writing style, tone, and voice used. When generating content, match this style exactly.`);
+    lines.push(
+      `The following are examples of content from this collection. Study these carefully to understand the writing style, tone, and voice used. When generating content, match this style exactly.`,
+    );
   }
 
   lines.push("");
@@ -666,7 +680,9 @@ export function buildVoiceSystemPrompt(
 
   // Add context summary
   if (context.author) {
-    parts.push(`You are writing as **${context.author}** for the "${context.collection}" collection.`);
+    parts.push(
+      `You are writing as **${context.author}** for the "${context.collection}" collection.`,
+    );
   } else {
     parts.push(`You are writing for the "${context.collection}" collection.`);
   }
@@ -868,10 +884,7 @@ export async function invalidateVoiceCache(
  * Invalidate all voice caches for a collection.
  * @throws {PathTraversalError} if collection contains malicious characters
  */
-export async function invalidateAllVoiceCaches(
-  cwd: string,
-  collection: string,
-): Promise<void> {
+export async function invalidateAllVoiceCaches(cwd: string, collection: string): Promise<void> {
   const voiceCache = new PathContext(cwd, VOICE_CACHE_DIR);
   const dir = voiceCache.getDirPath(collection);
   const { rm } = await import("node:fs/promises");
@@ -915,7 +928,7 @@ export async function getVoiceCacheStats(
         } catch {
           return 0; // Skip invalid files
         }
-      })
+      }),
     );
     const totalSamples = sampleCounts.reduce((sum, count) => sum + count, 0);
 

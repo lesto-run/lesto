@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  GracefulShutdown,
-  createShutdownTimeout,
-} from "../shutdown.js";
+import { GracefulShutdown, createShutdownTimeout } from "../shutdown.js";
 
 describe("GracefulShutdown", () => {
   let shutdown: GracefulShutdown;
@@ -57,17 +54,13 @@ describe("GracefulShutdown", () => {
       const promise = Promise.resolve("result");
 
       await expect(shutdown.track(promise)).rejects.toThrow(
-        "Cannot track operation: shutdown in progress"
+        "Cannot track operation: shutdown in progress",
       );
     });
 
     it("tracks multiple concurrent operations", async () => {
-      const p1 = shutdown.track(
-        new Promise((resolve) => setTimeout(() => resolve(1), 10))
-      );
-      const p2 = shutdown.track(
-        new Promise((resolve) => setTimeout(() => resolve(2), 20))
-      );
+      const p1 = shutdown.track(new Promise((resolve) => setTimeout(() => resolve(1), 10)));
+      const p2 = shutdown.track(new Promise((resolve) => setTimeout(() => resolve(2), 20)));
 
       expect(shutdown.activeCount).toBe(2);
 

@@ -55,6 +55,20 @@ describe("I18n.t", () => {
   it("returns the key for an unknown locale when fallback is off", () => {
     expect(make(false).t("de", "greeting")).toBe("greeting");
   });
+
+  it("treats inherited Object.prototype members as misses, not translations", () => {
+    // A catalog is a plain object, so `constructor`/`toString` live on its
+    // prototype. Looking up such a key must surface the key itself — never the
+    // inherited function (which would leak the prototype chain into the output).
+    for (const key of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+      expect(make().t("en", key)).toBe(key);
+      expect(make().has("en", key)).toBe(false);
+    }
+  });
+
+  it("treats inherited members as misses even with fallback off", () => {
+    expect(make(false).t("fr", "toString")).toBe("toString");
+  });
 });
 
 describe("I18n.plural", () => {
@@ -95,5 +109,12 @@ describe("I18n.locales", () => {
 describe("interpolate", () => {
   it("renders numeric values as strings", () => {
     expect(interpolate("n={n}", { n: 7 })).toBe("n=7");
+  });
+
+  it("leaves a placeholder naming an inherited member as written, not the prototype value", () => {
+    // `{constructor}` must not resolve `Object.prototype.constructor` and dump a
+    // function into the text; with no own `constructor` param it stays verbatim.
+    expect(interpolate("x={constructor}", {})).toBe("x={constructor}");
+    expect(interpolate("x={toString}", {})).toBe("x={toString}");
   });
 });

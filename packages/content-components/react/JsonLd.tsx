@@ -41,10 +41,5 @@ export function JsonLd({ json }: JsonLdProps) {
     return null;
   }
 
-  return (
-    <script
-      type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: safeJson }}
-    />
-  );
+  return <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJson }} />;
 }

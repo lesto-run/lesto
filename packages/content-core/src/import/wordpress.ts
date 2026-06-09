@@ -155,7 +155,10 @@ const HTML_TRANSFORMS: ReadonlyArray<readonly [RegExp, Replacement]> = [
   [/\[video[^\]]*\]/gi, ""],
 
   // Headers h1-h6 - single pattern with dynamic hash generation
-  [/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level, content) => `\n${"#".repeat(+level)} ${content}\n`],
+  [
+    /<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi,
+    (_, level, content) => `\n${"#".repeat(+level)} ${content}\n`,
+  ],
 
   // Paragraphs and line breaks
   [/<p[^>]*>([\s\S]*?)<\/p>/gi, "\n$1\n"],
@@ -181,25 +184,38 @@ const HTML_TRANSFORMS: ReadonlyArray<readonly [RegExp, Replacement]> = [
   [/<pre[^>]*>([\s\S]*?)<\/pre>/gi, "\n```\n$1\n```\n"],
 
   // Blockquotes - requires callback for line-by-line prefixing
-  [/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, content: string) => {
-    const lines = content.trim().split("\n").map((line: string) => `> ${line.trim()}`).join("\n");
-    return `\n${lines}\n`;
-  }],
+  [
+    /<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi,
+    (_, content: string) => {
+      const lines = content
+        .trim()
+        .split("\n")
+        .map((line: string) => `> ${line.trim()}`)
+        .join("\n");
+      return `\n${lines}\n`;
+    },
+  ],
 
   // Unordered lists
-  [/<ul[^>]*>([\s\S]*?)<\/ul>/gi, (_, content: string) => {
-    return "\n" + content.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, "- $1\n").trim() + "\n";
-  }],
+  [
+    /<ul[^>]*>([\s\S]*?)<\/ul>/gi,
+    (_, content: string) => {
+      return "\n" + content.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, "- $1\n").trim() + "\n";
+    },
+  ],
 
   // Ordered lists - requires callback for index tracking
-  [/<ol[^>]*>([\s\S]*?)<\/ol>/gi, (_, content: string) => {
-    let index = 0;
-    const result = content.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m: string, text: string) => {
-      index++;
-      return `${index}. ${text.trim()}\n`;
-    });
-    return "\n" + result.trim() + "\n";
-  }],
+  [
+    /<ol[^>]*>([\s\S]*?)<\/ol>/gi,
+    (_, content: string) => {
+      let index = 0;
+      const result = content.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m: string, text: string) => {
+        index++;
+        return `${index}. ${text.trim()}\n`;
+      });
+      return "\n" + result.trim() + "\n";
+    },
+  ],
 
   // Divs to paragraphs
   [/<div[^>]*>([\s\S]*?)<\/div>/gi, "\n$1\n"],
@@ -233,21 +249,25 @@ const HTML_ENTITIES: Readonly<Record<string, string>> = {
 
 // Pre-compiled regex for named entities (single pass, case-sensitive to match original behavior)
 const NAMED_ENTITY_PATTERN = new RegExp(
-  Object.keys(HTML_ENTITIES).map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
-  "g"
+  Object.keys(HTML_ENTITIES)
+    .map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|"),
+  "g",
 );
 
 /**
  * Decode HTML entities in a single pass using combined pattern.
  */
 function decodeEntities(text: string): string {
-  return text
-    // Named entities - single pass with lookup
-    .replace(NAMED_ENTITY_PATTERN, (match) => HTML_ENTITIES[match] ?? match)
-    // Numeric decimal entities
-    .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(parseInt(num, 10)))
-    // Numeric hex entities
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+  return (
+    text
+      // Named entities - single pass with lookup
+      .replace(NAMED_ENTITY_PATTERN, (match) => HTML_ENTITIES[match] ?? match)
+      // Numeric decimal entities
+      .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(parseInt(num, 10)))
+      // Numeric hex entities
+      .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+  );
 }
 
 /**
@@ -260,7 +280,7 @@ export function htmlToMarkdown(html: string): string {
   // Apply all transformations via reduce
   const transformed = HTML_TRANSFORMS.reduce(
     (md, [pattern, replacement]) => md.replace(pattern, replacement as string),
-    html
+    html,
   );
 
   // Decode entities and clean up whitespace
@@ -345,7 +365,7 @@ async function resolveCollectionDirectory(
 
   if (!collectionConfig) {
     throw new Error(
-      `Collection "${collection}" not found. Available: ${config.collections.map((c) => c.name).join(", ")}`
+      `Collection "${collection}" not found. Available: ${config.collections.map((c) => c.name).join(", ")}`,
     );
   }
 

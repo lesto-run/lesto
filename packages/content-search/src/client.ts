@@ -31,10 +31,7 @@ export function createSearchFromIndex(index: SearchIndex): SearchClient {
   return {
     index,
 
-    query(
-      queryEmbedding: number[],
-      options: SearchClientOptions = {}
-    ): SearchResult[] {
+    query(queryEmbedding: number[], options: SearchClientOptions = {}): SearchResult[] {
       return searchByEmbedding(queryEmbedding, index, {
         ...(options.collections && { collections: options.collections }),
         limit: options.limit ?? 10,

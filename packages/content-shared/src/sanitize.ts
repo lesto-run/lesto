@@ -43,10 +43,7 @@ export const DEFAULT_SANITIZE_CONFIG: Config = {
  * Sanitize HTML content to prevent XSS attacks.
  * Use for all user-generated or markdown-rendered HTML.
  */
-export function sanitizeHtml(
-  html: string,
-  options?: Config
-): string {
+export function sanitizeHtml(html: string, options?: Config): string {
   const purify = getPurify();
   const result = purify.sanitize(html, {
     ...DEFAULT_SANITIZE_CONFIG,
@@ -98,9 +95,7 @@ export function serializeJsonLd(obj: unknown): string {
  * Recursively removes __proto__, constructor, and prototype keys.
  * Preserves Date, RegExp, and other safe built-in types.
  */
-export function sanitizeObject<T extends Record<string, unknown>>(
-  obj: T
-): T {
+export function sanitizeObject<T extends Record<string, unknown>>(obj: T): T {
   if (obj === null || typeof obj !== "object") {
     return obj;
   }
@@ -114,7 +109,7 @@ export function sanitizeObject<T extends Record<string, unknown>>(
     return obj.map((item) =>
       typeof item === "object" && item !== null
         ? sanitizeObject(item as Record<string, unknown>)
-        : item
+        : item,
     ) as unknown as T;
   }
 

@@ -93,7 +93,11 @@ export class Engine {
         // First execution: run, persist, return.
         const result = await fn();
 
-        this.#write(runId, key, JSON.stringify(result));
+        // A void step returns undefined, and JSON.stringify(undefined) is itself
+        // undefined — not a string — which would violate `result TEXT NOT NULL`
+        // and leave NO row, so resume would RE-RUN the step (breaking exactly-once).
+        // Coalesce to JSON null so every completed step records a durable row.
+        this.#write(runId, key, JSON.stringify(result ?? null));
 
         return result;
       },

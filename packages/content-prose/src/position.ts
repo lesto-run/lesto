@@ -13,10 +13,10 @@ export interface LineIndex {
 export function createLineIndex(source: string): LineIndex {
   const lineStarts: number[] = [0];
   for (let i = 0; i < source.length; i++) {
-    if (source[i] === '\n') {
+    if (source[i] === "\n") {
       lineStarts.push(i + 1);
-    } else if (source[i] === '\r') {
-      if (source[i + 1] === '\n') {
+    } else if (source[i] === "\r") {
+      if (source[i + 1] === "\n") {
         i++; // Skip \r\n as single newline
       }
       lineStarts.push(i + 1);
@@ -28,7 +28,10 @@ export function createLineIndex(source: string): LineIndex {
 /**
  * Fast O(log n) offset to position using binary search.
  */
-export function offsetToPositionFast(index: LineIndex, offset: number): { line: number; column: number } {
+export function offsetToPositionFast(
+  index: LineIndex,
+  offset: number,
+): { line: number; column: number } {
   const { lineStarts } = index;
 
   // Binary search for the line containing this offset
@@ -59,7 +62,7 @@ export function offsetToPositionFast(index: LineIndex, offset: number): { line: 
 export function offsetToPosition(source: string, offset: number): { line: number; column: number } {
   const before = source.slice(0, offset);
   const lines = before.split(/\r?\n/);
-  const lastLine = lines[lines.length - 1] ?? '';
+  const lastLine = lines[lines.length - 1] ?? "";
   return {
     line: lines.length,
     column: lastLine.length + 1,

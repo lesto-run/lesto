@@ -138,7 +138,8 @@ async function parseFile(
   } catch (err) {
     // File may have been deleted between collection and parsing (watch mode race condition)
     throw new Error(
-      `Failed to read file "${file.absolutePath}": ${err instanceof Error ? err.message : String(err)}`, { cause: err }
+      `Failed to read file "${file.absolutePath}": ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
   const ext = path.extname(file.absolutePath).toLowerCase();
@@ -149,7 +150,14 @@ async function parseFile(
     const cached = cache.getParseCache(file.collection.name, file.relativePath, contentHash);
 
     if (cached) {
-      return buildParsedDocument(file, cached.data, cached.content, cached.meta, cached.slug, isMDX);
+      return buildParsedDocument(
+        file,
+        cached.data,
+        cached.content,
+        cached.meta,
+        cached.slug,
+        isMDX,
+      );
     }
 
     const { rawData, body } = await parseContent(file, content, workerPool);
@@ -219,7 +227,7 @@ export async function parse(
       } catch (err) {
         // Log worker pool creation failures to aid debugging
         console.warn(
-          `[docks] Worker pool creation failed, falling back to single-threaded parsing: ${err instanceof Error ? err.message : String(err)}`
+          `[docks] Worker pool creation failed, falling back to single-threaded parsing: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }

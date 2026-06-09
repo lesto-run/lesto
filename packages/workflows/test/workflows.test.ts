@@ -67,6 +67,32 @@ describe("Engine", () => {
     expect(receipts).toBe(1);
   });
 
+  it("persists a void step so it is not re-executed on resume", async () => {
+    let sends = 0;
+
+    const engine = new Engine({ db }).define<void, void>("notify", async (_input, ctx) => {
+      // A void step: returns undefined. JSON.stringify(undefined) is undefined,
+      // which would never persist — so a naive engine re-runs this on resume.
+      await ctx.step("send-email", () => {
+        sends += 1;
+      });
+    });
+
+    await engine.run("notify", "run-1", undefined);
+    expect(sends).toBe(1);
+
+    // The completed void step persisted a durable row whose result is JSON null.
+    const row = database
+      .prepare("SELECT result FROM keel_workflow_steps WHERE run_id = ? AND step_key = ?")
+      .get("run-1", "send-email") as { result: string } | undefined;
+
+    expect(row).toEqual({ result: "null" });
+
+    // Resume: the void step replays from the row instead of re-running its fn.
+    await engine.run("notify", "run-1", undefined);
+    expect(sends).toBe(1);
+  });
+
   it("awaits the injected sleep", async () => {
     const sleep = vi.fn<Sleep>(async () => {});
 

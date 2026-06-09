@@ -100,6 +100,39 @@ describe("layout containers", () => {
 
     expect(markup).toContain("repeat(2, 1fr)");
   });
+
+  it("renders a Grid with an attacker-shaped string columns falling back to the default, never interpolating the payload", () => {
+    // The prop validator leaves an un-coercible string untouched, so a CSS-
+    // bearing value can reach render. It must NOT be interpolated into the
+    // grid-template string; the column count collapses to the default.
+    const payload = "2, 1fr); background: url(http://evil/x); --x: repeat(99";
+
+    const markup = html({
+      type: "Grid",
+      props: { columns: payload },
+      children: ["a"],
+    });
+
+    expect(markup).toContain("repeat(2, 1fr)");
+    expect(markup).not.toContain("evil");
+    expect(markup).not.toContain("url(");
+  });
+
+  it("renders a Grid with a non-finite columns falling back to the default", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const markup = html({ type: "Grid", props: { columns: bad }, children: ["a"] });
+
+      expect(markup).toContain("repeat(2, 1fr)");
+      expect(markup).not.toContain("NaN");
+      expect(markup).not.toContain("Infinity");
+    }
+  });
+
+  it("renders a Grid with a valid numeric columns through unchanged", () => {
+    const markup = html({ type: "Grid", props: { columns: 5 }, children: ["a"] });
+
+    expect(markup).toContain("repeat(5, 1fr)");
+  });
 });
 
 describe("Stack direction", () => {
@@ -128,6 +161,18 @@ describe("Stack direction", () => {
     });
 
     expect(markup).toContain("gap:0px");
+  });
+
+  it("falls back to the default gap when gap is an un-coercible string, never interpolating it", () => {
+    const markup = html({
+      type: "Stack",
+      props: { gap: "8px; background: url(http://evil/x)" },
+      children: ["x"],
+    });
+
+    // Default gap index is 2 → tokens.space[2].
+    expect(markup).toContain(`gap:${tokens.space[2]}px`);
+    expect(markup).not.toContain("evil");
   });
 });
 

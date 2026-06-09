@@ -26,7 +26,7 @@ export interface Heading {
 
 export async function extractHeadings(
   markdown: string,
-  levels: number[] = [1, 2, 3, 4, 5, 6]
+  levels: number[] = [1, 2, 3, 4, 5, 6],
 ): Promise<Heading[]> {
   const { unified } = await import("unified");
   const remarkParse = (await import("remark-parse")).default;
@@ -78,7 +78,7 @@ export interface ReadingTime {
 
 export async function calculateReadingTime(
   markdown: string,
-  wordsPerMinute = 200
+  wordsPerMinute = 200,
 ): Promise<ReadingTime> {
   const plainText = await extractPlainText(stripFrontmatter(markdown));
   const words = plainText.split(/\s+/).filter(Boolean).length;

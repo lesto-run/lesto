@@ -110,12 +110,70 @@ export async function loadTier1Index(url: string): Promise<Tier1Index> {
 
 /** Stop words to filter from keywords */
 const STOP_WORDS = new Set([
-  "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "he",
-  "in", "is", "it", "its", "of", "on", "or", "that", "the", "to", "was", "were",
-  "will", "with", "this", "but", "they", "have", "had", "what", "when", "where",
-  "who", "which", "why", "how", "all", "each", "every", "both", "few", "more",
-  "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same",
-  "so", "than", "too", "very", "can", "just", "should", "now", "you", "your",
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "for",
+  "from",
+  "has",
+  "he",
+  "in",
+  "is",
+  "it",
+  "its",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "to",
+  "was",
+  "were",
+  "will",
+  "with",
+  "this",
+  "but",
+  "they",
+  "have",
+  "had",
+  "what",
+  "when",
+  "where",
+  "who",
+  "which",
+  "why",
+  "how",
+  "all",
+  "each",
+  "every",
+  "both",
+  "few",
+  "more",
+  "most",
+  "other",
+  "some",
+  "such",
+  "no",
+  "nor",
+  "not",
+  "only",
+  "own",
+  "same",
+  "so",
+  "than",
+  "too",
+  "very",
+  "can",
+  "just",
+  "should",
+  "now",
+  "you",
+  "your",
 ]);
 
 /**
@@ -137,7 +195,7 @@ export function extractKeywords(text: string, maxKeywords = 50): string[] {
 export function keywordSearch(
   query: string,
   index: Tier0Index,
-  options: SearchOptions = {}
+  options: SearchOptions = {},
 ): SearchResult[] {
   const { collections, limit = 10, threshold = 0.1 } = options;
 
@@ -182,7 +240,7 @@ export function keywordSearch(
 export function binarySemanticSearch(
   queryEmbedding: number[],
   index: Tier1Index,
-  options: SearchOptions = {}
+  options: SearchOptions = {},
 ): SearchResult[] {
   const { collections, limit = 10, threshold = 0.3 } = options;
 

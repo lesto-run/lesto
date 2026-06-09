@@ -8,13 +8,13 @@ import type { Parser, ParseOutput } from "./types";
 // Character Code Constants (for readability and V8 optimization)
 // ============================================================================
 
-const CHAR_DASH = 45;       // '-'
-const CHAR_DOT = 46;        // '.'
-const CHAR_LF = 10;         // '\n'
-const CHAR_CR = 13;         // '\r'
-const CHAR_SPACE = 32;      // ' '
-const CHAR_TAB = 9;         // '\t'
-const CHAR_BOM = 0xfeff;    // BOM
+const CHAR_DASH = 45; // '-'
+const CHAR_DOT = 46; // '.'
+const CHAR_LF = 10; // '\n'
+const CHAR_CR = 13; // '\r'
+const CHAR_SPACE = 32; // ' '
+const CHAR_TAB = 9; // '\t'
+const CHAR_BOM = 0xfeff; // BOM
 
 // ============================================================================
 // Pre-allocated Objects (avoid allocation in hot paths)
@@ -28,7 +28,7 @@ const EMPTY_DATA: Record<string, unknown> = Object.freeze(Object.create(null));
 
 const yamlCache = createImmutableCache<Record<string, unknown>>(
   { max: CACHE_LIMITS.YAML_PARSE },
-  deepClone
+  deepClone,
 );
 
 /**
@@ -139,9 +139,7 @@ function normalizeInput(input: string | Buffer): string {
  * Normalize delimiters option to [open, close] tuple.
  * Validates that delimiters are non-empty and safe.
  */
-function normalizeDelimiters(
-  delimiters?: string | [string, string]
-): [string, string] {
+function normalizeDelimiters(delimiters?: string | [string, string]): [string, string] {
   if (!delimiters) {
     return ["---", "---"];
   }
@@ -159,8 +157,14 @@ function normalizeDelimiters(
   if (open.length === 0 || close.length === 0) {
     throw new Error("Delimiter cannot be an empty string");
   }
-  if (open === "\n" || open === "\r" || open === "\r\n" ||
-      close === "\n" || close === "\r" || close === "\r\n") {
+  if (
+    open === "\n" ||
+    open === "\r" ||
+    open === "\r\n" ||
+    close === "\n" ||
+    close === "\r" ||
+    close === "\r\n"
+  ) {
     throw new Error("Delimiter cannot be a line ending character");
   }
   return delimiters;
@@ -191,7 +195,7 @@ function createFrontmatterResult(
   data: Record<string, unknown>,
   body: string,
   matter: string,
-  language: FrontmatterLanguage
+  language: FrontmatterLanguage,
 ): ParseResult {
   return {
     data,
@@ -210,10 +214,7 @@ function createFrontmatterResult(
  * Parse YAML with caching. Isolated try-catch for V8 optimization.
  * Uses immutable cache from @keel/content-shared to prevent mutation issues.
  */
-function parseYamlCached(
-  matter: string,
-  filePath: string
-): Record<string, unknown> {
+function parseYamlCached(matter: string, filePath: string): Record<string, unknown> {
   // Check cache first (returns a clone to prevent mutation)
   const cached = yamlCache.get(matter);
   if (cached !== undefined) {
@@ -240,7 +241,7 @@ function parseYamlCached(
   if (typeof data !== "object" || Array.isArray(data)) {
     throw new FrontmatterParseError(
       filePath,
-      new Error("Frontmatter must be a YAML object/map, not a scalar or array")
+      new Error("Frontmatter must be a YAML object/map, not a scalar or array"),
     );
   }
 
@@ -256,10 +257,7 @@ function parseYamlCached(
 /**
  * Parse JSON frontmatter. Isolated try-catch for V8 optimization.
  */
-function parseJsonFrontmatter(
-  matter: string,
-  filePath: string
-): Record<string, unknown> {
+function parseJsonFrontmatter(matter: string, filePath: string): Record<string, unknown> {
   let data: unknown;
   try {
     data = JSON.parse(matter);
@@ -274,7 +272,7 @@ function parseJsonFrontmatter(
   if (typeof data !== "object" || Array.isArray(data)) {
     throw new FrontmatterParseError(
       filePath,
-      new Error("Frontmatter must be a JSON object, not a scalar or array")
+      new Error("Frontmatter must be a JSON object, not a scalar or array"),
     );
   }
 
@@ -292,7 +290,7 @@ function parseJsonFrontmatter(
  */
 function detectLanguageFromDelimiter(
   afterDelim: string,
-  defaultLang: FrontmatterLanguage
+  defaultLang: FrontmatterLanguage,
 ): { language: FrontmatterLanguage; valid: boolean } {
   if (!afterDelim) return { language: defaultLang, valid: true };
   const lower = afterDelim.toLowerCase();
@@ -305,11 +303,7 @@ function detectLanguageFromDelimiter(
  * Find closing delimiter index in content.
  * Returns -1 if not found.
  */
-function findCloseDelimiterIndex(
-  str: string,
-  searchStart: number,
-  closeDelim: string
-): number {
+function findCloseDelimiterIndex(str: string, searchStart: number, closeDelim: string): number {
   const closePattern = "\n" + closeDelim;
   const closeLen = closeDelim.length;
 
@@ -332,7 +326,7 @@ function findCloseDelimiterIndex(
 function parseWithDelimiters(
   content: string,
   filePath: string,
-  options: ParseOptions
+  options: ParseOptions,
 ): ParseResult {
   const [openDelim, closeDelim] = normalizeDelimiters(options.delimiters);
   const language = options.language || "yaml";
@@ -442,11 +436,7 @@ function tryParseEmptyFrontmatter(content: string, filePath: string): ParseResul
  * Parse matter and body from delimiter index.
  * Returns the frontmatter result.
  */
-function parseFromDelimiterIndex(
-  content: string,
-  closeIdx: number,
-  filePath: string
-): ParseResult {
+function parseFromDelimiterIndex(content: string, closeIdx: number, filePath: string): ParseResult {
   const matter = content.slice(4, closeIdx);
   let bodyStart = closeIdx + 5;
 
@@ -504,16 +494,13 @@ function tryStandardDelimiter(content: string, filePath: string): ParseResult | 
 export function parseFrontmatter(
   input: string | Buffer,
   filePath?: string,
-  options?: ParseOptions
+  options?: ParseOptions,
 ): ParseResult;
-export function parseFrontmatter(
-  input: string | Buffer,
-  options?: ParseOptions
-): ParseResult;
+export function parseFrontmatter(input: string | Buffer, options?: ParseOptions): ParseResult;
 export function parseFrontmatter(
   input: string | Buffer,
   filePathOrOptions?: string | ParseOptions,
-  maybeOptions?: ParseOptions
+  maybeOptions?: ParseOptions,
 ): ParseResult {
   // Normalize arguments
   let filePath = "<unknown>";
@@ -582,7 +569,7 @@ function findFirstLineEnding(str: string, start: number): { index: number; hasCR
 function parseLanguageIdentifier(
   str: string,
   startPos: number,
-  endPos: number
+  endPos: number,
 ): { language: FrontmatterLanguage; valid: boolean } {
   // Skip leading whitespace
   let pos = startPos;
@@ -620,7 +607,7 @@ function parseLanguageIdentifier(
 function checkDelimiterChar(
   str: string,
   char3: number,
-  firstNewline: number
+  firstNewline: number,
 ): { language: FrontmatterLanguage; valid: boolean } {
   // Newline or CR after --- is valid
   if (char3 === CHAR_LF || char3 === CHAR_CR) {
@@ -721,7 +708,7 @@ function parseNonStandard(content: string, filePath: string): ParseResult {
  */
 function findCommonDelimiter(
   str: string,
-  searchStart: number
+  searchStart: number,
 ): { matterEnd: number; bodyStart: number } | null {
   const len = str.length;
 
@@ -753,7 +740,7 @@ function findCommonDelimiter(
  */
 function findDelimiterWithWhitespace(
   str: string,
-  searchStart: number
+  searchStart: number,
 ): { matterEnd: number; bodyStart: number } | null {
   const len = str.length;
   let lineStart = searchStart;
@@ -783,7 +770,7 @@ function findDelimiterWithWhitespace(
  */
 function findClosingDelimiter(
   str: string,
-  searchStart: number
+  searchStart: number,
 ): { matterEnd: number; bodyStart: number } | null {
   // Try fast path first
   const common = findCommonDelimiter(str, searchStart);
@@ -889,7 +876,7 @@ export const frontmatterOnlyParser: Parser = {
  */
 export function detectLanguage(
   input: string | Buffer,
-  delimiter: string = "---"
+  delimiter: string = "---",
 ): FrontmatterLanguage | undefined {
   const content = normalizeInput(input);
 
@@ -989,7 +976,7 @@ export function hasFrontmatter(content: string): boolean {
 export function stringify(
   data: Record<string, unknown>,
   content: string = "",
-  options: { language?: FrontmatterLanguage; delimiters?: [string, string] } = {}
+  options: { language?: FrontmatterLanguage; delimiters?: [string, string] } = {},
 ): string {
   const language = options.language || "yaml";
   const [open, close] = options.delimiters || ["---", "---"];
@@ -1028,7 +1015,7 @@ export function stringify(
  */
 export function extractExcerpt(
   result: ParseResult,
-  separator: string = "---"
+  separator: string = "---",
 ): ParseResult & { excerpt: string } {
   const idx = result.body.indexOf(separator);
 
@@ -1062,7 +1049,7 @@ const finalizationRegistry = new FinalizationRegistry((key: string) => {
  */
 export function parseFrontmatterCached(
   input: string | Buffer,
-  filePath: string = "<unknown>"
+  filePath: string = "<unknown>",
 ): ParseResult {
   // Normalize input to string for cache key
   const content = normalizeInput(input);

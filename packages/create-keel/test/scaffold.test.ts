@@ -145,6 +145,26 @@ describe("templates", () => {
     expect(parsed.name).toBe("acme");
   });
 
+  it("scaffolds @keel deps with resolvable specifiers, never the workspace protocol", () => {
+    const parsed = JSON.parse(packageJson("acme")) as {
+      dependencies: Record<string, string>;
+    };
+
+    const keelDeps = Object.entries(parsed.dependencies).filter(([name]) =>
+      name.startsWith("@keel/"),
+    );
+
+    // There ARE @keel deps to check (guards against a vacuous pass).
+    expect(keelDeps.length).toBeGreaterThan(0);
+
+    for (const [, specifier] of keelDeps) {
+      // `workspace:*` resolves only inside this monorepo; a scaffolded app would
+      // fail to install. Every @keel dep must carry a real, resolvable specifier.
+      expect(specifier).not.toContain("workspace:");
+      expect(specifier).toBe("latest");
+    }
+  });
+
   it("keelApp default-exports an AppConfig", () => {
     expect(keelApp()).toContain("export default config");
   });

@@ -16,10 +16,12 @@ export interface SyntaxHighlightingOptions {
    * Show a copy button on code blocks.
    * @default true
    */
-  copyButton?: boolean | {
-    visibility?: "hover" | "always";
-    feedbackDuration?: number;
-  };
+  copyButton?:
+    | boolean
+    | {
+        visibility?: "hover" | "always";
+        feedbackDuration?: number;
+      };
 }
 
 export interface RenderOptions {

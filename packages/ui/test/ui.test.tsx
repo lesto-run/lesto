@@ -313,6 +313,46 @@ describe("treeJsonSchema", () => {
     });
   });
 
+  it("requires the `props` object for a component with a required prop, so the schema agrees with validateTree", () => {
+    const r = registry();
+
+    const schema = treeJsonSchema(r) as {
+      $defs: { node: { oneOf: Array<Record<string, unknown>> } };
+    };
+
+    const variants = schema.$defs.node.oneOf;
+
+    // Text has a required prop -> the variant must require `props` itself; if it
+    // only required `type`, a model could omit `props` and pass the schema while
+    // failing validateTree's missing-required-prop check (a looser schema).
+    const text = variants.find((v) => constOf(v) === "Text") as { required: string[] };
+
+    expect(text.required).toEqual(["type", "props"]);
+
+    // A `{ type: "Text" }` node (no props) is now rejected by the schema's
+    // required list AND by validateTree — the two constraints agree.
+    expect(text.required).toContain("props");
+
+    const { valid } = validateTree(r, { type: "Text" });
+
+    expect(valid).toBe(false);
+  });
+
+  it("requires only `type` for a component with no required props", () => {
+    const schema = treeJsonSchema(registry()) as {
+      $defs: { node: { oneOf: Array<Record<string, unknown>> } };
+    };
+
+    // Box has no required props, so the model is free to omit `props` — the
+    // variant requires only `type`, matching validateTree, which accepts it.
+    const box = schema.$defs.node.oneOf.find((v) => constOf(v) === "Box") as {
+      required: string[];
+    };
+
+    expect(box.required).toEqual(["type"]);
+    expect(validateTree(registry(), { type: "Box" }).valid).toBe(true);
+  });
+
   it("throws UI_INVALID_ENUM_SPEC when an enum spec lacks values", () => {
     const r = new Registry().define({
       name: "Bad",

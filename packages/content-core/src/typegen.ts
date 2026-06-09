@@ -38,9 +38,7 @@ function generateTaxonomyTypes(taxonomies: AnyTaxonomy[]): string[] {
   for (const taxonomy of taxonomies) {
     const pascalName = toPascalCase(taxonomy.name);
     const slugs = getTaxonomySlugs(taxonomy);
-    const unionType = slugs.length > 0
-      ? slugs.map((s) => JSON.stringify(s)).join(" | ")
-      : "never";
+    const unionType = slugs.length > 0 ? slugs.map((s) => JSON.stringify(s)).join(" | ") : "never";
     lines.push(`export type ${pascalName} = ${unionType};`);
   }
   return lines;
@@ -52,9 +50,7 @@ function generateTaxonomyRegistry(taxonomies: AnyTaxonomy[]): string[] {
   const lines: string[] = ["", "  interface TaxonomyRegistry {"];
   for (const taxonomy of taxonomies) {
     const slugs = getTaxonomySlugs(taxonomy);
-    const slugType = slugs.length > 0
-      ? slugs.map((s) => JSON.stringify(s)).join(" | ")
-      : "never";
+    const slugType = slugs.length > 0 ? slugs.map((s) => JSON.stringify(s)).join(" | ") : "never";
     lines.push(`    "${taxonomy.name}": ${slugType};`);
   }
   lines.push("  }");
@@ -97,7 +93,7 @@ export function generateTypes(
     "// This works with ANY Standard Schema library (Zod, Valibot, ArkType, etc.)",
     "",
     `import type config from "${configPath}";`,
-    "import type { GetEntryByName, GetSchemaByName } from \"@keel/content-core\";",
+    'import type { GetEntryByName, GetSchemaByName } from "@keel/content-core";',
     "",
   ];
 
@@ -106,7 +102,9 @@ export function generateTypes(
   for (const collection of collections) {
     const pascal = toPascalCase(collection.name);
     lines.push(`export type ${pascal} = GetEntryByName<typeof config, "${collection.name}">;`);
-    lines.push(`export type ${pascal}Schema = GetSchemaByName<typeof config, "${collection.name}">;`);
+    lines.push(
+      `export type ${pascal}Schema = GetSchemaByName<typeof config, "${collection.name}">;`,
+    );
   }
   lines.push("");
 

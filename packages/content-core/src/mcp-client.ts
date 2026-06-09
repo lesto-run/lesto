@@ -84,7 +84,7 @@ export class McpClient {
   private async fetchWithRetry(
     url: string,
     options: RequestInit,
-    retriesLeft: number
+    retriesLeft: number,
   ): Promise<Response> {
     try {
       const controller = new AbortController();
@@ -123,7 +123,7 @@ export class McpClient {
   private async request<T>(
     method: string,
     path: string,
-    body?: unknown
+    body?: unknown,
   ): Promise<McpClientResponse<T>> {
     const url = `${this.baseUrl}${path}`;
     this.log(`${method} ${url}`);
@@ -211,10 +211,7 @@ export class McpClient {
    * Stream SSE responses from Studio API (for AI endpoints).
    * Yields text chunks as they arrive.
    */
-  async *stream(
-    path: string,
-    body: unknown
-  ): AsyncGenerator<string, void, unknown> {
+  async *stream(path: string, body: unknown): AsyncGenerator<string, void, unknown> {
     const url = `${this.baseUrl}${path}`;
     this.log(`STREAM ${url}`);
 
@@ -228,7 +225,7 @@ export class McpClient {
         },
         body: JSON.stringify(body),
       },
-      this.retries
+      this.retries,
     );
 
     if (!response.ok) {

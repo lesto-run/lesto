@@ -93,9 +93,7 @@ describe("decodeFloat32Array", () => {
     const invalidBytes = new Uint8Array([1, 2, 3]);
     const encoded = encodeBase64(invalidBytes);
 
-    expect(() => decodeFloat32Array(encoded)).toThrow(
-      /length 3 is not multiple of 4/
-    );
+    expect(() => decodeFloat32Array(encoded)).toThrow(/length 3 is not multiple of 4/);
   });
 
   it("handles empty array", () => {

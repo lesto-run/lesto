@@ -98,9 +98,10 @@ export function getZodDef(schema: unknown): SchemaDef | undefined {
 
   // For object schemas, shape may be a function (Zod v3) or an object (Zod v4)
   const shapeRaw = typedDef["shape"];
-  const shape = typeof shapeRaw === "function"
-    ? (shapeRaw as () => Record<string, unknown>)()
-    : (shapeRaw as Record<string, unknown> | undefined);
+  const shape =
+    typeof shapeRaw === "function"
+      ? (shapeRaw as () => Record<string, unknown>)()
+      : (shapeRaw as Record<string, unknown> | undefined);
 
   const entriesRaw = typedDef["entries"] ?? typedDef["values"];
   const entries =
@@ -266,7 +267,11 @@ function defTypeToJsonType(type: string): string | undefined {
 }
 
 /** Handler for converting a Zod type to JSON Schema */
-type ZodTypeHandler = (def: SchemaDef, depth: number, recurse: (schema: unknown, depth: number) => JsonSchema) => JsonSchema | null;
+type ZodTypeHandler = (
+  def: SchemaDef,
+  depth: number,
+  recurse: (schema: unknown, depth: number) => JsonSchema,
+) => JsonSchema | null;
 
 /** Unwrap inner type from wrapper schemas */
 function getInnerSchema(def: SchemaDef): unknown {
@@ -296,7 +301,7 @@ const ZOD_TYPE_HANDLERS: Record<string, ZodTypeHandler> = {
     if (!def.shape) return null;
     const entries = Object.entries(def.shape);
     const properties = Object.fromEntries(
-      entries.map(([key, value]) => [key, recurse(value, depth + 1)])
+      entries.map(([key, value]) => [key, recurse(value, depth + 1)]),
     );
     const required = entries.filter(([, value]) => isRequiredField(value)).map(([key]) => key);
     return {
@@ -310,7 +315,9 @@ const ZOD_TYPE_HANDLERS: Record<string, ZodTypeHandler> = {
     def.element ? { type: "array", items: recurse(def.element, depth + 1) } : null,
 
   record: (def, depth, recurse) =>
-    def.valueType ? { type: "object", additionalProperties: recurse(def.valueType, depth + 1) } : null,
+    def.valueType
+      ? { type: "object", additionalProperties: recurse(def.valueType, depth + 1) }
+      : null,
 
   enum: (def) => (def.entries ? { enum: Object.values(def.entries) } : null),
 
@@ -321,7 +328,9 @@ const ZOD_TYPE_HANDLERS: Record<string, ZodTypeHandler> = {
   },
 
   union: (def, depth, recurse) =>
-    def.options ? { anyOf: (def.options as unknown[]).map((opt) => recurse(opt, depth + 1)) } : null,
+    def.options
+      ? { anyOf: (def.options as unknown[]).map((opt) => recurse(opt, depth + 1)) }
+      : null,
 
   intersection: (def, depth, recurse) =>
     def.left && def.right

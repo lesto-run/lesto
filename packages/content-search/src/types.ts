@@ -199,10 +199,7 @@ export interface SearchClient {
   /**
    * Search for entries matching a query embedding.
    */
-  query(
-    queryEmbedding: number[],
-    options?: SearchClientOptions
-  ): SearchResult[];
+  query(queryEmbedding: number[], options?: SearchClientOptions): SearchResult[];
 
   /**
    * Find entries similar to a given entry.

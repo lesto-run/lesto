@@ -213,4 +213,27 @@ describe("Query.paginate()", () => {
     expect(result.entries[0]?.title).toBe("Post 4");
     expect(result.entries[1]?.title).toBe("Post 2");
   });
+
+  describe("invalid pagination input", () => {
+    // Regression: page < 1 yields a negative offset (wrong slice) and perPage < 1
+    // makes totalPages Infinity/NaN. These must be rejected with a coded error.
+    it("throws for page <= 0", () => {
+      expect(() => query("posts").paginate({ page: 0, perPage: 3 })).toThrow();
+      expect(() => query("posts").paginate({ page: -1, perPage: 3 })).toThrow();
+    });
+
+    it("throws for perPage <= 0", () => {
+      expect(() => query("posts").paginate({ page: 1, perPage: 0 })).toThrow();
+      expect(() => query("posts").paginate({ page: 1, perPage: -5 })).toThrow();
+    });
+
+    it("throws a ValidationError carrying a stable code", () => {
+      try {
+        query("posts").paginate({ page: 0, perPage: 3 });
+        expect.unreachable("paginate must throw for page < 1");
+      } catch (error) {
+        expect((error as { code?: string }).code).toBeDefined();
+      }
+    });
+  });
 });

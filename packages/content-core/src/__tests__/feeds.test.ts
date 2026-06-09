@@ -299,10 +299,7 @@ describe("feeds", () => {
 
   describe("generateSitemap", () => {
     it("generates valid sitemap XML", () => {
-      const entries = [
-        createEntry("post-1", "posts"),
-        createEntry("post-2", "posts"),
-      ];
+      const entries = [createEntry("post-1", "posts"), createEntry("post-2", "posts")];
 
       const sitemap = generateSitemap(entries, "https://example.com");
 
@@ -353,9 +350,7 @@ describe("feeds", () => {
     });
 
     it("handles many entries", () => {
-      const entries = Array.from({ length: 100 }, (_, i) =>
-        createEntry(`post-${i}`, "posts"),
-      );
+      const entries = Array.from({ length: 100 }, (_, i) => createEntry(`post-${i}`, "posts"));
 
       const sitemap = generateSitemap(entries, "https://example.com");
 

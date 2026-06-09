@@ -12,7 +12,9 @@ const PLACEHOLDER = /\{(\w+)\}/g;
 
 export const interpolate = (template: string, params: Params): string =>
   template.replaceAll(PLACEHOLDER, (whole, name: string) => {
-    const value = params[name];
+    // Read only OWN params: a placeholder like `{constructor}` must not resolve
+    // an inherited `Object.prototype` member and dump a function into the text.
+    const value = Object.hasOwn(params, name) ? params[name] : undefined;
 
     // Invariant: an unknown placeholder stays as written, signalling missing data.
     if (value === undefined) return whole;

@@ -173,7 +173,7 @@ export const jsonLd = {
   howTo(
     name: string,
     steps: HowToStep[],
-    options?: { description?: string; image?: string }
+    options?: { description?: string; image?: string },
   ): string {
     const schema = generateHowToSchema(name, steps, options);
     return serializeSchemaOrg(schema);
@@ -227,7 +227,7 @@ export const jsonLd = {
       sectionName?: string;
       /** Path to the section (e.g., "/blog", "/posts") */
       sectionPath?: string;
-    }
+    },
   ): string {
     const { sectionName = "Posts", sectionPath = "/posts", ...schemaOptions } = options;
     const siteUrl = schemaOptions.siteUrl.replace(/\/$/, "");

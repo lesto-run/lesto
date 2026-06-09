@@ -5,35 +5,35 @@
  * For filesystem operations, use ./config-loader.ts (Node.js only).
  */
 
-import type { CustomRule } from './custom-rules.js';
+import type { CustomRule } from "./custom-rules.js";
 
 /** Prose rule names */
 export const RULE_NAMES = [
-  'fillers',
-  'weasel',
-  'hedge',
-  'condescending',
-  'repeated',
-  'simplify',
-  'profanity',
-  'passive',
-  'adverbs',
-  'cliches',
-  'readability',
-  'spelling',
+  "fillers",
+  "weasel",
+  "hedge",
+  "condescending",
+  "repeated",
+  "simplify",
+  "profanity",
+  "passive",
+  "adverbs",
+  "cliches",
+  "readability",
+  "spelling",
 ] as const;
 
 export type RuleName = (typeof RULE_NAMES)[number];
-export type RuleSeverity = 'off' | 'warn' | 'error' | 0 | 1 | 2;
+export type RuleSeverity = "off" | "warn" | "error" | 0 | 1 | 2;
 
 /** A11y (accessibility) rule names */
 export const A11Y_RULE_NAMES = [
-  'altText',
-  'headingHierarchy',
-  'headingDuplicate',
-  'linkText',
-  'codeBlockLanguage',
-  'embedTitle',
+  "altText",
+  "headingHierarchy",
+  "headingDuplicate",
+  "linkText",
+  "codeBlockLanguage",
+  "embedTitle",
 ] as const;
 
 export type A11yRuleName = (typeof A11Y_RULE_NAMES)[number];
@@ -55,9 +55,9 @@ export interface LumenConfig {
  * Used internally by lintContent.
  */
 export interface ResolvedConfig {
-  rules: Record<RuleName, 'off' | 'warn' | 'error'>;
+  rules: Record<RuleName, "off" | "warn" | "error">;
   /** A11y (accessibility) rules */
-  a11y: Record<A11yRuleName, 'off' | 'warn' | 'error'>;
+  a11y: Record<A11yRuleName, "off" | "warn" | "error">;
   /** Custom rules ready for execution */
   customRules: CustomRule[];
 }
@@ -66,32 +66,32 @@ export interface ResolvedConfig {
  * Default severity for each prose rule.
  * Most rules are warnings; repeated and profanity are errors.
  */
-export const DEFAULT_SEVERITIES: Record<RuleName, 'warn' | 'error'> = {
-  fillers: 'warn',
-  weasel: 'warn',
-  hedge: 'warn',
-  condescending: 'warn',
-  repeated: 'error',
-  simplify: 'warn',
-  profanity: 'error',
-  passive: 'warn',
-  adverbs: 'warn',
-  cliches: 'warn',
-  readability: 'warn',
-  spelling: 'error',
+export const DEFAULT_SEVERITIES: Record<RuleName, "warn" | "error"> = {
+  fillers: "warn",
+  weasel: "warn",
+  hedge: "warn",
+  condescending: "warn",
+  repeated: "error",
+  simplify: "warn",
+  profanity: "error",
+  passive: "warn",
+  adverbs: "warn",
+  cliches: "warn",
+  readability: "warn",
+  spelling: "error",
 };
 
 /**
  * Default severity for each a11y rule.
  * Critical accessibility issues are errors.
  */
-export const A11Y_DEFAULT_SEVERITIES: Record<A11yRuleName, 'warn' | 'error'> = {
-  altText: 'error',
-  headingHierarchy: 'error',
-  headingDuplicate: 'warn',
-  linkText: 'warn',
-  codeBlockLanguage: 'warn',
-  embedTitle: 'error',
+export const A11Y_DEFAULT_SEVERITIES: Record<A11yRuleName, "warn" | "error"> = {
+  altText: "error",
+  headingHierarchy: "error",
+  headingDuplicate: "warn",
+  linkText: "warn",
+  codeBlockLanguage: "warn",
+  embedTitle: "error",
 };
 
 /**
@@ -103,12 +103,12 @@ export const A11Y_DEFAULT_SEVERITIES: Record<A11yRuleName, 'warn' | 'error'> = {
  */
 export function normalizeSeverity(
   value: RuleSeverity | undefined,
-  defaultSeverity: 'warn' | 'error'
-): 'off' | 'warn' | 'error' {
+  defaultSeverity: "warn" | "error",
+): "off" | "warn" | "error" {
   if (value === undefined) return defaultSeverity;
-  if (value === 0 || value === 'off') return 'off';
-  if (value === 1 || value === 'warn') return 'warn';
-  if (value === 2 || value === 'error') return 'error';
+  if (value === 0 || value === "off") return "off";
+  if (value === 1 || value === "warn") return "warn";
+  if (value === 2 || value === "error") return "error";
   // Invalid value - warn and use default
   console.warn(`Invalid severity "${value}", using default "${defaultSeverity}"`);
   return defaultSeverity;
@@ -122,7 +122,7 @@ export function normalizeSeverity(
  * @returns Resolved config with all rules defined
  */
 export function resolveConfig(config: LumenConfig | null): ResolvedConfig {
-  const rules = {} as Record<RuleName, 'off' | 'warn' | 'error'>;
+  const rules = {} as Record<RuleName, "off" | "warn" | "error">;
 
   for (const ruleName of RULE_NAMES) {
     const userSeverity = config?.rules?.[ruleName];
@@ -130,7 +130,7 @@ export function resolveConfig(config: LumenConfig | null): ResolvedConfig {
   }
 
   // Resolve a11y rules
-  const a11y = {} as Record<A11yRuleName, 'off' | 'warn' | 'error'>;
+  const a11y = {} as Record<A11yRuleName, "off" | "warn" | "error">;
 
   for (const ruleName of A11Y_RULE_NAMES) {
     const userSeverity = config?.a11y?.[ruleName];
@@ -138,9 +138,7 @@ export function resolveConfig(config: LumenConfig | null): ResolvedConfig {
   }
 
   // Filter out disabled custom rules
-  const customRules = (config?.customRules ?? []).filter(
-    (rule) => rule.enabled !== false
-  );
+  const customRules = (config?.customRules ?? []).filter((rule) => rule.enabled !== false);
 
   return { rules, a11y, customRules };
 }

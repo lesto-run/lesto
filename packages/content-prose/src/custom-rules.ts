@@ -5,37 +5,33 @@
  * that can be defined in configuration files.
  */
 
-import type { Severity } from './types.js';
+import type { Severity } from "./types.js";
 
 /**
  * Content targeting - which markdown elements the rule applies to.
  * Use 'text' for all prose content.
  */
 export type ContentTarget =
-  | 'text'        // All prose content (default)
-  | 'heading'     // Headings (# through ######)
-  | 'paragraph'   // Regular paragraphs
-  | 'list'        // List items
-  | 'blockquote'  // Blockquotes
-  | 'code'        // Inline code (backticks)
-  | 'link'        // Link text
-  | 'alt'         // Image alt text
-  | 'title';      // Link/image titles
+  | "text" // All prose content (default)
+  | "heading" // Headings (# through ######)
+  | "paragraph" // Regular paragraphs
+  | "list" // List items
+  | "blockquote" // Blockquotes
+  | "code" // Inline code (backticks)
+  | "link" // Link text
+  | "alt" // Image alt text
+  | "title"; // Link/image titles
 
 /**
  * Fix action types for auto-fixing diagnostics.
  */
-export type FixAction =
-  | RemoveFixAction
-  | ReplaceFixAction
-  | SuggestFixAction
-  | TransformFixAction;
+export type FixAction = RemoveFixAction | ReplaceFixAction | SuggestFixAction | TransformFixAction;
 
 /**
  * Remove matched text entirely.
  */
 export interface RemoveFixAction {
-  type: 'remove';
+  type: "remove";
   /** Optional: also remove surrounding whitespace */
   cleanWhitespace?: boolean;
 }
@@ -44,7 +40,7 @@ export interface RemoveFixAction {
  * Replace matched text with a fixed string.
  */
 export interface ReplaceFixAction {
-  type: 'replace';
+  type: "replace";
   /** The replacement text */
   with: string;
 }
@@ -54,7 +50,7 @@ export interface ReplaceFixAction {
  * Used when multiple valid replacements exist.
  */
 export interface SuggestFixAction {
-  type: 'suggest';
+  type: "suggest";
   /** Ordered list of suggestions (first is preferred) */
   suggestions: string[];
 }
@@ -63,9 +59,9 @@ export interface SuggestFixAction {
  * Transform matched text using a transformation function.
  */
 export interface TransformFixAction {
-  type: 'transform';
+  type: "transform";
   /** Transformation to apply */
-  transform: 'lowercase' | 'uppercase' | 'titlecase' | 'sentencecase';
+  transform: "lowercase" | "uppercase" | "titlecase" | "sentencecase";
 }
 
 /**
@@ -101,7 +97,7 @@ export interface CustomRuleBase {
  * ```
  */
 export interface BanRule extends CustomRuleBase {
-  type: 'ban';
+  type: "ban";
   /** Words or patterns to ban (can be strings or regex patterns) */
   pattern: string | string[];
   /** Whether patterns are regex (default: false, uses word boundaries) */
@@ -126,7 +122,7 @@ export interface BanRule extends CustomRuleBase {
  * ```
  */
 export interface ReplaceRule extends CustomRuleBase {
-  type: 'replace';
+  type: "replace";
   /** Map of patterns to their replacements */
   swap: Record<string, string>;
   /** Case-insensitive matching (default: true) */
@@ -149,7 +145,7 @@ export interface ReplaceRule extends CustomRuleBase {
  * ```
  */
 export interface LimitRule extends CustomRuleBase {
-  type: 'limit';
+  type: "limit";
   /** Pattern to count */
   pattern: string;
   /** Whether pattern is regex */
@@ -159,7 +155,7 @@ export interface LimitRule extends CustomRuleBase {
   /** Maximum occurrences (default: unlimited) */
   max?: number;
   /** Scope for counting */
-  scope?: 'sentence' | 'paragraph' | 'document';
+  scope?: "sentence" | "paragraph" | "document";
 }
 
 /**
@@ -177,7 +173,7 @@ export interface LimitRule extends CustomRuleBase {
  * ```
  */
 export interface ConsistentRule extends CustomRuleBase {
-  type: 'consistent';
+  type: "consistent";
   /** Groups of interchangeable terms (first seen wins) */
   either: string[][];
   /** Case-insensitive matching (default: true) */
@@ -197,7 +193,7 @@ export interface ConsistentRule extends CustomRuleBase {
  * ```
  */
 export interface FirstUseRule extends CustomRuleBase {
-  type: 'firstUse';
+  type: "firstUse";
   /** Pattern to match (usually regex for acronyms) */
   pattern: string;
   /** Whether pattern is regex (default: true for firstUse) */
@@ -221,9 +217,9 @@ export interface FirstUseRule extends CustomRuleBase {
  * ```
  */
 export interface CasingRule extends CustomRuleBase {
-  type: 'casing';
+  type: "casing";
   /** Required casing style */
-  case: 'lower' | 'upper' | 'title' | 'sentence';
+  case: "lower" | "upper" | "title" | "sentence";
   /** Words to ignore (proper nouns, acronyms, etc.) */
   exceptions?: string[];
 }
@@ -241,7 +237,7 @@ export interface CasingRule extends CustomRuleBase {
  * ```
  */
 export interface MatchRule extends CustomRuleBase {
-  type: 'match';
+  type: "match";
   /** Pattern to match */
   pattern: string;
   /** Whether pattern is regex (default: false) */
@@ -266,7 +262,7 @@ export interface MatchRule extends CustomRuleBase {
  * ```
  */
 export interface CustomFunctionRule extends CustomRuleBase {
-  type: 'custom';
+  type: "custom";
   /** Path to the custom rule function module */
   function: string;
 }
@@ -288,56 +284,56 @@ export type CustomRule =
  * Type guard for BanRule.
  */
 export function isBanRule(rule: CustomRule): rule is BanRule {
-  return rule.type === 'ban';
+  return rule.type === "ban";
 }
 
 /**
  * Type guard for ReplaceRule.
  */
 export function isReplaceRule(rule: CustomRule): rule is ReplaceRule {
-  return rule.type === 'replace';
+  return rule.type === "replace";
 }
 
 /**
  * Type guard for LimitRule.
  */
 export function isLimitRule(rule: CustomRule): rule is LimitRule {
-  return rule.type === 'limit';
+  return rule.type === "limit";
 }
 
 /**
  * Type guard for ConsistentRule.
  */
 export function isConsistentRule(rule: CustomRule): rule is ConsistentRule {
-  return rule.type === 'consistent';
+  return rule.type === "consistent";
 }
 
 /**
  * Type guard for FirstUseRule.
  */
 export function isFirstUseRule(rule: CustomRule): rule is FirstUseRule {
-  return rule.type === 'firstUse';
+  return rule.type === "firstUse";
 }
 
 /**
  * Type guard for CasingRule.
  */
 export function isCasingRule(rule: CustomRule): rule is CasingRule {
-  return rule.type === 'casing';
+  return rule.type === "casing";
 }
 
 /**
  * Type guard for MatchRule.
  */
 export function isMatchRule(rule: CustomRule): rule is MatchRule {
-  return rule.type === 'match';
+  return rule.type === "match";
 }
 
 /**
  * Type guard for CustomFunctionRule.
  */
 export function isCustomFunctionRule(rule: CustomRule): rule is CustomFunctionRule {
-  return rule.type === 'custom';
+  return rule.type === "custom";
 }
 
 /**

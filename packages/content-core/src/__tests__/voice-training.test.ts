@@ -320,11 +320,7 @@ describe("Voice Training", () => {
         isExemplary: false,
       };
 
-      const instructions = generateInstructionsForChunk(chunk, [
-        "write",
-        "explain",
-        "elaborate",
-      ]);
+      const instructions = generateInstructionsForChunk(chunk, ["write", "explain", "elaborate"]);
 
       expect(instructions).toHaveLength(3);
       expect(instructions.map((i) => i.type)).toContain("write");

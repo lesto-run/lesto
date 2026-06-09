@@ -106,9 +106,17 @@ function validateFieldReferences(
 
   const entries = collections.get(config.name) ?? [];
   for (const entry of entries) {
-    errors.push(...validateEntryReference(
-      entry, field, refInfo.isArray, validValues, isTaxonomyRef, targetName, config.name
-    ));
+    errors.push(
+      ...validateEntryReference(
+        entry,
+        field,
+        refInfo.isArray,
+        validValues,
+        isTaxonomyRef,
+        targetName,
+        config.name,
+      ),
+    );
   }
   return errors;
 }
@@ -125,7 +133,7 @@ function validateReferences(
   for (const [name, entries] of collections) {
     collectionSlugs.set(
       name,
-      new Set(entries.map((e) => (e as Record<string, unknown>)["slug"] as string))
+      new Set(entries.map((e) => (e as Record<string, unknown>)["slug"] as string)),
     );
   }
 
@@ -140,19 +148,23 @@ function validateReferences(
     if (!shape) continue;
 
     for (const [field, fieldSchema] of Object.entries(shape)) {
-      errors.push(...validateFieldReferences(
-        config, field, fieldSchema, collections, collectionSlugs, taxonomyTerms
-      ));
+      errors.push(
+        ...validateFieldReferences(
+          config,
+          field,
+          fieldSchema,
+          collections,
+          collectionSlugs,
+          taxonomyTerms,
+        ),
+      );
     }
   }
 
   return errors;
 }
 
-function validateUniqueNames(
-  collections: AnyCollection[],
-  taxonomies: AnyTaxonomy[],
-): string[] {
+function validateUniqueNames(collections: AnyCollection[], taxonomies: AnyTaxonomy[]): string[] {
   const errors: string[] = [];
   const collectionNames = new Set(collections.map((c) => c.name));
 

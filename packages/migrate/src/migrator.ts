@@ -1,3 +1,4 @@
+import { MigrateError } from "./errors";
 import { Schema } from "./schema";
 
 import type { SqlDatabase } from "./types";
@@ -69,10 +70,34 @@ export class Migrator {
 
     const insert = this.db.prepare(`INSERT INTO ${TABLE} (version) VALUES (?)`);
 
+    // Each migration's DDL and its bookkeeping INSERT are one atomic unit: a
+    // half-applied migration (DDL ran, record missing — or vice versa) would
+    // corrupt the source of truth. We wrap *each* migration in its own
+    // transaction rather than the whole run in one, matching Rails: migrations
+    // that succeed earlier in this run stay applied; only the one that throws
+    // is rolled back. Both SQLite and Postgres run DDL transactionally, so
+    // standard BEGIN/COMMIT/ROLLBACK is enough through the minimal SQL surface.
     for (const entry of pending) {
-      entry.migration.up(schema);
+      this.db.exec("BEGIN");
 
-      insert.run([entry.version]);
+      try {
+        entry.migration.up(schema);
+
+        insert.run([entry.version]);
+
+        this.db.exec("COMMIT");
+      } catch (error) {
+        // Undo the partial DDL and ensure no record was written. The ROLLBACK
+        // is best-effort: if it itself fails we must not mask the original
+        // failure, which is the one the caller needs to see.
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          // Swallow — the original `error` is rethrown below and is what matters.
+        }
+
+        throw error;
+      }
     }
 
     return pending.map((entry) => entry.version);
@@ -88,10 +113,26 @@ export class Migrator {
 
     const applied = this.appliedVersions();
 
-    // The latest applied entry is the last one (in version order) we know about.
-    const target = this.entries.toReversed().find((entry) => applied.has(entry.version));
+    if (applied.size === 0) return undefined;
 
-    if (target === undefined) return undefined;
+    // The DB is the source of truth for *what* is applied, so the latest applied
+    // version comes from the recorded set — not from `this.entries`, which may be
+    // missing a migration whose file was deleted. Lexicographically-greatest is
+    // the most recently applied, matching the order migrations are applied in.
+    const latestVersion = [...applied].toSorted((a, b) => a.localeCompare(b)).at(-1)!;
+
+    const target = this.entries.find((entry) => entry.version === latestVersion);
+
+    // The most-recently-applied migration has no definition we can load. Rolling
+    // back anything else would reverse the *wrong* migration and corrupt state,
+    // so we refuse rather than silently pick an older entry.
+    if (target === undefined) {
+      throw new MigrateError(
+        "MIGRATE_MISSING_MIGRATION",
+        `Cannot roll back: the most recently applied migration "${latestVersion}" has no loaded definition. Restore its migration file before rolling back.`,
+        { version: latestVersion, applied: [...applied] },
+      );
+    }
 
     // A migration without `down` is irreversible in effect, but we still drop the
     // record so the version is no longer considered applied.

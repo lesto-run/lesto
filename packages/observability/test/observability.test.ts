@@ -80,6 +80,20 @@ describe("end", () => {
     expect(exporter.spans).toHaveLength(1);
     expect(exporter.spans[0]).toBe(span.data);
   });
+
+  it("is idempotent: a second end() neither re-exports nor restamps the end time", () => {
+    const span = tracer.startSpan("op");
+
+    advance(50);
+    span.end();
+
+    // A later, redundant end() must be a no-op — the span is already closed.
+    advance(50);
+    span.end();
+
+    expect(exporter.spans).toHaveLength(1);
+    expect(span.data.endedAt).toBe(1_050);
+  });
 });
 
 describe("withSpan", () => {

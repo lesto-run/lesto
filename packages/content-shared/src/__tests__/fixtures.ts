@@ -60,7 +60,7 @@ export const DANGEROUS_HTML_SAMPLES = [
     description: "Iframe injection",
   },
   {
-    input: '<style>body { display: none; }</style>',
+    input: "<style>body { display: none; }</style>",
     description: "Style tag injection",
   },
   {
@@ -128,24 +128,11 @@ export const SAMPLE_URLS = {
     "http://localhost:3000",
     "https://sub.domain.example.com",
   ],
-  invalid: [
-    "not a url",
-    "ftp://example.com",
-    "javascript:alert(1)",
-    "//example.com",
-    "",
-    "   ",
-  ],
+  invalid: ["not a url", "ftp://example.com", "javascript:alert(1)", "//example.com", "", "   "],
 };
 
 export const SAMPLE_SLUGS = {
-  valid: [
-    "hello-world",
-    "my-post",
-    "post-123",
-    "a",
-    "single",
-  ],
+  valid: ["hello-world", "my-post", "post-123", "a", "single"],
   invalid: [
     "Hello World", // spaces
     "UPPERCASE", // uppercase
@@ -185,7 +172,7 @@ export const SAMPLE_FLOAT32_ARRAY = {
 
 export const SAMPLE_XML = {
   needsEscaping: '<div class="test">Hello & goodbye</div>',
-  escaped: '&lt;div class=&quot;test&quot;&gt;Hello &amp; goodbye&lt;/div&gt;',
+  escaped: "&lt;div class=&quot;test&quot;&gt;Hello &amp; goodbye&lt;/div&gt;",
   cdataContent: "Content with ]]> in it",
 };
 

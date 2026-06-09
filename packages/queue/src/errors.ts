@@ -13,7 +13,8 @@ export { KeelError };
 export type QueueErrorCode =
   | "QUEUE_HANDLER_NOT_A_FUNCTION"
   | "QUEUE_HANDLER_NOT_FOUND"
-  | "QUEUE_INVALID_CRON_EXPRESSION";
+  | "QUEUE_INVALID_CRON_EXPRESSION"
+  | "QUEUE_WORKER_POLL_FAILED";
 
 /** Anything the queue can refuse to do. */
 export class QueueError extends KeelError<QueueErrorCode> {

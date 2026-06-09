@@ -27,9 +27,7 @@ export type PaginationParams = z.infer<typeof paginationSchema>;
 /**
  * Validate pagination parameters.
  */
-export function validatePagination(
-  params: unknown
-): PaginationParams {
+export function validatePagination(params: unknown): PaginationParams {
   const result = paginationSchema.safeParse(params);
   if (!result.success) {
     throw new ValidationError("Invalid pagination parameters", {
@@ -69,13 +67,10 @@ export const packageNameSchema = z
   .string()
   .min(1)
   .max(214)
-  .regex(
-    /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/,
-    "Invalid package name"
-  )
+  .regex(/^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/, "Invalid package name")
   .refine(
     (name) => !name.startsWith(".") && !name.startsWith("_"),
-    "Package name cannot start with . or _"
+    "Package name cannot start with . or _",
   );
 
 /**
@@ -90,10 +85,7 @@ export const entrySchema = z.object({
 /**
  * Create a validator function from a Zod schema.
  */
-export function createValidator<T>(
-  schema: z.ZodType<T>,
-  context: string
-): (data: unknown) => T {
+export function createValidator<T>(schema: z.ZodType<T>, context: string): (data: unknown) => T {
   return (data: unknown) => {
     const result = schema.safeParse(data);
     if (!result.success) {
@@ -109,17 +101,14 @@ export function createValidator<T>(
 /**
  * Validate that a number is within a range.
  */
-export function validateRange(
-  value: number,
-  min: number,
-  max: number,
-  name: string
-): number {
+export function validateRange(value: number, min: number, max: number, name: string): number {
   if (value < min || value > max) {
-    throw new ValidationError(
-      `${name} must be between ${min} and ${max}, got ${value}`,
-      { value, min, max, name }
-    );
+    throw new ValidationError(`${name} must be between ${min} and ${max}, got ${value}`, {
+      value,
+      min,
+      max,
+      name,
+    });
   }
   return value;
 }

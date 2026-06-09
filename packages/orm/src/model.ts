@@ -1,5 +1,6 @@
 import { database } from "./connection";
 import { OrmError } from "./errors";
+import { quoteColumn, quoteIdentifier } from "./identifier";
 import { tableize } from "./inflector";
 import { Relation } from "./relation";
 import { validate, ValidationErrors } from "./validations";
@@ -48,9 +49,34 @@ export class Model {
 
   static timestamps = false;
 
+  /**
+   * The model's columns, used as the allowlist for any identifier that reaches
+   * SQL (where/order/pluck keys). Leave it `undefined` to opt out of allowlist
+   * enforcement and rely on identifier quoting alone — declare it to slam the
+   * door on unknown columns entirely.
+   */
+  static columns: readonly string[] | undefined = undefined;
+
   /** The table this model reads and writes. Inferred from the class name. */
   static table(this: typeof Model): string {
     return this.tableName ?? tableize(this.name);
+  }
+
+  /**
+   * The allowlist of identifiers this model accepts, or `undefined` when none
+   * is declared. The primary key and (when enabled) the timestamp columns are
+   * always included, since the ORM references them itself.
+   */
+  static knownColumns(this: typeof Model): readonly string[] | undefined {
+    if (this.columns === undefined) {
+      return undefined;
+    }
+
+    const implicit = this.timestamps
+      ? [this.primaryKey, "created_at", "updated_at"]
+      : [this.primaryKey];
+
+    return [...new Set([...this.columns, ...implicit])];
   }
 
   static instantiate(this: typeof Model, row: Attributes): Model {
@@ -65,6 +91,7 @@ export class Model {
     return {
       table: this.table(),
       primaryKey: this.primaryKey,
+      columns: this.knownColumns(),
       database: () => database(),
       instantiate: (row) => this.instantiate(row),
     };
@@ -199,9 +226,10 @@ export class Model {
   }
 
   destroy(): this {
-    database()
-      .prepare(`DELETE FROM ${this.model.table()} WHERE ${this.model.primaryKey} = ?`)
-      .run([this.id]);
+    const table = quoteIdentifier(this.model.table());
+    const pk = quoteIdentifier(this.model.primaryKey);
+
+    database().prepare(`DELETE FROM ${table} WHERE ${pk} = ?`).run([this.id]);
     this.persisted = false;
 
     return this;
@@ -224,6 +252,14 @@ export class Model {
     return Object.keys(this.attributes).filter((column) => column !== this.model.primaryKey);
   }
 
+  // True when the caller set the primary key themselves (e.g. a UUID or a
+  // natural key) — we must write it rather than let the database assign one.
+  private hasExplicitPrimaryKey(): boolean {
+    const pk = this.attributes[this.model.primaryKey];
+
+    return pk !== undefined && pk !== null;
+  }
+
   private touchTimestamps(forInsert: boolean): void {
     if (!this.model.timestamps) {
       return;
@@ -241,25 +277,40 @@ export class Model {
   private persist(mode: "insert" | "update"): void {
     this.touchTimestamps(mode === "insert");
 
-    const columns = this.writableColumns();
-    const values = columns.map((column) => normalize(this.attributes[column]));
-    const table = this.model.table();
+    const allowed = this.model.knownColumns();
+    const table = quoteIdentifier(this.model.table());
 
     if (mode === "insert") {
+      // Honor an explicitly-provided primary key (UUIDs, natural keys); only
+      // fall back to a database-assigned id when the caller left it blank.
+      const explicitPk = this.hasExplicitPrimaryKey();
+      const columns = explicitPk
+        ? [this.model.primaryKey, ...this.writableColumns()]
+        : this.writableColumns();
+      const values = columns.map((column) => normalize(this.attributes[column]));
+      const names = columns.map((column) => quoteColumn(column, allowed)).join(", ");
       const placeholders = columns.map(() => "?").join(", ");
+
       const result = database()
-        .prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`)
+        .prepare(`INSERT INTO ${table} (${names}) VALUES (${placeholders})`)
         .run(values);
 
-      this.attributes[this.model.primaryKey] = Number(result.lastInsertRowid);
+      if (!explicitPk) {
+        this.attributes[this.model.primaryKey] = Number(result.lastInsertRowid);
+      }
+
       this.persisted = true;
 
       return;
     }
 
-    const assignments = columns.map((column) => `${column} = ?`).join(", ");
+    const columns = this.writableColumns();
+    const values = columns.map((column) => normalize(this.attributes[column]));
+    const pk = quoteColumn(this.model.primaryKey, allowed);
+    const assignments = columns.map((column) => `${quoteColumn(column, allowed)} = ?`).join(", ");
+
     database()
-      .prepare(`UPDATE ${table} SET ${assignments} WHERE ${this.model.primaryKey} = ?`)
+      .prepare(`UPDATE ${table} SET ${assignments} WHERE ${pk} = ?`)
       .run([...values, this.id]);
   }
 }

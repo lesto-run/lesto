@@ -10,5 +10,11 @@ export * from "./validation.js";
 export * from "./shutdown.js";
 
 // Markdown utilities are async imports due to optional peer deps
-export { extractPlainText, extractHeadings, stripFrontmatter, hasFrontmatter, calculateReadingTime } from "./markdown.js";
+export {
+  extractPlainText,
+  extractHeadings,
+  stripFrontmatter,
+  hasFrontmatter,
+  calculateReadingTime,
+} from "./markdown.js";
 export type { Heading, ReadingTime } from "./markdown.js";

@@ -84,23 +84,18 @@ describe("Path Security", () => {
 
     it("allows paths within base directory", () => {
       expect(() =>
-        validatePathWithinBase(
-          path.join(baseDir, "collection", "author.json"),
-          baseDir
-        )
+        validatePathWithinBase(path.join(baseDir, "collection", "author.json"), baseDir),
       ).not.toThrow();
     });
 
     it("rejects paths that escape base directory", () => {
-      expect(() =>
-        validatePathWithinBase("/project/.docks/other/file.json", baseDir)
-      ).toThrow(PathTraversalError);
+      expect(() => validatePathWithinBase("/project/.docks/other/file.json", baseDir)).toThrow(
+        PathTraversalError,
+      );
     });
 
     it("rejects paths to parent directories", () => {
-      expect(() =>
-        validatePathWithinBase("/project/.docks", baseDir)
-      ).toThrow(PathTraversalError);
+      expect(() => validatePathWithinBase("/project/.docks", baseDir)).toThrow(PathTraversalError);
     });
 
     it("handles normalized path attacks", () => {
@@ -108,18 +103,15 @@ describe("Path Security", () => {
       expect(() =>
         validatePathWithinBase(
           path.normalize("/project/.docks/voice-samples/../../../etc/passwd"),
-          baseDir
-        )
+          baseDir,
+        ),
       ).toThrow(PathTraversalError);
     });
 
     it("prevents prefix matching attacks", () => {
       // /project/.docks/voice-samples-evil should not match /project/.docks/voice-samples
       expect(() =>
-        validatePathWithinBase(
-          "/project/.docks/voice-samples-evil/file.json",
-          baseDir
-        )
+        validatePathWithinBase("/project/.docks/voice-samples-evil/file.json", baseDir),
       ).toThrow(PathTraversalError);
     });
   });
@@ -229,13 +221,11 @@ describe("Path Security", () => {
       const baseDir = "/project/.docks/voice-samples";
 
       // Even if sanitization somehow fails, validatePathWithinBase catches it
-      expect(() =>
-        validatePathWithinBase("/etc/passwd", baseDir)
-      ).toThrow(PathTraversalError);
+      expect(() => validatePathWithinBase("/etc/passwd", baseDir)).toThrow(PathTraversalError);
 
-      expect(() =>
-        validatePathWithinBase("/project/other/file", baseDir)
-      ).toThrow(PathTraversalError);
+      expect(() => validatePathWithinBase("/project/other/file", baseDir)).toThrow(
+        PathTraversalError,
+      );
     });
   });
 });

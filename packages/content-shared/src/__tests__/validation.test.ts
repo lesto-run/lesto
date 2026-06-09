@@ -252,7 +252,7 @@ describe("entrySchema", () => {
       entrySchema.parse({
         id: "",
         collection: "posts",
-      })
+      }),
     ).toThrow();
   });
 
@@ -261,7 +261,7 @@ describe("entrySchema", () => {
       entrySchema.parse({
         id: "entry-1",
         collection: "",
-      })
+      }),
     ).toThrow();
   });
 
@@ -271,7 +271,7 @@ describe("entrySchema", () => {
         id: "entry-1",
         collection: "posts",
         slug: "INVALID SLUG",
-      })
+      }),
     ).toThrow();
   });
 });
@@ -338,14 +338,14 @@ describe("validateRange", () => {
   it("throws ValidationError when below minimum", () => {
     expect(() => validateRange(-1, 0, 10, "count")).toThrow(ValidationError);
     expect(() => validateRange(-1, 0, 10, "count")).toThrow(
-      "count must be between 0 and 10, got -1"
+      "count must be between 0 and 10, got -1",
     );
   });
 
   it("throws ValidationError when above maximum", () => {
     expect(() => validateRange(11, 0, 10, "count")).toThrow(ValidationError);
     expect(() => validateRange(11, 0, 10, "count")).toThrow(
-      "count must be between 0 and 10, got 11"
+      "count must be between 0 and 10, got 11",
     );
   });
 

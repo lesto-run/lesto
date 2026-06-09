@@ -1,6 +1,13 @@
 "use client";
 
-import { useRef, useState, useEffect, type ComponentProps, type ReactNode, type CSSProperties } from "react";
+import {
+  useRef,
+  useState,
+  useEffect,
+  type ComponentProps,
+  type ReactNode,
+  type CSSProperties,
+} from "react";
 
 export interface CodeBlockProps extends ComponentProps<"pre"> {
   children?: ReactNode;
@@ -15,7 +22,11 @@ export interface CodeBlockProps extends ComponentProps<"pre"> {
   /** Custom class for the copy button */
   buttonClassName?: string;
   /** Render custom copy button - receives copied/failed states and copy handler */
-  renderCopyButton?: (props: { copied: boolean; copyFailed: boolean; onCopy: () => void }) => ReactNode;
+  renderCopyButton?: (props: {
+    copied: boolean;
+    copyFailed: boolean;
+    onCopy: () => void;
+  }) => ReactNode;
 }
 
 /**
@@ -144,8 +155,8 @@ export function CodeBlock({
       <pre ref={preRef} className={className} style={style} {...props}>
         {children}
       </pre>
-      {!hideCopyButton && (
-        renderCopyButton ? (
+      {!hideCopyButton &&
+        (renderCopyButton ? (
           renderCopyButton({ copied, copyFailed, onCopy: handleCopy })
         ) : (
           <button
@@ -157,8 +168,7 @@ export function CodeBlock({
           >
             {copied ? <CheckIcon /> : copyFailed ? <XIcon /> : <CopyIcon />}
           </button>
-        )
-      )}
+        ))}
     </div>
   );
 }

@@ -27,10 +27,7 @@ export interface DoctorIssue {
   line?: number;
 }
 
-function buildCollectionDirs(
-  collections: AnyCollection[],
-  cwd: string,
-): Map<string, string> {
+function buildCollectionDirs(collections: AnyCollection[], cwd: string): Map<string, string> {
   const collectionDirs = new Map<string, string>();
   for (const collection of collections) {
     const absDir = path.isAbsolute(collection.directory)
@@ -51,10 +48,7 @@ function buildSlugsByCollection(entries: RuntimeEntry[]): Map<string, Set<string
   return slugsByCollection;
 }
 
-function getEntryFilePath(
-  entry: RuntimeEntry,
-  collectionDirs: Map<string, string>,
-): string {
+function getEntryFilePath(entry: RuntimeEntry, collectionDirs: Map<string, string>): string {
   const collectionDir = collectionDirs.get(entry.collection);
   return collectionDir
     ? path.join(collectionDir, entry.file.path)
@@ -64,7 +58,7 @@ function getEntryFilePath(
 export async function doctor(
   entries: RuntimeEntry[],
   config: DoctorConfig,
-  options: DoctorOptions = {}
+  options: DoctorOptions = {},
 ): Promise<DoctorResult> {
   const checks = options.checks ?? ["links", "images"];
   const publicDir = options.publicDir ?? "public";
@@ -86,15 +80,15 @@ export async function doctor(
   }
 
   return {
-    errors: issues.filter(i => i.severity === "error"),
-    warnings: issues.filter(i => i.severity === "warning"),
+    errors: issues.filter((i) => i.severity === "error"),
+    warnings: issues.filter((i) => i.severity === "warning"),
   };
 }
 
 function checkInternalLinks(
   entry: RuntimeEntry,
   slugs: Map<string, Set<string>>,
-  filePath: string
+  filePath: string,
 ): DoctorIssue[] {
   const issues: DoctorIssue[] = [];
 
@@ -129,7 +123,7 @@ function checkImages(
   entry: RuntimeEntry,
   cwd: string,
   publicDir: string,
-  filePath: string
+  filePath: string,
 ): DoctorIssue[] {
   const issues: DoctorIssue[] = [];
 

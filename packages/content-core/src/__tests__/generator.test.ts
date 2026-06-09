@@ -6,6 +6,8 @@ import { z } from "zod";
 import type { AnyCollection } from "../types";
 import { createImport, createNamedImport } from "../imports";
 import { generate, watch, type GenerateResult } from "../generator";
+import { createEventEmitter } from "../events";
+import { getWorkflowConfig, getCollection, setData, invalidateRuntimeEngine } from "../runtime";
 
 const mockWatcher = {
   on: vi.fn().mockReturnThis(),
@@ -170,9 +172,12 @@ describe("generator", () => {
 
       const indexContent = await getWrittenFile(result.indexPath);
 
-      expect(indexContent).toContain('import posts from "./posts.js"');
-      expect(indexContent).toContain('import pages from "./pages.js"');
-      expect(indexContent).toContain("export { posts, pages }");
+      // Collections are bound to safe local names and re-exported under their
+      // real names so any (even kebab-case) collection name produces valid JS.
+      expect(indexContent).toContain('from "./posts.js"');
+      expect(indexContent).toContain('from "./pages.js"');
+      expect(indexContent).toContain("as posts");
+      expect(indexContent).toContain("as pages");
       expect(indexContent).toContain("collections");
     });
 
@@ -272,6 +277,171 @@ describe("generator", () => {
 
       expect(result.collections).toEqual([]);
       expect(result.entryCount).toBe(0);
+    });
+
+    it("generated index.js loads for an EMPTY collection (types and runtime agree)", async () => {
+      // H5 regression: index.d.ts declared `posts` but index.js did not export it
+      // for empty collections — type-checks, throws at module load. The generated
+      // module must always export every declared collection.
+      await mkdir(path.join(tempDir, "content/posts"), { recursive: true });
+
+      const result = await generate({
+        cwd: tempDir,
+        writeNodeModulesTypes: false,
+        collections: createCollections([{ name: "posts", directory: "content/posts" }]),
+      });
+
+      // A data file exists for the empty collection...
+      expect(await fileExists(path.join(result.outDir, "posts.js"))).toBe(true);
+
+      const indexContent = await getWrittenFile(result.indexPath);
+      const indexDts = await getWrittenFile(path.join(result.outDir, "index.d.ts"));
+
+      // ...and index.js exports it (the .d.ts declares it, so the .js MUST too).
+      expect(indexContent).toContain('from "./posts.js"');
+      expect(indexContent).toContain("as posts");
+      expect(indexDts).toContain("as posts");
+
+      // The module actually loads without throwing, and exposes the empty array.
+      const mod = (await import(`${result.indexPath}?empty=${Date.now()}`)) as {
+        posts: unknown[];
+        collections: Record<string, unknown[]>;
+      };
+      expect(mod.posts).toEqual([]);
+      expect(mod.collections["posts"]).toEqual([]);
+    });
+
+    it("generates a loadable module for a kebab-case collection name", async () => {
+      // M regression: `import blog-posts from ...` is a SyntaxError. Kebab-case
+      // names must map to a safe binding and load without throwing.
+      await setupProject(tempDir, [
+        { path: "content/blog/post.md", frontmatter: { title: "Post" }, content: "" },
+      ]);
+
+      const result = await generate({
+        cwd: tempDir,
+        writeNodeModulesTypes: false,
+        collections: createCollections([{ name: "blog-posts", directory: "content/blog" }]),
+      });
+
+      const indexContent = await getWrittenFile(result.indexPath);
+      // The real (kebab) name never appears as a bare binding.
+      expect(indexContent).not.toMatch(/import blog-posts /);
+      expect(indexContent).toContain('from "./blog-posts.js"');
+
+      const mod = (await import(`${result.indexPath}?kebab=${Date.now()}`)) as {
+        collections: Record<string, unknown[]>;
+        getCollection: (name: string) => unknown[];
+      };
+      expect(mod.collections["blog-posts"]).toHaveLength(1);
+      expect(mod.getCollection("blog-posts")).toHaveLength(1);
+    });
+
+    it("registers collection workflow configs into the runtime (auto-filter is live)", async () => {
+      // Regression for the dead setWorkflowConfigs path: scanning a collection
+      // with a workflow config must register it so getCollection auto-filters.
+      invalidateRuntimeEngine();
+
+      await setupProject(tempDir, [
+        {
+          path: "content/posts/live.md",
+          frontmatter: { title: "Live", status: "published" },
+          content: "",
+        },
+        {
+          path: "content/posts/draft.md",
+          frontmatter: { title: "Draft", status: "draft" },
+          content: "",
+        },
+      ]);
+
+      await generate({
+        cwd: tempDir,
+        writeNodeModulesTypes: false,
+        collections: [
+          {
+            name: "posts",
+            directory: "content/posts",
+            include: "**/*.md",
+            schema: z.object({ title: z.string(), status: z.string() }),
+            workflow: { statusField: "status", filterUnpublished: true },
+          },
+        ],
+      });
+
+      // The workflow config the engine scanned is now registered on the runtime
+      // (previously setWorkflowConfigs had no production caller, so this was
+      // always undefined and the auto-filter was inert).
+      expect(getWorkflowConfig("posts")).toEqual({
+        statusField: "status",
+        filterUnpublished: true,
+      });
+
+      // And with that config live, getCollection auto-filters drafts. (We seed
+      // the runtime store directly — generate() writes files, hydration sets data.)
+      setData({
+        posts: [
+          { slug: "live", status: "published" } as never,
+          { slug: "draft", status: "draft" } as never,
+        ],
+      });
+      const visible = getCollection("posts");
+      expect(visible).toHaveLength(1);
+      expect(visible[0]?.slug).toBe("live");
+
+      invalidateRuntimeEngine();
+    });
+
+    it("emits build lifecycle events when an emitter is provided", async () => {
+      await setupProject(tempDir, [
+        { path: "content/posts/hello.md", frontmatter: { title: "Hello" }, content: "" },
+      ]);
+
+      const seen: string[] = [];
+      const emitter = createEventEmitter();
+      emitter.onAny((type) => {
+        seen.push(type);
+      });
+
+      await generate({
+        cwd: tempDir,
+        writeNodeModulesTypes: false,
+        collections: createCollections([{ name: "posts", directory: "content/posts" }]),
+        events: emitter,
+      });
+
+      expect(seen).toContain("build:start");
+      expect(seen).toContain("build:end");
+    });
+
+    it("emits build:error and rethrows when generation fails", async () => {
+      await setupProject(tempDir, [
+        { path: "content/posts/hello.md", frontmatter: { title: "Hello" }, content: "" },
+      ]);
+
+      const errorEvents: Error[] = [];
+      const emitter = createEventEmitter();
+      emitter.on("build:error", (payload) => {
+        errorEvents.push(payload.error);
+      });
+
+      // Force a write failure inside the build: pre-create a DIRECTORY where the
+      // generated index.js file is expected (with clean:false so it survives), so
+      // writeFile(index.js) throws EISDIR — driving generate() into its catch path.
+      const outDir = path.join(tempDir, ".docks", "generated");
+      await mkdir(path.join(outDir, "index.js"), { recursive: true });
+
+      await expect(
+        generate({
+          cwd: tempDir,
+          clean: false,
+          writeNodeModulesTypes: false,
+          collections: createCollections([{ name: "posts", directory: "content/posts" }]),
+          events: emitter,
+        }),
+      ).rejects.toThrow();
+
+      expect(errorEvents).toHaveLength(1);
     });
 
     it("handles multiple collections", async () => {

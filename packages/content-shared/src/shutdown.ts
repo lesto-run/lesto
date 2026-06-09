@@ -145,22 +145,16 @@ export class GracefulShutdown {
     // Wait for active operations with timeout
     if (this.activeOperations.size > 0) {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(
-          () => reject(new Error("Shutdown timeout")),
-          effectiveTimeout
-        );
+        setTimeout(() => reject(new Error("Shutdown timeout")), effectiveTimeout);
       });
 
       try {
-        await Promise.race([
-          Promise.all(this.activeOperations),
-          timeoutPromise,
-        ]);
+        await Promise.race([Promise.all(this.activeOperations), timeoutPromise]);
       } catch {
         this.options.onForcedShutdown();
         console.warn(
           `[GracefulShutdown] Forced shutdown after ${effectiveTimeout}ms timeout. ` +
-            `${this.activeOperations.size} operations still pending.`
+            `${this.activeOperations.size} operations still pending.`,
         );
       }
     }
@@ -175,10 +169,7 @@ export class GracefulShutdown {
    * @param instance - GracefulShutdown instance to use
    * @param exitAfterShutdown - Whether to exit the process after shutdown (default: true)
    */
-  static setupSignalHandlers(
-    instance: GracefulShutdown,
-    exitAfterShutdown = true
-  ): void {
+  static setupSignalHandlers(instance: GracefulShutdown, exitAfterShutdown = true): void {
     const handler = async (signal: string) => {
       console.log(`\n[GracefulShutdown] Received ${signal}, shutting down...`);
       await instance.shutdown();
@@ -197,9 +188,7 @@ export class GracefulShutdown {
    * @param fn - Async function to wrap
    * @returns Wrapped function that tracks operations
    */
-  wrap<T extends (...args: unknown[]) => Promise<unknown>>(
-    fn: T
-  ): T {
+  wrap<T extends (...args: unknown[]) => Promise<unknown>>(fn: T): T {
     return ((...args: Parameters<T>) => {
       return this.track(fn(...args));
     }) as T;
@@ -215,7 +204,7 @@ export class GracefulShutdown {
  */
 export function onProcessExit(
   cleanupFn: CleanupFn,
-  signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"]
+  signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"],
 ): () => void {
   let called = false;
 
@@ -262,10 +251,7 @@ export function onProcessExit(
  * @param timeoutMs - Timeout before shutdown triggers
  * @returns Function to cancel the timeout
  */
-export function createShutdownTimeout(
-  instance: GracefulShutdown,
-  timeoutMs: number
-): () => void {
+export function createShutdownTimeout(instance: GracefulShutdown, timeoutMs: number): () => void {
   const timeoutId = setTimeout(() => {
     console.log(`[GracefulShutdown] Shutdown timeout (${timeoutMs}ms) reached`);
     instance.shutdown();

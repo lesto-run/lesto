@@ -262,7 +262,9 @@ describe("pipeline", () => {
       expect(warnings).toHaveLength(1);
       expect(nn(warnings[0]).entryId).toBe("posts/hello");
       expect(nn(warnings[0]).issues).toBeDefined();
-      expect(nn(warnings[0]).issues.some((i: SerializationIssueInfo) => i.type === "function")).toBe(true);
+      expect(
+        nn(warnings[0]).issues.some((i: SerializationIssueInfo) => i.type === "function"),
+      ).toBe(true);
     });
 
     it("falls back to console.warn if no callback provided", async () => {

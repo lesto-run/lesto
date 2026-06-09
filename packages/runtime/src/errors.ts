@@ -10,7 +10,12 @@ import { KeelError } from "@keel/errors";
 
 export { KeelError };
 
-export type RuntimeErrorCode = "RUNTIME_STATIC_PATH_TRAVERSAL";
+export type RuntimeErrorCode =
+  | "RUNTIME_STATIC_PATH_TRAVERSAL"
+  /** The request body was not valid JSON for its declared content-type — a 400. */
+  | "RUNTIME_INVALID_JSON"
+  /** The request body exceeded the configured size limit — a 413. */
+  | "RUNTIME_BODY_TOO_LARGE";
 
 /** Anything the transport tier can refuse to do. */
 export class RuntimeError extends KeelError<RuntimeErrorCode> {

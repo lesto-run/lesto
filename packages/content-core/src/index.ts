@@ -7,12 +7,7 @@ export {
   isMDXEntry,
 } from "./types";
 
-export {
-  defineTaxonomy,
-  isEnumTaxonomy,
-  isSchemaTaxonomy,
-  getTaxonomySlugs,
-} from "./taxonomy";
+export { defineTaxonomy, isEnumTaxonomy, isSchemaTaxonomy, getTaxonomySlugs } from "./taxonomy";
 
 export type {
   TaxonomyConfig,
@@ -91,11 +86,7 @@ export { generateLlmsTxt } from "./llms-txt";
 export type { LlmsTxtOptions, LlmsTxtEntry, LlmsTxtSection } from "./llms-txt";
 
 // RAG context primitives for AI chat integration
-export {
-  buildRAGContext,
-  formatContextForLLM,
-  estimateTokens,
-} from "./rag";
+export { buildRAGContext, formatContextForLLM, estimateTokens } from "./rag";
 export type {
   RAGContext,
   RAGEntry,
@@ -108,11 +99,7 @@ export type {
 // NOTE: Schema.org / JSON-LD generation has moved to @keel/content-seo
 // import { jsonLd, generateSchemaOrg } from "@keel/content-seo";
 
-export {
-  wordCount,
-  readingTime,
-  excerpt,
-} from "./computed";
+export { wordCount, readingTime, excerpt } from "./computed";
 export {
   createImport,
   createNamedImport,
@@ -122,12 +109,7 @@ export {
 } from "./imports";
 
 // Asset utilities (browser-safe)
-export {
-  ALLOWED_MIME_TYPES,
-  EXTENSION_TO_MIME,
-  isImageType,
-  isVideoType,
-} from "./assets";
+export { ALLOWED_MIME_TYPES, EXTENSION_TO_MIME, isImageType, isVideoType } from "./assets";
 
 export type {
   ImportReference,
@@ -136,12 +118,7 @@ export type {
   CollectedImport,
 } from "./imports";
 
-export {
-  parseFrontmatter,
-  hasFrontmatter,
-  stringify,
-  extractExcerpt,
-} from "@keel/content-umbra";
+export { parseFrontmatter, hasFrontmatter, stringify, extractExcerpt } from "@keel/content-umbra";
 
 export type {
   ParseOutput,

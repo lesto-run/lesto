@@ -9,12 +9,12 @@
  * For CLI operations, use @keel/content-cli
  */
 
-import { extract } from './extract.js';
-import { ruleRegistry } from './rules.js';
-import { createLineIndex, offsetToPositionFast } from './position.js';
-import { resolveConfig, type LumenConfig, type ResolvedConfig, type RuleName } from './config.js';
-import type { Diagnostic, Fix } from './types.js';
-import type { CustomRule } from './custom-rules.js';
+import { extract } from "./extract.js";
+import { ruleRegistry } from "./rules.js";
+import { createLineIndex, offsetToPositionFast } from "./position.js";
+import { resolveConfig, type LumenConfig, type ResolvedConfig, type RuleName } from "./config.js";
+import type { Diagnostic, Fix } from "./types.js";
+import type { CustomRule } from "./custom-rules.js";
 import {
   runBanRule,
   runReplaceRule,
@@ -24,9 +24,9 @@ import {
   runCasingRule,
   runMatchRule,
   runCustomFunctionRule,
-} from './custom-rule-runner.js';
-import type { TextSpan } from './types.js';
-import type { LineIndex } from './position.js';
+} from "./custom-rule-runner.js";
+import type { TextSpan } from "./types.js";
+import type { LineIndex } from "./position.js";
 
 /**
  * Registry of sync custom rule runners.
@@ -34,7 +34,12 @@ import type { LineIndex } from './position.js';
  * Note: Runners are typed to accept specific rule types but are stored as generic handlers.
  * The dispatch functions ensure correct rule types are passed based on rule.type.
  */
-type SyncRuleRunner = (rule: CustomRule, spans: TextSpan[], file: string, lineIndex: LineIndex) => Diagnostic[];
+type SyncRuleRunner = (
+  rule: CustomRule,
+  spans: TextSpan[],
+  file: string,
+  lineIndex: LineIndex,
+) => Diagnostic[];
 
 const SYNC_RULE_RUNNERS: Record<string, SyncRuleRunner> = {
   ban: runBanRule as SyncRuleRunner,
@@ -49,7 +54,13 @@ const SYNC_RULE_RUNNERS: Record<string, SyncRuleRunner> = {
 /**
  * Registry of async custom rule runners (includes sync + custom function).
  */
-type AsyncRuleRunner = (rule: CustomRule, spans: TextSpan[], file: string, lineIndex: LineIndex, basePath?: string) => Diagnostic[] | Promise<Diagnostic[]>;
+type AsyncRuleRunner = (
+  rule: CustomRule,
+  spans: TextSpan[],
+  file: string,
+  lineIndex: LineIndex,
+  basePath?: string,
+) => Diagnostic[] | Promise<Diagnostic[]>;
 
 const ASYNC_RULE_RUNNERS: Record<string, AsyncRuleRunner> = {
   ...SYNC_RULE_RUNNERS,
@@ -57,25 +68,43 @@ const ASYNC_RULE_RUNNERS: Record<string, AsyncRuleRunner> = {
 };
 
 /** Dispatch a custom rule to its runner (sync version). Returns empty for async-only rules. */
-function dispatchCustomRule(rule: CustomRule, spans: TextSpan[], file: string, lineIndex: LineIndex): Diagnostic[] {
+function dispatchCustomRule(
+  rule: CustomRule,
+  spans: TextSpan[],
+  file: string,
+  lineIndex: LineIndex,
+): Diagnostic[] {
   const runner = SYNC_RULE_RUNNERS[rule.type];
   return runner ? runner(rule, spans, file, lineIndex) : [];
 }
 
 /** Dispatch a custom rule to its runner (async version). Handles all rule types. */
-async function dispatchCustomRuleAsync(rule: CustomRule, spans: TextSpan[], file: string, lineIndex: LineIndex, basePath?: string): Promise<Diagnostic[]> {
+async function dispatchCustomRuleAsync(
+  rule: CustomRule,
+  spans: TextSpan[],
+  file: string,
+  lineIndex: LineIndex,
+  basePath?: string,
+): Promise<Diagnostic[]> {
   const runner = ASYNC_RULE_RUNNERS[rule.type];
   return runner ? runner(rule, spans, file, lineIndex, basePath) : [];
 }
 
 // Re-export building blocks for custom linting pipelines
-export { extract } from './extract.js';
-export { rules, ruleRegistry } from './rules.js';
-export { createLineIndex } from './position.js';
-export { format } from './format.js';
-export { resolveConfig, RULE_NAMES, DEFAULT_SEVERITIES, A11Y_RULE_NAMES, A11Y_DEFAULT_SEVERITIES, normalizeSeverity } from './config.js';
-export { tokenizeSentences, calculateARI } from './sentence-tokenizer.js';
-export { getHelpForRule, RULE_HELP } from './help.js';
+export { extract } from "./extract.js";
+export { rules, ruleRegistry } from "./rules.js";
+export { createLineIndex } from "./position.js";
+export { format } from "./format.js";
+export {
+  resolveConfig,
+  RULE_NAMES,
+  DEFAULT_SEVERITIES,
+  A11Y_RULE_NAMES,
+  A11Y_DEFAULT_SEVERITIES,
+  normalizeSeverity,
+} from "./config.js";
+export { tokenizeSentences, calculateARI } from "./sentence-tokenizer.js";
+export { getHelpForRule, RULE_HELP } from "./help.js";
 // Note: Spelling functions use dynamic imports for Node.js compatibility.
 // They are exported but should only be used in Node.js environments.
 // For browser usage, use shouldSkipWord only or pass dictionaryData to createSpellChecker.
@@ -86,14 +115,28 @@ export {
   resetSpellChecker,
   shouldSkipWord,
   prewarmSpellChecker,
-} from './spelling.js';
-export { TECH_DICTIONARY, getTechDictionary } from './tech-dictionary.js';
-export type { Diagnostic, LintResult, RichLintResult, Severity, TextSpan, Fix, Rule } from './types.js';
-export type { LineIndex } from './position.js';
-export type { LumenConfig, ResolvedConfig, RuleName, RuleSeverity, A11yRuleName } from './config.js';
-export type { Sentence } from './sentence-tokenizer.js';
-export type { RuleHelp } from './help.js';
-export type { SpellChecker, SpellCheckerOptions } from './spelling.js';
+} from "./spelling.js";
+export { TECH_DICTIONARY, getTechDictionary } from "./tech-dictionary.js";
+export type {
+  Diagnostic,
+  LintResult,
+  RichLintResult,
+  Severity,
+  TextSpan,
+  Fix,
+  Rule,
+} from "./types.js";
+export type { LineIndex } from "./position.js";
+export type {
+  LumenConfig,
+  ResolvedConfig,
+  RuleName,
+  RuleSeverity,
+  A11yRuleName,
+} from "./config.js";
+export type { Sentence } from "./sentence-tokenizer.js";
+export type { RuleHelp } from "./help.js";
+export type { SpellChecker, SpellCheckerOptions } from "./spelling.js";
 export type {
   ContentTarget,
   FixAction,
@@ -112,7 +155,7 @@ export type {
   CustomFunctionRule,
   CustomRule,
   CustomRulesConfig,
-} from './custom-rules.js';
+} from "./custom-rules.js";
 export {
   isBanRule,
   isReplaceRule,
@@ -122,7 +165,7 @@ export {
   isCasingRule,
   isMatchRule,
   isCustomFunctionRule,
-} from './custom-rules.js';
+} from "./custom-rules.js";
 export {
   runLimitRule,
   runConsistentRule,
@@ -133,7 +176,7 @@ export {
   runMatchRule,
   runCustomFunctionRule,
   clearCustomFunctionCache,
-} from './custom-rule-runner.js';
+} from "./custom-rule-runner.js";
 
 /**
  * Options for lintContent function.
@@ -157,13 +200,9 @@ export interface LintOptions {
  * @param options - Optional config options for rule severity customization
  * @returns Array of diagnostics found in the content
  */
-export function lintContent(
-  content: string,
-  file = '',
-  options: LintOptions = {}
-): Diagnostic[] {
+export function lintContent(content: string, file = "", options: LintOptions = {}): Diagnostic[] {
   // Handle empty/invalid input gracefully
-  if (!content || typeof content !== 'string') {
+  if (!content || typeof content !== "string") {
     return [];
   }
   const spans = extract(content);
@@ -194,8 +233,8 @@ export interface LintSpansOptions extends LintOptions {
 export function lintSpans(
   content: string,
   spans: TextSpan[],
-  file = '',
-  options: LintSpansOptions = {}
+  file = "",
+  options: LintSpansOptions = {},
 ): Diagnostic[] {
   const lineIndex = options.lineIndex ?? createLineIndex(content);
   const diagnostics: Diagnostic[] = [];
@@ -206,13 +245,13 @@ export function lintSpans(
   // Run built-in prose rules
   for (const [ruleName, ruleCheck] of Object.entries(ruleRegistry)) {
     const severity = resolved.rules[ruleName as RuleName];
-    if (severity === 'off') continue;
+    if (severity === "off") continue;
 
     const ruleDiagnostics = ruleCheck(spans, file, lineIndex);
 
     // Override severity based on config
     for (const d of ruleDiagnostics) {
-      d.severity = severity === 'error' ? 'error' : 'warning';
+      d.severity = severity === "error" ? "error" : "warning";
     }
     diagnostics.push(...ruleDiagnostics);
   }
@@ -248,11 +287,11 @@ export interface AsyncLintOptions extends LintOptions {
  */
 export async function lintContentAsync(
   content: string,
-  file = '',
-  options: AsyncLintOptions = {}
+  file = "",
+  options: AsyncLintOptions = {},
 ): Promise<Diagnostic[]> {
   // Handle empty/invalid input gracefully
-  if (!content || typeof content !== 'string') {
+  if (!content || typeof content !== "string") {
     return [];
   }
   const spans = extract(content);
@@ -265,13 +304,13 @@ export async function lintContentAsync(
   // Run built-in prose rules
   for (const [ruleName, ruleCheck] of Object.entries(ruleRegistry)) {
     const severity = resolved.rules[ruleName as RuleName];
-    if (severity === 'off') continue;
+    if (severity === "off") continue;
 
     const ruleDiagnostics = ruleCheck(spans, file, lineIndex);
 
     // Override severity based on config
     for (const d of ruleDiagnostics) {
-      d.severity = severity === 'error' ? 'error' : 'warning';
+      d.severity = severity === "error" ? "error" : "warning";
     }
     diagnostics.push(...ruleDiagnostics);
   }
@@ -279,8 +318,8 @@ export async function lintContentAsync(
   // Run custom rules including async CustomFunctionRule (parallel execution)
   const customResults = await Promise.all(
     resolved.customRules.map((rule) =>
-      dispatchCustomRuleAsync(rule, spans, file, lineIndex, options.basePath)
-    )
+      dispatchCustomRuleAsync(rule, spans, file, lineIndex, options.basePath),
+    ),
   );
   for (const result of customResults) {
     diagnostics.push(...result);
@@ -320,21 +359,22 @@ export function applyFixes(content: string, fixes: Fix[]): string {
         lastStart: fix.start,
       };
     },
-    { content, lastStart: Infinity }
+    { content, lastStart: Infinity },
   ).content;
 }
 
 interface DisableNextLine {
   line: number;
-  rules: string[];  // Empty array means disable all rules
+  rules: string[]; // Empty array means disable all rules
 }
 
 function parseDisableNextLine(content: string): DisableNextLine[] {
   const disables: DisableNextLine[] = [];
-  const lines = content.split('\n');
+  const lines = content.split("\n");
   // Match lumen-disable-next-line or prose-disable-next-line with optional comma-separated rules
   // Supports both kebab-case (fillers) and camelCase (altText) rule names
-  const re = /<!--\s*(?:lumen|prose)-disable-next-line(?:\s+([a-zA-Z-]+(?:\s*,\s*[a-zA-Z-]+)*))?\s*-->/;
+  const re =
+    /<!--\s*(?:lumen|prose)-disable-next-line(?:\s+([a-zA-Z-]+(?:\s*,\s*[a-zA-Z-]+)*))?\s*-->/;
 
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i];
@@ -343,9 +383,7 @@ function parseDisableNextLine(content: string): DisableNextLine[] {
     if (match) {
       const rulesStr = match[1];
       // Preserve original case - comparison will be case-insensitive
-      const rules = rulesStr
-        ? rulesStr.split(',').map(r => r.trim())
-        : [];
+      const rules = rulesStr ? rulesStr.split(",").map((r) => r.trim()) : [];
       disables.push({ line: i + 1, rules });
     }
   }
@@ -374,9 +412,7 @@ export function filterDisabled(content: string, diagnostics: Diagnostic[]): Diag
     const start = offsetToPositionFast(lineIndex, match.index!).line;
     enableRe.lastIndex = match.index!;
     const enableMatch = enableRe.exec(content);
-    const end = enableMatch
-      ? offsetToPositionFast(lineIndex, enableMatch.index).line
-      : Infinity;
+    const end = enableMatch ? offsetToPositionFast(lineIndex, enableMatch.index).line : Infinity;
     return { start, end };
   });
 
@@ -393,7 +429,7 @@ export function filterDisabled(content: string, diagnostics: Diagnostic[]): Diag
       (disable) =>
         d.line === disable.line + 1 &&
         (disable.rules.length === 0 ||
-          disable.rules.some(r => r.toLowerCase() === d.rule.toLowerCase()))
+          disable.rules.some((r) => r.toLowerCase() === d.rule.toLowerCase())),
     );
     return !hasNextLineDisable;
   });
@@ -408,8 +444,8 @@ export function filterDisabled(content: string, diagnostics: Diagnostic[]): Diag
 export function createLintResult(diagnostics: Diagnostic[]) {
   return {
     diagnostics,
-    errorCount: diagnostics.filter(d => d.severity === 'error').length,
-    warningCount: diagnostics.filter(d => d.severity === 'warning').length,
-    fixCount: diagnostics.filter(d => d.fix).length,
+    errorCount: diagnostics.filter((d) => d.severity === "error").length,
+    warningCount: diagnostics.filter((d) => d.severity === "warning").length,
+    fixCount: diagnostics.filter((d) => d.fix).length,
   };
 }

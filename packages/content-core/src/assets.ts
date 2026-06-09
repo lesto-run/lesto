@@ -14,16 +14,7 @@ export interface ResolvedAssetsConfig {
 }
 
 /** Default allowed file extensions for media uploads */
-const DEFAULT_EXTENSIONS = [
-  "jpg",
-  "jpeg",
-  "png",
-  "gif",
-  "webp",
-  "svg",
-  "mp4",
-  "webm",
-];
+const DEFAULT_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp", "svg", "mp4", "webm"];
 
 /** Default maximum file size: 50MB */
 const DEFAULT_MAX_FILE_SIZE = 50 * 1024 * 1024;
@@ -35,7 +26,7 @@ const DEFAULT_MAX_FILE_SIZE = 50 * 1024 * 1024;
 export function resolveAssetsConfig(
   config: Pick<EngineConfig, "assets">,
   collection: AnyCollection,
-  cwd: string
+  cwd: string,
 ): ResolvedAssetsConfig {
   const globalAssets = config.assets ?? {};
   const collectionAssets = collection.assets;
@@ -54,19 +45,13 @@ export function resolveAssetsConfig(
   }
 
   // Get collection-level overrides
-  const collectionConfig =
-    typeof collectionAssets === "object" ? collectionAssets : {};
+  const collectionConfig = typeof collectionAssets === "object" ? collectionAssets : {};
 
   return {
     directory: path.resolve(cwd, directory),
     allowedExtensions:
-      collectionConfig.allowedExtensions ??
-      globalAssets.allowedExtensions ??
-      DEFAULT_EXTENSIONS,
-    maxFileSize:
-      collectionConfig.maxFileSize ??
-      globalAssets.maxFileSize ??
-      DEFAULT_MAX_FILE_SIZE,
+      collectionConfig.allowedExtensions ?? globalAssets.allowedExtensions ?? DEFAULT_EXTENSIONS,
+    maxFileSize: collectionConfig.maxFileSize ?? globalAssets.maxFileSize ?? DEFAULT_MAX_FILE_SIZE,
   };
 }
 
@@ -75,10 +60,7 @@ export function resolveAssetsConfig(
  * Handles both relative paths and absolute URLs.
  * Assets are served from public/assets/{collection}/ as static files.
  */
-export function resolveAssetPath(
-  assetPath: string,
-  collection: string
-): string {
+export function resolveAssetPath(assetPath: string, collection: string): string {
   // Already absolute URL
   if (assetPath.startsWith("http://") || assetPath.startsWith("https://")) {
     return assetPath;

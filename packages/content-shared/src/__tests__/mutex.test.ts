@@ -65,7 +65,7 @@ describe("AsyncMutex", () => {
     await expect(
       mutex.runExclusive(async () => {
         throw new Error("Test error");
-      })
+      }),
     ).rejects.toThrow("Test error");
 
     expect(mutex.isLocked()).toBe(false);
@@ -282,9 +282,7 @@ describe("ReadWriteLock", () => {
     releaseRead2();
 
     // Writer should acquire before second reader
-    expect(events.indexOf("write-acquired")).toBeLessThan(
-      events.indexOf("read2-acquired")
-    );
+    expect(events.indexOf("write-acquired")).toBeLessThan(events.indexOf("read2-acquired"));
   });
 });
 
@@ -491,7 +489,7 @@ describe("createDebouncedAsync", () => {
       () =>
         new Promise<string>((resolve) => {
           resolvePromise = resolve;
-        })
+        }),
     );
     const debounced = createDebouncedAsync(fn, 10);
 

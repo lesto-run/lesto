@@ -32,7 +32,7 @@ const ENTRY_SIZE = 72;
 const SIGNATURE_SIZE = BINARY_SIGNATURE_SIZE;
 
 /** Sentinel value for empty strings (max Uint32) */
-const EMPTY_STRING_SENTINEL = 0xFFFFFFFF;
+const EMPTY_STRING_SENTINEL = 0xffffffff;
 
 /** Feature flags */
 export enum IndexFlags {
@@ -141,16 +141,14 @@ export function createZeroCopyIndex(entries: ZeroCopyInputEntry[]): ArrayBuffer 
 /**
  * Convert EmbeddingResult with binary signature to ZeroCopyInputEntry.
  */
-export function toZeroCopyInput(
-  entry: {
-    id: string;
-    title: string;
-    slug: string;
-    snippet: string;
-    collection: string;
-    binaryEmbedding: Uint8Array;
-  }
-): ZeroCopyInputEntry {
+export function toZeroCopyInput(entry: {
+  id: string;
+  title: string;
+  slug: string;
+  snippet: string;
+  collection: string;
+  binaryEmbedding: Uint8Array;
+}): ZeroCopyInputEntry {
   return {
     id: entry.id,
     title: entry.title,
@@ -164,16 +162,14 @@ export function toZeroCopyInput(
 /**
  * Create ZeroCopyInputEntry from an EmbeddingResult by quantizing the embedding.
  */
-export function toZeroCopyInputFromEmbedding(
-  entry: {
-    id: string;
-    title: string;
-    slug: string;
-    snippet: string;
-    collection: string;
-    embedding: number[];
-  }
-): ZeroCopyInputEntry {
+export function toZeroCopyInputFromEmbedding(entry: {
+  id: string;
+  title: string;
+  slug: string;
+  snippet: string;
+  collection: string;
+  embedding: number[];
+}): ZeroCopyInputEntry {
   return {
     id: entry.id,
     title: entry.title,
@@ -191,13 +187,15 @@ export function toZeroCopyInputFromEmbedding(
 /**
  * Estimate the size of a zero-copy index.
  */
-export function estimateZeroCopySize(entries: Array<{
-  id: string;
-  title: string;
-  slug: string;
-  snippet: string;
-  collection: string;
-}>): number {
+export function estimateZeroCopySize(
+  entries: Array<{
+    id: string;
+    title: string;
+    slug: string;
+    snippet: string;
+    collection: string;
+  }>,
+): number {
   const encoder = new TextEncoder();
   const uniqueStrings = new Set<string>();
 

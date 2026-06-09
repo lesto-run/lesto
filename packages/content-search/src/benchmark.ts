@@ -170,9 +170,7 @@ export interface BenchmarkReport {
 /**
  * Search function signature for benchmarking.
  */
-export type SearchFunction = (
-  query: string
-) => Promise<Array<{ id: string; score?: number }>>;
+export type SearchFunction = (query: string) => Promise<Array<{ id: string; score?: number }>>;
 
 // ============================================================================
 // Metrics Computation
@@ -181,11 +179,7 @@ export type SearchFunction = (
 /**
  * Compute precision at K.
  */
-function computePrecisionAtK(
-  returnedIds: string[],
-  relevantIds: Set<string>,
-  k: number
-): number {
+function computePrecisionAtK(returnedIds: string[], relevantIds: Set<string>, k: number): number {
   const topK = returnedIds.slice(0, k);
   if (topK.length === 0) return 0;
 
@@ -196,11 +190,7 @@ function computePrecisionAtK(
 /**
  * Compute recall at K.
  */
-function computeRecallAtK(
-  returnedIds: string[],
-  relevantIds: Set<string>,
-  k: number
-): number {
+function computeRecallAtK(returnedIds: string[], relevantIds: Set<string>, k: number): number {
   if (relevantIds.size === 0) return 1;
 
   const topK = returnedIds.slice(0, k);
@@ -214,7 +204,7 @@ function computeRecallAtK(
 function computeNDCGAtK(
   returnedIds: string[],
   relevanceMap: Map<string, number>,
-  k: number
+  k: number,
 ): number {
   const topK = returnedIds.slice(0, k);
 
@@ -223,9 +213,7 @@ function computeNDCGAtK(
     return sum + relevance / Math.log2(i + 2);
   }, 0);
 
-  const idealRelevances = [...relevanceMap.values()]
-    .toSorted((a, b) => b - a)
-    .slice(0, k);
+  const idealRelevances = [...relevanceMap.values()].toSorted((a, b) => b - a).slice(0, k);
 
   const idcg = idealRelevances.reduce((sum, rel, i) => {
     return sum + rel / Math.log2(i + 2);
@@ -238,10 +226,7 @@ function computeNDCGAtK(
 /**
  * Compute reciprocal rank.
  */
-function computeReciprocalRank(
-  returnedIds: string[],
-  relevantIds: Set<string>
-): number {
+function computeReciprocalRank(returnedIds: string[], relevantIds: Set<string>): number {
   const firstRelevantIndex = returnedIds.findIndex((id) => relevantIds.has(id));
   if (firstRelevantIndex === -1) return 0;
   return 1 / (firstRelevantIndex + 1);
@@ -265,16 +250,14 @@ function percentile(sortedArr: number[], p: number): number {
  */
 export async function runBenchmark(
   searchFn: SearchFunction,
-  dataset: BenchmarkDataset
+  dataset: BenchmarkDataset,
 ): Promise<BenchmarkReport> {
   const startTime = performance.now();
   const results: QueryBenchmarkResult[] = [];
 
   for (const benchQuery of dataset.queries) {
     const relevantIds = new Set(benchQuery.relevantDocs.map((d) => d.id));
-    const relevanceMap = new Map(
-      benchQuery.relevantDocs.map((d) => [d.id, d.relevance])
-    );
+    const relevanceMap = new Map(benchQuery.relevantDocs.map((d) => [d.id, d.relevance]));
 
     const searchStart = performance.now();
     const searchResults = await searchFn(benchQuery.query);
@@ -368,7 +351,7 @@ function aggregateQualityMetrics(results: QueryBenchmarkResult[]): QualityMetric
       ndcg10: 0,
       reciprocalRank: 0,
       zeroResults: 0,
-    }
+    },
   );
 
   return {
@@ -394,9 +377,7 @@ function aggregateQualityMetrics(results: QueryBenchmarkResult[]): QualityMetric
 /**
  * Compute performance metrics from results.
  */
-function computePerformanceMetrics(
-  results: QueryBenchmarkResult[]
-): PerformanceMetrics {
+function computePerformanceMetrics(results: QueryBenchmarkResult[]): PerformanceMetrics {
   if (results.length === 0) {
     return {
       totalQueries: 0,
@@ -423,7 +404,7 @@ function computePerformanceMetrics(
  * Compute metrics by query category.
  */
 function computeMetricsByCategory(
-  results: QueryBenchmarkResult[]
+  results: QueryBenchmarkResult[],
 ): Record<QueryCategory, QualityMetrics | undefined> {
   const categories: QueryCategory[] = [
     "exact_keyword",
@@ -466,7 +447,7 @@ export function createBenchmarkDataset(
     relevantDocs: Array<string | { id: string; relevance?: number }>;
     category?: QueryCategory;
   }>,
-  name = "Custom Benchmark"
+  name = "Custom Benchmark",
 ): BenchmarkDataset {
   return {
     name,
@@ -634,10 +615,10 @@ export interface QualityThresholds {
  */
 export const DEFAULT_THRESHOLDS: QualityThresholds = {
   minRecall10: 0.85,
-  minPrecision10: 0.70,
-  minNdcg10: 0.70,
-  minMrr: 0.60,
-  maxZeroResultRate: 0.10,
+  minPrecision10: 0.7,
+  minNdcg10: 0.7,
+  minMrr: 0.6,
+  maxZeroResultRate: 0.1,
   maxP95LatencyMs: 50,
 };
 
@@ -645,9 +626,9 @@ export const DEFAULT_THRESHOLDS: QualityThresholds = {
  * Strict quality thresholds for production.
  */
 export const STRICT_THRESHOLDS: QualityThresholds = {
-  minRecall10: 0.90,
-  minPrecision10: 0.80,
-  minNdcg10: 0.80,
+  minRecall10: 0.9,
+  minPrecision10: 0.8,
+  minNdcg10: 0.8,
   minMrr: 0.75,
   maxZeroResultRate: 0.05,
   maxP95LatencyMs: 20,
@@ -658,7 +639,7 @@ export const STRICT_THRESHOLDS: QualityThresholds = {
  */
 export function checkQualityGates(
   report: BenchmarkReport,
-  thresholds: QualityThresholds = DEFAULT_THRESHOLDS
+  thresholds: QualityThresholds = DEFAULT_THRESHOLDS,
 ): {
   passed: boolean;
   failures: string[];
@@ -667,37 +648,37 @@ export function checkQualityGates(
 
   if (report.quality.recallAtK.k10 < thresholds.minRecall10) {
     failures.push(
-      `Recall@10 ${(report.quality.recallAtK.k10 * 100).toFixed(1)}% < ${(thresholds.minRecall10 * 100).toFixed(1)}%`
+      `Recall@10 ${(report.quality.recallAtK.k10 * 100).toFixed(1)}% < ${(thresholds.minRecall10 * 100).toFixed(1)}%`,
     );
   }
 
   if (report.quality.precisionAtK.k10 < thresholds.minPrecision10) {
     failures.push(
-      `Precision@10 ${(report.quality.precisionAtK.k10 * 100).toFixed(1)}% < ${(thresholds.minPrecision10 * 100).toFixed(1)}%`
+      `Precision@10 ${(report.quality.precisionAtK.k10 * 100).toFixed(1)}% < ${(thresholds.minPrecision10 * 100).toFixed(1)}%`,
     );
   }
 
   if (report.quality.ndcgAtK.k10 < thresholds.minNdcg10) {
     failures.push(
-      `NDCG@10 ${(report.quality.ndcgAtK.k10 * 100).toFixed(1)}% < ${(thresholds.minNdcg10 * 100).toFixed(1)}%`
+      `NDCG@10 ${(report.quality.ndcgAtK.k10 * 100).toFixed(1)}% < ${(thresholds.minNdcg10 * 100).toFixed(1)}%`,
     );
   }
 
   if (report.quality.meanReciprocalRank < thresholds.minMrr) {
     failures.push(
-      `MRR ${(report.quality.meanReciprocalRank * 100).toFixed(1)}% < ${(thresholds.minMrr * 100).toFixed(1)}%`
+      `MRR ${(report.quality.meanReciprocalRank * 100).toFixed(1)}% < ${(thresholds.minMrr * 100).toFixed(1)}%`,
     );
   }
 
   if (report.quality.zeroResultRate > thresholds.maxZeroResultRate) {
     failures.push(
-      `Zero result rate ${(report.quality.zeroResultRate * 100).toFixed(1)}% > ${(thresholds.maxZeroResultRate * 100).toFixed(1)}%`
+      `Zero result rate ${(report.quality.zeroResultRate * 100).toFixed(1)}% > ${(thresholds.maxZeroResultRate * 100).toFixed(1)}%`,
     );
   }
 
   if (report.performance.latency.p95 > thresholds.maxP95LatencyMs) {
     failures.push(
-      `P95 latency ${report.performance.latency.p95.toFixed(1)}ms > ${thresholds.maxP95LatencyMs}ms`
+      `P95 latency ${report.performance.latency.p95.toFixed(1)}ms > ${thresholds.maxP95LatencyMs}ms`,
     );
   }
 

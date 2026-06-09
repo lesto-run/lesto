@@ -7,13 +7,13 @@
  * Combines semantic search with keyword matching for best results.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { createCache, CACHE_LIMITS, CACHE_TTL } from '@keel/content-shared/cache';
-import { binaryQuantize, hammingDistance, hammingToSimilarity } from './binary';
-import { createQueryProcessor, type QueryProcessor } from './query-intelligence';
-import { shouldFallbackToRAG, RAGClient, mergeResults } from './rag-fallback';
-import type { ProcessedQuery } from './types';
-import type { SearchResult } from './types';
+import { useState, useEffect, useRef, useCallback } from "react";
+import { createCache, CACHE_LIMITS, CACHE_TTL } from "@keel/content-shared/cache";
+import { binaryQuantize, hammingDistance, hammingToSimilarity } from "./binary";
+import { createQueryProcessor, type QueryProcessor } from "./query-intelligence";
+import { shouldFallbackToRAG, RAGClient, mergeResults } from "./rag-fallback";
+import type { ProcessedQuery } from "./types";
+import type { SearchResult } from "./types";
 
 // ============================================================================
 // Types
@@ -48,10 +48,10 @@ export interface UseSearchReturn {
   error: Error | null;
   search: (query: string) => void;
   clear: () => void;
-  tier: 0 | 1 | 'full';
+  tier: 0 | 1 | "full";
   hasBinarySearch: boolean;
   hasRagResults: boolean;
-  resultSource: 'local' | 'rag' | 'hybrid';
+  resultSource: "local" | "rag" | "hybrid";
   ragAnswer: string | undefined;
 }
 
@@ -123,7 +123,7 @@ interface LoadedIndex {
   model: string;
   hasBinaryEmbeddings: boolean;
   hasKeywords: boolean;
-  tier: 0 | 1 | 'full';
+  tier: 0 | 1 | "full";
 }
 
 // ============================================================================
@@ -155,7 +155,7 @@ async function loadTier0Index(tier0Path: string): Promise<LoadedIndex> {
     throw new Error(`Failed to load Tier 0 index: ${response.status}`);
   }
 
-  const data = await response.json() as CompactTier0;
+  const data = (await response.json()) as CompactTier0;
 
   if (data.v !== 0) {
     throw new Error(`Unsupported Tier 0 index version: ${data.v}`);
@@ -173,20 +173,23 @@ async function loadTier0Index(tier0Path: string): Promise<LoadedIndex> {
   return {
     entries,
     dimensions: 384,
-    model: 'unknown',
+    model: "unknown",
     hasBinaryEmbeddings: false,
     hasKeywords: true,
     tier: 0,
   };
 }
 
-async function loadTier1Index(tier1Path: string, existingEntries: LoadedEntry[]): Promise<LoadedIndex> {
+async function loadTier1Index(
+  tier1Path: string,
+  existingEntries: LoadedEntry[],
+): Promise<LoadedIndex> {
   const response = await fetch(tier1Path);
   if (!response.ok) {
     throw new Error(`Failed to load Tier 1 index: ${response.status}`);
   }
 
-  const data = await response.json() as CompactTier1;
+  const data = (await response.json()) as CompactTier1;
 
   if (data.v !== 1) {
     throw new Error(`Unsupported Tier 1 index version: ${data.v}`);
@@ -233,7 +236,12 @@ async function loadIndex(indexPath: string): Promise<LoadedIndex> {
 
     const json: unknown = await response.json();
 
-    if (json && typeof json === 'object' && 'v' in json && (json as Record<string, unknown>)['v'] === 1) {
+    if (
+      json &&
+      typeof json === "object" &&
+      "v" in json &&
+      (json as Record<string, unknown>)["v"] === 1
+    ) {
       const data = json as IndexV1;
       const hasBinary = data.e.some((e) => e.b);
 
@@ -262,18 +270,18 @@ async function loadIndex(indexPath: string): Promise<LoadedIndex> {
         model: data.m,
         hasBinaryEmbeddings: hasBinary || entries.some((e) => e.binaryEmbedding),
         hasKeywords: false,
-        tier: 'full' as const,
+        tier: "full" as const,
       };
     }
 
     const rawData = json as Record<string, unknown>;
     return {
-      entries: (rawData['entries'] as LoadedEntry[]) || [],
-      dimensions: (rawData['dimensions'] as number) || 384,
-      model: (rawData['model'] as string) || 'unknown',
+      entries: (rawData["entries"] as LoadedEntry[]) || [],
+      dimensions: (rawData["dimensions"] as number) || 384,
+      model: (rawData["model"] as string) || "unknown",
       hasBinaryEmbeddings: false,
       hasKeywords: false,
-      tier: 'full' as const,
+      tier: "full" as const,
     };
   })();
 
@@ -319,7 +327,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
 function keywordOnlySearch(
   entries: LoadedEntry[],
   processedQuery: ProcessedQuery,
-  options: { limit: number; threshold: number; collections?: string[] }
+  options: { limit: number; threshold: number; collections?: string[] },
 ): SearchResult[] {
   const candidates = options.collections
     ? entries.filter((e) => options.collections!.includes(e.collection))
@@ -350,19 +358,19 @@ function keywordOnlySearch(
 // React Hook
 // ============================================================================
 
-const DEFAULT_OPTIONS: Required<Omit<UseSearchOptions, 'onSearch' | 'collections' | 'synonyms'>> = {
-  indexPath: '/search-index.json',
+const DEFAULT_OPTIONS: Required<Omit<UseSearchOptions, "onSearch" | "collections" | "synonyms">> = {
+  indexPath: "/search-index.json",
   limit: 10,
   threshold: 0.1,
   debounce: 150,
   typoTolerance: true,
   stemming: true,
-  embedApi: '/api/embed',
+  embedApi: "/api/embed",
   semanticWeight: 0.7,
   progressive: false,
-  progressivePath: '',
+  progressivePath: "",
   ragFallback: false,
-  ragEndpoint: '/api/search',
+  ragEndpoint: "/api/search",
   ragMinConfidence: 0.4,
 };
 
@@ -380,14 +388,14 @@ async function getQueryEmbedding(query: string, embedApi: string): Promise<numbe
 
   try {
     const response = await fetch(embedApi, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: normalizedQuery }),
     });
 
     if (!response.ok) return null;
 
-    const data = await response.json() as { embedding?: number[] };
+    const data = (await response.json()) as { embedding?: number[] };
     const embedding = data.embedding;
     if (!embedding || !Array.isArray(embedding)) return null;
 
@@ -416,7 +424,7 @@ function hybridSearchEntries(
   entries: LoadedEntry[],
   processedQuery: ProcessedQuery,
   queryEmbedding: number[],
-  options: { limit: number; threshold: number; collections?: string[]; semanticWeight: number }
+  options: { limit: number; threshold: number; collections?: string[]; semanticWeight: number },
 ): SearchResult[] {
   const candidates = options.collections
     ? entries.filter((e) => options.collections!.includes(e.collection))
@@ -473,16 +481,16 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
     ragMinConfidence,
   } = opts;
 
-  const [query, setQueryState] = useState('');
+  const [query, setQueryState] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [semanticEnabled, setSemanticEnabled] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const [tier, setTier] = useState<0 | 1 | 'full'>('full');
+  const [tier, setTier] = useState<0 | 1 | "full">("full");
   const [hasBinarySearch, setHasBinarySearch] = useState(false);
   const [hasRagResults, setHasRagResults] = useState(false);
-  const [resultSource, setResultSource] = useState<'local' | 'rag' | 'hybrid'>('local');
+  const [resultSource, setResultSource] = useState<"local" | "rag" | "hybrid">("local");
   const [ragAnswer, setRagAnswer] = useState<string | undefined>(undefined);
 
   const indexRef = useRef<LoadedIndex | null>(null);
@@ -505,10 +513,10 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
   }, [typoTolerance, stemming, synonyms]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === "undefined") return;
 
     if (progressive) {
-      const basePath = progressivePath ? `${progressivePath}/` : '/';
+      const basePath = progressivePath ? `${progressivePath}/` : "/";
       const tier0Path = `${basePath}search-tier0.json`;
       const tier1Path = `${basePath}search-tier1.json`;
 
@@ -526,16 +534,16 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
               return tier1Index;
             })
             .catch((err) => {
-              console.warn('Failed to load Tier 1 index:', err);
+              console.warn("Failed to load Tier 1 index:", err);
               return undefined;
             });
         })
         .catch((err) => {
-          console.warn('Tier 0 load failed, falling back to full index:', err);
+          console.warn("Tier 0 load failed, falling back to full index:", err);
           return loadIndex(indexPath)
             .then((index) => {
               indexRef.current = index;
-              setTier('full');
+              setTier("full");
               setHasBinarySearch(index.hasBinaryEmbeddings);
               setIsReady(true);
               return index;
@@ -549,7 +557,7 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
       loadIndex(indexPath)
         .then((index) => {
           indexRef.current = index;
-          setTier('full');
+          setTier("full");
           setHasBinarySearch(index.hasBinaryEmbeddings);
           setIsReady(true);
           return index;
@@ -570,14 +578,14 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
         setResults([]);
         setIsSearching(false);
         setHasRagResults(false);
-        setResultSource('local');
+        setResultSource("local");
         setRagAnswer(undefined);
         return;
       }
 
       setIsSearching(true);
       setHasRagResults(false);
-      setResultSource('local');
+      setResultSource("local");
       setRagAnswer(undefined);
       const currentSearchId = ++searchIdRef.current;
       const processed = processor.process(trimmed);
@@ -590,7 +598,10 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
 
       const executeSearch = async (): Promise<{ results: SearchResult[]; semantic: boolean }> => {
         if (!embedApi) {
-          return { results: keywordOnlySearch(index.entries, processed, searchOptions), semantic: false };
+          return {
+            results: keywordOnlySearch(index.entries, processed, searchOptions),
+            semantic: false,
+          };
         }
 
         const queryEmbedding = await getQueryEmbedding(trimmed, embedApi);
@@ -609,7 +620,10 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
           };
         }
 
-        return { results: keywordOnlySearch(index.entries, processed, searchOptions), semantic: false };
+        return {
+          results: keywordOnlySearch(index.entries, processed, searchOptions),
+          semantic: false,
+        };
       };
 
       const { results: localResults, semantic } = await executeSearch();
@@ -617,14 +631,17 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
       if (searchIdRef.current !== currentSearchId) return;
 
       const ragClient = ragClientRef.current;
-      const needsRag = ragFallback && ragClient && shouldFallbackToRAG(trimmed, localResults, {
-        minConfidence: ragMinConfidence,
-      });
+      const needsRag =
+        ragFallback &&
+        ragClient &&
+        shouldFallbackToRAG(trimmed, localResults, {
+          minConfidence: ragMinConfidence,
+        });
 
       if (!needsRag) {
         setSemanticEnabled(semantic);
         setResults(localResults);
-        setResultSource('local');
+        setResultSource("local");
         setIsSearching(false);
         onSearch?.(localResults);
         return;
@@ -632,10 +649,13 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
 
       setSemanticEnabled(semantic);
       setResults(localResults);
-      setResultSource('local');
+      setResultSource("local");
 
       try {
-        const ragResponse = await ragClient.search(trimmed, collections ? { collections, limit } : { limit });
+        const ragResponse = await ragClient.search(
+          trimmed,
+          collections ? { collections, limit } : { limit },
+        );
 
         if (searchIdRef.current !== currentSearchId) return;
 
@@ -643,17 +663,26 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
           const merged = mergeResults(localResults, ragResponse.results, { ragWeight: 0.6 });
           setResults(merged);
           setHasRagResults(true);
-          setResultSource(localResults.length > 0 ? 'hybrid' : 'rag');
+          setResultSource(localResults.length > 0 ? "hybrid" : "rag");
           setRagAnswer(ragResponse.answer);
           onSearch?.(merged);
         }
       } catch (ragError) {
-        console.warn('RAG fallback failed:', ragError);
+        console.warn("RAG fallback failed:", ragError);
       }
 
       setIsSearching(false);
     },
-    [limit, threshold, collections, onSearch, embedApi, semanticWeight, ragFallback, ragMinConfidence]
+    [
+      limit,
+      threshold,
+      collections,
+      onSearch,
+      embedApi,
+      semanticWeight,
+      ragFallback,
+      ragMinConfidence,
+    ],
   );
 
   useEffect(() => {
@@ -675,11 +704,11 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
       setQueryState(searchQuery);
       performSearch(searchQuery);
     },
-    [performSearch]
+    [performSearch],
   );
 
   const clear = useCallback(() => {
-    setQueryState('');
+    setQueryState("");
     setResults([]);
   }, []);
 
@@ -704,4 +733,4 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
 export default useSearch;
 
 // Re-export types for convenience
-export type { SearchResult } from './types';
+export type { SearchResult } from "./types";

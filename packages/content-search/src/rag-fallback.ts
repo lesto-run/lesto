@@ -41,7 +41,7 @@ const DEFAULT_RAG_OPTIONS: Required<RAGFallbackOptions> = {
 export function shouldFallbackToRAG(
   query: string,
   localResults: SearchResult[],
-  options: RAGFallbackOptions = {}
+  options: RAGFallbackOptions = {},
 ): boolean {
   const opts = { ...DEFAULT_RAG_OPTIONS, ...options };
   const trimmedQuery = query.trim();
@@ -135,7 +135,7 @@ export class RAGClient {
 
   async search(
     query: string,
-    request: Omit<RAGSearchRequest, "query"> = {}
+    request: Omit<RAGSearchRequest, "query"> = {},
   ): Promise<RAGSearchResponse> {
     const normalizedQuery = query.trim().toLowerCase();
     const cacheKey = this.getCacheKey(normalizedQuery, request);
@@ -212,7 +212,7 @@ export class RAGClient {
 export function mergeResults(
   localResults: SearchResult[],
   ragResults: SearchResult[],
-  options: { ragWeight?: number } = {}
+  options: { ragWeight?: number } = {},
 ): SearchResult[] {
   const { ragWeight = 0.6 } = options;
   const localWeight = 1 - ragWeight;
@@ -244,7 +244,7 @@ export function mergeResults(
 export function getResultSource(
   result: SearchResult,
   localResults: SearchResult[],
-  ragResults: SearchResult[]
+  ragResults: SearchResult[],
 ): "local" | "rag" | "both" {
   const inLocal = localResults.some((r) => r.id === result.id);
   const inRag = ragResults.some((r) => r.id === result.id);

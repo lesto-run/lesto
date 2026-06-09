@@ -42,10 +42,12 @@ class MDXErrorBoundary extends Component<MDXErrorBoundaryProps, MDXErrorBoundary
 
   override render(): ReactNode {
     if (this.state.hasError) {
-      return this.props.fallback ?? (
-        <div role="alert" style={{ color: "red", padding: "1rem" }}>
-          Failed to render content
-        </div>
+      return (
+        this.props.fallback ?? (
+          <div role="alert" style={{ color: "red", padding: "1rem" }}>
+            Failed to render content
+          </div>
+        )
       );
     }
     return this.props.children;
@@ -89,7 +91,7 @@ function addAnchorLinksToHtml(html: string): string {
       // tabindex="-1" removes from tab order, aria-hidden hides from screen readers
       const anchor = `<a href="#${id}" class="anchor" tabindex="-1" aria-hidden="true">#</a>`;
       return `<${tag}${before}id="${id}"${after}>${anchor}`;
-    }
+    },
   );
 }
 

@@ -19,6 +19,21 @@ import { interpolate } from "./interpolate";
 
 import type { I18nOptions, Messages, Params } from "./types";
 
+/**
+ * Read `key` from a catalog only if it is the catalog's OWN property.
+ *
+ * A plain object inherits members from `Object.prototype` (`constructor`,
+ * `toString`, …). A bare bracket read would resolve those inherited functions
+ * for a key like `"constructor"`, leaking the prototype chain and handing
+ * `interpolate` a non-string. `Object.hasOwn` confines the lookup to real
+ * translations; an absent or proto-only key resolves to a miss.
+ */
+function own(catalog: Messages | undefined, key: string): string | undefined {
+  if (catalog === undefined) return undefined;
+
+  return Object.hasOwn(catalog, key) ? catalog[key] : undefined;
+}
+
 export class I18n {
   /** Catalogs keyed by locale; named `catalogs` so `locales()` can be a method. */
   private readonly catalogs: Record<string, Messages>;
@@ -75,12 +90,12 @@ export class I18n {
 
   /** Resolve `key`'s template, consulting the default locale when allowed. */
   private lookup(locale: string, key: string): string | undefined {
-    const direct = this.catalogs[locale]?.[key];
+    const direct = own(this.catalogs[locale], key);
 
     if (direct !== undefined) return direct;
 
     if (!this.fallback) return undefined;
 
-    return this.catalogs[this.defaultLocale]?.[key];
+    return own(this.catalogs[this.defaultLocale], key);
   }
 }

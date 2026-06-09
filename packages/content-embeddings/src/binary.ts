@@ -208,7 +208,7 @@ export function serializeBinaryOnlyIndex(index: BinarySearchIndex): string {
  */
 export function estimateBinarySavings(
   entryCount: number,
-  dimensions = EMBEDDING_DIMENSIONS
+  dimensions = EMBEDDING_DIMENSIONS,
 ): {
   fullSizeBytes: number;
   binarySizeBytes: number;

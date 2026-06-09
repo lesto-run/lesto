@@ -19,5 +19,9 @@
     "lint": "oxlint src test",
     "format": "oxfmt src test",
     "format:check": "oxfmt --check src test"
+  },
+
+  "dependencies": {
+    "@keel/errors": "workspace:*"
   }
 }

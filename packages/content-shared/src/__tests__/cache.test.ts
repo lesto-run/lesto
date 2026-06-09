@@ -156,10 +156,7 @@ const simpleClone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 describe("createImmutableCache", () => {
   it("clones values on get", () => {
-    const cache = createImmutableCache<{ data: string }>(
-      { max: 10 },
-      simpleClone
-    );
+    const cache = createImmutableCache<{ data: string }>({ max: 10 }, simpleClone);
 
     const original = { data: "original" };
     cache.set("key", original);
@@ -177,10 +174,7 @@ describe("createImmutableCache", () => {
   });
 
   it("clones values on set", () => {
-    const cache = createImmutableCache<{ data: string }>(
-      { max: 10 },
-      simpleClone
-    );
+    const cache = createImmutableCache<{ data: string }>({ max: 10 }, simpleClone);
 
     const original = { data: "original" };
     cache.set("key", original);
@@ -461,7 +455,7 @@ describe("cache integration scenarios", () => {
   it("works with YAML-like parsed data", () => {
     const cache = createImmutableCache<Record<string, unknown>>(
       { max: CACHE_LIMITS.YAML_PARSE },
-      deepClone
+      deepClone,
     );
 
     const frontmatter = {

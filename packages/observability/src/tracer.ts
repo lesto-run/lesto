@@ -30,6 +30,9 @@ export interface StartSpanOptions {
 class LiveSpan implements Span {
   readonly data: SpanData;
 
+  /** A span ends exactly once; a second `end()` is a no-op, never a re-export. */
+  private ended = false;
+
   constructor(
     data: SpanData,
     private readonly clock: Clock,
@@ -51,6 +54,13 @@ class LiveSpan implements Span {
   }
 
   end(): void {
+    // Idempotent: the first call stamps the end time and exports; any later call
+    // returns silently so a span is never double-counted (e.g. an explicit
+    // `end()` inside a `withSpan` body plus the `finally`'s `end()`).
+    if (this.ended) return;
+
+    this.ended = true;
+
     this.data.endedAt = this.clock();
 
     this.exporter.export(this.data);

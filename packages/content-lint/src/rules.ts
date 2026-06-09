@@ -53,8 +53,8 @@ export function checkAltText(content: string, file: string, lineIndex: LineIndex
         length,
         "Image missing alt text",
         "error",
-        "Add descriptive alt text that explains the image content. Be specific and concise (1-2 sentences). Avoid starting with 'Image of'."
-      )
+        "Add descriptive alt text that explains the image content. Be specific and concise (1-2 sentences). Avoid starting with 'Image of'.",
+      ),
     ),
     ...[...ctx.scan(content, A11Y_PATTERNS.htmlImg)]
       .filter(({ match }) => !/alt\s*=/i.test(match[0]))
@@ -65,8 +65,8 @@ export function checkAltText(content: string, file: string, lineIndex: LineIndex
           length,
           "HTML image missing alt attribute",
           "error",
-          'Add an alt attribute: <img src="..." alt="Description of image" />'
-        )
+          'Add an alt attribute: <img src="..." alt="Description of image" />',
+        ),
       ),
     ...[...ctx.scan(content, A11Y_PATTERNS.htmlImgEmptyAlt)].map(({ offset, length }) =>
       ctx.diag(
@@ -75,8 +75,8 @@ export function checkAltText(content: string, file: string, lineIndex: LineIndex
         length,
         "HTML image has empty alt text",
         "error",
-        "Add descriptive alt text that explains the image content."
-      )
+        "Add descriptive alt text that explains the image content.",
+      ),
     ),
   ];
 }
@@ -113,8 +113,8 @@ export function checkHeadings(content: string, file: string, lineIndex: LineInde
         h.length,
         "Multiple H1 headings found; each page should have only one H1",
         "error",
-        "Use H2 or lower for additional sections. The page title (H1) should be defined in frontmatter or as the first heading."
-      )
+        "Use H2 or lower for additional sections. The page title (H1) should be defined in frontmatter or as the first heading.",
+      ),
     );
 
   const skippedLevels = headings.slice(1).flatMap((curr, i) => {
@@ -127,7 +127,7 @@ export function checkHeadings(content: string, file: string, lineIndex: LineInde
             curr.length,
             `Heading level skipped from H${prev.level} to H${curr.level}`,
             "error",
-            `Use H${prev.level + 1} instead of H${curr.level}. Headings should follow sequential order without skipping levels.`
+            `Use H${prev.level + 1} instead of H${curr.level}. Headings should follow sequential order without skipping levels.`,
           ),
         ]
       : [];
@@ -136,8 +136,8 @@ export function checkHeadings(content: string, file: string, lineIndex: LineInde
   const duplicates = Object.entries(
     headings.reduce<Record<number, ParsedHeading[]>>(
       (acc, h) => ((acc[h.level] ??= []).push(h), acc),
-      {}
-    )
+      {},
+    ),
   ).flatMap(([level, hs]) => {
     const seen = new Set<string>();
     return hs.flatMap((h) => {
@@ -150,7 +150,7 @@ export function checkHeadings(content: string, file: string, lineIndex: LineInde
             h.length,
             `Duplicate H${level} heading: "${h.text}"`,
             "warning",
-            "Same-level headings should have unique names to help with navigation. Consider making this heading more specific."
+            "Same-level headings should have unique names to help with navigation. Consider making this heading more specific.",
           ),
         ];
       }
@@ -174,17 +174,13 @@ export function checkLinks(content: string, file: string, lineIndex: LineIndex):
         length,
         `Vague link text: "${match[1]}"`,
         "warning",
-        'Link text should describe the destination. Instead of "click here", use descriptive text like "view the documentation" or "read the getting started guide".'
-      )
+        'Link text should describe the destination. Instead of "click here", use descriptive text like "view the documentation" or "read the getting started guide".',
+      ),
     );
 }
 
 /** Check for code blocks without language */
-export function checkCodeBlocks(
-  content: string,
-  file: string,
-  lineIndex: LineIndex
-): Diagnostic[] {
+export function checkCodeBlocks(content: string, file: string, lineIndex: LineIndex): Diagnostic[] {
   const ctx = new LintContext(file, lineIndex);
   return [...ctx.scan(content, A11Y_PATTERNS.codeBlock)]
     .filter(({ offset }) => (content.slice(0, offset).match(/^```/gm) ?? []).length % 2 === 0)
@@ -195,8 +191,8 @@ export function checkCodeBlocks(
         length,
         "Code block missing language specification",
         "warning",
-        "Specify a language for syntax highlighting: ```javascript, ```python, etc. This helps screen readers announce the code context."
-      )
+        "Specify a language for syntax highlighting: ```javascript, ```python, etc. This helps screen readers announce the code context.",
+      ),
     );
 }
 
@@ -213,8 +209,8 @@ export function checkEmbeds(content: string, file: string, lineIndex: LineIndex)
           length,
           "iframe missing title attribute",
           "error",
-          'Add a descriptive title: <iframe src="..." title="Tutorial: Setting up authentication" />'
-        )
+          'Add a descriptive title: <iframe src="..." title="Tutorial: Setting up authentication" />',
+        ),
       ),
     ...[...ctx.scan(content, A11Y_PATTERNS.video)]
       .filter(({ match }) => !/title\s*=/i.test(match[0]))
@@ -225,8 +221,8 @@ export function checkEmbeds(content: string, file: string, lineIndex: LineIndex)
           length,
           "video element missing title attribute",
           "warning",
-          "Add a descriptive title to help screen reader users understand the video content."
-        )
+          "Add a descriptive title to help screen reader users understand the video content.",
+        ),
       ),
   ];
 }
@@ -254,11 +250,7 @@ const STRUCTURAL_PATTERNS = {
 } as const;
 
 /** Check for empty URLs in links and images */
-export function checkNoEmptyUrl(
-  content: string,
-  file: string,
-  lineIndex: LineIndex
-): Diagnostic[] {
+export function checkNoEmptyUrl(content: string, file: string, lineIndex: LineIndex): Diagnostic[] {
   const ctx = new LintContext(file, lineIndex);
   const diagnostics: Diagnostic[] = [];
 
@@ -270,8 +262,8 @@ export function checkNoEmptyUrl(
         length,
         "Link has empty URL",
         "error",
-        "Add a valid URL to the link: [text](https://example.com)"
-      )
+        "Add a valid URL to the link: [text](https://example.com)",
+      ),
     );
   }
 
@@ -283,8 +275,8 @@ export function checkNoEmptyUrl(
         length,
         "Image has empty URL",
         "error",
-        "Add a valid URL to the image: ![alt](image.png)"
-      )
+        "Add a valid URL to the image: ![alt](image.png)",
+      ),
     );
   }
 
@@ -295,7 +287,7 @@ export function checkNoEmptyUrl(
 export function checkNoUndefinedReferences(
   content: string,
   file: string,
-  lineIndex: LineIndex
+  lineIndex: LineIndex,
 ): Diagnostic[] {
   const ctx = new LintContext(file, lineIndex);
 
@@ -321,8 +313,8 @@ export function checkNoUndefinedReferences(
           length,
           `Undefined reference: [${refName}]`,
           "error",
-          `Add a reference definition: [${refName}]: https://example.com`
-        )
+          `Add a reference definition: [${refName}]: https://example.com`,
+        ),
       );
     }
   }
@@ -352,8 +344,8 @@ export function checkNoUndefinedReferences(
           length,
           `Undefined reference: [${refName}]`,
           "error",
-          `Add a reference definition: [${refName}]: https://example.com`
-        )
+          `Add a reference definition: [${refName}]: https://example.com`,
+        ),
       );
     }
   }
@@ -365,12 +357,15 @@ export function checkNoUndefinedReferences(
 export function checkNoEmphasisAsHeading(
   content: string,
   file: string,
-  lineIndex: LineIndex
+  lineIndex: LineIndex,
 ): Diagnostic[] {
   const ctx = new LintContext(file, lineIndex);
   const diagnostics: Diagnostic[] = [];
 
-  for (const { match, offset, length } of ctx.scan(content, STRUCTURAL_PATTERNS.emphasisAsHeading)) {
+  for (const { match, offset, length } of ctx.scan(
+    content,
+    STRUCTURAL_PATTERNS.emphasisAsHeading,
+  )) {
     const text = match[0].replace(/\*+/g, "").trim();
 
     // Skip if it's inside a list item (preceded by list marker on same line)
@@ -387,7 +382,10 @@ export function checkNoEmphasisAsHeading(
 
     // Check if followed by content (heading-like behavior)
     const afterMatch = content.slice(offset + length);
-    const nextNonEmptyLine = afterMatch.split("\n").slice(1).find((line) => line.trim().length > 0);
+    const nextNonEmptyLine = afterMatch
+      .split("\n")
+      .slice(1)
+      .find((line) => line.trim().length > 0);
     // If followed by blank line then content, it's likely being used as a heading
     const isHeadingLike = nextNonEmptyLine && !nextNonEmptyLine.startsWith("#");
 
@@ -403,8 +401,8 @@ export function checkNoEmphasisAsHeading(
         "Don't use emphasis (bold) as a heading",
         "warning",
         `Use proper heading syntax: ## ${text}`,
-        { start: offset, end: offset + length, text: `## ${text}` }
-      )
+        { start: offset, end: offset + length, text: `## ${text}` },
+      ),
     );
   }
 
@@ -412,18 +410,22 @@ export function checkNoEmphasisAsHeading(
 }
 
 // FAQ-style question word patterns (allow ? for these headings)
-const QUESTION_WORDS = /^(what|why|how|when|where|who|which|can|should|is|are|do|does|will|would|have|has)\b/i;
+const QUESTION_WORDS =
+  /^(what|why|how|when|where|who|which|can|should|is|are|do|does|will|would|have|has)\b/i;
 
 /** Check for headings ending in punctuation */
 export function checkNoHeadingPunctuation(
   content: string,
   file: string,
-  lineIndex: LineIndex
+  lineIndex: LineIndex,
 ): Diagnostic[] {
   const ctx = new LintContext(file, lineIndex);
   const diagnostics: Diagnostic[] = [];
 
-  for (const { match, offset, length } of ctx.scan(content, STRUCTURAL_PATTERNS.headingWithPunctuation)) {
+  for (const { match, offset, length } of ctx.scan(
+    content,
+    STRUCTURAL_PATTERNS.headingWithPunctuation,
+  )) {
     const headingText = match[2] ?? "";
     const lastChar = headingText.slice(-1);
 
@@ -444,8 +446,8 @@ export function checkNoHeadingPunctuation(
           start: offset,
           end: offset + length,
           text: match[0].slice(0, -1).trimEnd(),
-        }
-      )
+        },
+      ),
     );
   }
 
@@ -456,7 +458,7 @@ export function checkNoHeadingPunctuation(
 export function checkNoShellDollars(
   content: string,
   file: string,
-  lineIndex: LineIndex
+  lineIndex: LineIndex,
 ): Diagnostic[] {
   const ctx = new LintContext(file, lineIndex);
   const diagnostics: Diagnostic[] = [];
@@ -487,8 +489,8 @@ export function checkNoShellDollars(
               start: dollarOffset,
               end: dollarOffset + dollarLength,
               text: "",
-            }
-          )
+            },
+          ),
         );
       }
       lineOffset += line.length + 1; // +1 for newline
@@ -503,10 +505,8 @@ export function checkNoShellDollars(
 // ============================================================================
 
 // Severity helpers
-const isEnabledA11y = (sev: A11yOptions["severities"], rule: A11yRuleName) =>
-  sev?.[rule] !== "off";
-const isEnabledLint = (sev: LintOptions["severities"], rule: LintRuleName) =>
-  sev?.[rule] !== "off";
+const isEnabledA11y = (sev: A11yOptions["severities"], rule: A11yRuleName) => sev?.[rule] !== "off";
+const isEnabledLint = (sev: LintOptions["severities"], rule: LintRuleName) => sev?.[rule] !== "off";
 
 const applySeverity = (sev: LintOptions["severities"], d: Diagnostic): Diagnostic => {
   const override = sev?.[d.rule as LintRuleName];
@@ -562,9 +562,18 @@ export function lintStructural(content: string, file: string, options?: LintOpti
 
   const checks: [boolean, () => Diagnostic[]][] = [
     [isEnabledLint(sev, "noEmptyUrl"), () => checkNoEmptyUrl(content, file, lineIndex)],
-    [isEnabledLint(sev, "noUndefinedReferences"), () => checkNoUndefinedReferences(content, file, lineIndex)],
-    [isEnabledLint(sev, "noEmphasisAsHeading"), () => checkNoEmphasisAsHeading(content, file, lineIndex)],
-    [isEnabledLint(sev, "noHeadingPunctuation"), () => checkNoHeadingPunctuation(content, file, lineIndex)],
+    [
+      isEnabledLint(sev, "noUndefinedReferences"),
+      () => checkNoUndefinedReferences(content, file, lineIndex),
+    ],
+    [
+      isEnabledLint(sev, "noEmphasisAsHeading"),
+      () => checkNoEmphasisAsHeading(content, file, lineIndex),
+    ],
+    [
+      isEnabledLint(sev, "noHeadingPunctuation"),
+      () => checkNoHeadingPunctuation(content, file, lineIndex),
+    ],
     [isEnabledLint(sev, "noShellDollars"), () => checkNoShellDollars(content, file, lineIndex)],
   ];
 
