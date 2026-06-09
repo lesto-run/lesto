@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
-import { nodeStaticReader, RuntimeError } from "../src/index";
+import { nodeStaticReader } from "../src/index";
 
 describe("nodeStaticReader", () => {
   let root: string;
@@ -40,12 +40,16 @@ describe("nodeStaticReader", () => {
     });
   });
 
-  it("does not let a sibling directory masquerade as being under the root", async () => {
-    // `root` is `.../keel-static-XXXX`; `keel-static-XXXXevil` shares a prefix
-    // but is not a child — the separator check must reject it.
+  it("does not let a same-prefix sibling masquerade as being under the root", async () => {
+    // `root` is `.../keel-static-XXXX`; its sibling `.../keel-static-XXXXevil`
+    // shares the entire root string as a prefix. Only the trailing-separator
+    // check distinguishes them — a naive `startsWith(root)` (without `+ sep`)
+    // would wrongly accept this path, so this test pins that exact guarantee.
     const read = nodeStaticReader(root);
 
-    await expect(read("../evil/secret.html")).rejects.toBeInstanceOf(RuntimeError);
+    await expect(read(`../${basename(root)}evil/secret.html`)).rejects.toMatchObject({
+      code: "RUNTIME_STATIC_PATH_TRAVERSAL",
+    });
   });
 
   it("rethrows a non-missing filesystem error rather than swallowing it", async () => {

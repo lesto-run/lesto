@@ -14,7 +14,7 @@ import type { Server, ServeOptions } from "@keel/runtime";
 
 import type { OutputSink, Site } from "@keel/sites";
 
-import { CliError, parsePort, run } from "../src/index";
+import { CliError, parsePort, parseStringFlag, run } from "../src/index";
 import type { CliDeps } from "../src/index";
 
 // --- A real-enough app, built over an in-memory better-sqlite3 adapter. ---
@@ -503,5 +503,25 @@ describe("parsePort", () => {
 
   it("falls back when the value is not a number", () => {
     expect(parsePort(["--port", "abc"], 3000)).toEqual({ port: 3000 });
+  });
+});
+
+describe("parseStringFlag", () => {
+  it("reads the token after the flag", () => {
+    expect(parseStringFlag(["--target", "docs"], "target")).toBe("docs");
+  });
+
+  it("is undefined when the flag is absent", () => {
+    expect(parseStringFlag(["--out", "dist"], "target")).toBeUndefined();
+  });
+
+  it("is undefined when the flag is the last token", () => {
+    expect(parseStringFlag(["--target"], "target")).toBeUndefined();
+  });
+
+  it("takes the immediately-following token verbatim, even if it looks like a flag", () => {
+    // Documented semantics: the value is whatever follows the flag. The command
+    // then validates it (e.g. an unknown --target name is a clear error).
+    expect(parseStringFlag(["--target", "--out"], "target")).toBe("--out");
   });
 });
