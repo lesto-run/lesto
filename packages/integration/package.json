@@ -1,0 +1,24 @@
+{
+  "name": "@keel/integration",
+  "version": "0.0.0",
+  "description": "Keel's built-in integration & E2E suite — boots the real stack over a real socket and exercises the seams unit tests mock.",
+  "type": "module",
+  "private": true,
+
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint test",
+    "format": "oxfmt test",
+    "format:check": "oxfmt --check test"
+  },
+
+  "dependencies": {
+    "@keel/kernel": "workspace:*",
+    "@keel/migrate": "workspace:*",
+    "@keel/router": "workspace:*",
+    "@keel/runtime": "workspace:*",
+    "@keel/web": "workspace:*",
+    "better-sqlite3": "^11.10.0"
+  }
+}
