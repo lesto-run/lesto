@@ -18,6 +18,7 @@
     "@keel/migrate": "workspace:*",
     "@keel/router": "workspace:*",
     "@keel/runtime": "workspace:*",
+    "@keel/sites": "workspace:*",
     "@keel/web": "workspace:*",
     "better-sqlite3": "^11.10.0"
   }
