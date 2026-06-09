@@ -87,6 +87,30 @@ describe("defineSites", () => {
       expect((error as SitesError).details["basePath"]).toBe("mls");
     }
   });
+
+  it("rejects two sites mounted at the same basePath", () => {
+    try {
+      defineSites([
+        { name: "a", render: "dynamic", basePath: "/app" },
+        { name: "b", render: "dynamic", basePath: "/app" },
+      ]);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as SitesError).code).toBe("SITES_DUPLICATE_BASE_PATH");
+      expect((error as SitesError).details["basePath"]).toBe("/app");
+    }
+  });
+
+  it("treats a trailing-slash basePath as the same mount (normalized)", () => {
+    // `/app` and `/app/` are the same zone — the trailing slash must not slip a
+    // second site past the collision guard.
+    expect(() =>
+      defineSites([
+        { name: "a", render: "dynamic", basePath: "/app" },
+        { name: "b", render: "dynamic", basePath: "/app/" },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: "SITES_DUPLICATE_BASE_PATH" }));
+  });
 });
 
 describe("prerenderSite", () => {

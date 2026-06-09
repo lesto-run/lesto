@@ -8,6 +8,8 @@ export type SitesErrorCode =
   | "SITES_DUPLICATE_NAME"
   /** A site's `basePath` does not start with `/`. */
   | "SITES_INVALID_BASE_PATH"
+  /** Two sites are mounted at the same `basePath` — routing would be ambiguous. */
+  | "SITES_DUPLICATE_BASE_PATH"
   /** A page would be written outside its output root (path traversal). */
   | "SITES_PATH_ESCAPE"
   /** A static build hit a page the app could not render (a non-2xx status). */
