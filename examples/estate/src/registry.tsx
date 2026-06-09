@@ -103,15 +103,20 @@ export const registry = new Registry()
     props: {
       signedIn: { type: "boolean", required: true },
       name: { type: "string" },
+      // The CSRF token for this form's POST, minted server-side and bound to
+      // the session (sign-out) or the anon id (sign-in). Verified on submit.
+      csrf: { type: "string", required: true },
     },
     children: false,
     render: (props) =>
       props["signedIn"] === true ? (
         <form className="auth" method="post" action="/mls/api/sign-out">
+          <input type="hidden" name="_csrf" value={String(props["csrf"])} />
           <span>Signed in as {String(props["name"])}</span> <button type="submit">Sign out</button>
         </form>
       ) : (
         <form className="auth" method="post" action="/mls/api/sign-in">
+          <input type="hidden" name="_csrf" value={String(props["csrf"])} />
           <button type="submit">Sign in (demo)</button>
         </form>
       ),

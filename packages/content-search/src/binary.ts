@@ -105,12 +105,14 @@ interface CompactBinaryEntry {
   c: string;
   t: string;
   n: string;
-  e: string;
+  /** full embedding (base64 float32) — present in v2, omitted in v3 binary-only */
+  e?: string;
   b: string;
 }
 
 interface CompactBinaryIndex {
-  v: 2;
+  /** 2 = full + binary (rerankable); 3 = binary-only (no full embeddings) */
+  v: 2 | 3;
   m: string;
   d: number;
   b: string;
@@ -145,7 +147,8 @@ function isCompactBinaryIndex(data: unknown): data is CompactBinaryIndex {
   if (typeof data !== "object" || data === null) return false;
   const obj = data as Record<string, unknown>;
   return (
-    obj["v"] === 2 &&
+    // v2 carries full embeddings (rerankable); v3 is binary-only.
+    (obj["v"] === 2 || obj["v"] === 3) &&
     typeof obj["m"] === "string" &&
     typeof obj["d"] === "number" &&
     typeof obj["b"] === "string" &&
@@ -182,7 +185,11 @@ export function parseBinaryIndex(json: string): BinarySearchIndex {
       collection: entry.c,
       title: entry.t,
       snippet: entry.n,
-      embedding: decodeEmbedding(entry.e),
+      // v3 (binary-only) carries no full embedding; only Hamming search is
+      // possible, so leave it empty rather than fabricate values. hybridSearch
+      // reranks via cosineSimilarity and will score these 0 — callers using a
+      // binary-only index should use binarySearch, not hybridSearch.
+      embedding: entry.e !== undefined ? decodeEmbedding(entry.e) : [],
       binaryEmbedding: decodeBytes(entry.b),
     })),
     dimensions: parsed.d,

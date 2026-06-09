@@ -140,6 +140,33 @@ describe("hash utilities", () => {
 
       expect(hash).toBeTruthy();
     });
+
+    it("differs when a NESTED value changes (cache must bust on nested edits)", async () => {
+      // Regression: JSON.stringify(obj, Object.keys(obj).toSorted()) treats the
+      // array as a property allowlist applied at every depth, collapsing every
+      // nested object to {} — so these two distinct schemas used to hash equal.
+      const schemaA = { schema: { fields: { title: "string", body: "number" } } };
+      const schemaB = { schema: { fields: { title: "string", body: "boolean" } } };
+
+      const hashA = await hashObject(schemaA);
+      const hashB = await hashObject(schemaB);
+
+      expect(hashA).not.toBe(hashB);
+    });
+
+    it("differs when a deeply nested value changes", async () => {
+      const a = { level1: { level2: { level3: "before" } } };
+      const b = { level1: { level2: { level3: "after" } } };
+
+      expect(await hashObject(a)).not.toBe(await hashObject(b));
+    });
+
+    it("is stable across nested key ordering", async () => {
+      const a = { outer: { a: 1, b: 2 }, list: [{ x: 1, y: 2 }] };
+      const b = { list: [{ y: 2, x: 1 }], outer: { b: 2, a: 1 } };
+
+      expect(await hashObject(a)).toBe(await hashObject(b));
+    });
   });
 
   describe("hashFunction", () => {
@@ -263,6 +290,15 @@ describe("hash utilities", () => {
       const hash2 = hasher.hashObject(obj2);
 
       expect(hash1).toBe(hash2);
+    });
+
+    it("hashObject differs when a nested value changes", async () => {
+      await initHasher();
+      const hasher = createSyncHasher();
+      const a = { schema: { fields: { body: "number" } } };
+      const b = { schema: { fields: { body: "boolean" } } };
+
+      expect(hasher.hashObject(a)).not.toBe(hasher.hashObject(b));
     });
   });
 });

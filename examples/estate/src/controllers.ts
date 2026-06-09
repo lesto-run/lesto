@@ -18,15 +18,45 @@ import { registry } from "./registry";
 import { renderDocument } from "./document";
 import { LISTINGS, formatPrice } from "./listings";
 import {
+  CSRF_FIELD,
   SESSION_COOKIE,
   clearCookie,
+  csrfTokenForAnon,
+  csrfTokenForSession,
   readCookie,
   sessionCookie,
   signIn,
   signOut,
   userForToken,
+  verifyCsrfForAnon,
+  verifyCsrfForSession,
 } from "./auth";
 import type { User } from "./auth";
+
+/**
+ * Demo-only impersonation: `?as=<id>` lets the sign-in form pick which seeded
+ * user to become. It is an EXAMPLE affordance with no password — gated so it
+ * can never ship to production. Enabled only outside production, or when
+ * `KEEL_DEMO_AUTH` is explicitly set. Off by default in production.
+ */
+function demoImpersonationEnabled(): boolean {
+  if (process.env["KEEL_DEMO_AUTH"] === "1") return true;
+
+  return process.env["NODE_ENV"] !== "production";
+}
+
+/**
+ * Pull a single field out of a urlencoded form body.
+ *
+ * The runtime hands a non-JSON body through as the raw string, so a form POST
+ * arrives as `"_csrf=abc&as=jade"`. Returns `undefined` when the body is not a
+ * string or the field is absent — callers treat that as "field not supplied".
+ */
+function formField(body: unknown, field: string): string | undefined {
+  if (typeof body !== "string") return undefined;
+
+  return new URLSearchParams(body).get(field) ?? undefined;
+}
 
 /** The site header, carrying the account control passed in (island or panel). */
 function header(accountSlot: UiNode): UiNode {
@@ -95,23 +125,34 @@ export class MarketingController extends Controller {
 }
 
 export class MlsController extends Controller {
+  /** The raw session token on the request, or `undefined` when none is set. */
+  private sessionToken(): string | undefined {
+    return readCookie(this.request.headers["cookie"], SESSION_COOKIE);
+  }
+
   /** The current user, read from the session cookie on the request. */
   private currentUser(): User | undefined {
-    const token = readCookie(this.request.headers["cookie"], SESSION_COOKIE);
-
-    return userForToken(token);
+    return userForToken(this.sessionToken());
   }
 
   /** The dynamic MLS landing page: server-rendered, with a real sign-in form. */
   index(): KeelResponse {
-    const user = this.currentUser();
+    const token = this.sessionToken();
+    const user = userForToken(token);
+
+    // Mint the CSRF token for whichever form we render: bound to the session
+    // for sign-out, or to the anon id for the signed-out sign-in form.
+    const csrf =
+      user !== undefined && token !== undefined
+        ? csrfTokenForSession(token)
+        : csrfTokenForAnon();
 
     const tree: UiNode = {
       type: "Page",
       children: [
         header({
           type: "SignInPanel",
-          props: { signedIn: user !== undefined, ...(user && { name: user.name }) },
+          props: { signedIn: user !== undefined, csrf, ...(user && { name: user.name }) },
         }),
         {
           type: "Hero",
@@ -139,9 +180,26 @@ export class MlsController extends Controller {
     return this.json({ user });
   }
 
-  /** Demo sign-in: mint a session for `?as=<id>` (default jade) and set the cookie. */
+  /**
+   * Demo sign-in: mint a session and set the cookie.
+   *
+   * CSRF-guarded: the POST must carry the anon-bound token the sign-in form
+   * embedded, or it is rejected. The `?as=<id>` impersonation that picks which
+   * seeded user to become is DEMO-ONLY and fenced off in production.
+   */
   signIn(): KeelResponse {
-    const session = signIn(this.request.query["as"] ?? "jade");
+    const token = formField(this.request.body, CSRF_FIELD);
+
+    if (token === undefined || !verifyCsrfForAnon(token)) {
+      return this.json({ error: "invalid CSRF token" }, 403);
+    }
+
+    // DEMO-ONLY: choose the seeded user to become. Ignored in production, where
+    // the affordance is fenced off, so a real deploy always signs in as `jade`.
+    const requestedId = this.request.query["as"];
+    const userId = demoImpersonationEnabled() ? (requestedId ?? "jade") : "jade";
+
+    const session = signIn(userId);
 
     return {
       status: 303,
@@ -150,9 +208,26 @@ export class MlsController extends Controller {
     };
   }
 
-  /** Sign out: revoke the session and clear the cookie. */
+  /**
+   * Sign out: revoke the session and clear the cookie.
+   *
+   * CSRF-guarded: the POST must carry the session-bound token the sign-out form
+   * embedded. A forged cross-site POST cannot present a token that verifies
+   * against this session, so it cannot silently sign the user out.
+   */
   signOut(): KeelResponse {
-    signOut(readCookie(this.request.headers["cookie"], SESSION_COOKIE));
+    const sessionToken = this.sessionToken();
+    const csrf = formField(this.request.body, CSRF_FIELD);
+
+    if (
+      sessionToken === undefined ||
+      csrf === undefined ||
+      !verifyCsrfForSession(csrf, sessionToken)
+    ) {
+      return this.json({ error: "invalid CSRF token" }, 403);
+    }
+
+    signOut(sessionToken);
 
     return {
       status: 303,

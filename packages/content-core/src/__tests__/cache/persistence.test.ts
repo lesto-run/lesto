@@ -269,9 +269,12 @@ describe("collection staleness", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("preserves cache when schema appears unchanged (zod limitation)", async () => {
-    // Note: Zod schemas serialize to {} so schema changes aren't detected
-    // This is a known limitation - use clearCache option if schema changes
+  it("invalidates cache when the schema changes (nested shape is hashed)", async () => {
+    // Regression for the hashObject replacer-array bug: schema hashing used to
+    // collapse every nested object to {} (JSON.stringify's array second-arg is
+    // a property allowlist applied at all depths), so a Zod schema gaining a
+    // field produced an identical hash and the parse cache went stale. The hash
+    // now walks the full nested structure, so a schema change busts the cache.
     const collection1 = createCollection({
       schema: z.object({ title: z.string() }),
     });
@@ -304,9 +307,9 @@ describe("collection staleness", () => {
     manager = await createCacheManager(tempDir, [collection2]);
     await manager.init();
 
-    // Schema change not detected due to zod serialization
+    // Schema change IS detected now: the cached entry is treated as a miss.
     const retrieved = manager.getParseCache("posts", "test.md", "hash");
-    expect(retrieved).toEqual(parseResult);
+    expect(retrieved).toBeNull();
   });
 
   it("invalidates cache when transform function changes", async () => {

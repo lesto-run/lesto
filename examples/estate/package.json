@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@keel/auth": "workspace:*",
+    "@keel/csrf": "workspace:*",
     "@keel/runtime": "workspace:*",
     "@keel/sites": "workspace:*",
     "@keel/ui": "workspace:*",

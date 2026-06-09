@@ -839,13 +839,77 @@ const HTTP_TOOL_HANDLERS: Record<string, HttpToolHandler> = {
     ),
 };
 
+// Every tool this server exposes, indexed by name, so we can validate incoming
+// arguments against the same JSON Schema we advertise to the client.
+export const ALL_TOOLS: Record<string, Tool> = Object.fromEntries(
+  [...CONTENT_TOOLS, ...VOICE_TOOLS, ...VOICE_AI_TOOLS, AI_STATUS_TOOL, ...QUALITY_TOOLS].map(
+    (tool) => [tool.name, tool],
+  ),
+);
+
+/**
+ * Validate request arguments against a tool's declared input schema.
+ *
+ * WHY: handlers previously cast `args` straight to their expected shape, so a
+ * missing required field or a wrong-typed value (e.g. `query` as a number)
+ * surfaced only as an opaque downstream TypeError, or sent garbage to the
+ * Studio API. We check required presence and primitive types up front and
+ * return a clear message the model can act on. Returns null when args are valid.
+ */
+export function validateToolArgs(tool: Tool, args: Record<string, unknown>): string | null {
+  const schema = tool.inputSchema as McpInputSchema;
+  const properties = schema.properties ?? {};
+  const required = schema.required ?? [];
+
+  for (const field of required) {
+    if (args[field] === undefined || args[field] === null) {
+      return `Missing required argument "${field}" for tool "${tool.name}".`;
+    }
+  }
+
+  for (const [field, value] of Object.entries(args)) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+
+    const declaredType = properties[field]?.type;
+    const expected = Array.isArray(declaredType)
+      ? declaredType
+      : declaredType
+        ? [declaredType]
+        : [];
+    if (expected.length === 0) {
+      continue;
+    }
+
+    const actual = Array.isArray(value) ? "array" : typeof value;
+    if (!expected.includes(actual)) {
+      return `Argument "${field}" for tool "${tool.name}" must be of type ${expected.join(" | ")}, received ${actual}.`;
+    }
+  }
+
+  return null;
+}
+
 async function handleToolCall(
   client: McpClient,
   name: string,
   args: Record<string, unknown>,
 ): Promise<string> {
   const handler = HTTP_TOOL_HANDLERS[name];
-  return handler ? handler(client, args) : `Unknown tool: ${name}`;
+  if (!handler) {
+    return `Unknown tool: ${name}`;
+  }
+
+  const tool = ALL_TOOLS[name];
+  if (tool) {
+    const validationError = validateToolArgs(tool, args);
+    if (validationError) {
+      return `Error: ${validationError}`;
+    }
+  }
+
+  return handler(client, args);
 }
 
 export async function createMcpHttpServer(options: McpHttpServerOptions = {}): Promise<Server> {

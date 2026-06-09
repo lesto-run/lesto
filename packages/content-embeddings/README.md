@@ -13,10 +13,12 @@ npm install @keel/content-embeddings
 ```typescript
 import { generateEmbeddings, serializeSearchIndex } from "@keel/content-embeddings";
 
-// Generate embeddings for your content
+// Generate embeddings for your content.
+// Each entry needs id, slug, and collection; title/content are optional and
+// are what gets embedded.
 const entries = [
-  { id: "post-1", text: "Getting started with Docks" },
-  { id: "post-2", text: "Advanced patterns and techniques" },
+  { id: "post-1", slug: "getting-started", collection: "blog", title: "Getting started with Docks" },
+  { id: "post-2", slug: "advanced-patterns", collection: "blog", title: "Advanced patterns and techniques" },
 ];
 
 const results = await generateEmbeddings(entries);
@@ -37,9 +39,10 @@ await Bun.write("public/search-index.json", index);
 
 ```typescript
 const results = await generateEmbeddings(entries, {
-  batchSize: 50, // Process in batches
-  onProgress: (done, total) => {
-    console.log(`${done}/${total} entries processed`);
+  maxTextLength: 8192, // Truncate long content before embedding
+  snippetLength: 200, // Snippet length stored for result display
+  onProgress: ({ current, total, entry }) => {
+    console.log(`${current}/${total} processed (${entry})`);
   },
 });
 ```

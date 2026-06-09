@@ -12,9 +12,37 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { renderPage } from "@keel/ui";
 import type { Registry, UiNode } from "@keel/ui";
 
-/** Escape `<` so the manifest JSON can never break out of its script tag. */
+// The two JS line terminators that are valid JSON but break a <script> body.
+// Built via escape codes so no raw separator char ever appears in this source
+// (a raw U+2028 in a regex literal is itself an unterminated-regex syntax error).
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
+
+/**
+ * Serialize a value to JSON safe to embed inside a `<script>` element.
+ *
+ * `<`/`>`/`&` are escaped so the JSON can never spell `</script>` (or an HTML
+ * entity) and break out of the tag. U+2028/U+2029 are *valid* JSON but are raw
+ * line terminators in JavaScript source — left unescaped they truncate the
+ * script and corrupt the manifest. Mirrors content-shared's `serializeJsonLd`.
+ */
 function safeJson(value: unknown): string {
-  return JSON.stringify(value).replaceAll("<", "\\u003c");
+  return JSON.stringify(value)
+    .replaceAll("<", "\\u003c")
+    .replaceAll(">", "\\u003e")
+    .replaceAll("&", "\\u0026")
+    .replaceAll(LINE_SEPARATOR, "\\u2028")
+    .replaceAll(PARAGRAPH_SEPARATOR, "\\u2029");
+}
+
+/** Escape a string for safe interpolation into HTML text/element content. */
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 const STYLE = `
@@ -39,13 +67,15 @@ export function renderDocument(registry: Registry, tree: UiNode, title: string):
 
   const body = page.element === null ? "" : renderToStaticMarkup(page.element);
 
+  // The title is attacker-influenceable (a controller may build it from a
+  // user-facing name), so it is HTML-escaped before it lands in <title>.
   return [
     "<!doctype html>",
     '<html lang="en">',
     "<head>",
     '<meta charset="utf-8" />',
     '<meta name="viewport" content="width=device-width, initial-scale=1" />',
-    `<title>${title}</title>`,
+    `<title>${escapeHtml(title)}</title>`,
     `<style>${STYLE}</style>`,
     "</head>",
     "<body>",

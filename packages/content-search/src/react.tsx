@@ -12,6 +12,13 @@ import { createCache, CACHE_LIMITS, CACHE_TTL } from "@keel/content-shared/cache
 import { binaryQuantize, hammingDistance, hammingToSimilarity } from "./binary";
 import { createQueryProcessor, type QueryProcessor } from "./query-intelligence";
 import { shouldFallbackToRAG, RAGClient, mergeResults } from "./rag-fallback";
+import {
+  loadIndex,
+  loadTier0Index,
+  loadTier1Index,
+  type LoadedEntry,
+  type LoadedIndex,
+} from "./load-index";
 import type { ProcessedQuery } from "./types";
 import type { SearchResult } from "./types";
 
@@ -53,241 +60,6 @@ export interface UseSearchReturn {
   hasRagResults: boolean;
   resultSource: "local" | "rag" | "hybrid";
   ragAnswer: string | undefined;
-}
-
-// ============================================================================
-// Index Types
-// ============================================================================
-
-interface CompactEntry {
-  i: string;
-  s: string;
-  c: string;
-  t: string;
-  n: string;
-  e: string;
-  b?: string;
-}
-
-interface IndexV1 {
-  v: 1;
-  d: number;
-  m: string;
-  b: string;
-  e: CompactEntry[];
-}
-
-interface CompactTier0 {
-  v: 0;
-  b: string;
-  e: Array<{
-    i: string;
-    s: string;
-    c: string;
-    t: string;
-    n: string;
-    k: string[];
-  }>;
-}
-
-interface CompactTier1 {
-  v: 1;
-  m: string;
-  d: number;
-  b: string;
-  bs: number;
-  e: Array<{
-    i: string;
-    s: string;
-    c: string;
-    t: string;
-    n: string;
-    be: string;
-  }>;
-}
-
-interface LoadedEntry {
-  id: string;
-  slug: string;
-  collection: string;
-  title: string;
-  snippet: string;
-  keywords?: string[];
-  embedding?: number[];
-  binaryEmbedding?: Uint8Array;
-}
-
-interface LoadedIndex {
-  entries: LoadedEntry[];
-  dimensions: number;
-  model: string;
-  hasBinaryEmbeddings: boolean;
-  hasKeywords: boolean;
-  tier: 0 | 1 | "full";
-}
-
-// ============================================================================
-// Index Loading
-// ============================================================================
-
-// Use shared LRU cache for search indexes (memory-heavy, limited to 10)
-const indexCache = createCache<Promise<LoadedIndex>>({
-  max: CACHE_LIMITS.SEARCH_INDEX,
-  ttl: CACHE_TTL.LONG,
-});
-
-function decodeFloat32(encoded: string): number[] {
-  const binaryString = atob(encoded);
-  const bytes = Uint8Array.from(binaryString, (c) => c.charCodeAt(0));
-  const alignedBuffer = new ArrayBuffer(bytes.length);
-  new Uint8Array(alignedBuffer).set(bytes);
-  return Array.from(new Float32Array(alignedBuffer));
-}
-
-function decodeUint8(encoded: string): Uint8Array {
-  const binaryString = atob(encoded);
-  return Uint8Array.from(binaryString, (c) => c.charCodeAt(0));
-}
-
-async function loadTier0Index(tier0Path: string): Promise<LoadedIndex> {
-  const response = await fetch(tier0Path);
-  if (!response.ok) {
-    throw new Error(`Failed to load Tier 0 index: ${response.status}`);
-  }
-
-  const data = (await response.json()) as CompactTier0;
-
-  if (data.v !== 0) {
-    throw new Error(`Unsupported Tier 0 index version: ${data.v}`);
-  }
-
-  const entries: LoadedEntry[] = data.e.map((e) => ({
-    id: e.i,
-    slug: e.s,
-    collection: e.c,
-    title: e.t,
-    snippet: e.n,
-    keywords: e.k,
-  }));
-
-  return {
-    entries,
-    dimensions: 384,
-    model: "unknown",
-    hasBinaryEmbeddings: false,
-    hasKeywords: true,
-    tier: 0,
-  };
-}
-
-async function loadTier1Index(
-  tier1Path: string,
-  existingEntries: LoadedEntry[],
-): Promise<LoadedIndex> {
-  const response = await fetch(tier1Path);
-  if (!response.ok) {
-    throw new Error(`Failed to load Tier 1 index: ${response.status}`);
-  }
-
-  const data = (await response.json()) as CompactTier1;
-
-  if (data.v !== 1) {
-    throw new Error(`Unsupported Tier 1 index version: ${data.v}`);
-  }
-
-  const entryMap = new Map(existingEntries.map((e) => [e.id, e]));
-
-  for (const e of data.e) {
-    const existing = entryMap.get(e.i);
-    if (existing) {
-      existing.binaryEmbedding = decodeUint8(e.be);
-    } else {
-      entryMap.set(e.i, {
-        id: e.i,
-        slug: e.s,
-        collection: e.c,
-        title: e.t,
-        snippet: e.n,
-        binaryEmbedding: decodeUint8(e.be),
-      });
-    }
-  }
-
-  return {
-    entries: Array.from(entryMap.values()),
-    dimensions: data.d,
-    model: data.m,
-    hasBinaryEmbeddings: true,
-    hasKeywords: existingEntries.some((e) => e.keywords),
-    tier: 1,
-  };
-}
-
-async function loadIndex(indexPath: string): Promise<LoadedIndex> {
-  const cached = indexCache.get(indexPath);
-  if (cached) return cached;
-
-  const promise = (async () => {
-    const response = await fetch(indexPath);
-    if (!response.ok) {
-      indexCache.delete(indexPath);
-      throw new Error(`Failed to load search index: ${response.status}`);
-    }
-
-    const json: unknown = await response.json();
-
-    if (
-      json &&
-      typeof json === "object" &&
-      "v" in json &&
-      (json as Record<string, unknown>)["v"] === 1
-    ) {
-      const data = json as IndexV1;
-      const hasBinary = data.e.some((e) => e.b);
-
-      const entries: LoadedEntry[] = data.e.map((e) => {
-        const entry: LoadedEntry = {
-          id: e.i,
-          slug: e.s,
-          collection: e.c,
-          title: e.t,
-          snippet: e.n,
-        };
-
-        if (e.b) {
-          entry.binaryEmbedding = decodeUint8(e.b);
-        } else if (e.e) {
-          entry.embedding = decodeFloat32(e.e);
-          entry.binaryEmbedding = binaryQuantize(entry.embedding);
-        }
-
-        return entry;
-      });
-
-      return {
-        entries,
-        dimensions: data.d,
-        model: data.m,
-        hasBinaryEmbeddings: hasBinary || entries.some((e) => e.binaryEmbedding),
-        hasKeywords: false,
-        tier: "full" as const,
-      };
-    }
-
-    const rawData = json as Record<string, unknown>;
-    return {
-      entries: (rawData["entries"] as LoadedEntry[]) || [],
-      dimensions: (rawData["dimensions"] as number) || 384,
-      model: (rawData["model"] as string) || "unknown",
-      hasBinaryEmbeddings: false,
-      hasKeywords: false,
-      tier: "full" as const,
-    };
-  })();
-
-  // LRU cache handles eviction automatically
-  indexCache.set(indexPath, promise);
-  return promise;
 }
 
 // ============================================================================
@@ -505,12 +277,35 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
   }, [ragFallback, ragEndpoint]);
 
   useEffect(() => {
-    queryProcessorRef.current = createQueryProcessor({
+    const processor = createQueryProcessor({
       maxTypoDistance: typoTolerance ? 2 : 0,
       enableStemming: stemming,
       ...(synonyms && { customSynonyms: synonyms }),
     });
+
+    // Typo correction is a no-op until the processor has a vocabulary to match
+    // against (correctWord early-returns when bkTree is null). If an index is
+    // already loaded, seed it now; otherwise the index-load effect seeds it.
+    if (typoTolerance && indexRef.current) {
+      processor.buildVocabulary(
+        indexRef.current.entries.map((e) => ({ title: e.title, content: e.snippet })),
+      );
+    }
+
+    queryProcessorRef.current = processor;
   }, [typoTolerance, stemming, synonyms]);
+
+  // Seed the query processor's fuzzy-match vocabulary from a loaded index so
+  // typoTolerance actually corrects typos (correctWord no-ops without it).
+  const seedVocabulary = useCallback(
+    (index: LoadedIndex) => {
+      if (!typoTolerance) return;
+      queryProcessorRef.current?.buildVocabulary(
+        index.entries.map((e) => ({ title: e.title, content: e.snippet })),
+      );
+    },
+    [typoTolerance],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -526,11 +321,14 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
           setTier(0);
           setIsReady(true);
 
+          seedVocabulary(tier0Index);
+
           return loadTier1Index(tier1Path, tier0Index.entries)
             .then((tier1Index) => {
               indexRef.current = tier1Index;
               setTier(1);
               setHasBinarySearch(true);
+              seedVocabulary(tier1Index);
               return tier1Index;
             })
             .catch((err) => {
@@ -546,6 +344,7 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
               setTier("full");
               setHasBinarySearch(index.hasBinaryEmbeddings);
               setIsReady(true);
+              seedVocabulary(index);
               return index;
             })
             .catch((fallbackErr) => {
@@ -560,13 +359,14 @@ export function useSearch(options: UseSearchOptions = {}): UseSearchReturn {
           setTier("full");
           setHasBinarySearch(index.hasBinaryEmbeddings);
           setIsReady(true);
+          seedVocabulary(index);
           return index;
         })
         .catch((err) => {
           setError(err instanceof Error ? err : new Error(String(err)));
         });
     }
-  }, [indexPath, progressive, progressivePath]);
+  }, [indexPath, progressive, progressivePath, seedVocabulary]);
 
   const performSearch = useCallback(
     async (searchQuery: string) => {

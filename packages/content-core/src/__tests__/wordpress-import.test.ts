@@ -582,4 +582,62 @@ describe("importWordPress", () => {
 
     expect(result.imported).toBe(3);
   });
+
+  it("rejects a traversal slug instead of writing outside the collection dir", async () => {
+    // Hostile WXR: wp:post_name escapes the collection directory.
+    const hostileWxr = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel>
+  <item>
+    <title>Evil</title>
+    <wp:post_name>../../evil</wp:post_name>
+    <wp:status>publish</wp:status>
+    <wp:post_type>post</wp:post_type>
+    <content:encoded><![CDATA[<p>pwned</p>]]></content:encoded>
+  </item>
+</channel>
+</rss>`;
+    await writeFile(path.join(tempDir, "hostile.xml"), hostileWxr);
+
+    const result = await importWordPress({
+      file: "hostile.xml",
+      collection: "posts",
+      cwd: tempDir,
+      directory: postsDir,
+    });
+
+    expect(result.imported).toBe(0);
+    expect(result.files).toHaveLength(0);
+    expect(nn(result.errors[0]).reason).toContain("Unsafe slug");
+
+    // The escaped target must not exist anywhere outside the collection dir.
+    await expect(readFile(path.join(tempDir, "evil.md"), "utf-8")).rejects.toThrow();
+    await expect(readFile(path.join(tempDir, "content", "evil.md"), "utf-8")).rejects.toThrow();
+  });
+
+  it("rejects a slug containing a NUL or path separator", async () => {
+    const hostileWxr = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:wp="http://wordpress.org/export/1.2/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel>
+  <item>
+    <title>Slash</title>
+    <wp:post_name>nested/evil</wp:post_name>
+    <wp:status>publish</wp:status>
+    <wp:post_type>post</wp:post_type>
+    <content:encoded><![CDATA[<p>x</p>]]></content:encoded>
+  </item>
+</channel>
+</rss>`;
+    await writeFile(path.join(tempDir, "slash.xml"), hostileWxr);
+
+    const result = await importWordPress({
+      file: "slash.xml",
+      collection: "posts",
+      cwd: tempDir,
+      directory: postsDir,
+    });
+
+    expect(result.imported).toBe(0);
+    expect(nn(result.errors[0]).reason).toContain("Unsafe slug");
+  });
 });

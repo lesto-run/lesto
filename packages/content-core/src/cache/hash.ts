@@ -25,20 +25,36 @@ export async function hashBuffer(input: Uint8Array): Promise<string> {
   return hasher.h64Raw(input).toString(16).padStart(16, "0");
 }
 
+/**
+ * Deterministically serialize a value with recursively sorted object keys.
+ *
+ * WHY not `JSON.stringify(obj, Object.keys(obj).toSorted())`: passing an array
+ * as the second argument makes it a property ALLOWLIST applied at EVERY nesting
+ * level, not a key sorter. With only the top-level keys allowed, every nested
+ * object collapses to `{}` — so two collections with different nested schemas
+ * hash identically and the parse cache never invalidates on a nested change.
+ * We instead walk the structure ourselves, sorting keys at each level so the
+ * hash reflects the full nested shape while staying stable across key order.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+
+  const record = value as Record<string, unknown>;
+  const entries = Object.keys(record)
+    .toSorted()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
+
+  return `{${entries.join(",")}}`;
+}
+
 export async function hashObject(obj: unknown): Promise<string> {
-  // Handle null, undefined, and primitives
-  if (obj === null || obj === undefined || typeof obj !== "object") {
-    return hashString(JSON.stringify(obj));
-  }
-
-  // Handle arrays - hash them in order
-  if (Array.isArray(obj)) {
-    return hashString(JSON.stringify(obj));
-  }
-
-  // For objects, sort keys for consistent hashing
-  const json = JSON.stringify(obj, Object.keys(obj).toSorted());
-  return hashString(json);
+  return hashString(stableStringify(obj));
 }
 
 export async function hashFunction(fn: Function): Promise<string> {
@@ -61,18 +77,9 @@ export function createSyncHasher(): {
 
   return {
     hash: (input: string) => h.h64ToString(input),
-    hashObject: (obj: unknown) => {
-      // Handle null, undefined, and primitives
-      if (obj === null || obj === undefined || typeof obj !== "object") {
-        return h.h64ToString(JSON.stringify(obj));
-      }
-      // Handle arrays - hash them in order
-      if (Array.isArray(obj)) {
-        return h.h64ToString(JSON.stringify(obj));
-      }
-      // For objects, sort keys for consistent hashing
-      const json = JSON.stringify(obj, Object.keys(obj).toSorted());
-      return h.h64ToString(json);
-    },
+    // Same deterministic, fully-nested serialization as hashObject — see the
+    // note on stableStringify for why the JSON.stringify replacer-array form is
+    // unsafe (it drops nested keys, so the cache never busts on nested changes).
+    hashObject: (obj: unknown) => h.h64ToString(stableStringify(obj)),
   };
 }

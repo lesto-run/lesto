@@ -8,7 +8,33 @@ import { resolveConfig, type ResolvedConfig } from "./config";
 import { createEngine } from "./engine";
 import { stringify } from "@keel/content-umbra";
 import { schemaToJsonSchema } from "./schema-introspector";
-import type { Engine, RuntimeEntry } from "./types";
+import type { CollectionSchema, Engine, RuntimeEntry } from "./types";
+
+/**
+ * Validate frontmatter data against a collection's Standard Schema.
+ *
+ * Returns a human-readable issue list when validation fails, or null when the
+ * data is valid. WHY: create_entry's tool description promises validation, so
+ * we run the same `~standard.validate` path the parser uses before persisting.
+ */
+async function validateAgainstSchema(
+  schema: CollectionSchema,
+  data: unknown,
+): Promise<string | null> {
+  const result = schema["~standard"].validate(data);
+  const resolved = result instanceof Promise ? await result : result;
+
+  if (!resolved.issues) {
+    return null;
+  }
+
+  return resolved.issues
+    .map((issue) => {
+      const issuePath = issue.path?.map(String).join(".") || "root";
+      return `  - ${issuePath}: ${issue.message}`;
+    })
+    .join("\n");
+}
 
 export interface McpServerOptions {
   cwd?: string;
@@ -264,7 +290,7 @@ function handleSearchContent(
   return JSON.stringify(results, null, 2);
 }
 
-async function handleCreateEntry(
+export async function handleCreateEntry(
   engine: Engine,
   config: ResolvedConfig,
   args: { collection: string; slug: string; data: Record<string, unknown>; content?: string },
@@ -295,6 +321,13 @@ async function handleCreateEntry(
     return `Error: Collection "${args.collection}" not found. Available collections: ${available}`;
   }
 
+  // The tool description promises schema validation; actually enforce it so we
+  // never write frontmatter that violates the collection's declared shape.
+  const validationError = await validateAgainstSchema(collectionConfig.schema, args.data);
+  if (validationError) {
+    return `Error: data does not match the "${args.collection}" schema:\n${validationError}`;
+  }
+
   const collectionDir = path.isAbsolute(collectionConfig.directory)
     ? collectionConfig.directory
     : path.join(config.cwd, collectionConfig.directory);
@@ -318,7 +351,7 @@ async function handleCreateEntry(
   }
 }
 
-async function handleUpdateEntry(
+export async function handleUpdateEntry(
   engine: Engine,
   config: ResolvedConfig,
   args: {
@@ -352,11 +385,28 @@ async function handleUpdateEntry(
     return `Error: Invalid file path. Path must be within collection directory.`;
   }
 
-  // Extract schema data from entry (excluding reserved fields)
+  // Extract schema data from entry, excluding reserved/engine-internal fields.
+  //
+  // WHY the explicit set: a RuntimeEntry carries EntryMeta fields ("id",
+  // "collection", "file") spread as own-enumerable keys alongside the user's
+  // frontmatter (see transformer.ts). None of those are "_"-prefixed, so the
+  // old "skip underscore + content/slug/rendered" filter let engine metadata —
+  // including the entire `file` DocumentMeta object — leak into the persisted
+  // frontmatter on every update. Persisting them would also let a later schema
+  // validation choke on fields the author never wrote. Strip them all.
+  const RESERVED_ENTRY_FIELDS = new Set([
+    "content",
+    "slug",
+    "rendered",
+    "id",
+    "collection",
+    "file",
+    "mdx",
+  ]);
   const entryRecord = entry as Record<string, unknown>;
   const existingData: Record<string, unknown> = {};
   for (const key of Object.keys(entryRecord)) {
-    if (!key.startsWith("_") && key !== "content" && key !== "slug" && key !== "rendered") {
+    if (!key.startsWith("_") && !RESERVED_ENTRY_FIELDS.has(key)) {
       existingData[key] = entryRecord[key];
     }
   }

@@ -372,13 +372,76 @@ async function resolveCollectionDirectory(
   return path.join(cwd, collectionConfig.directory);
 }
 
+/**
+ * True when the string contains any ASCII control character (U+0000–U+001F),
+ * including NUL. Checked without embedding control chars in a regex literal.
+ */
+function hasControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0);
+    if (code !== undefined && code <= 0x1f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Reject a WordPress-supplied slug that would escape the collection directory.
+ *
+ * WHY: `wp:post_name` (or a slug derived from a post link) is fully
+ * attacker-controlled in a hostile WXR export. A value like "../../etc/evil",
+ * an absolute path, or one containing NUL/path separators could make the
+ * importer write OUTSIDE the collection dir (arbitrary file write / traversal).
+ * Returns null when the slug is unsafe; the caller records a per-post error
+ * and skips it so one hostile entry never aborts an otherwise valid import.
+ */
+function safeSlugFileName(slug: string): string | null {
+  if (
+    !slug ||
+    slug.includes("..") ||
+    slug.includes("/") ||
+    slug.includes("\\") ||
+    slug.startsWith(".") ||
+    path.isAbsolute(slug) ||
+    // Reserved/illegal filename characters (hyphens are fine — WordPress slugs
+    // use them; "*", ":" etc. are not).
+    /[<>:"|?*]/.test(slug) ||
+    hasControlCharacter(slug)
+  ) {
+    return null;
+  }
+
+  return `${slug}.md`;
+}
+
 async function importSinglePost(
   post: WxrPost,
   collectionDir: string,
   result: ImportResult,
 ): Promise<void> {
-  const fileName = `${post.slug}.md`;
+  const fileName = safeSlugFileName(post.slug);
+
+  if (!fileName) {
+    result.errors.push({
+      title: post.title,
+      reason: `Unsafe slug "${post.slug}": refusing to write outside the collection directory.`,
+    });
+    return;
+  }
+
   const filePath = path.join(collectionDir, fileName);
+
+  // Defense in depth: confirm the resolved path stays within the collection
+  // directory (trailing separator defeats sibling-prefix collisions).
+  const resolvedDir = path.resolve(collectionDir);
+  if (!path.resolve(filePath).startsWith(resolvedDir + path.sep)) {
+    result.errors.push({
+      title: post.title,
+      reason: `Unsafe slug "${post.slug}": resolved path escapes the collection directory.`,
+    });
+    return;
+  }
 
   try {
     await access(filePath);

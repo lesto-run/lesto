@@ -10,14 +10,17 @@ npm install @keel/content-search
 
 ## Quick Start
 
+`createSearch` takes the index URL as a string and resolves to a client. The
+client queries by embedding vector (this package is embedding-free at runtime —
+generate the query embedding with `@keel/content-embeddings` or an embed API):
+
 ```typescript
 import { createSearch } from "@keel/content-search";
 
-const search = createSearch({
-  indexUrl: "/.docks/search-index.json",
-});
+const search = await createSearch("/.docks/search-index.json");
 
-const results = await search.search("how to get started", {
+// `queryEmbedding` is a number[] (e.g. from POST /api/embed)
+const results = search.query(queryEmbedding, {
   limit: 5,
   threshold: 0.5,
 });
@@ -26,6 +29,9 @@ results.forEach((r) => {
   console.log(r.id, r.score);
 });
 ```
+
+The client also exposes `findSimilar(id, k)`, `getEntries()`, and
+`getByCollection(collection)`.
 
 ## Features
 
@@ -37,16 +43,23 @@ results.forEach((r) => {
 
 ## React Hook
 
-```typescript
+`useSearch` takes `indexPath` (not `indexUrl`) and manages query embedding,
+debouncing, and keyword/semantic blending internally. It exposes `isSearching`
+and `isReady` (there is no `isLoading`):
+
+```tsx
 import { useSearch } from "@keel/content-search/react";
 
 function SearchBox() {
-  const { results, search, isLoading } = useSearch({
-    indexUrl: "/.docks/search-index.json",
+  const { results, search, isSearching, isReady } = useSearch({
+    indexPath: "/.docks/search-index.json",
   });
 
   return (
-    <input onChange={(e) => search(e.target.value)} />
+    <input
+      disabled={!isReady}
+      onChange={(e) => search(e.target.value)}
+    />
   );
 }
 ```
