@@ -18,6 +18,7 @@
  *   curl -i -b "keel_session=<token>" .../mls/api/session  # 200 { user } — same-origin session
  */
 
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { dispatchSites, nodeStaticReader, serve } from "@keel/runtime";
@@ -27,6 +28,7 @@ import { buildApp } from "./src/app";
 import sites from "./keel.sites";
 
 const PORT = Number(process.env["PORT"] ?? 3000);
+const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const OUT = fileURLToPath(new URL("./out", import.meta.url));
 
 async function main(): Promise<void> {
@@ -42,6 +44,20 @@ async function main(): Promise<void> {
   for (const site of manifest) {
     console.log(`prerendered ${site.site}: ${site.pages.length} pages`);
   }
+
+  // 1b. Bundle the island hydration client INTO the marketing zone's output, so
+  // the prerendered pages' `<script src="/client.js">` resolves: `/client.js`
+  // maps to `marketing/client.js`, the same file dispatchSites serves and the
+  // same file Cloudflare Static Assets would serve from `out/marketing`. Without
+  // this, the island never hydrates in production.
+  execFileSync(
+    "bun",
+    ["build", "client.tsx", "--outfile", "out/marketing/client.js", "--target", "browser"],
+    {
+      cwd: ROOT,
+      stdio: "inherit",
+    },
+  );
 
   // 2. The front door: static files for static zones, the live app for dynamic.
   const dispatch = dispatchSites({ sites, handle, readStatic: nodeStaticReader(OUT) });
