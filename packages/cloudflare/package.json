@@ -1,0 +1,29 @@
+{
+  "name": "@keel/cloudflare",
+  "version": "0.0.0",
+  "description": "Keel on Cloudflare Workers — adapt the pure dispatcher to a Worker fetch handler, serve static assets, and generate wrangler config from a deploy plan.",
+  "type": "module",
+  "private": true,
+
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+
+  "dependencies": {
+    "@keel/deploy": "workspace:*",
+    "@keel/errors": "workspace:*",
+    "@keel/web": "workspace:*"
+  }
+}
