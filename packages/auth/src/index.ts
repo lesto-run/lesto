@@ -19,6 +19,9 @@ export { generateToken } from "./token";
 export { MemorySessionStore, Sessions } from "./sessions";
 export type { SessionsOptions } from "./sessions";
 
+export { SignedSessions } from "./signed-sessions";
+export type { SignedClaim, SignedSessionsOptions } from "./signed-sessions";
+
 export { systemClock } from "./time";
 
 export { AuthError, KeelError } from "./errors";
