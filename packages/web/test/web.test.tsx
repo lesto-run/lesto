@@ -79,6 +79,7 @@ const buildApp = (): Application => {
   router.get("/later", "probe#later");
   router.get("/missing-controller", "ghost#index");
   router.get("/missing-action", "empty#nope");
+  router.get("/inherited-action", "probe#constructor");
 
   return new Application({ router, controllers });
 };
@@ -212,5 +213,15 @@ describe("Application dispatch", () => {
 
     expect(caught).toBeInstanceOf(WebError);
     expect((caught as WebError).code).toBe("WEB_UNKNOWN_ACTION");
+  });
+
+  it("refuses an action that names an inherited Object built-in", async () => {
+    // A typo'd target like `probe#constructor` resolves to an inherited member
+    // on every object; it must fail like any unknown action, not invoke it.
+    const app = buildApp();
+
+    await expect(app.handle("GET", "/inherited-action")).rejects.toMatchObject({
+      code: "WEB_UNKNOWN_ACTION",
+    });
   });
 });

@@ -1,0 +1,34 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - link "Jade Mills Estates" [ref=e4] [cursor=pointer]:
+      - /url: /
+    - navigation [ref=e5]:
+      - link "Home" [ref=e6] [cursor=pointer]:
+        - /url: /
+      - link "About" [ref=e7] [cursor=pointer]:
+        - /url: /about
+      - link "Listings" [ref=e8] [cursor=pointer]:
+        - /url: /mls
+      - generic [ref=e10]:
+        - text: Hi, Jade Mills ·
+        - link "Saved" [ref=e11] [cursor=pointer]:
+          - /url: /mls/saved
+  - generic [ref=e12]:
+    - heading "Extraordinary homes, quietly sold." [level=1] [ref=e13]
+    - paragraph [ref=e14]: Beverly Hills · Bel Air · Malibu
+  - generic [ref=e15]:
+    - article [ref=e16]:
+      - heading "Bel Air Glen Estate" [level=3] [ref=e17]
+      - paragraph [ref=e18]: Bel Air
+      - paragraph [ref=e19]: $42,000,000
+      - paragraph [ref=e20]: 7 bd · 9 ba
+    - article [ref=e21]:
+      - heading "Malibu Cliffside" [level=3] [ref=e22]
+      - paragraph [ref=e23]: Malibu
+      - paragraph [ref=e24]: $28,500,000
+      - paragraph [ref=e25]: 5 bd · 6 ba
+    - article [ref=e26]:
+      - heading "Beverly Hills Flats" [level=3] [ref=e27]
+      - paragraph [ref=e28]: Beverly Hills
+      - paragraph [ref=e29]: $18,900,000
+      - paragraph [ref=e30]: 6 bd · 7 ba

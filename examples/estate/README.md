@@ -21,8 +21,10 @@ bun run examples/estate/dev.ts        # or, in a real project: keel dev
 ```
 
 `dev.ts` bundles the island client to `out/client.js`, then serves _every_ zone
-**live** through the app's own `handle` (no prerender) on one port. Edit a
-marketing page and refresh — it's there, no rebuild. Open
+**live** through the app's own `handle` (no prerender) on one port. It also
+watches `src/` and `client.tsx`: edits to pages **and** island code rebuild the
+bundle automatically, and the browser reloads itself (served HTML carries a tiny
+script that polls `/__keel/version`). Open
 `http://127.0.0.1:3000` in a browser: the header shows "Sign in"; go to `/mls`
 and sign in; back on `/`, the `My Account` island has hydrated and greets you —
 one origin, one cookie.

@@ -88,7 +88,15 @@ export class Application {
     // The action is the method named `actionName` on the instance. Index through
     // the instance as an unknown-valued record so a missing method is `undefined`
     // rather than a type error, then guard that it is actually callable.
-    const action = (controller as unknown as Record<string, unknown>)[actionName];
+    //
+    // A name that lives on `Object.prototype` (`constructor`, `toString`, …) is
+    // never a real action — it is an inherited built-in that exists on every
+    // object. Treat it as absent so a typo'd target like `posts#constructor`
+    // fails cleanly instead of invoking an unintended method.
+    const action =
+      actionName in Object.prototype
+        ? undefined
+        : (controller as unknown as Record<string, unknown>)[actionName];
 
     if (typeof action !== "function") {
       throw new WebError(
