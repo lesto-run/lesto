@@ -1,0 +1,23 @@
+{
+  "name": "keel-e2e",
+  "version": "0.0.0",
+  "description": "Keel's browser E2E suite — Playwright against a minimal in-repo island fixture, proving hydration in a real browser. Named outside @keel/* so the workspace test filter skips it; run by its own CI job.",
+  "type": "module",
+  "private": true,
+
+  "scripts": {
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+
+  "dependencies": {
+    "@keel/runtime": "workspace:*",
+    "@keel/ui": "workspace:*",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
