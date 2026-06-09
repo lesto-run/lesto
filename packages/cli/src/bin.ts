@@ -61,6 +61,15 @@ const code = await run(argv, {
   sink: nodeSink,
   readAsset: nodeStaticReader(join(process.cwd(), DEV_ASSET_DIR)),
   uploader: nodeUploader,
+  // On a deploy's rolling restart, drain in-flight requests then exit cleanly.
+  installShutdown: (drain) => {
+    const shutdown = (): void => {
+      void drain().then(() => process.exit(0));
+    };
+
+    process.on("SIGTERM", shutdown);
+    process.on("SIGINT", shutdown);
+  },
   out: console.log,
 });
 

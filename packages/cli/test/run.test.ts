@@ -187,6 +187,25 @@ describe("run serve / dev", () => {
 
     expect(lines).toEqual(["listening on http://127.0.0.1:3000"]);
   });
+
+  it("registers a graceful-shutdown hook that drains the server", async () => {
+    const close = vi.fn(() => Promise.resolve());
+    const serve = vi.fn(
+      (_app: App, _options?: ServeOptions): Promise<Server> =>
+        Promise.resolve({ port: 3000, close }),
+    );
+    const installShutdown = vi.fn();
+
+    const code = await run(["serve"], depsWith({ serve, installShutdown }));
+
+    expect(code).toBe(0);
+    expect(installShutdown).toHaveBeenCalledTimes(1);
+
+    // The registered hook drains by closing the server.
+    const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
+    await drain();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
 });
 
 // A reader that answers the client bundle with bytes, everything else absent.
@@ -216,6 +235,26 @@ describe("run dev", () => {
     expect(typeof app.handle).toBe("function");
     expect(options?.port).toBe(5173);
     expect(lines).toEqual(["dev server on http://127.0.0.1:5173"]);
+  });
+
+  it("registers a graceful-shutdown hook for the dev server too", async () => {
+    const close = vi.fn(() => Promise.resolve());
+    const serve = vi.fn(
+      (_app: App, _options?: ServeOptions): Promise<Server> =>
+        Promise.resolve({ port: 5173, close }),
+    );
+    const installShutdown = vi.fn();
+
+    await run(
+      ["dev"],
+      depsWith({ serve, installShutdown, loadSites: () => Promise.resolve(sites) }),
+    );
+
+    expect(installShutdown).toHaveBeenCalledTimes(1);
+
+    const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
+    await drain();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("serves the client bundle through readAsset when one is provided", async () => {

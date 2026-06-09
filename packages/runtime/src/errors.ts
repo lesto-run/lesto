@@ -15,7 +15,9 @@ export type RuntimeErrorCode =
   /** The request body was not valid JSON for its declared content-type — a 400. */
   | "RUNTIME_INVALID_JSON"
   /** The request body exceeded the configured size limit — a 413. */
-  | "RUNTIME_BODY_TOO_LARGE";
+  | "RUNTIME_BODY_TOO_LARGE"
+  /** A request handler ran past its time budget; the socket is freed with a 503. */
+  | "RUNTIME_HANDLER_TIMEOUT";
 
 /** Anything the transport tier can refuse to do. */
 export class RuntimeError extends KeelError<RuntimeErrorCode> {

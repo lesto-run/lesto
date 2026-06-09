@@ -70,6 +70,14 @@ export interface CliDeps {
   /** Build a static-deploy uploader rooted at `distDir` (the bin passes `nodeUploader`). */
   uploader: (distDir: string) => ShipDeps;
 
+  /**
+   * Register a graceful-shutdown hook for the long-running `serve`/`dev`
+   * commands: the bin wires SIGTERM/SIGINT to drain the server and exit, so a
+   * deploy's rolling restart lets in-flight requests finish instead of severing
+   * them. Absent in tests and for one-shot commands, which never linger.
+   */
+  installShutdown?: (drain: () => Promise<void>) => void;
+
   /** Where a line of output goes (the bin passes `console.log`). */
   out: (line: string) => void;
 }
@@ -131,6 +139,8 @@ async function runServe(args: readonly string[], deps: CliDeps): Promise<number>
   const { port } = parsePort(args, DEFAULT_PORT);
 
   const server = await deps.serve(app, { port });
+
+  deps.installShutdown?.(() => server.close());
 
   deps.out(`listening on http://127.0.0.1:${server.port}`);
 
@@ -306,6 +316,8 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
     { handle: dispatch, migrationsApplied: app.migrationsApplied },
     { port },
   );
+
+  deps.installShutdown?.(() => server.close());
 
   deps.out(`dev server on http://127.0.0.1:${server.port}`);
 

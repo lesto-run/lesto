@@ -22,8 +22,8 @@ export type { RawRequest } from "./request";
 export { applyResponse } from "./response";
 export type { WritableResponse } from "./response";
 
-export { serve } from "./server";
-export type { Server, ServeOptions } from "./server";
+export { serve, DEFAULT_SECURITY_HEADERS } from "./server";
+export type { Server, ServeOptions, HealthOptions, AccessEntry } from "./server";
 
 export { runWorker } from "./worker";
 export type { RunWorkerOptions } from "./worker";

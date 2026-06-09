@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { App } from "@keel/kernel";
+import type { KeelResponse } from "@keel/web";
 
 import { applyResponse } from "./response";
 import { toKeelRequest } from "./request";
@@ -13,6 +14,29 @@ export interface Server {
   readonly port: number;
 
   close(): Promise<void>;
+}
+
+/** Liveness/readiness endpoints, answered by the runtime before the app. */
+export interface HealthOptions {
+  /** The liveness path — a bare 200 proving the process is up. Defaults to `/health`. */
+  readonly livePath?: string;
+
+  /** The readiness path — 200 when {@link isReady} holds, else 503. Defaults to `/readyz`. */
+  readonly readyPath?: string;
+
+  /** Whether the app is ready to take traffic (DB reachable, warmed, …). Defaults to always-ready. */
+  readonly isReady?: () => boolean | Promise<boolean>;
+}
+
+/** One served request, as the access log records it. */
+export interface AccessEntry {
+  readonly method: string;
+
+  readonly path: string;
+
+  readonly status: number;
+
+  readonly ms: number;
 }
 
 export interface ServeOptions {
@@ -30,6 +54,57 @@ export interface ServeOptions {
   readonly maxBodyBytes?: number;
 
   /**
+   * The longest a single handler may run before we answer 503 and free the
+   * socket. The handler is abandoned, not cancelled — JS cannot kill a running
+   * task — but the client and its socket are released rather than held forever
+   * by a hung or pathologically slow controller. Defaults to 30s.
+   */
+  readonly handlerTimeoutMs?: number;
+
+  /**
+   * node:http socket-level limits, set below Node's defaults so a public tier
+   * resists slow-loris / slow-body / oversized-header attacks out of the box.
+   * See {@link applyServerLimits}. Defaults: request 30s, headers 15s,
+   * keep-alive 5s, max header 16 KiB.
+   */
+  readonly requestTimeoutMs?: number;
+
+  readonly headersTimeoutMs?: number;
+
+  readonly keepAliveTimeoutMs?: number;
+
+  readonly maxHeaderBytes?: number;
+
+  /**
+   * How long a graceful shutdown waits for in-flight requests to finish before
+   * forcing the remaining sockets closed. Defaults to 10s.
+   */
+  readonly drainTimeoutMs?: number;
+
+  /**
+   * Liveness/readiness endpoints, on by default at `/health` and `/readyz`.
+   * Pass `false` to disable them (e.g. when an upstream owns those paths), or an
+   * object to override the paths and supply a real readiness probe.
+   */
+  readonly health?: false | HealthOptions;
+
+  /**
+   * Default response headers merged *under* every response — the app's own
+   * headers always win. Defaults to {@link DEFAULT_SECURITY_HEADERS}; pass
+   * `false` to send none, or a map to replace the defaults wholesale.
+   */
+  readonly securityHeaders?: false | Record<string, string>;
+
+  /**
+   * Where a one-line access record goes for each served request. Injected so a
+   * test can assert without writing to the console; defaults to `console.log`.
+   */
+  readonly logRequest?: (entry: AccessEntry) => void;
+
+  /** The clock used for request latency. Injected for tests; defaults to `Date.now`. */
+  readonly now?: () => number;
+
+  /**
    * Where uncaught server-level failures are reported.
    *
    * Injected so a test can assert the process safety-net logged without writing
@@ -40,6 +115,33 @@ export interface ServeOptions {
 
 /** A body we refuse to read past 1 MiB unless the caller raises the bar. */
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+
+/** Handler/socket budgets, tightened below Node's defaults for a public tier. */
+const DEFAULT_HANDLER_TIMEOUT_MS = 30_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_HEADERS_TIMEOUT_MS = 15_000;
+const DEFAULT_KEEP_ALIVE_TIMEOUT_MS = 5_000;
+const DEFAULT_MAX_HEADER_BYTES = 16 * 1024;
+const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
+
+const DEFAULT_LIVE_PATH = "/health";
+const DEFAULT_READY_PATH = "/readyz";
+
+/**
+ * The headers we put under every response by default.
+ *
+ * The unambiguously-safe set that needs no per-app tuning: no MIME sniffing, a
+ * privacy-preserving referrer, framing denied, and HSTS for any TLS terminator
+ * in front. We deliberately do NOT default a Content-Security-Policy — a safe
+ * CSP depends on the app's own inline scripts (island bootstrapping), so it is
+ * the app's to set rather than a default that silently breaks pages.
+ */
+export const DEFAULT_SECURITY_HEADERS: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-Frame-Options": "DENY",
+  "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+};
 
 /**
  * The method and path of an incoming request.
@@ -132,6 +234,82 @@ export function readBody(req: BodyStream, maxBytes: number): Promise<string> {
   });
 }
 
+/**
+ * Race a promise against a deadline.
+ *
+ * On overrun we reject with a coded {@link RuntimeError} (mapped to a 503) and
+ * leave `work` to settle whenever it eventually does — we attach handlers to it
+ * so its late resolution or rejection is swallowed, never surfacing as an
+ * unhandled rejection. The timer is `unref`'d so a pending deadline never keeps
+ * the process alive on its own.
+ */
+export function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new RuntimeError("RUNTIME_HANDLER_TIMEOUT", "Request handler exceeded its time limit.", {
+          ms,
+        }),
+      );
+    }, ms);
+
+    timer.unref();
+
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        return resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        return reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Answer a liveness/readiness probe, or `undefined` to let the app handle it.
+ *
+ * Liveness (`/health`) is a bare 200 — the process is up. Readiness (`/readyz`)
+ * consults the injected probe and is a 503 when the app is not ready to take
+ * traffic. Both answer only GET/HEAD; anything else falls through to the app so
+ * a real route at the same path still works.
+ */
+export async function healthResponse(
+  method: string,
+  path: string,
+  options: HealthOptions,
+): Promise<KeelResponse | undefined> {
+  if (method !== "GET" && method !== "HEAD") return undefined;
+
+  const headers = { "content-type": "text/plain; charset=utf-8" };
+
+  if (path === (options.livePath ?? DEFAULT_LIVE_PATH)) {
+    return { status: 200, headers, body: "ok" };
+  }
+
+  if (path === (options.readyPath ?? DEFAULT_READY_PATH)) {
+    const ready = await (options.isReady ?? (() => true))();
+
+    return ready
+      ? { status: 200, headers, body: "ready" }
+      : { status: 503, headers, body: "not ready" };
+  }
+
+  return undefined;
+}
+
+/** Merge the default headers under a response; the response's own headers win. */
+export function withSecurityHeaders(
+  response: KeelResponse,
+  defaults: Record<string, string> | false,
+): KeelResponse {
+  if (defaults === false) return response;
+
+  return { ...response, headers: { ...defaults, ...response.headers } };
+}
+
 /** Map a known transport-level refusal to its HTTP status; anything else is a 500. */
 function statusForError(error: unknown): number {
   if (error instanceof RuntimeError && error.code === "RUNTIME_INVALID_JSON") {
@@ -140,6 +318,10 @@ function statusForError(error: unknown): number {
 
   if (error instanceof RuntimeError && error.code === "RUNTIME_BODY_TOO_LARGE") {
     return 413;
+  }
+
+  if (error instanceof RuntimeError && error.code === "RUNTIME_HANDLER_TIMEOUT") {
+    return 503;
   }
 
   return 500;
@@ -151,7 +333,96 @@ function bodyForStatus(status: number): string {
 
   if (status === 413) return "Payload Too Large";
 
+  if (status === 503) return "Service Unavailable";
+
   return "Internal Server Error";
+}
+
+/** The socket-level timeouts {@link applyServerLimits} sets — the slice it writes. */
+export interface ServerLimits {
+  requestTimeout: number;
+
+  headersTimeout: number;
+
+  keepAliveTimeout: number;
+}
+
+/**
+ * Set node:http's per-socket timeouts on a server.
+ *
+ * Pulled out as a pure function over the minimal shape so the values we choose
+ * are unit-testable without a live socket. `maxHeaderSize` is not here: it is a
+ * construction-time option, set on `createServer`.
+ */
+export function applyServerLimits(
+  server: ServerLimits,
+  limits: { requestTimeoutMs: number; headersTimeoutMs: number; keepAliveTimeoutMs: number },
+): void {
+  server.requestTimeout = limits.requestTimeoutMs;
+  server.headersTimeout = limits.headersTimeoutMs;
+  server.keepAliveTimeout = limits.keepAliveTimeoutMs;
+}
+
+/** The slice of a node server {@link drainServer} drives — fakeable in a test. */
+export interface ClosableServer {
+  close(callback: () => void): void;
+
+  closeIdleConnections(): void;
+
+  closeAllConnections(): void;
+}
+
+/** The timer seam {@link drainServer} uses — injected so a test drives the clock. */
+export interface DrainTimers {
+  set(callback: () => void, ms: number): unknown;
+
+  clear(handle: unknown): void;
+}
+
+const realDrainTimers: DrainTimers = {
+  set: (callback, ms) => {
+    const timer = setTimeout(callback, ms);
+
+    timer.unref();
+
+    return timer;
+  },
+
+  clear: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+};
+
+/**
+ * Drain a server gracefully: stop accepting, let in-flight requests finish,
+ * then force what is left.
+ *
+ * `close` stops accepting new connections and resolves once the live ones end;
+ * `closeIdleConnections` frees keep-alive sockets that are sitting idle so they
+ * do not hold the drain open; and if the grace window expires first,
+ * `closeAllConnections` forces the stragglers so a deploy restart cannot hang
+ * forever. Resolves exactly once, whichever path settles it.
+ */
+export function drainServer(
+  server: ClosableServer,
+  graceMs: number,
+  timers: DrainTimers = realDrainTimers,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+
+    const graceTimer = timers.set(() => server.closeAllConnections(), graceMs);
+
+    const finish = (): void => {
+      if (settled) return;
+
+      settled = true;
+      timers.clear(graceTimer);
+      resolve();
+    };
+
+    server.close(() => finish());
+
+    server.closeIdleConnections();
+  });
 }
 
 /**
@@ -163,20 +434,40 @@ function bodyForStatus(status: number): string {
  * instances scale horizontally and deploys are rolling restarts.
  *
  * Resolves once the socket is listening, carrying the bound port — so a caller
- * that passed `port: 0` (the default) learns which ephemeral port it got.
+ * that passed `port: 0` (the default) learns which ephemeral port it got. The
+ * returned `close()` drains gracefully (see {@link drainServer}).
  */
 export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 0;
-  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
   const logError = options.logError ?? defaultLogError;
+
+  const deps: HandleDeps = {
+    maxBodyBytes: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
+    handlerTimeoutMs: options.handlerTimeoutMs ?? DEFAULT_HANDLER_TIMEOUT_MS,
+    health: options.health === false ? undefined : (options.health ?? {}),
+    securityHeaders: options.securityHeaders ?? DEFAULT_SECURITY_HEADERS,
+    logRequest: options.logRequest ?? defaultLogRequest,
+    logError,
+    now: options.now ?? Date.now,
+  };
 
   installProcessSafetyNet(logError);
 
-  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    // `handle` swallows every throw internally and always answers the socket,
-    // so this `void` can never leak a rejected promise into the process.
-    void handle(app, req, res, { maxBodyBytes, logError });
+  const server = createServer(
+    { maxHeaderSize: options.maxHeaderBytes ?? DEFAULT_MAX_HEADER_BYTES },
+    (req: IncomingMessage, res: ServerResponse) => {
+      // `handle` swallows every throw internally and always answers the socket,
+      // so this `void` can never leak a rejected promise into the process.
+      void handle(app, req, res, deps);
+    },
+  );
+
+  applyServerLimits(server, {
+    requestTimeoutMs: options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    headersTimeoutMs: options.headersTimeoutMs ?? DEFAULT_HEADERS_TIMEOUT_MS,
+    keepAliveTimeoutMs: options.keepAliveTimeoutMs ?? DEFAULT_KEEP_ALIVE_TIMEOUT_MS,
   });
 
   return new Promise((resolve) => {
@@ -187,10 +478,7 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
       resolve({
         port: address.port,
 
-        close: () =>
-          new Promise<void>((resolveClose) => {
-            server.close(() => resolveClose());
-          }),
+        close: () => drainServer(server, drainTimeoutMs),
       });
     });
   });
@@ -199,7 +487,18 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
 interface HandleDeps {
   readonly maxBodyBytes: number;
 
+  readonly handlerTimeoutMs: number;
+
+  /** Health endpoints, or `undefined` when disabled. */
+  readonly health: HealthOptions | undefined;
+
+  readonly securityHeaders: Record<string, string> | false;
+
+  readonly logRequest: (entry: AccessEntry) => void;
+
   readonly logError: (message: string, error: unknown) => void;
+
+  readonly now: () => number;
 }
 
 /**
@@ -207,10 +506,12 @@ interface HandleDeps {
  *
  * This is the per-request error boundary, the primary defense against an
  * unauthenticated client crashing the server. ANY failure — a malformed body,
- * a controller that throws, a rejected promise deep in the app — is caught
- * here, mapped to a status, and answered with a safe generic body. An attacker
- * can degrade their own request to a 4xx/500; they can never take the process
- * down or hang their socket open.
+ * a controller that throws, a rejected promise, a handler that overruns its
+ * deadline — is caught here, mapped to a status, and answered with a safe
+ * generic body; a liveness/readiness probe is answered before the app is even
+ * reached. Every request is access-logged once, success or failure. An attacker
+ * can degrade their own request to a 4xx/5xx; they can never take the process
+ * down or hold a socket open past the handler deadline.
  */
 async function handle(
   app: App,
@@ -218,10 +519,17 @@ async function handle(
   res: ServerResponse,
   deps: HandleDeps,
 ): Promise<void> {
+  const start = deps.now();
+
+  let method = "GET";
+  let path = "/";
+  let status = 500;
+
   try {
     const body = await readBody(req, deps.maxBodyBytes);
 
     const line = requestLineOf(req);
+    method = line.method;
 
     const request = toKeelRequest({
       method: line.method,
@@ -229,23 +537,38 @@ async function handle(
       headers: req.headers,
       body,
     });
+    path = request.path;
 
-    const response = await app.handle(request.method, request.path, {
-      query: request.query,
-      headers: request.headers,
-      body: request.body,
-    });
+    const probe =
+      deps.health === undefined
+        ? undefined
+        : await healthResponse(request.method, request.path, deps.health);
 
-    applyResponse(res, response);
+    const response =
+      probe ??
+      (await withTimeout(
+        app.handle(request.method, request.path, {
+          query: request.query,
+          headers: request.headers,
+          body: request.body,
+        }),
+        deps.handlerTimeoutMs,
+      ));
+
+    status = response.status;
+
+    applyResponse(res, withSecurityHeaders(response, deps.securityHeaders));
   } catch (error) {
-    const status = statusForError(error);
+    status = statusForError(error);
 
     // A 500 is ours to explain in the log; client errors (4xx) are not.
     if (status === 500) {
       deps.logError("unhandled error serving request", error);
     }
 
-    respondWithError(res, status);
+    respondWithError(res, status, deps.securityHeaders);
+  } finally {
+    deps.logRequest({ method, path, status, ms: deps.now() - start });
   }
 }
 
@@ -264,15 +587,26 @@ export interface ErrorResponse {
  * Best-effort: if the headers already went out (a handler that wrote then
  * threw) we cannot send a fresh status, so we just end the socket — the
  * invariant we protect is that the socket never hangs open, not that every
- * failure becomes a clean status line.
+ * failure becomes a clean status line. Default response headers are merged in
+ * so an error response is hardened like any other.
  */
-export function respondWithError(res: ErrorResponse, status: number): void {
+export function respondWithError(
+  res: ErrorResponse,
+  status: number,
+  securityHeaders: Record<string, string> | false = false,
+): void {
   if (!res.headersSent) {
-    applyResponse(res, {
-      status,
-      headers: { "content-type": "text/plain; charset=utf-8" },
-      body: bodyForStatus(status),
-    });
+    applyResponse(
+      res,
+      withSecurityHeaders(
+        {
+          status,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+          body: bodyForStatus(status),
+        },
+        securityHeaders,
+      ),
+    );
 
     return;
   }
@@ -283,6 +617,11 @@ export function respondWithError(res: ErrorResponse, status: number): void {
 /** The default error sink: structured-enough for a server log. */
 function defaultLogError(message: string, error: unknown): void {
   console.error(message, error);
+}
+
+/** The default access log: one line per request, method · path · status · latency. */
+function defaultLogRequest(entry: AccessEntry): void {
+  console.log(`${entry.method} ${entry.path} ${entry.status} ${entry.ms}ms`);
 }
 
 /** The slice of `process` the safety net listens on — injectable for tests. */
