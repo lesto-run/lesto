@@ -18,6 +18,8 @@
 
 export { defineSites } from "./define";
 
+export { sitePath, outputPath } from "./paths";
+
 export { prerenderSite } from "./prerender";
 
 export { writePages, nodeSink } from "./write";

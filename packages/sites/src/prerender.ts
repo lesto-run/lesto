@@ -1,48 +1,5 @@
+import { outputPath, sitePath } from "./paths";
 import type { PageHandler, RenderedPage, StaticSite } from "./types";
-
-/** Drop leading and trailing slashes: `"/a/b/"` -> `"a/b"`. */
-function trimSlashes(value: string): string {
-  return value.replace(/^\/+/, "").replace(/\/+$/, "");
-}
-
-/**
- * Join a site's `basePath` with one of its routes into the path the app sees.
- *
- *   ("/", "/")            -> "/"
- *   ("/", "/about")       -> "/about"
- *   ("/mls", "/")         -> "/mls"
- *   ("/mls", "/listings") -> "/mls/listings"
- */
-function joinPath(basePath: string, route: string): string {
-  const base = basePath === "/" ? "" : basePath.replace(/\/+$/, "");
-  const rest = route === "/" ? "" : `/${trimSlashes(route)}`;
-  const joined = `${base}${rest}`;
-
-  return joined === "" ? "/" : joined;
-}
-
-/**
- * The file a route prerenders to.
- *
- * A page becomes a clean-URL directory + `index.html`; a route that already
- * names a file (its last segment has an extension, e.g. `sitemap.xml`) is
- * written verbatim — the same split every static generator makes between pages
- * and endpoints.
- *
- *   ("site", "/")            -> "site/index.html"
- *   ("site", "/about")       -> "site/about/index.html"
- *   ("site", "/sitemap.xml") -> "site/sitemap.xml"
- */
-function toOutputPath(siteName: string, route: string): string {
-  const clean = trimSlashes(route);
-
-  if (clean === "") return `${siteName}/index.html`;
-
-  const lastSegment = clean.slice(clean.lastIndexOf("/") + 1);
-  const isFile = lastSegment.includes(".");
-
-  return isFile ? `${siteName}/${clean}` : `${siteName}/${clean}/index.html`;
-}
 
 /** Resolve a static site's pages, whether they were a list or a function. */
 async function resolvePages(site: StaticSite): Promise<readonly string[]> {
@@ -66,12 +23,12 @@ export async function prerenderSite(
   const pages: RenderedPage[] = [];
 
   for (const route of routes) {
-    const path = joinPath(site.basePath, route);
+    const path = sitePath(site.basePath, route);
     const response = await handle("GET", path);
 
     pages.push({
       path,
-      outputPath: toOutputPath(site.name, route),
+      outputPath: outputPath(site.name, route),
       status: response.status,
       html: response.body,
     });
