@@ -7,6 +7,7 @@
  * `pathFor`, so links never hardcode a URL.
  */
 
+import { compile, PARAM_SEGMENT } from "./compile";
 import { RouterError } from "./errors";
 
 /** One resolved route: its verb, the path pattern it answers, and where it dispatches. */
@@ -50,69 +51,9 @@ interface CompiledRoute {
   paramNames: ReadonlyArray<string>;
 }
 
-// A `:param` segment names a capture; it matches one path segment (anything but "/").
-const PARAM_SEGMENT = /:([A-Za-z_][A-Za-z0-9_]*)/g;
-
-// Characters that are literal in a path but special in a RegExp — escaped so a
-// static segment like "/posts.json" never acts as a wildcard.
-const REGEXP_SPECIALS = /[.*+?^${}()|[\]\\]/g;
-
-const escapeRegExp = (literal: string): string => literal.replace(REGEXP_SPECIALS, "\\$&");
-
 // Strip one trailing "s" to singularize. Deliberately tiny: "posts" -> "post".
 // A word without a trailing "s" is left untouched.
 const singularize = (word: string): string => (word.endsWith("s") ? word.slice(0, -1) : word);
-
-/**
- * Compile a path pattern into a RegExp plus the ordered list of its param names.
- *
- * Static parts are escaped so they match literally; each `:param` becomes a
- * `[^/]+` capture group. The pattern is anchored end-to-end.
- *
- * Refuses a pattern that puts two params in one segment (`/:a-:b`): that compiles
- * to adjacent `([^/]+)` groups separated by a literal, an ambiguous pattern whose
- * backtracking is catastrophic on a long non-matching segment — the same ReDoS
- * shape that bit `path-to-regexp` (CVE-2024-45296). And the request-handler
- * deadline is no defense: a synchronous regex blocks the event loop, so its timer
- * never fires. So we reject the shape at *declaration* time (fail fast, once)
- * rather than risk it at request time.
- */
-const compile = (pattern: string): { regExp: RegExp; paramNames: ReadonlyArray<string> } => {
-  const paramNames: string[] = [];
-
-  let source = "";
-  let lastIndex = 0;
-  let sawParam = false;
-
-  for (const match of pattern.matchAll(PARAM_SEGMENT)) {
-    // The static text between the previous param and this one is matched literally.
-    const between = pattern.slice(lastIndex, match.index);
-
-    // No `/` since the previous param means this one shares its segment — two
-    // `[^/]+` captures in one segment, the ambiguous backtracking shape we refuse.
-    if (sawParam && !between.includes("/")) {
-      throw new RouterError(
-        "ROUTER_AMBIGUOUS_SEGMENT",
-        `Route "${pattern}" puts two params in one segment (":${match[1]}" shares a segment with the param before it). Give each param its own "/" segment, or capture one param and split the value in the handler.`,
-        { pattern, param: match[1] },
-      );
-    }
-
-    source += escapeRegExp(between);
-    source += "([^/]+)";
-
-    // `match[1]` is the captured name; the regex guarantees it is present.
-    paramNames.push(match[1] as string);
-
-    lastIndex = match.index + match[0].length;
-    sawParam = true;
-  }
-
-  // Whatever trails the final param is also literal.
-  source += escapeRegExp(pattern.slice(lastIndex));
-
-  return { regExp: new RegExp(`^${source}$`), paramNames };
-};
 
 export class Router {
   // Insertion order is the resolution order: the first matching route wins.
