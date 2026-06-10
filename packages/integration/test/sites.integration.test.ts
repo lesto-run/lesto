@@ -37,18 +37,40 @@ class AppController extends Controller {
 }
 
 function adapt(raw: Database.Database): KernelDatabase {
-  return {
-    exec: (sql) => raw.exec(sql),
+  const adapted: KernelDatabase = {
+    exec: async (sql) => {
+      raw.exec(sql);
+    },
     prepare: (sql) => {
       const statement = raw.prepare(sql);
 
       return {
-        run: (params = []) => statement.run(...(params as never[])),
-        get: (params = []) => statement.get(...(params as never[])),
-        all: (params = []) => statement.all(...(params as never[])),
+        run: async (params = []) => statement.run(...(params as never[])),
+        get: async (params = []) => statement.get(...(params as never[])),
+        all: async (params = []) => statement.all(...(params as never[])),
       };
     },
+    transaction: async (fn) => {
+      raw.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        raw.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          raw.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
   };
+
+  return adapted;
 }
 
 function buildDynamicApp(database: Database.Database): AppConfig {
@@ -76,7 +98,7 @@ beforeAll(async () => {
   await writeFile(join(outDir, "marketing", "client.js"), "/* island bundle */", "utf8");
 
   database = new Database(":memory:");
-  const app = createApp(buildDynamicApp(database));
+  const app = await createApp(buildDynamicApp(database));
 
   const dispatch = dispatchSites({
     sites,

@@ -63,18 +63,40 @@ class BoomController extends Controller {
 }
 
 function adapt(raw: Database.Database): KernelDatabase {
-  return {
-    exec: (sql) => raw.exec(sql),
+  const adapted: KernelDatabase = {
+    exec: async (sql) => {
+      raw.exec(sql);
+    },
     prepare: (sql) => {
       const statement = raw.prepare(sql);
 
       return {
-        run: (params = []) => statement.run(...(params as never[])),
-        get: (params = []) => statement.get(...(params as never[])),
-        all: (params = []) => statement.all(...(params as never[])),
+        run: async (params = []) => statement.run(...(params as never[])),
+        get: async (params = []) => statement.get(...(params as never[])),
+        all: async (params = []) => statement.all(...(params as never[])),
       };
     },
+    transaction: async (fn) => {
+      raw.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        raw.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          raw.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
   };
+
+  return adapted;
 }
 
 function buildConfig(database: Database.Database): AppConfig {
@@ -106,7 +128,7 @@ beforeAll(async () => {
   database = new Database(":memory:");
 
   // Silence the expected 500's log line so the boundary test isn't noisy.
-  server = await serve(createApp(buildConfig(database)), { port: 0, logError: () => {} });
+  server = await serve(await createApp(buildConfig(database)), { port: 0, logError: () => {} });
 
   base = `http://127.0.0.1:${server.port}`;
 });
@@ -184,7 +206,7 @@ describe("the live HTTP server", () => {
 describe("the body-size limit", () => {
   it("refuses a body past the limit with 413 (no unbounded memory)", async () => {
     const db = new Database(":memory:");
-    const tiny = await serve(createApp(buildConfig(db)), { port: 0, maxBodyBytes: 16 });
+    const tiny = await serve(await createApp(buildConfig(db)), { port: 0, maxBodyBytes: 16 });
 
     try {
       const response = await fetch(`http://127.0.0.1:${tiny.port}/echo/body`, {
