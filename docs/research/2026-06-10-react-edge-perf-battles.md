@@ -236,7 +236,7 @@ Highest-leverage first. `[DONE]` items were implemented in this change-set;
    `react`→`preact/compat`, `react-dom/client`→`preact/compat/client`,
    `react/jsx-runtime` + `react/jsx-dev-runtime`→`preact/jsx-runtime`,
    `react-dom`→a local shim, and `react-dom/server`→a local shim. The alias is
-   gated on `KEEL_PREACT=1` (read in `production.ts` and `dev.ts`), **default
+   gated on `KEEL_PREACT=1` (read in `src/production.ts` and `dev.ts`), **default
    OFF** — so the default bundle is the same real React. Two shims are mandatory
    because `@keel/ui`'s barrel (reached via `src/registry.tsx`) drags server-only
    modules into the client graph: `preact-react-dom-shim.ts` re-exports
@@ -246,26 +246,33 @@ Highest-leverage first. `[DONE]` items were implemented in this change-set;
    `renderToString` / `renderToReadableStream` because `react-dom/server`'s
    top-level bootstrap throws once `react` is aliased away. Both shims are sound
    because the client only ever hydrates — it never invokes server-render or the
-   resource hints. **Measured:** default React `client.js` = 383293 bytes raw /
-   118402 gzip; `--preact` = 30087 bytes raw / 10099 gzip — ~92% smaller raw,
-   ~108KB smaller gzip. The large delta is partly because the alias path drops
+   resource hints. **Measured:** default React `client.js` = 383575 bytes raw /
+   ~118549 gzip; `--preact` = 30369 bytes raw / ~10241 gzip — ~92% smaller raw,
+   ~108KB smaller gzip (gzip figures vary by a few bytes across zlib versions). The large delta is partly because the alias path drops
    `react-dom/server` (otherwise pulled into the React client bundle by the
    `@keel/ui` barrel) via the inert server shim. **Constraint:** safe ONLY for
    `ssr: false` (deferred, `createRoot`) islands. (Findings 5, 6.)
 
-4. **`[PROPOSED]` Make `preact/compat` safe for `ssr: true` islands.** Today the
-   alias is client-only, so an `ssr: true` island would hydrate React-emitted
-   HTML with Preact's `hydrateRoot` and mismatch. Closing this requires switching
-   the *server* renderer (`react-dom/server` in `@keel/ui`'s `render.tsx` /
-   `stream.tsx`) to Preact too, so server- and client-emitted markup match. That
-   is a `@keel/ui` change (owned by another agent) and out of scope here. (Finding
-   6, finding 4 — `client:only`/deferred is the safe analogue.)
+4. **`[DONE]` Make `preact/compat` safe for `ssr: true` islands.** `@keel/ui`'s
+   server renderer is now pluggable: `renderPageMarkup` takes an injectable
+   `ServerRenderer` (default `reactServerRenderer` = real `react-dom/server`, so
+   the default path is byte-for-byte unchanged), and a `preactServerRenderer`
+   adapter ships from the new `@keel/ui/server-preact` subpath (backed by
+   `preact-render-to-string`, an optional peer dep). A Preact-client app passes
+   that adapter so server- and client-emitted markup match, closing the
+   `ssr: true` mismatch. Capability + end-to-end proof only — no app rewired
+   (estate has no `ssr: true` island). See ADR 0008. (Finding 6, finding 4.)
 
-5. **`[PROPOSED]` Lazy island hydration (`client:visible` analogue).** Astro loads
-   an island's JS only when it scrolls into view, via an internal
-   `IntersectionObserver`. Keel's flat manifest hydrates every island eagerly. An
-   `IntersectionObserver`-gated mount (an opt-in per-island strategy in
-   `hydrateIslands`) would defer JS for below-the-fold islands. (Finding 3.)
+5. **`[DONE]` Lazy island hydration (`client:visible` analogue).** `@keel/ui` added
+   opt-in `hydrate: "visible"` per client component: `buildIsland` threads a
+   `strategy: "visible"` flag onto the wire (omitted for the default `"load"`, so
+   existing manifests are unchanged), and `hydrateIslands` gained an injectable
+   `observe?: ObserveFn` seam (default `IntersectionObserver`) that defers a
+   visible island's *mount work* — render, effects, and on-mount fetches — until
+   its region first intersects the viewport, recording it under a new
+   `HydrationResult.deferred`. It defers mount WORK, not bundle BYTES (Keel still
+   ships one `client.js`); true byte deferral needs per-island code-splitting, a
+   separate follow-up. See ADR 0008's companion note. (Finding 3.)
 
 6. **`[PROPOSED]` Worker bundle-size guard.** Add a build-time check that the
    deployed worker's *compressed* size stays under the Cloudflare ceiling and that

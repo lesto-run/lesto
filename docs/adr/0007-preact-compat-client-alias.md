@@ -12,7 +12,7 @@ Keel SSRs every page on real React (`react-dom/server` in `@keel/ui`'s `render.t
 
 We already cut that bundle hard: `build-client.ts` runs with `--minify` (strip + mangle) and `--production` (pin `NODE_ENV` so React tree-shakes its development-only warnings and invariants, which are the bulk of an un-minified client build). What remains after that is irreducible *React itself*: the reconciler, the scheduler, and — because `@keel/ui`'s barrel reaches `react-dom/server` even from the client entry — a slice of the server renderer dragged into the client graph. Measured on the real deploy path (`bun run build.ts`):
 
-- **Default (real React) `/client.js`:** `383293` bytes raw, `~118402–118411` bytes gzip.
+- **Default (real React) `/client.js`:** `383575` bytes raw, `~118549` bytes gzip (the baseline grew ~282 bytes raw once ADR 0008's lazy-hydration runtime landed in the client; gzip varies a few bytes by zlib version).
 
 React's own docs and the ecosystem put the floor for `react` + `react-dom` at roughly 100–150 KiB before gzip; Preact's compat layer covers the same component API in ~3–9 KiB. Astro documents the swap as routine for client-side-only components and the Vite ecosystem has long treated `react`→`preact/compat` as a standard alias for shipping less JS (typically a 33–48% reduction in those reports). The question for Keel is not whether the swap shrinks the bundle — it plainly does — but whether it is *safe by default*, and the answer is no (see "Why optional, not default").
 
@@ -45,7 +45,7 @@ Both shims are sound for exactly one reason: **the client only hydrates; it neve
 
 ### 3. The flag is `KEEL_PREACT=1`, read by the spawning files; the build script takes `--preact`
 
-`production.ts` and `dev.ts` each `execFileSync("bun", ["build-client.ts", …])` — they *spawn* the build, they do not import it. That boundary is deliberate: the Bun-only `Bun.build` API lives in `build-client.ts` alone, behind a process boundary, so `production.ts`/`dev.ts` stay plain node-typed and vitest-importable. Both gate the alias on the environment: `process.env["KEEL_PREACT"] === "1"` appends `--preact` to the spawn argv, otherwise nothing is appended. The build scripts and shims are intentionally **outside** `tsconfig` `include` (they use the Bun global), so `tsc --noEmit` ignores them and stays green; `import type { BunPlugin } from "bun"` keeps oxlint's `consistent-type-imports` happy.
+`src/production.ts` and `dev.ts` each `execFileSync("bun", ["build-client.ts", …])` — they *spawn* the build, they do not import it. That boundary is deliberate: the Bun-only `Bun.build` API lives in `build-client.ts` alone, behind a process boundary, so `src/production.ts`/`dev.ts` stay plain node-typed and vitest-importable. Both gate the alias on the environment: `process.env["KEEL_PREACT"] === "1"` appends `--preact` to the spawn argv, otherwise nothing is appended. The build scripts and shims are intentionally **outside** `tsconfig` `include` (they use the Bun global), so `tsc --noEmit` ignores them and stays green; `import type { BunPlugin } from "bun"` keeps oxlint's `consistent-type-imports` happy.
 
 Default production flags (`--minify`, `--production`) and dev's unminified build are preserved exactly; `--preact` only adds the plugin.
 
@@ -53,7 +53,7 @@ Default production flags (`--minify`, `--production`) and dev's unminified build
 
 On the real deploy path, with `--preact`:
 
-- **`--preact` `/client.js`:** `30087` bytes raw, `~10092–10099` bytes gzip.
+- **`--preact` `/client.js`:** `30369` bytes raw, `~10241` bytes gzip (gzip varies by a few bytes across zlib versions).
 
 That is a **`353206`-byte raw reduction (~92% smaller)** and roughly **108 KiB less gzip** than the default React bundle. The delta is larger than the headline "Preact is ~10 KiB" story because the alias path *also* drops `react-dom/server` — which `@keel/ui`'s barrel otherwise pulls into the React client bundle — via the inert server shim.
 
@@ -75,9 +75,11 @@ This alias is **safe only for deferred (`ssr: false`) islands** — those that m
 
 It is **NOT yet safe for `ssr: true` islands.** Those hydrate React-emitted server HTML; under the alias, Preact's `hydrateRoot` would try to adopt markup produced by real React's `react-dom/server`, and the two renderers' output is not identical. Making `ssr: true` safe under Preact requires switching the **server** renderer too — `@keel/ui`'s `render.tsx`/`stream.tsx` would move from `react-dom/server` to `preact-render-to-string` so the server- and client-emitted markup match. **We deliberately keep server rendering on real React** in this change; the server-renderer swap is out of scope (and `@keel/ui` is owned by another agent). This is the known follow-up: a default-on Preact client is unblocked only once server and client render the same dialect.
 
+> **Follow-up resolved (2026-06-10): see [ADR 0008](./0008-pluggable-server-renderer.md).** `@keel/ui`'s server renderer is now pluggable: `renderPageMarkup` takes an injectable `ServerRenderer` (default real `react-dom/server`, so the default path is unchanged), and a `preactServerRenderer` adapter ships from `@keel/ui/server-preact`. A Preact-client app that wants `ssr: true` islands passes that adapter to `renderPageMarkup` so server and client speak the same dialect. This closes the gap above; "Preact by default" now reduces to an app picking the matching server+client pair (and accepting the traps in "Why optional, not default"). estate still ships only the deferred `Account` island, so it was not rewired.
+
 ## What this is and isn't
 
-- **Is:** an opt-in (`KEEL_PREACT=1`, default OFF) `react`→`preact/compat` alias for the **client** island bundle, implemented as a `Bun.build` resolver plugin in `build-client.ts`, with two mandatory inert shims for the `react-dom`/`react-dom/server` exports `@keel/ui`'s barrel drags into the client graph. Measured: `383293`→`30087` bytes raw (~92% smaller) on the real deploy path, verified to hydrate estate's deferred `Account` island in jsdom.
+- **Is:** an opt-in (`KEEL_PREACT=1`, default OFF) `react`→`preact/compat` alias for the **client** island bundle, implemented as a `Bun.build` resolver plugin in `build-client.ts`, with two mandatory inert shims for the `react-dom`/`react-dom/server` exports `@keel/ui`'s barrel drags into the client graph. Measured: `383575`→`30369` bytes raw (~92% smaller) on the real deploy path, verified to hydrate estate's deferred `Account` island in jsdom.
 - **Isn't:** a change to the **default** build (with no flag, the bytes and behaviour are exactly as before), and **not** a server-renderer change — server rendering stays on real React, so this is unsafe for `ssr: true` islands until the server is switched to `preact-render-to-string` (the named follow-up). It is also not a workspace package: it lives in `examples/estate`, which is not coverage-gated.
 
 ## Consequences
