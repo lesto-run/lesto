@@ -1,24 +1,34 @@
 /**
  * Assemble the blog app from its parts.
  *
- * This is the whole wiring: hand the kernel a database, the routes, the
- * controllers keyed by route-target name, and the migrations to bring the schema
- * up on boot. The kernel owns the assembly order (connect ORM, migrate, stand up
- * dispatch); we just declare the parts.
+ * The kernel still drives boot — it runs the migration and stands up the
+ * dispatch core. We add one step: wrap the same database handle in
+ * `@keel/db`'s `createDb` so controllers query through a typed seam (the
+ * kernel's `useDatabase` call is for the legacy `@keel/orm` path, which
+ * nothing in this app uses anymore).
+ *
+ * Returns both the booted `App` and the `Db` so seed scripts can write
+ * through the same handle the controllers read through.
  */
 
+import { createDb } from "@keel/db";
+import type { Db } from "@keel/db";
 import { createApp } from "@keel/kernel";
 import type { App, KernelDatabase } from "@keel/kernel";
 
+import { buildControllers } from "./posts-controller";
+import { postsMigration } from "./post";
 import { buildRouter } from "./routes";
-import { migrations } from "./migrations";
-import { PostsController } from "./posts-controller";
 
-export function buildApp(db: KernelDatabase): App {
-  return createApp({
-    db,
+export function buildApp(handle: KernelDatabase): { app: App; db: Db } {
+  const db = createDb(handle);
+
+  const app = createApp({
+    db: handle,
     router: buildRouter(),
-    controllers: { posts: PostsController },
-    migrations,
+    controllers: buildControllers(db),
+    migrations: [postsMigration],
   });
+
+  return { app, db };
 }

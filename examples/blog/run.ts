@@ -4,17 +4,19 @@
  *   bun run examples/blog/run.ts
  *
  * It boots the app on an in-memory SQLite database (migrations run on boot),
- * seeds a few posts through the ORM, then dispatches two real requests through
- * the kernel — the HTML page and the JSON API — and prints what comes back.
+ * seeds a few posts through the typed @keel/db handle, then dispatches two
+ * real requests through the kernel — the HTML page and the JSON API — and
+ * prints what comes back.
  *
- * This exercises every package at once: @keel/orm (Post), @keel/migrate (the
- * posts table), @keel/router (resources), @keel/web (the controller + renderTree),
- * @keel/ui (the registry + SSR), all assembled by @keel/kernel.
+ * This exercises every package at once: @keel/db (typed schema + queries),
+ * @keel/migrate (the posts table), @keel/router (resources), @keel/web (the
+ * controller + renderTree), @keel/ui (the registry + SSR), all assembled
+ * by @keel/kernel.
  */
 
-import { Post } from "./src/post";
 import { buildApp } from "./src/app";
 import { openDatabase } from "./src/database";
+import { countPosts, insertPost } from "./src/post";
 
 const seeds = [
   { title: "Hello, Keel", body: "A batteries-included, AI-native TypeScript framework." },
@@ -23,19 +25,20 @@ const seeds = [
 ];
 
 async function main(): Promise<void> {
-  const { db, close } = await openDatabase();
+  const { db: handle, close } = await openDatabase();
 
-  // Boot: the kernel connects the ORM, runs migrations, and stands up dispatch.
-  const app = buildApp(db);
+  // Boot: the kernel runs migrations and stands up dispatch; buildApp also
+  // wraps the same handle as a typed @keel/db, which controllers + seeds
+  // share.
+  const { app, db } = buildApp(handle);
 
   console.log("migrations applied:", app.migrationsApplied);
 
-  // Seed through the same ORM the kernel connected.
   for (const seed of seeds) {
-    Post.create(seed);
+    insertPost(db, seed);
   }
 
-  console.log("posts seeded:", Post.count());
+  console.log("posts seeded:", countPosts(db));
   console.log();
 
   // Dispatch the HTML page.

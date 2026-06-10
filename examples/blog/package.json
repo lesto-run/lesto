@@ -1,17 +1,16 @@
 {
   "name": "@keel/example-blog",
   "version": "0.0.0",
-  "description": "A runnable end-to-end Keel app: ORM model + migration + UI registry + controller + router, booted by the kernel.",
-  "type": "module",
   "private": true,
-
+  "description": "A runnable end-to-end Keel app: typed schema + migration + UI registry + controller + router, booted by the kernel.",
+  "type": "module",
   "scripts": {
-    "start": "bun run run.ts"
+    "start": "bun run run.ts",
+    "typecheck": "tsc --noEmit"
   },
-
   "dependencies": {
+    "@keel/db": "workspace:*",
     "@keel/kernel": "workspace:*",
-    "@keel/orm": "workspace:*",
     "@keel/migrate": "workspace:*",
     "@keel/router": "workspace:*",
     "@keel/runtime": "workspace:*",

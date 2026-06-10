@@ -2,45 +2,42 @@
  * The PostsController — the far end of the request round-trip.
  *
  * Two actions over the same data:
- *   - `index` queries every Post and renders an HTML page by composing a UI tree
- *     against the app registry, SSR'd by `renderTree`.
+ *   - `index` queries every Post and renders an HTML page by composing a
+ *     UI tree against the app registry, SSR'd by `renderTree`.
  *   - `api` returns the same posts as JSON.
  *
- * Neither action knows about HTTP or the database driver: it asks the ORM for
- * rows and hands the web layer a response built by a content-type-named helper.
+ * Built through a factory so the controller closes over the {@link Db} the
+ * app boot wires up — no module-scoped database global. Mirrors the
+ * `@keel/identity` and `@keel/mailing-lists` shape.
  */
 
 import { Controller } from "@keel/web";
-import type { KeelResponse } from "@keel/web";
+import type { ControllerClass, KeelResponse } from "@keel/web";
+import type { Db } from "@keel/db";
 import type { UiNode } from "@keel/ui";
 
-import { Post } from "./post";
+import { listPosts } from "./post";
 import { registry } from "./registry";
 
-export class PostsController extends Controller {
-  index(): KeelResponse {
-    const posts = Post.order("id", "asc").all();
+export function buildControllers(db: Db): { posts: ControllerClass } {
+  class PostsController extends Controller {
+    index(): KeelResponse {
+      const tree: UiNode = {
+        type: "Page",
+        props: { title: "The Keel Blog" },
+        children: listPosts(db).map((post) => ({
+          type: "PostCard",
+          props: { title: post.title, body: post.body },
+        })),
+      };
 
-    const tree: UiNode = {
-      type: "Page",
-      props: { title: "The Keel Blog" },
-      children: posts.map((post) => ({
-        type: "PostCard",
-        props: {
-          title: String(post.get("title")),
-          body: String(post.get("body")),
-        },
-      })),
-    };
+      return this.renderTree(registry, tree);
+    }
 
-    return this.renderTree(registry, tree);
+    api(): KeelResponse {
+      return this.json({ posts: listPosts(db) });
+    }
   }
 
-  api(): KeelResponse {
-    const posts = Post.order("id", "asc")
-      .all()
-      .map((post) => post.toJSON());
-
-    return this.json({ posts });
-  }
+  return { posts: PostsController as ControllerClass };
 }

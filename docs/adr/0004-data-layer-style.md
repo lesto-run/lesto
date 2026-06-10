@@ -7,7 +7,11 @@
 
 **Scout finding (Phase C):** `@keel/content-store` and `@keel/queue` were *expected* to need migration but already talk raw `SqlDatabase` and never imported `@keel/orm` — they need no work. The real Phase C consumers are `@keel/mailing-lists` (done), `examples/blog` (needs `.orderBy/.limit/.offset` added to `@keel/db`), and `packages/admin` (the meta-introspection consumer — forces the validation-as-boundary decision, ADR 0005 candidate).
 
-**Phase C.2 shipped (2026-06-09):** `@keel/db` grew `.orderBy(column, direction?)`, `.limit(n)`, `.offset(n)`, and `.count()` as an immutable chain on a new `SelectQuery<T>` type. Modifiers are last-wins; `.get()` always uses `LIMIT 1` regardless of user `.limit`; `.count()` honors `WHERE` but ignores `orderBy`/`limit`/`offset` (a limited count is almost always a bug). SQLite quirk: `OFFSET` without `LIMIT` emits `LIMIT -1 OFFSET n` so the offset still applies. 42 tests, 100% lines/branches/functions/statements. Unblocks Phase C.3 (`examples/blog`).
+**Phase C.2 shipped (2026-06-09):** `@keel/db` grew `.orderBy(column, direction?)`, `.limit(n)`, `.offset(n)`, and `.count()` as an immutable chain on a new `SelectQuery<T>` type. Modifiers are last-wins; `.get()` always uses `LIMIT 1` regardless of user `.limit`; `.count()` honors `WHERE` but ignores `orderBy`/`limit`/`offset` (a limited count is almost always a bug). SQLite quirk: `OFFSET` without `LIMIT` emits `LIMIT -1 OFFSET n` so the offset still applies. 42 tests, 100% lines/branches/functions/statements.
+
+**Phase C.3 shipped (2026-06-09):** `examples/blog` migrated. `posts` is a `defineTable` value; `Post = InferRow<typeof posts>` (plain row); `insertPost` / `listPosts` / `countPosts` take explicit `db`; `postsMigration` ships in the same module as the table (deleted the standalone `migrations.ts`). The controller is `buildControllers(db)` (factory pattern, matches identity + mailing-lists). The `static validations` rule (title presence) became a one-line check in `insertPost` — full validation story is deferred to ADR 0005. Blog runs end-to-end (`bun run examples/blog/run.ts`) — boot, seed, dispatch HTML page + JSON API all green. Used the new `.orderBy(posts.id, "asc")` verb directly. Dropped `@keel/orm` from the deps.
+
+**Phase C complete on the consumer side.** Remaining: `packages/admin` (forces ADR 0005 — validation), and Phase D (delete `kernel.useDatabase`, mark `@keel/orm` legacy, update `create-keel` templates).
 
 ## Context
 

@@ -17,9 +17,9 @@
 
 import { serve } from "@keel/runtime";
 
-import { Post } from "./src/post";
 import { buildApp } from "./src/app";
 import { openDatabase } from "./src/database";
+import { countPosts, insertPost } from "./src/post";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -30,19 +30,19 @@ const seeds = [
 ];
 
 async function main(): Promise<void> {
-  const { db, close } = await openDatabase();
+  const { db: handle, close } = await openDatabase();
 
-  // Boot: the kernel connects the ORM, runs migrations, and stands up dispatch.
-  const app = buildApp(db);
+  // Boot: the kernel runs migrations + stands up dispatch; buildApp also
+  // wraps the same handle as a typed @keel/db for controllers + seeds.
+  const { app, db } = buildApp(handle);
 
   console.log("migrations applied:", app.migrationsApplied);
 
-  // Seed through the same ORM the kernel connected.
   for (const seed of seeds) {
-    Post.create(seed);
+    insertPost(db, seed);
   }
 
-  console.log("posts seeded:", Post.count());
+  console.log("posts seeded:", countPosts(db));
 
   // Stand a real node:http server in front of the app.
   const server = await serve(app, { port: PORT });
