@@ -24,13 +24,49 @@ interface Env {
   readonly SESSION_SECRET?: string;
 }
 
+/** A Cloudflare Worker fetch handler — what both `toFetchHandler` and `withAssets` produce. */
+type FetchHandler = (request: Request) => Promise<Response>;
+
+/**
+ * The app/handler is built once per isolate and reused across requests, not
+ * rebuilt on every `fetch`. Constructing the Router, controllers, and the
+ * `SignedSessions` is pure CPU that depends on nothing but the signing secret,
+ * so doing it per request burned cycles on the edge for an identical result
+ * (research finding 11: keep work out of the per-request path). We memoize the
+ * `toFetchHandler` closure at module scope, keyed by the resolved secret.
+ *
+ * Keying by secret is the correctness guard: a Worker's secret is fixed for an
+ * isolate's lifetime, so the cache hits every time in production — but if the
+ * resolved secret ever differs (a rotation, or a test that drives two secrets
+ * through the same module), we rebuild rather than serve a handler signing with
+ * the wrong key. There is no cross-secret leakage: a different secret is a miss.
+ *
+ * `env.ASSETS` is deliberately NOT part of what we cache. It is a per-request
+ * binding the runtime hands us fresh on each `fetch`, so `withAssets` is rewrapped
+ * every request around the cached handler — cheap composition, no rebuild.
+ */
+let cachedSecret: string | undefined;
+let cachedHandler: FetchHandler | undefined;
+
+/** The fetch handler for `secret`, built once per isolate and reused thereafter. */
+function handlerFor(secret: string): FetchHandler {
+  if (cachedHandler === undefined || cachedSecret !== secret) {
+    const app = buildEdgeApp(secret);
+
+    cachedHandler = toFetchHandler((method, path, options) => app.handle(method, path, options));
+    cachedSecret = secret;
+  }
+
+  return cachedHandler;
+}
+
 export default {
   fetch(request: Request, env: Env): Promise<Response> {
-    const app = buildEdgeApp(edgeSecret(env));
-
-    const handler = toFetchHandler((method, path, options) => app.handle(method, path, options));
+    const handler = handlerFor(edgeSecret(env));
 
     // Static marketing files first (cached at the PoP); the live app for the rest.
+    // `env.ASSETS` is per-request, so this thin wrap happens every time; the
+    // handler it wraps is the cached, isolate-lifetime one built above.
     return withAssets(env.ASSETS, handler)(request);
   },
 };

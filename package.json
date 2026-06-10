@@ -29,6 +29,7 @@
     "@vitest/coverage-v8": "^4.1.8",
     "oxfmt": "^0.54.0",
     "oxlint": "^1.69.0",
+    "preact": "^10.29.2",
     "react": "^19",
     "react-dom": "^19",
     "typescript": "^5.7.0",

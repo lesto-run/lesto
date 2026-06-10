@@ -59,23 +59,30 @@ export async function buildProductionSite(
 
   const manifest = await buildStaticSites(sites, handle, nodeSink(outDir));
 
-  // `--minify` strips whitespace/comments and mangles identifiers; `--define`
-  // pins NODE_ENV so React tree-shakes its development-only branches (dev-mode
-  // warnings + invariants are the bulk of an un-minified client bundle). Together
-  // they take /client.js from ~172 KiB to a fraction of that — addressing both
+  // The client bundle is produced by `build-client.ts`, spawned (not imported) so
+  // this file stays plain node-typed and vitest-importable while the Bun-only
+  // `Bun.build` API stays behind a process boundary. `--minify` strips
+  // whitespace/comments and mangles identifiers; `--production` pins NODE_ENV so
+  // React tree-shakes its development-only branches (dev-mode warnings +
+  // invariants are the bulk of an un-minified client bundle) — addressing both
   // Lighthouse's "Minify JavaScript" and "Reduce unused JavaScript" diagnostics.
+  //
+  // The default path bundles real React, unchanged. `KEEL_PREACT=1` opts the
+  // CLIENT bundle into Preact's compat layer (see `build-client.ts`): materially
+  // smaller, and sound for estate's lone DEFERRED island (`Account`, `ssr:false`,
+  // a fresh `createRoot` mount with no server markup to hydrate). It is NOT yet
+  // safe for `ssr:true` islands, which would need the server renderer switched too.
+  const preact = process.env["KEEL_PREACT"] === "1" ? ["--preact"] : [];
+
   execFileSync(
     "bun",
     [
-      "build",
-      "client.tsx",
+      "build-client.ts",
       "--outfile",
       join(outDir, "marketing/client.js"),
-      "--target",
-      "browser",
       "--minify",
-      "--define",
-      'process.env.NODE_ENV="production"',
+      "--production",
+      ...preact,
     ],
     { cwd: projectRoot, stdio: "inherit" },
   );

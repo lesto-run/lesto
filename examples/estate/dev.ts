@@ -39,23 +39,27 @@ const ASSETS = fileURLToPath(new URL("./out", import.meta.url));
 let version = 1;
 
 /**
- * Bundle the island hydration entry to out/client.js. Spawned (not the
- * Bun.build API) so this file stays plain node-typed; the example runs under
- * bun, which provides the bundler. A failed rebuild keeps the previous bundle
- * on disk and keeps watching — fix the syntax error and save again.
+ * Bundle the island hydration entry to out/client.js. Spawns `build-client.ts`
+ * (not the Bun.build API directly) so this file stays plain node-typed; the
+ * example runs under bun, which provides the bundler. Dev builds are
+ * unminified — readable stacks matter more than bytes here. A failed rebuild
+ * keeps the previous bundle on disk and keeps watching — fix the syntax error
+ * and save again.
+ *
+ * `KEEL_PREACT=1` opts the CLIENT bundle into Preact's compat layer (see
+ * `build-client.ts`) — handy for testing the smaller bundle locally; the default
+ * keeps real React, unchanged.
  */
 function bundleClient(): void {
   const started = Date.now();
 
+  const preact = process.env["KEEL_PREACT"] === "1" ? ["--preact"] : [];
+
   try {
-    execFileSync(
-      "bun",
-      ["build", "client.tsx", "--outfile", "out/client.js", "--target", "browser"],
-      {
-        cwd: ROOT,
-        stdio: "inherit",
-      },
-    );
+    execFileSync("bun", ["build-client.ts", "--outfile", "out/client.js", ...preact], {
+      cwd: ROOT,
+      stdio: "inherit",
+    });
 
     console.log(`rebuilt client.js (${Date.now() - started}ms)`);
   } catch {
