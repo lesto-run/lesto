@@ -36,13 +36,16 @@ import type { ControllerClass, KeelResponse, Middleware } from "@keel/web";
  * app wraps it in `createDb(handle)` for its controllers.
  */
 export interface KernelDatabase {
-  exec(sql: string): unknown;
+  exec(sql: string): Promise<void>;
 
   prepare(sql: string): {
-    run(params?: unknown[]): { changes: number; lastInsertRowid: number | bigint };
-    get(params?: unknown[]): unknown;
-    all(params?: unknown[]): unknown[];
+    run(params?: unknown[]): Promise<{ changes: number; lastInsertRowid?: number | bigint }>;
+    get(params?: unknown[]): Promise<unknown>;
+    all(params?: unknown[]): Promise<unknown[]>;
   };
+
+  /** Run `fn` in one transaction on one connection (ADR 0006); see `@keel/db`. */
+  transaction<T>(fn: (tx: KernelDatabase) => Promise<T>): Promise<T>;
 }
 
 /** Everything needed to assemble an app: its database, routes, controllers, and migrations. */
@@ -89,11 +92,16 @@ export interface App {
  * up dispatch over the now-ready database — so a controller's first query
  * hits a migrated schema, not an empty one.
  */
-export function createApp(config: AppConfig): App {
+export async function createApp(config: AppConfig): Promise<App> {
   // Run pending migrations up front so the schema is ready before any
   // request. No migrations configured means nothing ran — empty applied list.
+  // Migrations are async now (ADR 0006): await them so the schema is fully
+  // applied before dispatch is stood up — a controller's first query must hit
+  // a migrated schema, never a half-applied one.
   const migrationsApplied: readonly string[] =
-    config.migrations === undefined ? [] : new Migrator(config.db, config.migrations).migrate();
+    config.migrations === undefined
+      ? []
+      : await new Migrator(config.db, config.migrations).migrate();
 
   // The web core owns request dispatch; the kernel only hands it its parts.
   // `middleware` flows straight through: the dispatch core folds it around the

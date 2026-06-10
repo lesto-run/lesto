@@ -15,19 +15,42 @@ import type { KernelDatabase } from "../src/index";
 // adapter maps that onto better-sqlite3's variadic bind. A Postgres adapter
 // looks the same.
 function adapt(raw: Database.Database): KernelDatabase {
-  return {
-    exec: (sql) => raw.exec(sql),
+  const adapted: KernelDatabase = {
+    exec: async (sql) => {
+      raw.exec(sql);
+    },
 
     prepare: (sql) => {
       const statement = raw.prepare(sql);
 
       return {
-        run: (params = []) => statement.run(...(params as never[])),
-        get: (params = []) => statement.get(...(params as never[])),
-        all: (params = []) => statement.all(...(params as never[])),
+        run: async (params = []) => statement.run(...(params as never[])),
+        get: async (params = []) => statement.get(...(params as never[])),
+        all: async (params = []) => statement.all(...(params as never[])),
       };
     },
+
+    transaction: async (fn) => {
+      raw.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        raw.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          raw.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
   };
+
+  return adapted;
 }
 
 // The fixture table the migration below creates — the proof the kernel ran
@@ -42,8 +65,8 @@ const posts = defineTable("posts", {
 const createPosts: MigrationEntry = {
   version: "001_create_posts",
   migration: {
-    up: (schema) => {
-      schema.execute(createTableSql(posts));
+    up: async (schema) => {
+      await schema.execute(createTableSql(posts));
     },
   },
 };
@@ -53,8 +76,8 @@ const createPosts: MigrationEntry = {
 // migrator.
 function buildControllers(db: Db): { posts: ControllerClass } {
   class PostsController extends Controller {
-    index() {
-      return this.json({ posts: db.select().from(posts).all() });
+    async index() {
+      return this.json({ posts: await db.select().from(posts).all() });
     }
   }
 
@@ -84,8 +107,8 @@ function buildRouter(): Router {
 }
 
 describe("createApp", () => {
-  it("runs migrations on boot and exposes the applied versions", () => {
-    const app = createApp({
+  it("runs migrations on boot and exposes the applied versions", async () => {
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: buildControllers(queryDb),
@@ -95,16 +118,16 @@ describe("createApp", () => {
     expect(app.migrationsApplied).toEqual(["001_create_posts"]);
 
     // The migrated table is real and queryable through @keel/db.
-    queryDb.insert(posts).values({ title: "Seeded directly" }).run();
+    await queryDb.insert(posts).values({ title: "Seeded directly" }).run();
 
-    expect(queryDb.select().from(posts).count()).toBe(1);
+    expect(await queryDb.select().from(posts).count()).toBe(1);
   });
 
-  it("applies no migrations when none are configured", () => {
+  it("applies no migrations when none are configured", async () => {
     // Stand the schema up out of band so the query still has a table to read.
-    db.exec(createTableSql(posts));
+    await db.exec(createTableSql(posts));
 
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: buildControllers(queryDb),
@@ -116,14 +139,14 @@ describe("createApp", () => {
 
 describe("App#handle", () => {
   it("dispatches a request end-to-end: seed a row, GET it back through a controller", async () => {
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: buildControllers(queryDb),
       migrations: [createPosts],
     });
 
-    queryDb.insert(posts).values({ title: "Hello, kernel" }).run();
+    await queryDb.insert(posts).values({ title: "Hello, kernel" }).run();
 
     const response = await app.handle("GET", "/posts");
 
@@ -137,7 +160,7 @@ describe("App#handle", () => {
   });
 
   it("delegates an unmatched path to a plain 404", async () => {
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: buildControllers(queryDb),
