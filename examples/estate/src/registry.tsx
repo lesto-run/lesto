@@ -41,6 +41,16 @@ export const registry = new Registry()
     ),
   })
   .define({
+    name: "Main",
+    description: "The page's main landmark — wraps the primary content below the header.",
+    props: {},
+    children: true,
+    // A single <main> landmark per page is what assistive tech jumps to with
+    // "skip to main content"; without it Lighthouse flags "no main landmark".
+    // The <header> stays its sibling, deliberately outside <main>.
+    render: (_props, children) => <main className="main">{children}</main>,
+  })
+  .define({
     name: "Hero",
     description: "A page's headline and subhead.",
     props: {
@@ -85,7 +95,9 @@ export const registry = new Registry()
     children: false,
     render: (props) => (
       <article className="card">
-        <h3>{String(props["title"])}</h3>
+        {/* h2, not h3: the page's only h1 is the Hero, so cards descend to h2 —
+            skipping to h3 is what trips Lighthouse's sequential-heading audit. */}
+        <h2>{String(props["title"])}</h2>
 
         <p className="card__where">{String(props["neighborhood"])}</p>
 

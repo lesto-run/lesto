@@ -59,6 +59,11 @@ export async function buildProductionSite(
 
   const manifest = await buildStaticSites(sites, handle, nodeSink(outDir));
 
+  // `--minify` strips whitespace/comments and mangles identifiers; `--define`
+  // pins NODE_ENV so React tree-shakes its development-only branches (dev-mode
+  // warnings + invariants are the bulk of an un-minified client bundle). Together
+  // they take /client.js from ~172 KiB to a fraction of that — addressing both
+  // Lighthouse's "Minify JavaScript" and "Reduce unused JavaScript" diagnostics.
   execFileSync(
     "bun",
     [
@@ -68,6 +73,9 @@ export async function buildProductionSite(
       join(outDir, "marketing/client.js"),
       "--target",
       "browser",
+      "--minify",
+      "--define",
+      'process.env.NODE_ENV="production"',
     ],
     { cwd: projectRoot, stdio: "inherit" },
   );

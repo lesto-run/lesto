@@ -59,6 +59,11 @@ function header(accountSlot: UiNode): UiNode {
   return { type: "SiteHeader", children: [accountSlot] };
 }
 
+/** The page's `<main>` landmark, wrapping the primary content below the header. */
+function main(...children: UiNode[]): UiNode {
+  return { type: "Main", children };
+}
+
 /** A grid node over every listing, prices formatted for display. */
 function listingGrid(): UiNode {
   return {
@@ -87,14 +92,16 @@ export function buildControllers(identity: Identity): {
         type: "Page",
         children: [
           header(island("Account")),
-          {
-            type: "Hero",
-            props: {
-              heading: "Extraordinary homes, quietly sold.",
-              sub: "Beverly Hills · Bel Air · Malibu",
+          main(
+            {
+              type: "Hero",
+              props: {
+                heading: "Extraordinary homes, quietly sold.",
+                sub: "Beverly Hills · Bel Air · Malibu",
+              },
             },
-          },
-          listingGrid(),
+            listingGrid(),
+          ),
         ],
       };
 
@@ -107,19 +114,21 @@ export function buildControllers(identity: Identity): {
         type: "Page",
         children: [
           header(island("Account")),
-          {
-            type: "Hero",
-            props: {
-              heading: "About Jade",
-              sub: "Four decades at the top of luxury real estate.",
+          main(
+            {
+              type: "Hero",
+              props: {
+                heading: "About Jade",
+                sub: "Four decades at the top of luxury real estate.",
+              },
             },
-          },
-          {
-            type: "Copy",
-            props: {
-              text: "This marketing site is prerendered to static HTML and served from a CDN — yet the Account control still reflects who you are, resolved on the client against the same-origin /mls session.",
+            {
+              type: "Copy",
+              props: {
+                text: "This marketing site is prerendered to static HTML and served from a CDN — yet the Account control still reflects who you are, resolved on the client against the same-origin /mls session.",
+              },
             },
-          },
+          ),
         ],
       };
 
@@ -158,17 +167,19 @@ export function buildControllers(identity: Identity): {
               ...(name && { name }),
             },
           }),
-          {
-            type: "Hero",
-            props: {
-              heading: user === undefined ? "MLS Search" : `Welcome back, ${name}`,
-              sub:
-                user === undefined
-                  ? "Sign in to save listings."
-                  : "Your saved searches are at /mls/saved.",
+          main(
+            {
+              type: "Hero",
+              props: {
+                heading: user === undefined ? "MLS Search" : `Welcome back, ${name}`,
+                sub:
+                  user === undefined
+                    ? "Sign in to save listings."
+                    : "Your saved searches are at /mls/saved.",
+              },
             },
-          },
-          listingGrid(),
+            listingGrid(),
+          ),
         ],
       };
 

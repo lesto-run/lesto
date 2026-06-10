@@ -45,20 +45,29 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
+// Interactive controls are sized for touch: ≥44px tall with real padding, so
+// adjacent nav links and form buttons clear Lighthouse's tap-target audit
+// (insufficient size/spacing) instead of being thin inline text.
 const STYLE = `
   :root { font-family: ui-sans-serif, system-ui, sans-serif; color: #1a1a1a; }
   body { margin: 0; }
   .site { display: flex; align-items: center; justify-content: space-between;
           padding: 1rem 2rem; border-bottom: 1px solid #eee; }
-  .site__brand { font-weight: 700; text-decoration: none; color: inherit; }
-  .site__nav a { margin-left: 1.25rem; text-decoration: none; color: #555; }
-  .account { margin-left: 1.25rem; }
+  .site__brand { font-weight: 700; text-decoration: none; color: inherit;
+          display: inline-flex; align-items: center; min-height: 44px; }
+  .site__nav { display: flex; align-items: center; gap: .5rem; }
+  .site__nav a { display: inline-flex; align-items: center; min-height: 44px;
+          padding: 0 .5rem; text-decoration: none; color: #555; }
+  .account { margin-left: .5rem; }
   .hero { padding: 3rem 2rem; }
   .hero h1 { font-size: 2.25rem; margin: 0 0 .5rem; }
   .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
           padding: 0 2rem 3rem; }
   .card { border: 1px solid #eee; border-radius: 12px; padding: 1.25rem; }
+  .card h2 { font-size: 1.1rem; margin: 0 0 .5rem; }
   .card__price { font-weight: 700; }
+  .auth button { min-height: 44px; padding: 0 1rem; }
+  .auth input { min-height: 44px; padding: 0 .5rem; }
 `;
 
 /** Render a tree into a complete, island-aware HTML document. */
