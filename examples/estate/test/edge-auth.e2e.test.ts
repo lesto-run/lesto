@@ -68,8 +68,11 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
   it("the session endpoint the marketing island calls reflects the cookie", async () => {
     const handler = handlerFor(SECRET);
 
+    // Signed out is a normal answer for this probe: 200 {user:null}, not a 401
+    // (a 401 would log a browser console error on every public marketing view).
     const anon = await handler(new Request(`${origin}/mls/api/session`));
-    expect(anon.status).toBe(401);
+    expect(anon.status).toBe(200);
+    expect((await anon.json()) as { user: unknown }).toEqual({ user: null });
 
     const signIn = await handler(
       new Request(`${origin}/mls/api/sign-in?as=guest`, { method: "POST" }),

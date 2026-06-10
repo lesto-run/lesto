@@ -85,9 +85,15 @@ describe("the prerendered marketing zone", () => {
 });
 
 describe("the dynamic /mls zone — the authenticated journey", () => {
-  it("gates the saved resource and the session endpoint when signed out", async () => {
+  it("gates the saved resource when signed out", async () => {
     expect((await dispatch("GET", "/mls/saved")).status).toBe(401);
-    expect((await dispatch("GET", "/mls/api/session")).status).toBe(401);
+  });
+
+  it("answers the session probe with 200 {user:null} when signed out (not a 401 — that logs a console error)", async () => {
+    const response = await dispatch("GET", "/mls/api/session");
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ user: null });
   });
 
   it("rejects a sign-in POST carrying no origin signal (CSRF)", async () => {

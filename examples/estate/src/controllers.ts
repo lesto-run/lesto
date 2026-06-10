@@ -105,7 +105,14 @@ export function buildControllers(identity: Identity): {
         ],
       };
 
-      return this.html(renderDocument(registry, tree, "Jade Mills Estates"));
+      return this.html(
+        renderDocument(
+          registry,
+          tree,
+          "Jade Mills Estates",
+          "Extraordinary homes, quietly sold across Beverly Hills, Bel Air, and Malibu — browse Jade Mills' luxury listings.",
+        ),
+      );
     }
 
     /** The static about page — also carries the island, also prerenders. */
@@ -132,7 +139,14 @@ export function buildControllers(identity: Identity): {
         ],
       };
 
-      return this.html(renderDocument(registry, tree, "About · Jade Mills Estates"));
+      return this.html(
+        renderDocument(
+          registry,
+          tree,
+          "About · Jade Mills Estates",
+          "Four decades at the top of luxury real estate — about Jade Mills and the Jade Mills Estates marketing site.",
+        ),
+      );
     }
   }
 
@@ -183,14 +197,30 @@ export function buildControllers(identity: Identity): {
         ],
       };
 
-      return this.html(renderDocument(registry, tree, "MLS · Jade Mills Estates"));
+      return this.html(
+        renderDocument(
+          registry,
+          tree,
+          "MLS · Jade Mills Estates",
+          "Search the Jade Mills MLS and sign in to save listings.",
+        ),
+      );
     }
 
-    /** The same-origin endpoint the marketing Account island calls. */
+    /**
+     * The same-origin endpoint the marketing Account island calls.
+     *
+     * This is an identity *probe*, not a gated resource: "nobody is signed in"
+     * is a normal, expected answer, so it returns 200 with `{ user: null }`
+     * rather than 401. A 401 here would be logged by the browser as a failed
+     * resource load (a console error Lighthouse flags) on every signed-out view
+     * of a public marketing page. The genuinely gated resources — `/mls/saved`,
+     * and any state-changing POST — still answer 401/403.
+     */
     async session(): Promise<KeelResponse> {
       const user = await this.currentUser();
 
-      if (user === undefined) return this.json({ user: null }, 401);
+      if (user === undefined) return this.json({ user: null });
 
       return this.json({ user: sessionUser(user.email) });
     }

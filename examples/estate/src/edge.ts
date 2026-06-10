@@ -54,6 +54,11 @@ function readCookie(header: string | undefined, name: string): string | undefine
   return undefined;
 }
 
+/** The page's `<main>` landmark, wrapping the primary content below the header. */
+function main(...children: UiNode[]): UiNode {
+  return { type: "Main", children };
+}
+
 /** A grid node over every listing, prices formatted for display. */
 function listingGrid(): UiNode {
   return {
@@ -97,18 +102,27 @@ export function buildEdgeApp(secret: string): Application {
         type: "Page",
         children: [
           { type: "SiteHeader", children: [island("Account")] },
-          {
-            type: "Hero",
-            props: {
-              heading: "Extraordinary homes, quietly sold.",
-              sub: "Beverly Hills · Bel Air · Malibu",
+          main(
+            {
+              type: "Hero",
+              props: {
+                heading: "Extraordinary homes, quietly sold.",
+                sub: "Beverly Hills · Bel Air · Malibu",
+              },
             },
-          },
-          listingGrid(),
+            listingGrid(),
+          ),
         ],
       };
 
-      return this.html(renderDocument(registry, tree, "Jade Mills Estates"));
+      return this.html(
+        renderDocument(
+          registry,
+          tree,
+          "Jade Mills Estates",
+          "Extraordinary homes, quietly sold across Beverly Hills, Bel Air, and Malibu — browse Jade Mills' luxury listings.",
+        ),
+      );
     }
   }
 
@@ -131,28 +145,45 @@ export function buildEdgeApp(secret: string): Application {
               },
             ],
           },
-          {
-            type: "Hero",
-            props: {
-              heading: user === undefined ? "MLS Search" : `Welcome back, ${user.name}`,
-              sub:
-                user === undefined
-                  ? "Sign in to save listings."
-                  : "Your saved listings are at /mls/saved.",
+          main(
+            {
+              type: "Hero",
+              props: {
+                heading: user === undefined ? "MLS Search" : `Welcome back, ${user.name}`,
+                sub:
+                  user === undefined
+                    ? "Sign in to save listings."
+                    : "Your saved listings are at /mls/saved.",
+              },
             },
-          },
-          listingGrid(),
+            listingGrid(),
+          ),
         ],
       };
 
-      return this.html(renderDocument(registry, tree, "MLS · Jade Mills Estates"));
+      return this.html(
+        renderDocument(
+          registry,
+          tree,
+          "MLS · Jade Mills Estates",
+          "Search the Jade Mills MLS and sign in to save listings.",
+        ),
+      );
     }
 
-    /** The same-origin endpoint the marketing Account island calls. */
+    /**
+     * The same-origin endpoint the marketing Account island calls.
+     *
+     * An identity *probe*, not a gated resource: "nobody is signed in" is a
+     * normal answer, so it returns 200 with `{ user: null }`. A 401 here would
+     * be logged by the browser as a failed resource load — a console error
+     * Lighthouse flags — on every signed-out view of the public marketing page,
+     * whose island fetches this on load. The gated `/mls/saved` still 401s.
+     */
     session(): KeelResponse {
       const user = currentUser(this.request.headers["cookie"]);
 
-      return user === undefined ? this.json({ user: null }, 401) : this.json({ user });
+      return user === undefined ? this.json({ user: null }) : this.json({ user });
     }
 
     /** Demo sign-in: mint a SIGNED token for `?as=<id>` (default jade), set the cookie. */

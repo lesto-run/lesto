@@ -71,13 +71,20 @@ const STYLE = `
 `;
 
 /** Render a tree into a complete, island-aware HTML document. */
-export function renderDocument(registry: Registry, tree: UiNode, title: string): string {
+export function renderDocument(
+  registry: Registry,
+  tree: UiNode,
+  title: string,
+  description?: string,
+): string {
   const page = renderPage(registry, tree);
 
   const body = page.element === null ? "" : renderToStaticMarkup(page.element);
 
-  // The title is attacker-influenceable (a controller may build it from a
-  // user-facing name), so it is HTML-escaped before it lands in <title>.
+  // The title and description are attacker-influenceable (a controller may build
+  // them from a user-facing name), so they are HTML-escaped before they land in
+  // their respective tags. A page without a description omits the meta entirely
+  // rather than emit an empty one — crawlers read a missing tag, not a blank one.
   return [
     "<!doctype html>",
     '<html lang="en">',
@@ -85,6 +92,9 @@ export function renderDocument(registry: Registry, tree: UiNode, title: string):
     '<meta charset="utf-8" />',
     '<meta name="viewport" content="width=device-width, initial-scale=1" />',
     `<title>${escapeHtml(title)}</title>`,
+    ...(description === undefined
+      ? []
+      : [`<meta name="description" content="${escapeHtml(description)}" />`]),
     `<style>${STYLE}</style>`,
     "</head>",
     "<body>",
