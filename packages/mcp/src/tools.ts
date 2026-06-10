@@ -8,7 +8,6 @@
  */
 
 import type { App } from "@keel/kernel";
-import type { Router } from "@keel/router";
 import type { SqlDatabase } from "@keel/migrate";
 
 import { getCollections, getEntry, query } from "@keel/content-core";
@@ -21,7 +20,8 @@ import { McpError } from "./errors";
 export interface KeelMcpContext {
   app: App;
 
-  router: Router;
+  /** The app's routes (verb + pattern), as `keel().routes()` yields — surfaced by `list_routes`. */
+  routes: readonly { method: string; pattern: string }[];
 
   /** Injected by the caller (wired to `@keel/ui-generate`); absent disables `generate_ui`. */
   generateUi?: (prompt: string) => Promise<unknown>;
@@ -95,7 +95,7 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
       type: "object",
       properties: {},
     },
-    handler: async () => context.router.list(),
+    handler: async () => context.routes,
   };
 
   const handleRequest: KeelTool = {

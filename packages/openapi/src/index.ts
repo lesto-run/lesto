@@ -1,12 +1,9 @@
 /**
- * @keel/openapi — generate an OpenAPI 3.1 document from a @keel/router Router.
+ * @keel/openapi — generate an OpenAPI 3.1 document from a Keel app's route list.
  *
- *   const router = new Router();
- *   router.resources("posts");
- *
- *   const spec = toOpenApi(router, { title: "Blog", version: "1.0.0" });
+ *   const spec = toOpenApi(app.routes(), { title: "Blog", version: "1.0.0" });
  *   const json = toJson(spec);
  */
 
 export { toJson, toOpenApi } from "./openapi";
-export type { OpenApiInfo } from "./openapi";
+export type { OpenApiInfo, RouteEntry } from "./openapi";

@@ -19,7 +19,6 @@
     "@keel/errors": "workspace:*",
     "@keel/kernel": "workspace:*",
     "@keel/migrate": "workspace:*",
-    "@keel/router": "workspace:*",
     "@keel/web": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },

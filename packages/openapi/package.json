@@ -1,7 +1,7 @@
 {
   "name": "@keel/openapi",
   "version": "0.0.0",
-  "description": "Keel's OpenAPI generator — turn a @keel/router Router into an OpenAPI 3.1 document.",
+  "description": "Keel's OpenAPI generator — turn a Keel app's route list into an OpenAPI 3.1 document.",
   "type": "module",
   "private": true,
 
@@ -21,7 +21,5 @@
     "format:check": "oxfmt --check src test"
   },
 
-  "dependencies": {
-    "@keel/router": "workspace:*"
-  }
+  "dependencies": {}
 }

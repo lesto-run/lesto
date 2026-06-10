@@ -1,9 +1,8 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { Controller } from "@keel/web";
+import { keel } from "@keel/web";
 import { createDb, createTableSql, defineTable, integer, text, type Db } from "@keel/db";
-import { Router } from "@keel/router";
 import { createApp } from "@keel/kernel";
 import { Migrator } from "@keel/migrate";
 import type { MigrationEntry } from "@keel/migrate";
@@ -78,22 +77,8 @@ const createPosts: MigrationEntry = {
 
 let queryDb: Db;
 
-class PostsController extends Controller {
-  async index() {
-    return this.json({ posts: await queryDb.select().from(posts).orderBy(posts.id, "asc").all() });
-  }
-}
-
-function buildRouter(): Router {
-  const router = new Router();
-
-  router.resources("posts");
-
-  return router;
-}
-
 let raw: Database.Database;
-let router: Router;
+let routes: ReadonlyArray<{ method: string; pattern: string }>;
 let app: App;
 
 beforeEach(async () => {
@@ -101,14 +86,13 @@ beforeEach(async () => {
   const db = adapt(raw);
   queryDb = createDb(db);
 
-  router = buildRouter();
+  const keelApp = keel().get("/posts", async (c) =>
+    c.json({ posts: await queryDb.select().from(posts).orderBy(posts.id, "asc").all() }),
+  );
 
-  app = await createApp({
-    db,
-    router,
-    controllers: { posts: PostsController },
-    migrations: [createPosts],
-  });
+  routes = keelApp.routes();
+
+  app = await createApp({ db, app: keelApp, migrations: [createPosts] });
 });
 
 afterEach(() => {
@@ -117,7 +101,7 @@ afterEach(() => {
 
 describe("buildTools", () => {
   it("returns the Keel tools with stable names, descriptions, and input schemas", () => {
-    const tools = buildTools({ app, router });
+    const tools = buildTools({ app, routes });
 
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_routes",
@@ -148,13 +132,16 @@ describe("buildTools", () => {
 });
 
 describe("list_routes handler", () => {
-  it("returns the router's routes", async () => {
-    const tools = buildTools({ app, router });
+  it("returns the app's routes", async () => {
+    const tools = buildTools({ app, routes });
 
-    const routes = (await dispatch(tools, "list_routes", {})) as { target: string }[];
+    const result = (await dispatch(tools, "list_routes", {})) as {
+      method: string;
+      pattern: string;
+    }[];
 
-    expect(routes).toEqual(router.list());
-    expect(routes.some((route) => route.target === "posts#index")).toBe(true);
+    expect(result).toEqual(routes);
+    expect(result.some((route) => route.method === "GET" && route.pattern === "/posts")).toBe(true);
   });
 });
 
@@ -189,7 +176,7 @@ describe("content tools", () => {
   });
 
   it("list_content_collections returns each collection with its entry count", async () => {
-    const tools = buildTools({ app, router });
+    const tools = buildTools({ app, routes });
 
     const collections = await dispatch(tools, "list_content_collections", {});
 
@@ -200,7 +187,7 @@ describe("content tools", () => {
   });
 
   it("get_content_entry returns the entry when it exists", async () => {
-    const tools = buildTools({ app, router });
+    const tools = buildTools({ app, routes });
 
     const result = await dispatch(tools, "get_content_entry", {
       collection: "posts",
@@ -211,7 +198,7 @@ describe("content tools", () => {
   });
 
   it("get_content_entry returns null when the entry is absent", async () => {
-    const tools = buildTools({ app, router });
+    const tools = buildTools({ app, routes });
 
     const result = await dispatch(tools, "get_content_entry", {
       collection: "posts",
@@ -222,7 +209,7 @@ describe("content tools", () => {
   });
 
   it("query_content lists all of a collection's entries", async () => {
-    const tools = buildTools({ app, router });
+    const tools = buildTools({ app, routes });
 
     const entries = (await dispatch(tools, "query_content", {
       collection: "posts",
@@ -232,7 +219,7 @@ describe("content tools", () => {
   });
 
   it("query_content caps the result at the given limit", async () => {
-    const tools = buildTools({ app, router });
+    const tools = buildTools({ app, routes });
 
     const entries = (await dispatch(tools, "query_content", {
       collection: "posts",
@@ -252,7 +239,7 @@ describe("content write tools", () => {
 
     await new Migrator(contentDb, [contentEntriesMigration]).migrate();
 
-    return { app, router, contentDb };
+    return { app, routes, contentDb };
   }
 
   it("create_content_entry writes an entry the read tools can then see", async () => {
@@ -315,7 +302,7 @@ describe("content write tools", () => {
   });
 
   it("refuses to write when no content store is configured", async () => {
-    const tools = buildTools({ app, router });
+    const tools = buildTools({ app, routes });
 
     await expect(
       dispatch(tools, "create_content_entry", { collection: "posts", slug: "x" }),
@@ -327,7 +314,7 @@ describe("handle_request handler", () => {
   it("dispatches to app.handle and returns the response", async () => {
     await queryDb.insert(posts).values({ title: "Hello, MCP" }).run();
 
-    const tools = buildTools({ app, router });
+    const tools = buildTools({ app, routes });
 
     const response = (await dispatch(tools, "handle_request", {
       method: "GET",
@@ -354,7 +341,7 @@ describe("handle_request handler", () => {
       },
     };
 
-    const tools = buildTools({ app: stubApp, router });
+    const tools = buildTools({ app: stubApp, routes });
 
     const response = (await dispatch(tools, "handle_request", {
       method: "POST",
@@ -377,7 +364,7 @@ describe("generate_ui handler", () => {
   it("returns the injected generateUi output", async () => {
     const context: KeelMcpContext = {
       app,
-      router,
+      routes,
       generateUi: (prompt) => Promise.resolve({ rendered: prompt }),
     };
 
@@ -389,7 +376,7 @@ describe("generate_ui handler", () => {
   });
 
   it("throws MCP_GENERATE_UNAVAILABLE when generateUi is not configured", async () => {
-    const tools = buildTools({ app, router });
+    const tools = buildTools({ app, routes });
 
     await expect(dispatch(tools, "generate_ui", { prompt: "x" })).rejects.toMatchObject({
       code: "MCP_GENERATE_UNAVAILABLE",
@@ -403,15 +390,15 @@ describe("generate_ui handler", () => {
 
 describe("dispatch", () => {
   it("runs a found tool's handler", async () => {
-    const tools = buildTools({ app, router });
+    const tools = buildTools({ app, routes });
 
-    const routes = await dispatch(tools, "list_routes", {});
+    const result = await dispatch(tools, "list_routes", {});
 
-    expect(routes).toEqual(router.list());
+    expect(result).toEqual(routes);
   });
 
   it("throws MCP_UNKNOWN_TOOL for an unknown name", async () => {
-    const tools = buildTools({ app, router });
+    const tools = buildTools({ app, routes });
 
     await expect(dispatch(tools, "nope", {})).rejects.toMatchObject({
       code: "MCP_UNKNOWN_TOOL",
