@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+
+  "compilerOptions": {
+    "rootDir": ".",
+    "types": ["node"],
+
+    // Typechecking reaches into @keel/web's source (types point at .tsx), so the
+    // JSX flag must be set even though this package authors no JSX itself.
+    "jsx": "react-jsx"
+  },
+
+  "include": ["src", "test"]
+}

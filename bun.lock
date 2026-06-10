@@ -40,6 +40,14 @@
         "@keel/errors": "workspace:*",
       },
     },
+    "packages/authz": {
+      "name": "@keel/authz",
+      "version": "0.0.0",
+      "dependencies": {
+        "@keel/errors": "workspace:*",
+        "@keel/web": "workspace:*",
+      },
+    },
     "packages/cache": {
       "name": "@keel/cache",
       "version": "0.0.0",
@@ -422,6 +430,13 @@
       "version": "0.0.0",
       "dependencies": {
         "@keel/errors": "workspace:*",
+      },
+    },
+    "packages/flags": {
+      "name": "@keel/flags",
+      "version": "0.0.0",
+      "dependencies": {
+        "@keel/web": "workspace:*",
       },
     },
     "packages/forms": {
@@ -827,6 +842,8 @@
 
     "@keel/auth": ["@keel/auth@workspace:packages/auth"],
 
+    "@keel/authz": ["@keel/authz@workspace:packages/authz"],
+
     "@keel/cache": ["@keel/cache@workspace:packages/cache"],
 
     "@keel/cli": ["@keel/cli@workspace:packages/cli"],
@@ -876,6 +893,8 @@
     "@keel/errors": ["@keel/errors@workspace:packages/errors"],
 
     "@keel/feeds": ["@keel/feeds@workspace:packages/feeds"],
+
+    "@keel/flags": ["@keel/flags@workspace:packages/flags"],
 
     "@keel/forms": ["@keel/forms@workspace:packages/forms"],
 
