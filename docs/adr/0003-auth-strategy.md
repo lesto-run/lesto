@@ -1,8 +1,11 @@
 # ADR 0003 — Auth strategy: in-house battery, pluggable edges
 
-- **Status:** Proposed (planning only — not implemented)
+- **Status:** Accepted (planning only — not implemented)
 - **Date:** 2026-06-09
-- **Deciders:** tech lead (pending owner sign-off)
+- **Deciders:** tech lead + owner
+- **Owner-confirmed (2026-06-09):** (1) the assembled battery is **`@keel/identity`**;
+  (2) **email verification is required before first login** — default on,
+  configurable off for low-friction apps.
 
 ## Context
 
