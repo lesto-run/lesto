@@ -87,7 +87,7 @@ describe("Webhooks delivery", () => {
       resolver: publicResolver,
       secrets: secretsFrom({ "ep-1": "shh" }),
     });
-    hooks.send("https://example.com/hook", "order.paid", { id: 42 }, { secretId: "ep-1" });
+    await hooks.send("https://example.com/hook", "order.paid", { id: 42 }, { secretId: "ep-1" });
 
     expect((await queue.runOnce())?.outcome).toBe("done");
 
@@ -107,7 +107,7 @@ describe("Webhooks delivery", () => {
       resolver: publicResolver,
       secrets: secretsFrom({ "ep-1": "super-secret-value" }),
     });
-    const id = hooks.send(
+    const id = await hooks.send(
       "https://example.com/hook",
       "order.paid",
       { id: 42 },
@@ -136,7 +136,7 @@ describe("Webhooks delivery", () => {
       fetch: fakeFetch({ ok: true, status: 200 }),
       resolver: publicResolver,
     });
-    hooks.send("https://example.com/hook", "ping", { ok: true });
+    await hooks.send("https://example.com/hook", "ping", { ok: true });
 
     await queue.runOnce();
     expect(calls[0]?.init.headers[SIGNATURE_HEADER]).toBeUndefined();
@@ -148,10 +148,10 @@ describe("Webhooks delivery", () => {
       fetch: fakeFetch({ ok: false, status: 503 }),
       resolver: publicResolver,
     });
-    const id = hooks.send("https://example.com/hook", "ping", {}, { maxAttempts: 1 });
+    const id = await hooks.send("https://example.com/hook", "ping", {}, { maxAttempts: 1 });
 
     expect((await queue.runOnce())?.outcome).toBe("failed");
-    expect(queue.find(id)?.lastError).toContain("returned 503");
+    expect((await queue.find(id))?.lastError).toContain("returned 503");
   });
 
   it("defaults to the global fetch when none is injected", () => {
@@ -175,7 +175,7 @@ describe("Webhooks secret resolution failures", () => {
       fetch: fakeFetch({ ok: true, status: 200 }),
       resolver: publicResolver,
     });
-    const id = hooks.send(
+    const id = await hooks.send(
       "https://example.com/hook",
       "ping",
       {},
@@ -183,7 +183,7 @@ describe("Webhooks secret resolution failures", () => {
     );
 
     expect((await queue.runOnce())?.outcome).toBe("failed");
-    expect(queue.find(id)?.lastError).toContain("no secrets source");
+    expect((await queue.find(id))?.lastError).toContain("no secrets source");
     expect(calls).toHaveLength(0); // never sent an unsigned request
   });
 
@@ -194,7 +194,7 @@ describe("Webhooks secret resolution failures", () => {
       resolver: publicResolver,
       secrets: secretsFrom({}),
     });
-    const id = hooks.send(
+    const id = await hooks.send(
       "https://example.com/hook",
       "ping",
       {},
@@ -202,7 +202,7 @@ describe("Webhooks secret resolution failures", () => {
     );
 
     expect((await queue.runOnce())?.outcome).toBe("failed");
-    expect(queue.find(id)?.lastError).toContain("No secret is registered");
+    expect((await queue.find(id))?.lastError).toContain("No secret is registered");
   });
 });
 
@@ -342,10 +342,10 @@ describe("Webhooks SSRF integration", () => {
       fetch: fakeFetch({ ok: true, status: 200 }),
       resolver: publicResolver,
     });
-    const id = hooks.send("http://169.254.169.254/latest/", "steal", {}, { maxAttempts: 1 });
+    const id = await hooks.send("http://169.254.169.254/latest/", "steal", {}, { maxAttempts: 1 });
 
     expect((await queue.runOnce())?.outcome).toBe("failed");
-    expect(queue.find(id)?.lastError).toContain("Refusing to deliver");
+    expect((await queue.find(id))?.lastError).toContain("Refusing to deliver");
     expect(calls).toHaveLength(0); // fetch never called
   });
 
@@ -356,7 +356,7 @@ describe("Webhooks SSRF integration", () => {
       resolver: resolverFor({ "internal.svc": ["10.0.0.9"] }),
       urlGuard: async () => undefined, // allow everything (e.g. inside a trusted mesh)
     });
-    hooks.send("http://internal.svc/hook", "ping", {});
+    await hooks.send("http://internal.svc/hook", "ping", {});
 
     expect((await queue.runOnce())?.outcome).toBe("done");
     expect(calls).toHaveLength(1);
@@ -368,9 +368,9 @@ describe("Webhooks SSRF integration", () => {
       queue,
       fetch: fakeFetch({ ok: true, status: 200 }),
     });
-    const id = hooks.send("http://10.0.0.1/hook", "ping", {}, { maxAttempts: 1 });
+    const id = await hooks.send("http://10.0.0.1/hook", "ping", {}, { maxAttempts: 1 });
 
     expect((await queue.runOnce())?.outcome).toBe("failed");
-    expect(queue.find(id)?.lastError).toContain("Refusing to deliver");
+    expect((await queue.find(id))?.lastError).toContain("Refusing to deliver");
   });
 });
