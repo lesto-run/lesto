@@ -1,0 +1,88 @@
+/**
+ * Typed condition builders for `WHERE`.
+ *
+ *   eq(users.email, "ada@example.com")          // typed: arg 2 must be string
+ *   ne(users.id, 1)
+ *   and(eq(users.email, e), isNotNull(users.emailVerifiedAt))
+ *   or(eq(users.id, 1), eq(users.id, 2))
+ *   isNull(users.emailVerifiedAt)
+ *
+ * A {@link Condition} is a small AST: a `sql` fragment with `?` placeholders
+ * plus the `params` array in order. The query compiler concatenates the
+ * fragment after `WHERE` and threads the params straight to `prepare(...)`.
+ * No string-interpolated values; SQL injection is structurally impossible.
+ */
+
+import type { CellType, Column } from "./columns";
+import { quoteIdentifier } from "./identifier";
+
+/** A compiled condition — what the query compiler appends after `WHERE`. */
+export interface Condition {
+  readonly sql: string;
+  readonly params: readonly unknown[];
+}
+
+/** Coerce a JS value to the form the SQL driver expects. */
+function bind(value: unknown): unknown {
+  if (typeof value === "boolean") return value ? 1 : 0;
+
+  return value;
+}
+
+/** `column = value` — the workhorse condition. */
+export function eq<C extends Column<unknown, boolean, boolean>>(
+  column: C,
+  value: NonNullable<CellType<C>>,
+): Condition {
+  return {
+    sql: `${quoteIdentifier(column.spec.name)} = ?`,
+    params: [bind(value)],
+  };
+}
+
+/** `column <> value` — the inverse of {@link eq}. */
+export function ne<C extends Column<unknown, boolean, boolean>>(
+  column: C,
+  value: NonNullable<CellType<C>>,
+): Condition {
+  return {
+    sql: `${quoteIdentifier(column.spec.name)} <> ?`,
+    params: [bind(value)],
+  };
+}
+
+/** `column IS NULL`. Defined separately because SQL `= NULL` does not match. */
+export function isNull(column: Column<unknown, boolean, boolean>): Condition {
+  return {
+    sql: `${quoteIdentifier(column.spec.name)} IS NULL`,
+    params: [],
+  };
+}
+
+/** `column IS NOT NULL`. */
+export function isNotNull(column: Column<unknown, boolean, boolean>): Condition {
+  return {
+    sql: `${quoteIdentifier(column.spec.name)} IS NOT NULL`,
+    params: [],
+  };
+}
+
+/** Combine conditions with `AND`. Single-arg returns the arg unchanged. */
+export function and(...conditions: Condition[]): Condition {
+  return combine("AND", conditions);
+}
+
+/** Combine conditions with `OR`. Single-arg returns the arg unchanged. */
+export function or(...conditions: Condition[]): Condition {
+  return combine("OR", conditions);
+}
+
+function combine(joiner: "AND" | "OR", conditions: Condition[]): Condition {
+  // A single combined condition is just itself — avoid `( x )` noise in SQL.
+  if (conditions.length === 1) return conditions[0]!;
+
+  return {
+    sql: conditions.map((c) => `(${c.sql})`).join(` ${joiner} `),
+    params: conditions.flatMap((c) => c.params),
+  };
+}
