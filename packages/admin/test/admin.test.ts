@@ -1,51 +1,84 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 
-import { Model, resetConnection, useDatabase } from "@keel/orm";
+import {
+  createDb,
+  createTableSql,
+  defineTable,
+  integer,
+  text,
+  type Db,
+  type SqlDatabase,
+} from "@keel/db";
 
-import { Admin, AdminError } from "../src/index";
+import { AdminError, createAdmin } from "../src/index";
 
-import type { AdminErrorCode } from "../src/index";
-import type { SqlDatabase, SqlStatement } from "@keel/orm";
+import type { Admin, AdminErrorCode, AdminResource } from "../src/index";
 
-// The DI boundary: the ORM speaks "array of positional params"; this adapter
-// maps that onto better-sqlite3's variadic bind — the same seam the ORM tests use.
+// ---------------------------------------------------------------------------
+// Test rig
+//
+// One in-memory SQLite per test, wrapped in @keel/db. A small fixture table
+// `posts` with a "secret" column the allow-list must hide.
+// ---------------------------------------------------------------------------
+
 function adapt(raw: Database.Database): SqlDatabase {
   return {
-    prepare(sql: string): SqlStatement {
-      const statement = raw.prepare(sql);
+    exec: (statement) => raw.exec(statement),
+    prepare: (statement) => {
+      const stmt = raw.prepare(statement);
 
       return {
-        run: (params = []) => statement.run(...(params as never[])),
-        get: (params = []) => statement.get(...(params as never[])),
-        all: (params = []) => statement.all(...(params as never[])),
+        run: (params: unknown[] = []) => stmt.run(...(params as never[])),
+        get: (params: unknown[] = []) => stmt.get(...(params as never[])),
+        all: (params: unknown[] = []) => stmt.all(...(params as never[])),
       };
     },
   };
 }
 
-class Post extends Model {
-  static override validations = { title: { presence: true } };
-}
+const posts = defineTable("posts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  secret: text("secret"),
+});
+
+const insertSchema = z.object({
+  title: z.string().min(1, "Title is required."),
+  body: z.string(),
+  secret: z.string().optional(),
+});
+
+const updateSchema = z.object({
+  title: z.string().min(1).optional(),
+  body: z.string().optional(),
+  secret: z.string().optional(),
+});
+
+const postsResource: AdminResource = {
+  name: "posts",
+  table: posts,
+  insertSchema,
+  updateSchema,
+  fields: ["title", "body"],
+};
 
 let raw: Database.Database;
+let db: Db;
 let admin: Admin;
 
 beforeEach(() => {
   raw = new Database(":memory:");
-  raw.exec(`
-    CREATE TABLE posts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT, body TEXT, secret TEXT
-    );
-  `);
-  useDatabase(adapt(raw));
+  const sql = adapt(raw);
+  db = createDb(sql);
+  db.exec(createTableSql(posts));
 
-  admin = new Admin([{ name: "posts", model: Post, fields: ["title", "body"] }]);
+  admin = createAdmin(db, [postsResource]);
 });
 
 afterEach(() => {
-  resetConnection();
   raw.close();
 });
 
@@ -60,9 +93,9 @@ function expectCode(run: () => void, code: AdminErrorCode): void {
   }
 }
 
-describe("Admin", () => {
+describe("createAdmin", () => {
   describe("resources", () => {
-    it("summarizes every resource as name + fields, without the model", () => {
+    it("summarizes every resource as name + fields, without table/schemas", () => {
       expect(admin.resources()).toEqual([{ name: "posts", fields: ["title", "body"] }]);
     });
   });
@@ -78,9 +111,9 @@ describe("Admin", () => {
   });
 
   describe("list", () => {
-    it("projects each record to only id + declared fields", () => {
-      Post.create({ title: "First", body: "one", secret: "hidden" });
-      Post.create({ title: "Second", body: "two", secret: "nope" });
+    it("projects each row to id + declared fields only (secret never leaks)", () => {
+      admin.create("posts", { title: "First", body: "one", secret: "hidden" });
+      admin.create("posts", { title: "Second", body: "two", secret: "nope" });
 
       const rows = admin.list("posts");
 
@@ -88,18 +121,16 @@ describe("Admin", () => {
         { id: 1, title: "First", body: "one" },
         { id: 2, title: "Second", body: "two" },
       ]);
-
-      // the allow-list holds: an undeclared column never leaks
       expect(Object.keys(rows[0]!)).toEqual(["id", "title", "body"]);
       expect(rows[0]).not.toHaveProperty("secret");
     });
   });
 
   describe("get", () => {
-    it("returns the projection of a found record", () => {
-      const created = Post.create({ title: "Hello", body: "world", secret: "x" });
+    it("returns the projection of a found row", () => {
+      const created = admin.create("posts", { title: "Hello", body: "world", secret: "x" });
 
-      expect(admin.get("posts", created.id)).toEqual({ id: 1, title: "Hello", body: "world" });
+      expect(admin.get("posts", created["id"])).toEqual({ id: 1, title: "Hello", body: "world" });
     });
 
     it("throws ADMIN_RECORD_NOT_FOUND when absent", () => {
@@ -108,40 +139,109 @@ describe("Admin", () => {
   });
 
   describe("create", () => {
-    it("persists and returns the projection", () => {
+    it("validates, persists, and returns the projection", () => {
       const created = admin.create("posts", { title: "New", body: "fresh", secret: "s" });
 
       expect(created).toEqual({ id: 1, title: "New", body: "fresh" });
-      expect(Post.find(1).get("title")).toBe("New");
+      expect(admin.get("posts", 1)).toEqual({ id: 1, title: "New", body: "fresh" });
+    });
+
+    it("throws ADMIN_VALIDATION_FAILED with flattened Zod issues on a bad title", () => {
+      try {
+        admin.create("posts", { title: "", body: "ok" });
+        expect.unreachable("expected an AdminError");
+      } catch (error) {
+        const adminError = error as AdminError;
+
+        expect(adminError.code).toBe("ADMIN_VALIDATION_FAILED");
+
+        const issues = adminError.details["issues"] as { fieldErrors: Record<string, string[]> };
+
+        expect(issues.fieldErrors["title"]).toContain("Title is required.");
+      }
+    });
+
+    it("throws ADMIN_VALIDATION_FAILED for a wholly missing required field", () => {
+      expectCode(() => admin.create("posts", { title: "ok" }), "ADMIN_VALIDATION_FAILED");
     });
   });
 
   describe("update", () => {
-    it("mutates a found record and returns the projection", () => {
-      const created = Post.create({ title: "Old", body: "stale", secret: "s" });
+    it("validates, mutates, and returns the merged projection", () => {
+      admin.create("posts", { title: "Old", body: "stale", secret: "s" });
 
-      const updated = admin.update("posts", created.id, { title: "Updated" });
+      const updated = admin.update("posts", 1, { title: "Updated" });
 
+      // `body` is untouched; `title` is the patched value.
       expect(updated).toEqual({ id: 1, title: "Updated", body: "stale" });
-      expect(Post.find(1).get("title")).toBe("Updated");
     });
 
-    it("throws ADMIN_RECORD_NOT_FOUND when absent", () => {
+    it("throws ADMIN_RECORD_NOT_FOUND when absent — BEFORE running the SQL update", () => {
       expectCode(() => admin.update("posts", 999, { title: "x" }), "ADMIN_RECORD_NOT_FOUND");
+    });
+
+    it("throws ADMIN_VALIDATION_FAILED on an invalid patch", () => {
+      admin.create("posts", { title: "Real", body: "ok" });
+
+      expectCode(() => admin.update("posts", 1, { title: "" }), "ADMIN_VALIDATION_FAILED");
     });
   });
 
   describe("destroy", () => {
-    it("deletes a found record", () => {
-      const created = Post.create({ title: "Doomed", body: "gone", secret: "s" });
+    it("deletes a found row", () => {
+      admin.create("posts", { title: "Doomed", body: "gone" });
 
-      admin.destroy("posts", created.id);
+      admin.destroy("posts", 1);
 
-      expect(Post.all().all()).toHaveLength(0);
+      expect(admin.list("posts")).toHaveLength(0);
     });
 
     it("throws ADMIN_RECORD_NOT_FOUND when absent", () => {
       expectCode(() => admin.destroy("posts", 999), "ADMIN_RECORD_NOT_FOUND");
+    });
+  });
+
+  describe("primary-key resolution", () => {
+    it("refuses a resource whose table has no primary-key column at construction time", () => {
+      const noPk = defineTable("no_pk", {
+        name: text("name").notNull(),
+      });
+
+      expectCode(
+        () =>
+          createAdmin(db, [
+            {
+              name: "broken",
+              table: noPk,
+              insertSchema: z.object({ name: z.string() }),
+              updateSchema: z.object({ name: z.string().optional() }),
+              fields: ["name"],
+            },
+          ]),
+        "ADMIN_NO_PRIMARY_KEY",
+      );
+    });
+
+    it("works with a non-`id` primary key (slug)", () => {
+      const slugTable = defineTable("by_slug", {
+        slug: text("slug").primaryKey(),
+        body: text("body").notNull(),
+      });
+      db.exec(createTableSql(slugTable));
+
+      const slugAdmin = createAdmin(db, [
+        {
+          name: "by_slug",
+          table: slugTable,
+          insertSchema: z.object({ slug: z.string(), body: z.string() }),
+          updateSchema: z.object({ body: z.string().optional() }),
+          fields: ["body"],
+        },
+      ]);
+
+      slugAdmin.create("by_slug", { slug: "hello", body: "world" });
+
+      expect(slugAdmin.get("by_slug", "hello")).toEqual({ id: "hello", body: "world" });
     });
   });
 

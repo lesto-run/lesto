@@ -2,13 +2,18 @@
  * Admin failures, coded.
  *
  * As everywhere in Keel, callers branch on `code` — never on the message.
- * The admin UI maps "unknown resource" to a 404 page and "record not found"
- * to a row-level not-found, both off the stable code.
+ * The admin UI maps "unknown resource" to a 404 page, "record not found"
+ * to a row-level not-found, and "validation failed" to per-field form
+ * errors, all off the stable code.
  */
 
 import { KeelError } from "@keel/errors";
 
-export type AdminErrorCode = "ADMIN_UNKNOWN_RESOURCE" | "ADMIN_RECORD_NOT_FOUND";
+export type AdminErrorCode =
+  | "ADMIN_UNKNOWN_RESOURCE"
+  | "ADMIN_RECORD_NOT_FOUND"
+  | "ADMIN_NO_PRIMARY_KEY"
+  | "ADMIN_VALIDATION_FAILED";
 
 /** Anything the admin layer can refuse to do. */
 export class AdminError extends KeelError<AdminErrorCode> {

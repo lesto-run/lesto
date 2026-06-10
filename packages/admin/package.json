@@ -1,7 +1,7 @@
 {
   "name": "@keel/admin",
   "version": "0.0.0",
-  "description": "Keel's admin operations layer over @keel/orm models — the backbone for a generic admin UI.",
+  "description": "Keel's admin operations layer — CRUD over a @keel/db Table with Zod-validated input, the backbone for a generic admin UI.",
   "type": "module",
   "private": true,
 
@@ -22,7 +22,8 @@
   },
 
   "dependencies": {
+    "@keel/db": "workspace:*",
     "@keel/errors": "workspace:*",
-    "@keel/orm": "workspace:*"
+    "zod": "^4.0.0"
   }
 }

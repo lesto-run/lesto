@@ -8,6 +8,7 @@
         "@anthropic-ai/sdk": "^0.102.0",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "better-sqlite3": "^11.10.0",
+        "zod": "^4.0.0",
       },
       "devDependencies": {
         "@types/better-sqlite3": "^7.6.13",
@@ -27,8 +28,9 @@
       "name": "@keel/admin",
       "version": "0.0.0",
       "dependencies": {
+        "@keel/db": "workspace:*",
         "@keel/errors": "workspace:*",
-        "@keel/orm": "workspace:*",
+        "zod": "^4.0.0",
       },
     },
     "packages/auth": {
@@ -383,6 +385,13 @@
         "@keel/web": "workspace:*",
       },
     },
+    "packages/db": {
+      "name": "@keel/db",
+      "version": "0.0.0",
+      "dependencies": {
+        "@keel/errors": "workspace:*",
+      },
+    },
     "packages/deploy": {
       "name": "@keel/deploy",
       "version": "0.0.0",
@@ -438,16 +447,17 @@
       "version": "0.0.0",
       "dependencies": {
         "@keel/auth": "workspace:*",
+        "@keel/db": "workspace:*",
         "@keel/errors": "workspace:*",
         "@keel/mail": "workspace:*",
         "@keel/migrate": "workspace:*",
-        "@keel/orm": "workspace:*",
       },
     },
     "packages/integration": {
       "name": "@keel/integration",
       "version": "0.0.0",
       "dependencies": {
+        "@keel/db": "workspace:*",
         "@keel/identity": "workspace:*",
         "@keel/kernel": "workspace:*",
         "@keel/migrate": "workspace:*",
@@ -483,9 +493,10 @@
       "name": "@keel/mailing-lists",
       "version": "0.0.0",
       "dependencies": {
+        "@keel/db": "workspace:*",
         "@keel/errors": "workspace:*",
         "@keel/mail": "workspace:*",
-        "@keel/orm": "workspace:*",
+        "@keel/migrate": "workspace:*",
         "@keel/queue": "workspace:*",
       },
     },
@@ -856,6 +867,8 @@
     "@keel/cors": ["@keel/cors@workspace:packages/cors"],
 
     "@keel/csrf": ["@keel/csrf@workspace:packages/csrf"],
+
+    "@keel/db": ["@keel/db@workspace:packages/db"],
 
     "@keel/deploy": ["@keel/deploy@workspace:packages/deploy"],
 

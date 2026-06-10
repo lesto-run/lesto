@@ -1,6 +1,6 @@
 ## ADR 0004 — Data layer style: away from ActiveRecord, toward Drizzle-shaped
 
-- **Status:** Accepted — Phases A + B + C.1 complete; remainder of C and D pending
+- **Status:** Accepted — Phase C complete; D (kernel sweep + `@keel/orm` deprecation) pending
 - **Date:** 2026-06-09
 - **Deciders:** tech lead + owner
 - **Implementation note (2026-06-09):** Phase A shipped `packages/db` (`defineTable`, typed columns, `createDb`, conditions, DDL — 31 tests, 100% cov). Phase B migrated `packages/identity` off `@keel/orm` (`User extends Model` and the global `useDatabase` are gone from identity; the service takes an explicit `db: Db`, the schema is a value (`users`) backing both queries and the migration's DDL, helpers are camelCase functions taking explicit `db`). Phase C.1 migrated `@keel/mailing-lists` to `@keel/db` (`List`/`Subscriber` rows replace the Model classes; `createMailingLists({ db, mailer, token? })` is the new closure-factory; `mailingListsMigration` ships with the package — consumers no longer hand-roll the CREATE TABLE; 9 tests, 100% cov, no @keel/db API growth needed). Identity + mailing-lists both dropped `@keel/orm` from their deps.
@@ -12,6 +12,10 @@
 **Phase C.3 shipped (2026-06-09):** `examples/blog` migrated. `posts` is a `defineTable` value; `Post = InferRow<typeof posts>` (plain row); `insertPost` / `listPosts` / `countPosts` take explicit `db`; `postsMigration` ships in the same module as the table (deleted the standalone `migrations.ts`). The controller is `buildControllers(db)` (factory pattern, matches identity + mailing-lists). The `static validations` rule (title presence) became a one-line check in `insertPost` — full validation story is deferred to ADR 0005. Blog runs end-to-end (`bun run examples/blog/run.ts`) — boot, seed, dispatch HTML page + JSON API all green. Used the new `.orderBy(posts.id, "asc")` verb directly. Dropped `@keel/orm` from the deps.
 
 **Phase C complete on the consumer side.** Remaining: `packages/admin` (forces ADR 0005 — validation), and Phase D (delete `kernel.useDatabase`, mark `@keel/orm` legacy, update `create-keel` templates).
+
+**Phase C.4 shipped (2026-06-09):** `@keel/admin` migrated. The resource shape `{ name, table, insertSchema, updateSchema, fields }` from ADR 0005 became real: tables come from `@keel/db`, schemas from Zod. `createAdmin(db, resources)` is the closure factory. Primary-key resolution happens at construction (a missing PK fails *now*, not on the first request) via `table.columnList.find(c => c.spec.primaryKey)` — works for both `id`/autoIncrement and natural keys (slug). Validation surfaces as `ADMIN_VALIDATION_FAILED` carrying Zod's `flatten()`-ed error. Update/destroy do a pre-fetch so absent-row is `ADMIN_RECORD_NOT_FOUND` rather than a silent zero-changes write. Dropped `@keel/orm` from admin's deps. 17 tests, 100% lines/branches/functions/statements.
+
+**Phase C complete.** Phase D (kernel cleanup + `@keel/orm` deprecation + `create-keel` templates) is now unblocked.
 
 ## Context
 

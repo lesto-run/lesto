@@ -1,135 +1,233 @@
-import { AdminError } from "./errors";
-
-import type { Model } from "@keel/orm";
-
 /**
- * A resource is one model exposed to the admin, plus the attributes the UI may
- * read and write. `fields` is the allow-list: the projection never leaks a
- * column the operator didn't declare.
+ * The admin operations layer.
+ *
+ *   const admin = createAdmin(db, [
+ *     {
+ *       name: "posts",
+ *       table: posts,
+ *       insertSchema: z.object({ title: z.string().min(1), body: z.string() }),
+ *       updateSchema: z.object({ title: z.string().min(1).optional(), body: z.string().optional() }),
+ *       fields: ["title", "body"],
+ *     },
+ *   ]);
+ *
+ *   admin.list("posts");                              // [{ id, title, body }, ...]
+ *   admin.create("posts", { title: "Hi", body: "" }); // throws ADMIN_VALIDATION_FAILED
+ *
+ * Resolves a resource name to its `@keel/db` {@link Table} and projects every
+ * row to `{ id, ...declared fields }` — the generic CRUD backbone a
+ * WordPress-style admin UI sits on. CRUD reads/writes go through `@keel/db`;
+ * input validation goes through each resource's Zod schemas (ADR 0005); this
+ * layer owns naming, projection, primary-key resolution, and the not-found /
+ * unknown-resource / validation-failed codes.
+ *
+ * Built as a closure factory matching the rest of the post-ADR-0004 codebase:
+ * no `this`, no inheritance, the `db` handle captured in lexical scope.
  */
-export interface AdminResource {
-  name: string;
-  model: typeof Model;
-  fields: string[];
-}
 
-/** What `resources()` and `describe()` hand back — the model stays server-side. */
-interface ResourceSummary {
-  name: string;
-  fields: string[];
-}
+import { eq } from "@keel/db";
+import type { Column, ColumnSpec, Db, Table } from "@keel/db";
+import type { ZodType } from "zod";
+
+import { AdminError } from "./errors";
 
 type Record_ = Record<string, unknown>;
 
-/**
- * The admin operations layer over `@keel/orm`.
- *
- * It resolves a resource name to its model and projects every record down to
- * `{ id, ...declared fields }` — the generic CRUD backbone a WordPress-style
- * admin UI sits on. CRUD goes through the ORM; this layer owns naming,
- * projection, and the not-found / unknown-resource codes.
- */
-export class Admin {
-  private readonly byName: Map<string, AdminResource>;
+/** A resource is one table exposed to the admin plus its validation + projection contract. */
+export interface AdminResource<TInsert = unknown, TUpdate = unknown> {
+  /** The name the admin URL + API addresses this resource by. */
+  readonly name: string;
 
-  constructor(resources: AdminResource[]) {
-    this.byName = new Map(resources.map((resource) => [resource.name, resource]));
+  /** The `@keel/db` table this resource reads and writes. */
+  readonly table: Table;
+
+  /**
+   * The Zod schema for `create` input. Validated *before* the row is written;
+   * a parse failure surfaces as `ADMIN_VALIDATION_FAILED` carrying the
+   * flattened Zod error.
+   */
+  readonly insertSchema: ZodType<TInsert>;
+
+  /** The Zod schema for `update` input — usually the insert schema with every field optional. */
+  readonly updateSchema: ZodType<TUpdate>;
+
+  /** The columns the projection exposes. The allow-list — never widened by accident. */
+  readonly fields: readonly string[];
+}
+
+/** What `resources()` and `describe()` hand back — schemas and tables stay server-side. */
+interface ResourceSummary {
+  readonly name: string;
+  readonly fields: readonly string[];
+}
+
+/** The admin service — an object of functions; build with {@link createAdmin}. */
+export interface Admin {
+  resources(): ResourceSummary[];
+  describe(name: string): ResourceSummary;
+  list(name: string): Record_[];
+  get(name: string, id: unknown): Record_;
+  create(name: string, attributes: unknown): Record_;
+  update(name: string, id: unknown, attributes: unknown): Record_;
+  destroy(name: string, id: unknown): void;
+}
+
+/** Internal — what we cache per resource to avoid re-scanning the column list. */
+interface ResolvedResource {
+  readonly resource: AdminResource;
+  readonly primaryKey: Column<unknown, boolean, boolean>;
+}
+
+/** Find the primary-key column of a table, or refuse with a coded error. */
+function resolvePrimaryKey(resource: AdminResource): Column<unknown, boolean, boolean> {
+  const column = resource.table.columnList.find((c) => c.spec.primaryKey);
+
+  if (!column) {
+    throw new AdminError(
+      "ADMIN_NO_PRIMARY_KEY",
+      `Resource "${resource.name}" maps to table "${resource.table.tableName}", which has no primary-key column.`,
+      { name: resource.name, table: resource.table.tableName },
+    );
   }
 
-  /** Every resource, summarized — name and exposed fields, no model. */
-  resources(): ResourceSummary[] {
-    return [...this.byName.values()].map((resource) => summarize(resource));
+  return column;
+}
+
+/** A resource without its schemas/table — safe to hand to a client. */
+function summarize(resource: AdminResource): ResourceSummary {
+  return { name: resource.name, fields: [...resource.fields] };
+}
+
+/** Project a row down to `{ id, ...declared fields }` — the allow-list in action. */
+function project(resource: AdminResource, row: Record_, pkSpec: ColumnSpec): Record_ {
+  // `byColumn` is built from `defineTable` and always contains every column
+  // in the table, the primary key included — so the lookup is total.
+  const pkKey = resource.table.byColumn[pkSpec.name]!;
+  const projected: Record_ = { id: row[pkKey] };
+
+  for (const field of resource.fields) {
+    projected[field] = row[field];
   }
 
-  /** One resource, summarized. Throws if the name is unknown. */
-  describe(name: string): ResourceSummary {
-    return summarize(this.resolve(name));
+  return projected;
+}
+
+/** Validate `attributes` against `schema`, or throw a coded validation error. */
+function validate<T>(resourceName: string, schema: ZodType<T>, attributes: unknown): T {
+  const parsed = schema.safeParse(attributes);
+
+  if (!parsed.success) {
+    throw new AdminError("ADMIN_VALIDATION_FAILED", `Validation failed for ${resourceName}.`, {
+      name: resourceName,
+      issues: parsed.error.flatten(),
+    });
   }
 
-  /** Every record, projected to `{ id, ...declared fields }`. */
-  list(name: string): Record_[] {
-    const resource = this.resolve(name);
+  return parsed.data;
+}
 
-    return resource.model
-      .all()
-      .all()
-      .map((record) => project(resource, record));
-  }
+export function createAdmin(db: Db, resources: readonly AdminResource[]): Admin {
+  // Resolve every resource's primary-key column up front. A missing PK fails
+  // *now*, not on the first request — startup-time errors are cheaper to fix.
+  const byName = new Map<string, ResolvedResource>(
+    resources.map((resource) => [
+      resource.name,
+      { resource, primaryKey: resolvePrimaryKey(resource) },
+    ]),
+  );
 
-  /** One record by id, projected. Throws if absent. */
-  get(name: string, id: unknown): Record_ {
-    const resource = this.resolve(name);
+  const resolve = (name: string): ResolvedResource => {
+    const entry = byName.get(name);
 
-    return project(resource, this.fetch(resource, id));
-  }
-
-  /** Persist a new record, then return its projection. */
-  create(name: string, attributes: Record_): Record_ {
-    const resource = this.resolve(name);
-
-    return project(resource, resource.model.create(attributes));
-  }
-
-  /** Update an existing record, then return its projection. Throws if absent. */
-  update(name: string, id: unknown, attributes: Record_): Record_ {
-    const resource = this.resolve(name);
-    const record = this.fetch(resource, id);
-
-    record.update(attributes);
-
-    return project(resource, record);
-  }
-
-  /** Delete an existing record. Throws if absent. */
-  destroy(name: string, id: unknown): void {
-    const resource = this.resolve(name);
-
-    this.fetch(resource, id).destroy();
-  }
-
-  // ---- internals ----
-
-  /** Resolve a name to its resource, or refuse with a coded error. */
-  private resolve(name: string): AdminResource {
-    const resource = this.byName.get(name);
-
-    if (!resource) {
+    if (!entry) {
       throw new AdminError("ADMIN_UNKNOWN_RESOURCE", `No admin resource named "${name}".`, {
         name,
       });
     }
 
-    return resource;
-  }
+    return entry;
+  };
 
-  /** Load one record by id, or refuse with a coded error. */
-  private fetch(resource: AdminResource, id: unknown): Model {
-    const record = resource.model.findBy({ [resource.model.primaryKey]: id });
+  const fetchRow = (entry: ResolvedResource, id: unknown): Record_ => {
+    const row = db
+      .select()
+      .from(entry.resource.table)
+      .where(eq(entry.primaryKey, id as never))
+      .get();
 
-    if (!record) {
+    if (!row) {
       throw new AdminError(
         "ADMIN_RECORD_NOT_FOUND",
-        `No ${resource.name} record with ${resource.model.primaryKey}=${String(id)}.`,
-        { name: resource.name, id },
+        `No ${entry.resource.name} record with ${entry.primaryKey.spec.name}=${String(id)}.`,
+        { name: entry.resource.name, id },
       );
     }
 
-    return record;
-  }
-}
+    return row as Record_;
+  };
 
-/** A resource without its model — safe to hand to a client. */
-function summarize(resource: AdminResource): ResourceSummary {
-  return { name: resource.name, fields: [...resource.fields] };
-}
+  return {
+    resources(): ResourceSummary[] {
+      return [...byName.values()].map((entry) => summarize(entry.resource));
+    },
 
-/** Project a record down to `{ id, ...declared fields }` — the allow-list in action. */
-function project(resource: AdminResource, record: Model): Record_ {
-  const projected: Record_ = { id: record.id };
+    describe(name) {
+      return summarize(resolve(name).resource);
+    },
 
-  for (const field of resource.fields) {
-    projected[field] = record.get(field);
-  }
+    list(name) {
+      const entry = resolve(name);
+      const rows = db.select().from(entry.resource.table).all() as Record_[];
 
-  return projected;
+      return rows.map((row) => project(entry.resource, row, entry.primaryKey.spec));
+    },
+
+    get(name, id) {
+      const entry = resolve(name);
+
+      return project(entry.resource, fetchRow(entry, id), entry.primaryKey.spec);
+    },
+
+    create(name, attributes) {
+      const entry = resolve(name);
+      const data = validate(name, entry.resource.insertSchema, attributes);
+
+      const row = db
+        .insert(entry.resource.table)
+        .values(data as never)
+        .returning()
+        .get() as Record_;
+
+      return project(entry.resource, row, entry.primaryKey.spec);
+    },
+
+    update(name, id, attributes) {
+      const entry = resolve(name);
+      const data = validate(name, entry.resource.updateSchema, attributes);
+
+      // Confirm the row exists *before* the update — gives us the
+      // not-found code instead of a silently-zero-rows-affected update.
+      fetchRow(entry, id);
+
+      db.update(entry.resource.table)
+        .set(data as never)
+        .where(eq(entry.primaryKey, id as never))
+        .run();
+
+      // Re-read so the projection reflects the merged state, not the patch.
+      return project(entry.resource, fetchRow(entry, id), entry.primaryKey.spec);
+    },
+
+    destroy(name, id) {
+      const entry = resolve(name);
+
+      // Same pre-check as update — the not-found code is more useful than
+      // a quiet zero-changes delete.
+      fetchRow(entry, id);
+
+      db.delete(entry.resource.table)
+        .where(eq(entry.primaryKey, id as never))
+        .run();
+    },
+  };
 }
