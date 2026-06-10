@@ -1,0 +1,486 @@
+{
+  "assessments": [
+    {
+      "key": "crash-safety-dos",
+      "dimension": "crash-safety & DoS surface",
+      "scoreBefore": 2,
+      "scoreNow": 6.5,
+      "whatChanged": "The single hardening commit 621fe4c (\"Harden security & correctness: resolve all 29 confirmed REVIEW-2026-06-09 findings\") landed on main and is fully COMMITTED (the env-block HEAD was a stale snapshot; the only uncommitted file is the untracked docs/ATTACK-PLAN-2026.md, which is not code). There are NO uncommitted in-flight runtime changes — git diff is empty for packages/runtime. The original catastrophic finding #3 (\"one malformed JSON POST crashes the whole server\") is genuinely fixed: packages/runtime/src/server.ts now has a per-request error boundary, a body-size cap, and a process-level unhandledRejection net; packages/runtime/src/request.ts catches JSON.parse. 63 runtime tests pass, including live socket tests proving the server keeps serving after a malformed body, a throwing handler, and an oversized body. No regressions found. NOTE: @keel/deploy is only static-file shipping (ship.ts), not a production HTTP tier — serve() in @keel/runtime IS the web tier.",
+      "summary": "The 2/10-era remote-unauthenticated process-kill is decisively closed: a malformed JSON body, a throwing/rejecting handler, and an oversized body are all caught at the per-request boundary and answered with a safe generic status (400/413/500), with a process-level unhandledRejection net as defense-in-depth. An attacker can now only degrade their OWN request, not take the process down. This is the difference between \"do not deploy\" and \"deployable behind a hardened proxy.\" What keeps it from production-grade for a direct, unauthenticated, client-facing deploy is the absence of any application-level liveness controls: there is NO request/handler timeout (a hung controller holds a socket forever), NO app-configured Node timeout/header limits (sole reliance on Node 22 defaults: 5-min requestTimeout, 60s headersTimeout, 16KB maxHeaderSize), and NO SIGTERM graceful-drain in the first-party `keel serve`/`keel dev` CLI. server.close() also has no idle-connection draining or grace timer, so shutdown can hang on keep-alive sockets. Behind a real reverse proxy / load balancer (which terminates slow-loris and enforces timeouts) this is reasonably safe; standing naked on the public internet it is still exposed to slow/hung-handler resource exhaustion and ungraceful deploy restarts.",
+      "items": [
+        {
+          "name": "Per-request error boundary (try/catch, never throws)",
+          "status": "resolved",
+          "evidence": "packages/runtime/src/server.ts:215-250 handle() wraps readBody+toKeelRequest+app.handle in try/catch: `} catch (error) { const status = statusForError(error); if (status === 500) { deps.logError(...) } respondWithError(res, status); }`. The dispatch at :179 `void handle(app, req, res, ...)` is safe because handle swallows all throws. Proven live by server.test.ts:182-209 ('handler that throws into a 500') and :155-180 ('malformed JSON ... keeps serving (no crash)').",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "This is the core fix for the original DoS. Solid: also scrubs error internals (the thrown message 'hunter2' never reaches the wire, asserted at server.test.ts:205)."
+        },
+        {
+          "name": "Malformed-JSON no longer crashes (original finding #3)",
+          "status": "resolved",
+          "evidence": "packages/runtime/src/request.ts:88-102 parseBody wraps JSON.parse in try/catch and throws typed RuntimeError('RUNTIME_INVALID_JSON'); server.ts:136-145 statusForError maps it to 400. Was previously an unhandled SyntaxError -> rejected promise -> process exit on Node>=22.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "The exact 2/10-era kill shot is closed and regression-tested."
+        },
+        {
+          "name": "Request body-size cap (memory-exhaustion guard)",
+          "status": "resolved",
+          "evidence": "packages/runtime/src/server.ts:89-133 readBody tallies bytes, rejects with RUNTIME_BODY_TOO_LARGE the moment total>maxBytes, frees the buffer (`chunks = []`) and ignores all later chunks (`if (aborted) return`); default DEFAULT_MAX_BODY_BYTES = 1 MiB (:42). Mapped to 413 at :141-143. Tested at server.test.ts:232-250 and readBody unit tests :305-318.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Heap stays bounded even if a client streams gigabytes. Note: it does NOT destroy the socket (intentional, to flush the 413), so the connection lingers until Node's requestTimeout — see slow-body item."
+        },
+        {
+          "name": "Process-level rejection net (defense-in-depth)",
+          "status": "resolved",
+          "evidence": "packages/runtime/src/server.ts:310-323 installProcessSafetyNet registers a single idempotent unhandledRejection listener via a WeakSet (`netted`); deliberately does NOT net uncaughtException (documented rationale at :296-308). Called from serve() at :174. Tested at server.test.ts:380-407.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Correct call: swallowing sync uncaughtException would risk corrupt state. The async net is appropriate belt-and-suspenders."
+        },
+        {
+          "name": "Request / handler execution timeout (hung-controller DoS)",
+          "status": "open",
+          "evidence": "packages/runtime/src/server.ts:233 `const response = await app.handle(...)` is awaited with no Promise.race/AbortSignal/timeout. Grep for 'timeout|setTimeout|Promise.race|AbortSignal' across packages/runtime/src + web + kernel src returns nothing in the request path. A controller that never resolves holds the socket and an event-loop slot open indefinitely.",
+          "isLowHangingFruit": true,
+          "effort": "M",
+          "note": "Highest-value remaining gap. The handle() JSDoc claims attackers 'can never ... hang their socket open' — true for errors, FALSE for a slow/hung handler. A Promise.race against a configurable deadline -> 503/504 is a well-under-a-day fix with no architectural change."
+        },
+        {
+          "name": "App-level Node timeout / header limits (slow-loris, slow-body, large headers)",
+          "status": "open",
+          "evidence": "packages/runtime/src/server.ts:176-196 createServer(...) then server.listen(...) — no server.requestTimeout / headersTimeout / keepAliveTimeout / maxHeadersCount / maxHeaderSize set anywhere (grep confirms only server.listen/address/close touch `server.`). Protection rests entirely on Node 22 defaults (requestTimeout 300s, headersTimeout 60s, maxHeaderSize 16KB).",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "Node's defaults give partial slow-loris/header coverage out of the box, but nothing is tuned for a public deploy and slow-body is bounded only at the 5-min default. Setting these explicitly (and exposing as ServeOptions) is a few lines."
+        },
+        {
+          "name": "Graceful shutdown / drain on SIGTERM for the web tier",
+          "status": "partial",
+          "evidence": "First-party CLI bin packages/cli/src/bin.ts has NO process.on('SIGTERM'/'SIGINT') — process 'stays alive on its own open socket' (:8,:68-69) and is never asked to drain. Only the example entrypoints wire it (examples/blog/serve.ts:66-67, examples/estate/serve.ts:64-65). Even there, server.close() (server.ts:190-194) is the bare Node callback with no closeIdleConnections()/closeAllConnections()/grace timer, so it can hang indefinitely on keep-alive sockets.",
+          "isLowHangingFruit": true,
+          "effort": "M",
+          "note": "serve() returns a close() but `keel serve`/`keel dev` never calls it on a signal, so a deploy rolling-restart SIGKILLs in-flight requests. The runtime doc comments reference SIGTERM but no first-party code wires it. A proper drain (stop accepting, closeIdle, grace timer then closeAll) belongs in serve()/bin.ts."
+        }
+      ]
+    },
+    {
+      "key": "security-wiring",
+      "summary": "Libraries fixed but unwired; no pipeline; default deploy enforces no security.",
+      "dimension": "Security primitives wired",
+      "scoreBefore": 2,
+      "scoreNow": 4.5,
+      "whatChanged": "621fe4c fixed findings at library level; no pipeline added.",
+      "items": [
+        {
+          "name": "Pipeline unwired (THE finding)",
+          "status": "open",
+          "evidence": "application.ts:52-116 no interception; cors/csrf/ratelimit/rbac no consumers",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "core knock unchanged"
+        },
+        {
+          "name": "Library fixes landed",
+          "status": "resolved",
+          "evidence": "cors.ts:118 CSRF token.ts:34 webhooks.ts:112,207 password.ts:59 server.ts:215 estate auth.ts:54,97",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "all verified on disk"
+        },
+        {
+          "name": "MemorySessionStore only; no default headers",
+          "status": "open",
+          "evidence": "sessions.ts:7-21 sole store; types.ts:32 single-valued headers; no HSTS/CSP",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "no secure-by-default"
+        }
+      ]
+    },
+    {
+      "key": "data-layer",
+      "dimension": "Data layer safety & scale (packages/orm, packages/migrate, packages/queue)",
+      "scoreBefore": 2,
+      "scoreNow": 5,
+      "whatChanged": "The Phase-0 hardening for the data layer is landed and committed (no uncommitted churn in these three packages; `git status` clean, last touch ~Jun 9 commits). Every concrete safety bug the review flagged is now fixed AND covered by a test: (1) a new packages/orm/src/identifier.ts adds quoting + a model-declared column allowlist, wired into relation.ts (where/order/pluck) and model.ts (insert/update/delete); (2) migrator.ts now wraps each migration's DDL + bookkeeping INSERT in its own BEGIN/COMMIT/ROLLBACK; (3) queue.ts work() loop gained a real error boundary (try/catch -> onError seam -> pollMs backoff) so a transient claim/reclaim fault no longer kills the worker; (4) the medium SQL correctness bugs (offset-without-limit -> LIMIT -1, where IN () -> 1=0, explicit-PK drop on create, rollback-of-wrong-migration) are all fixed. orm 31 + migrate 21 + queue 26 tests pass. What did NOT change: the architectural blocker — the SQL surface is still 100% synchronous and there is still zero Postgres driver in the tree.",
+      "summary": "All point-fix safety findings in this dimension are genuinely resolved and tested: ORM identifier injection (allowlist + quoting), per-migration transactions, queue worker error boundary, plus the cluster of medium SQL-correctness bugs. The craftsmanship is high and the fixes are verified, not just code-present. But the headline scale claim remains an IOU: SqlDatabase/SqlStatement (and therefore Relation/Model returning T[]/number/boolean, not Promises) are still fully SYNCHRONOUS, and no Postgres adapter exists anywhere in the repo — the only DB driver dependency is better-sqlite3, and 'Postgres' appears solely in comments. A real async Postgres driver cannot satisfy this synchronous interface without rewriting every call site, so the entire stateless-horizontal-scale story is still blocked. Score rises from 2 to 5: locally safe and correct on SQLite, but not scalable as advertised.",
+      "items": [
+        {
+          "name": "Async/Postgres blocker — SQL surface still synchronous, no PG adapter",
+          "status": "open",
+          "evidence": "packages/orm/src/types.ts:14-22 — `run(...): { changes; lastInsertRowid }`, `get(...): unknown`, `all(...): unknown[]` (all sync, no Promise); Relation.all()/count()/first() and Model.save()/create() return sync values (relation.ts:121 `all(): T[]`, model.ts:210 `save(): boolean`). No PG dep: `grep '\"pg\"|postgres|node-postgres|@neondatabase' packages/*/package.json` returns nothing; only better-sqlite3 is depended on. kernel.ts:30 says 'single better-sqlite3 (or Postgres) adapter' as a comment only. queue.ts:28 / migrate types.ts:6 reference Postgres purely in prose. `FOR UPDATE SKIP LOCKED` exists only in a comment (queue.ts:28), never in code.",
+          "isLowHangingFruit": false,
+          "effort": "XL",
+          "note": "This is THE cap on the stateless-scale story. Making it async (or supporting a real async PG driver) is a breaking rewrite of the SqlDatabase contract and every ORM/queue/migrate call site, plus driver-specific idioms must be abstracted: INTEGER PRIMARY KEY AUTOINCREMENT (queue.ts:36), lastInsertRowid (model.ts:299, queue.ts:200) vs PG RETURNING, named @param binding (queue.ts:188), and SQLite's LIMIT -1 (relation.ts:184). Multi-worker concurrency (FOR UPDATE SKIP LOCKED) is unimplemented."
+        },
+        {
+          "name": "ORM identifier (SQL) injection",
+          "status": "resolved",
+          "evidence": "New packages/orm/src/identifier.ts:36-55 — quoteIdentifier doubles embedded quotes and refuses NUL; quoteColumn enforces a model-declared allowlist (ORM_UNKNOWN_COLUMN). Wired at relation.ts:82 (where), :108 (order), :150 (pluck), :165 (table) and model.ts:229/291/309/310 (delete/insert/update). Tested: orm.test.ts:337 'quotes column identifiers so a where key cannot inject SQL' asserts `\"title\"\"; DROP TABLE posts; --\"`; orm.test.ts:355 covers order() injection.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Belt-and-suspenders (allowlist + standard double-quote quoting honored by SQLite and PG). Solidly fixed and verified."
+        },
+        {
+          "name": "Migrations not transactional (partial-failure leaves half-applied schema)",
+          "status": "resolved",
+          "evidence": "migrate/src/migrator.ts:80-101 wraps each migration in `this.db.exec('BEGIN')` / `COMMIT`, with `ROLLBACK` in catch (best-effort, original error rethrown). Per-migration (Rails-style), not whole-run. Tested: migrate.test.ts:326 'rolls back a failing migration's DDL and leaves no record, keeping earlier ones' asserts (a) rethrow, (b) no schema_migrations row, (c) the partial table is gone, (d) the earlier migration in the same run stays applied.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Correct for SQLite/PG transactional DDL. Note SqlDatabase.exec is on the migrate-local type (migrate/types.ts:17), not the ORM type — fine for now since the migrator owns its own surface."
+        },
+        {
+          "name": "Queue worker error boundary (transient DB error killed worker permanently)",
+          "status": "resolved",
+          "evidence": "queue/src/queue.ts:308-320 loop() wraps runOnce in try/catch; on throw it calls report() (which maps to a coded QUEUE_WORKER_POLL_FAILED QueueError via the onError seam, swallowing reporter throws) then `await sleep(pollMs)` and continues. Tested: queue.test.ts:258 'survives a transient poll error: reports it and keeps processing' uses a db wrapper whose first prepare() throws, then enqueues and asserts the job is still processed and the error surfaced as a frozen coded QueueError.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "At-least-once invariant preserved: a job claimed before the throw stays running until visibility deadline, then reclaim returns it. Reporter cannot resurrect the fault."
+        },
+        {
+          "name": "Medium SQL correctness bugs (offset-without-limit, IN (), explicit-PK drop, rollback-wrong-migration)",
+          "status": "resolved",
+          "evidence": "relation.ts:181-189 emits LIMIT -1 when offset set without limit; relation.ts:91-93 compiles empty-array IN to `1 = 0`; model.ts:257-261/286-289 hasExplicitPrimaryKey honors a caller-set PK on insert; migrator.ts:122-135 takes latest-applied version from the DB set and throws MIGRATE_MISSING_MIGRATION rather than reversing the wrong one. orm.test.ts:294/326 cover offset; migrate.test.ts:363 covers the missing-definition refusal.",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "All four mediums fixed with tests. LIMIT -1 is a SQLite/PG-compatible portable spelling; remains valid even after a future async port."
+        },
+        {
+          "name": "Driver-specific persistence idioms (latent portability debt)",
+          "status": "open",
+          "evidence": "model.ts:299 `this.attributes[pk] = Number(result.lastInsertRowid)` and queue.ts:200 `Number(result.lastInsertRowid)` assume SQLite's lastInsertRowid; PG needs RETURNING. queue.ts:36 DDL uses `INTEGER PRIMARY KEY AUTOINCREMENT` (SQLite-only syntax). queue binds with `@named` params (queue.ts:188), a better-sqlite3 idiom node-postgres does not accept.",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "Not a safety bug today (SQLite-only), but these are the concrete things that must be abstracted for the Postgres IOU to become real. Listed so the scale gap is not understated."
+        }
+      ]
+    },
+    {
+      "key": "observability-deploy",
+      "dimension": "Observability & Deploy/Ops",
+      "scoreBefore": 2,
+      "scoreNow": 3,
+      "whatChanged": "The hardening + Phase-2 work landed as commits (working tree is clean except a new untracked docs/ATTACK-PLAN-2026.md; the \"183 in-flight files\" are already committed). Two concrete moves touch this dimension: (1) runtime/server.ts gained a real per-request error boundary + body cap + process safety net (commit 621fe4c), which fixes the review's High #3 crash and adds the FIRST error logging in the request path (console.error on 500s only). (2) commit 621fe4c fixed the tracer end() double-export bug (observability/tracer.ts:33-34,60). Phase-2 (be7e88e) built out @keel/deploy (plan.ts/ship.ts) + `keel deploy`/`keel dev` CLI. None of this wired observability into the request path, added health/rollback/drain to deploy, or made deploy anything more than a local filesystem copy + routing-rule printer. The forward-looking ATTACK-PLAN-2026.md itself lists all of these as future bets (lines 33, 124, 172, 214), confirming they are unaddressed today.",
+      "summary": "Observability is still essentially a dead package: @keel/observability is imported by ZERO other packages (verified across package.json and *.ts), so the Tracer/spans never run. The request path emits NO request logging on success, NO traces, NO metrics — the only signal anywhere is a single console.error on 500s (server.ts:245) plus an unhandledRejection log (server.ts:321). There is no /health, /readyz, no /metrics, and no Prometheus/OTel exporter anywhere in the repo (the only exporter is InMemoryExporter, a test double). `keel deploy` builds static sites then ships them through nodeUploader, which is a UTF-8 filesystem copy into ./dist (ship.ts:82-104; reads/writes \"utf8\" so it cannot even ship binary assets correctly), then prints routing rules (\"route / → static\"). There is no real cloud target, no health check, no rollback, no drain, no incremental/changed-only upload, no CDN invalidation. You could NOT run this in prod and see what it is doing, nor deploy safely. The crash-boundary fix is a genuine operability improvement (the server no longer dies on a bad request), which is why this nudges from 2 to 3 — but the dimension remains pre-production.",
+      "items": [
+        {
+          "name": "@keel/observability imported by zero packages (dead code)",
+          "status": "open",
+          "evidence": "grep over all package.json: 'NO PACKAGE.JSON DEPENDS ON @keel/observability'; grep over all *.ts (excl. its own pkg): 'NO TS IMPORTS OUTSIDE observability'. Tracer/Span are exported (observability/src/index.ts:26) but never instantiated outside its own tests.",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "To matter it must be wired into kernel.ts createApp / Application.handle as a per-request span around app.handle, threaded to controllers. Kernel.ts:76-96 has no tracing seam and no dependency on observability. Architectural, not a one-liner."
+        },
+        {
+          "name": "Request logging in the request path",
+          "status": "partial",
+          "evidence": "runtime/server.ts:245 'deps.logError(\"unhandled error serving request\", error)' fires ONLY on status===500; client 4xx are deliberately not logged (server.ts:243-244). No success-path access log of method/path/status/latency anywhere. defaultLogError is console.error (server.ts:284).",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "Today the only request-path signal is errors. A basic structured access log (method, path, status, duration) in handle() after applyResponse would be a high-value, sub-hour change with an injectable sink already present (ServeOptions.logError pattern)."
+        },
+        {
+          "name": "Traces/metrics wired into request path",
+          "status": "open",
+          "evidence": "grep for observability|tracer|startSpan|metric across kernel/src and runtime/src returns only comment-string matches in server.ts (the word 'log'). No span is started per request; no metric is recorded. Repo-wide grep for prometheus|/metrics|histogram|counter|otel|statsd finds only a codegen 'counter' var (content-core/imports.ts:49) — no metrics facility exists.",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "No metrics primitive exists at all (only the tracing core). ATTACK-PLAN-2026.md:214 lists 'observability are in the request path' as a FUTURE phase exit, confirming it is not done."
+        },
+        {
+          "name": "Health / readiness endpoint",
+          "status": "open",
+          "evidence": "Repo-wide grep for healthz|readyz|livez|/health found only external-Studio probes (content-core/mcp-client.ts:58 fetches a remote /api/health) — a Keel app exposes none of its own. server.ts has no health route; kernel.ts wires no /health.",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "A trivial built-in GET /healthz (and a /readyz that checks the DB handle) would unblock load-balancer/orchestrator integration. Small, no architectural change."
+        },
+        {
+          "name": "`keel deploy` is a real deploy target",
+          "status": "open",
+          "evidence": "run.ts:332-367 runDeploy: buildStaticSites -> planDeploy -> shipStatic via deps.uploader, then prints 'route <basePath> → <mode>'. The only uploader is nodeUploader (ship.ts:82-104), a local fs copy into ./dist. plan.ts NodeTarget just carries run:'keel serve' as a string the CLI prints (run.ts:358 'run `keel serve` (dynamic)'). No S3/R2/CDN, no process start.",
+          "isLowHangingFruit": false,
+          "effort": "XL",
+          "note": "Still a filesystem copy + routing-rule printer, exactly as the 2/10 review described. ATTACK-PLAN-2026.md:33 admits 'S3/CloudFront/R2 deploys are hand-assembled' and lines 124/172 list incremental S3-compatible/Cloudflare uploaders as not-yet-built bets."
+        },
+        {
+          "name": "Health check / rollback / drain in deploy",
+          "status": "open",
+          "evidence": "grep for healthcheck|rollback|drain|graceful across deploy/src, cli/src, runtime/src found only: server.ts:11 'graceful shutdown' (just server.close()) and worker.ts 'graceful drain' (queue worker, not deploy). deploy/src has zero rollback/health/drain code; deploy.test.ts has no such cases.",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "shipStatic is fire-and-forget; a failed/partial publish leaves dist in a mixed state with no rollback and no post-deploy health gate. Cannot deploy safely."
+        },
+        {
+          "name": "nodeUploader corrupts binary assets",
+          "status": "open",
+          "evidence": "ship.ts:86 read uses readFile(...,'utf8') and ship.ts:65/102 put writes 'utf8' string; ShipDeps.put signature is (key, contents:string, contentType). Any image/font/binary asset is round-tripped through UTF-8 and corrupted on publish.",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Regression risk for any real static site (images/fonts). The seam is string-typed end to end, so fixing requires widening ShipDeps to Buffer/Uint8Array. Not introduced by churn but exposed now that deploy actually ships files."
+        },
+        {
+          "name": "Per-request error boundary + body cap (crash safety)",
+          "status": "resolved",
+          "evidence": "server.ts:215-250 handle() wraps readBody+app.handle in try/catch -> statusForError -> respondWithError (safe 400/413/500); readBody (server.ts:89-133) caps at DEFAULT_MAX_BODY_BYTES=1MiB (server.ts:42); installProcessSafetyNet (server.ts:310-323) nets unhandledRejection idempotently. Resolves review High #3.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "This is the single biggest operability gain since the review: the server no longer exits on a malformed POST, and 500s are now logged. It is error-handling, not full observability, but it is the foundation."
+        },
+        {
+          "name": "Tracer end() idempotency (double-export bug)",
+          "status": "resolved",
+          "evidence": "observability/tracer.ts:33-34 'private ended = false' and :60-62 'if (this.ended) return; this.ended = true;' before export. Commit 621fe4c added this + a regression test. Resolves the review's Medium tracer finding.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Correct fix, but academic until the tracer is actually used in the request path (see the zero-importers item)."
+        }
+      ]
+    },
+    {
+      "key": "maturity-ci",
+      "dimension": "Maturity, tests, CI, repo hygiene",
+      "scoreBefore": 2,
+      "scoreNow": 5,
+      "whatChanged": "Real, verified movement on release-engineering hygiene. (1) CI landed: /Users/ryan/crack/.github/workflows/ci.yml (commit 4349414) gates typecheck + lint + test as BLOCKING on push-to-main and all PRs, with concurrency cancel-in-progress and a dedicated create-keel test step (the @keel/* filter skips it). The review's headline 'no CI' is resolved. (2) Format debt paid down: bun run ws:format:check now exits 0 across all 52 packages (review reported 28 unformatted files in 7 content-* packages); the CI continue-on-error on the format step is now stale/over-cautious. (3) ws:test passes 2,103 tests / 0 fail (up from 2,025). NOT moved: legacy CommonJS root (lib/, bin/tracks.js, test/, root pkg still name='tracks', type=commonjs, npm test runs node test/run.js) is fully intact (review item #6 open); coverage is still only enforced via manual test:cov, never in CI; same 7 zero-test packages; bus factor 1 / all commits 2026-06-09 / nothing published. NOTE: the prompt's '~183 uncommitted in-flight files' did not materialize — git status shows ONE untracked file (docs/ATTACK-PLAN-2026.md); tree is otherwise clean, so this is judged on the committed state.",
+      "summary": "CI is the headline win and it is genuine: typecheck/lint/test now block on every PR, and the content-* format debt that the review flagged is actually paid down (ws:format:check is green, contradicting its own 'informational' CI comment). 2,103 tests pass clean. But the framework is still a one-day-old, single-author, unpublished prototype (10 commits all 2026-06-09, bus factor 1, version 0.0.0/0.1.0, no tags). Coverage is the biggest gap: 39/52 packages declare 100% thresholds but CI never runs --coverage, so the 'non-negotiable 100% bar' is aspirational on PRs. The legacy CommonJS root (lib/, bin/tracks.js, test/, root pkg 'tracks') is untouched, unlinted, untypechecked dead weight that duplicates ported packages and leaves the root publishable as tracks@0.1.0. Honest signals: CONTENT_COVERAGE.md tracks the 7-zero-test-package debt as an explicit ratchet rather than hiding it. Net: real CI/format progress lifts this from 2 to ~5; legacy root removal, coverage gating in CI, and killing dual lockfiles are the cheap wins blocking a higher score.",
+      "items": [
+        {
+          "name": "CI exists and gates typecheck/lint/test (blocking)",
+          "status": "resolved",
+          "evidence": ".github/workflows/ci.yml: steps 'Typecheck: bun run ws:typecheck', 'Lint: bun run lint', 'Test (workspace): bun run ws:test' (no continue-on-error → blocking); plus separate 'Test (create-keel)' step; triggers on push:[main] and pull_request; concurrency cancel-in-progress. Verified locally: lint exit 0, ws:test 2103 pass.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "The single biggest maturity jump from the 2/10 review. Committed 4349414."
+        },
+        {
+          "name": "Format debt (ws:format:check red on content-*)",
+          "status": "resolved",
+          "evidence": "bun run ws:format:check exits 0; grep for 'Exited with code [1-9]' across all packages → 'ALL PACKAGES EXIT 0'. Review reported '28 files across 7 content-* packages unformatted'. CI still marks the step continue-on-error (stale comment in ci.yml: 'content-* is the only failing set').",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "Now passes; flip the CI format step from continue-on-error to blocking — the cited reason for keeping it informational no longer holds."
+        },
+        {
+          "name": "ws:test pass count",
+          "status": "resolved",
+          "evidence": "bun run ws:test → summed 'Tests N passed' = 2103 passed, 0 fail (review baseline 2,025).",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Clean green across 52-package workspace."
+        },
+        {
+          "name": "Coverage enforcement (100% bar) gated in CI",
+          "status": "partial",
+          "evidence": "39/52 vitest.config.ts files declare explicit thresholds (grep -lE 'thresholds' */vitest.config.ts → 39). But CI has NO coverage step (grep -i cov .github/workflows/ci.yml hits only a comment); root has no ws:test:cov script. ws:test runs 'vitest run' without --coverage, so thresholds never fire on PRs.",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "Add a ws:test:cov script and a blocking CI coverage step (excluding the 14 frozen content-* configs). The thresholds already exist; they're just never executed by CI."
+        },
+        {
+          "name": "7 zero-test packages",
+          "status": "partial",
+          "evidence": "find for *.test.ts in each package src/test: content-components, content-embeddings, content-lint, content-mcp, content-mdx, content-search, content-seo all show tests=0. content-search/vitest.config.ts uses passWithNoTests:true and no thresholds block → passes ws:test vacuously. Same 7 as review.",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "Unresolved, but honestly tracked: CONTENT_COVERAGE.md documents an up-only ratchet and the 'frozen at 0% — needs tests' status per package. Debt is visible, not hidden."
+        },
+        {
+          "name": "Legacy CommonJS root (lib/, bin/tracks.js, test/, pkg 'tracks')",
+          "status": "open",
+          "evidence": "lib/ has 21 CJS files (lib/index.js: \"use strict\" + require('./model')); bin/tracks.js present; test/ present; root package.json name='tracks', type='commonjs', main='lib/index.js', \"test\":\"node test/run.js && node test/queue.test.js\" (still runs, exit 0). Root is NOT private → tracks@0.1.0 publishable by accident. 'oxlint packages' and ws:typecheck never touch lib/.",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "Review fix #6 ('Delete the legacy CommonJS root') is entirely unaddressed. Untyped, unlinted dead weight duplicating ported packages; delete or quarantine and mark root private."
+        },
+        {
+          "name": "Bus factor / version maturity / publishing",
+          "status": "open",
+          "evidence": "git rev-list --count HEAD = 10, all dated 2026-06-09; single author 'Keel <tech-lead@keel.dev>'; git tag count 0; package versions all 0.0.0 (38) or 0.1.0 (14); all 52 packages 'private: true' (nothing published). No .changeset, no dependabot.yml, no release workflow.",
+          "isLowHangingFruit": false,
+          "effort": "XL",
+          "note": "Inherent to a day-old single-author prototype; no release/dependency-update automation exists. Not fixable quickly — it's a time/team-maturity dimension."
+        },
+        {
+          "name": "Dual / stale lockfiles",
+          "status": "open",
+          "evidence": "Both package-lock.json (16KB, npm, Jun 7) and bun.lock (222KB, Jun 9) committed at repo root; packageManager='bun@1.3.5' and CI uses 'bun install --frozen-lockfile'. The npm lockfile is stale and unused.",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "Delete package-lock.json (and the unused engines/npm path) to avoid lockfile drift confusion."
+        },
+        {
+          "name": "Coverage debt is documented/ratcheted (maturity positive)",
+          "status": "resolved",
+          "evidence": "CONTENT_COVERAGE.md describes an explicit 'ratchet only goes up' policy, lists each content-* package's tsc/oxlint/test/coverage status, and each frozen vitest.config.ts carries a 'FROZEN BASELINE … threshold removed, not lowered' comment (14 such configs).",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Not a fix per se, but a real maturity signal: technical debt is tracked transparently with a stated paydown plan rather than hidden behind green checks."
+        }
+      ]
+    },
+    {
+      "key": "framework-correctness",
+      "dimension": "Framework correctness / polish (MEDIUM framework-glue findings)",
+      "scoreBefore": 2,
+      "scoreNow": 8,
+      "whatChanged": "Commit 621fe4c (\"Harden security & correctness: resolve all 29 confirmed REVIEW-2026-06-09 findings\") landed the bulk of the framework-glue fixes, each gated on a named regression test. On top of that, a SECOND wave of in-flight work is uncommitted in the tree RIGHT NOW (git stash revealed 6 modified files appearing after the session's opening snapshot: packages/content-core/src/cache/hash.ts, packages/content-core/src/import/wordpress.ts, packages/content-search/src/{binary,react}.tsx, examples/estate/src/{auth,document}.ts) — these target the \"unverified-but-credible\" leads (hashObject nested-key collapse, WordPress path traversal), not my six MEDIUM items. Of my seven assigned findings, six are fully resolved with passing regression tests (141 tests green across i18n/observability/ui-kit/ui/create-keel + 12 paginate + getCollections regression test); one (ui treeJsonSchema children allow-list) is only partially closed.",
+      "summary": "The hardening pass genuinely fixed the framework-correctness MEDIUMs. i18n now uses Object.hasOwn; the tracer span is idempotent; ui-kit coerces numeric props through a finite-number gate before CSS interpolation (with an explicit CSS-injection regression test); paginate rejects page/perPage < 1 via a coded ValidationError; getCollections routes through getCollection so it no longer leaks drafts; create-keel's scaffold emits the resolvable `latest` dist-tag instead of `workspace:*`. The one gap: the treeJsonSchema fix only tightened the required-props case (require `props` when a component has required props); the children ALLOW-LIST narrowing was NOT closed — a `children: [\"Text\"]` policy still emits `items: {$ref:\"#/$defs/node\"}` (any node), which is provably looser than validateTree.allowsChild's `policy.includes(childType)`, and a test at ui.test.tsx:292 actually pins this loose behavior. In practice the shipped kit only uses true/false policies so this is latent, but the primitive remains looser than the validator. Separately flagging an in-flight regression: persistence.test.ts:309 now fails because the in-flight hash.ts fix correctly detects a nested schema change while the stale test still asserts the old buggy \"not detected\" behavior — outside my six items but it must be updated before that wave commits.",
+      "items": [
+        {
+          "name": "i18n reads inherited prototype members (packages/i18n)",
+          "status": "resolved",
+          "evidence": "packages/i18n/src/i18n.ts:34 `return Object.hasOwn(catalog, key) ? catalog[key] : undefined;` (own() helper, used by lookup() at i18n.ts:93,99). Regression test i18n.test.ts:63 iterates [\"constructor\",\"toString\",\"hasOwnProperty\",\"__proto__\"] asserting each surfaces the key itself; interpolate guard tested at i18n.test.ts:117. Tests green.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Clean fix; the original `i18n.ts:78` bare bracket read is gone."
+        },
+        {
+          "name": "tracer end() not idempotent -> double-export (packages/observability/src/tracer.ts)",
+          "status": "resolved",
+          "evidence": "packages/observability/src/tracer.ts:60 `if (this.ended) return;` then sets ended=true and exports exactly once (lines 60-66). withSpan's explicit-then-finally double end() is the documented motivating case (tracer.ts:57-59). Suite green.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Was tracer.ts:53 in the review; the LiveSpan.end() guard is correct."
+        },
+        {
+          "name": "ui-kit numeric props injected into inline CSS (packages/ui-kit; numeric prop coercion via packages/ui/src/props.ts)",
+          "status": "resolved",
+          "evidence": "packages/ui-kit/src/components.tsx:323-325 `numericProp(value, fallback)` returns the value only when `typeof value===\"number\" && Number.isFinite(value)`, else fallback. Used for Grid columns (components.tsx:105 -> `repeat(${columns}, 1fr)`) and Stack gap (components.tsx:77). props.ts:28-38 coerceNumber deliberately passes un-coercible values through, so the second gate in ui-kit is load-bearing. CSS-injection regression test ui-kit.test.ts:108 (`\"2, 1fr); background: url(http://evil/x)\"` -> asserts NOT contains \"evil\"/\"url(\") and NaN/Infinity fallback test at ui-kit.test.ts:120 pass.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Defense-in-depth: validator coerces strings, render-layer rejects anything non-finite. Solid."
+        },
+        {
+          "name": "treeJsonSchema looser than validateTree (packages/ui/src/schema.ts)",
+          "status": "partial",
+          "evidence": "FIXED part: schema.ts:112 `required: hasRequiredProp(def.props) ? [\"type\",\"props\"] : [\"type\"]` closes the omit-props-wholesale gap (the only change in commit 621fe4c per `git show 621fe4c -- packages/ui/src/schema.ts`). OPEN part: schema.ts:106 still emits `children: { type:\"array\", items: nodeRef }` where nodeRef=#/$defs/node (ANY node) whenever acceptsChildren(policy) is true (schema.ts:79-85 collapses a non-empty array allow-list to `true`). But validate.ts:31 `return policy.includes(childType)` enforces the array allow-list strictly. Test ui.test.tsx:292 PINS the loose behavior: `expect(list.properties.children?.items.$ref).toBe(\"#/$defs/node\")` for a `children:[\"Text\"]` component, while validateTree rejects a non-Text child (ui.test.tsx:494). So a model constrained to the schema can emit children the validator rejects.",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "Latent in shipped kit (all kit components use true/false, never an array allow-list). To fully close: when policy is a non-empty array, emit `items: { oneOf: [stringLeaf, ...refs-to-only-allowed-variants] }` instead of the universal nodeRef. The commit message claims 'ui treeJsonSchema tightened to validateTree' but that is only accurate for required-props, not children."
+        },
+        {
+          "name": "paginate() accepts page<=0/perPage=0 (content-core query.ts)",
+          "status": "resolved",
+          "evidence": "packages/content-core/src/query.ts:186-187 `validateRange(page, 1, MAX_SAFE_INTEGER, \"page\")` / `validateRange(perPage, 1, ...)`. validateRange (content-shared/src/validation.ts:104-113) throws a coded ValidationError when value<min. paginate regression tests green (12 passed). Note: NaN passes validateRange (NaN<1 and NaN>MAX both false), but the original finding was specifically page<=0/perPage=0, which is now caught.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Was query.ts:191. NaN edge remains theoretically (out of original scope) but the negative/zero cases are correctly rejected."
+        },
+        {
+          "name": "getCollections() bypasses unpublished-filtering (content-core runtime.ts)",
+          "status": "resolved",
+          "evidence": "packages/content-core/src/runtime.ts:204-212 getCollections() now maps each name through getCollection(name) (line 210), which applies filterPublishedEntries when a workflowConfig with filterUnpublished!==false exists (runtime.ts:136-140). setWorkflowConfigs is now genuinely wired (runtime.ts:60-62; getWorkflowConfig reads it at :73). Dedicated regression test workflow.test.ts:475 'hides unpublished entries (no draft/scheduled/expired leak)' asserts only the 1 published entry survives; passes.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Also resolves the related 'setWorkflowConfigs has no callers' dead-path concern from the same review section."
+        },
+        {
+          "name": "create-keel scaffold emits workspace:* deps (create-keel/templates.ts)",
+          "status": "resolved",
+          "evidence": "packages/create-keel/src/templates.ts:19 `const keelDep = \"latest\";` and templates.ts:33-44 emit every @keel/* dep as `latest` (a real npm dist-tag), with an explicit comment (templates.ts:36-37) that workspace:* resolves only in-workspace. No workspace:* in scaffold output (`grep workspace:* templates.ts` only hits doc comments). Note create-keel/package.json:27 still has `@keel/errors: workspace:*` but that is create-keel's OWN monorepo dep, not scaffolded output — correct.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Was templates.ts:25. Scaffolded app now installs cleanly outside the monorepo."
+        }
+      ]
+    }
+  ],
+  "judge": {
+    "productionScoreBefore": 2,
+    "productionScoreNow": 4.5,
+    "rationale": "The Phase-0 hardening bought genuine, verified safety: the remote-unauthenticated process-kill is closed (per-request error boundary + 1 MiB body cap + unhandledRejection net, proven by 63 live runtime tests), ORM identifier injection is fixed with an allowlist, migrations are per-migration transactional, the queue worker has an error boundary, and CI now blocks typecheck/lint/test on every PR. These are the difference between \"do not deploy at all\" and \"deployable behind a hardened proxy for a hobby/demo workload\" — worth roughly +2.5. But I weight crash-safety, security, and data-layer heavily, and on those three the structural story is still fiction. I verified directly: the SQL surface (packages/orm/src/types.ts:14-22) is 100% SYNCHRONOUS (run/get/all return non-Promise values), and there is ZERO Postgres driver in the tree (only better-sqlite3) — so the entire stateless-horizontal-scale claim cannot be satisfied without rewriting every call site. The security batteries are wired into NOTHING: no package depends on @keel/security, and cors/rate-limit/rbac/sessions have zero consumers (only csrf is referenced, by one example) — the default request pipeline enforces no security. Observability is imported by zero packages (dead code); there is no /health, no metrics, no request access log. `keel deploy` is a UTF-8 filesystem copy that corrupts binary assets (ship.ts:86,102), with no real target/rollback/drain. There is also no request/handler timeout and no SIGTERM drain in the first-party CLI, so a hung controller or a deploy restart degrades the process. It remains a one-day-old, single-author, unpublished prototype with a still-intact legacy CommonJS root. The point-fixes are excellent craftsmanship but they raise the floor, not the ceiling; 4.5 reflects \"safe and correct locally on SQLite behind a proxy\" but well short of the advertised production framework.",
+    "biggestRemainingBlockers": [
+      "Async/Postgres is unbuilt and architecturally blocked: SqlDatabase/SqlStatement are fully synchronous (orm/src/types.ts), no PG driver exists anywhere, and Relation/Model return T[]/number/boolean not Promises — the horizontal-scale story is fiction and cannot be delivered without rewriting every DB call site.",
+      "Security primitives are wired into nothing: no package depends on @keel/security, and cors/rate-limit/rbac/sessions have zero consumers; the default application pipeline (web/src/application.ts) performs no interception, so a deployed app enforces NO CORS/CSRF/rate-limit/RBAC/security headers by default.",
+      "Observability is dead code (imported by zero packages); no /health or /readyz, no metrics, no per-request access log, no traces in the request path — you cannot run this in prod and see what it is doing.",
+      "`keel deploy` is not a deploy: nodeUploader is a UTF-8 filesystem copy into ./dist (corrupts binary assets) with no real cloud target, no health check, no rollback, no drain, no process start.",
+      "No application-level liveness controls: no request/handler execution timeout, no app-configured Node requestTimeout/headersTimeout/maxHeaderSize, and no SIGTERM graceful-drain in the first-party keel serve/dev CLI — a hung handler holds a socket forever and deploy restarts are ungraceful.",
+      "Maturity/bus factor: 10 commits all on one day, single author, version 0.0.0/0.1.0, nothing published, coverage thresholds never run in CI, legacy CommonJS root (lib/, bin/tracks.js, root pkg name='tracks') still publishable and unlinted; a flaky content-core leak-check suite failed once under parallel load on the current tree."
+    ],
+    "lowHangingFruit": [
+      {
+        "item": "Set app-level Node server timeouts (requestTimeout, headersTimeout, keepAliveTimeout, maxHeaderSize) on the created server",
+        "impact": "high",
+        "effort": "S",
+        "why": "Closes slow-loris/slow-body/large-header DoS that currently rests entirely on Node 22 defaults; a few lines in serve() after createServer. Directly lifts the heavily-weighted crash-safety dimension toward 7.",
+        "location": "packages/runtime/src/server.ts:176-196 (createServer/listen block)"
+      },
+      {
+        "item": "Add a request/handler execution timeout (Promise.race / AbortSignal) around app.handle, answering 503/504 on overrun",
+        "impact": "high",
+        "effort": "M",
+        "why": "Removes the hung-controller resource-exhaustion hole (an unresolving handler holds a socket and event-loop slot forever); the single remaining crash-safety gap for a naked deploy.",
+        "location": "packages/runtime/src/server.ts:233 (const response = await app.handle(...))"
+      },
+      {
+        "item": "Add a /health (liveness) and /readyz (readiness) route in the runtime/kernel router",
+        "impact": "high",
+        "effort": "S",
+        "why": "Every load balancer and orchestrator needs this; trivially wired, and unblocks safe rollout/drain. Moves observability-deploy off the floor.",
+        "location": "packages/runtime/src/server.ts routing / packages/kernel/src (route wiring); none exist today"
+      },
+      {
+        "item": "Wire SIGTERM/SIGINT graceful-drain into the first-party CLI bin with server.close() + closeIdleConnections() + a grace timer",
+        "impact": "high",
+        "effort": "M",
+        "why": "Makes deploy restarts non-destructive (in-flight requests finish, idle keep-alives close, bounded grace); currently only examples wire it and even there close() can hang on keep-alive sockets.",
+        "location": "packages/cli/src/bin.ts (no SIGTERM handler) + packages/runtime/src/server.ts:190-194 (bare close)"
+      },
+      {
+        "item": "Add a success-path request access log (method/path/status/latency) at the request boundary",
+        "impact": "high",
+        "effort": "S",
+        "why": "Today the only signal is console.error on 500s; a one-line structured access log is the single highest-leverage operability win and a prerequisite for any prod triage.",
+        "location": "packages/runtime/src/server.ts:215-250 (handle) — currently logs only on status===500 at :245"
+      },
+      {
+        "item": "Set default security response headers (HSTS, X-Content-Type-Options, basic CSP, Referrer-Policy) on every response",
+        "impact": "high",
+        "effort": "S",
+        "why": "Cheapest possible security win that needs no pipeline architecture; turns 'enforces no security by default' into a sane baseline. Lifts the heavily-weighted security dimension.",
+        "location": "packages/runtime/src/response/types.ts:32 (single-valued headers) + server.ts respond path"
+      },
+      {
+        "item": "Fix nodeUploader to read/write binary (Buffer, not 'utf8') so deploy stops corrupting images/fonts",
+        "impact": "medium",
+        "effort": "S",
+        "why": "Current deploy silently corrupts every binary asset; making it correct is a few lines and removes a data-corruption footgun even though deploy stays a local copy.",
+        "location": "packages/deploy/src/ship.ts:86 (readFile utf8) and :102 (writeFile utf8)"
+      },
+      {
+        "item": "Gate coverage in CI (add --coverage to ws:test or a dedicated job) so the declared 100% thresholds actually fire on PRs",
+        "impact": "medium",
+        "effort": "S",
+        "why": "39/52 packages declare thresholds that never run in CI; flipping this on enforces the stated 'non-negotiable' bar and catches the flaky/zero-test gaps. Lifts maturity-ci.",
+        "location": ".github/workflows/ci.yml (no coverage step) + root package.json (no ws:test:cov)"
+      },
+      {
+        "item": "Delete the legacy CommonJS root (lib/, bin/tracks.js, test/) and mark root package private",
+        "impact": "medium",
+        "effort": "S",
+        "why": "Removes unlinted/untypechecked dead weight that duplicates ported packages and leaves tracks@0.1.0 publishable by accident; cleans the maturity signal.",
+        "location": "/Users/ryan/crack/lib (21 CJS files), bin/tracks.js, test/, root package.json (name='tracks', not private)"
+      },
+      {
+        "item": "Remove the stale npm package-lock.json (keep bun.lock only)",
+        "impact": "low",
+        "effort": "S",
+        "why": "Dual lockfiles with bun as packageManager is a trap; deleting the unused npm lockfile is zero-risk hygiene.",
+        "location": "/Users/ryan/crack/package-lock.json (stale) vs bun.lock"
+      },
+      {
+        "item": "Narrow treeJsonSchema children to the policy allow-list so the schema cannot emit children validateTree rejects",
+        "impact": "low",
+        "effort": "S",
+        "why": "Closes the last framework-correctness gap (schema looser than validator); latent today since shipped kit uses only true/false policies, but the primitive is wrong and a test pins the loose behavior.",
+        "location": "packages/ui/src/schema.ts:79-85,106 (collapses array allow-list to any-node)"
+      }
+    ],
+    "keepGoingRecommendation": "Pick the operability/safety low-hanging fruit FIRST (it is unusually cheap and high-value here), then pivot to a structural phase — do not keep grinding fruit past ~6. Concretely: in the next sub-day, land the four sub-day safety/ops wins (Node server timeouts, request/handler timeout, /health + /readyz, SIGTERM graceful-drain in the CLI) plus the access log and default security headers. That sequence makes the server genuinely safe to stand on the public internet and minimally operable, and would lift the score to ~6.0. But the moment those land, the three heavily-weighted ceilings (async/Postgres unbuilt, security pipeline wired into nothing, deploy is a file copy) dominate, and no amount of fruit moves them. So after the fruit run, PIVOT to a structural phase in this order: (1) make the SQL surface async and add a real Postgres adapter — this is THE blocker on the advertised scale story and gates a 7; (2) wire the security batteries (cors/csrf/rate-limit/rbac/sessions) into the default request pipeline so apps are secure by default; (3) turn keel deploy into a real target with health/rollback/drain. Battery-wiring (2) is the highest reward-per-effort structural item and could even be partially fruit-sized, so it is the natural bridge between the fruit run and the async-DB rewrite.",
+    "scoreCeilingOfFruit": 6
+  }
+}
