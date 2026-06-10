@@ -11,7 +11,7 @@
  *
  *   await identity.register("ada@example.com", "correct horse battery staple");
  *   await identity.verifyEmail(tokenFromEmail);
- *   const { session } = identity.login("ada@example.com", "correct horse battery staple");
+ *   const { session } = await identity.login("ada@example.com", "correct horse battery staple");
  *
  * Built as a closure factory (`createIdentity`) returning an object of plain
  * functions — no `this`, no class to extend, options + secrets + signers
@@ -207,12 +207,12 @@ export interface Identity {
     email: string,
     password: string,
   ): Promise<{ status: "verification_sent"; user: User | undefined }>;
-  verifyEmail(token: string): User;
-  login(email: string, password: string): { user: User; session: Session };
+  verifyEmail(token: string): Promise<User>;
+  login(email: string, password: string): Promise<{ user: User; session: Session }>;
   requestPasswordReset(email: string): Promise<{ status: "reset_sent" }>;
   resetPassword(token: string, newPassword: string): Promise<User>;
   logout(token: string | undefined): void;
-  currentUser(token: string | undefined): User | undefined;
+  currentUser(token: string | undefined): Promise<User | undefined>;
 }
 
 /** Build an {@link Identity} bound to the given options. */
@@ -259,7 +259,7 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       const normalized = userRepo.normalizeEmail(email);
 
-      if (userRepo.findUserByEmail(db, normalized)) {
+      if (await userRepo.findUserByEmail(db, normalized)) {
         // Burn the same CPU we'd burn on a real insert so the response time
         // doesn't betray the collision. We discard the result.
         hashPassword(password);
@@ -269,7 +269,7 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       let user: User;
       try {
-        user = userRepo.insertUser(db, {
+        user = await userRepo.insertUser(db, {
           email: normalized,
           passwordHash: hashPassword(password),
           emailVerifiedAt: null,
@@ -300,18 +300,18 @@ export function createIdentity(options: IdentityOptions): Identity {
      * acceptable because verification has no side effect beyond flipping
      * the boolean.
      */
-    verifyEmail(token) {
+    async verifyEmail(token) {
       const claim = verifyTokens.verify(token);
 
       if (claim === undefined) throw invalidToken("verification");
 
-      const user = userRepo.findUserById(db, Number(claim.userId));
+      const user = await userRepo.findUserById(db, Number(claim.userId));
 
       if (!user) throw invalidToken("verification");
 
       if (!userRepo.isEmailVerified(user)) {
         const now = new Date().toISOString();
-        userRepo.markEmailVerified(db, user.id, now);
+        await userRepo.markEmailVerified(db, user.id, now);
 
         return { ...user, emailVerifiedAt: now };
       }
@@ -332,10 +332,10 @@ export function createIdentity(options: IdentityOptions): Identity {
      * email — that is the intentional UX-over-leak tradeoff and is
      * documented at the module level.
      */
-    login(email, password) {
+    async login(email, password) {
       const normalized = userRepo.normalizeEmail(email);
 
-      const user = userRepo.findUserByEmail(db, normalized);
+      const user = await userRepo.findUserByEmail(db, normalized);
 
       if (!user) {
         // Equalize CPU so a missing user costs the same as a wrong password.
@@ -368,7 +368,7 @@ export function createIdentity(options: IdentityOptions): Identity {
     async requestPasswordReset(email) {
       const normalized = userRepo.normalizeEmail(email);
 
-      const user = userRepo.findUserByEmail(db, normalized);
+      const user = await userRepo.findUserByEmail(db, normalized);
 
       if (!user) {
         // Burn equivalent CPU on the unknown path. The result is thrown away.
@@ -410,7 +410,7 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       if (!unpacked) throw invalidToken("reset");
 
-      const user = userRepo.findUserById(db, Number(unpacked.userId));
+      const user = await userRepo.findUserById(db, Number(unpacked.userId));
 
       if (!user) throw invalidToken("reset");
 
@@ -426,7 +426,7 @@ export function createIdentity(options: IdentityOptions): Identity {
       }
 
       const newHash = hashPassword(newPassword);
-      userRepo.setPasswordHash(db, user.id, newHash);
+      await userRepo.setPasswordHash(db, user.id, newHash);
 
       if (options.revokeUserSessions) {
         await options.revokeUserSessions(String(user.id));
@@ -439,14 +439,14 @@ export function createIdentity(options: IdentityOptions): Identity {
       if (token !== undefined) sessions.revoke(token);
     },
 
-    currentUser(token) {
+    async currentUser(token) {
       if (token === undefined) return undefined;
 
       const session = sessions.verify(token);
 
       if (session === undefined) return undefined;
 
-      return userRepo.findUserById(db, Number(session.userId));
+      return await userRepo.findUserById(db, Number(session.userId));
     },
   };
 }
