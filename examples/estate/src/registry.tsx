@@ -106,6 +106,11 @@ export const registry = new Registry()
       // The CSRF token for this form's POST, minted server-side and bound to
       // the session (sign-out) or the anon id (sign-in). Verified on submit.
       csrf: { type: "string", required: true },
+      // Demo affordance — pre-fills the email and password so one click signs
+      // you in. The POST still goes through real `Identity.login`; the demo
+      // is in the *value* of the field, not in the path it travels.
+      demoEmail: { type: "string" },
+      demoPassword: { type: "string" },
     },
     children: false,
     render: (props) =>
@@ -117,7 +122,30 @@ export const registry = new Registry()
       ) : (
         <form className="auth" method="post" action="/mls/api/sign-in">
           <input type="hidden" name="_csrf" value={String(props["csrf"])} />
-          <button type="submit">Sign in (demo)</button>
+
+          <label>
+            Email
+            <input
+              type="email"
+              name="email"
+              defaultValue={String(props["demoEmail"] ?? "")}
+              autoComplete="username"
+              required
+            />
+          </label>
+
+          <label>
+            Password
+            <input
+              type="password"
+              name="password"
+              defaultValue={String(props["demoPassword"] ?? "")}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+
+          <button type="submit">Sign in</button>
         </form>
       ),
   })

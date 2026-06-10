@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
 
 import { resolveSession } from "./session-client";
-import type { User } from "./auth";
+import type { User } from "./session-client";
 
 type AccountState =
   | { readonly status: "loading" }

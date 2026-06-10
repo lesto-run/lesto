@@ -19,7 +19,7 @@ import { hydrateIslands } from "@keel/ui/client";
 import type { UiNode } from "@keel/ui";
 
 import { registry } from "../src/registry";
-import type { User } from "../src/auth";
+import type { User } from "../src/session-client";
 
 const tree: UiNode = {
   type: "Page",

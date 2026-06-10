@@ -9,7 +9,11 @@
  * `fetchImpl` is injected so tests drive it without a network.
  */
 
-import type { User } from "./auth";
+/** The session-endpoint payload, as both the server and the island see it. */
+export interface User {
+  readonly id: string;
+  readonly name: string;
+}
 
 /** The minimal `fetch` shape this needs — the real `fetch` satisfies it. */
 export type FetchLike = (

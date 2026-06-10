@@ -22,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { buildProductionSite } from "../src/production";
 import type { SiteDispatch } from "../src/production";
+import { DEFAULT_DEMO } from "../src/identity";
 
 const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -90,25 +91,36 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
   });
 
   it("rejects a sign-in POST with no CSRF token", async () => {
-    expect((await dispatch("POST", "/mls/api/sign-in", { query: { as: "jade" } })).status).toBe(
-      403,
-    );
+    expect(
+      (
+        await dispatch("POST", "/mls/api/sign-in", {
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            email: DEFAULT_DEMO.email,
+            password: DEFAULT_DEMO.password,
+          }).toString(),
+        })
+      ).status,
+    ).toBe(403);
   });
 
-  it("signs in with a CSRF token, then the cookie unlocks the gated resource", async () => {
+  it("signs in with the demo credentials, then the cookie unlocks the gated resource", async () => {
     // 1. The /mls page carries a CSRF token in its sign-in form.
     const page = await dispatch("GET", "/mls");
     const csrf = csrfFrom(page.body);
     expect(csrf.length).toBeGreaterThan(0);
 
-    // 2. Sign in: the token clears CSRF, and a session cookie comes back. The
+    // 2. Sign in with the real demo credentials. The token clears CSRF, the
+    // password clears Identity.login, and a session cookie comes back. The
     // body is the raw urlencoded string the HTTP server delivers — the runtime
-    // only JSON-parses bodies, so the controller parses the form itself. Passing
-    // a pre-parsed object here would test a shape production never sees.
+    // only JSON-parses bodies, so the controller parses the form itself.
     const signIn = await dispatch("POST", "/mls/api/sign-in", {
-      query: { as: "jade" },
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: `_csrf=${csrf}`,
+      body: new URLSearchParams({
+        _csrf: csrf,
+        email: DEFAULT_DEMO.email,
+        password: DEFAULT_DEMO.password,
+      }).toString(),
     });
     expect(signIn.status).toBe(303);
 
@@ -118,11 +130,31 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
     // 3. The session endpoint the marketing island calls now sees the user.
     const session = await dispatch("GET", "/mls/api/session", { headers: { cookie } });
     expect(session.status).toBe(200);
-    expect(JSON.parse(session.body)).toEqual({ user: { id: "jade", name: "Jade Mills" } });
+    expect(JSON.parse(session.body)).toEqual({
+      user: { id: DEFAULT_DEMO.email, name: DEFAULT_DEMO.displayName },
+    });
 
     // 4. And the gated resource is unlocked.
     const saved = await dispatch("GET", "/mls/saved", { headers: { cookie } });
     expect(saved.status).toBe(200);
     expect((JSON.parse(saved.body) as { saved: unknown[] }).saved.length).toBeGreaterThan(0);
+  });
+
+  // The replacement for the old `?as=<id>` impersonation fence: there is no
+  // fence because there is no impersonation — wrong creds are wrong creds.
+  it("rejects a sign-in POST that clears CSRF but uses a wrong password", async () => {
+    const page = await dispatch("GET", "/mls");
+    const csrf = csrfFrom(page.body);
+
+    const signIn = await dispatch("POST", "/mls/api/sign-in", {
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        _csrf: csrf,
+        email: DEFAULT_DEMO.email,
+        password: "not-the-real-one",
+      }).toString(),
+    });
+
+    expect(signIn.status).toBe(401);
   });
 });

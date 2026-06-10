@@ -8,5 +8,14 @@
     "jsx": "react-jsx"
   },
 
-  "include": ["src", "test", "serve.ts", "dev.ts", "build.ts", "worker.ts", "client.tsx", "keel.sites.ts"]
+  "include": [
+    "src",
+    "test",
+    "serve.ts",
+    "dev.ts",
+    "build.ts",
+    "worker.ts",
+    "client.tsx",
+    "keel.sites.ts"
+  ]
 }

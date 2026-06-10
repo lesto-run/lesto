@@ -10,6 +10,6 @@
   // Served first; a miss falls through to the Worker (the /mls app).
   "assets": {
     "directory": "./out/marketing",
-    "binding": "ASSETS"
-  }
+    "binding": "ASSETS",
+  },
 }

@@ -1,18 +1,22 @@
 # ADR 0003 — Auth strategy: in-house battery, pluggable edges
 
-- **Status:** Accepted — Phase 1 implemented (estate `?as=` rewrite pending)
+- **Status:** Accepted — Phase 1 complete (Node path); edge path deferred
 - **Date:** 2026-06-09
 - **Deciders:** tech lead + owner
 - **Owner-confirmed (2026-06-09):** (1) the assembled battery is **`@keel/identity`**;
   (2) **email verification is required before first login** — default on,
   configurable off for low-friction apps.
 - **Implementation note (2026-06-09):** `packages/identity` ships register /
-  verifyEmail / login / requestPasswordReset / resetPassword + cookie helpers +
-  currentUser. 100% unit coverage; the canonical journey is exercised over a
-  real socket in `packages/integration/test/identity.integration.test.ts`. The
-  estate `?as=` demo replacement remains: estate has no DB today, so wiring it
-  to `@keel/identity` is a separate slice (add migration runtime + mail mock +
-  swap controllers + update tests).
+  verifyEmail / login / requestPasswordReset / resetPassword + cookie helpers
+  + currentUser. 100% unit coverage; the canonical journey is exercised over
+  a real socket in `packages/integration/test/identity.integration.test.ts`.
+  Estate's `?as=<id>` impersonation demo is **gone**: `examples/estate` now
+  wires `/mls` to real `Identity.login` over an in-memory SQLite seeded with
+  two demo accounts (jade, guest). The Cloudflare edge variant
+  (`examples/estate/src/edge.ts`) still uses its embedded user map +
+  `SignedSessions` directly — Identity's store-backed `Sessions` does not run
+  in a Worker isolate, and seeding from D1/KV is a separate slice tracked
+  under Phase 2 alongside the strategy seam.
 
 ## Context
 
