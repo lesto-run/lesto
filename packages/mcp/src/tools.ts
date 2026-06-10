@@ -199,10 +199,10 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
     handler: async (input) => {
       const db = requireContentDb(context);
 
-      const { entry } = createEntry(db, toWriteInput(input));
+      const { entry } = await createEntry(db, toWriteInput(input));
 
       // The write changed the database; refresh the runtime so reads see it.
-      hydrateRuntime(db);
+      await hydrateRuntime(db);
 
       return entry;
     },
@@ -215,9 +215,9 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
     handler: async (input) => {
       const db = requireContentDb(context);
 
-      const { entry } = updateEntry(db, toWriteInput(input));
+      const { entry } = await updateEntry(db, toWriteInput(input));
 
-      hydrateRuntime(db);
+      await hydrateRuntime(db);
 
       return entry;
     },
@@ -237,9 +237,9 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
     handler: async (input) => {
       const db = requireContentDb(context);
 
-      const result = deleteEntry(db, String(input.collection), String(input.slug));
+      const result = await deleteEntry(db, String(input.collection), String(input.slug));
 
-      hydrateRuntime(db);
+      await hydrateRuntime(db);
 
       return result;
     },
