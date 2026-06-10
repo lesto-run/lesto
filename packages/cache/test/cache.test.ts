@@ -9,23 +9,46 @@ import type { CacheStore, SqlDatabase } from "../src/index";
 let now: number;
 const clock = (): number => now;
 
-// A ~6-line adapter around better-sqlite3 — wired only in the test, never in src.
+// A small adapter around better-sqlite3 — wired only in the test, never in src.
+// The driver seam is Promise-returning (ADR 0006): `prepare()` stays sync, but
+// the terminals and `exec` resolve, and `transaction(fn)` brackets the work in
+// BEGIN/COMMIT (ROLLBACK on reject). better-sqlite3 is synchronous under the
+// hood, so each verb resolves an already-computed value.
 let database: Database.Database;
 const makeSqlDatabase = (): SqlDatabase => {
   database = new Database(":memory:");
 
-  return {
+  const adapt = (): SqlDatabase => ({
     prepare: (sql) => {
       const statement = database.prepare(sql);
 
       return {
-        run: (parameters = []) => statement.run(...parameters),
-        get: (parameters = []) => statement.get(...parameters),
-        all: (parameters = []) => statement.all(...parameters),
+        run: async (parameters = []) => statement.run(...parameters),
+        get: async (parameters = []) => statement.get(...parameters),
+        all: async (parameters = []) => statement.all(...parameters) as unknown[],
       };
     },
-    exec: (sql) => database.exec(sql),
-  };
+    exec: async (sql) => {
+      database.exec(sql);
+    },
+    transaction: async (fn) => {
+      database.exec("BEGIN");
+
+      try {
+        const result = await fn(adapt());
+
+        database.exec("COMMIT");
+
+        return result;
+      } catch (error) {
+        database.exec("ROLLBACK");
+
+        throw error;
+      }
+    },
+  });
+
+  return adapt();
 };
 
 afterEach(() => {
@@ -70,11 +93,11 @@ describe.each(stores)("Cache over $name", ({ make }) => {
 
       expect(value).toEqual({ hello: "world" });
       expect(calls).toBe(1);
-      expect(cache.read("k")).toEqual({ hello: "world" });
+      expect(await cache.read("k")).toEqual({ hello: "world" });
     });
 
     it("hits: returns the cached value without calling produce", async () => {
-      cache.write("k", 41);
+      await cache.write("k", 41);
 
       const value = await cache.fetch("k", () => {
         throw new Error("produce must not run on a hit");
@@ -97,7 +120,7 @@ describe.each(stores)("Cache over $name", ({ make }) => {
 
       expect(value).toBe("fresh");
       expect(calls).toBe(1);
-      expect(cache.read("k")).toBe("fresh");
+      expect(await cache.read("k")).toBe("fresh");
     });
   });
 
@@ -113,11 +136,11 @@ describe.each(stores)("Cache over $name", ({ make }) => {
 
       expect(value).toEqual({ hello: "world" });
       expect(calls).toBe(1);
-      expect(cache.read("k")).toEqual({ hello: "world" });
+      expect(await cache.read("k")).toEqual({ hello: "world" });
     });
 
     it("hits: returns the cached value without computing", async () => {
-      cache.write("k", 41);
+      await cache.write("k", 41);
 
       const value = await cache.remember("k", () => {
         throw new Error("compute must not run on a hit");
@@ -155,7 +178,7 @@ describe.each(stores)("Cache over $name", ({ make }) => {
 
       // The value landed in the cache, and the in-flight ledger was released:
       // a fresh call now hits without recomputing.
-      expect(cache.read("k")).toBe("shared");
+      expect(await cache.read("k")).toBe("shared");
       expect(await cache.remember("k", () => "ignored")).toBe("shared");
       expect(calls).toBe(1);
     });
@@ -174,7 +197,7 @@ describe.each(stores)("Cache over $name", ({ make }) => {
 
       expect(value).toBe("fresh");
       expect(calls).toBe(1);
-      expect(cache.read("k")).toBe("fresh");
+      expect(await cache.read("k")).toBe("fresh");
     });
 
     it("propagates a rejection to every waiter and caches nothing", async () => {
@@ -211,12 +234,12 @@ describe.each(stores)("Cache over $name", ({ make }) => {
       expect(calls).toBe(1);
 
       // No poisoned cache: the failed key was never written…
-      expect(cache.read("k")).toBeUndefined();
+      expect(await cache.read("k")).toBeUndefined();
 
       // …and the ledger was released, so the next call retries cleanly.
       const retried = await cache.remember("k", () => "recovered");
       expect(retried).toBe("recovered");
-      expect(cache.read("k")).toBe("recovered");
+      expect(await cache.read("k")).toBe("recovered");
     });
 
     it("a delete mid-flight wins: the resolving leader does not resurrect the value", async () => {
@@ -225,10 +248,24 @@ describe.each(stores)("Cache over $name", ({ make }) => {
         release = resolve;
       });
 
-      // Lead a compute, then invalidate the key while it is still parked.
-      const caller = cache.remember("k", () => gate);
+      // `read` is async now (ADR 0006), so the leader registers its ledger entry
+      // a microtask after `remember` is called — not synchronously. We gate the
+      // invalidation on the compute actually starting, so the delete provably
+      // lands *after* the lead is registered and *while* it is still parked.
+      let started!: () => void;
+      const computing = new Promise<void>((resolve) => {
+        started = resolve;
+      });
 
-      cache.delete("k");
+      const caller = cache.remember("k", () => {
+        started();
+
+        return gate;
+      });
+
+      await computing;
+
+      await cache.delete("k");
 
       release("late");
 
@@ -236,7 +273,7 @@ describe.each(stores)("Cache over $name", ({ make }) => {
       // real and joined waiters must see something — but the explicit delete
       // wins: nothing is written back to the store.
       expect(await caller).toBe("late");
-      expect(cache.read("k")).toBeUndefined();
+      expect(await cache.read("k")).toBeUndefined();
 
       // And the ledger is empty, so the next call leads a fresh compute.
       let calls = 0;
@@ -247,7 +284,7 @@ describe.each(stores)("Cache over $name", ({ make }) => {
       });
       expect(fresh).toBe("fresh");
       expect(calls).toBe(1);
-      expect(cache.read("k")).toBe("fresh");
+      expect(await cache.read("k")).toBe("fresh");
     });
 
     it("a clear mid-flight wins: the resolving leader does not resurrect the value", async () => {
@@ -256,14 +293,25 @@ describe.each(stores)("Cache over $name", ({ make }) => {
         release = resolve;
       });
 
-      const caller = cache.remember("k", () => gate);
+      let started!: () => void;
+      const computing = new Promise<void>((resolve) => {
+        started = resolve;
+      });
 
-      cache.clear();
+      const caller = cache.remember("k", () => {
+        started();
+
+        return gate;
+      });
+
+      await computing;
+
+      await cache.clear();
 
       release("late");
 
       expect(await caller).toBe("late");
-      expect(cache.read("k")).toBeUndefined();
+      expect(await cache.read("k")).toBeUndefined();
     });
 
     it("a fresh leader after a mid-flight delete is not clobbered by the stale one", async () => {
@@ -279,93 +327,117 @@ describe.each(stores)("Cache over $name", ({ make }) => {
         releaseFresh = resolve;
       });
 
-      const stale = cache.remember("k", () => staleGate);
+      let staleStarted!: () => void;
+      const staleComputing = new Promise<void>((resolve) => {
+        staleStarted = resolve;
+      });
+
+      const stale = cache.remember("k", () => {
+        staleStarted();
+
+        return staleGate;
+      });
+
+      // Wait for the stale leader's ledger entry to exist before invalidating it.
+      await staleComputing;
 
       // Invalidate, abandoning the stale leader's ledger entry.
-      cache.delete("k");
+      await cache.delete("k");
 
-      // A new caller now leads its own compute for the same key.
-      const fresh = cache.remember("k", () => freshGate);
+      // A new caller now leads its own compute for the same key. Wait for it to
+      // register before driving the resolutions.
+      let freshStarted!: () => void;
+      const freshComputing = new Promise<void>((resolve) => {
+        freshStarted = resolve;
+      });
+
+      const fresh = cache.remember("k", () => {
+        freshStarted();
+
+        return freshGate;
+      });
+
+      await freshComputing;
 
       // Fresh settles first and writes; then the stale leader settles last.
       releaseFresh("fresh");
       expect(await fresh).toBe("fresh");
-      expect(cache.read("k")).toBe("fresh");
+      expect(await cache.read("k")).toBe("fresh");
 
       releaseStale("stale");
       expect(await stale).toBe("stale");
 
       // The late, stale leader neither overwrote the fresh value nor cleared the
       // fresh ledger entry: the cache still holds "fresh".
-      expect(cache.read("k")).toBe("fresh");
+      expect(await cache.read("k")).toBe("fresh");
     });
   });
 
   describe("write", () => {
-    it("with a ttl: the value lives until the deadline, then expires", () => {
-      cache.write("k", "v", { ttlMs: 50 });
+    it("with a ttl: the value lives until the deadline, then expires", async () => {
+      await cache.write("k", "v", { ttlMs: 50 });
 
       now += 49;
-      expect(cache.read("k")).toBe("v");
+      expect(await cache.read("k")).toBe("v");
 
       now += 1; // exactly at the deadline counts as expired
-      expect(cache.read("k")).toBeUndefined();
+      expect(await cache.read("k")).toBeUndefined();
     });
 
-    it("without a ttl: the value never expires", () => {
-      cache.write("k", "forever");
+    it("without a ttl: the value never expires", async () => {
+      await cache.write("k", "forever");
 
       now += 1_000_000_000;
-      expect(cache.read("k")).toBe("forever");
+      expect(await cache.read("k")).toBe("forever");
     });
   });
 
   describe("read", () => {
-    it("returns undefined for a missing key", () => {
-      expect(cache.read("absent")).toBeUndefined();
+    it("returns undefined for a missing key", async () => {
+      expect(await cache.read("absent")).toBeUndefined();
     });
 
-    it("deletes an expired entry and returns undefined", () => {
-      cache.write("k", "v", { ttlMs: 10 });
+    it("deletes an expired entry and returns undefined", async () => {
+      await cache.write("k", "v", { ttlMs: 10 });
 
       now += 11;
 
-      expect(cache.read("k")).toBeUndefined();
+      expect(await cache.read("k")).toBeUndefined();
       // The dead entry was evicted at the store level, not merely hidden.
-      expect(store.get("k")).toBeUndefined();
+      expect(await store.get("k")).toBeUndefined();
     });
   });
 
-  it("delete removes a single key", () => {
-    cache.write("k", "v");
+  it("delete removes a single key", async () => {
+    await cache.write("k", "v");
 
-    cache.delete("k");
+    await cache.delete("k");
 
-    expect(cache.read("k")).toBeUndefined();
+    expect(await cache.read("k")).toBeUndefined();
   });
 
-  it("clear empties the whole store", () => {
-    cache.write("a", 1);
-    cache.write("b", 2);
+  it("clear empties the whole store", async () => {
+    await cache.write("a", 1);
+    await cache.write("b", 2);
 
-    cache.clear();
+    await cache.clear();
 
-    expect(cache.read("a")).toBeUndefined();
-    expect(cache.read("b")).toBeUndefined();
+    expect(await cache.read("a")).toBeUndefined();
+    expect(await cache.read("b")).toBeUndefined();
   });
 });
 
 describe("default clock", () => {
-  it("uses real time when no clock is injected", () => {
+  it("uses real time when no clock is injected", async () => {
     const cache = new Cache({ store: new MemoryStore() });
 
     // A ttl far in the future stays live against the real wall clock.
-    cache.write("k", "v", { ttlMs: 60_000 });
-    expect(cache.read("k")).toBe("v");
+    await cache.write("k", "v", { ttlMs: 60_000 });
+    expect(await cache.read("k")).toBe("v");
 
     // A ttl already in the past expires immediately.
-    cache.write("expired", "v", { ttlMs: -1 });
-    expect(cache.read("expired")).toBeUndefined();
+    await cache.write("expired", "v", { ttlMs: -1 });
+    expect(await cache.read("expired")).toBeUndefined();
   });
 
   it("exports a systemClock that returns epoch milliseconds", () => {

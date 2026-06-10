@@ -134,15 +134,15 @@ export function buildControllers(identity: Identity): {
     }
 
     /** The current user (an Identity model), or undefined when signed out. */
-    private currentUser(): { email: string } | undefined {
-      const user = identity.currentUser(this.sessionToken());
+    private async currentUser(): Promise<{ email: string } | undefined> {
+      const user = await identity.currentUser(this.sessionToken());
 
       return user === undefined ? undefined : { email: user.email };
     }
 
     /** The dynamic MLS landing page: server-rendered, with a real sign-in form. */
-    index(): KeelResponse {
-      const user = this.currentUser();
+    async index(): Promise<KeelResponse> {
+      const user = await this.currentUser();
 
       const name = user === undefined ? undefined : displayNameFor(user.email);
 
@@ -176,8 +176,8 @@ export function buildControllers(identity: Identity): {
     }
 
     /** The same-origin endpoint the marketing Account island calls. */
-    session(): KeelResponse {
-      const user = this.currentUser();
+    async session(): Promise<KeelResponse> {
+      const user = await this.currentUser();
 
       if (user === undefined) return this.json({ user: null }, 401);
 
@@ -194,12 +194,12 @@ export function buildControllers(identity: Identity): {
      * `IDENTITY_INVALID_CREDENTIALS` (or `IDENTITY_EMAIL_NOT_VERIFIED`, which
      * cannot happen for the demo's pre-verified seeds).
      */
-    signIn(): KeelResponse {
+    async signIn(): Promise<KeelResponse> {
       const email = formField(this.request.body, "email") ?? "";
       const password = formField(this.request.body, "password") ?? "";
 
       try {
-        const { session } = identity.login(email, password);
+        const { session } = await identity.login(email, password);
 
         return {
           status: 303,
@@ -235,8 +235,8 @@ export function buildControllers(identity: Identity): {
     }
 
     /** A gated resource: only a signed-in user's saved listings. */
-    saved(): KeelResponse {
-      const user = this.currentUser();
+    async saved(): Promise<KeelResponse> {
+      const user = await this.currentUser();
 
       if (user === undefined) return this.json({ error: "sign in required" }, 401);
 

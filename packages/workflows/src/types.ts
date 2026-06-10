@@ -6,16 +6,27 @@
  * satisfy the same shape in production, and the engine never knows the difference.
  */
 
-// ---- the minimal SQL surface (driver-agnostic) ----
+// ---- the minimal SQL surface (driver-agnostic, async per ADR 0006) ----
+//
+// The I/O terminals (`run`/`get`/`exec`) return Promises so the seam can be
+// backed by a networked pool (Postgres) — not just an in-process engine.
+// `prepare()` STAYS SYNCHRONOUS: it only builds a statement handle; binding +
+// execution is what touches the wire. No sync-over-async shim, ever.
 
 export interface SqlStatement {
-  run(params?: unknown[]): { changes: number };
-  get(params?: unknown[]): unknown;
+  run(params?: unknown[]): Promise<{ changes: number }>;
+  get(params?: unknown[]): Promise<unknown>;
 }
 
 export interface SqlDatabase {
-  exec(sql: string): unknown;
+  exec(sql: string): Promise<void>;
   prepare(sql: string): SqlStatement;
+  /**
+   * Run `fn` inside a single transaction, pinned to one connection. Commits on
+   * resolve, rolls back on throw. First-class so atomic spans never rely on raw
+   * `exec("BEGIN")` DDL, which would no-op across a pooled connection.
+   */
+  transaction<T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<T>;
 }
 
 /** A sleep, made injectable — so tests never wait on a real timer. */

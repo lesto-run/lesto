@@ -70,16 +70,44 @@ export async function openSqlite(
   const raw = engines.betterSqlite(filename) ?? (await engines.bunSqlite(filename));
 
   const db: KernelDatabase = {
-    exec: (sql) => raw.exec(sql),
+    // I/O terminal verbs are async: a SQLite engine returns synchronously, so we
+    // `await` a resolved value (zero latency) to present the Postgres-shaped seam.
+    exec: async (sql) => {
+      raw.exec(sql);
+    },
 
+    // `prepare` stays synchronous — compiling SQL is a pure value operation — but
+    // the statement's terminal verbs are async for the same reason as `exec`.
     prepare: (sql) => {
       const statement = raw.prepare(sql);
 
       return {
-        run: (params = []) => statement.run(...params),
-        get: (params = []) => statement.get(...params),
-        all: (params = []) => statement.all(...params),
+        run: async (params = []) => statement.run(...params),
+        get: async (params = []) => statement.get(...params),
+        all: async (params = []) => statement.all(...params),
       };
+    },
+
+    // Single-connection (SQLite) transaction: the same handle brackets `fn` with
+    // BEGIN/COMMIT, rolling back (best-effort) on any throw before re-raising.
+    transaction: async (fn) => {
+      raw.exec("BEGIN");
+
+      try {
+        const out = await fn(db);
+
+        raw.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          raw.exec("ROLLBACK");
+        } catch {
+          // Best-effort: a failed rollback must not mask the original error.
+        }
+
+        throw error;
+      }
     },
   };
 

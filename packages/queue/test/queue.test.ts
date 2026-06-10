@@ -12,15 +12,62 @@ const advance = (ms: number): void => {
   now = new Date(now.getTime() + ms);
 };
 
+// ---------------------------------------------------------------------------
+// Test rig
+//
+// The SQL surface is async + positional (ADR 0006): the synchronous
+// better-sqlite3 engine is adapted so each terminal resolves a Promise (zero
+// latency) and binds an ordered `unknown[]`; `prepare()` stays sync.
+// `transaction()` brackets BEGIN/COMMIT (ROLLBACK on reject) over the single
+// in-memory connection.
+// ---------------------------------------------------------------------------
+
+function adapt(database: Database.Database): SqlDatabase {
+  const adapted: SqlDatabase = {
+    exec: async (statement) => {
+      database.exec(statement);
+    },
+    prepare: (statement) => {
+      const stmt = database.prepare(statement);
+
+      return {
+        run: async (params = []) => stmt.run(...(params as never[])),
+        get: async (params = []) => stmt.get(...(params as never[])),
+        all: async (params = []) => stmt.all(...(params as never[])),
+      };
+    },
+    transaction: async (fn) => {
+      database.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        database.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          database.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
+  };
+
+  return adapted;
+}
+
 let database: Database.Database;
 let db: SqlDatabase;
 let queue: Queue;
 
-beforeEach(() => {
+beforeEach(async () => {
   now = new Date("2026-06-08T12:00:00.000Z");
   database = new Database(":memory:");
-  db = database as unknown as SqlDatabase;
-  installSchema(db);
+  db = adapt(database);
+  await installSchema(db);
   queue = new Queue({ db, clock, baseBackoffMs: 1000, maxBackoffMs: 3000 });
 });
 
@@ -45,21 +92,31 @@ const waitUntil = async (predicate: () => boolean, timeoutMs = 1000): Promise<vo
 };
 
 describe("enqueue", () => {
-  it("schedules immediately, after a delay, or at an absolute time", () => {
-    const immediate = queue.enqueue("x");
-    expect(queue.find(immediate)?.runAt).toBe(now.toISOString());
+  it("returns the real id sourced from RETURNING id", async () => {
+    const first = await queue.enqueue("x");
+    const second = await queue.enqueue("x");
 
-    const delayed = queue.enqueue("x", {}, { delayMs: 5000 });
-    expect(queue.find(delayed)?.runAt).toBe(new Date(now.getTime() + 5000).toISOString());
+    // RETURNING id (not lastInsertRowid): real, monotonic, and Postgres-portable.
+    expect(first).toBe(1);
+    expect(second).toBe(2);
+    expect((await queue.find(first))?.id).toBe(first);
+  });
+
+  it("schedules immediately, after a delay, or at an absolute time", async () => {
+    const immediate = await queue.enqueue("x");
+    expect((await queue.find(immediate))?.runAt).toBe(now.toISOString());
+
+    const delayed = await queue.enqueue("x", {}, { delayMs: 5000 });
+    expect((await queue.find(delayed))?.runAt).toBe(new Date(now.getTime() + 5000).toISOString());
 
     const future = new Date(now.getTime() + 99_000);
-    const scheduled = queue.enqueue("x", {}, { runAt: future });
-    expect(queue.find(scheduled)?.runAt).toBe(future.toISOString());
+    const scheduled = await queue.enqueue("x", {}, { runAt: future });
+    expect((await queue.find(scheduled))?.runAt).toBe(future.toISOString());
   });
 
   it("routes to named queues", async () => {
     queue.define("e", () => {});
-    queue.enqueue("e", {}, { queue: "emails" });
+    await queue.enqueue("e", {}, { queue: "emails" });
 
     expect(await queue.runOnce()).toBeNull(); // default queue is empty
     expect((await queue.runOnce({ queue: "emails", visibilityMs: 5000 }))?.outcome).toBe("done");
@@ -91,79 +148,79 @@ describe("runOnce", () => {
       seen.push(payload.name);
     });
 
-    const id = queue.enqueue("greet", { name: "Ada" });
+    const id = await queue.enqueue("greet", { name: "Ada" });
     const result = await queue.runOnce();
 
     expect(result?.outcome).toBe("done");
     expect(seen).toEqual(["Ada"]);
-    expect(queue.find(id)?.status).toBe("done");
-    expect(queue.find(id)?.finishedAt).not.toBeNull();
+    expect((await queue.find(id))?.status).toBe("done");
+    expect((await queue.find(id))?.finishedAt).not.toBeNull();
   });
 
   it("fails a job with no registered handler", async () => {
-    const id = queue.enqueue("ghost", {}, { maxAttempts: 1 });
+    const id = await queue.enqueue("ghost", {}, { maxAttempts: 1 });
     const result = await queue.runOnce();
 
     expect(result?.outcome).toBe("failed");
-    expect(queue.find(id)?.status).toBe("failed");
-    expect(queue.find(id)?.lastError).toContain("No handler");
+    expect((await queue.find(id))?.status).toBe("failed");
+    expect((await queue.find(id))?.lastError).toContain("No handler");
   });
 
   it("retries on throw, then fails after maxAttempts", async () => {
     queue.define("boom", () => {
       throw new Error("nope");
     });
-    const id = queue.enqueue("boom", {}, { maxAttempts: 2 });
+    const id = await queue.enqueue("boom", {}, { maxAttempts: 2 });
 
     expect((await queue.runOnce())?.outcome).toBe("retry");
-    expect(queue.find(id)?.status).toBe("ready");
-    expect(queue.find(id)?.lastError).toContain("nope");
+    expect((await queue.find(id))?.status).toBe("ready");
+    expect((await queue.find(id))?.lastError).toContain("nope");
 
     advance(1000);
     expect((await queue.runOnce())?.outcome).toBe("failed");
-    expect(queue.find(id)?.status).toBe("failed");
+    expect((await queue.find(id))?.status).toBe("failed");
   });
 
   it("stringifies a non-Error throw", async () => {
     queue.define("weird", () => {
       throw "stringy"; // eslint-disable-line -- exercising the non-Error branch
     });
-    const id = queue.enqueue("weird", {}, { maxAttempts: 1 });
+    const id = await queue.enqueue("weird", {}, { maxAttempts: 1 });
     await queue.runOnce();
 
-    expect(queue.find(id)?.lastError).toBe("stringy");
+    expect((await queue.find(id))?.lastError).toBe("stringy");
   });
 
   it("applies exponential backoff, capped at maxBackoffMs", async () => {
     queue.define("flaky", () => {
       throw new Error("boom");
     });
-    const id = queue.enqueue("flaky", {}, { maxAttempts: 10 });
+    const id = await queue.enqueue("flaky", {}, { maxAttempts: 10 });
 
     await queue.runOnce(); // attempt 1 → 1000 * 2^0 = 1000
-    expect(queue.find(id)?.runAt).toBe(new Date(now.getTime() + 1000).toISOString());
+    expect((await queue.find(id))?.runAt).toBe(new Date(now.getTime() + 1000).toISOString());
 
     advance(1000);
     await queue.runOnce(); // attempt 2 → 2000
-    expect(queue.find(id)?.runAt).toBe(new Date(now.getTime() + 2000).toISOString());
+    expect((await queue.find(id))?.runAt).toBe(new Date(now.getTime() + 2000).toISOString());
 
     advance(2000);
     await queue.runOnce(); // attempt 3 → 4000, capped to 3000
-    expect(queue.find(id)?.runAt).toBe(new Date(now.getTime() + 3000).toISOString());
+    expect((await queue.find(id))?.runAt).toBe(new Date(now.getTime() + 3000).toISOString());
   });
 });
 
 describe("claim & reclaim", () => {
-  it("claims by priority, then by age", () => {
-    queue.enqueue("x", { tag: "low" }, { priority: 0 });
-    queue.enqueue("x", { tag: "high" }, { priority: 10 });
+  it("claims by priority, then by age", async () => {
+    await queue.enqueue("x", { tag: "low" }, { priority: 0 });
+    await queue.enqueue("x", { tag: "high" }, { priority: 10 });
 
-    expect(queue.claim()?.payload).toMatchObject({ tag: "high" });
+    expect((await queue.claim())?.payload).toMatchObject({ tag: "high" });
   });
 
   it("does not claim a delayed job early", async () => {
     queue.define("later", () => {});
-    queue.enqueue("later", {}, { delayMs: 60_000 });
+    await queue.enqueue("later", {}, { delayMs: 60_000 });
 
     expect(await queue.runOnce()).toBeNull();
 
@@ -171,29 +228,29 @@ describe("claim & reclaim", () => {
     expect((await queue.runOnce())?.outcome).toBe("done");
   });
 
-  it("reclaims a job stranded past its visibility deadline", () => {
+  it("reclaims a job stranded past its visibility deadline", async () => {
     queue.define("slow", () => {});
-    const id = queue.enqueue("slow");
+    const id = await queue.enqueue("slow");
 
-    expect(queue.claim("default", 2000)?.id).toBe(id);
-    expect(queue.find(id)?.status).toBe("running");
-    expect(queue.reclaim()).toBe(0); // not yet stale
+    expect((await queue.claim("default", 2000))?.id).toBe(id);
+    expect((await queue.find(id))?.status).toBe("running");
+    expect(await queue.reclaim()).toBe(0); // not yet stale
 
     advance(2001);
-    expect(queue.reclaim()).toBe(1); // now stale → reclaimed
-    expect(queue.find(id)?.status).toBe("ready");
+    expect(await queue.reclaim()).toBe(1); // now stale → reclaimed
+    expect((await queue.find(id))?.status).toBe("ready");
   });
 });
 
 describe("stats & find", () => {
   it("counts by status and returns null for a missing id", async () => {
     queue.define("s", () => {});
-    queue.enqueue("s");
-    queue.enqueue("s");
+    await queue.enqueue("s");
+    await queue.enqueue("s");
     await queue.runOnce();
 
-    expect(queue.stats()).toMatchObject({ done: 1, ready: 1 });
-    expect(queue.find(99_999)).toBeNull();
+    expect(await queue.stats()).toMatchObject({ done: 1, ready: 1 });
+    expect(await queue.find(99_999)).toBeNull();
   });
 });
 
@@ -203,11 +260,11 @@ describe("work", () => {
     queue.define<{ tag: string }>("t", (payload) => {
       done.push(payload.tag);
     });
-    queue.enqueue("t", { tag: "a" });
-    queue.enqueue("t", { tag: "b" });
+    await queue.enqueue("t", { tag: "a" });
+    await queue.enqueue("t", { tag: "b" });
 
     const worker = queue.work(); // all defaults — covers the default poll interval
-    await waitUntil(() => (queue.stats().done ?? 0) === 2);
+    await waitUntil(() => done.length === 2);
     await worker.stop();
 
     expect(done.toSorted()).toEqual(["a", "b"]);
@@ -250,6 +307,7 @@ describe("work", () => {
 
         return db.prepare(sql);
       },
+      transaction: (fn) => db.transaction(fn),
     };
 
     return { db: wrapped, failed: () => thrown };
@@ -275,7 +333,7 @@ describe("work", () => {
     // The very first poll throws; the loop must survive it. Once the db heals we
     // enqueue a job and it must be processed — proof the loop did not die.
     await waitUntil(() => failed());
-    resilient.enqueue("t", { tag: "after-failure" });
+    await resilient.enqueue("t", { tag: "after-failure" });
 
     await waitUntil(() => done.length === 1);
     await worker.stop();
@@ -322,6 +380,7 @@ describe("work", () => {
 
         return db.prepare(sql);
       },
+      transaction: (fn) => db.transaction(fn),
     };
 
     const reported: QueueError[] = [];
@@ -350,7 +409,7 @@ describe("work", () => {
     // No onError seam at all (covers the early return), AND we exercise the
     // throwing-reporter guard on a second worker below.
     const silent = resilient.work({ pollMs: 1, sleep: yieldingSleep });
-    resilient.enqueue("t", { tag: "no-seam" });
+    await resilient.enqueue("t", { tag: "no-seam" });
 
     await waitUntil(() => done.includes("no-seam"));
     await silent.stop();
@@ -369,7 +428,7 @@ describe("work", () => {
         throw new Error("reporter exploded");
       },
     });
-    q2.enqueue("t", { tag: "throwing-reporter" });
+    await q2.enqueue("t", { tag: "throwing-reporter" });
 
     await waitUntil(() => done.includes("throwing-reporter"));
     await loud.stop();
@@ -379,11 +438,38 @@ describe("work", () => {
   });
 });
 
+describe("transaction (claim atomicity seam)", () => {
+  // The async seam exposes a first-class transaction() so a pooled Postgres
+  // driver can pin one connection for a multi-statement span. The in-memory
+  // adapter brackets BEGIN/COMMIT, ROLLBACK on reject — exercise both.
+  it("commits when fn resolves and rolls back when it rejects", async () => {
+    const id = await queue.enqueue("x");
+
+    const out = await db.transaction(async (tx) => {
+      await tx.prepare("UPDATE keel_jobs SET name = ? WHERE id = ?").run(["committed", id]);
+
+      return "ok";
+    });
+    expect(out).toBe("ok");
+    expect((await queue.find(id))?.name).toBe("committed");
+
+    await expect(
+      db.transaction(async (tx) => {
+        await tx.prepare("UPDATE keel_jobs SET name = ? WHERE id = ?").run(["doomed", id]);
+        throw new Error("abort");
+      }),
+    ).rejects.toThrow("abort");
+
+    // Rolled back: the doomed write never landed.
+    expect((await queue.find(id))?.name).toBe("committed");
+  });
+});
+
 describe("defaults", () => {
   it("falls back to the system clock and default tuning", async () => {
     const q2 = new Queue({ db, defaultQueue: "background" });
     q2.define("now", () => {});
-    q2.enqueue("now");
+    await q2.enqueue("now");
 
     expect((await q2.runOnce())?.outcome).toBe("done");
 
@@ -412,17 +498,17 @@ describe("cronMatches", () => {
 });
 
 describe("Scheduler", () => {
-  it("ticks crons (deduped per minute) and intervals", () => {
+  it("ticks crons (deduped per minute) and intervals", async () => {
     const at = new Date(2026, 5, 8, 9, 30, 0);
     const schedule = new Scheduler({ queue, clock: () => at });
     schedule.cron("30 9 * * *", "digest");
     schedule.cron("31 9 * * *", "never");
     schedule.every(1000, "ping");
 
-    expect(schedule.tick(at)).toBe(2); // digest + first ping
-    expect(schedule.tick(at)).toBe(0); // cron deduped, ping not yet due
+    expect(await schedule.tick(at)).toBe(2); // digest + first ping
+    expect(await schedule.tick(at)).toBe(0); // cron deduped, ping not yet due
 
-    expect(schedule.tick(new Date(at.getTime() + 1000))).toBe(1); // ping due again
+    expect(await schedule.tick(new Date(at.getTime() + 1000))).toBe(1); // ping due again
   });
 
   it("validates cron expressions at registration", () => {
@@ -430,7 +516,7 @@ describe("Scheduler", () => {
     expect(() => schedule.cron("not-a-cron", "x")).toThrowError(QueueError);
   });
 
-  it("start() ticks via injected timers and clears on stop", () => {
+  it("start() ticks via injected timers and clears on stop", async () => {
     const at = new Date(2026, 5, 8, 9, 30, 0);
     const schedule = new Scheduler({ queue, clock: () => at });
     schedule.cron("30 9 * * *", "digest");
@@ -451,15 +537,104 @@ describe("Scheduler", () => {
 
     expect(captured).toBeTypeOf("function");
     (captured as () => void)();
-    expect(queue.stats().ready).toBe(1);
+    // The timer callback fires `tick()` fire-and-forget; the enqueue lands on a
+    // microtask, so poll the durable count rather than asserting synchronously.
+    const start = Date.now();
+    while (((await queue.stats()).ready ?? 0) !== 1) {
+      if (Date.now() - start > 1000) throw new Error("tick enqueue timed out");
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect((await queue.stats()).ready).toBe(1);
 
     handle.stop();
     expect(clearedHandle).toBe(7);
+  });
+
+  it("start() swallows a tick fault so the cadence survives", async () => {
+    // A queue whose enqueue always rejects: the fire-and-forget tick must catch
+    // it (no unhandled rejection) and the cadence keeps running.
+    const failing: SqlDatabase = {
+      exec: async () => {},
+      prepare: () => ({
+        run: async () => {
+          throw new Error("enqueue down");
+        },
+        get: async () => {
+          throw new Error("enqueue down");
+        },
+        all: async () => [],
+      }),
+      transaction: async (fn) => fn(failing),
+    };
+    const q3 = new Queue({ db: failing, clock: () => new Date(2026, 5, 8, 9, 30, 0) });
+    const schedule = new Scheduler({ queue: q3, clock: () => new Date(2026, 5, 8, 9, 30, 0) });
+    schedule.cron("30 9 * * *", "digest");
+
+    let captured: (() => void) | undefined;
+    const handle = schedule.start({
+      setInterval: (callback) => {
+        captured = callback;
+
+        return 1;
+      },
+      clearInterval: () => {},
+    });
+
+    expect(() => (captured as () => void)()).not.toThrow();
+    // Let the rejected tick settle through its .catch — no unhandled rejection.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    handle.stop();
   });
 
   it("start() uses real timers by default", () => {
     const schedule = new Scheduler({ queue });
     schedule.start({ intervalMs: 10_000 }).stop(); // real setInterval/clearInterval
     schedule.start({ setInterval: () => 1, clearInterval: () => {} }).stop(); // default intervalMs
+  });
+
+  it("start() does not overlap ticks: a fire while one is in flight is skipped", async () => {
+    const schedule = new Scheduler({ queue, clock: () => new Date(2026, 5, 8, 9, 30, 0) });
+    schedule.cron("30 9 * * *", "digest");
+
+    // Spy on tick to (a) hold each tick open until released and (b) record the
+    // peak concurrency. With the no-overlap guard, two timer fires must yield a
+    // peak of 1; without it, the second fire would start a concurrent tick (2).
+    let inFlight = 0;
+    let peak = 0;
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realTick = schedule.tick.bind(schedule);
+    schedule.tick = async (when?: Date) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await held;
+      const fired = await realTick(when);
+      inFlight -= 1;
+
+      return fired;
+    };
+
+    let captured: (() => void) | undefined;
+    const handle = schedule.start({
+      setInterval: (callback) => {
+        captured = callback;
+
+        return 1;
+      },
+      clearInterval: () => {},
+    });
+
+    (captured as () => void)(); // tick 1 starts, holds open (ticking = true)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    (captured as () => void)(); // fires while tick 1 in flight → must be skipped
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(peak).toBe(1);
+
+    release?.(); // let tick 1 finish
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    handle.stop();
   });
 });

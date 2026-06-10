@@ -10,19 +10,42 @@ import { createApp, secureStack } from "../src/index";
 import type { KernelDatabase } from "../src/index";
 
 function adapt(raw: Database.Database): KernelDatabase {
-  return {
-    exec: (sql) => raw.exec(sql),
+  const adapted: KernelDatabase = {
+    exec: async (sql) => {
+      raw.exec(sql);
+    },
 
     prepare: (sql) => {
       const statement = raw.prepare(sql);
 
       return {
-        run: (params = []) => statement.run(...(params as never[])),
-        get: (params = []) => statement.get(...(params as never[])),
-        all: (params = []) => statement.all(...(params as never[])),
+        run: async (params = []) => statement.run(...(params as never[])),
+        get: async (params = []) => statement.get(...(params as never[])),
+        all: async (params = []) => statement.all(...(params as never[])),
       };
     },
+
+    transaction: async (fn) => {
+      raw.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        raw.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          raw.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
   };
+
+  return adapted;
 }
 
 const SECRET = "kernel-secret";
@@ -62,7 +85,7 @@ afterEach(() => {
 
 describe("secureStack — cors + rateLimit (safe to enable)", () => {
   it("attaches CORS headers to a normal response", async () => {
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: { api: ApiController },
@@ -75,7 +98,7 @@ describe("secureStack — cors + rateLimit (safe to enable)", () => {
   });
 
   it("answers a CORS preflight (OPTIONS) with 204", async () => {
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: { api: ApiController },
@@ -89,7 +112,7 @@ describe("secureStack — cors + rateLimit (safe to enable)", () => {
   });
 
   it("trips a 429 once a burst exhausts the rate limit", async () => {
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: { api: ApiController },
@@ -112,7 +135,7 @@ describe("secureStack — cors + rateLimit (safe to enable)", () => {
   });
 
   it("a controller reads the requestId off the context the runtime set", async () => {
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: { api: ApiController },
@@ -131,7 +154,7 @@ describe("secureStack — csrf is opt-in only", () => {
   it("a token-less state-changing POST succeeds when CSRF is NOT mounted", async () => {
     // The backward-compatibility guarantee: no csrf option => no enforcement,
     // exactly the estate sign-in flow (a POST with no CSRF token).
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: { api: ApiController },
@@ -147,7 +170,7 @@ describe("secureStack — csrf is opt-in only", () => {
   });
 
   it("the same token-less POST is 403 once CSRF IS mounted", async () => {
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: { api: ApiController },
@@ -167,7 +190,7 @@ describe("secureStack — csrf is opt-in only", () => {
   it("a valid token lets the POST through when CSRF is mounted", async () => {
     const token = generateToken(SESSION, SECRET);
 
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: { api: ApiController },
@@ -210,7 +233,7 @@ describe("secureStack composition", () => {
 
 describe("secureStack — origin check (zero-config CSRF default)", () => {
   it("refuses a cross-site state-changing request with no token plumbing", async () => {
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: { api: ApiController },
@@ -226,7 +249,7 @@ describe("secureStack — origin check (zero-config CSRF default)", () => {
   });
 
   it("allows a same-origin state-changing request without a token", async () => {
-    const app = createApp({
+    const app = await createApp({
       db,
       router: buildRouter(),
       controllers: { api: ApiController },

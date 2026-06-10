@@ -20,8 +20,11 @@ export const contentEntriesMigration: MigrationEntry = {
   version: "0001_create_content_entries",
 
   migration: {
-    up(schema) {
-      schema.createTable(CONTENT_ENTRIES_TABLE, (t) => {
+    async up(schema) {
+      // The table must exist before any index references it. On Postgres a
+      // CREATE INDEX that races CREATE TABLE fails ("relation does not exist"),
+      // so we await the DDL in strict order: table first, then each index.
+      await schema.createTable(CONTENT_ENTRIES_TABLE, (t) => {
         t.string("collection", { null: false });
         t.string("entry_id", { null: false });
         t.string("slug", { null: false });
@@ -33,15 +36,15 @@ export const contentEntriesMigration: MigrationEntry = {
 
       // The identity of an entry is (collection, entry_id) — unique, and the
       // conflict target every upsert resolves against.
-      schema.addIndex(CONTENT_ENTRIES_TABLE, ["collection", "entry_id"], { unique: true });
+      await schema.addIndex(CONTENT_ENTRIES_TABLE, ["collection", "entry_id"], { unique: true });
 
       // The two access paths the runtime actually takes: by slug, and by status.
-      schema.addIndex(CONTENT_ENTRIES_TABLE, ["collection", "slug"]);
-      schema.addIndex(CONTENT_ENTRIES_TABLE, ["collection", "status"]);
+      await schema.addIndex(CONTENT_ENTRIES_TABLE, ["collection", "slug"]);
+      await schema.addIndex(CONTENT_ENTRIES_TABLE, ["collection", "status"]);
     },
 
-    down(schema) {
-      schema.dropTable(CONTENT_ENTRIES_TABLE);
+    async down(schema) {
+      await schema.dropTable(CONTENT_ENTRIES_TABLE);
     },
   },
 };

@@ -65,11 +65,11 @@ interface ResourceSummary {
 export interface Admin {
   resources(): ResourceSummary[];
   describe(name: string): ResourceSummary;
-  list(name: string): Record_[];
-  get(name: string, id: unknown): Record_;
-  create(name: string, attributes: unknown): Record_;
-  update(name: string, id: unknown, attributes: unknown): Record_;
-  destroy(name: string, id: unknown): void;
+  list(name: string): Promise<Record_[]>;
+  get(name: string, id: unknown): Promise<Record_>;
+  create(name: string, attributes: unknown): Promise<Record_>;
+  update(name: string, id: unknown, attributes: unknown): Promise<Record_>;
+  destroy(name: string, id: unknown): Promise<void>;
 }
 
 /** Internal — what we cache per resource to avoid re-scanning the column list. */
@@ -148,8 +148,8 @@ export function createAdmin(db: Db, resources: readonly AdminResource[]): Admin 
     return entry;
   };
 
-  const fetchRow = (entry: ResolvedResource, id: unknown): Record_ => {
-    const row = db
+  const fetchRow = async (entry: ResolvedResource, id: unknown): Promise<Record_> => {
+    const row = await db
       .select()
       .from(entry.resource.table)
       .where(eq(entry.primaryKey, id as never))
@@ -175,57 +175,61 @@ export function createAdmin(db: Db, resources: readonly AdminResource[]): Admin 
       return summarize(resolve(name).resource);
     },
 
-    list(name) {
+    async list(name) {
       const entry = resolve(name);
-      const rows = db.select().from(entry.resource.table).all() as Record_[];
+      const rows = (await db.select().from(entry.resource.table).all()) as Record_[];
 
       return rows.map((row) => project(entry.resource, row, entry.primaryKey.spec));
     },
 
-    get(name, id) {
+    async get(name, id) {
       const entry = resolve(name);
 
-      return project(entry.resource, fetchRow(entry, id), entry.primaryKey.spec);
+      return project(entry.resource, await fetchRow(entry, id), entry.primaryKey.spec);
     },
 
-    create(name, attributes) {
+    async create(name, attributes) {
       const entry = resolve(name);
+      // Validation is sync and runs BEFORE the awaited write.
       const data = validate(name, entry.resource.insertSchema, attributes);
 
-      const row = db
+      const row = (await db
         .insert(entry.resource.table)
         .values(data as never)
         .returning()
-        .get() as Record_;
+        .get()) as Record_;
 
       return project(entry.resource, row, entry.primaryKey.spec);
     },
 
-    update(name, id, attributes) {
+    async update(name, id, attributes) {
       const entry = resolve(name);
+      // Validation is sync and runs BEFORE the awaited write.
       const data = validate(name, entry.resource.updateSchema, attributes);
 
       // Confirm the row exists *before* the update — gives us the
       // not-found code instead of a silently-zero-rows-affected update.
-      fetchRow(entry, id);
+      await fetchRow(entry, id);
 
-      db.update(entry.resource.table)
+      await db
+        .update(entry.resource.table)
         .set(data as never)
         .where(eq(entry.primaryKey, id as never))
         .run();
 
       // Re-read so the projection reflects the merged state, not the patch.
-      return project(entry.resource, fetchRow(entry, id), entry.primaryKey.spec);
+      return project(entry.resource, await fetchRow(entry, id), entry.primaryKey.spec);
     },
 
-    destroy(name, id) {
+    async destroy(name, id) {
       const entry = resolve(name);
 
       // Same pre-check as update — the not-found code is more useful than
       // a quiet zero-changes delete.
-      fetchRow(entry, id);
+      await fetchRow(entry, id);
 
-      db.delete(entry.resource.table)
+      await db
+        .delete(entry.resource.table)
         .where(eq(entry.primaryKey, id as never))
         .run();
     },

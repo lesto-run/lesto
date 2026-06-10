@@ -18,10 +18,10 @@ import { buildControllers } from "./posts-controller";
 import { postsMigration } from "./post";
 import { buildRouter } from "./routes";
 
-export function buildApp(handle: KernelDatabase): { app: App; db: Db } {
+export async function buildApp(handle: KernelDatabase): Promise<{ app: App; db: Db }> {
   const db = createDb(handle);
 
-  const app = createApp({
+  const app = await createApp({
     db: handle,
     router: buildRouter(),
     controllers: buildControllers(db),

@@ -33,15 +33,15 @@ async function main(): Promise<void> {
 
   // Boot: the kernel runs migrations + stands up dispatch; buildApp also
   // wraps the same handle as a typed @keel/db for controllers + seeds.
-  const { app, db } = buildApp(handle);
+  const { app, db } = await buildApp(handle);
 
   console.log("migrations applied:", app.migrationsApplied);
 
   for (const seed of seeds) {
-    insertPost(db, seed);
+    await insertPost(db, seed);
   }
 
-  console.log("posts seeded:", countPosts(db));
+  console.log("posts seeded:", await countPosts(db));
 
   // Stand a real node:http server in front of the app.
   const server = await serve(app, { port: PORT });

@@ -59,12 +59,12 @@ function buildEntry(input: WriteEntryInput): RuntimeEntry {
  * Create is deliberately not an upsert: an agent that means to add content
  * should hear about a collision rather than silently overwrite.
  */
-export function createEntry(
+export async function createEntry(
   db: SqlDatabase,
   input: WriteEntryInput,
   options?: PersistOptions,
-): WriteEntryResult {
-  if (loadEntry(db, input.collection, input.slug) !== undefined) {
+): Promise<WriteEntryResult> {
+  if ((await loadEntry(db, input.collection, input.slug)) !== undefined) {
     throw new ContentStoreError(
       "CONTENT_STORE_ENTRY_EXISTS",
       `An entry "${input.slug}" already exists in collection "${input.collection}".`,
@@ -74,7 +74,7 @@ export function createEntry(
 
   const entry = buildEntry(input);
 
-  persistEntries(db, [entry], options);
+  await persistEntries(db, [entry], options);
 
   return { entry };
 }
@@ -86,12 +86,12 @@ export function createEntry(
  * when given. Identity (`id`, `collection`, `file`) is held fixed — an update
  * cannot move an entry, only change what it holds.
  */
-export function updateEntry(
+export async function updateEntry(
   db: SqlDatabase,
   input: WriteEntryInput,
   options?: PersistOptions,
-): WriteEntryResult {
-  const existing = loadEntry(db, input.collection, input.slug);
+): Promise<WriteEntryResult> {
+  const existing = await loadEntry(db, input.collection, input.slug);
 
   if (existing === undefined) {
     throw new ContentStoreError(
@@ -110,15 +110,19 @@ export function updateEntry(
     file: existing.file,
   };
 
-  persistEntries(db, [entry], options);
+  await persistEntries(db, [entry], options);
 
   return { entry };
 }
 
 /** Remove an entry by its identity. Removing nothing is success, not an error. */
-export function deleteEntry(db: SqlDatabase, collection: string, id: string): DeleteEntryResult {
+export async function deleteEntry(
+  db: SqlDatabase,
+  collection: string,
+  id: string,
+): Promise<DeleteEntryResult> {
   const sql = `DELETE FROM ${CONTENT_ENTRIES_TABLE} WHERE collection = ? AND entry_id = ?`;
-  const result = db.prepare(sql).run([collection, id]);
+  const result = await db.prepare(sql).run([collection, id]);
 
   return { deleted: result.changes };
 }
@@ -141,12 +145,15 @@ function identityKey(collection: string, id: string): string {
  * source that no longer exists are removed so the database mirrors the build
  * exactly. It loads only identities (not documents) and deletes the difference.
  */
-export function pruneEntries(db: SqlDatabase, keep: readonly RuntimeEntry[]): DeleteEntryResult {
+export async function pruneEntries(
+  db: SqlDatabase,
+  keep: readonly RuntimeEntry[],
+): Promise<DeleteEntryResult> {
   const kept = new Set(keep.map((entry) => identityKey(entry.collection, entry.id)));
 
-  const rows = db
+  const rows = (await db
     .prepare(`SELECT collection, entry_id FROM ${CONTENT_ENTRIES_TABLE}`)
-    .all() as IdentityRow[];
+    .all()) as IdentityRow[];
 
   const statement = db.prepare(
     `DELETE FROM ${CONTENT_ENTRIES_TABLE} WHERE collection = ? AND entry_id = ?`,
@@ -156,7 +163,7 @@ export function pruneEntries(db: SqlDatabase, keep: readonly RuntimeEntry[]): De
 
   for (const row of rows) {
     if (!kept.has(identityKey(row.collection, row.entry_id))) {
-      statement.run([row.collection, row.entry_id]);
+      await statement.run([row.collection, row.entry_id]);
       deleted += 1;
     }
   }

@@ -6,23 +6,27 @@ import type { CacheStore, StoredEntry } from "./types";
  * Fast, zero-dependency, and entirely ephemeral — it lives and dies with the
  * process. Reach for `sqlStore` when the cache must survive a restart or be
  * shared across workers.
+ *
+ * The verbs are `async` to satisfy the Promise-returning `CacheStore` contract
+ * (ADR 0006). The work itself is a synchronous Map operation; resolving an
+ * already-settled value is the whole cost of the async shape here.
  */
 export class MemoryStore implements CacheStore {
   private readonly entries = new Map<string, StoredEntry>();
 
-  get(key: string): StoredEntry | undefined {
+  async get(key: string): Promise<StoredEntry | undefined> {
     return this.entries.get(key);
   }
 
-  set(key: string, entry: StoredEntry): void {
+  async set(key: string, entry: StoredEntry): Promise<void> {
     this.entries.set(key, entry);
   }
 
-  delete(key: string): void {
+  async delete(key: string): Promise<void> {
     this.entries.delete(key);
   }
 
-  clear(): void {
+  async clear(): Promise<void> {
     this.entries.clear();
   }
 }

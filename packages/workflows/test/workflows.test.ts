@@ -5,25 +5,47 @@ import { Engine, installWorkflowSchema, WorkflowError } from "../src/index";
 
 import type { Sleep, SqlDatabase } from "../src/index";
 
-// A ~6-line better-sqlite3 adapter: array-positional params spread into the driver.
-const adapt = (database: Database.Database): SqlDatabase => ({
-  exec: (sql) => database.exec(sql),
-  prepare: (sql) => {
-    const stmt = database.prepare(sql);
-    return {
-      run: (params = []) => stmt.run(...params),
-      get: (params = []) => stmt.get(...params),
-    };
-  },
-});
+// A small better-sqlite3 adapter presenting the ADR 0006 async seam: the sync
+// engine's terminals are wrapped in resolved Promises; `prepare()` stays sync.
+const adapt = (database: Database.Database): SqlDatabase => {
+  const db: SqlDatabase = {
+    exec: async (sql) => {
+      database.exec(sql);
+    },
+    prepare: (sql) => {
+      const stmt = database.prepare(sql);
+      return {
+        run: async (params = []) => stmt.run(...params),
+        get: async (params = []) => stmt.get(...params),
+      };
+    },
+    transaction: async (fn) => {
+      database.exec("BEGIN");
+      try {
+        const out = await fn(db);
+        database.exec("COMMIT");
+        return out;
+      } catch (error) {
+        try {
+          database.exec("ROLLBACK");
+        } catch {
+          /* a failed rollback must not mask the original error */
+        }
+        throw error;
+      }
+    },
+  };
+
+  return db;
+};
 
 let database: Database.Database;
 let db: SqlDatabase;
 
-beforeEach(() => {
+beforeEach(async () => {
   database = new Database(":memory:");
   db = adapt(database);
-  installWorkflowSchema(db);
+  await installWorkflowSchema(db);
 });
 
 afterEach(() => {
@@ -125,5 +147,41 @@ describe("Engine", () => {
     });
 
     await expect(engine.run("ghost", "run-1", undefined)).rejects.toBeInstanceOf(WorkflowError);
+  });
+});
+
+describe("the async seam", () => {
+  it("commits work done inside transaction(fn) and exposes it via the async get terminal", async () => {
+    await db.transaction(async (tx) => {
+      await tx
+        .prepare("INSERT INTO keel_workflow_steps (run_id, step_key, result) VALUES (?, ?, ?)")
+        .run(["tx-run", "tx-step", '"committed"']);
+    });
+
+    const row = await db
+      .prepare("SELECT result FROM keel_workflow_steps WHERE run_id = ? AND step_key = ?")
+      .get(["tx-run", "tx-step"]);
+
+    expect(row).toEqual({ result: '"committed"' });
+  });
+
+  it("rolls back the transaction when fn throws, leaving no durable row", async () => {
+    const boom = new Error("step blew up");
+
+    await expect(
+      db.transaction(async (tx) => {
+        await tx
+          .prepare("INSERT INTO keel_workflow_steps (run_id, step_key, result) VALUES (?, ?, ?)")
+          .run(["tx-run", "tx-step", '"doomed"']);
+
+        throw boom;
+      }),
+    ).rejects.toBe(boom);
+
+    const row = await db
+      .prepare("SELECT result FROM keel_workflow_steps WHERE run_id = ? AND step_key = ?")
+      .get(["tx-run", "tx-step"]);
+
+    expect(row).toBeUndefined();
   });
 });

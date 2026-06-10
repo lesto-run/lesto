@@ -42,18 +42,40 @@ const advance = (ms: number): void => {
 };
 
 function adapt(database: Database.Database): SqlDatabase {
-  return {
-    exec: (statement) => database.exec(statement),
+  const adapted: SqlDatabase = {
+    exec: async (statement) => {
+      database.exec(statement);
+    },
     prepare: (statement) => {
       const stmt = database.prepare(statement);
 
       return {
-        run: (params: unknown[] = []) => stmt.run(...(params as never[])),
-        get: (params: unknown[] = []) => stmt.get(...(params as never[])),
-        all: (params: unknown[] = []) => stmt.all(...(params as never[])),
+        run: async (params: unknown[] = []) => stmt.run(...(params as never[])),
+        get: async (params: unknown[] = []) => stmt.get(...(params as never[])),
+        all: async (params: unknown[] = []) => stmt.all(...(params as never[])),
       };
     },
+    transaction: async (fn) => {
+      database.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        database.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          database.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
   };
+
+  return adapted;
 }
 
 interface CapturedEmail {
@@ -103,13 +125,13 @@ function buildIdentity(opts: Partial<IdentityOptions> = {}): {
   return { identity, sent, revokedFor };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   raw = new Database(":memory:");
   sql = adapt(raw);
   db = createDb(sql);
   now = new Date("2026-06-09T12:00:00Z").getTime();
 
-  new Migrator(sql, [usersMigration]).migrate();
+  await new Migrator(sql, [usersMigration]).migrate();
 });
 
 afterEach(() => {
@@ -149,7 +171,7 @@ describe("register", () => {
     expect(result.status).toBe("verification_sent");
     expect(result.user).toBeUndefined();
     expect(sent).toHaveLength(0);
-    expect(db.select().from(users).all()).toHaveLength(1);
+    expect(await db.select().from(users).all()).toHaveLength(1);
   });
 
   it("rejects an obviously malformed email", async () => {
@@ -203,7 +225,7 @@ describe("verifyEmail", () => {
 
     await identity.register("ada@example.com", "correct horse staple");
 
-    const user = identity.verifyEmail(sent[0]!.token);
+    const user = await identity.verifyEmail(sent[0]!.token);
 
     expect(user.emailVerifiedAt).not.toBeNull();
     expect(user.emailVerifiedAt).toMatch(/^2026-/);
@@ -213,20 +235,20 @@ describe("verifyEmail", () => {
     const { identity, sent } = buildIdentity();
 
     await identity.register("ada@example.com", "correct horse staple");
-    const first = identity.verifyEmail(sent[0]!.token);
+    const first = await identity.verifyEmail(sent[0]!.token);
     const verifiedAt = first.emailVerifiedAt;
 
     advance(10_000);
-    const second = identity.verifyEmail(sent[0]!.token);
+    const second = await identity.verifyEmail(sent[0]!.token);
 
     expect(second.emailVerifiedAt).toBe(verifiedAt);
   });
 
-  it("rejects a tampered or malformed token", () => {
+  it("rejects a tampered or malformed token", async () => {
     const { identity } = buildIdentity();
 
-    expect(() => identity.verifyEmail("not-a-real-token")).toThrow(IdentityError);
-    expect(() => identity.verifyEmail("not-a-real-token")).toThrow(
+    await expect(identity.verifyEmail("not-a-real-token")).rejects.toThrow(IdentityError);
+    await expect(identity.verifyEmail("not-a-real-token")).rejects.toThrow(
       expect.objectContaining({ code: "IDENTITY_INVALID_TOKEN" }),
     );
   });
@@ -237,7 +259,7 @@ describe("verifyEmail", () => {
     await identity.register("ada@example.com", "correct horse staple");
     advance(2000);
 
-    expect(() => identity.verifyEmail(sent[0]!.token)).toThrow(
+    await expect(identity.verifyEmail(sent[0]!.token)).rejects.toThrow(
       expect.objectContaining({ code: "IDENTITY_INVALID_TOKEN" }),
     );
   });
@@ -246,9 +268,9 @@ describe("verifyEmail", () => {
     const { identity, sent } = buildIdentity();
 
     const { user } = await identity.register("ada@example.com", "correct horse staple");
-    userRepo.deleteUser(db, user!.id);
+    await userRepo.deleteUser(db, user!.id);
 
-    expect(() => identity.verifyEmail(sent[0]!.token)).toThrow(
+    await expect(identity.verifyEmail(sent[0]!.token)).rejects.toThrow(
       expect.objectContaining({ code: "IDENTITY_INVALID_TOKEN" }),
     );
   });
@@ -263,7 +285,7 @@ describe("verifyEmail", () => {
 
     const resetEmail = sent.find((e) => e.kind === "reset")!;
 
-    expect(() => identity.verifyEmail(resetEmail.token)).toThrow(
+    await expect(identity.verifyEmail(resetEmail.token)).rejects.toThrow(
       expect.objectContaining({ code: "IDENTITY_INVALID_TOKEN" }),
     );
   });
@@ -278,19 +300,19 @@ describe("login", () => {
     const { identity, sent } = buildIdentity();
 
     await identity.register("ada@example.com", "correct horse staple");
-    identity.verifyEmail(sent[0]!.token);
+    await identity.verifyEmail(sent[0]!.token);
 
-    const { user, session } = identity.login("Ada@Example.com", "correct horse staple");
+    const { user, session } = await identity.login("Ada@Example.com", "correct horse staple");
 
     expect(user.email).toBe("ada@example.com");
     expect(session.token).toMatch(/^[a-f0-9]{64}$/);
     expect(session.expiresAt).toBeGreaterThan(clock());
   });
 
-  it("returns IDENTITY_INVALID_CREDENTIALS for an unknown email", () => {
+  it("returns IDENTITY_INVALID_CREDENTIALS for an unknown email", async () => {
     const { identity } = buildIdentity();
 
-    expect(() => identity.login("nobody@example.com", "whatever")).toThrow(
+    await expect(identity.login("nobody@example.com", "whatever")).rejects.toThrow(
       expect.objectContaining({ code: "IDENTITY_INVALID_CREDENTIALS" }),
     );
   });
@@ -299,9 +321,9 @@ describe("login", () => {
     const { identity, sent } = buildIdentity();
 
     await identity.register("ada@example.com", "correct horse staple");
-    identity.verifyEmail(sent[0]!.token);
+    await identity.verifyEmail(sent[0]!.token);
 
-    expect(() => identity.login("ada@example.com", "wrong password")).toThrow(
+    await expect(identity.login("ada@example.com", "wrong password")).rejects.toThrow(
       expect.objectContaining({ code: "IDENTITY_INVALID_CREDENTIALS" }),
     );
   });
@@ -311,7 +333,7 @@ describe("login", () => {
 
     await identity.register("ada@example.com", "correct horse staple");
 
-    expect(() => identity.login("ada@example.com", "correct horse staple")).toThrow(
+    await expect(identity.login("ada@example.com", "correct horse staple")).rejects.toThrow(
       expect.objectContaining({ code: "IDENTITY_EMAIL_NOT_VERIFIED" }),
     );
   });
@@ -321,7 +343,7 @@ describe("login", () => {
 
     await identity.register("ada@example.com", "correct horse staple");
 
-    const { session } = identity.login("ada@example.com", "correct horse staple");
+    const { session } = await identity.login("ada@example.com", "correct horse staple");
 
     expect(session.token).toBeDefined();
   });
@@ -364,7 +386,7 @@ describe("resetPassword", () => {
     const { identity, sent, revokedFor } = buildIdentity();
 
     await identity.register("ada@example.com", "old password 1");
-    identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
     await identity.requestPasswordReset("ada@example.com");
 
     const resetToken = sent.find((e) => e.kind === "reset")!.token;
@@ -374,10 +396,12 @@ describe("resetPassword", () => {
     expect(revokedFor).toEqual([String(user.id)]);
 
     // The new password works; the old one does not.
-    expect(() => identity.login("ada@example.com", "old password 1")).toThrow(
+    await expect(identity.login("ada@example.com", "old password 1")).rejects.toThrow(
       expect.objectContaining({ code: "IDENTITY_INVALID_CREDENTIALS" }),
     );
-    expect(identity.login("ada@example.com", "brand new password").session.token).toBeDefined();
+    expect(
+      (await identity.login("ada@example.com", "brand new password")).session.token,
+    ).toBeDefined();
   });
 
   it("works without a revokeUserSessions hook", async () => {
@@ -392,7 +416,7 @@ describe("resetPassword", () => {
     });
 
     await identity.register("ada@example.com", "correct horse staple");
-    identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
     await identity.requestPasswordReset("ada@example.com");
 
     const user = await identity.resetPassword(
@@ -430,7 +454,7 @@ describe("resetPassword", () => {
     const { user } = await identity.register("ada@example.com", "correct horse staple");
     await identity.requestPasswordReset("ada@example.com");
     const resetToken = sent.find((e) => e.kind === "reset")!.token;
-    userRepo.deleteUser(db, user!.id);
+    await userRepo.deleteUser(db, user!.id);
 
     await expect(identity.resetPassword(resetToken, "new strong password")).rejects.toMatchObject({
       code: "IDENTITY_INVALID_TOKEN",
@@ -444,7 +468,7 @@ describe("resetPassword", () => {
     const { identity, sent } = buildIdentity();
 
     await identity.register("ada@example.com", "first password ok");
-    identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
     await identity.requestPasswordReset("ada@example.com");
 
     const resetToken = sent.find((e) => e.kind === "reset")!.token;
@@ -509,8 +533,8 @@ describe("resetPassword", () => {
     const original = userRepo.findUserByEmail;
     const spy = vi
       .spyOn(userRepo, "findUserByEmail")
-      .mockImplementationOnce((_db, email) =>
-        email === "race@example.com" ? undefined : original(_db, email),
+      .mockImplementationOnce(async (_db, email) =>
+        email === "race@example.com" ? undefined : await original(_db, email),
       );
 
     const result = await identity.register("race@example.com", "second password ok");
@@ -529,51 +553,51 @@ describe("session lifecycle", () => {
     const { identity, sent } = buildIdentity();
 
     await identity.register("ada@example.com", "correct horse staple");
-    identity.verifyEmail(sent[0]!.token);
-    const { session } = identity.login("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+    const { session } = await identity.login("ada@example.com", "correct horse staple");
 
-    expect(identity.currentUser(session.token)?.email).toBe("ada@example.com");
+    expect((await identity.currentUser(session.token))?.email).toBe("ada@example.com");
   });
 
   it("currentUser returns undefined for missing / unknown / expired tokens", async () => {
     const { identity, sent } = buildIdentity({ sessionTtlMs: 1000 });
 
-    expect(identity.currentUser(undefined)).toBeUndefined();
-    expect(identity.currentUser("not-a-session")).toBeUndefined();
+    expect(await identity.currentUser(undefined)).toBeUndefined();
+    expect(await identity.currentUser("not-a-session")).toBeUndefined();
 
     await identity.register("ada@example.com", "correct horse staple");
-    identity.verifyEmail(sent[0]!.token);
-    const { session } = identity.login("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+    const { session } = await identity.login("ada@example.com", "correct horse staple");
 
     advance(2000);
 
-    expect(identity.currentUser(session.token)).toBeUndefined();
+    expect(await identity.currentUser(session.token)).toBeUndefined();
   });
 
   it("currentUser returns undefined when the session points at a deleted user", async () => {
     const { identity, sent } = buildIdentity();
 
     const { user } = await identity.register("ada@example.com", "correct horse staple");
-    identity.verifyEmail(sent[0]!.token);
-    const { session } = identity.login("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+    const { session } = await identity.login("ada@example.com", "correct horse staple");
 
-    userRepo.deleteUser(db, user!.id);
+    await userRepo.deleteUser(db, user!.id);
 
-    expect(identity.currentUser(session.token)).toBeUndefined();
+    expect(await identity.currentUser(session.token)).toBeUndefined();
   });
 
   it("logout revokes a session; undefined is a no-op", async () => {
     const { identity, sent } = buildIdentity();
 
     await identity.register("ada@example.com", "correct horse staple");
-    identity.verifyEmail(sent[0]!.token);
-    const { session } = identity.login("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+    const { session } = await identity.login("ada@example.com", "correct horse staple");
 
     identity.logout(undefined);
-    expect(identity.currentUser(session.token)?.email).toBe("ada@example.com");
+    expect((await identity.currentUser(session.token))?.email).toBe("ada@example.com");
 
     identity.logout(session.token);
-    expect(identity.currentUser(session.token)).toBeUndefined();
+    expect(await identity.currentUser(session.token)).toBeUndefined();
   });
 });
 
@@ -586,10 +610,10 @@ describe("user model + migration", () => {
     expect(normalizeEmail("  Ada@Example.com  ")).toBe("ada@example.com");
   });
 
-  it("the migration's down drops the users table", () => {
+  it("the migration's down drops the users table", async () => {
     const migrator = new Migrator(sql, [usersMigration]);
 
-    expect(migrator.rollback()).toBe(usersMigration.version);
+    expect(await migrator.rollback()).toBe(usersMigration.version);
     expect(() => raw.prepare("SELECT * FROM users").all()).toThrow();
   });
 });
@@ -651,7 +675,7 @@ describe("token signer", () => {
     });
 
     await identity.register("ada@example.com", "correct horse staple");
-    const user = identity.verifyEmail(sent[0]!.token);
+    const user = await identity.verifyEmail(sent[0]!.token);
     expect(user.emailVerifiedAt).not.toBeNull();
 
     // Drive the reset path too — exercises `resetSigner` with no clock for
@@ -661,6 +685,8 @@ describe("token signer", () => {
     const resetToken = sent.find((e) => e.kind === "reset")!.token;
     await identity.resetPassword(resetToken, "fresh new password");
 
-    expect(identity.login("ada@example.com", "fresh new password").session.token).toBeDefined();
+    expect(
+      (await identity.login("ada@example.com", "fresh new password")).session.token,
+    ).toBeDefined();
   });
 });

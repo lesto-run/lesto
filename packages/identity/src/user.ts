@@ -55,10 +55,10 @@ export function isEmailVerified(user: User): boolean {
 }
 
 /** Insert a user, stamping `createdAt` / `updatedAt`, and return the row. */
-export function insertUser(db: Db, input: UserInput): User {
+export async function insertUser(db: Db, input: UserInput): Promise<User> {
   const now = new Date().toISOString();
 
-  return db
+  return await db
     .insert(users)
     .values({
       email: input.email,
@@ -72,34 +72,36 @@ export function insertUser(db: Db, input: UserInput): User {
 }
 
 /** Look up a user by email; `undefined` when no row matches. */
-export function findUserByEmail(db: Db, email: string): User | undefined {
-  return db.select().from(users).where(eq(users.email, email)).get();
+export async function findUserByEmail(db: Db, email: string): Promise<User | undefined> {
+  return await db.select().from(users).where(eq(users.email, email)).get();
 }
 
 /** Look up a user by id; `undefined` when no row matches. */
-export function findUserById(db: Db, id: number): User | undefined {
-  return db.select().from(users).where(eq(users.id, id)).get();
+export async function findUserById(db: Db, id: number): Promise<User | undefined> {
+  return await db.select().from(users).where(eq(users.id, id)).get();
 }
 
 /** Stamp a user's password hash + bump `updatedAt`. */
-export function setPasswordHash(db: Db, id: number, passwordHash: string): void {
-  db.update(users)
+export async function setPasswordHash(db: Db, id: number, passwordHash: string): Promise<void> {
+  await db
+    .update(users)
     .set({ passwordHash, updatedAt: new Date().toISOString() })
     .where(eq(users.id, id))
     .run();
 }
 
 /** Stamp a user's `emailVerifiedAt` + bump `updatedAt`. */
-export function markEmailVerified(db: Db, id: number, atIso: string): void {
-  db.update(users)
+export async function markEmailVerified(db: Db, id: number, atIso: string): Promise<void> {
+  await db
+    .update(users)
     .set({ emailVerifiedAt: atIso, updatedAt: new Date().toISOString() })
     .where(eq(users.id, id))
     .run();
 }
 
 /** Delete a user row by id. Used in tests; production deletes go through a service flow. */
-export function deleteUser(db: Db, id: number): void {
-  db.delete(users).where(eq(users.id, id)).run();
+export async function deleteUser(db: Db, id: number): Promise<void> {
+  await db.delete(users).where(eq(users.id, id)).run();
 }
 
 /** Normalize an email to its canonical, comparable form. */
@@ -118,11 +120,11 @@ export function normalizeEmail(email: string): string {
 export const usersMigration: { version: string; migration: Migration } = {
   version: "20260609000001_create_users",
   migration: {
-    up(schema) {
-      schema.execute(createTableSql(users));
+    async up(schema) {
+      await schema.execute(createTableSql(users));
     },
-    down(schema) {
-      schema.execute(dropTableSql(users));
+    async down(schema) {
+      await schema.execute(dropTableSql(users));
     },
   },
 };

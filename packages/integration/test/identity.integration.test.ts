@@ -73,10 +73,10 @@ class AuthController extends Controller {
     }
   }
 
-  verify(): KeelResponse {
+  async verify(): Promise<KeelResponse> {
     const token = this.request.query["token"] ?? "";
     try {
-      identity.verifyEmail(token);
+      await identity.verifyEmail(token);
 
       return this.json({ ok: true });
     } catch (error) {
@@ -84,10 +84,10 @@ class AuthController extends Controller {
     }
   }
 
-  login(): KeelResponse {
+  async login(): Promise<KeelResponse> {
     const { email, password } = this.body();
     try {
-      const { session } = identity.login(email, password);
+      const { session } = await identity.login(email, password);
 
       return {
         status: 200,
@@ -132,8 +132,8 @@ class AuthController extends Controller {
 }
 
 class GatedController extends Controller {
-  show(): KeelResponse {
-    const user = identity.currentUser(readSessionToken(this.request.headers["cookie"]));
+  async show(): Promise<KeelResponse> {
+    const user = await identity.currentUser(readSessionToken(this.request.headers["cookie"]));
 
     if (!user) {
       return { status: 401, headers: { "content-type": "application/json" }, body: '{"ok":false}' };
@@ -161,18 +161,40 @@ function errorResponse(error: unknown): KeelResponse {
 }
 
 function adapt(raw: Database.Database): KernelDatabase {
-  return {
-    exec: (sql) => raw.exec(sql),
+  const adapted: KernelDatabase = {
+    exec: async (sql) => {
+      raw.exec(sql);
+    },
     prepare: (sql) => {
       const statement = raw.prepare(sql);
 
       return {
-        run: (params = []) => statement.run(...(params as never[])),
-        get: (params = []) => statement.get(...(params as never[])),
-        all: (params = []) => statement.all(...(params as never[])),
+        run: async (params = []) => statement.run(...(params as never[])),
+        get: async (params = []) => statement.get(...(params as never[])),
+        all: async (params = []) => statement.all(...(params as never[])),
       };
     },
+    transaction: async (fn) => {
+      raw.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        raw.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          raw.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
   };
+
+  return adapted;
 }
 
 function buildConfig(database: Database.Database): AppConfig {
@@ -263,7 +285,7 @@ beforeAll(async () => {
     resetUrl: (token) => `https://app.test/auth/reset?token=${token}`,
   });
 
-  server = await serve(createApp(buildConfig(database)), { port: 0, logError: () => {} });
+  server = await serve(await createApp(buildConfig(database)), { port: 0, logError: () => {} });
   base = `http://127.0.0.1:${server.port}`;
 });
 
@@ -379,7 +401,7 @@ describe("the identity journey, over the wire", () => {
   it("logout clears the cookie and the session no longer resolves", async () => {
     inbox.length = 0;
     await post("/auth/register", { email: "logout@example.com", password: "correct horse staple" });
-    identity.verifyEmail(inbox.find((e) => e.to === "logout@example.com")!.token);
+    await identity.verifyEmail(inbox.find((e) => e.to === "logout@example.com")!.token);
 
     const loggedIn = await post("/auth/login", {
       email: "logout@example.com",

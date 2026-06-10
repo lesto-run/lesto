@@ -36,7 +36,7 @@ export type Post = InferRow<typeof posts>;
  * old `Post` model carried. A full validation story (ADR 0005 candidate)
  * will land before any consumer that needs more.
  */
-export function insertPost(db: Db, input: { title: string; body: string }): Post {
+export async function insertPost(db: Db, input: { title: string; body: string }): Promise<Post> {
   if (input.title.trim() === "") {
     throw new Error("Post title is required.");
   }
@@ -56,12 +56,12 @@ export function insertPost(db: Db, input: { title: string; body: string }): Post
 }
 
 /** Every post, ordered by id ascending — what both index and api render. */
-export function listPosts(db: Db): Post[] {
+export function listPosts(db: Db): Promise<Post[]> {
   return db.select().from(posts).orderBy(posts.id, "asc").all();
 }
 
 /** Row count — the seed script logs it. */
-export function countPosts(db: Db): number {
+export function countPosts(db: Db): Promise<number> {
   return db.select().from(posts).count();
 }
 

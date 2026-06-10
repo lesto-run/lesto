@@ -31,15 +31,15 @@ async function main(): Promise<void> {
   // Boot: the kernel runs migrations and stands up dispatch; buildApp also
   // wraps the same handle as a typed @keel/db, which controllers + seeds
   // share.
-  const { app, db } = buildApp(handle);
+  const { app, db } = await buildApp(handle);
 
   console.log("migrations applied:", app.migrationsApplied);
 
   for (const seed of seeds) {
-    insertPost(db, seed);
+    await insertPost(db, seed);
   }
 
-  console.log("posts seeded:", countPosts(db));
+  console.log("posts seeded:", await countPosts(db));
   console.log();
 
   // Dispatch the HTML page.

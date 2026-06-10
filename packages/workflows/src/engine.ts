@@ -11,8 +11,8 @@ const TABLE = "keel_workflow_steps";
  * One row per completed step, keyed by (run_id, step_key). The presence of a row
  * IS the durable record that the step ran; its `result` is the memoized value.
  */
-export function installWorkflowSchema(db: SqlDatabase): void {
-  db.exec(`
+export async function installWorkflowSchema(db: SqlDatabase): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS ${TABLE} (
       run_id    TEXT NOT NULL,
       step_key  TEXT NOT NULL,
@@ -63,8 +63,8 @@ export class Engine {
   }
 
   /** Look up a completed step's memoized result, or undefined if it never ran. */
-  #read(runId: string, key: string): StepRow | undefined {
-    const row = this.#db
+  async #read(runId: string, key: string): Promise<StepRow | undefined> {
+    const row = await this.#db
       .prepare(`SELECT result FROM ${TABLE} WHERE run_id = ? AND step_key = ?`)
       .get([runId, key]);
 
@@ -75,8 +75,8 @@ export class Engine {
   }
 
   /** Persist a step's result so future runs replay it instead of re-executing. */
-  #write(runId: string, key: string, result: string): void {
-    this.#db
+  async #write(runId: string, key: string, result: string): Promise<void> {
+    await this.#db
       .prepare(`INSERT INTO ${TABLE} (run_id, step_key, result) VALUES (?, ?, ?)`)
       .run([runId, key, result]);
   }
@@ -85,7 +85,7 @@ export class Engine {
   #context(runId: string): WorkflowContext {
     return {
       step: async <T>(key: string, fn: () => T | Promise<T>): Promise<T> => {
-        const existing = this.#read(runId, key);
+        const existing = await this.#read(runId, key);
 
         // Durable memoization: a completed step replays without calling `fn`.
         if (existing !== undefined) return JSON.parse(existing.result) as T;
@@ -97,7 +97,7 @@ export class Engine {
         // undefined — not a string — which would violate `result TEXT NOT NULL`
         // and leave NO row, so resume would RE-RUN the step (breaking exactly-once).
         // Coalesce to JSON null so every completed step records a durable row.
-        this.#write(runId, key, JSON.stringify(result ?? null));
+        await this.#write(runId, key, JSON.stringify(result ?? null));
 
         return result;
       },

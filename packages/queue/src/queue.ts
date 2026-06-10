@@ -30,8 +30,8 @@ const TABLE = "keel_jobs";
  */
 
 /** Create the jobs table. Idempotent; call it from a migration or once at boot. */
-export function installSchema(db: SqlDatabase): void {
-  db.exec(`
+export async function installSchema(db: SqlDatabase): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS ${TABLE} (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       queue         TEXT    NOT NULL DEFAULT 'default',
@@ -176,60 +176,77 @@ export class Queue {
   }
 
   /** Enqueue a job. Returns its id. */
-  enqueue(name: string, payload: JsonValue = {}, options: EnqueueOptions = {}): number {
+  async enqueue(
+    name: string,
+    payload: JsonValue = {},
+    options: EnqueueOptions = {},
+  ): Promise<number> {
     const now = nowIso(this.clock);
     const runAt = this.eligibleAt(options);
 
-    const result = this.db
+    // RETURNING id (not run().lastInsertRowid): Postgres has no implicit row id,
+    // so the id is read from the returned row across both drivers. The `?` order
+    // mirrors the VALUES order; `now` fills both created_at and updated_at.
+    const row = (await this.db
       .prepare(
         `INSERT INTO ${TABLE}
            (queue, name, payload, status, priority, max_attempts, run_at, created_at, updated_at)
          VALUES
-           (@queue, @name, @payload, 'ready', @priority, @maxAttempts, @runAt, @now, @now)`,
+           (?, ?, ?, 'ready', ?, ?, ?, ?, ?)
+         RETURNING id`,
       )
-      .run({
-        queue: options.queue ?? this.defaultQueue,
+      .get([
+        options.queue ?? this.defaultQueue,
         name,
-        payload: JSON.stringify(payload),
-        priority: options.priority ?? 0,
-        maxAttempts: options.maxAttempts ?? 5,
+        JSON.stringify(payload),
+        options.priority ?? 0,
+        options.maxAttempts ?? 5,
         runAt,
         now,
-      });
+        now,
+      ])) as { id: number };
 
-    return Number(result.lastInsertRowid);
+    return Number(row.id);
   }
 
   /** Return any job stranded past its visibility deadline to `ready`. */
-  reclaim(): number {
-    return this.db
+  async reclaim(): Promise<number> {
+    const now = nowIso(this.clock);
+
+    // `now` appears twice (SET updated_at, WHERE locked_until <) → repeated.
+    const result = await this.db
       .prepare(
         `UPDATE ${TABLE}
-            SET status = 'ready', locked_until = NULL, updated_at = @now
+            SET status = 'ready', locked_until = NULL, updated_at = ?
           WHERE status = 'running'
             AND locked_until IS NOT NULL
-            AND locked_until < @now`,
+            AND locked_until < ?`,
       )
-      .run({ now: nowIso(this.clock) }).changes;
+      .run([now, now]);
+
+    return result.changes;
   }
 
   /** Atomically claim the next eligible job, or `null` if the queue is idle. */
-  claim(queue: string = this.defaultQueue, visibilityMs = 30_000): Job | null {
-    const row = this.db
+  async claim(queue: string = this.defaultQueue, visibilityMs = 30_000): Promise<Job | null> {
+    const now = nowIso(this.clock);
+    const lock = isoAfter(this.clock, visibilityMs);
+
+    // `?` order: lock (SET locked_until), now (SET updated_at), queue, now
+    // (WHERE run_at <=). The single UPDATE … RETURNING is atomic on both drivers.
+    const row = (await this.db
       .prepare(
         `UPDATE ${TABLE}
-            SET status = 'running', attempts = attempts + 1, locked_until = @lock, updated_at = @now
+            SET status = 'running', attempts = attempts + 1, locked_until = ?, updated_at = ?
           WHERE id = (
             SELECT id FROM ${TABLE}
-             WHERE status = 'ready' AND queue = @queue AND run_at <= @now
+             WHERE status = 'ready' AND queue = ? AND run_at <= ?
              ORDER BY priority DESC, run_at ASC, id ASC
              LIMIT 1
           )
         RETURNING *`,
       )
-      .get({ queue, now: nowIso(this.clock), lock: isoAfter(this.clock, visibilityMs) }) as
-      | Row
-      | undefined;
+      .get([lock, now, queue, now])) as Row | undefined;
 
     return row ? hydrate(row) : null;
   }
@@ -238,16 +255,19 @@ export class Queue {
   async runOnce(
     options: { queue?: string; visibilityMs?: number } = {},
   ): Promise<RunResult | null> {
-    this.reclaim();
+    await this.reclaim();
 
-    const job = this.claim(options.queue ?? this.defaultQueue, options.visibilityMs ?? 30_000);
+    const job = await this.claim(
+      options.queue ?? this.defaultQueue,
+      options.visibilityMs ?? 30_000,
+    );
     if (!job) {
       return null;
     }
 
     const handler = this.handlers.get(job.name);
     if (!handler) {
-      const outcome = this.fail(
+      const outcome = await this.fail(
         job,
         new QueueError("QUEUE_HANDLER_NOT_FOUND", `No handler for job "${job.name}".`),
       );
@@ -257,11 +277,11 @@ export class Queue {
 
     try {
       await handler(job.payload, { job, attempt: job.attempts });
-      this.complete(job);
+      await this.complete(job);
 
       return { job, outcome: "done" };
     } catch (error) {
-      const outcome = this.fail(job, error);
+      const outcome = await this.fail(job, error);
 
       return { job, outcome };
     }
@@ -330,10 +350,10 @@ export class Queue {
   }
 
   /** A count of jobs by status for one queue — for dashboards, MCP, and tests. */
-  stats(queue: string = this.defaultQueue): Partial<Record<JobStatus, number>> {
-    const rows = this.db
-      .prepare(`SELECT status, COUNT(*) AS n FROM ${TABLE} WHERE queue = @queue GROUP BY status`)
-      .all({ queue }) as Array<{ status: JobStatus; n: number }>;
+  async stats(queue: string = this.defaultQueue): Promise<Partial<Record<JobStatus, number>>> {
+    const rows = (await this.db
+      .prepare(`SELECT status, COUNT(*) AS n FROM ${TABLE} WHERE queue = ? GROUP BY status`)
+      .all([queue])) as Array<{ status: JobStatus; n: number }>;
 
     return rows.reduce<Partial<Record<JobStatus, number>>>((counts, row) => {
       counts[row.status] = row.n;
@@ -343,8 +363,8 @@ export class Queue {
   }
 
   /** Fetch one job by id, or `null`. */
-  find(id: number): Job | null {
-    const row = this.db.prepare(`SELECT * FROM ${TABLE} WHERE id = @id`).get({ id }) as
+  async find(id: number): Promise<Job | null> {
+    const row = (await this.db.prepare(`SELECT * FROM ${TABLE} WHERE id = ?`).get([id])) as
       | Row
       | undefined;
 
@@ -353,48 +373,46 @@ export class Queue {
 
   // ---- private: the three terminal transitions ----
 
-  private complete(job: Job): void {
+  private async complete(job: Job): Promise<void> {
     const now = nowIso(this.clock);
 
-    this.db
+    // `?` order: now (finished_at), now (updated_at), id.
+    await this.db
       .prepare(
         `UPDATE ${TABLE}
-            SET status = 'done', locked_until = NULL, finished_at = @now, updated_at = @now
-          WHERE id = @id`,
+            SET status = 'done', locked_until = NULL, finished_at = ?, updated_at = ?
+          WHERE id = ?`,
       )
-      .run({ id: job.id, now });
+      .run([now, now, job.id]);
   }
 
-  private fail(job: Job, error: unknown): "retry" | "failed" {
+  private async fail(job: Job, error: unknown): Promise<"retry" | "failed"> {
     const now = nowIso(this.clock);
     const message = error instanceof Error ? error.message : String(error);
 
     if (job.attempts >= job.maxAttempts) {
-      this.db
+      // `?` order: error (last_error), now (finished_at), now (updated_at), id.
+      await this.db
         .prepare(
           `UPDATE ${TABLE}
-              SET status = 'failed', last_error = @error, locked_until = NULL,
-                  finished_at = @now, updated_at = @now
-            WHERE id = @id`,
+              SET status = 'failed', last_error = ?, locked_until = NULL,
+                  finished_at = ?, updated_at = ?
+            WHERE id = ?`,
         )
-        .run({ id: job.id, error: message, now });
+        .run([message, now, now, job.id]);
 
       return "failed";
     }
 
-    this.db
+    // `?` order: error (last_error), runAt (run_at), now (updated_at), id.
+    await this.db
       .prepare(
         `UPDATE ${TABLE}
-            SET status = 'ready', last_error = @error, locked_until = NULL,
-                run_at = @runAt, updated_at = @now
-          WHERE id = @id`,
+            SET status = 'ready', last_error = ?, locked_until = NULL,
+                run_at = ?, updated_at = ?
+          WHERE id = ?`,
       )
-      .run({
-        id: job.id,
-        error: message,
-        runAt: isoAfter(this.clock, this.backoffMs(job.attempts)),
-        now,
-      });
+      .run([message, isoAfter(this.clock, this.backoffMs(job.attempts)), now, job.id]);
 
     return "retry";
   }

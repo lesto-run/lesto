@@ -24,9 +24,9 @@
  *   // 3. Query through the schema value. `users.email` is the typed column
  *   //    reference; `eq(users.email, 1)` is a TypeScript error.
  *
- *   const user = db.select().from(users).where(eq(users.email, "ada@example.com")).get();
- *   const created = db.insert(users).values({ email, passwordHash }).returning().get();
- *   db.update(users).set({ passwordHash: next }).where(eq(users.id, created.id)).run();
+ *   const user = await db.select().from(users).where(eq(users.email, "ada@example.com")).get();
+ *   const created = await db.insert(users).values({ email, passwordHash }).returning().get();
+ *   await db.update(users).set({ passwordHash: next }).where(eq(users.id, created.id)).run();
  *
  *   // 4. The same value backs the migration's DDL — no duplicate column lists.
  *

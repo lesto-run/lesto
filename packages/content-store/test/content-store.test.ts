@@ -24,17 +24,39 @@ let raw: Database.Database;
 let db: SqlDatabase;
 
 function adapt(database: Database.Database): SqlDatabase {
-  return {
-    exec: (sql) => database.exec(sql),
+  const adapted: SqlDatabase = {
+    exec: async (sql) => {
+      database.exec(sql);
+    },
     prepare: (sql) => {
       const statement = database.prepare(sql);
 
       return {
-        run: (params = []) => statement.run(...(params as never[])),
-        all: (params = []) => statement.all(...(params as never[])),
+        run: async (params = []) => statement.run(...(params as never[])),
+        all: async (params = []) => statement.all(...(params as never[])),
       };
     },
+    transaction: async (fn) => {
+      database.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        database.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          database.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
   };
+
+  return adapted;
 }
 
 // A valid entry with the metadata content-core attaches to every document.
@@ -76,10 +98,10 @@ const ABOUT = makeEntry("pages", "about", {
   content: "about us",
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   raw = new Database(":memory:");
   db = adapt(raw);
-  new Migrator(db, [contentEntriesMigration]).migrate();
+  await new Migrator(db, [contentEntriesMigration]).migrate();
 });
 
 afterEach(() => {
@@ -95,8 +117,8 @@ describe("the migration", () => {
     expect(row).toEqual({ name: CONTENT_ENTRIES_TABLE });
   });
 
-  it("rolls back, dropping the table", () => {
-    new Migrator(db, [contentEntriesMigration]).rollback();
+  it("rolls back, dropping the table", async () => {
+    await new Migrator(db, [contentEntriesMigration]).rollback();
 
     const row = raw
       .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
@@ -107,14 +129,14 @@ describe("the migration", () => {
 });
 
 describe("persistEntries", () => {
-  it("writes every entry and reports the count", () => {
-    const result = persistEntries(db, [HELLO, DRAFT, ABOUT], { now: () => 1000 });
+  it("writes every entry and reports the count", async () => {
+    const result = await persistEntries(db, [HELLO, DRAFT, ABOUT], { now: () => 1000 });
 
     expect(result).toEqual({ persisted: 3 });
   });
 
-  it("lifts slug, status and publish date into their own columns", () => {
-    persistEntries(db, [HELLO, DRAFT, ABOUT], { now: () => 1000 });
+  it("lifts slug, status and publish date into their own columns", async () => {
+    await persistEntries(db, [HELLO, DRAFT, ABOUT], { now: () => 1000 });
 
     const rows = raw
       .prepare(
@@ -129,15 +151,15 @@ describe("persistEntries", () => {
     ]);
   });
 
-  it("upserts on identity, preserving created_at and advancing updated_at", () => {
-    persistEntries(db, [HELLO], { now: () => 1000 });
+  it("upserts on identity, preserving created_at and advancing updated_at", async () => {
+    await persistEntries(db, [HELLO], { now: () => 1000 });
 
     const updated = makeEntry("posts", "hello", {
       slug: "hello",
       title: "Hello, again",
       content: "# Hi",
     });
-    persistEntries(db, [updated], { now: () => 5000 });
+    await persistEntries(db, [updated], { now: () => 5000 });
 
     const rows = raw
       .prepare(`SELECT created_at, updated_at, document FROM ${CONTENT_ENTRIES_TABLE}`)
@@ -153,9 +175,9 @@ describe("persistEntries", () => {
     });
   });
 
-  it("defaults to the system clock when no clock is injected", () => {
+  it("defaults to the system clock when no clock is injected", async () => {
     const before = Date.now();
-    persistEntries(db, [HELLO]);
+    await persistEntries(db, [HELLO]);
     const after = Date.now();
 
     const row = raw.prepare(`SELECT updated_at FROM ${CONTENT_ENTRIES_TABLE}`).get() as {
@@ -167,19 +189,22 @@ describe("persistEntries", () => {
     expect(stamped).toBeLessThanOrEqual(after);
   });
 
-  it("rejects an entry with an empty id", () => {
-    expect(() => persistEntries(db, [{ ...HELLO, id: "" }])).toThrowError(ContentStoreError);
+  it("rejects an entry with an empty id", async () => {
+    await expect(persistEntries(db, [{ ...HELLO, id: "" }])).rejects.toThrowError(
+      ContentStoreError,
+    );
 
     try {
-      persistEntries(db, [{ ...HELLO, id: "" }]);
+      await persistEntries(db, [{ ...HELLO, id: "" }]);
+      expect.unreachable();
     } catch (error) {
       expect((error as ContentStoreError).code).toBe("CONTENT_STORE_INVALID_ENTRY");
     }
   });
 
-  it("rejects an entry with an empty collection", () => {
+  it("rejects an entry with an empty collection", async () => {
     try {
-      persistEntries(db, [{ ...HELLO, collection: "" }]);
+      await persistEntries(db, [{ ...HELLO, collection: "" }]);
       expect.unreachable();
     } catch (error) {
       expect((error as ContentStoreError).code).toBe("CONTENT_STORE_INVALID_ENTRY");
@@ -188,12 +213,12 @@ describe("persistEntries", () => {
 });
 
 describe("loadEntries", () => {
-  beforeEach(() => {
-    persistEntries(db, [HELLO, DRAFT, ABOUT], { now: () => 1000 });
+  beforeEach(async () => {
+    await persistEntries(db, [HELLO, DRAFT, ABOUT], { now: () => 1000 });
   });
 
-  it("reads every collection back, grouped and round-tripped", () => {
-    const loaded = loadEntries(db);
+  it("reads every collection back, grouped and round-tripped", async () => {
+    const loaded = await loadEntries(db);
 
     expect(Object.keys(loaded).toSorted()).toEqual(["pages", "posts"]);
     expect(loaded["posts"]).toHaveLength(2);
@@ -202,14 +227,14 @@ describe("loadEntries", () => {
     expect(loaded["posts"]?.map((e) => e.id)).toEqual(["draft", "hello"]);
   });
 
-  it("reads a single collection when one is named", () => {
-    const loaded = loadEntries(db, "posts");
+  it("reads a single collection when one is named", async () => {
+    const loaded = await loadEntries(db, "posts");
 
     expect(Object.keys(loaded)).toEqual(["posts"]);
     expect(loaded["posts"]).toHaveLength(2);
   });
 
-  it("throws on a corrupt stored document", () => {
+  it("throws on a corrupt stored document", async () => {
     raw
       .prepare(
         `INSERT INTO ${CONTENT_ENTRIES_TABLE}
@@ -219,7 +244,7 @@ describe("loadEntries", () => {
       .run();
 
     try {
-      loadEntries(db, "posts");
+      await loadEntries(db, "posts");
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(ContentStoreError);
@@ -230,20 +255,20 @@ describe("loadEntries", () => {
 });
 
 describe("loadEntry", () => {
-  it("reads one entry by identity", () => {
-    persistEntries(db, [HELLO], { now: () => 1000 });
+  it("reads one entry by identity", async () => {
+    await persistEntries(db, [HELLO], { now: () => 1000 });
 
-    expect(loadEntry(db, "posts", "hello")).toEqual(HELLO);
+    expect(await loadEntry(db, "posts", "hello")).toEqual(HELLO);
   });
 
-  it("returns undefined when the entry is absent", () => {
-    expect(loadEntry(db, "posts", "ghost")).toBeUndefined();
+  it("returns undefined when the entry is absent", async () => {
+    expect(await loadEntry(db, "posts", "ghost")).toBeUndefined();
   });
 });
 
 describe("createEntry", () => {
-  it("creates an entry from loose input, synthesizing its file metadata", () => {
-    const { entry } = createEntry(db, {
+  it("creates an entry from loose input, synthesizing its file metadata", async () => {
+    const { entry } = await createEntry(db, {
       collection: "posts",
       slug: "guides/intro",
       data: { title: "Intro" },
@@ -263,18 +288,18 @@ describe("createEntry", () => {
       },
     });
 
-    expect(loadEntry(db, "posts", "guides/intro")).toEqual(entry);
+    expect(await loadEntry(db, "posts", "guides/intro")).toEqual(entry);
   });
 
-  it("creates a bare entry with neither data nor body", () => {
-    const { entry } = createEntry(db, { collection: "pages", slug: "blank" });
+  it("creates a bare entry with neither data nor body", async () => {
+    const { entry } = await createEntry(db, { collection: "pages", slug: "blank" });
 
     expect(entry).toMatchObject({ id: "blank", collection: "pages", slug: "blank" });
     expect(entry["content"]).toBeUndefined();
   });
 
-  it("does not let frontmatter override the entry's identity", () => {
-    const { entry } = createEntry(db, {
+  it("does not let frontmatter override the entry's identity", async () => {
+    const { entry } = await createEntry(db, {
       collection: "posts",
       slug: "safe",
       data: { id: "evil", collection: "admin", slug: "spoof", title: "T" },
@@ -282,15 +307,15 @@ describe("createEntry", () => {
 
     expect(entry).toMatchObject({ id: "safe", collection: "posts", slug: "safe", title: "T" });
     // The row is keyed by the real identity, never the frontmatter's.
-    expect(loadEntry(db, "posts", "safe")).toBeDefined();
-    expect(loadEntry(db, "admin", "evil")).toBeUndefined();
+    expect(await loadEntry(db, "posts", "safe")).toBeDefined();
+    expect(await loadEntry(db, "admin", "evil")).toBeUndefined();
   });
 
-  it("refuses to overwrite an existing entry", () => {
-    createEntry(db, { collection: "posts", slug: "dup", data: { title: "One" } });
+  it("refuses to overwrite an existing entry", async () => {
+    await createEntry(db, { collection: "posts", slug: "dup", data: { title: "One" } });
 
     try {
-      createEntry(db, { collection: "posts", slug: "dup", data: { title: "Two" } });
+      await createEntry(db, { collection: "posts", slug: "dup", data: { title: "Two" } });
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(ContentStoreError);
@@ -300,15 +325,15 @@ describe("createEntry", () => {
 });
 
 describe("updateEntry", () => {
-  it("merges data and replaces the body, holding identity fixed", () => {
-    createEntry(db, {
+  it("merges data and replaces the body, holding identity fixed", async () => {
+    await createEntry(db, {
       collection: "posts",
       slug: "edit",
       data: { title: "Old", keep: true },
       content: "old",
     });
 
-    const { entry } = updateEntry(db, {
+    const { entry } = await updateEntry(db, {
       collection: "posts",
       slug: "edit",
       data: { title: "New" },
@@ -324,26 +349,26 @@ describe("updateEntry", () => {
       collection: "posts",
     });
 
-    const reloaded = loadEntry(db, "posts", "edit");
+    const reloaded = await loadEntry(db, "posts", "edit");
     expect(reloaded).toMatchObject({ title: "New", keep: true });
   });
 
-  it("leaves data and body untouched when neither is given", () => {
-    createEntry(db, {
+  it("leaves data and body untouched when neither is given", async () => {
+    await createEntry(db, {
       collection: "posts",
       slug: "keep",
       data: { title: "Same" },
       content: "body",
     });
 
-    const { entry } = updateEntry(db, { collection: "posts", slug: "keep" });
+    const { entry } = await updateEntry(db, { collection: "posts", slug: "keep" });
 
     expect(entry).toMatchObject({ title: "Same", content: "body" });
   });
 
-  it("refuses to update an entry that is not there", () => {
+  it("refuses to update an entry that is not there", async () => {
     try {
-      updateEntry(db, { collection: "posts", slug: "missing", data: { title: "x" } });
+      await updateEntry(db, { collection: "posts", slug: "missing", data: { title: "x" } });
       expect.unreachable();
     } catch (error) {
       expect((error as ContentStoreError).code).toBe("CONTENT_STORE_ENTRY_NOT_FOUND");
@@ -352,44 +377,44 @@ describe("updateEntry", () => {
 });
 
 describe("deleteEntry", () => {
-  it("removes a matching entry and reports one deleted", () => {
-    persistEntries(db, [HELLO], { now: () => 1000 });
+  it("removes a matching entry and reports one deleted", async () => {
+    await persistEntries(db, [HELLO], { now: () => 1000 });
 
-    expect(deleteEntry(db, "posts", "hello")).toEqual({ deleted: 1 });
-    expect(loadEntry(db, "posts", "hello")).toBeUndefined();
+    expect(await deleteEntry(db, "posts", "hello")).toEqual({ deleted: 1 });
+    expect(await loadEntry(db, "posts", "hello")).toBeUndefined();
   });
 
-  it("reports zero deleted when nothing matches", () => {
-    expect(deleteEntry(db, "posts", "ghost")).toEqual({ deleted: 0 });
+  it("reports zero deleted when nothing matches", async () => {
+    expect(await deleteEntry(db, "posts", "ghost")).toEqual({ deleted: 0 });
   });
 });
 
 describe("pruneEntries", () => {
-  it("drops entries not in the kept set, leaving the rest", () => {
-    persistEntries(db, [HELLO, DRAFT, ABOUT], { now: () => 1000 });
+  it("drops entries not in the kept set, leaving the rest", async () => {
+    await persistEntries(db, [HELLO, DRAFT, ABOUT], { now: () => 1000 });
 
     // Keep everything except DRAFT.
-    const result = pruneEntries(db, [HELLO, ABOUT]);
+    const result = await pruneEntries(db, [HELLO, ABOUT]);
 
     expect(result).toEqual({ deleted: 1 });
-    expect(loadEntry(db, "posts", "draft")).toBeUndefined();
-    expect(loadEntry(db, "posts", "hello")).toBeDefined();
-    expect(loadEntry(db, "pages", "about")).toBeDefined();
+    expect(await loadEntry(db, "posts", "draft")).toBeUndefined();
+    expect(await loadEntry(db, "posts", "hello")).toBeDefined();
+    expect(await loadEntry(db, "pages", "about")).toBeDefined();
   });
 
-  it("an empty kept set prunes everything", () => {
-    persistEntries(db, [HELLO, DRAFT], { now: () => 1000 });
+  it("an empty kept set prunes everything", async () => {
+    await persistEntries(db, [HELLO, DRAFT], { now: () => 1000 });
 
-    expect(pruneEntries(db, [])).toEqual({ deleted: 2 });
-    expect(loadEntries(db)).toEqual({});
+    expect(await pruneEntries(db, [])).toEqual({ deleted: 2 });
+    expect(await loadEntries(db)).toEqual({});
   });
 });
 
 describe("hydrateRuntime", () => {
-  it("loads the database into content-core's runtime queries", () => {
-    persistEntries(db, [HELLO, DRAFT, ABOUT], { now: () => 1000 });
+  it("loads the database into content-core's runtime queries", async () => {
+    await persistEntries(db, [HELLO, DRAFT, ABOUT], { now: () => 1000 });
 
-    hydrateRuntime(db);
+    await hydrateRuntime(db);
 
     expect(getCollection("posts")).toHaveLength(2);
     expect(getCollection("pages")).toHaveLength(1);

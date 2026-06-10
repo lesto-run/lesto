@@ -16,20 +16,25 @@ export class Schema {
    * Define a table through the builder DSL. The builder seeds an autoincrement
    * `id`, the callback adds the rest, and we emit a single `CREATE TABLE`.
    */
-  createTable(name: string, build: (t: TableBuilder) => void): void {
+  async createTable(name: string, build: (t: TableBuilder) => void): Promise<void> {
     const table = new TableBuilder();
 
     build(table);
 
-    this.db.exec(`CREATE TABLE ${name} (${table.build()})`);
+    await this.db.exec(`CREATE TABLE ${name} (${table.build()})`);
   }
 
-  dropTable(name: string): void {
-    this.db.exec(`DROP TABLE ${name}`);
+  async dropTable(name: string): Promise<void> {
+    await this.db.exec(`DROP TABLE ${name}`);
   }
 
   /** Add a single column to an existing table, with the usual modifiers. */
-  addColumn(table: string, name: string, type: string, opts: ColumnOptions = {}): void {
+  async addColumn(
+    table: string,
+    name: string,
+    type: string,
+    opts: ColumnOptions = {},
+  ): Promise<void> {
     const parts: string[] = [];
 
     if (opts.null === false) parts.push("NOT NULL");
@@ -40,26 +45,30 @@ export class Schema {
 
     const modifiers = parts.length === 0 ? "" : ` ${parts.join(" ")}`;
 
-    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}${modifiers}`);
+    await this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}${modifiers}`);
   }
 
   /**
    * Create an index over one or more columns. The name defaults to a stable
    * `idx_<table>_<col1>_<col2>` so repeated runs name the same index.
    */
-  addIndex(table: string, columns: string | string[], opts: IndexOptions = {}): void {
+  async addIndex(
+    table: string,
+    columns: string | string[],
+    opts: IndexOptions = {},
+  ): Promise<void> {
     const cols = Array.isArray(columns) ? columns : [columns];
 
     const name = opts.name ?? `idx_${table}_${cols.join("_")}`;
 
     const unique = opts.unique === true ? "UNIQUE " : "";
 
-    this.db.exec(`CREATE ${unique}INDEX ${name} ON ${table} (${cols.join(", ")})`);
+    await this.db.exec(`CREATE ${unique}INDEX ${name} ON ${table} (${cols.join(", ")})`);
   }
 
   /** Escape hatch: run arbitrary SQL the DSL does not cover. */
-  execute(sql: string): void {
-    this.db.exec(sql);
+  async execute(sql: string): Promise<void> {
+    await this.db.exec(sql);
   }
 }
 

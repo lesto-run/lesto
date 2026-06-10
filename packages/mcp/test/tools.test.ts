@@ -19,21 +19,46 @@ import { McpError } from "../src/errors";
 import type { KeelMcpContext } from "../src/tools";
 
 // The DI boundary: the kernel speaks "array of positional params"; this adapter
-// maps that onto better-sqlite3's variadic bind.
+// maps that onto better-sqlite3's variadic bind. The terminals are async (ADR
+// 0006) — a resolved Promise over the synchronous engine — while `prepare`
+// stays sync; `transaction()` brackets BEGIN/COMMIT (ROLLBACK on reject).
 function adapt(raw: Database.Database): KernelDatabase {
-  return {
-    exec: (sql) => raw.exec(sql),
+  const adapted: KernelDatabase = {
+    exec: async (sql) => {
+      raw.exec(sql);
+    },
 
     prepare: (sql) => {
       const statement = raw.prepare(sql);
 
       return {
-        run: (params = []) => statement.run(...(params as never[])),
-        get: (params = []) => statement.get(...(params as never[])),
-        all: (params = []) => statement.all(...(params as never[])),
+        run: async (params = []) => statement.run(...(params as never[])),
+        get: async (params = []) => statement.get(...(params as never[])),
+        all: async (params = []) => statement.all(...(params as never[])),
       };
     },
+
+    transaction: async (fn) => {
+      raw.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        raw.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          raw.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
   };
+
+  return adapted;
 }
 
 // A table the migration below creates, queried by the controller via @keel/db.
@@ -54,8 +79,8 @@ const createPosts: MigrationEntry = {
 let queryDb: Db;
 
 class PostsController extends Controller {
-  index() {
-    return this.json({ posts: queryDb.select().from(posts).orderBy(posts.id, "asc").all() });
+  async index() {
+    return this.json({ posts: await queryDb.select().from(posts).orderBy(posts.id, "asc").all() });
   }
 }
 
@@ -71,14 +96,14 @@ let raw: Database.Database;
 let router: Router;
 let app: App;
 
-beforeEach(() => {
+beforeEach(async () => {
   raw = new Database(":memory:");
   const db = adapt(raw);
   queryDb = createDb(db);
 
   router = buildRouter();
 
-  app = createApp({
+  app = await createApp({
     db,
     router,
     controllers: { posts: PostsController },
@@ -222,16 +247,16 @@ describe("content tools", () => {
 describe("content write tools", () => {
   // The write tools mutate a content-store database; give the context one,
   // migrated to hold the content_entries table.
-  function withContentDb(): KeelMcpContext {
+  async function withContentDb(): Promise<KeelMcpContext> {
     const contentDb = adapt(raw);
 
-    new Migrator(contentDb, [contentEntriesMigration]).migrate();
+    await new Migrator(contentDb, [contentEntriesMigration]).migrate();
 
     return { app, router, contentDb };
   }
 
   it("create_content_entry writes an entry the read tools can then see", async () => {
-    const tools = buildTools(withContentDb());
+    const tools = buildTools(await withContentDb());
 
     const created = (await dispatch(tools, "create_content_entry", {
       collection: "posts",
@@ -248,7 +273,7 @@ describe("content write tools", () => {
   });
 
   it("create_content_entry accepts a bare entry with no data or body", async () => {
-    const tools = buildTools(withContentDb());
+    const tools = buildTools(await withContentDb());
 
     const created = (await dispatch(tools, "create_content_entry", {
       collection: "pages",
@@ -259,7 +284,7 @@ describe("content write tools", () => {
   });
 
   it("update_content_entry changes an existing entry", async () => {
-    const tools = buildTools(withContentDb());
+    const tools = buildTools(await withContentDb());
 
     await dispatch(tools, "create_content_entry", {
       collection: "posts",
@@ -277,7 +302,7 @@ describe("content write tools", () => {
   });
 
   it("delete_content_entry removes an entry and reports the count", async () => {
-    const tools = buildTools(withContentDb());
+    const tools = buildTools(await withContentDb());
 
     await dispatch(tools, "create_content_entry", { collection: "posts", slug: "gone" });
 
@@ -300,7 +325,7 @@ describe("content write tools", () => {
 
 describe("handle_request handler", () => {
   it("dispatches to app.handle and returns the response", async () => {
-    queryDb.insert(posts).values({ title: "Hello, MCP" }).run();
+    await queryDb.insert(posts).values({ title: "Hello, MCP" }).run();
 
     const tools = buildTools({ app, router });
 

@@ -23,23 +23,49 @@ import type { RenderedEmail } from "@keel/mail";
 // Test rig
 //
 // One in-memory SQLite per test, adapted to @keel/db's `SqlDatabase` shape.
-// @keel/queue binds NAMED params, so it gets the raw Database directly; one
-// underlying DB satisfies both consumers through different adapters.
+// The terminals are async (ADR 0006): the synchronous better-sqlite3 engine is
+// wrapped so each terminal resolves a Promise (zero latency); prepare() stays
+// sync, and transaction() pins the single in-memory connection.
+//
+// Both @keel/db and @keel/queue now speak the same positional, async seam, so a
+// single adapter handle serves both — matching production and the queue's own test.
 // ---------------------------------------------------------------------------
 
 function adapt(raw: Database.Database): SqlDatabase {
-  return {
-    exec: (statement) => raw.exec(statement),
+  const adapted: SqlDatabase = {
+    exec: async (statement) => {
+      raw.exec(statement);
+    },
     prepare: (statement) => {
       const stmt = raw.prepare(statement);
 
       return {
-        run: (params: unknown[] = []) => stmt.run(...(params as never[])),
-        get: (params: unknown[] = []) => stmt.get(...(params as never[])),
-        all: (params: unknown[] = []) => stmt.all(...(params as never[])),
+        run: async (params: unknown[] = []) => stmt.run(...(params as never[])),
+        get: async (params: unknown[] = []) => stmt.get(...(params as never[])),
+        all: async (params: unknown[] = []) => stmt.all(...(params as never[])),
       };
     },
+    transaction: async (fn) => {
+      raw.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        raw.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          raw.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
   };
+
+  return adapted;
 }
 
 let raw: Database.Database;
@@ -63,20 +89,19 @@ async function deliverAll(): Promise<void> {
   }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   raw = new Database(":memory:");
   sql = adapt(raw);
   db = createDb(sql);
 
   // The package ships its own migration now — no hand-rolled CREATE TABLE
   // in the test fixture.
-  new Migrator(sql, [mailingListsMigration]).migrate();
+  await new Migrator(sql, [mailingListsMigration]).migrate();
 
-  // Queue's named-param binding sees the raw Database; @keel/db sees the
-  // positional adapter. One underlying file, two shapes.
-  installSchema(raw as unknown as QueueDatabase);
+  // The queue rides the SAME async adapter as @keel/db — one connection, one seam.
+  installSchema(sql as unknown as QueueDatabase);
 
-  queue = new Queue({ db: raw as unknown as QueueDatabase });
+  queue = new Queue({ db: sql as unknown as QueueDatabase });
   mailer = new Mailer({ queue, transport });
   mailer.define<{ to: string; issue: number }>("digest", ({ to, issue }) => ({
     to,
@@ -96,10 +121,10 @@ afterEach(() => {
 });
 
 describe("MailingLists", () => {
-  it("subscribe creates a pending subscriber carrying a fresh token", () => {
-    const list = insertList(db, { name: "Weekly" });
+  it("subscribe creates a pending subscriber carrying a fresh token", async () => {
+    const list = await insertList(db, { name: "Weekly" });
 
-    const subscriber = lists.subscribe(list.id, "ada@example.com");
+    const subscriber = await lists.subscribe(list.id, "ada@example.com");
 
     expect(subscriber.status).toBe("pending");
     expect(subscriber.email).toBe("ada@example.com");
@@ -107,43 +132,43 @@ describe("MailingLists", () => {
     expect(subscriber.token).toBe("token-1");
   });
 
-  it("confirm flips a pending subscriber to subscribed", () => {
-    const list = insertList(db, { name: "Weekly" });
-    const subscriber = lists.subscribe(list.id, "ada@example.com");
+  it("confirm flips a pending subscriber to subscribed", async () => {
+    const list = await insertList(db, { name: "Weekly" });
+    const subscriber = await lists.subscribe(list.id, "ada@example.com");
 
-    const confirmed = lists.confirm(subscriber.token!);
+    const confirmed = await lists.confirm(subscriber.token!);
 
     expect(confirmed.status).toBe("subscribed");
-    expect(findSubscriberById(db, subscriber.id)?.status).toBe("subscribed");
+    expect((await findSubscriberById(db, subscriber.id))?.status).toBe("subscribed");
   });
 
-  it("confirm throws a coded error for an unknown token", () => {
+  it("confirm throws a coded error for an unknown token", async () => {
     expect.assertions(2);
 
     try {
-      lists.confirm("nope");
+      await lists.confirm("nope");
     } catch (error) {
       expect(error).toBeInstanceOf(MailingListError);
       expect((error as MailingListError).code).toBe("MAILING_LIST_INVALID_TOKEN");
     }
   });
 
-  it("unsubscribe flips the matching subscriber to unsubscribed", () => {
-    const list = insertList(db, { name: "Weekly" });
-    const subscriber = lists.subscribe(list.id, "ada@example.com");
-    lists.confirm(subscriber.token!);
+  it("unsubscribe flips the matching subscriber to unsubscribed", async () => {
+    const list = await insertList(db, { name: "Weekly" });
+    const subscriber = await lists.subscribe(list.id, "ada@example.com");
+    await lists.confirm(subscriber.token!);
 
-    const removed = lists.unsubscribe(subscriber.token!);
+    const removed = await lists.unsubscribe(subscriber.token!);
 
     expect(removed.status).toBe("unsubscribed");
-    expect(findSubscriberById(db, subscriber.id)?.status).toBe("unsubscribed");
+    expect((await findSubscriberById(db, subscriber.id))?.status).toBe("unsubscribed");
   });
 
-  it("unsubscribe throws a coded error for an unknown token", () => {
+  it("unsubscribe throws a coded error for an unknown token", async () => {
     expect.assertions(2);
 
     try {
-      lists.unsubscribe("nope");
+      await lists.unsubscribe("nope");
     } catch (error) {
       expect(error).toBeInstanceOf(MailingListError);
       expect((error as MailingListError).code).toBe("MAILING_LIST_INVALID_TOKEN");
@@ -151,25 +176,25 @@ describe("MailingLists", () => {
   });
 
   it("broadcast enqueues exactly one delivery per SUBSCRIBED recipient", async () => {
-    const list = insertList(db, { name: "Weekly" });
+    const list = await insertList(db, { name: "Weekly" });
 
     // A confirmed subscriber — should receive the broadcast.
-    const ada = lists.subscribe(list.id, "ada@example.com");
-    lists.confirm(ada.token!);
+    const ada = await lists.subscribe(list.id, "ada@example.com");
+    await lists.confirm(ada.token!);
 
     // A second confirmed subscriber.
-    const grace = lists.subscribe(list.id, "grace@example.com");
-    lists.confirm(grace.token!);
+    const grace = await lists.subscribe(list.id, "grace@example.com");
+    await lists.confirm(grace.token!);
 
     // A still-pending subscriber — must be skipped.
-    lists.subscribe(list.id, "pending@example.com");
+    await lists.subscribe(list.id, "pending@example.com");
 
     // An unsubscribed subscriber — must be skipped.
-    const gone = lists.subscribe(list.id, "gone@example.com");
-    lists.confirm(gone.token!);
-    lists.unsubscribe(gone.token!);
+    const gone = await lists.subscribe(list.id, "gone@example.com");
+    await lists.confirm(gone.token!);
+    await lists.unsubscribe(gone.token!);
 
-    const count = lists.broadcast(list.id, "digest", { issue: 42 });
+    const count = await lists.broadcast(list.id, "digest", { issue: 42 });
     expect(count).toBe(2);
 
     await deliverAll();
@@ -179,26 +204,26 @@ describe("MailingLists", () => {
     expect(sent.every((email) => email.subject === "Issue #42")).toBe(true);
   });
 
-  it("defaults to a random hex token generator when none is injected", () => {
+  it("defaults to a random hex token generator when none is injected", async () => {
     const defaults = createMailingLists({ db, mailer });
-    const list = insertList(db, { name: "Weekly" });
+    const list = await insertList(db, { name: "Weekly" });
 
-    const subscriber = defaults.subscribe(list.id, "ada@example.com");
+    const subscriber = await defaults.subscribe(list.id, "ada@example.com");
 
     // 16 random bytes → 32 hex characters.
     expect(subscriber.token).toMatch(/^[0-9a-f]{32}$/);
   });
 
-  it("the migration's down drops both tables", () => {
+  it("the migration's down drops both tables", async () => {
     const migrator = new Migrator(sql, [mailingListsMigration]);
 
-    expect(migrator.rollback()).toBe(mailingListsMigration.version);
+    expect(await migrator.rollback()).toBe(mailingListsMigration.version);
     expect(() => raw.prepare("SELECT * FROM lists").all()).toThrow();
     expect(() => raw.prepare("SELECT * FROM subscribers").all()).toThrow();
   });
 
-  it("insertList accepts a null name (the column is nullable)", () => {
-    const list = insertList(db, { name: null });
+  it("insertList accepts a null name (the column is nullable)", async () => {
+    const list = await insertList(db, { name: null });
 
     expect(list.name).toBeNull();
   });

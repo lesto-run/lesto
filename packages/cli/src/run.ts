@@ -116,7 +116,7 @@ async function runRoutes(deps: CliDeps): Promise<number> {
 async function runMigrate(deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
 
-  const app = createApp(config);
+  const app = await createApp(config);
 
   for (const version of app.migrationsApplied) {
     deps.out(`applied ${version}`);
@@ -134,7 +134,7 @@ async function runMigrate(deps: CliDeps): Promise<number> {
 async function runServe(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
 
-  const app = createApp(config);
+  const app = await createApp(config);
 
   const { port } = parsePort(args, DEFAULT_PORT);
 
@@ -162,11 +162,11 @@ function entryNoun(count: number): string {
 async function runContentBuild(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
 
-  createApp(config);
+  await createApp(config);
 
   const entries = await deps.buildContent();
 
-  const { persisted } = persistEntries(config.db, entries);
+  const { persisted } = await persistEntries(config.db, entries);
 
   deps.out(`built ${persisted} ${entryNoun(persisted)} into the content store`);
 
@@ -174,7 +174,7 @@ async function runContentBuild(args: readonly string[], deps: CliDeps): Promise<
   // exists are dropped. Opt-in, because a misconfigured build would otherwise
   // wipe content.
   if (args.includes("--prune")) {
-    const { deleted } = pruneEntries(config.db, entries);
+    const { deleted } = await pruneEntries(config.db, entries);
 
     deps.out(`pruned ${deleted} stale ${entryNoun(deleted)}`);
   }
@@ -216,9 +216,9 @@ async function runContentDelete(args: readonly string[], deps: CliDeps): Promise
 
   const config = await deps.loadApp();
 
-  createApp(config);
+  await createApp(config);
 
-  const { deleted } = deleteEntry(config.db, collection, slug);
+  const { deleted } = await deleteEntry(config.db, collection, slug);
 
   deps.out(
     deleted === 0 ? `no ${collection} entry: ${slug}` : `deleted ${collection} entry: ${slug}`,
@@ -269,7 +269,7 @@ function selectTarget(sites: readonly Site[], target: string | undefined): reado
 async function runBuild(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
 
-  const app = createApp(config);
+  const app = await createApp(config);
 
   const sites = await deps.loadSites();
 
@@ -299,7 +299,7 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
 async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
 
-  const app = createApp(config);
+  const app = await createApp(config);
 
   const sites = await deps.loadSites();
 
@@ -344,7 +344,7 @@ function routeNoun(count: number): string {
 async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
 
-  const app = createApp(config);
+  const app = await createApp(config);
 
   const sites = await deps.loadSites();
 

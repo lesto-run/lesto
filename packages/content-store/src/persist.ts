@@ -43,11 +43,11 @@ function readString(entry: RuntimeEntry, key: string): string | null {
  * and the publish date are lifted out for indexing. Re-persisting the same
  * entry updates it in place — the operation is idempotent on identity.
  */
-export function persistEntries(
+export async function persistEntries(
   db: SqlDatabase,
   entries: readonly RuntimeEntry[],
   options: PersistOptions = {},
-): PersistResult {
+): Promise<PersistResult> {
   const now = options.now ?? Date.now;
   const statement = db.prepare(UPSERT_SQL);
 
@@ -67,7 +67,7 @@ export function persistEntries(
     const publishedAt = readString(entry, "publishedAt") ?? readString(entry, "date");
     const timestamp = new Date(now()).toISOString();
 
-    statement.run([
+    await statement.run([
       entry.collection,
       entry.id,
       slug,

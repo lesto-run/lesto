@@ -117,7 +117,7 @@ export class Scheduler {
   }
 
   /** Evaluate every entry at `now`, enqueueing those due. Returns how many fired. */
-  tick(now: Date = this.clock()): number {
+  async tick(now: Date = this.clock()): Promise<number> {
     const minuteKey = now.toISOString().slice(0, 16); // yyyy-mm-ddThh:mm
 
     const dueCrons = this.crons.filter(
@@ -126,7 +126,7 @@ export class Scheduler {
 
     for (const entry of dueCrons) {
       entry.lastMinuteKey = minuteKey;
-      this.queue.enqueue(entry.name, entry.payload);
+      await this.queue.enqueue(entry.name, entry.payload);
     }
 
     const dueIntervals = this.intervals.filter(
@@ -135,7 +135,7 @@ export class Scheduler {
 
     for (const entry of dueIntervals) {
       entry.lastRunAt = now.getTime();
-      this.queue.enqueue(entry.name, entry.payload);
+      await this.queue.enqueue(entry.name, entry.payload);
     }
 
     return dueCrons.length + dueIntervals.length;
@@ -147,8 +147,30 @@ export class Scheduler {
     const setTimer = options.setInterval ?? ((callback, ms) => setInterval(callback, ms));
     const clearTimer = options.clearInterval ?? ((handle) => clearInterval(handle as never));
 
+    // The cadence is fire-and-forget: each timer fire kicks a `tick()` whose
+    // enqueues are now async. A rejected tick must not become an unhandled
+    // rejection that crashes the process, so it is swallowed here — the next
+    // tick will retry on the following cadence.
+    //
+    // No-overlap invariant (restored from the synchronous scheduler): if a tick
+    // is still in flight when the next cadence fires, skip it rather than run a
+    // second concurrent tick. Two overlapping ticks can interleave on their
+    // `await`s and double-enqueue an entry (the snapshot one tick took before its
+    // await still gets processed after another tick fired the same entry).
+    let ticking = false;
+
     const handle = setTimer(() => {
-      this.tick();
+      if (ticking) return;
+
+      ticking = true;
+
+      void this.tick()
+        .catch(() => {
+          /* a transient enqueue fault is retried on the next cadence */
+        })
+        .finally(() => {
+          ticking = false;
+        });
     }, intervalMs);
 
     return {
