@@ -72,14 +72,40 @@ export interface RunResult {
 export type Clock = () => Date;
 
 // ---- the minimal SQL surface (driver-agnostic) ----
+//
+// The terminals are **asynchronous** (ADR 0006): `run` / `get` / `all` and
+// `exec` return Promises so a networked Postgres pool — which speaks over a
+// socket — can back the same surface as in-process SQLite. `prepare(sql)` stays
+// *synchronous*: it only compiles a statement object; binding + execution is
+// what awaits. There is no sync escape hatch.
+//
+// Parameters are *positional* (an ordered array), to keep the contract scalar
+// across SQLite (variadic binds) and Postgres (`$1`, `$2`). Where a value is
+// reused inside one statement, it is repeated at each `?` position.
 
 export interface SqlStatement {
-  run(parameters?: Record<string, unknown>): { changes: number; lastInsertRowid: number | bigint };
-  get(parameters?: Record<string, unknown>): unknown;
-  all(parameters?: Record<string, unknown>): unknown[];
+  /**
+   * Execute a write. `lastInsertRowid` is **optional**: SQLite supplies it
+   * natively, but Postgres has no implicit row id (use `RETURNING id`), so a
+   * driver may omit it.
+   */
+  run(params?: unknown[]): Promise<{ changes: number; lastInsertRowid?: number | bigint }>;
+  get(params?: unknown[]): Promise<unknown>;
+  all(params?: unknown[]): Promise<unknown[]>;
 }
 
 export interface SqlDatabase {
-  exec(sql: string): unknown;
+  exec(sql: string): Promise<void>;
+
   prepare(sql: string): SqlStatement;
+
+  /**
+   * Run `fn` inside a single transaction on a single connection. Commits when
+   * `fn` resolves, rolls back when it rejects (re-raising the original error).
+   *
+   * First-class because correctness depends on it: on a pooled driver, separate
+   * `exec("BEGIN")` / `exec("COMMIT")` calls would land on *different* pooled
+   * connections and the transaction would silently wrap nothing.
+   */
+  transaction<T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<T>;
 }
