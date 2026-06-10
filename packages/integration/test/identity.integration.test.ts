@@ -20,6 +20,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createApp } from "@keel/kernel";
 import type { AppConfig, KernelDatabase } from "@keel/kernel";
+import { createDb } from "@keel/db";
 import { Router } from "@keel/router";
 import { serve } from "@keel/runtime";
 import type { Server } from "@keel/runtime";
@@ -252,7 +253,11 @@ let server: Server;
 beforeAll(async () => {
   database = new Database(":memory:");
 
+  // The kernel's `useDatabase(config.db)` is for the legacy @keel/orm path;
+  // @keel/identity now wants an explicit @keel/db handle over the same
+  // underlying SQL surface. One adapter, two consumers.
   identity = createIdentity({
+    db: createDb(adapt(database)),
     secret: "integration-test-secret",
     mailer,
     verificationUrl: (token) => `https://app.test/auth/verify?token=${token}`,

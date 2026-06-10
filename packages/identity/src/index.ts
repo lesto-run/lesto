@@ -1,7 +1,10 @@
 /**
  * @keel/identity — Keel's batteries-included auth.
  *
+ *   const db = createDb(sqlAdapter);
+ *
  *   const identity = createIdentity({
+ *     db,
  *     secret: env.KEEL_AUTH_SECRET,
  *     mailer: { sendVerificationEmail, sendPasswordResetEmail },
  *     verificationUrl: (token) => `https://app.com/verify?token=${token}`,
@@ -14,18 +17,30 @@
  *
  * Composes:
  *   - `@keel/auth`    — scrypt hashing, store-backed sessions, signed tokens
- *   - `@keel/orm`     — the `User` row backing the persisted account
- *   - `@keel/migrate` — the `users` table migration
+ *   - `@keel/db`      — the `users` schema, typed queries, and DDL
+ *   - `@keel/migrate` — the `users` table migration shape
  *
- * Mail is injected as an interface so the package itself stays decoupled from
- * `@keel/mail`'s queue + worker boot; a two-line adapter wires the two
+ * Mail is injected as an interface so the package itself stays decoupled
+ * from `@keel/mail`'s queue + worker boot; a two-line adapter wires the two
  * together at app boot.
  */
 
 export { createIdentity } from "./identity";
 export type { Identity, IdentityMailer, IdentityOptions } from "./identity";
 
-export { normalizeEmail, User, usersMigration } from "./user";
+export {
+  deleteUser,
+  findUserByEmail,
+  findUserById,
+  insertUser,
+  isEmailVerified,
+  markEmailVerified,
+  normalizeEmail,
+  setPasswordHash,
+  users,
+  usersMigration,
+} from "./user";
+export type { User, UserInput } from "./user";
 
 export {
   clearSessionCookie,

@@ -2,6 +2,7 @@
  * The identity service — the assembled, DB-backed auth battery.
  *
  *   const identity = createIdentity({
+ *     db,
  *     secret: env.KEEL_AUTH_SECRET,
  *     mailer: { sendVerificationEmail, sendPasswordResetEmail },
  *     verificationUrl: (token) => `https://app.com/verify?token=${token}`,
@@ -14,14 +15,12 @@
  *
  * Built as a closure factory (`createIdentity`) returning an object of plain
  * functions — no `this`, no class to extend, options + secrets + signers
- * captured in lexical scope. That matches the Next/Express idiom; it also
- * means the returned `Identity` is a *value*, not an instance, and tests can
- * trivially shape-substitute it.
+ * captured in lexical scope. The `db` handle is *explicit*: identity never
+ * reaches for a global, and tests pass their own scoped handle.
  *
- * Composes `@keel/auth` (hashing, sessions, signed tokens) + `@keel/orm` (the
- * `User` model — internal-only; the public surface is camelCase) + an
- * injected mailer interface (so a test can capture the outgoing link without
- * booting `@keel/mail`).
+ * Composes `@keel/auth` (hashing, sessions, signed tokens) + `@keel/db` (the
+ * `users` schema, queries, and DDL) + an injected mailer interface (so a
+ * test can capture the outgoing link without booting `@keel/mail`).
  *
  * Edge cases worth flagging up front, because they shape the whole API:
  *
@@ -45,29 +44,27 @@
 
 import { hashPassword, MemorySessionStore, Sessions, verifyPassword } from "@keel/auth";
 import type { Clock, Session, SessionStore } from "@keel/auth";
+import type { Db } from "@keel/db";
 
 import { IdentityError } from "./errors";
-import { resetSigner, verifySigner } from "./tokens";
-import { packResetToken, unpackResetToken } from "./tokens";
-import {
-  findUserByEmail,
-  findUserById,
-  insertUser,
-  markEmailVerified,
-  normalizeEmail,
-  setPasswordHash,
-  type User,
-} from "./user";
+import { packResetToken, resetSigner, unpackResetToken, verifySigner } from "./tokens";
+
+// Namespace import so test code can `vi.spyOn(userRepo, "findUserByEmail")`
+// to drive the rare race path (pre-check returns nothing → INSERT races a
+// parallel one and hits the UNIQUE constraint). With a plain named import,
+// the binding is frozen and the spy never reaches the call site.
+import * as userRepo from "./user";
+import type { User } from "./user";
 
 /**
  * Email validation, in two layers.
  *
- * The pattern enforces structure (`local@host.tld`); the forbidden-chars guard
- * blocks the characters that have historically smuggled control into either
- * the mail transport (CR/LF header injection, comma-separated delivery —
- * see CVE-2022-31102 in `next-auth`) or the surrounding URL/HTML (`<>"`).
- * Together they keep what we accept narrow enough that a legitimate address
- * still works but the known attack shapes cannot.
+ * The pattern enforces structure (`local@host.tld`); the forbidden-chars
+ * guard blocks the characters that have historically smuggled control into
+ * either the mail transport (CR/LF header injection, comma-separated
+ * delivery — see CVE-2022-31102 in `next-auth`) or the surrounding URL/HTML
+ * (`<>"`). Together they keep what we accept narrow enough that a legitimate
+ * address still works but the known attack shapes cannot.
  */
 const EMAIL_PATTERN = /^[^@]+@[^@]+\.[^@]+$/;
 const EMAIL_FORBIDDEN_CHARS = /[\s,;<>"'`\\()[\]{}]/;
@@ -139,6 +136,9 @@ export interface IdentityMailer {
 }
 
 export interface IdentityOptions {
+  /** The database handle the service queries through. Explicit, never global. */
+  readonly db: Db;
+
   /**
    * The HMAC secret backing verification and reset token signatures.
    *
@@ -217,6 +217,7 @@ export interface Identity {
 
 /** Build an {@link Identity} bound to the given options. */
 export function createIdentity(options: IdentityOptions): Identity {
+  const db = options.db;
   const requireVerifiedEmail = options.requireVerifiedEmail ?? true;
   const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
   const verificationTtlMs = options.verificationTtlMs ?? DEFAULT_VERIFICATION_TTL_MS;
@@ -233,9 +234,9 @@ export function createIdentity(options: IdentityOptions): Identity {
     /**
      * Register a new account.
      *
-     * On a fresh email: hashes the password, inserts the user, mints a signed
-     * verification token, and asks the mailer to send the link. No session is
-     * issued — login is gated on verification (when required).
+     * On a fresh email: hashes the password, inserts the user, mints a
+     * signed verification token, and asks the mailer to send the link. No
+     * session is issued — login is gated on verification (when required).
      *
      * On a colliding email: returns the same shape, runs a throwaway
      * `hashPassword` to equalize CPU cost, and sends no email. That denies
@@ -256,9 +257,9 @@ export function createIdentity(options: IdentityOptions): Identity {
       assertValidEmail(email);
       assertValidPassword(password);
 
-      const normalized = normalizeEmail(email);
+      const normalized = userRepo.normalizeEmail(email);
 
-      if (findUserByEmail(normalized)) {
+      if (userRepo.findUserByEmail(db, normalized)) {
         // Burn the same CPU we'd burn on a real insert so the response time
         // doesn't betray the collision. We discard the result.
         hashPassword(password);
@@ -268,7 +269,7 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       let user: User;
       try {
-        user = insertUser({
+        user = userRepo.insertUser(db, {
           email: normalized,
           passwordHash: hashPassword(password),
           emailVerifiedAt: null,
@@ -304,12 +305,15 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       if (claim === undefined) throw invalidToken("verification");
 
-      const user = findUserById(Number(claim.userId));
+      const user = userRepo.findUserById(db, Number(claim.userId));
 
       if (!user) throw invalidToken("verification");
 
-      if (!user.isEmailVerified) {
-        markEmailVerified(user, new Date().toISOString());
+      if (!userRepo.isEmailVerified(user)) {
+        const now = new Date().toISOString();
+        userRepo.markEmailVerified(db, user.id, now);
+
+        return { ...user, emailVerifiedAt: now };
       }
 
       return user;
@@ -329,9 +333,9 @@ export function createIdentity(options: IdentityOptions): Identity {
      * documented at the module level.
      */
     login(email, password) {
-      const normalized = normalizeEmail(email);
+      const normalized = userRepo.normalizeEmail(email);
 
-      const user = findUserByEmail(normalized);
+      const user = userRepo.findUserByEmail(db, normalized);
 
       if (!user) {
         // Equalize CPU so a missing user costs the same as a wrong password.
@@ -344,7 +348,7 @@ export function createIdentity(options: IdentityOptions): Identity {
         throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
-      if (requireVerifiedEmail && !user.isEmailVerified) {
+      if (requireVerifiedEmail && !userRepo.isEmailVerified(user)) {
         throw new IdentityError("IDENTITY_EMAIL_NOT_VERIFIED", "Email address not verified.");
       }
 
@@ -362,9 +366,9 @@ export function createIdentity(options: IdentityOptions): Identity {
      * `issue` to equalize CPU, then discard it; no email goes out.
      */
     async requestPasswordReset(email) {
-      const normalized = normalizeEmail(email);
+      const normalized = userRepo.normalizeEmail(email);
 
-      const user = findUserByEmail(normalized);
+      const user = userRepo.findUserByEmail(db, normalized);
 
       if (!user) {
         // Burn equivalent CPU on the unknown path. The result is thrown away.
@@ -392,7 +396,7 @@ export function createIdentity(options: IdentityOptions): Identity {
      * Reset the password against a signed reset token.
      *
      * The token is **single-use in effect**: the signing secret incorporates
-     * the user's current `password_hash`, so once the password changes the
+     * the user's current `passwordHash`, so once the password changes the
      * token's HMAC no longer verifies. A leaked or replayed link cannot
      * reset the password a second time, and cannot undo a legitimate reset.
      *
@@ -406,7 +410,7 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       if (!unpacked) throw invalidToken("reset");
 
-      const user = findUserById(Number(unpacked.userId));
+      const user = userRepo.findUserById(db, Number(unpacked.userId));
 
       if (!user) throw invalidToken("reset");
 
@@ -421,13 +425,14 @@ export function createIdentity(options: IdentityOptions): Identity {
         throw invalidToken("reset");
       }
 
-      setPasswordHash(user, hashPassword(newPassword));
+      const newHash = hashPassword(newPassword);
+      userRepo.setPasswordHash(db, user.id, newHash);
 
       if (options.revokeUserSessions) {
         await options.revokeUserSessions(String(user.id));
       }
 
-      return user;
+      return { ...user, passwordHash: newHash };
     },
 
     logout(token) {
@@ -441,7 +446,7 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       if (session === undefined) return undefined;
 
-      return findUserById(Number(session.userId));
+      return userRepo.findUserById(db, Number(session.userId));
     },
   };
 }

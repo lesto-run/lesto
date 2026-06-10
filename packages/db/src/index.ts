@@ -40,7 +40,14 @@
  */
 
 export { integer, real, text } from "./columns";
-export type { CellType, Column, ColumnSpec, IsOptionalOnInsert, SqlType } from "./columns";
+export type {
+  CellType,
+  Column,
+  ColumnBuilder,
+  ColumnSpec,
+  IsOptionalOnInsert,
+  SqlType,
+} from "./columns";
 
 export { defineTable } from "./table";
 export type { ColumnMap, InferInsert, InferRow, InferUpdate, Table } from "./table";

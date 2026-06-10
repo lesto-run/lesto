@@ -23,9 +23,9 @@
 
   "dependencies": {
     "@keel/auth": "workspace:*",
+    "@keel/db": "workspace:*",
     "@keel/errors": "workspace:*",
     "@keel/mail": "workspace:*",
-    "@keel/migrate": "workspace:*",
-    "@keel/orm": "workspace:*"
+    "@keel/migrate": "workspace:*"
   }
 }

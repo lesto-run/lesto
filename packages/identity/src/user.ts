@@ -1,51 +1,46 @@
 /**
- * The `users` table — identity's only persisted entity — plus the camelCase
- * façade the rest of `@keel/identity` queries through.
+ * The `users` table — identity's only persisted entity — as a `@keel/db`
+ * schema value, plus the small helper functions identity calls.
  *
- * `User` itself is the legacy `@keel/orm` Model class (the constraint of the
- * current data layer; ADR 0004 plans to retire it). Everything *outside*
- * this module reads `user` instances via camelCase getters and writes via
- * the helpers below — `insertUser` / `setPasswordHash` / `markEmailVerified`
- * — which are the single place snake_case column names live.
- *
- *   id              the surrogate primary key the ORM seeds
+ *   id              the surrogate primary key SQLite auto-assigns
  *   email           lower-cased, unique; the natural identifier the user types
- *   password_hash   the scrypt hash from @keel/auth's `hashPassword`
- *   email_verified_at  ISO timestamp; `null` until verification completes
- *   created_at / updated_at  the conventional pair
+ *   passwordHash    the scrypt hash from @keel/auth's `hashPassword`
+ *   emailVerifiedAt ISO timestamp; `null` until verification completes
+ *   createdAt       ISO timestamp; stamped by `insertUser` (no DB trigger)
+ *   updatedAt       ISO timestamp; stamped by every write helper
  *
  * Email is stored lower-cased so case-insensitive lookup works without
  * citext — lookup callers all lower-case before they query, so the column
  * comparison is literal and the same answer on SQLite and Postgres.
+ *
+ * The schema *value* (`users`) backs both the migration's `CREATE TABLE` and
+ * the inferred row type (`User = InferRow<typeof users>`), so the column
+ * list has exactly one source of truth.
  */
 
-import { Model } from "@keel/orm";
+import {
+  createTableSql,
+  defineTable,
+  dropTableSql,
+  eq,
+  integer,
+  text,
+  type Db,
+  type InferRow,
+} from "@keel/db";
 import type { Migration } from "@keel/migrate";
 
-export class User extends Model {
-  static override tableName = "users";
+export const users = defineTable("users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  emailVerifiedAt: text("email_verified_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
 
-  static override timestamps = true;
-
-  static override columns = ["email", "password_hash", "email_verified_at"] as const;
-
-  get email(): string {
-    return this.get("email") as string;
-  }
-
-  get passwordHash(): string {
-    return this.get("password_hash") as string;
-  }
-
-  /** ISO timestamp the email was confirmed at — `null` if not yet verified. */
-  get emailVerifiedAt(): string | null {
-    return (this.get("email_verified_at") as string | null) ?? null;
-  }
-
-  get isEmailVerified(): boolean {
-    return this.emailVerifiedAt !== null;
-  }
-}
+/** A user row — the shape SELECT yields and identity passes around. */
+export type User = InferRow<typeof users>;
 
 /** A camelCase view of the writable fields, the shape the service speaks. */
 export interface UserInput {
@@ -54,58 +49,80 @@ export interface UserInput {
   readonly emailVerifiedAt: string | null;
 }
 
-/** Insert a user from a camelCase input. The only place snake_case keys live for writes. */
-export function insertUser(input: UserInput): User {
-  return User.create({
-    email: input.email,
-    password_hash: input.passwordHash,
-    email_verified_at: input.emailVerifiedAt,
-  });
+/** True iff the user has clicked the verification link. */
+export function isEmailVerified(user: User): boolean {
+  return user.emailVerifiedAt !== null;
+}
+
+/** Insert a user, stamping `createdAt` / `updatedAt`, and return the row. */
+export function insertUser(db: Db, input: UserInput): User {
+  const now = new Date().toISOString();
+
+  return db
+    .insert(users)
+    .values({
+      email: input.email,
+      passwordHash: input.passwordHash,
+      emailVerifiedAt: input.emailVerifiedAt,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning()
+    .get();
 }
 
 /** Look up a user by email; `undefined` when no row matches. */
-export function findUserByEmail(email: string): User | undefined {
-  return User.findBy({ email });
+export function findUserByEmail(db: Db, email: string): User | undefined {
+  return db.select().from(users).where(eq(users.email, email)).get();
 }
 
 /** Look up a user by id; `undefined` when no row matches. */
-export function findUserById(id: number): User | undefined {
-  return User.findBy({ id });
+export function findUserById(db: Db, id: number): User | undefined {
+  return db.select().from(users).where(eq(users.id, id)).get();
 }
 
-/** Stamp a user's password hash. */
-export function setPasswordHash(user: User, passwordHash: string): void {
-  user.update({ password_hash: passwordHash });
+/** Stamp a user's password hash + bump `updatedAt`. */
+export function setPasswordHash(db: Db, id: number, passwordHash: string): void {
+  db.update(users)
+    .set({ passwordHash, updatedAt: new Date().toISOString() })
+    .where(eq(users.id, id))
+    .run();
 }
 
-/** Stamp a user's `email_verified_at` timestamp. */
-export function markEmailVerified(user: User, atIso: string): void {
-  user.update({ email_verified_at: atIso });
+/** Stamp a user's `emailVerifiedAt` + bump `updatedAt`. */
+export function markEmailVerified(db: Db, id: number, atIso: string): void {
+  db.update(users)
+    .set({ emailVerifiedAt: atIso, updatedAt: new Date().toISOString() })
+    .where(eq(users.id, id))
+    .run();
+}
+
+/** Delete a user row by id. Used in tests; production deletes go through a service flow. */
+export function deleteUser(db: Db, id: number): void {
+  db.delete(users).where(eq(users.id, id)).run();
+}
+
+/** Normalize an email to its canonical, comparable form. */
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
 }
 
 /**
  * The migration that creates `users`. Versioned with a sortable, stable
  * prefix — `@keel/migrate` applies migrations in lexicographic order, so a
  * timestamped version lets later identity migrations slot in cleanly.
+ *
+ * Crucially, `up`/`down` execute the *schema-as-value's* DDL — exactly one
+ * column list lives in this file, and it's the one queries also use.
  */
 export const usersMigration: { version: string; migration: Migration } = {
   version: "20260609000001_create_users",
   migration: {
     up(schema) {
-      schema.createTable("users", (t) => {
-        t.string("email", { null: false, unique: true });
-        t.string("password_hash", { null: false });
-        t.datetime("email_verified_at");
-        t.timestamps();
-      });
+      schema.execute(createTableSql(users));
     },
     down(schema) {
-      schema.dropTable("users");
+      schema.execute(dropTableSql(users));
     },
   },
 };
-
-/** Normalize an email to its canonical, comparable form. */
-export function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
-}

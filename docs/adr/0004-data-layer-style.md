@@ -1,8 +1,9 @@
 ## ADR 0004 — Data layer style: away from ActiveRecord, toward Drizzle-shaped
 
-- **Status:** Proposed (planning only — not implemented)
+- **Status:** Accepted — Phases A + B complete; Phase C (content-store + queue) and D (deprecate `@keel/orm`) pending
 - **Date:** 2026-06-09
 - **Deciders:** tech lead + owner
+- **Implementation note (2026-06-09):** Phase A shipped `packages/db` (`defineTable`, typed columns, `createDb`, conditions, DDL — 31 tests, 100% cov). Phase B migrated `packages/identity` off `@keel/orm` (`User extends Model` and the global `useDatabase` are gone from identity; the service takes an explicit `db: Db`, the schema is a value (`users`) backing both queries and the migration's DDL, helpers are camelCase functions taking explicit `db`). Identity dropped `@keel/orm` from its deps. Estate's demo + the @keel/integration journey both updated. 48 + 18 + 30 + 31 tests green across packages.
 
 ## Context
 

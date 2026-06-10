@@ -1,7 +1,8 @@
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resetConnection, useDatabase } from "@keel/orm";
+import { createDb } from "@keel/db";
+import type { Db, SqlDatabase } from "@keel/db";
 import { Migrator } from "@keel/migrate";
 
 import {
@@ -13,22 +14,26 @@ import {
   readSessionToken,
   SESSION_COOKIE,
   sessionCookie,
-  User,
+  users,
   usersMigration,
 } from "../src/index";
+
+import * as userRepo from "../src/user";
 
 import type { Identity, IdentityMailer, IdentityOptions } from "../src/index";
 
 // ---------------------------------------------------------------------------
 // Test rig
 //
-// One in-memory SQLite, adapted both to the ORM's prepare-only shape and to
-// the migrator's exec+prepare shape — they are the same database, accessed
-// through two structural interfaces. A clock we can step lets every TTL test
-// be deterministic.
+// One in-memory SQLite per test, wrapped in @keel/db's `SqlDatabase` shape —
+// the same handle satisfies both the ORM-shaped surface @keel/db consumes
+// and the exec+prepare shape @keel/migrate runs DDL through. A clock we can
+// step lets every TTL test be deterministic.
 // ---------------------------------------------------------------------------
 
 let raw: Database.Database;
+let sql: SqlDatabase;
+let db: Db;
 let now: number;
 
 const clock = (): number => now;
@@ -36,40 +41,15 @@ const advance = (ms: number): void => {
   now += ms;
 };
 
-function adaptForOrm(db: Database.Database): {
-  prepare: (sql: string) => {
-    run: (params?: unknown[]) => { changes: number; lastInsertRowid: number | bigint };
-    get: (params?: unknown[]) => unknown;
-    all: (params?: unknown[]) => unknown[];
-  };
-} {
+function adapt(database: Database.Database): SqlDatabase {
   return {
-    prepare(sql: string) {
-      const stmt = db.prepare(sql);
+    exec: (statement) => database.exec(statement),
+    prepare: (statement) => {
+      const stmt = database.prepare(statement);
 
       return {
         run: (params: unknown[] = []) => stmt.run(...(params as never[])),
         get: (params: unknown[] = []) => stmt.get(...(params as never[])),
-        all: (params: unknown[] = []) => stmt.all(...(params as never[])),
-      };
-    },
-  };
-}
-
-function adaptForMigrate(db: Database.Database): {
-  exec: (sql: string) => unknown;
-  prepare: (sql: string) => {
-    run: (params?: unknown[]) => { changes: number };
-    all: (params?: unknown[]) => unknown[];
-  };
-} {
-  return {
-    exec: (sql) => db.exec(sql),
-    prepare(sql: string) {
-      const stmt = db.prepare(sql);
-
-      return {
-        run: (params: unknown[] = []) => stmt.run(...(params as never[])),
         all: (params: unknown[] = []) => stmt.all(...(params as never[])),
       };
     },
@@ -108,6 +88,7 @@ function buildIdentity(opts: Partial<IdentityOptions> = {}): {
   const revokedFor: string[] = [];
 
   const identity = createIdentity({
+    db,
     secret: "test-secret",
     mailer,
     verificationUrl: (token) => `https://app.test/verify?token=${token}`,
@@ -124,17 +105,16 @@ function buildIdentity(opts: Partial<IdentityOptions> = {}): {
 
 beforeEach(() => {
   raw = new Database(":memory:");
+  sql = adapt(raw);
+  db = createDb(sql);
   now = new Date("2026-06-09T12:00:00Z").getTime();
 
-  const migrator = new Migrator(adaptForMigrate(raw), [usersMigration]);
-  migrator.migrate();
-
-  useDatabase(adaptForOrm(raw));
+  new Migrator(sql, [usersMigration]).migrate();
 });
 
 afterEach(() => {
-  resetConnection();
   raw.close();
+  vi.restoreAllMocks();
 });
 
 // ---------------------------------------------------------------------------
@@ -149,7 +129,7 @@ describe("register", () => {
 
     expect(result.status).toBe("verification_sent");
     expect(result.user?.email).toBe("ada@example.com");
-    expect(result.user?.isEmailVerified).toBe(false);
+    expect(result.user?.emailVerifiedAt).toBeNull();
 
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ kind: "verify", to: "ada@example.com" });
@@ -169,7 +149,7 @@ describe("register", () => {
     expect(result.status).toBe("verification_sent");
     expect(result.user).toBeUndefined();
     expect(sent).toHaveLength(0);
-    expect(User.where({ email: "ada@example.com" }).all()).toHaveLength(1);
+    expect(db.select().from(users).all()).toHaveLength(1);
   });
 
   it("rejects an obviously malformed email", async () => {
@@ -225,7 +205,7 @@ describe("verifyEmail", () => {
 
     const user = identity.verifyEmail(sent[0]!.token);
 
-    expect(user.isEmailVerified).toBe(true);
+    expect(user.emailVerifiedAt).not.toBeNull();
     expect(user.emailVerifiedAt).toMatch(/^2026-/);
   });
 
@@ -266,7 +246,7 @@ describe("verifyEmail", () => {
     const { identity, sent } = buildIdentity();
 
     const { user } = await identity.register("ada@example.com", "correct horse staple");
-    user!.destroy();
+    userRepo.deleteUser(db, user!.id);
 
     expect(() => identity.verifyEmail(sent[0]!.token)).toThrow(
       expect.objectContaining({ code: "IDENTITY_INVALID_TOKEN" }),
@@ -403,6 +383,7 @@ describe("resetPassword", () => {
   it("works without a revokeUserSessions hook", async () => {
     const { mailer, sent } = captureMailer();
     const identity = createIdentity({
+      db,
       secret: "secret",
       mailer,
       verificationUrl: (t) => `https://app.test/v?t=${t}`,
@@ -449,7 +430,7 @@ describe("resetPassword", () => {
     const { user } = await identity.register("ada@example.com", "correct horse staple");
     await identity.requestPasswordReset("ada@example.com");
     const resetToken = sent.find((e) => e.kind === "reset")!.token;
-    user!.destroy();
+    userRepo.deleteUser(db, user!.id);
 
     await expect(identity.resetPassword(resetToken, "new strong password")).rejects.toMatchObject({
       code: "IDENTITY_INVALID_TOKEN",
@@ -514,33 +495,28 @@ describe("resetPassword", () => {
   // UNIQUE constraint on `email`. The handler must swallow it and present
   // the conflict shape — never a 500 to the client (which would betray the
   // collision via the status code).
+  //
+  // Identity imports `* as userRepo` precisely so the spy below reaches the
+  // call site; with a named import the binding would be frozen and the spy
+  // would never intercept.
   it("a UNIQUE-constraint race on insert is treated as a silent conflict", async () => {
     const { identity } = buildIdentity();
 
     await identity.register("race@example.com", "first password ok");
 
-    // Stub the pre-check to lie just once: it pretends no user exists, the
-    // INSERT then runs against the schema where the row is already there.
-    const realFindBy = User.findBy;
-    let stubArmed = true;
+    // Stub the pre-check to lie once: it pretends no user exists, so the
+    // INSERT runs into the existing row's UNIQUE constraint.
+    const original = userRepo.findUserByEmail;
+    const spy = vi
+      .spyOn(userRepo, "findUserByEmail")
+      .mockImplementationOnce((_db, email) =>
+        email === "race@example.com" ? undefined : original(_db, email),
+      );
 
-    User.findBy = ((conditions: Record<string, unknown>) => {
-      if (stubArmed && conditions["email"] === "race@example.com") {
-        stubArmed = false;
+    const result = await identity.register("race@example.com", "second password ok");
 
-        return undefined;
-      }
-
-      return realFindBy.call(User, conditions);
-    }) as typeof User.findBy;
-
-    try {
-      const result = await identity.register("race@example.com", "second password ok");
-
-      expect(result).toEqual({ status: "verification_sent", user: undefined });
-    } finally {
-      User.findBy = realFindBy;
-    }
+    expect(result).toEqual({ status: "verification_sent", user: undefined });
+    expect(spy).toHaveBeenCalled();
   });
 });
 
@@ -581,7 +557,7 @@ describe("session lifecycle", () => {
     identity.verifyEmail(sent[0]!.token);
     const { session } = identity.login("ada@example.com", "correct horse staple");
 
-    user!.destroy();
+    userRepo.deleteUser(db, user!.id);
 
     expect(identity.currentUser(session.token)).toBeUndefined();
   });
@@ -611,7 +587,7 @@ describe("user model + migration", () => {
   });
 
   it("the migration's down drops the users table", () => {
-    const migrator = new Migrator(adaptForMigrate(raw), [usersMigration]);
+    const migrator = new Migrator(sql, [usersMigration]);
 
     expect(migrator.rollback()).toBe(usersMigration.version);
     expect(() => raw.prepare("SELECT * FROM users").all()).toThrow();
@@ -667,6 +643,7 @@ describe("token signer", () => {
   it("issues working tokens with the default system clock when none is injected", async () => {
     const { mailer, sent } = captureMailer();
     const identity = createIdentity({
+      db,
       secret: "no-clock-test",
       mailer,
       verificationUrl: (t) => `https://app/v?t=${t}`,
@@ -675,7 +652,7 @@ describe("token signer", () => {
 
     await identity.register("ada@example.com", "correct horse staple");
     const user = identity.verifyEmail(sent[0]!.token);
-    expect(user.isEmailVerified).toBe(true);
+    expect(user.emailVerifiedAt).not.toBeNull();
 
     // Drive the reset path too — exercises `resetSigner` with no clock for
     // both the unknown-user equalization branch and the real branch.

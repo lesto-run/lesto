@@ -67,31 +67,36 @@ export interface Column<
 /** A column whose JS cell type is `T` — narrowed across the fluent chain. */
 type ColumnOf<T> = Column<T, boolean, boolean>;
 
-interface BaseBuilder<T, Nullable extends boolean, HasDefault extends boolean> extends Column<
-  T,
-  Nullable,
-  HasDefault
-> {
+/**
+ * The fluent column builder. Exported so a consumer's inferred schema type
+ * (`typeof users`) can be named in another package without TS4023.
+ *
+ * Returned by `text()` / `integer()` / `real()`; every chainable method
+ * (`.notNull()`, `.unique()`, etc.) returns a fresh builder with the
+ * modifier flipped in the type.
+ */
+export interface ColumnBuilder<T, Nullable extends boolean, HasDefault extends boolean>
+  extends Column<T, Nullable, HasDefault> {
   /** Mark the column `NOT NULL`. Default for new columns is *nullable*. */
-  notNull(): BaseBuilder<T, false, HasDefault>;
+  notNull(): ColumnBuilder<T, false, HasDefault>;
 
   /** Mark the column `UNIQUE`. */
-  unique(): BaseBuilder<T, Nullable, HasDefault>;
+  unique(): ColumnBuilder<T, Nullable, HasDefault>;
 
   /**
    * Mark the column the primary key. Sets `NOT NULL` (a primary key cannot be
    * null) and, when `autoIncrement` is on, marks it as having a default so
    * `InferInsert` treats it as optional.
    */
-  primaryKey(options?: { autoIncrement?: boolean }): BaseBuilder<T, false, true>;
+  primaryKey(options?: { autoIncrement?: boolean }): ColumnBuilder<T, false, true>;
 
   /** Stamp a default literal. The column is then optional on insert. */
-  default(value: T): BaseBuilder<T, Nullable, true>;
+  default(value: T): ColumnBuilder<T, Nullable, true>;
 }
 
 /** Compose a fresh builder around a (frozen) spec. */
-function builder<T, N extends boolean, D extends boolean>(spec: ColumnSpec): BaseBuilder<T, N, D> {
-  const self: BaseBuilder<T, N, D> = {
+function builder<T, N extends boolean, D extends boolean>(spec: ColumnSpec): ColumnBuilder<T, N, D> {
+  const self: ColumnBuilder<T, N, D> = {
     spec,
     notNull: () => builder({ ...spec, nullable: false }),
     unique: () => builder({ ...spec, unique: true }),
@@ -119,7 +124,7 @@ function builder<T, N extends boolean, D extends boolean>(spec: ColumnSpec): Bas
 }
 
 /** Seed a builder with the column's name and SQL type. New columns are nullable, non-unique, non-key. */
-function seed<T>(name: string, sqlType: SqlType): BaseBuilder<T, true, false> {
+function seed<T>(name: string, sqlType: SqlType): ColumnBuilder<T, true, false> {
   return builder<T, true, false>({
     name,
     sqlType,
@@ -132,17 +137,17 @@ function seed<T>(name: string, sqlType: SqlType): BaseBuilder<T, true, false> {
 }
 
 /** A `TEXT` column — JS `string`. */
-export function text(name: string): BaseBuilder<string, true, false> {
+export function text(name: string): ColumnBuilder<string, true, false> {
   return seed<string>(name, "TEXT");
 }
 
 /** An `INTEGER` column — JS `number`. */
-export function integer(name: string): BaseBuilder<number, true, false> {
+export function integer(name: string): ColumnBuilder<number, true, false> {
   return seed<number>(name, "INTEGER");
 }
 
 /** A `REAL` column — JS `number`. */
-export function real(name: string): BaseBuilder<number, true, false> {
+export function real(name: string): ColumnBuilder<number, true, false> {
   return seed<number>(name, "REAL");
 }
 
