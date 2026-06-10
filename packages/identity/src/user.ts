@@ -120,11 +120,11 @@ export function normalizeEmail(email: string): string {
 export const usersMigration: { version: string; migration: Migration } = {
   version: "20260609000001_create_users",
   migration: {
-    up(schema) {
-      schema.execute(createTableSql(users));
+    async up(schema) {
+      await schema.execute(createTableSql(users));
     },
-    down(schema) {
-      schema.execute(dropTableSql(users));
+    async down(schema) {
+      await schema.execute(dropTableSql(users));
     },
   },
 };
