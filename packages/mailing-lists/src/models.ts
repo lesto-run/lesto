@@ -54,8 +54,8 @@ export type List = InferRow<typeof lists>;
 export type Subscriber = InferRow<typeof subscribers>;
 
 /** Insert a list. Returns the row. */
-export function insertList(db: Db, input: { name?: string | null }): List {
-  return db
+export async function insertList(db: Db, input: { name?: string | null }): Promise<List> {
+  return await db
     .insert(lists)
     .values({ name: input.name ?? null })
     .returning()
@@ -63,7 +63,7 @@ export function insertList(db: Db, input: { name?: string | null }): List {
 }
 
 /** Insert a subscriber, stamping timestamps. Returns the row. */
-export function insertSubscriber(
+export async function insertSubscriber(
   db: Db,
   input: {
     listId: number;
@@ -71,10 +71,10 @@ export function insertSubscriber(
     status: SubscriberStatus;
     token: string | null;
   },
-): Subscriber {
+): Promise<Subscriber> {
   const now = new Date().toISOString();
 
-  return db
+  return await db
     .insert(subscribers)
     .values({
       listId: input.listId,
@@ -89,18 +89,24 @@ export function insertSubscriber(
 }
 
 /** A subscriber by id; `undefined` when no row matches. */
-export function findSubscriberById(db: Db, id: number): Subscriber | undefined {
-  return db.select().from(subscribers).where(eq(subscribers.id, id)).get();
+export async function findSubscriberById(db: Db, id: number): Promise<Subscriber | undefined> {
+  return await db.select().from(subscribers).where(eq(subscribers.id, id)).get();
 }
 
 /** A subscriber by token (any status); `undefined` when no row matches. */
-export function findSubscriberByToken(db: Db, token: string): Subscriber | undefined {
-  return db.select().from(subscribers).where(eq(subscribers.token, token)).get();
+export async function findSubscriberByToken(
+  db: Db,
+  token: string,
+): Promise<Subscriber | undefined> {
+  return await db.select().from(subscribers).where(eq(subscribers.token, token)).get();
 }
 
 /** A *pending* subscriber by token — the row `confirm` is allowed to flip. */
-export function findPendingSubscriberByToken(db: Db, token: string): Subscriber | undefined {
-  return db
+export async function findPendingSubscriberByToken(
+  db: Db,
+  token: string,
+): Promise<Subscriber | undefined> {
+  return await db
     .select()
     .from(subscribers)
     .where(and(eq(subscribers.token, token), eq(subscribers.status, "pending")))
@@ -108,16 +114,21 @@ export function findPendingSubscriberByToken(db: Db, token: string): Subscriber 
 }
 
 /** Update a subscriber's status; stamps `updatedAt`. */
-export function setSubscriberStatus(db: Db, id: number, status: SubscriberStatus): void {
-  db.update(subscribers)
+export async function setSubscriberStatus(
+  db: Db,
+  id: number,
+  status: SubscriberStatus,
+): Promise<void> {
+  await db
+    .update(subscribers)
     .set({ status, updatedAt: new Date().toISOString() })
     .where(eq(subscribers.id, id))
     .run();
 }
 
 /** Every confirmed recipient of a list — what broadcast iterates. */
-export function subscribedRecipients(db: Db, listId: number): Subscriber[] {
-  return db
+export async function subscribedRecipients(db: Db, listId: number): Promise<Subscriber[]> {
+  return await db
     .select()
     .from(subscribers)
     .where(and(eq(subscribers.listId, listId), eq(subscribers.status, "subscribed")))
@@ -136,13 +147,13 @@ export function subscribedRecipients(db: Db, listId: number): Subscriber[] {
 export const mailingListsMigration: { version: string; migration: Migration } = {
   version: "20260609000002_create_mailing_lists",
   migration: {
-    up(schema) {
-      schema.execute(createTableSql(lists));
-      schema.execute(createTableSql(subscribers));
+    async up(schema) {
+      await schema.execute(createTableSql(lists));
+      await schema.execute(createTableSql(subscribers));
     },
-    down(schema) {
-      schema.execute(dropTableSql(subscribers));
-      schema.execute(dropTableSql(lists));
+    async down(schema) {
+      await schema.execute(dropTableSql(subscribers));
+      await schema.execute(dropTableSql(lists));
     },
   },
 };

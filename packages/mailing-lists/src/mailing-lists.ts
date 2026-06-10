@@ -54,13 +54,13 @@ export interface MailingListsOptions {
  */
 export interface MailingLists {
   /** Begin double opt-in: create a pending subscriber holding a fresh token. */
-  subscribe(listId: number, email: string): Subscriber;
+  subscribe(listId: number, email: string): Promise<Subscriber>;
 
   /** Complete double opt-in: flip the pending subscriber for `token` to subscribed. */
-  confirm(token: string): Subscriber;
+  confirm(token: string): Promise<Subscriber>;
 
   /** Opt out: flip the subscriber for `token` to unsubscribed. */
-  unsubscribe(token: string): Subscriber;
+  unsubscribe(token: string): Promise<Subscriber>;
 
   /**
    * Fan a templated email out to every subscribed recipient of the list.
@@ -69,7 +69,7 @@ export interface MailingLists {
    * mailer — which enqueues a delivery job apiece. Pending and unsubscribed
    * rows are skipped. Returns the number of emails enqueued.
    */
-  broadcast(listId: number, mailerName: string, params: Record<string, unknown>): number;
+  broadcast(listId: number, mailerName: string, params: Record<string, unknown>): Promise<number>;
 }
 
 const invalidToken = (token: string): MailingListError =>
@@ -84,8 +84,8 @@ export function createMailingLists(options: MailingListsOptions): MailingLists {
   const token = options.token ?? randomToken;
 
   return {
-    subscribe(listId, email) {
-      return insertSubscriber(db, {
+    async subscribe(listId, email) {
+      return await insertSubscriber(db, {
         listId,
         email,
         status: "pending",
@@ -93,31 +93,34 @@ export function createMailingLists(options: MailingListsOptions): MailingLists {
       });
     },
 
-    confirm(presented) {
-      const subscriber = findPendingSubscriberByToken(db, presented);
+    async confirm(presented) {
+      const subscriber = await findPendingSubscriberByToken(db, presented);
 
       if (!subscriber) throw invalidToken(presented);
 
-      setSubscriberStatus(db, subscriber.id, "subscribed");
+      await setSubscriberStatus(db, subscriber.id, "subscribed");
 
       return { ...subscriber, status: "subscribed" };
     },
 
-    unsubscribe(presented) {
-      const subscriber = findSubscriberByToken(db, presented);
+    async unsubscribe(presented) {
+      const subscriber = await findSubscriberByToken(db, presented);
 
       if (!subscriber) throw invalidToken(presented);
 
-      setSubscriberStatus(db, subscriber.id, "unsubscribed");
+      await setSubscriberStatus(db, subscriber.id, "unsubscribed");
 
       return { ...subscriber, status: "unsubscribed" };
     },
 
-    broadcast(listId, mailerName, params) {
-      const recipients = subscribedRecipients(db, listId);
+    async broadcast(listId, mailerName, params) {
+      const recipients = await subscribedRecipients(db, listId);
 
       for (const recipient of recipients) {
-        mailer.send(mailerName, { ...params, to: recipient.email });
+        // `mailer.send` enqueues a delivery job on @keel/queue. The queue is
+        // being flipped async in this same wave; `await` tolerates its current
+        // sync return and is correct once it is a Promise.
+        await mailer.send(mailerName, { ...params, to: recipient.email });
       }
 
       return recipients.length;
