@@ -40,17 +40,17 @@ afterAll(async () => {
   if (outDir) await rm(outDir, { recursive: true, force: true });
 });
 
-/** Pull the CSRF token a rendered `/mls` form carries. */
-function csrfFrom(html: string): string {
-  const match = html.match(/name="_csrf" value="([^"]+)"/);
-
-  return match?.[1] ?? "";
-}
-
 /** Pull the session cookie's `name=value` out of a `Set-Cookie` header. */
 function cookieFrom(setCookie: string | undefined): string {
   return (setCookie ?? "").split(";")[0] ?? "";
 }
+
+// A same-origin browser form post: content-type + the Fetch-Metadata signal
+// `originCheck` reads to admit a state-changing request.
+const SAME_ORIGIN_FORM = {
+  "content-type": "application/x-www-form-urlencoded",
+  "sec-fetch-site": "same-origin",
+};
 
 describe("the prerendered marketing zone", () => {
   it("serves the home page with the island shell and a manifest", async () => {
@@ -90,7 +90,7 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
     expect((await dispatch("GET", "/mls/api/session")).status).toBe(401);
   });
 
-  it("rejects a sign-in POST with no CSRF token", async () => {
+  it("rejects a sign-in POST carrying no origin signal (CSRF)", async () => {
     expect(
       (
         await dispatch("POST", "/mls/api/sign-in", {
@@ -105,19 +105,14 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
   });
 
   it("signs in with the demo credentials, then the cookie unlocks the gated resource", async () => {
-    // 1. The /mls page carries a CSRF token in its sign-in form.
-    const page = await dispatch("GET", "/mls");
-    const csrf = csrfFrom(page.body);
-    expect(csrf.length).toBeGreaterThan(0);
-
-    // 2. Sign in with the real demo credentials. The token clears CSRF, the
-    // password clears Identity.login, and a session cookie comes back. The
-    // body is the raw urlencoded string the HTTP server delivers — the runtime
-    // only JSON-parses bodies, so the controller parses the form itself.
+    // Sign in with the real demo credentials. The same-origin Fetch-Metadata
+    // signal clears originCheck, the password clears Identity.login, and a
+    // session cookie comes back. The body is the raw urlencoded string the HTTP
+    // server delivers — the runtime only JSON-parses bodies, so the controller
+    // parses the form itself.
     const signIn = await dispatch("POST", "/mls/api/sign-in", {
-      headers: { "content-type": "application/x-www-form-urlencoded" },
+      headers: SAME_ORIGIN_FORM,
       body: new URLSearchParams({
-        _csrf: csrf,
         email: DEFAULT_DEMO.email,
         password: DEFAULT_DEMO.password,
       }).toString(),
@@ -142,14 +137,10 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
 
   // The replacement for the old `?as=<id>` impersonation fence: there is no
   // fence because there is no impersonation — wrong creds are wrong creds.
-  it("rejects a sign-in POST that clears CSRF but uses a wrong password", async () => {
-    const page = await dispatch("GET", "/mls");
-    const csrf = csrfFrom(page.body);
-
+  it("rejects a same-origin sign-in POST that uses a wrong password", async () => {
     const signIn = await dispatch("POST", "/mls/api/sign-in", {
-      headers: { "content-type": "application/x-www-form-urlencoded" },
+      headers: SAME_ORIGIN_FORM,
       body: new URLSearchParams({
-        _csrf: csrf,
         email: DEFAULT_DEMO.email,
         password: "not-the-real-one",
       }).toString(),

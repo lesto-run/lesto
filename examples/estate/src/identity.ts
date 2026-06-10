@@ -17,12 +17,11 @@
  * change if a deployment wants user accounts that survive a restart.
  */
 
-import Database from "better-sqlite3";
-
 import { hashPassword } from "@keel/auth";
 import { createDb } from "@keel/db";
 import type { Db, SqlDatabase } from "@keel/db";
 import { Migrator } from "@keel/migrate";
+import { openSqlite } from "@keel/runtime";
 
 import { createIdentity, insertUser, usersMigration } from "@keel/identity";
 import { findUserByEmail } from "@keel/identity";
@@ -61,28 +60,6 @@ export const DEMO_ACCOUNTS: readonly DemoAccount[] = [
 /** The default demo account the sign-in form pre-fills. */
 export const DEFAULT_DEMO = DEMO_ACCOUNTS[0]!;
 
-/** Open a `:memory:` SQLite + adapt to @keel/db's SqlDatabase. */
-function openDatabase(): { raw: Database.Database; sql: SqlDatabase } {
-  const raw = new Database(":memory:");
-
-  // better-sqlite3's variadic `run(...args)` becomes the positional
-  // `run(params?)` the layer above expects.
-  const sql: SqlDatabase = {
-    exec: (statement) => raw.exec(statement),
-    prepare: (statement) => {
-      const stmt = raw.prepare(statement);
-
-      return {
-        run: (params: unknown[] = []) => stmt.run(...(params as never[])),
-        get: (params: unknown[] = []) => stmt.get(...(params as never[])),
-        all: (params: unknown[] = []) => stmt.all(...(params as never[])),
-      };
-    },
-  };
-
-  return { raw, sql };
-}
-
 /** Insert the demo accounts (idempotent — running twice is a no-op). */
 function seedDemoAccounts(db: Db): void {
   const now = new Date().toISOString();
@@ -111,9 +88,24 @@ const silentMailer: IdentityMailer = {
   sendPasswordResetEmail: () => {},
 };
 
-/** Build a fresh Identity wired to a fresh in-memory DB, with the demo seeded. */
-export function buildIdentity(): { identity: Identity; close: () => void } {
-  const { raw, sql } = openDatabase();
+/**
+ * Build a fresh Identity wired to a fresh in-memory DB, with the demo seeded.
+ *
+ * Returns the raw `sql` handle too: the app threads it into `createApp`'s `db`
+ * slot, so the kernel and the identity service share one connection. Identity
+ * owns its own migration + seed here (run before the service is built), so the
+ * kernel has no migrations of its own to run.
+ *
+ * The DB is opened through `@keel/runtime`'s `openSqlite` (better-sqlite3 under
+ * Node, `bun:sqlite` under Bun) — which is what lets `keel.app.ts` boot under
+ * either runtime. That async open is why this function is async.
+ */
+export async function buildIdentity(): Promise<{
+  identity: Identity;
+  handle: SqlDatabase;
+  close: () => void;
+}> {
+  const { db: sql, close } = await openSqlite();
 
   // Order is the contract: migrate, build the db, seed, then the service.
   // A query before migrate would hit an empty schema.
@@ -131,5 +123,5 @@ export function buildIdentity(): { identity: Identity; close: () => void } {
     resetUrl: (token) => `/mls/api/reset?token=${token}`,
   });
 
-  return { identity, close: () => raw.close() };
+  return { identity, handle: sql, close };
 }

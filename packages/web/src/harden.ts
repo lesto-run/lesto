@@ -127,6 +127,7 @@ export function securityDefaults(
 export function statusForError(error: unknown): number {
   if (error instanceof KeelError) {
     if (error.code === "RUNTIME_INVALID_JSON") return 400;
+    if (error.code === "WEB_VALIDATION_FAILED") return 422;
     if (error.code === "RUNTIME_BODY_TOO_LARGE") return 413;
     if (error.code === "RUNTIME_HANDLER_TIMEOUT") return 503;
   }
@@ -137,6 +138,8 @@ export function statusForError(error: unknown): number {
 /** The safe, internals-free body sent for each error status. */
 export function bodyForStatus(status: number): string {
   if (status === 400) return "Bad Request";
+
+  if (status === 422) return "Unprocessable Entity";
 
   if (status === 413) return "Payload Too Large";
 

@@ -139,7 +139,7 @@ async function main(): Promise<void> {
     bundleClient();
   });
 
-  const app = buildApp();
+  const app = await buildApp();
   const handle = app.handle.bind(app);
 
   // Every zone renders live; /client.js (and any .js/.css) is served from out/.

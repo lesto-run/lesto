@@ -14,8 +14,9 @@
  * by @keel/kernel.
  */
 
+import { openSqlite } from "@keel/runtime";
+
 import { buildApp } from "./src/app";
-import { openDatabase } from "./src/database";
 import { countPosts, insertPost } from "./src/post";
 
 const seeds = [
@@ -25,7 +26,7 @@ const seeds = [
 ];
 
 async function main(): Promise<void> {
-  const { db: handle, close } = await openDatabase();
+  const { db: handle, close } = await openSqlite();
 
   // Boot: the kernel runs migrations and stands up dispatch; buildApp also
   // wraps the same handle as a typed @keel/db, which controllers + seeds

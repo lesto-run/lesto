@@ -22,13 +22,6 @@ import type { Identity } from "@keel/identity";
 import { registry } from "./registry";
 import { renderDocument } from "./document";
 import { LISTINGS, formatPrice } from "./listings";
-import {
-  CSRF_FIELD,
-  csrfTokenForAnon,
-  csrfTokenForSession,
-  verifyCsrfForAnon,
-  verifyCsrfForSession,
-} from "./auth";
 import { DEFAULT_DEMO, DEMO_ACCOUNTS } from "./identity";
 
 /** What the client sees on `/mls/api/session` — the same shape the Account island consumes. */
@@ -149,13 +142,7 @@ export function buildControllers(identity: Identity): {
 
     /** The dynamic MLS landing page: server-rendered, with a real sign-in form. */
     index(): KeelResponse {
-      const token = this.sessionToken();
       const user = this.currentUser();
-
-      // Mint the CSRF token for whichever form we render: bound to the session
-      // for sign-out, or to the anon id for the signed-out sign-in form.
-      const csrf =
-        user !== undefined && token !== undefined ? csrfTokenForSession(token) : csrfTokenForAnon();
 
       const name = user === undefined ? undefined : displayNameFor(user.email);
 
@@ -166,7 +153,6 @@ export function buildControllers(identity: Identity): {
             type: "SignInPanel",
             props: {
               signedIn: user !== undefined,
-              csrf,
               demoEmail: DEFAULT_DEMO.email,
               demoPassword: DEFAULT_DEMO.password,
               ...(name && { name }),
@@ -201,19 +187,14 @@ export function buildControllers(identity: Identity): {
     /**
      * Sign in — runs the real `Identity.login` flow.
      *
-     * The form POSTs `_csrf`, `email`, and `password`. CSRF is checked before
-     * Identity is touched, so a forged cross-site POST never reaches the
-     * credential path. Bad credentials surface as 401 — Identity throws
+     * CSRF is handled upstream by the `originCheck` middleware (`secureStack`):
+     * a cross-site POST is refused with a 403 before dispatch ever reaches this
+     * action, so the handler only sees same-origin form posts. The form POSTs
+     * `email` and `password`. Bad credentials surface as 401 — Identity throws
      * `IDENTITY_INVALID_CREDENTIALS` (or `IDENTITY_EMAIL_NOT_VERIFIED`, which
      * cannot happen for the demo's pre-verified seeds).
      */
     signIn(): KeelResponse {
-      const csrf = formField(this.request.body, CSRF_FIELD);
-
-      if (csrf === undefined || !verifyCsrfForAnon(csrf)) {
-        return this.json({ error: "invalid CSRF token" }, 403);
-      }
-
       const email = formField(this.request.body, "email") ?? "";
       const password = formField(this.request.body, "password") ?? "";
 
@@ -237,23 +218,14 @@ export function buildControllers(identity: Identity): {
     /**
      * Sign out: revoke the session and clear the cookie.
      *
-     * CSRF-guarded: the POST must carry the session-bound token the sign-out
-     * form embedded. A forged cross-site POST cannot present a token that
-     * verifies against this session, so it cannot silently sign the user out.
+     * The `originCheck` middleware refuses a cross-site POST before it arrives,
+     * so a forgery cannot reach here to silently sign the user out. Revoking is
+     * idempotent — a request without a session token just clears the cookie.
      */
     signOut(): KeelResponse {
       const sessionToken = this.sessionToken();
-      const csrf = formField(this.request.body, CSRF_FIELD);
 
-      if (
-        sessionToken === undefined ||
-        csrf === undefined ||
-        !verifyCsrfForSession(csrf, sessionToken)
-      ) {
-        return this.json({ error: "invalid CSRF token" }, 403);
-      }
-
-      identity.logout(sessionToken);
+      if (sessionToken !== undefined) identity.logout(sessionToken);
 
       return {
         status: 303,

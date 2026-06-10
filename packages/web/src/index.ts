@@ -47,4 +47,6 @@ export type { SecurityHeaderOptions } from "./harden";
 export { KeelError, WebError } from "./errors";
 export type { WebErrorCode } from "./errors";
 
+export { validateBody } from "./validate";
+
 export type { AnyKeelResponse, KeelBody, KeelRequest, KeelResponse } from "./types";

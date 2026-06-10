@@ -11,6 +11,7 @@
   "include": [
     "src",
     "test",
+    "keel.app.ts",
     "serve.ts",
     "dev.ts",
     "build.ts",

@@ -122,13 +122,12 @@ export function buildEdgeApp(secret: string): Application {
         children: [
           {
             type: "SiteHeader",
-            // SignInPanel's `csrf` is required by its schema; the edge app does
-            // not run CSRF (signed cookies + SameSite=Lax are the control here),
-            // so the field is present but unused.
+            // The edge app's CSRF control is the signed cookie + SameSite=Lax,
+            // not a form token — so SignInPanel renders without one.
             children: [
               {
                 type: "SignInPanel",
-                props: { signedIn: user !== undefined, csrf: "", ...(user && { name: user.name }) },
+                props: { signedIn: user !== undefined, ...(user && { name: user.name }) },
               },
             ],
           },

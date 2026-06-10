@@ -74,6 +74,12 @@ describe("scaffold", () => {
     expect(app).toContain("buildControllers(db)");
     expect(app).toContain('resources("posts")');
 
+    // The two conventions the starter demonstrates: boundary validation with
+    // Zod via validateBody, and CSRF on by default via secureStack/originCheck.
+    expect(app).toContain("validateBody(NewPost, this.request)");
+    expect(app).toContain("z.object({");
+    expect(app).toContain("secureStack({ originCheck: {} })");
+
     // package.json carries the project name, the @keel deps, and the dev script.
     const manifest = JSON.parse(pkg) as {
       name: string;

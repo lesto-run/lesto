@@ -70,9 +70,14 @@ export function keelApp(): string {
  * wired into the AppConfig that \`keel dev\` boots. This is the whole
  * application — grow it by adding tables, migrations, controllers, and routes.
  *
- * Validation: when you add a write endpoint, validate the body at the
- * boundary with Zod (\`schema.safeParse(this.request.body)\`) — see ADR 0005.
- * \`zod\` is already a dep.
+ * Two conventions worth seeing on day one:
+ *   - Validation at the boundary (ADR 0005): \`create\` runs the untrusted body
+ *     through a Zod schema with \`validateBody\` before it touches the database.
+ *     A bad body is a 422, never a crash. The schema is the only place input is
+ *     checked; everything past it is typed and trusted.
+ *   - CSRF on by default: \`secureStack({ originCheck: {} })\` refuses a
+ *     state-changing request that didn't come from this origin (it reads the
+ *     browser's \`Sec-Fetch-Site\`), with no per-form token plumbing.
  */
 
 import { createDb, createTableSql, defineTable, dropTableSql, integer, text } from "@keel/db";
@@ -82,11 +87,13 @@ import type { MigrationEntry } from "@keel/migrate";
 
 import { Router } from "@keel/router";
 
-import { Controller } from "@keel/web";
-import type { AppConfig, KernelDatabase } from "@keel/kernel";
+import { Controller, validateBody } from "@keel/web";
+import { openSqlite } from "@keel/runtime";
+import { secureStack } from "@keel/kernel";
+import type { AppConfig } from "@keel/kernel";
 import type { ControllerClass, KeelResponse } from "@keel/web";
 
-import { createRequire } from "node:module";
+import { z } from "zod";
 
 // The \`posts\` table — schema as a value backs both the migration's DDL
 // and the inferred row type every query returns.
@@ -112,6 +119,14 @@ const createPosts: MigrationEntry = {
   },
 };
 
+// The input schema for a new post — semantic validation (non-blank, trimmed)
+// lives here, not on the table (the table just says \`notNull()\`). This is the
+// untrusted-input contract; see ADR 0005.
+const NewPost = z.object({
+  title: z.string().trim().min(1, "Title is required."),
+  body: z.string().trim().min(1, "Body is required."),
+});
+
 // The controllers — built through a factory so they close over the typed
 // \`Db\`. No \`this\`, no global database connection, no inheritance for
 // domain types. Matches every other in-tree consumer.
@@ -121,6 +136,22 @@ function buildControllers(db: Db): { posts: ControllerClass } {
       const rows = db.select().from(posts).orderBy(posts.id, "asc").all();
 
       return this.json({ posts: rows });
+    }
+
+    // POST /posts. \`validateBody\` proves the shape (or throws a 422); past it,
+    // \`input\` is a typed \`{ title: string; body: string }\` we can trust.
+    create(): KeelResponse {
+      const input = validateBody(NewPost, this.request);
+
+      const now = new Date().toISOString();
+
+      const post = db
+        .insert(posts)
+        .values({ title: input.title, body: input.body, createdAt: now, updatedAt: now })
+        .returning()
+        .get();
+
+      return this.json({ post }, 201);
     }
   }
 
@@ -136,62 +167,11 @@ function buildRouter(): Router {
   return router;
 }
 
-/**
- * The driver seam: better-sqlite3 under Node, \`bun:sqlite\` under Bun.
- *
- * better-sqlite3's native addon cannot \`dlopen\` under Bun, so the
- * specifier is assembled at runtime and the built-in is dynamically
- * imported as a fallback.
- */
-interface SqliteHandle {
-  exec(sql: string): unknown;
-  prepare(sql: string): {
-    run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
-    get(...params: unknown[]): unknown;
-    all(...params: unknown[]): unknown[];
-  };
-}
-
-function tryBetterSqlite(filename: string): SqliteHandle | undefined {
-  try {
-    const require = createRequire(import.meta.url);
-    const Database = require("better-sqlite3") as new (file: string) => SqliteHandle;
-
-    return new Database(filename);
-  } catch {
-    // Native binding unavailable under this runtime (e.g. Bun) — fall back.
-    return undefined;
-  }
-}
-
-async function bunSqlite(filename: string): Promise<SqliteHandle> {
-  const specifier = ["bun", "sqlite"].join(":");
-
-  const { Database } = (await import(specifier)) as {
-    Database: new (file: string) => SqliteHandle;
-  };
-
-  return new Database(filename);
-}
-
-async function openDatabase(filename = "keel.db"): Promise<KernelDatabase> {
-  const raw = tryBetterSqlite(filename) ?? (await bunSqlite(filename));
-
-  return {
-    exec: (sql) => raw.exec(sql),
-    prepare: (sql) => {
-      const statement = raw.prepare(sql);
-
-      return {
-        run: (params = []) => statement.run(...params),
-        get: (params = []) => statement.get(...params),
-        all: (params = []) => statement.all(...params),
-      };
-    },
-  };
-}
-
-const handle = await openDatabase();
+// The driver seam: \`@keel/runtime\`'s \`openSqlite\` boots better-sqlite3 under
+// Node and falls back to the built-in \`bun:sqlite\` under Bun — the framework
+// owns that, so the app never has to. The same handle backs the kernel (which
+// runs migrations) and the typed \`@keel/db\` the controllers query through.
+const { db: handle } = await openSqlite("keel.db");
 const db = createDb(handle);
 
 const config: AppConfig = {
@@ -199,6 +179,11 @@ const config: AppConfig = {
   router: buildRouter(),
   controllers: buildControllers(db),
   migrations: [createPosts],
+
+  // Security batteries, on by default. \`originCheck\` is the zero-token CSRF
+  // defense: a cross-site POST/PUT/PATCH/DELETE is refused at the door. Add
+  // \`cors\`, \`rateLimit\`, or the signed-token \`csrf\` here as you need them.
+  middleware: secureStack({ originCheck: {} }),
 };
 
 export default config;
@@ -254,8 +239,12 @@ the typed \`@keel/db\` handle the controllers query through.
 - \`keel.app.ts\` — the whole app: a \`posts\` table (defined via
   \`@keel/db\`'s \`defineTable\`), its migration, a \`PostsController\`
   built through a closure factory, and a router with \`resources("posts")\`.
-- Validate request bodies at the boundary with Zod — \`zod\` is already a
-  dep. See \`docs/adr/0005-validation-at-the-boundary.md\` in the Keel
-  source for the pattern.
+- \`PostsController.create\` validates the request body at the boundary with
+  a Zod schema via \`validateBody\` — a bad body is a 422, never a crash.
+  See \`docs/adr/0005-validation-at-the-boundary.md\` in the Keel source.
+- Security is on by default: \`secureStack({ originCheck: {} })\` refuses
+  cross-site state-changing requests (zero-token, header-based CSRF). Note a
+  non-browser client (e.g. \`curl\`) sends no \`Sec-Fetch-Site\`, so it is
+  refused too — pass \`Sec-Fetch-Site: same-origin\` when testing by hand.
 `;
 }

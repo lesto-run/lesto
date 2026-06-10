@@ -169,7 +169,9 @@ function makeQuery<T extends Table>(sql: SqlDatabase, state: SelectState<T>): Se
       );
       const row = sql.prepare(stmt).get(params);
 
-      return row === undefined ? undefined : hydrate(state.table, row);
+      // No row reads as `undefined`, whichever sentinel the driver uses for a
+      // miss — better-sqlite3 returns `undefined`, `bun:sqlite` returns `null`.
+      return row == null ? undefined : hydrate(state.table, row);
     },
 
     all(): InferRow<T>[] {

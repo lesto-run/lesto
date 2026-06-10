@@ -75,6 +75,7 @@ describe("securityDefaults", () => {
 describe("statusForError", () => {
   it("maps the coded transport refusals to their statuses", () => {
     expect(statusForError(new KeelError("RUNTIME_INVALID_JSON", "x"))).toBe(400);
+    expect(statusForError(new KeelError("WEB_VALIDATION_FAILED", "x"))).toBe(422);
     expect(statusForError(new KeelError("RUNTIME_BODY_TOO_LARGE", "x"))).toBe(413);
     expect(statusForError(new KeelError("RUNTIME_HANDLER_TIMEOUT", "x"))).toBe(503);
   });
@@ -92,6 +93,7 @@ describe("statusForError", () => {
 describe("bodyForStatus", () => {
   it("returns a safe, internals-free body for each status", () => {
     expect(bodyForStatus(400)).toBe("Bad Request");
+    expect(bodyForStatus(422)).toBe("Unprocessable Entity");
     expect(bodyForStatus(413)).toBe("Payload Too Large");
     expect(bodyForStatus(503)).toBe("Service Unavailable");
     expect(bodyForStatus(500)).toBe("Internal Server Error");

@@ -103,9 +103,6 @@ export const registry = new Registry()
     props: {
       signedIn: { type: "boolean", required: true },
       name: { type: "string" },
-      // The CSRF token for this form's POST, minted server-side and bound to
-      // the session (sign-out) or the anon id (sign-in). Verified on submit.
-      csrf: { type: "string", required: true },
       // Demo affordance — pre-fills the email and password so one click signs
       // you in. The POST still goes through real `Identity.login`; the demo
       // is in the *value* of the field, not in the path it travels.
@@ -113,16 +110,15 @@ export const registry = new Registry()
       demoPassword: { type: "string" },
     },
     children: false,
+    // No CSRF token field: the `originCheck` middleware verifies the request's
+    // origin from `Sec-Fetch-Site`, so a plain same-origin form post is enough.
     render: (props) =>
       props["signedIn"] === true ? (
         <form className="auth" method="post" action="/mls/api/sign-out">
-          <input type="hidden" name="_csrf" value={String(props["csrf"])} />
           <span>Signed in as {String(props["name"])}</span> <button type="submit">Sign out</button>
         </form>
       ) : (
         <form className="auth" method="post" action="/mls/api/sign-in">
-          <input type="hidden" name="_csrf" value={String(props["csrf"])} />
-
           <label>
             Email
             <input

@@ -14,12 +14,6 @@ import { SESSION_COOKIE } from "@keel/identity";
 import { island } from "@keel/ui";
 import type { UiNode } from "@keel/ui";
 
-import {
-  csrfTokenForAnon,
-  csrfTokenForSession,
-  verifyCsrfForAnon,
-  verifyCsrfForSession,
-} from "../src/auth";
 import { buildApp } from "../src/app";
 import { renderDocument } from "../src/document";
 import { registry } from "../src/registry";
@@ -34,30 +28,6 @@ import { DEFAULT_DEMO } from "../src/identity";
 describe("the session cookie", () => {
   it("carries the __Host- prefix so the browser enforces Secure + Path=/ + no Domain", () => {
     expect(SESSION_COOKIE).toBe("__Host-keel_session");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// CSRF token binding (estate-owned, not @keel/identity)
-// ---------------------------------------------------------------------------
-
-describe("CSRF tokens", () => {
-  it("verify for the session/anon they were minted for", () => {
-    const sessionToken = "session-xyz";
-
-    expect(verifyCsrfForSession(csrfTokenForSession(sessionToken), sessionToken)).toBe(true);
-    expect(verifyCsrfForAnon(csrfTokenForAnon())).toBe(true);
-  });
-
-  it("do NOT verify across a different session (lateral replay)", () => {
-    const token = csrfTokenForSession("session-a");
-
-    expect(verifyCsrfForSession(token, "session-b")).toBe(false);
-  });
-
-  it("reject a garbage token", () => {
-    expect(verifyCsrfForAnon("not-a-token")).toBe(false);
-    expect(verifyCsrfForSession("not-a-token", "session")).toBe(false);
   });
 });
 
@@ -108,45 +78,52 @@ describe("renderDocument", () => {
 });
 
 // ---------------------------------------------------------------------------
-// /mls POST handlers — CSRF enforcement + real credential checks
+// /mls POST handlers — CSRF via the originCheck middleware + real credentials
+//
+// CSRF is now the framework's `secureStack({ originCheck })`: a state-changing
+// request is refused (403) before dispatch unless the browser's `Sec-Fetch-Site`
+// says it came from us. So a same-origin form post carries that header; a
+// cross-site one (or a client that sends no origin signal at all) is refused.
 // ---------------------------------------------------------------------------
 
 const FORM = { "content-type": "application/x-www-form-urlencoded" };
 
-function signInBody(
-  csrf: string,
-  email = DEFAULT_DEMO.email,
-  password = DEFAULT_DEMO.password,
-): string {
-  return new URLSearchParams({ _csrf: csrf, email, password }).toString();
+// A same-origin browser form post — what originCheck must let through.
+const SAME_ORIGIN = { ...FORM, "sec-fetch-site": "same-origin" };
+
+// A cross-site initiator — the CSRF vector originCheck must refuse.
+const CROSS_SITE = { ...FORM, "sec-fetch-site": "cross-site" };
+
+function signInBody(email = DEFAULT_DEMO.email, password = DEFAULT_DEMO.password): string {
+  return new URLSearchParams({ email, password }).toString();
 }
 
 describe("the /mls POST handlers", () => {
-  it("reject sign-in with no CSRF token (403)", async () => {
-    const app = buildApp();
+  it("reject a sign-in carrying no origin signal (403, before the controller)", async () => {
+    const app = await buildApp();
 
-    const res = await app.handle("POST", "/mls/api/sign-in", { headers: FORM, body: "" });
+    const res = await app.handle("POST", "/mls/api/sign-in", { headers: FORM, body: signInBody() });
 
     expect(res.status).toBe(403);
   });
 
-  it("reject sign-in with a forged CSRF token (403)", async () => {
-    const app = buildApp();
+  it("reject a cross-site sign-in (403)", async () => {
+    const app = await buildApp();
 
     const res = await app.handle("POST", "/mls/api/sign-in", {
-      headers: FORM,
-      body: signInBody("forged"),
+      headers: CROSS_SITE,
+      body: signInBody(),
     });
 
     expect(res.status).toBe(403);
   });
 
-  it("accept sign-in with a valid CSRF token + valid demo credentials, and set the session cookie", async () => {
-    const app = buildApp();
+  it("accept a same-origin sign-in with valid demo credentials, and set the session cookie", async () => {
+    const app = await buildApp();
 
     const res = await app.handle("POST", "/mls/api/sign-in", {
-      headers: FORM,
-      body: signInBody(csrfTokenForAnon()),
+      headers: SAME_ORIGIN,
+      body: signInBody(),
     });
 
     expect(res.status).toBe(303);
@@ -154,14 +131,14 @@ describe("the /mls POST handlers", () => {
     expect(res.headers["Set-Cookie"]).toContain("Secure");
   });
 
-  // The crux of "no impersonation": you must KNOW the password. CSRF clears,
+  // The crux of "no impersonation": you must KNOW the password. Origin clears,
   // but Identity rejects the bad credential — that's a 401, not a 303.
-  it("reject sign-in with a valid CSRF token but a wrong password (401)", async () => {
-    const app = buildApp();
+  it("reject a same-origin sign-in with a wrong password (401)", async () => {
+    const app = await buildApp();
 
     const res = await app.handle("POST", "/mls/api/sign-in", {
-      headers: FORM,
-      body: signInBody(csrfTokenForAnon(), DEFAULT_DEMO.email, "not-the-real-password"),
+      headers: SAME_ORIGIN,
+      body: signInBody(DEFAULT_DEMO.email, "not-the-real-password"),
     });
 
     expect(res.status).toBe(401);
@@ -169,21 +146,21 @@ describe("the /mls POST handlers", () => {
   });
 
   it("reject sign-in for an unknown email with the same generic error (no enumeration)", async () => {
-    const app = buildApp();
+    const app = await buildApp();
 
     const res = await app.handle("POST", "/mls/api/sign-in", {
-      headers: FORM,
-      body: signInBody(csrfTokenForAnon(), "nobody@nowhere.example", DEFAULT_DEMO.password),
+      headers: SAME_ORIGIN,
+      body: signInBody("nobody@nowhere.example", DEFAULT_DEMO.password),
     });
 
     expect(res.status).toBe(401);
     expect(JSON.parse(res.body)).toMatchObject({ code: "IDENTITY_INVALID_CREDENTIALS" });
   });
 
-  it("reject sign-out with no session/CSRF token (403)", async () => {
-    const app = buildApp();
+  it("reject a cross-site sign-out (403, before the controller)", async () => {
+    const app = await buildApp();
 
-    const res = await app.handle("POST", "/mls/api/sign-out", { headers: FORM, body: "" });
+    const res = await app.handle("POST", "/mls/api/sign-out", { headers: CROSS_SITE, body: "" });
 
     expect(res.status).toBe(403);
   });

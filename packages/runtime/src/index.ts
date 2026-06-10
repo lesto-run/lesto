@@ -48,5 +48,8 @@ export type { DispatchSitesDevDeps } from "./sites-dev";
 
 export { nodeStaticReader } from "./static-reader";
 
+export { openSqlite } from "./sqlite";
+export type { OpenSqlite, SqliteEngines, SqliteHandle } from "./sqlite";
+
 export { KeelError, RuntimeError } from "./errors";
 export type { RuntimeErrorCode } from "./errors";

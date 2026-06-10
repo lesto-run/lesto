@@ -10,15 +10,14 @@
  *   curl http://127.0.0.1:3000/posts        # the SSR HTML page
  *   curl http://127.0.0.1:3000/api/posts    # the JSON API
  *
- * The same driver story as `run.ts` holds: under Node we boot on
- * better-sqlite3, and under Bun (whose runtime can't dlopen that native addon)
- * `openDatabase` transparently falls back to the built-in `bun:sqlite`.
+ * The database is opened with `@keel/runtime`'s `openSqlite`: under Node it
+ * boots on better-sqlite3, and under Bun (whose runtime can't dlopen that
+ * native addon) it transparently falls back to the built-in `bun:sqlite`.
  */
 
-import { serve } from "@keel/runtime";
+import { openSqlite, serve } from "@keel/runtime";
 
 import { buildApp } from "./src/app";
-import { openDatabase } from "./src/database";
 import { countPosts, insertPost } from "./src/post";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -30,7 +29,7 @@ const seeds = [
 ];
 
 async function main(): Promise<void> {
-  const { db: handle, close } = await openDatabase();
+  const { db: handle, close } = await openSqlite();
 
   // Boot: the kernel runs migrations + stands up dispatch; buildApp also
   // wraps the same handle as a typed @keel/db for controllers + seeds.

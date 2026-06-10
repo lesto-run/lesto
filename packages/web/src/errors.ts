@@ -10,7 +10,10 @@ import { KeelError } from "@keel/errors";
 
 export { KeelError };
 
-export type WebErrorCode = "WEB_UNKNOWN_CONTROLLER" | "WEB_UNKNOWN_ACTION";
+export type WebErrorCode =
+  | "WEB_UNKNOWN_CONTROLLER"
+  | "WEB_UNKNOWN_ACTION"
+  | "WEB_VALIDATION_FAILED";
 
 /** Anything the web dispatch core can refuse to do. */
 export class WebError extends KeelError<WebErrorCode> {

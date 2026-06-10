@@ -7,7 +7,10 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/index.ts"],
+      // sqlite-drivers.ts is the thin engine wiring (a native-addon `require`
+      // and a Bun-only dynamic import that cannot both run under one test
+      // runtime); its consumers' decisions live in the covered sqlite.ts.
+      exclude: ["src/index.ts", "src/sqlite-drivers.ts"],
       thresholds: {
         lines: 100,
         functions: 100,

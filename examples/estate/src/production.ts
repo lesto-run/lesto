@@ -53,7 +53,7 @@ export async function buildProductionSite(
   outDir: string,
   projectRoot: string,
 ): Promise<ProductionSite> {
-  const app = buildApp();
+  const app = await buildApp();
 
   const handle = app.handle.bind(app);
 

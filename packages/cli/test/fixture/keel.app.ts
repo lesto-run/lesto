@@ -11,8 +11,7 @@ import { Controller } from "@keel/web";
 import type { ControllerClass, KeelResponse } from "@keel/web";
 import type { AppConfig } from "@keel/kernel";
 import type { MigrationEntry } from "@keel/migrate";
-
-import { openDatabase } from "./src/database";
+import { openSqlite } from "@keel/runtime";
 
 class PostsController extends Controller {
   index(): KeelResponse {
@@ -43,7 +42,7 @@ const migrations: MigrationEntry[] = [
   },
 ];
 
-const db = await openDatabase();
+const { db } = await openSqlite();
 
 const config: AppConfig = {
   db,

@@ -17,7 +17,8 @@
     "@keel/router": "workspace:*",
     "@keel/ui": "workspace:*",
     "react": "^19",
-    "react-dom": "^19"
+    "react-dom": "^19",
+    "zod": "^4.0.0"
   },
 
   "scripts": {

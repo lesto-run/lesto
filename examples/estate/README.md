@@ -43,15 +43,22 @@ curl -i http://127.0.0.1:3000/                          # static marketing HTML;
                                                         #   <script id="keel-islands"> manifest
 curl -i http://127.0.0.1:3000/mls                       # the dynamic app (a sign-in form)
 curl -i http://127.0.0.1:3000/mls/api/session           # 401 — nobody signed in
-curl -i -X POST http://127.0.0.1:3000/mls/api/sign-in   # 303 + Set-Cookie: keel_session=...
-curl -s -b "keel_session=<token>" \
-     http://127.0.0.1:3000/mls/api/session              # 200 { "user": { "id": "jade", ... } }
-curl -s -b "keel_session=<token>" \
+curl -i -X POST http://127.0.0.1:3000/mls/api/sign-in   # 403 — no Sec-Fetch-Site (CSRF: originCheck)
+curl -i -X POST -H "Sec-Fetch-Site: same-origin" \
+     --data "email=jade@demo.example.com&password=demo-password-jade" \
+     http://127.0.0.1:3000/mls/api/sign-in              # 303 + Set-Cookie: __Host-keel_session=...
+curl -s -b "__Host-keel_session=<token>" \
+     http://127.0.0.1:3000/mls/api/session              # 200 { "user": { "id": "jade@…", ... } }
+curl -s -b "__Host-keel_session=<token>" \
      http://127.0.0.1:3000/mls/saved                    # gated: the user's saved listings
 ```
 
-The `Set-Cookie` from `/mls/api/sign-in` survives the path-mount front door
-verbatim — that is what makes the same-origin session work.
+The bare `POST` is refused with a 403 on purpose: the `originCheck` CSRF
+middleware reads the browser's `Sec-Fetch-Site` and a hand-rolled `curl` sends
+none, so it looks cross-site. A real browser form post carries `same-origin` and
+sails through — no per-form token to mint or verify. The `Set-Cookie` it returns
+survives the path-mount front door verbatim, which is what makes the same-origin
+session work.
 
 ## How the pieces compose
 
@@ -63,6 +70,8 @@ verbatim — that is what makes the same-origin session work.
 | The island + its hydration manifest               | `@keel/ui` `island` / `renderPage`                   |
 | Mount the island in the browser                   | `@keel/ui/client` `hydrateIslands`                   |
 | Sessions (mint / verify / revoke)                 | `@keel/auth`                                         |
+| Assemble the app (one entrypoint)                 | `@keel/kernel` `createApp` ← `keel.app.ts`           |
+| CSRF on state-changing requests (zero token)      | `@keel/kernel` `secureStack({ originCheck })`        |
 
 ## The auth island, tested
 
