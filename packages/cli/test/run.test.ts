@@ -43,21 +43,48 @@ const migrations: MigrationEntry[] = [
   },
 ];
 
-// Adapt better-sqlite3 (variadic params) to the kernel's array-positional surface.
+// Adapt better-sqlite3 (variadic params) to the kernel's array-positional
+// surface. The terminals are async (ADR 0006): the synchronous better-sqlite3
+// engine is wrapped so each terminal resolves a Promise (zero latency);
+// prepare() stays sync. `transaction()` brackets BEGIN/COMMIT (ROLLBACK on
+// reject) over the one connection.
 function adapt(raw: Database.Database): KernelDatabase {
-  return {
-    exec: (sql) => raw.exec(sql),
+  const adapted: KernelDatabase = {
+    exec: async (sql) => {
+      raw.exec(sql);
+    },
 
     prepare: (sql) => {
       const statement = raw.prepare(sql);
 
       return {
-        run: (params = []) => statement.run(...params),
-        get: (params = []) => statement.get(...params),
-        all: (params = []) => statement.all(...params),
+        run: async (params = []) => statement.run(...params),
+        get: async (params = []) => statement.get(...params),
+        all: async (params = []) => statement.all(...params),
       };
     },
+
+    transaction: async (fn) => {
+      raw.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        raw.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          raw.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
   };
+
+  return adapted;
 }
 
 let database: Database.Database;
@@ -537,7 +564,7 @@ describe("run content:build", () => {
   it("persists the pipeline's entries into the content store and reports the count", async () => {
     // The app's migrations create the content_entries table on boot; mirror
     // that here by migrating the same in-memory database the config wraps.
-    new Migrator(adapt(database), [contentEntriesMigration]).migrate();
+    await new Migrator(adapt(database), [contentEntriesMigration]).migrate();
 
     const entries = [
       entry("posts", "hello", { title: "Hello" }),
@@ -559,7 +586,7 @@ describe("run content:build", () => {
   });
 
   it("says 'entry' (singular) for a single built entry", async () => {
-    new Migrator(adapt(database), [contentEntriesMigration]).migrate();
+    await new Migrator(adapt(database), [contentEntriesMigration]).migrate();
 
     const code = await run(
       ["content:build"],
@@ -573,7 +600,7 @@ describe("run content:build", () => {
   });
 
   it("with --prune, drops entries the build no longer produces", async () => {
-    new Migrator(adapt(database), [contentEntriesMigration]).migrate();
+    await new Migrator(adapt(database), [contentEntriesMigration]).migrate();
 
     // A first build writes two entries.
     const both = [entry("posts", "keep", {}), entry("posts", "stale", {})];
@@ -629,7 +656,7 @@ describe("run content:new", () => {
 
 describe("run content:delete", () => {
   it("deletes an existing entry and reports it", async () => {
-    new Migrator(adapt(database), [contentEntriesMigration]).migrate();
+    await new Migrator(adapt(database), [contentEntriesMigration]).migrate();
     await run(
       ["content:build"],
       depsWith({
@@ -645,7 +672,7 @@ describe("run content:delete", () => {
   });
 
   it("reports when there was nothing to delete", async () => {
-    new Migrator(adapt(database), [contentEntriesMigration]).migrate();
+    await new Migrator(adapt(database), [contentEntriesMigration]).migrate();
 
     const code = await run(["content:delete", "posts", "ghost"], depsWith());
 
