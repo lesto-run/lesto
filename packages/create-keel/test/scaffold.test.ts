@@ -66,12 +66,13 @@ describe("scaffold", () => {
     const app = await readFile(join(targetDir, "keel.app.ts"), "utf8");
     const pkg = await readFile(join(targetDir, "package.json"), "utf8");
 
-    // keel.app.ts default-exports the AppConfig and declares the four parts.
+    // keel.app.ts default-exports the AppConfig and declares the parts.
     expect(app).toContain("export default config");
     expect(app).toContain("const config: AppConfig");
-    expect(app).toContain("class Post extends Model");
+    expect(app).toContain('defineTable("posts"');
+    expect(app).toContain("createTableSql(posts)");
+    expect(app).toContain("buildControllers(db)");
     expect(app).toContain('resources("posts")');
-    expect(app).toContain("controllers: { posts: PostsController }");
 
     // package.json carries the project name, the @keel deps, and the dev script.
     const manifest = JSON.parse(pkg) as {
@@ -86,8 +87,8 @@ describe("scaffold", () => {
     expect(manifest.scripts["dev"]).toBe("keel dev");
 
     for (const dep of [
+      "@keel/db",
       "@keel/kernel",
-      "@keel/orm",
       "@keel/migrate",
       "@keel/router",
       "@keel/web",
@@ -96,9 +97,13 @@ describe("scaffold", () => {
       "react",
       "react-dom",
       "better-sqlite3",
+      "zod",
     ]) {
       expect(manifest.dependencies[dep]).toBeDefined();
     }
+
+    // The legacy @keel/orm dep is gone — scaffolded apps use @keel/db.
+    expect(manifest.dependencies["@keel/orm"]).toBeUndefined();
   });
 
   it("refuses to clobber an existing target", async () => {

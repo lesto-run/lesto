@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Router } from "@keel/router";
 import { Controller } from "@keel/web";
-import { resetConnection } from "@keel/orm";
 import { Migrator } from "@keel/migrate";
 import { contentEntriesMigration } from "@keel/content-store";
 import type { ControllerClass, KeelResponse } from "@keel/web";
@@ -118,9 +117,6 @@ beforeEach(() => {
 
 afterEach(() => {
   database.close();
-
-  // The ORM connection is global; reset it so tests do not leak into each other.
-  resetConnection();
 });
 
 describe("run routes", () => {

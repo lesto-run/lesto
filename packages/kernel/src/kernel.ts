@@ -2,17 +2,21 @@
  * The application kernel: it assembles a Keel app from its parts.
  *
  * Everything a Keel app is made of meets here — the database, the migrations
- * that shape it, the router that maps requests, and the controllers that answer
- * them. The kernel wires them together into one bootable `App` and is the single
- * place that knows the assembly order: connect the ORM, run pending migrations,
- * then stand up the web dispatch core.
+ * that shape it, the router that maps requests, and the controllers that
+ * answer them. The kernel wires them together into one bootable `App` and
+ * owns the assembly order: run pending migrations against the supplied
+ * database, then stand up the web dispatch core.
  *
- * It is deliberately transport-free. The node:http listener and the CLI are thin
- * adapters that feed an `App` and write its responses back; they live elsewhere.
- * What lives here is the pure, fully-coverable assembly + delegation.
+ * Controllers query the database through `@keel/db` (see ADR 0004) — they
+ * receive a typed `Db` from the app's factory rather than reaching for a
+ * global. The kernel itself never touches the data layer beyond handing
+ * `config.db` to the migrator.
+ *
+ * Deliberately transport-free. The node:http listener and the CLI are thin
+ * adapters that feed an `App` and write its responses back; they live
+ * elsewhere. What lives here is the pure, fully-coverable assembly +
+ * delegation.
  */
-
-import { useDatabase } from "@keel/orm";
 
 import { Migrator } from "@keel/migrate";
 import type { MigrationEntry } from "@keel/migrate";
@@ -23,12 +27,13 @@ import { Application } from "@keel/web";
 import type { ControllerClass, KeelResponse, Middleware } from "@keel/web";
 
 /**
- * The one database handle the kernel threads through everything.
+ * The one database handle the kernel threads through the migrator.
  *
- * It is the union of what its consumers need: `@keel/orm` prepares statements and
- * binds array-positional params; `@keel/migrate` also runs raw `exec` DDL. A
- * single better-sqlite3 (or Postgres) adapter satisfies the whole surface, so the
- * kernel hands the same handle to both without either knowing the driver.
+ * `@keel/migrate` consumes `exec` (for DDL) + `prepare` (for the bookkeeping
+ * table); `@keel/db` consumes the same shape for the runtime query layer. A
+ * single better-sqlite3 (or future Postgres) adapter satisfies both
+ * structurally, so the kernel hands the same handle to the migrator and the
+ * app wraps it in `createDb(handle)` for its controllers.
  */
 export interface KernelDatabase {
   exec(sql: string): unknown;
@@ -80,16 +85,13 @@ export interface App {
 /**
  * Assemble a bootable app from its parts.
  *
- * The order is the contract: point the ORM at the database first, then bring the
- * schema up to date, then stand up dispatch over the now-ready database — so a
- * controller's first query hits a migrated schema, not an empty one.
+ * The order is the contract: bring the schema up to date *first*, then stand
+ * up dispatch over the now-ready database — so a controller's first query
+ * hits a migrated schema, not an empty one.
  */
 export function createApp(config: AppConfig): App {
-  // Connect the ORM: every Model from here on talks to this database.
-  useDatabase(config.db);
-
-  // Run pending migrations up front so the schema is ready before any request.
-  // No migrations configured means nothing ran — an empty applied list.
+  // Run pending migrations up front so the schema is ready before any
+  // request. No migrations configured means nothing ran — empty applied list.
   const migrationsApplied: readonly string[] =
     config.migrations === undefined ? [] : new Migrator(config.db, config.migrations).migrate();
 

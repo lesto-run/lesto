@@ -1,6 +1,6 @@
 ## ADR 0004 — Data layer style: away from ActiveRecord, toward Drizzle-shaped
 
-- **Status:** Accepted — Phase C complete; D (kernel sweep + `@keel/orm` deprecation) pending
+- **Status:** Accepted — **all phases complete** (2026-06-09)
 - **Date:** 2026-06-09
 - **Deciders:** tech lead + owner
 - **Implementation note (2026-06-09):** Phase A shipped `packages/db` (`defineTable`, typed columns, `createDb`, conditions, DDL — 31 tests, 100% cov). Phase B migrated `packages/identity` off `@keel/orm` (`User extends Model` and the global `useDatabase` are gone from identity; the service takes an explicit `db: Db`, the schema is a value (`users`) backing both queries and the migration's DDL, helpers are camelCase functions taking explicit `db`). Phase C.1 migrated `@keel/mailing-lists` to `@keel/db` (`List`/`Subscriber` rows replace the Model classes; `createMailingLists({ db, mailer, token? })` is the new closure-factory; `mailingListsMigration` ships with the package — consumers no longer hand-roll the CREATE TABLE; 9 tests, 100% cov, no @keel/db API growth needed). Identity + mailing-lists both dropped `@keel/orm` from their deps.
@@ -16,6 +16,10 @@
 **Phase C.4 shipped (2026-06-09):** `@keel/admin` migrated. The resource shape `{ name, table, insertSchema, updateSchema, fields }` from ADR 0005 became real: tables come from `@keel/db`, schemas from Zod. `createAdmin(db, resources)` is the closure factory. Primary-key resolution happens at construction (a missing PK fails *now*, not on the first request) via `table.columnList.find(c => c.spec.primaryKey)` — works for both `id`/autoIncrement and natural keys (slug). Validation surfaces as `ADMIN_VALIDATION_FAILED` carrying Zod's `flatten()`-ed error. Update/destroy do a pre-fetch so absent-row is `ADMIN_RECORD_NOT_FOUND` rather than a silent zero-changes write. Dropped `@keel/orm` from admin's deps. 17 tests, 100% lines/branches/functions/statements.
 
 **Phase C complete.** Phase D (kernel cleanup + `@keel/orm` deprecation + `create-keel` templates) is now unblocked.
+
+**Phase D shipped (2026-06-09):** the cleanup pass. `kernel.useDatabase(config.db)` is gone (zero in-tree orm consumers were left, so the call was dead); the kernel rewrote its boot doc and dropped `@keel/orm` from its deps. The kernel test, plus the cli and mcp test fixtures, all moved from `extends Model` + global `useDatabase`/`resetConnection` ceremony to local `defineTable` + an explicit `Db` from `createDb`. `@keel/orm` itself is marked **LEGACY** — its `index.ts` JSDoc and its `package.json` description both point at `@keel/db` for new code, and the package stays in the workspace unchanged for any out-of-tree app that still depends on it. The `create-keel` scaffold now emits `defineTable` + `createDb` + `zod` (the canonical post-ADR-0004 shape), not `extends Model`. Zero in-tree imports of `@keel/orm` remain.
+
+**ADR 0004 is fully realized.** `@keel/db` is the data layer; `@keel/orm` is preserved for back-compat with no path forward for new in-tree work.
 
 ## Context
 

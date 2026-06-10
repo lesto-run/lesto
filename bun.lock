@@ -474,8 +474,8 @@
       "dependencies": {
         "@keel/cors": "workspace:*",
         "@keel/csrf": "workspace:*",
+        "@keel/db": "workspace:*",
         "@keel/migrate": "workspace:*",
-        "@keel/orm": "workspace:*",
         "@keel/ratelimit": "workspace:*",
         "@keel/router": "workspace:*",
         "@keel/web": "workspace:*",
@@ -506,10 +506,10 @@
       "dependencies": {
         "@keel/content-core": "workspace:*",
         "@keel/content-store": "workspace:*",
+        "@keel/db": "workspace:*",
         "@keel/errors": "workspace:*",
         "@keel/kernel": "workspace:*",
         "@keel/migrate": "workspace:*",
-        "@keel/orm": "workspace:*",
         "@keel/router": "workspace:*",
         "@keel/web": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.29.0",

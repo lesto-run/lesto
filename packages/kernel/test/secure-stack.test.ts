@@ -1,7 +1,6 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { resetConnection } from "@keel/orm";
 import { Router } from "@keel/router";
 import { Controller, currentContext, runWithContext } from "@keel/web";
 import { generateToken } from "@keel/csrf";
@@ -58,7 +57,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  resetConnection();
   raw.close();
 });
 

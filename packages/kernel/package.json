@@ -15,7 +15,7 @@
   "dependencies": {
     "@keel/cors": "workspace:*",
     "@keel/csrf": "workspace:*",
-    "@keel/orm": "workspace:*",
+    "@keel/db": "workspace:*",
     "@keel/migrate": "workspace:*",
     "@keel/ratelimit": "workspace:*",
     "@keel/router": "workspace:*",

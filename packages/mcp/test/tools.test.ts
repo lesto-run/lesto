@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { Controller } from "@keel/web";
-import { Model, resetConnection } from "@keel/orm";
+import { createDb, createTableSql, defineTable, integer, text, type Db } from "@keel/db";
 import { Router } from "@keel/router";
 import { createApp } from "@keel/kernel";
 import { Migrator } from "@keel/migrate";
@@ -36,30 +36,26 @@ function adapt(raw: Database.Database): KernelDatabase {
   };
 }
 
-// A model the migration below creates, queried by the controller.
-class Post extends Model {
-  static override timestamps = true;
-}
+// A table the migration below creates, queried by the controller via @keel/db.
+const posts = defineTable("posts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+});
 
 const createPosts: MigrationEntry = {
   version: "001_create_posts",
   migration: {
     up: (schema) => {
-      schema.createTable("posts", (t) => {
-        t.string("title", { null: false });
-        t.timestamps();
-      });
+      schema.execute(createTableSql(posts));
     },
   },
 };
 
+let queryDb: Db;
+
 class PostsController extends Controller {
   index() {
-    const posts = Post.order("id", "asc")
-      .all()
-      .map((post) => post.toJSON());
-
-    return this.json({ posts });
+    return this.json({ posts: queryDb.select().from(posts).orderBy(posts.id, "asc").all() });
   }
 }
 
@@ -77,11 +73,13 @@ let app: App;
 
 beforeEach(() => {
   raw = new Database(":memory:");
+  const db = adapt(raw);
+  queryDb = createDb(db);
 
   router = buildRouter();
 
   app = createApp({
-    db: adapt(raw),
+    db,
     router,
     controllers: { posts: PostsController },
     migrations: [createPosts],
@@ -89,7 +87,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  resetConnection();
   raw.close();
 });
 
@@ -303,7 +300,7 @@ describe("content write tools", () => {
 
 describe("handle_request handler", () => {
   it("dispatches to app.handle and returns the response", async () => {
-    Post.create({ title: "Hello, MCP" });
+    queryDb.insert(posts).values({ title: "Hello, MCP" }).run();
 
     const tools = buildTools({ app, router });
 

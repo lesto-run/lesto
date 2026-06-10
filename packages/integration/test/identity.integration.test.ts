@@ -253,9 +253,8 @@ let server: Server;
 beforeAll(async () => {
   database = new Database(":memory:");
 
-  // The kernel's `useDatabase(config.db)` is for the legacy @keel/orm path;
-  // @keel/identity now wants an explicit @keel/db handle over the same
-  // underlying SQL surface. One adapter, two consumers.
+  // The kernel adapter and @keel/db take the same `SqlDatabase` shape, so
+  // one wrapper around the in-memory database satisfies both consumers.
   identity = createIdentity({
     db: createDb(adapt(database)),
     secret: "integration-test-secret",

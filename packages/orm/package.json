@@ -1,7 +1,7 @@
 {
   "name": "@keel/orm",
   "version": "0.0.0",
-  "description": "Keel's ActiveRecord-style ORM — typed models, a fluent query builder, validations, on any SQL database.",
+  "description": "[LEGACY — superseded by @keel/db; see ADR 0004] Keel's ActiveRecord-style ORM — typed models, a fluent query builder, validations, on any SQL database.",
   "type": "module",
   "private": true,
 

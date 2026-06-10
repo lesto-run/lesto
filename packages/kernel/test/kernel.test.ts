@@ -1,17 +1,19 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { Model, resetConnection } from "@keel/orm";
+import { createDb, createTableSql, defineTable, integer, text, type Db } from "@keel/db";
 import type { MigrationEntry } from "@keel/migrate";
 import { Router } from "@keel/router";
 import { Controller } from "@keel/web";
+import type { ControllerClass } from "@keel/web";
 
 import { createApp } from "../src/index";
 
 import type { KernelDatabase } from "../src/index";
 
-// The DI boundary: the kernel speaks "array of positional params"; this adapter
-// maps that onto better-sqlite3's variadic bind. A Postgres adapter looks the same.
+// The DI boundary: the kernel speaks "array of positional params"; this
+// adapter maps that onto better-sqlite3's variadic bind. A Postgres adapter
+// looks the same.
 function adapt(raw: Database.Database): KernelDatabase {
   return {
     exec: (sql) => raw.exec(sql),
@@ -28,36 +30,50 @@ function adapt(raw: Database.Database): KernelDatabase {
   };
 }
 
-// A model whose table the migration below creates — the proof the kernel ran
-// migrations before the ORM queried anything.
-class Post extends Model {
-  static override timestamps = true;
-}
+// The fixture table the migration below creates — the proof the kernel ran
+// migrations before any query.
+const posts = defineTable("posts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+});
 
-// The one migration the app boots with: create the posts table.
+// The one migration the app boots with: create the posts table from the
+// schema-as-value (Phase D's canonical migration shape).
 const createPosts: MigrationEntry = {
   version: "001_create_posts",
   migration: {
     up: (schema) => {
-      schema.createTable("posts", (t) => {
-        t.string("title", { null: false });
-        t.timestamps();
-      });
+      schema.execute(createTableSql(posts));
     },
   },
 };
 
-// A controller whose index action queries the model and renders it as JSON —
-// the far end of the end-to-end round-trip.
-class PostsController extends Controller {
-  index() {
-    const posts = Post.order("id", "asc")
-      .all()
-      .map((post) => post.toJSON());
-
-    return this.json({ posts });
+// The controllers close over the typed `Db` the test wires up — the kernel
+// no longer touches the data layer beyond handing `config.db` to the
+// migrator.
+function buildControllers(db: Db): { posts: ControllerClass } {
+  class PostsController extends Controller {
+    index() {
+      return this.json({ posts: db.select().from(posts).all() });
+    }
   }
+
+  return { posts: PostsController as ControllerClass };
 }
+
+let raw: Database.Database;
+let db: KernelDatabase;
+let queryDb: Db;
+
+beforeEach(() => {
+  raw = new Database(":memory:");
+  db = adapt(raw);
+  queryDb = createDb(db);
+});
+
+afterEach(() => {
+  raw.close();
+});
 
 function buildRouter(): Router {
   const router = new Router();
@@ -67,46 +83,31 @@ function buildRouter(): Router {
   return router;
 }
 
-let raw: Database.Database;
-let db: KernelDatabase;
-
-beforeEach(() => {
-  raw = new Database(":memory:");
-  db = adapt(raw);
-});
-
-afterEach(() => {
-  resetConnection();
-  raw.close();
-});
-
 describe("createApp", () => {
   it("runs migrations on boot and exposes the applied versions", () => {
     const app = createApp({
       db,
       router: buildRouter(),
-      controllers: { posts: PostsController },
+      controllers: buildControllers(queryDb),
       migrations: [createPosts],
     });
 
     expect(app.migrationsApplied).toEqual(["001_create_posts"]);
 
-    // The migrated table is real and queryable through the ORM model.
-    Post.create({ title: "Seeded directly" });
+    // The migrated table is real and queryable through @keel/db.
+    queryDb.insert(posts).values({ title: "Seeded directly" }).run();
 
-    expect(Post.count()).toBe(1);
+    expect(queryDb.select().from(posts).count()).toBe(1);
   });
 
   it("applies no migrations when none are configured", () => {
-    // Stand the schema up out of band so the ORM still has a table to read.
-    raw.exec(
-      "CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, created_at TEXT, updated_at TEXT)",
-    );
+    // Stand the schema up out of band so the query still has a table to read.
+    db.exec(createTableSql(posts));
 
     const app = createApp({
       db,
       router: buildRouter(),
-      controllers: { posts: PostsController },
+      controllers: buildControllers(queryDb),
     });
 
     expect(app.migrationsApplied).toEqual([]);
@@ -118,12 +119,11 @@ describe("App#handle", () => {
     const app = createApp({
       db,
       router: buildRouter(),
-      controllers: { posts: PostsController },
+      controllers: buildControllers(queryDb),
       migrations: [createPosts],
     });
 
-    // Seed through the same ORM the kernel connected.
-    Post.create({ title: "Hello, kernel" });
+    queryDb.insert(posts).values({ title: "Hello, kernel" }).run();
 
     const response = await app.handle("GET", "/posts");
 
@@ -140,7 +140,7 @@ describe("App#handle", () => {
     const app = createApp({
       db,
       router: buildRouter(),
-      controllers: { posts: PostsController },
+      controllers: buildControllers(queryDb),
       migrations: [createPosts],
     });
 

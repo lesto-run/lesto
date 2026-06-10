@@ -1,5 +1,28 @@
 /**
- * @keel/orm — ActiveRecord for TypeScript.
+ * @keel/orm — ActiveRecord for TypeScript. **LEGACY** — superseded by
+ * `@keel/db`. See `docs/adr/0004-data-layer-style.md`.
+ *
+ * This package is preserved unchanged for any out-of-tree app that still
+ * depends on it. The Keel workspace itself has no in-tree consumers as of
+ * 2026-06-09: every package that did (identity, mailing-lists, admin,
+ * blog example, kernel) now uses `@keel/db`'s typed schema + query DSL.
+ *
+ * **For new code, use `@keel/db`:**
+ *
+ *     import { defineTable, integer, text, createDb, eq } from "@keel/db";
+ *
+ *     export const posts = defineTable("posts", {
+ *       id: integer("id").primaryKey({ autoIncrement: true }),
+ *       title: text("title").notNull(),
+ *     });
+ *
+ *     const db = createDb(sqlAdapter);
+ *     const post = db.select().from(posts).where(eq(posts.id, 1)).get();
+ *
+ * Removal is gated on outside-app adoption — keep using it if you have it,
+ * but new code should not adopt it.
+ *
+ * The old shape, for reference:
  *
  *   class Post extends Model {
  *     static override timestamps = true;

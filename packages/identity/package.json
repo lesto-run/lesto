@@ -1,7 +1,7 @@
 {
   "name": "@keel/identity",
   "version": "0.0.0",
-  "description": "Keel's batteries-included auth: users on the SQL DB, register/verify/login/reset flows composed from @keel/auth + @keel/orm + @keel/migrate + @keel/mail + @keel/csrf.",
+  "description": "Keel's batteries-included auth: users on the SQL DB, register/verify/login/reset flows composed from @keel/auth + @keel/db + @keel/migrate + @keel/mail + @keel/csrf.",
   "type": "module",
   "private": true,
 
