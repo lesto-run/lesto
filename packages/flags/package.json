@@ -1,0 +1,27 @@
+{
+  "name": "@keel/flags",
+  "version": "0.0.0",
+  "description": "Keel's first-class feature flags — declare a flag on a route or page and the gate hides it when off.",
+  "type": "module",
+  "private": true,
+
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+
+  "dependencies": {
+    "@keel/web": "workspace:*"
+  }
+}
