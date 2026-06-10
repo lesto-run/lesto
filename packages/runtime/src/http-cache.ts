@@ -143,11 +143,19 @@ export function hasContentHash(filePath: string): boolean {
  * to 27 base64url characters (160 bits of input, ample for distinguishing
  * bodies) and wrapped in quotes per the HTTP grammar.
  *
+ * The body is hashed as `string` *or* `Uint8Array` — both are fully buffered, so
+ * we can read every byte to compute a stable tag. A `ReadableStream` body is the
+ * one kind we cannot tag: hashing it would mean draining it, leaving nothing to
+ * send, so the caller skips ETag for a stream entirely (see {@link withEtag}).
+ *
  * A `weak` tag is prefixed with `W/` — declaring the entity *semantically*
  * equivalent rather than byte-identical, which is the honest claim when a
  * response is, say, compressed differently on the wire than when hashed.
  */
-export function etagFor(body: string, options: { weak?: boolean | undefined } = {}): string {
+export function etagFor(
+  body: string | Uint8Array,
+  options: { weak?: boolean | undefined } = {},
+): string {
   const digest = createHash("sha1").update(body).digest("base64url").slice(0, 27);
 
   const tag = `"${digest}"`;

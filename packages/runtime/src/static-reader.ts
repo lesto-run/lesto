@@ -12,12 +12,21 @@
  *     real fault is never silently swallowed into a 404.
  *   - The resolved file must stay *under* `outRoot`. A request path that climbs
  *     out with `..` is a traversal attempt and is refused, not served.
+ *
+ * It reads every file off disk as raw *bytes* (a `Buffer`), so an image, a font,
+ * or a PDF is never corrupted by a UTF-8 round trip — the bug that made binary
+ * static serving impossible. It then returns those bytes for a binary type and a
+ * decoded UTF-8 `string` for a text type, decided from the extension by the same
+ * {@link isBinaryType} table the dispatcher uses. So a text file (HTML, CSS, a
+ * JSON feed) still comes back as a string — the original behavior, unchanged —
+ * while a binary file comes back as bytes, intact.
  */
 
 import { readFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
 import { RuntimeError } from "./errors";
+import { isBinaryType } from "./sites";
 
 import type { StaticReader } from "./sites";
 
@@ -63,7 +72,12 @@ export function nodeStaticReader(outRoot: string): StaticReader {
     }
 
     try {
-      return await readFile(resolved, "utf8");
+      // Read raw bytes off disk, never UTF-8: a binary file must not be
+      // corrupted on the way in. Then return bytes for a binary type, or a
+      // decoded string for a text type — so a text file's contract is unchanged.
+      const bytes = await readFile(resolved);
+
+      return isBinaryType(resolved) ? bytes : bytes.toString("utf8");
     } catch (error) {
       if (isMissingFile(error)) return undefined;
 

@@ -17,13 +17,32 @@ describe("nodeStaticReader", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("reads a prerendered file's contents", async () => {
+  it("reads a text file's contents as a string", async () => {
     await mkdir(join(root, "marketing"), { recursive: true });
     await writeFile(join(root, "marketing", "index.html"), "<h1>Home</h1>", "utf8");
 
     const read = nodeStaticReader(root);
 
+    // A text extension comes back as a string — the original contract, unchanged.
     expect(await read("marketing/index.html")).toBe("<h1>Home</h1>");
+  });
+
+  it("reads a binary file as raw bytes, uncorrupted by a UTF-8 round trip", async () => {
+    // Bytes that are NOT valid UTF-8 (a lone 0xFF, an embedded NUL): reading them
+    // as text would mangle them, which is the bug binary serving must avoid.
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00, 0xfe]);
+
+    await mkdir(join(root, "marketing"), { recursive: true });
+    await writeFile(join(root, "marketing", "logo.png"), pngBytes);
+
+    const read = nodeStaticReader(root);
+
+    const body = await read("marketing/logo.png");
+
+    // A binary extension comes back as bytes, byte-for-byte identical to disk.
+    expect(typeof body).not.toBe("string");
+    expect(body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(body as Uint8Array)).toEqual(Array.from(pngBytes));
   });
 
   it("returns undefined for a missing file", async () => {

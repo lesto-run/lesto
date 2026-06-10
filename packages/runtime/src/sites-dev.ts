@@ -16,7 +16,7 @@
  * One thing sits in front of selection: the client asset passthrough. The
  * island hydration bundle (`/client.js`) and its friends are build output, not
  * a page route, so a `readAsset` port — injected, like everything that varies —
- * gets first refusal on asset-shaped paths. A hit serves the bytes with the
+ * gets first refusal on asset-shaped paths. A hit serves the asset with the
  * right content-type; a miss falls through to the sites, so a real `.js` *page*
  * route still works.
  */
@@ -90,7 +90,11 @@ async function serveAsset(
   return {
     status: 200,
     headers: { "content-type": contentTypeOf(file) },
-    body,
+    // Dev build assets are text (`.js`/`.css`/`.map` — see ASSET_EXTENSIONS), and
+    // a reader may hand them back as bytes (nodeStaticReader reads from disk),
+    // so decode to a UTF-8 string to match the Content-Type above. A string the
+    // reader already produced passes straight through.
+    body: typeof body === "string" ? body : Buffer.from(body).toString("utf8"),
   };
 }
 

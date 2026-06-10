@@ -24,4 +24,4 @@ export type { ControllerClass } from "./controller";
 export { KeelError, WebError } from "./errors";
 export type { WebErrorCode } from "./errors";
 
-export type { KeelRequest, KeelResponse } from "./types";
+export type { AnyKeelResponse, KeelBody, KeelRequest, KeelResponse } from "./types";

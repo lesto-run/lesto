@@ -5,7 +5,7 @@ import { Registry } from "@keel/ui";
 
 import { Application, Controller, WebError } from "../src/index";
 
-import type { ControllerClass } from "../src/index";
+import type { AnyKeelResponse, ControllerClass } from "../src/index";
 
 // A tiny registry with a single component, used to prove renderTree SSRs to HTML.
 const greetingRegistry = new Registry().define({
@@ -31,6 +31,12 @@ class ProbeController extends Controller {
 
   page(): ReturnType<Controller["html"]> {
     return this.html("<p>hi</p>");
+  }
+
+  // A 1x1 transparent GIF's leading bytes, including a 0xFF a UTF-8 round trip
+  // would mangle — proof the bytes arm carries binary intact.
+  icon(): ReturnType<Controller["bytes"]> {
+    return this.bytes(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0xff, 0x00]), "image/gif");
   }
 
   away(): ReturnType<Controller["redirect"]> {
@@ -72,6 +78,7 @@ const buildApp = (): Application => {
   router.post("/created", "probe#createdJson");
   router.get("/speak", "probe#speak");
   router.get("/page", "probe#page");
+  router.get("/icon", "probe#icon");
   router.get("/away", "probe#away");
   router.get("/permanently", "probe#permanently");
   router.get("/view", "probe#view");
@@ -130,6 +137,22 @@ describe("Controller response helpers", () => {
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toBe("text/html");
     expect(response.body).toBe("<p>hi</p>");
+  });
+
+  it("bytes returns a Uint8Array body with the caller's content-type, intact", async () => {
+    const app = buildApp();
+
+    // `/icon` answers with `bytes(...)`, so its body is a `Uint8Array`. `handle`
+    // reports the common string-bodied shape, so we view the response at its true
+    // (wider) type to read the bytes — a true cast for an action we control.
+    const response: AnyKeelResponse = await app.handle("GET", "/icon");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toBe("image/gif");
+
+    // The body is raw bytes — not a string — carrying every input byte.
+    expect(response.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(response.body as Uint8Array)).toEqual([0x47, 0x49, 0x46, 0x38, 0xff, 0x00]);
   });
 
   it("redirect defaults to 302 with a Location header", async () => {

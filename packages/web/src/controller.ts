@@ -10,7 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { renderTree } from "@keel/ui";
 import type { Registry } from "@keel/ui";
 
-import type { KeelRequest, KeelResponse } from "./types";
+import type { AnyKeelResponse, KeelRequest, KeelResponse } from "./types";
 
 export class Controller {
   // The request is immutable for the lifetime of the controller; an action
@@ -46,6 +46,23 @@ export class Controller {
       status,
       headers: { "content-type": "text/plain" },
       body,
+    };
+  }
+
+  /**
+   * A raw-bytes response — for content a string would corrupt.
+   *
+   * An image, a font, a PDF: their bytes are not text, so re-encoding them
+   * through a `string` mangles them. This hands the runtime a `Uint8Array` it
+   * writes to the socket verbatim, tagged with the caller's `contentType`. The
+   * caller names the type because only it knows what the bytes are — there is no
+   * extension to infer from here, unlike the static-file path.
+   */
+  bytes(data: Uint8Array, contentType: string, status = 200): AnyKeelResponse {
+    return {
+      status,
+      headers: { "content-type": contentType },
+      body: data,
     };
   }
 

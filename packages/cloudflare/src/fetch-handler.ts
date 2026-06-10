@@ -13,7 +13,7 @@
  * malformed JSON body answered as a 400 rather than thrown.
  */
 
-import type { KeelResponse } from "@keel/web";
+import type { AnyKeelResponse, KeelBody } from "@keel/web";
 
 /** The per-request inputs the dispatcher reads, the same shape the node server passes. */
 export interface EdgeRequestOptions {
@@ -24,12 +24,19 @@ export interface EdgeRequestOptions {
   readonly body: unknown;
 }
 
-/** The pure dispatcher a Worker fronts — `dispatchSites` / `app.handle` satisfy it. */
+/**
+ * The pure dispatcher a Worker fronts — `dispatchSites` / `app.handle` satisfy it.
+ *
+ * Its response carries any {@link KeelBody} arm (string, bytes, or stream): the
+ * site dispatcher can serve a binary file as bytes, and the edge `Response` takes
+ * each natively. A string-bodied `app.handle` satisfies it, since a string body
+ * is one arm of the wider type.
+ */
 export type EdgeDispatch = (
   method: string,
   path: string,
   options: EdgeRequestOptions,
-) => Promise<KeelResponse>;
+) => Promise<AnyKeelResponse>;
 
 /** Flatten a URL's search params to a record; the last value wins on repeats. */
 function queryFrom(params: URLSearchParams): Record<string, string> {
@@ -82,12 +89,31 @@ async function decodeBody(request: Request, contentType: string | undefined): Pr
 }
 
 /**
+ * Adapt a Keel body to the Web `Response`'s `BodyInit`.
+ *
+ * A Web `Response` natively accepts all three Keel body arms — a string, raw
+ * bytes (a `BufferSource`), and a `ReadableStream` — so this is a passthrough at
+ * runtime. The only reason it is not the identity is a *types* mismatch: the
+ * edge package compiles with both the DOM lib and `@types/node`, whose
+ * `Uint8Array`/`ReadableStream` definitions don't line up exactly, so the
+ * compiler can't see that a node-flavored `Uint8Array` satisfies DOM's
+ * `BufferSource`. The cast is true — at runtime they are the same bytes / the
+ * same stream — and confined to this one seam, so a widened Keel body flows to
+ * the edge untouched (never stringified, never copied).
+ */
+function toBodyInit(body: KeelBody): BodyInit {
+  return body as BodyInit;
+}
+
+/**
  * Adapt a Keel dispatcher into a Worker `fetch` handler.
  *
  * Parses the `Request` into the dispatcher's `(method, path, options)`, calls
  * it, and writes the `KeelResponse` back as a Web `Response` — headers and all,
- * so a `Set-Cookie` set by the app survives to the browser. A malformed JSON
- * body short-circuits to 400 before dispatch.
+ * so a `Set-Cookie` set by the app survives to the browser. The body is passed
+ * through in whatever arm the dispatcher produced (string, bytes, or stream); a
+ * `Response` accepts each natively, so an image or a stream reaches the edge
+ * uncorrupted. A malformed JSON body short-circuits to 400 before dispatch.
  */
 export function toFetchHandler(dispatch: EdgeDispatch): (request: Request) => Promise<Response> {
   return async (request) => {
@@ -107,6 +133,9 @@ export function toFetchHandler(dispatch: EdgeDispatch): (request: Request) => Pr
       body: decoded.body,
     });
 
-    return new Response(response.body, { status: response.status, headers: response.headers });
+    return new Response(toBodyInit(response.body), {
+      status: response.status,
+      headers: response.headers,
+    });
   };
 }

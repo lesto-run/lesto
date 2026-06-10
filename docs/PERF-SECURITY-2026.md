@@ -128,10 +128,10 @@ All `node:http setHeader` / `node:crypto` / React-hoisting; no rewrite. Delivere
 *Exit (met):* immutable assets + preloaded LCP + `fetchpriority`, 304s on repeat HTML, configurable CSP/COOP/Permissions-Policy, opt-in true hydration — all on the current buffered architecture.
 
 ### Tier 1 — the two keystones
-- **A. Response body `string → ReadableStream | Buffer | string`**, `applyResponse` handles streams/buffers/304. Unblocks streaming SSR + compression + binary + conditional GET.
+- ✅ **A. Response body widened — SHIPPED.** `KeelResponse<B extends KeelBody = string>` where `KeelBody = string | Uint8Array | ReadableStream` (a `string` default keeps every existing consumer non-breaking). `applyResponse` writes all three arms (string→end, Uint8Array→Buffer, ReadableStream→`Readable.fromWeb().pipe` with source/destination error handling that destroys the socket, never crashes); ETag/304 skips streams (can't hash without draining). Binary-safe static serving: `nodeStaticReader` reads bytes, `contentTypeOf`/`isBinaryType` cover image/font/media/wasm, body kind reconciled to extension. `Controller.bytes()` helper added. Cloudflare adapter passes the body straight to a Web `Response`. **Verified:** the real server returns a PNG byte-for-byte (incl. a `0xFF` byte) + a streamed body; ws:typecheck + ws:test green (2688), web/runtime/cloudflare 100% covered, examples untouched. This unblocks streaming SSR + compression + binary + conditional GET.
 - **B. Middleware pipeline + `AsyncLocalStorage` request context.** Default secure stack: cookie verify → session → CSRF → rate-limit → handler; ALS at the top carries request id/user/trace. **This is what finally turns csrf/cors/ratelimit from dead code into default-on protection** and pre-empts cross-request state leak. Add **trust-proxy** here so client IP/proto is correct for rate-limit + logging.
 
-*Exit:* a generated app enforces CSRF + rate-limit + CORS by default; one request emits a stitched trace via ALS; the response path can stream and compress.
+*Exit:* a generated app enforces CSRF + rate-limit + CORS by default; one request emits a stitched trace via ALS; the response path can stream and compress. **(A done; B remains.)**
 
 ### Tier 2 — built on the keystones
 - **Streaming SSR**: `renderToReadableStream` (unified Node path, React 19.2) + `<Suspense>` + `use()` render-as-you-fetch; keep the buffered `allReady` branch for crawlers.

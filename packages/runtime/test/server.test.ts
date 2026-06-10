@@ -944,6 +944,45 @@ describe("withEtag", () => {
 
     expect(withEtag(bare, {}).etag).toBeUndefined();
   });
+
+  it("skips a streamed HTML body — a stream cannot be hashed without draining it", () => {
+    // A 200 with an HTML content-type that would normally be tagged; but its body
+    // is a stream, so hashing it would consume the body we still owe the client.
+    const streamed = {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+
+          controller.close();
+        },
+      }),
+    };
+
+    const result = withEtag(streamed, {});
+
+    expect(result.etag).toBeUndefined();
+    // Passed through untouched — no ETag header was added.
+    expect(result.response).toBe(streamed);
+  });
+
+  it("tags a fully-buffered byte body — bytes are hashable just like a string", () => {
+    // Streaming SSR aside, an HTML response may arrive as bytes; those are
+    // buffered, so they hash to a stable ETag exactly as a string would.
+    const bytes = new Uint8Array(Buffer.from("<h1>Home</h1>", "utf8"));
+
+    const response = {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+      body: bytes,
+    };
+
+    const result = withEtag(response, {});
+
+    expect(result.etag).toBe(etagFor(bytes));
+    expect(result.response.headers["ETag"]).toBe(result.etag);
+  });
 });
 
 describe("ifNoneMatch", () => {

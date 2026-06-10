@@ -10,7 +10,7 @@ import type { AppHandler, RequestOptions, StaticReader } from "../src/index";
 
 import type { Site } from "@keel/sites";
 
-import type { KeelResponse } from "@keel/web";
+import type { AnyKeelResponse } from "@keel/web";
 
 /** A static reader over a fixed map; an absent key is a missing asset. */
 function fakeReader(files: Record<string, string>): StaticReader {
@@ -74,7 +74,7 @@ describe("dispatchSitesDev — live rendering", () => {
 
     const dispatch = dispatchSitesDev({ sites: [mls], handle });
 
-    const response: KeelResponse = await dispatch("POST", "/mls/session");
+    const response: AnyKeelResponse = await dispatch("POST", "/mls/session");
 
     expect(response.status).toBe(302);
     expect(response.headers).toEqual({ "set-cookie": "session=abc; HttpOnly" });
@@ -193,6 +193,22 @@ describe("dispatchSitesDev — client asset passthrough", () => {
     expect(js.headers).toEqual({ "content-type": "text/javascript; charset=utf-8" });
     expect(css.headers).toEqual({ "content-type": "text/css; charset=utf-8" });
     expect(map.headers).toEqual({ "content-type": "application/json" });
+  });
+
+  it("decodes a byte body to a string for a text asset", async () => {
+    // A real reader (nodeStaticReader) returns bytes from disk; a `.js` bundle is
+    // text, so the dev dispatcher decodes it to a string to match its type.
+    const dispatch = dispatchSitesDev({
+      sites: [marketing],
+      handle: recordingHandler({ status: 200, body: "" }).handle,
+      readAsset: () => Promise.resolve(new Uint8Array(Buffer.from("hydrate();", "utf8"))),
+    });
+
+    const response = await dispatch("GET", "/client.js");
+
+    expect(response.headers).toEqual({ "content-type": "text/javascript; charset=utf-8" });
+    expect(typeof response.body).toBe("string");
+    expect(response.body).toBe("hydrate();");
   });
 
   it("falls through to the sites when an asset-shaped path is a real page route", async () => {

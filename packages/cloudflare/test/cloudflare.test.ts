@@ -115,6 +115,45 @@ describe("toFetchHandler", () => {
 
     expect(calls[0]?.options.body).toBe("hello");
   });
+
+  it("passes a Uint8Array body through to the edge Response, byte-for-byte", async () => {
+    // Bytes a UTF-8 round trip would corrupt; a `Response` accepts them natively,
+    // so the adapter must not stringify them on the way out.
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00]);
+
+    const dispatch: EdgeDispatch = () =>
+      Promise.resolve({ status: 200, headers: { "content-type": "image/png" }, body: bytes });
+
+    const response = await toFetchHandler(dispatch)(new Request("https://example.com/logo.png"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+
+    const received = new Uint8Array(await response.arrayBuffer());
+
+    expect(Array.from(received)).toEqual(Array.from(bytes));
+  });
+
+  it("passes a ReadableStream body through to the edge Response", async () => {
+    // A streamed body must reach the edge as a stream, not be buffered or
+    // stringified — the foundation streaming SSR builds on later.
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(Buffer.from("chunk-")));
+        controller.enqueue(new Uint8Array(Buffer.from("stream")));
+
+        controller.close();
+      },
+    });
+
+    const dispatch: EdgeDispatch = () =>
+      Promise.resolve({ status: 200, headers: { "content-type": "text/html" }, body });
+
+    const response = await toFetchHandler(dispatch)(new Request("https://example.com/stream"));
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("chunk-stream");
+  });
 });
 
 // An assets binding that answers a fixed status for a known path, else 404.

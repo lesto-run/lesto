@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { App } from "@keel/kernel";
-import type { KeelResponse } from "@keel/web";
+import type { AnyKeelResponse, KeelResponse } from "@keel/web";
 
 import { applyResponse } from "./response";
 import { toKeelRequest } from "./request";
@@ -399,9 +399,9 @@ export async function healthResponse(
 
 /** Merge the default headers under a response; the response's own headers win. */
 export function withSecurityHeaders(
-  response: KeelResponse,
+  response: AnyKeelResponse,
   defaults: Record<string, string> | false,
-): KeelResponse {
+): AnyKeelResponse {
   if (defaults === false) return response;
 
   return { ...response, headers: { ...defaults, ...response.headers } };
@@ -468,9 +468,9 @@ export type EtagConfig = false | { readonly weak?: boolean };
  * non-HTML, the happy strong/weak tag — is unit-testable without a socket.
  */
 export function withEtag(
-  response: KeelResponse,
+  response: AnyKeelResponse,
   config: EtagConfig,
-): { response: KeelResponse; etag: string | undefined } {
+): { response: AnyKeelResponse; etag: string | undefined } {
   if (config === false) {
     return { response, etag: undefined };
   }
@@ -493,6 +493,14 @@ export function withEtag(
   // ETag-for-304 is about HTML pages (the dynamic/SSR path); other content types
   // either carry their own caching (static assets, below) or are one-shot.
   if (!isHtml(response.headers)) {
+    return { response, etag: undefined };
+  }
+
+  // A streamed body cannot be tagged: an ETag is a hash of the bytes, and
+  // hashing a stream means draining it — consuming the very body we still owe
+  // the client. So a stream (the streaming-SSR path, later) is sent untagged;
+  // only a fully-buffered body (string or bytes) can be hashed and 304'd.
+  if (response.body instanceof ReadableStream) {
     return { response, etag: undefined };
   }
 
@@ -811,6 +819,11 @@ export interface ErrorResponse {
  * invariant we protect is that the socket never hangs open, not that every
  * failure becomes a clean status line. Default response headers are merged in
  * so an error response is hardened like any other.
+ *
+ * The body is always a known string (see {@link bodyForStatus}), so we write it
+ * directly via `writeHead` + `end` rather than through {@link applyResponse}:
+ * that keeps {@link ErrorResponse} narrow — it needs no stream-piping surface,
+ * because an error is never a stream — and leaves its fakes unchanged.
  */
 export function respondWithError(
   res: ErrorResponse,
@@ -818,17 +831,17 @@ export function respondWithError(
   securityHeaders: Record<string, string> | false = false,
 ): void {
   if (!res.headersSent) {
-    applyResponse(
-      res,
-      withSecurityHeaders(
-        {
-          status,
-          headers: { "content-type": "text/plain; charset=utf-8" },
-          body: bodyForStatus(status),
-        },
-        securityHeaders,
-      ),
+    const body = bodyForStatus(status);
+
+    const hardened = withSecurityHeaders(
+      { status, headers: { "content-type": "text/plain; charset=utf-8" }, body },
+      securityHeaders,
     );
+
+    res.writeHead(hardened.status, hardened.headers);
+
+    // The local `body` is the string we just built; no cast, no narrowing.
+    res.end(body);
 
     return;
   }
