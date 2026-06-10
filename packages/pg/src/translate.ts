@@ -6,22 +6,27 @@
  * Postgres binds `$1`, `$2`, … instead, so the adapter rewrites the text once,
  * left to right, when a statement is prepared.
  *
- * A `?` inside a single-quoted SQL string literal is left untouched — defensive,
- * since Keel never puts a literal `?` in emitted SQL, but it keeps the translator
- * honest if a hand-written `db.exec` ever does. `''` (an escaped quote inside a
- * string) toggles the in-string flag twice, so the surrounding state is preserved.
+ * A `?` inside a single-quoted string literal OR a double-quoted identifier is
+ * left untouched — defensive, since Keel never puts a literal `?` in either, but
+ * it keeps the translator honest if a hand-written `db.exec` ever does. An escaped
+ * quote (`''` in a string, `""` in an identifier) toggles its flag twice, so the
+ * surrounding state is preserved. The two flags guard each other: a `"` inside a
+ * string and a `'` inside an identifier are ordinary characters, not delimiters.
  */
 export function translate(sql: string): string {
   let out = "";
   let index = 0;
   let inString = false;
+  let inIdent = false;
 
   for (const char of sql) {
-    if (char === "'") {
+    if (char === "'" && !inIdent) {
       inString = !inString;
+    } else if (char === '"' && !inString) {
+      inIdent = !inIdent;
     }
 
-    if (char === "?" && !inString) {
+    if (char === "?" && !inString && !inIdent) {
       index += 1;
       out += `$${index}`;
     } else {

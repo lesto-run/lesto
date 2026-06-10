@@ -52,7 +52,7 @@ export type Clock = () => number;
  * top-level `await` in a synchronous factory.
  */
 export interface SqlStatement {
-  run(parameters?: unknown[]): Promise<unknown>;
+  run(parameters?: unknown[]): Promise<{ changes: number }>;
   get(parameters?: unknown[]): Promise<unknown>;
   all(parameters?: unknown[]): Promise<unknown[]>;
 }

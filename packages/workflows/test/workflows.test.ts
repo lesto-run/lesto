@@ -26,7 +26,11 @@ const adapt = (database: Database.Database): SqlDatabase => {
         database.exec("COMMIT");
         return out;
       } catch (error) {
-        database.exec("ROLLBACK");
+        try {
+          database.exec("ROLLBACK");
+        } catch {
+          /* a failed rollback must not mask the original error */
+        }
         throw error;
       }
     },

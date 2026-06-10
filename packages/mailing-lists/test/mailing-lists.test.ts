@@ -27,8 +27,8 @@ import type { RenderedEmail } from "@keel/mail";
 // wrapped so each terminal resolves a Promise (zero latency); prepare() stays
 // sync, and transaction() pins the single in-memory connection.
 //
-// @keel/queue binds NAMED params, so it gets the raw Database directly; one
-// underlying DB satisfies both consumers through different adapters.
+// Both @keel/db and @keel/queue now speak the same positional, async seam, so a
+// single adapter handle serves both — matching production and the queue's own test.
 // ---------------------------------------------------------------------------
 
 function adapt(raw: Database.Database): SqlDatabase {
@@ -98,11 +98,10 @@ beforeEach(async () => {
   // in the test fixture.
   await new Migrator(sql, [mailingListsMigration]).migrate();
 
-  // Queue's named-param binding sees the raw Database; @keel/db sees the
-  // positional adapter. One underlying file, two shapes.
-  installSchema(raw as unknown as QueueDatabase);
+  // The queue rides the SAME async adapter as @keel/db — one connection, one seam.
+  installSchema(sql as unknown as QueueDatabase);
 
-  queue = new Queue({ db: raw as unknown as QueueDatabase });
+  queue = new Queue({ db: sql as unknown as QueueDatabase });
   mailer = new Mailer({ queue, transport });
   mailer.define<{ to: string; issue: number }>("digest", ({ to, issue }) => ({
     to,

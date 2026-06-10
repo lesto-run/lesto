@@ -1,8 +1,9 @@
 /**
  * The minimal SQL surface — what `@keel/db` consumes from a driver.
  *
- * Identical in shape to the surfaces `@keel/migrate` (and the legacy `@keel/orm`)
- * declare: `prepare(sql)` returning a statement with `run` / `get` / `all`, plus
+ * Identical in shape to the surface `@keel/migrate` declares (and re-declared by
+ * the other async consumers — cache, queue, workflows, the kernel):
+ * `prepare(sql)` returning a statement with `run` / `get` / `all`, plus
  * `exec(sql)` for migrations and other multi-statement DDL. A single adapter
  * (better-sqlite3 / `bun:sqlite` via `@keel/runtime`'s `openSqlite`, or a future
  * Postgres pool via `@keel/pg`) satisfies the whole surface, so the kernel hands

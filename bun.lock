@@ -461,6 +461,7 @@
         "@keel/identity": "workspace:*",
         "@keel/kernel": "workspace:*",
         "@keel/migrate": "workspace:*",
+        "@keel/pg": "workspace:*",
         "@keel/router": "workspace:*",
         "@keel/runtime": "workspace:*",
         "@keel/sites": "workspace:*",

@@ -25,4 +25,25 @@ describe("translate (? -> $n)", () => {
       "WHERE name = 'o''connor' AND id = $1",
     );
   });
+
+  it("does not translate a `?` inside a double-quoted identifier", () => {
+    expect(translate('SELECT "weird?col" FROM t WHERE a = ?')).toBe(
+      'SELECT "weird?col" FROM t WHERE a = $1',
+    );
+  });
+
+  it("a single quote inside an identifier is an ordinary char (no string toggle)", () => {
+    // The `'` inside "o'brien" must NOT open a string; the trailing `?` still binds.
+    expect(translate('SELECT "o\'brien" FROM t WHERE a = ?')).toBe(
+      'SELECT "o\'brien" FROM t WHERE a = $1',
+    );
+  });
+
+  it("a double quote inside a string literal is an ordinary char (no identifier toggle)", () => {
+    // The `"` inside the string must NOT open an identifier; the `?` in the string
+    // stays literal and the one after binds.
+    expect(translate("WHERE note = 'say \"hi\" to ?' AND a = ?")).toBe(
+      "WHERE note = 'say \"hi\" to ?' AND a = $1",
+    );
+  });
 });

@@ -19,7 +19,7 @@ type Handler = (text: string, values: unknown[]) => PgQueryResult;
 
 function fakePg(handler: Handler = () => ({ rows: [], rowCount: 0 })) {
   const calls: QueryCall[] = [];
-  const state = { released: 0, ended: 0, connected: 0 };
+  const state = { released: 0, ended: 0, connected: 0, releaseErr: undefined as unknown };
 
   const query =
     (on: "pool" | "client") =>
@@ -31,8 +31,9 @@ function fakePg(handler: Handler = () => ({ rows: [], rowCount: 0 })) {
 
   const client: PgClient = {
     query: query("client"),
-    release: () => {
+    release: (err?: unknown) => {
       state.released += 1;
+      state.releaseErr = err;
     },
   };
 
@@ -72,22 +73,22 @@ describe("createPgDatabase — statements", () => {
     expect(calls[0]?.values).toEqual([1, 2]);
   });
 
-  it("run surfaces lastInsertRowid from a numeric RETURNING id row", async () => {
+  it("run returns only { changes } — lastInsertRowid is never inferred (pg omits it)", async () => {
+    // Even when a RETURNING row comes back, run() does NOT leak an id; a caller
+    // that wants the id reads it via .returning().get() / RETURNING id + .get().
     const { pool } = fakePg(() => ({ rows: [{ id: 42 }], rowCount: 1 }));
     const db = createPgDatabase(pool);
 
     const result = await db.prepare("INSERT INTO t (a) VALUES (?) RETURNING id").run(["x"]);
 
-    expect(result).toEqual({ changes: 1, lastInsertRowid: 42 });
+    expect(result).toEqual({ changes: 1 });
   });
 
-  it("run omits lastInsertRowid when the returned row has no numeric id, and treats null rowCount as 0", async () => {
-    const { pool } = fakePg(() => ({ rows: [{ name: "x" }], rowCount: null }));
+  it("treats a null rowCount as 0 changes", async () => {
+    const { pool } = fakePg(() => ({ rows: [], rowCount: null }));
     const db = createPgDatabase(pool);
 
-    const result = await db.prepare("INSERT INTO t (name) VALUES (?) RETURNING name").run(["x"]);
-
-    expect(result).toEqual({ changes: 0 });
+    expect(await db.prepare("UPDATE t SET a = ?").run([1])).toEqual({ changes: 0 });
   });
 
   it("get returns the first row, or undefined when there are none", async () => {
@@ -124,20 +125,45 @@ describe("createPgDatabase — transaction", () => {
     expect(state.released).toBe(1);
   });
 
-  it("rolls back and re-raises when the callback throws, still releasing the client", async () => {
+  it("rolls back and re-raises when the callback throws, discarding the client via release(err)", async () => {
     const { pool, calls, state } = fakePg(() => ({ rows: [], rowCount: 0 }));
     const db = createPgDatabase(pool);
+
+    const boom = new Error("boom");
 
     await expect(
       db.transaction(async (tx) => {
         await tx.exec("INSERT INTO t (a) VALUES (1)");
 
-        throw new Error("boom");
+        throw boom;
       }),
-    ).rejects.toThrow("boom");
+    ).rejects.toBe(boom);
 
     expect(calls.map((c) => c.text)).toEqual(["BEGIN", "INSERT INTO t (a) VALUES (1)", "ROLLBACK"]);
     expect(state.released).toBe(1);
+    // The error is handed to release() so the pool discards the suspect client.
+    expect(state.releaseErr).toBe(boom);
+  });
+
+  it("a failing ROLLBACK does not mask the original error", async () => {
+    // The work throws, then ROLLBACK itself throws — the ORIGINAL error must win.
+    const { pool, state } = fakePg((text) => {
+      if (text === "ROLLBACK") throw new Error("rollback failed");
+
+      return { rows: [], rowCount: 0 };
+    });
+    const db = createPgDatabase(pool);
+
+    const boom = new Error("original");
+
+    await expect(
+      db.transaction(async () => {
+        throw boom;
+      }),
+    ).rejects.toBe(boom);
+
+    expect(state.released).toBe(1);
+    expect(state.releaseErr).toBe(boom);
   });
 
   it("a nested transaction runs flat on the same client (no second BEGIN)", async () => {

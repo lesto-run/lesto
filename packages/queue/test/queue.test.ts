@@ -591,4 +591,50 @@ describe("Scheduler", () => {
     schedule.start({ intervalMs: 10_000 }).stop(); // real setInterval/clearInterval
     schedule.start({ setInterval: () => 1, clearInterval: () => {} }).stop(); // default intervalMs
   });
+
+  it("start() does not overlap ticks: a fire while one is in flight is skipped", async () => {
+    const schedule = new Scheduler({ queue, clock: () => new Date(2026, 5, 8, 9, 30, 0) });
+    schedule.cron("30 9 * * *", "digest");
+
+    // Spy on tick to (a) hold each tick open until released and (b) record the
+    // peak concurrency. With the no-overlap guard, two timer fires must yield a
+    // peak of 1; without it, the second fire would start a concurrent tick (2).
+    let inFlight = 0;
+    let peak = 0;
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realTick = schedule.tick.bind(schedule);
+    schedule.tick = async (when?: Date) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await held;
+      const fired = await realTick(when);
+      inFlight -= 1;
+
+      return fired;
+    };
+
+    let captured: (() => void) | undefined;
+    const handle = schedule.start({
+      setInterval: (callback) => {
+        captured = callback;
+
+        return 1;
+      },
+      clearInterval: () => {},
+    });
+
+    (captured as () => void)(); // tick 1 starts, holds open (ticking = true)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    (captured as () => void)(); // fires while tick 1 in flight → must be skipped
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(peak).toBe(1);
+
+    release?.(); // let tick 1 finish
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    handle.stop();
+  });
 });

@@ -151,10 +151,26 @@ export class Scheduler {
     // enqueues are now async. A rejected tick must not become an unhandled
     // rejection that crashes the process, so it is swallowed here — the next
     // tick will retry on the following cadence.
+    //
+    // No-overlap invariant (restored from the synchronous scheduler): if a tick
+    // is still in flight when the next cadence fires, skip it rather than run a
+    // second concurrent tick. Two overlapping ticks can interleave on their
+    // `await`s and double-enqueue an entry (the snapshot one tick took before its
+    // await still gets processed after another tick fired the same entry).
+    let ticking = false;
+
     const handle = setTimer(() => {
-      void this.tick().catch(() => {
-        /* a transient enqueue fault is retried on the next cadence */
-      });
+      if (ticking) return;
+
+      ticking = true;
+
+      void this.tick()
+        .catch(() => {
+          /* a transient enqueue fault is retried on the next cadence */
+        })
+        .finally(() => {
+          ticking = false;
+        });
     }, intervalMs);
 
     return {

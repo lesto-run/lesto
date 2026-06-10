@@ -2,12 +2,12 @@
  * The four query verbs — `select`, `insert`, `update`, `delete` — built on
  * the schema-as-value.
  *
- *   const user = db.select().from(users).where(eq(users.email, e)).get();
- *   db.insert(users).values({ email, passwordHash, ... }).returning().get();
- *   db.update(users).set({ passwordHash }).where(eq(users.id, 1)).run();
- *   db.delete(users).where(eq(users.id, 1)).run();
+ *   const user = await db.select().from(users).where(eq(users.email, e)).get();
+ *   await db.insert(users).values({ email, passwordHash, ... }).returning().get();
+ *   await db.update(users).set({ passwordHash }).where(eq(users.id, 1)).run();
+ *   await db.delete(users).where(eq(users.id, 1)).run();
  *
- * Each verb is a fluent chain that *terminates* in a driver call:
+ * Each verb is a fluent chain that *terminates* in an awaited driver call:
  *
  *   - `.get()` — first row or `undefined` (always `LIMIT 1`).
  *   - `.all()` — every row.

@@ -117,9 +117,8 @@ export function createMailingLists(options: MailingListsOptions): MailingLists {
       const recipients = await subscribedRecipients(db, listId);
 
       for (const recipient of recipients) {
-        // `mailer.send` enqueues a delivery job on @keel/queue. The queue is
-        // being flipped async in this same wave; `await` tolerates its current
-        // sync return and is correct once it is a Promise.
+        // `mailer.send` enqueues a delivery job on @keel/queue (async); awaited so
+        // an enqueue failure rejects the broadcast rather than dropping a send.
         await mailer.send(mailerName, { ...params, to: recipient.email });
       }
 

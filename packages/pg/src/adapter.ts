@@ -35,22 +35,21 @@ export interface PgQueryable {
   query(text: string, values?: unknown[]): Promise<PgQueryResult>;
 }
 
-/** A checked-out pooled client — queryable, plus released back to the pool. */
+/**
+ * A checked-out pooled client — queryable, plus released back to the pool.
+ *
+ * `release(err)` mirrors node-postgres: pass the error that broke the
+ * transaction and the pool DISCARDS the client (it may be in an unknown state)
+ * rather than recycling it; pass nothing to return a healthy client to the pool.
+ */
 export interface PgClient extends PgQueryable {
-  release(): void;
+  release(err?: unknown): void;
 }
 
 /** A `pg.Pool`: queryable, hands out clients for transactions, closeable. */
 export interface PgPool extends PgQueryable {
   connect(): Promise<PgClient>;
   end(): Promise<void>;
-}
-
-/** The numeric `id` from a `RETURNING id` row, or `undefined`. */
-function insertedId(rows: unknown[]): number | undefined {
-  const row = rows[0] as Record<string, unknown> | undefined;
-
-  return row !== undefined && typeof row["id"] === "number" ? row["id"] : undefined;
 }
 
 /** The `exec` + `prepare` half of the seam, over any queryable (pool or client). */
@@ -65,14 +64,13 @@ function statementsOver(queryable: PgQueryable): Pick<SqlDatabase, "exec" | "pre
       const text = translate(sql);
 
       return {
+        // `lastInsertRowid` is intentionally omitted (the seam marks it optional):
+        // Postgres has no implicit row id, and the only consumer that wants an id
+        // reads it explicitly via `INSERT ... RETURNING id` + `.get()` (the queue).
         run: async (params = []) => {
           const result = await queryable.query(text, params);
-          const id = insertedId(result.rows);
 
-          return {
-            changes: result.rowCount ?? 0,
-            ...(id !== undefined && { lastInsertRowid: id }),
-          };
+          return { changes: result.rowCount ?? 0 };
         },
 
         get: async (params = []) => {
@@ -98,6 +96,7 @@ export function createPgDatabase(pool: PgPool): SqlDatabase {
 
     transaction: async (fn) => {
       const client = await pool.connect();
+      let failure: unknown;
 
       try {
         await client.query("BEGIN");
@@ -116,11 +115,21 @@ export function createPgDatabase(pool: PgPool): SqlDatabase {
 
         return out;
       } catch (error) {
-        await client.query("ROLLBACK");
+        failure = error;
+
+        // Best-effort rollback: a throwing ROLLBACK must not mask the original
+        // error (which stays the rejection).
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          /* keep the original error */
+        }
 
         throw error;
       } finally {
-        client.release();
+        // On failure the client may be in an unknown state — hand the error to
+        // release() so the pool discards it instead of recycling a broken client.
+        client.release(failure);
       }
     },
   };
