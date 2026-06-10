@@ -453,24 +453,32 @@ describe("createDebouncedAsync", () => {
   });
 
   it("resets timer on new calls", async () => {
-    const fn = vi.fn().mockResolvedValue("result");
-    const debounced = createDebouncedAsync(fn, 100);
+    // Fake timers: wall-clock sleeps race the 100ms debounce under parallel CI
+    // load (coverage instrumentation), so advance virtual time deterministically.
+    // advanceTimersByTimeAsync also drains the microtasks the timeout awaits.
+    vi.useFakeTimers();
+    try {
+      const fn = vi.fn().mockResolvedValue("result");
+      const debounced = createDebouncedAsync(fn, 100);
 
-    debounced("call1");
-    await new Promise((resolve) => setTimeout(resolve, 50));
+      debounced("call1");
+      await vi.advanceTimersByTimeAsync(50);
 
-    debounced("call2");
-    await new Promise((resolve) => setTimeout(resolve, 50));
+      debounced("call2");
+      await vi.advanceTimersByTimeAsync(50);
 
-    // Should not have been called yet (timer reset)
-    expect(fn).not.toHaveBeenCalled();
+      // Only 50ms since call2 — the 100ms timer was reset and hasn't fired.
+      expect(fn).not.toHaveBeenCalled();
 
-    debounced("call3");
-    await new Promise((resolve) => setTimeout(resolve, 110));
+      debounced("call3");
+      await vi.advanceTimersByTimeAsync(110);
 
-    // Now should be called with last args
-    expect(fn).toHaveBeenCalledTimes(1);
-    expect(fn).toHaveBeenCalledWith("call3");
+      // Now should be called with last args
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(fn).toHaveBeenCalledWith("call3");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("allows multiple arguments", async () => {

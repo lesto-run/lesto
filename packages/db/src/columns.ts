@@ -75,8 +75,11 @@ type ColumnOf<T> = Column<T, boolean, boolean>;
  * (`.notNull()`, `.unique()`, etc.) returns a fresh builder with the
  * modifier flipped in the type.
  */
-export interface ColumnBuilder<T, Nullable extends boolean, HasDefault extends boolean>
-  extends Column<T, Nullable, HasDefault> {
+export interface ColumnBuilder<
+  T,
+  Nullable extends boolean,
+  HasDefault extends boolean,
+> extends Column<T, Nullable, HasDefault> {
   /** Mark the column `NOT NULL`. Default for new columns is *nullable*. */
   notNull(): ColumnBuilder<T, false, HasDefault>;
 
@@ -95,7 +98,9 @@ export interface ColumnBuilder<T, Nullable extends boolean, HasDefault extends b
 }
 
 /** Compose a fresh builder around a (frozen) spec. */
-function builder<T, N extends boolean, D extends boolean>(spec: ColumnSpec): ColumnBuilder<T, N, D> {
+function builder<T, N extends boolean, D extends boolean>(
+  spec: ColumnSpec,
+): ColumnBuilder<T, N, D> {
   const self: ColumnBuilder<T, N, D> = {
     spec,
     notNull: () => builder({ ...spec, nullable: false }),

@@ -19,6 +19,7 @@
  * every user-supplied value rides a `?` placeholder.
  */
 
+import type { Column } from "./columns";
 import type { Condition } from "./conditions";
 import { DbError } from "./errors";
 import { quoteIdentifier } from "./identifier";
@@ -53,60 +54,160 @@ function hydrate<T extends Table>(table: T, raw: unknown): InferRow<T> {
 
 // ---------------------------------------------------------------------------
 // SELECT
+//
+// One {@link SelectQuery} type carries every chain stage. Each modifier
+// (`where` / `orderBy` / `limit` / `offset`) returns a *new* `SelectQuery`
+// with the state updated — immutable chain, no `this`. Three terminators
+// (`get` / `all` / `count`) compile the accumulated state to SQL and run
+// it. Modifier order is canonical at render time, so callers may chain in
+// whatever order reads best; every call is "last-wins" if repeated.
 // ---------------------------------------------------------------------------
 
-interface SelectFrom<T extends Table> {
-  /** Add a `WHERE` clause. Chainable. */
-  where(condition: Condition): SelectWhere<T>;
-
-  /** First row, or `undefined`. */
-  get(): InferRow<T> | undefined;
-
-  /** Every row. */
-  all(): InferRow<T>[];
+interface OrderBy {
+  readonly column: string;
+  readonly direction: "asc" | "desc";
 }
 
-interface SelectWhere<T extends Table> {
+interface SelectState<T extends Table> {
+  readonly table: T;
+  readonly where: Condition | undefined;
+  readonly orderBy: OrderBy | undefined;
+  readonly limit: number | undefined;
+  readonly offset: number | undefined;
+}
+
+/** A typed SELECT chain. Modifiers return a new query; terminators run it. */
+export interface SelectQuery<T extends Table> {
+  /** Add or replace the `WHERE` clause. */
+  where(condition: Condition): SelectQuery<T>;
+
+  /** Add or replace the `ORDER BY` clause. `direction` defaults to `"asc"`. */
+  orderBy(column: Column<unknown, boolean, boolean>, direction?: "asc" | "desc"): SelectQuery<T>;
+
+  /** Cap the row count. */
+  limit(count: number): SelectQuery<T>;
+
+  /** Skip `count` rows before yielding the first. */
+  offset(count: number): SelectQuery<T>;
+
+  /** First row matching the chain (always `LIMIT 1`), or `undefined`. */
   get(): InferRow<T> | undefined;
+
+  /** Every row matching the chain, in chain order. */
   all(): InferRow<T>[];
+
+  /**
+   * Count rows matching the `WHERE` clause. Ignores `orderBy` / `limit` /
+   * `offset` — counting all matching rows is the only useful semantic
+   * (LIMIT-ed counts are almost always a bug).
+   */
+  count(): number;
 }
 
 interface SelectBuilder {
-  from<T extends Table>(table: T): SelectFrom<T>;
+  from<T extends Table>(table: T): SelectQuery<T>;
+}
+
+/** Render WHERE + (optionally) ORDER BY / LIMIT / OFFSET into a (sql, params) pair. */
+function renderSelect<T extends Table>(
+  state: SelectState<T>,
+  options: { projection: string; respectLimitOrder: boolean },
+): { sql: string; params: unknown[] } {
+  const parts = [`SELECT ${options.projection} FROM ${quoteIdentifier(state.table.tableName)}`];
+  const params: unknown[] = [];
+
+  if (state.where) {
+    parts.push(`WHERE ${state.where.sql}`);
+    params.push(...state.where.params);
+  }
+
+  if (options.respectLimitOrder) {
+    if (state.orderBy) {
+      parts.push(
+        `ORDER BY ${quoteIdentifier(state.orderBy.column)} ${state.orderBy.direction.toUpperCase()}`,
+      );
+    }
+
+    // `LIMIT` and `OFFSET` are decoupled at the user level but coupled in
+    // SQLite (which requires a LIMIT for OFFSET to take effect). When the
+    // caller asked for offset alone, we emit `LIMIT -1` — the SQLite idiom
+    // for "no row cap" — so the offset still applies. A Postgres driver
+    // would render this as a bare `OFFSET`; that's the driver's concern.
+    if (state.limit !== undefined) {
+      parts.push(`LIMIT ${state.limit}`);
+      if (state.offset !== undefined) parts.push(`OFFSET ${state.offset}`);
+    } else if (state.offset !== undefined) {
+      parts.push(`LIMIT -1 OFFSET ${state.offset}`);
+    }
+  }
+
+  return { sql: parts.join(" "), params };
+}
+
+interface CountRow {
+  readonly c: number | bigint;
+}
+
+function makeQuery<T extends Table>(sql: SqlDatabase, state: SelectState<T>): SelectQuery<T> {
+  const next = (patch: Partial<SelectState<T>>): SelectQuery<T> =>
+    makeQuery(sql, { ...state, ...patch });
+
+  return {
+    where: (condition) => next({ where: condition }),
+    orderBy: (column, direction = "asc") =>
+      next({ orderBy: { column: column.spec.name, direction } }),
+    limit: (count) => next({ limit: count }),
+    offset: (count) => next({ offset: count }),
+
+    get(): InferRow<T> | undefined {
+      // `.get()` is `LIMIT 1` regardless of what the user set — the most
+      // useful semantic, matching better-sqlite3's `get()` and Drizzle's
+      // `.get()`.
+      const { sql: stmt, params } = renderSelect(
+        { ...state, limit: 1, offset: state.offset },
+        { projection: "*", respectLimitOrder: true },
+      );
+      const row = sql.prepare(stmt).get(params);
+
+      return row === undefined ? undefined : hydrate(state.table, row);
+    },
+
+    all(): InferRow<T>[] {
+      const { sql: stmt, params } = renderSelect(state, {
+        projection: "*",
+        respectLimitOrder: true,
+      });
+
+      return sql
+        .prepare(stmt)
+        .all(params)
+        .map((row) => hydrate(state.table, row));
+    },
+
+    count(): number {
+      const { sql: stmt, params } = renderSelect(state, {
+        projection: "COUNT(*) AS c",
+        respectLimitOrder: false,
+      });
+      const row = sql.prepare(stmt).get(params) as CountRow;
+
+      // better-sqlite3 may hand back a bigint when safeIntegers is on;
+      // coerce to number for the common single-table count.
+      return Number(row.c);
+    },
+  };
 }
 
 function makeSelect(sql: SqlDatabase): SelectBuilder {
   return {
-    from<T extends Table>(table: T): SelectFrom<T> {
-      const base = `SELECT * FROM ${quoteIdentifier(table.tableName)}`;
-
-      const run = (condition: Condition | undefined, limit: number | undefined): InferRow<T>[] => {
-        const parts = [base];
-        const params: unknown[] = [];
-
-        if (condition) {
-          parts.push(`WHERE ${condition.sql}`);
-          params.push(...condition.params);
-        }
-
-        if (limit !== undefined) parts.push(`LIMIT ${limit}`);
-
-        const rows = sql.prepare(parts.join(" ")).all(params);
-
-        return rows.map((row) => hydrate(table, row));
-      };
-
-      const get = (condition: Condition | undefined): InferRow<T> | undefined =>
-        run(condition, 1)[0];
-
-      return {
-        where: (condition) => ({
-          get: () => get(condition),
-          all: () => run(condition, undefined),
-        }),
-        get: () => get(undefined),
-        all: () => run(undefined, undefined),
-      };
+    from<T extends Table>(table: T): SelectQuery<T> {
+      return makeQuery(sql, {
+        table,
+        where: undefined,
+        orderBy: undefined,
+        limit: undefined,
+        offset: undefined,
+      });
     },
   };
 }

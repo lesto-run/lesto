@@ -249,6 +249,96 @@ describe("select", () => {
 });
 
 // ---------------------------------------------------------------------------
+// select modifiers — orderBy / limit / offset / count
+// ---------------------------------------------------------------------------
+
+describe("select modifiers", () => {
+  // Insert a small, deterministic set we can order + paginate over.
+  beforeEach(() => {
+    db.insert(users).values({ email: "c@x", passwordHash: "h", score: 30 }).run();
+    db.insert(users).values({ email: "a@x", passwordHash: "h", score: 10 }).run();
+    db.insert(users).values({ email: "b@x", passwordHash: "h", score: 20 }).run();
+  });
+
+  describe("orderBy", () => {
+    it("defaults to ascending when no direction is supplied", () => {
+      const rows = db.select().from(users).orderBy(users.email).all();
+
+      expect(rows.map((r) => r.email)).toEqual(["a@x", "b@x", "c@x"]);
+    });
+
+    it("descending sorts the other way", () => {
+      const rows = db.select().from(users).orderBy(users.score, "desc").all();
+
+      expect(rows.map((r) => r.score)).toEqual([30, 20, 10]);
+    });
+
+    it("last orderBy wins (idiomatic chain replacement)", () => {
+      const rows = db.select().from(users).orderBy(users.email).orderBy(users.score, "desc").all();
+
+      expect(rows.map((r) => r.score)).toEqual([30, 20, 10]);
+    });
+
+    it("composes with where", () => {
+      const rows = db
+        .select()
+        .from(users)
+        .where(ne(users.email, "b@x"))
+        .orderBy(users.score, "desc")
+        .all();
+
+      expect(rows.map((r) => r.email)).toEqual(["c@x", "a@x"]);
+    });
+  });
+
+  describe("limit", () => {
+    it("caps the row count", () => {
+      const rows = db.select().from(users).orderBy(users.email).limit(2).all();
+
+      expect(rows.map((r) => r.email)).toEqual(["a@x", "b@x"]);
+    });
+
+    it(".get() is implicitly LIMIT 1 and overrides a larger .limit()", () => {
+      const row = db.select().from(users).orderBy(users.email).limit(5).get();
+
+      expect(row?.email).toBe("a@x");
+    });
+  });
+
+  describe("offset", () => {
+    it("with limit, skips then yields", () => {
+      const rows = db.select().from(users).orderBy(users.email).limit(2).offset(1).all();
+
+      expect(rows.map((r) => r.email)).toEqual(["b@x", "c@x"]);
+    });
+
+    it("without limit, emits LIMIT -1 OFFSET n (SQLite-friendly)", () => {
+      const rows = db.select().from(users).orderBy(users.email).offset(1).all();
+
+      // Two rows after skipping the first.
+      expect(rows.map((r) => r.email)).toEqual(["b@x", "c@x"]);
+    });
+  });
+
+  describe("count", () => {
+    it("counts every row when no where is set", () => {
+      expect(db.select().from(users).count()).toBe(3);
+    });
+
+    it("honors the where clause", () => {
+      expect(db.select().from(users).where(ne(users.email, "b@x")).count()).toBe(2);
+    });
+
+    it("ignores orderBy/limit/offset (a limited count is almost always a bug)", () => {
+      // The user asked for at most 1 row, but we count the full match set.
+      expect(db.select().from(users).orderBy(users.score, "desc").limit(1).offset(99).count()).toBe(
+        3,
+      );
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // INSERT
 // ---------------------------------------------------------------------------
 

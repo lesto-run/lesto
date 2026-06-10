@@ -7,6 +7,8 @@
 
 **Scout finding (Phase C):** `@keel/content-store` and `@keel/queue` were *expected* to need migration but already talk raw `SqlDatabase` and never imported `@keel/orm` — they need no work. The real Phase C consumers are `@keel/mailing-lists` (done), `examples/blog` (needs `.orderBy/.limit/.offset` added to `@keel/db`), and `packages/admin` (the meta-introspection consumer — forces the validation-as-boundary decision, ADR 0005 candidate).
 
+**Phase C.2 shipped (2026-06-09):** `@keel/db` grew `.orderBy(column, direction?)`, `.limit(n)`, `.offset(n)`, and `.count()` as an immutable chain on a new `SelectQuery<T>` type. Modifiers are last-wins; `.get()` always uses `LIMIT 1` regardless of user `.limit`; `.count()` honors `WHERE` but ignores `orderBy`/`limit`/`offset` (a limited count is almost always a bug). SQLite quirk: `OFFSET` without `LIMIT` emits `LIMIT -1 OFFSET n` so the offset still applies. 42 tests, 100% lines/branches/functions/statements. Unblocks Phase C.3 (`examples/blog`).
+
 ## Context
 
 Keel's brand promise is "Rails+Laravel+WordPress+Next, best-of." On the

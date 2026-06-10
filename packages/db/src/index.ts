@@ -58,7 +58,7 @@ export { and, eq, isNotNull, isNull, ne, or } from "./conditions";
 export type { Condition } from "./conditions";
 
 export { createDb } from "./queries";
-export type { Db } from "./queries";
+export type { Db, SelectQuery } from "./queries";
 
 export type { SqlDatabase, SqlStatement } from "./sql";
 

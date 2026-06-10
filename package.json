@@ -9,6 +9,7 @@
     "lint": "oxlint packages",
     "format:check": "oxfmt --check packages",
     "ws:test": "bun run --filter '@keel/*' test",
+    "ws:test:cov": "bun run scripts/coverage-gate.ts",
     "ws:lint": "bun run --filter '@keel/*' lint",
     "ws:format:check": "bun run --filter '@keel/*' format:check",
     "ws:typecheck": "bun run --filter '@keel/*' typecheck"

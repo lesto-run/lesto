@@ -36,12 +36,25 @@ jobs:
       - name: Lint
         run: bun run lint
 
-      - name: Test (workspace)
-        run: bun run ws:test
+      # Coverage-gated: every package that declares a `test:cov` script is run
+      # under v8 coverage and must meet its 100% lines/branches/functions/
+      # statements threshold. Runs serially (see scripts/coverage-gate.ts) so the
+      # gate is deterministic on a busy runner. Excludes the frozen content-*
+      # baselines (no thresholds yet) and @keel/integration/e2e (no test:cov),
+      # which run as their own steps below.
+      - name: Test (coverage-gated)
+        run: bun run ws:test:cov
 
-      # create-keel is named `create-keel`, so the `@keel/*` workspace filter skips it.
-      - name: Test (create-keel)
-        working-directory: packages/create-keel
+      # The folded-in content-* suites carry tracked, frozen coverage debt
+      # (see CONTENT_COVERAGE.md) and are not gated yet — run them without the
+      # coverage threshold so their tests still execute on every PR.
+      - name: Test (content packages, ungated)
+        run: bun run --filter '@keel/content-*' test
+
+      # @keel/integration is a cross-package journey suite with no src of its own
+      # to cover, so it declares no thresholds and is excluded from the gate.
+      - name: Test (integration)
+        working-directory: packages/integration
         run: bun run test
 
       # Informational until the content-* formatting debt is paid down. The
