@@ -72,10 +72,31 @@ export interface MountContext {
 /** Where hydration's recoverable errors go — wired to React's `onRecoverableError`. */
 export type RecoverableErrorSink = (error: unknown, errorInfo: { componentStack?: string }) => void;
 
-/** What `hydrateIslands` did: the ids it brought to life and the ones it couldn't find. */
+/**
+ * Where a *fatal* per-island mount error goes — the throw a single island's
+ * mount raised, which we catch so the rest of the page still hydrates.
+ *
+ * This is distinct from `RecoverableErrorSink`: that one carries React's
+ * already-recovered hydration mismatches (the mount succeeded, React patched the
+ * DOM); this one carries a mount that genuinely failed (it threw and that island
+ * is dead). The id of the island whose mount threw rides along so the caller can
+ * tell which region is broken.
+ */
+export type MountErrorSink = (error: unknown, info: { id: string; component: string }) => void;
+
+/**
+ * What `hydrateIslands` did: the ids it brought to life, the ones it couldn't
+ * find a shell for, and the ones whose mount threw.
+ *
+ * `failed` is the resilience seam: one island's mount throwing no longer aborts
+ * the loop, so a single broken region cannot dark out every island after it in
+ * the manifest. A page with no broken islands gets an empty `failed`, so the
+ * common case reads exactly as before plus one always-empty array.
+ */
 export interface HydrationResult {
   mounted: string[];
   missing: string[];
+  failed: string[];
 }
 
 /** Optional injection seams; all default to the real browser + React. */
@@ -83,6 +104,7 @@ export interface HydrateOptions {
   root?: IslandRoot;
   mount?: MountFn;
   onRecoverableError?: RecoverableErrorSink;
+  onMountError?: MountErrorSink;
 }
 
 /**
@@ -108,6 +130,11 @@ const consoleRecoverableError: RecoverableErrorSink = (error) => {
   console.error("[keel/ui] recoverable hydration error", error);
 };
 
+/** Default sink: surface a fatal per-island mount error, naming the dead island. */
+const consoleMountError: MountErrorSink = (error, info) => {
+  console.error(`[keel/ui] island "${info.id}" (${info.component}) failed to mount`, error);
+};
+
 /**
  * Hydrate every island in `manifest`, pairing each mount's `id` to its shell.
  *
@@ -115,7 +142,16 @@ const consoleRecoverableError: RecoverableErrorSink = (error) => {
  * `missing` (a page may legitimately render only some islands). A mount whose
  * `component` is not a registered client component is a programming error —
  * the manifest and registry have drifted — and throws
- * `UI_ISLAND_UNKNOWN_COMPONENT`.
+ * `UI_ISLAND_UNKNOWN_COMPONENT`. That throw is deliberately NOT caught: a
+ * manifest/registry mismatch is a build-time bug affecting the whole page, not a
+ * per-visitor runtime fault, so failing loud at the first drifted id is correct.
+ *
+ * A mount that *throws at runtime* (a component that blows up during its initial
+ * render) is a different animal: it dents one region, not the build. We catch it,
+ * route it to `onMountError`, record the id in `failed`, and keep going — so a
+ * single broken island can never dark out every island that follows it in the
+ * manifest. This mirrors React's own per-root hydration resilience at the
+ * island-orchestration layer above it.
  */
 export function hydrateIslands(
   registry: Registry,
@@ -129,9 +165,13 @@ export function hydrateIslands(
   const onRecoverableError: RecoverableErrorSink =
     options.onRecoverableError ?? consoleRecoverableError;
 
+  const onMountError: MountErrorSink = options.onMountError ?? consoleMountError;
+
   const mounted: string[] = [];
 
   const missing: string[] = [];
+
+  const failed: string[] = [];
 
   for (const entry of manifest) {
     const def = registry.getClient(entry.component);
@@ -153,15 +193,23 @@ export function hydrateIslands(
       continue;
     }
 
-    mount(container, createElement(def.component, entry.props), {
-      ssr: entry.ssr,
-      onRecoverableError,
-    });
+    try {
+      mount(container, createElement(def.component, entry.props), {
+        ssr: entry.ssr,
+        onRecoverableError,
+      });
 
-    mounted.push(entry.id);
+      mounted.push(entry.id);
+    } catch (error) {
+      // One island's mount threw. Route it to the sink, mark it failed, and keep
+      // hydrating the rest — a broken region must not take the page down with it.
+      onMountError(error, { id: entry.id, component: entry.component });
+
+      failed.push(entry.id);
+    }
   }
 
-  return { mounted, missing };
+  return { mounted, missing, failed };
 }
 
 /**

@@ -7,7 +7,7 @@ import { createElement } from "react";
 import { ISLAND_ATTR, Registry, renderPage, renderPageMarkup, UiError } from "../src/index";
 import type { ClientComponentDef } from "../src/index";
 import { hydrateIslands } from "../src/hydrate";
-import type { MountFn } from "../src/hydrate";
+import type { MountErrorSink, MountFn } from "../src/hydrate";
 
 // ---------------------------------------------------------------------------
 // Client components used as hydration targets. Each renders something the test
@@ -84,7 +84,7 @@ describe("hydrateIslands — deferred islands (createRoot)", () => {
       result = hydrateIslands(registry(), manifest);
     });
 
-    expect(result).toEqual({ mounted: ["$"], missing: [] });
+    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [] });
     expect(document.body.querySelector(".live")?.textContent).toBe("Hi, Ada");
   });
 
@@ -101,7 +101,7 @@ describe("hydrateIslands — deferred islands (createRoot)", () => {
 
     const result = hydrateIslands(registry(), manifest, { mount });
 
-    expect(result).toEqual({ mounted: ["$"], missing: [] });
+    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [] });
     expect(mounts).toEqual([{ id: "$", plan: "outer", ssr: false }]);
   });
 });
@@ -122,7 +122,7 @@ describe("hydrateIslands — ssr islands (hydrateRoot)", () => {
       result = hydrateIslands(registry(), manifest);
     });
 
-    expect(result).toEqual({ mounted: ["$"], missing: [] });
+    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [] });
     // After hydration the same node is live — still the real component's output.
     expect(document.body.querySelector(".stamp")?.textContent).toBe("READY");
   });
@@ -218,7 +218,7 @@ describe("hydrateIslands — pairing and drift", () => {
       mount: (container) => calls.push(container.tagName),
     });
 
-    expect(result).toEqual({ mounted: [], missing: ["$"] });
+    expect(result).toEqual({ mounted: [], missing: ["$"], failed: [] });
     expect(calls).toEqual([]);
   });
 
@@ -233,7 +233,7 @@ describe("hydrateIslands — pairing and drift", () => {
       { root, mount: () => undefined },
     );
 
-    expect(result).toEqual({ mounted: ["$"], missing: [] });
+    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [] });
   });
 
   it("escapes special characters in an id so the selector stays literal", () => {
@@ -255,7 +255,7 @@ describe("hydrateIslands — pairing and drift", () => {
       { root, mount: (container) => void seen.push(container) },
     );
 
-    expect(result).toEqual({ mounted: [id], missing: [] });
+    expect(result).toEqual({ mounted: [id], missing: [], failed: [] });
     expect(seen[0]).toBe(shell);
   });
 
@@ -271,5 +271,89 @@ describe("hydrateIslands — pairing and drift", () => {
       expect((error as UiError).details).toEqual({ id: "$", component: "Ghost" });
       expect(Object.isFrozen((error as UiError).details)).toBe(true);
     }
+  });
+
+  it("does NOT catch the drift throw — a wrong component aborts before any mount runs", () => {
+    // The drift throw is a build-time bug for the whole page, not a per-island
+    // runtime fault: it must stay fatal and pre-empt the mount, never be routed to
+    // onMountError or recorded in `failed`.
+    let mountErrors = 0;
+
+    expect(() =>
+      hydrateIslands(registry(), [{ id: "$", component: "Ghost", props: {}, ssr: false }], {
+        root: document,
+        mount: () => undefined,
+        onMountError: () => (mountErrors += 1),
+      }),
+    ).toThrow(UiError);
+
+    expect(mountErrors).toBe(0);
+  });
+});
+
+describe("hydrateIslands — per-island mount resilience", () => {
+  it("routes a failing island's throw to onMountError and keeps hydrating the rest", () => {
+    // Two shells, two manifest entries. The FIRST island's mount throws; without
+    // resilience the loop would abort and the second would never hydrate. With it,
+    // the first is recorded in `failed`, its error reaches the sink, and the
+    // second still mounts.
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="first"></div><div ${ISLAND_ATTR}="second"></div>`;
+
+    const boom = new Error("component blew up during render");
+
+    const mounted: string[] = [];
+
+    const errors: Array<{ error: unknown; id: string; component: string }> = [];
+
+    const mount: MountFn = (container) => {
+      const id = container.getAttribute(ISLAND_ATTR);
+
+      if (id === "first") {
+        throw boom;
+      }
+
+      mounted.push(id as string);
+    };
+
+    const onMountError: MountErrorSink = (error, info) => {
+      errors.push({ error, id: info.id, component: info.component });
+    };
+
+    const result = hydrateIslands(
+      registry(),
+      [
+        { id: "first", component: "Account", props: { plan: "a" }, ssr: false },
+        { id: "second", component: "Stamp", props: { label: "b" }, ssr: true },
+      ],
+      { mount, onMountError },
+    );
+
+    expect(result).toEqual({ mounted: ["second"], missing: [], failed: ["first"] });
+    expect(mounted).toEqual(["second"]);
+    expect(errors).toEqual([{ error: boom, id: "first", component: "Account" }]);
+  });
+
+  it("falls back to console.error as the default mount-error sink", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+    const boom = new Error("nope");
+
+    const mount: MountFn = () => {
+      throw boom;
+    };
+
+    const result = hydrateIslands(
+      registry(),
+      [{ id: "$", component: "Account", props: { plan: "x" }, ssr: false }],
+      { mount },
+    );
+
+    expect(result).toEqual({ mounted: [], missing: [], failed: ["$"] });
+    expect(spy).toHaveBeenCalled();
+    // The default sink names the dead island and forwards the original error.
+    expect(spy.mock.calls[0]?.[0]).toContain('island "$" (Account) failed to mount');
+    expect(spy.mock.calls[0]?.[1]).toBe(boom);
   });
 });

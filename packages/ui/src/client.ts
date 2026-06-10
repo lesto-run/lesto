@@ -16,6 +16,7 @@ export type {
   HydrationResult,
   IslandRoot,
   MountContext,
+  MountErrorSink,
   MountFn,
   RecoverableErrorSink,
 } from "./hydrate";
