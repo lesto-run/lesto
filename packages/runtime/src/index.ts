@@ -25,6 +25,9 @@ export type { WritableResponse } from "./response";
 export { serve, DEFAULT_SECURITY_HEADERS, RECOMMENDED_CSP } from "./server";
 export type { Server, ServeOptions, HealthOptions, AccessEntry, EtagConfig } from "./server";
 
+export { resolveClient } from "./trust-proxy";
+export type { ForwardHeaders, ResolvedClient, TrustProxy } from "./trust-proxy";
+
 export {
   cacheControl,
   etagFor,

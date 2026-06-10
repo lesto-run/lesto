@@ -14,11 +14,15 @@
     "@keel/auth": "workspace:*",
     "@keel/cloudflare": "workspace:*",
     "@keel/csrf": "workspace:*",
+    "@keel/identity": "workspace:*",
+    "@keel/migrate": "workspace:*",
+    "@keel/orm": "workspace:*",
     "@keel/router": "workspace:*",
     "@keel/runtime": "workspace:*",
     "@keel/sites": "workspace:*",
     "@keel/ui": "workspace:*",
     "@keel/web": "workspace:*",
+    "better-sqlite3": "^11.10.0",
     "react": "^19",
     "react-dom": "^19"
   }

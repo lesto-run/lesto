@@ -9,10 +9,11 @@ import {
   renderPage,
   renderPageMarkup,
   renderTree,
+  serializeManifest,
   UiError,
   validateTree,
 } from "../src/index";
-import type { ClientComponentDef, ComponentDef } from "../src/index";
+import type { ClientComponentDef, ComponentDef, IslandMount } from "../src/index";
 
 // ---------------------------------------------------------------------------
 // Fixtures: a server container plus a couple of client components (islands).
@@ -438,6 +439,76 @@ describe("UI_ISLAND_PROPS_NOT_SERIALIZABLE", () => {
     const props = { plan: "pro", seats: [1, 2] };
 
     expect(assertSerializable("Account", props)).toBe(props);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// serializeManifest — the script-safe wire format for the island manifest.
+// ---------------------------------------------------------------------------
+
+describe("serializeManifest", () => {
+  it("neutralizes a `</script>` breakout in a prop, round-tripping to the identical value", () => {
+    const manifest: IslandMount[] = [
+      {
+        id: "i0",
+        component: "Account",
+        props: { bio: "</script><script>alert(document.cookie)</script>" },
+        ssr: false,
+      },
+    ];
+
+    const serialized = serializeManifest(manifest);
+
+    // Nothing the HTML parser would read as a script-closing or comment opener.
+    expect(serialized).not.toContain("<");
+    expect(serialized).not.toContain(">");
+    expect(serialized.toLowerCase()).not.toContain("</script");
+
+    // ...yet JSON.parse reads the exact original bytes back.
+    expect(JSON.parse(serialized)).toEqual(manifest);
+  });
+
+  it("escapes the `<`, `>`, and `&` breakout characters as \\uXXXX", () => {
+    const serialized = serializeManifest([
+      { id: "i", component: "C", props: { s: "a<b>c&d" }, ssr: true },
+    ]);
+
+    expect(serialized).toContain("\\u003c");
+    expect(serialized).toContain("\\u003e");
+    expect(serialized).toContain("\\u0026");
+  });
+
+  it("escapes the JS line and paragraph separators (U+2028 / U+2029)", () => {
+    const lineSeparator = String.fromCharCode(0x2028);
+    const paragraphSeparator = String.fromCharCode(0x2029);
+
+    const manifest: IslandMount[] = [
+      {
+        id: "i",
+        component: "C",
+        props: { text: `before${lineSeparator}mid${paragraphSeparator}after` },
+        ssr: false,
+      },
+    ];
+
+    const serialized = serializeManifest(manifest);
+
+    // The raw separators (which a JS parser treats as newlines) are gone...
+    expect(serialized).not.toContain(lineSeparator);
+    expect(serialized).not.toContain(paragraphSeparator);
+    expect(serialized).toContain("\\u2028");
+    expect(serialized).toContain("\\u2029");
+
+    // ...and the value still round-trips intact.
+    expect(JSON.parse(serialized)).toEqual(manifest);
+  });
+
+  it("serializes a clean manifest to plain, parseable JSON", () => {
+    const manifest: IslandMount[] = [
+      { id: "i0", component: "Cart", props: { count: 3, sku: "ABC" }, ssr: true },
+    ];
+
+    expect(JSON.parse(serializeManifest(manifest))).toEqual(manifest);
   });
 });
 

@@ -68,6 +68,16 @@ export interface DispatchSitesDeps {
 
   /** Reads a prerendered static file by its output path. */
   readonly readStatic: StaticReader;
+
+  /**
+   * Whether to serve source-map files (`*.map`). Off by default: a source map
+   * shipped to production hands an attacker the original source. Build output
+   * may carry maps, so we refuse any `.map` request unless this is explicitly
+   * enabled — production should not. A refused map is a bare 404, identical to a
+   * missing file, so its presence on disk never leaks. (The dev dispatcher,
+   * which has its own asset passthrough, serves maps for debugging.)
+   */
+  readonly serveSourceMaps?: boolean;
 }
 
 /** The methods a static site answers; anything else is a 405. */
@@ -307,6 +317,7 @@ async function serveStatic(
   method: string,
   path: string,
   readStatic: StaticReader,
+  serveSourceMaps: boolean,
 ): Promise<AnyKeelResponse> {
   if (!STATIC_METHODS.has(method)) return emptyResponse(405);
 
@@ -315,6 +326,12 @@ async function serveStatic(
   // Build and serve must agree on where a route's file lives, so both call
   // `outputPath` from @keel/sites — the single source of that mapping.
   const file = outputPath(site.name, route);
+
+  // A source map is build debug output; serving it in production leaks source.
+  // Refuse it as a bare 404 (indistinguishable from a missing file) unless the
+  // deployment explicitly opts in, so a map that slipped into the output dir is
+  // never disclosed and its existence is never even observable.
+  if (!serveSourceMaps && file.endsWith(".map")) return emptyResponse(404);
 
   const body = await readStatic(file);
 
@@ -344,6 +361,7 @@ export function dispatchSites(
   deps: DispatchSitesDeps,
 ): (method: string, path: string, options?: RequestOptions) => Promise<KeelResponse> {
   const { sites, handle, readStatic } = deps;
+  const serveSourceMaps = deps.serveSourceMaps ?? false;
 
   return async (method, path, options) => {
     const site = selectSite(sites, path);
@@ -358,6 +376,6 @@ export function dispatchSites(
     // A static file may be bytes (an image); the handler contract is string-
     // bodied, so present it as such — the runtime writes the real bytes. See
     // {@link asHandlerResponse}.
-    return asHandlerResponse(await serveStatic(site, method, path, readStatic));
+    return asHandlerResponse(await serveStatic(site, method, path, readStatic, serveSourceMaps));
   };
 }

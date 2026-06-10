@@ -12,6 +12,10 @@
     }
   },
 
+  "dependencies": {
+    "@keel/web": "workspace:*"
+  },
+
   "scripts": {
     "test": "vitest run",
     "test:cov": "vitest run --coverage",

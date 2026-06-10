@@ -25,8 +25,26 @@ export type { TreeError } from "./validate";
 export { renderPage, renderPageMarkup, renderTree } from "./render";
 export type { Page, RenderError } from "./render";
 
+// Streaming SSR: a live shell-first stream for humans, plus a buffered `allReady`
+// exit for crawlers/SSG. Additive over `renderPageMarkup` (which stays the
+// dependency-light buffered API). Server-safe — React's stream renderer runs on
+// Node as of React 19.2.
+export { renderPageStream, renderPageStreamToString } from "./stream";
+export type {
+  ErrorInfo,
+  ReactRenderStream,
+  RenderToReadableStream,
+  StreamErrorSink,
+  StreamOptions,
+} from "./stream";
+
 export { island, ISLAND_ATTR } from "./island";
 export type { ClientComponentDef, IslandMount } from "./island";
+
+// The audited seam for inlining the island manifest into a `<script>`: escapes
+// the breakout characters `JSON.stringify` leaves raw. Manifest emission MUST go
+// through this — never a bare stringify or a `String.replace` splice.
+export { serializeManifest } from "./serialize";
 
 // Resource hints + LCP/modulepreload conventions over React 19's native APIs.
 // Server-safe: the `react-dom` resource functions are isomorphic and only emit

@@ -9,3 +9,6 @@
  */
 
 export { generateToken, verifyToken } from "./token";
+
+export { csrf, defaultExtractToken } from "./middleware";
+export type { CsrfOptions } from "./middleware";

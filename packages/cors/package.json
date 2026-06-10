@@ -13,7 +13,8 @@
   },
 
   "dependencies": {
-    "@keel/errors": "workspace:*"
+    "@keel/errors": "workspace:*",
+    "@keel/web": "workspace:*"
   },
 
   "scripts": {

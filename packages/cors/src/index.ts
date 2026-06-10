@@ -11,3 +11,5 @@
 
 export { corsHeaders, CorsError } from "./cors";
 export type { CorsErrorCode, CorsOptions } from "./cors";
+
+export { cors } from "./middleware";

@@ -13,7 +13,8 @@ export { KeelError };
 export type UiErrorCode =
   | "UI_INVALID_ENUM_SPEC"
   | "UI_ISLAND_PROPS_NOT_SERIALIZABLE"
-  | "UI_ISLAND_UNKNOWN_COMPONENT";
+  | "UI_ISLAND_UNKNOWN_COMPONENT"
+  | "UI_STREAM_INCOMPLETE";
 
 /** Anything the UI engine can refuse to do while building a schema. */
 export class UiError extends KeelError<UiErrorCode> {

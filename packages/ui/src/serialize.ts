@@ -14,6 +14,8 @@
 
 import { UiError } from "./errors";
 
+import type { IslandMount } from "./island";
+
 /** A JSON-shaped value: the closure of null/boolean/number/string under array/object. */
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -86,4 +88,42 @@ export function assertSerializable(
 
   // The structural walk above proves the cast true: every reachable value is JSON.
   return props as Record<string, JsonValue>;
+}
+
+/**
+ * Serialize an island manifest for safe embedding in an inline `<script>`.
+ *
+ * `JSON.stringify` alone is NOT safe to drop into HTML. A string value carrying
+ * `</script>` (or `<!--`, or the JS line terminators U+2028 / U+2029) terminates
+ * the surrounding element and lets attacker-influenced prop data execute — a
+ * textbook SSR-serialization XSS. HTML-entity escaping does not help either:
+ * entities are not decoded inside `<script>`. So we escape the breakout
+ * characters to their `\uXXXX` JSON escapes, which `JSON.parse` reads back as the
+ * byte-identical string — `<` and `>` (defeat `</script>` and `<!--`), `&`
+ * (belt-and-braces), and the two separators a JS parser treats as line breaks.
+ *
+ * The emission that consumes this MUST use `<script type="application/json">` and
+ * revive with `JSON.parse(el.textContent)` on the client: a non-executable type
+ * keeps even a future escaping miss inert, and the payload stays compatible with
+ * a strict, nonce-based CSP. This is the one audited seam every manifest payload
+ * crosses — never hand-roll `JSON.stringify` into a `<script>`, and never splice
+ * it in with `String.prototype.replace`, whose `$&`/`$'` tokens are themselves an
+ * injection vector.
+ *
+ * Mirrors the script-context escape that `@keel/seo` and `@keel/content-shared`
+ * already apply to inline JSON-LD; kept local so `@keel/ui`'s render hot path
+ * pulls in no extra dependency for it.
+ */
+export function serializeManifest(manifest: readonly IslandMount[]): string {
+  // The JS line/paragraph separators, built from code points so no raw
+  // U+2028/U+2029 byte sits in this source (where tooling may mangle it).
+  const lineSeparator = String.fromCharCode(0x2028);
+  const paragraphSeparator = String.fromCharCode(0x2029);
+
+  return JSON.stringify(manifest)
+    .replaceAll("<", "\\u003c")
+    .replaceAll(">", "\\u003e")
+    .replaceAll("&", "\\u0026")
+    .replaceAll(lineSeparator, "\\u2028")
+    .replaceAll(paragraphSeparator, "\\u2029");
 }

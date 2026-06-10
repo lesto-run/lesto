@@ -236,6 +236,37 @@ describe("dispatchSites — static sites", () => {
     expect(response.headers["cache-control"]).toBe("no-cache");
   });
 
+  it("404s a source-map request by default, even when the file exists on disk", async () => {
+    const dispatch = dispatchSites({
+      sites: [marketing],
+      handle: recordingHandler({ status: 200, body: "" }).handle,
+      // The map is present in the output dir — serving it would leak source.
+      readStatic: fakeReader({ "marketing/app.js.map": '{"version":3,"sources":["app.ts"]}' }),
+    });
+
+    const response = await dispatch("GET", "/app.js.map");
+
+    // A bare 404, indistinguishable from a missing file — its existence never leaks.
+    expect(response.status).toBe(404);
+    expect(response.body).toBe("");
+  });
+
+  it("serves a source map only when serveSourceMaps is enabled (dev)", async () => {
+    const map = '{"version":3,"sources":["app.ts"]}';
+
+    const dispatch = dispatchSites({
+      sites: [marketing],
+      handle: recordingHandler({ status: 200, body: "" }).handle,
+      readStatic: fakeReader({ "marketing/app.js.map": map }),
+      serveSourceMaps: true,
+    });
+
+    const response = await dispatch("GET", "/app.js.map");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toBe(map);
+  });
+
   it("strips a zone basePath to the in-site route before mapping", async () => {
     const staticMls: Site = {
       name: "mls",

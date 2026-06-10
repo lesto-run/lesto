@@ -7,8 +7,8 @@
 
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { renderTree } from "@keel/ui";
-import type { Registry } from "@keel/ui";
+import { renderPage, renderPageStream, renderTree } from "@keel/ui";
+import type { Registry, StreamOptions } from "@keel/ui";
 
 import type { AnyKeelResponse, KeelRequest, KeelResponse } from "./types";
 
@@ -97,6 +97,58 @@ export class Controller {
     const body = element === null ? "" : renderToStaticMarkup(element);
 
     return this.html(body, status);
+  }
+
+  /**
+   * Stream a UI tree to HTML, flushing the shell before slow children resolve.
+   *
+   * The streaming twin of {@link renderTree}: instead of buffering the whole body
+   * into a string, it builds the page (manifest and all) and hands back a response
+   * whose `body` is the live `ReadableStream` from `@keel/ui`'s `renderPageStream`.
+   * The transport pipes that stream straight to the socket, so the shell paints
+   * immediately and each `<Suspense>` boundary reveals as its data settles.
+   *
+   * The choice is the CALLER's: `renderTree` for a buffered string (crawlers,
+   * SSG, an error page that must branch on status), `streamTree` for progressive
+   * delivery to a human. Both share the same registry/tree/island contract — a
+   * streamed page carries the hydration markers an `ssr: true` island needs,
+   * because React's stream renderer emits them.
+   *
+   * Returns the wider {@link AnyKeelResponse} because a `ReadableStream` body is
+   * not the string-default `KeelResponse` — the transport's `applyResponse`
+   * accepts every body arm, and ETag/304 already skips a stream (it cannot be
+   * hashed without draining it). One structural constraint the caller owns: once
+   * the shell flushes, status and headers are on the wire and cannot change, so a
+   * post-shell error can only be logged/aborted via `options.onError` — never
+   * turned into a different status.
+   *
+   * NOT FOR STATIC RENDERING. A `streamTree` body is a live stream for the
+   * transport; it is never appropriate to PRERENDER. The SSG/crawler path consumes
+   * a response's `body` as a finished string (e.g. `@keel/sites` `prerenderSite`
+   * reads `response.body` and writes it to disk), and a `ReadableStream` there
+   * stringifies to `"[object ReadableStream]"`. The dispatch core keeps the wide
+   * body type precisely so this is not laundered into the string contract silently
+   * — but the type alone cannot stop an un-annotated action from reaching the
+   * prerenderer. A static page MUST use {@link renderTree} (or `@keel/ui`'s
+   * `renderPageStreamToString`, which buffers to a complete string and now throws
+   * `UI_STREAM_INCOMPLETE` rather than emit a degraded one); `streamTree` is for a
+   * human reading a live response, full stop.
+   */
+  async streamTree(
+    registry: Registry,
+    tree: unknown,
+    options: StreamOptions = {},
+    status = 200,
+  ): Promise<AnyKeelResponse> {
+    const page = renderPage(registry, tree);
+
+    const body = await renderPageStream(page, options);
+
+    return {
+      status,
+      headers: { "content-type": "text/html" },
+      body,
+    };
   }
 }
 

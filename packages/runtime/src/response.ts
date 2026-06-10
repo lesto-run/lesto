@@ -58,7 +58,12 @@ const fromWeb: FromWeb = (body) => Readable.fromWeb(body as Parameters<typeof Re
  *     destroying the socket is the only honest signal of a truncated body.
  *   - The *destination* errors (the client hung up): the response emits `error`;
  *     we swallow it rather than let it surface as an uncaught exception, and end
- *     the wait.
+ *     the wait. Crucially we also `destroy` the *source* here: `pipe` does NOT
+ *     tear the source down when the destination dies, so a resource-backed body
+ *     (a file handle, a db cursor, an upstream fetch) would leak for the life of
+ *     the process on every client disconnect. Destroying it releases that
+ *     resource — the gap `stream.pipeline` exists to close, done explicitly so
+ *     the narrow {@link WritableResponse} seam stays fakeable.
  *   - `Readable.fromWeb` itself *throws synchronously* (the Web stream is already
  *     locked or disturbed — e.g. a body someone else read first): there is no
  *     node `Readable` to pipe, so we tear the socket down and resolve right here.
@@ -77,12 +82,20 @@ export function pipeStream(
   bridge: FromWeb = fromWeb,
 ): Promise<void> {
   return new Promise<void>((resolve) => {
-    // A write-side failure (client gone) must not escape as an uncaught throw.
-    // Registered first so it also covers the `error` a `destroy(error)` below
-    // emits — every tear-down path has a listener before it can fire.
-    res.on("error", () => resolve());
+    let source: Readable | undefined;
 
-    let source: Readable;
+    // A write-side failure (client gone) must not escape as an uncaught throw,
+    // and `pipe` leaves the source running when the destination dies — so we
+    // tear the source down ourselves, freeing whatever backs it. Registered
+    // first so it also covers the `error` a `destroy(error)` below emits — every
+    // tear-down path has a listener before it can fire. `source` is read through
+    // the closure, so it sees whichever value `bridge` later assigned (or stays
+    // `undefined` on the synchronous-throw path, where there is nothing to free).
+    res.on("error", () => {
+      source?.destroy();
+
+      resolve();
+    });
 
     try {
       source = bridge(body);

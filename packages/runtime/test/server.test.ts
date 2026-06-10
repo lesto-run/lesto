@@ -487,11 +487,15 @@ describe("serve", () => {
       port: 0,
       logRequest: (entry) => entries.push(entry),
       now: () => ticks[i++] ?? 0,
+      // A stable id so the access entry asserts byte-for-byte.
+      newRequestId: () => "req-1",
     });
 
     await makeRequest(server.port, { method: "POST", path: "/posts" });
 
-    expect(entries).toEqual([{ method: "POST", path: "/posts", status: 201, ms: 42 }]);
+    expect(entries).toEqual([
+      { method: "POST", path: "/posts", status: 201, ms: 42, requestId: "req-1" },
+    ]);
   });
 
   it("tags an HTML response with an ETag and 304s a matching conditional GET", async () => {

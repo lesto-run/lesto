@@ -1,15 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { App } from "@keel/kernel";
-import type { AnyKeelResponse, KeelResponse } from "@keel/web";
+import { runWithContext } from "@keel/web";
+import type { AnyKeelResponse, KeelResponse, RequestContext } from "@keel/web";
 
 import { applyResponse } from "./response";
 import { toKeelRequest } from "./request";
 import { RuntimeError } from "./errors";
 import { etagFor, etagMatches, respondNotModified } from "./http-cache";
+import { resolveClient } from "./trust-proxy";
 
+import type { ForwardHeaders, TrustProxy } from "./trust-proxy";
 import type { NotModifiedResponse } from "./http-cache";
 
 /** A running http server bound to a port, with a graceful shutdown. */
@@ -40,6 +44,14 @@ export interface AccessEntry {
   readonly status: number;
 
   readonly ms: number;
+
+  /**
+   * The per-request id minted for this request (see {@link RequestContext}).
+   *
+   * The same id the request context carries, so an access line and any
+   * context-tagged work the handler logged can be stitched into one trace.
+   */
+  readonly requestId: string;
 }
 
 export interface ServeOptions {
@@ -61,6 +73,14 @@ export interface ServeOptions {
    * socket. The handler is abandoned, not cancelled — JS cannot kill a running
    * task — but the client and its socket are released rather than held forever
    * by a hung or pathologically slow controller. Defaults to 30s.
+   *
+   * This bounds a slow *async* handler (one awaiting I/O): the deadline is a
+   * `setTimeout`, so it can only fire when the event loop is free to run it. It
+   * is NOT a defense against event-loop-*blocking* synchronous work — a
+   * catastrophic regex (ReDoS), a `while(true)`, or a huge synchronous
+   * `JSON.parse` — which starves the timer and every other request alike. That
+   * class is defended by not writing it (e.g. the router refuses ambiguous
+   * backtracking patterns), not by this timeout.
    */
   readonly handlerTimeoutMs?: number;
 
@@ -134,6 +154,19 @@ export interface ServeOptions {
   readonly etag?: false | { readonly weak?: boolean };
 
   /**
+   * Whom to believe about the client IP and protocol (see {@link TrustProxy}).
+   *
+   * Default: `false` — trust nothing. The client IP is the socket's own peer
+   * address and the protocol is plain `http`. The `X-Forwarded-For` /
+   * `X-Forwarded-Proto` headers are *trivially forged by any client*, so they
+   * are believed only when the immediate peer is a proxy you put there: set this
+   * to `true` (peer is always your proxy), a hop count, or a predicate over the
+   * peer address when deployed behind a known load balancer. The resolved
+   * identity lands on the request context for rate-limiting and logging.
+   */
+  readonly trustProxy?: TrustProxy;
+
+  /**
    * Where a one-line access record goes for each served request. Injected so a
    * test can assert without writing to the console; defaults to `console.log`.
    */
@@ -141,6 +174,12 @@ export interface ServeOptions {
 
   /** The clock used for request latency. Injected for tests; defaults to `Date.now`. */
   readonly now?: () => number;
+
+  /**
+   * Mints the per-request id put on the request context. Injected so a test can
+   * assert a stable id; defaults to `node:crypto.randomUUID`.
+   */
+  readonly newRequestId?: () => string;
 
   /**
    * Where uncaught server-level failures are reported.
@@ -659,6 +698,8 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
       crossOriginEmbedderPolicy: options.crossOriginEmbedderPolicy,
     }),
     etag: options.etag ?? {},
+    trustProxy: options.trustProxy ?? false,
+    newRequestId: options.newRequestId ?? randomUUID,
     logRequest: options.logRequest ?? defaultLogRequest,
     logError,
     now: options.now ?? Date.now,
@@ -708,11 +749,71 @@ interface HandleDeps {
   /** Conditional-GET ETag behaviour for HTML responses; `false` disables it. */
   readonly etag: EtagConfig;
 
+  /** Whom to believe about the client IP/protocol; `false` trusts nothing. */
+  readonly trustProxy: TrustProxy;
+
+  /** Mints the per-request id for the request context. */
+  readonly newRequestId: () => string;
+
   readonly logRequest: (entry: AccessEntry) => void;
 
   readonly logError: (message: string, error: unknown) => void;
 
   readonly now: () => number;
+}
+
+/**
+ * The slice of a request we need to establish the context: the socket peer and
+ * the raw forwarding headers (as node delivers them — a header sent twice can
+ * arrive as a list). Narrow on purpose, so a fake satisfies it without a socket.
+ */
+export interface ContextSource {
+  readonly socket?: { readonly remoteAddress?: string | undefined } | undefined;
+
+  readonly headers: Record<string, string | string[] | undefined>;
+}
+
+/** The first value of a possibly-repeated header, as a single string or absent. */
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * Build the per-request context: a fresh id, plus the trust-proxy-resolved
+ * client IP and protocol.
+ *
+ * The id is minted here (one per request, for tracing); the IP/protocol come
+ * from {@link resolveClient}, which believes the forwarding headers only when
+ * the policy trusts the socket peer (see the spoofing hazard there). We collapse
+ * a repeated forwarding header to its first value before handing it over. Pure
+ * over its inputs and exported so the id-stamping and the trust resolution are
+ * testable without a socket.
+ *
+ * `exactOptionalPropertyTypes` is on, so we attach `ip` only when one resolved —
+ * an absent IP is the key absent, not present-and-`undefined`.
+ */
+export function establishContext(
+  source: ContextSource,
+  trustProxy: TrustProxy,
+  requestId: string,
+): RequestContext {
+  const xff = firstHeader(source.headers["x-forwarded-for"]);
+  const xfp = firstHeader(source.headers["x-forwarded-proto"]);
+
+  // `exactOptionalPropertyTypes`: carry each forwarding header only when present,
+  // never as present-and-`undefined`, so `resolveClient` sees a clean shape.
+  const forwarded: ForwardHeaders = {
+    ...(xff !== undefined && { "x-forwarded-for": xff }),
+    ...(xfp !== undefined && { "x-forwarded-proto": xfp }),
+  };
+
+  const client = resolveClient(trustProxy, source.socket?.remoteAddress, forwarded);
+
+  return {
+    requestId,
+    protocol: client.protocol,
+    ...(client.ip !== undefined && { ip: client.ip }),
+  };
 }
 
 /**
@@ -733,73 +834,87 @@ async function handle(
   res: ServerResponse,
   deps: HandleDeps,
 ): Promise<void> {
-  const start = deps.now();
+  // Establish the per-request context up front and run the whole request inside
+  // it. `runWithContext` uses `AsyncLocalStorage.run`, so everything the handler
+  // does — through every `await` — sees this exact context, and nothing leaks
+  // into the next request: the context is torn down when this call settles. The
+  // id and resolved client identity are decided here, before the app runs, so a
+  // middleware (rate-limit) and the access log both read the same values.
+  const requestId = deps.newRequestId();
 
-  let method = "GET";
-  let path = "/";
-  let status = 500;
+  const context = establishContext(req, deps.trustProxy, requestId);
 
-  try {
-    const body = await readBody(req, deps.maxBodyBytes);
+  return runWithContext(context, async () => {
+    const start = deps.now();
 
-    const line = requestLineOf(req);
-    method = line.method;
+    let method = "GET";
+    let path = "/";
+    let status = 500;
 
-    const request = toKeelRequest({
-      method: line.method,
-      url: line.url,
-      headers: req.headers,
-      body,
-    });
-    path = request.path;
+    try {
+      const body = await readBody(req, deps.maxBodyBytes);
 
-    const probe =
-      deps.health === undefined
-        ? undefined
-        : await healthResponse(request.method, request.path, deps.health);
+      const line = requestLineOf(req);
+      method = line.method;
 
-    const response =
-      probe ??
-      (await withTimeout(
-        app.handle(request.method, request.path, {
-          query: request.query,
-          headers: request.headers,
-          body: request.body,
-        }),
-        deps.handlerTimeoutMs,
-      ));
+      const request = toKeelRequest({
+        method: line.method,
+        url: line.url,
+        headers: req.headers,
+        body,
+      });
+      path = request.path;
 
-    // Attach an ETag to a cacheable HTML response, then harden it. Security
-    // headers go on last so they cover the 304 path too — a Not-Modified
-    // response is hardened exactly like the full one it stands in for.
-    const tagged = withEtag(response, deps.etag);
+      const probe =
+        deps.health === undefined
+          ? undefined
+          : await healthResponse(request.method, request.path, deps.health);
 
-    const hardened = withSecurityHeaders(tagged.response, deps.securityHeaders);
+      const response =
+        probe ??
+        (await withTimeout(
+          app.handle(request.method, request.path, {
+            query: request.query,
+            headers: request.headers,
+            body: request.body,
+          }),
+          deps.handlerTimeoutMs,
+        ));
 
-    // A conditional GET whose validator still matches gets a bodiless 304: the
-    // client already holds these bytes. We echo the same headers (ETag and all)
-    // and send nothing on the wire.
-    if (tagged.etag !== undefined && etagMatches(ifNoneMatch(req.headers), tagged.etag)) {
-      status = 304;
+      // Attach an ETag to a cacheable HTML response, then harden it. Security
+      // headers go on last so they cover the 304 path too — a Not-Modified
+      // response is hardened exactly like the full one it stands in for.
+      const tagged = withEtag(response, deps.etag);
 
-      respondNotModified(res as NotModifiedResponse, hardened.headers);
-    } else {
-      status = hardened.status;
+      const hardened = withSecurityHeaders(tagged.response, deps.securityHeaders);
 
-      applyResponse(res, hardened);
+      // A conditional GET whose validator still matches gets a bodiless 304: the
+      // client already holds these bytes. We echo the same headers (ETag and all)
+      // and send nothing on the wire.
+      if (tagged.etag !== undefined && etagMatches(ifNoneMatch(req.headers), tagged.etag)) {
+        status = 304;
+
+        respondNotModified(res as NotModifiedResponse, hardened.headers);
+      } else {
+        status = hardened.status;
+
+        applyResponse(res, hardened);
+      }
+    } catch (error) {
+      status = statusForError(error);
+
+      // A 500 is ours to explain in the log; client errors (4xx) are not.
+      if (status === 500) {
+        deps.logError("unhandled error serving request", error);
+      }
+
+      respondWithError(res, status, deps.securityHeaders);
+    } finally {
+      // The request id rides on the access line too, so a log and any
+      // context-tagged work the handler emitted share one correlation id.
+      deps.logRequest({ method, path, status, ms: deps.now() - start, requestId });
     }
-  } catch (error) {
-    status = statusForError(error);
-
-    // A 500 is ours to explain in the log; client errors (4xx) are not.
-    if (status === 500) {
-      deps.logError("unhandled error serving request", error);
-    }
-
-    respondWithError(res, status, deps.securityHeaders);
-  } finally {
-    deps.logRequest({ method, path, status, ms: deps.now() - start });
-  }
+  });
 }
 
 /** The slice of a response the error path needs — narrow, so a test can fake it. */
@@ -854,9 +969,9 @@ function defaultLogError(message: string, error: unknown): void {
   console.error(message, error);
 }
 
-/** The default access log: one line per request, method · path · status · latency. */
+/** The default access log: one line per request, method · path · status · latency · id. */
 function defaultLogRequest(entry: AccessEntry): void {
-  console.log(`${entry.method} ${entry.path} ${entry.status} ${entry.ms}ms`);
+  console.log(`${entry.method} ${entry.path} ${entry.status} ${entry.ms}ms ${entry.requestId}`);
 }
 
 /** The slice of `process` the safety net listens on — injectable for tests. */

@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { Router } from "@keel/router";
 import { Registry } from "@keel/ui";
 
-import { Application, Controller, WebError } from "../src/index";
+import { Application, Controller, currentContext, WebError } from "../src/index";
 
-import type { AnyKeelResponse, ControllerClass } from "../src/index";
+import type { AnyKeelResponse, ControllerClass, Middleware } from "../src/index";
 
 // A tiny registry with a single component, used to prove renderTree SSRs to HTML.
 const greetingRegistry = new Registry().define({
@@ -70,6 +70,9 @@ const controllers: Record<string, ControllerClass> = {
   probe: ProbeController,
   empty: EmptyController,
 };
+
+// A middleware that answers 401 outright, never calling `next` — the short-circuit.
+const unauthorized: Middleware = async () => ({ status: 401, headers: {}, body: "Unauthorized" });
 
 const buildApp = (): Application => {
   const router = new Router();
@@ -246,5 +249,110 @@ describe("Application dispatch", () => {
     await expect(app.handle("GET", "/inherited-action")).rejects.toMatchObject({
       code: "WEB_UNKNOWN_ACTION",
     });
+  });
+});
+
+describe("Application middleware pipeline", () => {
+  it("dispatches identically when no middleware is configured (backward compat)", async () => {
+    // No `middleware` option: the pipeline collapses to the bare dispatch, so a
+    // request behaves exactly as a pipeline-free app — the compatibility floor.
+    const app = buildApp();
+
+    const response = await app.handle("GET", "/speak");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toBe("plain words");
+  });
+
+  it("wraps the dispatch with the configured middleware, outermost first", async () => {
+    const trace: string[] = [];
+
+    const tagging: Middleware = async (_req, next) => {
+      trace.push("in");
+      const response = await next();
+      trace.push("out");
+      return { ...response, headers: { ...response.headers, "x-mw": "yes" } };
+    };
+
+    const router = new Router();
+    router.get("/speak", "probe#speak");
+
+    const app = new Application({ router, controllers, middleware: [tagging] });
+
+    const response = await app.handle("GET", "/speak");
+
+    expect(response.headers["x-mw"]).toBe("yes");
+    expect(trace).toEqual(["in", "out"]);
+  });
+
+  it("lets a middleware read the params the router matched", async () => {
+    let seenId: string | undefined;
+
+    const peek: Middleware = async (req, next) => {
+      seenId = req.params["id"];
+      return next();
+    };
+
+    const router = new Router();
+    router.get("/probe/:id", "probe#showJson");
+
+    const app = new Application({ router, controllers, middleware: [peek] });
+
+    await app.handle("GET", "/probe/9");
+
+    expect(seenId).toBe("9");
+  });
+
+  it("runs middleware for an unmatched route too (404 still flows the onion)", async () => {
+    let ran = false;
+
+    const observe: Middleware = async (_req, next) => {
+      ran = true;
+      return next();
+    };
+
+    const router = new Router();
+    router.get("/exists", "probe#speak");
+
+    const app = new Application({ router, controllers, middleware: [observe] });
+
+    const response = await app.handle("GET", "/nowhere");
+
+    expect(response.status).toBe(404);
+    expect(ran).toBe(true);
+  });
+
+  it("lets a short-circuiting middleware answer before the controller", async () => {
+    const router = new Router();
+    router.get("/speak", "probe#speak");
+
+    const app = new Application({ router, controllers, middleware: [unauthorized] });
+
+    const response = await app.handle("GET", "/speak");
+
+    expect(response.status).toBe(401);
+    expect(response.body).toBe("Unauthorized");
+  });
+});
+
+// A controller that reads the request context to prove app code can reach it.
+class ContextController extends Controller {
+  trace(): ReturnType<Controller["json"]> {
+    return this.json({ requestId: currentContext()?.requestId ?? null });
+  }
+}
+
+describe("Controller reading the request context", () => {
+  it("reads currentContext().requestId when run inside a context", async () => {
+    const { runWithContext } = await import("../src/index");
+
+    const router = new Router();
+    router.get("/trace", "ctx#trace");
+
+    const app = new Application({ router, controllers: { ctx: ContextController } });
+
+    const response = await runWithContext({ requestId: "rq-7" }, () => app.handle("GET", "/trace"));
+
+    expect(JSON.parse(response.body)).toEqual({ requestId: "rq-7" });
   });
 });

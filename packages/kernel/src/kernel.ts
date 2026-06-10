@@ -20,7 +20,7 @@ import type { MigrationEntry } from "@keel/migrate";
 import type { Router } from "@keel/router";
 
 import { Application } from "@keel/web";
-import type { ControllerClass, KeelResponse } from "@keel/web";
+import type { ControllerClass, KeelResponse, Middleware } from "@keel/web";
 
 /**
  * The one database handle the kernel threads through everything.
@@ -51,6 +51,17 @@ export interface AppConfig {
 
   /** Schema migrations to bring the database up to date on boot. Absent means none. */
   migrations?: MigrationEntry[];
+
+  /**
+   * Request middleware that wraps every dispatch, outermost first.
+   *
+   * Absent (the default) is the backward-compatibility floor: no interception,
+   * behavior identical to a pipeline-free app. Mount {@link secureStack} (or
+   * individual `cors`/`rateLimit`/`csrf` adapters) here to activate the security
+   * batteries. Nothing is enabled implicitly — security middleware run only
+   * because the app put them in this list.
+   */
+  middleware?: readonly Middleware[];
 }
 
 /** A booted application: a request handler plus the record of what migrations ran. */
@@ -83,9 +94,12 @@ export function createApp(config: AppConfig): App {
     config.migrations === undefined ? [] : new Migrator(config.db, config.migrations).migrate();
 
   // The web core owns request dispatch; the kernel only hands it its parts.
+  // `middleware` flows straight through: the dispatch core folds it around the
+  // controller, and an absent list is a pipeline-free dispatch (the default).
   const application = new Application({
     router: config.router,
     controllers: config.controllers,
+    ...(config.middleware !== undefined && { middleware: config.middleware }),
   });
 
   return {

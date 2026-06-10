@@ -21,6 +21,16 @@ export type { ApplicationOptions, HandleOptions } from "./application";
 export { Controller } from "./controller";
 export type { ControllerClass } from "./controller";
 
+// Re-exported so a caller can type the streaming options it passes to
+// `Controller.streamTree` without reaching across to `@keel/ui` directly.
+export type { StreamErrorSink, StreamOptions } from "@keel/ui";
+
+export { currentContext, runWithContext } from "./context";
+export type { RequestContext } from "./context";
+
+export { runPipeline } from "./middleware";
+export type { Middleware, Next } from "./middleware";
+
 export { KeelError, WebError } from "./errors";
 export type { WebErrorCode } from "./errors";
 

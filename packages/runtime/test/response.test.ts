@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Writable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 
 import { applyResponse } from "../src/index";
 
@@ -241,5 +241,25 @@ describe("applyResponse", () => {
     sink.emit("error", new Error("client went away"));
 
     await expect(result).resolves.toBeUndefined();
+  });
+
+  it("destroys the source when the destination errors, so its resource is freed", async () => {
+    const sink = new StreamSink();
+
+    // A real readable that never ends on its own — only the destination error
+    // ends the pipe. `pipe` alone would leave it (and whatever backs it: a file
+    // descriptor, a db cursor, an upstream fetch) running for the life of the
+    // process; pipeStream must tear it down. We inject it via the bridge so the
+    // pipe runs over this exact source and we can assert it was destroyed.
+    const source = new Readable({ read() {} });
+
+    const result = pipeStream(sink, streamOf(new Uint8Array([1])), () => source);
+
+    sink.emit("error", new Error("client went away"));
+
+    await expect(result).resolves.toBeUndefined();
+
+    // The leak fix: the source is destroyed, not left running after the client left.
+    expect(source.destroyed).toBe(true);
   });
 });
