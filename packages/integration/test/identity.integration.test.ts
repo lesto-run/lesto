@@ -401,7 +401,7 @@ describe("the identity journey, over the wire", () => {
   it("logout clears the cookie and the session no longer resolves", async () => {
     inbox.length = 0;
     await post("/auth/register", { email: "logout@example.com", password: "correct horse staple" });
-    identity.verifyEmail(inbox.find((e) => e.to === "logout@example.com")!.token);
+    await identity.verifyEmail(inbox.find((e) => e.to === "logout@example.com")!.token);
 
     const loggedIn = await post("/auth/login", {
       email: "logout@example.com",
