@@ -91,17 +91,17 @@ export interface SelectQuery<T extends Table> {
   offset(count: number): SelectQuery<T>;
 
   /** First row matching the chain (always `LIMIT 1`), or `undefined`. */
-  get(): InferRow<T> | undefined;
+  get(): Promise<InferRow<T> | undefined>;
 
   /** Every row matching the chain, in chain order. */
-  all(): InferRow<T>[];
+  all(): Promise<InferRow<T>[]>;
 
   /**
    * Count rows matching the `WHERE` clause. Ignores `orderBy` / `limit` /
    * `offset` — counting all matching rows is the only useful semantic
    * (LIMIT-ed counts are almost always a bug).
    */
-  count(): number;
+  count(): Promise<number>;
 }
 
 interface SelectBuilder {
@@ -159,7 +159,7 @@ function makeQuery<T extends Table>(sql: SqlDatabase, state: SelectState<T>): Se
     limit: (count) => next({ limit: count }),
     offset: (count) => next({ offset: count }),
 
-    get(): InferRow<T> | undefined {
+    async get(): Promise<InferRow<T> | undefined> {
       // `.get()` is `LIMIT 1` regardless of what the user set — the most
       // useful semantic, matching better-sqlite3's `get()` and Drizzle's
       // `.get()`.
@@ -167,31 +167,30 @@ function makeQuery<T extends Table>(sql: SqlDatabase, state: SelectState<T>): Se
         { ...state, limit: 1, offset: state.offset },
         { projection: "*", respectLimitOrder: true },
       );
-      const row = sql.prepare(stmt).get(params);
+      const row = await sql.prepare(stmt).get(params);
 
       // No row reads as `undefined`, whichever sentinel the driver uses for a
       // miss — better-sqlite3 returns `undefined`, `bun:sqlite` returns `null`.
       return row == null ? undefined : hydrate(state.table, row);
     },
 
-    all(): InferRow<T>[] {
+    async all(): Promise<InferRow<T>[]> {
       const { sql: stmt, params } = renderSelect(state, {
         projection: "*",
         respectLimitOrder: true,
       });
 
-      return sql
-        .prepare(stmt)
-        .all(params)
-        .map((row) => hydrate(state.table, row));
+      const rows = await sql.prepare(stmt).all(params);
+
+      return rows.map((row) => hydrate(state.table, row));
     },
 
-    count(): number {
+    async count(): Promise<number> {
       const { sql: stmt, params } = renderSelect(state, {
         projection: "COUNT(*) AS c",
         respectLimitOrder: false,
       });
-      const row = sql.prepare(stmt).get(params) as CountRow;
+      const row = (await sql.prepare(stmt).get(params)) as CountRow;
 
       // better-sqlite3 may hand back a bigint when safeIntegers is on;
       // coerce to number for the common single-table count.
@@ -220,12 +219,12 @@ function makeSelect(sql: SqlDatabase): SelectBuilder {
 
 interface InsertReturning<T extends Table> {
   /** The single inserted row, hydrated. */
-  get(): InferRow<T>;
+  get(): Promise<InferRow<T>>;
 }
 
 interface InsertValues<T extends Table> {
   /** Execute the insert; returns `{ changes }`. */
-  run(): { changes: number };
+  run(): Promise<{ changes: number }>;
 
   /** Chain `.returning().get()` to receive the inserted row. */
   returning(): InsertReturning<T>;
@@ -272,17 +271,17 @@ function makeInsert(sql: SqlDatabase): InsertBuilder {
     return {
       values(input: InferInsert<T>): InsertValues<T> {
         return {
-          run() {
+          async run() {
             const { sql: stmt, params } = compileInsert(table, input, false);
-            const { changes } = sql.prepare(stmt).run(params);
+            const { changes } = await sql.prepare(stmt).run(params);
 
             return { changes };
           },
           returning() {
             return {
-              get(): InferRow<T> {
+              async get(): Promise<InferRow<T>> {
                 const { sql: stmt, params } = compileInsert(table, input, true);
-                const row = sql.prepare(stmt).get(params);
+                const row = await sql.prepare(stmt).get(params);
 
                 return hydrate(table, row);
               },
@@ -300,7 +299,7 @@ function makeInsert(sql: SqlDatabase): InsertBuilder {
 
 interface UpdateSet {
   /** Add the `WHERE` clause — required, refusing an unbounded update. */
-  where(condition: Condition): { run(): { changes: number } };
+  where(condition: Condition): { run(): Promise<{ changes: number }> };
 }
 
 interface UpdateBuilder {
@@ -334,11 +333,11 @@ function makeUpdate(sql: SqlDatabase): UpdateBuilder {
         return {
           where(condition: Condition) {
             return {
-              run() {
+              async run() {
                 const stmt = `UPDATE ${quoteIdentifier(
                   table.tableName,
                 )} SET ${assignments} WHERE ${condition.sql}`;
-                const { changes } = sql.prepare(stmt).run([...setParams, ...condition.params]);
+                const { changes } = await sql.prepare(stmt).run([...setParams, ...condition.params]);
 
                 return { changes };
               },
@@ -359,7 +358,7 @@ interface DeleteBuilder {
     table: T,
   ): {
     /** Add the `WHERE` clause — required, refusing an unbounded delete. */
-    where(condition: Condition): { run(): { changes: number } };
+    where(condition: Condition): { run(): Promise<{ changes: number }> };
   };
 }
 
@@ -368,9 +367,9 @@ function makeDelete(sql: SqlDatabase): DeleteBuilder {
     return {
       where(condition: Condition) {
         return {
-          run() {
+          async run() {
             const stmt = `DELETE FROM ${quoteIdentifier(table.tableName)} WHERE ${condition.sql}`;
-            const { changes } = sql.prepare(stmt).run([...condition.params]);
+            const { changes } = await sql.prepare(stmt).run([...condition.params]);
 
             return { changes };
           },
@@ -391,7 +390,15 @@ export interface Db {
   delete: DeleteBuilder;
 
   /** Escape hatch: run arbitrary SQL the DSL does not cover. */
-  exec(sql: string): void;
+  exec(sql: string): Promise<void>;
+
+  /**
+   * Run `fn` inside a single transaction (commit on resolve, rollback on
+   * reject). `tx` is a {@link Db} bound to the transaction's connection, so
+   * every query inside `fn` runs on the same connection — the only correct
+   * shape on a pooled (Postgres) driver.
+   */
+  transaction<R>(fn: (tx: Db) => Promise<R>): Promise<R>;
 }
 
 /** Build a {@link Db} bound to the given driver handle. */
@@ -406,8 +413,9 @@ export function createDb(sql: SqlDatabase): Db {
     insert,
     update,
     delete: deleteFrom,
-    exec: (statement) => {
-      sql.exec(statement);
+    exec: async (statement) => {
+      await sql.exec(statement);
     },
+    transaction: (fn) => sql.transaction((txSql) => fn(createDb(txSql))),
   };
 }
