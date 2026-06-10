@@ -13,7 +13,7 @@
  */
 
 export { createApp } from "./kernel";
-export type { App, AppConfig, KernelDatabase } from "./kernel";
+export type { App, AppConfig, KeelAppConfig, KernelDatabase } from "./kernel";
 
 export { secureStack } from "./secure-stack";
 export type { SecureStackOptions } from "./secure-stack";

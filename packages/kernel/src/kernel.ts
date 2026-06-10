@@ -24,7 +24,7 @@ import type { MigrationEntry } from "@keel/migrate";
 import type { Router } from "@keel/router";
 
 import { Application } from "@keel/web";
-import type { ControllerClass, KeelResponse, Middleware } from "@keel/web";
+import type { ControllerClass, Keel, KeelResponse, Middleware } from "@keel/web";
 
 /**
  * The one database handle the kernel threads through the migrator.
@@ -72,6 +72,23 @@ export interface AppConfig {
   middleware?: readonly Middleware[];
 }
 
+/**
+ * The assembly shape for the code-first router: a composed `keel()` app, its
+ * database, and migrations.
+ *
+ * This is the target shape (ADR 0004). Routes, pages, and middleware all live on
+ * the `app` — there is no separate `router`/`controllers`/`middleware` to thread.
+ * The kernel runs migrations, then delegates dispatch straight to `app.handle`.
+ */
+export interface KeelAppConfig {
+  db: KernelDatabase;
+
+  app: Keel;
+
+  /** Schema migrations to bring the database up to date on boot. Absent means none. */
+  migrations?: MigrationEntry[];
+}
+
 /** A booted application: a request handler plus the record of what migrations ran. */
 export interface App {
   /** Dispatch a request through the web core, returning the controller's response. */
@@ -92,20 +109,28 @@ export interface App {
  * up dispatch over the now-ready database — so a controller's first query
  * hits a migrated schema, not an empty one.
  */
-export async function createApp(config: AppConfig): Promise<App> {
+export async function createApp(config: AppConfig | KeelAppConfig): Promise<App> {
   // Run pending migrations up front so the schema is ready before any
   // request. No migrations configured means nothing ran — empty applied list.
   // Migrations are async now (ADR 0006): await them so the schema is fully
-  // applied before dispatch is stood up — a controller's first query must hit
-  // a migrated schema, never a half-applied one.
+  // applied before dispatch is stood up — a query's first hit must land on a
+  // migrated schema, never a half-applied one.
   const migrationsApplied: readonly string[] =
     config.migrations === undefined
       ? []
       : await new Migrator(config.db, config.migrations).migrate();
 
-  // The web core owns request dispatch; the kernel only hands it its parts.
-  // `middleware` flows straight through: the dispatch core folds it around the
-  // controller, and an absent list is a pipeline-free dispatch (the default).
+  // The code-first shape: the keel() router owns dispatch (routes, pages, and
+  // middleware all live on it), so the kernel just delegates to app.handle.
+  if ("app" in config) {
+    return {
+      migrationsApplied,
+      handle: (method, path, options) => config.app.handle(method, path, options),
+    };
+  }
+
+  // Legacy shape: wrap the old Application pipeline. Removed once every consumer
+  // has moved to the keel() app (see ADR 0004 Phase 7).
   const application = new Application({
     router: config.router,
     controllers: config.controllers,

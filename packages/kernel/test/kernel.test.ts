@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDb, createTableSql, defineTable, integer, text, type Db } from "@keel/db";
 import type { MigrationEntry } from "@keel/migrate";
 import { Router } from "@keel/router";
-import { Controller } from "@keel/web";
+import { Controller, keel } from "@keel/web";
 import type { ControllerClass } from "@keel/web";
 
 import { createApp } from "../src/index";
@@ -171,5 +171,34 @@ describe("App#handle", () => {
 
     expect(response.status).toBe(404);
     expect(response.body).toBe("Not Found");
+  });
+});
+
+describe("createApp with a keel() app (the code-first shape)", () => {
+  it("runs migrations, then dispatches through the keel() router", async () => {
+    const app = await createApp({
+      db,
+      app: keel().get("/posts/count", async (c) => {
+        const count = await queryDb.select().from(posts).count();
+        return c.json({ count });
+      }),
+      migrations: [createPosts],
+    });
+
+    expect(app.migrationsApplied).toEqual(["001_create_posts"]);
+
+    await queryDb.insert(posts).values({ title: "via keel()" }).run();
+
+    const response = await app.handle("GET", "/posts/count");
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ count: 1 });
+  });
+
+  it("applies no migrations for a keel() app when none are configured", async () => {
+    const app = await createApp({ db, app: keel().get("/ping", (c) => c.text("pong")) });
+
+    expect(app.migrationsApplied).toEqual([]);
+    expect((await app.handle("GET", "/ping")).body).toBe("pong");
   });
 });
