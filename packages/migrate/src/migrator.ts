@@ -5,8 +5,8 @@ import type { SqlDatabase } from "./types";
 
 /** A single, reversible change to the schema. `down` is optional but encouraged. */
 export interface Migration {
-  up(schema: Schema): void;
-  down?(schema: Schema): void;
+  up(schema: Schema): void | Promise<void>;
+  down?(schema: Schema): void | Promise<void>;
 }
 
 /** A migration paired with the version string that orders and records it. */
@@ -44,13 +44,13 @@ export class Migrator {
   }
 
   /** Create the bookkeeping table if it is not already there. */
-  private ensureTable(): void {
-    this.db.exec(`CREATE TABLE IF NOT EXISTS ${TABLE} (version TEXT PRIMARY KEY)`);
+  private async ensureTable(): Promise<void> {
+    await this.db.exec(`CREATE TABLE IF NOT EXISTS ${TABLE} (version TEXT PRIMARY KEY)`);
   }
 
   /** The set of versions already recorded as applied. */
-  private appliedVersions(): Set<string> {
-    const rows = this.db.prepare(`SELECT version FROM ${TABLE}`).all() as VersionRow[];
+  private async appliedVersions(): Promise<Set<string>> {
+    const rows = (await this.db.prepare(`SELECT version FROM ${TABLE}`).all()) as VersionRow[];
 
     return new Set(rows.map((row) => row.version));
   }
@@ -59,45 +59,36 @@ export class Migrator {
    * Run every not-yet-applied migration in version order, recording each as it
    * succeeds. Returns the versions actually applied (empty when up to date).
    */
-  migrate(): string[] {
-    this.ensureTable();
+  async migrate(): Promise<string[]> {
+    await this.ensureTable();
 
-    const applied = this.appliedVersions();
+    const applied = await this.appliedVersions();
 
     const pending = this.entries.filter((entry) => !applied.has(entry.version));
-
-    const schema = new Schema(this.db);
-
-    const insert = this.db.prepare(`INSERT INTO ${TABLE} (version) VALUES (?)`);
 
     // Each migration's DDL and its bookkeeping INSERT are one atomic unit: a
     // half-applied migration (DDL ran, record missing — or vice versa) would
     // corrupt the source of truth. We wrap *each* migration in its own
     // transaction rather than the whole run in one, matching Rails: migrations
     // that succeed earlier in this run stay applied; only the one that throws
-    // is rolled back. Both SQLite and Postgres run DDL transactionally, so
-    // standard BEGIN/COMMIT/ROLLBACK is enough through the minimal SQL surface.
+    // is rolled back.
+    //
+    // The transaction is the seam's `transaction()` — NOT raw exec("BEGIN") —
+    // so that on a pooled driver every statement in the span (the DDL and the
+    // INSERT) runs on the SAME connection. Three separate exec("BEGIN")/
+    // exec("COMMIT") calls would land on different pooled connections and
+    // silently no-op. We build the Schema and prepare the INSERT against the
+    // transaction-scoped `tx`, not the outer db, for exactly this reason. A
+    // throw inside `fn` rolls the span back and rejects, undoing the partial
+    // DDL and ensuring no record was written.
     for (const entry of pending) {
-      this.db.exec("BEGIN");
+      await this.db.transaction(async (tx) => {
+        const schema = new Schema(tx);
 
-      try {
-        entry.migration.up(schema);
+        await entry.migration.up(schema);
 
-        insert.run([entry.version]);
-
-        this.db.exec("COMMIT");
-      } catch (error) {
-        // Undo the partial DDL and ensure no record was written. The ROLLBACK
-        // is best-effort: if it itself fails we must not mask the original
-        // failure, which is the one the caller needs to see.
-        try {
-          this.db.exec("ROLLBACK");
-        } catch {
-          // Swallow — the original `error` is rethrown below and is what matters.
-        }
-
-        throw error;
-      }
+        await tx.prepare(`INSERT INTO ${TABLE} (version) VALUES (?)`).run([entry.version]);
+      });
     }
 
     return pending.map((entry) => entry.version);
@@ -108,10 +99,10 @@ export class Migrator {
    * and delete its record. Returns the version rolled back, or undefined when
    * nothing is applied.
    */
-  rollback(): string | undefined {
-    this.ensureTable();
+  async rollback(): Promise<string | undefined> {
+    await this.ensureTable();
 
-    const applied = this.appliedVersions();
+    const applied = await this.appliedVersions();
 
     if (applied.size === 0) return undefined;
 
@@ -136,18 +127,18 @@ export class Migrator {
 
     // A migration without `down` is irreversible in effect, but we still drop the
     // record so the version is no longer considered applied.
-    target.migration.down?.(new Schema(this.db));
+    await target.migration.down?.(new Schema(this.db));
 
-    this.db.prepare(`DELETE FROM ${TABLE} WHERE version = ?`).run([target.version]);
+    await this.db.prepare(`DELETE FROM ${TABLE} WHERE version = ?`).run([target.version]);
 
     return target.version;
   }
 
   /** Every known version with whether it is currently applied, in order. */
-  status(): { version: string; applied: boolean }[] {
-    this.ensureTable();
+  async status(): Promise<{ version: string; applied: boolean }[]> {
+    await this.ensureTable();
 
-    const applied = this.appliedVersions();
+    const applied = await this.appliedVersions();
 
     return this.entries.map((entry) => ({
       version: entry.version,
