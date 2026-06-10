@@ -15,18 +15,31 @@ export interface AssetFetcher {
   fetch(request: Request): Promise<Response>;
 }
 
+/** The methods static assets answer; everything else belongs to the app. */
+const ASSET_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD"]);
+
 /**
  * Compose an assets binding in front of an app `fetch` handler.
  *
- * Returns a handler that asks the assets binding first; any answer other than a
- * 404 (a hit, a redirect, a range response) is returned as-is, and only a 404 —
- * "no such asset" — falls through to the app.
+ * Static assets only ever answer safe, bodyless reads — a `GET`/`HEAD` for a
+ * file. So a write (a form `POST` to sign in, a `PUT`, a `DELETE`) goes
+ * *straight to the app*: handing it to the assets binding gets a 405, and
+ * returning that would swallow the request before the app ever saw it — the
+ * exact bug that left a deployed sign-in form posting into the void.
+ *
+ * For a `GET`/`HEAD`, the binding is asked first; a hit (or a 304, a range) is
+ * returned as-is, and only a 404 — "no such asset" — falls through to the app,
+ * so a dynamic route is never shadowed by a missing file.
  */
 export function withAssets(
   assets: AssetFetcher,
   handler: (request: Request) => Promise<Response>,
 ): (request: Request) => Promise<Response> {
   return async (request) => {
+    if (!ASSET_METHODS.has(request.method)) {
+      return handler(request);
+    }
+
     const asset = await assets.fetch(request);
 
     return asset.status === 404 ? handler(request) : asset;

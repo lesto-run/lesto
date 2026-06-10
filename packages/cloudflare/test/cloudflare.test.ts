@@ -159,6 +159,28 @@ describe("withAssets", () => {
 
     expect(await response.text()).toBe("app");
   });
+
+  it("sends a POST straight to the app, never the assets binding (the sign-in bug)", async () => {
+    // Static Assets only answer GET/HEAD; a form POST must reach the app, not be
+    // swallowed by the assets layer's 405. The assets fetcher must NOT be called.
+    let assetsCalled = false;
+    const assets: AssetFetcher = {
+      fetch: () => {
+        assetsCalled = true;
+
+        return Promise.resolve(new Response("", { status: 405 }));
+      },
+    };
+
+    const handler = withAssets(assets, fixedApp("signed-in"));
+
+    const response = await handler(
+      new Request("https://example.com/mls/api/sign-in", { method: "POST" }),
+    );
+
+    expect(await response.text()).toBe("signed-in");
+    expect(assetsCalled).toBe(false);
+  });
 });
 
 describe("wranglerConfig", () => {
