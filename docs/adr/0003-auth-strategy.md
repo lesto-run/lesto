@@ -1,11 +1,18 @@
 # ADR 0003 — Auth strategy: in-house battery, pluggable edges
 
-- **Status:** Accepted (planning only — not implemented)
+- **Status:** Accepted — Phase 1 implemented (estate `?as=` rewrite pending)
 - **Date:** 2026-06-09
 - **Deciders:** tech lead + owner
 - **Owner-confirmed (2026-06-09):** (1) the assembled battery is **`@keel/identity`**;
   (2) **email verification is required before first login** — default on,
   configurable off for low-friction apps.
+- **Implementation note (2026-06-09):** `packages/identity` ships register /
+  verifyEmail / login / requestPasswordReset / resetPassword + cookie helpers +
+  currentUser. 100% unit coverage; the canonical journey is exercised over a
+  real socket in `packages/integration/test/identity.integration.test.ts`. The
+  estate `?as=` demo replacement remains: estate has no DB today, so wiring it
+  to `@keel/identity` is a separate slice (add migration runtime + mail mock +
+  swap controllers + update tests).
 
 ## Context
 
