@@ -39,6 +39,41 @@ export interface RenderError {
 }
 
 /**
+ * The injectable server-render dialect: the two functions {@link renderPageMarkup}
+ * needs to serialize a built {@link Page} to body HTML.
+ *
+ * It is the SAME two-function surface `react-dom/server` exposes (`renderToString`
+ * + `renderToStaticMarkup`), narrowed to what this module calls — so the default
+ * is a thin pass-through and every existing caller is byte-for-byte unchanged.
+ *
+ * Why a seam at all? An `ssr: true` island ships its real server render into the
+ * shell for the client to `hydrateRoot`, and hydration only succeeds when the
+ * server- and client-emitted markup agree. React and Preact emit DIFFERENT
+ * hydration markup (notably how they delimit adjacent text segments), so a page
+ * whose client bundle is Preact (the opt-in `react`→`preact/compat` alias, ADR
+ * 0007) MUST be server-rendered by Preact too, or every `ssr: true` island
+ * mismatches on hydration. This seam lets the caller pick the dialect that matches
+ * its client; the default keeps the React dialect this engine has always emitted.
+ *
+ * It mirrors `hydrate.tsx`'s injectable `mount` seam: the thing that varies by
+ * runtime is injected, never reached for as a global, so both halves of the
+ * hydration contract are chosen by the same explicit decision.
+ */
+export interface ServerRenderer {
+  renderToString(node: ReactElement): string;
+  renderToStaticMarkup(node: ReactElement): string;
+}
+
+/**
+ * The default dialect: React's own `react-dom/server`. Statically imported (not
+ * lazy) because it is this engine's baseline renderer — the one the tests, the
+ * stream path, and the deploy all already use — so there is nothing to defer.
+ * Selecting a different dialect (e.g. {@link ../server-preact}) is the caller's
+ * explicit opt-in via {@link renderPageMarkup}'s `renderer` argument.
+ */
+export const reactServerRenderer: ServerRenderer = { renderToStaticMarkup, renderToString };
+
+/**
  * The mutable scratch a single render walk threads through itself: the errors it
  * accumulates and, only when a page is being built, the island manifest it fills.
  */
@@ -111,16 +146,30 @@ export function renderPage(registry: Registry, tree: unknown): Page {
  * deferred shells are replaced wholesale so their markers are irrelevant.
  *
  * A page whose element degraded to `null` has no body to render.
+ *
+ * The `renderer` is the dialect seam. It DEFAULTS to {@link reactServerRenderer}
+ * (real `react-dom/server`), so every existing caller — estate's `document.ts`,
+ * the render/hydrate/stream tests — is byte-for-byte unchanged. A page whose
+ * client bundle is Preact passes the Preact adapter (`@keel/ui/server-preact`) so
+ * the server emits the same markup the Preact client will hydrate against; only
+ * then is an `ssr: true` island safe under the `preact/compat` alias.
  */
-export function renderPageMarkup(page: Page): string {
+export function renderPageMarkup(
+  page: Page,
+  renderer: ServerRenderer = reactServerRenderer,
+): string {
   if (page.element === null) return "";
 
   // The manifest is the single source of truth for which renderer is safe: it is
   // the same data the client reads to decide hydrate-vs-mount, so server and
-  // client can never disagree about whether markers were emitted.
+  // client can never disagree about whether markers were emitted. WHICH dialect
+  // emits those markers is the `renderer`'s business; this rule (markers iff any
+  // ssr island) is identical across dialects.
   const needsHydrationMarkers = page.islands.some((island) => island.ssr);
 
-  return needsHydrationMarkers ? renderToString(page.element) : renderToStaticMarkup(page.element);
+  return needsHydrationMarkers
+    ? renderer.renderToString(page.element)
+    : renderer.renderToStaticMarkup(page.element);
 }
 
 /** Recursively build one node into a React element, collecting render errors. */
@@ -201,8 +250,20 @@ function buildIsland(
   try {
     const serializable = assertSerializable(client.name, props);
 
+    // The hydration *strategy* rides the wire only when it deviates from the
+    // default. Emitting `strategy: "load"` would change every eager island's
+    // manifest entry (and its serialized `<script>` bytes) for no behavioral
+    // gain; omitting it keeps the default path byte-for-byte identical and lets
+    // the client read an absent `strategy` as "load". Only the `"visible"` opt-in
+    // adds the field.
+    const mount: IslandMount = { id: path, component: client.name, props: serializable, ssr };
+
+    if (client.hydrate === "visible") {
+      mount.strategy = "visible";
+    }
+
     // Only a page build cares about the manifest; `renderTree` leaves it absent.
-    walk.islands?.push({ id: path, component: client.name, props: serializable, ssr });
+    walk.islands?.push(mount);
 
     // An `ssr` island ships its REAL output (the markup the client will hydrate
     // and find unchanged); a deferred island ships only its fallback placeholder.

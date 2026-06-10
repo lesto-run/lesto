@@ -22,8 +22,8 @@ export { componentCatalog, treeJsonSchema } from "./schema";
 export { validateTree } from "./validate";
 export type { TreeError } from "./validate";
 
-export { renderPage, renderPageMarkup, renderTree } from "./render";
-export type { Page, RenderError } from "./render";
+export { reactServerRenderer, renderPage, renderPageMarkup, renderTree } from "./render";
+export type { Page, RenderError, ServerRenderer } from "./render";
 
 // Streaming SSR: a live shell-first stream for humans, plus a buffered `allReady`
 // exit for crawlers/SSG. Additive over `renderPageMarkup` (which stays the
@@ -39,7 +39,7 @@ export type {
 } from "./stream";
 
 export { island, ISLAND_ATTR } from "./island";
-export type { ClientComponentDef, IslandMount } from "./island";
+export type { ClientComponentDef, HydrationStrategy, IslandMount } from "./island";
 
 // The audited seam for inlining the island manifest into a `<script>`: escapes
 // the breakout characters `JSON.stringify` leaves raw. Manifest emission MUST go

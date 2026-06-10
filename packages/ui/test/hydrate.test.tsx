@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 
 import { ISLAND_ATTR, Registry, renderPage, renderPageMarkup, UiError } from "../src/index";
-import type { ClientComponentDef } from "../src/index";
+import type { ClientComponentDef, ComponentDef } from "../src/index";
 import { hydrateIslands } from "../src/hydrate";
-import type { MountErrorSink, MountFn } from "../src/hydrate";
+import type { MountErrorSink, MountFn, ObserveFn } from "../src/hydrate";
 
 // ---------------------------------------------------------------------------
 // Client components used as hydration targets. Each renders something the test
@@ -45,8 +45,35 @@ const Greeting: ClientComponentDef = {
     createElement("p", { className: "greet" }, "Hi, ", props.name as string, "! Welcome back."),
 };
 
+// A `hydrate: "visible"` island: the client must NOT mount it on load, only when
+// its region first scrolls into view. Like `Account` it ships a fallback the
+// deferred mount replaces (visible islands are typically also `ssr: false`,
+// since the whole point is to defer per-visitor work).
+const Lazy: ClientComponentDef = {
+  name: "Lazy",
+  hydrate: "visible",
+  props: { tag: { type: "string", required: true } },
+  component: (props) => createElement("span", { className: "lazy-live" }, props.tag as string),
+  fallback: (props) =>
+    createElement("span", { className: "lazy-fallback" }, `idle ${props.tag as string}`),
+};
+
+// A plain server container, so a test can place two islands side by side under
+// one parent and assert their distinct wire entries.
+const Box: ComponentDef = {
+  name: "Box",
+  props: {},
+  children: true,
+  render: (_props, kids) => createElement("div", null, kids),
+};
+
 function registry(): Registry {
-  return new Registry().defineClient(Account).defineClient(Stamp).defineClient(Greeting);
+  return new Registry()
+    .define(Box)
+    .defineClient(Account)
+    .defineClient(Stamp)
+    .defineClient(Greeting)
+    .defineClient(Lazy);
 }
 
 /**
@@ -84,7 +111,7 @@ describe("hydrateIslands — deferred islands (createRoot)", () => {
       result = hydrateIslands(registry(), manifest);
     });
 
-    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [] });
+    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [], deferred: [] });
     expect(document.body.querySelector(".live")?.textContent).toBe("Hi, Ada");
   });
 
@@ -101,7 +128,7 @@ describe("hydrateIslands — deferred islands (createRoot)", () => {
 
     const result = hydrateIslands(registry(), manifest, { mount });
 
-    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [] });
+    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [], deferred: [] });
     expect(mounts).toEqual([{ id: "$", plan: "outer", ssr: false }]);
   });
 });
@@ -122,7 +149,7 @@ describe("hydrateIslands — ssr islands (hydrateRoot)", () => {
       result = hydrateIslands(registry(), manifest);
     });
 
-    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [] });
+    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [], deferred: [] });
     // After hydration the same node is live — still the real component's output.
     expect(document.body.querySelector(".stamp")?.textContent).toBe("READY");
   });
@@ -218,7 +245,7 @@ describe("hydrateIslands — pairing and drift", () => {
       mount: (container) => calls.push(container.tagName),
     });
 
-    expect(result).toEqual({ mounted: [], missing: ["$"], failed: [] });
+    expect(result).toEqual({ mounted: [], missing: ["$"], failed: [], deferred: [] });
     expect(calls).toEqual([]);
   });
 
@@ -233,7 +260,7 @@ describe("hydrateIslands — pairing and drift", () => {
       { root, mount: () => undefined },
     );
 
-    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [] });
+    expect(result).toEqual({ mounted: ["$"], missing: [], failed: [], deferred: [] });
   });
 
   it("escapes special characters in an id so the selector stays literal", () => {
@@ -255,7 +282,7 @@ describe("hydrateIslands — pairing and drift", () => {
       { root, mount: (container) => void seen.push(container) },
     );
 
-    expect(result).toEqual({ mounted: [id], missing: [], failed: [] });
+    expect(result).toEqual({ mounted: [id], missing: [], failed: [], deferred: [] });
     expect(seen[0]).toBe(shell);
   });
 
@@ -328,7 +355,7 @@ describe("hydrateIslands — per-island mount resilience", () => {
       { mount, onMountError },
     );
 
-    expect(result).toEqual({ mounted: ["second"], missing: [], failed: ["first"] });
+    expect(result).toEqual({ mounted: ["second"], missing: [], failed: ["first"], deferred: [] });
     expect(mounted).toEqual(["second"]);
     expect(errors).toEqual([{ error: boom, id: "first", component: "Account" }]);
   });
@@ -350,10 +377,234 @@ describe("hydrateIslands — per-island mount resilience", () => {
       { mount },
     );
 
-    expect(result).toEqual({ mounted: [], missing: [], failed: ["$"] });
+    expect(result).toEqual({ mounted: [], missing: [], failed: ["$"], deferred: [] });
     expect(spy).toHaveBeenCalled();
     // The default sink names the dead island and forwards the original error.
     expect(spy.mock.calls[0]?.[0]).toContain('island "$" (Account) failed to mount');
     expect(spy.mock.calls[0]?.[1]).toBe(boom);
+  });
+});
+
+describe("hydrateIslands — visible (lazy) islands", () => {
+  it("emits strategy: visible on the wire only for a visible island", () => {
+    // The eager island's manifest entry stays byte-for-byte what it always was
+    // (no `strategy` key), so existing manifests/scripts/tests read unchanged;
+    // only the `visible` opt-in carries the field. This pins both halves.
+    const page = renderPage(registry(), {
+      type: "Box",
+      children: [
+        { type: "Account", props: { plan: "eager" } },
+        { type: "Lazy", props: { tag: "deferred" } },
+      ],
+    });
+
+    expect(page.islands).toEqual([
+      { id: "$.children[0]", component: "Account", props: { plan: "eager" }, ssr: false },
+      {
+        id: "$.children[1]",
+        component: "Lazy",
+        props: { tag: "deferred" },
+        ssr: false,
+        strategy: "visible",
+      },
+    ]);
+  });
+
+  it("does NOT mount on load — it observes and records the id in deferred", () => {
+    const manifest = paint({ type: "Lazy", props: { tag: "X" } });
+
+    // Server painted the fallback; nothing should go live until intersection.
+    expect(document.body.querySelector(".lazy-fallback")?.textContent).toBe("idle X");
+
+    const observed: Element[] = [];
+
+    // A fake observer that records WHAT it watched but never fires `onVisible`,
+    // standing in for a viewport the region has not yet scrolled into.
+    const observe: ObserveFn = (container) => {
+      observed.push(container);
+
+      return () => undefined;
+    };
+
+    let result!: ReturnType<typeof hydrateIslands>;
+
+    act(() => {
+      result = hydrateIslands(registry(), manifest, { observe });
+    });
+
+    expect(result).toEqual({ mounted: [], missing: [], failed: [], deferred: ["$"] });
+    // The live component did NOT mount; the fallback is still the only thing there.
+    expect(document.body.querySelector(".lazy-live")).toBeNull();
+    expect(document.body.querySelector(".lazy-fallback")?.textContent).toBe("idle X");
+    // It DID hand the island's container to the observer.
+    expect(observed[0]?.getAttribute(ISLAND_ATTR)).toBe("$");
+  });
+
+  it("mounts once on first intersection, ignores repeats, then disconnects", () => {
+    const manifest = paint({ type: "Lazy", props: { tag: "Y" } });
+
+    // Capture the observer's callback + disconnect so the test can drive the
+    // intersection by hand, the way a real IntersectionObserver would later. Our
+    // fake fires `onVisible` on EVERY call — the runtime, not the observer, must
+    // guard the one-shot.
+    let fire: (() => void) | undefined;
+
+    let disconnects = 0;
+
+    const observe: ObserveFn = (_container, onVisible) => {
+      fire = onVisible;
+
+      return () => (disconnects += 1);
+    };
+
+    let result!: ReturnType<typeof hydrateIslands>;
+
+    act(() => {
+      result = hydrateIslands(registry(), manifest, { observe });
+    });
+
+    // Still deferred, still only the fallback, before the region is seen.
+    expect(result.deferred).toEqual(["$"]);
+    expect(document.body.querySelector(".lazy-live")).toBeNull();
+    expect(disconnects).toBe(0);
+
+    // Region scrolls into view: the runtime mounts the real component now and
+    // tears the observer down.
+    act(() => fire?.());
+
+    expect(document.body.querySelector(".lazy-live")?.textContent).toBe("Y");
+    // The post-intersection mount mutates the (caller-held) mounted array.
+    expect(result.mounted).toEqual(["$"]);
+    expect(disconnects).toBe(1);
+
+    // A repeat intersection (a real observer fires on every entry) is ignored:
+    // no second mount, no second disconnect.
+    act(() => fire?.());
+
+    expect(result.mounted).toEqual(["$"]);
+    expect(disconnects).toBe(1);
+  });
+
+  it("routes a deferred island whose mount throws to onMountError when it fires", () => {
+    // Resilience must survive the deferral: a visible island that blows up on
+    // mount is contained exactly like an eager one — just later, on intersection.
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+    const boom = new Error("lazy blew up");
+
+    let fire: (() => void) | undefined;
+
+    const observe: ObserveFn = (_container, onVisible) => {
+      fire = onVisible;
+
+      return () => undefined;
+    };
+
+    const mount: MountFn = () => {
+      throw boom;
+    };
+
+    const errors: Array<{ error: unknown; id: string; component: string }> = [];
+
+    const onMountError: MountErrorSink = (error, info) => {
+      errors.push({ error, id: info.id, component: info.component });
+    };
+
+    const result = hydrateIslands(
+      registry(),
+      [{ id: "$", component: "Lazy", props: { tag: "z" }, ssr: false, strategy: "visible" }],
+      { observe, mount, onMountError },
+    );
+
+    // Nothing failed synchronously — it's purely deferred.
+    expect(result).toEqual({ mounted: [], missing: [], failed: [], deferred: ["$"] });
+    expect(errors).toEqual([]);
+
+    // On intersection the throw is caught and routed, and the id lands in failed.
+    fire?.();
+
+    expect(errors).toEqual([{ error: boom, id: "$", component: "Lazy" }]);
+    expect(result.failed).toEqual(["$"]);
+  });
+
+  it("a missing visible shell is reported missing, never observed", () => {
+    // No painting: the visible island has no shell. It must take the missing
+    // branch (like any island), never reach the observer.
+    let observeCalls = 0;
+
+    const observe: ObserveFn = () => {
+      observeCalls += 1;
+
+      return () => undefined;
+    };
+
+    const result = hydrateIslands(
+      registry(),
+      [{ id: "$", component: "Lazy", props: { tag: "q" }, ssr: false, strategy: "visible" }],
+      { observe },
+    );
+
+    expect(result).toEqual({ mounted: [], missing: ["$"], failed: [], deferred: [] });
+    expect(observeCalls).toBe(0);
+  });
+
+  it("the default observer wraps IntersectionObserver: observes, fires once, disconnects", () => {
+    // Exercise the real `intersectionObserve` default (no injected `observe`) by
+    // substituting a fake `IntersectionObserver` on the global — jsdom has none.
+    // This covers the default branch, its `isIntersecting` predicate, the one-shot
+    // disconnect, and the returned disconnect wrapper.
+    const manifest = paint({ type: "Lazy", props: { tag: "W" } });
+
+    const instances: Array<{ observed: Element[]; disconnected: number }> = [];
+
+    let trigger: ((entries: Array<{ isIntersecting: boolean }>) => void) | undefined;
+
+    class FakeIntersectionObserver {
+      observed: Element[] = [];
+
+      disconnected = 0;
+
+      constructor(cb: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        trigger = cb;
+        instances.push(this);
+      }
+
+      observe(el: Element): void {
+        this.observed.push(el);
+      }
+
+      disconnect(): void {
+        this.disconnected += 1;
+      }
+    }
+
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+
+    try {
+      let result!: ReturnType<typeof hydrateIslands>;
+
+      act(() => {
+        result = hydrateIslands(registry(), manifest);
+      });
+
+      expect(result.deferred).toEqual(["$"]);
+      expect(instances[0]?.observed[0]?.getAttribute(ISLAND_ATTR)).toBe("$");
+      expect(document.body.querySelector(".lazy-live")).toBeNull();
+
+      // A non-intersecting entry is ignored — no mount, no disconnect.
+      act(() => trigger?.([{ isIntersecting: false }]));
+
+      expect(document.body.querySelector(".lazy-live")).toBeNull();
+      expect(instances[0]?.disconnected).toBe(0);
+
+      // An intersecting entry fires the one-shot: mount the real component and
+      // disconnect the observer.
+      act(() => trigger?.([{ isIntersecting: true }]));
+
+      expect(document.body.querySelector(".lazy-live")?.textContent).toBe("W");
+      expect(instances[0]?.disconnected).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

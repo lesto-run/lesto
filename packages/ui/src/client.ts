@@ -12,12 +12,14 @@
 
 export { hydrateIslands } from "./hydrate";
 export type {
+  Disconnect,
   HydrateOptions,
   HydrationResult,
   IslandRoot,
   MountContext,
   MountErrorSink,
   MountFn,
+  ObserveFn,
   RecoverableErrorSink,
 } from "./hydrate";
 

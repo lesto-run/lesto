@@ -30,6 +30,7 @@
     "oxfmt": "^0.54.0",
     "oxlint": "^1.69.0",
     "preact": "^10.29.2",
+    "preact-render-to-string": "^6.7.0",
     "react": "^19",
     "react-dom": "^19",
     "typescript": "^5.7.0",

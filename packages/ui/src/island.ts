@@ -55,6 +55,22 @@ import type { PropSpec, UiNode } from "./types";
  * it. Only set it when the component renders identically on both sides — see the
  * module doc. When `ssr` is true the `fallback` is unused (the real output IS the
  * server markup) and may be omitted.
+ *
+ * `hydrate` chooses WHEN the client does the island's mount work, mirroring how
+ * `ssr` chooses WHICH shell the server ships — a per-component declaration, not a
+ * page-wide mode:
+ *   - **`"load"` (default)** — eager: the island mounts as soon as
+ *     `hydrateIslands` runs, the behavior every existing island already has.
+ *   - **`"visible"`** — lazy: the island does not mount until its region first
+ *     scrolls into view (an `IntersectionObserver`), Astro's `client:visible`
+ *     analogue. For Keel's deferred Account island this also defers its on-mount
+ *     `/mls/api/session` fetch until the region is actually seen.
+ *
+ * Honest scope: Keel ships ONE client bundle, so `"visible"` defers the island's
+ * MOUNT WORK (its render, effects, and fetches), NOT bundle BYTES — the
+ * component's code is already in the loaded bundle. True byte deferral needs
+ * per-island code-splitting, a separate and larger follow-up. We do not overclaim
+ * it here.
  */
 export interface ClientComponentDef {
   name: string;
@@ -63,7 +79,16 @@ export interface ClientComponentDef {
   component: ComponentType<Record<string, unknown>>;
   fallback?: (props: Record<string, unknown>) => ReactNode;
   ssr?: boolean;
+  hydrate?: HydrationStrategy;
 }
+
+/**
+ * When the client mounts an island. `"load"` is eager (today's only behavior);
+ * `"visible"` defers the mount until the region first intersects the viewport.
+ * Kept as a named type because it rides both the authoring side
+ * ({@link ClientComponentDef.hydrate}) and the wire ({@link IslandMount.strategy}).
+ */
+export type HydrationStrategy = "load" | "visible";
 
 /**
  * One hydration target: enough for ANY client runtime to find the marked DOM
@@ -74,12 +99,20 @@ export interface ClientComponentDef {
  * server-rendered output (`hydrateRoot`) or only a fallback to replace
  * (`createRoot`). It rides the wire so the client never has to guess and never
  * risks a mismatch by hydrating a fallback-only shell.
+ *
+ * `strategy` tells the client WHEN to do that mount: `"visible"` defers it to the
+ * region's first intersection, anything else (including its absence) mounts
+ * eagerly. It is OPTIONAL and omitted for the default `"load"` so an eager
+ * island's wire entry stays byte-for-byte what it has always been — existing
+ * manifests, their serialized `<script>` payloads, and the tests that pin their
+ * exact shape all read unchanged. Only the rarer `"visible"` opt-in adds a field.
  */
 export interface IslandMount {
   id: string;
   component: string;
   props: Record<string, unknown>;
   ssr: boolean;
+  strategy?: HydrationStrategy;
 }
 
 /** The attribute that marks an island's wrapper element for hydration. */
