@@ -11,9 +11,9 @@ import { runWorker } from "../src/index";
 let database: Database.Database;
 let queue: Queue;
 
-beforeEach(() => {
+beforeEach(async () => {
   database = new Database(":memory:");
-  installSchema(database as unknown as SqlDatabase);
+  await installSchema(database as unknown as SqlDatabase);
   queue = new Queue({ db: database as unknown as SqlDatabase });
 });
 
@@ -42,7 +42,7 @@ describe("runWorker", () => {
       ran = true;
     });
 
-    const id = queue.enqueue("greet", { name: "ada" });
+    const id = await queue.enqueue("greet", { name: "ada" });
 
     const worker = runWorker(queue);
 
@@ -50,7 +50,7 @@ describe("runWorker", () => {
 
     await worker.stop();
 
-    expect(queue.find(id)?.status).toBe("done");
+    expect((await queue.find(id))?.status).toBe("done");
   });
 
   it("forwards the concurrency option to the queue worker", async () => {
@@ -60,7 +60,7 @@ describe("runWorker", () => {
       ran = true;
     });
 
-    queue.enqueue("greet");
+    await queue.enqueue("greet");
 
     const worker = runWorker(queue, { concurrency: 2 });
 
