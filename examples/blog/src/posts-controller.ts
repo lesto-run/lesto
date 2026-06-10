@@ -21,11 +21,13 @@ import { registry } from "./registry";
 
 export function buildControllers(db: Db): { posts: ControllerClass } {
   class PostsController extends Controller {
-    index(): KeelResponse {
+    async index(): Promise<KeelResponse> {
+      const posts = await listPosts(db);
+
       const tree: UiNode = {
         type: "Page",
         props: { title: "The Keel Blog" },
-        children: listPosts(db).map((post) => ({
+        children: posts.map((post) => ({
           type: "PostCard",
           props: { title: post.title, body: post.body },
         })),
@@ -34,8 +36,8 @@ export function buildControllers(db: Db): { posts: ControllerClass } {
       return this.renderTree(registry, tree);
     }
 
-    api(): KeelResponse {
-      return this.json({ posts: listPosts(db) });
+    async api(): Promise<KeelResponse> {
+      return this.json({ posts: await listPosts(db) });
     }
   }
 

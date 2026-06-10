@@ -61,13 +61,13 @@ export const DEMO_ACCOUNTS: readonly DemoAccount[] = [
 export const DEFAULT_DEMO = DEMO_ACCOUNTS[0]!;
 
 /** Insert the demo accounts (idempotent — running twice is a no-op). */
-function seedDemoAccounts(db: Db): void {
+async function seedDemoAccounts(db: Db): Promise<void> {
   const now = new Date().toISOString();
 
   for (const demo of DEMO_ACCOUNTS) {
-    if (findUserByEmail(db, demo.email)) continue;
+    if (await findUserByEmail(db, demo.email)) continue;
 
-    insertUser(db, {
+    await insertUser(db, {
       email: demo.email,
       passwordHash: hashPassword(demo.password),
       // Seeded users are born verified — the demo skips the email click.
@@ -109,9 +109,9 @@ export async function buildIdentity(): Promise<{
 
   // Order is the contract: migrate, build the db, seed, then the service.
   // A query before migrate would hit an empty schema.
-  new Migrator(sql, [usersMigration]).migrate();
+  await new Migrator(sql, [usersMigration]).migrate();
   const db = createDb(sql);
-  seedDemoAccounts(db);
+  await seedDemoAccounts(db);
 
   const identity = createIdentity({
     db,
