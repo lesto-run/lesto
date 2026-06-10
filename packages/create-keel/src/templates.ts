@@ -132,20 +132,20 @@ const NewPost = z.object({
 // domain types. Matches every other in-tree consumer.
 function buildControllers(db: Db): { posts: ControllerClass } {
   class PostsController extends Controller {
-    index(): KeelResponse {
-      const rows = db.select().from(posts).orderBy(posts.id, "asc").all();
+    async index(): Promise<KeelResponse> {
+      const rows = await db.select().from(posts).orderBy(posts.id, "asc").all();
 
       return this.json({ posts: rows });
     }
 
     // POST /posts. \`validateBody\` proves the shape (or throws a 422); past it,
     // \`input\` is a typed \`{ title: string; body: string }\` we can trust.
-    create(): KeelResponse {
+    async create(): Promise<KeelResponse> {
       const input = validateBody(NewPost, this.request);
 
       const now = new Date().toISOString();
 
-      const post = db
+      const post = await db
         .insert(posts)
         .values({ title: input.title, body: input.body, createdAt: now, updatedAt: now })
         .returning()
