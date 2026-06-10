@@ -1,7 +1,7 @@
 {
   "name": "@keel/mailing-lists",
   "version": "0.0.0",
-  "description": "Ghost-style subscriber lists — double opt-in and broadcasts, composed on @keel/orm, @keel/mail, and @keel/queue.",
+  "description": "Ghost-style subscriber lists — double opt-in and broadcasts, composed on @keel/db, @keel/mail, and @keel/queue.",
   "type": "module",
   "private": true,
 
@@ -13,9 +13,10 @@
   },
 
   "dependencies": {
+    "@keel/db": "workspace:*",
     "@keel/errors": "workspace:*",
     "@keel/mail": "workspace:*",
-    "@keel/orm": "workspace:*",
+    "@keel/migrate": "workspace:*",
     "@keel/queue": "workspace:*"
   },
 
