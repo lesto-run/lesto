@@ -75,13 +75,13 @@ export class Cache {
    * a miss or an expired entry we produce a new value, write it, and return it.
    */
   async fetch<T>(key: string, produce: () => T | Promise<T>, options?: WriteOptions): Promise<T> {
-    const live = this.read<T>(key);
+    const live = await this.read<T>(key);
 
     if (live !== undefined) return live;
 
     const produced = await produce();
 
-    this.write(key, produced, options);
+    await this.write(key, produced, options);
 
     return produced;
   }
@@ -119,11 +119,14 @@ export class Cache {
     compute: () => T | Promise<T>,
     options?: WriteOptions,
   ): Promise<T> {
-    const live = this.read<T>(key);
+    const live = await this.read<T>(key);
 
     if (live !== undefined) return live;
 
-    // Join an in-flight compute if one already owns this key.
+    // Join an in-flight compute if one already owns this key. The ledger is a
+    // process-local Map, so this check — and the lead registration below — run
+    // synchronously together (no `await` between them), which is what lets a
+    // same-tick caller join the leader instead of racing it.
     const pending = this.inFlight.get(key) as InFlight<T> | undefined;
 
     if (pending !== undefined) return pending.promise;
@@ -141,7 +144,7 @@ export class Cache {
     const promise = (async () => {
       const produced = await compute();
 
-      if (this.inFlight.get(key)?.token === token) this.write(key, produced, options);
+      if (this.inFlight.get(key)?.token === token) await this.write(key, produced, options);
 
       return produced;
     })().finally(() => {
@@ -159,14 +162,15 @@ export class Cache {
    * A missing key is a miss. An expired key is also a miss — and we delete it
    * here so the store sheds the dead entry the moment we notice it is dead.
    */
-  read<T>(key: string): T | undefined {
-    const entry = this.store.get(key);
+  async read<T>(key: string): Promise<T | undefined> {
+    const entry = await this.store.get(key);
 
     if (entry === undefined) return undefined;
 
-    // `null` means never expires; otherwise the deadline is in epoch ms.
+    // `null` means never expires; otherwise the deadline is in epoch ms. The
+    // clock comparison and the value cast are pure — only the store reads await.
     if (entry.expiresAt !== null && entry.expiresAt <= this.clock()) {
-      this.store.delete(key);
+      await this.store.delete(key);
 
       return undefined;
     }
@@ -175,12 +179,12 @@ export class Cache {
   }
 
   /** Write a value, optionally with a TTL. No TTL → the entry never expires. */
-  write(key: string, value: unknown, options?: WriteOptions): void {
+  async write(key: string, value: unknown, options?: WriteOptions): Promise<void> {
     const ttlMs = options?.ttlMs;
 
     const expiresAt = ttlMs === undefined ? null : this.clock() + ttlMs;
 
-    this.store.set(key, { value, expiresAt });
+    await this.store.set(key, { value, expiresAt });
   }
 
   /**
@@ -192,8 +196,8 @@ export class Cache {
    * `delete` is never undone by a compute that was already running. (The next
    * `remember` simply leads a fresh compute, since the join slot is now empty.)
    */
-  delete(key: string): void {
-    this.store.delete(key);
+  async delete(key: string): Promise<void> {
+    await this.store.delete(key);
 
     this.inFlight.delete(key);
   }
@@ -205,8 +209,8 @@ export class Cache {
    * entry so no leader resolving after a `clear` can write its value back into a
    * store the caller just emptied.
    */
-  clear(): void {
-    this.store.clear();
+  async clear(): Promise<void> {
+    await this.store.clear();
 
     this.inFlight.clear();
   }

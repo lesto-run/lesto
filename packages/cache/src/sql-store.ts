@@ -9,8 +9,8 @@ const TABLE = "keel_cache";
  * `value` holds the JSON-encoded payload; `expires_at` is a nullable epoch-ms
  * deadline (NULL = never expires), mirroring `StoredEntry.expiresAt` exactly.
  */
-export function installCacheSchema(db: SqlDatabase): void {
-  db.exec(`
+export async function installCacheSchema(db: SqlDatabase): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS ${TABLE} (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
@@ -33,6 +33,9 @@ interface CacheRow {
  * so re-caching a key overwrites rather than duplicates.
  */
 export function sqlStore(db: SqlDatabase): CacheStore {
+  // The four statements are prepared eagerly, here at construction time —
+  // `prepare()` is synchronous (ADR 0006), so the cached handles cost nothing
+  // to hold and every terminal below reuses them. Only the I/O verbs await.
   const selectByKey = db.prepare(`SELECT value, expires_at FROM ${TABLE} WHERE key = ?`);
 
   const upsert = db.prepare(`
@@ -46,25 +49,26 @@ export function sqlStore(db: SqlDatabase): CacheStore {
   const deleteAll = db.prepare(`DELETE FROM ${TABLE}`);
 
   return {
-    get(key) {
-      const row = selectByKey.get([key]) as CacheRow | undefined;
+    async get(key) {
+      const row = (await selectByKey.get([key])) as CacheRow | undefined;
 
       // A miss is undefined, never a half-built entry.
       if (row === undefined) return undefined;
 
+      // JSON.parse is pure value code — the only async beat was the read above.
       return { value: JSON.parse(row.value) as unknown, expiresAt: row.expires_at };
     },
 
-    set(key, entry: StoredEntry) {
-      upsert.run([key, JSON.stringify(entry.value), entry.expiresAt]);
+    async set(key, entry: StoredEntry) {
+      await upsert.run([key, JSON.stringify(entry.value), entry.expiresAt]);
     },
 
-    delete(key) {
-      deleteByKey.run([key]);
+    async delete(key) {
+      await deleteByKey.run([key]);
     },
 
-    clear() {
-      deleteAll.run();
+    async clear() {
+      await deleteAll.run();
     },
   };
 }
