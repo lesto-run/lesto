@@ -23,36 +23,9 @@
  * `bin.ts`); everything decided here is covered.
  */
 
+import type { KernelDatabase } from "@keel/kernel";
+
 import { realSqliteEngines } from "./sqlite-drivers";
-
-/**
- * The async database seam the kernel boots on (ADR 0006 Wave 1).
- *
- * The I/O terminal verbs — `exec` and a prepared statement's `run`/`get`/`all` —
- * return Promises so a future network-bound driver (Postgres) satisfies the same
- * shape. `prepare()` STAYS SYNCHRONOUS: compiling SQL to a statement handle is a
- * pure value operation, not a round-trip. `transaction` is first-class so the
- * seam — not each caller — owns BEGIN/COMMIT/ROLLBACK.
- *
- * Under SQLite a "transaction" is the degenerate single-connection case: the
- * one handle runs the bracketing statements and `fn` runs against the same `db`.
- */
-export interface AsyncKernelDatabase {
-  exec(sql: string): Promise<unknown>;
-
-  prepare(sql: string): {
-    run(params?: unknown[]): Promise<{ changes: number; lastInsertRowid: number | bigint }>;
-    get(params?: unknown[]): Promise<unknown>;
-    all(params?: unknown[]): Promise<unknown[]>;
-  };
-
-  /**
-   * Run `fn` inside a transaction: `BEGIN`, then `fn(db)`, then `COMMIT` on
-   * success or `ROLLBACK` on throw (the rollback itself is best-effort). The
-   * resolved value of `fn` is returned; a thrown error propagates after rollback.
-   */
-  transaction<T>(fn: (tx: AsyncKernelDatabase) => Promise<T>): Promise<T>;
-}
 
 /** The minimal driver shape both SQLite engines expose, once constructed. */
 export interface SqliteHandle {
@@ -80,7 +53,7 @@ export interface SqliteEngines {
 
 /** A booted SQLite handle plus the call that releases its connection. */
 export interface OpenSqlite {
-  db: AsyncKernelDatabase;
+  db: KernelDatabase;
   close: () => void;
 }
 
@@ -96,10 +69,12 @@ export async function openSqlite(
 ): Promise<OpenSqlite> {
   const raw = engines.betterSqlite(filename) ?? (await engines.bunSqlite(filename));
 
-  const db: AsyncKernelDatabase = {
+  const db: KernelDatabase = {
     // I/O terminal verbs are async: a SQLite engine returns synchronously, so we
     // `await` a resolved value (zero latency) to present the Postgres-shaped seam.
-    exec: async (sql) => raw.exec(sql),
+    exec: async (sql) => {
+      raw.exec(sql);
+    },
 
     // `prepare` stays synchronous — compiling SQL is a pure value operation — but
     // the statement's terminal verbs are async for the same reason as `exec`.
