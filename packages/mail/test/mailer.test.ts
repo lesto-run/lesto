@@ -37,7 +37,7 @@ describe("Mailer", () => {
       html: `<p>Hi ${name}</p>`,
     }));
 
-    const id = mailer.send("welcome", { to: "ada@example.com", name: "Ada" });
+    const id = await mailer.send("welcome", { to: "ada@example.com", name: "Ada" });
     expect(typeof id).toBe("number");
 
     expect((await queue.runOnce())?.outcome).toBe("done");
@@ -60,7 +60,7 @@ describe("Mailer", () => {
       react: { kind: "Digest" },
     }));
 
-    mailer.send("digest", {});
+    await mailer.send("digest", {});
     await queue.runOnce();
 
     expect(sent[0]?.from).toBe("noreply@app.com");
@@ -71,7 +71,7 @@ describe("Mailer", () => {
     const mailer = new Mailer({ queue, transport });
     mailer.define("bare", () => ({ to: "x@example.com", subject: "Bare", html: "<p>.</p>" }));
 
-    mailer.send("bare", {});
+    await mailer.send("bare", {});
     await queue.runOnce();
 
     expect(sent[0]?.from).toBeUndefined();
@@ -79,28 +79,28 @@ describe("Mailer", () => {
 
   it("fails (coded) for an unknown mailer", async () => {
     const mailer = new Mailer({ queue, transport });
-    const id = mailer.send("ghost", {}, { maxAttempts: 1 });
+    const id = await mailer.send("ghost", {}, { maxAttempts: 1 });
 
     expect((await queue.runOnce())?.outcome).toBe("failed");
-    expect(queue.find(id)?.lastError).toContain('No mailer named "ghost"');
+    expect((await queue.find(id))?.lastError).toContain('No mailer named "ghost"');
   });
 
   it("fails when the template has no body", async () => {
     const mailer = new Mailer({ queue, transport });
     mailer.define("empty", () => ({ to: "x@example.com", subject: "Empty" }));
-    const id = mailer.send("empty", {}, { maxAttempts: 1 });
+    const id = await mailer.send("empty", {}, { maxAttempts: 1 });
 
     await queue.runOnce();
-    expect(queue.find(id)?.lastError).toContain("html` or `react");
+    expect((await queue.find(id))?.lastError).toContain("html` or `react");
   });
 
   it("fails when a react template has no renderer", async () => {
     const mailer = new Mailer({ queue, transport });
     mailer.define("needsRender", () => ({ to: "x@example.com", subject: "R", react: {} }));
-    const id = mailer.send("needsRender", {}, { maxAttempts: 1 });
+    const id = await mailer.send("needsRender", {}, { maxAttempts: 1 });
 
     await queue.runOnce();
-    expect(queue.find(id)?.lastError).toContain("react-email");
+    expect((await queue.find(id))?.lastError).toContain("react-email");
   });
 
   it("MailError carries a frozen, coded payload", () => {
