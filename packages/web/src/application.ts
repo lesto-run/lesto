@@ -15,7 +15,7 @@ import type { ControllerClass } from "./controller";
 import { WebError } from "./errors";
 import { runPipeline } from "./middleware";
 import type { Middleware } from "./middleware";
-import type { AnyKeelResponse, KeelRequest, KeelResponse } from "./types";
+import type { AnyKeelResponse, HandleOptions, KeelRequest, KeelResponse } from "./types";
 
 /** What the application is built from: a router and the controllers it dispatches to. */
 export interface ApplicationOptions {
@@ -33,15 +33,6 @@ export interface ApplicationOptions {
    * router/controller (see {@link runPipeline}).
    */
   middleware?: readonly Middleware[];
-}
-
-/** Per-request inputs the router cannot supply: the query string, headers, and body. */
-export interface HandleOptions {
-  query?: Record<string, string>;
-
-  headers?: Record<string, string>;
-
-  body?: unknown;
 }
 
 export class Application {

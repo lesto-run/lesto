@@ -6,6 +6,19 @@
  * function or class over them, so the whole MVC core is testable without a server.
  */
 
+/**
+ * Per-request inputs the router cannot supply on its own: the query string,
+ * headers, and decoded body. The transport (or a test) hands these to
+ * `handle(method, path, options)`; the router contributes the matched params.
+ */
+export interface HandleOptions {
+  query?: Record<string, string>;
+
+  headers?: Record<string, string>;
+
+  body?: unknown;
+}
+
 /** A normalized inbound request: what the router matched, plus query and body. */
 export interface KeelRequest {
   method: string;

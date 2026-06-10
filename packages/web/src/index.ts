@@ -16,10 +16,21 @@
  */
 
 export { Application } from "./application";
-export type { ApplicationOptions, HandleOptions } from "./application";
+export type { ApplicationOptions } from "./application";
 
 export { Controller } from "./controller";
 export type { ControllerClass } from "./controller";
+
+// The code-first router + handler context — Keel's request-handling surface.
+export { keel, Keel } from "./keel";
+export type { Handler } from "./keel";
+export { Context } from "./handler-context";
+
+// Page rendering: the lean route contract (load / params / metadata / access /
+// flags) plus the props/layout/metadata types a page is authored against.
+export type { Layout, PageDef, PageLoad, PageMetadata, PageProps } from "./render-page";
+
+export type { HandleOptions } from "./types";
 
 // Re-exported so a caller can type the streaming options it passes to
 // `Controller.streamTree` without reaching across to `@keel/ui` directly.
