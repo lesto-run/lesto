@@ -113,6 +113,42 @@ export function buildEdgeApp(secret: string): Application {
   }
 
   class MlsController extends Controller {
+    /** The MLS landing page: the listings, with a sign-in/out control reflecting the session. */
+    index(): KeelResponse {
+      const user = currentUser(this.request.headers["cookie"]);
+
+      const tree: UiNode = {
+        type: "Page",
+        children: [
+          {
+            type: "SiteHeader",
+            // SignInPanel's `csrf` is required by its schema; the edge app does
+            // not run CSRF (signed cookies + SameSite=Lax are the control here),
+            // so the field is present but unused.
+            children: [
+              {
+                type: "SignInPanel",
+                props: { signedIn: user !== undefined, csrf: "", ...(user && { name: user.name }) },
+              },
+            ],
+          },
+          {
+            type: "Hero",
+            props: {
+              heading: user === undefined ? "MLS Search" : `Welcome back, ${user.name}`,
+              sub:
+                user === undefined
+                  ? "Sign in to save listings."
+                  : "Your saved listings are at /mls/saved.",
+            },
+          },
+          listingGrid(),
+        ],
+      };
+
+      return this.html(renderDocument(registry, tree, "MLS · Jade Mills Estates"));
+    }
+
     /** The same-origin endpoint the marketing Account island calls. */
     session(): KeelResponse {
       const user = currentUser(this.request.headers["cookie"]);
@@ -162,6 +198,7 @@ export function buildEdgeApp(secret: string): Application {
 
   const router = new Router()
     .get("/", "marketing#home")
+    .get("/mls", "mls#index")
     .get("/mls/api/session", "mls#session")
     .post("/mls/api/sign-in", "mls#signIn")
     .post("/mls/api/sign-out", "mls#signOut")

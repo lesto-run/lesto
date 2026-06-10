@@ -111,6 +111,17 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
     expect(saved.status).toBe(401);
   });
 
+  it("serves the /mls landing page with the listings", async () => {
+    const handler = handlerFor(SECRET);
+
+    const response = await handler(new Request(`${origin}/mls`));
+
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain("MLS Search");
+    expect(html).toContain("Bel Air Glen Estate");
+  });
+
   it("serves the marketing page with the Account island shell", async () => {
     const handler = handlerFor(SECRET);
 
