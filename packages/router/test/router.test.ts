@@ -65,6 +65,38 @@ describe("resolve", () => {
   });
 });
 
+describe("ambiguous-segment guard", () => {
+  it("refuses two params in one segment at declaration time", () => {
+    const router = new Router();
+
+    try {
+      router.get("/posts/:a-:b", "posts#show");
+      expect.unreachable("declaring an ambiguous segment should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RouterError);
+      expect((error as RouterError).code).toBe("ROUTER_AMBIGUOUS_SEGMENT");
+      expect((error as RouterError).details).toEqual({ pattern: "/posts/:a-:b", param: "b" });
+    }
+  });
+
+  it("refuses two adjacent params with no separator", () => {
+    const router = new Router();
+
+    expect(() => router.get("/:a:b", "x#y")).toThrow(RouterError);
+  });
+
+  it("allows multiple params in separate `/` segments", () => {
+    const router = new Router();
+
+    router.get("/posts/:post_id/comments/:id", "comments#show");
+
+    expect(router.resolve("GET", "/posts/3/comments/8")).toEqual({
+      target: "comments#show",
+      params: { post_id: "3", id: "8" },
+    });
+  });
+});
+
 describe("root", () => {
   it("answers GET / and is named root", () => {
     const router = new Router();

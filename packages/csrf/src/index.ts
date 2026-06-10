@@ -12,3 +12,8 @@ export { generateToken, verifyToken } from "./token";
 
 export { csrf, defaultExtractToken } from "./middleware";
 export type { CsrfOptions } from "./middleware";
+
+// The token-free companion: an Origin / Fetch-Metadata check that needs no
+// client plumbing — the cheap, zero-config CSRF default for cookie-authed apps.
+export { originCheck } from "./origin";
+export type { OriginCheckOptions } from "./origin";

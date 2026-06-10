@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { KeelError } from "@keel/errors";
+import { currentContext } from "@keel/web";
 
 import type { DeployPlan } from "@keel/deploy";
 
@@ -35,6 +38,13 @@ function recordingDispatch(response: {
 
   return { dispatch, calls };
 }
+
+/** A dispatcher that always throws `error` — drives the edge error boundary. */
+const throwingDispatch =
+  (error: unknown): EdgeDispatch =>
+  () => {
+    throw error;
+  };
 
 describe("toFetchHandler", () => {
   it("adapts method, path, query, and headers into the dispatcher", async () => {
@@ -153,6 +163,141 @@ describe("toFetchHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("chunk-stream");
+  });
+});
+
+describe("toFetchHandler — hardening (edge parity)", () => {
+  it("merges the default security headers under every response", async () => {
+    const { dispatch } = recordingDispatch({
+      status: 200,
+      body: "ok",
+      headers: { "content-type": "text/html" },
+    });
+
+    const response = await toFetchHandler(dispatch)(new Request("https://example.com/"));
+
+    // The same defaults the node server applies are now on the edge response...
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    // ...without clobbering the app's own headers.
+    expect(response.headers.get("content-type")).toBe("text/html");
+  });
+
+  it("establishes a per-request context the dispatcher can read", async () => {
+    let seen: { requestId: string; ip?: string; protocol?: string } | undefined;
+
+    const dispatch: EdgeDispatch = (_method, _path, _options) => {
+      const context = currentContext();
+      seen = {
+        requestId: context?.requestId ?? "none",
+        ...(context?.ip !== undefined ? { ip: context.ip } : {}),
+        ...(context?.protocol !== undefined ? { protocol: context.protocol } : {}),
+      };
+
+      return Promise.resolve({ status: 200, headers: {}, body: "ok" });
+    };
+
+    await toFetchHandler(dispatch, { newRequestId: () => "fixed-id" })(
+      new Request("https://example.com/x", { headers: { "cf-connecting-ip": "203.0.113.7" } }),
+    );
+
+    expect(seen).toEqual({ requestId: "fixed-id", ip: "203.0.113.7", protocol: "https" });
+  });
+
+  it("resolves http protocol and an absent ip when the edge headers are missing", async () => {
+    let seen: { ip: string | undefined; protocol: string | undefined } | undefined;
+
+    const dispatch: EdgeDispatch = () => {
+      const context = currentContext();
+      seen = { ip: context?.ip, protocol: context?.protocol };
+
+      return Promise.resolve({ status: 200, headers: {}, body: "ok" });
+    };
+
+    await toFetchHandler(dispatch)(new Request("http://example.com/x"));
+
+    expect(seen).toEqual({ ip: undefined, protocol: "http" });
+  });
+
+  it("exposes the request abort signal on the context", async () => {
+    let signal: AbortSignal | undefined;
+
+    const dispatch: EdgeDispatch = () => {
+      signal = currentContext()?.signal;
+
+      return Promise.resolve({ status: 200, headers: {}, body: "ok" });
+    };
+
+    await toFetchHandler(dispatch)(new Request("https://example.com/x"));
+
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("catches a dispatch throw, answers a safe 500, and logs it", async () => {
+    const logged: unknown[] = [];
+
+    const response = await toFetchHandler(throwingDispatch(new Error("boom: secret=hunter2")), {
+      logError: (_message, error) => logged.push(error),
+    })(new Request("https://example.com/x"));
+
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe("Internal Server Error");
+    // The thrown secret never reaches the wire; the error went to the log instead.
+    expect(logged).toHaveLength(1);
+    // The 500 is hardened like any other response.
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("logs an uncaught dispatch failure through the default sink", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const response = await toFetchHandler(throwingDispatch(new Error("boom")))(
+      new Request("https://example.com/x"),
+    );
+
+    expect(response.status).toBe(500);
+    expect(errorSpy).toHaveBeenCalledWith("unhandled error serving request", expect.any(Error));
+
+    errorSpy.mockRestore();
+  });
+
+  it("maps a coded transport error to its status, without logging a client error", async () => {
+    const logged: unknown[] = [];
+
+    const response = await toFetchHandler(
+      throwingDispatch(new KeelError("RUNTIME_BODY_TOO_LARGE", "too big")),
+      { logError: (_message, error) => logged.push(error) },
+    )(new Request("https://example.com/x", { method: "POST" }));
+
+    expect(response.status).toBe(413);
+    expect(await response.text()).toBe("Payload Too Large");
+    // A 4xx is the client's to own — not logged as a server error.
+    expect(logged).toEqual([]);
+  });
+
+  it("sends no security headers when they are disabled", async () => {
+    const { dispatch } = recordingDispatch({
+      status: 200,
+      body: "ok",
+      headers: { "content-type": "text/plain" },
+    });
+
+    const response = await toFetchHandler(dispatch, { securityHeaders: false })(
+      new Request("https://example.com/"),
+    );
+
+    expect(response.headers.get("x-content-type-options")).toBeNull();
+    expect(response.headers.get("content-type")).toBe("text/plain");
+  });
+
+  it("adds a configured Content-Security-Policy", async () => {
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    const response = await toFetchHandler(dispatch, {
+      csp: { policy: "default-src 'self'", mode: "enforce" },
+    })(new Request("https://example.com/"));
+
+    expect(response.headers.get("content-security-policy")).toBe("default-src 'self'");
   });
 });
 

@@ -68,22 +68,44 @@ const singularize = (word: string): string => (word.endsWith("s") ? word.slice(0
  *
  * Static parts are escaped so they match literally; each `:param` becomes a
  * `[^/]+` capture group. The pattern is anchored end-to-end.
+ *
+ * Refuses a pattern that puts two params in one segment (`/:a-:b`): that compiles
+ * to adjacent `([^/]+)` groups separated by a literal, an ambiguous pattern whose
+ * backtracking is catastrophic on a long non-matching segment — the same ReDoS
+ * shape that bit `path-to-regexp` (CVE-2024-45296). And the request-handler
+ * deadline is no defense: a synchronous regex blocks the event loop, so its timer
+ * never fires. So we reject the shape at *declaration* time (fail fast, once)
+ * rather than risk it at request time.
  */
 const compile = (pattern: string): { regExp: RegExp; paramNames: ReadonlyArray<string> } => {
   const paramNames: string[] = [];
 
   let source = "";
   let lastIndex = 0;
+  let sawParam = false;
 
   for (const match of pattern.matchAll(PARAM_SEGMENT)) {
     // The static text between the previous param and this one is matched literally.
-    source += escapeRegExp(pattern.slice(lastIndex, match.index));
+    const between = pattern.slice(lastIndex, match.index);
+
+    // No `/` since the previous param means this one shares its segment — two
+    // `[^/]+` captures in one segment, the ambiguous backtracking shape we refuse.
+    if (sawParam && !between.includes("/")) {
+      throw new RouterError(
+        "ROUTER_AMBIGUOUS_SEGMENT",
+        `Route "${pattern}" puts two params in one segment (":${match[1]}" shares a segment with the param before it). Give each param its own "/" segment, or capture one param and split the value in the handler.`,
+        { pattern, param: match[1] },
+      );
+    }
+
+    source += escapeRegExp(between);
     source += "([^/]+)";
 
     // `match[1]` is the captured name; the regex guarantees it is present.
     paramNames.push(match[1] as string);
 
     lastIndex = match.index + match[0].length;
+    sawParam = true;
   }
 
   // Whatever trails the final param is also literal.

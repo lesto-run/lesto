@@ -13,9 +13,13 @@
  *      headers).
  *   2. `rateLimit` — a cheap gate next, so a flood is shed before it can reach
  *      the comparatively expensive CSRF crypto or a controller.
- *   3. `csrf` — innermost of the three, and present ONLY when configured. CORS
- *      and rate-limit are safe to enable for everyone; CSRF enforcement changes
- *      what a token-less request can do, so it is never on unless the app asks.
+ *   3. `originCheck` — the header-based CSRF defense, before the token check so a
+ *      forged cross-site request is refused before any crypto runs. Present only
+ *      when configured.
+ *   4. `csrf` — innermost, the signed-token check, present ONLY when configured.
+ *      CORS and rate-limit are safe to enable for everyone; the CSRF checks change
+ *      what a token-less / cross-site request can do, so neither is on unless the
+ *      app asks.
  *
  * The contract that protects every existing app: with `cors`/`rateLimit`
  * omitted the stack adds nothing in those slots, and with `csrf` omitted no CSRF
@@ -29,8 +33,8 @@ import type { CorsOptions } from "@keel/cors";
 import { rateLimit } from "@keel/ratelimit";
 import type { RateLimitOptions } from "@keel/ratelimit";
 
-import { csrf } from "@keel/csrf";
-import type { CsrfOptions } from "@keel/csrf";
+import { csrf, originCheck } from "@keel/csrf";
+import type { CsrfOptions, OriginCheckOptions } from "@keel/csrf";
 
 import type { Middleware } from "@keel/web";
 
@@ -51,6 +55,16 @@ export interface SecureStackOptions {
    * request-context client IP. Absent → no rate limiting.
    */
   readonly rateLimit?: RateLimitOptions;
+
+  /**
+   * Origin / Fetch-Metadata CSRF check. Present → an `originCheck` middleware
+   * refuses cross-site state-changing requests by reading `Sec-Fetch-Site` (and
+   * `Origin` as a fallback) — no token plumbing required. The cheap, recommended
+   * CSRF default; `{ originCheck: {} }` is enough for modern browsers. Absent →
+   * no origin check. Pair it with {@link csrf} for defense in depth, or use it
+   * alone where the token machinery isn't yet wired.
+   */
+  readonly originCheck?: OriginCheckOptions;
 
   /**
    * CSRF policy. Present → a `csrf` middleware enforces tokens on state-changing
@@ -79,7 +93,14 @@ export function secureStack(options: SecureStackOptions): readonly Middleware[] 
     middleware.push(rateLimit(options.rateLimit));
   }
 
-  // CSRF is last and conditional: enforcement only when explicitly configured.
+  // The two CSRF defenses sit innermost, both conditional. The cheap header-based
+  // origin check runs first (it sheds a forged cross-site request before the
+  // token crypto), then the signed-token check.
+  if (options.originCheck !== undefined) {
+    middleware.push(originCheck(options.originCheck));
+  }
+
+  // CSRF token is last and conditional: enforcement only when explicitly configured.
   if (options.csrf !== undefined) {
     middleware.push(csrf(options.csrf));
   }

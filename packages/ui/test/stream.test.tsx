@@ -522,3 +522,194 @@ describe("renderPageStream — injected render seam", () => {
     expect(await renderPageStreamToString(page, {}, fakeRender)).toBe("✓ ok");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Render deadline + abort signal: a framework-owned timeout and a caller/
+// transport signal (a client disconnect) chained into React's render.
+// ---------------------------------------------------------------------------
+
+/** A closed stream whose `allReady` is settled on demand, to drive cleanup timing. */
+function gatedStream(): { stream: ReactRenderStream; settle: () => void } {
+  let settle!: () => void;
+
+  const allReady = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.close();
+    },
+  }) as ReactRenderStream;
+
+  stream.allReady = allReady;
+
+  return { stream, settle };
+}
+
+const tick = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe("renderPageStream — render deadline + abort signal", () => {
+  it("passes a caller signal straight through when no deadline is set", async () => {
+    const ac = new AbortController();
+
+    let seen: Parameters<RenderToReadableStream>[1] | undefined;
+
+    const render: RenderToReadableStream = async (_element, options) => {
+      seen = options;
+
+      const { stream, settle } = gatedStream();
+      settle();
+
+      return stream;
+    };
+
+    await renderPageStream(pageOf(createElement("p", null, "x")), { signal: ac.signal }, render);
+
+    // No timeout: the caller's exact signal is forwarded, not a wrapper around it.
+    expect(seen?.signal).toBe(ac.signal);
+  });
+
+  it("arms a deadline that aborts the render with UI_STREAM_TIMEOUT", async () => {
+    let seen: Parameters<RenderToReadableStream>[1] | undefined;
+
+    // `allReady` never settles, so the deadline — not completion — ends the render.
+    const render: RenderToReadableStream = async (_element, options) => {
+      seen = options;
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      }) as ReactRenderStream;
+
+      stream.allReady = new Promise<void>(() => undefined);
+
+      return stream;
+    };
+
+    await renderPageStream(pageOf(createElement("p", null, "x")), { renderTimeoutMs: 5 }, render);
+
+    await tick(20);
+
+    const signal = seen?.signal;
+    if (signal === undefined) expect.unreachable("render seam received no signal");
+
+    expect(signal.aborted).toBe(true);
+    expect((signal.reason as UiError).code).toBe("UI_STREAM_TIMEOUT");
+  });
+
+  it("aborts immediately when the caller signal is already aborted", async () => {
+    const ac = new AbortController();
+    ac.abort(new Error("already gone"));
+
+    let seen: Parameters<RenderToReadableStream>[1] | undefined;
+
+    const render: RenderToReadableStream = async (_element, options) => {
+      seen = options;
+
+      const { stream, settle } = gatedStream();
+      settle(); // resolves allReady so the cleanup clears the (long) deadline timer
+
+      return stream;
+    };
+
+    await renderPageStream(
+      pageOf(createElement("p", null, "x")),
+      { signal: ac.signal, renderTimeoutMs: 60_000 },
+      render,
+    );
+
+    await tick(0);
+
+    expect(seen?.signal?.aborted).toBe(true);
+  });
+
+  it("chains a later caller abort (a client disconnect) into the render", async () => {
+    const ac = new AbortController();
+
+    const { stream, settle } = gatedStream();
+
+    let seen: Parameters<RenderToReadableStream>[1] | undefined;
+
+    const render: RenderToReadableStream = async (_element, options) => {
+      seen = options;
+
+      return stream;
+    };
+
+    await renderPageStream(
+      pageOf(createElement("p", null, "x")),
+      { signal: ac.signal, renderTimeoutMs: 60_000 },
+      render,
+    );
+
+    const signal = seen?.signal;
+    if (signal === undefined) expect.unreachable("render seam received no signal");
+
+    // Not yet aborted: neither the deadline nor the caller has fired.
+    expect(signal.aborted).toBe(false);
+
+    ac.abort(new Error("client disconnected"));
+
+    expect(signal.aborted).toBe(true);
+    expect((signal.reason as Error).message).toBe("client disconnected");
+
+    settle(); // settle allReady so the deadline timer is cleared, leaving none pending
+    await tick(0);
+  });
+
+  it("clears the deadline when the live render settles, even if allReady rejects", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      },
+    }) as ReactRenderStream;
+
+    // A rejecting allReady must clear the deadline (the reject arm of the cleanup)
+    // and never surface as an unhandled rejection.
+    stream.allReady = Promise.reject(new Error("aborted"));
+
+    const render: RenderToReadableStream = async () => stream;
+
+    const out = await renderPageStream(
+      pageOf(createElement("p", null, "x")),
+      { renderTimeoutMs: 60_000 },
+      render,
+    );
+
+    expect(await readAll(out)).toBe("");
+
+    await tick(0); // let the cleanup microtask run: no dangling timer, no unhandled rejection
+  });
+
+  it("forwards a deadline through the buffered exit and clears it on completion", async () => {
+    let seen: Parameters<RenderToReadableStream>[1] | undefined;
+
+    const render: RenderToReadableStream = async (_element, options) => {
+      seen = options;
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("<ok>"));
+          controller.close();
+        },
+      }) as ReactRenderStream;
+
+      stream.allReady = Promise.resolve();
+
+      return stream;
+    };
+
+    const html = await renderPageStreamToString(
+      pageOf(createElement("p", null, "x")),
+      { renderTimeoutMs: 60_000 },
+      render,
+    );
+
+    expect(html).toBe("<ok>");
+    // A deadline wrapper signal was handed to the render, and the `finally` cleared
+    // its timer (no dangling 60s timer hangs the test).
+    expect(seen?.signal).toBeInstanceOf(AbortSignal);
+  });
+});

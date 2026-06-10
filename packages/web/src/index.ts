@@ -31,6 +31,19 @@ export type { RequestContext } from "./context";
 export { runPipeline } from "./middleware";
 export type { Middleware, Next } from "./middleware";
 
+// Transport-neutral response hardening, shared by the node server and the edge
+// adapter so neither runtime drifts: default security headers, the opt-in
+// CSP/COEP knobs, and the error→status/body mapping.
+export {
+  bodyForStatus,
+  DEFAULT_SECURITY_HEADERS,
+  RECOMMENDED_CSP,
+  securityDefaults,
+  statusForError,
+  withSecurityHeaders,
+} from "./harden";
+export type { SecurityHeaderOptions } from "./harden";
+
 export { KeelError, WebError } from "./errors";
 export type { WebErrorCode } from "./errors";
 

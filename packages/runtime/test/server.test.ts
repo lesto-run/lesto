@@ -11,6 +11,7 @@ import {
   ifNoneMatch,
   installProcessSafetyNet,
   readBody,
+  requestAbortSignal,
   requestLineOf,
   respondWithError,
   securityDefaults,
@@ -19,8 +20,15 @@ import {
   withTimeout,
 } from "../src/server";
 import { etagFor } from "../src/index";
+import { RuntimeError } from "../src/errors";
 
-import type { BodyStream, ClosableServer, DrainTimers, ServerLimits } from "../src/server";
+import type {
+  AbortableResponse,
+  BodyStream,
+  ClosableServer,
+  DrainTimers,
+  ServerLimits,
+} from "../src/server";
 
 import type { Server } from "../src/index";
 import type { App } from "@keel/kernel";
@@ -1086,5 +1094,51 @@ describe("drainServer", () => {
     await drained;
 
     expect(h.calls.cleared).toEqual(["handle"]);
+  });
+});
+
+/** A fake response capturing its `close` listener, with a settable `writableFinished`. */
+function fakeAbortableRes(writableFinished: boolean): {
+  res: AbortableResponse;
+  fireClose: () => void;
+} {
+  let closeListener: (() => void) | undefined;
+
+  const res: AbortableResponse = {
+    on: (_event, listener) => {
+      closeListener = listener;
+      return res;
+    },
+    writableFinished,
+  };
+
+  return { res, fireClose: () => closeListener?.() };
+}
+
+describe("requestAbortSignal", () => {
+  it("aborts with RUNTIME_CLIENT_DISCONNECTED when the client closed before finishing", () => {
+    const { res, fireClose } = fakeAbortableRes(false);
+
+    const signal = requestAbortSignal(res);
+
+    // Quiet inert until the socket actually closes.
+    expect(signal.aborted).toBe(false);
+
+    fireClose();
+
+    expect(signal.aborted).toBe(true);
+    expect(signal.reason).toBeInstanceOf(RuntimeError);
+    expect((signal.reason as RuntimeError).code).toBe("RUNTIME_CLIENT_DISCONNECTED");
+  });
+
+  it("does not abort on a clean completion (the response already finished)", () => {
+    const { res, fireClose } = fakeAbortableRes(true);
+
+    const signal = requestAbortSignal(res);
+
+    // `close` fires on every response end; a finished write is not a disconnect.
+    fireClose();
+
+    expect(signal.aborted).toBe(false);
   });
 });

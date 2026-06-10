@@ -17,7 +17,9 @@ export type RuntimeErrorCode =
   /** The request body exceeded the configured size limit — a 413. */
   | "RUNTIME_BODY_TOO_LARGE"
   /** A request handler ran past its time budget; the socket is freed with a 503. */
-  | "RUNTIME_HANDLER_TIMEOUT";
+  | "RUNTIME_HANDLER_TIMEOUT"
+  /** The client hung up before the response finished — the abort-signal reason. */
+  | "RUNTIME_CLIENT_DISCONNECTED";
 
 /** Anything the transport tier can refuse to do. */
 export class RuntimeError extends KeelError<RuntimeErrorCode> {

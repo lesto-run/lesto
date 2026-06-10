@@ -196,4 +196,50 @@ describe("secureStack composition", () => {
 
     expect(stack).toHaveLength(3);
   });
+
+  it("adds the origin check as its own layer when configured", () => {
+    const stack = secureStack({
+      cors: { origin: "*" },
+      rateLimit: { capacity: 1, refillPerSecond: 1 },
+      originCheck: {},
+      csrf: { secret: SECRET, sessionFor: () => SESSION },
+    });
+
+    // cors + rateLimit + originCheck + csrf — all four present.
+    expect(stack).toHaveLength(4);
+  });
+});
+
+describe("secureStack — origin check (zero-config CSRF default)", () => {
+  it("refuses a cross-site state-changing request with no token plumbing", async () => {
+    const app = createApp({
+      db,
+      router: buildRouter(),
+      controllers: { api: ApiController },
+      middleware: secureStack({ originCheck: {} }),
+    });
+
+    const response = await app.handle("POST", "/api/items", {
+      headers: { "sec-fetch-site": "cross-site" },
+      body: "name=widget",
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  it("allows a same-origin state-changing request without a token", async () => {
+    const app = createApp({
+      db,
+      router: buildRouter(),
+      controllers: { api: ApiController },
+      middleware: secureStack({ originCheck: {} }),
+    });
+
+    const response = await app.handle("POST", "/api/items", {
+      headers: { "sec-fetch-site": "same-origin" },
+      body: "name=widget",
+    });
+
+    expect(response.status).toBe(201);
+  });
 });

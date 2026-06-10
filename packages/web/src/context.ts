@@ -47,6 +47,16 @@ export interface RequestContext {
   /** The resolved request protocol (`"http"` / `"https"`), trust-proxy-aware. */
   protocol?: string;
 
+  /**
+   * Fires when the request is abandoned — the client disconnected, or the
+   * transport tore the socket down. Long-running or streaming work (an SSR
+   * stream, a slow handler, an upstream fetch) reads this to cancel rather than
+   * burn CPU and hold resources for a response no one will receive. The
+   * transport publishes it per request; absent in a bare `runWithContext` call
+   * (a test, a background task) that never wired one.
+   */
+  signal?: AbortSignal;
+
   /** Room to grow: a user, a tenant, a request-scoped cache — keyed by feature. */
   [key: string]: unknown;
 }

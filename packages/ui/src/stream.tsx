@@ -81,6 +81,24 @@ export interface StreamOptions {
   bootstrapModules?: readonly string[];
 
   bootstrapScriptContent?: string;
+
+  /**
+   * A caller/transport abort signal — typically a request's, fired when the
+   * client disconnects. React keeps a suspended render (and the socket) alive
+   * until its data settles; a disconnected client should cancel it, not pay for
+   * a render no one will read. Chained with {@link renderTimeoutMs}: whichever
+   * fires first aborts the render.
+   */
+  signal?: AbortSignal;
+
+  /**
+   * A hard render deadline in milliseconds. React ships NO default timeout, so a
+   * slow or never-resolving `<Suspense>` boundary would hold the render and the
+   * socket open indefinitely — a streaming DoS. When set, the render is aborted
+   * past the deadline with a coded {@link UiError} `UI_STREAM_TIMEOUT` as the
+   * abort reason, so `onError` can tell a timeout from a genuine render error.
+   */
+  renderTimeoutMs?: number;
 }
 
 /**
@@ -111,6 +129,7 @@ export type RenderToReadableStream = (
     onError?: (error: unknown, errorInfo: ErrorInfo) => void;
     bootstrapModules?: string[];
     bootstrapScriptContent?: string;
+    signal?: AbortSignal;
   },
 ) => Promise<ReactRenderStream>;
 
@@ -120,6 +139,51 @@ const reactRenderToReadableStream = renderToReadableStream as unknown as RenderT
 const consoleStreamError: StreamErrorSink = (error) => {
   console.error("[keel/ui] streamed render error", error);
 };
+
+/** A render's effective abort signal, plus `clear` to disarm its deadline timer. */
+interface RenderAbort {
+  signal: AbortSignal | undefined;
+
+  clear: () => void;
+}
+
+/**
+ * Fold the caller's abort signal and a render deadline into the single signal
+ * handed to React.
+ *
+ * With no `timeoutMs` we pass the caller's signal straight through (or none) and
+ * `clear` is a no-op. With a deadline we arm a timer that aborts the render with
+ * a coded {@link UiError} `UI_STREAM_TIMEOUT` — a *typed* reason, so an `onError`
+ * sink can tell "timed out" from a genuine render error — and chain the caller's
+ * signal in: an already-aborted caller signal aborts at once, otherwise whichever
+ * of timer/caller fires first wins. `clear` cancels the timer so a render that
+ * finished in time leaves no pending deadline behind.
+ */
+function renderAbort(signal: AbortSignal | undefined, timeoutMs: number | undefined): RenderAbort {
+  if (timeoutMs === undefined) {
+    return { signal, clear: () => {} };
+  }
+
+  const controller = new AbortController();
+
+  const timer = setTimeout(() => {
+    controller.abort(
+      new UiError("UI_STREAM_TIMEOUT", `streamed render exceeded its ${timeoutMs}ms deadline`, {
+        ms: timeoutMs,
+      }),
+    );
+  }, timeoutMs);
+
+  if (signal !== undefined) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+    } else {
+      signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+    }
+  }
+
+  return { signal: controller.signal, clear: () => clearTimeout(timer) };
+}
 
 /**
  * Render a built {@link Page} to a live HTML stream that flushes the shell first.
@@ -150,10 +214,13 @@ export async function renderPageStream(
 
   const onError = options.onError ?? consoleStreamError;
 
-  // Only forward optional bootstrap fields React understands; `exactOptionalPropertyTypes`
-  // forbids handing it `undefined`, so each is included only when the caller set it.
-  return render(page.element, {
+  const aborter = renderAbort(options.signal, options.renderTimeoutMs);
+
+  // Only forward optional fields React understands; `exactOptionalPropertyTypes`
+  // forbids handing it `undefined`, so each is included only when present.
+  const stream = await render(page.element, {
     onError,
+    ...(aborter.signal !== undefined ? { signal: aborter.signal } : {}),
     ...(options.bootstrapModules !== undefined
       ? { bootstrapModules: [...options.bootstrapModules] }
       : {}),
@@ -161,6 +228,15 @@ export async function renderPageStream(
       ? { bootstrapScriptContent: options.bootstrapScriptContent }
       : {}),
   });
+
+  // Disarm the deadline once the whole document has settled (resolved, errored,
+  // or aborted): the live stream may still be draining to a slow client, but the
+  // render itself is done, so the timer has no more work. Both settle paths clear
+  // it; we swallow any rejection here so an aborted/errored render never surfaces
+  // as an unhandled rejection — the live stream's errors travel via `onError`.
+  void Promise.resolve(stream.allReady).then(aborter.clear, aborter.clear);
+
+  return stream;
 }
 
 /**
@@ -232,35 +308,44 @@ export async function renderPageStreamToString(
     sink(error, errorInfo);
   };
 
-  const stream = await render(page.element, {
-    onError,
-    ...(options.bootstrapModules !== undefined
-      ? { bootstrapModules: [...options.bootstrapModules] }
-      : {}),
-    ...(options.bootstrapScriptContent !== undefined
-      ? { bootstrapScriptContent: options.bootstrapScriptContent }
-      : {}),
-  });
+  const aborter = renderAbort(options.signal, options.renderTimeoutMs);
 
-  // Wait for the entire document — including every suspended child — before
-  // draining, so the buffered string holds the resolved content, not fallbacks.
-  await stream.allReady;
+  try {
+    const stream = await render(page.element, {
+      onError,
+      ...(aborter.signal !== undefined ? { signal: aborter.signal } : {}),
+      ...(options.bootstrapModules !== undefined
+        ? { bootstrapModules: [...options.bootstrapModules] }
+        : {}),
+      ...(options.bootstrapScriptContent !== undefined
+        ? { bootstrapScriptContent: options.bootstrapScriptContent }
+        : {}),
+    });
 
-  // A boundary errored: `allReady` still resolved, but the drained string would be
-  // degraded (error marker + client-recovery template + fallback, not real
-  // content). The buffered audience (crawler/SSG) cannot recover on the client, so
-  // we refuse to hand back half-rendered HTML — throw a coded error the caller can
-  // catch and fall back on, instead of silently writing it to disk.
-  if (errored) {
-    throw new UiError(
-      "UI_STREAM_INCOMPLETE",
-      "buffered streamed render is incomplete: a <Suspense> boundary errored, so the HTML " +
-        "holds the fallback and a client-recovery marker, not the real content",
-      { cause: renderError },
-    );
+    // Wait for the entire document — including every suspended child — before
+    // draining, so the buffered string holds the resolved content, not fallbacks.
+    await stream.allReady;
+
+    // A boundary errored: `allReady` still resolved, but the drained string would
+    // be degraded (error marker + client-recovery template + fallback, not real
+    // content). The buffered audience (crawler/SSG) cannot recover on the client,
+    // so we refuse to hand back half-rendered HTML — throw a coded error the
+    // caller can catch and fall back on, instead of silently writing it to disk.
+    if (errored) {
+      throw new UiError(
+        "UI_STREAM_INCOMPLETE",
+        "buffered streamed render is incomplete: a <Suspense> boundary errored, so the HTML " +
+          "holds the fallback and a client-recovery marker, not the real content",
+        { cause: renderError },
+      );
+    }
+
+    return drainToString(stream);
+  } finally {
+    // Always disarm the deadline — on success, on UI_STREAM_INCOMPLETE, or on a
+    // timeout/caller abort that rejected `allReady` — so no pending timer is left.
+    aborter.clear();
   }
-
-  return drainToString(stream);
 }
 
 /** Drain a UTF-8 byte stream to a single string, releasing the reader at the end. */

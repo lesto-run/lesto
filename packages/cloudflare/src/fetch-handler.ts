@@ -3,17 +3,34 @@
  *
  * A Worker is a single function: `fetch(Request) => Response`. Keel's dispatcher
  * is already a pure `(method, path, options) => KeelResponse` — no node:http, no
- * sockets — so putting Keel on the edge is just *adapting the shapes*: a Web
- * `Request` in, a Web `Response` out, the same dispatch in between. No second
- * server, no divergent code path; the edge runs the very function the node
- * server runs.
+ * sockets — so putting Keel on the edge is *adapting the shapes*: a Web `Request`
+ * in, a Web `Response` out, the same dispatch in between.
  *
- * The one piece of logic that lives here (and mirrors the node server) is body
- * decoding: text by default, parsed when the content-type says JSON, with a
- * malformed JSON body answered as a 400 rather than thrown.
+ * But "the same dispatch" is not "the same request handling". The node server
+ * (`@keel/runtime`) wraps every request in a per-request context, default security
+ * headers, and an error boundary; an edge adapter that skipped them would be a
+ * second, weaker front door to the same app — exactly the kind of adapter gap the
+ * field's SSR CVEs keep landing in. So this handler runs the SAME transport-neutral
+ * hardening the node server does (from `@keel/web`): it establishes a per-request
+ * context (id, client identity, an abort signal that fires on client disconnect),
+ * catches any dispatch throw and maps it to a safe coded status, and merges the
+ * default security headers under every response.
+ *
+ * One node-only piece is deliberately not mirrored yet: the ETag/304 conditional
+ * GET, whose hash is computed over `node:crypto`. Doing it on the edge needs an
+ * async Web-Crypto hash; until then a streamed/HTML edge response simply carries no
+ * ETag, exactly as a streamed node response does.
  */
 
-import type { AnyKeelResponse, KeelBody } from "@keel/web";
+import {
+  bodyForStatus,
+  DEFAULT_SECURITY_HEADERS,
+  runWithContext,
+  securityDefaults,
+  statusForError,
+  withSecurityHeaders,
+} from "@keel/web";
+import type { AnyKeelResponse, KeelBody, RequestContext } from "@keel/web";
 
 /** The per-request inputs the dispatcher reads, the same shape the node server passes. */
 export interface EdgeRequestOptions {
@@ -37,6 +54,31 @@ export type EdgeDispatch = (
   path: string,
   options: EdgeRequestOptions,
 ) => Promise<AnyKeelResponse>;
+
+/**
+ * How the edge handler hardens a response — the same knobs `serve` exposes on the
+ * node server, so a deployment configures one security posture for both runtimes.
+ */
+export interface EdgeOptions {
+  /**
+   * Default response headers merged under every response — the app's own headers
+   * always win. Defaults to the shared {@link DEFAULT_SECURITY_HEADERS}; pass
+   * `false` to send none, or a map to replace the defaults wholesale.
+   */
+  readonly securityHeaders?: false | Record<string, string>;
+
+  /** A Content-Security-Policy, off by default (see the node server's `csp`). */
+  readonly csp?: { readonly policy: string; readonly mode: "enforce" | "report-only" };
+
+  /** Opt in to `Cross-Origin-Embedder-Policy: require-corp` (off by default). */
+  readonly crossOriginEmbedderPolicy?: boolean;
+
+  /** Mints the per-request id put on the context. Injected for tests; defaults to `crypto.randomUUID`. */
+  readonly newRequestId?: () => string;
+
+  /** Where an uncaught dispatch failure is reported. Injected for tests; defaults to `console.error`. */
+  readonly logError?: (message: string, error: unknown) => void;
+}
 
 /** Flatten a URL's search params to a record; the last value wins on repeats. */
 function queryFrom(params: URLSearchParams): Record<string, string> {
@@ -92,50 +134,130 @@ async function decodeBody(request: Request, contentType: string | undefined): Pr
  * Adapt a Keel body to the Web `Response`'s `BodyInit`.
  *
  * A Web `Response` natively accepts all three Keel body arms — a string, raw
- * bytes (a `BufferSource`), and a `ReadableStream` — so this is a passthrough at
- * runtime. The only reason it is not the identity is a *types* mismatch: the
- * edge package compiles with both the DOM lib and `@types/node`, whose
- * `Uint8Array`/`ReadableStream` definitions don't line up exactly, so the
- * compiler can't see that a node-flavored `Uint8Array` satisfies DOM's
- * `BufferSource`. The cast is true — at runtime they are the same bytes / the
- * same stream — and confined to this one seam, so a widened Keel body flows to
- * the edge untouched (never stringified, never copied).
+ * bytes (a `BufferSource`), and a `ReadableStream`. The cast is only a *types*
+ * bridge between the DOM lib and `@types/node`; at runtime they are the same
+ * bytes / the same stream, so a widened Keel body flows to the edge untouched.
  */
 function toBodyInit(body: KeelBody): BodyInit {
   return body as BodyInit;
 }
 
 /**
- * Adapt a Keel dispatcher into a Worker `fetch` handler.
+ * Build the per-request context for the edge.
  *
- * Parses the `Request` into the dispatcher's `(method, path, options)`, calls
- * it, and writes the `KeelResponse` back as a Web `Response` — headers and all,
- * so a `Set-Cookie` set by the app survives to the browser. The body is passed
- * through in whatever arm the dispatcher produced (string, bytes, or stream); a
- * `Response` accepts each natively, so an image or a stream reaches the edge
- * uncorrupted. A malformed JSON body short-circuits to 400 before dispatch.
+ * Mirrors the node server's context: a fresh id, the client identity, and an
+ * abort signal. On Cloudflare the trustworthy client IP is `cf-connecting-ip`
+ * (set by the edge, not forgeable by the client), the protocol comes from the
+ * request URL, and `request.signal` already fires when the client disconnects —
+ * so streaming/long work reads `currentContext()?.signal` and cancels for free.
  */
-export function toFetchHandler(dispatch: EdgeDispatch): (request: Request) => Promise<Response> {
+function edgeContext(
+  request: Request,
+  url: URL,
+  headers: Record<string, string>,
+  requestId: string,
+): RequestContext {
+  const context: RequestContext = {
+    requestId,
+    protocol: url.protocol === "https:" ? "https" : "http",
+    signal: request.signal,
+  };
+
+  const ip = headers["cf-connecting-ip"];
+
+  if (ip !== undefined) {
+    context.ip = ip;
+  }
+
+  return context;
+}
+
+/**
+ * Decode the body and run the dispatcher under an error boundary.
+ *
+ * A malformed declared-JSON body is a 400 before dispatch. Any throw from the
+ * dispatcher is caught and mapped to a coded status with a safe, generic body —
+ * an attacker can degrade their own request, never crash the worker or read an
+ * internal error off the wire. A 500 (an unexpected throw) is logged; a coded
+ * client error is the client's to own, not ours to explain.
+ */
+async function dispatchHardened(
+  request: Request,
+  url: URL,
+  headers: Record<string, string>,
+  dispatch: EdgeDispatch,
+  logError: (message: string, error: unknown) => void,
+): Promise<AnyKeelResponse> {
+  const decoded = await decodeBody(request, headers["content-type"]);
+
+  if (!decoded.ok) {
+    return {
+      status: 400,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+      body: "Bad Request",
+    };
+  }
+
+  try {
+    return await dispatch(request.method, url.pathname, {
+      query: queryFrom(url.searchParams),
+      headers,
+      body: decoded.body,
+    });
+  } catch (error) {
+    const status = statusForError(error);
+
+    if (status === 500) {
+      logError("unhandled error serving request", error);
+    }
+
+    return {
+      status,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+      body: bodyForStatus(status),
+    };
+  }
+}
+
+/**
+ * Adapt a Keel dispatcher into a hardened Worker `fetch` handler.
+ *
+ * Establishes a per-request context (so `currentContext()` works on the edge as
+ * on the node server), runs the dispatcher inside it under an error boundary, and
+ * merges the default security headers under the response — the same hardening the
+ * node `serve` applies. The body passes through in whatever arm the dispatcher
+ * produced (string, bytes, or stream), each accepted natively by a `Response`.
+ */
+export function toFetchHandler(
+  dispatch: EdgeDispatch,
+  options: EdgeOptions = {},
+): (request: Request) => Promise<Response> {
+  const securityHeaders = securityDefaults(options.securityHeaders ?? DEFAULT_SECURITY_HEADERS, {
+    csp: options.csp,
+    crossOriginEmbedderPolicy: options.crossOriginEmbedderPolicy,
+  });
+
+  const newRequestId = options.newRequestId ?? (() => crypto.randomUUID());
+
+  const logError =
+    options.logError ?? ((message: string, error: unknown) => console.error(message, error));
+
   return async (request) => {
     const url = new URL(request.url);
 
     const headers = headersFrom(request.headers);
 
-    const decoded = await decodeBody(request, headers["content-type"]);
+    const context = edgeContext(request, url, headers, newRequestId());
 
-    if (!decoded.ok) {
-      return new Response("Bad Request", { status: 400 });
-    }
+    return runWithContext(context, async () => {
+      const response = await dispatchHardened(request, url, headers, dispatch, logError);
 
-    const response = await dispatch(request.method, url.pathname, {
-      query: queryFrom(url.searchParams),
-      headers,
-      body: decoded.body,
-    });
+      const hardened = withSecurityHeaders(response, securityHeaders);
 
-    return new Response(toBodyInit(response.body), {
-      status: response.status,
-      headers: response.headers,
+      return new Response(toBodyInit(hardened.body), {
+        status: hardened.status,
+        headers: hardened.headers,
+      });
     });
   };
 }
