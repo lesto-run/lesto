@@ -1,7 +1,7 @@
 /**
  * The identity service — the assembled, DB-backed auth battery.
  *
- *   const identity = new Identity({
+ *   const identity = createIdentity({
  *     secret: env.KEEL_AUTH_SECRET,
  *     mailer: { sendVerificationEmail, sendPasswordResetEmail },
  *     verificationUrl: (token) => `https://app.com/verify?token=${token}`,
@@ -10,11 +10,18 @@
  *
  *   await identity.register("ada@example.com", "correct horse battery staple");
  *   await identity.verifyEmail(tokenFromEmail);
- *   const session = identity.login("ada@example.com", "correct horse battery staple");
+ *   const { session } = identity.login("ada@example.com", "correct horse battery staple");
+ *
+ * Built as a closure factory (`createIdentity`) returning an object of plain
+ * functions — no `this`, no class to extend, options + secrets + signers
+ * captured in lexical scope. That matches the Next/Express idiom; it also
+ * means the returned `Identity` is a *value*, not an instance, and tests can
+ * trivially shape-substitute it.
  *
  * Composes `@keel/auth` (hashing, sessions, signed tokens) + `@keel/orm` (the
- * `User` model) + an injected mailer interface (so a test can capture the
- * outgoing link without booting `@keel/mail`).
+ * `User` model — internal-only; the public surface is camelCase) + an
+ * injected mailer interface (so a test can capture the outgoing link without
+ * booting `@keel/mail`).
  *
  * Edge cases worth flagging up front, because they shape the whole API:
  *
@@ -37,11 +44,20 @@
  */
 
 import { hashPassword, MemorySessionStore, Sessions, verifyPassword } from "@keel/auth";
-import type { Clock, Session, SessionStore, SignedSessions } from "@keel/auth";
+import type { Clock, Session, SessionStore } from "@keel/auth";
 
 import { IdentityError } from "./errors";
-import { packResetToken, resetSigner, unpackResetToken, verifySigner } from "./tokens";
-import { normalizeEmail, User } from "./user";
+import { resetSigner, verifySigner } from "./tokens";
+import { packResetToken, unpackResetToken } from "./tokens";
+import {
+  findUserByEmail,
+  findUserById,
+  insertUser,
+  markEmailVerified,
+  normalizeEmail,
+  setPasswordHash,
+  type User,
+} from "./user";
 
 /**
  * Email validation, in two layers.
@@ -80,6 +96,33 @@ const DEFAULT_RESET_TTL_MS = 60 * 60 * 1000;
  * show up on the first failed login.
  */
 const DUMMY_HASH = hashPassword("__keel_identity_timing_decoy__");
+
+const invalidToken = (kind: "verification" | "reset"): IdentityError =>
+  new IdentityError("IDENTITY_INVALID_TOKEN", `The ${kind} link is invalid or has expired.`);
+
+const assertValidEmail = (email: string): void => {
+  const trimmed = email.trim();
+
+  if (!EMAIL_PATTERN.test(trimmed) || EMAIL_FORBIDDEN_CHARS.test(trimmed)) {
+    throw new IdentityError("IDENTITY_INVALID_EMAIL", "Email address is invalid.");
+  }
+};
+
+const assertValidPassword = (password: string): void => {
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    throw new IdentityError(
+      "IDENTITY_WEAK_PASSWORD",
+      `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
+    );
+  }
+
+  if (password.length > MAX_PASSWORD_LENGTH) {
+    throw new IdentityError(
+      "IDENTITY_WEAK_PASSWORD",
+      `Password must be at most ${MAX_PASSWORD_LENGTH} characters.`,
+    );
+  }
+};
 
 /**
  * The outbound-email seam.
@@ -150,311 +193,255 @@ export interface IdentityOptions {
   readonly clock?: Clock;
 }
 
-type ResolvedOptions = Required<
-  Pick<
-    IdentityOptions,
-    | "secret"
-    | "mailer"
-    | "verificationUrl"
-    | "resetUrl"
-    | "requireVerifiedEmail"
-    | "sessionTtlMs"
-    | "verificationTtlMs"
-    | "resetTtlMs"
-  >
->;
-
-export class Identity {
-  private readonly options: ResolvedOptions;
-
-  private readonly sessions: Sessions;
-
-  private readonly verifyTokens: SignedSessions;
-
-  private readonly clock: Clock | undefined;
-
-  private readonly revokeUserSessions: ((userId: string) => void | Promise<void>) | undefined;
-
-  constructor(options: IdentityOptions) {
-    this.options = {
-      secret: options.secret,
-      mailer: options.mailer,
-      verificationUrl: options.verificationUrl,
-      resetUrl: options.resetUrl,
-      requireVerifiedEmail: options.requireVerifiedEmail ?? true,
-      sessionTtlMs: options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS,
-      verificationTtlMs: options.verificationTtlMs ?? DEFAULT_VERIFICATION_TTL_MS,
-      resetTtlMs: options.resetTtlMs ?? DEFAULT_RESET_TTL_MS,
-    };
-
-    this.clock = options.clock;
-    this.verifyTokens = verifySigner(options.secret, options.clock);
-
-    this.sessions = new Sessions({
-      store: options.sessionStore ?? new MemorySessionStore(),
-      ...(options.clock ? { clock: options.clock } : {}),
-    });
-
-    this.revokeUserSessions = options.revokeUserSessions;
-  }
-
-  /**
-   * Register a new account.
-   *
-   * On a fresh email: hashes the password, inserts the user, mints a signed
-   * verification token, and asks the mailer to send the link. No session is
-   * issued — login is gated on verification (when required).
-   *
-   * On a colliding email: returns the same shape (`{ status: "verification_sent" }`),
-   * runs a throwaway `hashPassword` to equalize CPU cost, and sends no email.
-   * That denies an attacker the "is this email registered?" probe. The legitimate
-   * owner of an already-registered email simply does not receive a new link.
-   *
-   * The pre-check + insert pair is not atomic; a parallel registration could
-   * race past the pre-check. The unique-constraint catch below covers that —
-   * the racing call sees the same "verification_sent" shape with no new user,
-   * exactly as if it had lost the pre-check.
-   *
-   * Throws `IDENTITY_INVALID_EMAIL` or `IDENTITY_WEAK_PASSWORD` for malformed
-   * input — those are *attacker-controlled* shapes, not enumeration signals.
-   */
-  async register(
+/**
+ * The identity service — an object of functions, all closing over the
+ * `IdentityOptions` passed to {@link createIdentity}.
+ *
+ * Exported as a type (not a class) so callers store and pass the value
+ * around without worrying about `this` binding. The type is the API
+ * contract; the implementation is the closure that {@link createIdentity}
+ * returns.
+ */
+export interface Identity {
+  register(
     email: string,
     password: string,
-  ): Promise<{ status: "verification_sent"; user: User | undefined }> {
-    this.assertValidEmail(email);
-    this.assertValidPassword(password);
+  ): Promise<{ status: "verification_sent"; user: User | undefined }>;
+  verifyEmail(token: string): User;
+  login(email: string, password: string): { user: User; session: Session };
+  requestPasswordReset(email: string): Promise<{ status: "reset_sent" }>;
+  resetPassword(token: string, newPassword: string): Promise<User>;
+  logout(token: string | undefined): void;
+  currentUser(token: string | undefined): User | undefined;
+}
 
-    const normalized = normalizeEmail(email);
+/** Build an {@link Identity} bound to the given options. */
+export function createIdentity(options: IdentityOptions): Identity {
+  const requireVerifiedEmail = options.requireVerifiedEmail ?? true;
+  const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
+  const verificationTtlMs = options.verificationTtlMs ?? DEFAULT_VERIFICATION_TTL_MS;
+  const resetTtlMs = options.resetTtlMs ?? DEFAULT_RESET_TTL_MS;
 
-    if (User.findBy({ email: normalized })) {
-      // Burn the same CPU we'd burn on a real insert so the response time
-      // doesn't betray the collision. We discard the result.
-      hashPassword(password);
+  const verifyTokens = verifySigner(options.secret, options.clock);
 
-      return { status: "verification_sent", user: undefined };
-    }
+  const sessions = new Sessions({
+    store: options.sessionStore ?? new MemorySessionStore(),
+    ...(options.clock ? { clock: options.clock } : {}),
+  });
 
-    let user: User;
-    try {
-      user = User.create({
-        email: normalized,
-        password_hash: hashPassword(password),
-        email_verified_at: null,
+  return {
+    /**
+     * Register a new account.
+     *
+     * On a fresh email: hashes the password, inserts the user, mints a signed
+     * verification token, and asks the mailer to send the link. No session is
+     * issued — login is gated on verification (when required).
+     *
+     * On a colliding email: returns the same shape, runs a throwaway
+     * `hashPassword` to equalize CPU cost, and sends no email. That denies
+     * an attacker the "is this email registered?" probe. The legitimate
+     * owner of an already-registered email simply does not receive a new
+     * link.
+     *
+     * The pre-check + insert pair is not atomic; a parallel registration
+     * could race past the pre-check. The unique-constraint catch covers
+     * that — the racing call sees the same shape with no new user, exactly
+     * as if it had lost the pre-check.
+     *
+     * Throws `IDENTITY_INVALID_EMAIL` or `IDENTITY_WEAK_PASSWORD` for
+     * malformed input — those are *attacker-controlled* shapes, not
+     * enumeration signals.
+     */
+    async register(email, password) {
+      assertValidEmail(email);
+      assertValidPassword(password);
+
+      const normalized = normalizeEmail(email);
+
+      if (findUserByEmail(normalized)) {
+        // Burn the same CPU we'd burn on a real insert so the response time
+        // doesn't betray the collision. We discard the result.
+        hashPassword(password);
+
+        return { status: "verification_sent", user: undefined };
+      }
+
+      let user: User;
+      try {
+        user = insertUser({
+          email: normalized,
+          passwordHash: hashPassword(password),
+          emailVerifiedAt: null,
+        });
+      } catch {
+        // A parallel register raced us through the pre-check and hit the
+        // UNIQUE constraint. Treat it as the conflict path so we never leak
+        // a 500 for an enumeration probe.
+        return { status: "verification_sent", user: undefined };
+      }
+
+      const token = verifyTokens.issue(String(user.id), verificationTtlMs);
+
+      await options.mailer.sendVerificationEmail({
+        to: normalized,
+        url: options.verificationUrl(token),
+        token,
       });
-    } catch {
-      // A parallel register raced us through the pre-check and hit the
-      // UNIQUE constraint. Treat it as the conflict path so we never leak
-      // a 500 for an enumeration probe.
-      return { status: "verification_sent", user: undefined };
-    }
 
-    const token = this.verifyTokens.issue(String(user.id), this.options.verificationTtlMs);
+      return { status: "verification_sent", user };
+    },
 
-    await this.options.mailer.sendVerificationEmail({
-      to: normalized,
-      url: this.options.verificationUrl(token),
-      token,
-    });
+    /**
+     * Confirm a user's email from a signed verification token.
+     *
+     * Idempotent: a second call on an already-verified user is a no-op
+     * success, not an error. Replay is bounded by the token's TTL and
+     * acceptable because verification has no side effect beyond flipping
+     * the boolean.
+     */
+    verifyEmail(token) {
+      const claim = verifyTokens.verify(token);
 
-    return { status: "verification_sent", user };
-  }
+      if (claim === undefined) throw invalidToken("verification");
 
-  /**
-   * Confirm a user's email from a signed verification token.
-   *
-   * Idempotent: a second call on an already-verified user is a no-op success,
-   * not an error. Replay is bounded by the token's TTL and acceptable because
-   * verification has no side effect beyond flipping the boolean.
-   *
-   * Throws `IDENTITY_INVALID_TOKEN` for a forged, malformed, or expired token,
-   * and for a token whose user no longer exists.
-   */
-  verifyEmail(token: string): User {
-    const claim = this.verifyTokens.verify(token);
+      const user = findUserById(Number(claim.userId));
 
-    if (claim === undefined) {
-      throw this.invalidToken("verification");
-    }
+      if (!user) throw invalidToken("verification");
 
-    const user = User.findBy({ id: Number(claim.userId) });
+      if (!user.isEmailVerified) {
+        markEmailVerified(user, new Date().toISOString());
+      }
 
-    if (!user) {
-      throw this.invalidToken("verification");
-    }
+      return user;
+    },
 
-    if (!user.isEmailVerified) {
-      user.update({ email_verified_at: new Date().toISOString() });
-    }
+    /**
+     * Verify credentials and mint a session.
+     *
+     * Always spends one scrypt operation — on a missing user, we still call
+     * `verifyPassword(candidate, DUMMY_HASH)` so missing-email and wrong-
+     * password are timing-indistinguishable.
+     *
+     * `IDENTITY_INVALID_CREDENTIALS` covers both unknown-email and bad-
+     * password. `IDENTITY_EMAIL_NOT_VERIFIED` is distinct (better-auth
+     * pattern), which leaks the existence of an unverified registered
+     * email — that is the intentional UX-over-leak tradeoff and is
+     * documented at the module level.
+     */
+    login(email, password) {
+      const normalized = normalizeEmail(email);
 
-    return user;
-  }
+      const user = findUserByEmail(normalized);
 
-  /**
-   * Verify credentials and mint a session.
-   *
-   * Always spends one scrypt operation — on a missing user, we still call
-   * `verifyPassword(candidate, DUMMY_HASH)` so the response time of an unknown
-   * email and a wrong password are indistinguishable.
-   *
-   * `IDENTITY_INVALID_CREDENTIALS` covers both unknown-email and bad-password.
-   * `IDENTITY_EMAIL_NOT_VERIFIED` is distinct (better-auth pattern), which
-   * leaks the existence of an unverified registered email — that is the
-   * intentional UX-over-leak tradeoff and is documented at the class level.
-   */
-  login(email: string, password: string): { user: User; session: Session } {
-    const normalized = normalizeEmail(email);
+      if (!user) {
+        // Equalize CPU so a missing user costs the same as a wrong password.
+        verifyPassword(password, DUMMY_HASH);
 
-    const user = User.findBy({ email: normalized });
+        throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
+      }
 
-    if (!user) {
-      // Equalize CPU so a missing user costs the same as a wrong password.
-      verifyPassword(password, DUMMY_HASH);
+      if (!verifyPassword(password, user.passwordHash)) {
+        throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
+      }
 
-      throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
-    }
+      if (requireVerifiedEmail && !user.isEmailVerified) {
+        throw new IdentityError("IDENTITY_EMAIL_NOT_VERIFIED", "Email address not verified.");
+      }
 
-    if (!verifyPassword(password, user.passwordHash)) {
-      throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
-    }
+      const session = sessions.create(String(user.id), sessionTtlMs);
 
-    if (this.options.requireVerifiedEmail && !user.isEmailVerified) {
-      throw new IdentityError("IDENTITY_EMAIL_NOT_VERIFIED", "Email address not verified.");
-    }
+      return { user, session };
+    },
 
-    const session = this.sessions.create(String(user.id), this.options.sessionTtlMs);
+    /**
+     * Mint and send a password-reset link.
+     *
+     * Always resolves "success" — even when the email does not exist — so
+     * an attacker cannot probe whether an email is registered by watching
+     * response shapes or timing. On the unknown-email path we still run one
+     * `issue` to equalize CPU, then discard it; no email goes out.
+     */
+    async requestPasswordReset(email) {
+      const normalized = normalizeEmail(email);
 
-    return { user, session };
-  }
+      const user = findUserByEmail(normalized);
 
-  /**
-   * Mint and send a password-reset link.
-   *
-   * Always resolves "success" — even when the email does not exist — so an
-   * attacker cannot probe whether an email is registered by watching response
-   * shapes or timing. On the unknown-email path we still run one `issue` to
-   * equalize CPU, then discard it; no email goes out.
-   */
-  async requestPasswordReset(email: string): Promise<{ status: "reset_sent" }> {
-    const normalized = normalizeEmail(email);
+      if (!user) {
+        // Burn equivalent CPU on the unknown path. The result is thrown away.
+        resetSigner(options.secret, "missing-user-dummy", options.clock).issue("0", resetTtlMs);
 
-    const user = User.findBy({ email: normalized });
+        return { status: "reset_sent" };
+      }
 
-    if (!user) {
-      // Burn equivalent CPU on the unknown path. The result is thrown away.
-      resetSigner(this.options.secret, "missing-user-dummy", this.clock).issue(
-        "0",
-        this.options.resetTtlMs,
+      const signed = resetSigner(options.secret, user.passwordHash, options.clock).issue(
+        String(user.id),
+        resetTtlMs,
       );
+      const token = packResetToken(String(user.id), signed);
+
+      await options.mailer.sendPasswordResetEmail({
+        to: normalized,
+        url: options.resetUrl(token),
+        token,
+      });
 
       return { status: "reset_sent" };
-    }
+    },
 
-    const signed = resetSigner(this.options.secret, user.passwordHash, this.clock).issue(
-      String(user.id),
-      this.options.resetTtlMs,
-    );
-    const token = packResetToken(String(user.id), signed);
+    /**
+     * Reset the password against a signed reset token.
+     *
+     * The token is **single-use in effect**: the signing secret incorporates
+     * the user's current `password_hash`, so once the password changes the
+     * token's HMAC no longer verifies. A leaked or replayed link cannot
+     * reset the password a second time, and cannot undo a legitimate reset.
+     *
+     * Pre-reset login sessions are not touched here — call the
+     * `revokeUserSessions` hook if your deployment also wants those killed.
+     */
+    async resetPassword(token, newPassword) {
+      assertValidPassword(newPassword);
 
-    await this.options.mailer.sendPasswordResetEmail({
-      to: normalized,
-      url: this.options.resetUrl(token),
-      token,
-    });
+      const unpacked = unpackResetToken(token);
 
-    return { status: "reset_sent" };
-  }
+      if (!unpacked) throw invalidToken("reset");
 
-  /**
-   * Reset the password against a signed reset token.
-   *
-   * The token is **single-use in effect**: the signing secret incorporates
-   * the user's current `password_hash`, so once the password changes the
-   * token's HMAC no longer verifies. A leaked or replayed link cannot reset
-   * the password a second time, and cannot undo a legitimate reset.
-   *
-   * Pre-reset login sessions are not touched here — call the
-   * `revokeUserSessions` hook if your deployment also wants those killed.
-   */
-  async resetPassword(token: string, newPassword: string): Promise<User> {
-    this.assertValidPassword(newPassword);
+      const user = findUserById(Number(unpacked.userId));
 
-    const unpacked = unpackResetToken(token);
+      if (!user) throw invalidToken("reset");
 
-    if (!unpacked) {
-      throw this.invalidToken("reset");
-    }
+      const signer = resetSigner(options.secret, user.passwordHash, options.clock);
+      const claim = signer.verify(unpacked.signed);
 
-    const user = User.findBy({ id: Number(unpacked.userId) });
+      // Two checks: signature verified (`claim !== undefined`) AND the inner
+      // userId matches the outer one (defense-in-depth — even though forging
+      // the inner is impossible without the per-user secret, the equality
+      // check makes a tampered outer id a hard no).
+      if (claim === undefined || claim.userId !== unpacked.userId) {
+        throw invalidToken("reset");
+      }
 
-    if (!user) {
-      throw this.invalidToken("reset");
-    }
+      setPasswordHash(user, hashPassword(newPassword));
 
-    const signer = resetSigner(this.options.secret, user.passwordHash, this.clock);
-    const claim = signer.verify(unpacked.signed);
+      if (options.revokeUserSessions) {
+        await options.revokeUserSessions(String(user.id));
+      }
 
-    // Two checks: signature verified (`claim !== undefined`) AND the inner
-    // userId matches the outer one (defense-in-depth — even though forging
-    // the inner is impossible without the per-user secret, the equality
-    // check makes a tampered outer id a hard no).
-    if (claim === undefined || claim.userId !== unpacked.userId) {
-      throw this.invalidToken("reset");
-    }
+      return user;
+    },
 
-    user.update({ password_hash: hashPassword(newPassword) });
+    logout(token) {
+      if (token !== undefined) sessions.revoke(token);
+    },
 
-    if (this.revokeUserSessions) {
-      await this.revokeUserSessions(String(user.id));
-    }
+    currentUser(token) {
+      if (token === undefined) return undefined;
 
-    return user;
-  }
+      const session = sessions.verify(token);
 
-  /** Revoke a session token (sign out). Safe on undefined / unknown tokens. */
-  logout(token: string | undefined): void {
-    if (token !== undefined) this.sessions.revoke(token);
-  }
+      if (session === undefined) return undefined;
 
-  /** Resolve a session token to the live user, or `undefined` if no session. */
-  currentUser(token: string | undefined): User | undefined {
-    if (token === undefined) return undefined;
-
-    const session = this.sessions.verify(token);
-
-    if (session === undefined) return undefined;
-
-    return User.findBy({ id: Number(session.userId) });
-  }
-
-  private invalidToken(kind: "verification" | "reset"): IdentityError {
-    return new IdentityError(
-      "IDENTITY_INVALID_TOKEN",
-      `The ${kind} link is invalid or has expired.`,
-    );
-  }
-
-  private assertValidEmail(email: string): void {
-    const trimmed = email.trim();
-
-    if (!EMAIL_PATTERN.test(trimmed) || EMAIL_FORBIDDEN_CHARS.test(trimmed)) {
-      throw new IdentityError("IDENTITY_INVALID_EMAIL", "Email address is invalid.");
-    }
-  }
-
-  private assertValidPassword(password: string): void {
-    if (password.length < MIN_PASSWORD_LENGTH) {
-      throw new IdentityError(
-        "IDENTITY_WEAK_PASSWORD",
-        `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
-      );
-    }
-
-    if (password.length > MAX_PASSWORD_LENGTH) {
-      throw new IdentityError(
-        "IDENTITY_WEAK_PASSWORD",
-        `Password must be at most ${MAX_PASSWORD_LENGTH} characters.`,
-      );
-    }
-  }
+      return findUserById(Number(session.userId));
+    },
+  };
 }

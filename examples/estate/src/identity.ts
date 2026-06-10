@@ -23,8 +23,8 @@ import { useDatabase } from "@keel/orm";
 import { Migrator } from "@keel/migrate";
 import { hashPassword } from "@keel/auth";
 
-import { Identity, User, usersMigration } from "@keel/identity";
-import type { IdentityMailer } from "@keel/identity";
+import { createIdentity, User, usersMigration } from "@keel/identity";
+import type { Identity, IdentityMailer } from "@keel/identity";
 
 /**
  * The minimal SQL surface — the union of what `@keel/orm` and `@keel/migrate`
@@ -134,7 +134,7 @@ export function buildIdentity(): { identity: Identity; close: () => void } {
   new Migrator(kernel, [usersMigration]).migrate();
   seedDemoAccounts();
 
-  const identity = new Identity({
+  const identity = createIdentity({
     secret: process.env["KEEL_AUTH_SECRET"] ?? "estate-demo-identity-secret",
     mailer: silentMailer,
     // Demo never sends mail; these URLs exist only so the option types are

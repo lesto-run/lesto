@@ -1,7 +1,7 @@
 /**
  * @keel/identity — Keel's batteries-included auth.
  *
- *   const identity = new Identity({
+ *   const identity = createIdentity({
  *     secret: env.KEEL_AUTH_SECRET,
  *     mailer: { sendVerificationEmail, sendPasswordResetEmail },
  *     verificationUrl: (token) => `https://app.com/verify?token=${token}`,
@@ -14,7 +14,7 @@
  *
  * Composes:
  *   - `@keel/auth`    — scrypt hashing, store-backed sessions, signed tokens
- *   - `@keel/orm`     — the `User` model on the SQL substrate
+ *   - `@keel/orm`     — the `User` row backing the persisted account
  *   - `@keel/migrate` — the `users` table migration
  *
  * Mail is injected as an interface so the package itself stays decoupled from
@@ -22,8 +22,8 @@
  * together at app boot.
  */
 
-export { Identity } from "./identity";
-export type { IdentityMailer, IdentityOptions } from "./identity";
+export { createIdentity } from "./identity";
+export type { Identity, IdentityMailer, IdentityOptions } from "./identity";
 
 export { normalizeEmail, User, usersMigration } from "./user";
 

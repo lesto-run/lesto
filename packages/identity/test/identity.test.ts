@@ -6,7 +6,7 @@ import { Migrator } from "@keel/migrate";
 
 import {
   clearSessionCookie,
-  Identity,
+  createIdentity,
   IdentityError,
   normalizeEmail,
   readCookie,
@@ -17,7 +17,7 @@ import {
   usersMigration,
 } from "../src/index";
 
-import type { IdentityMailer, IdentityOptions } from "../src/index";
+import type { Identity, IdentityMailer, IdentityOptions } from "../src/index";
 
 // ---------------------------------------------------------------------------
 // Test rig
@@ -107,7 +107,7 @@ function buildIdentity(opts: Partial<IdentityOptions> = {}): {
   const { mailer, sent } = captureMailer();
   const revokedFor: string[] = [];
 
-  const identity = new Identity({
+  const identity = createIdentity({
     secret: "test-secret",
     mailer,
     verificationUrl: (token) => `https://app.test/verify?token=${token}`,
@@ -402,7 +402,7 @@ describe("resetPassword", () => {
 
   it("works without a revokeUserSessions hook", async () => {
     const { mailer, sent } = captureMailer();
-    const identity = new Identity({
+    const identity = createIdentity({
       secret: "secret",
       mailer,
       verificationUrl: (t) => `https://app.test/v?t=${t}`,
@@ -666,7 +666,7 @@ describe("cookie helpers", () => {
 describe("token signer", () => {
   it("issues working tokens with the default system clock when none is injected", async () => {
     const { mailer, sent } = captureMailer();
-    const identity = new Identity({
+    const identity = createIdentity({
       secret: "no-clock-test",
       mailer,
       verificationUrl: (t) => `https://app/v?t=${t}`,

@@ -28,13 +28,13 @@ import type { ControllerClass, KeelResponse } from "@keel/web";
 
 import {
   clearSessionCookie,
-  Identity,
+  createIdentity,
   IdentityError,
   readSessionToken,
   sessionCookie,
   usersMigration,
 } from "@keel/identity";
-import type { IdentityMailer } from "@keel/identity";
+import type { Identity, IdentityMailer } from "@keel/identity";
 
 // ---------------------------------------------------------------------------
 // Wiring
@@ -252,7 +252,7 @@ let server: Server;
 beforeAll(async () => {
   database = new Database(":memory:");
 
-  identity = new Identity({
+  identity = createIdentity({
     secret: "integration-test-secret",
     mailer,
     verificationUrl: (token) => `https://app.test/auth/verify?token=${token}`,
