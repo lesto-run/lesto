@@ -83,11 +83,11 @@ export class Mailer {
   }
 
   /** Queue an email for delivery. Returns the job id. */
-  send<P extends JsonValue>(
+  async send<P extends JsonValue>(
     name: string,
     params: P,
     options: { maxAttempts?: number } = {},
-  ): number {
+  ): Promise<number> {
     return this.queue.enqueue(DELIVER_JOB, { mailer: name, params }, options);
   }
 

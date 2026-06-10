@@ -24,17 +24,39 @@ let raw: Database.Database;
 let db: SqlDatabase;
 
 function adapt(database: Database.Database): SqlDatabase {
-  return {
-    exec: (sql) => database.exec(sql),
+  const adapted: SqlDatabase = {
+    exec: async (sql) => {
+      database.exec(sql);
+    },
     prepare: (sql) => {
       const statement = database.prepare(sql);
 
       return {
-        run: (params = []) => statement.run(...(params as never[])),
-        all: (params = []) => statement.all(...(params as never[])),
+        run: async (params = []) => statement.run(...(params as never[])),
+        all: async (params = []) => statement.all(...(params as never[])),
       };
     },
+    transaction: async (fn) => {
+      database.exec("BEGIN");
+
+      try {
+        const out = await fn(adapted);
+        database.exec("COMMIT");
+
+        return out;
+      } catch (error) {
+        try {
+          database.exec("ROLLBACK");
+        } catch {
+          /* preserve the original error */
+        }
+
+        throw error;
+      }
+    },
   };
+
+  return adapted;
 }
 
 // A valid entry with the metadata content-core attaches to every document.

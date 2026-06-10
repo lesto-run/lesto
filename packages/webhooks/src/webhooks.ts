@@ -273,12 +273,12 @@ export class Webhooks {
    * `secretId` is a REFERENCE resolved at delivery time via the configured
    * {@link SecretSource} — the raw secret is never persisted in the queue.
    */
-  send(
+  async send(
     url: string,
     event: string,
     payload: JsonValue,
     options: { secretId?: string; maxAttempts?: number } = {},
-  ): number {
+  ): Promise<number> {
     return this.queue.enqueue(
       DELIVER_JOB,
       {
