@@ -1,20 +1,34 @@
 import { defineConfig } from "vitest/config";
 
-// FROZEN BASELINE — folded in from Docks (@usedocks/*).
+// Coverage is enforced via thresholds. Keel's bar is 100%; this package reaches
+// 100% functions and ~98.6% statements/lines. The remaining gap is a small set
+// of genuinely defensive / structurally-unreachable branches that we will not
+// game with istanbul-ignore:
 //
-// Keel's bar is 100% coverage. This package entered the monorepo below that
-// bar, so its threshold is frozen here rather than enforced, and ratcheted up
-// in follow-up waves. New or modified code in this package is still expected to
-// ship fully covered — see CONTENT_COVERAGE.md for the ratchet plan.
+//   - client.ts 109 (AbortSignal.any compose — no public path sets options.signal),
+//     291/342-344 (SSE buffer.pop()??"" and trailing-[DONE] sub-branches).
+//   - http.ts 923-929 (createMcpHttpServer CallTool catch — every handler catches
+//     its own client errors and returns a string, so handleToolCall never throws;
+//     the StudioNotRunningError/instanceof-Error split is dead defensive code).
+//     Plus validateToolArgs' properties??{} and Array.isArray(type) branches,
+//     unreachable with the tools this server advertises.
+//   - server.ts 387/438 (resolved-path-prefix guard — defense in depth; the slug
+//     guard already rejects traversal and update paths come from the engine) and
+//     593 (CallTool generic catch — handlers never throw a non-ValidationError).
+//
+// Thresholds are pinned to the current numbers so coverage can only ratchet up.
 export default defineConfig({
   test: {
-    // Folded in without ported tests; the ratchet plan adds them in follow-up
-    // waves. A no-spec run should not hard-fail on exit code alone.
-    passWithNoTests: true,
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/index.ts"],
+      exclude: ["src/index.ts", "src/__tests__/**"],
+      thresholds: {
+        statements: 98,
+        branches: 90,
+        functions: 100,
+        lines: 98,
+      },
     },
   },
 });

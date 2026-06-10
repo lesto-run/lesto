@@ -25,95 +25,19 @@ import type {
   CompactTier0Index,
   CompactTier1Index,
 } from "./types";
+import { extractKeywords } from "@keel/content-shared/text";
 import { binaryQuantize } from "./binary";
-import { MODEL_NAME, EMBEDDING_DIMENSIONS, DEFAULT_MAX_KEYWORDS } from "./constants";
+import { MODEL_NAME, EMBEDDING_DIMENSIONS } from "./constants";
 
 // ============================================================================
 // Keyword Extraction
 // ============================================================================
 
-/** Stop words to filter from keywords */
-const STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "by",
-  "for",
-  "from",
-  "has",
-  "he",
-  "in",
-  "is",
-  "it",
-  "its",
-  "of",
-  "on",
-  "or",
-  "that",
-  "the",
-  "to",
-  "was",
-  "were",
-  "will",
-  "with",
-  "this",
-  "but",
-  "they",
-  "have",
-  "had",
-  "what",
-  "when",
-  "where",
-  "who",
-  "which",
-  "why",
-  "how",
-  "all",
-  "each",
-  "every",
-  "both",
-  "few",
-  "more",
-  "most",
-  "other",
-  "some",
-  "such",
-  "no",
-  "nor",
-  "not",
-  "only",
-  "own",
-  "same",
-  "so",
-  "than",
-  "too",
-  "very",
-  "can",
-  "just",
-  "should",
-  "now",
-  "you",
-  "your",
-]);
-
-/**
- * Extract searchable keywords from text.
- * Filters stop words and short words, returns lowercase unique terms.
- */
-export function extractKeywords(text: string, maxKeywords = DEFAULT_MAX_KEYWORDS): string[] {
-  const words = text
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .split(/\s+/)
-    .filter((word) => word.length >= 3 && !STOP_WORDS.has(word));
-
-  // Deduplicate and limit
-  return [...new Set(words)].slice(0, maxKeywords);
-}
+// extractKeywords (and its STOP_WORDS) now live in @keel/content-shared/text,
+// shared with the runtime keyword search so build-time and query-time keyword
+// extraction stay byte-identical. Its default cap (50) matches the former
+// DEFAULT_MAX_KEYWORDS. Re-exported here for existing importers of this module.
+export { extractKeywords };
 
 // ============================================================================
 // Index Generation

@@ -58,7 +58,9 @@ export function offsetToPositionFast(
     }
   }
 
-  const lowStart = lineStarts[low] ?? 0;
+  // `low` is always a valid index here: we returned early for an empty index,
+  // and the search keeps low within [0, length - 1].
+  const lowStart = lineStarts[low]!;
   return {
     line: low + 1, // 1-indexed
     column: offset - lowStart + 1, // 1-indexed

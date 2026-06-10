@@ -4,7 +4,6 @@
  */
 
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
 // Constants for tool defaults
@@ -13,7 +12,14 @@ export const MAX_SEARCH_LIMIT = 100;
 
 /**
  * Convert a Zod schema to MCP-compatible JSON Schema format.
- * Removes $schema property which is not allowed in MCP tool definitions.
+ * Removes the $schema property, which is not allowed in MCP tool definitions.
+ *
+ * WHY zod v4's native `z.toJSONSchema`: this package runs on zod v4, whose
+ * internal representation `zod-to-json-schema@3` cannot read — it would silently
+ * emit an empty `{ $schema }` object, dropping every property and the `required`
+ * list. That empty schema both misinforms the model AND defeats argument
+ * validation (see http.ts#validateToolArgs). The built-in serializer produces a
+ * faithful schema with properties/required.
  */
 export function zodToMcpSchema(schema: z.ZodType): {
   type: "object";
@@ -21,11 +27,7 @@ export function zodToMcpSchema(schema: z.ZodType): {
   required?: string[];
   [key: string]: unknown;
 } {
-  // zod-to-json-schema types its input against its own bundled zod; bridge our
-  // zod schema to that parameter type rather than reaching for `any`.
-  const jsonSchema = zodToJsonSchema(schema as unknown as Parameters<typeof zodToJsonSchema>[0], {
-    $refStrategy: "none",
-  }) as { $schema?: string; [key: string]: unknown };
+  const jsonSchema = z.toJSONSchema(schema) as { $schema?: string; [key: string]: unknown };
 
   const { $schema: _, ...rest } = jsonSchema;
 

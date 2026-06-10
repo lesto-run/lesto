@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { zodToJsonSchema } from "zod-to-json-schema";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -23,6 +22,64 @@ const writeMutex = new AsyncMutex();
 
 export interface McpServerOptions {
   cwd?: string;
+}
+
+/**
+ * Minimal structural view of a collection's Standard Schema validator.
+ *
+ * WHY structural: the engine's `CollectionSchema` is a `StandardSchemaV1`, but
+ * `@standard-schema/spec` is a transitive dependency we do not declare directly.
+ * We only need the `~standard.validate` entry point, so we describe exactly that
+ * shape rather than pulling in the full spec package.
+ */
+interface StandardSchemaLike {
+  "~standard": {
+    validate: (value: unknown) =>
+      | {
+          issues?: ReadonlyArray<{
+            message: string;
+            path?: ReadonlyArray<PropertyKey | { key: PropertyKey }>;
+          }>;
+        }
+      | Promise<{
+          issues?: ReadonlyArray<{
+            message: string;
+            path?: ReadonlyArray<PropertyKey | { key: PropertyKey }>;
+          }>;
+        }>;
+  };
+}
+
+/**
+ * Validate frontmatter data against a collection's Standard Schema.
+ *
+ * Returns a human-readable issue list when validation fails, or null when the
+ * data is valid. WHY: create_entry's tool description promises validation, so we
+ * run the same `~standard.validate` path the parser uses before persisting —
+ * otherwise we could write frontmatter that violates the collection's shape.
+ */
+async function validateAgainstSchema(
+  schema: StandardSchemaLike,
+  data: unknown,
+): Promise<string | null> {
+  const result = schema["~standard"].validate(data);
+  const resolved = result instanceof Promise ? await result : result;
+
+  if (!resolved.issues) {
+    return null;
+  }
+
+  return resolved.issues
+    .map((issue) => {
+      const issuePath =
+        issue.path
+          ?.map((segment) =>
+            typeof segment === "object" && segment !== null ? String(segment.key) : String(segment),
+          )
+          .join(".") || "root";
+      return `  - ${issuePath}: ${issue.message}`;
+    })
+    .join("\n");
 }
 
 // Zod schemas for tool input validation
@@ -175,14 +232,17 @@ function handleGetSchema(config: ResolvedConfig, args: { collection: string }): 
   }
 
   try {
-    // zod-to-json-schema types its input against its own bundled zod; bridge our
-    // collection schema to that parameter type rather than reaching for `any`.
-    const jsonSchema = zodToJsonSchema(
-      collectionConfig.schema as unknown as Parameters<typeof zodToJsonSchema>[0],
-      {
-        $refStrategy: "none",
-      },
-    );
+    // This package runs on zod v4; its built-in serializer reads the v4 schema
+    // representation faithfully (zod-to-json-schema@3 cannot, and would emit an
+    // empty schema). Collection schemas are zod schemas in practice.
+    //
+    // `unrepresentable: "any"` keeps types JSON Schema cannot express (notably
+    // `z.date()` / `z.coerce.date()`, which are pervasive in frontmatter) from
+    // throwing — they degrade to an unconstrained `{}` rather than failing the
+    // whole schema lookup.
+    const jsonSchema = z.toJSONSchema(collectionConfig.schema as unknown as z.ZodType, {
+      unrepresentable: "any",
+    });
     return JSON.stringify(jsonSchema, null, 2);
   } catch (error) {
     return `Error converting schema: ${error instanceof Error ? error.message : String(error)}`;
@@ -270,7 +330,7 @@ function handleSearchContent(
   return JSON.stringify(results, null, 2);
 }
 
-async function handleCreateEntry(
+export async function handleCreateEntry(
   engine: Engine,
   config: ResolvedConfig,
   args: {
@@ -314,6 +374,16 @@ async function handleCreateEntry(
       return `Error: Collection "${args.collection}" not found. Available collections: ${available}`;
     }
 
+    // The tool description promises schema validation; actually enforce it so we
+    // never write frontmatter that violates the collection's declared shape.
+    const validationError = await validateAgainstSchema(
+      collectionConfig.schema as unknown as StandardSchemaLike,
+      args.data,
+    );
+    if (validationError) {
+      return `Error: data does not match the "${args.collection}" schema:\n${validationError}`;
+    }
+
     const collectionDir = path.isAbsolute(collectionConfig.directory)
       ? collectionConfig.directory
       : path.join(config.cwd, collectionConfig.directory);
@@ -342,7 +412,7 @@ async function handleCreateEntry(
   });
 }
 
-async function handleUpdateEntry(
+export async function handleUpdateEntry(
   engine: Engine,
   config: ResolvedConfig,
   args: {
@@ -378,11 +448,29 @@ async function handleUpdateEntry(
       return `Error: Invalid file path. Path must be within collection directory.`;
     }
 
-    // Extract schema data from entry (excluding reserved fields)
+    // Extract schema data from entry, excluding reserved/engine-internal fields.
+    //
+    // WHY the explicit set: a RuntimeEntry carries EntryMeta fields ("id",
+    // "collection", "file") spread as own-enumerable keys alongside the user's
+    // frontmatter (see content-core transformer). None of those are
+    // "_"-prefixed, so a "skip underscore + content/slug/rendered" filter would
+    // let engine metadata — including the entire `file` DocumentMeta object —
+    // leak into the persisted frontmatter on every update. Persisting them would
+    // also let a later schema validation choke on fields the author never wrote.
+    // Strip them all.
+    const RESERVED_ENTRY_FIELDS = new Set([
+      "content",
+      "slug",
+      "rendered",
+      "id",
+      "collection",
+      "file",
+      "mdx",
+    ]);
     const entryRecord = entry as Record<string, unknown>;
     const existingData: Record<string, unknown> = {};
     for (const key of Object.keys(entryRecord)) {
-      if (!key.startsWith("_") && key !== "content" && key !== "slug" && key !== "rendered") {
+      if (!key.startsWith("_") && !RESERVED_ENTRY_FIELDS.has(key)) {
         existingData[key] = entryRecord[key];
       }
     }

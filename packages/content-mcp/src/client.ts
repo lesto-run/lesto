@@ -141,6 +141,18 @@ export class McpClient {
     }
   }
 
+  /**
+   * Only idempotent HTTP methods may be safely retried.
+   *
+   * WHY: a retry fires on timeout (AbortError/TimeoutError) as well as
+   * connection refusal, but a timeout does NOT mean the server never received
+   * the request — it may have applied a create/update/delete and simply been
+   * slow to respond. Retrying a non-idempotent mutation can double-apply it
+   * (duplicate writes, repeated deletes). GET (and HEAD) carry no such risk, so
+   * only those retry.
+   */
+  private static readonly IDEMPOTENT_METHODS = new Set(["GET", "HEAD"]);
+
   private async request<T>(
     method: string,
     path: string,
@@ -160,8 +172,10 @@ export class McpClient {
       options.body = JSON.stringify(body);
     }
 
+    const retries = McpClient.IDEMPOTENT_METHODS.has(method.toUpperCase()) ? this.retries : 0;
+
     try {
-      const response = await this.fetchWithRetry(url, options, this.retries);
+      const response = await this.fetchWithRetry(url, options, retries);
       const contentType = response.headers.get("content-type");
 
       let data: T | undefined;

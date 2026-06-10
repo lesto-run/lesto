@@ -9,6 +9,19 @@ import {
   type CSSProperties,
 } from "react";
 
+/**
+ * Resolve the text to copy from a code block's `<pre>` element.
+ *
+ * Prefer the inner `<code>`'s text (rehype-pretty-code wraps highlighted code
+ * in `<code>`), falling back to the `<pre>`'s own text, and finally to an empty
+ * string when the ref hasn't attached yet. Pure and DOM-only so every branch is
+ * unit-testable without driving the full component.
+ */
+export function resolveCopyText(pre: HTMLPreElement | null): string {
+  const codeEl = pre?.querySelector("code");
+  return codeEl?.textContent ?? pre?.textContent ?? "";
+}
+
 export interface CodeBlockProps extends ComponentProps<"pre"> {
   children?: ReactNode;
   /** Hide the copy button */
@@ -99,8 +112,7 @@ export function CodeBlock({
   }, []);
 
   const handleCopy = () => {
-    const codeEl = preRef.current?.querySelector("code");
-    const code = codeEl?.textContent ?? preRef.current?.textContent ?? "";
+    const code = resolveCopyText(preRef.current);
 
     // Clear any existing timeout to handle rapid clicks
     if (timeoutRef.current) {

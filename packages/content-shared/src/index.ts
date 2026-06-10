@@ -1,6 +1,7 @@
 // Re-export all modules
 export * from "./errors.js";
 export * from "./encoding.js";
+export * from "./text.js";
 export * from "./slugify.js";
 export * from "./xml.js";
 export * from "./sanitize.js";

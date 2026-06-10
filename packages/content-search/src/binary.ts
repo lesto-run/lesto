@@ -6,6 +6,7 @@
  * BUILD-TIME functions (quantization, serialization) are in @keel/content-embeddings.
  */
 
+import { hammingDistance } from "@keel/content-shared/encoding";
 import type { SearchResult, SearchOptions, BinarySearchIndex } from "./types";
 import { cosineSimilarity } from "./similarity";
 
@@ -42,35 +43,10 @@ export function binaryQuantize(embedding: number[]): Uint8Array {
 // Hamming Distance
 // ============================================================================
 
-/**
- * Lookup table for popcount (number of 1 bits in a byte).
- */
-const POPCOUNT_TABLE = new Uint8Array(256);
-for (let i = 0; i < 256; i++) {
-  let count = 0;
-  let n = i;
-  while (n) {
-    count++;
-    n &= n - 1;
-  }
-  POPCOUNT_TABLE[i] = count;
-}
-
-/**
- * Compute Hamming distance between two binary signatures.
- * Hamming distance = number of differing bits.
- *
- * @param a - First binary signature
- * @param b - Second binary signature
- * @returns Number of differing bits
- */
-export function hammingDistance(a: Uint8Array, b: Uint8Array): number {
-  if (a.length !== b.length) {
-    throw new Error(`Binary signature length mismatch: ${a.length} vs ${b.length}`);
-  }
-
-  return a.reduce((dist, byte, i) => dist + POPCOUNT_TABLE[byte ^ b[i]!]!, 0);
-}
+// hammingDistance lives in @keel/content-shared/encoding (byte-identical
+// algorithm). Re-exported here so existing importers of this module keep
+// working unchanged.
+export { hammingDistance };
 
 /**
  * Convert Hamming distance to a similarity score (0-1).

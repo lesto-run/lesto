@@ -35,43 +35,39 @@ interface Link {
 
 /**
  * ContentExtractor - extracts structured data from markdown.
- * Uses generator-based matching for efficient iteration.
  */
 class ContentExtractor {
   constructor(private content: string) {}
 
-  *matches<T>(pattern: RegExp, mapper: (m: RegExpExecArray) => T): Generator<T> {
-    for (const m of this.content.matchAll(pattern)) {
-      yield mapper(m);
-    }
-  }
-
   headings(): Heading[] {
+    // The full match (`#### Heading`) is always defined; we derive the level
+    // from the leading run of '#' and the text from the remainder, which keeps
+    // every read total and avoids an unreachable optional-group guard.
     const result: Heading[] = [];
-    for (const m of this.content.matchAll(/^(#{1,6})\s+(.+)$/gm)) {
-      const [, hashes, text] = m;
-      if (hashes === undefined || text === undefined) continue;
-      result.push({ level: hashes.length, text: text.trim() });
+    for (const m of this.content.matchAll(/^#{1,6}\s+.+$/gm)) {
+      const line = m[0];
+      const level = line.length - line.replace(/^#+/, "").length;
+      result.push({ level, text: line.slice(level).trim() });
     }
     return result;
   }
 
   images(): Image[] {
+    // Derive alt/src from the full match (`![alt](src)`) rather than optional
+    // capture groups, so there is no unreachable undefined-guard to cover.
     const result: Image[] = [];
     for (const m of this.content.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)) {
-      const [, alt, src] = m;
-      if (alt === undefined || src === undefined) continue;
+      const [alt, src] = splitBracketLink(m[0].slice(1));
       result.push({ alt, src });
     }
     return result;
   }
 
   links(): Link[] {
-    // Match markdown links but not images (negative lookbehind for !)
+    // Match markdown links but not images (negative lookbehind for !).
     const result: Link[] = [];
     for (const m of this.content.matchAll(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g)) {
-      const [, text, url] = m;
-      if (text === undefined || url === undefined) continue;
+      const [text, url] = splitBracketLink(m[0]);
       result.push({
         text,
         url,
@@ -80,6 +76,18 @@ class ContentExtractor {
     }
     return result;
   }
+}
+
+/**
+ * Split a `[text](url)` token into its two parts.
+ * The caller only passes strings the link/image regexes already matched, so the
+ * delimiters are guaranteed present — no defensive branching required here.
+ */
+function splitBracketLink(token: string): [string, string] {
+  const split = token.indexOf("](");
+  const text = token.slice(1, split);
+  const url = token.slice(split + 2, -1);
+  return [text, url];
 }
 
 /**
@@ -271,19 +279,20 @@ const SEO_WEIGHTS = {
 };
 
 function calculateTitleScore(title: SEOMetrics["title"]): number {
+  // An empty title has length 0; once we know the title is non-empty its length
+  // is necessarily > 0, so the trailing bands need no further length guard.
   if (!title.value) return 0;
   if (title.isOptimal) return SEO_WEIGHTS.title;
-  if (title.length > 0 && title.length <= 70) return SEO_WEIGHTS.title * 0.7;
-  if (title.length > 0) return SEO_WEIGHTS.title * 0.3;
-  return 0;
+  if (title.length <= 70) return SEO_WEIGHTS.title * 0.7;
+  return SEO_WEIGHTS.title * 0.3;
 }
 
 function calculateMetaScore(meta: SEOMetrics["metaDescription"]): number {
+  // Same invariant as the title: a non-empty value always has length > 0.
   if (!meta.value) return 0;
   if (meta.isOptimal) return SEO_WEIGHTS.metaDescription;
-  if (meta.length > 0 && meta.length <= 200) return SEO_WEIGHTS.metaDescription * 0.7;
-  if (meta.length > 0) return SEO_WEIGHTS.metaDescription * 0.3;
-  return 0;
+  if (meta.length <= 200) return SEO_WEIGHTS.metaDescription * 0.7;
+  return SEO_WEIGHTS.metaDescription * 0.3;
 }
 
 function calculateHeadingsScore(headings: SEOMetrics["headings"]): number {
@@ -310,12 +319,11 @@ function calculateContentScore(content: SEOMetrics["content"]): number {
 }
 
 function calculateLinksScore(links: SEOMetrics["links"]): number {
+  // Every link is classified as exactly one of internal or external, so a
+  // non-zero total guarantees at least one of the two counts is positive.
   if (links.total === 0) return SEO_WEIGHTS.links * 0.3;
-  const hasInternal = links.internal > 0;
-  const hasExternal = links.external > 0;
-  if (hasInternal && hasExternal) return SEO_WEIGHTS.links;
-  if (hasInternal || hasExternal) return SEO_WEIGHTS.links * 0.6;
-  return 0;
+  const hasBoth = links.internal > 0 && links.external > 0;
+  return hasBoth ? SEO_WEIGHTS.links : SEO_WEIGHTS.links * 0.6;
 }
 
 function calculateScore(metrics: Omit<SEOMetrics, "score">): number {
@@ -713,15 +721,16 @@ export function analyzeKeywordDensity(
     // Find all matches with positions
     const matches: Array<{ index: number; match: string }> = [];
     for (const m of plainContent.matchAll(pattern)) {
-      matches.push({ index: m.index!, match: m[0] });
+      matches.push({ index: m.index, match: m[0] });
     }
 
     const count = matches.length;
 
-    // Calculate density as percentage
-    // Count words that match the keyword (could be multi-word keywords)
+    // Calculate density as percentage. We returned early above when totalWords
+    // is 0, so the division here is always safe.
+    // Count words that match the keyword (could be multi-word keywords).
     const keywordWordCount = keyword.split(/\s+/).length;
-    const density = totalWords > 0 ? ((count * keywordWordCount) / totalWords) * 100 : 0;
+    const density = ((count * keywordWordCount) / totalWords) * 100;
 
     // Extract location samples
     const locations = matches.slice(0, maxLocations).map((m) => {

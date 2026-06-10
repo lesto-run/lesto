@@ -3,87 +3,27 @@ import path from "node:path";
 import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
 import rehypePrettyCode from "rehype-pretty-code";
-import { visit } from "unist-util-visit";
-import { createSlugger } from "@keel/content-shared/slugify";
-import type { Root, PhrasingContent } from "mdast";
+import type { Root } from "mdast";
 import type { VFile } from "vfile";
 import type { Heading, MDXCompileOptions, MDXCompileResult } from "./types";
+import {
+  calculateReadingTime,
+  generateExcerpt,
+  normalizePlugins,
+  remarkExtractHeadings,
+  resolveRawContent,
+} from "./extract";
 
 const DEFAULT_WORDS_PER_MINUTE = 250;
 const DEFAULT_EXCERPT_LENGTH = 200;
 
 /**
- * Remark plugin to extract headings from the MDX AST.
- * Uses github-slugger to handle duplicate headings correctly.
+ * Build the `mdxOptions` callback mdx-bundler invokes to assemble its plugin
+ * pipeline. Exported for direct testing: it injects our heading-extraction
+ * transformer ahead of any caller plugins, so we assert on the resulting arrays
+ * without paying for a full bundle.
  */
-function remarkExtractHeadings() {
-  return (tree: Root, file: VFile) => {
-    const headings: Heading[] = [];
-    const slugger = createSlugger();
-
-    visit(tree, "heading", (node) => {
-      const text = node.children
-        .map((child) => {
-          if (child.type === "text") return child.value;
-          if (child.type === "inlineCode") return child.value;
-          if ("children" in child) {
-            return extractTextFromChildren(child.children);
-          }
-          return "";
-        })
-        .join("")
-        .trim();
-
-      if (text) {
-        headings.push({
-          depth: node.depth as 1 | 2 | 3 | 4 | 5 | 6,
-          text,
-          slug: slugger.slug(text),
-        });
-      }
-    });
-
-    file.data["headings"] = headings;
-  };
-}
-
-function extractTextFromChildren(children: PhrasingContent[]): string {
-  return children
-    .map((child) => {
-      if (child.type === "text") return child.value;
-      if (child.type === "inlineCode") return child.value;
-      if ("children" in child) return extractTextFromChildren(child.children as PhrasingContent[]);
-      return "";
-    })
-    .join("");
-}
-
-function normalizePlugins(plugins: unknown): unknown[] {
-  if (plugins == null) return [];
-  return Array.isArray(plugins) ? plugins : [plugins];
-}
-
-function calculateReadingTime(content: string, wordsPerMinute: number) {
-  const words = content.trim().split(/\s+/).filter(Boolean).length;
-  const minutes = Math.ceil(words / wordsPerMinute);
-  const text = minutes === 0 ? "< 1 min read" : `${minutes} min read`;
-  return { words, minutes, text };
-}
-
-function generateExcerpt(content: string, length: number): string {
-  const plainText = content
-    .replace(/^---[\s\S]*?---/m, "")
-    .replace(/#+\s/g, "")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/[*_`~]/g, "")
-    .replace(/\n+/g, " ")
-    .trim();
-
-  if (plainText.length <= length) return plainText;
-  return plainText.slice(0, length).replace(/\s+\S*$/, "") + "...";
-}
-
-function createMdxOptionsBuilder(
+export function createMdxOptionsBuilder(
   remarkPlugins: unknown,
   rehypePlugins: unknown,
   onHeadingsExtracted: (headings: Heading[]) => void,
@@ -92,8 +32,10 @@ function createMdxOptionsBuilder(
     mdxOptions.remarkPlugins = [
       remarkGfm,
       () => (tree: Root, file: VFile) => {
+        // remarkExtractHeadings always assigns file.data.headings an array
+        // (possibly empty), so the cast below is total — no fallback needed.
         remarkExtractHeadings()(tree, file);
-        onHeadingsExtracted((file.data["headings"] as Heading[]) || []);
+        onHeadingsExtracted(file.data["headings"] as Heading[]);
       },
       ...normalizePlugins(remarkPlugins),
     ];
@@ -113,7 +55,12 @@ function createMdxOptionsBuilder(
   };
 }
 
-function createEsbuildOptionsBuilder(options: MDXCompileOptions, isFileMode: boolean) {
+/**
+ * Build the `esbuildOptions` callback. Exported for direct testing because the
+ * two interesting branches — alias resolution (file mode only) and the
+ * NODE_ENV define — are pure transforms on the esbuild config object.
+ */
+export function createEsbuildOptionsBuilder(options: MDXCompileOptions, isFileMode: boolean) {
   return (esbuildOptions: { alias?: Record<string, string>; define?: Record<string, string> }) => {
     if (
       isFileMode &&
@@ -138,7 +85,12 @@ function createEsbuildOptionsBuilder(options: MDXCompileOptions, isFileMode: boo
   };
 }
 
-function handleCompilationError(error: unknown, location: string): never {
+/**
+ * Wrap a bundler failure with the offending location, preserving the original
+ * via `cause`. Non-Error throws (rare, but possible from deep dependencies) are
+ * rethrown untouched so we never mask a thrown string or object.
+ */
+export function handleCompilationError(error: unknown, location: string): never {
   if (error instanceof Error) {
     throw new Error(`MDX compilation failed for ${location}: ${error.message}`, {
       cause: error,
@@ -187,7 +139,7 @@ export async function compileMDX(options: MDXCompileOptions): Promise<MDXCompile
         : { ...baseOptions, source: source! };
 
     const { code, frontmatter, matter } = await bundleMDX(bundleOptions);
-    const rawContent = matter?.content ?? source ?? "";
+    const rawContent = resolveRawContent(matter?.content, source);
 
     return {
       code,

@@ -13,6 +13,7 @@ import type {
   SearchResult,
   SearchOptions,
 } from "./types";
+import { extractKeywords } from "@keel/content-shared/text";
 import { binaryQuantize, hammingDistance, hammingToSimilarity, thresholdToHamming } from "./binary";
 
 // ============================================================================
@@ -108,86 +109,11 @@ export async function loadTier1Index(url: string): Promise<Tier1Index> {
 // Keyword Search (Tier 0)
 // ============================================================================
 
-/** Stop words to filter from keywords */
-const STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "by",
-  "for",
-  "from",
-  "has",
-  "he",
-  "in",
-  "is",
-  "it",
-  "its",
-  "of",
-  "on",
-  "or",
-  "that",
-  "the",
-  "to",
-  "was",
-  "were",
-  "will",
-  "with",
-  "this",
-  "but",
-  "they",
-  "have",
-  "had",
-  "what",
-  "when",
-  "where",
-  "who",
-  "which",
-  "why",
-  "how",
-  "all",
-  "each",
-  "every",
-  "both",
-  "few",
-  "more",
-  "most",
-  "other",
-  "some",
-  "such",
-  "no",
-  "nor",
-  "not",
-  "only",
-  "own",
-  "same",
-  "so",
-  "than",
-  "too",
-  "very",
-  "can",
-  "just",
-  "should",
-  "now",
-  "you",
-  "your",
-]);
-
-/**
- * Extract searchable keywords from text.
- */
-export function extractKeywords(text: string, maxKeywords = 50): string[] {
-  const words = text
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .split(/\s+/)
-    .filter((word) => word.length >= 3 && !STOP_WORDS.has(word));
-
-  return [...new Set(words)].slice(0, maxKeywords);
-}
+// extractKeywords (and its STOP_WORDS) now live in @keel/content-shared/text,
+// shared with the build-time index generator so the keywords stored in a Tier 0
+// index always match those extracted from a live query. Re-exported here for
+// existing importers of this module.
+export { extractKeywords };
 
 /**
  * Fast keyword search using Tier 0 index.

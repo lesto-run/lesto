@@ -36,6 +36,10 @@
       "types": "./src/encoding.ts",
       "import": "./src/encoding.ts"
     },
+    "./text": {
+      "types": "./src/text.ts",
+      "import": "./src/text.ts"
+    },
     "./slugify": {
       "types": "./src/slugify.ts",
       "import": "./src/slugify.ts"

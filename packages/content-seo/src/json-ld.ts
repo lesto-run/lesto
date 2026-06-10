@@ -314,19 +314,21 @@ export const jsonLd = {
 
     const parsedSchemas: Record<string, unknown>[] = [];
 
-    for (let i = 0; i < schemas.length; i++) {
-      const json = schemas[i];
-      if (json === undefined) continue;
+    // Iterating with entries() keeps `json` typed as a definite string (no
+    // undefined index guard) while still giving us the index for error context.
+    for (const [i, json] of schemas.entries()) {
       try {
         const parsed = JSON.parse(json) as Record<string, unknown>;
         // Remove @context from individual schemas
         const { "@context": _, ...rest } = parsed;
         parsedSchemas.push(rest);
       } catch (error) {
+        // The catch binding is `unknown`; String() coerces it without an
+        // instanceof branch (JSON.parse only throws a SyntaxError anyway).
         throw new ParseError(`Invalid JSON-LD schema at index ${i}`, {
           index: i,
           preview: json.slice(0, 100),
-          error: error instanceof Error ? error.message : String(error),
+          error: String(error),
         });
       }
     }

@@ -165,18 +165,21 @@ export function checkHeadings(content: string, file: string, lineIndex: LineInde
 /** Check for vague link text */
 export function checkLinks(content: string, file: string, lineIndex: LineIndex): Diagnostic[] {
   const ctx = new LintContext(file, lineIndex);
-  return [...ctx.scan(content, A11Y_PATTERNS.link)]
-    .filter(({ match }) => VAGUE_LINK_TEXTS.has(match[1]?.trim().toLowerCase() ?? ""))
-    .map(({ match, offset, length }) =>
-      ctx.diag(
-        "linkText",
-        offset,
-        length,
-        `Vague link text: "${match[1]}"`,
-        "warning",
-        'Link text should describe the destination. Instead of "click here", use descriptive text like "view the documentation" or "read the getting started guide".',
-      ),
-    );
+  return (
+    [...ctx.scan(content, A11Y_PATTERNS.link)]
+      // The link pattern's text group [^\]]+ always captures at least one char.
+      .filter(({ match }) => VAGUE_LINK_TEXTS.has(match[1]!.trim().toLowerCase()))
+      .map(({ match, offset, length }) =>
+        ctx.diag(
+          "linkText",
+          offset,
+          length,
+          `Vague link text: "${match[1]}"`,
+          "warning",
+          'Link text should describe the destination. Instead of "click here", use descriptive text like "view the documentation" or "read the getting started guide".',
+        ),
+      )
+  );
 }
 
 /** Check for code blocks without language */
@@ -291,20 +294,20 @@ export function checkNoUndefinedReferences(
 ): Diagnostic[] {
   const ctx = new LintContext(file, lineIndex);
 
-  // Pass 1: Collect all defined references
+  // Pass 1: Collect all defined references. The definition pattern's label
+  // group [^\]]+ always captures at least one character.
   const definedRefs = new Set<string>();
   for (const { match } of ctx.scan(content, STRUCTURAL_PATTERNS.refDefinition)) {
-    const refName = match[1];
-    if (refName !== undefined) {
-      definedRefs.add(refName.toLowerCase());
-    }
+    definedRefs.add(match[1]!.toLowerCase());
   }
 
   const diagnostics: Diagnostic[] = [];
 
   // Pass 2: Check full reference usages [text][ref]
   for (const { match, offset, length } of ctx.scan(content, STRUCTURAL_PATTERNS.refUsageFull)) {
-    const refName = (match[2] || match[1] || "").toLowerCase();
+    // [text][ref] uses the explicit ref (group 2); a collapsed [text][] falls
+    // back to the text (group 1), which the pattern guarantees is non-empty.
+    const refName = (match[2] || match[1]!).toLowerCase();
     if (!definedRefs.has(refName)) {
       diagnostics.push(
         ctx.diag(
@@ -320,10 +323,12 @@ export function checkNoUndefinedReferences(
   }
 
   // Pass 3: Check shortcut references [ref]
-  // Checkbox syntax patterns to skip: [x], [X], [ ] (used in task lists)
-  const checkboxPatterns = new Set(["x", " ", ""]);
+  // Checkbox syntax to skip: [x], [X], [ ] (used in task lists). The shortcut
+  // pattern's group always captures at least one char, so an empty label is
+  // impossible and is not among the skip set.
+  const checkboxPatterns = new Set(["x", " "]);
   for (const { match, offset, length } of ctx.scan(content, STRUCTURAL_PATTERNS.refUsageShortcut)) {
-    const rawRef = match[1] ?? "";
+    const rawRef = match[1]!;
     const refName = rawRef.toLowerCase();
 
     // Skip checkbox syntax (task lists): - [x], - [ ], - [X]
@@ -331,12 +336,9 @@ export function checkNoUndefinedReferences(
       continue;
     }
 
-    // Skip if it looks like a definition line or is a known definition
+    // A reference definition's own [ref] is collected in pass 1 and resolves
+    // here; the shortcut pattern's lookahead already excludes [ref]: forms.
     if (!definedRefs.has(refName)) {
-      // Check if this is actually a definition (has : after)
-      const afterMatch = content.slice(offset + length, offset + length + 2);
-      if (afterMatch.startsWith(":")) continue;
-
       diagnostics.push(
         ctx.diag(
           "noUndefinedReferences",
@@ -368,12 +370,9 @@ export function checkNoEmphasisAsHeading(
   )) {
     const text = match[0].replace(/\*+/g, "").trim();
 
-    // Skip if it's inside a list item (preceded by list marker on same line)
-    const lineStart = content.lastIndexOf("\n", offset - 1) + 1;
-    const linePrefix = content.slice(lineStart, offset);
-    if (/^\s*[-*+]\s+/.test(linePrefix) || /^\s*\d+\.\s+/.test(linePrefix)) {
-      continue;
-    }
+    // The pattern is anchored to the line start (^ ... $ under /m), so a list
+    // marker can never precede the emphasis on the same line; no list-item
+    // guard is needed here.
 
     // Skip short emphasis text (likely labels like **Note:** or **Warning:**)
     if (text.length < 10 || text.endsWith(":")) {
@@ -426,7 +425,8 @@ export function checkNoHeadingPunctuation(
     content,
     STRUCTURAL_PATTERNS.headingWithPunctuation,
   )) {
-    const headingText = match[2] ?? "";
+    // Group 2 (.+[.!?:]) is mandatory in the pattern, so it always captures.
+    const headingText = match[2]!;
     const lastChar = headingText.slice(-1);
 
     // Skip if it's a question (ends with ? and starts with question word)
@@ -474,7 +474,8 @@ export function checkNoShellDollars(
     for (const line of lines) {
       const dollarMatch = line.match(/^(\s*)\$\s+/);
       if (dollarMatch) {
-        const indent = dollarMatch[1] ?? "";
+        // The leading-whitespace group always captures (possibly to "").
+        const indent = dollarMatch[1]!;
         const dollarOffset = lineOffset + indent.length;
         const dollarLength = dollarMatch[0].length - indent.length;
         diagnostics.push(
