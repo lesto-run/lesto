@@ -197,8 +197,38 @@ describe("dispatchSites — static sites", () => {
     const response = await dispatch("GET", "/");
 
     expect(response.status).toBe(200);
-    expect(response.headers).toEqual({ "content-type": "text/html; charset=utf-8" });
+    // A page revalidates: no-cache, paired with the dynamic path's ETag upstream.
+    expect(response.headers).toEqual({
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-cache",
+    });
     expect(response.body).toBe("<h1>Home</h1>");
+  });
+
+  it("freezes a content-hashed asset as immutable for a year", async () => {
+    const dispatch = dispatchSites({
+      sites: [marketing],
+      handle: recordingHandler({ status: 200, body: "" }).handle,
+      readStatic: fakeReader({ "marketing/app.4f3a9c2b.js": "console.log(1)" }),
+    });
+
+    const response = await dispatch("GET", "/app.4f3a9c2b.js");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+    expect(response.headers["content-type"]).toBe("text/javascript; charset=utf-8");
+  });
+
+  it("makes a plainly-named asset revalidate rather than freeze", async () => {
+    const dispatch = dispatchSites({
+      sites: [marketing],
+      handle: recordingHandler({ status: 200, body: "" }).handle,
+      readStatic: fakeReader({ "marketing/app.js": "console.log(1)" }),
+    });
+
+    const response = await dispatch("GET", "/app.js");
+
+    expect(response.headers["cache-control"]).toBe("no-cache");
   });
 
   it("strips a zone basePath to the in-site route before mapping", async () => {
@@ -301,8 +331,10 @@ describe("dispatchSites — static sites", () => {
     const txt = await dispatch("GET", "/robots.txt");
     const json = await dispatch("GET", "/feed.json");
 
-    expect(xml.headers).toEqual({ "content-type": "application/xml" });
-    expect(txt.headers).toEqual({ "content-type": "text/plain; charset=utf-8" });
-    expect(json.headers).toEqual({ "content-type": "application/json" });
+    expect(xml.headers["content-type"]).toBe("application/xml");
+    expect(txt.headers["content-type"]).toBe("text/plain; charset=utf-8");
+    expect(json.headers["content-type"]).toBe("application/json");
+    // These hand-named endpoints are mutable URLs, so they revalidate.
+    expect(xml.headers["cache-control"]).toBe("no-cache");
   });
 });

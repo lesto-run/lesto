@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { createElement } from "react";
 
 import {
@@ -7,6 +7,7 @@ import {
   ISLAND_ATTR,
   Registry,
   renderPage,
+  renderPageMarkup,
   renderTree,
   UiError,
   validateTree,
@@ -113,7 +114,7 @@ describe("renderPage", () => {
     );
 
     expect(page.islands).toEqual([
-      { id: "$.children[1]", component: "Account", props: { plan: "pro" } },
+      { id: "$.children[1]", component: "Account", props: { plan: "pro" }, ssr: false },
     ]);
   });
 
@@ -121,7 +122,7 @@ describe("renderPage", () => {
     const page = renderPage(registry(), island("Ping"));
 
     expect(renderToStaticMarkup(page.element)).toBe('<div data-keel-island="$"></div>');
-    expect(page.islands).toEqual([{ id: "$", component: "Ping", props: {} }]);
+    expect(page.islands).toEqual([{ id: "$", component: "Ping", props: {}, ssr: false }]);
   });
 
   it("renders an island node written without a props key", () => {
@@ -129,7 +130,7 @@ describe("renderPage", () => {
     // empty-props fallback the `island()` helper would otherwise fill in.
     const page = renderPage(registry(), { type: "Ping" });
 
-    expect(page.islands).toEqual([{ id: "$", component: "Ping", props: {} }]);
+    expect(page.islands).toEqual([{ id: "$", component: "Ping", props: {}, ssr: false }]);
   });
 
   it("degrades a genuinely unknown component (neither server nor client)", () => {
@@ -166,7 +167,9 @@ describe("renderPage", () => {
 
     const page = renderPage(r, island("Account"));
 
-    expect(page.islands).toEqual([{ id: "$", component: "Account", props: { plan: "free" } }]);
+    expect(page.islands).toEqual([
+      { id: "$", component: "Account", props: { plan: "free" }, ssr: false },
+    ]);
   });
 
   it("contains a non-serializable prop as a render error, rendering nothing", () => {
@@ -183,8 +186,119 @@ describe("renderPage", () => {
     const page = renderPage(registry(), island("Ping", { anything: { nested: [1, 2] } }));
 
     expect(page.islands).toEqual([
-      { id: "$", component: "Ping", props: { anything: { nested: [1, 2] } } },
+      { id: "$", component: "Ping", props: { anything: { nested: [1, 2] } }, ssr: false },
     ]);
+  });
+
+  it("renders an ssr island's REAL component server-side and flags ssr in the manifest", () => {
+    // An `ssr` island ships its real output (the markup the client will hydrate),
+    // NOT a fallback — so hydrateRoot finds a match. The manifest says ssr: true.
+    const Stamp: ClientComponentDef = {
+      name: "Stamp",
+      ssr: true,
+      props: { label: { type: "string", required: true } },
+      component: (props) => createElement("strong", null, props.label as string),
+      // A fallback is declared but MUST be ignored when ssr is true.
+      fallback: () => createElement("em", null, "FALLBACK"),
+    };
+
+    const r = new Registry().define(Box).defineClient(Stamp);
+
+    const page = renderPage(r, { type: "Box", children: [island("Stamp", { label: "live" })] });
+
+    const html = renderToStaticMarkup(page.element);
+
+    expect(html).toBe(
+      '<div class="box"><div data-keel-island="$.children[0]"><strong>live</strong></div></div>',
+    );
+    expect(html).not.toContain("FALLBACK");
+
+    expect(page.islands).toEqual([
+      { id: "$.children[0]", component: "Stamp", props: { label: "live" }, ssr: true },
+    ]);
+  });
+
+  it("builds an ssr island's element lazily so React runs the real component", () => {
+    // An ssr island's `component` is a full React component (it may use hooks), so
+    // it is placed LAZILY: building the page never throws — the component runs
+    // only when React renders the element, exactly like a server component. A
+    // throwing island therefore surfaces at `renderToStaticMarkup`, not at build.
+    const Boom: ClientComponentDef = {
+      name: "Boom",
+      ssr: true,
+      component: () => {
+        throw new Error("kaboom");
+      },
+    };
+
+    const page = renderPage(new Registry().defineClient(Boom), island("Boom"));
+
+    // Building the tree did not throw, and the island is in the manifest.
+    expect(page.errors).toEqual([]);
+    expect(page.islands).toEqual([{ id: "$", component: "Boom", props: {}, ssr: true }]);
+
+    // The throw lives in React's render of the lazily-placed component.
+    expect(() => renderToStaticMarkup(page.element)).toThrow("kaboom");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderPageMarkup: pick the renderer the page's hydration contract requires.
+// An ssr island needs renderToString (it emits the `<!-- -->` text markers
+// hydrateRoot walks); a markerless renderToStaticMarkup would mismatch on the
+// common interpolated-text shape. No ssr island → static markup is fine.
+// ---------------------------------------------------------------------------
+
+describe("renderPageMarkup", () => {
+  // An ssr component whose render interpolates text: TWO adjacent text segments
+  // under one parent — the shape that needs (and exposes) the text markers.
+  const Greet: ClientComponentDef = {
+    name: "Greet",
+    ssr: true,
+    props: { name: { type: "string", required: true } },
+    component: (props) => createElement("p", null, "Hi, ", props.name as string, "!"),
+  };
+
+  it("renders an ssr-island page with renderToString so hydration markers survive", () => {
+    const r = new Registry().define(Box).defineClient(Greet);
+    const page = renderPage(r, { type: "Box", children: [island("Greet", { name: "Ada" })] });
+
+    const html = renderPageMarkup(page);
+
+    // The `<!-- -->` markers between adjacent text segments are present — exactly
+    // what hydrateRoot needs and what renderToStaticMarkup would have stripped.
+    expect(html).toContain("Hi, <!-- -->Ada<!-- -->!");
+    // Equals the renderToString output, NOT the markerless static one.
+    expect(html).toBe(renderToString(page.element));
+    expect(html).not.toBe(renderToStaticMarkup(page.element));
+  });
+
+  it("renders a page with no ssr islands with renderToStaticMarkup", () => {
+    // A deferred (ssr:false) island ships only a fallback the client replaces
+    // wholesale, so its markers are irrelevant; the page stays static markup.
+    const page = renderPage(registry(), {
+      type: "Box",
+      children: [island("Account", { plan: "pro" })],
+    });
+
+    const html = renderPageMarkup(page);
+
+    expect(html).toBe(renderToStaticMarkup(page.element));
+    expect(page.islands.every((m) => !m.ssr)).toBe(true);
+  });
+
+  it("renders a pure-static page (no islands) with renderToStaticMarkup", () => {
+    const page = renderPage(registry(), { type: "Box", children: ["hello"] });
+
+    expect(renderPageMarkup(page)).toBe(renderToStaticMarkup(page.element));
+  });
+
+  it("returns an empty string when the page element degraded to null", () => {
+    // An unknown root component degrades to a null element — there is no body.
+    const page = renderPage(registry(), { type: "DoesNotExist" });
+
+    expect(page.element).toBeNull();
+    expect(renderPageMarkup(page)).toBe("");
   });
 });
 

@@ -8,6 +8,9 @@ import type { KeelResponse } from "@keel/web";
 import { applyResponse } from "./response";
 import { toKeelRequest } from "./request";
 import { RuntimeError } from "./errors";
+import { etagFor, etagMatches, respondNotModified } from "./http-cache";
+
+import type { NotModifiedResponse } from "./http-cache";
 
 /** A running http server bound to a port, with a graceful shutdown. */
 export interface Server {
@@ -96,6 +99,41 @@ export interface ServeOptions {
   readonly securityHeaders?: false | Record<string, string>;
 
   /**
+   * A Content-Security-Policy, off by default.
+   *
+   * No enforcing CSP is sent unless one is configured: Keel's island bootstrap
+   * inlines JSON via a `<script>`, which a strict default policy would break.
+   * Set `mode: "enforce"` to block violations or `mode: "report-only"` to
+   * observe them without enforcement (the safe way to roll a policy out — emits
+   * `Content-Security-Policy-Report-Only`). See {@link RECOMMENDED_CSP} for a
+   * sane starting point. Merged under the response like every security header,
+   * so a route may override it.
+   */
+  readonly csp?: { readonly policy: string; readonly mode: "enforce" | "report-only" };
+
+  /**
+   * Opt in to `Cross-Origin-Embedder-Policy: require-corp` (off by default).
+   *
+   * COEP unlocks cross-origin isolation (`SharedArrayBuffer`, precise timers)
+   * but breaks any cross-origin subresource that does not opt in with CORP/CORS,
+   * so it can never be a safe default — only an app that knows its subresources
+   * comply should turn it on.
+   */
+  readonly crossOriginEmbedderPolicy?: boolean;
+
+  /**
+   * Conditional-GET behaviour for dynamic/HTML responses.
+   *
+   * When on (the default), the runtime hashes an HTML response body into an
+   * `ETag`, and a request whose `If-None-Match` still matches is answered with a
+   * bodiless 304 — the client reuses its cached copy. Pass `false` to disable,
+   * or `{ weak: true }` to emit weak validators. Only responses without an ETag
+   * of their own and without a body-changing status are tagged; the app may
+   * always set its own `ETag` and opt a given response out.
+   */
+  readonly etag?: false | { readonly weak?: boolean };
+
+  /**
    * Where a one-line access record goes for each served request. Injected so a
    * test can assert without writing to the console; defaults to `console.log`.
    */
@@ -128,20 +166,57 @@ const DEFAULT_LIVE_PATH = "/health";
 const DEFAULT_READY_PATH = "/readyz";
 
 /**
+ * A restrictive default `Permissions-Policy`: powerful features off until asked.
+ *
+ * The browser's secure-default principle applied to capabilities — a page that
+ * never uses the camera, microphone, or geolocation should not be *able* to,
+ * even if a script (or an injected one) tries. `interest-cohort=()` opts out of
+ * FLoC/Topics cohort calculation. An app that genuinely needs a feature sets its
+ * own `Permissions-Policy`, which wins the merge.
+ */
+const DEFAULT_PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=(), interest-cohort=()";
+
+/**
  * The headers we put under every response by default.
  *
  * The unambiguously-safe set that needs no per-app tuning: no MIME sniffing, a
- * privacy-preserving referrer, framing denied, and HSTS for any TLS terminator
- * in front. We deliberately do NOT default a Content-Security-Policy — a safe
- * CSP depends on the app's own inline scripts (island bootstrapping), so it is
- * the app's to set rather than a default that silently breaks pages.
+ * privacy-preserving referrer, framing denied, HSTS for any TLS terminator in
+ * front, a cross-origin opener boundary (so a popup opener can't reach back into
+ * this window), and a restrictive permissions policy.
+ *
+ * Two deliberate omissions:
+ *   - No Content-Security-Policy — a safe CSP depends on the app's own inline
+ *     scripts (island bootstrapping injects JSON via a `<script>`), so a strict
+ *     default would silently break pages. It is opt-in via {@link ServeOptions.csp}.
+ *   - No Cross-Origin-Embedder-Policy — `require-corp` breaks any cross-origin
+ *     subresource (a CDN image, a third-party font) that doesn't opt in with
+ *     CORP/CORS, so it cannot be a safe default. It is opt-in via
+ *     {@link ServeOptions.crossOriginEmbedderPolicy}.
  */
 export const DEFAULT_SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "strict-origin-when-cross-origin",
   "X-Frame-Options": "DENY",
   "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Permissions-Policy": DEFAULT_PERMISSIONS_POLICY,
 };
+
+/**
+ * A recommended Content-Security-Policy for an app that does NOT inline scripts.
+ *
+ * Exported as documentation-in-code: a sane starting policy an app can pass to
+ * {@link ServeOptions.csp} once it has eliminated inline `<script>` blocks (or
+ * moved island bootstrap data behind a nonce). It locks scripts and objects to
+ * same-origin, forbids framing, and upgrades mixed content. It is NOT a default
+ * precisely because Keel's island bootstrap currently inlines JSON, which
+ * `script-src 'self'` would block — adopt it deliberately, not silently.
+ */
+export const RECOMMENDED_CSP =
+  "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; upgrade-insecure-requests";
+
+/** The header `require-corp` rides on when COEP is opted in. */
+const COEP_HEADER = "Cross-Origin-Embedder-Policy";
 
 /**
  * The method and path of an incoming request.
@@ -158,6 +233,28 @@ export function requestLineOf(req: Pick<IncomingMessage, "method" | "url">): {
     method: req.method ?? "GET",
     url: req.url ?? "/",
   };
+}
+
+/**
+ * Read the `If-None-Match` validator from request headers as a single string.
+ *
+ * node:http delivers most request headers as a string, but a header sent more
+ * than once can arrive as a string array; we join such a list back into the
+ * comma-separated form {@link etagMatches} already splits on, so a client that
+ * (oddly) sent two `If-None-Match` lines still matches. Absent means absent.
+ *
+ * We take the broad raw-header shape rather than node's narrowed
+ * `IncomingHttpHeaders` (which types this one header as a bare string): the
+ * array case is real at runtime, so we handle it honestly and test it.
+ */
+export function ifNoneMatch(
+  headers: Record<string, string | string[] | undefined>,
+): string | undefined {
+  const value = headers["if-none-match"];
+
+  if (value === undefined) return undefined;
+
+  return Array.isArray(value) ? value.join(", ") : value;
 }
 
 /**
@@ -310,6 +407,108 @@ export function withSecurityHeaders(
   return { ...response, headers: { ...defaults, ...response.headers } };
 }
 
+/** The CSP and COEP knobs {@link securityDefaults} folds into the base header map. */
+export interface SecurityHeaderOptions {
+  readonly csp?: { readonly policy: string; readonly mode: "enforce" | "report-only" } | undefined;
+
+  readonly crossOriginEmbedderPolicy?: boolean | undefined;
+}
+
+/**
+ * Fold the opt-in CSP and COEP knobs into a base security-header map.
+ *
+ * The base map (the defaults, a custom replacement, or `false`) decides the
+ * always-on set; CSP and COEP are *additions* layered on top — present only
+ * when configured — so a caller turns them on without having to restate every
+ * default. Returns `false` untouched when headers are disabled wholesale: opting
+ * out of all security headers opts out of these too.
+ *
+ *   - CSP picks its header by mode: `Content-Security-Policy` to enforce,
+ *     `Content-Security-Policy-Report-Only` to merely observe violations.
+ *   - COEP adds `require-corp` only when explicitly enabled.
+ */
+export function securityDefaults(
+  base: Record<string, string> | false,
+  options: SecurityHeaderOptions,
+): Record<string, string> | false {
+  if (base === false) return false;
+
+  const headers: Record<string, string> = { ...base };
+
+  if (options.csp !== undefined) {
+    const header =
+      options.csp.mode === "report-only"
+        ? "Content-Security-Policy-Report-Only"
+        : "Content-Security-Policy";
+
+    headers[header] = options.csp.policy;
+  }
+
+  if (options.crossOriginEmbedderPolicy === true) {
+    headers[COEP_HEADER] = "require-corp";
+  }
+
+  return headers;
+}
+
+/** Whether ETag is on, and whether it emits weak validators. */
+export type EtagConfig = false | { readonly weak?: boolean };
+
+/**
+ * A response with an `ETag` attached, when conditional GET applies to it.
+ *
+ * We only tag a response that is *cacheable and validatable*: a 200 with an HTML
+ * body, where the app has not already set its own `ETag`. Anything else passes
+ * through untouched — a redirect, an error, a non-HTML payload, or a response
+ * whose handler took ownership of caching. The returned response always carries
+ * the headers to write; `etag` is the value to compare `If-None-Match` against,
+ * or `undefined` when no tag was added (so the caller skips the 304 check).
+ *
+ * Pure and exported so every branch — disabled, already-tagged, non-200,
+ * non-HTML, the happy strong/weak tag — is unit-testable without a socket.
+ */
+export function withEtag(
+  response: KeelResponse,
+  config: EtagConfig,
+): { response: KeelResponse; etag: string | undefined } {
+  if (config === false) {
+    return { response, etag: undefined };
+  }
+
+  // The app owns caching for this response if it set its own validator; never
+  // overwrite it. Header names arrive lowercased through the stack, but an app
+  // may set any casing, so match case-insensitively.
+  const hasOwnEtag = Object.keys(response.headers).some((name) => name.toLowerCase() === "etag");
+
+  if (hasOwnEtag) {
+    return { response, etag: undefined };
+  }
+
+  // Only a 200 is safely revalidatable as a whole entity; a redirect or error
+  // carries no cacheable body to 304 against.
+  if (response.status !== 200) {
+    return { response, etag: undefined };
+  }
+
+  // ETag-for-304 is about HTML pages (the dynamic/SSR path); other content types
+  // either carry their own caching (static assets, below) or are one-shot.
+  if (!isHtml(response.headers)) {
+    return { response, etag: undefined };
+  }
+
+  const etag = etagFor(response.body, { weak: config.weak });
+
+  return { response: { ...response, headers: { ...response.headers, ETag: etag } }, etag };
+}
+
+/** True iff a header map declares an HTML content-type (any header casing). */
+function isHtml(headers: Record<string, string>): boolean {
+  return Object.entries(headers).some(
+    ([name, value]) =>
+      name.toLowerCase() === "content-type" && value.toLowerCase().includes("text/html"),
+  );
+}
+
 /** Map a known transport-level refusal to its HTTP status; anything else is a 500. */
 function statusForError(error: unknown): number {
   if (error instanceof RuntimeError && error.code === "RUNTIME_INVALID_JSON") {
@@ -447,7 +646,11 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
     maxBodyBytes: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
     handlerTimeoutMs: options.handlerTimeoutMs ?? DEFAULT_HANDLER_TIMEOUT_MS,
     health: options.health === false ? undefined : (options.health ?? {}),
-    securityHeaders: options.securityHeaders ?? DEFAULT_SECURITY_HEADERS,
+    securityHeaders: securityDefaults(options.securityHeaders ?? DEFAULT_SECURITY_HEADERS, {
+      csp: options.csp,
+      crossOriginEmbedderPolicy: options.crossOriginEmbedderPolicy,
+    }),
+    etag: options.etag ?? {},
     logRequest: options.logRequest ?? defaultLogRequest,
     logError,
     now: options.now ?? Date.now,
@@ -493,6 +696,9 @@ interface HandleDeps {
   readonly health: HealthOptions | undefined;
 
   readonly securityHeaders: Record<string, string> | false;
+
+  /** Conditional-GET ETag behaviour for HTML responses; `false` disables it. */
+  readonly etag: EtagConfig;
 
   readonly logRequest: (entry: AccessEntry) => void;
 
@@ -555,9 +761,25 @@ async function handle(
         deps.handlerTimeoutMs,
       ));
 
-    status = response.status;
+    // Attach an ETag to a cacheable HTML response, then harden it. Security
+    // headers go on last so they cover the 304 path too — a Not-Modified
+    // response is hardened exactly like the full one it stands in for.
+    const tagged = withEtag(response, deps.etag);
 
-    applyResponse(res, withSecurityHeaders(response, deps.securityHeaders));
+    const hardened = withSecurityHeaders(tagged.response, deps.securityHeaders);
+
+    // A conditional GET whose validator still matches gets a bodiless 304: the
+    // client already holds these bytes. We echo the same headers (ETag and all)
+    // and send nothing on the wire.
+    if (tagged.etag !== undefined && etagMatches(ifNoneMatch(req.headers), tagged.etag)) {
+      status = 304;
+
+      respondNotModified(res as NotModifiedResponse, hardened.headers);
+    } else {
+      status = hardened.status;
+
+      applyResponse(res, hardened);
+    }
   } catch (error) {
     status = statusForError(error);
 

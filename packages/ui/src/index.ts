@@ -22,16 +22,49 @@ export { componentCatalog, treeJsonSchema } from "./schema";
 export { validateTree } from "./validate";
 export type { TreeError } from "./validate";
 
-export { renderPage, renderTree } from "./render";
+export { renderPage, renderPageMarkup, renderTree } from "./render";
 export type { Page, RenderError } from "./render";
 
 export { island, ISLAND_ATTR } from "./island";
 export type { ClientComponentDef, IslandMount } from "./island";
 
-// The hydration runtime is browser-only (it touches `document`), so it lives
-// behind the `@keel/ui/client` subpath — server-side importers of `@keel/ui`
-// never pull DOM code into a build without the DOM lib. Mirrors react-dom's
-// server/client split.
+// Resource hints + LCP/modulepreload conventions over React 19's native APIs.
+// Server-safe: the `react-dom` resource functions are isomorphic and only emit
+// markup during an SSR render.
+export {
+  lcpImage,
+  modulePreload,
+  preconnect,
+  prefetchDNS,
+  preinit,
+  preinitModule,
+  preload,
+} from "./resources";
+export type {
+  LcpImageProps,
+  PreconnectOptions,
+  PreinitModuleOptions,
+  PreinitOptions,
+  PreloadOptions,
+  ResourceRegistrar,
+} from "./resources";
+
+// Document metadata helpers + the dedup convention React's hoist-without-dedupe
+// leaves to the framework. Pure: React elements / data in, data out.
+export { dedupeMetadata, link, meta, renderMetadata, renderMetadataEntry, title } from "./metadata";
+export type {
+  CharsetMeta,
+  LinkSpec,
+  MetadataEntry,
+  MetaSpec,
+  NamedMeta,
+  PropertyMeta,
+} from "./metadata";
+
+// The hydration runtime and bfcache-safe lifecycle are browser-only (they touch
+// `document`/`window`), so they live behind the `@keel/ui/client` subpath —
+// server-side importers of `@keel/ui` never pull DOM code into a build without
+// the DOM lib. Mirrors react-dom's server/client split.
 
 export { KeelError, UiError } from "./errors";
 export type { UiErrorCode } from "./errors";

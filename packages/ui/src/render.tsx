@@ -23,6 +23,7 @@
 
 import { createElement, Fragment } from "react";
 import type { ReactElement, ReactNode } from "react";
+import { renderToStaticMarkup, renderToString } from "react-dom/server";
 
 import { ISLAND_ATTR } from "./island";
 import type { ClientComponentDef, IslandMount } from "./island";
@@ -84,6 +85,44 @@ export function renderPage(registry: Registry, tree: unknown): Page {
   return { element, errors: walk.errors, islands };
 }
 
+/**
+ * Serialize a built {@link Page} to its body HTML, choosing the React server
+ * renderer that the page's own hydration contract requires.
+ *
+ * This is where the framework's headline feature lives or dies. An `ssr: true`
+ * island ships its REAL server render into the shell so the client can
+ * `hydrateRoot` it — reuse the DOM, no re-render. But `hydrateRoot` matches the
+ * server tree to the client tree by walking *text-segment comment markers*
+ * (`<!-- -->`) that React emits between adjacent text children. `renderToString`
+ * emits those markers; `renderToStaticMarkup` deliberately STRIPS them (its
+ * markup is for documents that will never hydrate). Hydrating
+ * `renderToStaticMarkup` output therefore mismatches the instant a component
+ * renders two or more adjacent text segments under one parent (`'Hi, ', name`),
+ * firing `onRecoverableError` and forcing React to re-render the whole island —
+ * defeating `ssr: true` entirely. Single-text-child trees happen to survive,
+ * which is exactly the trap: the common shape (interpolated text) is the broken
+ * one.
+ *
+ * So the rule is mechanical, never a guess: **if any island in the manifest is
+ * `ssr: true`, the body MUST be rendered with `renderToString`** to keep the
+ * hydration markers the client needs. A page with no SSR islands (pure static,
+ * or only deferred `createRoot` islands whose shells are mounted fresh and never
+ * hydrated) uses `renderToStaticMarkup` — smaller, marker-free output, and the
+ * deferred shells are replaced wholesale so their markers are irrelevant.
+ *
+ * A page whose element degraded to `null` has no body to render.
+ */
+export function renderPageMarkup(page: Page): string {
+  if (page.element === null) return "";
+
+  // The manifest is the single source of truth for which renderer is safe: it is
+  // the same data the client reads to decide hydrate-vs-mount, so server and
+  // client can never disagree about whether markers were emitted.
+  const needsHydrationMarkers = page.islands.some((island) => island.ssr);
+
+  return needsHydrationMarkers ? renderToString(page.element) : renderToStaticMarkup(page.element);
+}
+
 /** Recursively build one node into a React element, collecting render errors. */
 function build(walk: Walk, node: unknown, path: string): ReactElement | null {
   // A bare string leaf becomes a text node, wrapped so the return type stays a
@@ -127,13 +166,22 @@ function build(walk: Walk, node: unknown, path: string): ReactElement | null {
 }
 
 /**
- * Build an island's server footprint: a marked wrapper element holding the
- * optional fallback, plus (when a page is being built) its manifest entry.
+ * Build an island's server footprint: a marked wrapper element holding either the
+ * fallback (deferred island) or the component's real output (an `ssr` island),
+ * plus (when a page is being built) its manifest entry.
  *
  * Props are validated against the client schema and asserted serializable; a
  * non-serializable prop is contained as a `render_threw` diagnostic, exactly
  * like a server component that throws, so the island degrades to nothing rather
  * than crashing the surrounding page.
+ *
+ * The shell contents are the crux of the hydration contract. A deferred island
+ * (`ssr` falsy) holds only the fallback — the client mounts the live component
+ * fresh, so the two need not match. An `ssr` island holds the component's actual
+ * server render, which the client then `hydrateRoot`s — the markup MUST match, so
+ * the same `component` runs on both sides with the same wire props. The `ssr`
+ * flag rides into the manifest so the client picks the right mount without
+ * guessing.
  */
 function buildIsland(
   walk: Walk,
@@ -148,15 +196,30 @@ function buildIsland(
   // schema's back.
   const props = client.props === undefined ? rawProps : validateProps(client.props, rawProps).props;
 
+  const ssr = client.ssr === true;
+
   try {
     const serializable = assertSerializable(client.name, props);
 
     // Only a page build cares about the manifest; `renderTree` leaves it absent.
-    walk.islands?.push({ id: path, component: client.name, props: serializable });
+    walk.islands?.push({ id: path, component: client.name, props: serializable, ssr });
 
-    const fallback = client.fallback?.(props);
+    // An `ssr` island ships its REAL output (the markup the client will hydrate
+    // and find unchanged); a deferred island ships only its fallback placeholder.
+    //
+    // The ssr component is placed LAZILY (`createElement`, not an eager call):
+    // an island's `component` is a full React component that may use hooks, so it
+    // can only be run by React's renderer (during the caller's
+    // `renderToStaticMarkup`), never invoked as a plain function here. This keeps
+    // the renderer's invariant honest — *building* the element tree never throws;
+    // the island's own render, like any React component's, runs (and may throw)
+    // when React renders the tree, which is exactly where a server component's
+    // render runs too. The serialize guard above is what `buildIsland` contains.
+    const contents: ReactNode = ssr
+      ? createElement(client.component, serializable)
+      : (client.fallback?.(props) as ReactNode);
 
-    return createElement("div", { key: path, [ISLAND_ATTR]: path }, fallback as ReactNode);
+    return createElement("div", { key: path, [ISLAND_ATTR]: path }, contents);
   } catch {
     walk.errors.push({ path, type: "render_threw" });
 

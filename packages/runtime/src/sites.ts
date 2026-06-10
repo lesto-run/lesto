@@ -18,6 +18,8 @@ import type { Site } from "@keel/sites";
 
 import type { KeelResponse } from "@keel/web";
 
+import { cacheControl, hasContentHash } from "./http-cache";
+
 /** Reads a prerendered file's contents, or `undefined` if it is not there. */
 export type StaticReader = (filePath: string) => Promise<string | undefined>;
 
@@ -144,6 +146,26 @@ function emptyResponse(status: number): KeelResponse {
   return { status, headers: {}, body: "" };
 }
 
+/**
+ * The `Cache-Control` a prerendered file gets, by whether its URL is frozen.
+ *
+ * A content-hashed asset (`app.4f3a9c2b.js`) is content-addressed: its bytes can
+ * never change under that URL, so it is cached `immutable` for a year and never
+ * revalidated — the single biggest repeat-visit win. Everything else (a page's
+ * `index.html`, a hand-named asset, `sitemap.xml`) may change at the same URL,
+ * so it is `no-cache`: stored, but revalidated every time. An HTML revalidation
+ * that finds no change is cheap because the dynamic path pairs it with an ETag;
+ * a static page revalidates against the file's freshness on the next request.
+ *
+ * Exported so a test can assert the policy directly, and so the dev dispatcher
+ * could label assets identically if it ever needs to — one table, not two.
+ */
+export function staticCacheControl(filePath: string): string {
+  return hasContentHash(filePath)
+    ? cacheControl({ immutable: true })
+    : cacheControl({ noCache: true });
+}
+
 /** Serve a static site: only GET/HEAD, mapping the route to its prerendered file. */
 async function serveStatic(
   site: Site,
@@ -165,7 +187,11 @@ async function serveStatic(
 
   return {
     status: 200,
-    headers: { "content-type": contentTypeOf(file) },
+    headers: {
+      "content-type": contentTypeOf(file),
+      // Freeze content-hashed assets for a year; make pages revalidate.
+      "cache-control": staticCacheControl(file),
+    },
     body,
   };
 }

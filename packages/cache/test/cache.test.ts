@@ -101,6 +101,206 @@ describe.each(stores)("Cache over $name", ({ make }) => {
     });
   });
 
+  describe("remember (single-flight)", () => {
+    it("misses: computes, caches, and returns the value", async () => {
+      let calls = 0;
+
+      const value = await cache.remember("k", () => {
+        calls += 1;
+
+        return { hello: "world" };
+      });
+
+      expect(value).toEqual({ hello: "world" });
+      expect(calls).toBe(1);
+      expect(cache.read("k")).toEqual({ hello: "world" });
+    });
+
+    it("hits: returns the cached value without computing", async () => {
+      cache.write("k", 41);
+
+      const value = await cache.remember("k", () => {
+        throw new Error("compute must not run on a hit");
+      });
+
+      expect(value).toBe(41);
+    });
+
+    it("coalesces N concurrent misses into a single compute", async () => {
+      let calls = 0;
+
+      // A compute we control: it parks until we release it, so all N callers
+      // are provably in flight at the same time before any of them resolves.
+      let release!: (value: string) => void;
+      const gate = new Promise<string>((resolve) => {
+        release = resolve;
+      });
+
+      const compute = (): Promise<string> => {
+        calls += 1;
+
+        return gate;
+      };
+
+      // Fire ten callers at the same key before the compute can settle.
+      const callers = Array.from({ length: 10 }, () => cache.remember("k", compute));
+
+      release("shared");
+
+      const results = await Promise.all(callers);
+
+      // Every caller saw the one shared value; compute ran exactly once.
+      expect(results).toEqual(Array.from({ length: 10 }, () => "shared"));
+      expect(calls).toBe(1);
+
+      // The value landed in the cache, and the in-flight ledger was released:
+      // a fresh call now hits without recomputing.
+      expect(cache.read("k")).toBe("shared");
+      expect(await cache.remember("k", () => "ignored")).toBe("shared");
+      expect(calls).toBe(1);
+    });
+
+    it("re-computes once the cached entry has expired", async () => {
+      await cache.remember("k", () => "stale", { ttlMs: 100 });
+
+      now += 101; // past the deadline
+
+      let calls = 0;
+      const value = await cache.remember("k", () => {
+        calls += 1;
+
+        return "fresh";
+      });
+
+      expect(value).toBe("fresh");
+      expect(calls).toBe(1);
+      expect(cache.read("k")).toBe("fresh");
+    });
+
+    it("propagates a rejection to every waiter and caches nothing", async () => {
+      let calls = 0;
+
+      let fail!: (error: Error) => void;
+      const gate = new Promise<string>((_resolve, reject) => {
+        fail = reject;
+      });
+
+      const boom = new Error("origin is down");
+
+      const compute = (): Promise<string> => {
+        calls += 1;
+
+        return gate;
+      };
+
+      // Three callers join the one in-flight compute, then it fails.
+      const callers = [
+        cache.remember("k", compute),
+        cache.remember("k", compute),
+        cache.remember("k", compute),
+      ];
+
+      fail(boom);
+
+      // Each waiter sees the very same rejection — the compute ran once.
+      const settled = await Promise.allSettled(callers);
+      for (const outcome of settled) {
+        expect(outcome.status).toBe("rejected");
+        expect((outcome as PromiseRejectedResult).reason).toBe(boom);
+      }
+      expect(calls).toBe(1);
+
+      // No poisoned cache: the failed key was never written…
+      expect(cache.read("k")).toBeUndefined();
+
+      // …and the ledger was released, so the next call retries cleanly.
+      const retried = await cache.remember("k", () => "recovered");
+      expect(retried).toBe("recovered");
+      expect(cache.read("k")).toBe("recovered");
+    });
+
+    it("a delete mid-flight wins: the resolving leader does not resurrect the value", async () => {
+      let release!: (value: string) => void;
+      const gate = new Promise<string>((resolve) => {
+        release = resolve;
+      });
+
+      // Lead a compute, then invalidate the key while it is still parked.
+      const caller = cache.remember("k", () => gate);
+
+      cache.delete("k");
+
+      release("late");
+
+      // The leader still resolves with the value it computed — the work was
+      // real and joined waiters must see something — but the explicit delete
+      // wins: nothing is written back to the store.
+      expect(await caller).toBe("late");
+      expect(cache.read("k")).toBeUndefined();
+
+      // And the ledger is empty, so the next call leads a fresh compute.
+      let calls = 0;
+      const fresh = await cache.remember("k", () => {
+        calls += 1;
+
+        return "fresh";
+      });
+      expect(fresh).toBe("fresh");
+      expect(calls).toBe(1);
+      expect(cache.read("k")).toBe("fresh");
+    });
+
+    it("a clear mid-flight wins: the resolving leader does not resurrect the value", async () => {
+      let release!: (value: string) => void;
+      const gate = new Promise<string>((resolve) => {
+        release = resolve;
+      });
+
+      const caller = cache.remember("k", () => gate);
+
+      cache.clear();
+
+      release("late");
+
+      expect(await caller).toBe("late");
+      expect(cache.read("k")).toBeUndefined();
+    });
+
+    it("a fresh leader after a mid-flight delete is not clobbered by the stale one", async () => {
+      // Two computes we release independently, to drive the exact interleaving:
+      // stale leads → delete → fresh leads → fresh resolves → stale resolves.
+      let releaseStale!: (value: string) => void;
+      const staleGate = new Promise<string>((resolve) => {
+        releaseStale = resolve;
+      });
+
+      let releaseFresh!: (value: string) => void;
+      const freshGate = new Promise<string>((resolve) => {
+        releaseFresh = resolve;
+      });
+
+      const stale = cache.remember("k", () => staleGate);
+
+      // Invalidate, abandoning the stale leader's ledger entry.
+      cache.delete("k");
+
+      // A new caller now leads its own compute for the same key.
+      const fresh = cache.remember("k", () => freshGate);
+
+      // Fresh settles first and writes; then the stale leader settles last.
+      releaseFresh("fresh");
+      expect(await fresh).toBe("fresh");
+      expect(cache.read("k")).toBe("fresh");
+
+      releaseStale("stale");
+      expect(await stale).toBe("stale");
+
+      // The late, stale leader neither overwrote the fresh value nor cleared the
+      // fresh ledger entry: the cache still holds "fresh".
+      expect(cache.read("k")).toBe("fresh");
+    });
+  });
+
   describe("write", () => {
     it("with a ttl: the value lives until the deadline, then expires", () => {
       cache.write("k", "v", { ttlMs: 50 });

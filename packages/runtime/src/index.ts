@@ -22,13 +22,22 @@ export type { RawRequest } from "./request";
 export { applyResponse } from "./response";
 export type { WritableResponse } from "./response";
 
-export { serve, DEFAULT_SECURITY_HEADERS } from "./server";
-export type { Server, ServeOptions, HealthOptions, AccessEntry } from "./server";
+export { serve, DEFAULT_SECURITY_HEADERS, RECOMMENDED_CSP } from "./server";
+export type { Server, ServeOptions, HealthOptions, AccessEntry, EtagConfig } from "./server";
+
+export {
+  cacheControl,
+  etagFor,
+  etagMatches,
+  hasContentHash,
+  respondNotModified,
+} from "./http-cache";
+export type { CacheControlOptions, NotModifiedResponse } from "./http-cache";
 
 export { runWorker } from "./worker";
 export type { RunWorkerOptions } from "./worker";
 
-export { dispatchSites } from "./sites";
+export { dispatchSites, staticCacheControl } from "./sites";
 export type { AppHandler, DispatchSitesDeps, RequestOptions, StaticReader } from "./sites";
 
 export { dispatchSitesDev } from "./sites-dev";

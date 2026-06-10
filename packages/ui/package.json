@@ -11,8 +11,8 @@
       "import": "./src/index.ts"
     },
     "./client": {
-      "types": "./src/hydrate.tsx",
-      "import": "./src/hydrate.tsx"
+      "types": "./src/client.ts",
+      "import": "./src/client.ts"
     }
   },
 

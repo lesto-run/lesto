@@ -19,6 +19,23 @@
  *   - the engine treats its `props` as a wire payload — they MUST be
  *     JSON-serializable, since a function or a class instance cannot survive the
  *     trip to the browser.
+ *
+ * Two flavors of island, distinguished by `ssr`:
+ *   - **Deferred (default, `ssr` absent/false)** — the classic auth-aware-static
+ *     island. The server CANNOT render the real component (it depends on the
+ *     signed-in user the prerender never knew), so it ships only the `fallback`,
+ *     and the client mounts the live component *fresh* (`createRoot`), swapping
+ *     the fallback for per-visitor truth. `hydrateRoot` would throw a mismatch
+ *     here, because the shell never held the component's real output.
+ *   - **SSR-able (`ssr: true`)** — the author asserts the server CAN render the
+ *     real component and that the client render will MATCH it. The server emits
+ *     the component's actual output into the shell, and the client `hydrateRoot`s
+ *     it: real hydration that reuses the server DOM and gains React 19's
+ *     hydration resilience, with no re-render and no mismatch.
+ *
+ * The default is deferred because that is the safe one: declaring `ssr` is an
+ * explicit promise that server and client agree, and a broken promise is a
+ * hydration mismatch — worse than a fresh mount. We never assume it.
  */
 
 import type { ComponentType, ReactNode } from "react";
@@ -32,6 +49,12 @@ import type { PropSpec, UiNode } from "./types";
  * component's props (required/enum/coercion all reuse the same validator).
  * `fallback` renders the server-side placeholder; absent, the island ships an
  * empty shell to be filled in on hydration.
+ *
+ * `ssr` opts the island into real hydration: the server renders the REAL
+ * `component` into the shell (not the fallback), and the client `hydrateRoot`s
+ * it. Only set it when the component renders identically on both sides — see the
+ * module doc. When `ssr` is true the `fallback` is unused (the real output IS the
+ * server markup) and may be omitted.
  */
 export interface ClientComponentDef {
   name: string;
@@ -39,17 +62,24 @@ export interface ClientComponentDef {
   props?: Record<string, PropSpec>;
   component: ComponentType<Record<string, unknown>>;
   fallback?: (props: Record<string, unknown>) => ReactNode;
+  ssr?: boolean;
 }
 
 /**
  * One hydration target: enough for ANY client runtime to find the marked DOM
  * element and mount the right component with the right props. This is the wire
  * contract between `renderPage` (server) and `hydrateIslands` (client).
+ *
+ * `ssr` tells the client whether the shell already holds the component's real
+ * server-rendered output (`hydrateRoot`) or only a fallback to replace
+ * (`createRoot`). It rides the wire so the client never has to guess and never
+ * risks a mismatch by hydrating a fallback-only shell.
  */
 export interface IslandMount {
   id: string;
   component: string;
   props: Record<string, unknown>;
+  ssr: boolean;
 }
 
 /** The attribute that marks an island's wrapper element for hydration. */

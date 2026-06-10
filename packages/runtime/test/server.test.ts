@@ -8,13 +8,17 @@ import {
   applyServerLimits,
   drainServer,
   healthResponse,
+  ifNoneMatch,
   installProcessSafetyNet,
   readBody,
   requestLineOf,
   respondWithError,
+  securityDefaults,
+  withEtag,
   withSecurityHeaders,
   withTimeout,
 } from "../src/server";
+import { etagFor } from "../src/index";
 
 import type { BodyStream, ClosableServer, DrainTimers, ServerLimits } from "../src/server";
 
@@ -40,10 +44,16 @@ interface RawResponse {
 /** Make a real socket request to the running server and read the full response. */
 function makeRequest(
   port: number,
-  options: { method: string; path: string; body?: string; contentType?: string },
+  options: {
+    method: string;
+    path: string;
+    body?: string;
+    contentType?: string;
+    headers?: Record<string, string>;
+  },
 ): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...options.headers };
 
     if (options.contentType !== undefined) {
       headers["content-type"] = options.contentType;
@@ -295,8 +305,64 @@ describe("serve", () => {
 
     expect(response.headers["x-content-type-options"]).toBe("nosniff");
     expect(response.headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+    // The extended hardening: a cross-origin opener boundary and a restrictive
+    // permissions policy ship by default too.
+    expect(response.headers["cross-origin-opener-policy"]).toBe("same-origin");
+    expect(response.headers["permissions-policy"]).toBe(
+      "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+    );
+    // No CSP and no COEP by default — both would break common pages/subresources.
+    expect(response.headers["content-security-policy"]).toBeUndefined();
+    expect(response.headers["cross-origin-embedder-policy"]).toBeUndefined();
     // The app's own header is untouched by the merge.
     expect(response.headers["content-type"]).toBe("text/html");
+  });
+
+  it("emits an enforcing CSP when one is configured", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: { "content-type": "text/html" }, body: "hi" }),
+    };
+
+    server = await serve(app, {
+      port: 0,
+      csp: { policy: "default-src 'self'", mode: "enforce" },
+    });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/" });
+
+    expect(response.headers["content-security-policy"]).toBe("default-src 'self'");
+    expect(response.headers["content-security-policy-report-only"]).toBeUndefined();
+  });
+
+  it("emits a report-only CSP under the report-only header when asked", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: { "content-type": "text/html" }, body: "hi" }),
+    };
+
+    server = await serve(app, {
+      port: 0,
+      csp: { policy: "default-src 'self'", mode: "report-only" },
+    });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/" });
+
+    expect(response.headers["content-security-policy-report-only"]).toBe("default-src 'self'");
+    expect(response.headers["content-security-policy"]).toBeUndefined();
+  });
+
+  it("opts in to COEP only when explicitly enabled", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: { "content-type": "text/html" }, body: "hi" }),
+    };
+
+    server = await serve(app, { port: 0, crossOriginEmbedderPolicy: true });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/" });
+
+    expect(response.headers["cross-origin-embedder-policy"]).toBe("require-corp");
   });
 
   it("omits security headers when they are disabled", async () => {
@@ -426,6 +492,118 @@ describe("serve", () => {
     await makeRequest(server.port, { method: "POST", path: "/posts" });
 
     expect(entries).toEqual([{ method: "POST", path: "/posts", status: 201, ms: 42 }]);
+  });
+
+  it("tags an HTML response with an ETag and 304s a matching conditional GET", async () => {
+    const entries: Array<{ method: string; path: string; status: number; ms: number }> = [];
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+        body: "<h1>Home</h1>",
+      }),
+    };
+
+    server = await serve(app, { port: 0, logRequest: (entry) => entries.push(entry) });
+
+    // First request: a full body plus the ETag the client should cache against.
+    const first = await makeRequest(server.port, { method: "GET", path: "/" });
+
+    expect(first.status).toBe(200);
+    expect(first.body).toBe("<h1>Home</h1>");
+
+    const etag = first.headers["etag"];
+    expect(typeof etag).toBe("string");
+
+    // Second request echoing that ETag: a bodiless 304, still hardened, still logged.
+    const second = await makeRequest(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "if-none-match": etag as string },
+    });
+
+    expect(second.status).toBe(304);
+    expect(second.body).toBe("");
+    // Security headers still apply to a 304.
+    expect(second.headers["x-content-type-options"]).toBe("nosniff");
+    // The access log records the 304 like any other status.
+    expect(entries.map((entry) => entry.status)).toEqual([200, 304]);
+  });
+
+  it("sends a full body when the conditional GET's ETag does not match", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({
+        status: 200,
+        headers: { "content-type": "text/html" },
+        body: "<h1>Home</h1>",
+      }),
+    };
+
+    server = await serve(app, { port: 0 });
+
+    const response = await makeRequest(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "if-none-match": '"stale"' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toBe("<h1>Home</h1>");
+  });
+
+  it("does not tag a non-HTML response, so a conditional GET gets the full body", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: '{"ok":true}',
+      }),
+    };
+
+    server = await serve(app, { port: 0 });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/api" });
+
+    expect(response.status).toBe(200);
+    expect(response.headers["etag"]).toBeUndefined();
+  });
+
+  it("does not tag when ETag is disabled", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({
+        status: 200,
+        headers: { "content-type": "text/html" },
+        body: "<h1>Home</h1>",
+      }),
+    };
+
+    server = await serve(app, { port: 0, etag: false });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/" });
+
+    expect(response.headers["etag"]).toBeUndefined();
+  });
+
+  it("emits weak validators when configured", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({
+        status: 200,
+        headers: { "content-type": "text/html" },
+        body: "<h1>Home</h1>",
+      }),
+    };
+
+    server = await serve(app, { port: 0, etag: { weak: true } });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/" });
+
+    expect(response.headers["etag"]).toMatch(/^W\//);
   });
 
   it("accepts tuned socket limits and serves normally", async () => {
@@ -657,6 +835,128 @@ describe("withSecurityHeaders", () => {
     });
 
     expect(merged.headers).toEqual({ "X-Frame-Options": "DENY", "content-type": "text/html" });
+  });
+});
+
+describe("securityDefaults", () => {
+  it("returns false untouched when headers are disabled wholesale", () => {
+    expect(securityDefaults(false, { csp: { policy: "x", mode: "enforce" } })).toBe(false);
+  });
+
+  it("layers nothing onto the base when neither knob is set", () => {
+    const base = { "X-Frame-Options": "DENY" };
+
+    const result = securityDefaults(base, {});
+
+    expect(result).toEqual({ "X-Frame-Options": "DENY" });
+    // A fresh object, not the same reference — folding must not mutate the base.
+    expect(result).not.toBe(base);
+  });
+
+  it("adds an enforcing CSP under the enforce header", () => {
+    expect(
+      securityDefaults({}, { csp: { policy: "default-src 'self'", mode: "enforce" } }),
+    ).toEqual({ "Content-Security-Policy": "default-src 'self'" });
+  });
+
+  it("adds a report-only CSP under the report-only header", () => {
+    expect(
+      securityDefaults({}, { csp: { policy: "default-src 'self'", mode: "report-only" } }),
+    ).toEqual({ "Content-Security-Policy-Report-Only": "default-src 'self'" });
+  });
+
+  it("adds COEP only when explicitly enabled, never when false", () => {
+    expect(securityDefaults({}, { crossOriginEmbedderPolicy: true })).toEqual({
+      "Cross-Origin-Embedder-Policy": "require-corp",
+    });
+
+    expect(securityDefaults({}, { crossOriginEmbedderPolicy: false })).toEqual({});
+  });
+});
+
+/** A 200 HTML response carrying the given body — the shape withEtag tags. */
+function htmlResponse(body: string): {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+} {
+  return {
+    status: 200,
+    headers: { "content-type": "text/html; charset=utf-8" },
+    body,
+  };
+}
+
+describe("withEtag", () => {
+  it("passes the response through untouched when ETag is disabled", () => {
+    const response = htmlResponse("<h1>x</h1>");
+
+    const result = withEtag(response, false);
+
+    expect(result.response).toBe(response);
+    expect(result.etag).toBeUndefined();
+  });
+
+  it("attaches a strong ETag to a 200 HTML response", () => {
+    const result = withEtag(htmlResponse("<h1>Home</h1>"), {});
+
+    expect(result.etag).toBe(etagFor("<h1>Home</h1>"));
+    expect(result.response.headers["ETag"]).toBe(result.etag);
+  });
+
+  it("attaches a weak ETag when configured", () => {
+    const result = withEtag(htmlResponse("<h1>Home</h1>"), { weak: true });
+
+    expect(result.etag).toBe(etagFor("<h1>Home</h1>", { weak: true }));
+  });
+
+  it("never overwrites an ETag the app already set, in any header casing", () => {
+    const response = {
+      status: 200,
+      headers: { "content-type": "text/html", etag: '"app-owned"' },
+      body: "<h1>x</h1>",
+    };
+
+    const result = withEtag(response, {});
+
+    expect(result.etag).toBeUndefined();
+    expect(result.response).toBe(response);
+  });
+
+  it("does not tag a non-200 response", () => {
+    const redirect = { status: 302, headers: { "content-type": "text/html" }, body: "" };
+
+    expect(withEtag(redirect, {}).etag).toBeUndefined();
+  });
+
+  it("does not tag a non-HTML response", () => {
+    const json = {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    };
+
+    expect(withEtag(json, {}).etag).toBeUndefined();
+  });
+
+  it("does not tag a 200 with no content-type at all", () => {
+    const bare = { status: 200, headers: {}, body: "x" };
+
+    expect(withEtag(bare, {}).etag).toBeUndefined();
+  });
+});
+
+describe("ifNoneMatch", () => {
+  it("returns undefined when the header is absent", () => {
+    expect(ifNoneMatch({})).toBeUndefined();
+  });
+
+  it("passes a single string value through", () => {
+    expect(ifNoneMatch({ "if-none-match": '"abc"' })).toBe('"abc"');
+  });
+
+  it("joins a repeated header into the comma-separated form", () => {
+    expect(ifNoneMatch({ "if-none-match": ['"a"', '"b"'] })).toBe('"a", "b"');
   });
 });
 
