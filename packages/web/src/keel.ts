@@ -27,7 +27,7 @@
 import { RouteTable } from "@keel/router";
 
 import { Context } from "./handler-context";
-import type { Next } from "./middleware";
+import type { Middleware, Next } from "./middleware";
 import { renderPageResponse } from "./render-page";
 import type { Layout, PageDef } from "./render-page";
 import type { AnyKeelResponse, HandleOptions, KeelRequest, KeelResponse } from "./types";
@@ -44,6 +44,20 @@ export type Handler<Path extends string = string> = (
   c: Context<Path>,
   next: Next,
 ) => MaybePromise<AnyKeelResponse | void>;
+
+/**
+ * Adapt a request-shaped {@link Middleware} into a {@link Handler}.
+ *
+ * The security batteries (`@keel/cors`, `@keel/ratelimit`, `@keel/csrf`, and the
+ * `secureStack` that bundles them) are written against the request-and-next
+ * contract — they read the request's headers/method and either answer or delegate.
+ * That is exactly a handler minus the context wrapper, so the bridge is to hand
+ * the middleware the context's request: `app.use(fromRequestMiddleware(cors()))`.
+ * One adapter keeps those packages unchanged while they run in the new chain.
+ */
+export function fromRequestMiddleware(middleware: Middleware): Handler {
+  return (c, next) => middleware(c.req, next);
+}
 
 /** A page's own payload: its definition plus the layouts wrapping it, outermost first. */
 interface PagePayload {
@@ -75,6 +89,9 @@ const NOT_FOUND: KeelResponse = {
   headers: { "content-type": "text/plain" },
   body: "Not Found",
 };
+
+/** The terminal for an unmatched request — a plain 404, run after any app-level middleware. */
+const notFoundHandler: Handler = () => NOT_FOUND;
 
 /**
  * Run a handler chain over a context, returning the response it produces.
@@ -221,12 +238,14 @@ export class Keel {
    * Resolve and run a request, returning its response.
    *
    * Matches method + path once, builds the {@link Context} with the captured
-   * params, and runs the route's handler chain. No match is a plain 404 — a
-   * response, not an error. The declared return is the string-bodied
-   * {@link KeelResponse} dispatch contract; a handler may produce a wider body
-   * (bytes, a stream — a page streams its HTML), which the transport, not this
-   * contract, writes — so it is narrowed back here, the same deliberate move the
-   * legacy `Application` made.
+   * params, and runs the route's handler chain. No match still runs the app's
+   * top-level `.use` middleware (wrapping a 404 terminal), so global concerns —
+   * a CORS preflight to an unrouted `OPTIONS`, a rate-limit on an unknown path —
+   * are answered exactly as the legacy `Application` pipeline answered them. The
+   * declared return is the string-bodied {@link KeelResponse} dispatch contract;
+   * a handler may produce a wider body (bytes, a stream — a page streams its
+   * HTML), which the transport, not this contract, writes — so it is narrowed
+   * back here.
    */
   async handle(method: string, path: string, options?: HandleOptions): Promise<KeelResponse> {
     const match = this.matcher().match(method, path);
@@ -240,9 +259,11 @@ export class Keel {
       body: options?.body,
     };
 
-    if (match === undefined) return NOT_FOUND;
+    // A match runs its baked chain (middleware + handler/page); a miss still runs
+    // the app's global middleware around a 404, so CORS/rate-limit see every request.
+    const chain = match === undefined ? [...this.useChain, notFoundHandler] : match.value;
 
-    const response = await runChain(match.value, new Context(request));
+    const response = await runChain(chain, new Context(request));
 
     return response as KeelResponse;
   }

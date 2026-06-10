@@ -22,7 +22,7 @@ export { Controller } from "./controller";
 export type { ControllerClass } from "./controller";
 
 // The code-first router + handler context — Keel's request-handling surface.
-export { keel, Keel } from "./keel";
+export { fromRequestMiddleware, keel, Keel } from "./keel";
 export type { Handler } from "./keel";
 export { Context } from "./handler-context";
 

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { keel } from "../src/keel";
+import { fromRequestMiddleware, keel } from "../src/keel";
 import type { Handler } from "../src/keel";
+import type { Middleware } from "../src/middleware";
 
 // Hoisted: these capture nothing from their test, so they live at module scope.
 const guard: Handler = (c, next) => (c.query("ok") === "1" ? next() : c.text("denied", 403));
@@ -161,6 +162,29 @@ describe("keel middleware (.use) + per-route chain", () => {
     });
 
     expect((await app.handle("GET", "/quiet")).status).toBe(404);
+  });
+});
+
+// A CORS-style request middleware: answers a preflight, else delegates and adds a header.
+const corsLike: Middleware = async (request, next) => {
+  if (request.method === "OPTIONS") return { status: 204, headers: {}, body: "" };
+
+  const response = await next();
+
+  return { ...response, headers: { ...response.headers, "x-cors": "1" } };
+};
+
+describe("fromRequestMiddleware", () => {
+  it("runs a request-shaped middleware in the handler chain", async () => {
+    const app = keel()
+      .use(fromRequestMiddleware(corsLike))
+      .get("/r", (c) => c.text("ok"));
+
+    expect((await app.handle("OPTIONS", "/r")).status).toBe(204);
+
+    const response = await app.handle("GET", "/r");
+    expect(response.body).toBe("ok");
+    expect(response.headers["x-cors"]).toBe("1");
   });
 });
 
