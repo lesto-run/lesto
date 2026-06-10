@@ -125,11 +125,18 @@ export class Migrator {
       );
     }
 
-    // A migration without `down` is irreversible in effect, but we still drop the
-    // record so the version is no longer considered applied.
-    await target.migration.down?.(new Schema(this.db));
+    // Symmetric with migrate(): the `down` DDL and the bookkeeping DELETE are one
+    // atomic span on one connection, via the seam's transaction() — a raw
+    // multi-statement sequence would land on different pooled connections under a
+    // pooled (Postgres) driver and silently no-op. A throw inside `down` rolls the
+    // whole reversal back, so the version stays recorded as applied rather than
+    // half-reverted. A migration without `down` is irreversible in effect, but we
+    // still drop the record so the version is no longer considered applied.
+    await this.db.transaction(async (tx) => {
+      await target.migration.down?.(new Schema(tx));
 
-    await this.db.prepare(`DELETE FROM ${TABLE} WHERE version = ?`).run([target.version]);
+      await tx.prepare(`DELETE FROM ${TABLE} WHERE version = ?`).run([target.version]);
+    });
 
     return target.version;
   }
