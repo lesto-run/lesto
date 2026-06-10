@@ -540,6 +540,13 @@
         "@keel/errors": "workspace:*",
       },
     },
+    "packages/pg": {
+      "name": "@keel/pg",
+      "version": "0.0.0",
+      "dependencies": {
+        "@keel/db": "workspace:*",
+      },
+    },
     "packages/pubsub": {
       "name": "@keel/pubsub",
       "version": "0.0.0",
@@ -902,6 +909,8 @@
     "@keel/openapi": ["@keel/openapi@workspace:packages/openapi"],
 
     "@keel/orm": ["@keel/orm@workspace:packages/orm"],
+
+    "@keel/pg": ["@keel/pg@workspace:packages/pg"],
 
     "@keel/pubsub": ["@keel/pubsub@workspace:packages/pubsub"],
 
