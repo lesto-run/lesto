@@ -9,6 +9,7 @@ the dated JSON beside this file.
 | 2026-06-09 | 4.5/10 | +2.5 (from 2.0) | async/Postgres unbuilt + security batteries wired into nothing | Set Node server timeouts (`server.ts`, S) |
 | 2026-06-09 (run 2) | 5.5/10 | +1.0 (from 4.5) | async/Postgres unbuilt (sync `SqlDatabase`) — structural | Gate coverage in CI (S) |
 | 2026-06-10 | 5.5/10 | +0.0 (flat from 5.5) | async/Postgres unbuilt (sync `SqlDatabase`) — structural | Wire a real readiness probe so `/readyz` stops lying (S) |
+| 2026-06-10 (run 2, post async-merge) | 6.5/10 | +1.0 (from 5.5) | deploy is a non-atomic file copy + observability orphaned (no traces/metrics, `/readyz` lies) — structural | Reformat `@keel/db` (committed `oxfmt` regression) (S) |
 
 ## 2026-06-09 — 4.5/10 (baseline 2.0)
 
