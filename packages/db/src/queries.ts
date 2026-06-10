@@ -337,7 +337,9 @@ function makeUpdate(sql: SqlDatabase): UpdateBuilder {
                 const stmt = `UPDATE ${quoteIdentifier(
                   table.tableName,
                 )} SET ${assignments} WHERE ${condition.sql}`;
-                const { changes } = await sql.prepare(stmt).run([...setParams, ...condition.params]);
+                const { changes } = await sql
+                  .prepare(stmt)
+                  .run([...setParams, ...condition.params]);
 
                 return { changes };
               },

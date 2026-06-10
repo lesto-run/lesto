@@ -261,7 +261,9 @@ describe("select", () => {
 
   it("hands back unknown columns unchanged (defensive — schema evolution friendly)", async () => {
     await db.exec('ALTER TABLE "users" ADD COLUMN extra TEXT DEFAULT NULL');
-    await db.exec(`INSERT INTO "users" (email, password_hash, extra) VALUES ('x@y', 'h', 'leaked')`);
+    await db.exec(
+      `INSERT INTO "users" (email, password_hash, extra) VALUES ('x@y', 'h', 'leaked')`,
+    );
 
     const row = (await db.select().from(users).where(eq(users.email, "x@y")).get()) as Record<
       string,
