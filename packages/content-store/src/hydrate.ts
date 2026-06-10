@@ -10,6 +10,6 @@ import { loadEntries } from "./load";
  * from the database-backed data — the same runtime API, now on the SQL
  * substrate instead of generated files. Call it once at boot.
  */
-export function hydrateRuntime(db: SqlDatabase): void {
-  setData(loadEntries(db));
+export async function hydrateRuntime(db: SqlDatabase): Promise<void> {
+  setData(await loadEntries(db));
 }

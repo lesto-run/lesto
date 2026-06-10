@@ -17,14 +17,17 @@ interface ContentRow {
  * {@link https://npmjs.com/package/@keel/content-core | content-core}'s
  * `setData` expects. Pass a collection to read just that one.
  */
-export function loadEntries(db: SqlDatabase, collection?: string): Record<string, RuntimeEntry[]> {
+export async function loadEntries(
+  db: SqlDatabase,
+  collection?: string,
+): Promise<Record<string, RuntimeEntry[]>> {
   const sql =
     collection === undefined
       ? `SELECT collection, document FROM ${CONTENT_ENTRIES_TABLE} ORDER BY collection, slug`
       : `SELECT collection, document FROM ${CONTENT_ENTRIES_TABLE} WHERE collection = ? ORDER BY slug`;
 
   const params = collection === undefined ? [] : [collection];
-  const rows = db.prepare(sql).all(params) as ContentRow[];
+  const rows = (await db.prepare(sql).all(params)) as ContentRow[];
 
   const collections: Record<string, RuntimeEntry[]> = {};
 
@@ -43,13 +46,13 @@ export function loadEntries(db: SqlDatabase, collection?: string): Record<string
  * The companion to {@link loadEntries} for the write path: create checks this is
  * empty before inserting, update checks it is present before merging.
  */
-export function loadEntry(
+export async function loadEntry(
   db: SqlDatabase,
   collection: string,
   id: string,
-): RuntimeEntry | undefined {
+): Promise<RuntimeEntry | undefined> {
   const sql = `SELECT collection, document FROM ${CONTENT_ENTRIES_TABLE} WHERE collection = ? AND entry_id = ?`;
-  const rows = db.prepare(sql).all([collection, id]) as ContentRow[];
+  const rows = (await db.prepare(sql).all([collection, id])) as ContentRow[];
 
   const row = rows[0];
 
