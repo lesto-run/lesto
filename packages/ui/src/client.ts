@@ -10,7 +10,7 @@
  * helper — the two pieces of client code the framework ships.
  */
 
-export { hydrateIslands } from "./hydrate";
+export { hydrateDocumentIslands, hydrateIslands } from "./hydrate";
 export type {
   Disconnect,
   HydrateOptions,

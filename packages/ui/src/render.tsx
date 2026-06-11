@@ -22,17 +22,15 @@
  */
 
 import { createElement, Fragment } from "react";
-import type { ReactElement, ReactNode } from "react";
+import type { ComponentType, ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 
-import { dataSourceHref } from "./data";
-import type { IslandBind } from "./data";
 import { ISLAND_ATTR } from "./island";
 import type { ClientComponentDef, IslandMount } from "./island";
+import { islandMount } from "./mount";
 import { isNodeObject } from "./node";
 import { validateProps } from "./props";
 import type { Registry } from "./registry";
-import { assertSerializable } from "./serialize";
 
 /** One thing the renderer couldn't render, located by `path`. */
 export interface RenderError {
@@ -240,44 +238,13 @@ function buildIsland(
   rawProps: Record<string, unknown>,
   path: string,
 ): ReactElement | null {
-  // A declared schema filters and coerces, exactly like a server component; an
-  // island without one is trusted to pass its props straight to the wire (the
-  // serialize guard below is the only gate). Either way, the props we ship are
-  // the props the client will receive — nothing is dropped silently behind the
-  // schema's back.
-  const props = client.props === undefined ? rawProps : validateProps(client.props, rawProps).props;
-
-  const ssr = client.ssr === true;
-
   try {
-    const serializable = assertSerializable(client.name, props);
-
-    // The hydration *strategy* rides the wire only when it deviates from the
-    // default. Emitting `strategy: "load"` would change every eager island's
-    // manifest entry (and its serialized `<script>` bytes) for no behavioral
-    // gain; omitting it keeps the default path byte-for-byte identical and lets
-    // the client read an absent `strategy` as "load". Only the `"visible"` opt-in
-    // adds the field.
-    const mount: IslandMount = { id: path, component: client.name, props: serializable, ssr };
-
-    if (client.hydrate === "visible") {
-      mount.strategy = "visible";
-    }
-
-    // A `data` declaration rides the wire as an unresolved `bind` (propName →
-    // source + fetch href). A dynamic render resolves these into `props` and
-    // strips `bind` (resolveIslandData); a static render leaves them for the
-    // client's parse-time primer. Emitted only when declared, so a data-free
-    // island's entry is byte-for-byte unchanged.
-    if (client.data !== undefined) {
-      const bind: Record<string, IslandBind> = {};
-
-      for (const [prop, source] of Object.entries(client.data)) {
-        bind[prop] = { source: source.name, href: dataSourceHref(source.name) };
-      }
-
-      mount.bind = bind;
-    }
+    // The mount shape (validated + serializable props, ssr, the optional
+    // strategy/bind) is authored once in `islandMount`, shared with the `.page`
+    // path's `defineIsland` so the two emit byte-identical wire entries. Building
+    // it is the serialize guard `buildIsland` contains — a non-serializable prop
+    // throws here and the island is reported, never crashing the page render.
+    const { mount, props } = islandMount(client, rawProps, path);
 
     // Only a page build cares about the manifest; `renderTree` leaves it absent.
     walk.islands?.push(mount);
@@ -290,11 +257,9 @@ function buildIsland(
     // can only be run by React's renderer (during the caller's
     // `renderToStaticMarkup`), never invoked as a plain function here. This keeps
     // the renderer's invariant honest — *building* the element tree never throws;
-    // the island's own render, like any React component's, runs (and may throw)
-    // when React renders the tree, which is exactly where a server component's
-    // render runs too. The serialize guard above is what `buildIsland` contains.
-    const contents: ReactNode = ssr
-      ? createElement(client.component, serializable)
+    // the island's own render runs when React renders the tree.
+    const contents: ReactNode = mount.ssr
+      ? createElement(client.component as ComponentType<Record<string, unknown>>, mount.props)
       : (client.fallback?.(props) as ReactNode);
 
     return createElement("div", { key: path, [ISLAND_ATTR]: path }, contents);

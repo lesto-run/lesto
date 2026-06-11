@@ -184,6 +184,14 @@ export interface IslandMount {
 export const ISLAND_ATTR = "data-keel-island";
 
 /**
+ * The attribute marking an island's co-located mount script (ADR 0011): a
+ * `<script type="application/json" data-keel-island-mount>` carrying one
+ * {@link IslandMount}, emitted next to its shell by `defineIsland` and scanned
+ * by `hydrateDocumentIslands`.
+ */
+export const ISLAND_MOUNT_ATTR = "data-keel-island-mount";
+
+/**
  * Author an island node by hand-free sugar: `island("Account", { plan: "pro" })`.
  * It is exactly the `UiNode` you would have written — nothing magic, so it
  * composes as a child anywhere a node is allowed.

@@ -115,12 +115,26 @@ export function assertSerializable(
  * pulls in no extra dependency for it.
  */
 export function serializeManifest(manifest: readonly IslandMount[]): string {
+  return serializeScriptJson(manifest);
+}
+
+/**
+ * Serialize any value to JSON safe to embed inside a `<script>` element.
+ *
+ * The same script-context escape {@link serializeManifest} applies, generalized
+ * to one value — used by the per-island co-located mount script (ADR 0011),
+ * where each island emits its OWN `IslandMount` object rather than the page-wide
+ * array. The same rules and the same one-audited-seam discipline apply: emit only
+ * as `<script type="application/json">`, revive with `JSON.parse`, never a bare
+ * `JSON.stringify` into a `<script>`.
+ */
+export function serializeScriptJson(value: unknown): string {
   // The JS line/paragraph separators, built from code points so no raw
   // U+2028/U+2029 byte sits in this source (where tooling may mangle it).
   const lineSeparator = String.fromCharCode(0x2028);
   const paragraphSeparator = String.fromCharCode(0x2029);
 
-  return JSON.stringify(manifest)
+  return JSON.stringify(value)
     .replaceAll("<", "\\u003c")
     .replaceAll(">", "\\u003e")
     .replaceAll("&", "\\u0026")

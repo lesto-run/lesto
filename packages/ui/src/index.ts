@@ -38,8 +38,17 @@ export type {
   StreamOptions,
 } from "./stream";
 
-export { island, ISLAND_ATTR } from "./island";
+export { island, ISLAND_ATTR, ISLAND_MOUNT_ATTR } from "./island";
 export type { ClientComponentDef, HydrationStrategy, IslandMount } from "./island";
+
+// Self-describing islands for the `.page` path (ADR 0011): a component that
+// emits its own shell + co-located mount script + data primer, so islands need
+// no page-wide manifest walk. The client half (`hydrateDocumentIslands`) is in
+// the `@keel/ui/client` subpath.
+export { defineIsland } from "./define-island";
+export type { IslandComponent } from "./define-island";
+
+export { islandMount } from "./mount";
 
 // Island data sources (ADR 0010): declared data, framework-owned delivery.
 // `defineDataSource` is the isomorphic token; `dataSourceHref`/`DATA_ROUTE_PREFIX`
@@ -57,7 +66,7 @@ export type { DataSource, IslandBind } from "./data";
 // The audited seam for inlining the island manifest into a `<script>`: escapes
 // the breakout characters `JSON.stringify` leaves raw. Manifest emission MUST go
 // through this — never a bare stringify or a `String.replace` splice.
-export { serializeManifest } from "./serialize";
+export { serializeManifest, serializeScriptJson } from "./serialize";
 
 // Resource hints + LCP/modulepreload conventions over React 19's native APIs.
 // Server-safe: the `react-dom` resource functions are isomorphic and only emit

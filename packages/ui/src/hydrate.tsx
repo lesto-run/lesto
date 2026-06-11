@@ -66,7 +66,7 @@ import type { ReactElement } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 
 import { UiError } from "./errors";
-import { ISLAND_ATTR } from "./island";
+import { ISLAND_ATTR, ISLAND_MOUNT_ATTR } from "./island";
 import type { ClientComponentDef, IslandMount } from "./island";
 import type { Registry } from "./registry";
 
@@ -110,6 +110,9 @@ async function resolveBinds(entry: IslandMount): Promise<Record<string, unknown>
 /** Where islands are looked up: anything that can query by selector. */
 export interface IslandRoot {
   querySelector(selectors: string): Element | null;
+
+  /** Find every co-located mount script (used by {@link hydrateDocumentIslands}). */
+  querySelectorAll(selectors: string): ArrayLike<Element>;
 }
 
 /**
@@ -420,6 +423,49 @@ export function hydrateIslands(
   }
 
   return { mounted, missing, failed, deferred };
+}
+
+/**
+ * Hydrate every island a `.page` self-described (ADR 0011): the document's
+ * default entry point.
+ *
+ * Where {@link hydrateIslands} takes a manifest array (the Registry path's single
+ * `#keel-islands` script), this scans the document for the co-located mount
+ * scripts `defineIsland` emits — one `<script type="application/json"
+ * data-keel-island-mount>` per island — parses each into an {@link IslandMount},
+ * and feeds the very same machinery (binds, strategies, mount resilience). The
+ * scan + parse is the only new step; everything downstream is unchanged, so a
+ * page-described island and a manifest-described island hydrate identically.
+ *
+ * A mount script that does not parse is skipped — its island keeps the
+ * server-painted fallback, graceful degradation rather than a thrown page — so a
+ * single corrupt script cannot dark out the rest, the same
+ * one-broken-region-cannot-take-the-page-down contract as the mount loop.
+ */
+export function hydrateDocumentIslands(
+  registry: Registry,
+  options: HydrateOptions = {},
+): HydrationResult {
+  const root: IslandRoot = options.root ?? document;
+
+  const manifest: IslandMount[] = [];
+
+  for (const script of Array.from(root.querySelectorAll(`script[${ISLAND_MOUNT_ATTR}]`))) {
+    const text = script.textContent;
+
+    // An empty mount script has nothing to parse; skip it (the island keeps its
+    // fallback) rather than feed `JSON.parse` an empty string.
+    if (!text) continue;
+
+    try {
+      manifest.push(JSON.parse(text) as IslandMount);
+    } catch {
+      // A corrupt mount script is skipped; its island keeps its fallback.
+      continue;
+    }
+  }
+
+  return hydrateIslands(registry, manifest, options);
 }
 
 /**
