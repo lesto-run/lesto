@@ -298,35 +298,61 @@ describe("hydrateIslands — pairing and drift", () => {
     expect(seen[0]).toBe(shell);
   });
 
-  it("throws UI_ISLAND_UNKNOWN_COMPONENT when the manifest and registry drift", () => {
-    const manifest = [{ id: "$", component: "Ghost", props: {}, ssr: false }];
+  it("routes UI_ISLAND_UNKNOWN_COMPONENT to the sink (deploy skew, not a thrown page)", () => {
+    // A renamed-and-redeployed island in a CDN-cached document names a component
+    // this bundle no longer registers. It must NOT throw — that would dark out the
+    // rest of the page. The coded error is routed to onMountError and the id lands
+    // in `failed`; the known island after it still mounts.
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="ghost"></div><div ${ISLAND_ATTR}="ok"></div>`;
 
-    try {
-      hydrateIslands(registry(), manifest, { root: document, mount: () => undefined });
-      expect.unreachable("should have thrown");
-    } catch (error) {
-      expect(error).toBeInstanceOf(UiError);
-      expect((error as UiError).code).toBe("UI_ISLAND_UNKNOWN_COMPONENT");
-      expect((error as UiError).details).toEqual({ id: "$", component: "Ghost" });
-      expect(Object.isFrozen((error as UiError).details)).toBe(true);
-    }
+    const mounted: string[] = [];
+
+    const errors: Array<{ error: UiError; id: string; component: string }> = [];
+
+    const result = hydrateIslands(
+      registry(),
+      [
+        { id: "ghost", component: "Ghost", props: {}, ssr: false },
+        { id: "ok", component: "Account", props: { plan: "live" }, ssr: false },
+      ],
+      {
+        mount: (container) => void mounted.push(container.getAttribute(ISLAND_ATTR) as string),
+        onMountError: (error, info) =>
+          errors.push({ error: error as UiError, id: info.id, component: info.component }),
+      },
+    );
+
+    // The unknown island failed (routed), the known one mounted — the loop survived.
+    expect(result).toEqual({ mounted: ["ok"], missing: [], failed: ["ghost"], deferred: [] });
+    expect(mounted).toEqual(["ok"]);
+    expect(errors).toHaveLength(1);
+
+    const first = errors[0] as { error: UiError; id: string; component: string };
+
+    expect(first.error).toBeInstanceOf(UiError);
+    expect(first.error.code).toBe("UI_ISLAND_UNKNOWN_COMPONENT");
+    expect(first.error.details).toEqual({ id: "ghost", component: "Ghost" });
+    expect(Object.isFrozen(first.error.details)).toBe(true);
+    // The sink's `info` argument names the dead island too.
+    expect({ id: first.id, component: first.component }).toEqual({
+      id: "ghost",
+      component: "Ghost",
+    });
   });
 
-  it("does NOT catch the drift throw — a wrong component aborts before any mount runs", () => {
-    // The drift throw is a build-time bug for the whole page, not a per-island
-    // runtime fault: it must stay fatal and pre-empt the mount, never be routed to
-    // onMountError or recorded in `failed`.
-    let mountErrors = 0;
+  it("falls back to console.error for an unknown component with no injected sink", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    expect(() =>
-      hydrateIslands(registry(), [{ id: "$", component: "Ghost", props: {}, ssr: false }], {
-        root: document,
-        mount: () => undefined,
-        onMountError: () => (mountErrors += 1),
-      }),
-    ).toThrow(UiError);
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
 
-    expect(mountErrors).toBe(0);
+    const result = hydrateIslands(registry(), [
+      { id: "$", component: "Ghost", props: {}, ssr: false },
+    ]);
+
+    expect(result.failed).toEqual(["$"]);
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0]?.[0]).toContain('island "$" (Ghost) failed to mount');
+    expect(spy.mock.calls[0]?.[1]).toBeInstanceOf(UiError);
   });
 });
 

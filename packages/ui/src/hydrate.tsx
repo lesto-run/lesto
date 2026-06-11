@@ -271,14 +271,16 @@ const intersectionObserve: ObserveFn = (container, onVisible) => {
  *
  * A mount whose shell is absent from the DOM is skipped and reported in
  * `missing` (a page may legitimately render only some islands). A mount whose
- * `component` is not a registered client component is a programming error —
- * the manifest and registry have drifted — and throws
- * `UI_ISLAND_UNKNOWN_COMPONENT`. That throw is deliberately NOT caught: a
- * manifest/registry mismatch is a build-time bug affecting the whole page, not a
- * per-visitor runtime fault, so failing loud at the first drifted id is correct.
+ * `component` is not a registered client component (`UI_ISLAND_UNKNOWN_COMPONENT`)
+ * is ROUTED, not thrown: both manifest forms reach the client inside a possibly
+ * CDN-cached document, so a rename-and-redeploy leaves stale pages naming a
+ * component this bundle no longer holds — a production deploy-skew fault, not a
+ * build-time bug. Throwing it would dark out every island after the drifted id;
+ * instead we hand the coded error to `onMountError`, record the id in `failed`,
+ * and keep going. Callers still branch on the code at the sink.
  *
  * A mount that *throws at runtime* (a component that blows up during its initial
- * render) is a different animal: it dents one region, not the build. We catch it,
+ * render) is the same animal: it dents one region, not the page. We catch it,
  * route it to `onMountError`, record the id in `failed`, and keep going — so a
  * single broken island can never dark out every island that follows it in the
  * manifest. This mirrors React's own per-root hydration resilience at the
@@ -387,11 +389,23 @@ export function hydrateIslands(
     const def = registry.getClient(entry.component);
 
     if (def === undefined) {
-      throw new UiError(
-        "UI_ISLAND_UNKNOWN_COMPONENT",
-        `island manifest names an unregistered client component "${entry.component}"`,
+      // Deploy skew, not a build bug: both manifest forms reach the client inside
+      // a possibly CDN-cached document, so a renamed-and-redeployed island leaves
+      // stale pages naming a component this bundle no longer registers. Throwing
+      // would dark out every island after it in the manifest. Route it to the
+      // sink, record the id, and keep going — the page-resilience contract.
+      onMountError(
+        new UiError(
+          "UI_ISLAND_UNKNOWN_COMPONENT",
+          `island manifest names an unregistered client component "${entry.component}"`,
+          { id: entry.id, component: entry.component },
+        ),
         { id: entry.id, component: entry.component },
       );
+
+      failed.push(entry.id);
+
+      continue;
     }
 
     const container = root.querySelector(`[${ISLAND_ATTR}="${quoteAttrValue(entry.id)}"]`);

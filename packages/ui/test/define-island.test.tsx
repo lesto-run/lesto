@@ -203,6 +203,38 @@ describe("hydrateDocumentIslands — client scan + mount", () => {
     expect(document.body.querySelector(".plain-live")).toBeNull();
   });
 
+  it("survives a stale mount script naming a renamed component — others hydrate (deploy skew)", () => {
+    const Plain = defineIsland({
+      name: "Plain",
+      component: () => createElement("span", { className: "plain-live" }, "live"),
+    });
+
+    // Two islands: a known one and a stale mount script the bundle no longer
+    // registers (a renamed-then-redeployed island in a CDN-cached document).
+    document.body.innerHTML =
+      `<div ${ISLAND_ATTR}="known"></div>` +
+      `<script type="application/json" ${ISLAND_MOUNT_ATTR}="">` +
+      `{"id":"known","component":"Plain","props":{},"ssr":false}</script>` +
+      `<div ${ISLAND_ATTR}="stale"></div>` +
+      `<script type="application/json" ${ISLAND_MOUNT_ATTR}="">` +
+      `{"id":"stale","component":"Renamed","props":{},"ssr":false}</script>`;
+
+    const errors: unknown[] = [];
+
+    let result!: ReturnType<typeof hydrateDocumentIslands>;
+    act(() => {
+      result = hydrateDocumentIslands(new Registry().defineClient(Plain.island), {
+        onMountError: (error) => errors.push(error),
+      });
+    });
+
+    // The renamed island failed (routed), the known one still mounted.
+    expect(result.mounted).toEqual(["known"]);
+    expect(result.failed).toEqual(["stale"]);
+    expect((errors[0] as UiError).code).toBe("UI_ISLAND_UNKNOWN_COMPONENT");
+    expect(document.body.querySelector(".plain-live")).not.toBeNull();
+  });
+
   it("skips an empty mount script (nothing to parse)", () => {
     document.body.innerHTML = `<div ${ISLAND_ATTR}="x"></div><script ${ISLAND_MOUNT_ATTR}=""></script>`;
 
