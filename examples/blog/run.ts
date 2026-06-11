@@ -42,11 +42,12 @@ async function main(): Promise<void> {
   console.log("posts seeded:", await countPosts(db));
   console.log();
 
-  // Dispatch the HTML page.
+  // Dispatch the HTML page. A `.page` streams its document, so the body is a
+  // ReadableStream — drain it to a string to print what the browser receives.
   const page = await app.handle("GET", "/posts");
 
   console.log(`GET /posts -> ${page.status} ${page.headers["content-type"]}`);
-  console.log(page.body);
+  console.log(await new Response(page.body).text());
   console.log();
 
   // Dispatch the JSON API.

@@ -2,7 +2,7 @@
   "name": "@keel/example-blog",
   "version": "0.0.0",
   "private": true,
-  "description": "A runnable end-to-end Keel app: typed schema + migration + UI registry + controller + router, booted by the kernel.",
+  "description": "A runnable end-to-end Keel app: typed schema + migration + a code-first keel() app with a streamed .page and a JSON route, booted by the kernel.",
   "type": "module",
   "scripts": {
     "start": "bun run run.ts",
@@ -12,9 +12,7 @@
     "@keel/db": "workspace:*",
     "@keel/kernel": "workspace:*",
     "@keel/migrate": "workspace:*",
-    "@keel/router": "workspace:*",
     "@keel/runtime": "workspace:*",
-    "@keel/ui": "workspace:*",
     "@keel/web": "workspace:*",
     "better-sqlite3": "^11.10.0",
     "react": "^19",
