@@ -54,6 +54,27 @@ export interface HealthOptions {
   readonly isReady?: () => boolean | Promise<boolean>;
 }
 
+/**
+ * One span over one served request — the narrow tracing surface the server
+ * mints through.
+ *
+ * Structurally satisfied by `@keel/observability`'s `Span`/`Tracer`, so the
+ * runtime records real traces without depending on the tracing package: what
+ * varies is injected, as everywhere else in this file.
+ */
+export interface RequestSpan {
+  setAttribute(key: string, value: unknown): unknown;
+
+  setStatus(status: "ok" | "error"): unknown;
+
+  end(): void;
+}
+
+/** Mints {@link RequestSpan}s — `@keel/observability`'s `Tracer`, structurally. */
+export interface RequestTracer {
+  startSpan(name: string): RequestSpan;
+}
+
 /** One served request, as the access log records it. */
 export interface AccessEntry {
   readonly method: string;
@@ -190,6 +211,16 @@ export interface ServeOptions {
    * test can assert without writing to the console; defaults to `console.log`.
    */
   readonly logRequest?: (entry: AccessEntry) => void;
+
+  /**
+   * Mints one span per served request — the trace counterpart of the access
+   * log. Off by default (no tracer, no spans, zero overhead); pass
+   * `@keel/observability`'s `Tracer` (it satisfies this structurally, so the
+   * runtime takes no dependency) and every request records a `http.request`
+   * span carrying method, path, status, and the request id, with `error`
+   * status on a 5xx.
+   */
+  readonly tracer?: RequestTracer;
 
   /** The clock used for request latency. Injected for tests; defaults to `Date.now`. */
   readonly now?: () => number;
@@ -587,6 +618,7 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
     logRequest: options.logRequest ?? defaultLogRequest,
     logError,
     now: options.now ?? Date.now,
+    ...(options.tracer === undefined ? {} : { tracer: options.tracer }),
   };
 
   installProcessSafetyNet(logError);
@@ -644,6 +676,9 @@ interface HandleDeps {
   readonly logError: (message: string, error: unknown) => void;
 
   readonly now: () => number;
+
+  /** Mints one span per request, or absent for the zero-overhead default. */
+  readonly tracer?: RequestTracer;
 }
 
 /**
@@ -777,6 +812,10 @@ async function handle(
   return runWithContext(context, async () => {
     const start = deps.now();
 
+    // The request's span opens with the work and closes beside the access line,
+    // so trace timing and the logged latency describe the same window.
+    const span = deps.tracer?.startSpan("http.request");
+
     let method = "GET";
     let path = "/";
     let status = 500;
@@ -843,6 +882,17 @@ async function handle(
       // The request id rides on the access line too, so a log and any
       // context-tagged work the handler emitted share one correlation id.
       deps.logRequest({ method, path, status, ms: deps.now() - start, requestId });
+
+      if (span !== undefined) {
+        span.setAttribute("http.method", method);
+        span.setAttribute("http.path", path);
+        span.setAttribute("http.status_code", status);
+        span.setAttribute("keel.request_id", requestId);
+        // A 5xx is the server's failure; everything else (4xx included) is a
+        // request the server answered as designed.
+        span.setStatus(status >= 500 ? "error" : "ok");
+        span.end();
+      }
     }
   });
 }

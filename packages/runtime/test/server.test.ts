@@ -506,6 +506,75 @@ describe("serve", () => {
     ]);
   });
 
+  it("mints one span per request when a tracer is wired — the trace twin of the access line", async () => {
+    // A recording tracer satisfying the structural RequestTracer seam, standing
+    // in for @keel/observability's Tracer.
+    const spans: Array<{
+      name: string;
+      attributes: Record<string, unknown>;
+      status?: string;
+      ended: boolean;
+    }> = [];
+
+    const tracer = {
+      startSpan: (name: string) => {
+        const record: (typeof spans)[number] = { name, attributes: {}, ended: false };
+
+        spans.push(record);
+
+        return {
+          setAttribute: (key: string, value: unknown) => (record.attributes[key] = value),
+          setStatus: (status: "ok" | "error") => (record.status = status),
+          end: () => (record.ended = true),
+        };
+      },
+    };
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async (_method, path) => {
+        if (path === "/boom") throw new Error("kaboom");
+
+        return { status: 201, headers: {}, body: "made" };
+      },
+    };
+
+    server = await serve(app, {
+      port: 0,
+      tracer,
+      logError: () => {},
+      newRequestId: () => "req-9",
+    });
+
+    await makeRequest(server.port, { method: "POST", path: "/posts" });
+    await makeRequest(server.port, { method: "GET", path: "/boom" });
+
+    expect(spans).toEqual([
+      {
+        name: "http.request",
+        attributes: {
+          "http.method": "POST",
+          "http.path": "/posts",
+          "http.status_code": 201,
+          "keel.request_id": "req-9",
+        },
+        status: "ok",
+        ended: true,
+      },
+      {
+        name: "http.request",
+        attributes: {
+          "http.method": "GET",
+          "http.path": "/boom",
+          "http.status_code": 500,
+          "keel.request_id": "req-9",
+        },
+        status: "error",
+        ended: true,
+      },
+    ]);
+  });
+
   it("tags an HTML response with an ETag and 304s a matching conditional GET", async () => {
     const entries: Array<{ method: string; path: string; status: number; ms: number }> = [];
 

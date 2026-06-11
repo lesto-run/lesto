@@ -25,8 +25,8 @@ import type { OutputSink, Site } from "@keel/sites";
 import { dispatchSitesDev } from "@keel/runtime";
 import type { serve, StaticReader } from "@keel/runtime";
 
-import { planDeploy, shipStatic } from "@keel/deploy";
-import type { ShipDeps } from "@keel/deploy";
+import { planDeploy, rollback, shipRelease, shipStatic } from "@keel/deploy";
+import type { ReleaseStore, ShipDeps } from "@keel/deploy";
 
 import { CliError } from "./errors";
 import { parsePort, parseStringFlag } from "./flags";
@@ -78,6 +78,16 @@ export interface CliDeps {
   uploader: (distDir: string) => ShipDeps;
 
   /**
+   * Build a versioned release store rooted at `distDir` (the bin passes
+   * `nodeReleaseStore`). Backs `deploy --release` and `rollback`: immutable
+   * `releases/<version>/` trees behind an atomically-flipped `current` pointer.
+   */
+  releaseStore: (distDir: string) => ReleaseStore;
+
+  /** The clock release version stamps derive from (the bin passes `Date.now`). */
+  now: () => number;
+
+  /**
    * Register a graceful-shutdown hook for the long-running `serve`/`dev`
    * commands: the bin wires SIGTERM/SIGINT to drain the server and exit, so a
    * deploy's rolling restart lets in-flight requests finish instead of severing
@@ -101,7 +111,9 @@ const USAGE = [
   "  serve             Boot the app over HTTP (--port, default 3000)",
   "  dev               Run every site live on one origin for local development (--port)",
   "  build             Prerender static sites to disk (--target <name>, --out <dir>, default out)",
-  "  deploy            Build and ship static sites; print the routing plan (--target, --out, --dist)",
+  "  deploy            Build and ship static sites; print the routing plan (--target, --out, --dist;",
+  "                    --release for a versioned, atomically-flipped release, --version <v> to name it)",
+  "  rollback          Flip the live pointer to a published release: rollback --to <version> (--dist)",
   "  content:build     Compile markdown content into the content store (--prune drops stale rows)",
   "  content:new       Scaffold a new content entry: content:new <collection> <title>",
   "  content:delete    Delete a content entry: content:delete <collection> <slug>",
@@ -376,14 +388,25 @@ function routeNoun(count: number): string {
   return count === 1 ? "route" : "routes";
 }
 
+/** A version stamp from the injected clock — ISO time made path-segment safe. */
+function versionStamp(now: () => number): string {
+  return new Date(now()).toISOString().replaceAll(/[:.]/g, "-");
+}
+
 /**
  * Build the static sites, then ship them and print the deploy plan.
  *
  * Prerenders (failing on a broken page, via `buildStaticSites`), plans the
  * deploy (static targets for the CDN, a `keel serve` node target for the live
- * tier), ships each static target through the injected uploader, and prints the
- * routing manifest — the single source that splits `/` (static) from `/mls/*`
- * (node) at the edge.
+ * tier), ships each static target, and prints the routing manifest — the single
+ * source that splits `/` (static) from `/mls/*` (node) at the edge.
+ *
+ * The default ship is the legacy in-place copy. `--release` upgrades it to a
+ * versioned release: every file lands under an immutable `releases/<version>/`
+ * tree first and the `current` pointer flips atomically after — so traffic
+ * never sees a partial deploy, and `keel rollback --to <version>` can flip
+ * back in one step. `--version <v>` names the release; absent, a timestamp
+ * stamp is derived from the injected clock.
  */
 async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
@@ -395,29 +418,84 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
   const target = parseStringFlag(args, "target");
   const outDir = parseStringFlag(args, "out") ?? DEFAULT_OUT_DIR;
   const distDir = parseStringFlag(args, "dist") ?? DEFAULT_DIST_DIR;
+  const release = args.includes("--release");
 
   const selected = selectTarget(sites, target);
 
   const manifest = await buildStaticSites(selected, app.handle, deps.sink(outDir));
 
   const plan = planDeploy(selected, manifest);
-  const uploader = deps.uploader(distDir);
+  const version = parseStringFlag(args, "version") ?? versionStamp(deps.now);
+
+  // One shipper, chosen up front: the versioned release store or the legacy
+  // in-place copy — discriminated so each branch holds its own dependency.
+  const shipper: { kind: "release"; store: ReleaseStore } | { kind: "copy"; uploader: ShipDeps } =
+    release
+      ? { kind: "release", store: deps.releaseStore(distDir) }
+      : { kind: "copy", uploader: deps.uploader(distDir) };
 
   for (const deployTarget of plan.targets) {
-    if (deployTarget.kind === "static") {
-      const result = await shipStatic(deployTarget, outDir, uploader);
+    if (deployTarget.kind !== "static") {
+      deps.out(`${deployTarget.site}: run \`${deployTarget.run}\` (dynamic)`);
+
+      continue;
+    }
+
+    if (shipper.kind === "release") {
+      const shipped = await shipRelease(deployTarget, outDir, shipper.store, { version });
 
       deps.out(
-        `shipped ${result.site}: ${result.routes.length} ${routeNoun(result.routes.length)}`,
+        `released ${shipped.site}: ${shipped.routes.length} ${routeNoun(shipped.routes.length)} (version ${shipped.version})`,
       );
-    } else {
-      deps.out(`${deployTarget.site}: run \`${deployTarget.run}\` (dynamic)`);
+
+      continue;
     }
+
+    const result = await shipStatic(deployTarget, outDir, shipper.uploader);
+
+    deps.out(`shipped ${result.site}: ${result.routes.length} ${routeNoun(result.routes.length)}`);
+  }
+
+  if (shipper.kind === "release") {
+    deps.out(`current → ${version}`);
   }
 
   for (const rule of plan.routing) {
     deps.out(`route ${rule.basePath} → ${rule.mode}`);
   }
+
+  return 0;
+}
+
+/**
+ * Flip the live pointer back to an already-published release.
+ *
+ * `--to <version>` names the target (required; refusing to guess is the point
+ * of a rollback under pressure); `--dist <dir>` locates the release store. The
+ * flip is the same atomic pointer move a deploy ends with, and an unknown
+ * version is refused by the store (`DEPLOY_UNKNOWN_RELEASE`) rather than
+ * pointing the site at nothing.
+ */
+async function runRollback(args: readonly string[], deps: CliDeps): Promise<number> {
+  const version = parseStringFlag(args, "to");
+
+  if (version === undefined) {
+    throw new CliError(
+      "CLI_ROLLBACK_MISSING_VERSION",
+      "rollback needs the release to flip to: keel rollback --to <version>",
+      {},
+    );
+  }
+
+  const distDir = parseStringFlag(args, "dist") ?? DEFAULT_DIST_DIR;
+
+  const result = await rollback(deps.releaseStore(distDir), version);
+
+  deps.out(
+    result.from === undefined
+      ? `now serving ${result.to}`
+      : `rolled back: ${result.from} → ${result.to}`,
+  );
 
   return 0;
 }
@@ -449,6 +527,8 @@ export async function run(argv: readonly string[], deps: CliDeps): Promise<numbe
   if (command === "build") return runBuild(args, deps);
 
   if (command === "deploy") return runDeploy(args, deps);
+
+  if (command === "rollback") return runRollback(args, deps);
 
   if (command === "content:build") return runContentBuild(args, deps);
 

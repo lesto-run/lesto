@@ -4,9 +4,18 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { contentTypeFor, DeployError, nodeUploader, planDeploy, shipStatic } from "../src/index";
+import {
+  contentTypeFor,
+  DeployError,
+  nodeReleaseStore,
+  nodeUploader,
+  planDeploy,
+  rollback,
+  shipRelease,
+  shipStatic,
+} from "../src/index";
 
-import type { ShipDeps, StaticTarget } from "../src/index";
+import type { ReleaseStore, ShipDeps, StaticTarget } from "../src/index";
 import type { Site, SiteManifest } from "@keel/sites";
 
 // A two-zone project: a static marketing site at the root, a dynamic app at /mls
@@ -225,6 +234,229 @@ describe("nodeUploader", () => {
 
     await expect(deps.put("../escape.html", "nope", "text/html")).rejects.toMatchObject({
       code: "DEPLOY_PATH_ESCAPE",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Versioned releases: stage → gate → atomic pointer flip; rollback is the same
+// flip pointed backwards.
+// ---------------------------------------------------------------------------
+
+/** A one-file static target, enough to watch the staging prefix and the order. */
+const releaseTarget: StaticTarget = {
+  kind: "static",
+  site: "marketing",
+  basePath: "/",
+  routing: { basePath: "/", mode: "static" },
+  files: [{ file: "marketing/index.html", route: "/", contentType: "text/html; charset=utf-8" }],
+};
+
+/** An in-memory ReleaseStore that records every put and pointer move, in order. */
+function memoryStore(): {
+  store: ReleaseStore;
+  puts: string[];
+  pointer: { current?: string; flips: number };
+} {
+  const puts: string[] = [];
+  const pointer: { current?: string; flips: number } = { flips: 0 };
+
+  const store: ReleaseStore = {
+    read: (_outRoot, file) => Promise.resolve(`bytes of ${file}`),
+    put: (key) => {
+      puts.push(key);
+
+      return Promise.resolve();
+    },
+    setCurrent: (version) => {
+      pointer.current = version;
+      pointer.flips += 1;
+
+      return Promise.resolve();
+    },
+    getCurrent: () => Promise.resolve(pointer.current),
+    listReleases: () =>
+      Promise.resolve([...new Set(puts.map((key) => key.split("/")[1] as string))]),
+  };
+
+  return { store, puts, pointer };
+}
+
+describe("shipRelease", () => {
+  it("stages every file under the release prefix, then flips the pointer", async () => {
+    const { store, puts, pointer } = memoryStore();
+
+    const release = await shipRelease(releaseTarget, "out", store, { version: "v1" });
+
+    expect(puts).toEqual(["releases/v1/marketing/index.html"]);
+    expect(pointer.current).toBe("v1");
+    expect(release).toEqual({ version: "v1", site: "marketing", routes: ["/"] });
+  });
+
+  it("records the replaced version so a one-step rollback knows its target", async () => {
+    const { store, pointer } = memoryStore();
+
+    await shipRelease(releaseTarget, "out", store, { version: "v1" });
+    const second = await shipRelease(releaseTarget, "out", store, { version: "v2" });
+
+    expect(second.previous).toBe("v1");
+    expect(pointer.current).toBe("v2");
+  });
+
+  it("refuses to flip when the health gate fails — staged files stay, pointer stays", async () => {
+    const { store, puts, pointer } = memoryStore();
+
+    await shipRelease(releaseTarget, "out", store, { version: "v1" });
+
+    await expect(
+      shipRelease(releaseTarget, "out", store, {
+        version: "v2",
+        verify: () => Promise.resolve(false),
+      }),
+    ).rejects.toMatchObject({ code: "DEPLOY_RELEASE_UNHEALTHY" });
+
+    // v2 is staged for inspection, but the live pointer never moved off v1.
+    expect(puts).toContain("releases/v2/marketing/index.html");
+    expect(pointer.current).toBe("v1");
+    expect(pointer.flips).toBe(1);
+  });
+
+  it("flips when the health gate passes, handing it the staged release", async () => {
+    const { store, pointer } = memoryStore();
+
+    const seen: unknown[] = [];
+
+    await shipRelease(releaseTarget, "out", store, {
+      version: "v1",
+      verify: (release) => {
+        seen.push(release);
+
+        return Promise.resolve(true);
+      },
+    });
+
+    expect(seen).toEqual([{ version: "v1", site: "marketing", routes: ["/"] }]);
+    expect(pointer.current).toBe("v1");
+  });
+
+  it.each(["", ".", "..", "a/b", "a\\b"])("refuses unsafe version %j", async (version) => {
+    const { store } = memoryStore();
+
+    await expect(shipRelease(releaseTarget, "out", store, { version })).rejects.toMatchObject({
+      code: "DEPLOY_BAD_VERSION",
+    });
+  });
+});
+
+describe("rollback", () => {
+  it("flips the pointer back to a published release", async () => {
+    const { store, pointer } = memoryStore();
+
+    await shipRelease(releaseTarget, "out", store, { version: "v1" });
+    await shipRelease(releaseTarget, "out", store, { version: "v2" });
+
+    const result = await rollback(store, "v1");
+
+    expect(result).toEqual({ from: "v2", to: "v1" });
+    expect(pointer.current).toBe("v1");
+  });
+
+  it("omits `from` when nothing was live yet", async () => {
+    const { store } = memoryStore();
+
+    // Stage a release directly (no flip): puts exist, pointer never set.
+    await shipRelease(releaseTarget, "out", store, {
+      version: "v1",
+      verify: () => Promise.resolve(true),
+    }).catch(() => undefined);
+
+    const { store: fresh, puts } = memoryStore();
+    puts.push("releases/v1/x"); // a published version with no live pointer
+
+    expect(await rollback(fresh, "v1")).toEqual({ to: "v1" });
+  });
+
+  it("refuses a version that was never published", async () => {
+    const { store } = memoryStore();
+
+    await shipRelease(releaseTarget, "out", store, { version: "v1" });
+
+    try {
+      await rollback(store, "ghost");
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeployError);
+      expect((error as DeployError).code).toBe("DEPLOY_UNKNOWN_RELEASE");
+      expect((error as DeployError).details).toEqual({ version: "ghost", known: ["v1"] });
+    }
+  });
+});
+
+describe("nodeReleaseStore", () => {
+  let outRoot: string;
+  let distRoot: string;
+
+  beforeEach(async () => {
+    outRoot = await mkdtemp(join(tmpdir(), "keel-release-out-"));
+    distRoot = await mkdtemp(join(tmpdir(), "keel-release-dist-"));
+
+    await writeFile(join(outRoot, "index.html"), "<h1>v</h1>", "utf8");
+  });
+
+  afterEach(async () => {
+    await rm(outRoot, { recursive: true, force: true });
+    await rm(distRoot, { recursive: true, force: true });
+  });
+
+  it("is empty-handed before the first release", async () => {
+    const store = nodeReleaseStore(distRoot);
+
+    expect(await store.getCurrent()).toBeUndefined();
+    expect(await store.listReleases()).toEqual([]);
+  });
+
+  it("publishes, flips the current symlink atomically, lists, and re-flips", async () => {
+    const store = nodeReleaseStore(distRoot);
+
+    const target: StaticTarget = {
+      ...releaseTarget,
+      files: [{ file: "index.html", route: "/", contentType: "text/html; charset=utf-8" }],
+    };
+
+    await shipRelease(target, outRoot, store, { version: "v1" });
+
+    // The live tree is reachable THROUGH the pointer — what a static server mounts.
+    expect(await readFile(join(distRoot, "current", "index.html"), "utf8")).toBe("<h1>v</h1>");
+    expect(await store.getCurrent()).toBe("v1");
+
+    await shipRelease(target, outRoot, store, { version: "v2" });
+
+    expect(await store.getCurrent()).toBe("v2");
+    expect((await store.listReleases()).toSorted()).toEqual(["v1", "v2"]);
+
+    // Roll back over the existing link — the rename-over path.
+    await rollback(store, "v1");
+
+    expect(await store.getCurrent()).toBe("v1");
+  });
+
+  it("clears a leftover staging link before flipping", async () => {
+    const store = nodeReleaseStore(distRoot);
+
+    // A crashed earlier flip left its staging link behind; the next flip must
+    // clear it rather than fail on EEXIST.
+    await writeFile(join(distRoot, ".current-staging"), "stale", "utf8");
+
+    await store.setCurrent("v9");
+
+    expect(await store.getCurrent()).toBe("v9");
+  });
+
+  it("refuses an unsafe version segment at the pointer too", async () => {
+    const store = nodeReleaseStore(distRoot);
+
+    await expect(store.setCurrent("../escape")).rejects.toMatchObject({
+      code: "DEPLOY_BAD_VERSION",
     });
   });
 });

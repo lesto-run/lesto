@@ -14,10 +14,15 @@
  *     return charge();
  *   });
  *
- * The shape is OpenTelemetry-flavored; an OTel exporter is a future adapter.
+ * The shape is OpenTelemetry-flavored, and the OTLP adapter is here: wire an
+ * `OtlpHttpExporter` instead of the in-memory one and `flush()` ships every
+ * finished span to a real collector over OTLP/HTTP JSON.
  */
 
 export { InMemoryExporter } from "./exporter";
+
+export { OtlpHttpExporter, otlpTraceRequest } from "./otlp";
+export type { OtlpHttpExporterOptions } from "./otlp";
 
 export { randomHexId } from "./ids";
 

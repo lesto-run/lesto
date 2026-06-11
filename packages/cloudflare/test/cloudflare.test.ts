@@ -165,6 +165,64 @@ describe("toFetchHandler", () => {
     expect(pulls).toBeLessThanOrEqual(3);
   });
 
+  it("mints one span per request when a tracer is wired, error-flagged on a 500", async () => {
+    const spans: Array<{
+      name: string;
+      attributes: Record<string, unknown>;
+      status?: string;
+      ended: boolean;
+    }> = [];
+
+    // A recording tracer satisfying the structural EdgeRequestTracer seam,
+    // standing in for @keel/observability's Tracer.
+    const tracer = {
+      startSpan: (name: string) => {
+        const record: (typeof spans)[number] = { name, attributes: {}, ended: false };
+
+        spans.push(record);
+
+        return {
+          setAttribute: (key: string, value: unknown) => (record.attributes[key] = value),
+          setStatus: (status: "ok" | "error") => (record.status = status),
+          end: () => (record.ended = true),
+        };
+      },
+    };
+
+    const handler = toFetchHandler(throwingDispatch(new Error("boom")), {
+      tracer,
+      logError: () => undefined,
+      logRequest: () => undefined,
+      newRequestId: () => "edge-1",
+    });
+
+    await handler(new Request("https://example.com/mls/saved"));
+
+    expect(spans).toEqual([
+      {
+        name: "http.request",
+        attributes: {
+          "http.method": "GET",
+          "http.path": "/mls/saved",
+          "http.status_code": 500,
+          "keel.request_id": "edge-1",
+        },
+        status: "error",
+        ended: true,
+      },
+    ]);
+
+    // The happy path flags ok.
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    await toFetchHandler(dispatch, { tracer, logRequest: () => undefined })(
+      new Request("https://example.com/"),
+    );
+
+    expect(spans[1]?.status).toBe("ok");
+    expect(spans[1]?.ended).toBe(true);
+  });
+
   it("logs one access line per request — method, path, status, latency, id", async () => {
     const { dispatch } = recordingDispatch({ status: 201, body: "ok" });
 

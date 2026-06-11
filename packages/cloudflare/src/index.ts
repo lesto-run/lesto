@@ -23,6 +23,8 @@ export type {
   EdgeDispatch,
   EdgeOptions,
   EdgeRequestOptions,
+  EdgeRequestSpan,
+  EdgeRequestTracer,
 } from "./fetch-handler";
 
 export { withAssets } from "./assets";

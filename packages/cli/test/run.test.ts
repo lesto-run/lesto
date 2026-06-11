@@ -12,6 +12,7 @@ import type { RuntimeEntry } from "@keel/content-core";
 import type { Server, ServeOptions } from "@keel/runtime";
 
 import type { OutputSink, Site } from "@keel/sites";
+import type { ReleaseStore } from "@keel/deploy";
 
 import { CliError, parsePort, parseStringFlag, run } from "../src/index";
 import type { CliDeps } from "../src/index";
@@ -117,9 +118,41 @@ function depsWith(overrides: Partial<CliDeps> = {}): CliDeps {
     loadSites: () => Promise.resolve([]),
     sink: () => () => Promise.resolve(),
     uploader: () => ({ read: () => Promise.resolve(""), put: () => Promise.resolve() }),
+    releaseStore: () => memoryReleaseStore().store,
+    now: () => 0,
     out: (line) => lines.push(line),
     ...overrides,
   };
+}
+
+// An in-memory ReleaseStore: keys land in a map, the pointer in a box — so the
+// release tests assert the staged prefix and the flip without a filesystem.
+function memoryReleaseStore(): {
+  store: ReleaseStore;
+  shipped: Map<string, string>;
+  pointer: { current?: string };
+} {
+  const shipped = new Map<string, string>();
+  const pointer: { current?: string } = {};
+
+  const store: ReleaseStore = {
+    read: (_outRoot, file) => Promise.resolve(`bytes:${file}`),
+    put: (key, contents) => {
+      shipped.set(key, contents);
+
+      return Promise.resolve();
+    },
+    setCurrent: (version) => {
+      pointer.current = version;
+
+      return Promise.resolve();
+    },
+    getCurrent: () => Promise.resolve(pointer.current),
+    listReleases: () =>
+      Promise.resolve([...new Set([...shipped.keys()].map((key) => key.split("/")[1] as string))]),
+  };
+
+  return { store, shipped, pointer };
 }
 
 // A minimal-but-valid runtime entry, with the metadata content-core attaches.
@@ -577,6 +610,114 @@ describe("run deploy", () => {
     await expect(
       run(["deploy", "--target", "ghost"], depsWith({ loadSites: () => Promise.resolve(sites) })),
     ).rejects.toMatchObject({ code: "CLI_UNKNOWN_TARGET" });
+  });
+
+  it("--release stages an immutable versioned tree and flips the pointer", async () => {
+    const { sink } = recordingSink();
+    const { store, shipped, pointer } = memoryReleaseStore();
+    const distDirs: string[] = [];
+
+    const code = await run(
+      ["deploy", "--release", "--version", "v7", "--dist", "blue-green"],
+      depsWith({
+        loadApp,
+        loadSites: () => Promise.resolve(sites),
+        sink,
+        releaseStore: (distDir) => {
+          distDirs.push(distDir);
+
+          return store;
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(distDirs).toEqual(["blue-green"]);
+
+    // Every file landed under the release's immutable prefix, never in place.
+    expect([...shipped.keys()].every((key) => key.startsWith("releases/v7/"))).toBe(true);
+    expect(shipped.size).toBe(2);
+    expect(pointer.current).toBe("v7");
+
+    expect(lines).toEqual([
+      "released marketing: 2 routes (version v7)",
+      "mls: run `keel serve` (dynamic)",
+      "current → v7",
+      "route /mls → dynamic",
+      "route / → static",
+    ]);
+  });
+
+  it("--release stamps a version from the injected clock when none is given", async () => {
+    const { sink } = recordingSink();
+    const { store, pointer } = memoryReleaseStore();
+
+    // 2026-06-11T00:00:00.000Z, made path-segment safe.
+    const code = await run(
+      ["deploy", "--release"],
+      depsWith({
+        loadApp,
+        loadSites: () => Promise.resolve(sites),
+        sink,
+        releaseStore: () => store,
+        now: () => Date.UTC(2026, 5, 11),
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(pointer.current).toBe("2026-06-11T00-00-00-000Z");
+    expect(lines).toContain("current → 2026-06-11T00-00-00-000Z");
+  });
+});
+
+describe("run rollback", () => {
+  it("flips the pointer back to a published release and reports the move", async () => {
+    const { store, pointer } = memoryReleaseStore();
+    const distDirs: string[] = [];
+
+    await store.put("releases/v1/marketing/index.html", "old", "text/html");
+    await store.setCurrent("v2");
+
+    const code = await run(
+      ["rollback", "--to", "v1", "--dist", "blue-green"],
+      depsWith({
+        releaseStore: (distDir) => {
+          distDirs.push(distDir);
+
+          return store;
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(distDirs).toEqual(["blue-green"]);
+    expect(pointer.current).toBe("v1");
+    expect(lines).toEqual(["rolled back: v2 → v1"]);
+  });
+
+  it("says 'now serving' when nothing was live before the flip", async () => {
+    const { store } = memoryReleaseStore();
+
+    await store.put("releases/v1/marketing/index.html", "old", "text/html");
+
+    const code = await run(["rollback", "--to", "v1"], depsWith({ releaseStore: () => store }));
+
+    expect(code).toBe(0);
+    expect(lines).toEqual(["now serving v1"]);
+  });
+
+  it("refuses to run without --to (no guessing under pressure)", async () => {
+    await expect(run(["rollback"], depsWith())).rejects.toMatchObject({
+      code: "CLI_ROLLBACK_MISSING_VERSION",
+    });
+  });
+
+  it("surfaces the store's refusal of an unpublished version", async () => {
+    const { store } = memoryReleaseStore();
+
+    await expect(
+      run(["rollback", "--to", "ghost"], depsWith({ releaseStore: () => store })),
+    ).rejects.toMatchObject({ code: "DEPLOY_UNKNOWN_RELEASE" });
   });
 });
 

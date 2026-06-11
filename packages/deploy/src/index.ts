@@ -32,5 +32,8 @@ export type {
 export { nodeUploader, shipStatic } from "./ship";
 export type { ShipDeps, ShipResult } from "./ship";
 
+export { nodeReleaseStore, rollback, shipRelease } from "./release";
+export type { Release, ReleaseStore, ShipReleaseOptions } from "./release";
+
 export { DeployError } from "./errors";
 export type { DeployErrorCode } from "./errors";

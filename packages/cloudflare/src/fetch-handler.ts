@@ -69,6 +69,24 @@ export interface EdgeAccessEntry {
   readonly requestId: string;
 }
 
+/**
+ * One span over one served edge request — the same narrow tracing surface the
+ * node server mints through, so a deployment wires one `Tracer` to both tiers.
+ * Structurally satisfied by `@keel/observability`'s `Tracer`; no dependency.
+ */
+export interface EdgeRequestSpan {
+  setAttribute(key: string, value: unknown): unknown;
+
+  setStatus(status: "ok" | "error"): unknown;
+
+  end(): void;
+}
+
+/** Mints {@link EdgeRequestSpan}s — `@keel/observability`'s `Tracer`, structurally. */
+export interface EdgeRequestTracer {
+  startSpan(name: string): EdgeRequestSpan;
+}
+
 /** The largest request body the edge reads before refusing it with 413. Defaults to 1 MiB (node parity). */
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
@@ -101,6 +119,13 @@ export interface EdgeOptions {
 
   /** The clock the access log times requests against. Injected for tests; defaults to `Date.now`. */
   readonly now?: () => number;
+
+  /**
+   * Mints one span per served request, mirroring the node server's `tracer`
+   * option. Off by default; pair with an `OtlpHttpExporter` flushed through the
+   * Worker's `waitUntil` to ship traces without holding the response.
+   */
+  readonly tracer?: EdgeRequestTracer;
 
   /**
    * Default response headers merged under every response — the app's own headers
@@ -349,8 +374,14 @@ export function toFetchHandler(
 
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 
+  const tracer = options.tracer;
+
   return async (request) => {
     const start = now();
+
+    // The request's span opens with the work and closes beside the access line,
+    // exactly as the node server does — one tracing contract across both tiers.
+    const span = tracer?.startSpan("http.request");
 
     const url = new URL(request.url);
 
@@ -381,6 +412,16 @@ export function toFetchHandler(
         ms: now() - start,
         requestId,
       });
+
+      if (span !== undefined) {
+        span.setAttribute("http.method", request.method);
+        span.setAttribute("http.path", url.pathname);
+        span.setAttribute("http.status_code", hardened.status);
+        span.setAttribute("keel.request_id", requestId);
+        // A 5xx is the server's failure; everything else was answered as designed.
+        span.setStatus(hardened.status >= 500 ? "error" : "ok");
+        span.end();
+      }
 
       return new Response(toBodyInit(hardened.body), {
         status: hardened.status,

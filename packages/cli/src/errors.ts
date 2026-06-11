@@ -13,7 +13,8 @@ export { KeelError };
 export type CliErrorCode =
   | "CLI_UNKNOWN_COMMAND"
   | "CLI_CONTENT_MISSING_ARGS"
-  | "CLI_UNKNOWN_TARGET";
+  | "CLI_UNKNOWN_TARGET"
+  | "CLI_ROLLBACK_MISSING_VERSION";
 
 /** Anything the CLI can refuse to do. */
 export class CliError extends KeelError<CliErrorCode> {

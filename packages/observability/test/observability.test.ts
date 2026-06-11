@@ -1,6 +1,13 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { InMemoryExporter, randomHexId, systemClock, Tracer } from "../src/index";
+import {
+  InMemoryExporter,
+  OtlpHttpExporter,
+  otlpTraceRequest,
+  randomHexId,
+  systemClock,
+  Tracer,
+} from "../src/index";
 
 import type { Clock, SpanData } from "../src/index";
 
@@ -175,5 +182,223 @@ describe("defaults", () => {
   it("exposes the default id-generator and clock directly", () => {
     expect(randomHexId()).toMatch(/^[0-9a-f]{32}$/);
     expect(typeof systemClock()).toBe("number");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OTLP/HTTP export: the mapping, pinned byte-for-byte, and the shipping seam.
+// ---------------------------------------------------------------------------
+
+/** A finished span with every field populated, for the mapping test. */
+const fullSpan: SpanData = {
+  traceId: "a".repeat(32),
+  spanId: "b".repeat(32),
+  parentSpanId: "c".repeat(32),
+  name: "http.request",
+  startedAt: 1_000,
+  endedAt: 1_250,
+  attributes: {
+    "http.method": "GET",
+    "http.status_code": 200,
+    ratio: 0.5,
+    cached: true,
+    weird: { nested: true },
+  },
+  status: "ok",
+};
+
+describe("otlpTraceRequest", () => {
+  it("maps a batch to the OTLP JSON shape a collector accepts", () => {
+    expect(otlpTraceRequest([fullSpan], "estate")).toEqual({
+      resourceSpans: [
+        {
+          resource: {
+            attributes: [{ key: "service.name", value: { stringValue: "estate" } }],
+          },
+          scopeSpans: [
+            {
+              scope: { name: "@keel/observability" },
+              spans: [
+                {
+                  traceId: "a".repeat(32),
+                  // Span ids truncate to OTLP's 16 hex chars; the traceId is full-width.
+                  spanId: "b".repeat(16),
+                  parentSpanId: "c".repeat(16),
+                  name: "http.request",
+                  kind: 2,
+                  startTimeUnixNano: "1000000000",
+                  endTimeUnixNano: "1250000000",
+                  attributes: [
+                    { key: "http.method", value: { stringValue: "GET" } },
+                    { key: "http.status_code", value: { intValue: "200" } },
+                    { key: "ratio", value: { doubleValue: 0.5 } },
+                    { key: "cached", value: { boolValue: true } },
+                    { key: "weird", value: { stringValue: "[object Object]" } },
+                  ],
+                  status: { code: 1 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("roots, unfinished spans, and error/unset statuses map honestly", () => {
+    const root: SpanData = {
+      traceId: "t".repeat(32),
+      spanId: "s".repeat(32),
+      name: "boom",
+      startedAt: 5,
+      attributes: {},
+      status: "error",
+    };
+
+    const mapped = otlpTraceRequest([root, { ...root, status: "unset" }], "keel") as {
+      resourceSpans: Array<{ scopeSpans: Array<{ spans: Array<Record<string, unknown>> }> }>;
+    };
+
+    const [first, second] = mapped.resourceSpans[0]!.scopeSpans[0]!.spans;
+
+    // No parent → no parentSpanId key; never-ended → end falls back to start.
+    expect(first).not.toHaveProperty("parentSpanId");
+    expect(first?.["endTimeUnixNano"]).toBe("5000000");
+    expect(first?.["status"]).toEqual({ code: 2 });
+    expect(second?.["status"]).toEqual({ code: 0 });
+  });
+});
+
+/** A fetch stub that records its calls and answers with `status`. */
+function fakeFetch(status: number): {
+  fetchFn: typeof fetch;
+  calls: Array<{ url: string; init: RequestInit }>;
+} {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+
+  const fetchFn = ((url: string, init: RequestInit) => {
+    calls.push({ url, init });
+
+    return Promise.resolve({ ok: status < 400, status } as Response);
+  }) as unknown as typeof fetch;
+
+  return { fetchFn, calls };
+}
+
+describe("OtlpHttpExporter", () => {
+  it("buffers spans and ships the batch on flush, then starts empty again", async () => {
+    const { fetchFn, calls } = fakeFetch(200);
+
+    const otlp = new OtlpHttpExporter({
+      url: "http://collector:4318/v1/traces",
+      headers: { authorization: "Bearer t" },
+      serviceName: "estate",
+      fetchFn,
+    });
+
+    const otlpTracer = new Tracer({
+      exporter: otlp,
+      clock: () => 7,
+      idGenerator: () => "f".repeat(32),
+    });
+
+    otlpTracer.startSpan("one").end();
+    otlpTracer.startSpan("two").end();
+
+    await otlp.flush();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("http://collector:4318/v1/traces");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(calls[0]?.init.headers).toEqual({
+      "content-type": "application/json",
+      authorization: "Bearer t",
+    });
+
+    const body = JSON.parse(calls[0]?.init.body as string) as {
+      resourceSpans: Array<{ scopeSpans: Array<{ spans: unknown[] }> }>;
+    };
+
+    expect(body.resourceSpans[0]?.scopeSpans[0]?.spans).toHaveLength(2);
+
+    // The buffer drained: a second flush has nothing to say and says nothing.
+    await otlp.flush();
+
+    expect(calls).toHaveLength(1);
+  });
+
+  it("routes a non-2xx response to onError and drops the batch", async () => {
+    const { fetchFn } = fakeFetch(503);
+
+    const errors: unknown[] = [];
+
+    const otlp = new OtlpHttpExporter({
+      url: "http://collector/v1/traces",
+      fetchFn,
+      onError: (error) => errors.push(error),
+    });
+
+    otlp.export(fullSpan);
+
+    await otlp.flush();
+
+    expect(errors).toHaveLength(1);
+    expect(String(errors[0])).toContain("OTLP export failed: 503 for 1 span(s)");
+  });
+
+  it("routes a network throw to onError — telemetry never takes the app down", async () => {
+    const sunk = new Error("ECONNREFUSED");
+
+    const errors: unknown[] = [];
+
+    const otlp = new OtlpHttpExporter({
+      url: "http://collector/v1/traces",
+      fetchFn: (() => Promise.reject(sunk)) as unknown as typeof fetch,
+      onError: (error) => errors.push(error),
+    });
+
+    otlp.export(fullSpan);
+
+    await expect(otlp.flush()).resolves.toBeUndefined();
+    expect(errors).toEqual([sunk]);
+  });
+
+  it("uses the global fetch when none is injected", async () => {
+    const calls: string[] = [];
+
+    vi.stubGlobal("fetch", ((url: string) => {
+      calls.push(url);
+
+      return Promise.resolve({ ok: true, status: 200 } as Response);
+    }) as unknown as typeof fetch);
+
+    try {
+      const otlp = new OtlpHttpExporter({ url: "http://collector/v1/traces" });
+
+      otlp.export(fullSpan);
+
+      await otlp.flush();
+
+      expect(calls).toEqual(["http://collector/v1/traces"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reports through console.error by default", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const otlp = new OtlpHttpExporter({
+      url: "http://collector/v1/traces",
+      fetchFn: (() => Promise.reject(new Error("down"))) as unknown as typeof fetch,
+    });
+
+    otlp.export(fullSpan);
+
+    await otlp.flush();
+
+    expect(spy).toHaveBeenCalledWith("[keel/observability]", expect.any(Error));
+
+    spy.mockRestore();
   });
 });

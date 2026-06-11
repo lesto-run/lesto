@@ -19,7 +19,7 @@ import type { RuntimeEntry } from "@keel/content-core";
 import { nodeSink } from "@keel/sites";
 import type { Site } from "@keel/sites";
 
-import { nodeUploader } from "@keel/deploy";
+import { nodeReleaseStore, nodeUploader } from "@keel/deploy";
 
 import { run } from "./run";
 
@@ -63,6 +63,8 @@ const code = await run(argv, {
   sink: nodeSink,
   readAsset: nodeStaticReader(join(process.cwd(), DEV_ASSET_DIR)),
   uploader: nodeUploader,
+  releaseStore: nodeReleaseStore,
+  now: Date.now,
   // On a deploy's rolling restart, drain in-flight requests then exit cleanly.
   installShutdown: (drain) => {
     const shutdown = (): void => {
