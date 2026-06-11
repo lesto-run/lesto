@@ -212,9 +212,23 @@ export class Keel {
    * `client.js` via the parse-time primer — when the page is static. Registered
    * like any route, so the `.use` middleware declared so far wraps it too. Return
    * an allowlisted DTO only: never the session token or raw cookie (ADR 0010 §5).
+   *
+   * The response carries a cache header keyed by the source's `scope` (ADR 0010
+   * §3a): a `private` source is `no-store`, a `shared` one is
+   * `public, max-age=0, must-revalidate`. A per-user JSON GET with NO cache
+   * header is heuristically shared-cacheable — a session leak waiting for a CDN —
+   * and `Vary: Cookie` is not honored by Cloudflare's cache, so "do not store" is
+   * the only defense for per-user JSON; the framework never emits the bare GET.
    */
   data<T>(source: DataSource<T>, loader: (c: Context) => MaybePromise<T>): this {
-    return this.get(dataSourceHref(source.name), async (c) => c.json(await loader(c)));
+    const cacheControl =
+      source.scope === "shared" ? "public, max-age=0, must-revalidate" : "private, no-store";
+
+    return this.get(dataSourceHref(source.name), async (c) => {
+      const response = c.json(await loader(c));
+
+      return { ...response, headers: { ...response.headers, "cache-control": cacheControl } };
+    });
   }
 
   /**

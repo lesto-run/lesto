@@ -9,8 +9,9 @@
  * `fetch`-in-effect for the author to write, and therefore no waterfall to
  * write — the whole point.
  *
- * The token carries only a NAME and a phantom TYPE. It deliberately holds no
- * implementation, so importing the shared token module from the client bundle
+ * The token carries only a NAME, a SCOPE (per-user vs shared — it picks the auto
+ * route's cache header, ADR 0010 §3a), and a phantom TYPE. It deliberately holds
+ * no implementation, so importing the shared token module from the client bundle
  * (as the island registry does) drags no server code across the wire.
  *
  * Delivery is chosen by topology, never by the author (ADR 0010 §3):
@@ -30,12 +31,24 @@ import { UiError } from "./errors";
 import type { IslandMount } from "./island";
 
 /**
- * A typed handle to a named data source — no implementation, just a name and a
- * phantom value type. `defineDataSource<User | null>("session")` names the
- * source and pins what its loader returns / its bound prop receives.
+ * Whether a source's value is per-user (`"private"`) or the same for everyone
+ * (`"shared"`). It is a MEANING only the author can know, so it is declared, not
+ * inferred — and it drives the cache header on the auto-exposed route (ADR 0010
+ * §3a): `private` → `no-store` (a per-user JSON GET with no cache header is a
+ * session leak waiting for a CDN), `shared` → revalidated-but-cacheable.
+ */
+export type DataSourceScope = "private" | "shared";
+
+/**
+ * A typed handle to a named data source — no implementation, just a name, a
+ * scope, and a phantom value type. `defineDataSource<User | null>("session")`
+ * names the source and pins what its loader returns / its bound prop receives.
  */
 export interface DataSource<T = unknown> {
   readonly name: string;
+
+  /** Per-user or shared — drives the route's cache header. Defaults to `"private"`. */
+  readonly scope: DataSourceScope;
 
   /** Phantom: carries the resolved value's type to the binding. Never present at runtime. */
   readonly __value?: T;
@@ -63,8 +76,17 @@ export function dataSourceHref(name: string): string {
  * (server) and to a prop elsewhere (island). The name is validated here so an
  * unsafe one fails loudly at declaration, not as a broken route or a malformed
  * primer at request time.
+ *
+ * `scope` declares whether the value is per-user (`"private"`, the default) or
+ * the same for every visitor (`"shared"`) — the meaning that picks the auto
+ * route's cache header (ADR 0010 §3a). Private-by-default keeps the dangerous
+ * configuration (a per-user value heuristically cached by a CDN) unrepresentable
+ * without a visible declaration.
  */
-export function defineDataSource<T>(name: string): DataSource<T> {
+export function defineDataSource<T>(
+  name: string,
+  options?: { scope?: DataSourceScope },
+): DataSource<T> {
   if (!VALID_SOURCE_NAME.test(name)) {
     throw new UiError(
       "UI_INVALID_DATA_SOURCE_NAME",
@@ -73,7 +95,7 @@ export function defineDataSource<T>(name: string): DataSource<T> {
     );
   }
 
-  return { name };
+  return { name, scope: options?.scope ?? "private" };
 }
 
 /** One bound prop on an island: which source feeds it, and where the client fetches it. */

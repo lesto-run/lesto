@@ -61,7 +61,7 @@ export {
   defineDataSource,
   resolveIslandData,
 } from "./data";
-export type { DataSource, IslandBind } from "./data";
+export type { DataSource, DataSourceScope, IslandBind } from "./data";
 
 // The audited seam for inlining the island manifest into a `<script>`: escapes
 // the breakout characters `JSON.stringify` leaves raw. Manifest emission MUST go

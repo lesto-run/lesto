@@ -13,10 +13,22 @@ import {
 import type { IslandMount } from "../src/index";
 
 describe("defineDataSource", () => {
-  it("returns a token carrying just the name", () => {
+  it("returns a token carrying the name and a default private scope", () => {
     const source = defineDataSource<{ id: string }>("session");
 
-    expect(source).toEqual({ name: "session" });
+    expect(source).toEqual({ name: "session", scope: "private" });
+  });
+
+  it("defaults scope to private when no options are given", () => {
+    expect(defineDataSource("session").scope).toBe("private");
+  });
+
+  it("carries an explicit shared scope", () => {
+    expect(defineDataSource("reactions", { scope: "shared" }).scope).toBe("shared");
+  });
+
+  it("carries an explicit private scope", () => {
+    expect(defineDataSource("session", { scope: "private" }).scope).toBe("private");
   });
 
   it.each(["a/b", "a b", "", "a.b", "sess!on", "../escape"])(

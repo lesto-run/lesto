@@ -266,6 +266,30 @@ describe("keel().data() — island data sources (ADR 0010)", () => {
     expect(JSON.parse(signedOut.body)).toBeNull();
   });
 
+  it("marks a default (private) source no-store — per-user JSON never shared-cacheable", async () => {
+    const app = keel().data(sessionSource, () => ({ id: "ada", name: "Ada" }));
+
+    const response = await app.handle("GET", "/__keel/data/session");
+
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+    // Body + content-type are untouched by the header rule.
+    expect(response.headers["content-type"]).toContain("application/json");
+    expect(JSON.parse(response.body)).toEqual({ id: "ada", name: "Ada" });
+  });
+
+  it("marks a shared source publicly cacheable but always revalidated", async () => {
+    const reactionsSource = defineDataSource<Record<string, number>>("reactions", {
+      scope: "shared",
+    });
+
+    const app = keel().data(reactionsSource, () => ({ "post-1": 3 }));
+
+    const response = await app.handle("GET", "/__keel/data/reactions");
+
+    expect(response.headers["cache-control"]).toBe("public, max-age=0, must-revalidate");
+    expect(JSON.parse(response.body)).toEqual({ "post-1": 3 });
+  });
+
   it("awaits an async loader", async () => {
     const app = keel().data(sessionSource, () => Promise.resolve({ id: "ada", name: "Ada" }));
 

@@ -165,3 +165,21 @@ describe("the /mls POST handlers", () => {
     expect(res.status).toBe(403);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The auto-exposed session data route — per-user JSON must never be
+// shared-cacheable (ADR 0010 §3a). `sessionSource` is private (the default), so
+// `keel().data()` answers it with `Cache-Control: private, no-store`. This is
+// the live launch-hardening surface: a missing header here is a session leak
+// waiting for a CDN.
+// ---------------------------------------------------------------------------
+
+describe("the /__keel/data/session route", () => {
+  it("is no-store — the per-user session JSON is never written to a shared cache", async () => {
+    const app = await buildApp();
+
+    const res = await app.handle("GET", "/__keel/data/session");
+
+    expect(res.headers["cache-control"]).toBe("private, no-store");
+  });
+});
