@@ -14,9 +14,12 @@
  * no implementation, so importing the shared token module from the client bundle
  * (as the island registry does) drags no server code across the wire.
  *
- * Delivery is chosen by topology, never by the author (ADR 0010 §3):
- *   - dynamically rendered → {@link resolveIslandData} runs loaders at render
- *     and inlines the values into the manifest props (0 extra requests);
+ * Delivery is chosen by topology, never by the author:
+ *   - dynamically rendered → the render-time resolver in `data-resolve.tsx`
+ *     (ADR 0012) runs loaders DURING the render and `defineIsland` inlines the
+ *     values straight into the island's props — feeding even an `ssr: true`
+ *     island's server markup (the canonical island, 0 extra requests). This
+ *     module owns only the STATIC tier;
  *   - static / prerendered with a server in the path → the document carries the
  *     unresolved bind plus the {@link dataPrimerScript} primer, which kicks the
  *     fetch at HTML-parse time (parallel with `client.js`), and the client
@@ -177,41 +180,4 @@ export function dataPrimerScript(manifest: readonly IslandMount[]): string {
     .join(";");
 
   return `(function(){var w=window.__keelData=window.__keelData||{};${assignments};})()`;
-}
-
-/**
- * Resolve every bound source at render time and inline the values into the
- * manifest props — the dynamic-render delivery tier (ADR 0010 §3): the document
- * arrives with the data already in it, zero extra requests.
- *
- * `resolve` runs one loader per DISTINCT source (in parallel), with whatever
- * request context the caller closes over. Each island's bound props are then
- * set to the resolved values and its `bind` removed — so the client sees a
- * fully-propped island with no bind and mounts it synchronously. Mutates the
- * manifest in place (the caller serializes it immediately after). A manifest
- * with no binds is a no-op.
- */
-export async function resolveIslandData(
-  manifest: readonly IslandMount[],
-  resolve: (source: string) => Promise<unknown> | unknown,
-): Promise<void> {
-  const sources = distinctSources(manifest);
-
-  if (sources.size === 0) return;
-
-  const resolved = new Map(
-    await Promise.all(
-      [...sources.keys()].map(async (name) => [name, await resolve(name)] as const),
-    ),
-  );
-
-  for (const mount of manifest) {
-    if (mount.bind === undefined) continue;
-
-    for (const [prop, bind] of Object.entries(mount.bind)) {
-      (mount.props as Record<string, unknown>)[prop] = resolved.get(bind.source);
-    }
-
-    delete mount.bind;
-  }
 }

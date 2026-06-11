@@ -214,14 +214,15 @@ export function island(name: string, props: Record<string, unknown> = {}): UiNod
  *
  *   1. neither `component` nor `load` → nothing to ever mount;
  *   2. `ssr: true` without a `component` → the server cannot SSR a component it
- *      does not hold (a lazy island's server shell is only its fallback);
- *   3. `ssr: true` WITH a `data` binding → temporary (island-data-hardening item
- *      1): the server cannot yet render an island with its bound data, so the
- *      client's `{...props, ...data}` hydrate would always mismatch. Item 7
- *      (ADR 0012) makes this the canonical island and removes this rule.
+ *      does not hold (a lazy island's server shell is only its fallback).
+ *
+ * `ssr: true` WITH `data` is NO LONGER refused here — ADR 0012 makes it the
+ * canonical island: legal at define time, resolved at render. The topology check
+ * (is a render-time resolver in scope?) lives at emission, where it belongs
+ * (`UI_ISLAND_SSR_DATA_UNRESOLVED` in `define-island.tsx`).
  */
 export function assertClientDef(def: ClientComponentDef): void {
-  const declared: { component?: unknown; load?: unknown; ssr?: unknown; data?: unknown } = def;
+  const declared: { component?: unknown; load?: unknown; ssr?: unknown } = def;
 
   if (declared.component === undefined && declared.load === undefined) {
     throw new UiError(
@@ -235,14 +236,6 @@ export function assertClientDef(def: ClientComponentDef): void {
     throw new UiError(
       "UI_CLIENT_SSR_NEEDS_COMPONENT",
       `client component "${def.name}" is ssr: true but lazy — the server cannot render a component it does not hold`,
-      { name: def.name },
-    );
-  }
-
-  if (declared.ssr === true && declared.data !== undefined) {
-    throw new UiError(
-      "UI_CLIENT_SSR_DATA_UNSUPPORTED",
-      `client component "${def.name}" is ssr: true with data bindings — the server cannot yet render an island WITH its bound data, so hydration would always mismatch (temporary; see ADR 0012)`,
       { name: def.name },
     );
   }

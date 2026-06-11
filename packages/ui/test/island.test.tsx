@@ -107,7 +107,7 @@ describe("assertClientDef", () => {
     }
   });
 
-  it("refuses ssr: true with data (UI_CLIENT_SSR_DATA_UNSUPPORTED) — interim, see ADR 0012", () => {
+  it("accepts ssr: true WITH data — the canonical island, legal at define time (ADR 0012)", () => {
     const ssrData = {
       name: "Live",
       ssr: true,
@@ -115,14 +115,9 @@ describe("assertClientDef", () => {
       data: { session: defineDataSource("session") },
     } as unknown as ClientComponentDef;
 
-    try {
-      assertClientDef(ssrData);
-      expect.unreachable();
-    } catch (error) {
-      expect(error).toBeInstanceOf(UiError);
-      expect((error as UiError).code).toBe("UI_CLIENT_SSR_DATA_UNSUPPORTED");
-      expect((error as UiError).details).toEqual({ name: "Live" });
-    }
+    // No longer refused: the topology check (is a resolver in scope?) is at
+    // emission, not declaration.
+    expect(() => assertClientDef(ssrData)).not.toThrow();
   });
 });
 
@@ -200,7 +195,7 @@ describe("Registry client components", () => {
     }
   });
 
-  it("refuses ssr: true + data via defineClient (UI_CLIENT_SSR_DATA_UNSUPPORTED)", () => {
+  it("accepts ssr: true + data via defineClient (the canonical island, ADR 0012)", () => {
     const ssrData = {
       name: "Live",
       ssr: true,
@@ -208,14 +203,7 @@ describe("Registry client components", () => {
       data: { session: defineDataSource("session") },
     } as unknown as ClientComponentDef;
 
-    try {
-      new Registry().defineClient(ssrData);
-      expect.unreachable();
-    } catch (error) {
-      expect(error).toBeInstanceOf(UiError);
-      expect((error as UiError).code).toBe("UI_CLIENT_SSR_DATA_UNSUPPORTED");
-      expect((error as UiError).details).toEqual({ name: "Live" });
-    }
+    expect(() => new Registry().defineClient(ssrData)).not.toThrow();
   });
 });
 

@@ -52,16 +52,17 @@ export { islandMount } from "./mount";
 
 // Island data sources (ADR 0010): declared data, framework-owned delivery.
 // `defineDataSource` is the isomorphic token; `dataSourceHref`/`DATA_ROUTE_PREFIX`
-// + `dataPrimerScript` + `resolveIslandData` are the server-side delivery seams
-// (the client half lives in `@keel/ui/client`'s hydration runtime).
-export {
-  DATA_ROUTE_PREFIX,
-  dataPrimerScript,
-  dataSourceHref,
-  defineDataSource,
-  resolveIslandData,
-} from "./data";
+// + `dataPrimerScript` are the STATIC-tier server delivery seams (the client half
+// lives in `@keel/ui/client`'s hydration runtime).
+export { DATA_ROUTE_PREFIX, dataPrimerScript, dataSourceHref, defineDataSource } from "./data";
 export type { DataSource, DataSourceScope, IslandBind } from "./data";
+
+// The render-time source resolver (ADR 0012): the DYNAMIC-tier delivery that runs
+// loaders during the render and inlines the values — feeding the canonical
+// `ssr: true` island's server markup. Server-only (it wraps the page tree in a
+// React context the `.page` renderer provides); NOT in the client barrel.
+export { createSourceResolver, IslandDataContext, IslandDataProvider } from "./data-resolve";
+export type { SourceResolver } from "./data-resolve";
 
 // The audited seam for inlining the island manifest into a `<script>`: escapes
 // the breakout characters `JSON.stringify` leaves raw. Manifest emission MUST go

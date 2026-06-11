@@ -7,7 +7,6 @@ import {
   dataPrimerScript,
   dataSourceHref,
   defineDataSource,
-  resolveIslandData,
   UiError,
 } from "../src/index";
 import type { IslandMount } from "../src/index";
@@ -194,70 +193,5 @@ describe("dataPrimerScript — runtime behavior", () => {
     runPrimer(dataPrimerScript([bound("$.a", sessionBind)]));
 
     await expect(window.__keelData?.session).resolves.toBe("Ada");
-  });
-});
-
-describe("resolveIslandData", () => {
-  it("is a no-op for a manifest with no binds", async () => {
-    const manifest: IslandMount[] = [{ id: "$", component: "X", props: { a: 1 }, ssr: false }];
-
-    await resolveIslandData(manifest, () => "unused");
-
-    expect(manifest).toEqual([{ id: "$", component: "X", props: { a: 1 }, ssr: false }]);
-  });
-
-  it("inlines resolved values into props and strips the bind (the dynamic tier)", async () => {
-    const manifest = [
-      bound("$.a", { session: { source: "session", href: "/__keel/data/session" } }),
-    ];
-
-    await resolveIslandData(manifest, (source) =>
-      source === "session" ? { id: "jade", name: "Jade" } : undefined,
-    );
-
-    expect(manifest[0]).toEqual({
-      id: "$.a",
-      component: "Account",
-      props: { static: 1, session: { id: "jade", name: "Jade" } },
-      ssr: false,
-    });
-    expect(manifest[0]?.bind).toBeUndefined();
-  });
-
-  it("leaves an unbound island on the page untouched (mixed manifest)", async () => {
-    const manifest: IslandMount[] = [
-      { id: "$.static", component: "Hero", props: { title: "Homes" }, ssr: false },
-      bound("$.account", { session: { source: "session", href: "/__keel/data/session" } }),
-    ];
-
-    await resolveIslandData(manifest, () => ({ id: "x", name: "X" }));
-
-    // The data-free island is byte-identical; only the bound one gained its value.
-    expect(manifest[0]).toEqual({
-      id: "$.static",
-      component: "Hero",
-      props: { title: "Homes" },
-      ssr: false,
-    });
-    expect(manifest[1]?.props["session"]).toEqual({ id: "x", name: "X" });
-  });
-
-  it("runs each distinct source's loader exactly once, even when bound twice", async () => {
-    const calls: string[] = [];
-
-    const manifest = [
-      bound("$.a", { session: { source: "session", href: "/__keel/data/session" } }),
-      bound("$.b", { session: { source: "session", href: "/__keel/data/session" } }),
-    ];
-
-    await resolveIslandData(manifest, (source) => {
-      calls.push(source);
-
-      return Promise.resolve(`v:${source}`);
-    });
-
-    expect(calls).toEqual(["session"]); // one loader run, fanned out to both islands
-    expect(manifest[0]?.props["session"]).toBe("v:session");
-    expect(manifest[1]?.props["session"]).toBe("v:session");
   });
 });

@@ -23,13 +23,27 @@ import { assertSerializable } from "./serialize";
  * assemble the wire mount. Returns the mount AND the validated props (the caller
  * renders the fallback / ssr output from the same validated bag). May throw
  * `UI_ISLAND_PROPS_NOT_SERIALIZABLE` — the caller decides whether to contain it.
+ *
+ * `resolved` is the render-time-resolved data (ADR 0012, the canonical island):
+ * when present, its entries are merged into the props AFTER schema validation
+ * (bound props were never schema-validated — they bypass `validateProps` on the
+ * client path today, kept symmetric) and BEFORE `assertSerializable` (inlined
+ * data rides the wire, so it passes the same JSON guard). A `bind` is then
+ * emitted only for `def.data` entries NOT in `resolved` (e.g. a `visible`
+ * island's deferred source). The Registry path (`buildIsland`) passes nothing,
+ * so its mount is byte-for-byte unchanged.
  */
 export function islandMount(
   def: ClientComponentDef,
   rawProps: Record<string, unknown>,
   id: string,
+  resolved?: Record<string, unknown>,
 ): { mount: IslandMount; props: Record<string, unknown> } {
-  const props = def.props === undefined ? rawProps : validateProps(def.props, rawProps).props;
+  const validated = def.props === undefined ? rawProps : validateProps(def.props, rawProps).props;
+
+  // Inlined data merges OVER the validated props (a bound prop wins over a static
+  // one of the same name), then the whole bag must pass the serialize guard.
+  const props = resolved === undefined ? validated : { ...validated, ...resolved };
 
   const serializable = assertSerializable(def.name, props);
 
@@ -50,10 +64,18 @@ export function islandMount(
     const bind: Record<string, IslandBind> = {};
 
     for (const [prop, source] of Object.entries(def.data)) {
+      // A source already resolved into props needs no client-side bind — its
+      // value crossed the wire inline. Only unresolved sources keep a bind.
+      if (resolved !== undefined && prop in resolved) continue;
+
       bind[prop] = { source: source.name, href: dataSourceHref(source.name) };
     }
 
-    mount.bind = bind;
+    // Emit `bind` only when at least one source is still unresolved, so a fully
+    // inlined island's wire entry has no `bind` key at all (byte-stable).
+    if (Object.keys(bind).length > 0) {
+      mount.bind = bind;
+    }
   }
 
   return { mount, props };

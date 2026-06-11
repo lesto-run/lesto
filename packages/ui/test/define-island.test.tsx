@@ -11,20 +11,23 @@
  * the manifest path. The two are proven to meet in the middle.
  */
 
-import { act } from "react";
+import { act, Suspense } from "react";
 import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createSourceResolver,
   defineDataSource,
   defineIsland,
+  IslandDataProvider,
   ISLAND_ATTR,
   ISLAND_MOUNT_ATTR,
   Registry,
+  renderPageStreamToString,
   UiError,
 } from "../src/index";
-import type { ClientComponentDef } from "../src/index";
+import type { ClientComponentDef, SourceResolver } from "../src/index";
 import { hydrateDocumentIslands } from "../src/hydrate";
 
 // A deferred island that renders a prop the framework resolves from a source.
@@ -54,24 +57,6 @@ afterEach(() => {
 });
 
 describe("defineIsland — define-time union refusals", () => {
-  it("throws UI_CLIENT_SSR_DATA_UNSUPPORTED for ssr: true + data (interim, ADR 0012)", () => {
-    const ssrData = {
-      name: "Live",
-      ssr: true,
-      component: () => createElement("span", null, "x"),
-      data: { session: defineDataSource("session") },
-    } as unknown as ClientComponentDef;
-
-    try {
-      defineIsland(ssrData);
-      expect.unreachable();
-    } catch (error) {
-      expect(error).toBeInstanceOf(UiError);
-      expect((error as UiError).code).toBe("UI_CLIENT_SSR_DATA_UNSUPPORTED");
-      expect((error as UiError).details).toEqual({ name: "Live" });
-    }
-  });
-
   it("throws UI_CLIENT_COMPONENT_MISSING for a def with neither component nor load", () => {
     const empty = { name: "Ghost" } as unknown as ClientComponentDef;
 
@@ -123,6 +108,206 @@ function paint(...islands: ReturnType<typeof defineIsland>[]): void {
     .map((Island) => renderToStaticMarkup(createElement(Island, {})))
     .join("");
 }
+
+// ---------------------------------------------------------------------------
+// ADR 0012: the render-time resolver. Under a provider, a bound island's data
+// is resolved AT RENDER and inlined (no bind, no primer); an ssr:true island's
+// shell holds the REAL component WITH the data.
+// ---------------------------------------------------------------------------
+
+const counts = defineDataSource<{ likes: number }>("counts");
+
+/** A stub resolver that records which sources it loaded and returns canned values. */
+function stubResolver(value: unknown): { resolver: SourceResolver; loaded: string[] } {
+  const loaded: string[] = [];
+
+  const resolver = createSourceResolver((source) => {
+    loaded.push(source);
+
+    return value;
+  });
+
+  return { resolver, loaded };
+}
+
+describe("defineIsland — render-time resolver (ADR 0012)", () => {
+  it("an ssr:true + data island renders the real component WITH the data, no bind, no primer", () => {
+    const Reactions = defineIsland({
+      name: "Reactions",
+      ssr: true,
+      component: (props) =>
+        createElement(
+          "b",
+          { className: "count" },
+          String((props.counts as { likes: number }).likes),
+        ),
+      data: { counts },
+    });
+
+    const { resolver, loaded } = stubResolver({ likes: 42 });
+
+    const html = renderToStaticMarkup(
+      createElement(IslandDataProvider, { resolver }, createElement(Reactions, {})),
+    );
+
+    // The server markup holds the REAL component's output with the inlined data.
+    expect(html).toContain('class="count"');
+    expect(html).toContain("42");
+    // The mount script inlines the value into props with NO bind…
+    expect(html).toContain('"counts":{"likes":42}');
+    expect(html).not.toContain('"bind"');
+    expect(html).toContain('"ssr":true');
+    // …and there is no primer (the data already crossed the wire inline).
+    expect(html).not.toContain("__keelData");
+    expect(loaded).toEqual(["counts"]);
+  });
+
+  it("a deferred (ssr falsy) + data island under a resolver inlines too — no bind, no primer", () => {
+    const { resolver } = stubResolver({ name: "Ada" });
+
+    const html = renderToStaticMarkup(
+      createElement(IslandDataProvider, { resolver }, createElement(Account, {})),
+    );
+
+    // The shell is still the fallback (ssr is falsy), but the mount inlines data…
+    expect(html).toContain("Sign in");
+    expect(html).toContain('"session":{"name":"Ada"}');
+    expect(html).not.toContain('"bind"');
+    expect(html).not.toContain("__keelData");
+  });
+
+  it("a visible + data island under a resolver KEEPS its bind and never loads its source", () => {
+    const VisibleAccount = defineIsland({
+      name: "VisibleAccount",
+      hydrate: "visible",
+      component: (props) => createElement("span", null, String(props.session)),
+      fallback: () => createElement("span", null, "idle"),
+      data: { session: sessionSource },
+    });
+
+    const { resolver, loaded } = stubResolver({ name: "Never" });
+
+    const html = renderToStaticMarkup(
+      createElement(IslandDataProvider, { resolver }, createElement(VisibleAccount, {})),
+    );
+
+    // Deferred with the mount: bind kept, no inline value, loader never called.
+    expect(html).toContain('"bind":{"session":{"source":"session","href":"/__keel/data/session"}}');
+    expect(html).toContain('"strategy":"visible"');
+    expect(loaded).toEqual([]);
+  });
+
+  it("two islands binding one source run the loader once (memoization)", () => {
+    const A = defineIsland({
+      name: "A",
+      ssr: true,
+      component: (props) =>
+        createElement("i", null, String((props.counts as { likes: number }).likes)),
+      data: { counts },
+    });
+    const B = defineIsland({
+      name: "B",
+      ssr: true,
+      component: (props) =>
+        createElement("u", null, String((props.counts as { likes: number }).likes)),
+      data: { counts },
+    });
+
+    const { resolver, loaded } = stubResolver({ likes: 9 });
+
+    renderToString(
+      createElement(IslandDataProvider, { resolver }, createElement(A, {}), createElement(B, {})),
+    );
+
+    expect(loaded).toEqual(["counts"]);
+  });
+
+  it("renders a sync-loader island under renderToString", () => {
+    const Reactions = defineIsland({
+      name: "Reactions",
+      ssr: true,
+      component: (props) =>
+        createElement("b", null, String((props.counts as { likes: number }).likes)),
+      data: { counts },
+    });
+
+    const { resolver } = stubResolver({ likes: 3 });
+
+    const html = renderToString(
+      createElement(IslandDataProvider, { resolver }, createElement(Reactions, {})),
+    );
+
+    expect(html).toContain("3");
+  });
+
+  it("streams an async-loader island, flushing the resolved document", async () => {
+    const Reactions = defineIsland({
+      name: "Reactions",
+      ssr: true,
+      component: (props) =>
+        createElement(
+          "b",
+          { className: "count" },
+          String((props.counts as { likes: number }).likes),
+        ),
+      data: { counts },
+    });
+
+    // An async loader — resolved through React's `use()` + Suspense + the stream.
+    const resolver = createSourceResolver(() => Promise.resolve({ likes: 77 }));
+
+    const element = createElement(
+      "div",
+      null,
+      createElement(
+        IslandDataProvider,
+        { resolver },
+        createElement(
+          Suspense,
+          { fallback: createElement("span", null, "…") },
+          createElement(Reactions, {}),
+        ),
+      ),
+    );
+
+    const html = await renderPageStreamToString({ element, errors: [], islands: [] });
+
+    expect(html).toContain('class="count"');
+    expect(html).toContain("77");
+    expect(html).toContain('"counts":{"likes":77}');
+  });
+});
+
+describe("defineIsland — no resolver in scope", () => {
+  it("an ssr:true + data island throws UI_ISLAND_SSR_DATA_UNRESOLVED", () => {
+    const Reactions = defineIsland({
+      name: "Reactions",
+      ssr: true,
+      component: (props) =>
+        createElement("b", null, String((props.counts as { likes: number }).likes)),
+      data: { counts },
+    });
+
+    try {
+      // No provider: a static/prerender emission of an ssr+data island is refused.
+      renderToStaticMarkup(createElement(Reactions, {}));
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(UiError);
+      expect((error as UiError).code).toBe("UI_ISLAND_SSR_DATA_UNRESOLVED");
+      expect((error as UiError).details).toEqual({ name: "Reactions" });
+    }
+  });
+
+  it("a deferred + data island emits bind + primer byte-identically to before item 7", () => {
+    // No provider → the static tier: the same bind + primer the island always had.
+    const html = renderToStaticMarkup(createElement(Account, {}));
+
+    expect(html).toContain('"bind":{"session":{"source":"session","href":"/__keel/data/session"}}');
+    expect(html).toContain("window.__keelData");
+    expect(html).not.toContain('"session":{"name"');
+  });
+});
 
 describe("defineIsland — shell variants", () => {
   it("renders the REAL component into the shell for an ssr:true island", () => {
