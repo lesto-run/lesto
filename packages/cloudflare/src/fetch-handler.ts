@@ -55,11 +55,53 @@ export type EdgeDispatch = (
   options: EdgeRequestOptions,
 ) => Promise<AnyKeelResponse>;
 
+/** One served edge request, as the access log records it (mirrors the node `AccessEntry`). */
+export interface EdgeAccessEntry {
+  readonly method: string;
+
+  readonly path: string;
+
+  readonly status: number;
+
+  readonly ms: number;
+
+  /** The per-request id minted for this request — the same id the context carries. */
+  readonly requestId: string;
+}
+
+/** The largest request body the edge reads before refusing it with 413. Defaults to 1 MiB (node parity). */
+const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+
+/** The default edge access log: one line per request, method · path · status · latency · id. */
+function defaultEdgeLogRequest(entry: EdgeAccessEntry): void {
+  console.log(`${entry.method} ${entry.path} ${entry.status} ${entry.ms}ms ${entry.requestId}`);
+}
+
 /**
  * How the edge handler hardens a response — the same knobs `serve` exposes on the
  * node server, so a deployment configures one security posture for both runtimes.
  */
 export interface EdgeOptions {
+  /**
+   * The largest request body the edge will read before refusing it with 413.
+   *
+   * The node server enforces this on the socket; the edge enforces it here so an
+   * unauthenticated client cannot stream an unbounded body into a worker's
+   * memory, instead of leaning on the platform's coarse ceiling. Defaults to 1 MiB.
+   */
+  readonly maxBodyBytes?: number;
+
+  /**
+   * Where each served request is logged — method, path, status, latency, id. The
+   * real prod target logged errors only; this gives it the per-request access log
+   * the node server has. Defaults to one line per request on `console.log`; pass
+   * your own sink to ship structured logs, or a no-op to silence it.
+   */
+  readonly logRequest?: (entry: EdgeAccessEntry) => void;
+
+  /** The clock the access log times requests against. Injected for tests; defaults to `Date.now`. */
+  readonly now?: () => number;
+
   /**
    * Default response headers merged under every response — the app's own headers
    * always win. Defaults to the shared {@link DEFAULT_SECURITY_HEADERS}; pass
@@ -102,28 +144,45 @@ function headersFrom(headers: Headers): Record<string, string> {
   return flat;
 }
 
-/** A decoded body, or the signal that a declared-JSON body did not parse. */
-type Decoded = { readonly ok: true; readonly body: unknown } | { readonly ok: false };
+/**
+ * A decoded body, or the client-error status the caller answers with: 413 when
+ * the body exceeds the cap, 400 when a declared-JSON body did not parse.
+ */
+type Decoded =
+  | { readonly ok: true; readonly body: unknown }
+  | { readonly ok: false; readonly status: 400 | 413 };
 
 /**
- * Decode the request body the way a controller expects it.
+ * Decode the request body the way a controller expects it, bounded by `maxBytes`.
  *
- * Empty is `undefined` (no body, not an empty string); a JSON content-type is
- * parsed, and a parse failure is a *client* error the caller turns into a 400 —
- * never an exception. Anything else stays the raw text.
+ * The body is read once into memory and refused with 413 if it exceeds the cap —
+ * so an unbounded client body cannot exhaust the worker. Empty is `undefined` (no
+ * body, not an empty string); a JSON content-type is parsed, and a parse failure
+ * is a *client* error the caller turns into a 400 — never an exception. Anything
+ * else stays the raw text.
  */
-async function decodeBody(request: Request, contentType: string | undefined): Promise<Decoded> {
-  const text = await request.text();
+async function decodeBody(
+  request: Request,
+  contentType: string | undefined,
+  maxBytes: number,
+): Promise<Decoded> {
+  const buffer = await request.arrayBuffer();
 
-  if (text.length === 0) {
+  if (buffer.byteLength > maxBytes) {
+    return { ok: false, status: 413 };
+  }
+
+  if (buffer.byteLength === 0) {
     return { ok: true, body: undefined };
   }
+
+  const text = new TextDecoder().decode(buffer);
 
   if (contentType !== undefined && contentType.startsWith("application/json")) {
     try {
       return { ok: true, body: JSON.parse(text) as unknown };
     } catch {
-      return { ok: false };
+      return { ok: false, status: 400 };
     }
   }
 
@@ -187,14 +246,15 @@ async function dispatchHardened(
   headers: Record<string, string>,
   dispatch: EdgeDispatch,
   logError: (message: string, error: unknown) => void,
+  maxBodyBytes: number,
 ): Promise<AnyKeelResponse> {
-  const decoded = await decodeBody(request, headers["content-type"]);
+  const decoded = await decodeBody(request, headers["content-type"], maxBodyBytes);
 
   if (!decoded.ok) {
     return {
-      status: 400,
+      status: decoded.status,
       headers: { "content-type": "text/plain; charset=utf-8" },
-      body: "Bad Request",
+      body: bodyForStatus(decoded.status),
     };
   }
 
@@ -242,17 +302,44 @@ export function toFetchHandler(
   const logError =
     options.logError ?? ((message: string, error: unknown) => console.error(message, error));
 
+  const logRequest = options.logRequest ?? defaultEdgeLogRequest;
+
+  const now = options.now ?? (() => Date.now());
+
+  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+
   return async (request) => {
+    const start = now();
+
     const url = new URL(request.url);
 
     const headers = headersFrom(request.headers);
 
-    const context = edgeContext(request, url, headers, newRequestId());
+    const requestId = newRequestId();
+
+    const context = edgeContext(request, url, headers, requestId);
 
     return runWithContext(context, async () => {
-      const response = await dispatchHardened(request, url, headers, dispatch, logError);
+      const response = await dispatchHardened(
+        request,
+        url,
+        headers,
+        dispatch,
+        logError,
+        maxBodyBytes,
+      );
 
       const hardened = withSecurityHeaders(response, securityHeaders);
+
+      // One access line per served request — the same shape the node server logs,
+      // stitched to the request id so an edge log and any context-tagged work line up.
+      logRequest({
+        method: request.method,
+        path: url.pathname,
+        status: hardened.status,
+        ms: now() - start,
+        requestId,
+      });
 
       return new Response(toBodyInit(hardened.body), {
         status: hardened.status,

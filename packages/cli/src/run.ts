@@ -14,7 +14,7 @@
  */
 
 import { createApp } from "@keel/kernel";
-import type { AppConfig, KeelAppConfig } from "@keel/kernel";
+import type { AppConfig, KeelAppConfig, KernelDatabase } from "@keel/kernel";
 
 import { deleteEntry, persistEntries, pruneEntries } from "@keel/content-store";
 import type { RuntimeEntry } from "@keel/content-core";
@@ -144,10 +144,33 @@ async function runMigrate(deps: CliDeps): Promise<number> {
 }
 
 /**
+ * A readiness probe over the app's database: a trivial query that proves the
+ * connection actually answers.
+ *
+ * `/readyz` defaults to always-ready, which lies — an orchestrator would route
+ * traffic to a node whose database is down or mid-failover. This makes the probe
+ * honest: a thrown error (connection gone, pool exhausted) resolves to `false`,
+ * so the runtime answers `/readyz` with 503 and the node is taken out of
+ * rotation until its database recovers.
+ */
+function databaseReady(db: KernelDatabase): () => Promise<boolean> {
+  return async () => {
+    try {
+      await db.prepare("SELECT 1").get();
+
+      return true;
+    } catch {
+      return false;
+    }
+  };
+}
+
+/**
  * Boot the app and stand a server in front of it, printing the listening URL.
  *
  * Resolves once the server is listening — the core does not block forever; the
- * bin is what keeps the process alive after this returns.
+ * bin is what keeps the process alive after this returns. `/readyz` is wired to
+ * a real database ping so it reports the node's true readiness, not a constant.
  */
 async function runServe(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
@@ -156,7 +179,10 @@ async function runServe(args: readonly string[], deps: CliDeps): Promise<number>
 
   const { port } = parsePort(args, DEFAULT_PORT);
 
-  const server = await deps.serve(app, { port });
+  const server = await deps.serve(app, {
+    port,
+    health: { isReady: databaseReady(config.db) },
+  });
 
   deps.installShutdown?.(() => server.close());
 

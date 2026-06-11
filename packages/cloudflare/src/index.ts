@@ -18,7 +18,12 @@
  */
 
 export { toFetchHandler } from "./fetch-handler";
-export type { EdgeDispatch, EdgeOptions, EdgeRequestOptions } from "./fetch-handler";
+export type {
+  EdgeAccessEntry,
+  EdgeDispatch,
+  EdgeOptions,
+  EdgeRequestOptions,
+} from "./fetch-handler";
 
 export { withAssets } from "./assets";
 export type { AssetFetcher } from "./assets";

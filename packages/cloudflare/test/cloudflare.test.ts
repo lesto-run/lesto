@@ -11,6 +11,7 @@ import {
   withAssets,
   wranglerConfig,
   type AssetFetcher,
+  type EdgeAccessEntry,
   type EdgeDispatch,
   type EdgeRequestOptions,
 } from "../src/index";
@@ -124,6 +125,36 @@ describe("toFetchHandler", () => {
     );
 
     expect(calls[0]?.options.body).toBe("hello");
+  });
+
+  it("refuses a body over the cap with 413, before dispatch", async () => {
+    const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
+
+    const response = await toFetchHandler(dispatch, { maxBodyBytes: 8 })(
+      new Request("https://example.com/x", { method: "POST", body: "x".repeat(20) }),
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.text()).toBe("Payload Too Large");
+    expect(calls).toEqual([]); // never reached the app
+  });
+
+  it("logs one access line per request — method, path, status, latency, id", async () => {
+    const { dispatch } = recordingDispatch({ status: 201, body: "ok" });
+
+    const entries: EdgeAccessEntry[] = [];
+    let tick = 1000;
+
+    await toFetchHandler(dispatch, {
+      logRequest: (entry) => entries.push(entry),
+      // Two ticks: start at 1015, end at 1030 → a measured 15ms.
+      now: () => (tick += 15),
+      newRequestId: () => "fixed-id",
+    })(new Request("https://example.com/mls/saved"));
+
+    expect(entries).toEqual([
+      { method: "GET", path: "/mls/saved", status: 201, ms: 15, requestId: "fixed-id" },
+    ]);
   });
 
   it("passes a Uint8Array body through to the edge Response, byte-for-byte", async () => {

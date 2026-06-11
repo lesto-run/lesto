@@ -194,6 +194,18 @@ const fakeServe = (boundPort: number) =>
       Promise.resolve({ port: boundPort, close: () => Promise.resolve() }),
   );
 
+/** Pull the readiness probe out of the health option the serve command wired. */
+function readinessProbe(serve: ReturnType<typeof fakeServe>): () => Promise<boolean> {
+  const [, options] = serve.mock.calls[0]!;
+  const health = options?.health;
+
+  if (!health) throw new Error("serve was called without a health option");
+
+  if (!health.isReady) throw new Error("health option carried no isReady probe");
+
+  return health.isReady as () => Promise<boolean>;
+}
+
 describe("run serve / dev", () => {
   it("serves on the --port flag and prints the listening URL", async () => {
     const serve = fakeServe(8080);
@@ -225,6 +237,38 @@ describe("run serve / dev", () => {
     expect(options?.port).toBe(3000);
 
     expect(lines).toEqual(["listening on http://127.0.0.1:3000"]);
+  });
+
+  it("wires /readyz to a real database ping that answers true when the DB is up", async () => {
+    const serve = fakeServe(3000);
+
+    await run(["serve"], depsWith({ serve }));
+
+    // The probe runs SELECT 1 against the live in-memory database → ready.
+    expect(await readinessProbe(serve)()).toBe(true);
+  });
+
+  it("reports not-ready when the database ping throws (a down/failing DB)", async () => {
+    const serve = fakeServe(3000);
+
+    // A keel() app over a database whose query rejects — and no migrations, so
+    // boot never touches it; only the readiness probe does.
+    const downConfig: KeelAppConfig = {
+      db: {
+        exec: () => Promise.resolve(),
+        prepare: () => ({
+          run: () => Promise.reject(new Error("db down")),
+          get: () => Promise.reject(new Error("db down")),
+          all: () => Promise.reject(new Error("db down")),
+        }),
+        transaction: (fn) => fn(downConfig.db),
+      },
+      app: keel().get("/", (c) => c.text("ok")),
+    };
+
+    await run(["serve"], depsWith({ serve, loadApp: () => Promise.resolve(downConfig) }));
+
+    expect(await readinessProbe(serve)()).toBe(false);
   });
 
   it("registers a graceful-shutdown hook that drains the server", async () => {
