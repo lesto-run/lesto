@@ -1,18 +1,24 @@
 /**
- * The two zones' controllers — `MarketingController` for `/`, `MlsController`
- * for `/mls`. Built through a factory so each app instance closes over its own
- * {@link Identity} (no module-scoped DB handle).
+ * The estate's routes for both zones, on one composable `keel()` app.
  *
- *   MarketingController — the static `/` zone. Its pages prerender to HTML and
+ *   marketing (`/`, `/about`) — the static zone. Its pages prerender to HTML and
  *   carry the `Account` island, so they are cacheable yet auth-aware.
  *
- *   MlsController — the dynamic `/mls` zone. It owns the session: it mints the
- *   cookie on sign-in via `Identity.login`, answers `/mls/api/session` with
- *   the current user (what the marketing island calls), and gates `/mls/saved`.
+ *   mls (`/mls/*`) — the dynamic zone. It owns the session: it mints the cookie
+ *   on sign-in via `Identity.login`, answers `/mls/api/session` with the current
+ *   user (what the marketing island calls), and gates `/mls/saved`.
+ *
+ * Built through a factory so the handlers close over their own {@link Identity}
+ * (no module-scoped DB handle). The pages still render through the retained
+ * `renderDocument`/`Registry`/island path (ADR 0004 reserves it for hand-authored
+ * and DB-driven views alike) — only dispatch moved off the legacy
+ * `Application`/`Controller`/`Router` onto `keel()`. Converting these to `.page`
+ * waits on islands-through-pages (Phase 4); until then `renderDocument` keeps the
+ * Account island hydrating exactly as before.
  */
 
-import { Controller } from "@keel/web";
-import type { ControllerClass, KeelResponse } from "@keel/web";
+import { keel } from "@keel/web";
+import type { Context, Keel } from "@keel/web";
 import { island } from "@keel/ui";
 import type { UiNode } from "@keel/ui";
 
@@ -81,212 +87,195 @@ function listingGrid(): UiNode {
   };
 }
 
-export function buildControllers(identity: Identity): {
-  marketing: ControllerClass;
-  mls: ControllerClass;
-} {
-  class MarketingController extends Controller {
-    /** The static home page: hero + listings, with the auth-aware Account island. */
-    home(): KeelResponse {
-      const tree: UiNode = {
-        type: "Page",
-        children: [
-          header(island("Account")),
-          main(
-            {
-              type: "Hero",
-              props: {
-                heading: "Extraordinary homes, quietly sold.",
-                sub: "Beverly Hills · Bel Air · Malibu",
+/** The estate app's routes, closing over the {@link Identity} they authenticate against. */
+export function buildEstateRoutes(identity: Identity): Keel {
+  /** The current user (an Identity model), or undefined when signed out. */
+  const currentUser = async (c: Context): Promise<{ email: string } | undefined> => {
+    const user = await identity.currentUser(readSessionToken(c.header("cookie")));
+
+    return user === undefined ? undefined : { email: user.email };
+  };
+
+  return (
+    keel()
+      // --- marketing (static) zone ---
+      // The static home page: hero + listings, with the auth-aware Account island.
+      .get("/", (c) => {
+        const tree: UiNode = {
+          type: "Page",
+          children: [
+            header(island("Account")),
+            main(
+              {
+                type: "Hero",
+                props: {
+                  heading: "Extraordinary homes, quietly sold.",
+                  sub: "Beverly Hills · Bel Air · Malibu",
+                },
               },
-            },
-            listingGrid(),
+              listingGrid(),
+            ),
+          ],
+        };
+
+        return c.html(
+          renderDocument(
+            registry,
+            tree,
+            "Jade Mills Estates",
+            "Extraordinary homes, quietly sold across Beverly Hills, Bel Air, and Malibu — browse Jade Mills' luxury listings.",
           ),
-        ],
-      };
-
-      return this.html(
-        renderDocument(
-          registry,
-          tree,
-          "Jade Mills Estates",
-          "Extraordinary homes, quietly sold across Beverly Hills, Bel Air, and Malibu — browse Jade Mills' luxury listings.",
-        ),
-      );
-    }
-
-    /** The static about page — also carries the island, also prerenders. */
-    about(): KeelResponse {
-      const tree: UiNode = {
-        type: "Page",
-        children: [
-          header(island("Account")),
-          main(
-            {
-              type: "Hero",
-              props: {
-                heading: "About Jade",
-                sub: "Four decades at the top of luxury real estate.",
+        );
+      })
+      // The static about page — also carries the island, also prerenders.
+      .get("/about", (c) => {
+        const tree: UiNode = {
+          type: "Page",
+          children: [
+            header(island("Account")),
+            main(
+              {
+                type: "Hero",
+                props: {
+                  heading: "About Jade",
+                  sub: "Four decades at the top of luxury real estate.",
+                },
               },
-            },
-            {
-              type: "Copy",
-              props: {
-                text: "This marketing site is prerendered to static HTML and served from a CDN — yet the Account control still reflects who you are, resolved on the client against the same-origin /mls session.",
+              {
+                type: "Copy",
+                props: {
+                  text: "This marketing site is prerendered to static HTML and served from a CDN — yet the Account control still reflects who you are, resolved on the client against the same-origin /mls session.",
+                },
               },
-            },
+            ),
+          ],
+        };
+
+        return c.html(
+          renderDocument(
+            registry,
+            tree,
+            "About · Jade Mills Estates",
+            "Four decades at the top of luxury real estate — about Jade Mills and the Jade Mills Estates marketing site.",
           ),
-        ],
-      };
+        );
+      })
+      // --- mls (dynamic) zone ---
+      // The dynamic MLS landing page: server-rendered, with a real sign-in form.
+      .get("/mls", async (c) => {
+        const user = await currentUser(c);
 
-      return this.html(
-        renderDocument(
-          registry,
-          tree,
-          "About · Jade Mills Estates",
-          "Four decades at the top of luxury real estate — about Jade Mills and the Jade Mills Estates marketing site.",
-        ),
-      );
-    }
-  }
+        const name = user === undefined ? undefined : displayNameFor(user.email);
 
-  class MlsController extends Controller {
-    /** The raw session token on the request, or `undefined` when none is set. */
-    private sessionToken(): string | undefined {
-      return readSessionToken(this.request.headers["cookie"]);
-    }
-
-    /** The current user (an Identity model), or undefined when signed out. */
-    private async currentUser(): Promise<{ email: string } | undefined> {
-      const user = await identity.currentUser(this.sessionToken());
-
-      return user === undefined ? undefined : { email: user.email };
-    }
-
-    /** The dynamic MLS landing page: server-rendered, with a real sign-in form. */
-    async index(): Promise<KeelResponse> {
-      const user = await this.currentUser();
-
-      const name = user === undefined ? undefined : displayNameFor(user.email);
-
-      const tree: UiNode = {
-        type: "Page",
-        children: [
-          header({
-            type: "SignInPanel",
-            props: {
-              signedIn: user !== undefined,
-              demoEmail: DEFAULT_DEMO.email,
-              demoPassword: DEFAULT_DEMO.password,
-              ...(name && { name }),
-            },
-          }),
-          main(
-            {
-              type: "Hero",
+        const tree: UiNode = {
+          type: "Page",
+          children: [
+            header({
+              type: "SignInPanel",
               props: {
-                heading: user === undefined ? "MLS Search" : `Welcome back, ${name}`,
-                sub:
-                  user === undefined
-                    ? "Sign in to save listings."
-                    : "Your saved searches are at /mls/saved.",
+                signedIn: user !== undefined,
+                demoEmail: DEFAULT_DEMO.email,
+                demoPassword: DEFAULT_DEMO.password,
+                ...(name && { name }),
               },
-            },
-            listingGrid(),
+            }),
+            main(
+              {
+                type: "Hero",
+                props: {
+                  heading: user === undefined ? "MLS Search" : `Welcome back, ${name}`,
+                  sub:
+                    user === undefined
+                      ? "Sign in to save listings."
+                      : "Your saved searches are at /mls/saved.",
+                },
+              },
+              listingGrid(),
+            ),
+          ],
+        };
+
+        return c.html(
+          renderDocument(
+            registry,
+            tree,
+            "MLS · Jade Mills Estates",
+            "Search the Jade Mills MLS and sign in to save listings.",
           ),
-        ],
-      };
+        );
+      })
+      /**
+       * The same-origin endpoint the marketing Account island calls.
+       *
+       * This is an identity *probe*, not a gated resource: "nobody is signed in"
+       * is a normal, expected answer, so it returns 200 with `{ user: null }`
+       * rather than 401. A 401 here would be logged by the browser as a failed
+       * resource load (a console error Lighthouse flags) on every signed-out view
+       * of a public marketing page. The genuinely gated resources — `/mls/saved`,
+       * and any state-changing POST — still answer 401/403.
+       */
+      .get("/mls/api/session", async (c) => {
+        const user = await currentUser(c);
 
-      return this.html(
-        renderDocument(
-          registry,
-          tree,
-          "MLS · Jade Mills Estates",
-          "Search the Jade Mills MLS and sign in to save listings.",
-        ),
-      );
-    }
+        if (user === undefined) return c.json({ user: null });
 
-    /**
-     * The same-origin endpoint the marketing Account island calls.
-     *
-     * This is an identity *probe*, not a gated resource: "nobody is signed in"
-     * is a normal, expected answer, so it returns 200 with `{ user: null }`
-     * rather than 401. A 401 here would be logged by the browser as a failed
-     * resource load (a console error Lighthouse flags) on every signed-out view
-     * of a public marketing page. The genuinely gated resources — `/mls/saved`,
-     * and any state-changing POST — still answer 401/403.
-     */
-    async session(): Promise<KeelResponse> {
-      const user = await this.currentUser();
+        return c.json({ user: sessionUser(user.email) });
+      })
+      /**
+       * Sign in — runs the real `Identity.login` flow.
+       *
+       * CSRF is handled upstream by the `originCheck` middleware (`secureStack`):
+       * a cross-site POST is refused with a 403 before dispatch ever reaches this
+       * handler, so it only sees same-origin form posts. The form POSTs `email`
+       * and `password`. Bad credentials surface as 401 — Identity throws
+       * `IDENTITY_INVALID_CREDENTIALS` (or `IDENTITY_EMAIL_NOT_VERIFIED`, which
+       * cannot happen for the demo's pre-verified seeds).
+       */
+      .post("/mls/api/sign-in", async (c) => {
+        const email = formField(c.req.body, "email") ?? "";
+        const password = formField(c.req.body, "password") ?? "";
 
-      if (user === undefined) return this.json({ user: null });
+        try {
+          const { session } = await identity.login(email, password);
 
-      return this.json({ user: sessionUser(user.email) });
-    }
+          return {
+            status: 303,
+            headers: { Location: "/mls", "Set-Cookie": sessionCookie(session.token) },
+            body: "",
+          };
+        } catch (error) {
+          if (error instanceof IdentityError) {
+            return c.json({ error: "invalid credentials", code: error.code }, 401);
+          }
 
-    /**
-     * Sign in — runs the real `Identity.login` flow.
-     *
-     * CSRF is handled upstream by the `originCheck` middleware (`secureStack`):
-     * a cross-site POST is refused with a 403 before dispatch ever reaches this
-     * action, so the handler only sees same-origin form posts. The form POSTs
-     * `email` and `password`. Bad credentials surface as 401 — Identity throws
-     * `IDENTITY_INVALID_CREDENTIALS` (or `IDENTITY_EMAIL_NOT_VERIFIED`, which
-     * cannot happen for the demo's pre-verified seeds).
-     */
-    async signIn(): Promise<KeelResponse> {
-      const email = formField(this.request.body, "email") ?? "";
-      const password = formField(this.request.body, "password") ?? "";
+          throw error;
+        }
+      })
+      /**
+       * Sign out: revoke the session and clear the cookie.
+       *
+       * The `originCheck` middleware refuses a cross-site POST before it arrives,
+       * so a forgery cannot reach here to silently sign the user out. Revoking is
+       * idempotent — a request without a session token just clears the cookie.
+       */
+      .post("/mls/api/sign-out", (c) => {
+        const sessionToken = readSessionToken(c.header("cookie"));
 
-      try {
-        const { session } = await identity.login(email, password);
+        if (sessionToken !== undefined) identity.logout(sessionToken);
 
         return {
           status: 303,
-          headers: { Location: "/mls", "Set-Cookie": sessionCookie(session.token) },
+          headers: { Location: "/mls", "Set-Cookie": clearSessionCookie() },
           body: "",
         };
-      } catch (error) {
-        if (error instanceof IdentityError) {
-          return this.json({ error: "invalid credentials", code: error.code }, 401);
-        }
+      })
+      // A gated resource: only a signed-in user's saved listings.
+      .get("/mls/saved", async (c) => {
+        const user = await currentUser(c);
 
-        throw error;
-      }
-    }
+        if (user === undefined) return c.json({ error: "sign in required" }, 401);
 
-    /**
-     * Sign out: revoke the session and clear the cookie.
-     *
-     * The `originCheck` middleware refuses a cross-site POST before it arrives,
-     * so a forgery cannot reach here to silently sign the user out. Revoking is
-     * idempotent — a request without a session token just clears the cookie.
-     */
-    signOut(): KeelResponse {
-      const sessionToken = this.sessionToken();
-
-      if (sessionToken !== undefined) identity.logout(sessionToken);
-
-      return {
-        status: 303,
-        headers: { Location: "/mls", "Set-Cookie": clearSessionCookie() },
-        body: "",
-      };
-    }
-
-    /** A gated resource: only a signed-in user's saved listings. */
-    async saved(): Promise<KeelResponse> {
-      const user = await this.currentUser();
-
-      if (user === undefined) return this.json({ error: "sign in required" }, 401);
-
-      return this.json({ user: sessionUser(user.email), saved: LISTINGS.slice(0, 2) });
-    }
-  }
-
-  return {
-    marketing: MarketingController as ControllerClass,
-    mls: MlsController as ControllerClass,
-  };
+        return c.json({ user: sessionUser(user.email), saved: LISTINGS.slice(0, 2) });
+      })
+  );
 }

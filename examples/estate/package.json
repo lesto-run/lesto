@@ -17,7 +17,6 @@
     "@keel/db": "workspace:*",
     "@keel/identity": "workspace:*",
     "@keel/migrate": "workspace:*",
-    "@keel/router": "workspace:*",
     "@keel/runtime": "workspace:*",
     "@keel/sites": "workspace:*",
     "@keel/ui": "workspace:*",

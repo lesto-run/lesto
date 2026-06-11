@@ -8,14 +8,15 @@
  * its own proof and verifies anywhere the secret is known. The node demo
  * (`serve.ts`) keeps using the store-backed `Sessions`; this is the edge twin.
  *
- * `buildEdgeApp(secret)` returns a plain `Application` whose `handle` is the pure
- * function the Worker fronts — so the same app is exercised by an in-process
- * E2E test and by the deployed Worker, with no divergence.
+ * `buildEdgeApp(secret)` returns a composable `keel()` app whose `handle` is the
+ * pure function the Worker fronts — so the same app is exercised by an in-process
+ * E2E test and by the deployed Worker, with no divergence. Pages still render
+ * through the retained `renderDocument`/island path; only dispatch moved off the
+ * legacy `Application`/`Controller`/`Router` onto `keel()`.
  */
 
-import { Application, Controller } from "@keel/web";
-import type { ControllerClass, KeelResponse } from "@keel/web";
-import { Router } from "@keel/router";
+import { keel } from "@keel/web";
+import type { Keel } from "@keel/web";
 import { SignedSessions } from "@keel/auth";
 import { island } from "@keel/ui";
 import type { UiNode } from "@keel/ui";
@@ -82,7 +83,7 @@ function listingGrid(): UiNode {
  * The secret backs every signed session; in the Worker it comes from
  * `env.SESSION_SECRET`, never the source.
  */
-export function buildEdgeApp(secret: string): Application {
+export function buildEdgeApp(secret: string): Keel {
   const sessions = new SignedSessions({ secret });
 
   /** The user named by the request's session cookie, or undefined. */
@@ -96,151 +97,127 @@ export function buildEdgeApp(secret: string): Application {
     return claim === undefined ? undefined : USERS.get(claim.userId);
   };
 
-  class MarketingController extends Controller {
-    home(): KeelResponse {
-      const tree: UiNode = {
-        type: "Page",
-        children: [
-          { type: "SiteHeader", children: [island("Account")] },
-          main(
-            {
-              type: "Hero",
-              props: {
-                heading: "Extraordinary homes, quietly sold.",
-                sub: "Beverly Hills · Bel Air · Malibu",
-              },
-            },
-            listingGrid(),
-          ),
-        ],
-      };
-
-      return this.html(
-        renderDocument(
-          registry,
-          tree,
-          "Jade Mills Estates",
-          "Extraordinary homes, quietly sold across Beverly Hills, Bel Air, and Malibu — browse Jade Mills' luxury listings.",
-        ),
-      );
-    }
-  }
-
-  class MlsController extends Controller {
-    /** The MLS landing page: the listings, with a sign-in/out control reflecting the session. */
-    index(): KeelResponse {
-      const user = currentUser(this.request.headers["cookie"]);
-
-      const tree: UiNode = {
-        type: "Page",
-        children: [
-          {
-            type: "SiteHeader",
-            // The edge app's CSRF control is the signed cookie + SameSite=Lax,
-            // not a form token — so SignInPanel renders without one.
-            children: [
+  return (
+    keel()
+      .get("/", (c) => {
+        const tree: UiNode = {
+          type: "Page",
+          children: [
+            { type: "SiteHeader", children: [island("Account")] },
+            main(
               {
-                type: "SignInPanel",
-                props: { signedIn: user !== undefined, ...(user && { name: user.name }) },
+                type: "Hero",
+                props: {
+                  heading: "Extraordinary homes, quietly sold.",
+                  sub: "Beverly Hills · Bel Air · Malibu",
+                },
               },
-            ],
-          },
-          main(
-            {
-              type: "Hero",
-              props: {
-                heading: user === undefined ? "MLS Search" : `Welcome back, ${user.name}`,
-                sub:
-                  user === undefined
-                    ? "Sign in to save listings."
-                    : "Your saved listings are at /mls/saved.",
-              },
-            },
-            listingGrid(),
+              listingGrid(),
+            ),
+          ],
+        };
+
+        return c.html(
+          renderDocument(
+            registry,
+            tree,
+            "Jade Mills Estates",
+            "Extraordinary homes, quietly sold across Beverly Hills, Bel Air, and Malibu — browse Jade Mills' luxury listings.",
           ),
-        ],
-      };
+        );
+      })
+      // The MLS landing page: the listings, with a sign-in/out control reflecting the session.
+      .get("/mls", (c) => {
+        const user = currentUser(c.header("cookie"));
 
-      return this.html(
-        renderDocument(
-          registry,
-          tree,
-          "MLS · Jade Mills Estates",
-          "Search the Jade Mills MLS and sign in to save listings.",
-        ),
-      );
-    }
+        const tree: UiNode = {
+          type: "Page",
+          children: [
+            {
+              type: "SiteHeader",
+              // The edge app's CSRF control is the signed cookie + SameSite=Lax,
+              // not a form token — so SignInPanel renders without one.
+              children: [
+                {
+                  type: "SignInPanel",
+                  props: { signedIn: user !== undefined, ...(user && { name: user.name }) },
+                },
+              ],
+            },
+            main(
+              {
+                type: "Hero",
+                props: {
+                  heading: user === undefined ? "MLS Search" : `Welcome back, ${user.name}`,
+                  sub:
+                    user === undefined
+                      ? "Sign in to save listings."
+                      : "Your saved listings are at /mls/saved.",
+                },
+              },
+              listingGrid(),
+            ),
+          ],
+        };
 
-    /**
-     * The same-origin endpoint the marketing Account island calls.
-     *
-     * An identity *probe*, not a gated resource: "nobody is signed in" is a
-     * normal answer, so it returns 200 with `{ user: null }`. A 401 here would
-     * be logged by the browser as a failed resource load — a console error
-     * Lighthouse flags — on every signed-out view of the public marketing page,
-     * whose island fetches this on load. The gated `/mls/saved` still 401s.
-     */
-    session(): KeelResponse {
-      const user = currentUser(this.request.headers["cookie"]);
+        return c.html(
+          renderDocument(
+            registry,
+            tree,
+            "MLS · Jade Mills Estates",
+            "Search the Jade Mills MLS and sign in to save listings.",
+          ),
+        );
+      })
+      /**
+       * The same-origin endpoint the marketing Account island calls.
+       *
+       * An identity *probe*, not a gated resource: "nobody is signed in" is a
+       * normal answer, so it returns 200 with `{ user: null }`. A 401 here would
+       * be logged by the browser as a failed resource load — a console error
+       * Lighthouse flags — on every signed-out view of the public marketing page,
+       * whose island fetches this on load. The gated `/mls/saved` still 401s.
+       */
+      .get("/mls/api/session", (c) => {
+        const user = currentUser(c.header("cookie"));
 
-      return user === undefined ? this.json({ user: null }) : this.json({ user });
-    }
+        return user === undefined ? c.json({ user: null }) : c.json({ user });
+      })
+      // Demo sign-in: mint a SIGNED token for `?as=<id>` (default jade), set the cookie.
+      .post("/mls/api/sign-in", (c) => {
+        const user = USERS.get(c.query("as") ?? "jade");
 
-    /** Demo sign-in: mint a SIGNED token for `?as=<id>` (default jade), set the cookie. */
-    signIn(): KeelResponse {
-      const user = USERS.get(this.request.query["as"] ?? "jade");
+        if (user === undefined) return c.json({ error: "unknown user" }, 400);
 
-      if (user === undefined) return this.json({ error: "unknown user" }, 400);
+        const token = sessions.issue(user.id, ONE_DAY_MS);
 
-      const token = sessions.issue(user.id, ONE_DAY_MS);
-
-      return {
-        status: 303,
-        headers: {
-          Location: "/mls",
-          "Set-Cookie": `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Lax`,
-        },
-        body: "",
-      };
-    }
-
-    /** Sign out: clear the cookie. A signed token cannot be revoked, so it just expires. */
-    signOut(): KeelResponse {
-      return {
+        return {
+          status: 303,
+          headers: {
+            Location: "/mls",
+            "Set-Cookie": `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Lax`,
+          },
+          body: "",
+        };
+      })
+      // Sign out: clear the cookie. A signed token cannot be revoked, so it just expires.
+      .post("/mls/api/sign-out", () => ({
         status: 303,
         headers: {
           Location: "/mls",
           "Set-Cookie": `${SESSION_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`,
         },
         body: "",
-      };
-    }
+      }))
+      // A gated resource: only a signed-in user's saved listings.
+      .get("/mls/saved", (c) => {
+        const user = currentUser(c.header("cookie"));
 
-    /** A gated resource: only a signed-in user's saved listings. */
-    saved(): KeelResponse {
-      const user = currentUser(this.request.headers["cookie"]);
+        if (user === undefined) return c.json({ error: "sign in required" }, 401);
 
-      if (user === undefined) return this.json({ error: "sign in required" }, 401);
-
-      return this.json({ user, saved: LISTINGS.slice(0, 2) });
-    }
-  }
-
-  const router = new Router()
-    .get("/", "marketing#home")
-    .get("/mls", "mls#index")
-    .get("/mls/api/session", "mls#session")
-    .post("/mls/api/sign-in", "mls#signIn")
-    .post("/mls/api/sign-out", "mls#signOut")
-    .get("/mls/saved", "mls#saved");
-
-  return new Application({
-    router,
-    controllers: {
-      marketing: MarketingController as ControllerClass,
-      mls: MlsController as ControllerClass,
-    },
-  });
+        return c.json({ user, saved: LISTINGS.slice(0, 2) });
+      })
+  );
 }
 
 /** The signing secret from the environment, with a loud demo fallback. */

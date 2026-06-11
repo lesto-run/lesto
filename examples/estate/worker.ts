@@ -29,7 +29,7 @@ type FetchHandler = (request: Request) => Promise<Response>;
 
 /**
  * The app/handler is built once per isolate and reused across requests, not
- * rebuilt on every `fetch`. Constructing the Router, controllers, and the
+ * rebuilt on every `fetch`. Constructing the `keel()` app and its
  * `SignedSessions` is pure CPU that depends on nothing but the signing secret,
  * so doing it per request burned cycles on the edge for an identical result
  * (research finding 11: keep work out of the per-request path). We memoize the
