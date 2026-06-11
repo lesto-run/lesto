@@ -923,6 +923,107 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
     expect(document.body.querySelector(".profile")).toBeNull();
   });
 
+  it("fails a bound island whose data never arrives after the deadline (UI_ISLAND_DATA_TIMEOUT)", async () => {
+    vi.useFakeTimers();
+
+    try {
+      document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+      // A primed promise that never settles — the hung-source case.
+      window.__keelData = { who: new Promise<unknown>(() => undefined) };
+
+      const errors: UiError[] = [];
+
+      let result!: ReturnType<typeof hydrateIslands>;
+
+      await act(async () => {
+        result = hydrateIslands(registry(), [profileBind], {
+          onMountError: (error) => errors.push(error as UiError),
+        });
+      });
+
+      // In flight: deferred, nothing failed yet.
+      expect(result.deferred).toEqual(["$"]);
+      expect(result.failed).toEqual([]);
+
+      // Advance past the 10s deadline; the timeout rejects and routes to the sink.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(result.failed).toEqual(["$"]);
+      expect(errors[0]).toBeInstanceOf(UiError);
+      expect(errors[0]?.code).toBe("UI_ISLAND_DATA_TIMEOUT");
+      expect(errors[0]?.details).toEqual({ id: "$" });
+      expect(document.body.querySelector(".profile")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("mounts when data wins just before the deadline and leaks no timer", async () => {
+    vi.useFakeTimers();
+
+    try {
+      document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+      // Resolve at 9.9s — inside the 10s deadline.
+      window.__keelData = {
+        who: new Promise<unknown>((resolve) => setTimeout(() => resolve("Ada"), 9_900)),
+      };
+
+      let result!: ReturnType<typeof hydrateIslands>;
+
+      await act(async () => {
+        result = hydrateIslands(registry(), [profileBind]);
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9_900);
+      });
+
+      expect(result.mounted).toEqual(["$"]);
+      expect(result.failed).toEqual([]);
+      expect(document.body.querySelector(".profile")?.textContent).toBe("who: Ada");
+      // The deadline timer was cleared when the data won — nothing dangling.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors an injected bindTimeoutMs override", async () => {
+    vi.useFakeTimers();
+
+    try {
+      document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+      window.__keelData = { who: new Promise<unknown>(() => undefined) };
+
+      const errors: UiError[] = [];
+
+      let result!: ReturnType<typeof hydrateIslands>;
+
+      await act(async () => {
+        result = hydrateIslands(registry(), [profileBind], {
+          bindTimeoutMs: 50,
+          onMountError: (error) => errors.push(error as UiError),
+        });
+      });
+
+      // The default 10s would not have fired yet; the 50ms override does.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+
+      expect(result.failed).toEqual(["$"]);
+      expect(errors[0]?.code).toBe("UI_ISLAND_DATA_TIMEOUT");
+      expect(errors[0]?.message).toContain("50ms");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fetches a lazy island's chunk AND its data in parallel, then mounts", async () => {
     // A bound + lazy island: ADR 0009's chunk and ADR 0010's data must race, not
     // chain. Both resolve; the island mounts with the loaded component + data.

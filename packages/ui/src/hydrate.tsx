@@ -83,21 +83,37 @@ declare global {
 }
 
 /**
- * Resolve an island's data binds to a `{ propName: value }` bag, in parallel.
+ * The client analogue of the server's 10s `RENDER_DEADLINE_MS` (render-page.tsx):
+ * a hung `/__keel/data/<name>` — or a primed promise that never settles — would
+ * otherwise leave its island in `deferred` forever. Bind resolution races this
+ * deadline and routes a timeout to `onMountError`/`failed`, exactly like a
+ * rejected fetch.
+ */
+const BIND_DEADLINE_MS = 10_000;
+
+/**
+ * Resolve an island's data binds to a `{ propName: value }` bag, in parallel,
+ * racing a `timeoutMs` deadline so a never-settling source cannot strand the
+ * island in `deferred`.
  *
  * Each bound source is taken from the parse-time primer promise
  * (`window.__keelData[source]`, started before any JS ran — see
  * `dataPrimerScript`) when present, else fetched directly as the fallback. A
- * rejection propagates to the caller's catch, which fails just that one island.
+ * rejection (a non-ok fetch, or the timeout) propagates to the caller's catch,
+ * which fails just that one island. The timer is CLEARED when the data wins — a
+ * dangling timer keeps a test process (or the browser tab) alive needlessly.
  */
-async function resolveBinds(entry: IslandMount): Promise<Record<string, unknown>> {
+async function resolveBinds(
+  entry: IslandMount,
+  timeoutMs: number,
+): Promise<Record<string, unknown>> {
   if (entry.bind === undefined) return {};
 
   const primed = window.__keelData;
 
   const resolved: Record<string, unknown> = {};
 
-  await Promise.all(
+  const data = Promise.all(
     Object.entries(entry.bind).map(async ([prop, bind]) => {
       resolved[prop] = await (primed?.[bind.source] ??
         fetch(bind.href, { credentials: "same-origin" }).then((response) => {
@@ -116,6 +132,26 @@ async function resolveBinds(entry: IslandMount): Promise<Record<string, unknown>
         }));
     }),
   );
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new UiError("UI_ISLAND_DATA_TIMEOUT", `island data did not arrive within ${timeoutMs}ms`, {
+          id: entry.id,
+        }),
+      );
+    }, timeoutMs);
+  });
+
+  try {
+    await Promise.race([data, deadline]);
+  } finally {
+    // Whether the data won or the deadline fired, stop the timer so it cannot
+    // dangle (the win case) — the loss case has already cleared on fire.
+    clearTimeout(timer);
+  }
 
   return resolved;
 }
@@ -210,6 +246,13 @@ export interface HydrateOptions {
   observe?: ObserveFn;
   onRecoverableError?: RecoverableErrorSink;
   onMountError?: MountErrorSink;
+
+  /**
+   * How long a bound island waits for its data before failing (the client
+   * analogue of the server's render deadline). Defaults to {@link BIND_DEADLINE_MS};
+   * an injectable seam like `observe`/`mount`, primarily for tests.
+   */
+  bindTimeoutMs?: number;
 }
 
 /**
@@ -312,6 +355,8 @@ export function hydrateIslands(
 
   const onMountError: MountErrorSink = options.onMountError ?? consoleMountError;
 
+  const bindTimeoutMs: number = options.bindTimeoutMs ?? BIND_DEADLINE_MS;
+
   const mounted: string[] = [];
 
   const missing: string[] = [];
@@ -373,7 +418,7 @@ export function hydrateIslands(
     const componentReady: Promise<NonNullable<ClientComponentDef["component"]>> =
       def.component === undefined ? def.load() : Promise.resolve(def.component);
 
-    Promise.all([componentReady, resolveBinds(entry)]).then(
+    Promise.all([componentReady, resolveBinds(entry, bindTimeoutMs)]).then(
       ([component, data]) => finish(entry, component, container, { ...entry.props, ...data }),
       (error: unknown) => {
         onMountError(error, { id: entry.id, component: entry.component });
