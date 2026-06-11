@@ -1,0 +1,130 @@
+/**
+ * The real `Bun.build` + `node:fs` wiring behind {@link buildClient}'s seams.
+ *
+ * This is the dialect-and-bundler edge — `Bun.build` (the only API that can apply
+ * the preact resolver plugin; the `bun build` CLI has no `--alias`), dynamic
+ * `import()` to read each island's declared hydrate strategy, and the filesystem.
+ * It is the `bin`-equivalent of this package: excluded from the coverage gate
+ * because it cannot run under vitest, while the orchestration it feeds
+ * (`build-client.ts`) is covered with fakes.
+ */
+
+import { readdir, rm, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+
+import type { BunPlugin } from "bun";
+
+import type { BuildClientDeps, BundleArtifact, BundleRequest } from "./build-client";
+import { AssetsError } from "./errors";
+import { PREACT_ALIAS } from "./preact-alias";
+import type { IslandFile } from "./synthesize";
+
+/** This package's shims directory — where a `@keel/assets/shims/*` alias target lives. */
+const SHIMS_DIR = join(import.meta.dir, "shims");
+
+/** The island module file extensions an `app/islands/` directory may hold. */
+const ISLAND_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js"];
+
+/** Build the Bun resolver plugin that rewrites each React specifier to its Preact target. */
+function preactAliasPlugin(appRoot: string): BunPlugin {
+  return {
+    name: "react-to-preact-compat",
+    setup(build) {
+      for (const [from, to] of Object.entries(PREACT_ALIAS)) {
+        // Anchor the filter so `react-dom/client` is not also caught by `react-dom`.
+        const filter = new RegExp(`^${from.replace(/[/\\]/g, "\\$&")}$`);
+
+        // A `@keel/assets/shims/*` target is this package's own file; anything
+        // else is resolved in the consuming app's graph.
+        const path = to.startsWith("@keel/assets/shims/")
+          ? join(SHIMS_DIR, `${basename(to)}.ts`)
+          : Bun.resolveSync(to, appRoot);
+
+        build.onResolve({ filter }, () => ({ path }));
+      }
+    },
+  };
+}
+
+/** Read one island module's declaration, classifying it eager/lazy by its hydrate strategy. */
+async function readIsland(path: string): Promise<IslandFile> {
+  const module = (await import(path)) as {
+    default: { island: { name: string; hydrate?: string } };
+  };
+
+  const def = module.default.island;
+
+  return { name: def.name, importPath: path, lazy: def.hydrate === "visible" };
+}
+
+/** Whether a directory entry is an island module (by extension), ignoring synthesized/hidden files. */
+function isIslandModule(name: string): boolean {
+  return !name.startsWith(".") && ISLAND_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
+/** Bundle the synthesized entry with Bun, applying the preact alias for the preact dialect. */
+async function bundle(request: BundleRequest, appRoot: string): Promise<readonly BundleArtifact[]> {
+  // Bun.build takes entry FILES, so the synthesized source is staged beside the
+  // output and removed after; island imports are absolute, so its location is moot.
+  const entryFile = join(appRoot, ".keel-client-entry.tsx");
+
+  await writeFile(entryFile, request.entrySource, "utf8");
+
+  try {
+    const production = request.mode === "production";
+
+    const result = await Bun.build({
+      entrypoints: [entryFile],
+      target: "browser",
+      splitting: true,
+      minify: production,
+      define: production ? { "process.env.NODE_ENV": '"production"' } : {},
+      plugins: request.dialect === "preact" ? [preactAliasPlugin(appRoot)] : [],
+    });
+
+    if (!result.success) {
+      for (const log of result.logs) console.error(log);
+
+      throw new AssetsError("ASSETS_BUNDLE_FAILED", "the client bundle failed to compile", {
+        dialect: request.dialect,
+      });
+    }
+
+    return Promise.all(
+      result.outputs.map(async (artifact) => ({
+        kind: artifact.kind === "entry-point" ? ("entry" as const) : ("chunk" as const),
+        fileName: basename(artifact.path),
+        contents: await artifact.text(),
+      })),
+    );
+  } finally {
+    await rm(entryFile, { force: true });
+  }
+}
+
+/**
+ * The default {@link BuildClientDeps}, wired to real Bun + `node:fs`.
+ *
+ * `appRoot` is where island imports and the staged entry resolve from (the
+ * project root). The preact alias's bare targets (`preact/compat`, …) resolve in
+ * the app's `node_modules`; the two `react-dom` shims resolve to this package.
+ */
+export function bunBuildClientDeps(appRoot: string): BuildClientDeps {
+  return {
+    listIslands: async (islandsDir) => {
+      const names = await readdir(islandsDir);
+
+      return Promise.all(
+        names.filter(isIslandModule).map((name) => readIsland(join(islandsDir, name))),
+      );
+    },
+
+    bundle: (request) => bundle(request, appRoot),
+
+    listOutDir: (outDir) => readdir(outDir),
+
+    remove: (path) => rm(path),
+
+    write: (path, contents) => writeFile(path, contents),
+  };
+}

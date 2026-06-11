@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+
+  "compilerOptions": {
+    "rootDir": ".",
+    "types": ["node", "bun"]
+  },
+
+  "include": ["src", "test"],
+
+  // The shims are Bun-bundle-target inputs (resolved by the alias plugin, not
+  // imported by any TS-compiled module here), and they re-export `preact/compat`
+  // (an `export =` module) — bundler-resolvable but not tsc-`export *`-able. They
+  // are typechecked by their use in the client graph, not here.
+  "exclude": ["src/shims"]
+}

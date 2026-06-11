@@ -1,0 +1,28 @@
+{
+  "name": "@keel/assets",
+  "version": "0.0.0",
+  "description": "Keel's client-asset pipeline — synthesize the island hydration entry from an app/islands convention and bundle it (Bun.build, splitting, the opt-in preact dialect), so an app ships an optimized /client.js with no bespoke build script.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "dependencies": {
+    "@keel/errors": "workspace:*",
+    "preact": "^10.29.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
