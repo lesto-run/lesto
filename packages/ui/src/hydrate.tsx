@@ -100,7 +100,20 @@ async function resolveBinds(entry: IslandMount): Promise<Record<string, unknown>
   await Promise.all(
     Object.entries(entry.bind).map(async ([prop, bind]) => {
       resolved[prop] = await (primed?.[bind.source] ??
-        fetch(bind.href, { credentials: "same-origin" }).then((response) => response.json()));
+        fetch(bind.href, { credentials: "same-origin" }).then((response) => {
+          // Mirror the primer's `ok` guard: a 401/429 etc. JSON error body must
+          // never become the island's prop value. A coded rejection flows to the
+          // caller's catch, which fails just this island (it keeps its fallback).
+          if (!response.ok) {
+            throw new UiError(
+              "UI_ISLAND_DATA_FETCH_FAILED",
+              `data source "${bind.source}" answered ${response.status}`,
+              { source: bind.source, status: response.status },
+            );
+          }
+
+          return response.json();
+        }));
     }),
   );
 

@@ -20,6 +20,9 @@
  *     unresolved bind plus the {@link dataPrimerScript} primer, which kicks the
  *     fetch at HTML-parse time (parallel with `client.js`), and the client
  *     hydration runtime awaits it (1 RTT, never the serial `doc → js → fetch`).
+ *     A `hydrate: "visible"` island is EXCLUDED from the primer — its data is
+ *     deferred to first intersection along with its mount, or `"visible"` would
+ *     be defeated by a parse-time fetch.
  */
 
 import { UiError } from "./errors";
@@ -81,7 +84,13 @@ export interface IslandBind {
 }
 
 /**
- * Collect the distinct sources every island on the page binds.
+ * Collect the distinct sources every PRIMED island on the page binds.
+ *
+ * A `hydrate: "visible"` island is excluded: its mount work — and so its data
+ * fetch — is deferred to first intersection (resolved then by the client's
+ * fallback fetch), or the whole point of `"visible"` is defeated by priming it
+ * at parse time (ADR 0010 corrections #4). A source bound by both an eager and a
+ * visible island still primes once: the eager mount keeps it in the map.
  *
  * Shared by the primer (which kicks one fetch per distinct source) and the
  * server resolver (which runs one loader per distinct source) — a source bound
@@ -92,6 +101,8 @@ function distinctSources(manifest: readonly IslandMount[]): Map<string, string> 
 
   for (const mount of manifest) {
     if (mount.bind === undefined) continue;
+
+    if (mount.strategy === "visible") continue;
 
     for (const bind of Object.values(mount.bind)) {
       sources.set(bind.source, bind.href);
@@ -112,6 +123,19 @@ function distinctSources(manifest: readonly IslandMount[]): Map<string, string> 
  * hydration runtime awaits before mounting a bound island. The script embeds
  * only framework-controlled, charset-validated names and hrefs (never data),
  * so the JSON-encoded literals cannot break out of the `<script>`.
+ *
+ * Three properties the emitted body carries (ADR 0010 corrections #3, Seam 1 §3):
+ *   - `w[name]=w[name]||fetch(...)` is IDEMPOTENT: two islands binding one source
+ *     (each emitting its own primer) issue a single credentialed fetch, not two.
+ *   - the `if(!r.ok)throw` rejects the stored promise on a 401/429 etc., so a
+ *     JSON error body never becomes the island's prop value; `hydrateIslands`
+ *     routes that rejection to `onMountError`/`failed` and the island keeps its
+ *     fallback — correct for an unauthenticated visitor.
+ *   - the trailing detached `.catch(function(){})` marks the rejection HANDLED so
+ *     a failure that lands before hydration attaches its handler does not fire a
+ *     spurious `unhandledrejection`. It does NOT swallow the error for the
+ *     hydration runtime, which awaits the ORIGINAL stored promise (`w[name]`),
+ *     not this detached branch.
  */
 export function dataPrimerScript(manifest: readonly IslandMount[]): string {
   const sources = distinctSources(manifest);
@@ -119,10 +143,15 @@ export function dataPrimerScript(manifest: readonly IslandMount[]): string {
   if (sources.size === 0) return "";
 
   const assignments = [...sources]
-    .map(
-      ([name, href]) =>
-        `w[${JSON.stringify(name)}]=fetch(${JSON.stringify(href)},{credentials:"same-origin"}).then(function(r){return r.json()})`,
-    )
+    .map(([name, href]) => {
+      const w = `w[${JSON.stringify(name)}]`;
+
+      return (
+        `${w}=${w}||fetch(${JSON.stringify(href)},{credentials:"same-origin"})` +
+        `.then(function(r){if(!r.ok)throw new Error("keel data "+r.status);return r.json()});` +
+        `${w}.catch(function(){})`
+      );
+    })
     .join(";");
 
   return `(function(){var w=window.__keelData=window.__keelData||{};${assignments};})()`;

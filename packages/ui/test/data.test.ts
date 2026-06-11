@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DATA_ROUTE_PREFIX,
@@ -48,34 +50,138 @@ function bound(id: string, bind: NonNullable<IslandMount["bind"]>): IslandMount 
   return { id, component: "Account", props: { static: 1 }, ssr: false, bind };
 }
 
+/** A visible (lazy-mount) bound island — its data is deferred, never primed. */
+function visibleBound(id: string, bind: NonNullable<IslandMount["bind"]>): IslandMount {
+  return { id, component: "Account", props: { static: 1 }, ssr: false, strategy: "visible", bind };
+}
+
+const sessionBind = { session: { source: "session", href: "/__keel/data/session" } } as const;
+const cartBind = { cart: { source: "cart", href: "/__keel/data/cart" } } as const;
+
+afterEach(() => {
+  delete window.__keelData;
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
 describe("dataPrimerScript", () => {
   it("is empty for a manifest with no binds (a data-free page emits no primer)", () => {
     expect(dataPrimerScript([{ id: "$", component: "X", props: {}, ssr: false }])).toBe("");
     expect(dataPrimerScript([])).toBe("");
   });
 
-  it("kicks one credentialed fetch per distinct source onto window.__keelData", () => {
-    const script = dataPrimerScript([
-      bound("$.a", { session: { source: "session", href: "/__keel/data/session" } }),
-    ]);
+  it("kicks one guarded, ok-checked, credentialed fetch per distinct source", () => {
+    const script = dataPrimerScript([bound("$.a", sessionBind)]);
 
     expect(script).toBe(
       "(function(){var w=window.__keelData=window.__keelData||{};" +
-        'w["session"]=fetch("/__keel/data/session",{credentials:"same-origin"})' +
-        ".then(function(r){return r.json()});})()",
+        'w["session"]=w["session"]||fetch("/__keel/data/session",{credentials:"same-origin"})' +
+        '.then(function(r){if(!r.ok)throw new Error("keel data "+r.status);return r.json()});' +
+        'w["session"].catch(function(){});})()',
     );
   });
 
   it("deduplicates a source bound by several islands to a single fetch", () => {
     const script = dataPrimerScript([
-      bound("$.a", { session: { source: "session", href: "/__keel/data/session" } }),
-      bound("$.b", { session: { source: "session", href: "/__keel/data/session" } }),
-      bound("$.c", { cart: { source: "cart", href: "/__keel/data/cart" } }),
+      bound("$.a", sessionBind),
+      bound("$.b", sessionBind),
+      bound("$.c", cartBind),
     ]);
 
     expect(script.match(/fetch\(/g)).toHaveLength(2);
     expect(script).toContain('w["session"]=');
     expect(script).toContain('w["cart"]=');
+  });
+
+  it("emits no primer when the only bind is on a visible island (F5)", () => {
+    expect(dataPrimerScript([visibleBound("$.v", sessionBind)])).toBe("");
+  });
+
+  it("primes a source once when bound by both an eager and a visible island", () => {
+    const script = dataPrimerScript([
+      bound("$.eager", sessionBind),
+      visibleBound("$.v", sessionBind),
+    ]);
+
+    expect(script.match(/fetch\(/g)).toHaveLength(1);
+    expect(script).toContain('w["session"]=');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Execute the emitted primer body in jsdom against a stubbed window.fetch —
+// the guard, the ok-check, and the handled-rejection properties (F2/F4).
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a primer script body the way the browser would (it is a self-calling IIFE).
+ *
+ * `new Function` executes only the framework's own emitted primer, whose names
+ * and hrefs are charset-validated by `defineDataSource` (the `VALID_SOURCE_NAME`
+ * invariant) — no untrusted input crosses into the function body.
+ */
+function runPrimer(script: string): void {
+  new Function(script)();
+}
+
+describe("dataPrimerScript — runtime behavior", () => {
+  it("starts one fetch per source; running the script TWICE still fetches once (the || guard)", () => {
+    const fetchMock = vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve(1) }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const script = dataPrimerScript([bound("$.a", sessionBind), bound("$.b", cartBind)]);
+
+    runPrimer(script);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // A re-run (e.g. two islands each emitting their own primer for shared
+    // sources) must NOT re-fetch — `w[name]||fetch(...)` keeps the first promise.
+    runPrimer(script);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects the stored promise on a non-ok response WITHOUT parsing the error body", async () => {
+    const json = vi.fn(() => Promise.resolve({ error: "nope" }));
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, status: 401, json }));
+
+    runPrimer(dataPrimerScript([bound("$.a", sessionBind)]));
+
+    await expect(window.__keelData?.session).rejects.toThrow("keel data 401");
+    // The error JSON body was never read into a value.
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  it("does not fire unhandledrejection for an unconsumed rejected primer promise", async () => {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: false, status: 500, json: () => undefined }),
+    );
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (event: PromiseRejectionEvent): void => {
+      unhandled.push(event.reason);
+    };
+    window.addEventListener("unhandledrejection", onUnhandled);
+
+    try {
+      // Nobody awaits window.__keelData.session here — the detached .catch must
+      // mark the rejection handled so no unhandledrejection escapes.
+      runPrimer(dataPrimerScript([bound("$.a", sessionBind)]));
+
+      // Let the rejected promise settle and the microtask/macrotask queues drain.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      window.removeEventListener("unhandledrejection", onUnhandled);
+    }
+  });
+
+  it("resolves the stored promise to the parsed body on an ok response", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: true, json: () => Promise.resolve("Ada") }));
+
+    runPrimer(dataPrimerScript([bound("$.a", sessionBind)]));
+
+    await expect(window.__keelData?.session).resolves.toBe("Ada");
   });
 });
 

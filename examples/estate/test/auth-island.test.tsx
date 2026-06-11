@@ -91,7 +91,10 @@ describe("the Account island", () => {
 
   it("falls back to fetching the source route when nothing primed it", async () => {
     const fetchMock = vi.fn(() =>
-      Promise.resolve({ json: () => Promise.resolve({ id: "ada", name: "Ada" }) } as Response),
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ id: "ada", name: "Ada" }),
+      } as Response),
     );
     vi.stubGlobal("fetch", fetchMock);
 

@@ -800,7 +800,7 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
     document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
 
     const fetchMock = vi.fn(() =>
-      Promise.resolve({ json: () => Promise.resolve("Bob") } as Response),
+      Promise.resolve({ ok: true, json: () => Promise.resolve("Bob") } as Response),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -817,6 +817,37 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
     expect(fetchMock).toHaveBeenCalledWith("/__keel/data/who", { credentials: "same-origin" });
     expect(document.body.querySelector(".profile")?.textContent).toBe("who: Bob");
     expect(result.mounted).toEqual(["$"]);
+  });
+
+  it("fails the island when the fallback fetch answers non-ok (UI_ISLAND_DATA_FETCH_FAILED)", async () => {
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+    // No primer primed `who`, so the runtime fetches the href — and gets a 401.
+    const json = vi.fn(() => Promise.resolve({ error: "unauthorized" }));
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: false, status: 401, json } as unknown as Response),
+    );
+
+    const errors: unknown[] = [];
+
+    let result!: ReturnType<typeof hydrateIslands>;
+
+    await act(async () => {
+      result = hydrateIslands(registry(), [profileBind], {
+        onMountError: (error) => errors.push(error),
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.failed).toEqual(["$"]);
+    expect(errors[0]).toBeInstanceOf(UiError);
+    expect((errors[0] as UiError).code).toBe("UI_ISLAND_DATA_FETCH_FAILED");
+    expect((errors[0] as UiError).details).toEqual({ source: "who", status: 401 });
+    // The error body was never read into a prop value.
+    expect(json).not.toHaveBeenCalled();
+    expect(document.body.querySelector(".profile")).toBeNull();
   });
 
   it("merges resolved data over the island's static props (data wins)", async () => {
