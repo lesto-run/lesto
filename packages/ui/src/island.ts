@@ -67,19 +67,62 @@ import type { PropSpec, UiNode } from "./types";
  *     `/mls/api/session` fetch until the region is actually seen.
  *
  * Honest scope: Keel ships ONE client bundle, so `"visible"` defers the island's
- * MOUNT WORK (its render, effects, and fetches), NOT bundle BYTES — the
- * component's code is already in the loaded bundle. True byte deferral needs
- * per-island code-splitting, a separate and larger follow-up. We do not overclaim
- * it here.
+ * MOUNT WORK (its render, effects, and fetches). Whether it also defers the
+ * island's BYTES depends on the declaration form below: an eager `component`
+ * already shipped in the main bundle, while a lazy `load` arrives as its own
+ * chunk only when the mount actually happens.
+ *
+ * A client component is declared in one of two forms, and the split is what
+ * makes per-island code-splitting real:
+ *
+ *   - **Eager (`component`)** — the component function is referenced directly,
+ *     so its code ships in the main client bundle. Required for `ssr: true`
+ *     (the server must hold the real component to render it into the shell).
+ *
+ *   - **Lazy (`load`)** — the def carries a `() => import(...)`-shaped loader
+ *     instead of the component itself. A bundler with code-splitting turns that
+ *     dynamic import into a separate chunk, so the island's BYTES stay out of
+ *     the main bundle and only arrive when the island actually mounts. Combined
+ *     with `hydrate: "visible"` this is true byte deferral: a below-the-fold
+ *     island costs nothing — no code, no work — until it scrolls into view.
+ *     A lazy island is necessarily deferred (`ssr` cannot be `true`): the server
+ *     cannot SSR a component it does not hold, only its `fallback`.
+ *
+ * The two forms are a discriminated union, not two optional fields: exactly one
+ * of `component`/`load` is present, the compiler enforces `ssr: true` only on
+ * the eager form, and `defineClient` re-checks both rules at runtime for
+ * un-typed callers.
  */
-export interface ClientComponentDef {
+export type ClientComponentDef = EagerClientComponentDef | LazyClientComponentDef;
+
+/** The declaration fields shared by both forms of client component. */
+interface ClientComponentBase {
   name: string;
   description?: string;
   props?: Record<string, PropSpec>;
-  component: ComponentType<Record<string, unknown>>;
   fallback?: (props: Record<string, unknown>) => ReactNode;
-  ssr?: boolean;
   hydrate?: HydrationStrategy;
+}
+
+/** An island whose component ships in the main bundle (and may be `ssr: true`). */
+export interface EagerClientComponentDef extends ClientComponentBase {
+  component: ComponentType<Record<string, unknown>>;
+  load?: never;
+  ssr?: boolean;
+}
+
+/**
+ * An island whose component arrives as its own chunk, fetched on mount.
+ *
+ * `load` resolves the component — canonically `() => import("./x").then(m => m.X)`
+ * so the bundler splits it. The island is always deferred (`ssr` is not
+ * declarable): its server shell is the `fallback`, and the client swaps it for
+ * the loaded component with a fresh mount once the chunk arrives.
+ */
+export interface LazyClientComponentDef extends ClientComponentBase {
+  load: () => Promise<ComponentType<Record<string, unknown>>>;
+  component?: never;
+  ssr?: false;
 }
 
 /**

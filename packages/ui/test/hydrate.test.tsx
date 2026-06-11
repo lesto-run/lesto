@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 
 import { ISLAND_ATTR, Registry, renderPage, renderPageMarkup, UiError } from "../src/index";
-import type { ClientComponentDef, ComponentDef } from "../src/index";
+import type { ClientComponentDef, ComponentDef, IslandMount } from "../src/index";
 import { hydrateIslands } from "../src/hydrate";
 import type { MountErrorSink, MountFn, ObserveFn } from "../src/hydrate";
 
@@ -606,5 +606,144 @@ describe("hydrateIslands — visible (lazy) islands", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// A lazy (load) island: its component arrives as its own chunk at mount time —
+// per-island code-splitting's runtime half. The loader here stands in for the
+// `() => import("./x").then(m => m.X)` a bundler would split.
+const Chunky: ClientComponentDef = {
+  name: "Chunky",
+  props: { tag: { type: "string", required: true } },
+  load: () =>
+    Promise.resolve((props: Record<string, unknown>) =>
+      createElement("span", { className: "chunk-live" }, props.tag as string),
+    ),
+  fallback: (props) =>
+    createElement("span", { className: "chunk-fallback" }, `fetching ${props.tag as string}`),
+};
+
+describe("hydrateIslands — lazy (load) islands", () => {
+  /** The shared registry plus the lazy island under test. */
+  function lazyRegistry(def: ClientComponentDef = Chunky): Registry {
+    return registry().defineClient(def);
+  }
+
+  /** Paint a tree against the lazy registry, returning its manifest. */
+  function paintLazy(def: ClientComponentDef, tree: unknown): IslandMount[] {
+    const page = renderPage(lazyRegistry(def), tree);
+
+    document.body.innerHTML = renderPageMarkup(page);
+
+    return [...page.islands];
+  }
+
+  it("reports the island deferred, then mounts it when its chunk lands", async () => {
+    const manifest = paintLazy(Chunky, { type: "Chunky", props: { tag: "Z" } });
+
+    // The server painted only the fallback — a lazy island is always deferred.
+    expect(document.body.querySelector(".chunk-fallback")?.textContent).toBe("fetching Z");
+
+    let result!: ReturnType<typeof hydrateIslands>;
+
+    act(() => {
+      result = hydrateIslands(lazyRegistry(), manifest);
+    });
+
+    // Synchronously: found, pending, not yet live — the chunk is in flight.
+    expect(result).toEqual({ mounted: [], missing: [], failed: [], deferred: ["$"] });
+    expect(document.body.querySelector(".chunk-live")).toBeNull();
+
+    // The chunk arrives (the loader's promise resolves): the island goes live
+    // and the post-arrival mount mutates the caller-held result arrays.
+    await act(async () => {});
+
+    expect(document.body.querySelector(".chunk-live")?.textContent).toBe("Z");
+    expect(result.mounted).toEqual(["$"]);
+    expect(result.failed).toEqual([]);
+  });
+
+  it("routes a failed chunk load to onMountError and failed — the page survives", async () => {
+    const sunk = new Error("chunk fetch failed");
+
+    const Broken: ClientComponentDef = {
+      name: "Chunky",
+      props: { tag: { type: "string", required: true } },
+      load: () => Promise.reject(sunk),
+      fallback: (props) =>
+        createElement("span", { className: "chunk-fallback" }, `fetching ${props.tag as string}`),
+    };
+
+    const manifest = paintLazy(Broken, { type: "Chunky", props: { tag: "Q" } });
+
+    const errors: Array<{ error: unknown; id: string; component: string }> = [];
+
+    const onMountError: MountErrorSink = (error, info) => {
+      errors.push({ error, id: info.id, component: info.component });
+    };
+
+    let result!: ReturnType<typeof hydrateIslands>;
+
+    act(() => {
+      result = hydrateIslands(lazyRegistry(Broken), manifest, { onMountError });
+    });
+
+    expect(result.deferred).toEqual(["$"]);
+
+    await act(async () => {});
+
+    // The island is dead, named, and contained; the fallback still stands.
+    expect(result.failed).toEqual(["$"]);
+    expect(result.mounted).toEqual([]);
+    expect(errors).toEqual([{ error: sunk, id: "$", component: "Chunky" }]);
+    expect(document.body.querySelector(".chunk-fallback")?.textContent).toBe("fetching Q");
+  });
+
+  it("combines with visible: no fetch until intersection, then load + mount", async () => {
+    // The full byte-deferral story: a below-the-fold lazy island costs nothing —
+    // not even its chunk fetch — until the region first scrolls into view.
+    let loads = 0;
+
+    const Visible: ClientComponentDef = {
+      name: "Chunky",
+      hydrate: "visible",
+      props: { tag: { type: "string", required: true } },
+      load: () => {
+        loads += 1;
+
+        return Promise.resolve((props: Record<string, unknown>) =>
+          createElement("span", { className: "chunk-live" }, props.tag as string),
+        );
+      },
+      fallback: (props) =>
+        createElement("span", { className: "chunk-fallback" }, `fetching ${props.tag as string}`),
+    };
+
+    const manifest = paintLazy(Visible, { type: "Chunky", props: { tag: "V" } });
+
+    let fire: (() => void) | undefined;
+
+    const observe: ObserveFn = (_container, onVisible) => {
+      fire = onVisible;
+
+      return () => undefined;
+    };
+
+    let result!: ReturnType<typeof hydrateIslands>;
+
+    act(() => {
+      result = hydrateIslands(lazyRegistry(Visible), manifest, { observe });
+    });
+
+    // Before intersection: deferred, and the chunk was never even requested.
+    expect(result.deferred).toEqual(["$"]);
+    expect(loads).toBe(0);
+
+    // The region is seen: fetch the chunk, then mount on arrival.
+    await act(async () => fire?.());
+
+    expect(loads).toBe(1);
+    expect(document.body.querySelector(".chunk-live")?.textContent).toBe("V");
+    expect(result.mounted).toEqual(["$"]);
   });
 });

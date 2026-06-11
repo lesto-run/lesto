@@ -38,10 +38,13 @@
  *     fetch until the region is actually seen, so an above-the-fold prerender
  *     does not fan out a request for every below-the-fold island on load.
  *
- * Honest scope: Keel ships ONE client bundle, so `"visible"` defers the island's
- * MOUNT WORK (render, effects, fetches), NOT bundle BYTES — the component's code
- * already arrived in the loaded bundle. True byte deferral needs per-island
- * code-splitting, a separate and larger follow-up; this runtime does not claim it.
+ * Byte deferral is the declaration's choice, not the strategy's: an island whose
+ * def carries an eager `component` already shipped its code in the main bundle
+ * (so `"visible"` defers only its mount WORK), while a lazy `load` def fetches
+ * its component as its own chunk at mount time — the per-island code-splitting
+ * that makes `"visible"` defer BYTES too. The runtime treats a lazy island like
+ * a visible one in its result: found, pending, reported under `deferred`, with
+ * the eventual mount (or failure) appended to the caller-held arrays.
  *
  * Everything that varies is injected, so the whole runtime is exercised under
  * jsdom with no real browser:
@@ -130,15 +133,15 @@ export type MountErrorSink = (error: unknown, info: { id: string; component: str
  * the manifest. A page with no broken islands gets an empty `failed`, so the
  * common case reads exactly as before plus one always-empty array.
  *
- * `deferred` reports the `"visible"` islands found in the DOM that we did NOT
- * mount synchronously — we set up an intersection observer for them instead, and
- * each will mount (and surface its own throw to `onMountError`) when its region
- * is first seen, AFTER this call has returned. It is its own list precisely
- * because a deferred island is neither `mounted` (no work ran yet) nor `missing`
- * (its shell is present) nor `failed` (nothing threw): conflating it with any of
- * those would lie about the page's state. A page with no `"visible"` islands gets
- * an empty `deferred`, so the eager case again reads as before plus one
- * always-empty array.
+ * `deferred` reports the islands found in the DOM that we did NOT finish
+ * mounting synchronously — a `"visible"` island waiting on its intersection
+ * observer, or a lazy (`load`) island whose chunk is still in flight. Each will
+ * mount (and surface its own throw or load failure to `onMountError`) AFTER this
+ * call has returned. It is its own list precisely because a deferred island is
+ * neither `mounted` (no work finished) nor `missing` (its shell is present) nor
+ * `failed` (nothing failed yet): conflating it with any of those would lie about
+ * the page's state. A page of eager `"load"` islands gets an empty `deferred`,
+ * so the common case reads exactly as before plus one always-empty array.
  */
 export interface HydrationResult {
   mounted: string[];
@@ -262,13 +265,17 @@ export function hydrateIslands(
 
   const deferred: string[] = [];
 
-  // Mount one island and contain its throw, shared by the eager path and the
-  // on-intersection path so a deferred island gets identical resilience. It reads
-  // and mutates the result arrays above by closure, which is why the deferred
-  // (post-return) mount still lands in `mounted`/`failed`.
-  const mountOne = (entry: IslandMount, def: ClientComponentDef, container: Element): void => {
+  // Render one resolved component into its container and contain its throw,
+  // shared by every path (eager, lazy, on-intersection) so each gets identical
+  // resilience. It reads and mutates the result arrays above by closure, which
+  // is why a post-return mount still lands in `mounted`/`failed`.
+  const finish = (
+    entry: IslandMount,
+    component: NonNullable<ClientComponentDef["component"]>,
+    container: Element,
+  ): void => {
     try {
-      mount(container, createElement(def.component, entry.props), {
+      mount(container, createElement(component, entry.props), {
         ssr: entry.ssr,
         onRecoverableError,
       });
@@ -281,6 +288,36 @@ export function hydrateIslands(
 
       failed.push(entry.id);
     }
+  };
+
+  // Mount one island now (eager `component`) or kick off its chunk fetch (lazy
+  // `load`) and mount when it lands. Returns whether the mount completed
+  // synchronously: a lazy island reports `"later"` so the caller records it as
+  // deferred — its code is still in flight when this call returns, and its
+  // outcome (mounted or failed) is appended to the result arrays on arrival. A
+  // rejected load is the same animal as a throwing mount — that island is dead,
+  // the page is not — so it routes to `onMountError` and `failed` identically.
+  const mountOne = (
+    entry: IslandMount,
+    def: ClientComponentDef,
+    container: Element,
+  ): "now" | "later" => {
+    if (def.component !== undefined) {
+      finish(entry, def.component, container);
+
+      return "now";
+    }
+
+    def.load().then(
+      (component) => finish(entry, component, container),
+      (error: unknown) => {
+        onMountError(error, { id: entry.id, component: entry.component });
+
+        failed.push(entry.id);
+      },
+    );
+
+    return "later";
   };
 
   for (const entry of manifest) {
@@ -328,7 +365,11 @@ export function hydrateIslands(
       continue;
     }
 
-    mountOne(entry, def, container);
+    // An eager island mounts now; a lazy one ("later") has its chunk in flight —
+    // report it deferred, exactly like a visible island whose mount is pending.
+    if (mountOne(entry, def, container) === "later") {
+      deferred.push(entry.id);
+    }
   }
 
   return { mounted, missing, failed, deferred };

@@ -29,6 +29,8 @@
  * (`Account`) is deferred, so the flag is safe for it today.
  */
 
+import { basename, dirname, join } from "node:path";
+
 import type { BunPlugin } from "bun";
 
 /**
@@ -103,9 +105,18 @@ async function main(): Promise<void> {
   const projectRoot = import.meta.dir;
   const options = parseArgs(Bun.argv.slice(2));
 
+  // `splitting` is what makes a lazy island def's `() => import("./account")`
+  // (see src/registry.tsx) a separate chunk instead of main-bundle bytes: the
+  // entry keeps only the runtime + eager islands, and a lazy island's code is
+  // fetched by the browser on first mount via a relative `import()` the bundler
+  // emits — no manifest, no chunk map, just ESM resolving against /client.js's
+  // own URL. The chunks land beside the entry, where every asset path already
+  // serves them (dispatchSites/dispatchSitesDev serve any `.js`; the Cloudflare
+  // assets binding serves the whole directory).
   const result = await Bun.build({
     entrypoints: [`${projectRoot}/client.tsx`],
     target: "browser",
+    splitting: true,
     minify: options.minify,
     define: options.production ? { "process.env.NODE_ENV": '"production"' } : {},
     plugins: options.preact ? [preactAliasPlugin(projectRoot)] : [],
@@ -117,13 +128,22 @@ async function main(): Promise<void> {
     throw new Error("build-client: bundling failed");
   }
 
-  // `Bun.build` returns the artifact in memory; write the single JS output to
-  // the requested path. There is exactly one entry, so there is one artifact.
-  const [artifact] = result.outputs;
+  // Write the entry to the requested path and every split chunk beside it,
+  // keeping each chunk's generated (hashed) filename — the entry references its
+  // chunks by exactly those relative names.
+  const outDir = dirname(options.outfile);
 
-  if (artifact === undefined) throw new Error("build-client: no output produced");
+  const entry = result.outputs.find((artifact) => artifact.kind === "entry-point");
 
-  await Bun.write(options.outfile, artifact);
+  if (entry === undefined) throw new Error("build-client: no entry output produced");
+
+  await Bun.write(options.outfile, entry);
+
+  for (const artifact of result.outputs) {
+    if (artifact.kind === "entry-point") continue;
+
+    await Bun.write(join(outDir, basename(artifact.path)), artifact);
+  }
 }
 
 await main();

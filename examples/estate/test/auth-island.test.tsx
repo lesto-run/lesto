@@ -43,10 +43,34 @@ function renderIntoDocument(): ReturnType<typeof renderPage> {
   return page;
 }
 
-/** Let the island's effect, its fetch, and the re-render all settle. */
-async function settle(): Promise<void> {
-  // A macrotask flush — yields past every microtask in the fetch chain. (A
-  // microtask-only flush would starve the event loop and never resolve.)
+/**
+ * Hydrate the page, then let the island's chunk, mount, fetch, and re-render
+ * all settle.
+ *
+ * The island is lazy (per-island code-splitting, ADR 0009), so its mount waits
+ * on a REAL dynamic import — under vitest that means an on-demand module
+ * transform whose duration is not a fixed number of ticks. Guessing a flush
+ * count races it; instead we wait for the runtime's own completion report (the
+ * caller-held `mounted`/`failed` arrays it appends to), then flush once more so
+ * the mounted component's effect runs its session fetch and re-renders.
+ */
+async function hydrateAndSettle(page: ReturnType<typeof renderPage>): Promise<void> {
+  let result!: ReturnType<typeof hydrateIslands>;
+
+  act(() => {
+    result = hydrateIslands(registry, page.islands);
+  });
+
+  await act(async () => {
+    for (let i = 0; i < 200 && result.mounted.length === 0 && result.failed.length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  });
+
+  // The chunk landed and the island mounted — loudly, not by luck.
+  expect(result.failed).toEqual([]);
+  expect(result.mounted).toHaveLength(1);
+
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
@@ -67,10 +91,7 @@ describe("the Account island", () => {
     expect(document.body.textContent).toContain("Sign in");
     expect(document.body.textContent).not.toContain("Hi,");
 
-    await act(async () => {
-      hydrateIslands(registry, page.islands);
-    });
-    await settle();
+    await hydrateAndSettle(page);
 
     // Hydration resolved the session and rewrote the island, per-user.
     expect(document.body.textContent).toContain("Hi, Jade Mills");
@@ -81,10 +102,7 @@ describe("the Account island", () => {
 
     const page = renderIntoDocument();
 
-    await act(async () => {
-      hydrateIslands(registry, page.islands);
-    });
-    await settle();
+    await hydrateAndSettle(page);
 
     expect(document.body.textContent).toContain("Sign in");
     expect(document.body.textContent).not.toContain("Hi,");

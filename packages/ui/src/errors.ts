@@ -11,6 +11,8 @@ import { KeelError } from "@keel/errors";
 export { KeelError };
 
 export type UiErrorCode =
+  | "UI_CLIENT_COMPONENT_MISSING"
+  | "UI_CLIENT_SSR_NEEDS_COMPONENT"
   | "UI_INVALID_ENUM_SPEC"
   | "UI_ISLAND_PROPS_NOT_SERIALIZABLE"
   | "UI_ISLAND_UNKNOWN_COMPONENT"

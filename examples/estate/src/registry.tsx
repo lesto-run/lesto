@@ -10,7 +10,7 @@
 
 import { Registry } from "@keel/ui";
 
-import { Account, AccountFallback } from "./account";
+import { AccountFallback } from "./account-fallback";
 
 export const registry = new Registry()
   .define({
@@ -160,6 +160,10 @@ export const registry = new Registry()
   .defineClient({
     name: "Account",
     description: "The signed-in/out account control — resolved per-user on the client.",
-    component: Account,
+    // Lazy: the island's code is its own chunk, fetched on first mount, so the
+    // main /client.js carries none of Account's bytes (per-island
+    // code-splitting; `build-client.ts` turns this import() into the chunk).
+    // The statically-imported fallback is all the server (and main bundle) holds.
+    load: () => import("./account").then((module) => module.Account),
     fallback: AccountFallback,
   });
