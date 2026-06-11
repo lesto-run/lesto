@@ -1,11 +1,20 @@
-import { createElement } from "react";
+import { createElement, Suspense } from "react";
 import type { ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+
+import { defineDataSource, defineIsland } from "@keel/ui";
 
 import { runWithContext } from "../src/context";
 import { keel } from "../src/keel";
+import { Context as RequestCtx } from "../src/handler-context";
+import { renderPageResponse } from "../src/render-page";
+import type { Context } from "../src/handler-context";
 import type { KeelResponse } from "../src/types";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /** Drain a streamed response body to a single string for assertions. */
 async function drain(response: KeelResponse): Promise<string> {
@@ -167,5 +176,182 @@ describe("page abort signal", () => {
     );
 
     expect(html).toContain("<p>signal</p>");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0011/0012: the head module tag (.client) + the render-time data resolver.
+// ---------------------------------------------------------------------------
+
+describe("keel().client() — head module tag", () => {
+  it("emits the client module tag in the head of every page when set", async () => {
+    const app = keel()
+      .client("/client.js")
+      .page("/", { component: () => createElement("main", null, "home") });
+
+    const html = await drain(await app.handle("GET", "/"));
+
+    expect(html).toContain('<script type="module" src="/client.js"></script>');
+    // It is in the head, before the body content.
+    expect(html.indexOf("/client.js")).toBeLessThan(html.indexOf("<body>"));
+  });
+
+  it("emits no module tag when .client() was never called", async () => {
+    const app = keel().page("/", { component: () => createElement("main", null, "home") });
+
+    expect(await drain(await app.handle("GET", "/"))).not.toContain('type="module"');
+  });
+});
+
+// A shared source + a canonical ssr:true island that renders its count inline.
+const reactions = defineDataSource<{ likes: number }>("reactions", { scope: "shared" });
+
+const Reactions = defineIsland({
+  name: "Reactions",
+  ssr: true,
+  component: (props) =>
+    createElement("b", { className: "count" }, String((props.likes as { likes: number }).likes)),
+  data: { likes: reactions },
+});
+
+describe("keel().data() + a defineIsland on a page (the canonical island)", () => {
+  it("streams the island's real markup with inline data, a mount script, and no primer", async () => {
+    const app = keel()
+      .client("/client.js")
+      .data(reactions, () => ({ likes: 7 }))
+      .page("/posts", {
+        component: () => createElement("main", null, createElement(Reactions, {})),
+      });
+
+    const html = await drain(await app.handle("GET", "/posts"));
+
+    // The island's REAL server markup carries the resolved count…
+    expect(html).toContain('class="count"');
+    expect(html).toContain(">7<");
+    // …the co-located mount script inlines the value, no bind…
+    expect(html).toContain('"likes":{"likes":7}');
+    expect(html).not.toContain('"bind"');
+    // …no primer (data crossed the wire inline)…
+    expect(html).not.toContain("__keelData");
+    // …and the head module tag is present.
+    expect(html).toContain('<script type="module" src="/client.js"></script>');
+  });
+
+  it("runs a source's loader once per request, with the request's context, across two islands", async () => {
+    let runs = 0;
+    let sawHeader: string | undefined;
+
+    const Two = defineIsland({
+      name: "Two",
+      ssr: true,
+      component: (props) =>
+        createElement("i", null, String((props.likes as { likes: number }).likes)),
+      data: { likes: reactions },
+    });
+
+    const app = keel()
+      .data(reactions, (c: Context) => {
+        runs += 1;
+        sawHeader = c.header("x-probe");
+
+        return { likes: 5 };
+      })
+      .page("/posts", {
+        component: () =>
+          createElement("main", null, createElement(Reactions, {}), createElement(Two, {})),
+      });
+
+    await drain(await app.handle("GET", "/posts", { headers: { "x-probe": "yes" } }));
+
+    // Two islands bind one source → the memoized resolver runs the loader once.
+    expect(runs).toBe(1);
+    expect(sawHeader).toBe("yes");
+  });
+
+  it("contains an island bound to an unregistered source (WEB_UNKNOWN_DATA_SOURCE) — page still streams", async () => {
+    const Orphan = defineIsland({
+      name: "Orphan",
+      ssr: true,
+      component: (props) => createElement("span", { className: "orphan" }, String(props.likes)),
+      fallback: () => createElement("span", { className: "orphan-fallback" }, "…"),
+      data: { likes: defineDataSource<number>("never-registered") },
+    });
+
+    // The resolver throws WEB_UNKNOWN_DATA_SOURCE during the render inside the
+    // island's Suspense boundary; React contains it to that boundary (its
+    // fallback) and routes the error to the stream's onError sink (console).
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const app = keel().page("/posts", {
+      component: () =>
+        createElement(
+          "main",
+          null,
+          "before",
+          createElement(
+            Suspense,
+            { fallback: createElement("span", { className: "boundary-fallback" }, "loading") },
+            createElement(Orphan, {}),
+          ),
+        ),
+    });
+
+    const response = await app.handle("GET", "/posts");
+
+    // The page still streams (the shell flushed); the rest of the document is there.
+    expect(response.status).toBe(200);
+    const html = await drain(response);
+    expect(html).toContain("before");
+
+    // The coded error reached the stream's sink — observable, not silent undefined.
+    const sawCoded = spy.mock.calls.some((args) =>
+      args.some(
+        (arg) =>
+          arg instanceof Error && (arg as { code?: string }).code === "WEB_UNKNOWN_DATA_SOURCE",
+      ),
+    );
+    expect(sawCoded).toBe(true);
+  });
+});
+
+describe("renderPageResponse — default (no resolver, no client module)", () => {
+  it("renders the plain document when called with no island options", async () => {
+    const c = new RequestCtx({
+      method: "GET",
+      path: "/",
+      params: {},
+      query: {},
+      headers: {},
+      body: undefined,
+    });
+
+    const response = await renderPageResponse(
+      { component: () => createElement("main", null, "plain") },
+      c,
+      [],
+    );
+
+    const html = await drain(response as KeelResponse);
+
+    expect(html).toContain("<main>plain</main>");
+    // No IslandDataProvider wrap and no head module tag.
+    expect(html).not.toContain('type="module"');
+  });
+});
+
+describe("keel().route() — data loader merge", () => {
+  it("resolves a sub-app's loader on a parent-mounted page", async () => {
+    const sub = keel()
+      .data(reactions, () => ({ likes: 11 }))
+      .page("/posts", {
+        component: () => createElement("main", null, createElement(Reactions, {})),
+      });
+
+    const app = keel().route(sub);
+
+    const html = await drain(await app.handle("GET", "/posts"));
+
+    expect(html).toContain('"likes":{"likes":11}');
+    expect(html).toContain(">11<");
   });
 });

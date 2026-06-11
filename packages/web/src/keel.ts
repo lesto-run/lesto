@@ -25,9 +25,10 @@
  */
 
 import { RouteTable } from "@keel/router";
-import { dataSourceHref } from "@keel/ui";
+import { createSourceResolver, dataSourceHref } from "@keel/ui";
 import type { DataSource } from "@keel/ui";
 
+import { WebError } from "./errors";
 import { Context } from "./handler-context";
 import type { Middleware, Next } from "./middleware";
 import { renderPageResponse } from "./render-page";
@@ -122,18 +123,6 @@ function runChain(chain: readonly Handler[], c: Context): Promise<AnyKeelRespons
   return run(0);
 }
 
-/** The terminal handler for a page route: render its component, wrapped in its layouts. */
-function pageHandler(payload: PagePayload): Handler {
-  return (c) => renderPageResponse(payload.def, c, payload.layouts);
-}
-
-/** The full handler chain a route runs: its middleware, then its own work (or page render). */
-function chainOf(route: CollectedRoute): readonly Handler[] {
-  const own = isPage(route.own) ? [pageHandler(route.own)] : route.own;
-
-  return [...route.middleware, ...own];
-}
-
 export class Keel {
   // Insertion order is resolution order; the matcher is built lazily from this.
   private readonly collected: CollectedRoute[] = [];
@@ -143,6 +132,16 @@ export class Keel {
 
   // Layout components added with `.layout`, wrapping every page registered afterward.
   private readonly layoutChain: Layout[] = [];
+
+  // Each registered data source's loader, keyed by source name (ADR 0012). The
+  // per-request render-time resolver runs these; last registration wins, the same
+  // rule the auto-route registration follows. `.route()` merges a sub-app's map.
+  private readonly dataLoaders = new Map<string, (c: Context) => MaybePromise<unknown>>();
+
+  // The app's client module src (`.client("/client.js")`), emitted as the head
+  // module tag on every page when set (ADR 0011, amended 2026-06-11). Undefined =
+  // no client runtime, no tag.
+  private clientModuleSrc: string | undefined;
 
   // The compiled matcher, rebuilt on demand and invalidated whenever a route is added.
   private table: RouteTable<readonly Handler[]> | undefined;
@@ -224,11 +223,34 @@ export class Keel {
     const cacheControl =
       source.scope === "shared" ? "public, max-age=0, must-revalidate" : "private, no-store";
 
+    // Record the loader for the render-time resolver (ADR 0012) — last
+    // registration wins, mirroring the auto-route's "last write wins" below — in
+    // addition to registering the fetch route the primer/`visible` tier needs.
+    this.dataLoaders.set(source.name, loader as (c: Context) => MaybePromise<unknown>);
+
     return this.get(dataSourceHref(source.name), async (c) => {
       const response = c.json(await loader(c));
 
       return { ...response, headers: { ...response.headers, "cache-control": cacheControl } };
     });
+  }
+
+  /**
+   * Declare the app's client runtime module, emitted as a `<script type="module"
+   * src=…>` in every page's `<head>` (ADR 0011, amended 2026-06-11).
+   *
+   * It is CONFIG-DRIVEN, not island-gated, on purpose: streaming flushes the
+   * `<head>` before the body renders, so a page cannot retroactively gate a head
+   * tag on whether it grew an island. Declaring the client module once is also
+   * the right altitude — shipping a client runtime is an app-level fact, not a
+   * per-page guess. An island-less page on a client-configured app pays one
+   * cached, deferred module fetch; the alternative (buffering the body to detect
+   * islands) would forfeit streaming.
+   */
+  client(src: string): this {
+    this.clientModuleSrc = src;
+
+    return this;
   }
 
   /**
@@ -238,6 +260,15 @@ export class Keel {
    * and the parent's current middleware (and, for a page, layouts) composed around
    * it — outermost — so a feature slice declared in its own module slots in
    * without losing the enclosing app's middleware or chrome.
+   *
+   * The sub-app's data loaders (ADR 0012) are merged into the parent's map, the
+   * sub's winning on a name collision — last-write-wins, consistent with
+   * `.data()` itself.
+   *
+   * KNOWN LIMITATION (ADR 0010 corrections #8): a prefixed mount prefixes the data
+   * *route* but a bound island's `bind.href` still points at root
+   * (`/__keel/data/<name>`). Register data sources on the ROOT app. A prefix-aware
+   * href is future work.
    */
   route(sub: Keel): this;
   route(prefix: string, sub: Keel): this;
@@ -254,6 +285,11 @@ export class Keel {
           ? { def: route.own.def, layouts: [...this.layoutChain, ...route.own.layouts] }
           : route.own,
       });
+    }
+
+    // Merge the sub's loaders; the sub wins on collision (last-write-wins).
+    for (const [name, loader] of sub.dataLoaders) {
+      this.dataLoaders.set(name, loader);
     }
 
     this.table = undefined;
@@ -300,12 +336,54 @@ export class Keel {
     return response as KeelResponse;
   }
 
+  /**
+   * The terminal handler for a page route: render its component, wrapped in its
+   * layouts, with the per-request render-time data resolver and the head module
+   * tag (ADR 0011 + 0012).
+   *
+   * The resolver is built PER REQUEST and closes over that request's context, so
+   * a loader sees the live request. It is memoized by source name (one loader run
+   * per source per request, shared by every island that binds it). A bind on a
+   * source that was never registered is a wiring bug: the resolver throws a coded
+   * {@link WebError} (`WEB_UNKNOWN_DATA_SOURCE`) rather than silently feeding the
+   * island `undefined`; the render error path contains it to that island.
+   */
+  private pageHandler(payload: PagePayload): Handler {
+    return (c) => {
+      const resolver = createSourceResolver((name) => {
+        const loader = this.dataLoaders.get(name);
+
+        if (loader === undefined) {
+          throw new WebError(
+            "WEB_UNKNOWN_DATA_SOURCE",
+            `island bound to data source "${name}", which no .data() registered`,
+            { source: name },
+          );
+        }
+
+        return loader(c);
+      });
+
+      return renderPageResponse(payload.def, c, payload.layouts, {
+        resolver,
+        ...(this.clientModuleSrc === undefined ? {} : { clientModule: this.clientModuleSrc }),
+      });
+    };
+  }
+
+  /** The full handler chain a route runs: its middleware, then its own work (or page render). */
+  private chainOf(route: CollectedRoute): readonly Handler[] {
+    const own = isPage(route.own) ? [this.pageHandler(route.own)] : route.own;
+
+    return [...route.middleware, ...own];
+  }
+
   private matcher(): RouteTable<readonly Handler[]> {
     if (this.table === undefined) {
       const table = new RouteTable<readonly Handler[]>();
 
       for (const route of this.collected) {
-        table.add(route.method, route.pattern, chainOf(route));
+        table.add(route.method, route.pattern, this.chainOf(route));
       }
 
       this.table = table;

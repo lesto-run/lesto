@@ -8,16 +8,21 @@
  * document is streamed through `@keel/ui`'s `renderPageStream`, so the shell paints
  * before a slow `<Suspense>` boundary resolves.
  *
- * The island manifest is empty here on purpose: marking a component interactive is
- * the `"use client"` build transform's job (a later tier). This renderer owns the
- * server document; islands slot into the same stream when that lands.
+ * Islands ride `defineIsland`'s co-located emission (ADR 0011): a `<…Island/>` in
+ * the tree self-emits its shell + mount script in the same stream. When the app
+ * declared a client module (`keel().client(...)`) the document gains the head
+ * module tag that runs the hydration runtime; when a data resolver is in scope
+ * (`keel().data(...)`) the page tree is wrapped in `IslandDataProvider`, so an
+ * `ssr: true` island resolves its data at render and inlines it (ADR 0012 — the
+ * canonical island). A data-free, client-less page is exactly the plain document
+ * it always was.
  */
 
 import { createElement } from "react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
 
-import { renderMetadata, renderPageStream } from "@keel/ui";
-import type { LinkSpec, MetadataEntry, MetaSpec } from "@keel/ui";
+import { IslandDataProvider, renderMetadata, renderPageStream } from "@keel/ui";
+import type { LinkSpec, MetadataEntry, MetaSpec, SourceResolver } from "@keel/ui";
 import type { ZodType } from "zod";
 
 import type { Context } from "./handler-context";
@@ -124,6 +129,15 @@ function wrap(layouts: readonly Layout[], page: ReactElement): ReactElement {
   );
 }
 
+/** Per-render island wiring: the data resolver and the client module to head-tag. */
+export interface RenderPageOptions {
+  /** The render-time data resolver — wraps the page tree in `IslandDataProvider` (ADR 0012). */
+  resolver?: SourceResolver;
+
+  /** The app's client module src — emitted as a head `<script type="module">` (ADR 0011). */
+  clientModule?: string;
+}
+
 /**
  * Render a page registration to a streamed HTML response.
  *
@@ -132,11 +146,17 @@ function wrap(layouts: readonly Layout[], page: ReactElement): ReactElement {
  * layouts, and streams the full `<html>` document — head metadata and all —
  * shell-first. The request's abort signal is forwarded so a disconnected client
  * cancels the render rather than holding the socket.
+ *
+ * `options.resolver`, when set, wraps the page tree in `IslandDataProvider` so a
+ * data-bound island resolves at render. `options.clientModule`, when set, appends
+ * the head module tag that boots the hydration runtime (after the metadata
+ * elements). Both absent → the plain document path, byte-for-byte as before.
  */
 export async function renderPageResponse(
   def: PageDef,
   c: Context,
   layouts: readonly Layout[],
+  options: RenderPageOptions = {},
 ): Promise<AnyKeelResponse> {
   if (def.params !== undefined) {
     const parsed = def.params.safeParse(c.req.query);
@@ -152,9 +172,22 @@ export async function renderPageResponse(
   // receives — one localized erasure, not a hole in the public types.
   const loaded = ((def.load === undefined ? undefined : await def.load(c)) ?? {}) as LoadedProps;
 
-  const content = wrap(layouts, createElement(def.component as ComponentType<LoadedProps>, loaded));
+  const page = wrap(layouts, createElement(def.component as ComponentType<LoadedProps>, loaded));
+
+  // A render-time resolver in scope means islands inline their data (the canonical
+  // island); absent, they fall back to bind + primer. Wrapping is the only seam.
+  const content =
+    options.resolver === undefined
+      ? page
+      : createElement(IslandDataProvider, { resolver: options.resolver }, page);
 
   const head = headElements(def.metadata === undefined ? {} : def.metadata(loaded));
+
+  // The client module boots hydration: a deferred head `type="module"` script,
+  // after the metadata, so every co-located mount script is present when it runs.
+  if (options.clientModule !== undefined) {
+    head.push(createElement("script", { type: "module", src: options.clientModule }));
+  }
 
   const documentElement = createElement(
     "html",
