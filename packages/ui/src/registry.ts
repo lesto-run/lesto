@@ -3,7 +3,7 @@
  * appear in a rendered tree. The AI proposes; the registry disposes.
  */
 
-import { UiError } from "./errors";
+import { assertClientDef } from "./island";
 import type { ClientComponentDef } from "./island";
 import type { ComponentDef } from "./types";
 
@@ -42,34 +42,12 @@ export class Registry {
    * declaring a client shadows any server component of the same name and vice
    * versa, so a `type` resolves to exactly one thing.
    *
-   * The eager/lazy union is re-checked at runtime for un-typed callers: a def
-   * must carry `component` or `load` (else there is nothing to ever mount), and
-   * `ssr: true` demands an eager `component` (the server cannot SSR a component
-   * it does not hold — a lazy island's server shell is only its fallback).
+   * The eager/lazy union is re-checked at runtime for un-typed callers via the
+   * shared {@link assertClientDef} (the rule lives once, so this path and the
+   * `.page` `defineIsland` path refuse identical broken unions identically).
    */
   defineClient(def: ClientComponentDef): this {
-    // Read the discriminant fields through a widened view: to the compiler the
-    // union already forbids these states (the branches would narrow `def` to
-    // `never`), but an un-typed caller can still hand us a def that violates
-    // them, and a clear coded error beats a downstream undefined-component
-    // crash at hydrate time.
-    const declared: { component?: unknown; load?: unknown; ssr?: unknown } = def;
-
-    if (declared.component === undefined && declared.load === undefined) {
-      throw new UiError(
-        "UI_CLIENT_COMPONENT_MISSING",
-        `client component "${def.name}" declares neither "component" nor "load" — nothing to mount`,
-        { name: def.name },
-      );
-    }
-
-    if (declared.ssr === true && declared.component === undefined) {
-      throw new UiError(
-        "UI_CLIENT_SSR_NEEDS_COMPONENT",
-        `client component "${def.name}" is ssr: true but lazy — the server cannot render a component it does not hold`,
-        { name: def.name },
-      );
-    }
+    assertClientDef(def);
 
     this.clientsByName.set(def.name, def);
     this.byName.delete(def.name);

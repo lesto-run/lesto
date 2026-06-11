@@ -28,7 +28,7 @@ import { createElement, Fragment, useId } from "react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
 
 import { dataPrimerScript } from "./data";
-import { ISLAND_ATTR, ISLAND_MOUNT_ATTR } from "./island";
+import { assertClientDef, ISLAND_ATTR, ISLAND_MOUNT_ATTR } from "./island";
 import type { ClientComponentDef } from "./island";
 import { islandMount } from "./mount";
 import { serializeScriptJson } from "./serialize";
@@ -52,6 +52,11 @@ export interface IslandComponent {
  * render exactly as the Registry path's does — the page's error boundary owns it.
  */
 export function defineIsland(def: ClientComponentDef): IslandComponent {
+  // The `.page` path never passes through a Registry, so the union rules are
+  // enforced here at wrap time (module init): an un-typed caller can hand
+  // `defineIsland` a broken union too.
+  assertClientDef(def);
+
   function Island(props: Record<string, unknown>): ReactElement {
     const id = useId();
 

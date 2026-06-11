@@ -38,7 +38,7 @@ export type {
   StreamOptions,
 } from "./stream";
 
-export { island, ISLAND_ATTR, ISLAND_MOUNT_ATTR } from "./island";
+export { assertClientDef, island, ISLAND_ATTR, ISLAND_MOUNT_ATTR } from "./island";
 export type { ClientComponentDef, HydrationStrategy, IslandMount } from "./island";
 
 // Self-describing islands for the `.page` path (ADR 0011): a component that

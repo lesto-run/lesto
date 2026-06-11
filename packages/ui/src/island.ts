@@ -41,6 +41,7 @@
 import type { ComponentType, ReactNode } from "react";
 
 import type { DataSource, IslandBind } from "./data";
+import { UiError } from "./errors";
 import type { PropSpec, UiNode } from "./types";
 
 /**
@@ -198,4 +199,51 @@ export const ISLAND_MOUNT_ATTR = "data-keel-island-mount";
  */
 export function island(name: string, props: Record<string, unknown> = {}): UiNode {
   return { type: name, props };
+}
+
+/**
+ * The runtime union rules for a {@link ClientComponentDef}, in one place so both
+ * declaration paths — the Registry (`defineClient`) and the `.page`
+ * (`defineIsland`) — refuse identical broken unions identically.
+ *
+ * The compiler already forbids these states for a typed caller (the branches
+ * would narrow `def` to `never`), but an un-typed caller can still hand over a
+ * def that violates them; a clear coded error beats a downstream
+ * undefined-component crash at hydrate time. We read the discriminant fields
+ * through a widened view because, to the compiler, they cannot be wrong.
+ *
+ *   1. neither `component` nor `load` → nothing to ever mount;
+ *   2. `ssr: true` without a `component` → the server cannot SSR a component it
+ *      does not hold (a lazy island's server shell is only its fallback);
+ *   3. `ssr: true` WITH a `data` binding → temporary (island-data-hardening item
+ *      1): the server cannot yet render an island with its bound data, so the
+ *      client's `{...props, ...data}` hydrate would always mismatch. Item 7
+ *      (ADR 0012) makes this the canonical island and removes this rule.
+ */
+export function assertClientDef(def: ClientComponentDef): void {
+  const declared: { component?: unknown; load?: unknown; ssr?: unknown; data?: unknown } = def;
+
+  if (declared.component === undefined && declared.load === undefined) {
+    throw new UiError(
+      "UI_CLIENT_COMPONENT_MISSING",
+      `client component "${def.name}" declares neither "component" nor "load" — nothing to mount`,
+      { name: def.name },
+    );
+  }
+
+  if (declared.ssr === true && declared.component === undefined) {
+    throw new UiError(
+      "UI_CLIENT_SSR_NEEDS_COMPONENT",
+      `client component "${def.name}" is ssr: true but lazy — the server cannot render a component it does not hold`,
+      { name: def.name },
+    );
+  }
+
+  if (declared.ssr === true && declared.data !== undefined) {
+    throw new UiError(
+      "UI_CLIENT_SSR_DATA_UNSUPPORTED",
+      `client component "${def.name}" is ssr: true with data bindings — the server cannot yet render an island WITH its bound data, so hydration would always mismatch (temporary; see ADR 0012)`,
+      { name: def.name },
+    );
+  }
 }

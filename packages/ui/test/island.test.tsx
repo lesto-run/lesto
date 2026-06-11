@@ -3,6 +3,7 @@ import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { createElement } from "react";
 
 import {
+  assertClientDef,
   defineDataSource,
   island,
   ISLAND_ATTR,
@@ -64,6 +65,64 @@ describe("island()", () => {
 
   it("defaults props to an empty bag", () => {
     expect(island("Ping")).toEqual({ type: "Ping", props: {} });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// assertClientDef: the shared union rules both declaration paths enforce.
+// ---------------------------------------------------------------------------
+
+describe("assertClientDef", () => {
+  it("accepts a well-formed eager def", () => {
+    expect(() => assertClientDef(Account)).not.toThrow();
+  });
+
+  it("refuses a def with neither component nor load (UI_CLIENT_COMPONENT_MISSING)", () => {
+    const empty = { name: "Ghost" } as unknown as ClientComponentDef;
+
+    try {
+      assertClientDef(empty);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(UiError);
+      expect((error as UiError).code).toBe("UI_CLIENT_COMPONENT_MISSING");
+      expect((error as UiError).details).toEqual({ name: "Ghost" });
+    }
+  });
+
+  it("refuses ssr: true on a lazy def (UI_CLIENT_SSR_NEEDS_COMPONENT)", () => {
+    const lazySsr = {
+      name: "Eager-only",
+      ssr: true,
+      load: () => Promise.resolve(() => createElement("span", null, "x")),
+    } as unknown as ClientComponentDef;
+
+    try {
+      assertClientDef(lazySsr);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(UiError);
+      expect((error as UiError).code).toBe("UI_CLIENT_SSR_NEEDS_COMPONENT");
+      expect((error as UiError).details).toEqual({ name: "Eager-only" });
+    }
+  });
+
+  it("refuses ssr: true with data (UI_CLIENT_SSR_DATA_UNSUPPORTED) — interim, see ADR 0012", () => {
+    const ssrData = {
+      name: "Live",
+      ssr: true,
+      component: () => createElement("span", null, "x"),
+      data: { session: defineDataSource("session") },
+    } as unknown as ClientComponentDef;
+
+    try {
+      assertClientDef(ssrData);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(UiError);
+      expect((error as UiError).code).toBe("UI_CLIENT_SSR_DATA_UNSUPPORTED");
+      expect((error as UiError).details).toEqual({ name: "Live" });
+    }
   });
 });
 
@@ -138,6 +197,24 @@ describe("Registry client components", () => {
       expect(error).toBeInstanceOf(UiError);
       expect((error as UiError).code).toBe("UI_CLIENT_SSR_NEEDS_COMPONENT");
       expect((error as UiError).details).toEqual({ name: "Eager-only" });
+    }
+  });
+
+  it("refuses ssr: true + data via defineClient (UI_CLIENT_SSR_DATA_UNSUPPORTED)", () => {
+    const ssrData = {
+      name: "Live",
+      ssr: true,
+      component: () => createElement("span", null, "x"),
+      data: { session: defineDataSource("session") },
+    } as unknown as ClientComponentDef;
+
+    try {
+      new Registry().defineClient(ssrData);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(UiError);
+      expect((error as UiError).code).toBe("UI_CLIENT_SSR_DATA_UNSUPPORTED");
+      expect((error as UiError).details).toEqual({ name: "Live" });
     }
   });
 });

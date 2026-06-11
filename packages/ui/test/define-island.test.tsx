@@ -22,7 +22,9 @@ import {
   ISLAND_ATTR,
   ISLAND_MOUNT_ATTR,
   Registry,
+  UiError,
 } from "../src/index";
+import type { ClientComponentDef } from "../src/index";
 import { hydrateDocumentIslands } from "../src/hydrate";
 
 // A deferred island that renders a prop the framework resolves from a source.
@@ -49,6 +51,39 @@ afterEach(() => {
   document.body.innerHTML = "";
   delete window.__keelData;
   vi.restoreAllMocks();
+});
+
+describe("defineIsland — define-time union refusals", () => {
+  it("throws UI_CLIENT_SSR_DATA_UNSUPPORTED for ssr: true + data (interim, ADR 0012)", () => {
+    const ssrData = {
+      name: "Live",
+      ssr: true,
+      component: () => createElement("span", null, "x"),
+      data: { session: defineDataSource("session") },
+    } as unknown as ClientComponentDef;
+
+    try {
+      defineIsland(ssrData);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(UiError);
+      expect((error as UiError).code).toBe("UI_CLIENT_SSR_DATA_UNSUPPORTED");
+      expect((error as UiError).details).toEqual({ name: "Live" });
+    }
+  });
+
+  it("throws UI_CLIENT_COMPONENT_MISSING for a def with neither component nor load", () => {
+    const empty = { name: "Ghost" } as unknown as ClientComponentDef;
+
+    try {
+      defineIsland(empty);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(UiError);
+      expect((error as UiError).code).toBe("UI_CLIENT_COMPONENT_MISSING");
+      expect((error as UiError).details).toEqual({ name: "Ghost" });
+    }
+  });
 });
 
 describe("defineIsland — server emission", () => {
