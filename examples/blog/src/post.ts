@@ -65,6 +65,27 @@ export function countPosts(db: Db): Promise<number> {
   return db.select().from(posts).count();
 }
 
+/**
+ * The reaction count per post, keyed by a stable slug (`post-<id>`), as the
+ * Reactions island's `reactionsSource` loader returns it (ADR 0012's blog proof).
+ *
+ * There is no reactions table in this small demo, so the count is derived
+ * deterministically from the post's body length — honest (it reads real rows
+ * through the typed `Db`) and small. A real app would `SELECT count(*)` from a
+ * reactions table; the shape the island consumes is identical.
+ */
+export async function countReactions(db: Db): Promise<Record<string, number>> {
+  const rows = await listPosts(db);
+
+  const counts: Record<string, number> = {};
+
+  for (const post of rows) {
+    counts[`post-${post.id}`] = post.body.length;
+  }
+
+  return counts;
+}
+
 const migration: { version: string; migration: Migration } = {
   version: "001_create_posts",
   migration: {

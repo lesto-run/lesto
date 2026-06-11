@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "bun run run.ts",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -13,6 +14,7 @@
     "@keel/kernel": "workspace:*",
     "@keel/migrate": "workspace:*",
     "@keel/runtime": "workspace:*",
+    "@keel/ui": "workspace:*",
     "@keel/web": "workspace:*",
     "better-sqlite3": "^11.10.0",
     "react": "^19",

@@ -10,13 +10,23 @@
 
 import type { ReactElement } from "react";
 
+import ReactionsIsland from "../app/islands/reactions";
 import type { Post } from "./post";
 
-/** The blog index: a titled list of post cards. */
+/**
+ * The blog index: a titled list of post cards, plus the Reactions island.
+ *
+ * `<ReactionsIsland />` is the canonical island (ADR 0012): an `ssr: true` island
+ * whose `counts` data is resolved at render and inlined. It takes no props here —
+ * its only prop (`counts`) is supplied by the framework from `reactionsSource`,
+ * which the typed `defineIsland` (review F8) reflects: the JSX needs no `counts`.
+ */
 export function BlogPage({ posts }: { posts: Post[] }): ReactElement {
   return (
     <main>
       <h1>The Keel Blog</h1>
+
+      <ReactionsIsland />
 
       <section>
         {posts.map((post) => (

@@ -72,6 +72,7 @@
         "keel": "./src/bin.ts",
       },
       "dependencies": {
+        "@keel/assets": "workspace:*",
         "@keel/content-core": "workspace:*",
         "@keel/content-store": "workspace:*",
         "@keel/deploy": "workspace:*",

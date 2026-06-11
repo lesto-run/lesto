@@ -21,11 +21,23 @@ import { keel } from "@keel/web";
 import type { Keel } from "@keel/web";
 
 import { BlogPage } from "./page";
-import { listPosts, postsMigration } from "./post";
+import { countReactions, listPosts, postsMigration } from "./post";
+import { reactionsSource } from "./reactions-source";
 
-/** The blog's routes + page, closing over the typed `Db` they query through. */
+/**
+ * The blog's routes + page, closing over the typed `Db` they query through.
+ *
+ * `.data(reactionsSource, …)` registers the Reactions island's data loader and
+ * auto-exposes it at `/__keel/data/reactions` (a `shared` source → publicly
+ * cacheable-but-revalidated). On the dynamically rendered `/posts` page the
+ * framework resolves it AT RENDER and inlines it into the `ssr: true` island —
+ * the canonical island, 0 RTT (ADR 0012). `.client("/client.js")` declares the
+ * client runtime, so every page emits the head module tag that hydrates it.
+ */
 export function buildBlog(db: Db): Keel {
   return keel()
+    .client("/client.js")
+    .data(reactionsSource, () => countReactions(db))
     .page("/posts", {
       load: async () => ({ posts: await listPosts(db) }),
       component: BlogPage,

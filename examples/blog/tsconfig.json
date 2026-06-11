@@ -3,9 +3,10 @@
 
   "compilerOptions": {
     "rootDir": ".",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "jsx": "react-jsx"
   },
 
-  "include": ["src", "run.ts", "serve.ts"]
+  "include": ["src", "app", "test", "run.ts", "serve.ts"]
 }
