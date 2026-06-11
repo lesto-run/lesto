@@ -1,6 +1,6 @@
 # ADR 0008 — Pluggable server renderer (`ssr: true` under Preact)
 
-- **Status:** Accepted (capability + end-to-end proof in `@keel/ui`; no app wired yet)
+- **Status:** Accepted (capability + end-to-end proof in `@keel/ui`; estate's deployed Worker wired to the matched pair on 2026-06-11 — see the 0008-06-11 addendum at the end)
 - **Date:** 2026-06-10
 - **Context:** closes the named follow-up from [ADR 0007](./0007-preact-compat-client-alias.md). ADR 0007 added an opt-in `react`→`preact/compat` alias for the **client** island bundle and proved it shrank `/client.js` ~92% — but only for **deferred (`ssr: false`)** islands, which mount fresh with `createRoot` against a placeholder shell and so have no server markup to hydrate against. `ssr: true` islands were explicitly left unsafe under the alias because the **server** still rendered on real React: Preact's `hydrateRoot` would try to adopt markup produced by `react-dom/server`, and the two renderers' output does not match. This ADR records the seam that lets the server render in the same dialect the client hydrates in.
 - **Relates to:** ADR 0007 (the client alias whose `ssr: true` gap this closes); `@keel/ui`'s `render.tsx` (`renderPageMarkup`) and `hydrate.tsx`'s existing injectable `mount` seam, which this mirrors.
@@ -75,3 +75,32 @@ The mismatch is a property of the *output*, not the *engine*. Two correct render
 - The default path is untouched and remains the safe, supported build: `renderPageMarkup` with no renderer is real `react-dom/server`, and a default React importer of `@keel/ui` pulls in nothing new. `preact-render-to-string` loads only when `@keel/ui/server-preact` is imported.
 - The remaining gap to **"Preact by default"** is no longer in `@keel/ui` — the engine now supports both dialects on both sides. What is left is an *application* decision: an app must select the matching pair (the `--preact` client alias **and** `preactServerRenderer` for its server render) and accept ADR 0007's standing correctness traps (`react-aria`-class library breakage under compat; dev/prod alias divergence). Keel does not flip that switch for anyone; the seam keeps the choice explicit and per-app, mirroring why the client alias itself is opt-in.
 - **Companion `@keel/ui` change (separate concern, recorded for the integrator):** alongside this seam, `@keel/ui` gained opt-in **visible (lazy) island hydration**, mirroring how `ssr` already threads a per-component flag onto the wire. `ClientComponentDef` gained `hydrate?: HydrationStrategy` (`"load" | "visible"`, default `"load"`) and `IslandMount` gained `strategy?: HydrationStrategy`, emitted by `buildIsland` **only** for `"visible"` (omitted for the default so existing manifests, their serialized `<script>` bytes, and the tests pinning them are byte-for-byte unchanged). `hydrateIslands` gained an injectable `observe?: ObserveFn` seam (`(container, onVisible) => Disconnect`, defaulting to an `IntersectionObserver` wrapper — the same injection style as `mount`) and a `HydrationResult.deferred: string[]` for visible islands found-but-not-yet-mounted (distinct from `mounted`/`missing`/`failed`, none of which is truthful for a region whose shell is present but whose work was deliberately postponed). A `"visible"` island defers its **mount work** — its render, effects, and any on-mount fetch (e.g. the Account island's `/mls/api/session` call) — until the region first scrolls into view, via the same `mountOne` helper the eager path uses, so deferred mounts inherit identical `onMountError`/`failed` resilience; their later success/failure is reflected by mutating the caller-held result arrays. The runtime owns the one-shot guard and calls the returned `Disconnect` after mount, so an injected `ObserveFn` need not self-disconnect. It does **not** defer bundle **bytes**: Keel ships one `client.js`, so the code already arrived; `"visible"` only postpones running it. True byte/code deferral needs per-island code-splitting — a separate, larger follow-up, not claimed here. This change is additive and independent of the server-renderer seam, but worth recording because it extends the same hydration contract and threads a per-component flag onto the wire the same way `ssr` does.
+
+## Addendum (2026-06-11): estate's Worker is the matched pair
+
+The application step this ADR deliberately left untaken has now been taken where
+it is honest to take it — the **bundled** target. estate's Cloudflare Worker is
+Preact by default:
+
+- `wrangler.jsonc` carries the same alias block `build-client.ts --preact`
+  applies (react→`preact/compat`, the two `react-dom` shims, jsx-runtime), so the
+  whole worker module graph builds Preact vnodes.
+- `worker.ts` completes the pair by passing `preactServerRenderer` through
+  `buildEdgeApp`'s new `serverRenderer` option into `renderDocument` — which now
+  renders through `renderPageMarkup` (the seam) instead of a hard
+  `renderToStaticMarkup`, fixing the latent marker-stripping bug for `ssr: true`
+  islands in any dialect.
+- `build.ts` ships the deploy assets with the **Preact client** explicitly
+  (`preactClient: true`), so the worker's markup and the served `/client.js`
+  (30,369 B raw vs React's 383,575 B) speak one dialect. Verified by a
+  `wrangler deploy --dry-run` bundle inspection: 117 KiB total, preact present,
+  real `react-dom/server` absent (only estate's inert shim).
+
+The **node** paths deliberately stay React-paired: an unaliased node process
+builds real React elements, which `preact-render-to-string` cannot render — a
+runtime can't be dialect-flipped per-app without bundling. `KEEL_PREACT=1`
+remains the client-only opt-in there, sound for deferred islands only. Likewise
+the **prerendered** marketing pages are React-rendered static markup; an
+`ssr: true` island on a *prerendered* page under the Preact client remains the
+one unsupported combination (it would need the prerenderer itself bundled under
+the alias).

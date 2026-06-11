@@ -19,7 +19,7 @@ import { keel } from "@keel/web";
 import type { Keel } from "@keel/web";
 import { SignedSessions } from "@keel/auth";
 import { island } from "@keel/ui";
-import type { UiNode } from "@keel/ui";
+import type { ServerRenderer, UiNode } from "@keel/ui";
 
 import { registry } from "./registry";
 import { renderDocument } from "./document";
@@ -77,14 +77,28 @@ function listingGrid(): UiNode {
   };
 }
 
+/** What `buildEdgeApp` accepts beyond the signing secret. */
+export interface EdgeAppOptions {
+  /**
+   * The server-render dialect the pages use — default React. The Worker passes
+   * `preactServerRenderer` because its bundle is aliased to `preact/compat`
+   * (`wrangler.jsonc`), so the SSR'd markup matches the Preact client bundle the
+   * deploy ships (ADR 0008's matched pair). The in-process tests, which run this
+   * file unaliased, leave it unset and render React.
+   */
+  readonly serverRenderer?: ServerRenderer;
+}
+
 /**
  * Build the edge app over a signing secret.
  *
  * The secret backs every signed session; in the Worker it comes from
  * `env.SESSION_SECRET`, never the source.
  */
-export function buildEdgeApp(secret: string): Keel {
+export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel {
   const sessions = new SignedSessions({ secret });
+
+  const renderer = options.serverRenderer;
 
   /** The user named by the request's session cookie, or undefined. */
   const currentUser = (cookieHeader: string | undefined): User | undefined => {
@@ -123,6 +137,7 @@ export function buildEdgeApp(secret: string): Keel {
             tree,
             "Jade Mills Estates",
             "Extraordinary homes, quietly sold across Beverly Hills, Bel Air, and Malibu — browse Jade Mills' luxury listings.",
+            renderer,
           ),
         );
       })
@@ -166,6 +181,7 @@ export function buildEdgeApp(secret: string): Keel {
             tree,
             "MLS · Jade Mills Estates",
             "Search the Jade Mills MLS and sign in to save listings.",
+            renderer,
           ),
         );
       })

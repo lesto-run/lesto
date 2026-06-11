@@ -20,11 +20,15 @@ import { buildProductionSite } from "./src/production";
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const OUT = fileURLToPath(new URL("./out", import.meta.url));
 
-const { manifest } = await buildProductionSite(OUT, ROOT);
+// The deploy pair is Preact by default: the Worker SSRs through
+// `preactServerRenderer` (worker.ts + the wrangler.jsonc alias), so the client
+// these assets ship MUST be the Preact bundle — a React client hydrating against
+// Preact markup is exactly the ssr-mismatch ADR 0008 closes.
+const { manifest } = await buildProductionSite(OUT, ROOT, { preactClient: true });
 
 for (const site of manifest) {
   console.log(`built ${site.site}: ${site.pages.length} pages → out/${site.site}`);
 }
 
-console.log("bundled island client → out/marketing/client.js");
+console.log("bundled island client (preact) → out/marketing/client.js");
 console.log("\nout/marketing is ready to deploy (see wrangler.jsonc). Next: wrangler deploy");

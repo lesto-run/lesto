@@ -16,6 +16,13 @@
 import { toFetchHandler, withAssets } from "@keel/cloudflare";
 import type { AssetFetcher } from "@keel/cloudflare";
 
+// The Preact server dialect. This import is only honest because wrangler bundles
+// this worker with the react→preact/compat alias block (wrangler.jsonc): inside
+// that bundle, every element @keel/ui builds is a Preact vnode, which is exactly
+// what preact-render-to-string consumes. The matched pair — Preact server markup
+// + the Preact client bundle `build.ts` ships — is ADR 0008's invariant.
+import { preactServerRenderer } from "@keel/ui/server-preact";
+
 import { buildEdgeApp, edgeSecret } from "./src/edge";
 
 /** The bindings this Worker is configured with (see wrangler.jsonc). */
@@ -51,7 +58,7 @@ let cachedHandler: FetchHandler | undefined;
 /** The fetch handler for `secret`, built once per isolate and reused thereafter. */
 function handlerFor(secret: string): FetchHandler {
   if (cachedHandler === undefined || cachedSecret !== secret) {
-    const app = buildEdgeApp(secret);
+    const app = buildEdgeApp(secret, { serverRenderer: preactServerRenderer });
 
     cachedHandler = toFetchHandler((method, path, options) => app.handle(method, path, options));
     cachedSecret = secret;

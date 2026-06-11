@@ -43,6 +43,20 @@ export interface ProductionSite {
   readonly manifest: readonly SiteManifest[];
 }
 
+/** What `buildProductionSite` accepts beyond its paths. */
+export interface ProductionBuildOptions {
+  /**
+   * Bundle the client in Preact's compat dialect (`build-client.ts --preact`).
+   *
+   * Defaults to the `KEEL_PREACT=1` env opt-in — the node serve path, whose SSR
+   * is always React, where the alias is sound only because estate's lone island
+   * is deferred. The Cloudflare deploy (`build.ts`) passes `true` explicitly:
+   * the Worker SSRs in Preact (see `worker.ts` + the `wrangler.jsonc` alias), so
+   * its assets must carry the matched Preact client (ADR 0008).
+   */
+  readonly preactClient?: boolean;
+}
+
 /**
  * Assemble the production site into `outDir`, bundling from `projectRoot`.
  *
@@ -52,6 +66,7 @@ export interface ProductionSite {
 export async function buildProductionSite(
   outDir: string,
   projectRoot: string,
+  options: ProductionBuildOptions = {},
 ): Promise<ProductionSite> {
   const app = await buildApp();
 
@@ -67,12 +82,15 @@ export async function buildProductionSite(
   // invariants are the bulk of an un-minified client bundle) — addressing both
   // Lighthouse's "Minify JavaScript" and "Reduce unused JavaScript" diagnostics.
   //
-  // The default path bundles real React, unchanged. `KEEL_PREACT=1` opts the
-  // CLIENT bundle into Preact's compat layer (see `build-client.ts`): materially
+  // The default path bundles real React, unchanged. `KEEL_PREACT=1` (or the
+  // explicit `preactClient` option the deploy build passes) opts the CLIENT
+  // bundle into Preact's compat layer (see `build-client.ts`): materially
   // smaller, and sound for estate's lone DEFERRED island (`Account`, `ssr:false`,
-  // a fresh `createRoot` mount with no server markup to hydrate). It is NOT yet
-  // safe for `ssr:true` islands, which would need the server renderer switched too.
-  const preact = process.env["KEEL_PREACT"] === "1" ? ["--preact"] : [];
+  // a fresh `createRoot` mount with no server markup to hydrate). An `ssr: true`
+  // island additionally needs the server dialect matched — which the Worker does
+  // (preactServerRenderer) and the node serve path, always-React SSR, does not.
+  const preactClient = options.preactClient ?? process.env["KEEL_PREACT"] === "1";
+  const preact = preactClient ? ["--preact"] : [];
 
   execFileSync(
     "bun",

@@ -12,4 +12,18 @@
     "directory": "./out/marketing",
     "binding": "ASSETS",
   },
+  // Preact by default on the edge (ADR 0007/0008): the worker bundle resolves
+  // every React specifier to Preact's compat layer — the same alias set
+  // `build-client.ts --preact` applies to the client bundle, so the SSR'd markup
+  // and the shipped client speak one dialect. `worker.ts` completes the pair by
+  // rendering through `preactServerRenderer`. The shims satisfy the react-dom
+  // imports `@keel/ui`'s barrel carries but the worker never invokes.
+  "alias": {
+    "react": "preact/compat",
+    "react-dom/client": "preact/compat/client",
+    "react-dom/server": "./preact-react-dom-server-shim.ts",
+    "react-dom": "./preact-react-dom-shim.ts",
+    "react/jsx-runtime": "preact/jsx-runtime",
+    "react/jsx-dev-runtime": "preact/jsx-runtime",
+  },
 }

@@ -5,12 +5,19 @@
  * body, then serialize the manifest into a `<script type="application/json">`
  * and point at the client bundle — exactly what `hydrateIslands` reads on load.
  * A page with no islands ships an empty manifest and is pure static HTML.
+ *
+ * The body goes through `@keel/ui`'s `renderPageMarkup`, never a direct
+ * `react-dom/server` call: that seam is what keeps an `ssr: true` island's
+ * hydration markers intact (`renderToString` when any island is ssr, marker-free
+ * `renderToStaticMarkup` otherwise — render.tsx owns the rule) and what lets a
+ * caller swap the server dialect (`renderer`) to Preact's when the client bundle
+ * is Preact (ADR 0008). Bypassing it with a hard `renderToStaticMarkup` — as
+ * this file once did — would silently strip the markers from the first
+ * `ssr: true` island and break its hydration, in any dialect.
  */
 
-import { renderToStaticMarkup } from "react-dom/server";
-
-import { renderPage } from "@keel/ui";
-import type { Registry, UiNode } from "@keel/ui";
+import { renderPage, renderPageMarkup } from "@keel/ui";
+import type { Registry, ServerRenderer, UiNode } from "@keel/ui";
 
 // The two JS line terminators that are valid JSON but break a <script> body.
 // Built via escape codes so no raw separator char ever appears in this source
@@ -70,16 +77,25 @@ const STYLE = `
   .auth input { min-height: 44px; padding: 0 .5rem; }
 `;
 
-/** Render a tree into a complete, island-aware HTML document. */
+/**
+ * Render a tree into a complete, island-aware HTML document.
+ *
+ * `renderer` picks the server dialect — default React; pass `@keel/ui`'s
+ * `preactServerRenderer` when (and only when) the module graph is aliased to
+ * `preact/compat`, as the Worker bundle is (see `wrangler.jsonc`). The dialect
+ * must match the element factory that built the tree: an unaliased node process
+ * builds React elements, which only the React renderer can render.
+ */
 export function renderDocument(
   registry: Registry,
   tree: UiNode,
   title: string,
   description?: string,
+  renderer?: ServerRenderer,
 ): string {
   const page = renderPage(registry, tree);
 
-  const body = page.element === null ? "" : renderToStaticMarkup(page.element);
+  const body = renderPageMarkup(page, renderer);
 
   // The title and description are attacker-influenceable (a controller may build
   // them from a user-facing name), so they are HTML-escaped before they land in
