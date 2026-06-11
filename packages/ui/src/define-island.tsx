@@ -48,17 +48,23 @@ import { createElement, Fragment, use, useContext, useId } from "react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
 
 import { dataPrimerScript } from "./data";
+import type { DataSource } from "./data";
 import { IslandDataContext } from "./data-resolve";
 import type { SourceResolver } from "./data-resolve";
 import { UiError } from "./errors";
 import { assertClientDef, ISLAND_ATTR, ISLAND_MOUNT_ATTR } from "./island";
-import type { ClientComponentDef } from "./island";
+import type { ClientComponentDef, HydrationStrategy } from "./island";
 import { islandMount } from "./mount";
 import { serializeScriptJson } from "./serialize";
+import type { PropSpec } from "./types";
 
-/** A React component for a `.page`, carrying its island declaration for the build + client registry. */
-export interface IslandComponent {
-  (props: Record<string, unknown>): ReactElement;
+/**
+ * A React component for a `.page`, carrying its island declaration for the build +
+ * client registry. Generic over `Rest` — the props the CALLER must still pass in
+ * JSX (the component's props minus the ones the framework resolves from data).
+ */
+export interface IslandComponent<Rest extends Record<string, unknown> = Record<string, unknown>> {
+  (props: Rest): ReactElement;
 
   /** The island's declaration — read by the entry synthesizer and the client registry. */
   readonly island: ClientComponentDef;
@@ -113,8 +119,41 @@ function resolveData(
 }
 
 /**
- * Wrap a {@link ClientComponentDef} into a `.page`-usable React component that
+ * The typed declaration `defineIsland` accepts (review F8).
+ *
+ * `P` is the component's full props. `D` binds a SUBSET of those props to data
+ * sources, each `DataSource<P[K]>` — so binding a `DataSource<number>` to a
+ * `string` prop is a compile error (the token's phantom type finally reaches the
+ * component). `fallback` and the returned component see only `Omit<P, keyof D>` —
+ * the props NOT supplied by data — so the island component requires the unbound
+ * props and rejects the bound ones.
+ */
+export interface IslandDef<
+  P extends Record<string, unknown>,
+  D extends { [K in keyof P]?: DataSource<P[K]> },
+> {
+  name: string;
+  component: ComponentType<P>;
+  ssr?: boolean;
+  hydrate?: HydrationStrategy;
+  fallback?: (props: Omit<P, keyof D>) => ReactNode;
+  data?: D;
+  props?: Record<string, PropSpec>;
+}
+
+/**
+ * Wrap a typed island declaration into a `.page`-usable React component that
  * self-emits its shell + mount script + data primer.
+ *
+ * The public signature is generic over the component's props (review F8): `data`
+ * is typed as `{ [K in keyof P]?: DataSource<P[K]> }` and the returned island
+ * component accepts the non-bound remainder `Omit<P, keyof D>`. Internally the
+ * def is cast ONCE to the erased {@link ClientComponentDef} — the same
+ * one-erasure-boundary precedent `keel().page()` uses, because a React component
+ * is contravariant in its props, so a specific def is not directly assignable to
+ * the open one. `Registry.defineClient` typing stays deferred (ADR 0011
+ * Increment 2 / the `island.ts` doc): its storage is erased, its consumers
+ * stringly, so generics there are cosmetic until that path migrates.
  *
  * The shell is the `ssr: true` real render or the deferred `fallback`; the mount
  * script and primer are SIBLINGS of the shell wrapper so the client's
@@ -122,7 +161,12 @@ function resolveData(
  * container would mismatch hydration). A non-serializable prop throws out of the
  * render exactly as the Registry path's does — the page's error boundary owns it.
  */
-export function defineIsland(def: ClientComponentDef): IslandComponent {
+export function defineIsland<
+  P extends Record<string, unknown>,
+  const D extends { [K in keyof P]?: DataSource<P[K]> } = Record<never, never>,
+>(declaration: IslandDef<P, D>): IslandComponent<Omit<P, keyof D>> {
+  const def = declaration as unknown as ClientComponentDef;
+
   // The `.page` path never passes through a Registry, so the union rules are
   // enforced here at wrap time (module init): an un-typed caller can hand
   // `defineIsland` a broken union too.
@@ -166,5 +210,7 @@ export function defineIsland(def: ClientComponentDef): IslandComponent {
 
   Island.island = def;
 
-  return Island;
+  // One erasure boundary: the runtime component takes the open props record; the
+  // public type narrows it to the unbound remainder. The cast lives only here.
+  return Island as unknown as IslandComponent<Omit<P, keyof D>>;
 }

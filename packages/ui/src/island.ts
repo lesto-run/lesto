@@ -112,6 +112,15 @@ interface ClientComponentBase {
    * no `fetch`-in-effect, and a waterfall has no author-side site to exist at.
    * The source's implementation is bound on the server (`keel().data(...)`);
    * this only names the binding, so the client bundle pulls in no server code.
+   *
+   * Typed loosely here (`DataSource`, value type erased) ON PURPOSE. The
+   * type-checked binding — `DataSource<P[K]>` linked to the component's props
+   * (review F8) — lives on the `defineIsland` path (`IslandDef`), the canonical
+   * path. The Registry's `defineClient` typing is deferred to estate's `.page`
+   * convergence (ADR 0011 Increment 2): its storage is an erased
+   * `Map<string, ClientComponentDef>` and its consumers (the UiNode walk) are
+   * stringly by design, so generics here would be cosmetic until that path
+   * migrates or retires.
    */
   data?: Record<string, DataSource>;
 }

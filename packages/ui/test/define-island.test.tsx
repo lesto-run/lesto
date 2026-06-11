@@ -14,7 +14,7 @@
 import { act, Suspense } from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   createSourceResolver,
@@ -27,7 +27,7 @@ import {
   renderPageStreamToString,
   UiError,
 } from "../src/index";
-import type { ClientComponentDef, SourceResolver } from "../src/index";
+import type { SourceResolver } from "../src/index";
 import { hydrateDocumentIslands } from "../src/hydrate";
 
 // A deferred island that renders a prop the framework resolves from a source.
@@ -58,7 +58,8 @@ afterEach(() => {
 
 describe("defineIsland — define-time union refusals", () => {
   it("throws UI_CLIENT_COMPONENT_MISSING for a def with neither component nor load", () => {
-    const empty = { name: "Ghost" } as unknown as ClientComponentDef;
+    // The un-typed caller: cast past the generic signature to the runtime gate.
+    const empty = { name: "Ghost" } as unknown as Parameters<typeof defineIsland>[0];
 
     try {
       defineIsland(empty);
@@ -306,6 +307,60 @@ describe("defineIsland — no resolver in scope", () => {
     expect(html).toContain('"bind":{"session":{"source":"session","href":"/__keel/data/session"}}');
     expect(html).toContain("window.__keelData");
     expect(html).not.toContain('"session":{"name"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Item 9 (review F8): the token's phantom type reaches the component's props.
+// These are TYPE-LEVEL assertions — checked by the package's `tsc --noEmit`
+// step (test is in the tsconfig include); the `@ts-expect-error` lines fail the
+// build if the error they pin disappears. The runtime body is incidental.
+// ---------------------------------------------------------------------------
+
+describe("defineIsland — typed props (review F8)", () => {
+  const numberSource = defineDataSource<number>("count");
+
+  it("binds a DataSource to a same-typed prop; the island requires the unbound props", () => {
+    const Card = defineIsland({
+      name: "Card",
+      component: (props: { count: number; title: string }) =>
+        createElement("div", null, `${props.title}: ${props.count}`),
+      data: { count: numberSource },
+    });
+
+    // The returned island accepts ONLY the unbound remainder (`title`), with the
+    // bound `count` removed.
+    expectTypeOf(Card).parameter(0).toEqualTypeOf<{ title: string }>();
+
+    // Supplying `title` is valid…
+    createElement(Card, { title: "Hello" });
+
+    // …omitting it is a compile error (it is required)…
+    // @ts-expect-error — `title` is required on the unbound remainder.
+    createElement(Card, {});
+
+    // …and passing the bound prop is rejected (data supplies it, not the caller).
+    // @ts-expect-error — `count` is bound by data; the caller must not pass it.
+    createElement(Card, { title: "Hello", count: 3 });
+  });
+
+  it("rejects binding a DataSource<number> to a string prop (mismatched phantom type)", () => {
+    defineIsland({
+      name: "Bad",
+      component: (props: { count: string }) => createElement("span", null, props.count),
+      // @ts-expect-error — DataSource<number> cannot feed a `string` prop.
+      data: { count: numberSource },
+    });
+  });
+
+  it("flows P straight through when there is no data (every prop required of the caller)", () => {
+    const Plain = defineIsland({
+      name: "Plain",
+      component: (props: { a: number; b: string }) =>
+        createElement("span", null, `${props.a}${props.b}`),
+    });
+
+    expectTypeOf(Plain).parameter(0).toEqualTypeOf<{ a: number; b: string }>();
   });
 });
 

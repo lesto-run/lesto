@@ -46,7 +46,7 @@ export type { ClientComponentDef, HydrationStrategy, IslandMount } from "./islan
 // no page-wide manifest walk. The client half (`hydrateDocumentIslands`) is in
 // the `@keel/ui/client` subpath.
 export { defineIsland } from "./define-island";
-export type { IslandComponent } from "./define-island";
+export type { IslandComponent, IslandDef } from "./define-island";
 
 export { islandMount } from "./mount";
 
