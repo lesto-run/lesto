@@ -11,6 +11,7 @@
 import { Registry } from "@keel/ui";
 
 import { Account, AccountFallback } from "./account";
+import { sessionSource } from "./session-source";
 
 export const registry = new Registry()
   .define({
@@ -159,7 +160,7 @@ export const registry = new Registry()
   })
   .defineClient({
     name: "Account",
-    description: "The signed-in/out account control — resolved per-user on the client.",
+    description: "The signed-in/out account control — resolved per-user from the session source.",
     // Eager ON PURPOSE — do not "optimize" this into a lazy `load:`. Account is
     // ~1 KB, above the fold, and always mounts, so code-splitting it defers
     // nothing and only adds request hops (the measured Lighthouse critical
@@ -168,4 +169,9 @@ export const registry = new Registry()
     // live in @keel/ui's unit tests; see ADR 0009 for when to reach for it.
     component: Account,
     fallback: AccountFallback,
+    // Its `session` prop is resolved from the session source (ADR 0010): primed
+    // at HTML-parse time on the static marketing page, parallel with client.js —
+    // no `fetch`-in-effect, no waterfall. The server binds the impl in
+    // controllers.ts (node) and edge.ts (worker).
+    data: { session: sessionSource },
   });

@@ -26,6 +26,7 @@ import { clearSessionCookie, IdentityError, readSessionToken, sessionCookie } fr
 import type { Identity } from "@keel/identity";
 
 import { registry } from "./registry";
+import { sessionSource } from "./session-source";
 import { renderDocument } from "./document";
 import { LISTINGS, formatPrice } from "./listings";
 import { DEFAULT_DEMO, DEMO_ACCOUNTS } from "./identity";
@@ -205,21 +206,20 @@ export function buildEstateRoutes(identity: Identity): Keel {
         );
       })
       /**
-       * The same-origin endpoint the marketing Account island calls.
+       * The session data source the marketing Account island binds to (ADR 0010).
        *
-       * This is an identity *probe*, not a gated resource: "nobody is signed in"
-       * is a normal, expected answer, so it returns 200 with `{ user: null }`
-       * rather than 401. A 401 here would be logged by the browser as a failed
-       * resource load (a console error Lighthouse flags) on every signed-out view
-       * of a public marketing page. The genuinely gated resources — `/mls/saved`,
-       * and any state-changing POST — still answer 401/403.
+       * This replaces the hand-written `/mls/api/session` route + the island's
+       * client fetch: the framework auto-exposes it at `/__keel/data/session` and
+       * delivers its value to the island as a prop (primed parallel with the
+       * client bundle, not a `doc → js → fetch` waterfall). It is an identity
+       * *probe*, not a gated resource — "nobody is signed in" is a normal answer
+       * (`null`, 200), never a 401. The DTO is allowlisted to `{ id, name }`; the
+       * gated resources (`/mls/saved`, any POST) still answer 401/403.
        */
-      .get("/mls/api/session", async (c) => {
+      .data(sessionSource, async (c) => {
         const user = await currentUser(c);
 
-        if (user === undefined) return c.json({ user: null });
-
-        return c.json({ user: sessionUser(user.email) });
+        return user === undefined ? null : sessionUser(user.email);
       })
       /**
        * Sign in — runs the real `Identity.login` flow.

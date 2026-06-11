@@ -4,10 +4,13 @@
  * The auth island, end to end, in a browser-like environment.
  *
  * It proves the whole auth-aware-static loop without a server: render the page
- * the way the build does (the Account island ships as its signed-out fallback),
- * drop that HTML into the document, then hydrate — and watch the island resolve
- * the same-origin session and rewrite itself per-user. The session fetch is
- * stubbed, so this is deterministic.
+ * the way the build does (the Account island ships as its signed-out fallback
+ * and a manifest `bind` for its session source), drop that HTML into the
+ * document, then hydrate — and watch the framework resolve the session and
+ * rewrite the island per-user. There is no client `fetch`-in-effect anymore
+ * (ADR 0010): the data arrives either from the parse-time primer promise
+ * (`window.__keelData`) or, as the fallback, a fetch of the source's route —
+ * both stubbed here, so this is deterministic.
  */
 
 import { act } from "react";
@@ -19,22 +22,16 @@ import { hydrateIslands } from "@keel/ui/client";
 import type { UiNode } from "@keel/ui";
 
 import { registry } from "../src/registry";
-import type { User } from "../src/session-client";
+import type { SessionUser } from "../src/session-source";
+
+const ACCOUNT_ID = "$.children[0].children[0]";
 
 const tree: UiNode = {
   type: "Page",
   children: [{ type: "SiteHeader", children: [island("Account")] }],
 };
 
-/** Stub `fetch` to answer the session endpoint with `user` (or a 401 when null). */
-function stubSession(user: User | null): void {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(() => Promise.resolve({ ok: user !== null, json: () => Promise.resolve({ user }) })),
-  );
-}
-
-/** Render the page like the build does and put its HTML in the document. */
+/** Render the page like the build does (fallback markup + the session bind). */
 function renderIntoDocument(): ReturnType<typeof renderPage> {
   const page = renderPage(registry, tree);
 
@@ -43,55 +40,81 @@ function renderIntoDocument(): ReturnType<typeof renderPage> {
   return page;
 }
 
-/**
- * Hydrate the page and let the island's mount, session fetch, and re-render
- * settle.
- *
- * Account is an EAGER island (registry.tsx: `component:`, not `load:`), so it
- * mounts synchronously the instant `hydrateIslands` runs. The one macrotask
- * flush is for what happens *after* the mount — its on-mount `/mls/api/session`
- * fetch and the per-user re-render that follows. (A microtask-only flush would
- * starve the event loop and never resolve the fetch chain.)
- */
-async function hydrateAndSettle(page: ReturnType<typeof renderPage>): Promise<void> {
-  const result = await act(async () => hydrateIslands(registry, page.islands));
-
-  // Mounted synchronously, by design — no chunk to wait on.
-  expect(result.mounted).toEqual(["$.children[0].children[0]"]);
-  expect(result.deferred).toEqual([]);
-
+/** Drain the bind resolution + re-render. The bind is async, so the island defers then mounts. */
+async function settle(): Promise<void> {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
   });
 }
 
 afterEach(() => {
   document.body.innerHTML = "";
+  delete window.__keelData;
   vi.unstubAllGlobals();
 });
 
 describe("the Account island", () => {
-  it("ships as a signed-out shell, then hydrates to a greeting for a signed-in user", async () => {
-    stubSession({ id: "jade", name: "Jade Mills" });
-
+  it("emits the session bind (not a baked value) and a signed-out fallback at build", () => {
     const page = renderIntoDocument();
 
-    // The prerendered shell knows nobody — it shows the signed-out CTA.
+    // The prerendered shell knows nobody — it shows the signed-out CTA…
     expect(document.body.textContent).toContain("Sign in");
     expect(document.body.textContent).not.toContain("Hi,");
 
-    await hydrateAndSettle(page);
-
-    // Hydration resolved the session and rewrote the island, per-user.
-    expect(document.body.textContent).toContain("Hi, Jade Mills");
+    // …and the manifest carries the unresolved session bind for the client to
+    // resolve (via the parse-time primer or its fallback fetch).
+    expect(page.islands[0]?.bind).toEqual({
+      session: { source: "session", href: "/__keel/data/session" },
+    });
   });
 
-  it("stays signed-out when no session is present", async () => {
-    stubSession(null);
+  it("hydrates to a per-user greeting from the primed session promise", async () => {
+    const user: SessionUser = { id: "jade", name: "Jade Mills" };
+    // The primer (dataPrimerScript) already kicked the fetch before any JS ran.
+    window.__keelData = { session: Promise.resolve(user) };
 
     const page = renderIntoDocument();
 
-    await hydrateAndSettle(page);
+    let result!: ReturnType<typeof hydrateIslands>;
+    act(() => {
+      result = hydrateIslands(registry, page.islands);
+    });
+
+    // Bound island → deferred until its data resolves, then mounted.
+    expect(result.deferred).toEqual([ACCOUNT_ID]);
+
+    await settle();
+
+    expect(result.mounted).toEqual([ACCOUNT_ID]);
+    expect(document.body.textContent).toContain("Hi, Jade Mills");
+  });
+
+  it("falls back to fetching the source route when nothing primed it", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve({ json: () => Promise.resolve({ id: "ada", name: "Ada" }) } as Response),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = renderIntoDocument();
+
+    act(() => {
+      hydrateIslands(registry, page.islands);
+    });
+    await settle();
+
+    expect(fetchMock).toHaveBeenCalledWith("/__keel/data/session", { credentials: "same-origin" });
+    expect(document.body.textContent).toContain("Hi, Ada");
+  });
+
+  it("stays signed-out when the session resolves to null", async () => {
+    window.__keelData = { session: Promise.resolve(null) };
+
+    const page = renderIntoDocument();
+
+    act(() => {
+      hydrateIslands(registry, page.islands);
+    });
+    await settle();
 
     expect(document.body.textContent).toContain("Sign in");
     expect(document.body.textContent).not.toContain("Hi,");

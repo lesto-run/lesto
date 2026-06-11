@@ -2,9 +2,11 @@
  * Wrap a UI tree into a full HTML document.
  *
  * `renderPage` gives us the SSR'd body plus the island manifest. We emit the
- * body, then serialize the manifest into a `<script type="application/json">`
- * and point at the client bundle — exactly what `hydrateIslands` reads on load.
- * A page with no islands ships an empty manifest and is pure static HTML.
+ * body, serialize the manifest through `@keel/ui`'s `serializeManifest` (the one
+ * audited script-context-safe seam — never a hand-rolled stringify), point at
+ * the client bundle, and — for any island that binds a data source (ADR 0010) —
+ * emit the parse-time primer that kicks its fetch parallel with `client.js`. A
+ * page with no islands ships an empty manifest and no primer: pure static HTML.
  *
  * The body goes through `@keel/ui`'s `renderPageMarkup`, never a direct
  * `react-dom/server` call: that seam is what keeps an `ssr: true` island's
@@ -16,31 +18,8 @@
  * `ssr: true` island and break its hydration, in any dialect.
  */
 
-import { renderPage, renderPageMarkup } from "@keel/ui";
+import { dataPrimerScript, renderPage, renderPageMarkup, serializeManifest } from "@keel/ui";
 import type { Registry, ServerRenderer, UiNode } from "@keel/ui";
-
-// The two JS line terminators that are valid JSON but break a <script> body.
-// Built via escape codes so no raw separator char ever appears in this source
-// (a raw U+2028 in a regex literal is itself an unterminated-regex syntax error).
-const LINE_SEPARATOR = String.fromCharCode(0x2028);
-const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
-
-/**
- * Serialize a value to JSON safe to embed inside a `<script>` element.
- *
- * `<`/`>`/`&` are escaped so the JSON can never spell `</script>` (or an HTML
- * entity) and break out of the tag. U+2028/U+2029 are *valid* JSON but are raw
- * line terminators in JavaScript source — left unescaped they truncate the
- * script and corrupt the manifest. Mirrors content-shared's `serializeJsonLd`.
- */
-function safeJson(value: unknown): string {
-  return JSON.stringify(value)
-    .replaceAll("<", "\\u003c")
-    .replaceAll(">", "\\u003e")
-    .replaceAll("&", "\\u0026")
-    .replaceAll(LINE_SEPARATOR, "\\u2028")
-    .replaceAll(PARAGRAPH_SEPARATOR, "\\u2029");
-}
 
 /** Escape a string for safe interpolation into HTML text/element content. */
 function escapeHtml(value: string): string {
@@ -97,6 +76,8 @@ export function renderDocument(
 
   const body = renderPageMarkup(page, renderer);
 
+  const primer = dataPrimerScript(page.islands);
+
   // The title and description are attacker-influenceable (a controller may build
   // them from a user-facing name), so they are HTML-escaped before they land in
   // their respective tags. A page without a description omits the meta entirely
@@ -115,7 +96,13 @@ export function renderDocument(
     "</head>",
     "<body>",
     body,
-    `<script id="keel-islands" type="application/json">${safeJson(page.islands)}</script>`,
+    `<script id="keel-islands" type="application/json">${serializeManifest(page.islands)}</script>`,
+    // The data primer: a plain (non-deferred) inline script that starts each
+    // bound source's fetch the instant the parser reaches it — before the
+    // deferred module below runs — so per-user data lands parallel with
+    // client.js, never in a doc→js→fetch chain (ADR 0010). Empty (and so
+    // omitted) for a page whose islands bind no data.
+    ...(primer === "" ? [] : [`<script>${primer}</script>`]),
     '<script type="module" src="/client.js"></script>',
     "</body>",
     "</html>",

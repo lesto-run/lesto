@@ -22,6 +22,7 @@ import { island } from "@keel/ui";
 import type { ServerRenderer, UiNode } from "@keel/ui";
 
 import { registry } from "./registry";
+import { sessionSource } from "./session-source";
 import { renderDocument } from "./document";
 import { LISTINGS, formatPrice } from "./listings";
 
@@ -186,19 +187,16 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel
         );
       })
       /**
-       * The same-origin endpoint the marketing Account island calls.
+       * The session data source the marketing Account island binds to (ADR 0010).
        *
-       * An identity *probe*, not a gated resource: "nobody is signed in" is a
-       * normal answer, so it returns 200 with `{ user: null }`. A 401 here would
-       * be logged by the browser as a failed resource load — a console error
-       * Lighthouse flags — on every signed-out view of the public marketing page,
-       * whose island fetches this on load. The gated `/mls/saved` still 401s.
+       * Auto-exposed at `/__keel/data/session`; the framework delivers its value
+       * to the island as a prop (primed parallel with client.js), replacing the
+       * old `/mls/api/session` route + client fetch. An identity *probe*, not a
+       * gated resource — "nobody is signed in" is a normal `null`/200, never a
+       * 401. The signed-token user is already the `{ id, name }` DTO. The gated
+       * `/mls/saved` still 401s.
        */
-      .get("/mls/api/session", (c) => {
-        const user = currentUser(c.header("cookie"));
-
-        return user === undefined ? c.json({ user: null }) : c.json({ user });
-      })
+      .data(sessionSource, (c) => currentUser(c.header("cookie")) ?? null)
       // Demo sign-in: mint a SIGNED token for `?as=<id>` (default jade), set the cookie.
       .post("/mls/api/sign-in", (c) => {
         const user = USERS.get(c.query("as") ?? "jade");

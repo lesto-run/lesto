@@ -89,11 +89,15 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
     expect((await dispatch("GET", "/mls/saved")).status).toBe(401);
   });
 
-  it("answers the session probe with 200 {user:null} when signed out (not a 401 — that logs a console error)", async () => {
-    const response = await dispatch("GET", "/mls/api/session");
+  it("answers the session source with 200 null when signed out (not a 401 — that logs a console error)", async () => {
+    // The marketing Account island binds this source (ADR 0010); the framework
+    // auto-exposes it at /__keel/data/session, which dispatchSites routes to the
+    // live app even though the `/` catch-all zone's prefix would otherwise claim
+    // it. The value is the user directly (or null), no `{ user }` wrapper.
+    const response = await dispatch("GET", "/__keel/data/session");
 
     expect(response.status).toBe(200);
-    expect(JSON.parse(response.body)).toEqual({ user: null });
+    expect(JSON.parse(response.body)).toBeNull();
   });
 
   it("rejects a sign-in POST carrying no origin signal (CSRF)", async () => {
@@ -128,11 +132,12 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
     const cookie = cookieFrom(signIn.headers["Set-Cookie"] ?? signIn.headers["set-cookie"]);
     expect(cookie).toContain("keel_session");
 
-    // 3. The session endpoint the marketing island calls now sees the user.
-    const session = await dispatch("GET", "/mls/api/session", { headers: { cookie } });
+    // 3. The session source the marketing island binds now resolves the user.
+    const session = await dispatch("GET", "/__keel/data/session", { headers: { cookie } });
     expect(session.status).toBe(200);
     expect(JSON.parse(session.body)).toEqual({
-      user: { id: DEFAULT_DEMO.email, name: DEFAULT_DEMO.displayName },
+      id: DEFAULT_DEMO.email,
+      name: DEFAULT_DEMO.displayName,
     });
 
     // 4. And the gated resource is unlocked.

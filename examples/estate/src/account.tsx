@@ -1,60 +1,43 @@
 /**
- * The "My Account" island — the heart of auth-aware static.
+ * The "My Account" island — the heart of auth-aware static, now a pure function
+ * of its data (ADR 0010).
  *
- * It ships in a prerendered, cacheable marketing page, but renders per-user: on
- * the client it resolves the same-origin session and shows either a sign-in link
- * or a greeting + a link to the gated Saved page. The server emits the
- * {@link AccountFallback} shell so a no-JS visitor still sees a sensible
- * signed-out state; the island upgrades it once hydrated.
+ * It ships in a prerendered, cacheable marketing page but renders per-user — and
+ * the per-user `session` arrives as a PROP the framework resolved (the
+ * `sessionSource` binding in `registry.tsx`), not a `fetch` this component runs.
+ * There is no `useEffect`, no loading state, and no `doc → js → fetch` waterfall:
+ * the data was primed at HTML-parse time, parallel with the client bundle. The
+ * server paints {@link AccountFallback} until the island hydrates with its data.
  */
 
-import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
 
-import { resolveSession } from "./session-client";
-import type { User } from "./session-client";
+import type { SessionUser } from "./session-source";
 
-type AccountState =
-  | { readonly status: "loading" }
-  | { readonly status: "out" }
-  | { readonly status: "in"; readonly user: User };
+/**
+ * The Account control — signed-out CTA, or a greeting + a link to the gated
+ * Saved page.
+ *
+ * Props arrive as the engine's open record (the island wire is untyped at this
+ * boundary; the `data` binding names the prop, see registry.tsx) — so `session`
+ * is read and narrowed here, the same idiom every island component uses. The
+ * value itself was resolved by the framework, never fetched by this component.
+ */
+export function Account(props: Record<string, unknown>): ReactElement {
+  const session = (props.session ?? null) as SessionUser | null;
 
-/** The live, client-only Account component the island mounts. */
-export function Account(): ReactElement {
-  const [state, setState] = useState<AccountState>({ status: "loading" });
-
-  useEffect(() => {
-    let active = true;
-
-    const settle = (next: AccountState): void => {
-      if (active) setState(next);
-    };
-
-    resolveSession()
-      .then((user) => settle(user === null ? { status: "out" } : { status: "in", user }))
-      .catch(() => settle({ status: "out" }));
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  if (state.status === "loading") {
-    return <span className="account account--loading">…</span>;
-  }
-
-  if (state.status === "in") {
+  if (session === null) {
     return (
-      <span className="account account--in">
-        Hi, {state.user.name} · <a href="/mls/saved">Saved</a>
-      </span>
+      <a className="account account--out" href="/mls">
+        Sign in
+      </a>
     );
   }
 
   return (
-    <a className="account account--out" href="/mls">
-      Sign in
-    </a>
+    <span className="account account--in">
+      Hi, {session.name} · <a href="/mls/saved">Saved</a>
+    </span>
   );
 }
 

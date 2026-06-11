@@ -65,14 +65,17 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
     expect(body.saved).toHaveLength(2);
   });
 
-  it("the session endpoint the marketing island calls reflects the cookie", async () => {
+  it("the session source the marketing island binds reflects the cookie", async () => {
     const handler = handlerFor(SECRET);
 
-    // Signed out is a normal answer for this probe: 200 {user:null}, not a 401
-    // (a 401 would log a browser console error on every public marketing view).
-    const anon = await handler(new Request(`${origin}/mls/api/session`));
+    // The Account island binds this source (ADR 0010); the worker auto-exposes
+    // it at /__keel/data/session (a miss on the assets binding falls through to
+    // the app). Signed out is a normal answer: 200 with the value `null`, not a
+    // 401 (a 401 would log a browser console error on every public view). The
+    // value is the user directly — no `{ user }` wrapper.
+    const anon = await handler(new Request(`${origin}/__keel/data/session`));
     expect(anon.status).toBe(200);
-    expect((await anon.json()) as { user: unknown }).toEqual({ user: null });
+    expect(await anon.json()).toBeNull();
 
     const signIn = await handler(
       new Request(`${origin}/mls/api/sign-in?as=guest`, { method: "POST" }),
@@ -80,10 +83,10 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
     const cookie = sessionCookiePair(signIn.headers.get("set-cookie") ?? "");
 
     const session = await handler(
-      new Request(`${origin}/mls/api/session`, { headers: { cookie } }),
+      new Request(`${origin}/__keel/data/session`, { headers: { cookie } }),
     );
     expect(session.status).toBe(200);
-    expect(((await session.json()) as { user: { name: string } }).user.name).toBe("Guest Buyer");
+    expect(((await session.json()) as { name: string }).name).toBe("Guest Buyer");
   });
 
   it("verifies across isolates: a cookie from one handler is accepted by another with the same secret and no shared store", async () => {
