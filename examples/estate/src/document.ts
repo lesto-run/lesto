@@ -8,6 +8,15 @@
  * emit the parse-time primer that kicks its fetch parallel with `client.js`. A
  * page with no islands ships an empty manifest and no primer: pure static HTML.
  *
+ * Head placement (ADR 0011 Seam 1, fixed 2026-06-11): the primer and the
+ * `type="module"` client tag live in `<head>`, not at end-of-body. The primer's
+ * whole purpose is to start the data fetch at parse time; at end-of-body it
+ * would only start after the entire document had parsed. A `type="module"`
+ * script is deferred by spec — it downloads immediately and executes after the
+ * parse — so the `#keel-islands` manifest (kept at end-of-body: inert payload
+ * the runtime reads post-parse, and keeping it after the content keeps
+ * first-paint bytes first) is always present when the runtime runs.
+ *
  * The body goes through `@keel/ui`'s `renderPageMarkup`, never a direct
  * `react-dom/server` call: that seam is what keeps an `ssr: true` island's
  * hydration markers intact (`renderToString` when any island is ssr, marker-free
@@ -93,17 +102,20 @@ export function renderDocument(
       ? []
       : [`<meta name="description" content="${escapeHtml(description)}" />`]),
     `<style>${STYLE}</style>`,
+    // The data primer: a plain (non-deferred) inline script in <head> that starts
+    // each bound source's fetch the instant the parser reaches it — at parse time,
+    // before the deferred module below executes — so per-user data lands parallel
+    // with client.js, never in a doc→js→fetch chain (ADR 0010). Empty (and so
+    // omitted) for a page whose islands bind no data.
+    ...(primer === "" ? [] : [`<script>${primer}</script>`]),
+    // The client module in <head>: a type="module" script is deferred by spec,
+    // so it downloads now and runs after the full parse — when the end-of-body
+    // manifest is already in the DOM for the runtime to read.
+    '<script type="module" src="/client.js"></script>',
     "</head>",
     "<body>",
     body,
     `<script id="keel-islands" type="application/json">${serializeManifest(page.islands)}</script>`,
-    // The data primer: a plain (non-deferred) inline script that starts each
-    // bound source's fetch the instant the parser reaches it — before the
-    // deferred module below runs — so per-user data lands parallel with
-    // client.js, never in a doc→js→fetch chain (ADR 0010). Empty (and so
-    // omitted) for a page whose islands bind no data.
-    ...(primer === "" ? [] : [`<script>${primer}</script>`]),
-    '<script type="module" src="/client.js"></script>',
     "</body>",
     "</html>",
   ].join("\n");

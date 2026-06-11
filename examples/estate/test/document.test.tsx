@@ -94,6 +94,45 @@ describe("renderDocument", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Head placement (ADR 0011 Seam 1): the primer and the module script live in
+// <head> so the data fetch starts at parse time and the deferred module runs
+// after the parse — while the manifest stays at end-of-body.
+// ---------------------------------------------------------------------------
+
+describe("renderDocument — head placement", () => {
+  it("emits the primer in <head>, before the module tag, with the manifest still in body", () => {
+    // estate's Account island binds the `session` source, so a primer is emitted.
+    const html = renderDocument(registry, homeTree, "Jade Mills Estates");
+
+    const headEnd = html.indexOf("</head>");
+    const primerAt = html.indexOf("window.__keelData");
+    const moduleAt = html.indexOf('<script type="module" src="/client.js">');
+    const manifestAt = html.indexOf('id="keel-islands"');
+    const bodyOpen = html.indexOf("<body>");
+
+    // The primer is present and inside <head>…
+    expect(primerAt).toBeGreaterThan(-1);
+    expect(primerAt).toBeLessThan(headEnd);
+    // …before the module tag, which is also in <head>…
+    expect(moduleAt).toBeGreaterThan(primerAt);
+    expect(moduleAt).toBeLessThan(headEnd);
+    // …while the inert manifest stays at end-of-body.
+    expect(manifestAt).toBeGreaterThan(bodyOpen);
+    expect(manifestAt).toBeGreaterThan(headEnd);
+  });
+
+  it("emits no primer for a page whose islands bind no data", () => {
+    // A bare Page tree with no data-bound island → empty primer, none emitted.
+    const html = renderDocument(registry, { type: "Page" }, "No islands");
+
+    expect(html).not.toContain("window.__keelData");
+    // The module tag is still emitted (and still in <head>).
+    const headEnd = html.indexOf("</head>");
+    expect(html.indexOf('<script type="module" src="/client.js">')).toBeLessThan(headEnd);
+  });
+});
+
 describe("buildEdgeApp serverRenderer threading", () => {
   it("renders pages through the injected dialect (how the Worker speaks Preact)", async () => {
     const { renderer, calls } = fakeRenderer();
