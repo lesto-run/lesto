@@ -43,8 +43,10 @@ describe("bin e2e", () => {
 
     expect(result.code, result.stderr).toBe(0);
 
-    // The fixture declares `resources("posts")`; its index route must appear.
-    expect(result.stdout).toContain("GET\t/posts\tposts#index");
-    expect(result.stdout).toContain("posts#create");
+    // The fixture's `keel()` app declares these routes; `routes` prints the
+    // code-first `method\tpattern` shape (no controller#action target).
+    expect(result.stdout).toContain("GET\t/posts");
+    expect(result.stdout).toContain("POST\t/posts");
+    expect(result.stdout).toContain("GET\t/posts/:id");
   }, 30_000);
 });

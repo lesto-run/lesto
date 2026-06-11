@@ -2,11 +2,11 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Router } from "@keel/router";
-import { Controller } from "@keel/web";
+import { Controller, keel } from "@keel/web";
 import { Migrator } from "@keel/migrate";
 import { contentEntriesMigration } from "@keel/content-store";
 import type { ControllerClass, KeelResponse } from "@keel/web";
-import type { App, AppConfig, KernelDatabase } from "@keel/kernel";
+import type { App, AppConfig, KeelAppConfig, KernelDatabase } from "@keel/kernel";
 import type { MigrationEntry } from "@keel/migrate";
 import type { RuntimeEntry } from "@keel/content-core";
 import type { Server, ServeOptions } from "@keel/runtime";
@@ -89,15 +89,18 @@ function adapt(raw: Database.Database): KernelDatabase {
 
 let database: Database.Database;
 
-function buildConfig(): AppConfig {
-  const router = new Router();
-
-  router.resources("posts");
+// The default app every command test runs against: a code-first `keel()` app
+// (KeelAppConfig). `GET /posts` answers 200 with `{ posts: [] }` and anything
+// unmatched 404s — so the build/deploy/dev tests render over a real app.
+function buildConfig(): KeelAppConfig {
+  const app = keel()
+    .get("/posts", (c) => c.json({ posts: [] }))
+    .post("/posts", (c) => c.json({ created: true }, 201))
+    .get("/posts/:id", (c) => c.json({ id: c.param("id") }));
 
   return {
     db: adapt(database),
-    router,
-    controllers: { posts: PostsController as ControllerClass },
+    app,
     migrations,
   };
 }
@@ -147,17 +150,30 @@ afterEach(() => {
 });
 
 describe("run routes", () => {
-  it("prints every route from the app's router and returns 0", async () => {
+  it("prints every route from the keel() app as method\\tpattern and returns 0", async () => {
     const code = await run(["routes"], depsWith());
 
     expect(code).toBe(0);
 
-    // The seven RESTful routes for `resources("posts")`.
+    // The code-first shape: method + pattern, no controller#action target.
+    expect(lines).toEqual(["GET\t/posts", "POST\t/posts", "GET\t/posts/:id"]);
+  });
+
+  it("prints the legacy Router's method, pattern, and controller#action target", async () => {
+    // Dual-mode lives until ADR 0004 Phase 7.6: a legacy `{ router, controllers }`
+    // app still lists its routes with the third target column.
+    const legacy: AppConfig = {
+      db: adapt(database),
+      router: new Router().resources("posts"),
+      controllers: { posts: PostsController as ControllerClass },
+      migrations,
+    };
+
+    const code = await run(["routes"], depsWith({ loadApp: () => Promise.resolve(legacy) }));
+
+    expect(code).toBe(0);
     expect(lines).toContain("GET\t/posts\tposts#index");
     expect(lines).toContain("POST\t/posts\tposts#create");
-    expect(lines).toContain("GET\t/posts/:id\tposts#show");
-    expect(lines).toContain("DELETE\t/posts/:id\tposts#destroy");
-    expect(lines).toHaveLength(8);
   });
 });
 
@@ -453,18 +469,19 @@ describe("run deploy", () => {
     { name: "mls", render: "dynamic", basePath: "/mls" },
   ];
 
-  function twoRouteConfig(): AppConfig {
-    const router = new Router().get("/posts", "posts#index").get("/more", "posts#index");
+  function twoRouteConfig(): KeelAppConfig {
+    const app = keel()
+      .get("/posts", (c) => c.json({ posts: [] }))
+      .get("/more", (c) => c.json({ posts: [] }));
 
     return {
       db: adapt(database),
-      router,
-      controllers: { posts: PostsController as ControllerClass },
+      app,
       migrations,
     };
   }
 
-  const loadApp = (): Promise<AppConfig> => Promise.resolve(twoRouteConfig());
+  const loadApp = (): Promise<KeelAppConfig> => Promise.resolve(twoRouteConfig());
 
   it("builds, ships the static target into --dist, and prints the routing plan", async () => {
     const { sink } = recordingSink();

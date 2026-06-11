@@ -19,13 +19,12 @@ import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createApp } from "@keel/kernel";
-import type { AppConfig, KernelDatabase } from "@keel/kernel";
+import type { KeelAppConfig, KernelDatabase } from "@keel/kernel";
 import { createDb } from "@keel/db";
-import { Router } from "@keel/router";
 import { serve } from "@keel/runtime";
 import type { Server } from "@keel/runtime";
-import { Controller } from "@keel/web";
-import type { ControllerClass, KeelResponse } from "@keel/web";
+import { keel } from "@keel/web";
+import type { Context, KeelResponse } from "@keel/web";
 
 import {
   clearSessionCookie,
@@ -61,86 +60,9 @@ const mailer: IdentityMailer = {
 
 let identity: Identity;
 
-class AuthController extends Controller {
-  async register(): Promise<KeelResponse> {
-    const { email, password } = this.body();
-    try {
-      await identity.register(email, password);
-
-      return this.json({ ok: true });
-    } catch (error) {
-      return errorResponse(error);
-    }
-  }
-
-  async verify(): Promise<KeelResponse> {
-    const token = this.request.query["token"] ?? "";
-    try {
-      await identity.verifyEmail(token);
-
-      return this.json({ ok: true });
-    } catch (error) {
-      return errorResponse(error);
-    }
-  }
-
-  async login(): Promise<KeelResponse> {
-    const { email, password } = this.body();
-    try {
-      const { session } = await identity.login(email, password);
-
-      return {
-        status: 200,
-        headers: { "content-type": "application/json", "Set-Cookie": sessionCookie(session.token) },
-        body: JSON.stringify({ ok: true }),
-      };
-    } catch (error) {
-      return errorResponse(error);
-    }
-  }
-
-  logout(): KeelResponse {
-    identity.logout(readSessionToken(this.request.headers["cookie"]));
-
-    return {
-      status: 200,
-      headers: { "content-type": "application/json", "Set-Cookie": clearSessionCookie() },
-      body: JSON.stringify({ ok: true }),
-    };
-  }
-
-  async requestReset(): Promise<KeelResponse> {
-    await identity.requestPasswordReset(this.body().email);
-
-    return this.json({ ok: true });
-  }
-
-  async reset(): Promise<KeelResponse> {
-    const body = this.body();
-    try {
-      await identity.resetPassword(body.token ?? "", body.password);
-
-      return this.json({ ok: true });
-    } catch (error) {
-      return errorResponse(error);
-    }
-  }
-
-  private body(): { email: string; password: string; token?: string } {
-    return this.request.body as { email: string; password: string; token?: string };
-  }
-}
-
-class GatedController extends Controller {
-  async show(): Promise<KeelResponse> {
-    const user = await identity.currentUser(readSessionToken(this.request.headers["cookie"]));
-
-    if (!user) {
-      return { status: 401, headers: { "content-type": "application/json" }, body: '{"ok":false}' };
-    }
-
-    return this.json({ ok: true, email: user.email });
-  }
+/** The auth body shape every credential handler reads off the request. */
+function authBody(c: Context): { email: string; password: string; token?: string } {
+  return c.req.body as { email: string; password: string; token?: string };
 }
 
 function errorResponse(error: unknown): KeelResponse {
@@ -197,23 +119,86 @@ function adapt(raw: Database.Database): KernelDatabase {
   return adapted;
 }
 
-function buildConfig(database: Database.Database): AppConfig {
-  const router = new Router()
-    .post("/auth/register", "auth#register")
-    .get("/auth/verify", "auth#verify")
-    .post("/auth/login", "auth#login")
-    .post("/auth/logout", "auth#logout")
-    .post("/auth/request-reset", "auth#requestReset")
-    .post("/auth/reset", "auth#reset")
-    .get("/me", "gated#show");
+function buildConfig(database: Database.Database): KeelAppConfig {
+  const app = keel()
+    .post("/auth/register", async (c) => {
+      const { email, password } = authBody(c);
+      try {
+        await identity.register(email, password);
+
+        return c.json({ ok: true });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    })
+    .get("/auth/verify", async (c) => {
+      const token = c.query("token") ?? "";
+      try {
+        await identity.verifyEmail(token);
+
+        return c.json({ ok: true });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    })
+    .post("/auth/login", async (c) => {
+      const { email, password } = authBody(c);
+      try {
+        const { session } = await identity.login(email, password);
+
+        return {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "Set-Cookie": sessionCookie(session.token),
+          },
+          body: JSON.stringify({ ok: true }),
+        };
+      } catch (error) {
+        return errorResponse(error);
+      }
+    })
+    .post("/auth/logout", (c) => {
+      identity.logout(readSessionToken(c.header("cookie")));
+
+      return {
+        status: 200,
+        headers: { "content-type": "application/json", "Set-Cookie": clearSessionCookie() },
+        body: JSON.stringify({ ok: true }),
+      };
+    })
+    .post("/auth/request-reset", async (c) => {
+      await identity.requestPasswordReset(authBody(c).email);
+
+      return c.json({ ok: true });
+    })
+    .post("/auth/reset", async (c) => {
+      const body = authBody(c);
+      try {
+        await identity.resetPassword(body.token ?? "", body.password);
+
+        return c.json({ ok: true });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    })
+    .get("/me", async (c) => {
+      const user = await identity.currentUser(readSessionToken(c.header("cookie")));
+
+      if (!user) {
+        return {
+          status: 401,
+          headers: { "content-type": "application/json" },
+          body: '{"ok":false}',
+        };
+      }
+
+      return c.json({ ok: true, email: user.email });
+    });
 
   return {
     db: adapt(database),
-    router,
-    controllers: {
-      auth: AuthController as ControllerClass,
-      gated: GatedController as ControllerClass,
-    },
+    app,
     migrations: [usersMigration],
   };
 }

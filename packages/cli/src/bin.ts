@@ -11,7 +11,7 @@
 import { join } from "node:path";
 
 import { nodeStaticReader, serve } from "@keel/runtime";
-import type { AppConfig } from "@keel/kernel";
+import type { AppConfig, KeelAppConfig } from "@keel/kernel";
 
 import { createNewEntry, runPipeline } from "@keel/content-core/build";
 import type { RuntimeEntry } from "@keel/content-core";
@@ -28,8 +28,10 @@ const DEV_ASSET_DIR = "out";
 
 const argv = process.argv.slice(2);
 
-const loadApp = async (): Promise<AppConfig> => {
-  const module = (await import(join(process.cwd(), "keel.app.ts"))) as { default: AppConfig };
+const loadApp = async (): Promise<AppConfig | KeelAppConfig> => {
+  const module = (await import(join(process.cwd(), "keel.app.ts"))) as {
+    default: AppConfig | KeelAppConfig;
+  };
 
   return module.default;
 };

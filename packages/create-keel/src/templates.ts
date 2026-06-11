@@ -8,10 +8,10 @@
  *
  * The app they emit is small but REAL — it boots on `@keel/kernel`'s
  * `createApp` with a `posts` table (defined as a `@keel/db` value), a
- * migration that runs `createTableSql(posts)`, a controller built through
- * a closure factory that queries via `@keel/db`, and a router. Mirrors
- * the shape of the canonical blog example (`examples/blog`) and the rest
- * of the post-ADR-0004 codebase.
+ * migration that runs `createTableSql(posts)`, and a code-first `keel()`
+ * app whose handlers query via `@keel/db`. Mirrors the shape of the
+ * canonical blog example (`examples/blog`) and the rest of the
+ * post-ADR-0004 codebase.
  */
 
 /**
@@ -43,7 +43,6 @@ export function packageJson(name: string): string {
       "@keel/db": keelDep,
       "@keel/kernel": keelDep,
       "@keel/migrate": keelDep,
-      "@keel/router": keelDep,
       "@keel/runtime": keelDep,
       "@keel/ui": keelDep,
       "@keel/web": keelDep,
@@ -60,24 +59,28 @@ export function packageJson(name: string): string {
 /**
  * `keel.app.ts` — the project root's entrypoint.
  *
- * It default-exports an `AppConfig` (the `{ db, router, controllers,
- * migrations }` object `createApp` accepts), which `@keel/cli`'s `keel
- * dev` loads and boots.
+ * It default-exports a `KeelAppConfig` (the `{ db, app, migrations }` object
+ * `createApp` accepts), which `@keel/cli`'s `keel dev` loads and boots.
  */
 export function keelApp(): string {
   return `/**
- * The app: a \`posts\` table, its migration, a controller, and a router,
- * wired into the AppConfig that \`keel dev\` boots. This is the whole
- * application — grow it by adding tables, migrations, controllers, and routes.
+ * The app: a \`posts\` table, its migration, and a code-first \`keel()\` app,
+ * wired into the KeelAppConfig that \`keel dev\` boots. This is the whole
+ * application — grow it by adding tables, migrations, routes, and pages.
+ *
+ * Routes read top-to-bottom like Hono/Express: one \`keel()\` surface for both
+ * API routes (\`.get\`/\`.post\`/…) and pages (\`.page\`), each handler a
+ * \`(c) => response\` over the request context \`c\`.
  *
  * Two conventions worth seeing on day one:
- *   - Validation at the boundary (ADR 0005): \`create\` runs the untrusted body
- *     through a Zod schema with \`validateBody\` before it touches the database.
- *     A bad body is a 422, never a crash. The schema is the only place input is
- *     checked; everything past it is typed and trusted.
+ *   - Validation at the boundary (ADR 0005): the create handler runs the
+ *     untrusted body through a Zod schema with \`c.valid\` before it touches the
+ *     database. A bad body is a 422, never a crash. The schema is the only place
+ *     input is checked; everything past it is typed and trusted.
  *   - CSRF on by default: \`secureStack({ originCheck: {} })\` refuses a
  *     state-changing request that didn't come from this origin (it reads the
- *     browser's \`Sec-Fetch-Site\`), with no per-form token plumbing.
+ *     browser's \`Sec-Fetch-Site\`), with no per-form token plumbing. The
+ *     request-shaped batteries drop onto the chain via \`fromRequestMiddleware\`.
  */
 
 import { createDb, createTableSql, defineTable, dropTableSql, integer, text } from "@keel/db";
@@ -85,13 +88,10 @@ import type { Db } from "@keel/db";
 
 import type { MigrationEntry } from "@keel/migrate";
 
-import { Router } from "@keel/router";
-
-import { Controller, validateBody } from "@keel/web";
+import { fromRequestMiddleware, keel } from "@keel/web";
 import { openSqlite } from "@keel/runtime";
 import { secureStack } from "@keel/kernel";
-import type { AppConfig } from "@keel/kernel";
-import type { ControllerClass, KeelResponse } from "@keel/web";
+import type { KeelAppConfig } from "@keel/kernel";
 
 import { z } from "zod";
 
@@ -127,63 +127,51 @@ const NewPost = z.object({
   body: z.string().trim().min(1, "Body is required."),
 });
 
-// The controllers — built through a factory so they close over the typed
-// \`Db\`. No \`this\`, no global database connection, no inheritance for
-// domain types. Matches every other in-tree consumer.
-function buildControllers(db: Db): { posts: ControllerClass } {
-  class PostsController extends Controller {
-    async index(): Promise<KeelResponse> {
-      const rows = await db.select().from(posts).orderBy(posts.id, "asc").all();
+// The app — built through a factory so its handlers close over the typed
+// \`Db\`. No \`this\`, no global database connection, no inheritance for domain
+// types. One \`keel()\` surface for the whole app; grow it by chaining more
+// \`.get\`/\`.post\`/\`.page\` calls.
+function buildApp(db: Db) {
+  return (
+    keel()
+      // Security batteries, on by default. \`originCheck\` is the zero-token CSRF
+      // defense: a cross-site POST/PUT/PATCH/DELETE is refused at the door. Add
+      // \`cors\`, \`rateLimit\`, or the signed-token \`csrf\` here as you need them.
+      .use(...secureStack({ originCheck: {} }).map(fromRequestMiddleware))
+      .get("/posts", async (c) => {
+        const rows = await db.select().from(posts).orderBy(posts.id, "asc").all();
 
-      return this.json({ posts: rows });
-    }
+        return c.json({ posts: rows });
+      })
+      // POST /posts. \`c.valid\` proves the shape (or throws a 422); past it,
+      // \`input\` is a typed \`{ title: string; body: string }\` we can trust.
+      .post("/posts", async (c) => {
+        const input = c.valid(NewPost);
 
-    // POST /posts. \`validateBody\` proves the shape (or throws a 422); past it,
-    // \`input\` is a typed \`{ title: string; body: string }\` we can trust.
-    async create(): Promise<KeelResponse> {
-      const input = validateBody(NewPost, this.request);
+        const now = new Date().toISOString();
 
-      const now = new Date().toISOString();
+        const post = await db
+          .insert(posts)
+          .values({ title: input.title, body: input.body, createdAt: now, updatedAt: now })
+          .returning()
+          .get();
 
-      const post = await db
-        .insert(posts)
-        .values({ title: input.title, body: input.body, createdAt: now, updatedAt: now })
-        .returning()
-        .get();
-
-      return this.json({ post }, 201);
-    }
-  }
-
-  return { posts: PostsController as ControllerClass };
-}
-
-// The routes: the seven RESTful routes for the posts collection.
-function buildRouter(): Router {
-  const router = new Router();
-
-  router.resources("posts");
-
-  return router;
+        return c.json({ post }, 201);
+      })
+  );
 }
 
 // The driver seam: \`@keel/runtime\`'s \`openSqlite\` boots better-sqlite3 under
 // Node and falls back to the built-in \`bun:sqlite\` under Bun — the framework
 // owns that, so the app never has to. The same handle backs the kernel (which
-// runs migrations) and the typed \`@keel/db\` the controllers query through.
+// runs migrations) and the typed \`@keel/db\` the handlers query through.
 const { db: handle } = await openSqlite("keel.db");
 const db = createDb(handle);
 
-const config: AppConfig = {
+const config: KeelAppConfig = {
   db: handle,
-  router: buildRouter(),
-  controllers: buildControllers(db),
+  app: buildApp(db),
   migrations: [createPosts],
-
-  // Security batteries, on by default. \`originCheck\` is the zero-token CSRF
-  // defense: a cross-site POST/PUT/PATCH/DELETE is refused at the door. Add
-  // \`cors\`, \`rateLimit\`, or the signed-token \`csrf\` here as you need them.
-  middleware: secureStack({ originCheck: {} }),
 };
 
 export default config;
@@ -232,15 +220,16 @@ bun run dev
 
 \`keel dev\` loads \`keel.app.ts\` (which default-exports the app config) and
 boots it: the kernel runs migrations and stands up request dispatch over
-the typed \`@keel/db\` handle the controllers query through.
+the typed \`@keel/db\` handle the route handlers query through.
 
 ## Structure
 
 - \`keel.app.ts\` — the whole app: a \`posts\` table (defined via
-  \`@keel/db\`'s \`defineTable\`), its migration, a \`PostsController\`
-  built through a closure factory, and a router with \`resources("posts")\`.
-- \`PostsController.create\` validates the request body at the boundary with
-  a Zod schema via \`validateBody\` — a bad body is a 422, never a crash.
+  \`@keel/db\`'s \`defineTable\`), its migration, and a code-first \`keel()\`
+  app built through a closure factory, with \`.get("/posts")\` /
+  \`.post("/posts")\` route handlers.
+- The \`POST /posts\` handler validates the request body at the boundary with
+  a Zod schema via \`c.valid\` — a bad body is a 422, never a crash.
   See \`docs/adr/0005-validation-at-the-boundary.md\` in the Keel source.
 - Security is on by default: \`secureStack({ originCheck: {} })\` refuses
   cross-site state-changing requests (zero-token, header-based CSRF). Note a

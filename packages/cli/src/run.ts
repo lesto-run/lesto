@@ -14,7 +14,7 @@
  */
 
 import { createApp } from "@keel/kernel";
-import type { AppConfig } from "@keel/kernel";
+import type { AppConfig, KeelAppConfig } from "@keel/kernel";
 
 import { deleteEntry, persistEntries, pruneEntries } from "@keel/content-store";
 import type { RuntimeEntry } from "@keel/content-core";
@@ -36,8 +36,15 @@ const DEFAULT_PORT = 3000;
 
 /** The seams the command core depends on — all injected, never imported live. */
 export interface CliDeps {
-  /** Load the project's app config (the bin reads `keel.app.ts`; tests fake it). */
-  loadApp: () => Promise<AppConfig>;
+  /**
+   * Load the project's app config (the bin reads `keel.app.ts`; tests fake it).
+   *
+   * Either shape `createApp` accepts: the code-first `keel()` app
+   * ({@link KeelAppConfig}) or the legacy `{ router, controllers }`
+   * ({@link AppConfig}). Both are supported until the legacy surface is removed
+   * (ADR 0004 Phase 7.6).
+   */
+  loadApp: () => Promise<AppConfig | KeelAppConfig>;
 
   /** Stand a real server in front of the app (the bin passes `@keel/runtime`'s). */
   serve: typeof serve;
@@ -101,9 +108,20 @@ const USAGE = [
   "  help              Show this help",
 ].join("\n");
 
-/** Print every route the app's router declares, one per line. */
+/** Print every route the app declares, one per line. */
 async function runRoutes(deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
+
+  // The code-first `keel()` app exposes its routes as `{ method, pattern }`.
+  // The legacy `Router` additionally carries a `controller#action` target. Both
+  // are listed here until the legacy surface is removed (ADR 0004 Phase 7.6).
+  if ("app" in config) {
+    for (const route of config.app.routes()) {
+      deps.out(`${route.method}\t${route.pattern}`);
+    }
+
+    return 0;
+  }
 
   for (const route of config.router.list()) {
     deps.out(`${route.method}\t${route.pattern}\t${route.target}`);

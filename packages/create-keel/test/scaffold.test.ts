@@ -66,19 +66,22 @@ describe("scaffold", () => {
     const app = await readFile(join(targetDir, "keel.app.ts"), "utf8");
     const pkg = await readFile(join(targetDir, "package.json"), "utf8");
 
-    // keel.app.ts default-exports the AppConfig and declares the parts.
+    // keel.app.ts default-exports the KeelAppConfig and declares the parts.
     expect(app).toContain("export default config");
-    expect(app).toContain("const config: AppConfig");
+    expect(app).toContain("const config: KeelAppConfig");
     expect(app).toContain('defineTable("posts"');
     expect(app).toContain("createTableSql(posts)");
-    expect(app).toContain("buildControllers(db)");
-    expect(app).toContain('resources("posts")');
+    expect(app).toContain("buildApp(db)");
+    expect(app).toContain('.get("/posts"');
+    expect(app).toContain('.post("/posts"');
 
     // The two conventions the starter demonstrates: boundary validation with
-    // Zod via validateBody, and CSRF on by default via secureStack/originCheck.
-    expect(app).toContain("validateBody(NewPost, this.request)");
+    // Zod via c.valid, and CSRF on by default via secureStack/originCheck
+    // (the request-shaped batteries adapted onto the chain).
+    expect(app).toContain("c.valid(NewPost)");
     expect(app).toContain("z.object({");
     expect(app).toContain("secureStack({ originCheck: {} })");
+    expect(app).toContain("fromRequestMiddleware");
 
     // package.json carries the project name, the @keel deps, and the dev script.
     const manifest = JSON.parse(pkg) as {
@@ -96,7 +99,6 @@ describe("scaffold", () => {
       "@keel/db",
       "@keel/kernel",
       "@keel/migrate",
-      "@keel/router",
       "@keel/web",
       "@keel/ui",
       "@keel/runtime",
@@ -110,6 +112,9 @@ describe("scaffold", () => {
 
     // The legacy @keel/orm dep is gone — scaffolded apps use @keel/db.
     expect(manifest.dependencies["@keel/orm"]).toBeUndefined();
+
+    // Routes live on the code-first keel() app now — no legacy @keel/router dep.
+    expect(manifest.dependencies["@keel/router"]).toBeUndefined();
   });
 
   it("refuses to clobber an existing target", async () => {
@@ -176,8 +181,9 @@ describe("templates", () => {
     }
   });
 
-  it("keelApp default-exports an AppConfig", () => {
+  it("keelApp default-exports a KeelAppConfig", () => {
     expect(keelApp()).toContain("export default config");
+    expect(keelApp()).toContain("const config: KeelAppConfig");
   });
 
   it("tsconfig is bundler-resolution, strict JSON", () => {

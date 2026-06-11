@@ -16,51 +16,12 @@ import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createApp } from "@keel/kernel";
-import type { AppConfig, KernelDatabase } from "@keel/kernel";
+import type { KeelAppConfig, KernelDatabase } from "@keel/kernel";
 import { serve } from "@keel/runtime";
 import type { Server } from "@keel/runtime";
-import { Router } from "@keel/router";
-import { Controller } from "@keel/web";
-import type { ControllerClass, KeelResponse } from "@keel/web";
+import { keel } from "@keel/web";
 
-// ---- A real-enough app: controllers that report back what they received. ----
-
-class HomeController extends Controller {
-  index(): KeelResponse {
-    return this.html("<h1>Home</h1>");
-  }
-}
-
-class EchoController extends Controller {
-  /** Reflect the request's cookie header — proves headers reach the controller. */
-  headers(): KeelResponse {
-    return this.json({ cookie: this.request.headers["cookie"] ?? null });
-  }
-
-  /** Reflect the decoded body — proves the JSON body path. */
-  body(): KeelResponse {
-    return this.json({ body: this.request.body });
-  }
-
-  /** Reflect the parsed query string. */
-  query(): KeelResponse {
-    return this.json({ query: this.request.query });
-  }
-}
-
-class SessionController extends Controller {
-  /** Set a cookie — proves a response Set-Cookie survives to the client. */
-  create(): KeelResponse {
-    return { status: 200, headers: { "Set-Cookie": "sid=abc; HttpOnly" }, body: "ok" };
-  }
-}
-
-class BoomController extends Controller {
-  /** Throw — proves the per-request error boundary maps it to 500, not a crash. */
-  go(): KeelResponse {
-    throw new Error("kaboom");
-  }
-}
+// ---- A real-enough app: handlers that report back what they received. ----
 
 function adapt(raw: Database.Database): KernelDatabase {
   const adapted: KernelDatabase = {
@@ -99,24 +60,30 @@ function adapt(raw: Database.Database): KernelDatabase {
   return adapted;
 }
 
-function buildConfig(database: Database.Database): AppConfig {
-  const router = new Router()
-    .get("/", "home#index")
-    .get("/echo/headers", "echo#headers")
-    .post("/echo/body", "echo#body")
-    .get("/echo/query", "echo#query")
-    .post("/session", "session#create")
-    .get("/boom", "boom#go");
+function buildConfig(database: Database.Database): KeelAppConfig {
+  const app = keel()
+    // Render an HTML page.
+    .get("/", (c) => c.html("<h1>Home</h1>"))
+    // Reflect the request's cookie header — proves headers reach the handler.
+    .get("/echo/headers", (c) => c.json({ cookie: c.header("cookie") ?? null }))
+    // Reflect the decoded body — proves the JSON body path.
+    .post("/echo/body", (c) => c.json({ body: c.req.body }))
+    // Reflect the parsed query string.
+    .get("/echo/query", (c) => c.json({ query: c.req.query }))
+    // Set a cookie — proves a response Set-Cookie survives to the client.
+    .post("/session", () => ({
+      status: 200,
+      headers: { "Set-Cookie": "sid=abc; HttpOnly" },
+      body: "ok",
+    }))
+    // Throw — proves the per-request error boundary maps it to 500, not a crash.
+    .get("/boom", () => {
+      throw new Error("kaboom");
+    });
 
   return {
     db: adapt(database),
-    router,
-    controllers: {
-      home: HomeController as ControllerClass,
-      echo: EchoController as ControllerClass,
-      session: SessionController as ControllerClass,
-      boom: BoomController as ControllerClass,
-    },
+    app,
   };
 }
 

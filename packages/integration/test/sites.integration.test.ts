@@ -17,24 +17,11 @@ import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createApp } from "@keel/kernel";
-import type { AppConfig, KernelDatabase } from "@keel/kernel";
+import type { KeelAppConfig, KernelDatabase } from "@keel/kernel";
 import { dispatchSites, nodeStaticReader, serve } from "@keel/runtime";
 import type { Server } from "@keel/runtime";
 import { defineSites } from "@keel/sites";
-import { Router } from "@keel/router";
-import { Controller } from "@keel/web";
-import type { ControllerClass, KeelResponse } from "@keel/web";
-
-// The dynamic zone: a live app mounted under /app that reflects what it gets.
-class AppController extends Controller {
-  index(): KeelResponse {
-    return this.json({ zone: "app" });
-  }
-
-  echo(): KeelResponse {
-    return this.json({ cookie: this.request.headers["cookie"] ?? null });
-  }
-}
+import { keel } from "@keel/web";
 
 function adapt(raw: Database.Database): KernelDatabase {
   const adapted: KernelDatabase = {
@@ -73,10 +60,13 @@ function adapt(raw: Database.Database): KernelDatabase {
   return adapted;
 }
 
-function buildDynamicApp(database: Database.Database): AppConfig {
-  const router = new Router().get("/app", "app#index").get("/app/echo", "app#echo");
+// The dynamic zone: a live app mounted under /app that reflects what it gets.
+function buildDynamicApp(database: Database.Database): KeelAppConfig {
+  const app = keel()
+    .get("/app", (c) => c.json({ zone: "app" }))
+    .get("/app/echo", (c) => c.json({ cookie: c.header("cookie") ?? null }));
 
-  return { db: adapt(database), router, controllers: { app: AppController as ControllerClass } };
+  return { db: adapt(database), app };
 }
 
 const sites = defineSites([
