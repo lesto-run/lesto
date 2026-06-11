@@ -25,6 +25,8 @@ import { createElement, Fragment } from "react";
 import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 
+import { dataSourceHref } from "./data";
+import type { IslandBind } from "./data";
 import { ISLAND_ATTR } from "./island";
 import type { ClientComponentDef, IslandMount } from "./island";
 import { isNodeObject } from "./node";
@@ -260,6 +262,21 @@ function buildIsland(
 
     if (client.hydrate === "visible") {
       mount.strategy = "visible";
+    }
+
+    // A `data` declaration rides the wire as an unresolved `bind` (propName →
+    // source + fetch href). A dynamic render resolves these into `props` and
+    // strips `bind` (resolveIslandData); a static render leaves them for the
+    // client's parse-time primer. Emitted only when declared, so a data-free
+    // island's entry is byte-for-byte unchanged.
+    if (client.data !== undefined) {
+      const bind: Record<string, IslandBind> = {};
+
+      for (const [prop, source] of Object.entries(client.data)) {
+        bind[prop] = { source: source.name, href: dataSourceHref(source.name) };
+      }
+
+      mount.bind = bind;
     }
 
     // Only a page build cares about the manifest; `renderTree` leaves it absent.

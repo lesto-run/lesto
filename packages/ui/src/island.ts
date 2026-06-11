@@ -40,6 +40,7 @@
 
 import type { ComponentType, ReactNode } from "react";
 
+import type { DataSource, IslandBind } from "./data";
 import type { PropSpec, UiNode } from "./types";
 
 /**
@@ -102,6 +103,16 @@ interface ClientComponentBase {
   props?: Record<string, PropSpec>;
   fallback?: (props: Record<string, unknown>) => ReactNode;
   hydrate?: HydrationStrategy;
+
+  /**
+   * Per-request data this island needs, as `propName → source token` (ADR
+   * 0010). The framework resolves each source and hands the value to the
+   * component as that prop — so the component is a pure function of props with
+   * no `fetch`-in-effect, and a waterfall has no author-side site to exist at.
+   * The source's implementation is bound on the server (`keel().data(...)`);
+   * this only names the binding, so the client bundle pulls in no server code.
+   */
+  data?: Record<string, DataSource>;
 }
 
 /** An island whose component ships in the main bundle (and may be `ssr: true`). */
@@ -156,6 +167,17 @@ export interface IslandMount {
   props: Record<string, unknown>;
   ssr: boolean;
   strategy?: HydrationStrategy;
+
+  /**
+   * Per-prop data bindings the client must resolve before mounting (ADR 0010),
+   * `propName → { source, href }`. Present only on an island with a `data`
+   * declaration whose values were NOT resolved server-side; a dynamically
+   * rendered page inlines the values into `props` and omits `bind` entirely, so
+   * a data-free or server-resolved island's wire entry is byte-for-byte what it
+   * always was. The client awaits each source (the parse-time primer promise on
+   * `window.__keelData`, else a fetch of `href`) and merges it into props.
+   */
+  bind?: Record<string, IslandBind>;
 }
 
 /** The attribute that marks an island's wrapper element for hydration. */

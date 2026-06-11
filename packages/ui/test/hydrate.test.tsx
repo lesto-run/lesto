@@ -67,13 +67,24 @@ const Box: ComponentDef = {
   render: (_props, kids) => createElement("div", null, kids),
 };
 
+// A data-bound island (ADR 0010): it renders a prop the framework resolves from
+// a source, never a client fetch the component wrote. Eager component; the bind
+// rides the manifest entry, not the def.
+const Profile: ClientComponentDef = {
+  name: "Profile",
+  component: (props) =>
+    createElement("span", { className: "profile" }, `who: ${String(props.who)}`),
+  fallback: () => createElement("span", { className: "profile-fallback" }, "…"),
+};
+
 function registry(): Registry {
   return new Registry()
     .define(Box)
     .defineClient(Account)
     .defineClient(Stamp)
     .defineClient(Greeting)
-    .defineClient(Lazy);
+    .defineClient(Lazy)
+    .defineClient(Profile);
 }
 
 /**
@@ -94,6 +105,7 @@ function paint(tree: unknown): ReturnType<typeof renderPage>["islands"] {
 
 afterEach(() => {
   document.body.innerHTML = "";
+  delete window.__keelData;
   vi.restoreAllMocks();
 });
 
@@ -744,6 +756,151 @@ describe("hydrateIslands — lazy (load) islands", () => {
 
     expect(loads).toBe(1);
     expect(document.body.querySelector(".chunk-live")?.textContent).toBe("V");
+    expect(result.mounted).toEqual(["$"]);
+  });
+});
+
+describe("hydrateIslands — data binds (ADR 0010)", () => {
+  // A manifest entry as buildIsland emits for a `data`-declared island: static
+  // props plus an unresolved bind the client must resolve before mounting.
+  const profileBind = {
+    id: "$",
+    component: "Profile",
+    props: {},
+    ssr: false,
+    bind: { who: { source: "who", href: "/__keel/data/who" } },
+  };
+
+  it("resolves a bind from the parse-time primer promise, then mounts with it", async () => {
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+    // The primer (dataPrimerScript) already kicked the fetch before any JS ran;
+    // the runtime must AWAIT that promise, not start its own request.
+    window.__keelData = { who: Promise.resolve("Ada") };
+
+    let result!: ReturnType<typeof hydrateIslands>;
+
+    await act(async () => {
+      result = hydrateIslands(registry(), [profileBind]);
+    });
+
+    // Synchronously deferred — the data is in flight — then mounted on resolve.
+    expect(result.deferred).toEqual(["$"]);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.body.querySelector(".profile")?.textContent).toBe("who: Ada");
+    expect(result.mounted).toEqual(["$"]);
+    expect(result.failed).toEqual([]);
+  });
+
+  it("falls back to fetching the href when no primer primed the source", async () => {
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+    const fetchMock = vi.fn(() =>
+      Promise.resolve({ json: () => Promise.resolve("Bob") } as Response),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let result!: ReturnType<typeof hydrateIslands>;
+
+    await act(async () => {
+      result = hydrateIslands(registry(), [profileBind]);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Credentialed same-origin fetch of the source's href, exactly once.
+    expect(fetchMock).toHaveBeenCalledWith("/__keel/data/who", { credentials: "same-origin" });
+    expect(document.body.querySelector(".profile")?.textContent).toBe("who: Bob");
+    expect(result.mounted).toEqual(["$"]);
+  });
+
+  it("merges resolved data over the island's static props (data wins)", async () => {
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+    window.__keelData = { who: Promise.resolve("FromData") };
+
+    await act(async () => {
+      hydrateIslands(registry(), [{ ...profileBind, props: { who: "FromStaticProp" } }]);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.body.querySelector(".profile")?.textContent).toBe("who: FromData");
+  });
+
+  it("routes a failed data resolution to onMountError and failed — the page survives", async () => {
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div><div ${ISLAND_ATTR}="ok"></div>`;
+
+    const sunk = new Error("data endpoint 500");
+    window.__keelData = { who: Promise.reject(sunk) };
+
+    const errors: Array<{ id: string; component: string }> = [];
+
+    let result!: ReturnType<typeof hydrateIslands>;
+
+    await act(async () => {
+      result = hydrateIslands(
+        registry(),
+        [
+          profileBind,
+          // An eager, unbound island after the broken one still mounts.
+          { id: "ok", component: "Stamp", props: { label: "live" }, ssr: true },
+        ],
+        { onMountError: (_error, info) => errors.push({ id: info.id, component: info.component }) },
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.failed).toEqual(["$"]);
+    expect(errors).toEqual([{ id: "$", component: "Profile" }]);
+    // The unbound island mounted synchronously and is unaffected.
+    expect(result.mounted).toContain("ok");
+    expect(document.body.querySelector(".profile")).toBeNull();
+  });
+
+  it("fetches a lazy island's chunk AND its data in parallel, then mounts", async () => {
+    // A bound + lazy island: ADR 0009's chunk and ADR 0010's data must race, not
+    // chain. Both resolve; the island mounts with the loaded component + data.
+    const LazyProfile: ClientComponentDef = {
+      name: "LazyProfile",
+      load: () =>
+        Promise.resolve((props: Record<string, unknown>) =>
+          createElement("span", { className: "lazy-profile" }, `hi ${String(props.who)}`),
+        ),
+      fallback: () => createElement("span", null, "…"),
+    };
+
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+    window.__keelData = { who: Promise.resolve("Cleo") };
+
+    let result!: ReturnType<typeof hydrateIslands>;
+
+    await act(async () => {
+      result = hydrateIslands(new Registry().defineClient(LazyProfile), [
+        {
+          id: "$",
+          component: "LazyProfile",
+          props: {},
+          ssr: false,
+          bind: { who: { source: "who", href: "/__keel/data/who" } },
+        },
+      ]);
+    });
+    expect(result.deferred).toEqual(["$"]);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(document.body.querySelector(".lazy-profile")?.textContent).toBe("hi Cleo");
     expect(result.mounted).toEqual(["$"]);
   });
 });

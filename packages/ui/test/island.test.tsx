@@ -3,6 +3,7 @@ import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { createElement } from "react";
 
 import {
+  defineDataSource,
   island,
   ISLAND_ATTR,
   Registry,
@@ -138,6 +139,44 @@ describe("Registry client components", () => {
       expect((error as UiError).code).toBe("UI_CLIENT_SSR_NEEDS_COMPONENT");
       expect((error as UiError).details).toEqual({ name: "Eager-only" });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Data-bound islands (ADR 0010): buildIsland emits the wire `bind`.
+// ---------------------------------------------------------------------------
+
+describe("renderPage — data binds", () => {
+  it("emits a bind (propName → source + href) for an island that declares data", () => {
+    const sessionSource = defineDataSource<{ name: string }>("session");
+
+    const r = new Registry().define(Box).defineClient({
+      name: "Account",
+      component: (props) => createElement("span", null, String(props.session)),
+      fallback: () => createElement("span", null, "Sign in"),
+      data: { session: sessionSource },
+    });
+
+    const page = renderPage(r, island("Account"));
+
+    // The fallback is what the server paints (deferred island)…
+    expect(renderToStaticMarkup(page.element)).toContain("Sign in");
+    // …and the manifest carries the unresolved bind for the client to resolve.
+    expect(page.islands).toEqual([
+      {
+        id: "$",
+        component: "Account",
+        props: {},
+        ssr: false,
+        bind: { session: { source: "session", href: "/__keel/data/session" } },
+      },
+    ]);
+  });
+
+  it("omits bind entirely for a data-free island (byte-stable wire)", () => {
+    const page = renderPage(registry(), island("Account", { plan: "pro" }));
+
+    expect(page.islands[0]).not.toHaveProperty("bind");
   });
 });
 

@@ -41,6 +41,19 @@ export type {
 export { island, ISLAND_ATTR } from "./island";
 export type { ClientComponentDef, HydrationStrategy, IslandMount } from "./island";
 
+// Island data sources (ADR 0010): declared data, framework-owned delivery.
+// `defineDataSource` is the isomorphic token; `dataSourceHref`/`DATA_ROUTE_PREFIX`
+// + `dataPrimerScript` + `resolveIslandData` are the server-side delivery seams
+// (the client half lives in `@keel/ui/client`'s hydration runtime).
+export {
+  DATA_ROUTE_PREFIX,
+  dataPrimerScript,
+  dataSourceHref,
+  defineDataSource,
+  resolveIslandData,
+} from "./data";
+export type { DataSource, IslandBind } from "./data";
+
 // The audited seam for inlining the island manifest into a `<script>`: escapes
 // the breakout characters `JSON.stringify` leaves raw. Manifest emission MUST go
 // through this — never a bare stringify or a `String.replace` splice.

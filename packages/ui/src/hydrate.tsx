@@ -70,6 +70,43 @@ import { ISLAND_ATTR } from "./island";
 import type { ClientComponentDef, IslandMount } from "./island";
 import type { Registry } from "./registry";
 
+declare global {
+  interface Window {
+    /**
+     * Per-source data promises kicked by the parse-time primer
+     * (`dataPrimerScript`), keyed by source name. The hydration runtime awaits
+     * these before mounting a bound island, so the data fetch runs parallel
+     * with `client.js` rather than after it (ADR 0010).
+     */
+    __keelData?: Record<string, Promise<unknown>>;
+  }
+}
+
+/**
+ * Resolve an island's data binds to a `{ propName: value }` bag, in parallel.
+ *
+ * Each bound source is taken from the parse-time primer promise
+ * (`window.__keelData[source]`, started before any JS ran — see
+ * `dataPrimerScript`) when present, else fetched directly as the fallback. A
+ * rejection propagates to the caller's catch, which fails just that one island.
+ */
+async function resolveBinds(entry: IslandMount): Promise<Record<string, unknown>> {
+  if (entry.bind === undefined) return {};
+
+  const primed = window.__keelData;
+
+  const resolved: Record<string, unknown> = {};
+
+  await Promise.all(
+    Object.entries(entry.bind).map(async ([prop, bind]) => {
+      resolved[prop] = await (primed?.[bind.source] ??
+        fetch(bind.href, { credentials: "same-origin" }).then((response) => response.json()));
+    }),
+  );
+
+  return resolved;
+}
+
 /** Where islands are looked up: anything that can query by selector. */
 export interface IslandRoot {
   querySelector(selectors: string): Element | null;
@@ -265,17 +302,19 @@ export function hydrateIslands(
 
   const deferred: string[] = [];
 
-  // Render one resolved component into its container and contain its throw,
-  // shared by every path (eager, lazy, on-intersection) so each gets identical
-  // resilience. It reads and mutates the result arrays above by closure, which
-  // is why a post-return mount still lands in `mounted`/`failed`.
+  // Render one resolved component into its container with its (data-merged)
+  // props and contain its throw, shared by every path (eager, lazy, bound,
+  // on-intersection) so each gets identical resilience. It reads and mutates the
+  // result arrays above by closure, which is why a post-return mount still lands
+  // in `mounted`/`failed`.
   const finish = (
     entry: IslandMount,
     component: NonNullable<ClientComponentDef["component"]>,
     container: Element,
+    props: Record<string, unknown>,
   ): void => {
     try {
-      mount(container, createElement(component, entry.props), {
+      mount(container, createElement(component, props), {
         ssr: entry.ssr,
         onRecoverableError,
       });
@@ -290,26 +329,34 @@ export function hydrateIslands(
     }
   };
 
-  // Mount one island now (eager `component`) or kick off its chunk fetch (lazy
-  // `load`) and mount when it lands. Returns whether the mount completed
-  // synchronously: a lazy island reports `"later"` so the caller records it as
-  // deferred — its code is still in flight when this call returns, and its
-  // outcome (mounted or failed) is appended to the result arrays on arrival. A
-  // rejected load is the same animal as a throwing mount — that island is dead,
-  // the page is not — so it routes to `onMountError` and `failed` identically.
+  // Mount one island now (eager `component`, no data binds) or, when its code
+  // and/or its data are still arriving, resolve both IN PARALLEL and mount when
+  // they land. Returns `"now"` for the synchronous case and `"later"` otherwise,
+  // so the caller records a still-pending island as deferred — its outcome
+  // (mounted or failed) is appended to the result arrays on arrival. A rejected
+  // chunk load OR a rejected data fetch is the same animal as a throwing mount —
+  // that island is dead, the page is not — so it routes to `onMountError`/`failed`.
   const mountOne = (
     entry: IslandMount,
     def: ClientComponentDef,
     container: Element,
   ): "now" | "later" => {
-    if (def.component !== undefined) {
-      finish(entry, def.component, container);
+    const bound = entry.bind !== undefined && Object.keys(entry.bind).length > 0;
+
+    if (def.component !== undefined && !bound) {
+      finish(entry, def.component, container, entry.props);
 
       return "now";
     }
 
-    def.load().then(
-      (component) => finish(entry, component, container),
+    // The chunk (lazy) and the data (binds) are independent — fetch them at the
+    // same time, not in sequence, so a lazy+bound island never waterfalls its
+    // own two requests. ADR 0009's lesson applied to data.
+    const componentReady: Promise<NonNullable<ClientComponentDef["component"]>> =
+      def.component === undefined ? def.load() : Promise.resolve(def.component);
+
+    Promise.all([componentReady, resolveBinds(entry)]).then(
+      ([component, data]) => finish(entry, component, container, { ...entry.props, ...data }),
       (error: unknown) => {
         onMountError(error, { id: entry.id, component: entry.component });
 

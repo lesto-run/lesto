@@ -12,6 +12,13 @@
   "rules": {
     "no-console": "off",
     "no-unused-vars": "error",
+
+    // `__keelData` is the framework's injected hydration-data global (ADR 0010),
+    // namespaced with the `__` prefix by the same convention as `__NEXT_DATA__` /
+    // `__remixContext` / `__NUXT__` — deliberate collision-avoidance, allowlisted
+    // rather than renamed away.
+    "no-underscore-dangle": ["error", { "allow": ["__keelData"] }],
+
     "eqeqeq": ["error", "smart"],
     "typescript/no-explicit-any": "error",
     "typescript/consistent-type-imports": "error",
