@@ -25,6 +25,8 @@
  */
 
 import { RouteTable } from "@keel/router";
+import { dataSourceHref } from "@keel/ui";
+import type { DataSource } from "@keel/ui";
 
 import { Context } from "./handler-context";
 import type { Middleware, Next } from "./middleware";
@@ -197,6 +199,22 @@ export class Keel {
       def: def as unknown as PageDef,
       layouts: [...this.layoutChain],
     });
+  }
+
+  /**
+   * Register a data source's loader and auto-expose it at `GET /__keel/data/<name>`
+   * (ADR 0010 — island data sources).
+   *
+   * The loader runs with the request context; its return is the DTO an island
+   * bound to this source (`defineClient({ data: { … } })`) receives as a prop.
+   * The framework delivers it without a waterfall: inline in the document when
+   * the page is dynamically rendered, or fetched from this route — parallel with
+   * `client.js` via the parse-time primer — when the page is static. Registered
+   * like any route, so the `.use` middleware declared so far wraps it too. Return
+   * an allowlisted DTO only: never the session token or raw cookie (ADR 0010 §5).
+   */
+  data<T>(source: DataSource<T>, loader: (c: Context) => MaybePromise<T>): this {
+    return this.get(dataSourceHref(source.name), async (c) => c.json(await loader(c)));
   }
 
   /**

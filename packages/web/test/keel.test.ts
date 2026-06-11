@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { defineDataSource } from "@keel/ui";
+
 import { fromRequestMiddleware, keel } from "../src/keel";
 import type { Handler } from "../src/keel";
 import type { Middleware } from "../src/middleware";
@@ -238,5 +240,50 @@ describe("keel.routes inspection", () => {
       { method: "POST", pattern: "/b" },
       { method: "GET", pattern: "/nested/c" },
     ]);
+  });
+});
+
+describe("keel().data() — island data sources (ADR 0010)", () => {
+  const sessionSource = defineDataSource<{ id: string; name: string } | null>("session");
+
+  it("auto-exposes a source at GET /__keel/data/<name>, running the loader with context", async () => {
+    const app = keel().data(sessionSource, (c) =>
+      c.header("cookie") === "sid=jade" ? { id: "jade", name: "Jade" } : null,
+    );
+
+    // The route the parse-time primer / client fallback fetches.
+    expect(app.routes()).toContainEqual({ method: "GET", pattern: "/__keel/data/session" });
+
+    const signedIn = await app.handle("GET", "/__keel/data/session", {
+      headers: { cookie: "sid=jade" },
+    });
+    expect(signedIn.status).toBe(200);
+    expect(signedIn.headers["content-type"]).toContain("application/json");
+    expect(JSON.parse(signedIn.body)).toEqual({ id: "jade", name: "Jade" });
+
+    // "Nobody is signed in" is a normal answer — 200 with null, not a 401.
+    const signedOut = await app.handle("GET", "/__keel/data/session");
+    expect(JSON.parse(signedOut.body)).toBeNull();
+  });
+
+  it("awaits an async loader", async () => {
+    const app = keel().data(sessionSource, () => Promise.resolve({ id: "ada", name: "Ada" }));
+
+    expect(JSON.parse((await app.handle("GET", "/__keel/data/session")).body)).toEqual({
+      id: "ada",
+      name: "Ada",
+    });
+  });
+
+  it("runs the .use middleware declared before it, like any route", async () => {
+    // secureStack-style guard mounted first must also wrap the data route.
+    const app = keel()
+      .use((c, next) => (c.header("x-allow") === "1" ? next() : c.text("denied", 403)))
+      .data(sessionSource, () => ({ id: "x", name: "X" }));
+
+    expect((await app.handle("GET", "/__keel/data/session")).status).toBe(403);
+    expect(
+      (await app.handle("GET", "/__keel/data/session", { headers: { "x-allow": "1" } })).status,
+    ).toBe(200);
   });
 });
