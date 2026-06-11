@@ -9,8 +9,8 @@
  * prints what comes back.
  *
  * This exercises every package at once: @keel/db (typed schema + queries),
- * @keel/migrate (the posts table), @keel/router (resources), @keel/web (the
- * controller + renderTree), @keel/ui (the registry + SSR), all assembled
+ * @keel/migrate (the posts table), @keel/web (the keel() app, its .page
+ * streaming a plain-React component, and the JSON route), all assembled
  * by @keel/kernel.
  */
 

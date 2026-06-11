@@ -153,30 +153,71 @@ type Decoded =
   | { readonly ok: false; readonly status: 400 | 413 };
 
 /**
+ * Read a request body, stopping the moment it exceeds `maxBytes`.
+ *
+ * The read is bounded *while streaming* — over the cap, the stream is cancelled
+ * and the bytes already buffered are dropped — so an unbounded client body can
+ * never occupy more than the cap in worker memory. Buffering it whole and
+ * checking afterwards would defend nothing. Mirrors the node server's `readBody`.
+ */
+async function readBounded(request: Request, maxBytes: number): Promise<Uint8Array | undefined> {
+  if (request.body === null) return new Uint8Array(0);
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+
+    if (done) break;
+
+    received += value.byteLength;
+
+    if (received > maxBytes) {
+      await reader.cancel();
+
+      return undefined;
+    }
+
+    chunks.push(value);
+  }
+
+  const all = new Uint8Array(received);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    all.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return all;
+}
+
+/**
  * Decode the request body the way a controller expects it, bounded by `maxBytes`.
  *
- * The body is read once into memory and refused with 413 if it exceeds the cap —
- * so an unbounded client body cannot exhaust the worker. Empty is `undefined` (no
- * body, not an empty string); a JSON content-type is parsed, and a parse failure
- * is a *client* error the caller turns into a 400 — never an exception. Anything
- * else stays the raw text.
+ * The read is refused with 413 the moment it passes the cap (see
+ * {@link readBounded}). Empty is `undefined` (no body, not an empty string); a
+ * JSON content-type is parsed, and a parse failure is a *client* error the
+ * caller turns into a 400 — never an exception. Anything else stays the raw text.
  */
 async function decodeBody(
   request: Request,
   contentType: string | undefined,
   maxBytes: number,
 ): Promise<Decoded> {
-  const buffer = await request.arrayBuffer();
+  const bytes = await readBounded(request, maxBytes);
 
-  if (buffer.byteLength > maxBytes) {
+  if (bytes === undefined) {
     return { ok: false, status: 413 };
   }
 
-  if (buffer.byteLength === 0) {
+  if (bytes.byteLength === 0) {
     return { ok: true, body: undefined };
   }
 
-  const text = new TextDecoder().decode(buffer);
+  const text = new TextDecoder().decode(bytes);
 
   if (contentType !== undefined && contentType.startsWith("application/json")) {
     try {

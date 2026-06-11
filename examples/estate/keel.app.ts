@@ -1,5 +1,5 @@
 /**
- * The project entrypoint — the `AppConfig` `@keel/cli` loads and `createApp`
+ * The project entrypoint — the `KeelAppConfig` `@keel/cli` loads and `createApp`
  * boots, the same shape every Keel app default-exports.
  *
  * estate keeps its own `serve.ts` / `build.ts` / `dev.ts` because it does two

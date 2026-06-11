@@ -139,6 +139,32 @@ describe("toFetchHandler", () => {
     expect(calls).toEqual([]); // never reached the app
   });
 
+  it("stops reading an over-cap body mid-stream — later chunks are never pulled", async () => {
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    // A pull-based stream: each chunk is only produced when the reader asks for
+    // it, so the pull count proves how far the bounded read actually consumed.
+    let pulls = 0;
+
+    const body = new ReadableStream({
+      pull(controller) {
+        pulls += 1;
+
+        // 6 bytes per chunk against an 8-byte cap: the second chunk crosses it.
+        controller.enqueue(new TextEncoder().encode("chunk!"));
+      },
+    });
+
+    const response = await toFetchHandler(dispatch, { maxBodyBytes: 8 })(
+      new Request("https://example.com/x", { method: "POST", body, duplex: "half" } as RequestInit),
+    );
+
+    expect(response.status).toBe(413);
+    // The read cancelled at the chunk that crossed the cap instead of draining
+    // the (infinite) stream — the whole point of the bounded read.
+    expect(pulls).toBeLessThanOrEqual(3);
+  });
+
   it("logs one access line per request — method, path, status, latency, id", async () => {
     const { dispatch } = recordingDispatch({ status: 201, body: "ok" });
 
