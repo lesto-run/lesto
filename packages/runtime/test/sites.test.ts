@@ -191,6 +191,32 @@ describe("dispatchSites — dynamic sites", () => {
   });
 });
 
+describe("dispatchSites — framework-reserved /__keel/ namespace", () => {
+  it("routes /__keel/* to the live app, even when the / catch-all zone would claim it", async () => {
+    // estate's marketing zone is the `/` catch-all (static). A data-source route
+    // lives at /__keel/data/<name> and MUST reach the dynamic app, not be read as
+    // a (missing) static file — so node serve matches the edge's app fallthrough.
+    const { handle, calls } = recordingHandler({ status: 200, body: '{"user":null}' });
+
+    const dispatch = dispatchSites({
+      sites: [marketing],
+      handle,
+      readStatic: fakeReader({ "marketing/index.html": "<h1>Home</h1>" }),
+    });
+
+    const response = await dispatch("GET", "/__keel/data/session", {
+      headers: { cookie: "sid=jade" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toBe('{"user":null}');
+    // Delegated to the app with the full path + options, never read as a file.
+    expect(calls).toEqual([
+      { method: "GET", path: "/__keel/data/session", options: { headers: { cookie: "sid=jade" } } },
+    ]);
+  });
+});
+
 describe("dispatchSites — static sites", () => {
   it("serves the prerendered file mapped from the in-site route", async () => {
     const dispatch = dispatchSites({

@@ -83,6 +83,9 @@ export interface DispatchSitesDeps {
 /** The methods a static site answers; anything else is a 405. */
 const STATIC_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD"]);
 
+/** The framework's reserved path namespace, always served by the live app (ADR 0010). */
+const FRAMEWORK_RESERVED_PREFIX = "/__keel/";
+
 /**
  * One row of the content-type table: the MIME type, and whether it is binary.
  *
@@ -364,6 +367,13 @@ export function dispatchSites(
   const serveSourceMaps = deps.serveSourceMaps ?? false;
 
   return async (method, path, options) => {
+    // `/__keel/*` is the framework's reserved namespace (island data sources —
+    // ADR 0010 — and any future framework route). It is always served by the
+    // live app, never matched against a zone: a data endpoint must resolve the
+    // same under node serve as under the edge's asset-then-app fallthrough, even
+    // though the `/` catch-all zone's prefix would otherwise claim it.
+    if (path.startsWith(FRAMEWORK_RESERVED_PREFIX)) return handle(method, path, options);
+
     const site = selectSite(sites, path);
 
     if (site === undefined) return emptyResponse(404);
