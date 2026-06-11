@@ -11,10 +11,11 @@ import { KeelError } from "@keel/errors";
 export { KeelError };
 
 export type CliErrorCode =
-  | "CLI_UNKNOWN_COMMAND"
+  | "CLI_CLIENT_BUILD_FAILED"
   | "CLI_CONTENT_MISSING_ARGS"
-  | "CLI_UNKNOWN_TARGET"
-  | "CLI_ROLLBACK_MISSING_VERSION";
+  | "CLI_ROLLBACK_MISSING_VERSION"
+  | "CLI_UNKNOWN_COMMAND"
+  | "CLI_UNKNOWN_TARGET";
 
 /** Anything the CLI can refuse to do. */
 export class CliError extends KeelError<CliErrorCode> {

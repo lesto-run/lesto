@@ -74,6 +74,32 @@ export interface CliDeps {
    */
   readAsset?: StaticReader;
 
+  /**
+   * Probe whether the project has an `app/islands/` directory (ADR 0011's
+   * one-island-per-file convention). When present, `build`/`dev` run the client
+   * pipeline; absent, they do nothing — an island-less app is unchanged. The bin
+   * passes an fs probe rooted at the project; absent, the CLI never builds
+   * client assets (so tests opt in by providing it).
+   */
+  hasIslandsDir?: () => Promise<boolean>;
+
+  /**
+   * Build the project's island client bundle (`@keel/assets`, ADR 0011 Seam 3).
+   * The bin wires this to `buildClient(...)` with `bunBuildClientDeps` over the
+   * project's `app/islands/`; the CLI core only decides WHEN to call it (a prod
+   * build for `build`, an unminified one on `dev` boot + on watch). A rejected
+   * build is surfaced as a coded `CLI_CLIENT_BUILD_FAILED`.
+   */
+  buildClientAssets?: (options: { outDir: string; mode: "dev" | "production" }) => Promise<void>;
+
+  /**
+   * Watch `app/islands/` and call `onChange` (debounced) when a module changes,
+   * returning a stop handle. The bin wires this to a debounced `fs.watch`; the
+   * CLI core just registers the rebuild. Absent → no watching (a one-shot dev
+   * build on boot, no live rebuilds).
+   */
+  watchIslands?: (onChange: () => void) => () => void;
+
   /** Build a static-deploy uploader rooted at `distDir` (the bin passes `nodeUploader`). */
   uploader: (distDir: string) => ShipDeps;
 
@@ -314,6 +340,50 @@ function selectTarget(sites: readonly Site[], target: string | undefined): reado
 }
 
 /**
+ * Build the island client bundle into `outDir` when the project has an
+ * `app/islands/` directory, wrapping any bundler failure in a coded CLI error so
+ * the command fails loudly rather than shipping a static site with no runtime.
+ * A project without the directory is a no-op (an island-less app is unchanged).
+ *
+ * The probe (`hasIslandsDir`) and the builder (`buildClientAssets`) are seams the
+ * bin wires to the real filesystem + `@keel/assets`; absent, the CLI never builds
+ * client assets.
+ */
+async function buildClientIfPresent(
+  deps: CliDeps,
+  outDir: string,
+  mode: "dev" | "production",
+): Promise<void> {
+  if (deps.hasIslandsDir === undefined || deps.buildClientAssets === undefined) return;
+
+  if (!(await deps.hasIslandsDir())) return;
+
+  try {
+    await deps.buildClientAssets({ outDir, mode });
+  } catch (cause) {
+    throw new CliError(
+      "CLI_CLIENT_BUILD_FAILED",
+      "the island client build failed — see the cause for the bundler error",
+      { outDir, mode, cause },
+    );
+  }
+}
+
+/**
+ * The human message for a watch-triggered rebuild failure. A `buildClientIfPresent`
+ * failure is a coded `CliError` carrying the bundler's own error as
+ * `details.cause` — that cause's message is what an author needs. Falls back to
+ * the error's own string form when no useful cause is present.
+ */
+function rebuildErrorMessage(error: unknown): string {
+  const cause = error instanceof CliError ? error.details["cause"] : undefined;
+
+  if (cause instanceof Error) return cause.message;
+
+  return String(error);
+}
+
+/**
  * Prerender the project's static sites to disk.
  *
  * Boots the app, loads its declared sites, and hands the app's own `handle` to
@@ -321,6 +391,10 @@ function selectTarget(sites: readonly Site[], target: string | undefined): reado
  * before writing a single file. `--target <name>` builds one site; `--out <dir>`
  * picks the output root (default `out`). One line per built site reports its
  * page count.
+ *
+ * When the project has an `app/islands/` directory, a production client build
+ * runs first so `/client.js` + its chunks land in the artifact alongside the
+ * prerendered HTML (ADR 0011 Seam 3).
  */
 async function runBuild(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
@@ -333,6 +407,8 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
   const outDir = parseStringFlag(args, "out") ?? DEFAULT_OUT_DIR;
 
   const selected = selectTarget(sites, target);
+
+  await buildClientIfPresent(deps, outDir, "production");
 
   const manifest = await buildStaticSites(selected, app.handle, deps.sink(outDir));
 
@@ -351,6 +427,11 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
  * zone needs no prebuild and an edit shows on the next refresh. With a
  * `readAsset` seam it also serves the client bundle (`/client.js`) so islands
  * hydrate. One origin, so the same-origin session just works.
+ *
+ * When the project has an `app/islands/` directory, an unminified client build
+ * runs on boot (into the dev asset dir `readAsset` serves) and a debounced
+ * watcher rebuilds it on change (ADR 0011 Seam 3), so an island edit shows on the
+ * next refresh without restarting the dev server.
  */
 async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
@@ -358,6 +439,22 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   const app = await createApp(config);
 
   const sites = await deps.loadSites();
+
+  // Build the island client on boot, then watch for changes. The dev outDir is
+  // the same root the bin's `readAsset` serves from (DEFAULT_OUT_DIR).
+  await buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev");
+
+  // A change rebuilds the bundle; a rebuild failure during dev is reported, not
+  // fatal — the dev server stays up so the next save can fix it. The coded
+  // `CliError`'s `details.cause` is the bundler's own error, the message worth
+  // showing.
+  if (deps.hasIslandsDir !== undefined && (await deps.hasIslandsDir())) {
+    deps.watchIslands?.(() => {
+      void buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev").catch((error: unknown) => {
+        deps.out(`client rebuild failed: ${rebuildErrorMessage(error)}`);
+      });
+    });
+  }
 
   const dispatch = dispatchSitesDev({
     sites,

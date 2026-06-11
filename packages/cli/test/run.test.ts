@@ -513,6 +513,286 @@ describe("run build", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// ADR 0011 Seam 3: the CLI runs the @keel/assets client build when the project
+// has an `app/islands/` directory. The probe + builder + watcher are seams.
+// ---------------------------------------------------------------------------
+
+describe("run build — island client assets", () => {
+  it("builds the client (production) into the out dir when app/islands/ exists", async () => {
+    const built: Array<{ outDir: string; mode: string }> = [];
+
+    const code = await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: (options) => {
+          built.push(options);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(built).toEqual([{ outDir: "out", mode: "production" }]);
+  });
+
+  it("skips the client build when app/islands/ does not exist (island-less app)", async () => {
+    const buildClientAssets = vi.fn(() => Promise.resolve());
+
+    await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+        hasIslandsDir: () => Promise.resolve(false),
+        buildClientAssets,
+      }),
+    );
+
+    expect(buildClientAssets).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the asset seams are absent (the default, no client pipeline)", async () => {
+    // No hasIslandsDir/buildClientAssets in deps → the build runs unchanged.
+    const code = await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(lines).toEqual(["built marketing: 1 page"]);
+  });
+
+  it("fails with CLI_CLIENT_BUILD_FAILED when the bundler throws", async () => {
+    const cause = new Error("esbuild blew up");
+
+    try {
+      await run(
+        ["build"],
+        depsWith({
+          loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+          sink: recordingSink().sink,
+          hasIslandsDir: () => Promise.resolve(true),
+          buildClientAssets: () => Promise.reject(cause),
+        }),
+      );
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).code).toBe("CLI_CLIENT_BUILD_FAILED");
+      expect((error as CliError).details).toMatchObject({
+        outDir: "out",
+        mode: "production",
+        cause,
+      });
+    }
+  });
+});
+
+describe("run dev — island client assets", () => {
+  const sites: readonly Site[] = [
+    { name: "marketing", render: "static", basePath: "/", pages: ["/"] },
+  ];
+
+  it("builds the client (dev mode) on boot when app/islands/ exists", async () => {
+    const built: Array<{ outDir: string; mode: string }> = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: (options) => {
+          built.push(options);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(built).toEqual([{ outDir: "out", mode: "dev" }]);
+  });
+
+  it("registers a debounced watcher that rebuilds on change", async () => {
+    let onChange: (() => void) | undefined;
+    let builds = 0;
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: () => {
+          builds += 1;
+
+          return Promise.resolve();
+        },
+        watchIslands: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+      }),
+    );
+
+    // One build on boot; the watcher is registered.
+    expect(builds).toBe(1);
+    expect(onChange).toBeDefined();
+
+    // A change fires another build (the watcher's debounce lives in the bin's
+    // fs.watch wrapper; the core just registers the rebuild closure).
+    onChange?.();
+    await Promise.resolve();
+
+    expect(builds).toBe(2);
+  });
+
+  it("reports a watch-triggered rebuild failure without crashing the dev server", async () => {
+    let onChange: (() => void) | undefined;
+    let calls = 0;
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: () => {
+          calls += 1;
+
+          // Succeed on boot, fail on the watch rebuild.
+          return calls === 1 ? Promise.resolve() : Promise.reject(new Error("rebuild boom"));
+        },
+        watchIslands: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+      }),
+    );
+
+    onChange?.();
+    // Let the rejected rebuild (hasIslandsDir → buildClientAssets → CliError →
+    // .catch) settle across its several microtasks.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The coded CliError's `cause` (the bundler's Error) is the message shown.
+    expect(lines).toContain("client rebuild failed: rebuild boom");
+  });
+
+  it("falls back to the error's string form when the rebuild cause is not an Error", async () => {
+    let onChange: (() => void) | undefined;
+    let calls = 0;
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: () => {
+          calls += 1;
+
+          // Boot succeeds; the watch rebuild rejects with a non-Error value, so
+          // its CliError's `cause` is not an Error → the fallback path.
+          // eslint-disable-next-line prefer-promise-reject-errors
+          return calls === 1 ? Promise.resolve() : Promise.reject("string failure");
+        },
+        watchIslands: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+      }),
+    );
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // No "rebuild boom"; the line carries the CliError's own string form instead.
+    expect(lines.some((line) => line.startsWith("client rebuild failed: "))).toBe(true);
+    expect(lines).not.toContain("client rebuild failed: string failure");
+  });
+
+  it("reports a non-CliError rebuild failure via the error's string form", async () => {
+    let onChange: (() => void) | undefined;
+    let probes = 0;
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        // First probe (boot) says yes; on the watch rebuild the probe itself
+        // rejects — a raw, non-CliError error reaches the rebuild catch.
+        hasIslandsDir: () => {
+          probes += 1;
+
+          return probes <= 2 ? Promise.resolve(true) : Promise.reject(new Error("probe gone"));
+        },
+        buildClientAssets: () => Promise.resolve(),
+        watchIslands: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+      }),
+    );
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The raw error is not a CliError, so its own string form is reported.
+    expect(lines).toContain("client rebuild failed: Error: probe gone");
+  });
+
+  it("does not watch when app/islands/ is absent", async () => {
+    const watchIslands = vi.fn(() => () => undefined);
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        hasIslandsDir: () => Promise.resolve(false),
+        buildClientAssets: () => Promise.resolve(),
+        watchIslands,
+      }),
+    );
+
+    expect(watchIslands).not.toHaveBeenCalled();
+  });
+
+  it("builds on boot but skips watching when watchIslands is absent", async () => {
+    let builds = 0;
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: () => {
+          builds += 1;
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(builds).toBe(1);
+  });
+});
+
 // A capturing uploader: every shipped key lands in the map.
 function recordingUploader(): {
   uploader: CliDeps["uploader"];
