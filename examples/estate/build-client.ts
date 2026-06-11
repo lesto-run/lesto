@@ -29,6 +29,7 @@
  * (`Account`) is deferred, so the flag is safe for it today.
  */
 
+import { readdir, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import type { BunPlugin } from "bun";
@@ -128,15 +129,29 @@ async function main(): Promise<void> {
     throw new Error("build-client: bundling failed");
   }
 
-  // Write the entry to the requested path and every split chunk beside it,
-  // keeping each chunk's generated (hashed) filename — the entry references its
-  // chunks by exactly those relative names.
   const outDir = dirname(options.outfile);
 
   const entry = result.outputs.find((artifact) => artifact.kind === "entry-point");
 
   if (entry === undefined) throw new Error("build-client: no entry output produced");
 
+  // Chunk names are content-hashed, so a new build emits FRESH names and never
+  // overwrites the previous build's chunks — they would linger forever and get
+  // re-deployed (a dialect switch, or just editing an island, orphans the old
+  // ones). Clear the prior build's `chunk-*.js` before writing this build's, so
+  // the output holds exactly the current graph and nothing stale ships. The
+  // prerendered HTML and the fixed-name entry are written elsewhere/overwritten,
+  // so only the hashed chunks need sweeping. We clean only AFTER a successful
+  // build, so a failed rebuild leaves the last good output intact.
+  for (const name of await readdir(outDir)) {
+    if (/^chunk-[A-Za-z0-9]+\.js$/.test(name)) {
+      await rm(join(outDir, name));
+    }
+  }
+
+  // Write the entry to the requested path and every split chunk beside it,
+  // keeping each chunk's generated (hashed) filename — the entry references its
+  // chunks by exactly those relative names.
   await Bun.write(options.outfile, entry);
 
   for (const artifact of result.outputs) {
