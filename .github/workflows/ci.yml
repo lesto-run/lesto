@@ -1,10 +1,9 @@
 name: CI
 
-# The first CI gate for Keel. Blocking jobs (typecheck, lint, test) are green on
-# the committed tree today; formatting runs informational-only because the
-# content-* packages carry tracked, frozen formatting debt (see
-# CONTENT_COVERAGE.md) that is ratcheted up in follow-up waves rather than gated
-# here. Flip the format step to blocking once that debt is paid down.
+# The first CI gate for Keel. Every job is blocking: typecheck, lint, the
+# 100%-coverage test gate, and formatting (the content-* formatting debt that
+# once kept the format step informational has been paid down — all 58 packages
+# check clean, so a format regression now fails the build).
 
 on:
   push:
@@ -57,11 +56,8 @@ jobs:
         working-directory: packages/integration
         run: bun run test
 
-      # Informational until the content-* formatting debt is paid down. The
-      # framework packages are already clean; content-* is the only failing set.
-      - name: Format check (informational)
+      - name: Format check
         run: bun run ws:format:check
-        continue-on-error: true
 
   # Browser E2E (Playwright) is a separate job: it needs a browser binary and
   # boots a real server, so it runs apart from the workspace unit/integration
