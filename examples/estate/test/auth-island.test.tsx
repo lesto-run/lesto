@@ -44,32 +44,21 @@ function renderIntoDocument(): ReturnType<typeof renderPage> {
 }
 
 /**
- * Hydrate the page, then let the island's chunk, mount, fetch, and re-render
- * all settle.
+ * Hydrate the page and let the island's mount, session fetch, and re-render
+ * settle.
  *
- * The island is lazy (per-island code-splitting, ADR 0009), so its mount waits
- * on a REAL dynamic import — under vitest that means an on-demand module
- * transform whose duration is not a fixed number of ticks. Guessing a flush
- * count races it; instead we wait for the runtime's own completion report (the
- * caller-held `mounted`/`failed` arrays it appends to), then flush once more so
- * the mounted component's effect runs its session fetch and re-renders.
+ * Account is an EAGER island (registry.tsx: `component:`, not `load:`), so it
+ * mounts synchronously the instant `hydrateIslands` runs. The one macrotask
+ * flush is for what happens *after* the mount — its on-mount `/mls/api/session`
+ * fetch and the per-user re-render that follows. (A microtask-only flush would
+ * starve the event loop and never resolve the fetch chain.)
  */
 async function hydrateAndSettle(page: ReturnType<typeof renderPage>): Promise<void> {
-  let result!: ReturnType<typeof hydrateIslands>;
+  const result = await act(async () => hydrateIslands(registry, page.islands));
 
-  act(() => {
-    result = hydrateIslands(registry, page.islands);
-  });
-
-  await act(async () => {
-    for (let i = 0; i < 200 && result.mounted.length === 0 && result.failed.length === 0; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-  });
-
-  // The chunk landed and the island mounted — loudly, not by luck.
-  expect(result.failed).toEqual([]);
-  expect(result.mounted).toHaveLength(1);
+  // Mounted synchronously, by design — no chunk to wait on.
+  expect(result.mounted).toEqual(["$.children[0].children[0]"]);
+  expect(result.deferred).toEqual([]);
 
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));

@@ -10,7 +10,7 @@
 
 import { Registry } from "@keel/ui";
 
-import { AccountFallback } from "./account-fallback";
+import { Account, AccountFallback } from "./account";
 
 export const registry = new Registry()
   .define({
@@ -160,10 +160,12 @@ export const registry = new Registry()
   .defineClient({
     name: "Account",
     description: "The signed-in/out account control — resolved per-user on the client.",
-    // Lazy: the island's code is its own chunk, fetched on first mount, so the
-    // main /client.js carries none of Account's bytes (per-island
-    // code-splitting; `build-client.ts` turns this import() into the chunk).
-    // The statically-imported fallback is all the server (and main bundle) holds.
-    load: () => import("./account").then((module) => module.Account),
+    // Eager ON PURPOSE — do not "optimize" this into a lazy `load:`. Account is
+    // ~1 KB, above the fold, and always mounts, so code-splitting it defers
+    // nothing and only adds request hops (the measured Lighthouse critical
+    // chain). Split when an island's bytes are HEAVY or its mount is
+    // CONDITIONAL — neither is true here. The `load:` capability + its proof
+    // live in @keel/ui's unit tests; see ADR 0009 for when to reach for it.
+    component: Account,
     fallback: AccountFallback,
   });

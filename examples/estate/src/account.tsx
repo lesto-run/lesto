@@ -58,8 +58,11 @@ export function Account(): ReactElement {
   );
 }
 
-// The server-rendered AccountFallback shell lives in its own module
-// (`account-fallback.tsx`), NOT here: this module must be reached ONLY through
-// the registry's lazy `import()` — that exclusivity is what lets the bundler
-// split Account (and its session client) into its own chunk. A static import of
-// anything in this file would pin it all back into the main bundle.
+/** The server-rendered shell: the signed-out CTA, shown until the island hydrates. */
+export function AccountFallback(): ReactElement {
+  return (
+    <a className="account account--fallback" href="/mls">
+      Sign in
+    </a>
+  );
+}
