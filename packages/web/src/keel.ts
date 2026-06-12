@@ -138,6 +138,11 @@ export class Keel {
   // rule the auto-route registration follows. `.route()` merges a sub-app's map.
   private readonly dataLoaders = new Map<string, (c: Context) => MaybePromise<unknown>>();
 
+  // Whether any registered source is `private`-scoped (review 2d). A page render
+  // that could inline private data is stamped no-store; tracked here so the
+  // renderer (which sees only the resolver, not the sources' scopes) can decide.
+  private hasPrivateData = false;
+
   // The app's client module src (`.client("/client.js")`), emitted as the head
   // module tag on every page when set (ADR 0011, amended 2026-06-11). Undefined =
   // no client runtime, no tag.
@@ -228,6 +233,11 @@ export class Keel {
     // addition to registering the fetch route the primer/`visible` tier needs.
     this.dataLoaders.set(source.name, loader as (c: Context) => MaybePromise<unknown>);
 
+    // A private source means any page inlining it must not be shared-cached (2d).
+    if (source.scope !== "shared") {
+      this.hasPrivateData = true;
+    }
+
     return this.get(dataSourceHref(source.name), async (c) => {
       const response = c.json(await loader(c));
 
@@ -290,6 +300,11 @@ export class Keel {
     // Merge the sub's loaders; the sub wins on collision (last-write-wins).
     for (const [name, loader] of sub.dataLoaders) {
       this.dataLoaders.set(name, loader);
+    }
+
+    // A sub-app's private source makes the parent's pages no-store too (2d).
+    if (sub.hasPrivateData) {
+      this.hasPrivateData = true;
     }
 
     this.table = undefined;
@@ -366,6 +381,7 @@ export class Keel {
 
       return renderPageResponse(payload.def, c, payload.layouts, {
         resolver,
+        privateData: this.hasPrivateData,
         ...(this.clientModuleSrc === undefined ? {} : { clientModule: this.clientModuleSrc }),
       });
     };

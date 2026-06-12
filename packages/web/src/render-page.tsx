@@ -136,6 +136,20 @@ export interface RenderPageOptions {
 
   /** The app's client module src — emitted as a head `<script type="module">` (ADR 0011). */
   clientModule?: string;
+
+  /**
+   * Whether the app declares any `private`-scoped data source (ADR 0010 §3a).
+   *
+   * When true, a dynamically rendered page MAY inline per-user bytes into the
+   * document, so the response is stamped `Cache-Control: private, no-store` —
+   * the document carries the same defense the data *endpoint* already has
+   * (chief-architect review 2d: a framework that refuses a bare per-user JSON GET
+   * must not emit a bare per-user HTML doc). Conservative by necessity: the page
+   * streams, so which sources resolved is not known when headers are emitted, and
+   * `Vary: Cookie` is not honored by shared caches — "do not store" is the only
+   * safe defense. An app with only `shared` sources is left cacheable.
+   */
+  privateData?: boolean;
 }
 
 /**
@@ -204,9 +218,18 @@ export async function renderPageResponse(
     },
   );
 
+  // A dynamic page that could inline private data must not be shared-cached
+  // (review 2d). Stamped here, beside the content-type, so it covers the streamed
+  // body whatever it carries.
+  const headers: Record<string, string> = { "content-type": "text/html; charset=utf-8" };
+
+  if (options.resolver !== undefined && options.privateData === true) {
+    headers["cache-control"] = "private, no-store";
+  }
+
   return {
     status: 200,
-    headers: { "content-type": "text/html; charset=utf-8" },
+    headers,
     body: stream,
   };
 }

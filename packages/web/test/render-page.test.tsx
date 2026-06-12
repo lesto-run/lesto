@@ -314,6 +314,50 @@ describe("keel().data() + a defineIsland on a page (the canonical island)", () =
   });
 });
 
+describe("private data → no-store page (review 2d)", () => {
+  // `defineDataSource` defaults to scope: "private".
+  const session = defineDataSource<{ name: string }>("session");
+
+  const Greeting = defineIsland({
+    name: "Greeting",
+    ssr: true,
+    component: (props) =>
+      createElement("span", null, `Hi ${(props.user as { name: string }).name}`),
+    data: { user: session },
+  });
+
+  it("stamps Cache-Control: private, no-store on a page that could inline a private source", async () => {
+    const app = keel()
+      .data(session, () => ({ name: "Ada" }))
+      .page("/me", {
+        component: () => createElement("main", null, createElement(Greeting, {})),
+      });
+
+    expect((await app.handle("GET", "/me")).headers["cache-control"]).toBe("private, no-store");
+  });
+
+  it("leaves a shared-only app's page cacheable (no cache-control header)", async () => {
+    // `reactions` is scope: "shared" — no private source registered.
+    const app = keel()
+      .data(reactions, () => ({ likes: 1 }))
+      .page("/posts", {
+        component: () => createElement("main", null, createElement(Reactions, {})),
+      });
+
+    expect((await app.handle("GET", "/posts")).headers["cache-control"]).toBeUndefined();
+  });
+
+  it("a sub-app's private source makes the parent's pages no-store too (.route merge)", async () => {
+    const sub = keel().data(session, () => ({ name: "Bo" }));
+
+    const app = keel()
+      .route(sub)
+      .page("/p", { component: () => createElement("main", null, "x") });
+
+    expect((await app.handle("GET", "/p")).headers["cache-control"]).toBe("private, no-store");
+  });
+});
+
 describe("renderPageResponse — default (no resolver, no client module)", () => {
   it("renders the plain document when called with no island options", async () => {
     const c = new RequestCtx({
