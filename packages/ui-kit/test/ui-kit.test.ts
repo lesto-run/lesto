@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { renderTree, validateTree } from "@keel/ui";
 import type { UiNode } from "@keel/ui";
@@ -250,6 +250,58 @@ describe("Button variants", () => {
     expect(markup).toContain("<a");
     expect(markup).toContain('href="https://keel.dev"');
     expect(markup).toContain("Visit");
+  });
+});
+
+describe("Button href scheme guard (XSS in the AI tree)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("allows safe schemes and relative URLs as anchors", () => {
+    for (const href of [
+      "https://keel.dev",
+      "http://example.com",
+      "mailto:hi@keel.dev",
+      "/relative/path",
+      "#anchor",
+      "?q=1",
+      "page.html",
+    ]) {
+      const markup = html({ type: "Button", props: { label: "Go", href } });
+      expect(markup).toContain("<a");
+      expect(markup).toContain(`href="${href}"`);
+    }
+  });
+
+  it("refuses unsafe schemes: renders a plain <button> and reports the refusal", () => {
+    for (const href of [
+      "javascript:alert(1)",
+      "JavaScript:alert(1)", // case-insensitive scheme
+      "\tjavascript:alert(1)", // leading control char (browsers strip it)
+      "  javascript:alert(1)", // leading whitespace
+      "data:text/html,<script>alert(1)</script>",
+      "vbscript:msgbox(1)",
+      "//evil.example.com", // protocol-relative off-origin
+    ]) {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { element, errors } = renderTree(createKit(), {
+        type: "Button",
+        props: { label: "Go", href },
+      });
+      const markup = renderToStaticMarkup(element);
+
+      expect(markup).toContain("<button");
+      expect(markup).not.toContain("<a");
+      expect(markup).not.toContain("href=");
+      // Reported through the render-error channel under the stable code.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("UI_KIT_UNSAFE_HREF"));
+      // The tree itself still rendered (degraded gracefully, not a crash).
+      expect(errors).toEqual([]);
+
+      warn.mockRestore();
+    }
   });
 });
 

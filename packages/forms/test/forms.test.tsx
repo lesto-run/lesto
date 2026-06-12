@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { renderTree, validateTree } from "@keel/ui";
@@ -167,6 +167,47 @@ describe("renderForm", () => {
     // The Submit prop default ("Submit") and Form method default ("post").
     expect(html).toContain('<form action="/x" method="post">');
     expect(html).toContain('<button type="submit">Submit</button>');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Form action scheme guard (XSS in the AI tree)
+// ---------------------------------------------------------------------------
+
+describe("Form action scheme guard", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keeps a safe action (https/http/relative)", () => {
+    for (const action of ["https://keel.dev/submit", "http://example.com", "/relative", "?q=1"]) {
+      const html = renderToStaticMarkup(Form.render({ action, method: "post" }, null));
+      expect(html).toContain(`action="${action}"`);
+    }
+  });
+
+  it("drops an unsafe action and reports the refusal", () => {
+    for (const action of [
+      "javascript:alert(1)",
+      "JavaScript:alert(1)", // case-insensitive
+      "\tjavascript:alert(1)", // leading control char
+      "  javascript:alert(1)", // leading whitespace
+      "data:text/html,<script>alert(1)</script>",
+      "vbscript:msgbox(1)",
+      "//evil.example.com", // protocol-relative off-origin
+    ]) {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const html = renderToStaticMarkup(Form.render({ action, method: "post" }, null));
+
+      // The attribute is dropped — the form posts to the current URL, not the
+      // attacker's target — and the method survives.
+      expect(html).not.toContain("action=");
+      expect(html).toContain('method="post"');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("FORM_UNSAFE_ACTION"));
+
+      warn.mockRestore();
+    }
   });
 });
 

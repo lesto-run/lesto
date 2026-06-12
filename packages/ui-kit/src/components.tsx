@@ -16,6 +16,66 @@ import type { CSSProperties } from "react";
 
 import { tokens } from "./tokens";
 
+/**
+ * The URL schemes a navigational `href` may carry in an AI-composed tree.
+ *
+ * The hazard: a component renders whatever string the AI put in `href`, so
+ * `javascript:`, `data:`, and `vbscript:` URLs are a stored-XSS vector — a click
+ * runs attacker script. The allowlist is the closed defense: only navigation we
+ * understand. A relative URL (no scheme) is fine; a protocol-relative `//host`
+ * is NOT (it inherits the page scheme and points off-origin), so it is refused.
+ */
+const SAFE_HREF_SCHEMES: ReadonlySet<string> = new Set(["https:", "http:", "mailto:"]);
+
+/** The stable code the scheme guard reports a refusal under (the render-error channel). */
+const UNSAFE_HREF_CODE = "UI_KIT_UNSAFE_HREF";
+
+/**
+ * Return `href` iff it is safe to render as a navigation target, else `undefined`.
+ *
+ * Safe = an allowlisted scheme ({@link SAFE_HREF_SCHEMES}) OR a plain relative
+ * URL (no scheme, and not the protocol-relative `//` form). Anything else —
+ * `javascript:`, `data:`, `vbscript:`, a protocol-relative `//evil.com`, or any
+ * unknown scheme — is refused: the caller drops the link and the refusal is
+ * reported through the render-error channel (a coded `console.warn`, the only
+ * report seam a `ComponentDef.render` has — it returns an element, not errors).
+ */
+function safeHref(href: string): string | undefined {
+  // Browsers strip leading control chars and whitespace before resolving a URL,
+  // so `\tjavascript:…` runs as `javascript:…`. Strip them first or the scheme
+  // check is trivially bypassed by a prefixed tab/newline/space.
+  // eslint-disable-next-line no-control-regex -- intentional: the control range browsers strip
+  const trimmed = href.replace(/^[\u0000-\u0020]+/, "");
+
+  // Protocol-relative (`//host`) inherits the page scheme and points off-origin —
+  // a relative-looking off-origin redirect. Refuse before the scheme check.
+  if (trimmed.startsWith("//")) {
+    reportUnsafeHref(href);
+
+    return undefined;
+  }
+
+  // A scheme is `name:` before any `/`, `?`, or `#`. No match = a relative URL,
+  // which is safe (it stays on this origin).
+  const scheme = /^([a-z][a-z0-9+.-]*:)/i.exec(trimmed)?.[1]?.toLowerCase();
+
+  if (scheme === undefined) return href;
+
+  if (SAFE_HREF_SCHEMES.has(scheme)) return href;
+
+  reportUnsafeHref(href);
+
+  return undefined;
+}
+
+/** Report a refused href through the render-error channel: one coded `console.warn`. */
+function reportUnsafeHref(href: string): void {
+  console.warn(
+    `[${UNSAFE_HREF_CODE}] refused an unsafe Button href and rendered a plain button instead: ` +
+      `${JSON.stringify(href)}. Allowed: https/http/mailto or a relative URL.`,
+  );
+}
+
 /** The root frame of a page: full-bleed background, comfortable padding. */
 export const Page: ComponentDef = {
   name: "Page",
@@ -234,13 +294,19 @@ export const Button: ComponentDef = {
 
     const style = buttonStyle(variant);
 
-    // A link target turns the action into an anchor; without one it's a button.
+    // A link target turns the action into an anchor — but ONLY a safe scheme. An
+    // unsafe `href` (`javascript:`, `data:`, a protocol-relative `//host`, …) is
+    // refused by `safeHref` (which reports it) and falls through to a plain button.
     if (typeof href === "string") {
-      return (
-        <a href={href} style={style}>
-          {label}
-        </a>
-      );
+      const safe = safeHref(href);
+
+      if (safe !== undefined) {
+        return (
+          <a href={safe} style={style}>
+            {label}
+          </a>
+        );
+      }
     }
 
     return (
