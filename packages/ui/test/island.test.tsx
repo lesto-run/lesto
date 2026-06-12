@@ -243,6 +243,27 @@ describe("renderPage — data binds", () => {
 
     expect(page.islands[0]).not.toHaveProperty("bind");
   });
+
+  it("guards ssr:true + data on the Registry path — never emits a silent mismatch (2c)", () => {
+    // An ssr island whose bound data was not resolved would be server-rendered
+    // WITHOUT the data and hydrated WITH it — a guaranteed mismatch. The shared
+    // `islandMount` invariant refuses it; `buildIsland` contains the throw as a
+    // reported render error, so the island is dropped, not shipped broken. (This
+    // path had no guard — review 2c — until the invariant moved to islandMount.)
+    const sessionSource = defineDataSource<{ name: string }>("session");
+
+    const r = new Registry().defineClient({
+      name: "Account",
+      ssr: true,
+      component: (props) => createElement("span", null, String(props.session)),
+      data: { session: sessionSource },
+    });
+
+    const page = renderPage(r, island("Account"));
+
+    expect(page.errors).toEqual([{ path: "$", type: "render_threw" }]);
+    expect(page.islands).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

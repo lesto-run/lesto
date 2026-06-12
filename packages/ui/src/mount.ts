@@ -14,6 +14,7 @@
 
 import { dataSourceHref } from "./data";
 import type { IslandBind } from "./data";
+import { UiError } from "./errors";
 import type { ClientComponentDef, IslandMount } from "./island";
 import { validateProps } from "./props";
 import { assertSerializable } from "./serialize";
@@ -76,6 +77,22 @@ export function islandMount(
     if (Object.keys(bind).length > 0) {
       mount.bind = bind;
     }
+  }
+
+  // The shared invariant, authored here so BOTH emission paths obey it by
+  // construction (chief-architect review 2c — it had drifted onto only the
+  // `defineIsland` path): an `ssr: true` island that still carries a `bind` would
+  // be server-rendered WITHOUT its bound data and then hydrated WITH it — a
+  // guaranteed mismatch. It is legal only when the data was resolved at render
+  // (a dynamic page's resolver inlines it, leaving no bind). Refuse it otherwise:
+  // the Registry/`buildIsland` path contains this throw as a reported render
+  // error; the `defineIsland` path propagates it to the page boundary.
+  if (mount.ssr && mount.bind !== undefined) {
+    throw new UiError(
+      "UI_ISLAND_SSR_DATA_UNRESOLVED",
+      `island "${def.name}" is ssr: true with unresolved data bindings — the server cannot render correct markup without the data, so hydration would mismatch; render it on a dynamic page (where a resolver inlines the values) or drop ssr`,
+      { name: def.name },
+    );
   }
 
   return { mount, props };

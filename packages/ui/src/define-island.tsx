@@ -52,7 +52,6 @@ import { dataPrimerScript } from "./data";
 import type { DataSource } from "./data";
 import { IslandDataContext } from "./data-resolve";
 import type { SourceResolver } from "./data-resolve";
-import { UiError } from "./errors";
 import { assertClientDef, ISLAND_ATTR, ISLAND_MOUNT_ATTR } from "./island";
 import type { ClientComponentDef, HydrationStrategy } from "./island";
 import { islandMount } from "./mount";
@@ -100,18 +99,12 @@ function resolveData(
   if (def.data === undefined) return undefined;
 
   if (resolver === null) {
-    // No render-time resolver in scope. An `ssr: true` + `data` island here is a
-    // static/prerender emission of per-user bytes into a shared-cacheable
-    // document — impossible, not inconvenient: refuse loudly (ADR 0012). A
-    // deferred island keeps today's bind + primer behavior (the static tier).
-    if (def.ssr === true) {
-      throw new UiError(
-        "UI_ISLAND_SSR_DATA_UNRESOLVED",
-        `island "${def.name}" is ssr: true with data bindings but no data resolver is in scope — on a static/prerendered document this would inline per-user bytes or guarantee a hydration mismatch; render it on a dynamic page or drop ssr`,
-        { name: def.name },
-      );
-    }
-
+    // No render-time resolver in scope: nothing is inlined. A deferred island
+    // keeps today's bind + primer behavior (the static tier). An `ssr: true` +
+    // `data` island is refused — but the refusal now lives uniformly in
+    // `islandMount` (it sees the unresolved `bind` on an ssr mount and throws
+    // UI_ISLAND_SSR_DATA_UNRESOLVED), so BOTH the Registry and `.page` paths
+    // obey it by construction (review 2c). We simply return no inlined data.
     return undefined;
   }
 
