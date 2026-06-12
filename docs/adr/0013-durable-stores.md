@@ -1,6 +1,6 @@
 # ADR 0013 — Durable SQL-backed session + rate-limit stores (async store interfaces)
 
-- **Status:** Accepted (design); implementation plan in `docs/plans/durable-stores.md`
+- **Status:** Implemented (2026-06-11): both store interfaces are async, `sqlSessionStore`/`sqlRateLimitStore` ship on the SQL seam, the SQLite adapter serializes transactions FIFO, estate dogfoods the durable session path, and `@keel/integration`'s `durable-stores.integration.test.ts` proves session/identity/rate-limit durability cross-driver (SQLite always; Postgres in `db-parity-postgres`). The implementation plan is `docs/plans/durable-stores.md`.
 - **Date:** 2026-06-11
 - **Builds on:** ADR 0006 (the async `SqlDatabase` seam — implemented; this is its first *product* consumer beyond the query layer), ADR 0003 (`@keel/identity`), ADR 0004 (data-layer style: closure factories, explicit `db`)
 - **Relates to:** ADR 0002 (edge target), `packages/auth/src/signed-sessions.ts` (the stateless edge tier this ADR deliberately does **not** absorb)
