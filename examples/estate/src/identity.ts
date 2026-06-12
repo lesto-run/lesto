@@ -52,6 +52,10 @@ const DEMO_IDENTITY_SECRET = "estate-demo-identity-secret-0123456789";
  * `KEEL_AUTH_SECRET` is preferred; absent it, the committed demo fallback is
  * reachable ONLY under `KEEL_DEMO=1`. Outside demo mode an unset secret THROWS
  * rather than signing verification/reset tokens with a public key.
+ *
+ * This is the *serve* path's resolution. The static prerender (`build.ts`) signs
+ * no tokens, so it passes an explicit throwaway secret to `buildIdentity` and
+ * never reaches this fail-closed branch — a CI build needs no runtime secret.
  */
 function identitySecret(): string {
   const secret = process.env["KEEL_AUTH_SECRET"];
@@ -139,7 +143,7 @@ const silentMailer: IdentityMailer = {
  * Node, `bun:sqlite` under Bun) — which is what lets `keel.app.ts` boot under
  * either runtime. That async open is why this function is async.
  */
-export async function buildIdentity(): Promise<{
+export async function buildIdentity(secret?: string): Promise<{
   identity: Identity;
   handle: SqlDatabase;
   close: () => void;
@@ -156,7 +160,10 @@ export async function buildIdentity(): Promise<{
   const identity = createIdentity({
     db,
     sessionStore: sqlSessionStore(sql),
-    secret: identitySecret(),
+    // An explicit secret (the static prerender passes a throwaway one — it signs
+    // no tokens) overrides the fail-closed runtime resolution. Absent it, the
+    // serve/Worker paths still demand a real `KEEL_AUTH_SECRET` (or `KEEL_DEMO=1`).
+    secret: secret ?? identitySecret(),
     mailer: silentMailer,
     // Demo never sends mail; these URLs exist only so the option types are
     // satisfied. If you flip the demo into a real onboarding flow, swap them.

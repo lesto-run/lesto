@@ -13,6 +13,7 @@
  * entry — there is no global `keel` command to invoke.
  */
 
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { buildProductionSite } from "./src/production";
@@ -20,11 +21,21 @@ import { buildProductionSite } from "./src/production";
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const OUT = fileURLToPath(new URL("./out", import.meta.url));
 
+// The prerender constructs the dynamic app only to render the static marketing
+// zone — which mints no tokens — so it needs *a* valid identity secret but the
+// value never reaches the output. Honor a real `KEEL_AUTH_SECRET` if the builder
+// set one; otherwise use a throwaway. The deployed Worker reads its own
+// `SESSION_SECRET` from the runtime env, so a CI build needs no secret of its own.
+const buildSecret = process.env["KEEL_AUTH_SECRET"] ?? randomBytes(32).toString("hex");
+
 // The deploy pair is Preact by default: the Worker SSRs through
 // `preactServerRenderer` (worker.ts + the wrangler.jsonc alias), so the client
 // these assets ship MUST be the Preact bundle — a React client hydrating against
 // Preact markup is exactly the ssr-mismatch ADR 0008 closes.
-const { manifest } = await buildProductionSite(OUT, ROOT, { preactClient: true });
+const { manifest } = await buildProductionSite(OUT, ROOT, {
+  preactClient: true,
+  secret: buildSecret,
+});
 
 for (const site of manifest) {
   console.log(`built ${site.site}: ${site.pages.length} pages → out/${site.site}`);

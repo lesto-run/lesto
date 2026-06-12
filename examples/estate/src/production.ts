@@ -55,6 +55,17 @@ export interface ProductionBuildOptions {
    * its assets must carry the matched Preact client (ADR 0008).
    */
   readonly preactClient?: boolean;
+
+  /**
+   * The identity signing secret to construct the app with.
+   *
+   * The prerender boots the dynamic app only to render the STATIC marketing
+   * zone, which signs no tokens — so the value is irrelevant to the output, and
+   * `build.ts` passes an ephemeral one. This is what lets a CI build run with no
+   * `KEEL_AUTH_SECRET` (a runtime-only Worker secret); absent it, the app falls
+   * back to the fail-closed serve-path resolution.
+   */
+  readonly secret?: string;
 }
 
 /**
@@ -68,7 +79,7 @@ export async function buildProductionSite(
   projectRoot: string,
   options: ProductionBuildOptions = {},
 ): Promise<ProductionSite> {
-  const app = await buildApp();
+  const app = await buildApp(options.secret);
 
   const handle = app.handle.bind(app);
 

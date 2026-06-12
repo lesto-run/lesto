@@ -30,8 +30,8 @@ import { buildIdentity } from "./identity";
  * boots. Returning a factory (not a singleton) is what keeps every test world
  * isolated.
  */
-export async function buildAppConfig(): Promise<KeelAppConfig> {
-  const { identity, handle } = await buildIdentity();
+export async function buildAppConfig(secret?: string): Promise<KeelAppConfig> {
+  const { identity, handle } = await buildIdentity(secret);
 
   // Zero-token, header-based CSRF on every state-changing request, applied
   // before the routes so it wraps the whole app (matched routes and 404s alike).
@@ -46,6 +46,6 @@ export async function buildAppConfig(): Promise<KeelAppConfig> {
 }
 
 /** Boot the app the kernel way: `createApp` over a fresh config. */
-export async function buildApp(): Promise<App> {
-  return createApp(await buildAppConfig());
+export async function buildApp(secret?: string): Promise<App> {
+  return createApp(await buildAppConfig(secret));
 }
