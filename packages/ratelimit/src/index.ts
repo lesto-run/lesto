@@ -7,7 +7,7 @@
  *     refillPerSecond: 1,
  *   });
  *
- *   const { allowed, remaining, retryAfterMs } = limiter.check("user:42");
+ *   const { allowed, remaining, retryAfterMs } = await limiter.check("user:42");
  *   if (!allowed) sleep(retryAfterMs);
  */
 
@@ -19,6 +19,19 @@ export type { RateLimitOptions } from "./middleware";
 
 export { MemoryRateLimitStore } from "./store";
 
+export { installRateLimitSchema, isUniqueViolation, sqlRateLimitStore } from "./sql-store";
+export type { Dialect, SqlRateLimitStore } from "./sql-store";
+
+export { RateLimitError } from "./errors";
+export type { RateLimitErrorCode } from "./errors";
+
 export { systemClock } from "./time";
 
-export type { BucketState, Clock, RateLimitResult, RateLimitStore } from "./types";
+export type {
+  BucketState,
+  Clock,
+  RateLimitResult,
+  RateLimitStore,
+  SqlDatabase,
+  SqlStatement,
+} from "./types";

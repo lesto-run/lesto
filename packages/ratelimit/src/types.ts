@@ -37,6 +37,31 @@ export interface RateLimitStore {
   ): Promise<BucketState>;
 }
 
+// ---- the minimal SQL surface (driver-agnostic) ----
+
+/**
+ * The minimal SQL surface `sqlRateLimitStore` consumes from a driver.
+ *
+ * Declared *locally*, type-only — `@keel/ratelimit` takes no `@keel/db`
+ * dependency (the established cache precedent). Per ADR 0006 the I/O terminals
+ * are Promise-returning while `prepare()` stays synchronous.
+ *
+ * Unlike the session store's seam, this one **must include `transaction`**: an
+ * atomic rate-limit check is one read-modify-write that must run inside a single
+ * transaction (a locked read on Postgres) — see `sql-store.ts`.
+ */
+export interface SqlStatement {
+  run(parameters?: unknown[]): Promise<{ changes: number }>;
+  get(parameters?: unknown[]): Promise<unknown>;
+  all(parameters?: unknown[]): Promise<unknown[]>;
+}
+
+export interface SqlDatabase {
+  prepare(sql: string): SqlStatement;
+  exec(sql: string): Promise<void>;
+  transaction<T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<T>;
+}
+
 /** A clock we can stop. Injected wherever time matters, so tests are deterministic. */
 export type Clock = () => number;
 
