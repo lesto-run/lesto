@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { csrf, defaultExtractToken, generateToken } from "../src/index";
+import { csrf, CsrfError, defaultExtractToken, generateToken } from "../src/index";
 
 import type { AnyKeelResponse, KeelRequest } from "@keel/web";
 
-const SECRET = "test-secret";
+// >= 32 bytes: a real CSRF secret (the weak-secret guard rejects shorter).
+const SECRET = "test-secret-0123456789abcdefghijk";
 const SESSION = "session-42";
 
 function requestWith(overrides: Partial<KeelRequest> = {}): KeelRequest {
@@ -30,6 +31,19 @@ describe("csrf middleware", () => {
     const response = await middleware(requestWith({ method: "GET" }), async () => okResponse);
 
     expect(response.status).toBe(200);
+  });
+
+  it("throws CSRF_WEAK_SECRET at construction for a short secret (batched P1)", () => {
+    try {
+      csrf({ secret: "short", sessionFor });
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(CsrfError);
+      expect((e as CsrfError).code).toBe("CSRF_WEAK_SECRET");
+    }
+
+    // The 32-byte boundary is inclusive — a real secret builds fine.
+    expect(() => csrf({ secret: "a".repeat(32), sessionFor })).not.toThrow();
   });
 
   it("accepts a guarded request carrying a valid token (header)", async () => {

@@ -46,7 +46,7 @@ import { hashPassword, MemorySessionStore, Sessions, verifyPassword } from "@kee
 import type { Clock, Session, SessionStore } from "@keel/auth";
 import type { Db } from "@keel/db";
 
-import { IdentityError } from "./errors";
+import { assertStrongSecret, IdentityError } from "./errors";
 import { packResetToken, resetSigner, unpackResetToken, verifySigner } from "./tokens";
 
 // Namespace import so test code can `vi.spyOn(userRepo, "findUserByEmail")`
@@ -216,6 +216,11 @@ export interface Identity {
 
 /** Build an {@link Identity} bound to the given options. */
 export function createIdentity(options: IdentityOptions): Identity {
+  // The verification/reset token signatures are only as strong as this secret;
+  // refuse a weak one at construction rather than mint forgeable tokens
+  // (IDENTITY_WEAK_SECRET).
+  assertStrongSecret(options.secret);
+
   const db = options.db;
   const requireVerifiedEmail = options.requireVerifiedEmail ?? true;
   const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;

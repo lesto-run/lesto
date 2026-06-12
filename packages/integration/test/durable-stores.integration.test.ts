@@ -151,7 +151,7 @@ describe.each(drivers)("durable stores: $name", (driver) => {
       identity = createIdentity({
         db,
         sessionStore: sqlSessionStore(handle as AuthSql),
-        secret: "integration-secret",
+        secret: "integration-secret-0123456789abcde",
         mailer: { sendVerificationEmail: () => {}, sendPasswordResetEmail: () => {} },
         verificationUrl: (t) => `/verify?token=${t}`,
         resetUrl: (t) => `/reset?token=${t}`,

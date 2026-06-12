@@ -15,6 +15,8 @@
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
+import { assertStrongSecret } from "./errors";
+
 // The two halves of a token, joined by a single ".".
 const SEPARATOR = ".";
 
@@ -42,6 +44,9 @@ const sign = (nonce: string, sessionId: string, secret: string): string =>
  * the nonce is 16 bytes of cryptographic randomness.
  */
 export const generateToken = (sessionId: string, secret: string): string => {
+  // A token minted under a weak secret is forgeable; refuse it loud (CSRF_WEAK_SECRET).
+  assertStrongSecret(secret);
+
   const nonce = randomBytes(NONCE_BYTES).toString("hex");
 
   return nonce + SEPARATOR + sign(nonce, sessionId, secret);

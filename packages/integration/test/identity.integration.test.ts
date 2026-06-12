@@ -264,7 +264,7 @@ beforeAll(async () => {
   // one wrapper around the in-memory database satisfies both consumers.
   identity = createIdentity({
     db: createDb(adapt(database)),
-    secret: "integration-test-secret",
+    secret: "integration-test-secret-0123456789",
     mailer,
     verificationUrl: (token) => `https://app.test/auth/verify?token=${token}`,
     resetUrl: (token) => `https://app.test/auth/reset?token=${token}`,

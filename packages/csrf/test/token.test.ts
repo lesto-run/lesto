@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { generateToken, verifyToken } from "../src/index";
+import { CsrfError, generateToken, verifyToken } from "../src/index";
 
-const SECRET = "a-server-side-secret";
+// >= 32 bytes: a real CSRF secret (the weak-secret guard rejects shorter).
+const SECRET = "a-server-side-secret-0123456789ab";
 const SESSION = "session_a";
 
 describe("generateToken / verifyToken", () => {
@@ -61,5 +62,31 @@ describe("generateToken / verifyToken", () => {
 
     expect(verifyToken(tokenForXY, "xy", SECRET)).toBe(true);
     expect(verifyToken(tokenForXY, "x", SECRET)).toBe(false);
+  });
+
+  describe("weak-secret guard (batched P1)", () => {
+    it("throws CSRF_WEAK_SECRET when minting under an empty secret", () => {
+      try {
+        generateToken(SESSION, "");
+        expect.fail("should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(CsrfError);
+        expect((e as CsrfError).code).toBe("CSRF_WEAK_SECRET");
+        expect((e as CsrfError).details).toMatchObject({ bytes: 0, minBytes: 32 });
+      }
+    });
+
+    it("throws for a 31-byte secret (just under the boundary)", () => {
+      expect(() => generateToken(SESSION, "a".repeat(31))).toThrowError(CsrfError);
+    });
+
+    it("mints under an exactly-32-byte secret (the boundary is inclusive)", () => {
+      expect(() => generateToken(SESSION, "a".repeat(32))).not.toThrow();
+    });
+
+    it("verifyToken stays total — never throws, even under a weak secret", () => {
+      // verify is a total predicate by contract: a weak secret is a false, not a throw.
+      expect(verifyToken("anything.deadbeef", SESSION, "")).toBe(false);
+    });
   });
 });

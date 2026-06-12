@@ -23,6 +23,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import { assertStrongSecret } from "./errors";
 import type { Clock } from "./types";
 import { systemClock } from "./time";
 
@@ -100,6 +101,10 @@ export class SignedSessions {
   private readonly clock: Clock;
 
   constructor(options: SignedSessionsOptions) {
+    // A signed session is only as trustworthy as its HMAC key; refuse a weak
+    // secret at construction rather than mint forgeable tokens (AUTH_WEAK_SECRET).
+    assertStrongSecret(options.secret);
+
     this.secret = options.secret;
     this.clock = options.clock ?? systemClock;
   }

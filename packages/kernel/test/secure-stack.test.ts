@@ -48,7 +48,8 @@ function adapt(raw: Database.Database): KernelDatabase {
   return adapted;
 }
 
-const SECRET = "kernel-secret";
+// >= 32 bytes: a real CSRF secret (the weak-secret guard rejects shorter).
+const SECRET = "kernel-secret-0123456789abcdefghi";
 const SESSION = "anon";
 
 // A controller exercising both a state-changing action and reading the context.

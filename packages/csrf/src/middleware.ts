@@ -14,6 +14,7 @@
  * was bound to, under the app's secret.
  */
 
+import { assertStrongSecret } from "./errors";
 import { verifyToken } from "./token";
 
 import type { KeelRequest, Middleware } from "@keel/web";
@@ -101,6 +102,10 @@ export function defaultExtractToken(request: KeelRequest): string | undefined {
  * guarded request can never slip through unverified.
  */
 export function csrf(options: CsrfOptions): Middleware {
+  // Refuse a weak secret when the middleware is built, not per request
+  // (CSRF_WEAK_SECRET) — a forgeable secret defeats the whole guard.
+  assertStrongSecret(options.secret);
+
   const guarded = options.methods ?? DEFAULT_GUARDED_METHODS;
   const extractToken = options.extractToken ?? defaultExtractToken;
 

@@ -2,10 +2,11 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { SignedSessions } from "../src/index";
+import { AuthError, SignedSessions } from "../src/index";
 import type { Clock } from "../src/index";
 
-const SECRET = "test-signing-secret";
+// >= 32 bytes: a real signing secret (the weak-secret guard rejects shorter).
+const SECRET = "test-signing-secret-0123456789ab";
 
 // A clock we can stop, so every expiry path is exact.
 function stoppedClock(start: number): { clock: Clock; advance: (ms: number) => void } {
@@ -78,7 +79,10 @@ describe("SignedSessions", () => {
   });
 
   it("rejects a token signed with a different secret", () => {
-    const issuer = new SignedSessions({ secret: "other-secret", clock: () => 1000 });
+    const issuer = new SignedSessions({
+      secret: "other-secret-0123456789abcdefghij",
+      clock: () => 1000,
+    });
     const verifier = new SignedSessions({ secret: SECRET, clock: () => 1000 });
 
     expect(verifier.verify(issuer.issue("user_1", 60_000))).toBeUndefined();
@@ -112,5 +116,32 @@ describe("SignedSessions", () => {
     expect(sessions.verify(forge(JSON.stringify({ foo: "bar" }), SECRET))).toBeUndefined();
     expect(sessions.verify(forge(JSON.stringify(["not", "an", "object"]), SECRET))).toBeUndefined();
     expect(sessions.verify(forge("null", SECRET))).toBeUndefined();
+  });
+
+  describe("weak-secret guard (batched P1)", () => {
+    it("throws AUTH_WEAK_SECRET at construction for an empty secret", () => {
+      let thrown: unknown;
+      try {
+        const sessions = new SignedSessions({ secret: "" });
+        void sessions;
+        expect.fail("should have thrown");
+      } catch (e) {
+        thrown = e;
+      }
+
+      expect(thrown).toBeInstanceOf(AuthError);
+      expect((thrown as AuthError).code).toBe("AUTH_WEAK_SECRET");
+      expect((thrown as AuthError).details).toMatchObject({ bytes: 0, minBytes: 32 });
+    });
+
+    it("throws AUTH_WEAK_SECRET for a 31-byte secret (just under the boundary)", () => {
+      const thirtyOne = "a".repeat(31);
+      expect(() => new SignedSessions({ secret: thirtyOne })).toThrowError(AuthError);
+    });
+
+    it("accepts an exactly-32-byte secret (the boundary is inclusive)", () => {
+      const thirtyTwo = "a".repeat(32);
+      expect(() => new SignedSessions({ secret: thirtyTwo })).not.toThrow();
+    });
   });
 });

@@ -111,7 +111,7 @@ function buildIdentity(opts: Partial<IdentityOptions> = {}): {
 
   const identity = createIdentity({
     db,
-    secret: "test-secret",
+    secret: "test-secret-0123456789abcdefghij",
     mailer,
     verificationUrl: (token) => `https://app.test/verify?token=${token}`,
     resetUrl: (token) => `https://app.test/reset?token=${token}`,
@@ -137,6 +137,31 @@ beforeEach(async () => {
 afterEach(() => {
   raw.close();
   vi.restoreAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// weak-secret guard (batched P1)
+// ---------------------------------------------------------------------------
+
+describe("weak-secret guard", () => {
+  it("throws IDENTITY_WEAK_SECRET at construction for an empty secret", () => {
+    try {
+      buildIdentity({ secret: "" });
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(IdentityError);
+      expect((e as IdentityError).code).toBe("IDENTITY_WEAK_SECRET");
+      expect((e as IdentityError).details).toMatchObject({ bytes: 0, minBytes: 32 });
+    }
+  });
+
+  it("throws for a 31-byte secret (just under the boundary)", () => {
+    expect(() => buildIdentity({ secret: "a".repeat(31) })).toThrowError(IdentityError);
+  });
+
+  it("accepts an exactly-32-byte secret (the boundary is inclusive)", () => {
+    expect(() => buildIdentity({ secret: "a".repeat(32) })).not.toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -408,7 +433,7 @@ describe("resetPassword", () => {
     const { mailer, sent } = captureMailer();
     const identity = createIdentity({
       db,
-      secret: "secret",
+      secret: "secret-0123456789abcdefghijklmnop",
       mailer,
       verificationUrl: (t) => `https://app.test/v?t=${t}`,
       resetUrl: (t) => `https://app.test/r?t=${t}`,
@@ -668,7 +693,7 @@ describe("token signer", () => {
     const { mailer, sent } = captureMailer();
     const identity = createIdentity({
       db,
-      secret: "no-clock-test",
+      secret: "no-clock-test-0123456789abcdefghij",
       mailer,
       verificationUrl: (t) => `https://app/v?t=${t}`,
       resetUrl: (t) => `https://app/r?t=${t}`,
