@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
+  resetPurifyInstanceForTest,
   sanitizeHtml,
   sanitizeJsonLd,
   sanitizeObject,
@@ -135,6 +136,41 @@ describe("sanitizeHtml", () => {
     expect(DEFAULT_SANITIZE_CONFIG).toBeDefined();
     expect(DEFAULT_SANITIZE_CONFIG.FORBID_TAGS).toContain("script");
     expect(DEFAULT_SANITIZE_CONFIG.FORBID_ATTR).toContain("onerror");
+  });
+});
+
+describe("sanitizeHtml — no-DOM runtime (blocker #5: fail loud, never fail open)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetPurifyInstanceForTest();
+  });
+
+  it("THROWS a coded SecurityError on a Workers-shaped runtime instead of returning input unchanged", () => {
+    // Simulate Cloudflare Workers: no `process.versions.node`, so the Node/jsdom
+    // branch is skipped and bare DOMPurify is used — which has no DOM, so
+    // `isSupported` is false and its sanitize() would be a dangerous passthrough.
+    vi.stubGlobal("process", undefined);
+    resetPurifyInstanceForTest();
+
+    let thrown: unknown;
+    try {
+      sanitizeHtml('<script>alert("xss")</script>');
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(SecurityError);
+    expect((thrown as SecurityError).code).toBe("SECURITY_ERROR");
+    expect((thrown as SecurityError).context.reason).toBe("no-dom");
+    expect((thrown as SecurityError).context.runtime).toBe("edge");
+  });
+
+  it("still sanitizes on Node (the createRequire('jsdom') path works under ESM)", () => {
+    // After the env is restored, the Node branch must load jsdom via createRequire
+    // and sanitize normally — the ESM-consumer regression for blocker #5.
+    resetPurifyInstanceForTest();
+
+    expect(sanitizeHtml('<div><script>alert("xss")</script>Hello</div>')).toBe("<div>Hello</div>");
   });
 });
 

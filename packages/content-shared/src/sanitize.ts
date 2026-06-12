@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import DOMPurify, { type Config } from "dompurify";
 import serialize from "serialize-javascript";
 import { SecurityError } from "./errors.js";
@@ -8,24 +9,71 @@ type DOMPurifyInstance = ReturnType<typeof DOMPurify> | typeof DOMPurify;
 // Initialize DOMPurify with jsdom for Node.js
 let purifyInstance: DOMPurifyInstance | undefined;
 
-function getPurify(): DOMPurifyInstance {
-  if (purifyInstance) return purifyInstance;
-
-  // Check for browser environment by checking process.versions.node
+/**
+ * Resolve a DOMPurify instance backed by a real DOM, or throw if none exists.
+ *
+ * Three runtimes, two outcomes:
+ *
+ *   - Node — load `jsdom` (now a runtime DEPENDENCY, not a devDependency, so an
+ *     npm consumer has it) and bind DOMPurify to a JSDOM window. We use
+ *     `createRequire(import.meta.url)` rather than a bare `require`, because under
+ *     native ESM (the package is `"type": "module"`) `require` is not in scope —
+ *     the bare call threw `ReferenceError` for every ESM consumer.
+ *   - Browser — use the global DOM directly.
+ *   - No DOM (Cloudflare Workers, Deno deploy, any DOM-less runtime) — DOMPurify
+ *     reports `isSupported === false` and its `sanitize` becomes a passthrough
+ *     that returns the input UNCHANGED. That is the dangerous failure this guard
+ *     closes: an unsanitized string flowing into HTML is an XSS hole. We THROW a
+ *     coded {@link SecurityError} instead, so a no-op sanitizer fails loud rather
+ *     than silently shipping attacker HTML.
+ */
+function resolvePurify(): DOMPurifyInstance {
+  // Check for a Node runtime by probing for jsdom-able `process.versions.node`.
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   const isNode = typeof process !== "undefined" && process.versions?.node !== undefined;
 
-  if (!isNode) {
-    // Browser environment - use DOMPurify directly
-    purifyInstance = DOMPurify;
-  } else {
-    // Node.js environment - lazy load jsdom
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+  if (isNode) {
+    // Node — bind DOMPurify to a JSDOM window. `createRequire` makes the CJS-only
+    // `jsdom` loadable from an ESM module. jsdom ships no types, so the constructor
+    // is read off the untyped module require (as the original bare require was).
+    const require = createRequire(import.meta.url);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
     const { JSDOM } = require("jsdom");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
     const jsdomWindow = new JSDOM("").window;
-    // Cast through unknown for cross-environment compatibility
-    purifyInstance = DOMPurify(jsdomWindow as unknown as Parameters<typeof DOMPurify>[0]);
+
+    return DOMPurify(jsdomWindow as unknown as Parameters<typeof DOMPurify>[0]);
   }
+
+  // Browser or DOM-less runtime — DOMPurify uses whatever global DOM exists.
+  return DOMPurify;
+}
+
+/**
+ * Reset the memoized DOMPurify instance. TEST-ONLY: lets a test force the
+ * runtime-detection path to re-run after stubbing the global environment (e.g.
+ * to simulate a DOM-less Workers runtime). Not part of the supported surface.
+ */
+export function resetPurifyInstanceForTest(): void {
+  purifyInstance = undefined;
+}
+
+function getPurify(): DOMPurifyInstance {
+  if (purifyInstance) return purifyInstance;
+
+  const purify = resolvePurify();
+
+  // No DOM means DOMPurify's `sanitize` is a passthrough — returning unsanitized
+  // input is an XSS hole, so refuse to operate rather than fail open.
+  if (!purify.isSupported) {
+    throw new SecurityError(
+      "sanitizeHtml requires a DOM, but this runtime has none (e.g. Cloudflare Workers). " +
+        "HTML cannot be safely sanitized here; sanitize before reaching the edge, or run on Node.",
+      { reason: "no-dom", runtime: typeof process === "undefined" ? "edge" : "node" },
+    );
+  }
+
+  purifyInstance = purify;
 
   return purifyInstance;
 }
