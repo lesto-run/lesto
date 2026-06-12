@@ -486,11 +486,13 @@
       "name": "@keel/integration",
       "version": "0.0.0",
       "dependencies": {
+        "@keel/auth": "workspace:*",
         "@keel/db": "workspace:*",
         "@keel/identity": "workspace:*",
         "@keel/kernel": "workspace:*",
         "@keel/migrate": "workspace:*",
         "@keel/pg": "workspace:*",
+        "@keel/ratelimit": "workspace:*",
         "@keel/router": "workspace:*",
         "@keel/runtime": "workspace:*",
         "@keel/sites": "workspace:*",
@@ -588,6 +590,7 @@
       "name": "@keel/ratelimit",
       "version": "0.0.0",
       "dependencies": {
+        "@keel/errors": "workspace:*",
         "@keel/web": "workspace:*",
       },
     },
