@@ -24,13 +24,40 @@ import type { JsonValue, Queue } from "@keel/queue";
  *   2. Every destination URL passes an SSRF guard before we connect: http(s)
  *      only, and the host must resolve to a public address — loopback,
  *      RFC1918, link-local (incl. the cloud metadata endpoint), and other
- *      reserved ranges are refused.
+ *      reserved ranges are refused. The deliverer sets `redirect: "manual"` so a
+ *      guarded public URL cannot 302 the request to a private endpoint after the
+ *      guard ran — a 3xx is a delivery failure, never a followed hop.
+ *
+ *   3. Signatures bind a timestamp: we sign `${timestamp}.${body}` and ship the
+ *      timestamp in an `x-keel-timestamp` header. `verify` checks the signature
+ *      AND that the timestamp is within a caller-set tolerance, so a captured
+ *      request replayed later fails — the replay window is the tolerance, not
+ *      forever.
+ *
+ * RESIDUAL RISK — DNS-rebinding TOCTOU (documented, not closed): the guard
+ * resolves the host and `fetch` resolves it again, so a hostile DNS server could
+ * answer "public" to the guard and "private" to the fetch in the gap between.
+ * IP-pinning the resolved address into the fetch (Host header preserved) would
+ * close it, but that is not expressible through the injected {@link FetchLike} /
+ * the Workers `fetch` we run on — neither lets a caller pin the connect IP while
+ * keeping the Host. The mitigations we DO have: the guard blocks on *any*
+ * resolved private address (so a name that resolves to both public and private
+ * is refused outright), and `redirect: "manual"` removes the post-guard redirect
+ * hop. A host that needs hard TOCTOU closure must inject a pinning `FetchLike`.
  */
 
 const DELIVER_JOB = "keel.webhook.deliver";
 
 export const EVENT_HEADER = "x-keel-event";
 export const SIGNATURE_HEADER = "x-keel-signature";
+export const TIMESTAMP_HEADER = "x-keel-timestamp";
+
+/**
+ * Default replay tolerance for {@link verify}: a signed request is accepted only
+ * if its timestamp is within five minutes of now. Wide enough for clock skew and
+ * queue latency, narrow enough that a captured request is useless soon after.
+ */
+export const DEFAULT_TOLERANCE_MS = 5 * 60 * 1000;
 
 export type WebhookErrorCode =
   | "WEBHOOK_DELIVERY_FAILED"
@@ -50,9 +77,54 @@ export function sign(body: string, secret: string): string {
   return createHmac("sha256", secret).update(body).digest("hex");
 }
 
-/** Constant-time check that `signature` is a valid HMAC of `body`. */
-export function verify(body: string, signature: string, secret: string): boolean {
-  const expected = Buffer.from(sign(body, secret));
+/** The signed payload when a timestamp binds the body against replay. */
+function signedPayload(timestamp: number, body: string): string {
+  return `${timestamp}.${body}`;
+}
+
+/** Options for a timestamp-bound {@link verify} that also defends against replay. */
+export interface VerifyOptions {
+  /**
+   * The `x-keel-timestamp` value the sender shipped (epoch ms). When set, the
+   * signature is checked over `${timestamp}.${body}` AND the timestamp must be
+   * within {@link VerifyOptions.toleranceMs} of {@link VerifyOptions.now} — a
+   * captured request replayed past the window fails.
+   */
+  readonly timestamp?: number;
+
+  /** Replay tolerance in ms. Defaults to {@link DEFAULT_TOLERANCE_MS}. */
+  readonly toleranceMs?: number;
+
+  /** "Now" in epoch ms, injectable for tests. Defaults to `Date.now()`. */
+  readonly now?: number;
+}
+
+/**
+ * Constant-time check that `signature` is a valid HMAC of `body`.
+ *
+ * Pass `options.timestamp` to verify a timestamp-bound signature: the HMAC is
+ * recomputed over `${timestamp}.${body}` (what the deliverer signs) and the
+ * timestamp is additionally required to be within `toleranceMs` of `now`, so a
+ * replayed capture outside the window is rejected even with a valid signature.
+ * Omit `options` for the legacy body-only signature.
+ */
+export function verify(
+  body: string,
+  signature: string,
+  secret: string,
+  options: VerifyOptions = {},
+): boolean {
+  if (options.timestamp !== undefined) {
+    const toleranceMs = options.toleranceMs ?? DEFAULT_TOLERANCE_MS;
+    const now = options.now ?? Date.now();
+
+    // Outside the replay window: reject before any HMAC work.
+    if (Math.abs(now - options.timestamp) > toleranceMs) return false;
+  }
+
+  const message = options.timestamp === undefined ? body : signedPayload(options.timestamp, body);
+
+  const expected = Buffer.from(sign(message, secret));
   const provided = Buffer.from(signature);
 
   return expected.length === provided.length && timingSafeEqual(expected, provided);
@@ -65,7 +137,18 @@ export interface WebhookResponse {
 
 export type FetchLike = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body: string;
+    /**
+     * Always `"manual"` from the deliverer: a guarded public URL must not be
+     * able to 3xx the request onward to a private endpoint after the SSRF guard
+     * already ran. The real `fetch` honors this; an injected `FetchLike` should
+     * too. Optional so older fetch stubs still type-check.
+     */
+    redirect?: "manual";
+  },
 ) => Promise<WebhookResponse>;
 
 /**
@@ -304,26 +387,43 @@ export class Webhooks {
     }
 
     const body = JSON.stringify({ event: payload.event, data: payload.payload });
+    const timestamp = Date.now();
     const headers: Record<string, string> = {
       "content-type": "application/json",
       [EVENT_HEADER]: payload.event,
+      [TIMESTAMP_HEADER]: String(timestamp),
     };
 
     if (payload.secretId !== undefined) {
-      headers[SIGNATURE_HEADER] = sign(body, await this.resolveSecret(payload.secretId));
+      // Sign `${timestamp}.${body}`, not the bare body, so the receiver's
+      // `verify({ timestamp })` can reject a replayed capture outside tolerance.
+      headers[SIGNATURE_HEADER] = sign(
+        `${timestamp}.${body}`,
+        await this.resolveSecret(payload.secretId),
+      );
     }
 
-    const response = await this.fetchFn(payload.url, { method: "POST", headers, body });
+    // `redirect: "manual"` is the SSRF closure: the guard validated THIS URL, so a
+    // 3xx must not be followed to an unguarded (possibly private) endpoint. A
+    // manual redirect surfaces as a non-ok 3xx response, which falls into the
+    // delivery-failure path below — retried like any other failed attempt.
+    const response = await this.fetchFn(payload.url, {
+      method: "POST",
+      headers,
+      body,
+      redirect: "manual",
+    });
 
     if (!response.ok) {
-      throw new WebhookError(
-        "WEBHOOK_DELIVERY_FAILED",
-        `Webhook to ${payload.url} returned ${response.status}.`,
-        {
-          url: payload.url,
-          status: response.status,
-        },
-      );
+      const reason =
+        response.status >= 300 && response.status < 400
+          ? `redirected (${response.status}) — refusing to follow past the SSRF guard`
+          : `returned ${response.status}`;
+
+      throw new WebhookError("WEBHOOK_DELIVERY_FAILED", `Webhook to ${payload.url} ${reason}.`, {
+        url: payload.url,
+        status: response.status,
+      });
     }
   }
 

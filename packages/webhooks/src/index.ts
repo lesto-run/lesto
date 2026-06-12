@@ -9,11 +9,13 @@
  */
 
 export {
+  DEFAULT_TOLERANCE_MS,
   defaultUrlGuard,
   EVENT_HEADER,
   sign,
   SIGNATURE_HEADER,
   systemResolver,
+  TIMESTAMP_HEADER,
   verify,
   WebhookError,
   Webhooks,
@@ -23,6 +25,7 @@ export type {
   Resolver,
   SecretSource,
   UrlGuard,
+  VerifyOptions,
   WebhookErrorCode,
   WebhookResponse,
   WebhooksOptions,

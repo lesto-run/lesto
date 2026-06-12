@@ -3,11 +3,13 @@ import { installSchema, Queue } from "@keel/queue";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_TOLERANCE_MS,
   defaultUrlGuard,
   EVENT_HEADER,
   sign,
   SIGNATURE_HEADER,
   systemResolver,
+  TIMESTAMP_HEADER,
   verify,
   WebhookError,
   Webhooks,
@@ -18,7 +20,12 @@ import type { FetchLike, Resolver, SecretSource, WebhookResponse } from "../src/
 
 interface Call {
   url: string;
-  init: { method: string; headers: Record<string, string>; body: string };
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body: string;
+    redirect?: "manual";
+  };
 }
 
 let raw: Database.Database;
@@ -77,6 +84,33 @@ describe("sign & verify", () => {
     expect(verify("body", sign("body", "other"), "secret")).toBe(false); // same length, wrong mac
     expect(verify("body", "short", "secret")).toBe(false); // length mismatch short-circuits
   });
+
+  it("binds a timestamp and rejects a replay outside tolerance (blocker #3)", () => {
+    const ts = 1_700_000_000_000;
+    const signature = sign(`${ts}.body`, "secret"); // what the deliverer signs
+
+    // Captured request, verified within tolerance: accepted.
+    expect(verify("body", signature, "secret", { timestamp: ts, now: ts + 1000 })).toBe(true);
+
+    // The SAME captured request replayed past the window: rejected, despite a
+    // valid signature, before any HMAC is even computed.
+    const replayedAt = ts + DEFAULT_TOLERANCE_MS + 1;
+    expect(verify("body", signature, "secret", { timestamp: ts, now: replayedAt })).toBe(false);
+
+    // A custom (tighter) tolerance also rejects.
+    expect(
+      verify("body", signature, "secret", { timestamp: ts, now: ts + 2000, toleranceMs: 1000 }),
+    ).toBe(false);
+
+    // Within tolerance but a forged body still fails the signature check.
+    expect(verify("tampered", signature, "secret", { timestamp: ts, now: ts })).toBe(false);
+
+    // No `now` given: it defaults to Date.now(). A just-now timestamp is in window.
+    const fresh = Date.now();
+    expect(verify("body", sign(`${fresh}.body`, "secret"), "secret", { timestamp: fresh })).toBe(
+      true,
+    );
+  });
 });
 
 describe("Webhooks delivery", () => {
@@ -94,10 +128,21 @@ describe("Webhooks delivery", () => {
     const call = calls[0];
     expect(call?.url).toBe("https://example.com/hook");
     expect(call?.init.headers[EVENT_HEADER]).toBe("order.paid");
-    expect(call?.init.headers[SIGNATURE_HEADER]).toBe(sign(call?.init.body ?? "", "shh"));
-    expect(verify(call?.init.body ?? "", call?.init.headers[SIGNATURE_HEADER] ?? "", "shh")).toBe(
-      true,
+    expect(call?.init.redirect).toBe("manual"); // SSRF: never follow a redirect past the guard
+
+    // The signature binds the shipped x-keel-timestamp (replay defense): it is the
+    // HMAC of `${timestamp}.${body}`, and verify() accepts it under that timestamp.
+    const timestamp = Number(call?.init.headers[TIMESTAMP_HEADER]);
+    expect(Number.isFinite(timestamp)).toBe(true);
+    expect(call?.init.headers[SIGNATURE_HEADER]).toBe(
+      sign(`${timestamp}.${call?.init.body ?? ""}`, "shh"),
     );
+    expect(
+      verify(call?.init.body ?? "", call?.init.headers[SIGNATURE_HEADER] ?? "", "shh", {
+        timestamp,
+        now: timestamp,
+      }),
+    ).toBe(true);
   });
 
   it("NEVER persists the raw secret — only a secretId reference is stored", async () => {
@@ -121,11 +166,13 @@ describe("Webhooks delivery", () => {
 
     // ...and the signature still comes out valid once delivered.
     await queue.runOnce();
+    const timestamp = Number(calls[0]?.init.headers[TIMESTAMP_HEADER]);
     expect(
       verify(
         calls[0]?.init.body ?? "",
         calls[0]?.init.headers[SIGNATURE_HEADER] ?? "",
         "super-secret-value",
+        { timestamp, now: timestamp },
       ),
     ).toBe(true);
   });
@@ -152,6 +199,31 @@ describe("Webhooks delivery", () => {
 
     expect((await queue.runOnce())?.outcome).toBe("failed");
     expect((await queue.find(id))?.lastError).toContain("returned 503");
+  });
+
+  it("refuses to follow a 302 to a metadata endpoint after the guard ran (blocker #3)", async () => {
+    // The destination is a guarded PUBLIC URL, but it answers 302 →
+    // 169.254.169.254. With redirect:"manual" the fetch never follows; the 3xx
+    // surfaces as a coded delivery failure instead of an SSRF to the metadata host.
+    const redirecting: FetchLike = async (url, init) => {
+      calls.push({ url, init });
+
+      return { ok: false, status: 302 };
+    };
+
+    const hooks = new Webhooks({
+      queue,
+      fetch: redirecting,
+      resolver: publicResolver,
+    });
+    const id = await hooks.send("https://example.com/hook", "ping", {}, { maxAttempts: 1 });
+
+    expect((await queue.runOnce())?.outcome).toBe("failed");
+    expect(calls[0]?.init.redirect).toBe("manual"); // asked the transport not to follow
+    expect((await queue.find(id))?.lastError).toContain("redirected (302)");
+    expect((await queue.find(id))?.lastError).toContain("SSRF guard");
+    // Exactly one call — the redirect was NOT followed to a second (private) host.
+    expect(calls).toHaveLength(1);
   });
 
   it("defaults to the global fetch when none is injected", () => {
