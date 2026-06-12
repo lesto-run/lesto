@@ -19,6 +19,9 @@ export { generateToken } from "./token";
 export { MemorySessionStore, Sessions } from "./sessions";
 export type { SessionsOptions } from "./sessions";
 
+export { installSessionSchema, sqlSessionStore } from "./sql-session-store";
+export type { SqlSessionStore } from "./sql-session-store";
+
 export { SignedSessions } from "./signed-sessions";
 export type { SignedClaim, SignedSessionsOptions } from "./signed-sessions";
 
@@ -27,4 +30,4 @@ export { systemClock } from "./time";
 export { AuthError, KeelError } from "./errors";
 export type { AuthErrorCode } from "./errors";
 
-export type { Clock, Session, SessionStore } from "./types";
+export type { Clock, Session, SessionStore, SqlDatabase, SqlStatement } from "./types";
