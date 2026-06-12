@@ -146,6 +146,34 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
     expect((JSON.parse(saved.body) as { saved: unknown[] }).saved.length).toBeGreaterThan(0);
   });
 
+  it("sign-out revokes the session: the old cookie no longer resolves the user", async () => {
+    // Sign in and confirm the session resolves (the row is in the SQL store).
+    const signIn = await dispatch("POST", "/mls/api/sign-in", {
+      headers: SAME_ORIGIN_FORM,
+      body: new URLSearchParams({
+        email: DEFAULT_DEMO.email,
+        password: DEFAULT_DEMO.password,
+      }).toString(),
+    });
+    const cookie = cookieFrom(signIn.headers["Set-Cookie"] ?? signIn.headers["set-cookie"]);
+
+    const before = await dispatch("GET", "/__keel/data/session", { headers: { cookie } });
+    expect(JSON.parse(before.body)).toEqual({ id: DEFAULT_DEMO.email, name: DEFAULT_DEMO.displayName });
+
+    // Sign out: this drives sqlSessionStore.delete through the full HTTP journey.
+    const signOut = await dispatch("POST", "/mls/api/sign-out", {
+      headers: { ...SAME_ORIGIN_FORM, cookie },
+      body: "",
+    });
+    expect(signOut.status).toBe(303);
+
+    // The same cookie now resolves nobody — the row was deleted, not just the
+    // cookie cleared. (Re-presenting the revoked token yields signed-out.)
+    const after = await dispatch("GET", "/__keel/data/session", { headers: { cookie } });
+    expect(after.status).toBe(200);
+    expect(JSON.parse(after.body)).toBeNull();
+  });
+
   // The replacement for the old `?as=<id>` impersonation fence: there is no
   // fence because there is no impersonation — wrong creds are wrong creds.
   it("rejects a same-origin sign-in POST that uses a wrong password", async () => {

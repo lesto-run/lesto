@@ -15,9 +15,17 @@
  * The DB is `:memory:`: estate is a demo, not a persistent app, so a fresh
  * boot is a clean slate. Switching to a file-backed SQLite is a one-line
  * change if a deployment wants user accounts that survive a restart.
+ *
+ * Sessions are durable too: this node path dogfoods `sqlSessionStore`, so the
+ * session rows live in the same SQLite handle as the users. In the `:memory:`
+ * demo that resets on restart along with everything else — but the *wiring*
+ * (install schema → store → identity) is exactly what a production app copies,
+ * and a file-backed SQLite or Postgres makes both users and sessions durable for
+ * real. The edge path (`edge.ts`, `SignedSessions`) is a separate, stateless
+ * tier and is deliberately untouched (ADR 0013 §8).
  */
 
-import { hashPassword } from "@keel/auth";
+import { hashPassword, installSessionSchema, sqlSessionStore } from "@keel/auth";
 import { createDb } from "@keel/db";
 import type { Db, SqlDatabase } from "@keel/db";
 import { Migrator } from "@keel/migrate";
@@ -110,11 +118,13 @@ export async function buildIdentity(): Promise<{
   // Order is the contract: migrate, build the db, seed, then the service.
   // A query before migrate would hit an empty schema.
   await new Migrator(sql, [usersMigration]).migrate();
+  await installSessionSchema(sql);
   const db = createDb(sql);
   await seedDemoAccounts(db);
 
   const identity = createIdentity({
     db,
+    sessionStore: sqlSessionStore(sql),
     secret: process.env["KEEL_AUTH_SECRET"] ?? "estate-demo-identity-secret",
     mailer: silentMailer,
     // Demo never sends mail; these URLs exist only so the option types are
