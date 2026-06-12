@@ -21,6 +21,15 @@
  * dynamic import can never both run under one test runtime. The real loaders are
  * the untestable wiring in `./sqlite-drivers` (excluded from coverage, like
  * `bin.ts`); everything decided here is covered.
+ *
+ * Transactions are serialized FIFO over the one shared connection: each
+ * `transaction()` enqueues onto an internal promise chain and only `BEGIN`s once
+ * the previous span has fully settled, so concurrent transactions (steady-state
+ * once the rate-limit store runs one per request) never collide on the second
+ * `BEGIN`. Nested transactions compose flat — an inner `tx.transaction(...)` runs
+ * its callback on the same span rather than re-enqueuing (which would deadlock).
+ * Cross-*process* SQLite writers remain out of scope: SQLite is the single-node
+ * dev default; fleets run Postgres.
  */
 
 import type { KernelDatabase } from "@keel/kernel";
@@ -69,7 +78,10 @@ export async function openSqlite(
 ): Promise<OpenSqlite> {
   const raw = engines.betterSqlite(filename) ?? (await engines.bunSqlite(filename));
 
-  const db: KernelDatabase = {
+  // The shared `exec`/`prepare` half of the seam over the one connection. Both
+  // the top-level db and a tx-scoped handle reuse these closures — there is only
+  // ever one connection, so they always hit the same engine handle.
+  const statements: Pick<KernelDatabase, "exec" | "prepare"> = {
     // I/O terminal verbs are async: a SQLite engine returns synchronously, so we
     // `await` a resolved value (zero latency) to present the Postgres-shaped seam.
     exec: async (sql) => {
@@ -87,27 +99,63 @@ export async function openSqlite(
         all: async (params = []) => statement.all(...params),
       };
     },
+  };
 
-    // Single-connection (SQLite) transaction: the same handle brackets `fn` with
-    // BEGIN/COMMIT, rolling back (best-effort) on any throw before re-raising.
-    transaction: async (fn) => {
-      raw.exec("BEGIN");
+  // The FIFO chain: every transaction enqueues its BEGIN…COMMIT/ROLLBACK span
+  // onto this promise so the next one cannot `BEGIN` until the previous span has
+  // fully settled. Without it, two concurrent `transaction()` calls on the single
+  // shared connection interleave at the `await fn(...)` microtask boundary and
+  // the second `BEGIN` throws "cannot start a transaction within a transaction".
+  let chain: Promise<unknown> = Promise.resolve();
 
-      try {
-        const out = await fn(db);
+  const db: KernelDatabase = {
+    ...statements,
 
-        raw.exec("COMMIT");
+    // Single-connection (SQLite) FIFO transaction. Each call appends its span to
+    // `chain` and waits for the previous span to settle before `BEGIN`, so spans
+    // never overlap on the one connection. A rolled-back (rejected) span must not
+    // poison the queue: the sequencing link swallows the previous link's rejection
+    // (`.then(noop, noop)`) purely to gate the next BEGIN, while the caller still
+    // receives a promise that rejects with the original error.
+    transaction: async <T>(fn: (tx: KernelDatabase) => Promise<T>): Promise<T> => {
+      const run = chain.then(async () => {
+        raw.exec("BEGIN");
 
-        return out;
-      } catch (error) {
         try {
-          raw.exec("ROLLBACK");
-        } catch {
-          // Best-effort: a failed rollback must not mask the original error.
-        }
+          // The tx-scoped handle shares the one connection's `exec`/`prepare`.
+          // A nested `transaction` runs `inner` FLAT on this same span — SQLite
+          // has no nested BEGIN, so composing flat (rather than re-enqueuing,
+          // which would deadlock against the chain this span already holds)
+          // matches the shape `createPgDatabase` uses (pg adapter.ts:107–110).
+          const tx: KernelDatabase = {
+            ...statements,
+            transaction: (inner) => inner(tx),
+          };
 
-        throw error;
-      }
+          const out = await fn(tx);
+
+          raw.exec("COMMIT");
+
+          return out;
+        } catch (error) {
+          try {
+            raw.exec("ROLLBACK");
+          } catch {
+            // Best-effort: a failed rollback must not mask the original error.
+          }
+
+          throw error;
+        }
+      });
+
+      // Gate the next span on this one settling, but never let its rejection
+      // poison the chain — sequencing only cares that the span ENDED.
+      chain = run.then(
+        () => undefined,
+        () => undefined,
+      );
+
+      return run;
     },
   };
 

@@ -7,7 +7,10 @@
  * path injects async-wrapped sync fakes: better-sqlite3 "unavailable" (returns
  * `undefined`) so `bun:sqlite` is reached — the branch no Node test could
  * otherwise cover without loading `bun:sqlite`. The transaction verb is covered
- * on both its commit and rollback (including failed-rollback) branches.
+ * on both its commit and rollback (including failed-rollback) branches, plus the
+ * FIFO queue (concurrent transactions serialize; a rolled-back span does not
+ * poison the chain) and flat nesting (an inner `tx.transaction` runs on the same
+ * span; an inner throw rolls the whole span back).
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -156,5 +159,122 @@ describe("openSqlite", () => {
 
     close();
     expect(closed).toHaveBeenCalledOnce();
+  });
+
+  it("serializes two concurrent transactions instead of colliding on BEGIN", async () => {
+    const { db, close } = await openSqlite();
+
+    await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+
+    // A latch the first transaction blocks on AFTER its BEGIN, so the second
+    // transaction is dispatched while the first is mid-span. With the FIFO queue
+    // the second cannot BEGIN until the first settles; without it the second
+    // BEGIN throws "cannot start a transaction within a transaction".
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const first = db.transaction(async (tx) => {
+      await tx.prepare("INSERT INTO t (name) VALUES (?)").run(["first"]);
+
+      await held;
+    });
+
+    const second = db.transaction(async (tx) => {
+      await tx.prepare("INSERT INTO t (name) VALUES (?)").run(["second"]);
+    });
+
+    // Let the event loop turn so the second transaction would BEGIN if it could.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+
+    // Both committed, effects serialized (first then second).
+    const rows = await db.prepare("SELECT name FROM t ORDER BY id").all();
+    expect(rows).toEqual([{ name: "first" }, { name: "second" }]);
+
+    close();
+  });
+
+  it("does not poison the queue when a transaction rolls back", async () => {
+    const { db, close } = await openSqlite();
+
+    await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+
+    const boom = new Error("boom");
+
+    const rejected = db.transaction(async (tx) => {
+      await tx.prepare("INSERT INTO t (name) VALUES (?)").run(["doomed"]);
+
+      throw boom;
+    });
+
+    // Queued immediately behind the rejecting span — it must still run on a clean
+    // connection, not inherit a poisoned chain.
+    const committed = db.transaction(async (tx) => {
+      await tx.prepare("INSERT INTO t (name) VALUES (?)").run(["survivor"]);
+    });
+
+    await expect(rejected).rejects.toBe(boom);
+    await expect(committed).resolves.toBeUndefined();
+
+    const rows = await db.prepare("SELECT name FROM t").all();
+    expect(rows).toEqual([{ name: "survivor" }]);
+
+    close();
+  });
+
+  it("runs a nested transaction flat on the same span (inner writes visible after the outer COMMIT)", async () => {
+    const { db, close } = await openSqlite();
+
+    await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+
+    const out = await db.transaction(async (tx) => {
+      await tx.prepare("INSERT INTO t (name) VALUES (?)").run(["outer"]);
+
+      // Nested call composes flat on the same span — no second BEGIN, no deadlock.
+      const inner = await tx.transaction(async (innerTx) => {
+        await innerTx.prepare("INSERT INTO t (name) VALUES (?)").run(["inner"]);
+
+        return "inner-ok";
+      });
+
+      return inner;
+    });
+
+    expect(out).toBe("inner-ok");
+
+    const rows = await db.prepare("SELECT name FROM t ORDER BY id").all();
+    expect(rows).toEqual([{ name: "outer" }, { name: "inner" }]);
+
+    close();
+  });
+
+  it("rolls back the whole span when a nested transaction throws", async () => {
+    const { db, close } = await openSqlite();
+
+    await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
+
+    const boom = new Error("inner boom");
+
+    await expect(
+      db.transaction(async (tx) => {
+        await tx.prepare("INSERT INTO t (name) VALUES (?)").run(["outer"]);
+
+        await tx.transaction(async (innerTx) => {
+          await innerTx.prepare("INSERT INTO t (name) VALUES (?)").run(["inner"]);
+
+          throw boom;
+        });
+      }),
+    ).rejects.toBe(boom);
+
+    // The flat inner throw rolled the entire outer span back.
+    const rows = await db.prepare("SELECT name FROM t").all();
+    expect(rows).toEqual([]);
+
+    close();
   });
 });
