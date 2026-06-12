@@ -137,7 +137,7 @@ describe("buildEdgeApp serverRenderer threading", () => {
   it("renders pages through the injected dialect (how the Worker speaks Preact)", async () => {
     const { renderer, calls } = fakeRenderer();
 
-    const app = buildEdgeApp("test-secret", { serverRenderer: renderer });
+    const app = buildEdgeApp("test-secret-0123456789abcdefghij", { serverRenderer: renderer });
 
     const response = await app.handle("GET", "/");
 
@@ -147,7 +147,7 @@ describe("buildEdgeApp serverRenderer threading", () => {
   });
 
   it("defaults to the React dialect when no renderer is given (the in-process path)", async () => {
-    const response = await buildEdgeApp("test-secret").handle("GET", "/");
+    const response = await buildEdgeApp("test-secret-0123456789abcdefghij").handle("GET", "/");
 
     expect(response.status).toBe(200);
     expect(response.body).toContain("Jade Mills Estates");

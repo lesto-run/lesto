@@ -129,6 +129,14 @@ wrangler secret put SESSION_SECRET   # the signing secret; the trust root, never
 wrangler deploy                      # ship the Worker (worker.ts) + the static assets
 ```
 
+The deploy **fails closed**: `SESSION_SECRET` is mandatory. With it unset, the
+Worker throws on the first request rather than signing sessions with a committed
+key — the committed fallback secret and the passwordless `?as=` demo sign-in are
+reachable **only** under an explicit `KEEL_DEMO=1` binding (which `serve.ts` /
+`dev.ts` set for you locally, and a real deploy never sets). This is the
+framework's pattern for every secret-bearing Worker: production is the default,
+demo is the loud opt-in.
+
 `build.ts` runs the same assembly `serve.ts` does (`buildProductionSite`),
 leaving `out/marketing/` with the prerendered pages and `client.js` beside them
 — which is what `wrangler.jsonc` binds as the `ASSETS` static site. (estate runs

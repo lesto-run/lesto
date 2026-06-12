@@ -16,16 +16,26 @@ import { toFetchHandler } from "@keel/cloudflare";
 
 import { buildEdgeApp } from "../src/edge";
 
-const SECRET = "edge-e2e-secret";
+// >= 32 bytes: the secret-strength guard rejects shorter signing secrets.
+const SECRET = "edge-e2e-secret-0123456789abcdefg";
 
-/** The Worker's fetch handler, built over the edge app with `secret`. */
+const origin = "https://estate.example.com";
+
+// A same-origin browser POST — what the edge originCheck must let through. The
+// secureStack on the edge refuses a state-changing request with no origin signal,
+// so every POST in this suite carries `Sec-Fetch-Site: same-origin`.
+const SAME_ORIGIN = { "sec-fetch-site": "same-origin" };
+
+/**
+ * The Worker's fetch handler, built over the edge app with `secret`. Demo mode
+ * is on (the setup file sets KEEL_DEMO=1), so the passwordless `?as=` sign-in
+ * the auth flow uses is reachable.
+ */
 function handlerFor(secret: string): (request: Request) => Promise<Response> {
-  const app = buildEdgeApp(secret);
+  const app = buildEdgeApp(secret, { demo: true });
 
   return toFetchHandler((method, path, options) => app.handle(method, path, options));
 }
-
-const origin = "https://estate.example.com";
 
 /** Pull the session cookie's `name=value` out of a `Set-Cookie` header. */
 function sessionCookiePair(setCookie: string): string {
@@ -45,7 +55,7 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
     const handler = handlerFor(SECRET);
 
     const signIn = await handler(
-      new Request(`${origin}/mls/api/sign-in?as=jade`, { method: "POST" }),
+      new Request(`${origin}/mls/api/sign-in?as=jade`, { method: "POST", headers: SAME_ORIGIN }),
     );
 
     expect(signIn.status).toBe(303);
@@ -78,7 +88,7 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
     expect(await anon.json()).toBeNull();
 
     const signIn = await handler(
-      new Request(`${origin}/mls/api/sign-in?as=guest`, { method: "POST" }),
+      new Request(`${origin}/mls/api/sign-in?as=guest`, { method: "POST", headers: SAME_ORIGIN }),
     );
     const cookie = sessionCookiePair(signIn.headers.get("set-cookie") ?? "");
 
@@ -94,7 +104,7 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
     const otherIsolate = handlerFor(SECRET); // fresh app, fresh (empty) memory — like a new PoP
 
     const signIn = await issuer(
-      new Request(`${origin}/mls/api/sign-in?as=jade`, { method: "POST" }),
+      new Request(`${origin}/mls/api/sign-in?as=jade`, { method: "POST", headers: SAME_ORIGIN }),
     );
     const cookie = sessionCookiePair(signIn.headers.get("set-cookie") ?? "");
 
@@ -104,11 +114,11 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
   });
 
   it("rejects a cookie signed with a different secret (forged)", async () => {
-    const attacker = handlerFor("a-different-secret");
+    const attacker = handlerFor("a-different-secret-0123456789abcde");
     const real = handlerFor(SECRET);
 
     const forged = await attacker(
-      new Request(`${origin}/mls/api/sign-in?as=jade`, { method: "POST" }),
+      new Request(`${origin}/mls/api/sign-in?as=jade`, { method: "POST", headers: SAME_ORIGIN }),
     );
     const cookie = sessionCookiePair(forged.headers.get("set-cookie") ?? "");
 

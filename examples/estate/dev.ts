@@ -31,6 +31,11 @@ import { dispatchSitesDev, nodeStaticReader, serve } from "@keel/runtime";
 import { buildApp } from "./src/app";
 import sites from "./keel.sites";
 
+// Local dev runs the public demo, so default into demo mode (committed fallback
+// secrets) unless the operator set KEEL_AUTH_SECRET. The deployed Worker never
+// does this; production stays fail-closed on a missing secret.
+process.env["KEEL_DEMO"] ??= "1";
+
 const PORT = Number(process.env["PORT"] ?? 3000);
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const ASSETS = fileURLToPath(new URL("./out", import.meta.url));

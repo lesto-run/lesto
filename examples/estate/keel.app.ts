@@ -11,4 +11,10 @@
 
 import { buildAppConfig } from "./src/app";
 
+// estate is the public demo, so default into demo mode (committed fallback
+// secrets) unless the operator set their own KEEL_AUTH_SECRET. A real app would
+// not ship this line; the deployed Worker (`worker.ts`) deliberately omits it,
+// so production stays fail-closed on a missing secret.
+process.env["KEEL_DEMO"] ??= "1";
+
 export default await buildAppConfig();

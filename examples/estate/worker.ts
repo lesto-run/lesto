@@ -23,12 +23,13 @@ import type { AssetFetcher } from "@keel/cloudflare";
 // + the Preact client bundle `build.ts` ships — is ADR 0008's invariant.
 import { preactServerRenderer } from "@keel/ui/server-preact";
 
-import { buildEdgeApp, edgeSecret } from "./src/edge";
+import { buildEdgeApp, edgeSecret, isDemoMode } from "./src/edge";
 
 /** The bindings this Worker is configured with (see wrangler.jsonc). */
 interface Env {
   readonly ASSETS: AssetFetcher;
   readonly SESSION_SECRET?: string;
+  readonly KEEL_DEMO?: string;
 }
 
 /** A Cloudflare Worker fetch handler — what both `toFetchHandler` and `withAssets` produce. */
@@ -53,15 +54,23 @@ type FetchHandler = (request: Request) => Promise<Response>;
  * every request around the cached handler — cheap composition, no rebuild.
  */
 let cachedSecret: string | undefined;
+let cachedDemo: boolean | undefined;
 let cachedHandler: FetchHandler | undefined;
 
-/** The fetch handler for `secret`, built once per isolate and reused thereafter. */
-function handlerFor(secret: string): FetchHandler {
-  if (cachedHandler === undefined || cachedSecret !== secret) {
-    const app = buildEdgeApp(secret, { serverRenderer: preactServerRenderer });
+/**
+ * The fetch handler for `secret` + `demo`, built once per isolate and reused.
+ *
+ * Keyed by both the secret and the demo flag: the demo flag changes whether the
+ * passwordless `?as=` sign-in is reachable, so a flag change must rebuild rather
+ * than serve a handler with the wrong auth posture.
+ */
+function handlerFor(secret: string, demo: boolean): FetchHandler {
+  if (cachedHandler === undefined || cachedSecret !== secret || cachedDemo !== demo) {
+    const app = buildEdgeApp(secret, { serverRenderer: preactServerRenderer, demo });
 
     cachedHandler = toFetchHandler((method, path, options) => app.handle(method, path, options));
     cachedSecret = secret;
+    cachedDemo = demo;
   }
 
   return cachedHandler;
@@ -69,7 +78,9 @@ function handlerFor(secret: string): FetchHandler {
 
 export default {
   fetch(request: Request, env: Env): Promise<Response> {
-    const handler = handlerFor(edgeSecret(env));
+    // edgeSecret FAILS CLOSED: an unset SESSION_SECRET outside demo mode throws
+    // here, so the Worker refuses to serve rather than sign with a public secret.
+    const handler = handlerFor(edgeSecret(env), isDemoMode(env));
 
     // Static marketing files first (cached at the PoP); the live app for the rest.
     // `env.ASSETS` is per-request, so this thin wrap happens every time; the

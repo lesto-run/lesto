@@ -35,6 +35,37 @@ import { createIdentity, insertUser, usersMigration } from "@keel/identity";
 import { findUserByEmail } from "@keel/identity";
 import type { Identity, IdentityMailer } from "@keel/identity";
 
+import { isDemoMode } from "./edge";
+
+/**
+ * The committed demo identity secret — used ONLY in demo mode.
+ *
+ * >= 32 bytes so the secret-strength guard (`createIdentity`) accepts it. It is
+ * public by design; a real deploy never reaches it (it is fenced behind
+ * `KEEL_DEMO=1`, the same gate the edge secret uses).
+ */
+const DEMO_IDENTITY_SECRET = "estate-demo-identity-secret-0123456789";
+
+/**
+ * The identity signing secret — FAIL CLOSED, mirroring `edgeSecret`.
+ *
+ * `KEEL_AUTH_SECRET` is preferred; absent it, the committed demo fallback is
+ * reachable ONLY under `KEEL_DEMO=1`. Outside demo mode an unset secret THROWS
+ * rather than signing verification/reset tokens with a public key.
+ */
+function identitySecret(): string {
+  const secret = process.env["KEEL_AUTH_SECRET"];
+
+  if (secret !== undefined) return secret;
+
+  if (isDemoMode()) return DEMO_IDENTITY_SECRET;
+
+  throw new Error(
+    "KEEL_AUTH_SECRET is not set and KEEL_DEMO is not enabled. Refusing to build identity: set " +
+      "KEEL_AUTH_SECRET, or set KEEL_DEMO=1 to run the demo with its committed fallback secret.",
+  );
+}
+
 /** A demo seed: an account that exists out of the box, pre-verified. */
 export interface DemoAccount {
   readonly id: "jade" | "guest";
@@ -125,7 +156,7 @@ export async function buildIdentity(): Promise<{
   const identity = createIdentity({
     db,
     sessionStore: sqlSessionStore(sql),
-    secret: process.env["KEEL_AUTH_SECRET"] ?? "estate-demo-identity-secret",
+    secret: identitySecret(),
     mailer: silentMailer,
     // Demo never sends mail; these URLs exist only so the option types are
     // satisfied. If you flip the demo into a real onboarding flow, swap them.

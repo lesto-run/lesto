@@ -15,9 +15,11 @@
  * legacy `Application`/`Controller`/`Router` onto `keel()`.
  */
 
-import { keel } from "@keel/web";
+import { fromRequestMiddleware, keel } from "@keel/web";
 import type { Keel } from "@keel/web";
 import { SignedSessions } from "@keel/auth";
+import { secureStack } from "@keel/kernel";
+import { clearSessionCookie, readSessionToken, sessionCookie } from "@keel/identity";
 import { island } from "@keel/ui";
 import type { ServerRenderer, UiNode } from "@keel/ui";
 
@@ -38,23 +40,18 @@ const USERS = new Map<string, User>([
   ["guest", { id: "guest", name: "Guest Buyer" }],
 ]);
 
-/** The session cookie — `__Host-` so the browser enforces Secure + Path=/ + no Domain. */
-const SESSION_COOKIE = "__Host-keel_session";
+// The session cookie name and serializers live in `@keel/identity`'s cookie
+// module — the single source of the `__Host-` discipline. The edge twin reuses
+// them rather than re-deriving the contract (it used to keep its own copy).
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Read one cookie's value out of a `Cookie` header. */
-function readCookie(header: string | undefined, name: string): string | undefined {
-  if (header === undefined) return undefined;
-
-  for (const pair of header.split(";")) {
-    const [key, ...rest] = pair.trim().split("=");
-
-    if (key === name) return rest.join("=");
-  }
-
-  return undefined;
-}
+// The edge isolate's per-client rate-limit policy: a small burst, refilled
+// steadily. Keyed by the request-context client IP (`cf-connecting-ip`, set by
+// Cloudflare and not client-forgeable), so a flood from one client is shed
+// before it reaches dispatch. Built once per `buildEdgeApp` call (per isolate),
+// which is the lifetime a token bucket must outlive.
+const EDGE_RATE_LIMIT = { capacity: 60, refillPerSecond: 10 } as const;
 
 /** The page's `<main>` landmark, wrapping the primary content below the header. */
 function main(...children: UiNode[]): UiNode {
@@ -88,22 +85,38 @@ export interface EdgeAppOptions {
    * file unaliased, leave it unset and render React.
    */
   readonly serverRenderer?: ServerRenderer;
+
+  /**
+   * Whether the passwordless `?as=<id>` demo sign-in is reachable.
+   *
+   * The edge twin's sign-in mints a session for a user id with NO credential
+   * check — fine for the public demo, a wide-open auth bypass for a real deploy.
+   * It is therefore OFF by default and turned on only under an explicit demo
+   * binding (`KEEL_DEMO=1`, resolved by {@link isDemoMode}). With it off, the
+   * sign-in route is registered but refuses (403), so a forgotten flag fails
+   * closed rather than silently exposing impersonation.
+   */
+  readonly demo?: boolean;
 }
 
 /**
  * Build the edge app over a signing secret.
  *
  * The secret backs every signed session; in the Worker it comes from
- * `env.SESSION_SECRET`, never the source.
+ * `env.SESSION_SECRET`, never the source. The app mounts the framework's
+ * `secureStack` (origin-check CSRF + per-isolate rate limiting) ahead of every
+ * route — the same posture as the node twin (`app.ts`) — so a cross-site
+ * state-changing request is refused before dispatch and a flood is shed early.
  */
 export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel {
   const sessions = new SignedSessions({ secret });
 
   const renderer = options.serverRenderer;
+  const demo = options.demo ?? false;
 
   /** The user named by the request's session cookie, or undefined. */
   const currentUser = (cookieHeader: string | undefined): User | undefined => {
-    const token = readCookie(cookieHeader, SESSION_COOKIE);
+    const token = readSessionToken(cookieHeader);
 
     if (token === undefined) return undefined;
 
@@ -114,6 +127,12 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel
 
   return (
     keel()
+      // Mirror the node twin's posture: origin-check CSRF + per-isolate rate
+      // limiting wrap every route (and every 404), applied before any route so a
+      // forged cross-site POST or a flood is refused ahead of dispatch.
+      .use(
+        ...secureStack({ originCheck: {}, rateLimit: EDGE_RATE_LIMIT }).map(fromRequestMiddleware),
+      )
       .get("/", (c) => {
         const tree: UiNode = {
           type: "Page",
@@ -197,8 +216,16 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel
        * `/mls/saved` still 401s.
        */
       .data(sessionSource, (c) => currentUser(c.header("cookie")) ?? null)
-      // Demo sign-in: mint a SIGNED token for `?as=<id>` (default jade), set the cookie.
+      // Demo sign-in: mint a SIGNED token for `?as=<id>` (default jade), set the
+      // cookie. PASSWORDLESS by design — it impersonates a user id with no
+      // credential check — so it is fenced behind the demo flag: off, every
+      // request to it is refused (403), never a silent auth bypass. A real deploy
+      // wires `@keel/identity` (the node twin in `app.ts` already does).
       .post("/mls/api/sign-in", (c) => {
+        if (!demo) {
+          return c.json({ error: "sign-in is disabled outside demo mode" }, 403);
+        }
+
         const user = USERS.get(c.query("as") ?? "jade");
 
         if (user === undefined) return c.json({ error: "unknown user" }, 400);
@@ -207,20 +234,14 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel
 
         return {
           status: 303,
-          headers: {
-            Location: "/mls",
-            "Set-Cookie": `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Lax`,
-          },
+          headers: { Location: "/mls", "Set-Cookie": sessionCookie(token) },
           body: "",
         };
       })
       // Sign out: clear the cookie. A signed token cannot be revoked, so it just expires.
       .post("/mls/api/sign-out", () => ({
         status: 303,
-        headers: {
-          Location: "/mls",
-          "Set-Cookie": `${SESSION_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`,
-        },
+        headers: { Location: "/mls", "Set-Cookie": clearSessionCookie() },
         body: "",
       }))
       // A gated resource: only a signed-in user's saved listings.
@@ -234,7 +255,53 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel
   );
 }
 
-/** The signing secret from the environment, with a loud demo fallback. */
-export function edgeSecret(env?: { SESSION_SECRET?: string }): string {
-  return env?.SESSION_SECRET ?? process.env["SESSION_SECRET"] ?? "estate-demo-edge-secret";
+/**
+ * The committed demo signing secret — used ONLY in demo mode.
+ *
+ * >= 32 bytes so the secret-strength guard (`SignedSessions`) accepts it. It is
+ * public by design (it is in the source); a real deploy never reaches it because
+ * it is gated behind {@link isDemoMode}.
+ */
+const DEMO_EDGE_SECRET = "estate-demo-edge-secret-0123456789ab";
+
+/** The environment bindings the edge entry reads. */
+export interface EdgeEnv {
+  readonly SESSION_SECRET?: string;
+  readonly KEEL_DEMO?: string;
+}
+
+/**
+ * Is the Worker running in demo mode?
+ *
+ * Demo mode is the OPT-IN escape hatch that allows the committed fallback secret
+ * and the passwordless `?as=` sign-in. It requires an explicit `KEEL_DEMO=1`
+ * binding (from the Worker `env` or `process.env`) — anything else, including an
+ * absent binding, is NOT demo mode. The framework's pattern for every
+ * secret-bearing Worker: production is the default, demo is the loud opt-in.
+ */
+export function isDemoMode(env?: EdgeEnv): boolean {
+  return (env?.KEEL_DEMO ?? process.env["KEEL_DEMO"]) === "1";
+}
+
+/**
+ * The signing secret from the environment — FAIL CLOSED.
+ *
+ * In production (`isDemoMode` false) an absent `SESSION_SECRET` THROWS rather
+ * than falling back to a committed literal: a Worker with no trust root must not
+ * serve a single request signing sessions anyone can forge. The committed
+ * {@link DEMO_EDGE_SECRET} is reachable ONLY under an explicit `KEEL_DEMO=1`
+ * binding. This is the framework's pattern for every secret-bearing Worker.
+ */
+export function edgeSecret(env?: EdgeEnv): string {
+  const secret = env?.SESSION_SECRET ?? process.env["SESSION_SECRET"];
+
+  if (secret !== undefined) return secret;
+
+  if (isDemoMode(env)) return DEMO_EDGE_SECRET;
+
+  throw new Error(
+    "SESSION_SECRET is not set and KEEL_DEMO is not enabled. Refusing to serve: set the " +
+      "SESSION_SECRET wrangler secret (`wrangler secret put SESSION_SECRET`), or set KEEL_DEMO=1 " +
+      "to run the public demo with its committed fallback secret.",
+  );
 }
