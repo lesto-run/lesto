@@ -147,7 +147,7 @@ export function rateLimit(options: RateLimitOptions): Middleware {
   const keyFor = options.keyFor ?? defaultKeyFor(options.onUnknownClient ?? warnUnknownClient);
 
   return async (_request, next) => {
-    const result = limiter.check(keyFor());
+    const result = await limiter.check(keyFor());
 
     if (result.allowed) {
       return next();

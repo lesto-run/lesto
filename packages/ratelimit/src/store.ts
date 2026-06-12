@@ -6,15 +6,21 @@ import type { BucketState, RateLimitStore } from "./types";
  * State lives only in memory, so it is per-process and resets on restart — fine
  * for a single node or for tests. Swap in a SQL- or Redis-backed store (same
  * interface) when limits must hold across a fleet.
+ *
+ * `update` is atomic by construction: single-threaded JS plus a synchronous
+ * `mutate` means nothing can interleave between the read and the write.
  */
 export class MemoryRateLimitStore implements RateLimitStore {
   private readonly buckets = new Map<string, BucketState>();
 
-  get(key: string): BucketState | undefined {
-    return this.buckets.get(key);
-  }
+  async update(
+    key: string,
+    mutate: (current: BucketState | undefined) => BucketState,
+  ): Promise<BucketState> {
+    const next = mutate(this.buckets.get(key));
 
-  set(key: string, state: BucketState): void {
-    this.buckets.set(key, state);
+    this.buckets.set(key, next);
+
+    return next;
   }
 }

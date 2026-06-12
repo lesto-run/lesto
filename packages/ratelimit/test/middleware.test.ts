@@ -11,6 +11,23 @@ import {
 } from "../src/index";
 
 import type { AnyKeelResponse, KeelRequest } from "@keel/web";
+import type { BucketState } from "../src/index";
+
+/**
+ * Read a bucket without mutating it — the store has no `get`, only the atomic
+ * `update`, so probe by returning the current state unchanged.
+ */
+async function bucketAt(
+  store: MemoryRateLimitStore,
+  key: string,
+): Promise<BucketState | undefined> {
+  let seen: BucketState | undefined;
+  await store.update(key, (current) => {
+    seen = current;
+    return current ?? { tokens: 0, updatedAt: 0 };
+  });
+  return seen;
+}
 
 const request: KeelRequest = {
   method: "GET",
@@ -88,7 +105,7 @@ describe("rateLimit middleware", () => {
     await middleware(request, async () => okResponse);
 
     // The bucket under the fallback key was touched — proof the fallback was used.
-    expect(store.get(UNKNOWN_CLIENT_KEY)).toBeDefined();
+    expect(await bucketAt(store, UNKNOWN_CLIENT_KEY)).toBeDefined();
   });
 
   it("honors a custom keyFor", async () => {
@@ -104,7 +121,7 @@ describe("rateLimit middleware", () => {
 
     await middleware(request, async () => okResponse);
 
-    expect(store.get("tenant:acme")).toBeDefined();
+    expect(await bucketAt(store, "tenant:acme")).toBeDefined();
   });
 
   it("builds a default limiter from capacity/refill when none is injected", async () => {
