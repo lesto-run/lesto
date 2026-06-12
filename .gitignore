@@ -11,3 +11,6 @@ out/
 .playwright-mcp/
 test-results/
 playwright-report/
+
+# Local agent artifacts (worktrees are git-internal; skills are local tooling)
+.claude/
