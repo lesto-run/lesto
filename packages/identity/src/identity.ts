@@ -38,8 +38,8 @@
  *     this way: replay is harmless because `verifyEmail` is idempotent and
  *     has no side effect beyond a single boolean flip.
  *   - **Timing**. `login` always runs one `verifyPassword`, even on an
- *     unknown email, against a precomputed dummy hash — so missing-user
- *     and wrong-password paths spend the same scrypt cost.
+ *     unknown email, against a constant dummy hash (computed once on first
+ *     use) — so missing-user and wrong-password paths spend the same scrypt cost.
  */
 
 import { hashPassword, MemorySessionStore, Sessions, verifyPassword } from "@keel/auth";
@@ -85,14 +85,20 @@ const DEFAULT_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RESET_TTL_MS = 60 * 60 * 1000;
 
 /**
- * A *constant* scrypt hash of a placeholder password.
+ * A *constant* scrypt hash of a placeholder password, computed lazily.
  *
- * `login` runs `verifyPassword(candidate, DUMMY_HASH)` whenever the supplied
- * email matches no user, so the no-user and wrong-password paths spend the
- * same CPU. Precomputed at module load so the cost of producing it doesn't
- * show up on the first failed login.
+ * `login` runs `verifyPassword(candidate, dummyHash())` whenever the supplied
+ * email matches no user, so the no-user and wrong-password paths spend the same
+ * CPU. Computed on first use and memoized — NOT at module load: `hashPassword`
+ * calls `randomBytes`, and a Cloudflare Worker forbids generating random values
+ * in global scope (module evaluation), so an eager module-level constant made
+ * `@keel/identity` impossible to even *import* in a Worker. Deferring it keeps
+ * the package import-safe on the edge; the one-time cost lands on the first
+ * failed login, inside a request handler where randomness is allowed.
  */
-const DUMMY_HASH = hashPassword("__keel_identity_timing_decoy__");
+let dummyHashCache: string | undefined;
+
+const dummyHash = (): string => (dummyHashCache ??= hashPassword("__keel_identity_timing_decoy__"));
 
 const invalidToken = (kind: "verification" | "reset"): IdentityError =>
   new IdentityError("IDENTITY_INVALID_TOKEN", `The ${kind} link is invalid or has expired.`);
@@ -327,7 +333,7 @@ export function createIdentity(options: IdentityOptions): Identity {
      * Verify credentials and mint a session.
      *
      * Always spends one scrypt operation — on a missing user, we still call
-     * `verifyPassword(candidate, DUMMY_HASH)` so missing-email and wrong-
+     * `verifyPassword(candidate, dummyHash())` so missing-email and wrong-
      * password are timing-indistinguishable.
      *
      * `IDENTITY_INVALID_CREDENTIALS` covers both unknown-email and bad-
@@ -343,7 +349,7 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       if (!user) {
         // Equalize CPU so a missing user costs the same as a wrong password.
-        verifyPassword(password, DUMMY_HASH);
+        verifyPassword(password, dummyHash());
 
         throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
       }
