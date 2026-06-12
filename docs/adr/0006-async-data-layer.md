@@ -1,6 +1,6 @@
 # ADR 0006 — Async data layer (the Postgres-backable substrate)
 
-- **Status:** Accepted (design); implementation in progress
+- **Status:** Implemented (2026-06-10): the seam is async end-to-end, `@keel/pg` ships `openPostgres` + the `?`→`$n` translator, and CI's `db-parity-postgres` job runs the cross-driver conformance suite against a real Postgres service (`.github/workflows/ci.yml`). Outstanding edges, named honestly: (a) the §7 *identity/queue journey* legs never landed on Postgres — blocked on dialect drift (`createTableSql` emits `AUTOINCREMENT`, which PG rejects); (b) dialect drift and AbortSignal remain open follow-ups — note the "(ADR 0007)" pointer in the open-questions section is stale (0007 was taken by the preact alias). Durable SQL-backed session/rate-limit stores are ADR 0013.
 - **Date:** 2026-06-10
 - **Supersedes the sync assumption of:** ADR 0004 (`@keel/db` stays the data layer; only its driver seam goes async)
 - **Relates to:** ADR 0004 (`@keel/db` query layer), ADR 0005 (validation at the boundary); `docs/readiness/PLAN.md` Phase 1; `docs/readiness/2026-06-10.json`
