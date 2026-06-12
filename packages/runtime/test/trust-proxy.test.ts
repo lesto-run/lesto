@@ -29,15 +29,29 @@ describe("resolveClient — default (trust nothing)", () => {
   });
 });
 
-describe("resolveClient — trust all (true)", () => {
-  it("believes the left-most X-Forwarded-For entry and the proto", () => {
+describe("resolveClient — true (one trusted hop, right-most)", () => {
+  it("believes the RIGHT-most X-Forwarded-For entry and the proto", () => {
+    // One proxy in front appended the address it observed; that is the right-most
+    // entry, the only slot no upstream client can position.
     const client = resolveClient(true, "10.0.0.1", {
       "x-forwarded-for": "1.2.3.4, 10.0.0.9",
       "x-forwarded-proto": "https",
     });
 
-    expect(client.ip).toBe("1.2.3.4");
+    expect(client.ip).toBe("10.0.0.9");
     expect(client.protocol).toBe("https");
+  });
+
+  it("ignores a prepended XFF spoof: the LB-appended real IP wins (blocker #4)", () => {
+    // The attacker sets `X-Forwarded-For: 1.2.3.4`; our single load balancer
+    // appends the address it actually accepted the connection from. With `true` =
+    // one trusted hop, the resolved client is the right-most entry, so the forged
+    // left-most prefix cannot move the rate-limit/audit key.
+    const client = resolveClient(true, "10.0.0.1", {
+      "x-forwarded-for": "1.2.3.4, 203.0.113.7",
+    });
+
+    expect(client.ip).toBe("203.0.113.7");
   });
 
   it("falls back to the socket peer when a trusted peer sent no XFF", () => {
@@ -55,6 +69,24 @@ describe("resolveClient — trust all (true)", () => {
     });
 
     expect(client.protocol).toBe("https");
+  });
+});
+
+describe('resolveClient — "all" escape hatch (left-most, legacy)', () => {
+  it("trusts the whole chain and takes the LEFT-most (forgeable) entry", () => {
+    const client = resolveClient("all", "10.0.0.1", {
+      "x-forwarded-for": "1.2.3.4, 10.0.0.9",
+      "x-forwarded-proto": "https",
+    });
+
+    expect(client.ip).toBe("1.2.3.4");
+    expect(client.protocol).toBe("https");
+  });
+
+  it("falls back to the socket peer when an all-trusted peer sent no XFF", () => {
+    const client = resolveClient("all", "10.0.0.1", {});
+
+    expect(client.ip).toBe("10.0.0.1");
   });
 });
 
@@ -94,8 +126,10 @@ describe("resolveClient — hop count", () => {
   });
 });
 
-describe("resolveClient — predicate", () => {
-  it("trusts forwarding when the predicate accepts the peer (left-most client)", () => {
+describe("resolveClient — predicate (peels trusted hops right-to-left)", () => {
+  it("peels every entry the predicate accepts, leaving the left-most client", () => {
+    // trustLan accepts the trailing 10.x hop, then index reaches 0 (the loop
+    // stops), so the left-most originating client stands.
     const client = resolveClient(trustLan, "10.0.0.5", {
       "x-forwarded-for": "1.2.3.4, 10.0.0.9",
       "x-forwarded-proto": "https",
@@ -103,6 +137,17 @@ describe("resolveClient — predicate", () => {
 
     expect(client.ip).toBe("1.2.3.4");
     expect(client.protocol).toBe("https");
+  });
+
+  it("stops peeling at the first entry the predicate rejects (the perimeter ingress)", () => {
+    // Two of our own 10.x hops appended on the right; the entry that entered the
+    // perimeter (8.8.8.8, public) is rejected by trustLan and becomes the client —
+    // NOT the left-most forgeable 1.2.3.4 a client could prepend.
+    const client = resolveClient(trustLan, "10.0.0.5", {
+      "x-forwarded-for": "1.2.3.4, 8.8.8.8, 10.0.0.9, 10.0.0.10",
+    });
+
+    expect(client.ip).toBe("8.8.8.8");
   });
 
   it("does not trust forwarding when the predicate rejects the peer", () => {

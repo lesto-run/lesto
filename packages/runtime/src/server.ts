@@ -200,9 +200,13 @@ export interface ServeOptions {
    * address and the protocol is plain `http`. The `X-Forwarded-For` /
    * `X-Forwarded-Proto` headers are *trivially forged by any client*, so they
    * are believed only when the immediate peer is a proxy you put there: set this
-   * to `true` (peer is always your proxy), a hop count, or a predicate over the
-   * peer address when deployed behind a known load balancer. The resolved
-   * identity lands on the request context for rate-limiting and logging.
+   * to `true` (one trusted hop — the RIGHT-most XFF entry, the spoof-safe default
+   * for `LB -> app`), a hop count `n` (peel `n` trusted hops from the right), a
+   * predicate over the peer address (peels trusted hops right-to-left), or the
+   * explicit `"all"` escape hatch (trust the whole client-supplied chain and take
+   * the LEFT-most, forgeable, entry) when deployed behind a known load balancer.
+   * The resolved identity lands on the request context for rate-limiting and
+   * logging.
    */
   readonly trustProxy?: TrustProxy;
 
