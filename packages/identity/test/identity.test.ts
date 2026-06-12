@@ -593,10 +593,10 @@ describe("session lifecycle", () => {
     await identity.verifyEmail(sent[0]!.token);
     const { session } = await identity.login("ada@example.com", "correct horse staple");
 
-    identity.logout(undefined);
+    await identity.logout(undefined);
     expect((await identity.currentUser(session.token))?.email).toBe("ada@example.com");
 
-    identity.logout(session.token);
+    await identity.logout(session.token);
     expect(await identity.currentUser(session.token)).toBeUndefined();
   });
 });

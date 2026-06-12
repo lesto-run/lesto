@@ -158,8 +158,8 @@ function buildConfig(database: Database.Database): KeelAppConfig {
         return errorResponse(error);
       }
     })
-    .post("/auth/logout", (c) => {
-      identity.logout(readSessionToken(c.header("cookie")));
+    .post("/auth/logout", async (c) => {
+      await identity.logout(readSessionToken(c.header("cookie")));
 
       return {
         status: 200,

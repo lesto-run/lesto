@@ -19,11 +19,19 @@ export interface Session {
   expiresAt: number;
 }
 
-/** Where sessions live. Minimal on purpose — a Map or a table both fit. */
+/**
+ * Where sessions live. Minimal on purpose — a Map or a table both fit.
+ *
+ * Every verb is asynchronous (ADR 0006/0013), even when the backing work is
+ * not: the in-memory store satisfies the shape by resolving immediately, and an
+ * SQL table shared across nodes satisfies the same shape over a socket. No
+ * `void | Promise` unions — a sync-shaped backdoor invites the half-awaited bugs
+ * the no-`tsc` coverage gate cannot catch.
+ */
 export interface SessionStore {
-  save(session: Session): void;
+  save(session: Session): Promise<void>;
 
-  find(token: string): Session | undefined;
+  find(token: string): Promise<Session | undefined>;
 
-  delete(token: string): void;
+  delete(token: string): Promise<void>;
 }

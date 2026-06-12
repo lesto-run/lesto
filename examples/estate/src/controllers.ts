@@ -258,10 +258,10 @@ export function buildEstateRoutes(identity: Identity): Keel {
        * so a forgery cannot reach here to silently sign the user out. Revoking is
        * idempotent — a request without a session token just clears the cookie.
        */
-      .post("/mls/api/sign-out", (c) => {
+      .post("/mls/api/sign-out", async (c) => {
         const sessionToken = readSessionToken(c.header("cookie"));
 
-        if (sessionToken !== undefined) identity.logout(sessionToken);
+        await identity.logout(sessionToken);
 
         return {
           status: 303,

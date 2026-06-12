@@ -7,15 +7,15 @@ import type { Clock, Session, SessionStore } from "./types";
 export class MemorySessionStore implements SessionStore {
   private readonly sessions = new Map<string, Session>();
 
-  save(session: Session): void {
+  async save(session: Session): Promise<void> {
     this.sessions.set(session.token, session);
   }
 
-  find(token: string): Session | undefined {
+  async find(token: string): Promise<Session | undefined> {
     return this.sessions.get(token);
   }
 
-  delete(token: string): void {
+  async delete(token: string): Promise<void> {
     this.sessions.delete(token);
   }
 }
@@ -31,7 +31,8 @@ export interface SessionsOptions {
  *
  * Expiry is decided against an injected clock so tests are deterministic. A
  * session that has expired is deleted on first sight — verification is also the
- * sweep, so dead rows don't accumulate.
+ * sweep, so dead rows don't accumulate. The store may now be an SQL table shared
+ * across nodes (ADR 0013), so every store call is awaited.
  */
 export class Sessions {
   private readonly store: SessionStore;
@@ -44,14 +45,14 @@ export class Sessions {
   }
 
   /** Mint a session for a user, valid for `ttlMs` from now. */
-  create(userId: string, ttlMs: number): Session {
+  async create(userId: string, ttlMs: number): Promise<Session> {
     const session: Session = {
       token: generateToken(),
       userId,
       expiresAt: this.clock() + ttlMs,
     };
 
-    this.store.save(session);
+    await this.store.save(session);
 
     return session;
   }
@@ -62,13 +63,13 @@ export class Sessions {
    * Returns undefined for an unknown token, and for an expired one — which it
    * also deletes on the way out.
    */
-  verify(token: string): Session | undefined {
-    const session = this.store.find(token);
+  async verify(token: string): Promise<Session | undefined> {
+    const session = await this.store.find(token);
 
     if (session === undefined) return undefined;
 
     if (this.clock() >= session.expiresAt) {
-      this.store.delete(token);
+      await this.store.delete(token);
 
       return undefined;
     }
@@ -77,7 +78,7 @@ export class Sessions {
   }
 
   /** Invalidate a session immediately, whether or not it exists. */
-  revoke(token: string): void {
-    this.store.delete(token);
+  async revoke(token: string): Promise<void> {
+    await this.store.delete(token);
   }
 }

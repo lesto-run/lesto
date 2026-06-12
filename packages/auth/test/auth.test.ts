@@ -112,68 +112,68 @@ describe("generateToken", () => {
 });
 
 describe("Sessions", () => {
-  it("create returns a token bound to the user with the expected expiry", () => {
+  it("create returns a token bound to the user with the expected expiry", async () => {
     const { clock } = stoppedClock(1_000);
     const sessions = new Sessions({ store: new MemorySessionStore(), clock });
 
-    const session = sessions.create("user_1", 60_000);
+    const session = await sessions.create("user_1", 60_000);
 
     expect(session.userId).toBe("user_1");
     expect(session.token).toHaveLength(64);
     expect(session.expiresAt).toBe(61_000);
   });
 
-  it("verify returns a live session", () => {
+  it("verify returns a live session", async () => {
     const { clock, advance } = stoppedClock(1_000);
     const sessions = new Sessions({ store: new MemorySessionStore(), clock });
 
-    const session = sessions.create("user_1", 60_000);
+    const session = await sessions.create("user_1", 60_000);
 
     advance(30_000);
 
-    expect(sessions.verify(session.token)).toEqual(session);
+    expect(await sessions.verify(session.token)).toEqual(session);
   });
 
-  it("verify returns undefined for an expired session and deletes it", () => {
+  it("verify returns undefined for an expired session and deletes it", async () => {
     const { clock, advance } = stoppedClock(1_000);
     const store = new MemorySessionStore();
     const sessions = new Sessions({ store, clock });
 
-    const session = sessions.create("user_1", 60_000);
+    const session = await sessions.create("user_1", 60_000);
 
     advance(60_000);
 
-    expect(sessions.verify(session.token)).toBeUndefined();
-    expect(store.find(session.token)).toBeUndefined();
+    expect(await sessions.verify(session.token)).toBeUndefined();
+    expect(await store.find(session.token)).toBeUndefined();
   });
 
-  it("verify returns undefined for an unknown token", () => {
+  it("verify returns undefined for an unknown token", async () => {
     const { clock } = stoppedClock(1_000);
     const sessions = new Sessions({ store: new MemorySessionStore(), clock });
 
-    expect(sessions.verify("nope")).toBeUndefined();
+    expect(await sessions.verify("nope")).toBeUndefined();
   });
 
-  it("revoke invalidates a live session", () => {
+  it("revoke invalidates a live session", async () => {
     const { clock } = stoppedClock(1_000);
     const sessions = new Sessions({ store: new MemorySessionStore(), clock });
 
-    const session = sessions.create("user_1", 60_000);
+    const session = await sessions.create("user_1", 60_000);
 
-    sessions.revoke(session.token);
+    await sessions.revoke(session.token);
 
-    expect(sessions.verify(session.token)).toBeUndefined();
+    expect(await sessions.verify(session.token)).toBeUndefined();
   });
 
-  it("defaults to the system clock when none is injected", () => {
+  it("defaults to the system clock when none is injected", async () => {
     const sessions = new Sessions({ store: new MemorySessionStore() });
 
     const before = systemClock();
-    const session = sessions.create("user_1", 60_000);
+    const session = await sessions.create("user_1", 60_000);
 
     // The default clock is the real wall clock: expiry sits ~ttl in the future.
     expect(session.expiresAt).toBeGreaterThanOrEqual(before + 60_000);
-    expect(sessions.verify(session.token)).toEqual(session);
+    expect(await sessions.verify(session.token)).toEqual(session);
   });
 });
 

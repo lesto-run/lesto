@@ -5,9 +5,9 @@
  *   verifyPassword("correct horse battery staple", hash); // true
  *
  *   const sessions = new Sessions({ store: new MemorySessionStore() });
- *   const session = sessions.create("user_1", 60_000);
- *   sessions.verify(session.token); // the live session
- *   sessions.revoke(session.token);
+ *   const session = await sessions.create("user_1", 60_000);
+ *   await sessions.verify(session.token); // the live session
+ *   await sessions.revoke(session.token);
  *
  * OAuth / social sign-in via better-auth is a future adapter, out of scope here.
  */

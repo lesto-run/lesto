@@ -183,9 +183,8 @@ export interface IdentityOptions {
    * The reset itself is already single-use (the per-user-hash signing secret
    * dies with the old password), so this hook only matters if the caller
    * wants to *also* kill any pre-reset login sessions — common in
-   * compromised-account flows. The `SessionStore` interface has no by-user
-   * index, so the caller does this themselves (typically one
-   * `DELETE FROM sessions WHERE user_id = ?`).
+   * compromised-account flows. Wire `sqlSessionStore`'s `deleteByUserId`
+   * (ADR 0013), or one `DELETE … WHERE user_id = ?` on a custom store.
    */
   readonly revokeUserSessions?: (userId: string) => void | Promise<void>;
 
@@ -211,7 +210,7 @@ export interface Identity {
   login(email: string, password: string): Promise<{ user: User; session: Session }>;
   requestPasswordReset(email: string): Promise<{ status: "reset_sent" }>;
   resetPassword(token: string, newPassword: string): Promise<User>;
-  logout(token: string | undefined): void;
+  logout(token: string | undefined): Promise<void>;
   currentUser(token: string | undefined): Promise<User | undefined>;
 }
 
@@ -352,7 +351,7 @@ export function createIdentity(options: IdentityOptions): Identity {
         throw new IdentityError("IDENTITY_EMAIL_NOT_VERIFIED", "Email address not verified.");
       }
 
-      const session = sessions.create(String(user.id), sessionTtlMs);
+      const session = await sessions.create(String(user.id), sessionTtlMs);
 
       return { user, session };
     },
@@ -435,14 +434,14 @@ export function createIdentity(options: IdentityOptions): Identity {
       return { ...user, passwordHash: newHash };
     },
 
-    logout(token) {
-      if (token !== undefined) sessions.revoke(token);
+    async logout(token) {
+      if (token !== undefined) await sessions.revoke(token);
     },
 
     async currentUser(token) {
       if (token === undefined) return undefined;
 
-      const session = sessions.verify(token);
+      const session = await sessions.verify(token);
 
       if (session === undefined) return undefined;
 
