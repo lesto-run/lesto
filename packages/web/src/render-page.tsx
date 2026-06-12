@@ -81,11 +81,19 @@ export type PageProps<Load> = Load extends (...args: never[]) => infer Result
   ? Awaited<NonNullable<Result>>
   : never;
 
-const BAD_REQUEST: AnyKeelResponse = {
+/**
+ * A fresh 400 response.
+ *
+ * A FACTORY, not a shared constant, for the same reason as `notFound()` in
+ * `keel.ts`: a single shared object whose `headers` record is mutated by
+ * downstream middleware would leak one request's headers into the next malformed
+ * request's 400. Each rejected request gets its own object.
+ */
+const badRequest = (): AnyKeelResponse => ({
   status: 400,
   headers: { "content-type": "text/plain" },
   body: "Bad Request",
-};
+});
 
 /**
  * A hard deadline for a page's streamed render.
@@ -175,7 +183,7 @@ export async function renderPageResponse(
   if (def.params !== undefined) {
     const parsed = def.params.safeParse(c.req.query);
 
-    if (!parsed.success) return BAD_REQUEST;
+    if (!parsed.success) return badRequest();
 
     c.set("params", parsed.data);
   }

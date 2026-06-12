@@ -164,6 +164,23 @@ describe("page params (query validation)", () => {
       body: "Bad Request",
     });
   });
+
+  it("returns a fresh 400 each time, not a shared singleton (blocker #2)", async () => {
+    const app = keel().page("/search", {
+      params: Schema,
+      component: () => createElement("p", null, "never"),
+    });
+
+    const first = (await app.handle("GET", "/search")) as { headers: Record<string, string> };
+    first.headers["x-tainted"] = "leaked";
+
+    const second = await app.handle("GET", "/search");
+    expect(second).toEqual({
+      status: 400,
+      headers: { "content-type": "text/plain" },
+      body: "Bad Request",
+    });
+  });
 });
 
 describe("page abort signal", () => {

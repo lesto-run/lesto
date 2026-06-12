@@ -62,6 +62,39 @@ describe("keel verbs + dispatch", () => {
     });
   });
 
+  it("does not leak mutated 404 headers across requests (singleton regression, blocker #2)", async () => {
+    // App middleware that mutates the response object it sees ONLY on the first
+    // unmatched request — exactly what a header/cookie-setting middleware does on
+    // one request. Against a shared NOT_FOUND singleton that one mutation would
+    // poison the object every subsequent 404 returns; with a per-request factory
+    // the second request's 404 is pristine.
+    let tainted = false;
+    const taintOnce: Handler = async (_c, next) => {
+      const response = await next();
+      if (!tainted) {
+        tainted = true;
+        response.headers["x-tainted"] = "leaked";
+      }
+      return response;
+    };
+
+    const app = keel()
+      .use(taintOnce)
+      .get("/a", (c) => c.text("a"));
+
+    const first = await app.handle("GET", "/missing");
+    expect(first.headers["x-tainted"]).toBe("leaked");
+
+    // The NEXT unmatched request must get a clean 404 — no leaked header.
+    const second = await app.handle("GET", "/also-missing");
+    expect(second.headers["x-tainted"]).toBeUndefined();
+    expect(second).toEqual({
+      status: 404,
+      headers: { "content-type": "text/plain" },
+      body: "Not Found",
+    });
+  });
+
   it("returns the handler's wide body (bytes) through the dispatch contract", async () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const app = keel().get("/img", (c) => c.bytes(bytes, "image/png"));

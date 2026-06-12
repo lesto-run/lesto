@@ -87,14 +87,24 @@ interface CollectedRoute {
 
 const isPage = (own: readonly Handler[] | PagePayload): own is PagePayload => !Array.isArray(own);
 
-const NOT_FOUND: KeelResponse = {
+/**
+ * A fresh 404 response.
+ *
+ * A FACTORY, not a shared constant. A single shared `NOT_FOUND` object is a
+ * cross-request leak: app middleware that mutates the response it sees (sets a
+ * cookie, adds a header) would mutate the one 404 every subsequent unmatched
+ * request returns — bleeding one client's headers into the next. Each unmatched
+ * request gets its own object, with its own `headers` record, so a mutation
+ * cannot outlive the request that made it.
+ */
+const notFound = (): KeelResponse => ({
   status: 404,
   headers: { "content-type": "text/plain" },
   body: "Not Found",
-};
+});
 
-/** The terminal for an unmatched request — a plain 404, run after any app-level middleware. */
-const notFoundHandler: Handler = () => NOT_FOUND;
+/** The terminal for an unmatched request — a fresh plain 404, run after any app-level middleware. */
+const notFoundHandler: Handler = () => notFound();
 
 /**
  * Run a handler chain over a context, returning the response it produces.
@@ -110,7 +120,7 @@ function runChain(chain: readonly Handler[], c: Context): Promise<AnyKeelRespons
   const run = async (index: number): Promise<AnyKeelResponse> => {
     const handler = chain[index];
 
-    if (handler === undefined) return NOT_FOUND;
+    if (handler === undefined) return notFound();
 
     let advanced: Promise<AnyKeelResponse> | undefined;
     const next: Next = () => (advanced ??= run(index + 1));
