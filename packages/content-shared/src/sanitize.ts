@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { resolve, sep } from "node:path";
 import DOMPurify, { type Config } from "dompurify";
 import serialize from "serialize-javascript";
 import { SecurityError } from "./errors.js";
@@ -66,10 +67,17 @@ function getPurify(): DOMPurifyInstance {
   // No DOM means DOMPurify's `sanitize` is a passthrough — returning unsanitized
   // input is an XSS hole, so refuse to operate rather than fail open.
   if (!purify.isSupported) {
+    // Label off the SAME signal `resolvePurify` branches on (`process.versions
+    // ?.node`), not a bare `typeof process`: an edge runtime with a partial
+    // `process` polyfill would otherwise be mislabeled "node". This only changes
+    // the diagnostic metadata; the throw (the security behavior) is unchanged.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    const isNode = typeof process !== "undefined" && process.versions?.node !== undefined;
+
     throw new SecurityError(
       "sanitizeHtml requires a DOM, but this runtime has none (e.g. Cloudflare Workers). " +
         "HTML cannot be safely sanitized here; sanitize before reaching the edge, or run on Node.",
-      { reason: "no-dom", runtime: typeof process === "undefined" ? "edge" : "node" },
+      { reason: "no-dom", runtime: isNode ? "node" : "edge" },
     );
   }
 
@@ -188,12 +196,13 @@ export function serializeJavaScript(obj: unknown): string {
  * Validate and normalize a path to prevent path traversal.
  */
 export function sanitizePath(inputPath: string, rootDir: string): string {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const path = require("node:path");
-  const resolved = path.resolve(rootDir, inputPath);
-  const normalizedRoot = path.resolve(rootDir);
+  // `node:path` is imported at the top level: the package is `"type": "module"`,
+  // so a bare `require("node:path")` here threw `ReferenceError: require is not
+  // defined` under native ESM (Vitest's CJS-ish loader masked it).
+  const resolved = resolve(rootDir, inputPath);
+  const normalizedRoot = resolve(rootDir);
 
-  if (!resolved.startsWith(normalizedRoot + path.sep) && resolved !== normalizedRoot) {
+  if (!resolved.startsWith(normalizedRoot + sep) && resolved !== normalizedRoot) {
     throw new SecurityError("Path traversal detected", {
       inputPath,
       rootDir,
