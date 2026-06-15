@@ -27,6 +27,7 @@ import type { Identity } from "@keel/identity";
 import { createDb } from "@keel/db";
 import type { Db, SqlDatabase } from "@keel/db";
 import { Migrator } from "@keel/migrate";
+import { installSchema as installQueueSchema, Queue } from "@keel/queue";
 import { openSqlite } from "@keel/runtime";
 
 interface Driver {
@@ -222,5 +223,76 @@ describe.each(drivers)("durable stores: $name", (driver) => {
       const fresh = await limiter.check("k");
       expect(fresh).toEqual({ allowed: true, remaining: 1, retryAfterMs: 0 });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Queue concurrency (increment 2): the at-most-once claim under contention is
+// the queue's hardest correctness claim, and only a real socket proves it. On
+// Postgres the claim leans on `FOR UPDATE SKIP LOCKED`; on SQLite, the runtime's
+// single-connection serialization. The atomicity proof mirrors the rate-limit
+// one above: a burst of concurrent claimers must partition the jobs exactly.
+// ---------------------------------------------------------------------------
+
+describe.each(drivers)("queue concurrency: $name", (driver) => {
+  let handle: SqlDatabase;
+  let close: () => unknown;
+
+  beforeEach(async () => {
+    const opened = await driver.open();
+    handle = opened.db;
+    close = opened.close;
+
+    await handle.exec("DROP TABLE IF EXISTS keel_jobs");
+    await installQueueSchema(handle, driver.name);
+  });
+
+  afterEach(async () => {
+    await close();
+  });
+
+  it("THE ATOMICITY PROOF: 12 concurrent workers, 12 jobs — each claimed exactly once", async () => {
+    const queue = new Queue({ db: handle, dialect: driver.name });
+
+    // 12 ready jobs.
+    const ids = new Set<number>();
+    for (let i = 0; i < 12; i += 1) {
+      ids.add(await queue.enqueue("work", { i }));
+    }
+
+    // 12 workers race to claim concurrently. On PG this exercises FOR UPDATE SKIP
+    // LOCKED across pooled connections; on SQLite, the serialized write path.
+    const claimed = await Promise.all(Array.from({ length: 12 }, () => queue.claim()));
+
+    const claimedIds = claimed.map((job) => job?.id).filter((id): id is number => id !== undefined);
+
+    // Every job was claimed, and no id appears twice — the at-most-once invariant.
+    expect(claimedIds.length).toBe(12);
+    expect(new Set(claimedIds).size).toBe(12);
+    expect(new Set(claimedIds)).toEqual(ids);
+  });
+
+  it("a stalled worker's terminal write never resurrects a job another worker re-owns", async () => {
+    const queue = new Queue({ db: handle, dialect: driver.name });
+    const id = await queue.enqueue("work", { n: 1 });
+
+    // Worker A claims with a short lease.
+    const a = await queue.claim("default", 1);
+    expect(a?.id).toBe(id);
+
+    // The lease lapses; reclaim frees the row; worker B re-claims with a fresh lock.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(await queue.reclaim()).toBe(1);
+    const b = await queue.claim("default", 30_000);
+    expect(b?.id).toBe(id);
+    expect(b?.lockedUntil).not.toBe(a?.lockedUntil);
+
+    // A's late completion is fenced by its stale lock token: the row stays under B.
+    await queue["complete"](a!);
+    expect((await queue.find(id))?.status).toBe("running");
+
+    // B completes against the current token — the one that lands.
+    await queue["complete"](b!);
+    expect((await queue.find(id))?.status).toBe("done");
   });
 });

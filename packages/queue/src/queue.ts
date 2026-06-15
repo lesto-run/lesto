@@ -85,7 +85,15 @@ interface Row {
   finished_at: string | null;
 }
 
-function hydrate(row: Row): Job {
+/**
+ * Hydrate everything EXCEPT the payload — the metadata terminal transitions need
+ * (id, attempts, the `lockedUntil` fencing token). The payload is parsed
+ * separately ({@link hydrate}) so a poison (un-parseable) payload can be routed
+ * through `fail()` from this same metadata, instead of throwing before the job is
+ * even visible to the runner. `payload` is seeded `null` and overwritten on the
+ * happy path.
+ */
+function hydrateMeta(row: Row): Job {
   return {
     // `id` is a BIGINT on Postgres, which node-postgres returns as a string;
     // coerce so `Job.id` is always the `number` its type promises (the integer
@@ -93,7 +101,7 @@ function hydrate(row: Row): Job {
     id: Number(row.id),
     queue: row.queue,
     name: row.name,
-    payload: JSON.parse(row.payload) as JsonValue,
+    payload: null,
     status: row.status,
     priority: Number(row.priority),
     attempts: Number(row.attempts),
@@ -107,12 +115,25 @@ function hydrate(row: Row): Job {
   };
 }
 
+/** Hydrate the full job, parsing the payload. Throws on a poison (invalid) payload. */
+function hydrate(row: Row): Job {
+  return { ...hydrateMeta(row), payload: JSON.parse(row.payload) as JsonValue };
+}
+
 export interface QueueOptions {
   readonly db: SqlDatabase;
   readonly clock?: Clock;
   readonly defaultQueue?: string;
   readonly baseBackoffMs?: number;
   readonly maxBackoffMs?: number;
+
+  /**
+   * Which SQL dialect `db` speaks. Defaults to `"sqlite"`. On `"postgres"` the
+   * atomic claim adds `FOR UPDATE SKIP LOCKED` so concurrent workers each skip a
+   * row another already locked — the row-level locking SQLite does not need
+   * (the runtime serializes every write over its one connection).
+   */
+  readonly dialect?: Dialect;
 }
 
 export interface WorkOptions {
@@ -154,6 +175,8 @@ export class Queue {
 
   private readonly maxBackoffMs: number;
 
+  private readonly dialect: Dialect;
+
   private readonly handlers = new Map<string, JobHandler>();
 
   constructor(options: QueueOptions) {
@@ -162,6 +185,7 @@ export class Queue {
     this.defaultQueue = options.defaultQueue ?? "default";
     this.baseBackoffMs = options.baseBackoffMs ?? 1000;
     this.maxBackoffMs = options.maxBackoffMs ?? 60_000;
+    this.dialect = options.dialect ?? "sqlite";
   }
 
   /** Register the handler for a job name. */
@@ -244,14 +268,22 @@ export class Queue {
     return result.changes;
   }
 
-  /** Atomically claim the next eligible job, or `null` if the queue is idle. */
-  async claim(queue: string = this.defaultQueue, visibilityMs = 30_000): Promise<Job | null> {
+  /** Atomically claim the next eligible row, or `undefined` if the queue is idle. */
+  private async claimRow(queue: string, visibilityMs: number): Promise<Row | undefined> {
     const now = nowIso(this.clock);
     const lock = isoAfter(this.clock, visibilityMs);
 
+    // On Postgres the subselect adds `FOR UPDATE SKIP LOCKED`: it row-locks the
+    // one candidate it returns and SKIPS any row another worker already locked,
+    // so N concurrent workers each claim a DISTINCT job in one round — never the
+    // same one twice, never blocking on each other. SQLite needs no such clause:
+    // the runtime serializes every transaction over its single connection, so the
+    // `UPDATE … WHERE id = (SELECT … LIMIT 1)` is already atomic against rivals.
+    const lockClause = this.dialect === "postgres" ? " FOR UPDATE SKIP LOCKED" : "";
+
     // `?` order: lock (SET locked_until), now (SET updated_at), queue, now
     // (WHERE run_at <=). The single UPDATE … RETURNING is atomic on both drivers.
-    const row = (await this.db
+    return (await this.db
       .prepare(
         `UPDATE ${TABLE}
             SET status = 'running', attempts = attempts + 1, locked_until = ?, updated_at = ?
@@ -259,11 +291,16 @@ export class Queue {
             SELECT id FROM ${TABLE}
              WHERE status = 'ready' AND queue = ? AND run_at <= ?
              ORDER BY priority DESC, run_at ASC, id ASC
-             LIMIT 1
+             LIMIT 1${lockClause}
           )
         RETURNING *`,
       )
       .get([lock, now, queue, now])) as Row | undefined;
+  }
+
+  /** Atomically claim the next eligible job, or `null` if the queue is idle. */
+  async claim(queue: string = this.defaultQueue, visibilityMs = 30_000): Promise<Job | null> {
+    const row = await this.claimRow(queue, visibilityMs);
 
     return row ? hydrate(row) : null;
   }
@@ -274,13 +311,39 @@ export class Queue {
   ): Promise<RunResult | null> {
     await this.reclaim();
 
-    const job = await this.claim(
+    const row = await this.claimRow(
       options.queue ?? this.defaultQueue,
       options.visibilityMs ?? 30_000,
     );
-    if (!job) {
+    if (!row) {
       return null;
     }
+
+    // The row is claimed (attempts incremented, locked) BEFORE the payload is
+    // parsed. A poison payload — invalid JSON a producer wrote — must not throw
+    // out of the runner and leave the row to be reclaimed and re-poisoned forever;
+    // it routes through `fail()` from the claimed metadata, so `maxAttempts`
+    // eventually retires it to `failed` like any other unrunnable job.
+    const meta = hydrateMeta(row);
+    let payload: JsonValue;
+    try {
+      payload = JSON.parse(row.payload) as JsonValue;
+    } catch (error) {
+      // `JSON.parse` only ever throws a `SyntaxError` (an `Error`), so reading
+      // `.message` needs no non-Error fallback here.
+      const cause = (error as Error).message;
+      const outcome = await this.fail(
+        meta,
+        new QueueError("QUEUE_POISON_PAYLOAD", `Job ${meta.id} has an unparseable payload.`, {
+          id: meta.id,
+          cause,
+        }),
+      );
+
+      return { job: meta, outcome };
+    }
+
+    const job: Job = { ...meta, payload };
 
     const handler = this.handlers.get(job.name);
     if (!handler) {
@@ -389,18 +452,25 @@ export class Queue {
   }
 
   // ---- private: the three terminal transitions ----
+  //
+  // Each is FENCED by the claim lock as a token: `status = 'running' AND
+  // locked_until = <the value this worker stamped at claim>`. If a slow worker's
+  // visibility deadline lapsed and RECLAIM returned the row to `ready` (or another
+  // worker re-claimed it and stamped a fresh `locked_until`), this worker's
+  // terminal update matches ZERO rows and is a no-op — it can never resurrect a
+  // job another worker now owns, nor mark `done` a row that was already retried.
 
   private async complete(job: Job): Promise<void> {
     const now = nowIso(this.clock);
 
-    // `?` order: now (finished_at), now (updated_at), id.
+    // `?` order: now (finished_at), now (updated_at), id, locked_until (fence).
     await this.db
       .prepare(
         `UPDATE ${TABLE}
             SET status = 'done', locked_until = NULL, finished_at = ?, updated_at = ?
-          WHERE id = ?`,
+          WHERE id = ? AND status = 'running' AND locked_until = ?`,
       )
-      .run([now, now, job.id]);
+      .run([now, now, job.id, job.lockedUntil]);
   }
 
   private async fail(job: Job, error: unknown): Promise<"retry" | "failed"> {
@@ -408,28 +478,36 @@ export class Queue {
     const message = error instanceof Error ? error.message : String(error);
 
     if (job.attempts >= job.maxAttempts) {
-      // `?` order: error (last_error), now (finished_at), now (updated_at), id.
+      // `?` order: error (last_error), now (finished_at), now (updated_at), id,
+      // locked_until (fence).
       await this.db
         .prepare(
           `UPDATE ${TABLE}
               SET status = 'failed', last_error = ?, locked_until = NULL,
                   finished_at = ?, updated_at = ?
-            WHERE id = ?`,
+            WHERE id = ? AND status = 'running' AND locked_until = ?`,
         )
-        .run([message, now, now, job.id]);
+        .run([message, now, now, job.id, job.lockedUntil]);
 
       return "failed";
     }
 
-    // `?` order: error (last_error), runAt (run_at), now (updated_at), id.
+    // `?` order: error (last_error), runAt (run_at), now (updated_at), id,
+    // locked_until (fence).
     await this.db
       .prepare(
         `UPDATE ${TABLE}
             SET status = 'ready', last_error = ?, locked_until = NULL,
                 run_at = ?, updated_at = ?
-          WHERE id = ?`,
+          WHERE id = ? AND status = 'running' AND locked_until = ?`,
       )
-      .run([message, isoAfter(this.clock, this.backoffMs(job.attempts)), now, job.id]);
+      .run([
+        message,
+        isoAfter(this.clock, this.backoffMs(job.attempts)),
+        now,
+        job.id,
+        job.lockedUntil,
+      ]);
 
     return "retry";
   }

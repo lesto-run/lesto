@@ -250,6 +250,67 @@ describe("runOnce", () => {
     await queue.runOnce(); // attempt 3 → 4000, capped to 3000
     expect((await queue.find(id))?.runAt).toBe(new Date(now.getTime() + 3000).toISOString());
   });
+
+  it("routes a poison (unparseable) payload through fail, terminating at maxAttempts", async () => {
+    queue.define("p", () => {
+      throw new Error("handler should never run on a poison payload");
+    });
+    const id = await queue.enqueue("p", { ok: true }, { maxAttempts: 2 });
+
+    // Corrupt the stored JSON so claim's parse will throw — a payload no producer
+    // could have written through `enqueue`, but a manual write or a bug could.
+    database.prepare("UPDATE keel_jobs SET payload = ? WHERE id = ?").run("{not json", id);
+
+    // The row's status is read with raw SQL: `find` parses the payload too, and a
+    // poison row is exactly the case that would make `find` itself throw.
+    const statusOf = (jobId: number): string =>
+      (database.prepare("SELECT status, last_error FROM keel_jobs WHERE id = ?").get(jobId) as {
+        status: string;
+        last_error: string | null;
+      })!.status;
+    const lastErrorOf = (jobId: number): string | null =>
+      (database.prepare("SELECT last_error FROM keel_jobs WHERE id = ?").get(jobId) as {
+        last_error: string | null;
+      })!.last_error;
+
+    // First run: the parse fails, fail() retries (attempt 1 < 2).
+    const first = await queue.runOnce();
+    expect(first?.outcome).toBe("retry");
+    expect(statusOf(id)).toBe("ready");
+    expect(lastErrorOf(id)).toContain("unparseable payload");
+
+    // Second run (after backoff): attempt 2 == maxAttempts → failed, not looping.
+    advance(2000);
+    const second = await queue.runOnce();
+    expect(second?.outcome).toBe("failed");
+    expect(statusOf(id)).toBe("failed");
+  });
+
+  it("a stalled worker's complete() never resurrects a job another worker re-owns", async () => {
+    queue.define("slow", () => {});
+    const id = await queue.enqueue("slow");
+
+    // Worker A claims with a short lease and captures the job it holds.
+    const a = await queue.claim("default", 1000);
+    expect(a?.id).toBe(id);
+
+    // A stalls past its deadline; RECLAIM frees the row, then worker B re-claims
+    // it with a FRESH lock (a different `locked_until`).
+    advance(1001);
+    expect(await queue.reclaim()).toBe(1);
+    const b = await queue.claim("default", 5000);
+    expect(b?.id).toBe(id);
+    expect(b?.lockedUntil).not.toBe(a?.lockedUntil);
+
+    // A finally finishes and completes against its STALE token — fenced out: the
+    // row stays `running` under B, never flipped to `done`.
+    await queue["complete"](a!);
+    expect((await queue.find(id))?.status).toBe("running");
+
+    // B's completion (current token) is the one that lands.
+    await queue["complete"](b!);
+    expect((await queue.find(id))?.status).toBe("done");
+  });
 });
 
 describe("claim & reclaim", () => {
@@ -281,6 +342,48 @@ describe("claim & reclaim", () => {
     advance(2001);
     expect(await queue.reclaim()).toBe(1); // now stale → reclaimed
     expect((await queue.find(id))?.status).toBe("ready");
+  });
+
+  it("postgres dialect: the claim subselect carries FOR UPDATE SKIP LOCKED", async () => {
+    let claimSql = "";
+    const capture: SqlDatabase = {
+      prepare: (sql) => {
+        if (sql.includes("SET status = 'running'")) claimSql = sql;
+
+        return {
+          run: async () => ({ changes: 0 }),
+          get: async () => undefined,
+          all: async () => [],
+        };
+      },
+      exec: async () => {},
+      transaction: async (fn) => fn(capture),
+    };
+
+    await new Queue({ db: capture, clock, dialect: "postgres" }).claim();
+
+    expect(claimSql).toContain("FOR UPDATE SKIP LOCKED");
+  });
+
+  it("sqlite dialect (default): the claim has no row-locking clause", async () => {
+    let claimSql = "";
+    const capture: SqlDatabase = {
+      prepare: (sql) => {
+        if (sql.includes("SET status = 'running'")) claimSql = sql;
+
+        return {
+          run: async () => ({ changes: 0 }),
+          get: async () => undefined,
+          all: async () => [],
+        };
+      },
+      exec: async () => {},
+      transaction: async (fn) => fn(capture),
+    };
+
+    await new Queue({ db: capture, clock }).claim();
+
+    expect(claimSql).not.toContain("FOR UPDATE");
   });
 });
 

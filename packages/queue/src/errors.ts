@@ -14,6 +14,7 @@ export type QueueErrorCode =
   | "QUEUE_HANDLER_NOT_A_FUNCTION"
   | "QUEUE_HANDLER_NOT_FOUND"
   | "QUEUE_INVALID_CRON_EXPRESSION"
+  | "QUEUE_POISON_PAYLOAD"
   | "QUEUE_WORKER_POLL_FAILED";
 
 /** Anything the queue can refuse to do. */
