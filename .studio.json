@@ -1,0 +1,16 @@
+{
+  "_comment": "Studio config for the Keel framework repo (local-only, no remote). Studio drives Wave 3+ of docs/ROADMAP-V1.md here. Layered over ~/.studio/settings.local.json; this wins. No secrets here.",
+  "studio": {
+    "github": { "baseBranch": "main" },
+    "autoOpenPrOnFinish": false,
+    "checks": {
+      "commands": [
+        "bun run ws:typecheck",
+        "bun run ws:lint",
+        "bun run ws:format:check",
+        "bun scripts/coverage-gate.ts"
+      ]
+    },
+    "verifyGate": { "enabled": true }
+  }
+}
