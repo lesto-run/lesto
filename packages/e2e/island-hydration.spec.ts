@@ -7,7 +7,10 @@ import { expect, test } from "@playwright/test";
  * "hydrated ✓". We assert both ends of that transition.
  */
 
-test("the island ships a server fallback, then hydrates in the browser", async ({ page, request }) => {
+test("the island ships a server fallback, then hydrates in the browser", async ({
+  page,
+  request,
+}) => {
   // The server-sent HTML carries the island's fallback (asserted on the raw
   // bytes — hydration is too fast to observe the pre-mount DOM in the browser).
   const html = await (await request.get("/")).text();

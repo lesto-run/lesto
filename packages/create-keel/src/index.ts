@@ -17,4 +17,14 @@ export type { CreateKeelErrorCode } from "./errors";
 export { scaffold } from "./scaffold";
 export type { ScaffoldIO, ScaffoldOptions } from "./scaffold";
 
-export { gitignore, keelApp, packageJson, readme, tsconfig } from "./templates";
+export {
+  gitignore,
+  islandCounter,
+  keelApp,
+  keelSites,
+  KEEL_PACKAGES,
+  packageJson,
+  readme,
+  tsconfig,
+} from "./templates";
+export type { KeelDepResolver } from "./templates";

@@ -9,8 +9,8 @@
  * (`build-client.ts`) is covered with fakes.
  */
 
-import { readdir, rm, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 import type { BunPlugin } from "bun";
 
@@ -103,7 +103,7 @@ async function bundle(request: BundleRequest, appRoot: string): Promise<readonly
  *
  * `appRoot` is where island imports and the staged entry resolve from (the
  * project root). The preact alias's bare targets (`preact/compat`, …) resolve in
- * the app's `node_modules`; the two `react-dom` shims resolve to this package.
+ * the app's `node_modules`.
  */
 export function bunBuildClientDeps(appRoot: string): BuildClientDeps {
   return {
@@ -117,10 +117,23 @@ export function bunBuildClientDeps(appRoot: string): BuildClientDeps {
 
     bundle: (request) => bundle(request, appRoot),
 
-    listOutDir: (outDir) => readdir(outDir),
+    // A first build has no out dir yet — that is "no stale chunks", not an error.
+    listOutDir: async (outDir) => {
+      try {
+        return await readdir(outDir);
+      } catch {
+        return [];
+      }
+    },
 
     remove: (path) => rm(path),
 
-    write: (path, contents) => writeFile(path, contents),
+    // Ensure the out dir exists before writing the entry/chunks — on a fresh app
+    // (a just-scaffolded project) it does not yet, so the first `keel build`/`dev`
+    // must create it rather than fail with ENOENT.
+    write: async (path, contents) => {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, contents);
+    },
   };
 }

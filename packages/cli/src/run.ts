@@ -35,6 +35,14 @@ import { parsePort, parseStringFlag } from "./flags";
 /** The default port for `serve`/`dev` when no `--port` flag is given. */
 const DEFAULT_PORT = 3000;
 
+/**
+ * The synthetic single site `dev` falls back to when a project declares none (a
+ * missing `keel.sites.ts`): one dynamic zone at the root, so every path is
+ * dispatched live to the app. The whole-app, no-zones default — the scaffold's
+ * first-boot shape — instead of a hard crash or a 404 on every route (blocker #9).
+ */
+const APP_ONLY_SITE: Site = { name: "app", render: "dynamic", basePath: "/" };
+
 /** The seams the command core depends on — all injected, never imported live. */
 export interface CliDeps {
   /**
@@ -484,8 +492,12 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
     });
   }
 
+  // Tolerate an app with no declared sites (a missing `keel.sites.ts`, which the
+  // bin's loader resolves to `[]`): dispatch every path straight to the app, so a
+  // freshly scaffolded app boots and serves before its author writes a sites file.
+  // A declared site set routes as before.
   const dispatch = dispatchSitesDev({
-    sites,
+    sites: sites.length === 0 ? [APP_ONLY_SITE] : sites,
     handle: app.handle,
     ...(deps.readAsset === undefined ? {} : { readAsset: deps.readAsset }),
   });

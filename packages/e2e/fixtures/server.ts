@@ -29,10 +29,14 @@ const HERE = fileURLToPath(new URL(".", import.meta.url));
 // Bundle the client entry to app.js. Done at boot so the served bundle always
 // matches the current source — the same shape a project's build step produces.
 const BUNDLE = join(HERE, ".out", "app.js");
-execFileSync("bun", ["build", "fixtures/client.tsx", "--outfile", "fixtures/.out/app.js", "--target", "browser"], {
-  cwd: join(HERE, ".."),
-  stdio: "inherit",
-});
+execFileSync(
+  "bun",
+  ["build", "fixtures/client.tsx", "--outfile", "fixtures/.out/app.js", "--target", "browser"],
+  {
+    cwd: join(HERE, ".."),
+    stdio: "inherit",
+  },
+);
 const appJs = readFileSync(BUNDLE, "utf8");
 
 const tree: UiNode = { type: "Page", children: [{ type: "Probe" }] };
@@ -53,11 +57,18 @@ function htmlDocument(): string {
   ].join("\n");
 }
 
-const dispatch = (_method: string, path: string): Promise<{ status: number; headers: Record<string, string>; body: string }> =>
+const dispatch = (
+  _method: string,
+  path: string,
+): Promise<{ status: number; headers: Record<string, string>; body: string }> =>
   Promise.resolve(
     path === "/app.js"
       ? { status: 200, headers: { "content-type": "text/javascript; charset=utf-8" }, body: appJs }
-      : { status: 200, headers: { "content-type": "text/html; charset=utf-8" }, body: htmlDocument() },
+      : {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+          body: htmlDocument(),
+        },
   );
 
 const server = await serve({ handle: dispatch, migrationsApplied: [] }, { port: PORT });

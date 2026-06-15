@@ -113,13 +113,28 @@ const createEntry = (collection: string, title: string): Promise<void> =>
   createNewEntry(process.cwd(), collection, title);
 
 // The project declares its sites in `keel.sites.ts`, mirroring `keel.app.ts`;
-// the build reads its default export.
-const loadSites = async (): Promise<readonly Site[]> => {
-  const module = (await import(join(process.cwd(), "keel.sites.ts"))) as {
-    default: readonly Site[];
-  };
+// the build reads its default export. A MISSING file is tolerated, not fatal: it
+// resolves to no sites, and the CLI core falls back to app-only dispatch (a fresh
+// scaffold boots before its author writes a sites file — blocker #9). Any OTHER
+// import error (a syntax error in an existing file) is rethrown, so a real bug in
+// the sites file is not silently swallowed as "no sites".
+const SITES_PATH = join(process.cwd(), "keel.sites.ts");
 
-  return module.default;
+const loadSites = async (): Promise<readonly Site[]> => {
+  try {
+    const module = (await import(SITES_PATH)) as { default: readonly Site[] };
+
+    return module.default;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
+      // Distinguish "the sites file is absent" from "a module it imports is
+      // missing": only the former — the sites file itself not existing — is the
+      // tolerated empty-sites case. A missing transitive import is a real error.
+      if ((error as { message: string }).message.includes("keel.sites.ts")) return [];
+    }
+
+    throw error;
+  }
 };
 
 const code = await run(argv, {

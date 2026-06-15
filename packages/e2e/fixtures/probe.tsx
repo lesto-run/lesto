@@ -17,5 +17,7 @@ export function Probe(): ReactElement {
     setMounted(true);
   }, []);
 
-  return <span data-probe={mounted ? "hydrated" : "client-initial"}>{mounted ? "hydrated ✓" : "…"}</span>;
+  return (
+    <span data-probe={mounted ? "hydrated" : "client-initial"}>{mounted ? "hydrated ✓" : "…"}</span>
+  );
 }

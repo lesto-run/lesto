@@ -7,14 +7,21 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CreateKeelError,
   gitignore,
+  islandCounter,
   keelApp,
+  keelSites,
+  KEEL_PACKAGES,
   packageJson,
   readme,
   scaffold,
   tsconfig,
 } from "../src/index";
 
-import type { ScaffoldIO } from "../src/index";
+import type { KeelDepResolver, ScaffoldIO } from "../src/index";
+
+// A deterministic dep resolver for the pure-template tests: pin every @keel/*
+// package to a fake `file:` path, so a test never depends on the repo layout.
+const fakePin: KeelDepResolver = (pkg) => `file:/fake/packages/${pkg.replace("@keel/", "")}`;
 
 // A real node:fs/promises-backed ScaffoldIO, the same shape bin.ts wires up.
 const realIO: ScaffoldIO = {
@@ -43,7 +50,15 @@ describe("scaffold", () => {
 
     const written = await scaffold({ name: "my-app", targetDir }, realIO);
 
-    const expected = ["package.json", "keel.app.ts", "tsconfig.json", ".gitignore", "README.md"]
+    const expected = [
+      "package.json",
+      "keel.app.ts",
+      "keel.sites.ts",
+      "app/islands/counter.tsx",
+      "tsconfig.json",
+      ".gitignore",
+      "README.md",
+    ]
       .map((relative) => join(targetDir, relative))
       .toSorted();
 
@@ -83,7 +98,14 @@ describe("scaffold", () => {
     expect(app).toContain("secureStack({ originCheck: {} })");
     expect(app).toContain("fromRequestMiddleware");
 
-    // package.json carries the project name, the @keel deps, and the dev script.
+    // The Preact-by-default island pipeline: the single ui.dialect key, the
+    // client module tag, the home page, and the island import.
+    expect(app).toContain('ui: { dialect: "preact" }');
+    expect(app).toContain('.client("/client.js")');
+    expect(app).toContain('.page("/"');
+    expect(app).toContain('import Counter from "./app/islands/counter"');
+
+    // package.json carries the project name, the @keel deps, and the run scripts.
     const manifest = JSON.parse(pkg) as {
       name: string;
       type: string;
@@ -94,14 +116,20 @@ describe("scaffold", () => {
     expect(manifest.name).toBe("blogish");
     expect(manifest.type).toBe("module");
     expect(manifest.scripts["dev"]).toBe("keel dev");
+    expect(manifest.scripts["build"]).toBe("keel build");
 
     for (const dep of [
+      // The CLI (the `keel` binary) and the asset pipeline — their absence was
+      // blocker #9's silent break.
+      "@keel/cli",
+      "@keel/assets",
       "@keel/db",
       "@keel/kernel",
       "@keel/migrate",
       "@keel/web",
       "@keel/ui",
       "@keel/runtime",
+      "preact",
       "react",
       "react-dom",
       "better-sqlite3",
@@ -115,6 +143,26 @@ describe("scaffold", () => {
 
     // Routes live on the code-first keel() app now — no legacy @keel/router dep.
     expect(manifest.dependencies["@keel/router"]).toBeUndefined();
+  });
+
+  it("scaffolds keel.sites.ts and the island module", async () => {
+    const targetDir = join(workspace, "sited");
+
+    await scaffold({ name: "sited", targetDir }, realIO);
+
+    const sites = await readFile(join(targetDir, "keel.sites.ts"), "utf8");
+    const island = await readFile(join(targetDir, "app/islands/counter.tsx"), "utf8");
+
+    // keel.sites.ts default-exports a Site[] with one dynamic root zone.
+    expect(sites).toContain("export default sites");
+    expect(sites).toContain('render: "dynamic"');
+    expect(sites).toContain('basePath: "/"');
+
+    // The island is one defineIsland default-export — the convention the build
+    // discovers and bundles into /client.js.
+    expect(island).toContain("export default defineIsland({");
+    expect(island).toContain('name: "Counter"');
+    expect(island).toContain("useState");
   });
 
   it("refuses to clobber an existing target", async () => {
@@ -156,13 +204,13 @@ describe("scaffold", () => {
 
 describe("templates", () => {
   it("packageJson embeds the name and parses as JSON", () => {
-    const parsed = JSON.parse(packageJson("acme")) as { name: string };
+    const parsed = JSON.parse(packageJson("acme", fakePin)) as { name: string };
 
     expect(parsed.name).toBe("acme");
   });
 
-  it("scaffolds @keel deps with resolvable specifiers, never the workspace protocol", () => {
-    const parsed = JSON.parse(packageJson("acme")) as {
+  it("pins every @keel dep through the injected resolver, never the workspace protocol", () => {
+    const parsed = JSON.parse(packageJson("acme", fakePin)) as {
       dependencies: Record<string, string>;
     };
 
@@ -170,29 +218,52 @@ describe("templates", () => {
       name.startsWith("@keel/"),
     );
 
-    // There ARE @keel deps to check (guards against a vacuous pass).
-    expect(keelDeps.length).toBeGreaterThan(0);
+    // Every package in KEEL_PACKAGES is present (guards against a vacuous pass).
+    expect(keelDeps.map(([name]) => name).toSorted()).toEqual([...KEEL_PACKAGES].toSorted());
 
-    for (const [, specifier] of keelDeps) {
+    for (const [name, specifier] of keelDeps) {
       // `workspace:*` resolves only inside this monorepo; a scaffolded app would
-      // fail to install. Every @keel dep must carry a real, resolvable specifier.
+      // fail to install. The resolver pins each to a real, resolvable specifier.
       expect(specifier).not.toContain("workspace:");
-      expect(specifier).toBe("latest");
+      expect(specifier).toBe(fakePin(name as (typeof KEEL_PACKAGES)[number]));
     }
   });
 
-  it("keelApp default-exports a KeelAppConfig", () => {
-    expect(keelApp()).toContain("export default config");
-    expect(keelApp()).toContain("const config: KeelAppConfig");
+  it("ships preact for the ~10 KB island client AND react for the server render", () => {
+    const parsed = JSON.parse(packageJson("acme", fakePin)) as {
+      dependencies: Record<string, string>;
+    };
+
+    expect(parsed.dependencies["preact"]).toBeDefined();
+    expect(parsed.dependencies["react"]).toBeDefined();
+    expect(parsed.dependencies["react-dom"]).toBeDefined();
   });
 
-  it("tsconfig is bundler-resolution, strict JSON", () => {
+  it("keelApp default-exports a KeelAppConfig with the preact dialect", () => {
+    expect(keelApp()).toContain("export default config");
+    expect(keelApp()).toContain("const config: KeelAppConfig");
+    expect(keelApp()).toContain('ui: { dialect: "preact" }');
+  });
+
+  it("islandCounter is one defineIsland default-export", () => {
+    expect(islandCounter()).toContain("export default defineIsland({");
+    expect(islandCounter()).toContain('name: "Counter"');
+  });
+
+  it("keelSites default-exports a Site[] with a dynamic root zone", () => {
+    expect(keelSites()).toContain("export default sites");
+    expect(keelSites()).toContain('render: "dynamic"');
+  });
+
+  it("tsconfig is bundler-resolution, strict JSON that includes the island dir", () => {
     const parsed = JSON.parse(tsconfig()) as {
       compilerOptions: { moduleResolution: string; strict: boolean };
+      include: string[];
     };
 
     expect(parsed.compilerOptions.moduleResolution).toBe("Bundler");
     expect(parsed.compilerOptions.strict).toBe(true);
+    expect(parsed.include).toContain("app");
   });
 
   it("gitignore ignores node_modules and the db file", () => {

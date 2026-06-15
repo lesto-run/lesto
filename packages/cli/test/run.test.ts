@@ -627,6 +627,21 @@ describe("run dev — island client assets", () => {
     expect(built).toEqual([{ outDir: "out", mode: "dev", dialect: "react" }]);
   });
 
+  it("falls back to app-only dispatch when the project declares no sites", async () => {
+    const serve = fakeServe(3000);
+
+    // No `keel.sites.ts` → the bin's loader resolves to `[]`; dev must still serve
+    // the app (blocker #9), not 404 every route.
+    await run(["dev"], depsWith({ serve, loadSites: () => Promise.resolve([]) }));
+
+    // The app handed to `serve` carries the dev dispatch. A path the app handles
+    // is dispatched live, not refused for want of a matching site.
+    const [devApp] = serve.mock.calls[0]!;
+    const response = await devApp.handle("GET", "/posts");
+
+    expect(response.status).toBe(200);
+  });
+
   it("passes the preact dialect to the client build when ui.dialect is preact", async () => {
     const built: Array<{ outDir: string; mode: string; dialect: string }> = [];
 

@@ -15,16 +15,50 @@
  */
 
 /**
- * The version specifier every `@keel/*` dependency is scaffolded with.
+ * The `@keel/*` packages a scaffolded app depends on, by directory name under
+ * `packages/`.
  *
- * A real npm dist-tag, resolvable by any package manager outside this
- * monorepo — deliberately NOT the `workspace:*` protocol, which only
- * resolves in-workspace.
+ * `@keel/cli` is the `keel` binary `keel dev`/`build` runs (its absence was a
+ * silent break — blocker #9); `@keel/assets` is the client-bundle pipeline the
+ * island build needs in the app's graph. The rest are the app's own runtime
+ * (db/kernel/migrate/runtime, the web router, the UI engine).
  */
-const keelDep = "latest";
+export const KEEL_PACKAGES = [
+  "@keel/cli",
+  "@keel/assets",
+  "@keel/db",
+  "@keel/kernel",
+  "@keel/migrate",
+  "@keel/runtime",
+  "@keel/ui",
+  "@keel/web",
+] as const;
 
-/** `package.json` for the scaffolded app: starter deps + a `keel dev` script. */
-export function packageJson(name: string): string {
+/**
+ * Resolve a `@keel/*` package name to the dependency specifier the scaffold pins
+ * it at.
+ *
+ * The packages are NOT published yet, so a scaffolded app cannot resolve a
+ * `@keel/*@latest` dist-tag — the original blocker #9 break. Until the `0.x`
+ * publish at launch the scaffolder pins each to a `file:` path at the in-repo
+ * package (computed from the scaffolder's own location), so `bun install`
+ * resolves it today. At publish these flip to a real `^0.x` version range — the
+ * one line that changes is the resolver the scaffolder injects.
+ */
+export type KeelDepResolver = (pkg: (typeof KEEL_PACKAGES)[number]) => string;
+
+/**
+ * `package.json` for the scaffolded app: starter deps + a `keel dev` script.
+ *
+ * The `@keel/*` specifiers come from the injected `keelDep` resolver (a `file:`
+ * pin today; a published range post-launch), keeping this a pure function of its
+ * inputs. The app ships `preact` (the ~10 KB island client the Preact dialect
+ * aliases `react` to) AND `react`/`react-dom` (the server still renders React —
+ * see `keel.app.ts`'s `ui: { dialect: "preact" }`).
+ */
+export function packageJson(name: string, keelDep: KeelDepResolver): string {
+  const keelDeps = Object.fromEntries(KEEL_PACKAGES.map((pkg) => [pkg, keelDep(pkg)]));
+
   const manifest = {
     name,
     version: "0.0.0",
@@ -33,20 +67,16 @@ export function packageJson(name: string): string {
 
     scripts: {
       dev: "keel dev",
+      build: "keel build",
     },
 
     dependencies: {
-      // Resolvable specifiers for a freshly scaffolded app: `latest` is a
-      // real npm dist-tag any package manager can install OUTSIDE this
-      // monorepo. The `workspace:*` protocol resolves only within the
-      // workspace, so a generated app would fail to install.
-      "@keel/db": keelDep,
-      "@keel/kernel": keelDep,
-      "@keel/migrate": keelDep,
-      "@keel/runtime": keelDep,
-      "@keel/ui": keelDep,
-      "@keel/web": keelDep,
+      ...keelDeps,
       "better-sqlite3": "^11.10.0",
+      // The Preact dialect (`ui.dialect: "preact"`) aliases the island client's
+      // `react` to `preact/compat`, so the app needs `preact` for the ~10 KB
+      // client bundle; `react`/`react-dom` back the React server render.
+      preact: "^10.29.2",
       react: "^19",
       "react-dom": "^19",
       zod: "^4.0.0",
@@ -83,6 +113,8 @@ export function keelApp(): string {
  *     request-shaped batteries drop onto the chain via \`fromRequestMiddleware\`.
  */
 
+import { createElement } from "react";
+
 import { createDb, createTableSql, defineTable, dropTableSql, integer, text } from "@keel/db";
 import type { Db } from "@keel/db";
 
@@ -94,6 +126,8 @@ import { secureStack } from "@keel/kernel";
 import type { KeelAppConfig } from "@keel/kernel";
 
 import { z } from "zod";
+
+import Counter from "./app/islands/counter";
 
 // The \`posts\` table — schema as a value backs both the migration's DDL
 // and the inferred row type every query returns.
@@ -138,6 +172,22 @@ function buildApp(db: Db) {
       // defense: a cross-site POST/PUT/PATCH/DELETE is refused at the door. Add
       // \`cors\`, \`rateLimit\`, or the signed-token \`csrf\` here as you need them.
       .use(...secureStack({ originCheck: {} }).map(fromRequestMiddleware))
+      // The hydration runtime: \`keel build\`/\`dev\` bundle \`app/islands/\` into
+      // this \`/client.js\` (the Preact dialect — see \`ui\` below), and every page
+      // gets the head module tag that boots it.
+      .client("/client.js")
+      // The home page renders the Counter island. Its button does nothing until
+      // the client bundle hydrates it — a working click is the visible proof the
+      // island came alive on the Preact runtime.
+      .page("/", {
+        component: () =>
+          createElement(
+            "main",
+            null,
+            createElement("h1", null, "Welcome to Keel"),
+            createElement(Counter, { start: 0 }),
+          ),
+      })
       .get("/posts", async (c) => {
         const rows = await db.select().from(posts).orderBy(posts.id, "asc").all();
 
@@ -172,9 +222,73 @@ const config: KeelAppConfig = {
   db: handle,
   app: buildApp(db),
   migrations: [createPosts],
+  // The headline default (ADR 0011 Increment 3): \`preact\` ships a ~10 KB island
+  // client. The single \`ui.dialect\` key drives BOTH the client bundle's
+  // \`react\`→\`preact/compat\` alias (read by \`keel dev\`/\`build\`) and — for a
+  // bespoke worker — the server renderer. Switch to \`"react"\` to opt out.
+  ui: { dialect: "preact" },
 };
 
 export default config;
+`;
+}
+
+/**
+ * `app/islands/counter.tsx` — the one island the starter ships (ADR 0011).
+ *
+ * One `defineIsland` default-export per file is the convention `keel build`/`dev`
+ * discover and bundle into `/client.js`. A deferred (`ssr: false`) island: the
+ * server paints its fallback, the Preact client mounts the live component fresh —
+ * the sound pairing while the CLI server renders React (full server-side Preact is
+ * estate's bespoke whole-process-aliased path). The `useState` button is inert
+ * until hydration, so a working click is the visible proof the island came alive.
+ */
+export function islandCounter(): string {
+  return `import { useState } from "react";
+import type { ReactElement } from "react";
+
+import { defineIsland } from "@keel/ui";
+
+/** A trivial interactive component: the local count proves hydration is live. */
+function Counter({ start }: { start: number }): ReactElement {
+  const [n, setN] = useState(start);
+
+  return (
+    <button type="button" data-testid="counter" onClick={() => setN((value) => value + 1)}>
+      count: {n}
+    </button>
+  );
+}
+
+/** Deferred island: server paints the fallback, the client mounts Counter fresh. */
+export default defineIsland({
+  name: "Counter",
+  component: Counter,
+  fallback: ({ start }) => <button type="button" data-testid="counter">count: {start}</button>,
+});
+`;
+}
+
+/**
+ * `keel.sites.ts` — the project's declared sites, mirroring `keel.app.ts`.
+ *
+ * `keel build`/`dev` read its default export. A single dynamic site at `/` runs
+ * the whole app live; grow it (static zones, multiple origins) as the app does.
+ * Its presence is also what keeps `keel build` from crashing — a missing
+ * `keel.sites.ts` is tolerated (app-only dispatch), but shipping one is the
+ * starting point every real app grows from.
+ */
+export function keelSites(): string {
+  return `import type { Site } from "@keel/sites";
+
+/**
+ * One dynamic site at the root: every route runs live through the app's handler.
+ * Add static zones (\`render: "static"\` with a \`pages\` list) or extra origins
+ * here as the app grows.
+ */
+const sites: Site[] = [{ name: "app", render: "dynamic", basePath: "/" }];
+
+export default sites;
 `;
 }
 
@@ -183,7 +297,9 @@ export function tsconfig(): string {
   const config = {
     compilerOptions: {
       target: "ES2023",
-      lib: ["ES2023"],
+      // DOM for the island's browser APIs (`useState` over a real button), ES2023
+      // for the server. The client bundle is compiled by `Bun.build`, not tsc.
+      lib: ["ES2023", "DOM", "DOM.Iterable"],
       module: "ESNext",
       moduleResolution: "Bundler",
       verbatimModuleSyntax: true,
@@ -194,7 +310,7 @@ export function tsconfig(): string {
       types: ["node"],
       skipLibCheck: true,
     },
-    include: ["keel.app.ts"],
+    include: ["keel.app.ts", "keel.sites.ts", "app"],
   };
 
   return `${JSON.stringify(config, null, 2)}\n`;
@@ -202,7 +318,7 @@ export function tsconfig(): string {
 
 /** `.gitignore` — keep build artefacts and the local SQLite file out of git. */
 export function gitignore(): string {
-  return ["node_modules/", "*.db", "*.db-journal", "dist/", ".DS_Store", ""].join("\n");
+  return ["node_modules/", "*.db", "*.db-journal", "dist/", "out/", ".DS_Store", ""].join("\n");
 }
 
 /** `README.md` — how to run the freshly scaffolded app. */
