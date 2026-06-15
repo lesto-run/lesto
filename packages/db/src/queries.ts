@@ -432,8 +432,13 @@ export interface Db {
    * escape hatch to reach for when a query needs a value, not `exec`. Rows come
    * back raw (driver column names, driver types — no snake→camel hydration and
    * no numeric coercion, since `raw` has no schema to map against). `R` is the
-   * caller's asserted row shape. A write (`INSERT`/`UPDATE`/`DELETE` without
-   * `RETURNING`) yields an empty array.
+   * caller's asserted row shape.
+   *
+   * `raw` is for ROW-RETURNING statements (a `SELECT`, or a write with
+   * `RETURNING`): it reads the result set back. For a non-returning write, use
+   * {@link Db.exec} — on SQLite (better-sqlite3) running a non-returning write
+   * through `raw` THROWS, because the underlying `.all()` rejects a statement
+   * that produces no rows.
    */
   raw<R = Record<string, unknown>>(sql: string, params?: readonly unknown[]): Promise<R[]>;
 

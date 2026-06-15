@@ -77,12 +77,12 @@ throw new QueueError("QUEUE_HANDLER_NOT_FOUND", `No handler for job "${name}".`,
 | Module | State |
 |---|---|
 | `@keel/queue` | ✅ reference: TS · ESM · 100% coverage · oxfmt-clean |
-| `@keel/orm` | ✅ Tracks core ported — Model/Relation/validations/inflector, 100% coverage |
+| `@keel/orm` | ❌ DELETED — superseded by `@keel/db` (schema-as-value + async query layer); see ADR 0004 |
 | `@keel/mail` | ✅ `defineMailer`, queued delivery on `@keel/queue`, 100% coverage |
 | `@keel/webhooks` | ✅ signed delivery + inbound verify on `@keel/queue`, 100% coverage |
 | `@keel/cache` | ✅ TTL cache, memory + SQL stores, injected clock, 100% coverage |
 | `@keel/hooks` | ✅ actions/filters extensibility core, 100% coverage |
-| `@keel/migrate` | ✅ schema DSL + migrator on a `SqlDatabase` interface, 100% coverage |
+| `@keel/migrate` | ✅ Tracks-style migrator over `@keel/db` value-DDL on a `SqlDatabase` interface, 100% coverage |
 | `@keel/router` | ✅ RESTful router (`resources`, named routes), 100% coverage |
 | Tracks server (`lib/*` router/controller/migrations, CJS) | ⏳ remaining to port → `packages/*` |
 | Loom (`loom/*`, JS) | ⏳ to port → `packages/*` |

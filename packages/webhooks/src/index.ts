@@ -1,11 +1,16 @@
 /**
  * @keel/webhooks — signed, retried outbound webhooks on @keel/queue, plus inbound verification.
  *
- *   const hooks = new Webhooks({ queue });
- *   hooks.send("https://example.com/hook", "order.paid", { id: 42 }, { secret });
+ *   // sending: `secretId` is a REFERENCE resolved to the real secret at delivery
+ *   // time via the Webhooks `secrets` source; the raw secret never enters the queue.
+ *   const hooks = new Webhooks({ queue, secrets });
+ *   hooks.send("https://example.com/hook", "order.paid", { id: 42 }, { secretId });
  *
- *   // receiving:
- *   if (!verify(rawBody, req.headers["x-keel-signature"], secret)) reject();
+ *   // receiving: the deliverer signs `${timestamp}.${body}`, so verify MUST be
+ *   // given the timestamp — without it the signature check fails on every real
+ *   // webhook. Read `x-keel-timestamp` as a Number and pass `{ timestamp }`.
+ *   const timestamp = Number(req.headers["x-keel-timestamp"]);
+ *   if (!verify(rawBody, req.headers["x-keel-signature"], secret, { timestamp })) reject();
  */
 
 export {

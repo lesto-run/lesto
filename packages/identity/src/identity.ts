@@ -95,6 +95,13 @@ const DEFAULT_RESET_TTL_MS = 60 * 60 * 1000;
  * `@keel/identity` impossible to even *import* in a Worker. Deferring it keeps
  * the package import-safe on the edge; the one-time cost lands on the first
  * failed login, inside a request handler where randomness is allowed.
+ *
+ * The lazy memoization has one honest seam: the timing-equalization property
+ * holds for all but the FIRST failed-unknown-email login per isolate. On a cold
+ * cache that first request also computes the decoy hash (an extra `hashPassword`
+ * scrypt), so it is slower than a steady-state miss. Once warmed, every
+ * subsequent miss spends exactly one scrypt and is indistinguishable from a
+ * wrong-password hit — the property the rest of this doc describes.
  */
 let dummyHashCache: string | undefined;
 

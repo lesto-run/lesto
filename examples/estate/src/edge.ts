@@ -105,8 +105,11 @@ export interface EdgeAppOptions {
  * The secret backs every signed session; in the Worker it comes from
  * `env.SESSION_SECRET`, never the source. The app mounts the framework's
  * `secureStack` (origin-check CSRF + per-isolate rate limiting) ahead of every
- * route — the same posture as the node twin (`app.ts`) — so a cross-site
- * state-changing request is refused before dispatch and a flood is shed early.
+ * route, so a cross-site state-changing request is refused before dispatch and a
+ * flood is shed early. This is the node twin's (`app.ts`) origin-check posture
+ * PLUS per-isolate rate limiting the edge adds on top — `app.ts` runs no rate
+ * limiter (a single long-lived node process leans on infra for that; a
+ * short-lived Worker isolate cannot, so the edge sheds floods itself).
  */
 export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel {
   const sessions = new SignedSessions({ secret });
@@ -127,9 +130,10 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel
 
   return (
     keel()
-      // Mirror the node twin's posture: origin-check CSRF + per-isolate rate
-      // limiting wrap every route (and every 404), applied before any route so a
-      // forged cross-site POST or a flood is refused ahead of dispatch.
+      // The node twin's origin-check CSRF posture, PLUS per-isolate rate limiting
+      // the edge adds on top (app.ts has none) — both wrap every route (and every
+      // 404), applied before any route so a forged cross-site POST or a flood is
+      // refused ahead of dispatch.
       .use(
         ...secureStack({ originCheck: {}, rateLimit: EDGE_RATE_LIMIT }).map(fromRequestMiddleware),
       )

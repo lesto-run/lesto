@@ -29,7 +29,9 @@
  *     move the right-most slot, so the spoof is ignored.
  *   - a number `n` — trust `n` proxy hops; the client is the entry `n` from the
  *     right of the `X-Forwarded-For` list (the last `n` were added by your own
- *     trusted hops). `true` is `1` with a different empty-chain fallback.
+ *     trusted hops). Note `true` is NOT `n = 1`: `true` peels ZERO hops and
+ *     takes the right-most entry, while `n = 1` peels one and takes the entry
+ *     before it (the empty-chain fallback is identical — both use the socket).
  *   - `"all"` — trust the ENTIRE client-supplied chain and take the LEFT-most
  *     entry as the originating client. This is the legacy "trust everything"
  *     behavior; it is forgeable by any client (the left-most entry is whatever

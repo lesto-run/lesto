@@ -1,11 +1,24 @@
 /**
  * @keel/kernel — the application kernel that assembles a Keel app from its parts.
  *
+ *   // Tables are `@keel/db` schema values, rendered for the dialect (ADR 0004).
+ *   import { createTableSql, defineTable, integer, text } from "@keel/db";
+ *
+ *   const posts = defineTable("posts", {
+ *     id: integer("id").primaryKey({ autoIncrement: true }),
+ *     title: text("title").notNull(),
+ *   });
+ *
  *   const app = createApp({
  *     db,
  *     router,
  *     controllers: { posts: PostsController },
- *     migrations: [{ version: "001_create_posts", migration: { up: (s) => s.createTable(...) } }],
+ *     migrations: [
+ *       {
+ *         version: "001_create_posts",
+ *         migration: { up: (s) => s.execute(createTableSql(posts, s.dialect)) },
+ *       },
+ *     ],
  *   });
  *
  *   app.migrationsApplied;                 // ["001_create_posts"]

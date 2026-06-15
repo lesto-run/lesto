@@ -12,8 +12,7 @@ Fifty `@keel/*` packages and counting. The highlights below are grouped by domai
 
 | Package | What it does |
 |---|---|
-| [`@keel/orm`](./packages/orm) | ActiveRecord-style ORM — typed models, a fluent query builder, and validations over any SQL database. |
-| [`@keel/migrate`](./packages/migrate) | Schema-builder DSL and migrator — version-stamped, idempotent migrations on an injected SQL database. |
+| [`@keel/migrate`](./packages/migrate) | Tracks-style migrator — version-stamped, idempotent migrations over `@keel/db` schema-as-value DDL on an injected SQL database. |
 | [`@keel/storage`](./packages/storage) | Object storage behind one API — pluggable backends (in-memory, local filesystem; S3 to come). |
 
 ### Async
@@ -30,7 +29,7 @@ Fifty `@keel/*` packages and counting. The highlights below are grouped by domai
 | Package | What it does |
 |---|---|
 | [`@keel/mail`](./packages/mail) | Mailers — react-email templates with queued delivery on `@keel/queue` and a pluggable transport. |
-| [`@keel/mailing-lists`](./packages/mailing-lists) | Ghost-style subscriber lists — double opt-in and broadcasts, composed on `@keel/orm`, `@keel/mail`, and `@keel/queue`. |
+| [`@keel/mailing-lists`](./packages/mailing-lists) | Ghost-style subscriber lists — double opt-in and broadcasts, composed on `@keel/db`, `@keel/mail`, and `@keel/queue`. |
 | [`@keel/webhooks`](./packages/webhooks) | Webhooks — HMAC-signed outbound delivery (retried on `@keel/queue`) and inbound signature verification. |
 
 ### Content
