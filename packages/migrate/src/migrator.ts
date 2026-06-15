@@ -23,6 +23,14 @@ interface VersionRow {
 const TABLE = "schema_migrations";
 
 /**
+ * The fixed Postgres advisory-lock key for "the Keel migration lock". Any value
+ * works as long as every migrator uses the SAME one; this is an arbitrary,
+ * stable bigint chosen to be unlikely to collide with an application's own
+ * advisory locks. Sent as a bound parameter, never interpolated.
+ */
+const LOCK_KEY = 4_705_321_001;
+
+/**
  * Applies and reverses migrations, recording each in `schema_migrations`.
  *
  * The recorded set is the source of truth: a migration runs exactly when its
@@ -70,42 +78,87 @@ export class Migrator {
   }
 
   /**
-   * Run every not-yet-applied migration in version order, recording each as it
-   * succeeds. Returns the versions actually applied (empty when up to date).
+   * Run `fn` while holding the cross-process migration lock, so two booting
+   * instances of a fleet never run migrations against the same database at once.
+   *
+   * On Postgres this is a session advisory lock (`pg_advisory_lock` /
+   * `pg_advisory_unlock`) on a fixed key, pinned to one connection for the whole
+   * run via `transaction()`: a second migrator's `pg_advisory_lock` BLOCKS until
+   * the first releases — one runs, one waits, zero DDL collisions. The lock is
+   * released in `finally` so a throwing migration cannot strand it. (The advisory
+   * lock is global to the database, not the connection, so the migrations
+   * themselves still run on their own pooled connections inside `fn`.)
+   *
+   * On SQLite there is no cross-process concern the engine does not already
+   * solve: the runtime serializes every write over its single connection (a
+   * file lock under the hood), so concurrent migrators queue FIFO. The default
+   * therefore just runs `fn` directly — the seam exists so the PG path can
+   * override it without the SQLite path paying for a lock it does not need.
    */
-  async migrate(): Promise<string[]> {
-    await this.ensureTable();
-
-    const applied = await this.appliedVersions();
-
-    const pending = this.entries.filter((entry) => !applied.has(entry.version));
-
-    // Each migration's DDL and its bookkeeping INSERT are one atomic unit: a
-    // half-applied migration (DDL ran, record missing — or vice versa) would
-    // corrupt the source of truth. We wrap *each* migration in its own
-    // transaction rather than the whole run in one, matching Rails: migrations
-    // that succeed earlier in this run stay applied; only the one that throws
-    // is rolled back.
-    //
-    // The transaction is the seam's `transaction()` — NOT raw exec("BEGIN") —
-    // so that on a pooled driver every statement in the span (the DDL and the
-    // INSERT) runs on the SAME connection. Three separate exec("BEGIN")/
-    // exec("COMMIT") calls would land on different pooled connections and
-    // silently no-op. We build the Schema and prepare the INSERT against the
-    // transaction-scoped `tx`, not the outer db, for exactly this reason. A
-    // throw inside `fn` rolls the span back and rejects, undoing the partial
-    // DDL and ensuring no record was written.
-    for (const entry of pending) {
-      await this.db.transaction(async (tx) => {
-        const schema = new Schema(tx, this.dialect);
-
-        await entry.migration.up(schema);
-
-        await tx.prepare(`INSERT INTO ${TABLE} (version) VALUES (?)`).run([entry.version]);
-      });
+  private async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.dialect !== "postgres") {
+      return fn();
     }
 
-    return pending.map((entry) => entry.version);
+    // `LOCK_KEY` is a fixed bigint identifying "the Keel migration lock". Hold it
+    // on one pinned connection (a transaction span) for the whole run; release it
+    // in `finally`. We do NOT use `pg_advisory_xact_lock` because the migrations
+    // inside `fn` open their own transactions on other pooled connections — the
+    // lock must outlive any single one of them.
+    return this.db.transaction(async (tx) => {
+      await tx.prepare("SELECT pg_advisory_lock(?)").run([LOCK_KEY]);
+
+      try {
+        return await fn();
+      } finally {
+        await tx.prepare("SELECT pg_advisory_unlock(?)").run([LOCK_KEY]);
+      }
+    });
+  }
+
+  /**
+   * Run every not-yet-applied migration in version order, recording each as it
+   * succeeds. Returns the versions actually applied (empty when up to date).
+   *
+   * The whole run — ensure-table, read-applied, apply-pending — is wrapped in the
+   * cross-process {@link withMigrationLock}, so a fleet booting N instances at
+   * once still runs each migration exactly once.
+   */
+  async migrate(): Promise<string[]> {
+    return this.withMigrationLock(async () => {
+      await this.ensureTable();
+
+      const applied = await this.appliedVersions();
+
+      const pending = this.entries.filter((entry) => !applied.has(entry.version));
+
+      // Each migration's DDL and its bookkeeping INSERT are one atomic unit: a
+      // half-applied migration (DDL ran, record missing — or vice versa) would
+      // corrupt the source of truth. We wrap *each* migration in its own
+      // transaction rather than the whole run in one, matching Rails: migrations
+      // that succeed earlier in this run stay applied; only the one that throws
+      // is rolled back.
+      //
+      // The transaction is the seam's `transaction()` — NOT raw exec("BEGIN") —
+      // so that on a pooled driver every statement in the span (the DDL and the
+      // INSERT) runs on the SAME connection. Three separate exec("BEGIN")/
+      // exec("COMMIT") calls would land on different pooled connections and
+      // silently no-op. We build the Schema and prepare the INSERT against the
+      // transaction-scoped `tx`, not the outer db, for exactly this reason. A
+      // throw inside `fn` rolls the span back and rejects, undoing the partial
+      // DDL and ensuring no record was written.
+      for (const entry of pending) {
+        await this.db.transaction(async (tx) => {
+          const schema = new Schema(tx, this.dialect);
+
+          await entry.migration.up(schema);
+
+          await tx.prepare(`INSERT INTO ${TABLE} (version) VALUES (?)`).run([entry.version]);
+        });
+      }
+
+      return pending.map((entry) => entry.version);
+    });
   }
 
   /**

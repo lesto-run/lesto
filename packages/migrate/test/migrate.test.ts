@@ -65,6 +65,65 @@ afterEach(() => {
   database.close();
 });
 
+/**
+ * A Postgres-SHAPED fake over the same in-memory SQLite engine: it intercepts the
+ * `pg_advisory_lock` / `pg_advisory_unlock` statements (which SQLite has no
+ * function for), recording them into `lockLog`, and passes every other statement
+ * through to the real engine. This lets the `dialect: "postgres"` migrator paths
+ * run against SQLite while proving the advisory lock brackets the whole run.
+ */
+function makePgFake(lockLog: string[]): SqlDatabase {
+  const passthrough = makeDb();
+
+  // Mirror the real `@keel/pg` adapter's transaction nesting: the TOP-LEVEL db
+  // brackets BEGIN/COMMIT, but a transaction-scoped handle runs a nested
+  // `transaction` FLAT (Postgres has no nested BEGIN). The SQLite fake would
+  // otherwise throw "cannot start a transaction within a transaction" when the
+  // advisory-lock outer span wraps the per-migration inner spans.
+  const advisory = (sql: string): SqlStatement | undefined => {
+    const tag = sql.includes("pg_advisory_unlock")
+      ? "unlock"
+      : sql.includes("pg_advisory_lock")
+        ? "lock"
+        : undefined;
+
+    if (tag === undefined) return undefined;
+
+    return {
+      run: async () => {
+        lockLog.push(tag);
+
+        return { changes: 0 };
+      },
+      all: async () => [],
+    };
+  };
+
+  const prepare = (sql: string): SqlStatement => advisory(sql) ?? passthrough.prepare(sql);
+
+  // Real Postgres runs the advisory-lock span and each migration on SEPARATE
+  // pooled connections (independent BEGINs). The single-connection SQLite fake
+  // cannot, so we collapse nesting: only the OUTERMOST transaction issues a real
+  // BEGIN/COMMIT (via the passthrough); deeper ones run flat on the same handle.
+  let depth = 0;
+  const self: SqlDatabase = {
+    exec: passthrough.exec,
+    prepare,
+    transaction: async (fn) => {
+      if (depth > 0) return fn(self);
+
+      depth += 1;
+      try {
+        return await passthrough.transaction(() => fn(self));
+      } finally {
+        depth -= 1;
+      }
+    },
+  };
+
+  return self;
+}
+
 /** Read the columns of a table as { name -> type, notnull } for assertions. */
 const tableInfo = (name: string): { name: string; type: string; notnull: number }[] =>
   database.prepare(`PRAGMA table_info(${name})`).all() as {
@@ -429,12 +488,74 @@ describe("Migrator", () => {
       },
     };
 
-    const migrator = new Migrator(db, [recordDialect], { dialect: "postgres" });
+    // Postgres dialect → migrate runs under the advisory lock; the fake handles
+    // the lock SQL the SQLite engine lacks.
+    const migrator = new Migrator(makePgFake([]), [recordDialect], { dialect: "postgres" });
 
     await migrator.migrate();
     await migrator.rollback();
 
     expect(seen).toEqual(["up:postgres", "down:postgres"]);
+  });
+
+  it("postgres: takes the advisory lock around the run and releases it after", async () => {
+    const lockLog: string[] = [];
+    const seen: string[] = [];
+    const migrator = new Migrator(
+      makePgFake(lockLog),
+      [
+        {
+          version: "001",
+          migration: {
+            up: async () => {
+              // The lock is held WHILE the migration runs.
+              seen.push(lockLog.join(","));
+            },
+          },
+        },
+      ],
+      { dialect: "postgres" },
+    );
+
+    await migrator.migrate();
+
+    // Lock taken before the body, released after — exactly once each, in order.
+    expect(seen).toEqual(["lock"]);
+    expect(lockLog).toEqual(["lock", "unlock"]);
+  });
+
+  it("postgres: releases the advisory lock even when a migration throws", async () => {
+    const lockLog: string[] = [];
+    const migrator = new Migrator(
+      makePgFake(lockLog),
+      [
+        {
+          version: "001_boom",
+          migration: {
+            up: async () => {
+              throw new Error("boom");
+            },
+          },
+        },
+      ],
+      { dialect: "postgres" },
+    );
+
+    await expect(migrator.migrate()).rejects.toThrow("boom");
+
+    // The lock is released in `finally` — a throwing migration cannot strand it.
+    expect(lockLog).toEqual(["lock", "unlock"]);
+  });
+
+  it("sqlite (default): runs no advisory lock — relies on the single-connection FIFO", async () => {
+    const lockLog: string[] = [];
+    const migrator = new Migrator(makePgFake(lockLog), [
+      { version: "001", migration: { up: async () => {} } },
+    ]);
+
+    await migrator.migrate();
+
+    expect(lockLog).toEqual([]);
   });
 
   it("defaults to the sqlite dialect when no option is passed", async () => {

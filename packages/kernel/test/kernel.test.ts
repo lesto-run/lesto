@@ -135,6 +135,21 @@ describe("createApp", () => {
 
     expect(app.migrationsApplied).toEqual([]);
   });
+
+  it('runs nothing when migrations is "skip" (a fleet member that defers to another)', async () => {
+    // The schema is already migrated by another instance; this member must boot
+    // against it WITHOUT running migrations itself.
+    await db.exec(createTableSql(posts));
+
+    const app = await createApp({
+      db,
+      router: buildRouter(),
+      controllers: buildControllers(queryDb),
+      migrations: "skip",
+    });
+
+    expect(app.migrationsApplied).toEqual([]);
+  });
 });
 
 describe("App#handle", () => {

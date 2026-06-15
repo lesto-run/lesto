@@ -53,6 +53,14 @@ if (PG_URL !== undefined) {
   });
 }
 
+/** Open ONE fresh, independent Postgres session (its own pool) — for the advisory-lock race. */
+async function openPostgresHandle(): Promise<{ db: SqlDatabase; close: () => Promise<void> }> {
+  const { openPostgres } = await import("@keel/pg");
+
+  // Only ever called from the PG-only describe, so the URL is present.
+  return openPostgres({ connectionString: PG_URL! });
+}
+
 describe.each(drivers)("data-layer parity: $name", (driver) => {
   let handle: SqlDatabase;
   let db: Db;
@@ -244,5 +252,64 @@ describe.each(drivers)("schema installers on $name", (driver) => {
 
     expect(created.id).toBeGreaterThan(0);
     expect(created.label).toBe("hello");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Migration advisory lock (increment 3): a fleet booting N instances against
+// ONE Postgres must run each migration exactly once with zero DDL collisions.
+// This needs TWO INDEPENDENT sessions racing the same database, so it is
+// Postgres-only (two in-memory SQLite handles are separate databases — there is
+// nothing to contend over; SQLite's single-connection FIFO is the documented
+// story there).
+// ---------------------------------------------------------------------------
+
+const describePg = PG_URL === undefined ? describe.skip : describe;
+
+describePg("migration advisory lock (postgres, two racing migrators)", () => {
+  const racers = defineTable("lock_racers", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    note: text("note").notNull(),
+  });
+
+  const migration = {
+    version: "001_lock_racers",
+    migration: {
+      up: async (s: { execute(sql: string): Promise<void>; dialect: Dialect }) => {
+        // Plain CREATE TABLE (no IF NOT EXISTS): if both migrators ran the DDL,
+        // the second would throw "relation already exists" — exactly the
+        // collision the advisory lock must prevent.
+        await s.execute(createTableSql(racers, s.dialect));
+      },
+    },
+  };
+
+  it("one runs, one waits — each migration applied exactly once, no DDL collision", async () => {
+    const a = await openPostgresHandle();
+    const b = await openPostgresHandle();
+
+    try {
+      await a.db.exec("DROP TABLE IF EXISTS lock_racers");
+      await a.db.exec("DROP TABLE IF EXISTS schema_migrations");
+
+      // Two migrators, two independent sessions, racing the SAME database.
+      const [appliedA, appliedB] = await Promise.all([
+        new Migrator(a.db, [migration], { dialect: "postgres" }).migrate(),
+        new Migrator(b.db, [migration], { dialect: "postgres" }).migrate(),
+      ]);
+
+      // Exactly one migrator applied the migration; the other found it already
+      // applied (the lock made it wait, then read the recorded version).
+      const total = appliedA.length + appliedB.length;
+      expect(total).toBe(1);
+
+      // The table exists exactly once and is usable.
+      const db = createDb(a.db, { dialect: "postgres" });
+      const created = await db.insert(racers).values({ note: "ok" }).returning().get();
+      expect(created.id).toBeGreaterThan(0);
+    } finally {
+      await a.close();
+      await b.close();
+    }
   });
 });

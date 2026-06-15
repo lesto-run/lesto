@@ -57,8 +57,14 @@ export interface AppConfig {
   /** Controllers keyed by the name used in route targets (`"posts"` in `"posts#index"`). */
   controllers: Record<string, ControllerClass>;
 
-  /** Schema migrations to bring the database up to date on boot. Absent means none. */
-  migrations?: MigrationEntry[];
+  /**
+   * Schema migrations to bring the database up to date on boot. Absent means
+   * none. Pass the literal `"skip"` for a fleet member that must NOT migrate on
+   * boot — when one instance (or a separate release step) owns the migration and
+   * the rest should come up against the already-migrated schema. `"skip"` runs
+   * zero migrations and reports an empty applied list.
+   */
+  migrations?: MigrationEntry[] | "skip";
 
   /**
    * Request middleware that wraps every dispatch, outermost first.
@@ -85,8 +91,14 @@ export interface KeelAppConfig {
 
   app: Keel;
 
-  /** Schema migrations to bring the database up to date on boot. Absent means none. */
-  migrations?: MigrationEntry[];
+  /**
+   * Schema migrations to bring the database up to date on boot. Absent means
+   * none. Pass the literal `"skip"` for a fleet member that must NOT migrate on
+   * boot — when one instance (or a separate release step) owns the migration and
+   * the rest should come up against the already-migrated schema. `"skip"` runs
+   * zero migrations and reports an empty applied list.
+   */
+  migrations?: MigrationEntry[] | "skip";
 }
 
 /** A booted application: a request handler plus the record of what migrations ran. */
@@ -115,8 +127,10 @@ export async function createApp(config: AppConfig | KeelAppConfig): Promise<App>
   // Migrations are async now (ADR 0006): await them so the schema is fully
   // applied before dispatch is stood up — a query's first hit must land on a
   // migrated schema, never a half-applied one.
+  // `undefined` (no migrations configured) and `"skip"` (a fleet member that
+  // defers to another instance's migrate) both run nothing — empty applied list.
   const migrationsApplied: readonly string[] =
-    config.migrations === undefined
+    config.migrations === undefined || config.migrations === "skip"
       ? []
       : await new Migrator(config.db, config.migrations).migrate();
 
