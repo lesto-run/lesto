@@ -84,10 +84,12 @@ afterEach(() => {
 
 /**
  * A Postgres-SHAPED fake over the same in-memory SQLite engine: it intercepts the
- * `pg_advisory_lock` / `pg_advisory_unlock` statements (which SQLite has no
- * function for), recording them into `lockLog`, and passes every other statement
- * through to the real engine. This lets the `dialect: "postgres"` migrator paths
- * run against SQLite while proving the advisory lock brackets the whole run.
+ * `pg_advisory_xact_lock` statement (which SQLite has no function for), recording
+ * it into `lockLog`, and passes every other statement through to the real engine.
+ * This lets the `dialect: "postgres"` migrator paths run against SQLite while
+ * proving the transaction-level advisory lock brackets the whole run. (There is
+ * no unlock to record: a transaction-level lock releases automatically at
+ * COMMIT/ROLLBACK — see {@link Migrator}'s `withMigrationLock`.)
  */
 function makePgFake(lockLog: string[]): SqlDatabase {
   const passthrough = makeDb();
@@ -98,17 +100,11 @@ function makePgFake(lockLog: string[]): SqlDatabase {
   // otherwise throw "cannot start a transaction within a transaction" when the
   // advisory-lock outer span wraps the per-migration inner spans.
   const advisory = (sql: string): SqlStatement | undefined => {
-    const tag = sql.includes("pg_advisory_unlock")
-      ? "unlock"
-      : sql.includes("pg_advisory_lock")
-        ? "lock"
-        : undefined;
-
-    if (tag === undefined) return undefined;
+    if (!sql.includes("pg_advisory_xact_lock")) return undefined;
 
     return {
       run: async () => {
-        lockLog.push(tag);
+        lockLog.push("lock");
 
         return { changes: 0 };
       },
@@ -415,7 +411,7 @@ describe("Migrator", () => {
     expect(seen).toEqual(["up:postgres", "down:postgres"]);
   });
 
-  it("postgres: takes the advisory lock around the run and releases it after", async () => {
+  it("postgres: takes the xact advisory lock as the first statement of the run", async () => {
     const lockLog: string[] = [];
     const seen: string[] = [];
     const migrator = new Migrator(
@@ -436,12 +432,77 @@ describe("Migrator", () => {
 
     await migrator.migrate();
 
-    // Lock taken before the body, released after — exactly once each, in order.
+    // The transaction-level lock is taken once, before the body; it has no
+    // explicit unlock — COMMIT/ROLLBACK releases it (see withMigrationLock).
     expect(seen).toEqual(["lock"]);
-    expect(lockLog).toEqual(["lock", "unlock"]);
+    expect(lockLog).toEqual(["lock"]);
   });
 
-  it("postgres: releases the advisory lock even when a migration throws", async () => {
+  it("postgres: runs the whole body on the pinned lock connection (no second checkout → no max:1 deadlock)", async () => {
+    // The deadlock this guards: the lock span pins ONE connection via
+    // this.db.transaction; if migrate() then opened a SECOND this.db.transaction
+    // per migration, a `max: 1` pool would wait forever for a connection the lock
+    // already holds. The fix threads the lock's pinned `tx` into the body so each
+    // per-migration span runs FLAT on it. This fake makes the top-level checkout
+    // observable: the OUTER transaction (the lock span) increments `checkouts`;
+    // the nested per-migration transaction must run flat (depth > 0) and NOT
+    // check out again. With the bug it would be 1 (lock) + 1 (migration) = 2.
+    let checkouts = 0;
+    let depth = 0;
+    const passthrough = makeDb();
+    const lockLog: string[] = [];
+
+    const fake: SqlDatabase = {
+      exec: passthrough.exec,
+      prepare: (sql): SqlStatement => {
+        if (sql.includes("pg_advisory_xact_lock")) {
+          return {
+            run: async () => {
+              lockLog.push("lock");
+
+              return { changes: 0 };
+            },
+            all: async () => [],
+          };
+        }
+
+        return passthrough.prepare(sql);
+      },
+      // A nested transaction runs FLAT on the same handle (Postgres has no nested
+      // BEGIN) and passes `self` as `tx` — mirroring `@keel/pg`'s
+      // `transaction: inner => inner(tx)`. Only the OUTERMOST call is a real
+      // checkout.
+      transaction: async (fn) => {
+        if (depth > 0) return fn(fake);
+
+        checkouts += 1;
+        depth += 1;
+        try {
+          return await passthrough.transaction(() => fn(fake));
+        } finally {
+          depth -= 1;
+        }
+      },
+    };
+
+    const migrator = new Migrator(
+      fake,
+      [
+        { version: "001", migration: { up: async () => {} } },
+        { version: "002", migration: { up: async () => {} } },
+      ],
+      { dialect: "postgres" },
+    );
+
+    expect(await migrator.migrate()).toEqual(["001", "002"]);
+
+    // Exactly ONE top-level checkout (the lock span), even with two migrations —
+    // proof the per-migration spans ran flat on the pinned connection.
+    expect(checkouts).toBe(1);
+    expect(lockLog).toEqual(["lock"]);
+  });
+
+  it("postgres: a throwing migration rolls the locked span back (no stranded lock)", async () => {
     const lockLog: string[] = [];
     const migrator = new Migrator(
       makePgFake(lockLog),
@@ -460,8 +521,9 @@ describe("Migrator", () => {
 
     await expect(migrator.migrate()).rejects.toThrow("boom");
 
-    // The lock is released in `finally` — a throwing migration cannot strand it.
-    expect(lockLog).toEqual(["lock", "unlock"]);
+    // The xact lock was taken once; ROLLBACK (which the rejecting span triggers)
+    // releases it — no explicit unlock, nothing to strand.
+    expect(lockLog).toEqual(["lock"]);
   });
 
   it("sqlite (default): runs no advisory lock — relies on the single-connection FIFO", async () => {

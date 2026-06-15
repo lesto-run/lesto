@@ -66,13 +66,13 @@ export class Migrator {
   }
 
   /** Create the bookkeeping table if it is not already there. */
-  private async ensureTable(): Promise<void> {
-    await this.db.exec(`CREATE TABLE IF NOT EXISTS ${TABLE} (version TEXT PRIMARY KEY)`);
+  private async ensureTable(db: SqlDatabase): Promise<void> {
+    await db.exec(`CREATE TABLE IF NOT EXISTS ${TABLE} (version TEXT PRIMARY KEY)`);
   }
 
   /** The set of versions already recorded as applied. */
-  private async appliedVersions(): Promise<Set<string>> {
-    const rows = (await this.db.prepare(`SELECT version FROM ${TABLE}`).all()) as VersionRow[];
+  private async appliedVersions(db: SqlDatabase): Promise<Set<string>> {
+    const rows = (await db.prepare(`SELECT version FROM ${TABLE}`).all()) as VersionRow[];
 
     return new Set(rows.map((row) => row.version));
   }
@@ -80,39 +80,55 @@ export class Migrator {
   /**
    * Run `fn` while holding the cross-process migration lock, so two booting
    * instances of a fleet never run migrations against the same database at once.
+   * `fn` receives the db handle it MUST run every statement against.
    *
-   * On Postgres this is a session advisory lock (`pg_advisory_lock` /
-   * `pg_advisory_unlock`) on a fixed key, pinned to one connection for the whole
-   * run via `transaction()`: a second migrator's `pg_advisory_lock` BLOCKS until
-   * the first releases — one runs, one waits, zero DDL collisions. The lock is
-   * released in `finally` so a throwing migration cannot strand it. (The advisory
-   * lock is global to the database, not the connection, so the migrations
-   * themselves still run on their own pooled connections inside `fn`.)
+   * On Postgres this is a TRANSACTION-level advisory lock
+   * (`pg_advisory_xact_lock`) on a fixed key, taken as the first statement of a
+   * single `transaction()` span that wraps the entire run: a second migrator's
+   * `pg_advisory_xact_lock` BLOCKS until the first's transaction ends — one runs,
+   * one waits, zero DDL collisions.
+   *
+   * Two properties make `_xact_` the right primitive here, where a session lock
+   * (`pg_advisory_lock` / `pg_advisory_unlock`) is subtly wrong:
+   *
+   *   - It releases EXACTLY at COMMIT/ROLLBACK, atomically. A session lock
+   *     unlocked in a `finally` would release just BEFORE the surrounding
+   *     transaction commits, so the waiting migrator would acquire it, read the
+   *     not-yet-committed `schema_migrations`, find the version absent, and
+   *     re-run the DDL — a "relation already exists" collision. The xact lock is
+   *     held until the writer's data is durable, so the waiter only ever sees a
+   *     committed (already-applied) state.
+   *   - It needs no `finally` to unlock: a throwing migration rolls the span back
+   *     and the lock is dropped with it. Nothing can strand it.
+   *
+   * CRITICAL: `fn` is handed the PINNED `tx`, not `this.db`. The whole migrate
+   * body must run inside this one locked transaction. If `migrate()` instead
+   * opened fresh `this.db.transaction(...)` spans, a pool with `max: 1` would
+   * have its only connection already held by this span — the inner `connect()`
+   * would wait forever for a connection that never frees (a self-deadlock).
+   * Because both the `@keel/pg` adapter and `openSqlite` run a NESTED
+   * `transaction` FLAT on the same handle, threading `tx` through makes each
+   * per-migration span run on this connection: no second checkout, no deadlock,
+   * and (via the xact lock) the whole run is one atomic, serialized unit.
    *
    * On SQLite there is no cross-process concern the engine does not already
    * solve: the runtime serializes every write over its single connection (a
    * file lock under the hood), so concurrent migrators queue FIFO. The default
-   * therefore just runs `fn` directly — the seam exists so the PG path can
-   * override it without the SQLite path paying for a lock it does not need.
+   * therefore just runs `fn(this.db)` directly — the seam exists so the PG path
+   * can override it without the SQLite path paying for a lock it does not need.
    */
-  private async withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
+  private async withMigrationLock<T>(fn: (db: SqlDatabase) => Promise<T>): Promise<T> {
     if (this.dialect !== "postgres") {
-      return fn();
+      return fn(this.db);
     }
 
-    // `LOCK_KEY` is a fixed bigint identifying "the Keel migration lock". Hold it
-    // on one pinned connection (a transaction span) for the whole run; release it
-    // in `finally`. We do NOT use `pg_advisory_xact_lock` because the migrations
-    // inside `fn` open their own transactions on other pooled connections — the
-    // lock must outlive any single one of them.
+    // `LOCK_KEY` is a fixed bigint identifying "the Keel migration lock". The
+    // transaction-level lock is held for the whole span and released atomically
+    // at COMMIT, so the waiting migrator never observes a half-applied state.
     return this.db.transaction(async (tx) => {
-      await tx.prepare("SELECT pg_advisory_lock(?)").run([LOCK_KEY]);
+      await tx.prepare("SELECT pg_advisory_xact_lock(?)").run([LOCK_KEY]);
 
-      try {
-        return await fn();
-      } finally {
-        await tx.prepare("SELECT pg_advisory_unlock(?)").run([LOCK_KEY]);
-      }
+      return fn(tx);
     });
   }
 
@@ -125,10 +141,14 @@ export class Migrator {
    * once still runs each migration exactly once.
    */
   async migrate(): Promise<string[]> {
-    return this.withMigrationLock(async () => {
-      await this.ensureTable();
+    // `db` is the handle the lock hands us: the PINNED advisory-lock connection on
+    // Postgres, `this.db` on SQLite. Every statement below runs on it — see
+    // {@link withMigrationLock} for why running on `this.db` instead would
+    // self-deadlock a `max: 1` Postgres pool.
+    return this.withMigrationLock(async (db) => {
+      await this.ensureTable(db);
 
-      const applied = await this.appliedVersions();
+      const applied = await this.appliedVersions(db);
 
       const pending = this.entries.filter((entry) => !applied.has(entry.version));
 
@@ -143,12 +163,15 @@ export class Migrator {
       // so that on a pooled driver every statement in the span (the DDL and the
       // INSERT) runs on the SAME connection. Three separate exec("BEGIN")/
       // exec("COMMIT") calls would land on different pooled connections and
-      // silently no-op. We build the Schema and prepare the INSERT against the
-      // transaction-scoped `tx`, not the outer db, for exactly this reason. A
-      // throw inside `fn` rolls the span back and rejects, undoing the partial
-      // DDL and ensuring no record was written.
+      // silently no-op. On Postgres `db` IS the pinned lock connection, so this
+      // nested `transaction` runs FLAT on it (the pg adapter's
+      // `transaction: inner => inner(tx)`); no second connection is checked out.
+      // We build the Schema and prepare the INSERT against the transaction-scoped
+      // `tx`, not the outer db, for the same reason. A throw inside `fn` rolls the
+      // span back and rejects, undoing the partial DDL and ensuring no record was
+      // written.
       for (const entry of pending) {
-        await this.db.transaction(async (tx) => {
+        await db.transaction(async (tx) => {
           const schema = new Schema(tx, this.dialect);
 
           await entry.migration.up(schema);
@@ -167,9 +190,9 @@ export class Migrator {
    * nothing is applied.
    */
   async rollback(): Promise<string | undefined> {
-    await this.ensureTable();
+    await this.ensureTable(this.db);
 
-    const applied = await this.appliedVersions();
+    const applied = await this.appliedVersions(this.db);
 
     if (applied.size === 0) return undefined;
 
@@ -210,9 +233,9 @@ export class Migrator {
 
   /** Every known version with whether it is currently applied, in order. */
   async status(): Promise<{ version: string; applied: boolean }[]> {
-    await this.ensureTable();
+    await this.ensureTable(this.db);
 
-    const applied = await this.appliedVersions();
+    const applied = await this.appliedVersions(this.db);
 
     return this.entries.map((entry) => ({
       version: entry.version,

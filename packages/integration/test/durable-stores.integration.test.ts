@@ -24,9 +24,10 @@ import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@keel/ra
 import type { Dialect, SqlDatabase as RateLimitSql } from "@keel/ratelimit";
 import { createIdentity, findUserByEmail, insertUser, usersMigration } from "@keel/identity";
 import type { Identity } from "@keel/identity";
-import { createDb } from "@keel/db";
+import { createDb, createTableSql, defineTable, integer, text } from "@keel/db";
 import type { Db, SqlDatabase } from "@keel/db";
 import { Migrator } from "@keel/migrate";
+import type { MigrationEntry } from "@keel/migrate";
 import { installSchema as installQueueSchema, Queue } from "@keel/queue";
 import { openSqlite } from "@keel/runtime";
 
@@ -311,5 +312,75 @@ describe.each(drivers)("queue concurrency: $name", (driver) => {
     // B completes against the current token — the one that lands.
     await queue["complete"](b!);
     expect((await queue.find(id))?.status).toBe("done");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Migrator self-deadlock regression (Postgres only). The advisory-lock span pins
+// ONE connection for the whole migrate run; the per-migration transactions must
+// run FLAT on that pinned connection. If they instead opened fresh
+// `this.db.transaction(...)` spans, a pool with `max: 1` would have its only
+// connection already held by the lock — the inner checkout would wait forever.
+// This proves a `max: 1` migration COMPLETES. It is guarded against hanging the
+// suite by a short connectionTimeout AND a hard Promise.race deadline that fails
+// loud rather than wedging the runner.
+// ---------------------------------------------------------------------------
+
+describe.runIf(PG_URL !== undefined)("migrator: max:1 pool does not self-deadlock", () => {
+  const HARD_DEADLINE_MS = 5_000;
+
+  const usersTable = defineTable("users", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    email: text("email").notNull(),
+  });
+  const postsTable = defineTable("posts", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    title: text("title").notNull(),
+  });
+
+  const m1: MigrationEntry = {
+    version: "001_users",
+    migration: { up: async (s) => s.execute(createTableSql(usersTable, s.dialect)) },
+  };
+  const m2: MigrationEntry = {
+    version: "002_posts",
+    migration: { up: async (s) => s.execute(createTableSql(postsTable, s.dialect)) },
+  };
+
+  it("runs two migrations to completion on a single-connection pool", async () => {
+    const { openPostgres } = await import("@keel/pg");
+
+    // A pool with exactly ONE connection and a short connect timeout: if the fix
+    // regressed, the per-migration checkout could not be satisfied and would
+    // surface a connect timeout (loud) rather than hang the lock span forever.
+    const { db, close } = await openPostgres({
+      connectionString: PG_URL,
+      max: 1,
+      connectionTimeoutMillis: 2_000,
+    } as Parameters<typeof openPostgres>[0]);
+
+    try {
+      await db.exec("DROP TABLE IF EXISTS posts");
+      await db.exec("DROP TABLE IF EXISTS users");
+      await db.exec("DROP TABLE IF EXISTS schema_migrations");
+
+      const run = new Migrator(db, [m2, m1], { dialect: "postgres" }).migrate();
+
+      // Hard deadline so a true deadlock fails the test loud instead of wedging
+      // the whole suite on a single connection that never frees.
+      const applied = await Promise.race([
+        run,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new Error("migrate() did not complete on a max:1 pool — self-deadlock")),
+            HARD_DEADLINE_MS,
+          );
+        }),
+      ]);
+
+      expect(applied).toEqual(["001_users", "002_posts"]);
+    } finally {
+      await close();
+    }
   });
 });

@@ -152,11 +152,11 @@ describe("createApp", () => {
   });
 
   it("threads config.dialect into the migrator (the Postgres advisory-lock path runs)", async () => {
-    // The migrator takes the `pg_advisory_lock` path ONLY when dialect "postgres"
-    // reached it — so observing that lock proves the kernel threaded the dialect
-    // through to `new Migrator(..., { dialect })`. Empty migrations exercise the
-    // lock without a per-migration transaction; the sqlite test handle can't run
-    // `pg_advisory_*`, so we record-and-stub just those two statements.
+    // The migrator takes the `pg_advisory_xact_lock` path ONLY when dialect
+    // "postgres" reached it — so observing that lock proves the kernel threaded
+    // the dialect through to `new Migrator(..., { dialect })`. Empty migrations
+    // exercise the lock without a per-migration transaction; the sqlite test
+    // handle can't run `pg_advisory_*`, so we record-and-stub those statements.
     const prepared: string[] = [];
     const pgish: KernelDatabase = {
       exec: async (sql) => {
@@ -165,7 +165,7 @@ describe("createApp", () => {
       prepare: (sql) => {
         prepared.push(sql);
 
-        // sqlite has no pg_advisory_* functions; stub just those two.
+        // sqlite has no pg_advisory_* functions; stub them.
         if (sql.includes("pg_advisory")) {
           return {
             run: async () => ({ changes: 0 }),
@@ -212,7 +212,7 @@ describe("createApp", () => {
       dialect: "postgres",
     });
 
-    expect(prepared.some((sql) => sql.includes("pg_advisory_lock"))).toBe(true);
+    expect(prepared.some((sql) => sql.includes("pg_advisory_xact_lock"))).toBe(true);
     expect(app.migrationsApplied).toEqual([]);
   });
 });

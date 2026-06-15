@@ -72,7 +72,7 @@ export interface AppConfig {
    * The SQL dialect the boot migrations render DDL for. Defaults to `"sqlite"`.
    * A Postgres deploy MUST set `"postgres"` or the migrator emits SQLite-only
    * DDL (`GENERATED ALWAYS AS IDENTITY` becomes `AUTOINCREMENT`, which Postgres
-   * rejects) and skips the `pg_advisory_lock` boot guard. The app wires the same
+   * rejects) and skips the advisory-lock boot guard. The app wires the same
    * dialect into its own `createDb(handle, { dialect })`.
    */
   dialect?: Dialect;
@@ -115,7 +115,7 @@ export interface KeelAppConfig {
    * The SQL dialect the boot migrations render DDL for. Defaults to `"sqlite"`.
    * A Postgres deploy MUST set `"postgres"` or the migrator emits SQLite-only
    * DDL (`GENERATED ALWAYS AS IDENTITY` becomes `AUTOINCREMENT`, which Postgres
-   * rejects) and skips the `pg_advisory_lock` boot guard. The app wires the same
+   * rejects) and skips the advisory-lock boot guard. The app wires the same
    * dialect into its own `createDb(handle, { dialect })`.
    */
   dialect?: Dialect;
