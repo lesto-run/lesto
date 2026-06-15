@@ -48,11 +48,14 @@ const UNSAFE_ACTION_CODE = "FORM_UNSAFE_ACTION";
  * only report seam a `ComponentDef.render` has).
  */
 function safeAction(action: string): string | undefined {
-  // Browsers strip leading control chars/whitespace before resolving a URL, so
-  // `\tjavascript:…` runs as `javascript:…`. Strip them first or a prefixed
-  // tab/newline/space trivially bypasses the scheme check.
+  // Browsers strip ASCII tab (\t), newline (\n), carriage return (\r) from
+  // ANYWHERE in a URL before resolving it (WHATWG), so `java\tscript:` runs as
+  // `javascript:`. Remove those three everywhere, then strip leading control/
+  // whitespace, before the scheme check — else an EMBEDDED control char splits
+  // the scheme and slips past as a "relative" URL (live XSS on a non-escaping
+  // server renderer). We test this canonical form but return the ORIGINAL action.
   // eslint-disable-next-line no-control-regex -- intentional: the control range browsers strip
-  const trimmed = action.replace(/^[\u0000-\u0020]+/, "");
+  const trimmed = action.replace(/[\t\n\r]/g, "").replace(/^[\u0000-\u0020]+/, "");
 
   if (trimmed.startsWith("//")) {
     reportUnsafeAction(action);

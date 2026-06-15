@@ -192,6 +192,10 @@ describe("Form action scheme guard", () => {
       "JavaScript:alert(1)", // case-insensitive
       "\tjavascript:alert(1)", // leading control char
       "  javascript:alert(1)", // leading whitespace
+      "java\tscript:alert(1)", // EMBEDDED tab — browsers strip it mid-URL
+      "java\nscript:alert(1)", // EMBEDDED newline
+      "java\rscript:alert(1)", // EMBEDDED carriage return
+      "/\t/evil.example.com", // embedded-control protocol-relative bypass
       "data:text/html,<script>alert(1)</script>",
       "vbscript:msgbox(1)",
       "//evil.example.com", // protocol-relative off-origin

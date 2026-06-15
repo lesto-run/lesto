@@ -41,11 +41,14 @@ const UNSAFE_HREF_CODE = "UI_KIT_UNSAFE_HREF";
  * report seam a `ComponentDef.render` has — it returns an element, not errors).
  */
 function safeHref(href: string): string | undefined {
-  // Browsers strip leading control chars and whitespace before resolving a URL,
-  // so `\tjavascript:…` runs as `javascript:…`. Strip them first or the scheme
-  // check is trivially bypassed by a prefixed tab/newline/space.
+  // Browsers strip ASCII tab (\t), newline (\n), carriage return (\r) from
+  // ANYWHERE in a URL before resolving it (WHATWG), so `java\tscript:` runs as
+  // `javascript:`. Remove those three everywhere, then strip leading control/
+  // whitespace, before the scheme check — else an EMBEDDED control char splits
+  // the scheme and slips past as a "relative" URL (live XSS on a non-escaping
+  // server renderer). We test this canonical form but return the ORIGINAL href.
   // eslint-disable-next-line no-control-regex -- intentional: the control range browsers strip
-  const trimmed = href.replace(/^[\u0000-\u0020]+/, "");
+  const trimmed = href.replace(/[\t\n\r]/g, "").replace(/^[\u0000-\u0020]+/, "");
 
   // Protocol-relative (`//host`) inherits the page scheme and points off-origin —
   // a relative-looking off-origin redirect. Refuse before the scheme check.
