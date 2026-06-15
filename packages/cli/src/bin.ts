@@ -13,7 +13,7 @@ import { watch } from "node:fs";
 import { join } from "node:path";
 
 import { nodeStaticReader, serve } from "@keel/runtime";
-import type { AppConfig, KeelAppConfig } from "@keel/kernel";
+import type { KeelAppConfig } from "@keel/kernel";
 import type { UiDialect } from "@keel/web";
 
 import { createNewEntry, runPipeline } from "@keel/content-core/build";
@@ -43,9 +43,9 @@ const projectRoot = process.cwd();
 
 const islandsDir = join(projectRoot, ISLANDS_DIR);
 
-const loadApp = async (): Promise<AppConfig | KeelAppConfig> => {
+const loadApp = async (): Promise<KeelAppConfig> => {
   const module = (await import(join(process.cwd(), "keel.app.ts"))) as {
-    default: AppConfig | KeelAppConfig;
+    default: KeelAppConfig;
   };
 
   return module.default;

@@ -14,7 +14,7 @@
  */
 
 import { createApp } from "@keel/kernel";
-import type { AppConfig, KeelAppConfig, KernelDatabase } from "@keel/kernel";
+import type { KeelAppConfig, KernelDatabase } from "@keel/kernel";
 import type { UiDialect } from "@keel/web";
 
 import { deleteEntry, persistEntries, pruneEntries } from "@keel/content-store";
@@ -48,12 +48,11 @@ export interface CliDeps {
   /**
    * Load the project's app config (the bin reads `keel.app.ts`; tests fake it).
    *
-   * Either shape `createApp` accepts: the code-first `keel()` app
-   * ({@link KeelAppConfig}) or the legacy `{ router, controllers }`
-   * ({@link AppConfig}). Both are supported until the legacy surface is removed
-   * (ADR 0004 Phase 7.6).
+   * The code-first `keel()` app shape ({@link KeelAppConfig}) — the only shape
+   * `createApp` accepts now that the legacy `{ router, controllers }` surface is
+   * gone (ADR 0004 Phase 7.6).
    */
-  loadApp: () => Promise<AppConfig | KeelAppConfig>;
+  loadApp: () => Promise<KeelAppConfig>;
 
   /** Stand a real server in front of the app (the bin passes `@keel/runtime`'s). */
   serve: typeof serve;
@@ -164,23 +163,14 @@ const USAGE = [
   "  help              Show this help",
 ].join("\n");
 
-/** Print every route the app declares, one per line. */
+/** Print every route the app declares, one per line as `method\tpattern`. */
 async function runRoutes(deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
 
-  // The code-first `keel()` app exposes its routes as `{ method, pattern }`.
-  // The legacy `Router` additionally carries a `controller#action` target. Both
-  // are listed here until the legacy surface is removed (ADR 0004 Phase 7.6).
-  if ("app" in config) {
-    for (const route of config.app.routes()) {
-      deps.out(`${route.method}\t${route.pattern}`);
-    }
-
-    return 0;
-  }
-
-  for (const route of config.router.list()) {
-    deps.out(`${route.method}\t${route.pattern}\t${route.target}`);
+  // The code-first `keel()` app exposes its routes as `{ method, pattern }` — the
+  // only route surface now that the legacy `Router` is gone (ADR 0004 Phase 7.6).
+  for (const route of config.app.routes()) {
+    deps.out(`${route.method}\t${route.pattern}`);
   }
 
   return 0;
@@ -391,13 +381,12 @@ async function buildClientIfPresent(
 /**
  * The UI dialect a config selects — the matched pair's single source (ADR 0008).
  *
- * Read from `config.ui.dialect`; absent (or the legacy `{ router }` shape, which
- * has no `ui` field) defaults to `"react"`. The CLI hands this to the client
- * build, while `createApp` wires the server renderer from the same key — so the
- * client alias and the server renderer are always the same dialect.
+ * Read from `config.ui.dialect`; absent defaults to `"react"`. The CLI hands this
+ * to the client build, while `createApp` wires the server renderer from the same
+ * key — so the client alias and the server renderer are always the same dialect.
  */
-function dialectOf(config: AppConfig | KeelAppConfig): UiDialect {
-  return "ui" in config && config.ui !== undefined ? config.ui.dialect : "react";
+function dialectOf(config: KeelAppConfig): UiDialect {
+  return config.ui !== undefined ? config.ui.dialect : "react";
 }
 
 /**

@@ -2,12 +2,10 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTableSql, defineTable, dropTableSql, integer, text } from "@keel/db";
-import { Router } from "@keel/router";
-import { Controller, keel } from "@keel/web";
+import { keel } from "@keel/web";
 import { Migrator } from "@keel/migrate";
 import { contentEntriesMigration } from "@keel/content-store";
-import type { ControllerClass, KeelResponse } from "@keel/web";
-import type { App, AppConfig, KeelAppConfig, KernelDatabase } from "@keel/kernel";
+import type { App, KeelAppConfig, KernelDatabase } from "@keel/kernel";
 import type { MigrationEntry } from "@keel/migrate";
 import type { RuntimeEntry } from "@keel/content-core";
 import type { Server, ServeOptions } from "@keel/runtime";
@@ -19,12 +17,6 @@ import { CliError, parsePort, parseStringFlag, run } from "../src/index";
 import type { CliDeps } from "../src/index";
 
 // --- A real-enough app, built over an in-memory better-sqlite3 adapter. ---
-
-class PostsController extends Controller {
-  index(): KeelResponse {
-    return this.json({ posts: [] });
-  }
-}
 
 const posts = defineTable("posts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -195,23 +187,6 @@ describe("run routes", () => {
 
     // The code-first shape: method + pattern, no controller#action target.
     expect(lines).toEqual(["GET\t/posts", "POST\t/posts", "GET\t/posts/:id"]);
-  });
-
-  it("prints the legacy Router's method, pattern, and controller#action target", async () => {
-    // Dual-mode lives until ADR 0004 Phase 7.6: a legacy `{ router, controllers }`
-    // app still lists its routes with the third target column.
-    const legacy: AppConfig = {
-      db: adapt(database),
-      router: new Router().resources("posts"),
-      controllers: { posts: PostsController as ControllerClass },
-      migrations,
-    };
-
-    const code = await run(["routes"], depsWith({ loadApp: () => Promise.resolve(legacy) }));
-
-    expect(code).toBe(0);
-    expect(lines).toContain("GET\t/posts\tposts#index");
-    expect(lines).toContain("POST\t/posts\tposts#create");
   });
 });
 
