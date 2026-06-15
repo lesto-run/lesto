@@ -18,6 +18,8 @@
  * delegation.
  */
 
+import type { Dialect } from "@keel/db";
+
 import { Migrator } from "@keel/migrate";
 import type { MigrationEntry } from "@keel/migrate";
 
@@ -67,6 +69,15 @@ export interface AppConfig {
   migrations?: MigrationEntry[] | "skip";
 
   /**
+   * The SQL dialect the boot migrations render DDL for. Defaults to `"sqlite"`.
+   * A Postgres deploy MUST set `"postgres"` or the migrator emits SQLite-only
+   * DDL (`GENERATED ALWAYS AS IDENTITY` becomes `AUTOINCREMENT`, which Postgres
+   * rejects) and skips the `pg_advisory_lock` boot guard. The app wires the same
+   * dialect into its own `createDb(handle, { dialect })`.
+   */
+  dialect?: Dialect;
+
+  /**
    * Request middleware that wraps every dispatch, outermost first.
    *
    * Absent (the default) is the backward-compatibility floor: no interception,
@@ -99,6 +110,15 @@ export interface KeelAppConfig {
    * zero migrations and reports an empty applied list.
    */
   migrations?: MigrationEntry[] | "skip";
+
+  /**
+   * The SQL dialect the boot migrations render DDL for. Defaults to `"sqlite"`.
+   * A Postgres deploy MUST set `"postgres"` or the migrator emits SQLite-only
+   * DDL (`GENERATED ALWAYS AS IDENTITY` becomes `AUTOINCREMENT`, which Postgres
+   * rejects) and skips the `pg_advisory_lock` boot guard. The app wires the same
+   * dialect into its own `createDb(handle, { dialect })`.
+   */
+  dialect?: Dialect;
 }
 
 /** A booted application: a request handler plus the record of what migrations ran. */
@@ -132,7 +152,9 @@ export async function createApp(config: AppConfig | KeelAppConfig): Promise<App>
   const migrationsApplied: readonly string[] =
     config.migrations === undefined || config.migrations === "skip"
       ? []
-      : await new Migrator(config.db, config.migrations).migrate();
+      : await new Migrator(config.db, config.migrations, {
+          dialect: config.dialect ?? "sqlite",
+        }).migrate();
 
   // The code-first shape: the keel() router owns dispatch (routes, pages, and
   // middleware all live on it), so the kernel just delegates to app.handle.
