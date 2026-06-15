@@ -109,7 +109,8 @@ function parseGeneration(contents: string | undefined): readonly string[] {
   try {
     const parsed: unknown = JSON.parse(contents);
 
-    return Array.isArray(parsed) ? parsed.filter((name): name is string => typeof name === "string")
+    return Array.isArray(parsed)
+      ? parsed.filter((name): name is string => typeof name === "string")
       : [];
   } catch {
     return [];
@@ -149,6 +150,37 @@ export async function buildClient(
   deps: BuildClientDeps,
 ): Promise<BuildClientResult> {
   const islands = await deps.listIslands(options.islandsDir);
+
+  // The matched pair (ADR 0008): the `preact` dialect aliases only the CLIENT
+  // bundle react→preact/compat. The CLI's server renderer stays React (its
+  // process is NOT aliased), which is sound for deferred (`ssr: false`) islands —
+  // they mount fresh on the client and never hydrate server markup. But an
+  // `ssr: true` island ships React server markup that the Preact client would
+  // silently re-hydrate: a hydration mismatch nothing else catches. Refuse it at
+  // build time with a coded error, naming the offending island(s) and the two
+  // ways out (make it deferred, or take the whole-process-aliased worker path
+  // that estate uses — react→preact aliased at build time + .renderer(
+  // preactServerRenderer)). `react` builds are exempt: server and client are both
+  // React, so any `ssr` value is byte-identical.
+  if (options.dialect === "preact") {
+    const ssrIslands = islands.filter((island) => island.ssr).map((island) => island.name);
+
+    if (ssrIslands.length > 0) {
+      throw new AssetsError(
+        "ASSETS_DIALECT_SSR_MISMATCH",
+        `island${ssrIslands.length > 1 ? "s" : ""} ${ssrIslands
+          .map((name) => `"${name}"`)
+          .join(", ")} ${ssrIslands.length > 1 ? "are" : "is"} ssr: true under the ` +
+          `"preact" client dialect, but the CLI server renders React — the React ` +
+          `server markup would silently mismatch the Preact client on hydration. ` +
+          `Either make the island deferred (ssr: false), or build it through the ` +
+          `whole-process-aliased worker path (react→preact alias + ` +
+          `.renderer(preactServerRenderer), as examples/estate does) where the ` +
+          `server can emit Preact markup.`,
+        { dialect: options.dialect, islands: ssrIslands },
+      );
+    }
+  }
 
   const entrySource = synthesizeEntry(islands);
 

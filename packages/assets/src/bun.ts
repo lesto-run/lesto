@@ -45,12 +45,17 @@ function preactAliasPlugin(appRoot: string): BunPlugin {
 /** Read one island module's declaration, classifying it eager/lazy by its hydrate strategy. */
 async function readIsland(path: string): Promise<IslandFile> {
   const module = (await import(path)) as {
-    default: { island: { name: string; hydrate?: string } };
+    default: { island: { name: string; hydrate?: string; ssr?: boolean } };
   };
 
   const def = module.default.island;
 
-  return { name: def.name, importPath: path, lazy: def.hydrate === "visible" };
+  return {
+    name: def.name,
+    importPath: path,
+    lazy: def.hydrate === "visible",
+    ssr: def.ssr === true,
+  };
 }
 
 /** Whether a directory entry is an island module (by extension), ignoring synthesized/hidden files. */

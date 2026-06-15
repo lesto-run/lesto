@@ -14,7 +14,7 @@ import type { IslandFile } from "../src/synthesize";
 describe("synthesizeEntry", () => {
   it("static-imports an eager island and registers it by its carried def", () => {
     const source = synthesizeEntry([
-      { name: "Account", importPath: "/app/islands/account.tsx", lazy: false },
+      { name: "Account", importPath: "/app/islands/account.tsx", lazy: false, ssr: false },
     ]);
 
     expect(source).toContain('import Island0 from "/app/islands/account.tsx";');
@@ -25,7 +25,7 @@ describe("synthesizeEntry", () => {
 
   it("dynamic-imports a lazy (visible) island so only its bytes split", () => {
     const source = synthesizeEntry([
-      { name: "Chart", importPath: "/app/islands/chart.tsx", lazy: true },
+      { name: "Chart", importPath: "/app/islands/chart.tsx", lazy: true, ssr: false },
     ]);
 
     // No static import for the lazy one…
@@ -39,9 +39,9 @@ describe("synthesizeEntry", () => {
 
   it("mixes eager and lazy islands, numbering the eager imports", () => {
     const source = synthesizeEntry([
-      { name: "Account", importPath: "/a.tsx", lazy: false },
-      { name: "Chart", importPath: "/b.tsx", lazy: true },
-      { name: "Cart", importPath: "/c.tsx", lazy: false },
+      { name: "Account", importPath: "/a.tsx", lazy: false, ssr: false },
+      { name: "Chart", importPath: "/b.tsx", lazy: true, ssr: false },
+      { name: "Cart", importPath: "/c.tsx", lazy: false, ssr: false },
     ]);
 
     // Eager imports keep their positional index (0 and 2), lazy gets no import.
@@ -106,7 +106,9 @@ function fakeDeps(overrides: Partial<BuildClientDeps> = {}): {
 
   const deps: BuildClientDeps = {
     listIslands: () =>
-      Promise.resolve([{ name: "Account", importPath: "/a.tsx", lazy: false }] as IslandFile[]),
+      Promise.resolve([
+        { name: "Account", importPath: "/a.tsx", lazy: false, ssr: false },
+      ] as IslandFile[]),
     bundle: (request) => {
       bundled.push(request);
 
@@ -253,20 +255,23 @@ describe("buildClient", () => {
   it.each([
     ["corrupt JSON", "not json{"],
     ["valid JSON that is not an array", '{"chunk-x.js":true}'],
-  ])("tolerates a %s generation marker (treats it as no prior generation)", async (_label, marker) => {
-    const { deps, removed } = fakeDeps({
-      listOutDir: () => Promise.resolve(["chunk-stale0001.js"]),
-      read: () => Promise.resolve(marker),
-    });
+  ])(
+    "tolerates a %s generation marker (treats it as no prior generation)",
+    async (_label, marker) => {
+      const { deps, removed } = fakeDeps({
+        listOutDir: () => Promise.resolve(["chunk-stale0001.js"]),
+        read: () => Promise.resolve(marker),
+      });
 
-    await buildClient(
-      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
-      deps,
-    );
+      await buildClient(
+        { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+        deps,
+      );
 
-    // With no parseable prior generation, the stale chunk is swept.
-    expect(removed).toEqual(["/out/chunk-stale0001.js"]);
-  });
+      // With no parseable prior generation, the stale chunk is swept.
+      expect(removed).toEqual(["/out/chunk-stale0001.js"]);
+    },
+  );
 
   it("ignores non-string entries in the generation marker", async () => {
     // A marker array with a non-string element: the non-string is filtered out, so
@@ -300,5 +305,100 @@ describe("buildClient", () => {
       expect(error).toBeInstanceOf(AssetsError);
       expect((error as AssetsError).code).toBe("ASSETS_NO_ENTRY");
     }
+  });
+
+  it("refuses an ssr: true island under the preact dialect, naming the island", async () => {
+    // The broken matched pair: a preact CLIENT bundle hydrating React SERVER
+    // markup. The CLI server renders React, so this would silently mismatch — the
+    // build must make it loud. The bundler is never even reached.
+    const { deps, bundled } = fakeDeps({
+      listIslands: () =>
+        Promise.resolve([
+          { name: "Account", importPath: "/a.tsx", lazy: false, ssr: false },
+          { name: "Cart", importPath: "/c.tsx", lazy: false, ssr: true },
+        ] as IslandFile[]),
+    });
+
+    try {
+      await buildClient(
+        { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "preact" },
+        deps,
+      );
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(AssetsError);
+      expect((error as AssetsError).code).toBe("ASSETS_DIALECT_SSR_MISMATCH");
+      // The message names the offending island and points at both resolutions.
+      expect((error as AssetsError).message).toContain('"Cart"');
+      expect((error as AssetsError).message).not.toContain('"Account"');
+      expect((error as AssetsError).message).toContain("ssr: false");
+      expect((error as AssetsError).message).toContain("preactServerRenderer");
+      expect((error as AssetsError).details).toMatchObject({ islands: ["Cart"] });
+    }
+
+    // The refusal short-circuits before bundling.
+    expect(bundled).toEqual([]);
+  });
+
+  it("names every offending island and pluralizes when more than one is ssr: true", async () => {
+    const { deps } = fakeDeps({
+      listIslands: () =>
+        Promise.resolve([
+          { name: "Cart", importPath: "/c.tsx", lazy: false, ssr: true },
+          { name: "Account", importPath: "/a.tsx", lazy: false, ssr: false },
+          { name: "Banner", importPath: "/b.tsx", lazy: false, ssr: true },
+        ] as IslandFile[]),
+    });
+
+    try {
+      await buildClient(
+        { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "preact" },
+        deps,
+      );
+      expect.unreachable();
+    } catch (error) {
+      expect((error as AssetsError).code).toBe("ASSETS_DIALECT_SSR_MISMATCH");
+      // Both ssr islands named (plural form), the deferred one omitted.
+      expect((error as AssetsError).message).toContain('islands "Cart", "Banner" are ssr: true');
+      expect((error as AssetsError).message).not.toContain('"Account"');
+      expect((error as AssetsError).details).toMatchObject({ islands: ["Cart", "Banner"] });
+    }
+  });
+
+  it("builds fine under the preact dialect when every island is deferred (ssr: false)", async () => {
+    const { deps, written } = fakeDeps({
+      listIslands: () =>
+        Promise.resolve([
+          { name: "Account", importPath: "/a.tsx", lazy: false, ssr: false },
+          { name: "Chart", importPath: "/b.tsx", lazy: true, ssr: false },
+        ] as IslandFile[]),
+    });
+
+    const result = await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "preact" },
+      deps,
+    );
+
+    expect(result.entry).toBe("/out/client.js");
+    expect(written.get("/out/client.js")).toBe("ENTRY");
+  });
+
+  it("builds fine under the react dialect even with an ssr: true island", async () => {
+    // React server + React client are byte-identical, so ssr: true is always fine
+    // under the react dialect — the guard is preact-only.
+    const { deps, written } = fakeDeps({
+      listIslands: () =>
+        Promise.resolve([
+          { name: "Cart", importPath: "/c.tsx", lazy: false, ssr: true },
+        ] as IslandFile[]),
+    });
+
+    const result = await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+      deps,
+    );
+
+    expect(result.entry).toBe("/out/client.js");
+    expect(written.get("/out/client.js")).toBe("ENTRY");
   });
 });

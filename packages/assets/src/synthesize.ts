@@ -28,6 +28,14 @@ export interface IslandFile {
 
   /** `true` for a `hydrate: "visible"` island — reached via a dynamic import (its own chunk). */
   readonly lazy: boolean;
+
+  /**
+   * `true` for an island the author asserted the server can render (`ssr: true`),
+   * which therefore HYDRATES server markup rather than mounting fresh. Carried so
+   * the build can refuse the broken matched pair (`ssr: true` under the `preact`
+   * client dialect with the CLI's React server renderer — {@link buildClient}).
+   */
+  readonly ssr: boolean;
 }
 
 /** A safe JS identifier for the Nth statically-imported island. */
