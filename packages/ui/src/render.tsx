@@ -58,8 +58,17 @@ export interface RenderError {
  * It mirrors `hydrate.tsx`'s injectable `mount` seam: the thing that varies by
  * runtime is injected, never reached for as a global, so both halves of the
  * hydration contract are chosen by the same explicit decision.
+ *
+ * The `dialect` tag names which client this renderer's markup is meant to hydrate
+ * against (`"react"` / `"preact"`). It is the load-bearing half of ADR 0008's
+ * matched pair: the wiring that turns a single `ui.dialect` key into a client
+ * alias AND a server renderer compares this tag to the client dialect and refuses
+ * a mismatch (client Preact + server React) with a coded error, so the
+ * silently-mismatching hydration this seam exists to prevent can never be wired.
  */
 export interface ServerRenderer {
+  /** Which client this renderer's markup hydrates against — the matched-pair tag. */
+  dialect: "react" | "preact";
   renderToString(node: ReactElement): string;
   renderToStaticMarkup(node: ReactElement): string;
 }
@@ -71,7 +80,11 @@ export interface ServerRenderer {
  * Selecting a different dialect (e.g. {@link ./server-preact}) is the caller's
  * explicit opt-in via {@link renderPageMarkup}'s `renderer` argument.
  */
-export const reactServerRenderer: ServerRenderer = { renderToStaticMarkup, renderToString };
+export const reactServerRenderer: ServerRenderer = {
+  dialect: "react",
+  renderToStaticMarkup,
+  renderToString,
+};
 
 /**
  * The mutable scratch a single render walk threads through itself: the errors it

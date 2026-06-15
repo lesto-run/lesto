@@ -11,6 +11,7 @@ import { KeelError } from "@keel/errors";
 export { KeelError };
 
 export type WebErrorCode =
+  | "WEB_DIALECT_MISMATCH"
   | "WEB_UNKNOWN_ACTION"
   | "WEB_UNKNOWN_CONTROLLER"
   | "WEB_UNKNOWN_DATA_SOURCE"

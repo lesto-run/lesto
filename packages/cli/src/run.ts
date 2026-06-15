@@ -15,6 +15,7 @@
 
 import { createApp } from "@keel/kernel";
 import type { AppConfig, KeelAppConfig, KernelDatabase } from "@keel/kernel";
+import type { UiDialect } from "@keel/web";
 
 import { deleteEntry, persistEntries, pruneEntries } from "@keel/content-store";
 import type { RuntimeEntry } from "@keel/content-core";
@@ -87,10 +88,19 @@ export interface CliDeps {
    * Build the project's island client bundle (`@keel/assets`, ADR 0011 Seam 3).
    * The bin wires this to `buildClient(...)` with `bunBuildClientDeps` over the
    * project's `app/islands/`; the CLI core only decides WHEN to call it (a prod
-   * build for `build`, an unminified one on `dev` boot + on watch). A rejected
-   * build is surfaced as a coded `CLI_CLIENT_BUILD_FAILED`.
+   * build for `build`, an unminified one on `dev` boot + on watch) and with which
+   * `dialect`. A rejected build is surfaced as a coded `CLI_CLIENT_BUILD_FAILED`.
+   *
+   * `dialect` is the matched pair's CLIENT half (ADR 0008): the CLI reads the
+   * project's single `ui.dialect` key and passes it here AND lets `createApp` wire
+   * the server renderer from the same value, so the client alias and the server
+   * renderer can never diverge.
    */
-  buildClientAssets?: (options: { outDir: string; mode: "dev" | "production" }) => Promise<void>;
+  buildClientAssets?: (options: {
+    outDir: string;
+    mode: "dev" | "production";
+    dialect: UiDialect;
+  }) => Promise<void>;
 
   /**
    * Watch `app/islands/` and call `onChange` (debounced) when a module changes,
@@ -353,20 +363,33 @@ async function buildClientIfPresent(
   deps: CliDeps,
   outDir: string,
   mode: "dev" | "production",
+  dialect: UiDialect,
 ): Promise<void> {
   if (deps.hasIslandsDir === undefined || deps.buildClientAssets === undefined) return;
 
   if (!(await deps.hasIslandsDir())) return;
 
   try {
-    await deps.buildClientAssets({ outDir, mode });
+    await deps.buildClientAssets({ outDir, mode, dialect });
   } catch (cause) {
     throw new CliError(
       "CLI_CLIENT_BUILD_FAILED",
       "the island client build failed — see the cause for the bundler error",
-      { outDir, mode, cause },
+      { outDir, mode, dialect, cause },
     );
   }
+}
+
+/**
+ * The UI dialect a config selects — the matched pair's single source (ADR 0008).
+ *
+ * Read from `config.ui.dialect`; absent (or the legacy `{ router }` shape, which
+ * has no `ui` field) defaults to `"react"`. The CLI hands this to the client
+ * build, while `createApp` wires the server renderer from the same key — so the
+ * client alias and the server renderer are always the same dialect.
+ */
+function dialectOf(config: AppConfig | KeelAppConfig): UiDialect {
+  return "ui" in config && config.ui !== undefined ? config.ui.dialect : "react";
 }
 
 /**
@@ -408,7 +431,7 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
 
   const selected = selectTarget(sites, target);
 
-  await buildClientIfPresent(deps, outDir, "production");
+  await buildClientIfPresent(deps, outDir, "production", dialectOf(config));
 
   const manifest = await buildStaticSites(selected, app.handle, deps.sink(outDir));
 
@@ -440,9 +463,14 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
 
   const sites = await deps.loadSites();
 
+  // The matched pair's client half (ADR 0008): the same `ui.dialect` key
+  // `createApp` just wired the server renderer from also picks the client alias,
+  // so dev's bundle and its server render speak one dialect.
+  const dialect = dialectOf(config);
+
   // Build the island client on boot, then watch for changes. The dev outDir is
   // the same root the bin's `readAsset` serves from (DEFAULT_OUT_DIR).
-  await buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev");
+  await buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev", dialect);
 
   // A change rebuilds the bundle; a rebuild failure during dev is reported, not
   // fatal — the dev server stays up so the next save can fix it. The coded
@@ -450,7 +478,7 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // showing.
   if (deps.hasIslandsDir !== undefined && (await deps.hasIslandsDir())) {
     deps.watchIslands?.(() => {
-      void buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev").catch((error: unknown) => {
+      void buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev", dialect).catch((error: unknown) => {
         deps.out(`client rebuild failed: ${rebuildErrorMessage(error)}`);
       });
     });

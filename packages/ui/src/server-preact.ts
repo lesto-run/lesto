@@ -53,6 +53,7 @@ import type { ServerRenderer } from "./render";
  * rather than widening either library's public types.
  */
 export const preactServerRenderer: ServerRenderer = {
+  dialect: "preact",
   renderToString: (node: ReactElement) => renderToString(node as never),
   renderToStaticMarkup: (node: ReactElement) => renderToStaticMarkup(node as never),
 };

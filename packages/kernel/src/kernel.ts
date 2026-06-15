@@ -26,7 +26,7 @@ import type { MigrationEntry } from "@keel/migrate";
 import type { Router } from "@keel/router";
 
 import { Application } from "@keel/web";
-import type { ControllerClass, Keel, KeelResponse, Middleware } from "@keel/web";
+import type { ControllerClass, Keel, KeelResponse, Middleware, UiDialect } from "@keel/web";
 
 /**
  * The one database handle the kernel threads through the migrator.
@@ -119,6 +119,17 @@ export interface KeelAppConfig {
    * dialect into its own `createDb(handle, { dialect })`.
    */
   dialect?: Dialect;
+
+  /**
+   * The UI client/server dialect (ADR 0007/0008's matched pair). The single key
+   * that drives BOTH the island client bundle's `react`→`preact/compat` alias
+   * (read by the CLI for `keel dev`/`build`) AND the page server renderer
+   * (applied to `app` here, on boot). `{ dialect: "preact" }` shrinks the island
+   * runtime to ~10 KB gzip; absent (or `"react"`) keeps React streaming, the
+   * default. `createApp` wires the server half; the CLI wires the client half
+   * from the same value, so the two can never diverge.
+   */
+  ui?: { dialect: UiDialect };
 }
 
 /** A booted application: a request handler plus the record of what migrations ran. */
@@ -159,6 +170,19 @@ export async function createApp(config: AppConfig | KeelAppConfig): Promise<App>
   // The code-first shape: the keel() router owns dispatch (routes, pages, and
   // middleware all live on it), so the kernel just delegates to app.handle.
   if ("app" in config) {
+    // The matched pair's SERVER half (ADR 0008). Under the CLI's in-process
+    // Node/Bun runtime the page renderer is React (`react-dom/server`) — the
+    // process is NOT aliased to Preact — so the server renderer stays React even
+    // when `ui.dialect: "preact"` selects the Preact CLIENT bundle. That pairing
+    // is sound for deferred (`ssr: false`) islands, which mount fresh on the
+    // Preact client and never hydrate server markup (the scaffold's default).
+    // Full server-side Preact (byte-identical `ssr: true` markup) is the estate
+    // bespoke path, where the WHOLE worker process is aliased react→preact/compat
+    // at build time and the app calls `.renderer(preactServerRenderer)` itself —
+    // a Preact server renderer cannot consume React's `createElement` output in a
+    // React process, so the CLI does not force it. The `applyUiDialect` /
+    // `.renderer()` seam + the `WEB_DIALECT_MISMATCH` guard remain for that
+    // bespoke wiring; the CLI drives only the client half from `ui.dialect`.
     return {
       migrationsApplied,
       handle: (method, path, options) => config.app.handle(method, path, options),

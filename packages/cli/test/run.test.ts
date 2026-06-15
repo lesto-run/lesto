@@ -525,7 +525,7 @@ describe("run build", () => {
 
 describe("run build — island client assets", () => {
   it("builds the client (production) into the out dir when app/islands/ exists", async () => {
-    const built: Array<{ outDir: string; mode: string }> = [];
+    const built: Array<{ outDir: string; mode: string; dialect: string }> = [];
 
     const code = await run(
       ["build"],
@@ -542,7 +542,8 @@ describe("run build — island client assets", () => {
     );
 
     expect(code).toBe(0);
-    expect(built).toEqual([{ outDir: "out", mode: "production" }]);
+    // The app config carries no `ui` key, so the client build defaults to "react".
+    expect(built).toEqual([{ outDir: "out", mode: "production", dialect: "react" }]);
   });
 
   it("skips the client build when app/islands/ does not exist (island-less app)", async () => {
@@ -607,7 +608,7 @@ describe("run dev — island client assets", () => {
   ];
 
   it("builds the client (dev mode) on boot when app/islands/ exists", async () => {
-    const built: Array<{ outDir: string; mode: string }> = [];
+    const built: Array<{ outDir: string; mode: string; dialect: string }> = [];
 
     await run(
       ["dev"],
@@ -623,7 +624,30 @@ describe("run dev — island client assets", () => {
       }),
     );
 
-    expect(built).toEqual([{ outDir: "out", mode: "dev" }]);
+    expect(built).toEqual([{ outDir: "out", mode: "dev", dialect: "react" }]);
+  });
+
+  it("passes the preact dialect to the client build when ui.dialect is preact", async () => {
+    const built: Array<{ outDir: string; mode: string; dialect: string }> = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        // A keel() app config that opts into the Preact dialect — the single key
+        // that the CLI hands to the client build (the matched pair's client half).
+        loadApp: () => Promise.resolve({ ...buildConfig(), ui: { dialect: "preact" as const } }),
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: (options) => {
+          built.push(options);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(built).toEqual([{ outDir: "out", mode: "dev", dialect: "preact" }]);
   });
 
   it("registers a debounced watcher that rebuilds on change", async () => {

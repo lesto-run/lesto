@@ -159,6 +159,7 @@ describe("preactServerRenderer — dialect-matched ssr:true hydration", () => {
     // server markup it must hydrate disagrees with what it produces — the very
     // mismatch the Preact-dialect render above eliminates (zero markers, agreement).
     const reactRenderer: ServerRenderer = {
+      dialect: "react",
       renderToString: (node) => reactRenderToString(node),
       renderToStaticMarkup: (node) => reactRenderToString(node),
     };

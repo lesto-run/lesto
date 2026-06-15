@@ -34,6 +34,7 @@ function fakeRenderer(): { renderer: ServerRenderer; calls: string[] } {
   return {
     calls,
     renderer: {
+      dialect: "react" as const,
       renderToString: () => {
         calls.push("renderToString");
 

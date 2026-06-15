@@ -22,8 +22,8 @@ export { Controller } from "./controller";
 export type { ControllerClass } from "./controller";
 
 // The code-first router + handler context — Keel's request-handling surface.
-export { fromRequestMiddleware, keel, Keel } from "./keel";
-export type { Handler } from "./keel";
+export { applyUiDialect, fromRequestMiddleware, keel, Keel } from "./keel";
+export type { Handler, UiDialect } from "./keel";
 export { Context } from "./handler-context";
 
 // Page rendering: the lean route contract (load / params / metadata / access /

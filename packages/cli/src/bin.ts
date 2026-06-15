@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 import { nodeStaticReader, serve } from "@keel/runtime";
 import type { AppConfig, KeelAppConfig } from "@keel/kernel";
+import type { UiDialect } from "@keel/web";
 
 import { createNewEntry, runPipeline } from "@keel/content-core/build";
 import type { RuntimeEntry } from "@keel/content-core";
@@ -63,19 +64,22 @@ const hasIslandsDir = async (): Promise<boolean> => {
 };
 
 // Build the island client bundle with @keel/assets. The CLI core's "dev" mode
-// maps to an unminified build; "production" to the minified one. Dialect is
-// "react" for now — the `ui.dialect` config key is Increment 2/3 scope (TODO:
-// ADR 0011 Seam 2 — drive dialect from keel.config so dev == prod under preact).
+// maps to an unminified build; "production" to the minified one. The `dialect`
+// is the matched pair's client half (ADR 0008): the CLI core reads the project's
+// single `ui.dialect` key and passes it here, while `createApp` wires the server
+// renderer from the same value — so the client alias and the server render never
+// diverge.
 const buildClientAssets = async (options: {
   outDir: string;
   mode: "dev" | "production";
+  dialect: UiDialect;
 }): Promise<void> => {
   await buildClient(
     {
       islandsDir,
       outDir: join(projectRoot, options.outDir),
       mode: options.mode === "dev" ? "development" : "production",
-      dialect: "react",
+      dialect: options.dialect,
     },
     bunBuildClientDeps(projectRoot),
   );

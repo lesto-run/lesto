@@ -27,6 +27,8 @@
 import { RouteTable } from "@keel/router";
 import { createSourceResolver, dataSourceHref } from "@keel/ui";
 import type { DataSource } from "@keel/ui";
+import { preactServerRenderer, reactServerRenderer } from "@keel/ui/server";
+import type { ServerRenderer } from "@keel/ui/server";
 
 import { WebError } from "./errors";
 import { Context } from "./handler-context";
@@ -158,6 +160,14 @@ export class Keel {
   // no client runtime, no tag.
   private clientModuleSrc: string | undefined;
 
+  // The server-render dialect (ADR 0008's matched pair). Undefined = React
+  // streaming (the default). Set to a Preact `ServerRenderer` (via `.renderer()`)
+  // when the client bundle is built under the `preact/compat` alias, so an
+  // `ssr: true` island's server markup is the dialect its client hydrates
+  // against. The CLI sets this from the single `ui.dialect` key that ALSO drives
+  // the client alias — the two are never wired independently.
+  private serverRenderer: ServerRenderer | undefined;
+
   // The compiled matcher, rebuilt on demand and invalidated whenever a route is added.
   private table: RouteTable<readonly Handler[]> | undefined;
 
@@ -271,6 +281,49 @@ export class Keel {
     this.clientModuleSrc = src;
 
     return this;
+  }
+
+  /**
+   * Select the server-render dialect (ADR 0008's matched pair).
+   *
+   * Pass the Preact `ServerRenderer` (`@keel/ui/server`'s `preactServerRenderer`)
+   * when this app's client bundle is built under the `react`→`preact/compat`
+   * alias, so an `ssr: true` island's SERVER markup is the dialect its client
+   * hydrates against — mismatch the two and every `ssr: true` island re-renders
+   * on hydration. Unset (the default) is React streaming.
+   *
+   * It is the matched pair because ONE input chooses both halves: the CLI reads
+   * the single `ui.dialect` key and, via {@link applyUiDialect}, calls this AND
+   * builds the client under the matching alias — never one without the other. An
+   * app that wires its own bespoke worker (estate) calls this directly with the
+   * same renderer its build aliases to.
+   *
+   * Calling it twice with renderers of DIFFERENT dialects is a wiring bug — the
+   * matched pair would be ambiguous — and is refused with a coded
+   * {@link WebError} (`WEB_DIALECT_MISMATCH`). Re-selecting the same dialect is
+   * idempotent.
+   */
+  renderer(serverRenderer: ServerRenderer): this {
+    if (
+      this.serverRenderer !== undefined &&
+      this.serverRenderer.dialect !== serverRenderer.dialect
+    ) {
+      throw new WebError(
+        "WEB_DIALECT_MISMATCH",
+        `the app's server renderer is already "${this.serverRenderer.dialect}"; ` +
+          `cannot also select "${serverRenderer.dialect}" — the matched pair must agree`,
+        { existing: this.serverRenderer.dialect, requested: serverRenderer.dialect },
+      );
+    }
+
+    this.serverRenderer = serverRenderer;
+
+    return this;
+  }
+
+  /** The server-render dialect this app emits, or `undefined` for the React default. */
+  get serverDialect(): UiDialect | undefined {
+    return this.serverRenderer?.dialect;
   }
 
   /**
@@ -393,6 +446,7 @@ export class Keel {
         resolver,
         privateData: this.hasPrivateData,
         ...(this.clientModuleSrc === undefined ? {} : { clientModule: this.clientModuleSrc }),
+        ...(this.serverRenderer === undefined ? {} : { serverRenderer: this.serverRenderer }),
       });
     };
   }
@@ -422,4 +476,38 @@ export class Keel {
 /** Start a new code-first router. */
 export function keel(): Keel {
   return new Keel();
+}
+
+/**
+ * Which component runtime an app's UI is built for (ADR 0007/0008). The single
+ * `ui.dialect` config key the CLI reads; it drives BOTH the client bundle's
+ * `react`→`preact/compat` alias AND the server renderer, as one matched pair.
+ */
+export type UiDialect = "react" | "preact";
+
+/** The server renderer each dialect maps to — the matched pair's server half. */
+const RENDERER_FOR_DIALECT: Record<UiDialect, ServerRenderer> = {
+  react: reactServerRenderer,
+  preact: preactServerRenderer,
+};
+
+/**
+ * Wire a single `ui.dialect` key onto a `keel()` app as ADR 0008's matched pair,
+ * returning the dialect the caller must ALSO build the client bundle for.
+ *
+ * This is the one place the two halves are chosen together: it sets the app's
+ * server renderer to the dialect's renderer and hands back that same dialect, so
+ * a caller (the CLI) feeds the identical value to the client build — the client
+ * alias and the server renderer can never be wired independently. `"react"` (or
+ * an unset key, which the CLI defaults to `"react"`) sets the React renderer,
+ * which `renderPageResponse` treats as its streaming default.
+ *
+ * If the app ALREADY selected a different dialect (a bespoke `.renderer()` call),
+ * `app.renderer` refuses with a coded `WEB_DIALECT_MISMATCH` — the matched pair
+ * cannot be ambiguous. Returns the wired dialect for the client build.
+ */
+export function applyUiDialect(app: Keel, dialect: UiDialect): UiDialect {
+  app.renderer(RENDERER_FOR_DIALECT[dialect]);
+
+  return dialect;
 }

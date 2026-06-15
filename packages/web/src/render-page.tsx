@@ -24,6 +24,7 @@ import type { ComponentType, ReactElement, ReactNode } from "react";
 import { IslandDataProvider, renderMetadata } from "@keel/ui";
 import type { LinkSpec, MetadataEntry, MetaSpec, SourceResolver } from "@keel/ui";
 import { renderPageStream } from "@keel/ui/server";
+import type { ServerRenderer } from "@keel/ui/server";
 import type { ZodType } from "zod";
 
 import type { Context } from "./handler-context";
@@ -159,6 +160,21 @@ export interface RenderPageOptions {
    * safe defense. An app with only `shared` sources is left cacheable.
    */
   privateData?: boolean;
+
+  /**
+   * The server-render dialect (ADR 0008's matched pair). Absent, or a `"react"`
+   * renderer, streams the document shell-first through React 19's
+   * `renderToReadableStream` (with the render-deadline + client-disconnect abort
+   * the streaming path provides). A `"preact"` renderer (set when the client
+   * bundle is built under the `react`→`preact/compat` alias) renders the document
+   * BUFFERED with this renderer's `renderToString` — the markup the Preact client
+   * hydrates against — because Preact's server renderer has no streaming twin with
+   * the same onError/abort surface, so v1 takes the simpler-correct buffered path.
+   * The renderer and the client alias never diverge because ONE config key
+   * (`ui.dialect`) drives both, and a mismatch is refused at wiring time
+   * (`WEB_DIALECT_MISMATCH`), before any request is served.
+   */
+  serverRenderer?: ServerRenderer;
 }
 
 /**
@@ -173,7 +189,9 @@ export interface RenderPageOptions {
  * `options.resolver`, when set, wraps the page tree in `IslandDataProvider` so a
  * data-bound island resolves at render. `options.clientModule`, when set, appends
  * the head module tag that boots the hydration runtime (after the metadata
- * elements). Both absent → the plain document path, byte-for-byte as before.
+ * elements). `options.serverRenderer`, when set, selects the Preact buffered
+ * dialect instead of React streaming (ADR 0008's matched pair). All absent → the
+ * plain React-streamed document path, byte-for-byte as before.
  */
 export async function renderPageResponse(
   def: PageDef,
@@ -219,17 +237,28 @@ export async function renderPageResponse(
     createElement("body", null, content),
   );
 
-  const stream = await renderPageStream(
-    { element: documentElement, errors: [], islands: [] },
-    {
-      renderTimeoutMs: RENDER_DEADLINE_MS,
-      ...(c.signal === undefined ? {} : { signal: c.signal }),
-    },
-  );
+  // The matched-pair fork (ADR 0008). React (the default, and an explicit React
+  // renderer): stream shell-first through React 19's `renderToReadableStream`,
+  // with the render deadline + client-disconnect abort the streaming path
+  // provides. Preact: render BUFFERED to a string with the dialect's
+  // `renderToString` — the markup the Preact client hydrates against — because
+  // Preact's server renderer has no streaming twin carrying the same
+  // onError/abort surface, so v1 takes the simpler-correct buffered path. Both
+  // produce the same document content; only React gets progressive flush.
+  const body: AnyKeelResponse["body"] =
+    options.serverRenderer !== undefined && options.serverRenderer.dialect === "preact"
+      ? options.serverRenderer.renderToString(documentElement)
+      : await renderPageStream(
+          { element: documentElement, errors: [], islands: [] },
+          {
+            renderTimeoutMs: RENDER_DEADLINE_MS,
+            ...(c.signal === undefined ? {} : { signal: c.signal }),
+          },
+        );
 
   // A dynamic page that could inline private data must not be shared-cached
-  // (review 2d). Stamped here, beside the content-type, so it covers the streamed
-  // body whatever it carries.
+  // (review 2d). Stamped here, beside the content-type, so it covers the body
+  // whatever it carries (streamed or buffered).
   const headers: Record<string, string> = { "content-type": "text/html; charset=utf-8" };
 
   if (options.resolver !== undefined && options.privateData === true) {
@@ -239,6 +268,6 @@ export async function renderPageResponse(
   return {
     status: 200,
     headers,
-    body: stream,
+    body,
   };
 }

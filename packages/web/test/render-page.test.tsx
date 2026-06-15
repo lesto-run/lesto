@@ -4,9 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { defineDataSource, defineIsland } from "@keel/ui";
+import { preactServerRenderer, reactServerRenderer } from "@keel/ui/server";
 
 import { runWithContext } from "../src/context";
-import { keel } from "../src/keel";
+import { applyUiDialect, keel } from "../src/keel";
 import { Context as RequestCtx } from "../src/handler-context";
 import { renderPageResponse } from "../src/render-page";
 import type { Context } from "../src/handler-context";
@@ -414,5 +415,80 @@ describe("keel().route() — data loader merge", () => {
 
     expect(html).toContain('"likes":{"likes":11}');
     expect(html).toContain(">11<");
+  });
+});
+
+describe("the server-render dialect (the matched pair)", () => {
+  // A stand-in Preact `ServerRenderer`: real `preactServerRenderer` cannot consume
+  // React's `createElement` output inside this React test process (that is the
+  // whole reason CLI server-render stays React; full Preact SSR is estate's
+  // whole-process-aliased bespoke path). This stub exercises the buffered BRANCH —
+  // a `"preact"`-tagged renderer makes `renderPageResponse` return a string body.
+  const bufferingPreactRenderer = {
+    dialect: "preact" as const,
+    renderToString: () => "<!doctype html><html><body><main>preact</main></body></html>",
+    renderToStaticMarkup: () => "",
+  };
+
+  it("renders BUFFERED to a string under a preact-dialect renderer, not a stream", async () => {
+    const app = keel()
+      .renderer(bufferingPreactRenderer)
+      .page("/p", { component: () => createElement("main", null, "preact") });
+
+    const response = await app.handle("GET", "/p");
+
+    // The Preact path returns a complete string body, not a ReadableStream — the
+    // buffered fallback v1 takes under Preact (it has no streaming twin).
+    expect(typeof response.body).toBe("string");
+    expect(response.body as string).toContain("<main>preact</main>");
+    expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
+  });
+
+  it("still STREAMS under the react dialect (a react renderer is the default path)", async () => {
+    const app = keel()
+      .renderer(reactServerRenderer)
+      .page("/p", { component: () => createElement("main", null, "react") });
+
+    const response = await app.handle("GET", "/p");
+
+    // A react renderer does NOT switch to the buffered path — the body is a stream.
+    expect(typeof response.body).not.toBe("string");
+    expect(await drain(response)).toContain("<main>react</main>");
+  });
+
+  it("applyUiDialect returns the wired dialect for the client build", () => {
+    const app = keel();
+
+    expect(applyUiDialect(app, "preact")).toBe("preact");
+    expect(app.serverDialect).toBe("preact");
+  });
+
+  it("a react app reports a react server dialect", () => {
+    const app = keel();
+
+    expect(applyUiDialect(app, "react")).toBe("react");
+    expect(app.serverDialect).toBe("react");
+  });
+
+  it("an unconfigured app has no server dialect", () => {
+    expect(keel().serverDialect).toBeUndefined();
+  });
+
+  it("re-selecting the SAME dialect is idempotent", () => {
+    const app = keel().renderer(preactServerRenderer);
+
+    expect(() => app.renderer(preactServerRenderer)).not.toThrow();
+    expect(app.serverDialect).toBe("preact");
+  });
+
+  it("refuses a mismatched pair (client preact + server react) with a coded error", () => {
+    const app = keel().renderer(reactServerRenderer);
+
+    try {
+      applyUiDialect(app, "preact");
+      expect.unreachable();
+    } catch (error) {
+      expect((error as { code?: string }).code).toBe("WEB_DIALECT_MISMATCH");
+    }
   });
 });
