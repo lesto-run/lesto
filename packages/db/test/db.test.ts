@@ -9,9 +9,15 @@ import {
   defineTable,
   dropTableSql,
   eq,
+  gt,
+  gte,
+  inList,
   integer,
   isNotNull,
   isNull,
+  like,
+  lt,
+  lte,
   ne,
   or,
   real,
@@ -678,5 +684,75 @@ describe("conditions", () => {
   it("boolean values bind as 1/0 in eq/ne (both arms)", () => {
     expect(eq(users.score, true as unknown as number).params).toEqual([1]);
     expect(eq(users.score, false as unknown as number).params).toEqual([0]);
+  });
+
+  it("gt / gte / lt / lte — numeric comparisons", async () => {
+    // Seed distinct scores: a@x=10, b@x=20, c@x=30.
+    await db.update(users).set({ score: 10 }).where(eq(users.email, "a@x")).run();
+    await db.update(users).set({ score: 20 }).where(eq(users.email, "b@x")).run();
+    await db.update(users).set({ score: 30 }).where(eq(users.email, "c@x")).run();
+
+    const gtRows = await db.select().from(users).where(gt(users.score, 20)).all();
+    expect(gtRows.map((r) => r.email)).toEqual(["c@x"]);
+
+    const gteRows = await db.select().from(users).where(gte(users.score, 20)).all();
+    expect(gteRows.map((r) => r.email).toSorted()).toEqual(["b@x", "c@x"]);
+
+    const ltRows = await db.select().from(users).where(lt(users.score, 20)).all();
+    expect(ltRows.map((r) => r.email)).toEqual(["a@x"]);
+
+    const lteRows = await db.select().from(users).where(lte(users.score, 20)).all();
+    expect(lteRows.map((r) => r.email).toSorted()).toEqual(["a@x", "b@x"]);
+  });
+
+  it("inList — membership, single, and the empty-set short-circuit", async () => {
+    const some = await db
+      .select()
+      .from(users)
+      .where(inList(users.email, ["a@x", "c@x"]))
+      .all();
+    expect(some.map((r) => r.email).toSorted()).toEqual(["a@x", "c@x"]);
+
+    const one = await db
+      .select()
+      .from(users)
+      .where(inList(users.email, ["b@x"]))
+      .all();
+    expect(one.map((r) => r.email)).toEqual(["b@x"]);
+
+    // An empty list matches nothing (renders `1 = 0`), never throws on `IN ()`.
+    const empty = inList(users.email, []);
+    expect(empty).toEqual({ sql: "1 = 0", params: [] });
+    expect(await db.select().from(users).where(empty).all()).toEqual([]);
+  });
+
+  it("like — pattern match with bound wildcards", async () => {
+    const rows = await db.select().from(users).where(like(users.email, "a%")).all();
+    expect(rows.map((r) => r.email)).toEqual(["a@x"]);
+
+    // The pattern is a bound parameter — the value is never interpolated.
+    expect(like(users.email, "a%").params).toEqual(["a%"]);
+  });
+});
+
+describe("raw", () => {
+  beforeEach(async () => {
+    await db.insert(users).values({ email: "a@x", passwordHash: "h", score: 1 }).run();
+    await db.insert(users).values({ email: "b@x", passwordHash: "h", score: 2 }).run();
+  });
+
+  it("runs a parameterized query and returns the raw rows", async () => {
+    const rows = await db.raw<{ email: string }>(
+      "SELECT email FROM users WHERE score >= ? ORDER BY email",
+      [2],
+    );
+
+    expect(rows).toEqual([{ email: "b@x" }]);
+  });
+
+  it("defaults params to empty and returns [] for a parameterless read with no match", async () => {
+    const rows = await db.raw("SELECT email FROM users WHERE score > 99");
+
+    expect(rows).toEqual([]);
   });
 });

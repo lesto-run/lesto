@@ -51,6 +51,90 @@ export function ne<C extends Column<unknown, boolean, boolean>>(
   };
 }
 
+/** `column > value`. */
+export function gt<C extends Column<unknown, boolean, boolean>>(
+  column: C,
+  value: NonNullable<CellType<C>>,
+): Condition {
+  return {
+    sql: `${quoteIdentifier(column.spec.name)} > ?`,
+    params: [bind(value)],
+  };
+}
+
+/** `column >= value`. */
+export function gte<C extends Column<unknown, boolean, boolean>>(
+  column: C,
+  value: NonNullable<CellType<C>>,
+): Condition {
+  return {
+    sql: `${quoteIdentifier(column.spec.name)} >= ?`,
+    params: [bind(value)],
+  };
+}
+
+/** `column < value`. */
+export function lt<C extends Column<unknown, boolean, boolean>>(
+  column: C,
+  value: NonNullable<CellType<C>>,
+): Condition {
+  return {
+    sql: `${quoteIdentifier(column.spec.name)} < ?`,
+    params: [bind(value)],
+  };
+}
+
+/** `column <= value`. */
+export function lte<C extends Column<unknown, boolean, boolean>>(
+  column: C,
+  value: NonNullable<CellType<C>>,
+): Condition {
+  return {
+    sql: `${quoteIdentifier(column.spec.name)} <= ?`,
+    params: [bind(value)],
+  };
+}
+
+/**
+ * `column IN (?, ?, …)` — membership against a list of values.
+ *
+ * An EMPTY list is the empty set: nothing can be a member, so this renders the
+ * always-false `1 = 0` (with no params) rather than the syntactically invalid
+ * `IN ()`. `column IN (a)` and `column = a` are equivalent; we keep the `IN`
+ * form for one stable shape regardless of length.
+ */
+export function inList<C extends Column<unknown, boolean, boolean>>(
+  column: C,
+  values: readonly NonNullable<CellType<C>>[],
+): Condition {
+  if (values.length === 0) {
+    return { sql: "1 = 0", params: [] };
+  }
+
+  const placeholders = values.map(() => "?").join(", ");
+
+  return {
+    sql: `${quoteIdentifier(column.spec.name)} IN (${placeholders})`,
+    params: values.map((value) => bind(value)),
+  };
+}
+
+/**
+ * `column LIKE pattern` — SQL pattern match on a text column (`%` = any run,
+ * `_` = any single char). The pattern is a bound parameter, so `%` / `_` in the
+ * caller's string are SQL wildcards but the value is never interpolated. Typed to
+ * text columns only — `LIKE` on a number is almost always a mistake.
+ */
+export function like<C extends Column<string, boolean, boolean>>(
+  column: C,
+  pattern: string,
+): Condition {
+  return {
+    sql: `${quoteIdentifier(column.spec.name)} LIKE ?`,
+    params: [pattern],
+  };
+}
+
 /** `column IS NULL`. Defined separately because SQL `= NULL` does not match. */
 export function isNull(column: Column<unknown, boolean, boolean>): Condition {
   return {

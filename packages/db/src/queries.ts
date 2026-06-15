@@ -414,8 +414,28 @@ export interface Db {
   update: UpdateBuilder;
   delete: DeleteBuilder;
 
-  /** Escape hatch: run arbitrary SQL the DSL does not cover. */
+  /**
+   * DDL-only escape hatch: run a statement the DSL does not model, for its side
+   * effect, with NO parameters (`CREATE TABLE`, `CREATE INDEX`, `DROP …`). The
+   * string is sent verbatim, so it must NOT carry user input — for a
+   * value-bearing query use {@link Db.raw}, which binds parameters and returns
+   * rows.
+   */
   exec(sql: string): Promise<void>;
+
+  /**
+   * Parameterized escape hatch: run arbitrary SQL the DSL does not model, with
+   * `?` placeholders bound to `params`, and read the result rows back.
+   *
+   * Unlike {@link Db.exec}, every value rides a `?` placeholder (the driver
+   * translates `?` → `$n` on Postgres), so user input is safe — this is the
+   * escape hatch to reach for when a query needs a value, not `exec`. Rows come
+   * back raw (driver column names, driver types — no snake→camel hydration and
+   * no numeric coercion, since `raw` has no schema to map against). `R` is the
+   * caller's asserted row shape. A write (`INSERT`/`UPDATE`/`DELETE` without
+   * `RETURNING`) yields an empty array.
+   */
+  raw<R = Record<string, unknown>>(sql: string, params?: readonly unknown[]): Promise<R[]>;
 
   /**
    * Run `fn` inside a single transaction (commit on resolve, rollback on
@@ -453,6 +473,8 @@ export function createDb(sql: SqlDatabase, options: DbOptions = {}): Db {
     exec: async (statement) => {
       await sql.exec(statement);
     },
+    raw: async <R = Record<string, unknown>>(statement: string, params: readonly unknown[] = []) =>
+      (await sql.prepare(statement).all([...params])) as R[],
     transaction: (fn) => sql.transaction((txSql) => fn(createDb(txSql, { dialect }))),
   };
 }

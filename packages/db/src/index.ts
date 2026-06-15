@@ -55,7 +55,7 @@ export type { ColumnMap, InferInsert, InferRow, InferUpdate, Table } from "./tab
 export { createTableSql, dropTableSql } from "./ddl";
 export type { Dialect } from "./ddl";
 
-export { and, eq, isNotNull, isNull, ne, or } from "./conditions";
+export { and, eq, gt, gte, inList, isNotNull, isNull, like, lt, lte, ne, or } from "./conditions";
 export type { Condition } from "./conditions";
 
 export { createDb } from "./queries";

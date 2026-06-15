@@ -19,7 +19,20 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createDb, createTableSql, defineTable, eq, integer, text } from "@keel/db";
+import {
+  createDb,
+  createTableSql,
+  defineTable,
+  eq,
+  gt,
+  gte,
+  inList,
+  integer,
+  like,
+  lt,
+  lte,
+  text,
+} from "@keel/db";
 import type { Db, Dialect, SqlDatabase } from "@keel/db";
 import { Migrator } from "@keel/migrate";
 import { openSqlite } from "@keel/runtime";
@@ -123,6 +136,55 @@ describe.each(drivers)("data-layer parity: $name", (driver) => {
     const deleted = await db.delete(items).where(eq(items.name, "y")).run();
     expect(deleted.changes).toBe(1);
     expect(await db.select().from(items).count()).toBe(1);
+  });
+
+  it("condition vocabulary (gt/gte/lt/lte/inList/like) agrees on both drivers", async () => {
+    await db.insert(items).values({ name: "alpha", score: 10 }).run();
+    await db.insert(items).values({ name: "beta", score: 20 }).run();
+    await db.insert(items).values({ name: "gamma", score: 30 }).run();
+
+    expect(
+      (await db.select().from(items).where(gt(items.score, 20)).all()).map((r) => r.name),
+    ).toEqual(["gamma"]);
+    expect(
+      (await db.select().from(items).where(gte(items.score, 20)).orderBy(items.name).all()).map(
+        (r) => r.name,
+      ),
+    ).toEqual(["beta", "gamma"]);
+    expect(
+      (await db.select().from(items).where(lt(items.score, 20)).all()).map((r) => r.name),
+    ).toEqual(["alpha"]);
+    expect(
+      (await db.select().from(items).where(lte(items.score, 20)).orderBy(items.name).all()).map(
+        (r) => r.name,
+      ),
+    ).toEqual(["alpha", "beta"]);
+    expect(
+      (
+        await db
+          .select()
+          .from(items)
+          .where(inList(items.name, ["alpha", "gamma"]))
+          .orderBy(items.name)
+          .all()
+      ).map((r) => r.name),
+    ).toEqual(["alpha", "gamma"]);
+    expect(await db.select().from(items).where(inList(items.name, [])).all()).toEqual([]);
+    expect(
+      (await db.select().from(items).where(like(items.name, "a%")).all()).map((r) => r.name),
+    ).toEqual(["alpha"]);
+  });
+
+  it("db.raw runs a parameterized query and returns rows on both drivers", async () => {
+    await db.insert(items).values({ name: "one", score: 1 }).run();
+    await db.insert(items).values({ name: "two", score: 2 }).run();
+
+    const rows = await db.raw<{ name: string }>(
+      "SELECT name FROM items WHERE score >= ? ORDER BY name",
+      [2],
+    );
+
+    expect(rows.map((r) => r.name)).toEqual(["two"]);
   });
 
   it("transaction commits the whole span", async () => {
