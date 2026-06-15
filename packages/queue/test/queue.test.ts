@@ -399,6 +399,46 @@ describe("stats & find", () => {
   });
 });
 
+describe("poison-payload tolerance on the public Job-or-null surface", () => {
+  // A payload no producer could write through `enqueue` (which always
+  // `JSON.stringify`s), but a manual write or a bug could. `claim()`/`find()`
+  // must surface it as the CODED `QUEUE_POISON_PAYLOAD` — not a raw SyntaxError
+  // that strands the row `running` (claim) or hides which row is corrupt (find).
+  const poison = async (id: number): Promise<void> => {
+    database.prepare("UPDATE keel_jobs SET payload = ? WHERE id = ?").run("{not json", id);
+  };
+
+  it("claim() throws the coded poison error (not a raw SyntaxError)", async () => {
+    const id = await queue.enqueue("p", { ok: true });
+    await poison(id);
+
+    try {
+      await queue.claim();
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(QueueError);
+      expect((error as QueueError).code).toBe("QUEUE_POISON_PAYLOAD");
+      expect((error as QueueError).message).toContain("unparseable payload");
+      expect((error as QueueError).details).toMatchObject({ id });
+      expect(Object.isFrozen((error as QueueError).details)).toBe(true);
+    }
+  });
+
+  it("find() throws the coded poison error (not payload:null)", async () => {
+    const id = await queue.enqueue("p", { ok: true });
+    await poison(id);
+
+    try {
+      await queue.find(id);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(QueueError);
+      expect((error as QueueError).code).toBe("QUEUE_POISON_PAYLOAD");
+      expect((error as QueueError).details).toMatchObject({ id });
+    }
+  });
+});
+
 describe("work", () => {
   it("drains the queue with the default sleep and stops gracefully", async () => {
     const done: string[] = [];

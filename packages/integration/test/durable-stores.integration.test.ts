@@ -272,6 +272,23 @@ describe.each(drivers)("queue concurrency: $name", (driver) => {
     expect(new Set(claimedIds)).toEqual(ids);
   });
 
+  it("stats() returns real numbers (Postgres COUNT(*) arrives as a string)", async () => {
+    const queue = new Queue({ db: handle, dialect: driver.name });
+
+    await queue.enqueue("work", { i: 1 });
+    await queue.enqueue("work", { i: 2 });
+    // Claim one so two statuses exist: one `running`, one `ready`.
+    await queue.claim();
+
+    const stats = await queue.stats();
+
+    // The COUNT(*) coercion: node-postgres returns the aggregate as a STRING,
+    // so without `Number(…)` these would be `"1"` and fail `typeof === "number"`.
+    expect(typeof stats.running).toBe("number");
+    expect(typeof stats.ready).toBe("number");
+    expect(stats).toMatchObject({ running: 1, ready: 1 });
+  });
+
   it("a stalled worker's terminal write never resurrects a job another worker re-owns", async () => {
     const queue = new Queue({ db: handle, dialect: driver.name });
     const id = await queue.enqueue("work", { n: 1 });

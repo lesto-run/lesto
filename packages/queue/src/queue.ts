@@ -38,6 +38,13 @@ const TABLE = "keel_jobs";
  * key as a `BIGINT … GENERATED ALWAYS AS IDENTITY` column (Postgres has no
  * `AUTOINCREMENT` keyword, and an int4 key would cap the queue at ~2.1B jobs).
  * Every other column is spelled identically on both engines.
+ *
+ * IMPORTANT: this `dialect` and the {@link Queue}'s `dialect` MUST agree. The
+ * Queue's `dialect` is what decides whether the atomic claim carries `FOR UPDATE
+ * SKIP LOCKED`; a Postgres app that installs the schema here with `"postgres"`
+ * but forgets `dialect: "postgres"` on `new Queue()` silently DROPS that clause
+ * and reintroduces double-delivery under concurrency — with no error to warn
+ * you. Pass the same dialect to both.
  */
 export async function installSchema(db: SqlDatabase, dialect: Dialect = "sqlite"): Promise<void> {
   const idColumn =
@@ -115,9 +122,31 @@ function hydrateMeta(row: Row): Job {
   };
 }
 
-/** Hydrate the full job, parsing the payload. Throws on a poison (invalid) payload. */
+/**
+ * Hydrate the full job, parsing the payload. A poison (un-parseable) payload
+ * throws the *coded* `QUEUE_POISON_PAYLOAD` rather than a raw `SyntaxError`, so a
+ * caller can branch on the code and an operator can see WHICH job is corrupt
+ * instead of a bare parse failure. `runOnce` does not go through this path — it
+ * parses on the claimed metadata so it can route a poison payload through
+ * `fail()` (see {@link Queue.runOnce}); the public `claim()`/`find()` surface
+ * keeps its Job-or-null contract and surfaces the coded error instead.
+ */
 function hydrate(row: Row): Job {
-  return { ...hydrateMeta(row), payload: JSON.parse(row.payload) as JsonValue };
+  const meta = hydrateMeta(row);
+
+  let payload: JsonValue;
+  try {
+    payload = JSON.parse(row.payload) as JsonValue;
+  } catch (error) {
+    // `JSON.parse` only ever throws a `SyntaxError` (an `Error`), so reading
+    // `.message` needs no non-Error fallback here.
+    throw new QueueError("QUEUE_POISON_PAYLOAD", `Job ${meta.id} has an unparseable payload.`, {
+      id: meta.id,
+      cause: (error as Error).message,
+    });
+  }
+
+  return { ...meta, payload };
 }
 
 export interface QueueOptions {
@@ -132,6 +161,10 @@ export interface QueueOptions {
    * atomic claim adds `FOR UPDATE SKIP LOCKED` so concurrent workers each skip a
    * row another already locked — the row-level locking SQLite does not need
    * (the runtime serializes every write over its one connection).
+   *
+   * MUST match the dialect passed to {@link installSchema}: forgetting
+   * `"postgres"` here on a Postgres app silently drops the locking clause and
+   * reintroduces double-delivery, with no error to warn you.
    */
   readonly dialect?: Dialect;
 }
@@ -431,12 +464,17 @@ export class Queue {
 
   /** A count of jobs by status for one queue — for dashboards, MCP, and tests. */
   async stats(queue: string = this.defaultQueue): Promise<Partial<Record<JobStatus, number>>> {
+    // `COUNT(*)` comes back a STRING from node-postgres (it returns `bigint`
+    // columns as strings to avoid precision loss); better-sqlite3 returns a
+    // number. Type the raw row as `string | number` and coerce with `Number(…)`
+    // so `stats()` always yields the numbers its return type promises — the same
+    // coercion every other read path applies to Postgres-stringified integers.
     const rows = (await this.db
       .prepare(`SELECT status, COUNT(*) AS n FROM ${TABLE} WHERE queue = ? GROUP BY status`)
-      .all([queue])) as Array<{ status: JobStatus; n: number }>;
+      .all([queue])) as Array<{ status: JobStatus; n: string | number }>;
 
     return rows.reduce<Partial<Record<JobStatus, number>>>((counts, row) => {
-      counts[row.status] = row.n;
+      counts[row.status] = Number(row.n);
 
       return counts;
     }, {});
