@@ -137,6 +137,13 @@ reachable **only** under an explicit `KEEL_DEMO=1` binding (which `serve.ts` /
 framework's pattern for every secret-bearing Worker: production is the default,
 demo is the loud opt-in.
 
+> **`KEEL_DEMO` is a Worker binding, not a build variable.** `KEEL_DEMO=1 bun run
+> build` only affects the *build shell* (the static prerender) — it does **not**
+> reach the deployed runtime, so the Worker still fail-closes. To run the deployed
+> Worker in demo mode you must set it as a Worker var (`"vars": { "KEEL_DEMO": "1" }`
+> in `wrangler.jsonc`, or `wrangler deploy --var KEEL_DEMO:1`). The supported
+> production path is `wrangler secret put SESSION_SECRET` above.
+
 `build.ts` runs the same assembly `serve.ts` does (`buildProductionSite`),
 leaving `out/marketing/` with the prerendered pages and `client.js` beside them
 — which is what `wrangler.jsonc` binds as the `ASSETS` static site. (estate runs

@@ -14,3 +14,6 @@ playwright-report/
 
 # Local agent artifacts (worktrees are git-internal; skills are local tooling)
 .claude/
+
+# Wrangler local dev cache
+.wrangler/
