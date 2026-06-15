@@ -7,8 +7,9 @@
 
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { renderPage, renderPageStream, renderTree } from "@keel/ui";
-import type { Registry, StreamOptions } from "@keel/ui";
+import type { Registry } from "@keel/ui";
+import { renderPage, renderPageStream, renderTree } from "@keel/ui/server";
+import type { StreamOptions } from "@keel/ui/server";
 
 import type { AnyKeelResponse, KeelRequest, KeelResponse } from "./types";
 

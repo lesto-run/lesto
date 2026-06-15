@@ -1,5 +1,5 @@
 /**
- * @keel/ui — the AI-native UI rendering engine core.
+ * @keel/ui — the AI-native UI rendering engine's ISOMORPHIC core.
  *
  *   const registry = new Registry()
  *     .define({ name: "Box", props: {}, children: true, render: (_p, kids) => <div>{kids}</div> });
@@ -10,7 +10,14 @@
  *   const tree = { type: "Box", children: ["hello"] };   // the AI emits plain JSON
  *
  *   const { valid, errors } = validateTree(registry, tree);   // pure, React-free
- *   const { element }       = renderTree(registry, tree);     // tree -> React, safe
+ *
+ * This barrel is deliberately isomorphic: NOTHING here imports `react-dom/server`,
+ * so a client bundle that pulls `@keel/ui` (for `Registry`, `defineIsland`, the
+ * island/data tokens) never drags React's ~60 KB server renderer into the
+ * browser. The server-render surface — `renderPage`/`renderPageMarkup`/`renderTree`,
+ * the streaming renderers, and the React/Preact server dialects — lives behind the
+ * `@keel/ui/server` subpath; the browser-only hydration runtime behind
+ * `@keel/ui/client`. Mirrors `react-dom`'s own server/client split (ADR 0008).
  */
 
 export { Registry } from "./registry";
@@ -22,21 +29,10 @@ export { componentCatalog, treeJsonSchema } from "./schema";
 export { validateTree } from "./validate";
 export type { TreeError } from "./validate";
 
-export { reactServerRenderer, renderPage, renderPageMarkup, renderTree } from "./render";
-export type { Page, RenderError, ServerRenderer } from "./render";
-
-// Streaming SSR: a live shell-first stream for humans, plus a buffered `allReady`
-// exit for crawlers/SSG. Additive over `renderPageMarkup` (which stays the
-// dependency-light buffered API). Server-safe — React's stream renderer runs on
-// Node as of React 19.2.
-export { renderPageStream, renderPageStreamToString } from "./stream";
-export type {
-  ErrorInfo,
-  ReactRenderStream,
-  RenderToReadableStream,
-  StreamErrorSink,
-  StreamOptions,
-} from "./stream";
+// The server-render surface (`renderPage`/`renderPageMarkup`/`renderTree`, the
+// streaming renderers, the React/Preact `ServerRenderer` dialects) is NOT
+// re-exported here — it imports `react-dom/server` and so lives behind the
+// `@keel/ui/server` subpath, keeping this barrel client-safe.
 
 export { assertClientDef, island, ISLAND_ATTR, ISLAND_MOUNT_ATTR } from "./island";
 export type { ClientComponentDef, HydrationStrategy, IslandMount } from "./island";

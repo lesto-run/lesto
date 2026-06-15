@@ -3,10 +3,11 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { island, Registry, renderPage, renderPageMarkup, UiError } from "../src/index";
+import { island, Registry, UiError } from "../src/index";
 import type { ClientComponentDef, ComponentDef } from "../src/index";
+import { renderPage, renderPageMarkup } from "../src/server";
 import { renderPageStream, renderPageStreamToString } from "../src/stream";
-import type { Page, ReactRenderStream, RenderToReadableStream } from "../src/index";
+import type { Page, ReactRenderStream, RenderToReadableStream } from "../src/server";
 
 // ---------------------------------------------------------------------------
 // Fixtures.

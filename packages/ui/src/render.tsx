@@ -68,7 +68,7 @@ export interface ServerRenderer {
  * The default dialect: React's own `react-dom/server`. Statically imported (not
  * lazy) because it is this engine's baseline renderer — the one the tests, the
  * stream path, and the deploy all already use — so there is nothing to defer.
- * Selecting a different dialect (e.g. {@link ../server-preact}) is the caller's
+ * Selecting a different dialect (e.g. {@link ./server-preact}) is the caller's
  * explicit opt-in via {@link renderPageMarkup}'s `renderer` argument.
  */
 export const reactServerRenderer: ServerRenderer = { renderToStaticMarkup, renderToString };
@@ -150,7 +150,7 @@ export function renderPage(registry: Registry, tree: unknown): Page {
  * The `renderer` is the dialect seam. It DEFAULTS to {@link reactServerRenderer}
  * (real `react-dom/server`), so every existing caller — estate's `document.ts`,
  * the render/hydrate/stream tests — is byte-for-byte unchanged. A page whose
- * client bundle is Preact passes the Preact adapter (`@keel/ui/server-preact`) so
+ * client bundle is Preact passes the Preact adapter (`@keel/ui/server`) so
  * the server emits the same markup the Preact client will hydrate against; only
  * then is an `ssr: true` island safe under the `preact/compat` alias.
  */

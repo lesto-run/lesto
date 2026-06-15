@@ -4,7 +4,8 @@ import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 
-import { ISLAND_ATTR, Registry, renderPage, renderPageMarkup, UiError } from "../src/index";
+import { ISLAND_ATTR, Registry, UiError } from "../src/index";
+import { renderPage, renderPageMarkup } from "../src/server";
 import type { ClientComponentDef, ComponentDef, IslandMount } from "../src/index";
 import { hydrateIslands } from "../src/hydrate";
 import type { MountErrorSink, MountFn, ObserveFn } from "../src/hydrate";

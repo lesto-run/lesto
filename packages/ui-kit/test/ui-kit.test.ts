@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { renderTree, validateTree } from "@keel/ui";
+import { validateTree } from "@keel/ui";
+import { renderTree } from "@keel/ui/server";
 import type { UiNode } from "@keel/ui";
 
 import {

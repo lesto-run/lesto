@@ -13,10 +13,11 @@
   "scripts": {
     "test": "vitest run",
     "test:cov": "vitest run --coverage",
+    "bundle-size": "bun run scripts/bundle-size.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint src test",
-    "format": "oxfmt src test",
-    "format:check": "oxfmt --check src test"
+    "lint": "oxlint src test scripts",
+    "format": "oxfmt src test scripts",
+    "format:check": "oxfmt --check src test scripts"
   },
   "dependencies": {
     "@keel/errors": "workspace:*",

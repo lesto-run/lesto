@@ -21,7 +21,7 @@ import type { AssetFetcher } from "@keel/cloudflare";
 // that bundle, every element @keel/ui builds is a Preact vnode, which is exactly
 // what preact-render-to-string consumes. The matched pair — Preact server markup
 // + the Preact client bundle `build.ts` ships — is ADR 0008's invariant.
-import { preactServerRenderer } from "@keel/ui/server-preact";
+import { preactServerRenderer } from "@keel/ui/server";
 
 import { buildEdgeApp, edgeSecret, isDemoMode } from "./src/edge";
 

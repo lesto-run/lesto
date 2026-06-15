@@ -34,7 +34,7 @@ export type { HandleOptions } from "./types";
 
 // Re-exported so a caller can type the streaming options it passes to
 // `Controller.streamTree` without reaching across to `@keel/ui` directly.
-export type { StreamErrorSink, StreamOptions } from "@keel/ui";
+export type { StreamErrorSink, StreamOptions } from "@keel/ui/server";
 
 export { currentContext, runWithContext } from "./context";
 export type { RequestContext } from "./context";

@@ -8,13 +8,11 @@ import {
   island,
   ISLAND_ATTR,
   Registry,
-  renderPage,
-  renderPageMarkup,
-  renderTree,
   serializeManifest,
   UiError,
   validateTree,
 } from "../src/index";
+import { renderPage, renderPageMarkup, renderTree } from "../src/server";
 import type { ClientComponentDef, ComponentDef, IslandMount } from "../src/index";
 
 // ---------------------------------------------------------------------------

@@ -21,8 +21,9 @@
 import { createElement } from "react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
 
-import { IslandDataProvider, renderMetadata, renderPageStream } from "@keel/ui";
+import { IslandDataProvider, renderMetadata } from "@keel/ui";
 import type { LinkSpec, MetadataEntry, MetaSpec, SourceResolver } from "@keel/ui";
+import { renderPageStream } from "@keel/ui/server";
 import type { ZodType } from "zod";
 
 import type { Context } from "./handler-context";

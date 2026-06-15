@@ -6,11 +6,13 @@
     "types": ["node", "bun"]
   },
 
-  "include": ["src", "test"],
+  // `scripts/` holds the standalone Bun bundle-size assertion — Bun-run, not
+  // vitest, but still typechecked.
+  "include": ["src", "test", "scripts"],
 
-  // The shims are Bun-bundle-target inputs (resolved by the alias plugin, not
-  // imported by any TS-compiled module here), and they re-export `preact/compat`
-  // (an `export =` module) — bundler-resolvable but not tsc-`export *`-able. They
-  // are typechecked by their use in the client graph, not here.
-  "exclude": ["src/shims"]
+  // The island fixture under `scripts/fixture-islands` is a JSX bundler input
+  // (compiled by `Bun.build`, which owns JSX), not a tsc-compiled module — this
+  // package is otherwise JSX-free and sets no `jsx` option. It is typechecked by
+  // its use in the client graph the script builds, not here.
+  "exclude": ["scripts/fixture-islands"]
 }

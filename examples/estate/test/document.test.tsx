@@ -20,7 +20,8 @@
 import { describe, expect, it } from "vitest";
 
 import { island, Registry } from "@keel/ui";
-import type { ServerRenderer, UiNode } from "@keel/ui";
+import type { UiNode } from "@keel/ui";
+import type { ServerRenderer } from "@keel/ui/server";
 
 import { renderDocument } from "../src/document";
 import { buildEdgeApp } from "../src/edge";

@@ -76,11 +76,12 @@ describe("isChunkFile", () => {
 
 describe("PREACT_ALIAS", () => {
   it("maps every React specifier the client graph pulls to a Preact target", () => {
+    // No `react-dom`/`react-dom/server` entries: after the `@keel/ui` barrel
+    // split the client never imports the server-render surface, so neither
+    // specifier reaches the browser graph and no inert shim is needed.
     expect(PREACT_ALIAS).toEqual({
       react: "preact/compat",
-      "react-dom": "@keel/assets/shims/react-dom",
       "react-dom/client": "preact/compat/client",
-      "react-dom/server": "@keel/assets/shims/react-dom-server",
       "react/jsx-runtime": "preact/jsx-runtime",
       "react/jsx-dev-runtime": "preact/jsx-runtime",
     });

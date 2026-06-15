@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { renderTree, validateTree } from "@keel/ui";
+import { validateTree } from "@keel/ui";
+import { renderTree } from "@keel/ui/server";
 
 import {
   createFormRegistry,

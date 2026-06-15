@@ -27,8 +27,10 @@
  * `ssr: true` island and break its hydration, in any dialect.
  */
 
-import { dataPrimerScript, renderPage, renderPageMarkup, serializeManifest } from "@keel/ui";
-import type { Registry, ServerRenderer, UiNode } from "@keel/ui";
+import { dataPrimerScript, serializeManifest } from "@keel/ui";
+import type { Registry, UiNode } from "@keel/ui";
+import { renderPage, renderPageMarkup } from "@keel/ui/server";
+import type { ServerRenderer } from "@keel/ui/server";
 
 /** Escape a string for safe interpolation into HTML text/element content. */
 function escapeHtml(value: string): string {

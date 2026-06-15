@@ -1,5 +1,6 @@
 /**
- * `@keel/ui/server-preact` — the Preact server-render dialect.
+ * The Preact server-render dialect — re-exported from the `@keel/ui/server`
+ * subpath as `preactServerRenderer`.
  *
  * This is the adapter half of the {@link ServerRenderer} seam (declared in
  * `render.tsx`). It backs the two functions {@link renderPageMarkup} needs with
@@ -17,14 +18,14 @@
  * defeating `ssr: true`. Rendering the server side with THIS adapter removes the
  * mismatch at the source: both sides speak Preact, so the markup lines up.
  *
- * Why a separate subpath, not a named export of the core barrel: keeping `@keel/ui`
+ * Why it lives behind `@keel/ui/server` (not the core barrel): keeping `@keel/ui`
  * dialect-agnostic means its core never hard-depends on `preact-render-to-string`.
  * A server importer of `@keel/ui` (the default React path, estate's `document.ts`)
  * must never drag Preact's renderer into its build. So `preact-render-to-string` is
  * an OPTIONAL peer dependency — present only when an adopter chooses the Preact
  * client alias — and this module is the only place that imports it. Reach for it
- * explicitly (`import { preactServerRenderer } from "@keel/ui/server-preact"`) and
- * pass it to {@link renderPageMarkup}; the default path never loads this file.
+ * explicitly (`import { preactServerRenderer } from "@keel/ui/server"`) and pass it
+ * to {@link renderPageMarkup}; the default React path never loads this file.
  *
  * The `as` cast at the call boundary is the honest cost of bridging two element
  * factories: `@keel/ui` builds its tree with React's `createElement`, and under

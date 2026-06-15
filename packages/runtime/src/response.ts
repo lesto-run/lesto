@@ -42,7 +42,12 @@ function isReadableStream(body: KeelBody): body is ReadableStream {
  */
 export type FromWeb = (body: ReadableStream) => Readable;
 
-const fromWeb: FromWeb = (body) => Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]);
+const fromWeb: FromWeb = (body) =>
+  // `as unknown as` bridges the DOM `ReadableStream` lib type to node's
+  // `stream/web` `ReadableStream` parameter type: newer `@types/node` narrowed
+  // `fromWeb`'s parameter enough that a direct cast no longer overlaps, but the
+  // two are structurally the same Web stream at runtime.
+  Readable.fromWeb(body as unknown as Parameters<typeof Readable.fromWeb>[0]);
 
 /**
  * Pipe a Web `ReadableStream` body onto the node socket, then resolve.

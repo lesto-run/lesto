@@ -17,7 +17,8 @@ import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { island, renderPage } from "@keel/ui";
+import { island } from "@keel/ui";
+import { renderPage } from "@keel/ui/server";
 import { hydrateIslands } from "@keel/ui/client";
 import type { UiNode } from "@keel/ui";
 

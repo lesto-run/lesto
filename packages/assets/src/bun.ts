@@ -19,9 +19,6 @@ import { AssetsError } from "./errors";
 import { PREACT_ALIAS } from "./preact-alias";
 import type { IslandFile } from "./synthesize";
 
-/** This package's shims directory — where a `@keel/assets/shims/*` alias target lives. */
-const SHIMS_DIR = join(import.meta.dir, "shims");
-
 /** The island module file extensions an `app/islands/` directory may hold. */
 const ISLAND_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js"];
 
@@ -34,11 +31,10 @@ function preactAliasPlugin(appRoot: string): BunPlugin {
         // Anchor the filter so `react-dom/client` is not also caught by `react-dom`.
         const filter = new RegExp(`^${from.replace(/[/\\]/g, "\\$&")}$`);
 
-        // A `@keel/assets/shims/*` target is this package's own file; anything
-        // else is resolved in the consuming app's graph.
-        const path = to.startsWith("@keel/assets/shims/")
-          ? join(SHIMS_DIR, `${basename(to)}.ts`)
-          : Bun.resolveSync(to, appRoot);
+        // Every target is a bare specifier (`preact/compat`, …) resolved in the
+        // consuming app's graph — the inert react-dom shims are gone now that the
+        // client never imports `react-dom`/`react-dom/server` (the barrel split).
+        const path = Bun.resolveSync(to, appRoot);
 
         build.onResolve({ filter }, () => ({ path }));
       }

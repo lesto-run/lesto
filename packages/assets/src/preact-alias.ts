@@ -4,10 +4,18 @@
  *
  * When an app's `ui.dialect` is `"preact"`, the client bundle resolves every
  * React specifier to Preact's compat layer, shrinking the runtime from ~118 KB
- * to ~10 KB gzip. Most go straight to `preact/compat`; the two `react-dom`
- * entries point at this package's inert shims (`./shims/*`), because `@keel/ui`'s
- * barrel drags React 19's resource-hint exports and `react-dom/server` into the
- * client graph even though the browser never calls them — see the shim files.
+ * to ~10 KB gzip. `react` → `preact/compat`, the client renderer
+ * (`createRoot`/`hydrateRoot`) → `preact/compat/client`, and the automatic JSX
+ * runtime → `preact/jsx-runtime`.
+ *
+ * There is deliberately NO `react-dom` or `react-dom/server` entry. Before the
+ * `@keel/ui` barrel split (Wave 2), the isomorphic barrel re-exported the page
+ * renderers, dragging `react-dom/server` (and the bare-`react-dom` resource
+ * hints) into every client graph — so inert shims had to alias them away. Now the
+ * server-render surface lives behind `@keel/ui/server`, which the client bundle
+ * never imports, so neither specifier reaches the browser graph at all and no
+ * shim is needed. A stray `react-dom` import in app code is therefore a real
+ * unresolved-module build error, not a silently-shimmed no-op — the honest signal.
  *
  * The map is the pure, dialect-agnostic data; the Bun resolver plugin that
  * applies it (`bun.ts`) is the runtime that depends on `Bun.resolveSync`. Kept
@@ -19,19 +27,13 @@
  */
 
 /**
- * Each aliased specifier → its Preact target. Shim targets are resolved relative
- * to this package; bare specifiers resolve in the consuming app's graph.
+ * Each aliased specifier → its Preact target. Bare specifiers resolve in the
+ * consuming app's graph (its `node_modules`).
  */
 export const PREACT_ALIAS: Readonly<Record<string, string>> = {
   react: "preact/compat",
-  // The React-19 resource hints (`preload`/`preinit`/…) Preact omits but the
-  // `@keel/ui` barrel imports — a no-op shim so the import resolves.
-  "react-dom": "@keel/assets/shims/react-dom",
   // `createRoot`/`hydrateRoot` — Preact mirrors them here, the only non-compat entry.
   "react-dom/client": "preact/compat/client",
-  // Dragged into the client graph by the barrel but never run on the browser;
-  // the real module's top-level bootstrap throws once React is aliased away.
-  "react-dom/server": "@keel/assets/shims/react-dom-server",
   // The automatic JSX runtime the app's `jsx: react-jsx` emits.
   "react/jsx-runtime": "preact/jsx-runtime",
   "react/jsx-dev-runtime": "preact/jsx-runtime",

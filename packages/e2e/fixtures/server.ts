@@ -17,8 +17,8 @@ import { join } from "node:path";
 
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { renderPage } from "@keel/ui";
 import type { UiNode } from "@keel/ui";
+import { renderPage } from "@keel/ui/server";
 import { serve } from "@keel/runtime";
 
 import { registry } from "./registry";

@@ -6,12 +6,12 @@ import type { ReactNode } from "react";
 import {
   componentCatalog,
   Registry,
-  renderTree,
   treeJsonSchema,
   UiError,
   validateProps,
   validateTree,
 } from "../src/index";
+import { renderTree } from "../src/server";
 import type { ComponentDef, PropSpec } from "../src/index";
 
 // ---------------------------------------------------------------------------

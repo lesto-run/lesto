@@ -24,9 +24,9 @@ import {
   ISLAND_ATTR,
   ISLAND_MOUNT_ATTR,
   Registry,
-  renderPageStreamToString,
   UiError,
 } from "../src/index";
+import { renderPageStreamToString } from "../src/server";
 import type { SourceResolver } from "../src/index";
 import { hydrateDocumentIslands } from "../src/hydrate";
 

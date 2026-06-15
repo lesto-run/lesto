@@ -21,7 +21,8 @@ import { SignedSessions } from "@keel/auth";
 import { secureStack } from "@keel/kernel";
 import { clearSessionCookie, readSessionToken, sessionCookie } from "@keel/identity";
 import { island } from "@keel/ui";
-import type { ServerRenderer, UiNode } from "@keel/ui";
+import type { UiNode } from "@keel/ui";
+import type { ServerRenderer } from "@keel/ui/server";
 
 import { registry } from "./registry";
 import { sessionSource } from "./session-source";
