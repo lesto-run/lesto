@@ -114,10 +114,11 @@ function makePgFake(lockLog: string[]): SqlDatabase {
 
   const prepare = (sql: string): SqlStatement => advisory(sql) ?? passthrough.prepare(sql);
 
-  // Real Postgres runs the advisory-lock span and each migration on SEPARATE
-  // pooled connections (independent BEGINs). The single-connection SQLite fake
-  // cannot, so we collapse nesting: only the OUTERMOST transaction issues a real
-  // BEGIN/COMMIT (via the passthrough); deeper ones run flat on the same handle.
+  // Mirror real `@keel/pg`: the migrator pins ONE connection (the advisory-lock
+  // span) and runs every migration FLAT on it (`transaction: inner => inner(tx)`),
+  // so the whole run is one transaction. We model that here: only the OUTERMOST
+  // transaction issues a real BEGIN/COMMIT (via the passthrough); deeper ones run
+  // flat on the same handle — exactly the nesting the real adapter performs.
   let depth = 0;
   const self: SqlDatabase = {
     exec: passthrough.exec,

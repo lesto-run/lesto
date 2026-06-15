@@ -152,24 +152,27 @@ export class Migrator {
 
       const pending = this.entries.filter((entry) => !applied.has(entry.version));
 
-      // Each migration's DDL and its bookkeeping INSERT are one atomic unit: a
-      // half-applied migration (DDL ran, record missing — or vice versa) would
-      // corrupt the source of truth. We wrap *each* migration in its own
-      // transaction rather than the whole run in one, matching Rails: migrations
-      // that succeed earlier in this run stay applied; only the one that throws
-      // is rolled back.
+      // Each migration's DDL and its bookkeeping INSERT are one atomic unit (a
+      // half-applied migration — DDL ran, record missing, or vice versa — would
+      // corrupt the source of truth), so each runs in a `transaction()` span via
+      // the seam's `transaction()`, never a raw exec("BEGIN") that a pooled driver
+      // would scatter across connections.
       //
-      // The transaction is the seam's `transaction()` — NOT raw exec("BEGIN") —
-      // so that on a pooled driver every statement in the span (the DDL and the
-      // INSERT) runs on the SAME connection. Three separate exec("BEGIN")/
-      // exec("COMMIT") calls would land on different pooled connections and
-      // silently no-op. On Postgres `db` IS the pinned lock connection, so this
-      // nested `transaction` runs FLAT on it (the pg adapter's
-      // `transaction: inner => inner(tx)`); no second connection is checked out.
-      // We build the Schema and prepare the INSERT against the transaction-scoped
-      // `tx`, not the outer db, for the same reason. A throw inside `fn` rolls the
-      // span back and rejects, undoing the partial DDL and ensuring no record was
-      // written.
+      // The rollback GRANULARITY differs by dialect — load-bearing, not incidental:
+      //   - SQLite: `db` is the top-level handle (no outer lock span), so each
+      //     iteration is its OWN independent BEGIN/COMMIT. A failure in the Nth
+      //     migration rolls back only the Nth; earlier ones already committed and
+      //     stay applied (Rails-style).
+      //   - Postgres: `db` is the PINNED advisory-lock connection and the pg
+      //     adapter runs a nested `transaction` FLAT (`inner => inner(tx)`), so
+      //     every iteration joins the ONE outer transaction the xact lock holds.
+      //     The whole run is therefore atomic: a failure rolls back EVERY migration
+      //     in this run, not just the failing one. That is the price of a
+      //     transaction-level lock held across the run (see `withMigrationLock`) —
+      //     and the safer prod default: `schema_migrations` is all-or-nothing, and
+      //     a fixed migration re-runs the set cleanly on the next boot.
+      // Either way, `schema_migrations` never records a migration whose DDL rolled
+      // back. We build the Schema + prepare the INSERT against the span's `tx`.
       for (const entry of pending) {
         await db.transaction(async (tx) => {
           const schema = new Schema(tx, this.dialect);
