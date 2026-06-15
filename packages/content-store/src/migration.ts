@@ -1,20 +1,38 @@
+import { createTableSql, defineTable, integer, text } from "@keel/db";
 import type { MigrationEntry } from "@keel/migrate";
 
 /** The single table that holds every content entry, for every collection. */
 export const CONTENT_ENTRIES_TABLE = "content_entries";
 
 /**
- * The schema for content on the SQL substrate.
+ * The content-entries table as a `@keel/db` schema value — the one source of
+ * truth for its DDL. One row per entry. The open-ended shape of a content
+ * document — arbitrary frontmatter, rendered HTML, computed fields — lives
+ * losslessly in the `document` JSON column. A handful of fields are lifted out
+ * alongside it (`collection`, `slug`, `status`, `published_at`) precisely because
+ * they are the ones worth indexing and querying on. `published_at` and the
+ * timestamps are ISO strings (TEXT), matching the rest of Keel's time columns.
+ */
+const contentEntries = defineTable(CONTENT_ENTRIES_TABLE, {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  collection: text("collection").notNull(),
+  entryId: text("entry_id").notNull(),
+  slug: text("slug").notNull(),
+  status: text("status"),
+  publishedAt: text("published_at"),
+  document: text("document").notNull(),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+/**
+ * The migration for content on the SQL substrate.
  *
- * One row per entry. The open-ended shape of a content document — arbitrary
- * frontmatter, rendered HTML, computed fields — lives losslessly in the
- * `document` JSON column. A handful of fields are lifted out alongside it
- * (`collection`, `slug`, `status`, `published_at`) precisely because they are
- * the ones worth indexing and querying on.
+ * The table DDL is rendered from the schema value above via
+ * `createTableSql(table, schema.dialect)` — one DDL system, dialect-aware, no
+ * parallel column list. Run it with the standard migrator:
  *
- * Run it with the standard migrator:
- *
- *   new Migrator(db, [contentEntriesMigration]).migrate();
+ *   new Migrator(db, [contentEntriesMigration], { dialect }).migrate();
  */
 export const contentEntriesMigration: MigrationEntry = {
   version: "0001_create_content_entries",
@@ -24,15 +42,7 @@ export const contentEntriesMigration: MigrationEntry = {
       // The table must exist before any index references it. On Postgres a
       // CREATE INDEX that races CREATE TABLE fails ("relation does not exist"),
       // so we await the DDL in strict order: table first, then each index.
-      await schema.createTable(CONTENT_ENTRIES_TABLE, (t) => {
-        t.string("collection", { null: false });
-        t.string("entry_id", { null: false });
-        t.string("slug", { null: false });
-        t.string("status");
-        t.datetime("published_at");
-        t.text("document", { null: false });
-        t.timestamps();
-      });
+      await schema.execute(createTableSql(contentEntries, schema.dialect));
 
       // The identity of an entry is (collection, entry_id) — unique, and the
       // conflict target every upsert resolves against.

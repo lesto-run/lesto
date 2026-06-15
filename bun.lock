@@ -316,6 +316,7 @@
         "dompurify": "^3.0.0",
         "github-slugger": "^2.0.0",
         "he": "^1.2.0",
+        "jsdom": "^24.0.0",
         "lru-cache": "^10.0.0",
         "serialize-javascript": "^6.0.0",
         "zod": "^3.22.0",
@@ -324,7 +325,6 @@
         "@types/dompurify": "^3.0.0",
         "@types/he": "^1.2.0",
         "@types/serialize-javascript": "^5.0.0",
-        "jsdom": "^24.0.0",
         "mdast-util-to-string": "^4.0.0",
         "remark-parse": "^11.0.0",
         "unified": "^11.0.0",
@@ -348,6 +348,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@keel/content-core": "workspace:*",
+        "@keel/db": "workspace:*",
         "@keel/errors": "workspace:*",
         "@keel/migrate": "workspace:*",
       },
@@ -404,6 +405,7 @@
       "name": "@keel/csrf",
       "version": "0.0.0",
       "dependencies": {
+        "@keel/errors": "workspace:*",
         "@keel/web": "workspace:*",
       },
     },
@@ -552,6 +554,10 @@
       "dependencies": {
         "@keel/errors": "workspace:*",
       },
+      "devDependencies": {
+        "@keel/db": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+      },
     },
     "packages/observability": {
       "name": "@keel/observability",
@@ -560,13 +566,6 @@
     "packages/openapi": {
       "name": "@keel/openapi",
       "version": "0.0.0",
-    },
-    "packages/orm": {
-      "name": "@keel/orm",
-      "version": "0.0.0",
-      "dependencies": {
-        "@keel/errors": "workspace:*",
-      },
     },
     "packages/pg": {
       "name": "@keel/pg",
@@ -948,8 +947,6 @@
     "@keel/observability": ["@keel/observability@workspace:packages/observability"],
 
     "@keel/openapi": ["@keel/openapi@workspace:packages/openapi"],
-
-    "@keel/orm": ["@keel/orm@workspace:packages/orm"],
 
     "@keel/pg": ["@keel/pg@workspace:packages/pg"],
 

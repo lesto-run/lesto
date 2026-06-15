@@ -1,7 +1,7 @@
 {
   "name": "@keel/migrate",
   "version": "0.0.0",
-  "description": "Keel's schema-builder DSL and migrator — a Tracks-style migration system on an injected SQL database.",
+  "description": "Keel's migrator — a Tracks-style migration system (ordering, bookkeeping, indexes) over @keel/db schema-as-value DDL on an injected SQL database.",
   "type": "module",
   "private": true,
 
@@ -23,5 +23,10 @@
 
   "dependencies": {
     "@keel/errors": "workspace:*"
+  },
+
+  "devDependencies": {
+    "@keel/db": "workspace:*",
+    "better-sqlite3": "^11.10.0"
   }
 }

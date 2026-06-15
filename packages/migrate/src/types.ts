@@ -60,12 +60,6 @@ export interface ColumnOptions {
   readonly default?: string | number | boolean;
 }
 
-/** A reference column may also pin a real foreign-key constraint. */
-export interface ReferenceOptions extends ColumnOptions {
-  /** When `true`, also emit `FOREIGN KEY(<name>_id) REFERENCES <name>s(id)`. */
-  readonly foreignKey?: boolean;
-}
-
 /** Options for a standalone index. */
 export interface IndexOptions {
   /** When `true`, the index is `UNIQUE`. */

@@ -1,9 +1,26 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { MigrateError, Migrator, Schema, TableBuilder } from "../src/index";
+import { createTableSql, defineTable, integer, text } from "@keel/db";
+
+import { MigrateError, Migrator, Schema } from "../src/index";
 
 import type { Migration, MigrationEntry, SqlDatabase, SqlStatement } from "../src/index";
+
+// Schema-as-value test tables (the one DDL system). `createTableSql(t, dialect)`
+// renders these; the value layer's own rendering is exhaustively tested in
+// @keel/db, so here we only prove the migrator runs and orders the DDL.
+const posts = defineTable("posts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+const usersTable = defineTable("users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull(),
+});
 
 let database: Database.Database;
 let db: SqlDatabase;
@@ -138,114 +155,11 @@ const indexList = (table: string): { name: string; unique: number }[] =>
     unique: number;
   }[];
 
-describe("TableBuilder", () => {
-  it("seeds an autoincrement id and renders every column type", () => {
-    const t = new TableBuilder();
-
-    t.string("title");
-    t.text("body");
-    t.integer("views");
-    t.boolean("published");
-    t.float("rating");
-    t.datetime("seen_at");
-
-    expect(t.build()).toBe(
-      [
-        "id INTEGER PRIMARY KEY AUTOINCREMENT",
-        "title TEXT",
-        "body TEXT",
-        "views INTEGER",
-        "published INTEGER",
-        "rating REAL",
-        "seen_at TEXT",
-      ].join(", "),
-    );
-  });
-
-  it("adds a reference column without a foreign key by default", () => {
-    const t = new TableBuilder();
-
-    t.references("author");
-
-    expect(t.build()).toBe("id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER");
-  });
-
-  it("adds a foreign key only when asked", () => {
-    const t = new TableBuilder();
-
-    t.references("author", { foreignKey: true });
-
-    expect(t.build()).toBe(
-      [
-        "id INTEGER PRIMARY KEY AUTOINCREMENT",
-        "author_id INTEGER",
-        "FOREIGN KEY(author_id) REFERENCES authors(id)",
-      ].join(", "),
-    );
-  });
-
-  it("adds created_at and updated_at via timestamps()", () => {
-    const t = new TableBuilder();
-
-    t.timestamps();
-
-    expect(t.build()).toBe(
-      "id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, updated_at TEXT",
-    );
-  });
-
-  it("postgres: identity key + BIGINT integer/boolean/reference columns", () => {
-    const t = new TableBuilder("postgres");
-
-    t.integer("views");
-    t.boolean("published");
-    t.references("author", { foreignKey: true });
-
-    expect(t.build()).toBe(
-      [
-        "id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY",
-        "views BIGINT",
-        "published BIGINT",
-        "author_id BIGINT",
-        "FOREIGN KEY(author_id) REFERENCES authors(id)",
-      ].join(", "),
-    );
-  });
-
-  it("renders null:false, unique, and every default literal flavor", () => {
-    const t = new TableBuilder();
-
-    t.string("name", { null: false });
-    t.string("slug", { unique: true });
-    t.string("status", { default: "draft" });
-    t.string("quote", { default: "it's" });
-    t.integer("views", { default: 0 });
-    t.boolean("published", { default: true });
-    t.boolean("archived", { default: false });
-
-    expect(t.build()).toBe(
-      [
-        "id INTEGER PRIMARY KEY AUTOINCREMENT",
-        "name TEXT NOT NULL",
-        "slug TEXT UNIQUE",
-        "status TEXT DEFAULT 'draft'",
-        "quote TEXT DEFAULT 'it''s'",
-        "views INTEGER DEFAULT 0",
-        "published INTEGER DEFAULT 1",
-        "archived INTEGER DEFAULT 0",
-      ].join(", "),
-    );
-  });
-});
-
 describe("Schema", () => {
-  it("createTable emits a usable CREATE TABLE", async () => {
+  it("runs value-DDL CREATE TABLE via execute(createTableSql)", async () => {
     const schema = new Schema(db);
 
-    await schema.createTable("posts", (t) => {
-      t.string("title", { null: false });
-      t.timestamps();
-    });
+    await schema.execute(createTableSql(posts, schema.dialect));
 
     const cols = tableInfo("posts");
 
@@ -256,13 +170,13 @@ describe("Schema", () => {
   it("dropTable removes the table", async () => {
     const schema = new Schema(db);
 
-    await schema.createTable("temp", (t) => t.string("x"));
-    await schema.dropTable("temp");
+    await schema.execute(createTableSql(usersTable, schema.dialect));
+    await schema.dropTable("users");
 
-    expect(() => database.prepare("SELECT * FROM temp").all()).toThrow();
+    expect(() => database.prepare("SELECT * FROM users").all()).toThrow();
   });
 
-  it("exposes its dialect and renders postgres DDL through createTable", async () => {
+  it("exposes its dialect so a value-DDL migration renders postgres DDL", async () => {
     let emitted = "";
     const capture: SqlDatabase = {
       exec: async (sql) => {
@@ -281,10 +195,10 @@ describe("Schema", () => {
     // The dialect is readable so a value-DDL migration can render for it.
     expect(schema.dialect).toBe("postgres");
 
-    await schema.createTable("posts", (t) => t.string("title", { null: false }));
+    await schema.execute(createTableSql(usersTable, schema.dialect));
 
     expect(emitted).toBe(
-      "CREATE TABLE posts (id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY, title TEXT NOT NULL)",
+      'CREATE TABLE "users" ("id" BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY, "email" TEXT NOT NULL)',
     );
   });
 
@@ -295,7 +209,7 @@ describe("Schema", () => {
   it("addColumn renders modifiers and grows the table", async () => {
     const schema = new Schema(db);
 
-    await schema.createTable("posts", (t) => t.string("title"));
+    await schema.execute(createTableSql(posts, schema.dialect));
 
     await schema.addColumn("posts", "views", "INTEGER", { null: false, default: 0 });
 
@@ -330,7 +244,7 @@ describe("Schema", () => {
   it("addColumn with no opts adds a plain column", async () => {
     const schema = new Schema(db);
 
-    await schema.createTable("posts", (t) => t.string("title"));
+    await schema.execute(createTableSql(posts, schema.dialect));
 
     await schema.addColumn("posts", "body", "TEXT");
 
@@ -340,7 +254,7 @@ describe("Schema", () => {
   it("addColumn renders string and boolean defaults", async () => {
     const schema = new Schema(db);
 
-    await schema.createTable("posts", (t) => t.string("title"));
+    await schema.execute(createTableSql(posts, schema.dialect));
 
     await schema.addColumn("posts", "status", "TEXT", { default: "draft" });
     await schema.addColumn("posts", "published", "INTEGER", { default: true });
@@ -356,9 +270,9 @@ describe("Schema", () => {
   it("addIndex over a single column with a custom name and unique flag", async () => {
     const schema = new Schema(db);
 
-    await schema.createTable("posts", (t) => t.string("slug"));
+    await schema.execute(createTableSql(posts, schema.dialect));
 
-    await schema.addIndex("posts", "slug", { unique: true, name: "by_slug" });
+    await schema.addIndex("posts", "title", { unique: true, name: "by_slug" });
 
     const index = indexList("posts").find((i) => i.name === "by_slug");
 
@@ -368,10 +282,13 @@ describe("Schema", () => {
   it("addIndex over an array of columns with a generated name", async () => {
     const schema = new Schema(db);
 
-    await schema.createTable("posts", (t) => {
-      t.string("title");
-      t.integer("author_id");
+    const withAuthor = defineTable("posts", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      title: text("title"),
+      authorId: integer("author_id"),
     });
+
+    await schema.execute(createTableSql(withAuthor, schema.dialect));
 
     await schema.addIndex("posts", ["author_id", "title"]);
 
@@ -394,13 +311,13 @@ describe("Migrator", () => {
   // can exercise rollback both with and without a `down`.
   const createPosts: Migration = {
     up: async (s) => {
-      await s.createTable("posts", (t) => t.string("title"));
+      await s.execute(createTableSql(posts, s.dialect));
     },
   };
 
   const createUsers: Migration = {
     up: async (s) => {
-      await s.createTable("users", (t) => t.string("email"));
+      await s.execute(createTableSql(usersTable, s.dialect));
     },
     down: async (s) => {
       await s.dropTable("users");
@@ -583,9 +500,10 @@ describe("Migrator", () => {
     // is written for the failure, while 001 (applied earlier in the SAME run,
     // its own committed transaction) stays applied. This forces the rollback
     // branch of the seam's transaction().
+    const half = defineTable("half", { id: integer("id").primaryKey({ autoIncrement: true }) });
     const failing: Migration = {
       up: async (s) => {
-        await s.createTable("half", (t) => t.string("x"));
+        await s.execute(createTableSql(half, s.dialect));
 
         throw new Error("boom");
       },

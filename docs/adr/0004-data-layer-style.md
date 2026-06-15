@@ -21,6 +21,8 @@
 
 **ADR 0004 is fully realized.** `@keel/db` is the data layer; `@keel/orm` is preserved for back-compat with no path forward for new in-tree work.
 
+**Phase 7.6 — data half done (2026-06-15, Wave 1):** `@keel/orm` is **DELETED** (`packages/orm` removed from the workspace; it had zero in-tree consumers since Phase D, and back-compat for out-of-tree apps is not a v1 obligation). `@keel/migrate`'s string-building `TableBuilder` and `Schema.createTable` DSL are gone too: there is now **one DDL system** — tables are defined once as a `@keel/db` schema value and rendered with `s.execute(createTableSql(table, s.dialect))`, dialect-aware (Wave 1 item 1). The `references("category")` → `categorys` pluralization footgun died with the builder. `@keel/migrate` keeps what the value layer does not cover: migration ordering/bookkeeping, `addIndex`/`addColumn`/`dropTable`, and the raw `execute` escape hatch. `@keel/content-store` and the cli/migrate test fixtures moved to value DDL in the same pass. (The legacy *dispatch* stack — `Application`/`Controller`/legacy `Router` — is the OTHER half of Phase 7.6 and stays deferred to Wave 5.)
+
 ## Context
 
 Keel's brand promise is "Rails+Laravel+WordPress+Next, best-of." On the

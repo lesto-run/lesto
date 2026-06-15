@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createTableSql, defineTable, dropTableSql, integer, text } from "@keel/db";
 import { Router } from "@keel/router";
 import { Controller, keel } from "@keel/web";
 import { Migrator } from "@keel/migrate";
@@ -25,20 +26,24 @@ class PostsController extends Controller {
   }
 }
 
+const posts = defineTable("posts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
 const migrations: MigrationEntry[] = [
   {
     version: "001_create_posts",
     migration: {
       up: (schema) => {
-        schema.createTable("posts", (t) => {
-          t.string("title", { null: false });
-          t.text("body", { null: false });
-          t.timestamps();
-        });
+        schema.execute(createTableSql(posts, schema.dialect));
       },
 
       down: (schema) => {
-        schema.dropTable("posts");
+        schema.execute(dropTableSql(posts));
       },
     },
   },

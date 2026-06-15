@@ -23,6 +23,7 @@
 
   "dependencies": {
     "@keel/content-core": "workspace:*",
+    "@keel/db": "workspace:*",
     "@keel/errors": "workspace:*",
     "@keel/migrate": "workspace:*"
   },
