@@ -72,6 +72,9 @@ export interface BuildClientDeps {
   /** The names of files currently in the out dir (for the stale-chunk sweep). */
   listOutDir(outDir: string): Promise<readonly string[]>;
 
+  /** Read a file's text, or `undefined` if it does not exist (the prior-generation marker). */
+  read(path: string): Promise<string | undefined>;
+
   /** Remove a file. */
   remove(path: string): Promise<void>;
 
@@ -92,12 +95,54 @@ export interface BuildClientResult {
 const DEFAULT_ENTRY = "client.js";
 
 /**
+ * The prior-generation marker: a production build records the chunk file names it
+ * wrote here, so the NEXT production build knows which chunks are the one
+ * generation to retain (everything older is swept). Hidden so it is never mistaken
+ * for an asset and never served.
+ */
+const GENERATION_MARKER = ".keel-chunks.json";
+
+/** Parse the generation marker's chunk-name list; tolerate a missing/corrupt marker. */
+function parseGeneration(contents: string | undefined): readonly string[] {
+  if (contents === undefined) return [];
+
+  try {
+    const parsed: unknown = JSON.parse(contents);
+
+    return Array.isArray(parsed) ? parsed.filter((name): name is string => typeof name === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Build the client for `options` through the injected `deps`.
  *
- * Pure orchestration: every effect (read islands, bundle, list/remove/write
+ * Pure orchestration: every effect (read islands, bundle, read/list/remove/write
  * files) is a seam, so the sequence and the stale-chunk sweep are tested with
  * fakes. An empty `app/islands/` still produces a (no-op) entry, which a page
  * loads harmlessly.
+ *
+ * WRITE-THEN-SWEEP, not sweep-then-write. The new artifacts are written FIRST,
+ * then anything stale is removed — never the reverse. Two failure modes this
+ * closes:
+ *
+ *   - A crash BETWEEN phases leaves a fully-written new build on disk (plus, at
+ *     worst, some harmless stale chunks). Sweeping first risked a crash that left
+ *     the out dir with the old chunks gone and the new ones not yet written — a
+ *     half-empty, unservable directory.
+ *   - A rebuild WHILE an old document is in flight. A client (or a CDN-cached
+ *     `index.html`) that already fetched the previous `client.js` may still be
+ *     requesting that generation's hashed chunks. Sweeping them before the new
+ *     build is even written 404s those chunks mid-rebuild. Hashed names make
+ *     keeping both generations safe — they never collide.
+ *
+ * The sweep policy is mode-aware. Development sweeps every chunk not in the new
+ * build (a clean dir, no CDN, no in-flight concern). Production keeps exactly ONE
+ * previous generation — the chunks the LAST production build wrote, recorded in a
+ * {@link GENERATION_MARKER} — so an in-flight old document still resolves its
+ * chunks, while a third generation does not accumulate unbounded.
  */
 export async function buildClient(
   options: BuildClientOptions,
@@ -121,23 +166,26 @@ export async function buildClient(
     });
   }
 
-  // Sweep the previous build's hashed chunks before writing this build's, so the
-  // out dir holds exactly the current graph and nothing stale ships. Only after a
-  // successful build (we are past the bundle + entry checks).
-  for (const name of await deps.listOutDir(options.outDir)) {
-    if (isChunkFile(name)) {
-      await deps.remove(join(options.outDir, name));
-    }
-  }
+  const markerPath = join(options.outDir, GENERATION_MARKER);
 
+  // Read the prior generation's chunk names BEFORE writing — in production these
+  // are the one generation to retain for in-flight documents. (Read up front so a
+  // failed read never strands the build mid-write.)
+  const priorGeneration = parseGeneration(await deps.read(markerPath));
+
+  // PHASE 1 — write the new artifacts first, so a crash here leaves a servable
+  // (current) build on disk rather than a half-swept empty dir.
   const entryPath = join(options.outDir, options.entryName ?? DEFAULT_ENTRY);
 
   await deps.write(entryPath, entryArtifact.contents);
 
   const chunks: string[] = [];
+  const newChunkNames: string[] = [];
 
   for (const artifact of artifacts) {
     if (artifact.kind === "entry") continue;
+
+    newChunkNames.push(artifact.fileName);
 
     const chunkPath = join(options.outDir, artifact.fileName);
 
@@ -145,6 +193,26 @@ export async function buildClient(
 
     chunks.push(chunkPath);
   }
+
+  // PHASE 2 — sweep stale chunks. Keep this build's chunks always; in production
+  // also keep the immediately-prior generation (in-flight documents still fetch
+  // it), so only the generation BEFORE that is removed. Development keeps only the
+  // new set. Hashed names guarantee a retained chunk never shadows a new one.
+  const retained = new Set<string>(newChunkNames);
+
+  if (options.mode === "production") {
+    for (const name of priorGeneration) retained.add(name);
+  }
+
+  for (const name of await deps.listOutDir(options.outDir)) {
+    if (isChunkFile(name) && !retained.has(name)) {
+      await deps.remove(join(options.outDir, name));
+    }
+  }
+
+  // Record THIS build's chunks as the prior generation the next production build
+  // will retain. Written last, after the dir is consistent.
+  await deps.write(markerPath, JSON.stringify(newChunkNames));
 
   return { entry: entryPath, chunks, islands };
 }

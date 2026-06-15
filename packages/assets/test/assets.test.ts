@@ -88,16 +88,21 @@ describe("PREACT_ALIAS", () => {
   });
 });
 
-// A fake deps bag recording the writes/removes and serving canned islands + artifacts.
+// A fake deps bag recording the writes/removes and serving canned islands +
+// artifacts. `read` is backed by `written`, so the generation marker round-trips
+// across successive buildClient calls on the same bag — exactly how a real disk
+// would carry one build's chunk list to the next.
 function fakeDeps(overrides: Partial<BuildClientDeps> = {}): {
   deps: BuildClientDeps;
   written: Map<string, string | Uint8Array>;
   removed: string[];
   bundled: BundleRequest[];
+  writeOrder: string[];
 } {
   const written = new Map<string, string | Uint8Array>();
   const removed: string[] = [];
   const bundled: BundleRequest[] = [];
+  const writeOrder: string[] = [];
 
   const deps: BuildClientDeps = {
     listIslands: () =>
@@ -111,12 +116,19 @@ function fakeDeps(overrides: Partial<BuildClientDeps> = {}): {
       ] as BundleArtifact[]);
     },
     listOutDir: () => Promise.resolve([]),
+    read: (path) => {
+      const value = written.get(path);
+
+      return Promise.resolve(typeof value === "string" ? value : undefined);
+    },
     remove: (path) => {
       removed.push(path);
+      written.delete(path);
 
       return Promise.resolve();
     },
     write: (path, contents) => {
+      writeOrder.push(path);
       written.set(path, contents);
 
       return Promise.resolve();
@@ -124,7 +136,7 @@ function fakeDeps(overrides: Partial<BuildClientDeps> = {}): {
     ...overrides,
   };
 
-  return { deps, written, removed, bundled };
+  return { deps, written, removed, bundled, writeOrder };
 }
 
 describe("buildClient", () => {
@@ -166,10 +178,85 @@ describe("buildClient", () => {
     expect(result.entry).toBe("/out/hydrate.js");
   });
 
-  it("sweeps the previous build's stale chunks, never the entry or HTML", async () => {
+  it("writes the new artifacts BEFORE sweeping anything (crash-safe order)", async () => {
+    const { deps, writeOrder } = fakeDeps({
+      listOutDir: () => Promise.resolve(["chunk-old11111.js"]),
+    });
+
+    let firstRemoveAt = -1;
+    const baseRemove = deps.remove;
+    deps.remove = (path) => {
+      // The first remove must come AFTER the entry + new chunk are written: a crash
+      // between phases then leaves the new build on disk, never a half-swept dir.
+      if (firstRemoveAt === -1) firstRemoveAt = writeOrder.length;
+
+      return baseRemove(path);
+    };
+
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "development", dialect: "react" },
+      deps,
+    );
+
+    // The entry and the new chunk were both written before the first sweep removal.
+    expect(writeOrder).toContain("/out/client.js");
+    expect(writeOrder).toContain("/out/chunk-deadbeef.js");
+    expect(firstRemoveAt).toBeGreaterThanOrEqual(2);
+  });
+
+  it("development sweeps every chunk not in the new build", async () => {
     const { deps, removed } = fakeDeps({
       listOutDir: () =>
         Promise.resolve(["client.js", "index.html", "chunk-old11111.js", "chunk-old22222.js"]),
+    });
+
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "development", dialect: "react" },
+      deps,
+    );
+
+    // Only the stale hashed chunks are removed — never the entry or the HTML.
+    expect(removed.toSorted()).toEqual(["/out/chunk-old11111.js", "/out/chunk-old22222.js"]);
+  });
+
+  it("production keeps exactly ONE previous generation for in-flight documents", async () => {
+    // Build 1 writes chunk-deadbeef.js and records it as the generation marker.
+    const { deps, removed } = fakeDeps();
+
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+      deps,
+    );
+
+    expect(removed).toEqual([]);
+
+    // Build 2 produces a NEW chunk; the prior generation (chunk-deadbeef.js) must
+    // survive so an in-flight old document can still fetch it. A stale chunk from
+    // TWO generations ago (chunk-ancient.js) is swept.
+    deps.bundle = () =>
+      Promise.resolve([
+        { kind: "entry", fileName: "entry.js", contents: "ENTRY2" },
+        { kind: "chunk", fileName: "chunk-cafef00d.js", contents: "CHUNK2" },
+      ] as BundleArtifact[]);
+    deps.listOutDir = () =>
+      Promise.resolve(["client.js", "chunk-deadbeef.js", "chunk-cafef00d.js", "chunk-ancient.js"]);
+
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+      deps,
+    );
+
+    // The prior generation survives; only the two-generations-old chunk is swept.
+    expect(removed).toEqual(["/out/chunk-ancient.js"]);
+  });
+
+  it.each([
+    ["corrupt JSON", "not json{"],
+    ["valid JSON that is not an array", '{"chunk-x.js":true}'],
+  ])("tolerates a %s generation marker (treats it as no prior generation)", async (_label, marker) => {
+    const { deps, removed } = fakeDeps({
+      listOutDir: () => Promise.resolve(["chunk-stale0001.js"]),
+      read: () => Promise.resolve(marker),
     });
 
     await buildClient(
@@ -177,8 +264,25 @@ describe("buildClient", () => {
       deps,
     );
 
-    // Only the stale hashed chunks are removed.
-    expect(removed.toSorted()).toEqual(["/out/chunk-old11111.js", "/out/chunk-old22222.js"]);
+    // With no parseable prior generation, the stale chunk is swept.
+    expect(removed).toEqual(["/out/chunk-stale0001.js"]);
+  });
+
+  it("ignores non-string entries in the generation marker", async () => {
+    // A marker array with a non-string element: the non-string is filtered out, so
+    // only the real prior-generation chunk name is retained.
+    const { deps, removed } = fakeDeps({
+      listOutDir: () => Promise.resolve(["chunk-prevreal.js", "chunk-stale0001.js"]),
+      read: () => Promise.resolve('["chunk-prevreal.js", 42]'),
+    });
+
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+      deps,
+    );
+
+    // The named prior chunk survives; the unrelated stale chunk is swept.
+    expect(removed).toEqual(["/out/chunk-stale0001.js"]);
   });
 
   it("throws ASSETS_NO_ENTRY when the bundler produced no entry artifact", async () => {

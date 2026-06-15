@@ -9,7 +9,7 @@
  * (`build-client.ts`) is covered with fakes.
  */
 
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import type { BunPlugin } from "bun";
@@ -123,6 +123,15 @@ export function bunBuildClientDeps(appRoot: string): BuildClientDeps {
         return await readdir(outDir);
       } catch {
         return [];
+      }
+    },
+
+    // The generation marker is absent on a first build — `undefined`, not an error.
+    read: async (path) => {
+      try {
+        return await readFile(path, "utf8");
+      } catch {
+        return undefined;
       }
     },
 
