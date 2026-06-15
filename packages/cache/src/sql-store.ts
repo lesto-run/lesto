@@ -1,4 +1,4 @@
-import type { CacheStore, SqlDatabase, StoredEntry } from "./types";
+import type { CacheStore, Dialect, SqlDatabase, StoredEntry } from "./types";
 
 /** The single table every SQL-backed cache reads and writes. */
 const TABLE = "keel_cache";
@@ -8,13 +8,23 @@ const TABLE = "keel_cache";
  *
  * `value` holds the JSON-encoded payload; `expires_at` is a nullable epoch-ms
  * deadline (NULL = never expires), mirroring `StoredEntry.expiresAt` exactly.
+ *
+ * `expires_at` is **`BIGINT`, not `INTEGER`** — an epoch-ms deadline (~1.8e12)
+ * overflows Postgres's 32-bit `int4`. On SQLite, `BIGINT` carries INTEGER
+ * affinity, so the same DDL is correct on both engines. `dialect` defaults to
+ * `"sqlite"`; pass `"postgres"` when installing against a Postgres handle.
  */
-export async function installCacheSchema(db: SqlDatabase): Promise<void> {
+export async function installCacheSchema(
+  db: SqlDatabase,
+  dialect: Dialect = "sqlite",
+): Promise<void> {
+  const expiresAtType = dialect === "postgres" ? "BIGINT" : "INTEGER";
+
   await db.exec(`
     CREATE TABLE IF NOT EXISTS ${TABLE} (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
-      expires_at INTEGER
+      expires_at ${expiresAtType}
     )
   `);
 }
@@ -22,7 +32,10 @@ export async function installCacheSchema(db: SqlDatabase): Promise<void> {
 /** The shape a row comes back as — a true cast, justified by the schema above. */
 interface CacheRow {
   value: string;
-  expires_at: number | null;
+  // node-postgres returns BIGINT as a string; SQLite as a number. Either may
+  // arrive here, so the read path coerces with `Number()` before handing the
+  // deadline back as the `number | null` the `Cache` policy expects.
+  expires_at: number | string | null;
 }
 
 /**
@@ -56,7 +69,12 @@ export function sqlStore(db: SqlDatabase): CacheStore {
       if (row === undefined) return undefined;
 
       // JSON.parse is pure value code — the only async beat was the read above.
-      return { value: JSON.parse(row.value) as unknown, expiresAt: row.expires_at };
+      // A NULL deadline stays null; a present one is coerced (PG hands BIGINT
+      // back as a string) to the epoch-ms number the `Cache` policy compares.
+      return {
+        value: JSON.parse(row.value) as unknown,
+        expiresAt: row.expires_at === null ? null : Number(row.expires_at),
+      };
     },
 
     async set(key, entry: StoredEntry) {

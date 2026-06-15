@@ -71,6 +71,14 @@ export interface RunResult {
 /** A clock we can stop. Injected everywhere time matters, so tests are deterministic. */
 export type Clock = () => Date;
 
+/**
+ * Which SQL dialect the queue speaks. Defaults to `"sqlite"`. It selects the
+ * surrogate-key DDL ({@link installSchema}) and the row-locking clause in the
+ * atomic claim (`FOR UPDATE SKIP LOCKED` on Postgres). Mirrors `@keel/db`'s
+ * `Dialect`.
+ */
+export type Dialect = "sqlite" | "postgres";
+
 // ---- the minimal SQL surface (driver-agnostic) ----
 //
 // The terminals are **asynchronous** (ADR 0006): `run` / `get` / `all` and

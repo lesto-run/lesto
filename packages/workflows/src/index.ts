@@ -23,4 +23,11 @@ export { systemSleep } from "./sleep";
 export { KeelError, WorkflowError } from "./errors";
 export type { WorkflowErrorCode } from "./errors";
 
-export type { Sleep, SqlDatabase, SqlStatement, WorkflowContext, WorkflowFn } from "./types";
+export type {
+  Dialect,
+  Sleep,
+  SqlDatabase,
+  SqlStatement,
+  WorkflowContext,
+  WorkflowFn,
+} from "./types";

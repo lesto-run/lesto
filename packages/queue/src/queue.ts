@@ -3,6 +3,7 @@ import { isoAfter, nowIso, systemClock } from "./time";
 
 import type {
   Clock,
+  Dialect,
   EnqueueOptions,
   Job,
   JobHandler,
@@ -25,15 +26,28 @@ const TABLE = "keel_jobs";
  * idempotent.
  *
  * On SQLite the claim is one atomic `UPDATE … WHERE id = (SELECT … LIMIT 1)
- * RETURNING *`. The Postgres driver will swap in `… FOR UPDATE SKIP LOCKED` for
- * true multi-worker concurrency — behind this exact API.
+ * RETURNING *`. On Postgres the subselect adds `FOR UPDATE SKIP LOCKED`, so
+ * concurrent workers each skip rows another has already locked and every job is
+ * claimed exactly once — behind this exact API (see {@link Queue.claim}).
  */
 
-/** Create the jobs table. Idempotent; call it from a migration or once at boot. */
-export async function installSchema(db: SqlDatabase): Promise<void> {
+/**
+ * Create the jobs table. Idempotent; call it from a migration or once at boot.
+ *
+ * `dialect` defaults to `"sqlite"`; pass `"postgres"` to declare the surrogate
+ * key as a `BIGINT … GENERATED ALWAYS AS IDENTITY` column (Postgres has no
+ * `AUTOINCREMENT` keyword, and an int4 key would cap the queue at ~2.1B jobs).
+ * Every other column is spelled identically on both engines.
+ */
+export async function installSchema(db: SqlDatabase, dialect: Dialect = "sqlite"): Promise<void> {
+  const idColumn =
+    dialect === "postgres"
+      ? "BIGINT  PRIMARY KEY GENERATED ALWAYS AS IDENTITY"
+      : "INTEGER PRIMARY KEY AUTOINCREMENT";
+
   await db.exec(`
     CREATE TABLE IF NOT EXISTS ${TABLE} (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      id            ${idColumn},
       queue         TEXT    NOT NULL DEFAULT 'default',
       name          TEXT    NOT NULL,
       payload       TEXT    NOT NULL DEFAULT '{}',
@@ -73,14 +87,17 @@ interface Row {
 
 function hydrate(row: Row): Job {
   return {
-    id: row.id,
+    // `id` is a BIGINT on Postgres, which node-postgres returns as a string;
+    // coerce so `Job.id` is always the `number` its type promises (the integer
+    // counters are int4 → already numbers, but `Number()` is idempotent on them).
+    id: Number(row.id),
     queue: row.queue,
     name: row.name,
     payload: JSON.parse(row.payload) as JsonValue,
     status: row.status,
-    priority: row.priority,
-    attempts: row.attempts,
-    maxAttempts: row.max_attempts,
+    priority: Number(row.priority),
+    attempts: Number(row.attempts),
+    maxAttempts: Number(row.max_attempts),
     runAt: row.run_at,
     lockedUntil: row.locked_until,
     lastError: row.last_error,

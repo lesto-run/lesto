@@ -18,4 +18,4 @@ export { installCacheSchema, sqlStore } from "./sql-store";
 
 export { systemClock } from "./time";
 
-export type { CacheStore, Clock, SqlDatabase, SqlStatement, StoredEntry } from "./types";
+export type { CacheStore, Clock, Dialect, SqlDatabase, SqlStatement, StoredEntry } from "./types";

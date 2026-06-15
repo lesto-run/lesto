@@ -1,6 +1,6 @@
 import { TableBuilder } from "./table-builder";
 
-import type { ColumnOptions, IndexOptions, SqlDatabase } from "./types";
+import type { ColumnOptions, Dialect, IndexOptions, SqlDatabase } from "./types";
 
 /**
  * The schema editor handed to a migration's `up`/`down`.
@@ -8,16 +8,25 @@ import type { ColumnOptions, IndexOptions, SqlDatabase } from "./types";
  * Every method is a thin, declarative wrapper that renders one DDL statement and
  * sends it straight to the database. The builder owns *what* the SQL looks like;
  * `Schema` owns *that it runs*.
+ *
+ * `dialect` is the engine this migration is running against — exposed (read-only)
+ * so a value-DDL migration can render `createTableSql(table, schema.dialect)`,
+ * and threaded into the `TableBuilder` so the DSL's surrogate key matches it.
+ * It defaults to `"sqlite"`; the migrator passes the real dialect through.
  */
 export class Schema {
-  constructor(private readonly db: SqlDatabase) {}
+  constructor(
+    private readonly db: SqlDatabase,
+    readonly dialect: Dialect = "sqlite",
+  ) {}
 
   /**
    * Define a table through the builder DSL. The builder seeds an autoincrement
-   * `id`, the callback adds the rest, and we emit a single `CREATE TABLE`.
+   * `id` (or, on Postgres, an identity column), the callback adds the rest, and
+   * we emit a single `CREATE TABLE`.
    */
   async createTable(name: string, build: (t: TableBuilder) => void): Promise<void> {
-    const table = new TableBuilder();
+    const table = new TableBuilder(this.dialect);
 
     build(table);
 

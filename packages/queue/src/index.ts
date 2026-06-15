@@ -24,6 +24,7 @@ export { systemClock } from "./time";
 
 export type {
   Clock,
+  Dialect,
   EnqueueOptions,
   Job,
   JobContext,

@@ -148,8 +148,9 @@ export const mailingListsMigration: { version: string; migration: Migration } = 
   version: "20260609000002_create_mailing_lists",
   migration: {
     async up(schema) {
-      await schema.execute(createTableSql(lists));
-      await schema.execute(createTableSql(subscribers));
+      // Render for the engine the migrator runs against (`schema.dialect`).
+      await schema.execute(createTableSql(lists, schema.dialect));
+      await schema.execute(createTableSql(subscribers, schema.dialect));
     },
     async down(schema) {
       await schema.execute(dropTableSql(subscribers));

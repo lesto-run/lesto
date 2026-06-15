@@ -135,6 +135,24 @@ describe("TableBuilder", () => {
     );
   });
 
+  it("postgres: identity key + BIGINT integer/boolean/reference columns", () => {
+    const t = new TableBuilder("postgres");
+
+    t.integer("views");
+    t.boolean("published");
+    t.references("author", { foreignKey: true });
+
+    expect(t.build()).toBe(
+      [
+        "id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY",
+        "views BIGINT",
+        "published BIGINT",
+        "author_id BIGINT",
+        "FOREIGN KEY(author_id) REFERENCES authors(id)",
+      ].join(", "),
+    );
+  });
+
   it("renders null:false, unique, and every default literal flavor", () => {
     const t = new TableBuilder();
 
@@ -183,6 +201,36 @@ describe("Schema", () => {
     await schema.dropTable("temp");
 
     expect(() => database.prepare("SELECT * FROM temp").all()).toThrow();
+  });
+
+  it("exposes its dialect and renders postgres DDL through createTable", async () => {
+    let emitted = "";
+    const capture: SqlDatabase = {
+      exec: async (sql) => {
+        emitted = sql;
+      },
+      prepare: () => {
+        throw new Error("unused");
+      },
+      transaction: () => {
+        throw new Error("unused");
+      },
+    };
+
+    const schema = new Schema(capture, "postgres");
+
+    // The dialect is readable so a value-DDL migration can render for it.
+    expect(schema.dialect).toBe("postgres");
+
+    await schema.createTable("posts", (t) => t.string("title", { null: false }));
+
+    expect(emitted).toBe(
+      "CREATE TABLE posts (id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY, title TEXT NOT NULL)",
+    );
+  });
+
+  it("defaults its dialect to sqlite", () => {
+    expect(new Schema(db).dialect).toBe("sqlite");
   });
 
   it("addColumn renders modifiers and grows the table", async () => {
@@ -365,6 +413,46 @@ describe("Migrator", () => {
     const migrator = new Migrator(db, migrations);
 
     expect(await migrator.rollback()).toBeUndefined();
+  });
+
+  it("threads its dialect into every migration's Schema (up and down)", async () => {
+    const seen: string[] = [];
+    const recordDialect: MigrationEntry = {
+      version: "001_record",
+      migration: {
+        up: async (s) => {
+          seen.push(`up:${s.dialect}`);
+        },
+        down: async (s) => {
+          seen.push(`down:${s.dialect}`);
+        },
+      },
+    };
+
+    const migrator = new Migrator(db, [recordDialect], { dialect: "postgres" });
+
+    await migrator.migrate();
+    await migrator.rollback();
+
+    expect(seen).toEqual(["up:postgres", "down:postgres"]);
+  });
+
+  it("defaults to the sqlite dialect when no option is passed", async () => {
+    let seen = "";
+    const migrator = new Migrator(db, [
+      {
+        version: "001_record",
+        migration: {
+          up: async (s) => {
+            seen = s.dialect;
+          },
+        },
+      },
+    ]);
+
+    await migrator.migrate();
+
+    expect(seen).toBe("sqlite");
   });
 
   // M6: a migration's up() and its version record must be one atomic unit.

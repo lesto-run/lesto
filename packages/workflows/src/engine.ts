@@ -1,7 +1,7 @@
 import { WorkflowError } from "./errors";
 import { systemSleep } from "./sleep";
 
-import type { Sleep, SqlDatabase, WorkflowContext, WorkflowFn } from "./types";
+import type { Dialect, Sleep, SqlDatabase, WorkflowContext, WorkflowFn } from "./types";
 
 const TABLE = "keel_workflow_steps";
 
@@ -10,8 +10,19 @@ const TABLE = "keel_workflow_steps";
  *
  * One row per completed step, keyed by (run_id, step_key). The presence of a row
  * IS the durable record that the step ran; its `result` is the memoized value.
+ *
+ * The table is all `TEXT` under a composite primary key, so its DDL needs no
+ * dialect fork — `dialect` is accepted (defaulting to `"sqlite"`) only for
+ * signature parity with the other installers; it is otherwise unused here.
  */
-export async function installWorkflowSchema(db: SqlDatabase): Promise<void> {
+export async function installWorkflowSchema(
+  db: SqlDatabase,
+  dialect: Dialect = "sqlite",
+): Promise<void> {
+  // The DDL is dialect-identical; reference the param so it is not flagged unused
+  // while keeping the installer's two-arg signature uniform across the repo.
+  void dialect;
+
   await db.exec(`
     CREATE TABLE IF NOT EXISTS ${TABLE} (
       run_id    TEXT NOT NULL,

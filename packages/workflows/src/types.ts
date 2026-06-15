@@ -33,6 +33,16 @@ export interface SqlDatabase {
 export type Sleep = (ms: number) => Promise<void>;
 
 /**
+ * Which SQL dialect the workflow schema installs for. Defaults to `"sqlite"`.
+ * The step-journal table is all `TEXT` columns under a composite primary key —
+ * no auto-increment key, no epoch-ms integer — so its DDL is byte-identical on
+ * both engines; the parameter exists for installer-signature parity with the
+ * rest of the repo and to document that the table was checked against Postgres.
+ * Mirrors `@keel/db`'s `Dialect`.
+ */
+export type Dialect = "sqlite" | "postgres";
+
+/**
  * The handle a workflow body uses to do durable work.
  *
  * `step` memoizes: its first run for a given (runId, key) persists the result;

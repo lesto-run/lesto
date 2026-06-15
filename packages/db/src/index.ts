@@ -53,6 +53,7 @@ export { defineTable } from "./table";
 export type { ColumnMap, InferInsert, InferRow, InferUpdate, Table } from "./table";
 
 export { createTableSql, dropTableSql } from "./ddl";
+export type { Dialect } from "./ddl";
 
 export { and, eq, isNotNull, isNull, ne, or } from "./conditions";
 export type { Condition } from "./conditions";

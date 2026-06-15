@@ -121,7 +121,10 @@ export const usersMigration: { version: string; migration: Migration } = {
   version: "20260609000001_create_users",
   migration: {
     async up(schema) {
-      await schema.execute(createTableSql(users));
+      // Render for the engine this migration is running against — `schema.dialect`
+      // is `"postgres"` under a Postgres migrator, so the surrogate key becomes an
+      // identity column instead of the SQLite `AUTOINCREMENT` Postgres rejects.
+      await schema.execute(createTableSql(users, schema.dialect));
     },
     async down(schema) {
       await schema.execute(dropTableSql(users));

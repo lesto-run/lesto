@@ -40,6 +40,13 @@ export interface CacheStore {
 /** Time, made injectable. Returns the current instant in epoch milliseconds. */
 export type Clock = () => number;
 
+/**
+ * Which SQL dialect the cache schema installs for. Defaults to `"sqlite"`; the
+ * only difference is `expires_at`'s integer width (`BIGINT` on Postgres so an
+ * epoch-ms deadline does not overflow `int4`). Mirrors `@keel/db`'s `Dialect`.
+ */
+export type Dialect = "sqlite" | "postgres";
+
 // ---- the minimal SQL surface (driver-agnostic) ----
 
 /**

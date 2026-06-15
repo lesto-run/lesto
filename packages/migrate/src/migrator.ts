@@ -1,7 +1,7 @@
 import { MigrateError } from "./errors";
 import { Schema } from "./schema";
 
-import type { SqlDatabase } from "./types";
+import type { Dialect, SqlDatabase } from "./types";
 
 /** A single, reversible change to the schema. `down` is optional but encouraged. */
 export interface Migration {
@@ -30,17 +30,31 @@ const TABLE = "schema_migrations";
  * on every boot. Versions are applied in lexicographic order — the same scheme
  * Tracks (and Rails) use for timestamped version strings.
  */
+export interface MigratorOptions {
+  /**
+   * The SQL dialect every migration in this run renders DDL for. Defaults to
+   * `"sqlite"`. Each `Schema` the migrator builds carries it, so the builder's
+   * surrogate key and any `createTableSql(table, schema.dialect)` match the
+   * engine behind `db`.
+   */
+  readonly dialect?: Dialect;
+}
+
 export class Migrator {
   private readonly entries: readonly MigrationEntry[];
+
+  private readonly dialect: Dialect;
 
   constructor(
     private readonly db: SqlDatabase,
     migrations: MigrationEntry[],
+    options: MigratorOptions = {},
   ) {
     // Sort once, up front, so order is total and independent of caller input.
     // Lexicographic on the version string — the ordering timestamped versions
     // are built for.
     this.entries = migrations.toSorted((a, b) => a.version.localeCompare(b.version));
+    this.dialect = options.dialect ?? "sqlite";
   }
 
   /** Create the bookkeeping table if it is not already there. */
@@ -83,7 +97,7 @@ export class Migrator {
     // DDL and ensuring no record was written.
     for (const entry of pending) {
       await this.db.transaction(async (tx) => {
-        const schema = new Schema(tx);
+        const schema = new Schema(tx, this.dialect);
 
         await entry.migration.up(schema);
 
@@ -133,7 +147,7 @@ export class Migrator {
     // half-reverted. A migration without `down` is irreversible in effect, but we
     // still drop the record so the version is no longer considered applied.
     await this.db.transaction(async (tx) => {
-      await target.migration.down?.(new Schema(tx));
+      await target.migration.down?.(new Schema(tx, this.dialect));
 
       await tx.prepare(`DELETE FROM ${TABLE} WHERE version = ?`).run([target.version]);
     });

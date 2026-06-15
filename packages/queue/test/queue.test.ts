@@ -91,6 +91,48 @@ const waitUntil = async (predicate: () => boolean, timeoutMs = 1000): Promise<vo
   }
 };
 
+describe("installSchema dialect", () => {
+  it("sqlite (default): the surrogate key is INTEGER ... AUTOINCREMENT", async () => {
+    let captured = "";
+    const capture: SqlDatabase = {
+      prepare: () => ({
+        run: async () => ({ changes: 0 }),
+        get: async () => undefined,
+        all: async () => [],
+      }),
+      exec: async (sql) => {
+        captured = sql;
+      },
+      transaction: async (fn) => fn(capture),
+    };
+
+    await installSchema(capture);
+
+    expect(captured).toContain("INTEGER PRIMARY KEY AUTOINCREMENT");
+    expect(captured).not.toContain("GENERATED ALWAYS AS IDENTITY");
+  });
+
+  it("postgres: the surrogate key is BIGINT ... GENERATED ALWAYS AS IDENTITY", async () => {
+    let captured = "";
+    const capture: SqlDatabase = {
+      prepare: () => ({
+        run: async () => ({ changes: 0 }),
+        get: async () => undefined,
+        all: async () => [],
+      }),
+      exec: async (sql) => {
+        captured = sql;
+      },
+      transaction: async (fn) => fn(capture),
+    };
+
+    await installSchema(capture, "postgres");
+
+    expect(captured).toContain("BIGINT  PRIMARY KEY GENERATED ALWAYS AS IDENTITY");
+    expect(captured).not.toContain("AUTOINCREMENT");
+  });
+});
+
 describe("enqueue", () => {
   it("returns the real id sourced from RETURNING id", async () => {
     const first = await queue.enqueue("x");

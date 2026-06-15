@@ -1,4 +1,4 @@
-import type { ColumnOptions, ReferenceOptions } from "./types";
+import type { ColumnOptions, Dialect, ReferenceOptions } from "./types";
 
 /**
  * Render a literal default the way SQLite expects it.
@@ -47,8 +47,19 @@ export class TableBuilder {
   /** Table-level constraints (foreign keys), appended after the columns. */
   private readonly constraints: string[] = [];
 
-  constructor() {
-    this.columns.push("id INTEGER PRIMARY KEY AUTOINCREMENT");
+  /** The integer width FK columns adopt, matching the surrogate key they point at. */
+  private readonly intType: string;
+
+  constructor(dialect: Dialect = "sqlite") {
+    this.intType = dialect === "postgres" ? "BIGINT" : "INTEGER";
+    // The surrogate key is the one column whose spelling forks per dialect:
+    // SQLite uses the `AUTOINCREMENT` keyword; Postgres has none and declares an
+    // identity column (and a 64-bit `BIGINT` so the key cannot overflow int4).
+    this.columns.push(
+      dialect === "postgres"
+        ? "id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY"
+        : "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    );
   }
 
   private column(name: string, type: string, opts: ColumnOptions): void {
@@ -64,11 +75,11 @@ export class TableBuilder {
   }
 
   integer(name: string, opts: ColumnOptions = {}): void {
-    this.column(name, "INTEGER", opts);
+    this.column(name, this.intType, opts);
   }
 
   boolean(name: string, opts: ColumnOptions = {}): void {
-    this.column(name, "INTEGER", opts);
+    this.column(name, this.intType, opts);
   }
 
   float(name: string, opts: ColumnOptions = {}): void {
@@ -85,7 +96,7 @@ export class TableBuilder {
    * enforced constraints are a deliberate choice.
    */
   references(name: string, opts: ReferenceOptions = {}): void {
-    this.column(`${name}_id`, "INTEGER", opts);
+    this.column(`${name}_id`, this.intType, opts);
 
     if (opts.foreignKey === true) {
       this.constraints.push(`FOREIGN KEY(${name}_id) REFERENCES ${name}s(id)`);

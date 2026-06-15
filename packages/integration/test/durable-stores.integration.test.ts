@@ -9,37 +9,25 @@
  * a no-op until a real socket is wired. `dialect` is threaded into
  * `sqlRateLimitStore` per driver so the PG leg exercises `FOR UPDATE`.
  *
- * Item 7.2 hand-writes the `users` DDL per dialect (SQLite `AUTOINCREMENT` / PG
- * `SERIAL`), mirroring db-parity's `items`: `usersMigration` runs `createTableSql`,
- * whose `AUTOINCREMENT` Postgres rejects — that dialect-drift is the named PG
- * hardening follow-up. This is the first identity-shaped flow proven over a real
- * Postgres socket.
+ * `usersMigration` now runs through a dialect-aware `Migrator` per driver — its
+ * `createTableSql(users, schema.dialect)` renders an identity column on Postgres
+ * instead of the `AUTOINCREMENT` it used to reject. The hand-written per-dialect
+ * `users` DDL workaround is gone; this is the first identity-shaped flow whose
+ * own migration installs on a real Postgres socket.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  installSessionSchema,
-  Sessions,
-  sqlSessionStore,
-  hashPassword,
-} from "@keel/auth";
+import { installSessionSchema, Sessions, sqlSessionStore, hashPassword } from "@keel/auth";
 import type { SqlDatabase as AuthSql } from "@keel/auth";
 import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@keel/ratelimit";
 import type { Dialect, SqlDatabase as RateLimitSql } from "@keel/ratelimit";
-import { createIdentity, findUserByEmail, insertUser } from "@keel/identity";
+import { createIdentity, findUserByEmail, insertUser, usersMigration } from "@keel/identity";
 import type { Identity } from "@keel/identity";
 import { createDb } from "@keel/db";
 import type { Db, SqlDatabase } from "@keel/db";
+import { Migrator } from "@keel/migrate";
 import { openSqlite } from "@keel/runtime";
-
-/** Per-dialect `users` DDL — hand-written because usersMigration can't run on PG. */
-const USERS_DDL: Record<Dialect, string> = {
-  sqlite:
-    "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, email_verified_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
-  postgres:
-    "CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, email_verified_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
-};
 
 interface Driver {
   readonly name: Dialect;
@@ -73,6 +61,9 @@ describe.each(drivers)("durable stores: $name", (driver) => {
     await handle.exec("DROP TABLE IF EXISTS keel_sessions");
     await handle.exec("DROP TABLE IF EXISTS keel_rate_limits");
     await handle.exec("DROP TABLE IF EXISTS users");
+    // The migrator's bookkeeping table — dropped too so the migration re-runs
+    // against a fresh schema on Postgres (which persists across tests).
+    await handle.exec("DROP TABLE IF EXISTS schema_migrations");
   });
 
   afterEach(async () => {
@@ -94,7 +85,10 @@ describe.each(drivers)("durable stores: $name", (driver) => {
 
       // A SECOND store over the SAME handle sees the same row — durability is the
       // row, not the in-process object.
-      const reopened = new Sessions({ store: sqlSessionStore(handle as AuthSql), clock: () => now });
+      const reopened = new Sessions({
+        store: sqlSessionStore(handle as AuthSql),
+        clock: () => now,
+      });
       expect(await reopened.verify(session.token)).toEqual(session);
 
       // Revoke through the first; the second sees it gone.
@@ -135,10 +129,12 @@ describe.each(drivers)("durable stores: $name", (driver) => {
     let db: Db;
 
     beforeEach(async () => {
-      await handle.exec(USERS_DDL[driver.name]);
+      // The migration installs `users` for the driver's dialect — no hand-written
+      // DDL — proving identity's own migration runs on a real Postgres.
+      await new Migrator(handle, [usersMigration], { dialect: driver.name }).migrate();
       await installSessionSchema(handle as AuthSql);
 
-      db = createDb(handle);
+      db = createDb(handle, { dialect: driver.name });
 
       // Seed a pre-verified user directly (no email round-trip in the test).
       const now = new Date().toISOString();

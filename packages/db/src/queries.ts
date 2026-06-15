@@ -21,6 +21,7 @@
 
 import type { Column } from "./columns";
 import type { Condition } from "./conditions";
+import type { Dialect } from "./ddl";
 import { DbError } from "./errors";
 import { quoteIdentifier } from "./identifier";
 import type { SqlDatabase } from "./sql";
@@ -39,6 +40,14 @@ function bind(value: unknown): unknown {
  * Hydrate a raw row (snake_case keys) into the camelCase row the consumer
  * expects, using the table's `byColumn` map. Unknown columns are passed
  * through (defensive — a future column added in DDL would otherwise drop).
+ *
+ * A numeric column (`INTEGER` / `REAL`) is coerced to a JS `number`: node-postgres
+ * hands `BIGINT` (and other numerics) back as a *string*, whereas SQLite returns
+ * a number, so a non-null numeric cell is normalized here. `InferRow` types these
+ * columns as `number`, so this is what makes that type honest on both drivers —
+ * and what lets `createTableSql` widen `INTEGER` to `BIGINT` on Postgres (to dodge
+ * int4 overflow) without leaking a string up to the caller. `null` stays `null`;
+ * a `TEXT` column is never coerced (a numeric-looking string stays a string).
  */
 function hydrate<T extends Table>(table: T, raw: unknown): InferRow<T> {
   const row = raw as Record<string, unknown>;
@@ -46,7 +55,10 @@ function hydrate<T extends Table>(table: T, raw: unknown): InferRow<T> {
 
   for (const [columnName, value] of Object.entries(row)) {
     const key = table.byColumn[columnName] ?? columnName;
-    out[key] = value;
+    const sqlType = table.byKey[key]?.sqlType;
+    const numeric = sqlType === "INTEGER" || sqlType === "REAL";
+
+    out[key] = numeric && typeof value === "string" ? Number(value) : value;
   }
 
   return out as InferRow<T>;
@@ -111,7 +123,7 @@ interface SelectBuilder {
 /** Render WHERE + (optionally) ORDER BY / LIMIT / OFFSET into a (sql, params) pair. */
 function renderSelect<T extends Table>(
   state: SelectState<T>,
-  options: { projection: string; respectLimitOrder: boolean },
+  options: { projection: string; respectLimitOrder: boolean; dialect: Dialect },
 ): { sql: string; params: unknown[] } {
   const parts = [`SELECT ${options.projection} FROM ${quoteIdentifier(state.table.tableName)}`];
   const params: unknown[] = [];
@@ -130,14 +142,19 @@ function renderSelect<T extends Table>(
 
     // `LIMIT` and `OFFSET` are decoupled at the user level but coupled in
     // SQLite (which requires a LIMIT for OFFSET to take effect). When the
-    // caller asked for offset alone, we emit `LIMIT -1` — the SQLite idiom
-    // for "no row cap" — so the offset still applies. A Postgres driver
-    // would render this as a bare `OFFSET`; that's the driver's concern.
+    // caller asked for offset alone we still need a "no row cap" limit so the
+    // offset applies: SQLite spells that `LIMIT -1`, which Postgres rejects —
+    // Postgres takes a bare `OFFSET` (or the equivalent `LIMIT ALL`). This is
+    // the second dialect fork, decided here at render time from `dialect`.
     if (state.limit !== undefined) {
       parts.push(`LIMIT ${state.limit}`);
       if (state.offset !== undefined) parts.push(`OFFSET ${state.offset}`);
     } else if (state.offset !== undefined) {
-      parts.push(`LIMIT -1 OFFSET ${state.offset}`);
+      parts.push(
+        options.dialect === "postgres"
+          ? `OFFSET ${state.offset}`
+          : `LIMIT -1 OFFSET ${state.offset}`,
+      );
     }
   }
 
@@ -148,9 +165,13 @@ interface CountRow {
   readonly c: number | bigint;
 }
 
-function makeQuery<T extends Table>(sql: SqlDatabase, state: SelectState<T>): SelectQuery<T> {
+function makeQuery<T extends Table>(
+  sql: SqlDatabase,
+  dialect: Dialect,
+  state: SelectState<T>,
+): SelectQuery<T> {
   const next = (patch: Partial<SelectState<T>>): SelectQuery<T> =>
-    makeQuery(sql, { ...state, ...patch });
+    makeQuery(sql, dialect, { ...state, ...patch });
 
   return {
     where: (condition) => next({ where: condition }),
@@ -165,7 +186,7 @@ function makeQuery<T extends Table>(sql: SqlDatabase, state: SelectState<T>): Se
       // `.get()`.
       const { sql: stmt, params } = renderSelect(
         { ...state, limit: 1, offset: state.offset },
-        { projection: "*", respectLimitOrder: true },
+        { projection: "*", respectLimitOrder: true, dialect },
       );
       const row = await sql.prepare(stmt).get(params);
 
@@ -178,6 +199,7 @@ function makeQuery<T extends Table>(sql: SqlDatabase, state: SelectState<T>): Se
       const { sql: stmt, params } = renderSelect(state, {
         projection: "*",
         respectLimitOrder: true,
+        dialect,
       });
 
       const rows = await sql.prepare(stmt).all(params);
@@ -189,6 +211,7 @@ function makeQuery<T extends Table>(sql: SqlDatabase, state: SelectState<T>): Se
       const { sql: stmt, params } = renderSelect(state, {
         projection: "COUNT(*) AS c",
         respectLimitOrder: false,
+        dialect,
       });
       const row = (await sql.prepare(stmt).get(params)) as CountRow;
 
@@ -199,10 +222,10 @@ function makeQuery<T extends Table>(sql: SqlDatabase, state: SelectState<T>): Se
   };
 }
 
-function makeSelect(sql: SqlDatabase): SelectBuilder {
+function makeSelect(sql: SqlDatabase, dialect: Dialect): SelectBuilder {
   return {
     from<T extends Table>(table: T): SelectQuery<T> {
-      return makeQuery(sql, {
+      return makeQuery(sql, dialect, {
         table,
         where: undefined,
         orderBy: undefined,
@@ -403,9 +426,21 @@ export interface Db {
   transaction<R>(fn: (tx: Db) => Promise<R>): Promise<R>;
 }
 
+/** Options for {@link createDb}. */
+export interface DbOptions {
+  /**
+   * Which SQL dialect to render for. Defaults to `"sqlite"`. The only query the
+   * dialect changes is offset-without-limit (SQLite needs `LIMIT -1`, Postgres
+   * takes a bare `OFFSET`); every other statement is identical. A `tx` opened by
+   * {@link Db.transaction} inherits its parent's dialect.
+   */
+  readonly dialect?: Dialect;
+}
+
 /** Build a {@link Db} bound to the given driver handle. */
-export function createDb(sql: SqlDatabase): Db {
-  const select = makeSelect(sql);
+export function createDb(sql: SqlDatabase, options: DbOptions = {}): Db {
+  const dialect = options.dialect ?? "sqlite";
+  const select = makeSelect(sql, dialect);
   const insert = makeInsert(sql);
   const update = makeUpdate(sql);
   const deleteFrom = makeDelete(sql);
@@ -418,6 +453,6 @@ export function createDb(sql: SqlDatabase): Db {
     exec: async (statement) => {
       await sql.exec(statement);
     },
-    transaction: (fn) => sql.transaction((txSql) => fn(createDb(txSql))),
+    transaction: (fn) => sql.transaction((txSql) => fn(createDb(txSql, { dialect }))),
   };
 }

@@ -7,6 +7,17 @@
  * difference.
  */
 
+/**
+ * Which SQL dialect a migration renders DDL for. Defaults to `"sqlite"`.
+ *
+ * The migrator threads this to every `Schema` it builds, so the auto-increment
+ * surrogate key the builder seeds (`AUTOINCREMENT` on SQLite, identity column on
+ * Postgres) — and any `@keel/db` `createTableSql(table, schema.dialect)` a
+ * value-DDL migration renders — match the engine the migration is running
+ * against. Mirrors `@keel/db`'s `Dialect`.
+ */
+export type Dialect = "sqlite" | "postgres";
+
 // ---- the minimal SQL surface (driver-agnostic) ----
 
 export interface SqlStatement {

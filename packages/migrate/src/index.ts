@@ -20,13 +20,14 @@ export { Schema } from "./schema";
 export { TableBuilder } from "./table-builder";
 
 export { Migrator } from "./migrator";
-export type { Migration, MigrationEntry } from "./migrator";
+export type { Migration, MigrationEntry, MigratorOptions } from "./migrator";
 
 export { MigrateError } from "./errors";
 export type { MigrateErrorCode } from "./errors";
 
 export type {
   ColumnOptions,
+  Dialect,
   IndexOptions,
   ReferenceOptions,
   SqlDatabase,

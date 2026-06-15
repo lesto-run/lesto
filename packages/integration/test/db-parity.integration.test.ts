@@ -11,20 +11,21 @@
  * `KEEL_PG_URL` is set (its own CI job with a Postgres service) — so the coverage
  * gate never depends on a container, and a developer opts in with a real PG.
  *
- * Out of scope (surfaced, NOT fixed here — see the dialect-drift follow-up): the
- * table DDL itself differs per dialect (`AUTOINCREMENT` vs `SERIAL`), so the
- * schema setup is the one driver-specific seam below; everything ABOVE the DDL is
- * the portable query layer under test.
+ * The table DDL is now rendered by the dialect layer (`createTableSql(items,
+ * driver.name)`): the previous hand-written `AUTOINCREMENT`/`SERIAL` workaround
+ * is gone, so this suite also proves `@keel/db`'s installer runs unchanged on a
+ * real Postgres.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createDb, defineTable, eq, integer, text } from "@keel/db";
-import type { Db, SqlDatabase } from "@keel/db";
+import { createDb, createTableSql, defineTable, eq, integer, text } from "@keel/db";
+import type { Db, Dialect, SqlDatabase } from "@keel/db";
+import { Migrator } from "@keel/migrate";
 import { openSqlite } from "@keel/runtime";
 
-// The schema-as-value drives every query (column refs, insert, select); only the
-// CREATE TABLE text below is dialect-specific.
+// The schema-as-value drives every query (column refs, insert, select) AND the
+// CREATE TABLE: one source of truth, rendered per dialect by `createTableSql`.
 const items = defineTable("items", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
@@ -32,15 +33,8 @@ const items = defineTable("items", {
   note: text("note"),
 });
 
-const DDL: Record<string, string> = {
-  sqlite:
-    "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, score INTEGER NOT NULL, note TEXT)",
-  postgres:
-    "CREATE TABLE items (id SERIAL PRIMARY KEY, name TEXT NOT NULL, score INTEGER NOT NULL, note TEXT)",
-};
-
 interface Driver {
-  readonly name: "sqlite" | "postgres";
+  readonly name: Dialect;
   open(): Promise<{ db: SqlDatabase; close: () => unknown }>;
 }
 
@@ -70,9 +64,9 @@ describe.each(drivers)("data-layer parity: $name", (driver) => {
     close = opened.close;
 
     await handle.exec("DROP TABLE IF EXISTS items");
-    await handle.exec(DDL[driver.name]!);
+    await handle.exec(createTableSql(items, driver.name));
 
-    db = createDb(handle);
+    db = createDb(handle, { dialect: driver.name });
   });
 
   afterEach(async () => {
@@ -99,6 +93,12 @@ describe.each(drivers)("data-layer parity: $name", (driver) => {
 
     const page = await db.select().from(items).orderBy(items.name).limit(1).offset(1).all();
     expect(page.map((r) => r.name)).toEqual(["b"]);
+
+    // Offset WITHOUT a limit: the SQLite idiom is `LIMIT -1 OFFSET n`, which
+    // Postgres rejects (it wants a bare `OFFSET`). Both dialects must skip the
+    // first row and yield the rest — the dialect fork proven on a real socket.
+    const tail = await db.select().from(items).orderBy(items.name).offset(1).all();
+    expect(tail.map((r) => r.name)).toEqual(["b", "c"]);
 
     expect(await db.select().from(items).count()).toBe(3);
     expect(await db.select().from(items).where(eq(items.name, "a")).count()).toBe(1);
@@ -136,5 +136,113 @@ describe.each(drivers)("data-layer parity: $name", (driver) => {
     ).rejects.toThrow("boom");
 
     expect(await db.select().from(items).count()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Schema installers (the increment-1 acceptance): every dialect-aware installer
+// + the migrator must INSTALL on a real Postgres, not just SQLite. Before the
+// dialect layer these emitted SQLite-only DDL (`AUTOINCREMENT`, int4 epoch-ms)
+// and could not run on PG at all. We install each, then round-trip the table,
+// so a regression in any installer's DDL surfaces here against a real socket.
+// ---------------------------------------------------------------------------
+
+describe.each(drivers)("schema installers on $name", (driver) => {
+  let handle: SqlDatabase;
+  let close: () => unknown;
+
+  beforeEach(async () => {
+    const opened = await driver.open();
+    handle = opened.db;
+    close = opened.close;
+
+    await handle.exec("DROP TABLE IF EXISTS keel_jobs");
+    await handle.exec("DROP TABLE IF EXISTS keel_cache");
+    await handle.exec("DROP TABLE IF EXISTS keel_workflow_steps");
+    await handle.exec("DROP TABLE IF EXISTS schema_migrations");
+    await handle.exec("DROP TABLE IF EXISTS installer_items");
+  });
+
+  afterEach(async () => {
+    await close();
+  });
+
+  it("queue.installSchema installs and enqueue→claim round-trips", async () => {
+    const { Queue, installSchema } = await import("@keel/queue");
+
+    await installSchema(handle, driver.name);
+
+    const queue = new Queue({ db: handle });
+    const id = await queue.enqueue("ping", { n: 1 });
+    const claimed = await queue.claim();
+
+    expect(id).toBeGreaterThan(0);
+    expect(claimed?.id).toBe(id);
+    expect(claimed?.payload).toEqual({ n: 1 });
+  });
+
+  it("cache.installCacheSchema installs and set→get round-trips (BIGINT expires_at)", async () => {
+    const { installCacheSchema, sqlStore } = await import("@keel/cache");
+
+    await installCacheSchema(handle, driver.name);
+
+    const store = sqlStore(handle);
+    // A real epoch-ms deadline (~1.75e12) — overflows int4, so this would have
+    // failed to install on PG before the BIGINT fix.
+    await store.set("k", { value: { ok: true }, expiresAt: 1_750_000_000_000 });
+
+    expect(await store.get("k")).toEqual({ value: { ok: true }, expiresAt: 1_750_000_000_000 });
+  });
+
+  it("workflows.installWorkflowSchema installs and a step memoizes", async () => {
+    const { Engine, installWorkflowSchema } = await import("@keel/workflows");
+
+    await installWorkflowSchema(handle, driver.name);
+
+    let calls = 0;
+    const engine = new Engine({ db: handle }).define("w", async (_input: null, ctx) =>
+      ctx.step("once", () => {
+        calls += 1;
+
+        return calls;
+      }),
+    );
+
+    expect(await engine.run("w", "run-1", null)).toBe(1);
+    // Re-running the same run id replays the memoized step instead of re-calling.
+    expect(await engine.run("w", "run-1", null)).toBe(1);
+    expect(calls).toBe(1);
+  });
+
+  it("the migrator installs a value-DDL table and round-trips through createDb", async () => {
+    const installerItems = defineTable("installer_items", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      label: text("label").notNull(),
+    });
+
+    await new Migrator(
+      handle,
+      [
+        {
+          version: "001_installer_items",
+          migration: {
+            up: async (s) => {
+              await s.execute(createTableSql(installerItems, s.dialect));
+            },
+          },
+        },
+      ],
+      { dialect: driver.name },
+    ).migrate();
+
+    const installerDb = createDb(handle, { dialect: driver.name });
+    const created = await installerDb
+      .insert(installerItems)
+      .values({ label: "hello" })
+      .returning()
+      .get();
+
+    expect(created.id).toBeGreaterThan(0);
+    expect(created.label).toBe("hello");
   });
 });

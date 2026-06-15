@@ -448,3 +448,61 @@ describe("default clock", () => {
     expect(t).toBeGreaterThanOrEqual(before);
   });
 });
+
+describe("postgres dialect", () => {
+  it("installs expires_at as BIGINT (epoch-ms overflows int4)", async () => {
+    let captured = "";
+    const capture: SqlDatabase = {
+      prepare: () => ({
+        run: async () => ({ changes: 0 }),
+        get: async () => undefined,
+        all: async () => [],
+      }),
+      exec: async (sql) => {
+        captured = sql;
+      },
+      transaction: async (fn) => fn(capture),
+    };
+
+    await installCacheSchema(capture, "postgres");
+
+    expect(captured).toContain("expires_at BIGINT");
+    expect(captured).not.toContain("expires_at INTEGER");
+  });
+
+  it("coerces a string expires_at (the form node-postgres returns BIGINT in)", async () => {
+    // node-postgres hands BIGINT back as a string; the read path must `Number()`
+    // it so the `Cache` policy compares a number, not a lexical string.
+    const row = { value: JSON.stringify("v"), expires_at: "1700000000000" };
+    const capture: SqlDatabase = {
+      prepare: () => ({
+        run: async () => ({ changes: 0 }),
+        get: async () => row,
+        all: async () => [],
+      }),
+      exec: async () => {},
+      transaction: async (fn) => fn(capture),
+    };
+
+    const store = sqlStore(capture);
+    const entry = await store.get("k");
+
+    expect(entry).toEqual({ value: "v", expiresAt: 1_700_000_000_000 });
+    expect(typeof entry?.expiresAt).toBe("number");
+  });
+
+  it("preserves a NULL expires_at as null (a never-expiring entry)", async () => {
+    const row = { value: JSON.stringify("v"), expires_at: null };
+    const capture: SqlDatabase = {
+      prepare: () => ({
+        run: async () => ({ changes: 0 }),
+        get: async () => row,
+        all: async () => [],
+      }),
+      exec: async () => {},
+      transaction: async (fn) => fn(capture),
+    };
+
+    expect(await sqlStore(capture).get("k")).toEqual({ value: "v", expiresAt: null });
+  });
+});

@@ -228,6 +228,28 @@ describe("DDL", () => {
   it("refuses a NUL byte in an identifier", () => {
     expect(() => createTableSql(defineTable("bad\0name", { x: text("x") }))).toThrow(DbError);
   });
+
+  it("postgres: AUTOINCREMENT becomes an identity column and INTEGER widens to BIGINT", () => {
+    const stmt = createTableSql(users, "postgres");
+
+    expect(stmt).toBe(
+      'CREATE TABLE "users" ' +
+        '("id" BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY, ' +
+        '"email" TEXT NOT NULL UNIQUE, ' +
+        '"password_hash" TEXT NOT NULL, ' +
+        '"email_verified_at" TEXT, ' +
+        '"score" BIGINT DEFAULT 0, ' +
+        '"rating" REAL)',
+    );
+  });
+
+  it("postgres: a non-auto-increment INTEGER primary key still widens to BIGINT", () => {
+    const t = defineTable("counters", {
+      id: integer("id").primaryKey(),
+    });
+
+    expect(createTableSql(t, "postgres")).toBe('CREATE TABLE "counters" ("id" BIGINT PRIMARY KEY)');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -348,6 +370,54 @@ describe("select modifiers", () => {
 
       // Two rows after skipping the first.
       expect(rows.map((r) => r.email)).toEqual(["b@x", "c@x"]);
+    });
+
+    it("coerces a numeric column returned as a string (node-postgres BIGINT) to a number", async () => {
+      // node-postgres hands BIGINT/numeric back as a string; the hydrator must
+      // coerce numeric columns so `InferRow` (which types `id`/`score` as number)
+      // is honest. A TEXT column that happens to look numeric stays a string.
+      const row = { id: "42", email: "ada@x", score: "7", rating: "1.5" };
+      const capture: SqlDatabase = {
+        prepare: () => ({
+          run: async () => ({ changes: 0 }),
+          get: async () => row,
+          all: async () => [row],
+        }),
+        exec: async () => {},
+        transaction: async (fn) => fn(capture),
+      };
+
+      const got = await createDb(capture).select().from(users).get();
+
+      expect(got).toEqual({ id: 42, email: "ada@x", score: 7, rating: 1.5 });
+      expect(typeof got?.id).toBe("number");
+      expect(typeof got?.email).toBe("string");
+    });
+
+    it("postgres dialect: offset-without-limit renders a bare OFFSET (no LIMIT -1)", async () => {
+      // Capture the SQL the dialect renders without needing a real Postgres: the
+      // `LIMIT -1` idiom is a SQLite-ism Postgres rejects, so the PG path must emit
+      // a bare `OFFSET`. We assert the rendered statement, not a row set.
+      let captured = "";
+      const capture: SqlDatabase = {
+        prepare: (stmt) => {
+          captured = stmt;
+
+          return {
+            run: async () => ({ changes: 0 }),
+            get: async () => undefined,
+            all: async () => [],
+          };
+        },
+        exec: async () => {},
+        transaction: async (fn) => fn(capture),
+      };
+
+      const pg = createDb(capture, { dialect: "postgres" });
+      await pg.select().from(users).orderBy(users.email).offset(1).all();
+
+      expect(captured).toContain("OFFSET 1");
+      expect(captured).not.toContain("LIMIT -1");
     });
   });
 
