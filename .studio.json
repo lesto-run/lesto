@@ -11,6 +11,7 @@
         "bun scripts/coverage-gate.ts"
       ]
     },
-    "verifyGate": { "enabled": true }
+    "verifyGate": { "enabled": true },
+    "reviewPoll": { "guidelinesPath": "CONVENTIONS.md" }
   }
 }

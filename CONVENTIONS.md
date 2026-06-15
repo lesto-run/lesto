@@ -3,6 +3,23 @@
 The bar, written down. `packages/queue` is the reference implementation — every other
 module migrates to match it.
 
+## Estate is the living dogfood — update it WITH every change
+
+`examples/estate` is the canonical proof the framework works end-to-end and the surface
+we actually test against. **Every feature or refactor MUST keep estate current in the
+SAME change — never as a follow-up:**
+
+- Add or change a battery / API / seam → wire it into estate so it's exercised, and keep
+  estate **building** (`cd examples/estate && KEEL_DEMO=1 bun run build`) with its tests +
+  the scaffold/e2e green.
+- Delete or migrate surface → migrate estate off it in the same change; estate must never
+  depend on something you removed.
+- A change that leaves estate broken or lagging the architecture is **NOT done**, even if
+  every package gate is green. Estate lagging is exactly how "passes the unit tests, broken
+  in a real app" ships.
+
+Estate is where a regression or an awkward API shows up first. Keep it real, keep it current.
+
 ## Toolchain
 
 | Concern | Choice |
