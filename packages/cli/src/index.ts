@@ -12,8 +12,6 @@
  * alive for long-running commands.
  */
 
-export type { AppConfig } from "@keel/kernel";
-
 export { run } from "./run";
 export type { CliDeps } from "./run";
 

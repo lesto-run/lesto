@@ -1,11 +1,12 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { Router } from "@keel/router";
-import { Controller, currentContext, runWithContext } from "@keel/web";
+import { currentContext, fromRequestMiddleware, keel, runWithContext } from "@keel/web";
+import type { Keel } from "@keel/web";
 import { generateToken } from "@keel/csrf";
 
 import { createApp, secureStack } from "../src/index";
+import type { SecureStackOptions } from "../src/index";
 
 import type { KernelDatabase } from "../src/index";
 
@@ -52,24 +53,15 @@ function adapt(raw: Database.Database): KernelDatabase {
 const SECRET = "kernel-secret-0123456789abcdefghi";
 const SESSION = "anon";
 
-// A controller exercising both a state-changing action and reading the context.
-class ApiController extends Controller {
-  create(): ReturnType<Controller["json"]> {
-    return this.json({ created: true }, 201);
-  }
-
-  whoami(): ReturnType<Controller["json"]> {
-    return this.json({ requestId: currentContext()?.requestId ?? null });
-  }
-}
-
-function buildRouter(): Router {
-  const router = new Router();
-
-  router.post("/api/items", "api#create");
-  router.get("/api/whoami", "api#whoami");
-
-  return router;
+// A keel() app exercising both a state-changing route and reading the context,
+// with the secure stack mounted as the app's outermost middleware. The security
+// batteries are request-and-next middleware, bridged into the handler chain by
+// `fromRequestMiddleware` — the production wiring (see create-keel's template).
+function buildApp(options: SecureStackOptions): Keel {
+  return keel()
+    .use(...secureStack(options).map(fromRequestMiddleware))
+    .post("/api/items", (c) => c.json({ created: true }, 201))
+    .get("/api/whoami", (c) => c.json({ requestId: currentContext()?.requestId ?? null }));
 }
 
 let raw: Database.Database;
@@ -86,12 +78,7 @@ afterEach(() => {
 
 describe("secureStack — cors + rateLimit (safe to enable)", () => {
   it("attaches CORS headers to a normal response", async () => {
-    const app = await createApp({
-      db,
-      router: buildRouter(),
-      controllers: { api: ApiController },
-      middleware: secureStack({ cors: { origin: "*" } }),
-    });
+    const app = await createApp({ db, app: buildApp({ cors: { origin: "*" } }) });
 
     const response = await app.handle("GET", "/api/whoami");
 
@@ -99,12 +86,7 @@ describe("secureStack — cors + rateLimit (safe to enable)", () => {
   });
 
   it("answers a CORS preflight (OPTIONS) with 204", async () => {
-    const app = await createApp({
-      db,
-      router: buildRouter(),
-      controllers: { api: ApiController },
-      middleware: secureStack({ cors: { origin: "*" } }),
-    });
+    const app = await createApp({ db, app: buildApp({ cors: { origin: "*" } }) });
 
     const response = await app.handle("OPTIONS", "/api/items");
 
@@ -113,12 +95,10 @@ describe("secureStack — cors + rateLimit (safe to enable)", () => {
   });
 
   it("trips a 429 once a burst exhausts the rate limit", async () => {
+    // capacity 2, negligible refill: the third request in a burst is throttled.
     const app = await createApp({
       db,
-      router: buildRouter(),
-      controllers: { api: ApiController },
-      // capacity 2, negligible refill: the third request in a burst is throttled.
-      middleware: secureStack({ rateLimit: { capacity: 2, refillPerSecond: 0.0001 } }),
+      app: buildApp({ rateLimit: { capacity: 2, refillPerSecond: 0.0001 } }),
     });
 
     // Drive each request inside a context with the same client IP, as the
@@ -135,13 +115,8 @@ describe("secureStack — cors + rateLimit (safe to enable)", () => {
     expect(await burst()).toBe(429);
   });
 
-  it("a controller reads the requestId off the context the runtime set", async () => {
-    const app = await createApp({
-      db,
-      router: buildRouter(),
-      controllers: { api: ApiController },
-      middleware: secureStack({ cors: { origin: "*" } }),
-    });
+  it("a handler reads the requestId off the context the runtime set", async () => {
+    const app = await createApp({ db, app: buildApp({ cors: { origin: "*" } }) });
 
     const response = await runWithContext({ requestId: "trace-xyz" }, () =>
       app.handle("GET", "/api/whoami"),
@@ -157,9 +132,7 @@ describe("secureStack — csrf is opt-in only", () => {
     // exactly the estate sign-in flow (a POST with no CSRF token).
     const app = await createApp({
       db,
-      router: buildRouter(),
-      controllers: { api: ApiController },
-      middleware: secureStack({
+      app: buildApp({
         cors: { origin: "*" },
         rateLimit: { capacity: 100, refillPerSecond: 1 },
       }),
@@ -173,9 +146,7 @@ describe("secureStack — csrf is opt-in only", () => {
   it("the same token-less POST is 403 once CSRF IS mounted", async () => {
     const app = await createApp({
       db,
-      router: buildRouter(),
-      controllers: { api: ApiController },
-      middleware: secureStack({
+      app: buildApp({
         cors: { origin: "*" },
         csrf: { secret: SECRET, sessionFor: () => SESSION },
       }),
@@ -193,9 +164,7 @@ describe("secureStack — csrf is opt-in only", () => {
 
     const app = await createApp({
       db,
-      router: buildRouter(),
-      controllers: { api: ApiController },
-      middleware: secureStack({ csrf: { secret: SECRET, sessionFor: () => SESSION } }),
+      app: buildApp({ csrf: { secret: SECRET, sessionFor: () => SESSION } }),
     });
 
     const response = await app.handle("POST", "/api/items", { body: `_csrf=${token}` });
@@ -234,12 +203,7 @@ describe("secureStack composition", () => {
 
 describe("secureStack — origin check (zero-config CSRF default)", () => {
   it("refuses a cross-site state-changing request with no token plumbing", async () => {
-    const app = await createApp({
-      db,
-      router: buildRouter(),
-      controllers: { api: ApiController },
-      middleware: secureStack({ originCheck: {} }),
-    });
+    const app = await createApp({ db, app: buildApp({ originCheck: {} }) });
 
     const response = await app.handle("POST", "/api/items", {
       headers: { "sec-fetch-site": "cross-site" },
@@ -250,12 +214,7 @@ describe("secureStack — origin check (zero-config CSRF default)", () => {
   });
 
   it("allows a same-origin state-changing request without a token", async () => {
-    const app = await createApp({
-      db,
-      router: buildRouter(),
-      controllers: { api: ApiController },
-      middleware: secureStack({ originCheck: {} }),
-    });
+    const app = await createApp({ db, app: buildApp({ originCheck: {} }) });
 
     const response = await app.handle("POST", "/api/items", {
       headers: { "sec-fetch-site": "same-origin" },

@@ -3,9 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createDb, createTableSql, defineTable, integer, text, type Db } from "@keel/db";
 import type { MigrationEntry } from "@keel/migrate";
-import { Router } from "@keel/router";
-import { Controller, keel } from "@keel/web";
-import type { ControllerClass } from "@keel/web";
+import { keel } from "@keel/web";
 
 import { createApp } from "../src/index";
 
@@ -71,19 +69,6 @@ const createPosts: MigrationEntry = {
   },
 };
 
-// The controllers close over the typed `Db` the test wires up — the kernel
-// no longer touches the data layer beyond handing `config.db` to the
-// migrator.
-function buildControllers(db: Db): { posts: ControllerClass } {
-  class PostsController extends Controller {
-    async index() {
-      return this.json({ posts: await db.select().from(posts).all() });
-    }
-  }
-
-  return { posts: PostsController as ControllerClass };
-}
-
 let raw: Database.Database;
 let db: KernelDatabase;
 let queryDb: Db;
@@ -98,57 +83,56 @@ afterEach(() => {
   raw.close();
 });
 
-function buildRouter(): Router {
-  const router = new Router();
-
-  router.resources("posts");
-
-  return router;
-}
-
 describe("createApp", () => {
-  it("runs migrations on boot and exposes the applied versions", async () => {
+  it("runs migrations on boot, then dispatches through the keel() router", async () => {
     const app = await createApp({
       db,
-      router: buildRouter(),
-      controllers: buildControllers(queryDb),
+      app: keel().get("/posts/count", async (c) => {
+        const count = await queryDb.select().from(posts).count();
+        return c.json({ count });
+      }),
       migrations: [createPosts],
     });
 
+    // The migration ran before any request — the applied list proves the order,
+    // and the migrated table is real and queryable through @keel/db.
     expect(app.migrationsApplied).toEqual(["001_create_posts"]);
 
-    // The migrated table is real and queryable through @keel/db.
-    await queryDb.insert(posts).values({ title: "Seeded directly" }).run();
+    await queryDb.insert(posts).values({ title: "via keel()" }).run();
 
-    expect(await queryDb.select().from(posts).count()).toBe(1);
+    const response = await app.handle("GET", "/posts/count");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toBe("application/json");
+    expect(JSON.parse(response.body)).toEqual({ count: 1 });
   });
 
   it("applies no migrations when none are configured", async () => {
-    // Stand the schema up out of band so the query still has a table to read.
-    await db.exec(createTableSql(posts));
-
-    const app = await createApp({
-      db,
-      router: buildRouter(),
-      controllers: buildControllers(queryDb),
-    });
+    const app = await createApp({ db, app: keel().get("/ping", (c) => c.text("pong")) });
 
     expect(app.migrationsApplied).toEqual([]);
+    expect((await app.handle("GET", "/ping")).body).toBe("pong");
   });
 
   it('runs nothing when migrations is "skip" (a fleet member that defers to another)', async () => {
     // The schema is already migrated by another instance; this member must boot
     // against it WITHOUT running migrations itself.
-    await db.exec(createTableSql(posts));
-
     const app = await createApp({
       db,
-      router: buildRouter(),
-      controllers: buildControllers(queryDb),
+      app: keel().get("/ping", (c) => c.text("pong")),
       migrations: "skip",
     });
 
     expect(app.migrationsApplied).toEqual([]);
+  });
+
+  it("delegates an unmatched path to a plain 404", async () => {
+    const app = await createApp({ db, app: keel().get("/ping", (c) => c.text("pong")) });
+
+    const response = await app.handle("GET", "/nope");
+
+    expect(response.status).toBe(404);
+    expect(response.body).toBe("Not Found");
   });
 
   it("threads config.dialect into the migrator (the Postgres advisory-lock path runs)", async () => {
@@ -206,79 +190,12 @@ describe("createApp", () => {
 
     const app = await createApp({
       db: pgish,
-      router: buildRouter(),
-      controllers: buildControllers(queryDb),
+      app: keel().get("/ping", (c) => c.text("pong")),
       migrations: [],
       dialect: "postgres",
     });
 
     expect(prepared.some((sql) => sql.includes("pg_advisory_xact_lock"))).toBe(true);
     expect(app.migrationsApplied).toEqual([]);
-  });
-});
-
-describe("App#handle", () => {
-  it("dispatches a request end-to-end: seed a row, GET it back through a controller", async () => {
-    const app = await createApp({
-      db,
-      router: buildRouter(),
-      controllers: buildControllers(queryDb),
-      migrations: [createPosts],
-    });
-
-    await queryDb.insert(posts).values({ title: "Hello, kernel" }).run();
-
-    const response = await app.handle("GET", "/posts");
-
-    expect(response.status).toBe(200);
-    expect(response.headers["content-type"]).toBe("application/json");
-
-    const payload = JSON.parse(response.body) as { posts: { title: string }[] };
-
-    expect(payload.posts).toHaveLength(1);
-    expect(payload.posts[0]?.title).toBe("Hello, kernel");
-  });
-
-  it("delegates an unmatched path to a plain 404", async () => {
-    const app = await createApp({
-      db,
-      router: buildRouter(),
-      controllers: buildControllers(queryDb),
-      migrations: [createPosts],
-    });
-
-    const response = await app.handle("GET", "/nope");
-
-    expect(response.status).toBe(404);
-    expect(response.body).toBe("Not Found");
-  });
-});
-
-describe("createApp with a keel() app (the code-first shape)", () => {
-  it("runs migrations, then dispatches through the keel() router", async () => {
-    const app = await createApp({
-      db,
-      app: keel().get("/posts/count", async (c) => {
-        const count = await queryDb.select().from(posts).count();
-        return c.json({ count });
-      }),
-      migrations: [createPosts],
-    });
-
-    expect(app.migrationsApplied).toEqual(["001_create_posts"]);
-
-    await queryDb.insert(posts).values({ title: "via keel()" }).run();
-
-    const response = await app.handle("GET", "/posts/count");
-
-    expect(response.status).toBe(200);
-    expect(JSON.parse(response.body)).toEqual({ count: 1 });
-  });
-
-  it("applies no migrations for a keel() app when none are configured", async () => {
-    const app = await createApp({ db, app: keel().get("/ping", (c) => c.text("pong")) });
-
-    expect(app.migrationsApplied).toEqual([]);
-    expect((await app.handle("GET", "/ping")).body).toBe("pong");
   });
 });

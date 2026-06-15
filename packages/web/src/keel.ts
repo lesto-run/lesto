@@ -387,8 +387,8 @@ export class Keel {
    * params, and runs the route's handler chain. No match still runs the app's
    * top-level `.use` middleware (wrapping a 404 terminal), so global concerns —
    * a CORS preflight to an unrouted `OPTIONS`, a rate-limit on an unknown path —
-   * are answered exactly as the legacy `Application` pipeline answered them. The
-   * declared return is the string-bodied {@link KeelResponse} dispatch contract;
+   * are answered for every request, matched or not. The declared return is the
+   * string-bodied {@link KeelResponse} dispatch contract;
    * a handler may produce a wider body (bytes, a stream — a page streams its
    * HTML), which the transport, not this contract, writes — so it is narrowed
    * back here.

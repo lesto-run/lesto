@@ -1,16 +1,13 @@
 /**
- * @keel/router — a RESTful router for Keel.
+ * @keel/router — the route-matching substrate for Keel's code-first `keel()` app.
  *
- *   const router = new Router();
- *   router.root("home#index");
- *   router.resources("posts", (posts) => posts.resources("comments"));
+ *   const table = new RouteTable<Handler>();
+ *   table.add("GET", "/posts/:id", handler);
+ *   table.match("GET", "/posts/3");   // { value: handler, params: { id: "3" } }
  *
- *   router.resolve("GET", "/posts/3");          // { target: "posts#show", params: { id: "3" } }
- *   router.pathFor("post", { id: 42 });         // "/posts/42"
+ * The pattern compiler (`compile`) and type-level param inference (`ParamKeys` /
+ * `PathParams`) give `keel()` handlers their `c.param(...)` keys with no codegen.
  */
-
-export { Router } from "./router";
-export type { RouteInfo, RouteOptions, Resolution } from "./router";
 
 // The generic matcher the `keel()` builder dispatches over, plus the shared
 // pattern compiler and the type-level param inference that gives handlers their

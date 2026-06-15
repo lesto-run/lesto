@@ -1,25 +1,12 @@
 /**
- * @keel/web — the MVC request-handling core.
+ * @keel/web — the code-first request-handling core.
  *
- *   const router = new Router();
- *   router.get("/posts/:id", "posts#show");
- *
- *   class PostsController extends Controller {
- *     show() {
- *       return this.json({ id: this.params.id });
- *     }
- *   }
- *
- *   const app = new Application({ router, controllers: { posts: PostsController } });
+ *   const app = keel()
+ *     .get("/posts/:id", (c) => c.json({ id: c.param("id") }))
+ *     .page("/posts/:id", { load, component: PostScene });
  *
  *   await app.handle("GET", "/posts/3");   // { status: 200, body: '{"id":"3"}', ... }
  */
-
-export { Application } from "./application";
-export type { ApplicationOptions } from "./application";
-
-export { Controller } from "./controller";
-export type { ControllerClass } from "./controller";
 
 // The code-first router + handler context — Keel's request-handling surface.
 export { applyUiDialect, fromRequestMiddleware, keel, Keel } from "./keel";
@@ -32,8 +19,8 @@ export type { Layout, PageDef, PageLoad, PageMetadata, PageProps } from "./rende
 
 export type { HandleOptions } from "./types";
 
-// Re-exported so a caller can type the streaming options it passes to
-// `Controller.streamTree` without reaching across to `@keel/ui` directly.
+// Re-exported so a caller can type the streaming options a page render forwards
+// (the `onError` sink, bootstrap modules) without reaching across to `@keel/ui`.
 export type { StreamErrorSink, StreamOptions } from "@keel/ui/server";
 
 export { currentContext, runWithContext } from "./context";
