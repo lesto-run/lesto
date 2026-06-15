@@ -3,8 +3,12 @@
  * (`scripts/bundle-size.ts`). It depends ONLY on `@keel/ui` (`defineIsland`) and
  * `react` (`useState`) — no app data sources — so the measured client bundle is
  * the framework's own runtime weight (the island + hydration + the React/Preact
- * runtime), not an example app's payload. An `ssr: true` island so the measured
- * graph includes hydration, the realistic case.
+ * runtime), not an example app's payload. The island is DEFERRED (`ssr: false`,
+ * the default): the measured CLIENT bundle — component + mount/hydration runtime
+ * + the React/Preact runtime — is identical whether the island is deferred or
+ * `ssr: true`, and deferred is the dialect-agnostic case BOTH dialects build (an
+ * `ssr: true` island under `preact` is a coded build error — it needs the
+ * whole-process-aliased server, not the CLI's React server).
  */
 
 import { useState } from "react";
@@ -26,5 +30,4 @@ function Counter({ start }: { start: number }): ReactElement {
 export default defineIsland({
   name: "Counter",
   component: Counter,
-  ssr: true,
 });
