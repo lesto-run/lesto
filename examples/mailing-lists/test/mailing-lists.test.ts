@@ -179,6 +179,28 @@ describe("@keel/mailing-lists example — the journey over HTTP", () => {
     }
   });
 
+  it("rejects a malformed body with 422 instead of crashing", async () => {
+    const { app, list, close } = await boot();
+
+    try {
+      // Keel has no request error boundary yet, so the routes validate the body
+      // themselves — a missing/wrong-typed field must be a clean 422, never an
+      // uncaught throw that would 500 the endpoint.
+      const noEmail = await app.handle("POST", `/lists/${list.id}/subscribe`, { body: {} });
+      expect(noEmail.status).toBe(422);
+
+      const badEmail = await app.handle("POST", `/lists/${list.id}/subscribe`, {
+        body: { email: 123 },
+      });
+      expect(badEmail.status).toBe(422);
+
+      const noIssue = await app.handle("POST", `/lists/${list.id}/broadcast`, { body: {} });
+      expect(noIssue.status).toBe(422);
+    } finally {
+      close();
+    }
+  });
+
   it("delivers a broadcast exactly once per subscribed recipient", async () => {
     const { app, list, outbox, drain, subscribeAndConfirm, close } = await boot();
 

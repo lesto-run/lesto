@@ -19,8 +19,6 @@
  * over their dependencies — no module-scoped globals.
  */
 
-import { z } from "zod";
-
 import { createDb } from "@keel/db";
 import type { Db } from "@keel/db";
 import { createApp } from "@keel/kernel";
@@ -50,12 +48,6 @@ function escapeHtml(value: string): string {
     .replaceAll('"', "&quot;");
 }
 
-// Boundary validation (ADR 0005): the body is untrusted until it parses. We keep
-// the email shape check to the service (it owns the canonical rule + coded error)
-// and only assert the field is present and a string here.
-const subscribeSchema = z.object({ email: z.string() });
-const broadcastSchema = z.object({ issue: z.coerce.number().int().positive() });
-
 /**
  * The routes, closing over the `@keel/mailing-lists` service they front and the
  * middleware that rate-limits the public `subscribe` endpoint.
@@ -77,7 +69,12 @@ export function buildMailingListsApp(deps: {
       const listId = Number(c.param("listId"));
       if (!Number.isInteger(listId)) return c.json({ error: "Unknown list." }, 404);
 
-      const { email } = c.valid(subscribeSchema);
+      // The body is untrusted. We validate here rather than via `c.valid`, whose
+      // WebError would escape uncaught — Keel has no request error boundary yet (a
+      // known framework gap, see README). Presence/type only; the service owns the
+      // canonical email-shape rule and raises its own coded error.
+      const email = (c.req.body as { email?: unknown } | null)?.email;
+      if (typeof email !== "string") return c.json({ error: "An email is required." }, 422);
 
       try {
         const sub = await lists.subscribe(listId, email);
@@ -127,7 +124,11 @@ export function buildMailingListsApp(deps: {
       const listId = Number(c.param("listId"));
       if (!Number.isInteger(listId)) return c.json({ error: "Unknown list." }, 404);
 
-      const { issue } = c.valid(broadcastSchema);
+      const issue = (c.req.body as { issue?: unknown } | null)?.issue;
+      if (typeof issue !== "number" || !Number.isInteger(issue) || issue <= 0) {
+        return c.json({ error: "An `issue` number is required." }, 422);
+      }
+
       const result = await lists.broadcast(listId, "digest", { issue });
 
       return c.json(result, 202);

@@ -132,15 +132,21 @@ export function buildAdminApp(deps: { admin: Admin; db: Db }): Keel {
   return keel()
     .get("/admin/products", async (c) => {
       // Paging comes off the query string, parsed defensively: a malformed
-      // `?limit=abc` resolves to `undefined` → `list`'s default page (50), never
-      // `NaN` (which reaches the query as `no such column: NaN`). Absent → page one.
+      // `?limit=abc` becomes `undefined` → `list`'s default page, never `NaN`
+      // (which reaches the query as `no such column: NaN`). Absent → page one.
+      // Keys are set only when present: `exactOptionalPropertyTypes` rejects an
+      // explicit `undefined` for the optional `limit?` / `offset?`.
       const limit = toInt(c.query("limit"));
       const offset = toInt(c.query("offset"));
 
-      const rows = await admin.list(RESOURCE, { limit, offset });
+      const options: { limit?: number; offset?: number } = {};
+      if (limit !== undefined) options.limit = limit;
+      if (offset !== undefined) options.offset = offset;
+
+      const rows = await admin.list(RESOURCE, options);
 
       // Echo the effective paging back so a UI can render "showing N, offset M".
-      return c.json({ rows, limit: limit ?? null, offset: offset ?? 0 });
+      return c.json({ rows, limit: options.limit ?? null, offset: options.offset ?? 0 });
     })
     .get("/admin/products/:id", (c) => {
       const id = toInt(c.param("id"));

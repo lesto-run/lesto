@@ -99,7 +99,6 @@
         "@keel/runtime": "workspace:*",
         "@keel/web": "workspace:*",
         "better-sqlite3": "^11.10.0",
-        "zod": "^4.0.0",
       },
     },
     "packages/admin": {
