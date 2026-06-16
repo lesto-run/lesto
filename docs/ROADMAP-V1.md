@@ -164,7 +164,7 @@ Launch = end of Wave 4 with Wave 0–4 exit criteria all green. 1.0 = end of Wav
 ## 5. Docs hierarchy
 
 1. **This roadmap** — scope, sequence, and the launch gate. It wins conflicts.
-2. **`docs/plans/<slug>.md`** (eight domain plans + the completed `durable-stores.md` / `island-data-hardening.md`) — commit-by-commit execution detail. Cross-cutting work is owned by exactly one plan and referenced by the others.
+2. **`docs/plans/<slug>.md`** (eight domain plans + the completed `durable-stores.md` / `island-data-hardening.md` + the cross-wave `examples-gallery.md`) — commit-by-commit execution detail. Cross-cutting work is owned by exactly one plan and referenced by the others.
 3. **`docs/adr/`** — design rationale of record. ADRs are amended when a wave changes a decision; they do not re-sequence work.
 4. **`docs/ARCHITECTURE.md` / `ATTACK-PLAN-2026.md`** — vision and strategy. Aspirational by design; Wave 5 trues them up against shipped reality.
 
@@ -184,31 +184,52 @@ Launch = end of Wave 4 with Wave 0–4 exit criteria all green. 1.0 = end of Wav
 
 ---
 
-## 7. Post-1.0 — the adoption surface (an examples gallery)
+## 7. The examples gallery — a per-wave QA gate (and, later, the adoption surface)
 
-Not a launch or 1.0 gate. Once the batteries are true (Waves 3–4) and the public
-API is frozen (Wave 5), the framework needs a per-feature **examples gallery** —
-the way SST (`examples/`) and Next.js (`examples/`) make a large surface legible:
-one minimal, self-contained, runnable example per battery, beside the two
-integrated flagships (`examples/estate`, `examples/blog`).
+**Reframed 2026-06-16 (CTO call).** The gallery is not a post-1.0 nicety — it is
+how we QA every battery we ship, on the two axes a unit test cannot reach: **local
+DX** (wire the package's real public API into a running app and feel the ergonomics)
+and **hosted UX** (deploy it and click the actual user journey). A feature is not
+"done" until its example **runs locally and deploys**. The gallery therefore runs
+*alongside* Waves 3–5, closing the feedback loop on each battery as it lands — it
+does **not** wait on the Wave 5 API freeze. Its later role as the public adoption
+surface (the way SST/Next make a large `examples/` legible) is a free by-product,
+not the driver.
 
-The motivation is concrete: estate exercises ~16 of the ~61 packages. The other
-~45 are tested in isolation but have no runnable proof a reader can clone and run.
-Each gallery example IS the live evidence behind a §1 scope-table claim — the
-durable antidote to "ARCHITECTURE.md is aspirational."
+Why the prior "defer to post-1.0" logic dissolves: the fear was rewriting ~45 apps
+against a moving API. But when the example IS the QA, you maintain a handful that
+evolve *with* the API — the churn is the signal (a wiring that got harder is a
+finding), not waste. And the cost of *not* having it is exactly the gap Wave 3 hit:
+~929 lines of `@keel/mailing-lists` shipped with its entire user-facing journey
+(subscribe → confirm → broadcast) proven only as service-method calls in a unit
+test — never wired into a route, never deployed, never clicked.
 
-- One `examples/<feature>/` per battery: a tiny app/script exercising ONLY that
-  package's real public API, with a test and a README ("what it shows / how to
-  run"). Targets the packages estate doesn't touch — `queue`, `storage`, `cache`,
-  `mail`, `pubsub`, `webhooks`, `workflows`, `forms`, `rbac`, `openapi`, `pg`, the
+The motivation is still concrete: estate exercises ~16 of the ~61 packages; the
+other ~45 are tested in isolation with no runnable, deployable proof. Each gallery
+example IS the live evidence behind a §1 scope-table claim — the durable antidote
+to "ARCHITECTURE.md is aspirational."
+
+- One `examples/<feature>/` per battery: a small app/script exercising ONLY that
+  package's real public API, with a test, a README ("what it shows / how to run /
+  how to deploy"), and — where it has a deployable surface — a hosted-QA runbook.
+  Targets the packages estate doesn't touch — `queue`, `storage`, `cache`, `mail`,
+  `pubsub`, `webhooks`, `workflows`, `forms`, `rbac`, `openapi`, `pg`, the
   `content-*` markdown pipeline, `observability`, `i18n`, `seo`, `feeds`, `cors`,
   `csrf`, `ratelimit`, `config`, `mcp`, …
 - Wiring prerequisite: add `examples/*` to the workspace globs (currently
   `packages/*` only) so each example links its `workspace:*` deps, plus a root
-  script that runs every example's test (examples stay OUT of the 100% coverage
-  gate, like estate/blog).
-- estate stays the INTEGRATED flagship (many batteries on one app); the gallery is
-  the per-feature breadth. The two are complementary, not redundant.
+  `examples:test` script that runs every example's test (examples stay OUT of the
+  100% coverage gate, like estate/blog).
+- estate stays the INTEGRATED flagship (many batteries on one app) AND absorbs the
+  hosted-QA legs for the batteries it already wires — durable sessions surviving a
+  restart, login throttle, revoke-on-reset, unset-secret-refuses-to-boot. The
+  gallery is the per-feature breadth for everything estate doesn't touch.
+  Complementary, not redundant.
+- **Execution:** `docs/plans/examples-gallery.md` owns the example template, the
+  local-DX + hosted-UX QA checklist, the "done" bar, and the build backlog —
+  starting with the Wave 3 batteries already shipped without a runnable proof
+  (`mailing-lists`, `admin`, `release-rollback`).
 
-**Done:** every shipped battery has a runnable, tested example; the gallery's
-tests run in CI; the docs link each battery to its example.
+**Done (per battery):** a runnable, tested example that wires only the public API,
+runs in CI (out of the coverage gate), deploys via a documented runbook, and whose
+hosted journey has been clicked through; the docs link each battery to its example.
