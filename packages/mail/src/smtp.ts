@@ -1,0 +1,348 @@
+import { KeelError } from "@keel/errors";
+
+import { assertHeaders, assertNoInjection, type MailTransport, type RenderedEmail } from "./mailer";
+
+/**
+ * A minimal, dependency-light SMTP transport.
+ *
+ * **Node-only** — it speaks raw TCP/TLS over `node:net` / `node:tls`. It does
+ * NOT run on Cloudflare Workers (no raw sockets there); use
+ * {@link createFetchProviderTransport} on the edge.
+ *
+ * Implements just enough of RFC 5321 to deliver one message: `EHLO`,
+ * optional `STARTTLS`, optional `AUTH LOGIN`, then `MAIL FROM` / `RCPT TO` /
+ * `DATA`. Delivery is at-least-once (see {@link MailTransport}); the message
+ * carries the job-derived `messageId` as its `Message-ID` header so a relay or
+ * downstream provider can dedupe retries.
+ */
+
+export type SmtpErrorCode =
+  | "MAIL_TRANSPORT_SMTP_PROTOCOL"
+  | "MAIL_TRANSPORT_SMTP_AUTH"
+  | "MAIL_TRANSPORT_SMTP_CONNECTION";
+
+export class SmtpTransportError extends KeelError<SmtpErrorCode> {
+  constructor(code: SmtpErrorCode, message: string, details?: Record<string, unknown>) {
+    super(code, message, details);
+
+    this.name = "SmtpTransportError";
+  }
+}
+
+/** The slice of a socket the SMTP client drives — satisfied by net/tls sockets. */
+export interface SmtpSocket {
+  write(data: string): void;
+  on(event: "data", listener: (chunk: Buffer | string) => void): void;
+  on(event: "error", listener: (error: Error) => void): void;
+  on(event: "close", listener: () => void): void;
+  removeAllListeners(): void;
+  end(): void;
+}
+
+export interface SmtpAuth {
+  readonly user: string;
+  readonly pass: string;
+}
+
+export interface SmtpTransportConfig {
+  readonly host: string;
+  readonly port: number;
+
+  /** Upgrade the plaintext connection with STARTTLS before AUTH. Default true. */
+  readonly secure?: boolean;
+
+  readonly auth?: SmtpAuth;
+
+  /** Hostname announced in EHLO. Defaults to "localhost". */
+  readonly ehloName?: string;
+
+  /**
+   * Opens the initial (plaintext) connection. Injectable so tests drive a fake
+   * socket; defaults to `node:net`.
+   */
+  readonly connect?: (host: string, port: number) => Promise<SmtpSocket>;
+
+  /**
+   * Upgrades an open socket to TLS for STARTTLS. Injectable for tests; defaults
+   * to `node:tls`.
+   */
+  readonly upgrade?: (socket: SmtpSocket, host: string) => Promise<SmtpSocket>;
+}
+
+/** Create a Node SMTP {@link MailTransport}. */
+export function createSmtpTransport(config: SmtpTransportConfig): MailTransport {
+  const secure = config.secure ?? true;
+  const ehloName = config.ehloName ?? "localhost";
+  const connect = config.connect ?? nodeConnect;
+  const upgrade = config.upgrade ?? nodeUpgrade;
+
+  return {
+    async send(email: RenderedEmail): Promise<void> {
+      validate(email);
+
+      let socket = await connect(config.host, config.port);
+      const conn = new SmtpConnection(socket);
+
+      try {
+        await conn.expect(220);
+        await conn.command(`EHLO ${ehloName}`, 250);
+
+        if (secure) {
+          await conn.command("STARTTLS", 220);
+          socket = await upgrade(socket, config.host);
+          conn.rebind(socket);
+          await conn.command(`EHLO ${ehloName}`, 250);
+        }
+
+        if (config.auth) {
+          await authenticate(conn, config.auth);
+        }
+
+        const from = email.from ?? config.auth?.user ?? ehloName;
+
+        await conn.command(`MAIL FROM:<${addressOnly(from)}>`, 250);
+        await conn.command(`RCPT TO:<${addressOnly(email.to)}>`, 250);
+        await conn.command("DATA", 354);
+        await conn.command(buildMessage(email, from), 250);
+        await conn.command("QUIT", 221);
+      } finally {
+        socket.removeAllListeners();
+        socket.end();
+      }
+    },
+  };
+}
+
+// Re-validate at the transport edge: a transport may be handed a RenderedEmail
+// by anything, so it never trusts the mailer to have guarded the headers.
+function validate(email: RenderedEmail): void {
+  assertNoInjection("to", email.to, "MAIL_INVALID_ADDRESS");
+  assertNoInjection("subject", email.subject, "MAIL_INVALID_HEADER");
+
+  if (email.from !== undefined) {
+    assertNoInjection("from", email.from, "MAIL_INVALID_ADDRESS");
+  }
+
+  if (email.headers !== undefined) {
+    assertHeaders(email.headers);
+  }
+}
+
+async function authenticate(conn: SmtpConnection, auth: SmtpAuth): Promise<void> {
+  try {
+    await conn.command("AUTH LOGIN", 334);
+    await conn.command(base64(auth.user), 334);
+    await conn.command(base64(auth.pass), 235);
+  } catch (error) {
+    // `command` only ever throws SmtpTransportError, so `error` is always an Error.
+    throw new SmtpTransportError("MAIL_TRANSPORT_SMTP_AUTH", "SMTP authentication failed.", {
+      cause: (error as Error).message,
+    });
+  }
+}
+
+/** One in-flight SMTP dialogue over a single socket. */
+class SmtpConnection {
+  private socket: SmtpSocket;
+
+  private buffer = "";
+
+  private pending: { resolve: (line: string) => void; reject: (error: Error) => void } | undefined;
+
+  private failure: Error | undefined;
+
+  constructor(socket: SmtpSocket) {
+    this.socket = socket;
+    this.bind();
+  }
+
+  /** Swap in the upgraded (TLS) socket after STARTTLS. */
+  rebind(socket: SmtpSocket): void {
+    this.socket = socket;
+    this.buffer = "";
+    this.bind();
+  }
+
+  private bind(): void {
+    this.socket.on("data", (chunk) => {
+      this.buffer += chunk.toString();
+
+      // A reply is complete once a final `NNN <text>` status line lands and a
+      // reader is waiting for it. SMTP is strictly request-response, so a reply
+      // only ever arrives after a command set `pending`.
+      if (!this.pending || !/(^|\n)(\d{3}) [^\n]*\r?\n$/.test(this.buffer)) {
+        return;
+      }
+
+      const line = this.buffer;
+      this.buffer = "";
+      const settle = this.pending;
+      this.pending = undefined;
+      settle.resolve(line);
+    });
+
+    this.socket.on("error", (error) => {
+      this.failure = error;
+      this.pending?.reject(error);
+      this.pending = undefined;
+    });
+  }
+
+  /** Wait for the next complete reply line and return it. */
+  async readLine(): Promise<string> {
+    if (this.failure) {
+      throw new SmtpTransportError("MAIL_TRANSPORT_SMTP_CONNECTION", this.failure.message);
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      this.pending = { resolve, reject };
+    });
+  }
+
+  /** Read the next reply and assert its status code. */
+  async expect(code: number): Promise<string> {
+    const line = await this.readLine();
+    const status = Number(line.trimStart().slice(0, 3));
+
+    if (status !== code) {
+      throw new SmtpTransportError(
+        "MAIL_TRANSPORT_SMTP_PROTOCOL",
+        `Expected SMTP ${code}, got: ${line.trim()}`,
+        { expected: code, line: line.trim() },
+      );
+    }
+
+    return line;
+  }
+
+  /** Send one command, then assert the reply code. */
+  async command(line: string, code: number): Promise<string> {
+    this.socket.write(`${line}\r\n`);
+
+    return this.expect(code);
+  }
+}
+
+function buildMessage(email: RenderedEmail, from: string): string {
+  const lines: string[] = [
+    `From: ${from}`,
+    `To: ${email.to}`,
+    `Subject: ${email.subject}`,
+    `Message-ID: <${email.messageId}>`,
+    "MIME-Version: 1.0",
+  ];
+
+  for (const [name, value] of Object.entries(email.headers ?? {})) {
+    lines.push(`${name}: ${value}`);
+  }
+
+  let body: string;
+
+  if (email.text !== undefined) {
+    const boundary = `keel-${email.messageId}`;
+    lines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+    body = [
+      "",
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      email.text,
+      `--${boundary}`,
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      email.html,
+      `--${boundary}--`,
+    ].join("\r\n");
+  } else {
+    lines.push('Content-Type: text/html; charset="utf-8"');
+    body = `\r\n${email.html}`;
+  }
+
+  // RFC 5321 dot-stuffing: a line that is just "." would end DATA early.
+  const message = `${lines.join("\r\n")}${body}`.replace(/\n\./g, "\n..");
+
+  return `${message}\r\n.`;
+}
+
+function addressOnly(value: string): string {
+  const match = /<([^>]+)>/.exec(value);
+
+  return match ? match[1]! : value.trim();
+}
+
+function base64(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64");
+}
+
+/** The slices of `node:net` / `node:tls` the defaults touch — injectable for tests. */
+export interface NetModule {
+  createConnection(options: { host: string; port: number }): NodeSocket;
+}
+
+export interface TlsModule {
+  connect(options: { socket: NodeSocket; servername: string }): NodeSocket;
+}
+
+interface NodeSocket {
+  once(event: "error", listener: (error: Error) => void): void;
+  once(event: string, listener: () => void): void;
+  removeListener(event: "error", listener: (error: Error) => void): void;
+  setEncoding(encoding: "utf8"): void;
+}
+
+/** Load `node:net`. Importing it opens no socket; isolated so tests can cover it. */
+export function loadNet(): Promise<NetModule> {
+  return import("node:net") as unknown as Promise<NetModule>;
+}
+
+/** Load `node:tls`. Importing it opens no socket; isolated so tests can cover it. */
+export function loadTls(): Promise<TlsModule> {
+  return import("node:tls") as unknown as Promise<TlsModule>;
+}
+
+/**
+ * Default plaintext connect over `node:net`. The `net` module loader is a
+ * parameter so tests inject a fake socket; production uses {@link loadNet}.
+ */
+export async function nodeConnect(
+  host: string,
+  port: number,
+  load: () => Promise<NetModule> = loadNet,
+): Promise<SmtpSocket> {
+  const net = await load();
+
+  return new Promise<SmtpSocket>((resolve, reject) => {
+    const socket = net.createConnection({ host, port });
+    const onError = (error: Error): void => {
+      reject(new SmtpTransportError("MAIL_TRANSPORT_SMTP_CONNECTION", error.message));
+    };
+    socket.once("error", onError);
+    socket.once("connect", () => {
+      socket.removeListener("error", onError);
+      socket.setEncoding("utf8");
+      resolve(socket as unknown as SmtpSocket);
+    });
+  });
+}
+
+/** Default STARTTLS upgrade over `node:tls`. The `tls` module is injectable for tests. */
+export async function nodeUpgrade(
+  socket: SmtpSocket,
+  host: string,
+  load: () => Promise<TlsModule> = loadTls,
+): Promise<SmtpSocket> {
+  const tls = await load();
+
+  return new Promise<SmtpSocket>((resolve, reject) => {
+    const secure = tls.connect({ socket: socket as unknown as NodeSocket, servername: host });
+    const onError = (error: Error): void => {
+      reject(new SmtpTransportError("MAIL_TRANSPORT_SMTP_CONNECTION", error.message));
+    };
+    secure.once("error", onError);
+    secure.once("secureConnect", () => {
+      secure.removeListener("error", onError);
+      secure.setEncoding("utf8");
+      resolve(secure as unknown as SmtpSocket);
+    });
+  });
+}
