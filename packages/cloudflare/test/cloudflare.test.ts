@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { KeelError } from "@keel/errors";
@@ -7,6 +10,7 @@ import type { DeployPlan } from "@keel/deploy";
 
 import {
   CloudflareError,
+  serializeWranglerConfig,
   toFetchHandler,
   withAssets,
   wranglerConfig,
@@ -849,6 +853,44 @@ describe("wranglerConfig", () => {
     expect(config.assets.binding).toBe("STATIC");
   });
 
+  it("omits the optional bindings when they are absent or empty", () => {
+    const config = wranglerConfig(planWithDynamic, {
+      name: "estate",
+      main: "worker.ts",
+      compatibilityDate: "2026-06-01",
+      assetsDir: "out",
+      // Present but empty: an empty alias/d1/vars set carries no field.
+      alias: {},
+      d1Databases: [],
+      vars: {},
+    });
+
+    expect(config.alias).toBeUndefined();
+    expect(config.d1_databases).toBeUndefined();
+    expect(config.vars).toBeUndefined();
+    expect(config.placement).toBeUndefined();
+  });
+
+  it("emits alias, d1_databases, vars, and placement when supplied", () => {
+    const config = wranglerConfig(planWithDynamic, {
+      name: "estate",
+      main: "worker.ts",
+      compatibilityDate: "2026-06-01",
+      assetsDir: "out",
+      alias: { react: "preact/compat" },
+      d1Databases: [{ binding: "DB", databaseName: "estate", databaseId: "abc-123" }],
+      vars: { KEEL_DEMO: "1" },
+      placement: { mode: "smart" },
+    });
+
+    expect(config.alias).toEqual({ react: "preact/compat" });
+    expect(config.d1_databases).toEqual([
+      { binding: "DB", database_name: "estate", database_id: "abc-123" },
+    ]);
+    expect(config.vars).toEqual({ KEEL_DEMO: "1" });
+    expect(config.placement).toEqual({ mode: "smart" });
+  });
+
   it("refuses a plan with no dynamic zone (nothing for a Worker to run)", () => {
     const staticOnly: DeployPlan = {
       targets: [
@@ -875,5 +917,185 @@ describe("wranglerConfig", () => {
       expect(error).toBeInstanceOf(CloudflareError);
       expect((error as CloudflareError).code).toBe("CLOUDFLARE_NO_DYNAMIC_ZONE");
     }
+  });
+});
+
+describe("serializeWranglerConfig", () => {
+  it("emits tab-indented JSONC with trailing commas and a final newline", () => {
+    const text = serializeWranglerConfig({
+      name: "w",
+      main: "worker.ts",
+      compatibility_date: "2026-06-01",
+      compatibility_flags: ["nodejs_compat"],
+      assets: { directory: "./out", binding: "ASSETS" },
+    });
+
+    expect(text).toBe(
+      [
+        "{",
+        '\t"name": "w",',
+        '\t"main": "worker.ts",',
+        '\t"compatibility_date": "2026-06-01",',
+        '\t"compatibility_flags": [',
+        '\t\t"nodejs_compat",',
+        "\t],",
+        '\t"assets": {',
+        '\t\t"directory": "./out",',
+        '\t\t"binding": "ASSETS",',
+        "\t},",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("weaves header and per-field comments in, and renders empty containers inline", () => {
+    const text = serializeWranglerConfig(
+      {
+        name: "w",
+        main: "worker.ts",
+        compatibility_date: "2026-06-01",
+        compatibility_flags: [],
+        assets: { directory: "./out", binding: "ASSETS" },
+        vars: {},
+      },
+      {
+        header: ["a header line", ""],
+        fields: { name: ["names the worker"] },
+      },
+    );
+
+    expect(text).toBe(
+      [
+        "// a header line",
+        "//",
+        "{",
+        "\t// names the worker",
+        '\t"name": "w",',
+        '\t"main": "worker.ts",',
+        '\t"compatibility_date": "2026-06-01",',
+        '\t"compatibility_flags": [],',
+        '\t"assets": {',
+        '\t\t"directory": "./out",',
+        '\t\t"binding": "ASSETS",',
+        "\t},",
+        '\t"vars": {},',
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("serializes a config that carries every optional binding", () => {
+    const text = serializeWranglerConfig({
+      name: "w",
+      main: "worker.ts",
+      compatibility_date: "2026-06-01",
+      compatibility_flags: ["nodejs_compat"],
+      assets: { directory: "./out", binding: "ASSETS" },
+      d1_databases: [{ binding: "DB", database_name: "estate", database_id: "id" }],
+      alias: { react: "preact/compat" },
+      vars: { KEEL_DEMO: "1" },
+      placement: { mode: "smart" },
+    });
+
+    expect(text).toContain('\t"d1_databases": [\n\t\t{\n\t\t\t"binding": "DB",');
+    expect(text).toContain('\t"alias": {\n\t\t"react": "preact/compat",\n\t},');
+    expect(text).toContain('\t"vars": {\n\t\t"KEEL_DEMO": "1",\n\t},');
+    expect(text).toContain('\t"placement": {\n\t\t"mode": "smart",\n\t},');
+  });
+
+  // The contract: the committed examples/estate/wrangler.jsonc is reproducible
+  // byte-for-byte from `serializeWranglerConfig(wranglerConfig(...))`. Any drift
+  // — a compatibility_date bump, a binding rename, a new alias — fails here, so
+  // the file's "Generated by `wranglerConfig`" header stays true.
+  it("regenerates the committed examples/estate/wrangler.jsonc byte-identically", () => {
+    const estatePlan: DeployPlan = {
+      targets: [
+        {
+          kind: "static",
+          site: "marketing",
+          basePath: "/",
+          routing: { basePath: "/", mode: "static" },
+          files: [],
+        },
+        {
+          kind: "node",
+          site: "mls",
+          basePath: "/mls",
+          routing: { basePath: "/mls", mode: "dynamic" },
+          run: "keel serve",
+          needsDatabase: true,
+        },
+      ],
+      routing: [
+        { basePath: "/mls", mode: "dynamic" },
+        { basePath: "/", mode: "static" },
+      ],
+    };
+
+    const config = wranglerConfig(estatePlan, {
+      name: "keel-estate",
+      main: "worker.ts",
+      compatibilityDate: "2026-06-01",
+      assetsDir: "./out/marketing",
+      d1Databases: [
+        {
+          binding: "DB",
+          databaseName: "estate",
+          databaseId: "c02cbc83-d9f1-40bb-bd64-20f697ebb2f1",
+        },
+      ],
+      alias: {
+        react: "preact/compat",
+        "react-dom/client": "preact/compat/client",
+        "react-dom/server": "./preact-react-dom-server-shim.ts",
+        "react-dom": "./preact-react-dom-shim.ts",
+        "react/jsx-runtime": "preact/jsx-runtime",
+        "react/jsx-dev-runtime": "preact/jsx-runtime",
+      },
+    });
+
+    const text = serializeWranglerConfig(config, {
+      fields: {
+        name: [
+          "Generated by `wranglerConfig` (@keel/cloudflare) from the deploy plan, then",
+          'committed. See ADR 0002 and the README\'s "Deploy to Cloudflare" runbook.',
+        ],
+        compatibility_flags: ["node:crypto for the signed-session HMAC and password hashing."],
+        assets: [
+          "The prerendered static marketing site (`keel build` → out/marketing).",
+          "Served first; a miss falls through to the Worker (the /mls app).",
+        ],
+        d1_databases: [
+          "Cloudflare D1 backs the DB-driven `/lab/content/:slug` page — a Worker has no",
+          "filesystem SQLite, so the content store uses D1 on the edge (Node/`bun run`",
+          "use `openSqlite`). One-time setup before `wrangler deploy`:",
+          "  1. wrangler d1 create estate        # creates the DB, prints its id",
+          "  2. paste that id into `database_id` below",
+          "The binding name MUST be `DB` — that is what `worker.ts` reads as `env.DB`.",
+          "(`wrangler d1 create` interactively defaults the binding to the DB name,",
+          "`estate`, which would leave `env.DB` undefined and the page on its fallback.)",
+          "The `pages` table is created + seeded lazily on first request (idempotent),",
+          "so no separate migration step is needed for the demo. Absent this binding,",
+          'the content page renders a "configure a D1 binding" view instead of 404ing.',
+        ],
+        alias: [
+          "Preact by default on the edge (ADR 0007/0008): the worker bundle resolves",
+          "every React specifier to Preact's compat layer — the same alias set",
+          "`build-client.ts --preact` applies to the client bundle, so the SSR'd markup",
+          "and the shipped client speak one dialect. `worker.ts` completes the pair by",
+          "rendering through `preactServerRenderer`. The shims satisfy the react-dom",
+          "imports `@keel/ui`'s barrel carries but the worker never invokes.",
+        ],
+      },
+    });
+
+    const committed = readFileSync(
+      fileURLToPath(new URL("../../../examples/estate/wrangler.jsonc", import.meta.url)),
+      "utf8",
+    );
+
+    expect(text).toBe(committed);
   });
 });

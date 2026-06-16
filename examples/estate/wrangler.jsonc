@@ -6,7 +6,7 @@
 	"compatibility_date": "2026-06-01",
 	// node:crypto for the signed-session HMAC and password hashing.
 	"compatibility_flags": [
-		"nodejs_compat"
+		"nodejs_compat",
 	],
 	// The prerendered static marketing site (`keel build` → out/marketing).
 	// Served first; a miss falls through to the Worker (the /mls app).
@@ -29,7 +29,7 @@
 		{
 			"binding": "DB",
 			"database_name": "estate",
-			"database_id": "c02cbc83-d9f1-40bb-bd64-20f697ebb2f1"
+			"database_id": "c02cbc83-d9f1-40bb-bd64-20f697ebb2f1",
 		},
 	],
 	// Preact by default on the edge (ADR 0007/0008): the worker bundle resolves

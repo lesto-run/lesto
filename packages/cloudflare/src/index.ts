@@ -33,8 +33,14 @@ export type {
 export { withAssets } from "./assets";
 export type { AssetAppHandler, AssetExecutionContext, AssetFetcher } from "./assets";
 
-export { wranglerConfig } from "./wrangler";
-export type { WranglerConfig, WranglerOptions } from "./wrangler";
+export { serializeWranglerConfig, wranglerConfig } from "./wrangler";
+export type {
+  WranglerComments,
+  WranglerConfig,
+  WranglerD1Database,
+  WranglerOptions,
+  WranglerPlacement,
+} from "./wrangler";
 
 export { CloudflareError } from "./errors";
 export type { CloudflareErrorCode } from "./errors";
