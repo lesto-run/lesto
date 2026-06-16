@@ -26,6 +26,7 @@
     "@keel/db": "workspace:*",
     "@keel/errors": "workspace:*",
     "@keel/mail": "workspace:*",
-    "@keel/migrate": "workspace:*"
+    "@keel/migrate": "workspace:*",
+    "@keel/ratelimit": "workspace:*"
   }
 }

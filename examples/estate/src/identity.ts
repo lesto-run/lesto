@@ -29,6 +29,7 @@ import { hashPassword, installSessionSchema, sqlSessionStore } from "@keel/auth"
 import { createDb } from "@keel/db";
 import type { Db, SqlDatabase } from "@keel/db";
 import { Migrator } from "@keel/migrate";
+import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@keel/ratelimit";
 import { openSqlite } from "@keel/runtime";
 
 import { createIdentity, insertUser, usersMigration } from "@keel/identity";
@@ -146,6 +147,7 @@ export async function buildIdentity(secret?: string): Promise<{
   // A query before migrate would hit an empty schema.
   await new Migrator(sql, [usersMigration]).migrate();
   await installSessionSchema(sql);
+  await installRateLimitSchema(sql);
   const db = createDb(sql);
   await seedDemoAccounts(db);
 
@@ -157,6 +159,17 @@ export async function buildIdentity(secret?: string): Promise<{
   const identity = createIdentity({
     db,
     sessionStore: sqlSessionStore(sql),
+    // The INNER, per-account login throttle (auth-security item 4): five failed
+    // attempts per ~15 minutes for one account, fleet-correct over the shared SQL
+    // store. This is the credential-stuffing defense — it bounds guesses against
+    // ONE account no matter how many IPs they come from. The IP-keyed limiter on
+    // `secureStack({ rateLimit })` is the OUTER moat (per-client request rate); a
+    // botnet rotating IPs slips that, which is exactly what this layer closes.
+    loginRateLimiter: new RateLimiter({
+      store: sqlRateLimitStore(sql),
+      capacity: 5,
+      refillPerSecond: 5 / (15 * 60),
+    }),
     // An explicit secret (the static prerender passes a throwaway one — it signs
     // no tokens) overrides the fail-closed runtime resolution. Absent it, the
     // serve/Worker paths still demand a real `KEEL_AUTH_SECRET` (or `KEEL_DEMO=1`).

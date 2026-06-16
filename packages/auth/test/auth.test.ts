@@ -8,6 +8,7 @@ import {
   MemorySessionStore,
   needsRehash,
   Sessions,
+  sha256,
   systemClock,
   verifyPassword,
 } from "../src/index";
@@ -200,6 +201,20 @@ describe("generateToken", () => {
 
   it("produces distinct tokens", () => {
     expect(generateToken()).not.toBe(generateToken());
+  });
+});
+
+describe("sha256", () => {
+  it("matches the known SHA-256 digest of a string (lowercase hex)", () => {
+    expect(sha256("abc")).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  });
+
+  it("is deterministic — the same input always yields the same digest", () => {
+    expect(sha256("keel")).toBe(sha256("keel"));
+  });
+
+  it("distinguishes different inputs", () => {
+    expect(sha256("a")).not.toBe(sha256("b"));
   });
 });
 

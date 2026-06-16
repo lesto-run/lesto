@@ -3,9 +3,11 @@ import { randomBytes, scryptSync } from "node:crypto";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { installSessionSchema, sqlSessionStore } from "@keel/auth";
 import { createDb } from "@keel/db";
 import type { Db, SqlDatabase } from "@keel/db";
 import { Migrator } from "@keel/migrate";
+import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@keel/ratelimit";
 
 import {
   clearSessionCookie,
@@ -134,6 +136,11 @@ beforeEach(async () => {
   now = new Date("2026-06-09T12:00:00Z").getTime();
 
   await new Migrator(sql, [usersMigration]).migrate();
+  // The durable-store tests (revoke-on-reset, login throttle) run over real SQL
+  // tables on the same in-memory handle; install both schemas up front so any
+  // test can opt into the SQL-backed stores.
+  await installSessionSchema(sql);
+  await installRateLimitSchema(sql);
 });
 
 afterEach(() => {
@@ -790,5 +797,202 @@ describe("token signer", () => {
     expect(
       (await identity.login("ada@example.com", "fresh new password")).session.token,
     ).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// revoke-on-reset by default (SQL-backed session store) — auth-security item 3
+// ---------------------------------------------------------------------------
+
+describe("revoke-on-reset (SQL-backed default)", () => {
+  /** An identity whose sessions live in the real SQL store on the shared handle. */
+  function sqlBackedIdentity(): { identity: Identity; sent: CapturedEmail[] } {
+    const { mailer, sent } = captureMailer();
+    const identity = createIdentity({
+      db,
+      secret: "test-secret-0123456789abcdefghij",
+      mailer,
+      verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+      resetUrl: (token) => `https://app.test/reset?token=${token}`,
+      sessionStore: sqlSessionStore(sql),
+      clock: () => clock(),
+    });
+
+    return { identity, sent };
+  }
+
+  it("ends every live session for the user on reset — no hook wired", async () => {
+    const { identity, sent } = sqlBackedIdentity();
+
+    await identity.register("ada@example.com", "old password 1");
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+
+    // The attacker holds a live session minted before the reset.
+    const { session: attacker } = await identity.login("ada@example.com", "old password 1");
+    expect((await identity.currentUser(attacker.token))?.email).toBe("ada@example.com");
+
+    // The victim resets their password — the SQL store's deleteByUserId fires by
+    // default (no revokeUserSessions hook), killing the attacker's session.
+    await identity.requestPasswordReset("ada@example.com");
+    const resetToken = sent.find((e) => e.kind === "reset")!.token;
+    await identity.resetPassword(resetToken, "brand new password");
+
+    expect(await identity.currentUser(attacker.token)).toBeUndefined();
+  });
+
+  it("runs the revokeUserSessions hook IN ADDITION to the store-backed revoke", async () => {
+    const { mailer, sent } = captureMailer();
+    const revokedFor: string[] = [];
+    const identity = createIdentity({
+      db,
+      secret: "test-secret-0123456789abcdefghij",
+      mailer,
+      verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+      resetUrl: (token) => `https://app.test/reset?token=${token}`,
+      sessionStore: sqlSessionStore(sql),
+      revokeUserSessions: (userId) => {
+        revokedFor.push(userId);
+      },
+      clock: () => clock(),
+    });
+
+    await identity.register("ada@example.com", "old password 1");
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+    const { session: attacker } = await identity.login("ada@example.com", "old password 1");
+
+    await identity.requestPasswordReset("ada@example.com");
+    const resetToken = sent.find((e) => e.kind === "reset")!.token;
+    const user = await identity.resetPassword(resetToken, "brand new password");
+
+    // Store-backed revoke killed the session AND the second-tier hook fired.
+    expect(await identity.currentUser(attacker.token)).toBeUndefined();
+    expect(revokedFor).toEqual([String(user.id)]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// login throttling (per-account, fleet-correct) — auth-security item 4
+// ---------------------------------------------------------------------------
+
+describe("login throttling", () => {
+  /** A SQL-backed per-account limiter: `capacity` failed attempts, slow refill. */
+  function loginLimiter(capacity: number, handle: SqlDatabase = sql): RateLimiter {
+    return new RateLimiter({
+      store: sqlRateLimitStore(handle),
+      capacity,
+      // ~1 token / 15 min: deterministic over the stepped clock (no refill in-test).
+      refillPerSecond: 1 / 900,
+      clock: () => clock(),
+    });
+  }
+
+  function throttledIdentity(limiter: RateLimiter): { identity: Identity; sent: CapturedEmail[] } {
+    const { mailer, sent } = captureMailer();
+    const identity = createIdentity({
+      db,
+      secret: "test-secret-0123456789abcdefghij",
+      mailer,
+      verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+      resetUrl: (token) => `https://app.test/reset?token=${token}`,
+      loginRateLimiter: limiter,
+      clock: () => clock(),
+    });
+
+    return { identity, sent };
+  }
+
+  it("refuses with IDENTITY_LOGIN_THROTTLED after the bucket is drained", async () => {
+    const { identity, sent } = throttledIdentity(loginLimiter(3));
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+
+    // Three wrong-password attempts drain the 3-token bucket.
+    for (let i = 0; i < 3; i++) {
+      await expect(identity.login("ada@example.com", "wrong password")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_CREDENTIALS",
+      });
+    }
+
+    // The fourth is throttled — refused BEFORE the credential check, with the
+    // retry hint in the details.
+    await expect(identity.login("ada@example.com", "wrong password")).rejects.toMatchObject({
+      code: "IDENTITY_LOGIN_THROTTLED",
+    });
+
+    const throttled = await identity
+      .login("ada@example.com", "correct horse staple")
+      .catch((e: unknown) => e);
+    expect((throttled as IdentityError).code).toBe("IDENTITY_LOGIN_THROTTLED");
+    expect((throttled as IdentityError).details?.["retryAfterMs"]).toBeGreaterThan(0);
+  });
+
+  it("does not throttle on a successful login (a real user never locks themselves out)", async () => {
+    const { identity, sent } = throttledIdentity(loginLimiter(3));
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+
+    // Many successful logins spend nothing — the bucket stays full.
+    for (let i = 0; i < 5; i++) {
+      const { session } = await identity.login("ada@example.com", "correct horse staple");
+      expect(session.token).toBeDefined();
+    }
+  });
+
+  it("throttles an UNKNOWN email exactly like a known one (no enumeration leak)", async () => {
+    const { identity } = throttledIdentity(loginLimiter(2));
+
+    // The key is login:<email> for every email, so an unknown account drains and
+    // throttles on the same schedule — the throttle never betrays existence.
+    for (let i = 0; i < 2; i++) {
+      await expect(identity.login("ghost@example.com", "whatever")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_CREDENTIALS",
+      });
+    }
+
+    await expect(identity.login("ghost@example.com", "whatever")).rejects.toMatchObject({
+      code: "IDENTITY_LOGIN_THROTTLED",
+    });
+  });
+
+  it("is fleet-correct: failures throttle the account across two store handles", async () => {
+    // Two separate sqlRateLimitStore handles over the SAME table — the two nodes
+    // of a fleet. Failures on one count against the other; the cap is shared.
+    const sql2 = adapt(raw);
+    const nodeA = throttledIdentity(loginLimiter(2, sql));
+    const nodeB = throttledIdentity(loginLimiter(2, sql2));
+
+    await nodeA.identity.register("ada@example.com", "correct horse staple");
+    await nodeA.identity.verifyEmail(nodeA.sent[0]!.token);
+
+    // One failure on node A, one on node B — together they drain the 2-token cap.
+    await expect(nodeA.identity.login("ada@example.com", "wrong")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_CREDENTIALS",
+    });
+    await expect(nodeB.identity.login("ada@example.com", "wrong")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_CREDENTIALS",
+    });
+
+    // The next attempt on EITHER node is throttled — the limit is fleet-wide.
+    await expect(
+      nodeB.identity.login("ada@example.com", "correct horse staple"),
+    ).rejects.toMatchObject({ code: "IDENTITY_LOGIN_THROTTLED" });
+  });
+
+  it("an account-not-verified login is not penalized (correct password, no guess)", async () => {
+    // The credentials are right; the user just hasn't verified. That is not a
+    // guessing signal, so it must not burn the throttle bucket.
+    const { identity } = throttledIdentity(loginLimiter(1));
+
+    await identity.register("ada@example.com", "correct horse staple");
+
+    for (let i = 0; i < 3; i++) {
+      await expect(identity.login("ada@example.com", "correct horse staple")).rejects.toMatchObject(
+        {
+          code: "IDENTITY_EMAIL_NOT_VERIFIED",
+        },
+      );
+    }
   });
 });

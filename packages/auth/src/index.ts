@@ -15,6 +15,8 @@
 
 export { hashPassword, needsRehash, verifyPassword } from "./password";
 
+export { sha256 } from "./hash";
+
 export { generateToken } from "./token";
 
 export { MemorySessionStore, Sessions } from "./sessions";

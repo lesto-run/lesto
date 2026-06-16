@@ -20,7 +20,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createApp } from "@keel/kernel";
 import type { KeelAppConfig, KernelDatabase } from "@keel/kernel";
+import { installSessionSchema, sqlSessionStore } from "@keel/auth";
 import { createDb } from "@keel/db";
+import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@keel/ratelimit";
 import { serve } from "@keel/runtime";
 import type { Server } from "@keel/runtime";
 import { keel } from "@keel/web";
@@ -67,10 +69,15 @@ function authBody(c: Context): { email: string; password: string; token?: string
 
 function errorResponse(error: unknown): KeelResponse {
   if (error instanceof IdentityError) {
-    const status =
-      error.code === "IDENTITY_EMAIL_NOT_VERIFIED" || error.code === "IDENTITY_INVALID_CREDENTIALS"
-        ? 401
-        : 400;
+    let status = 400;
+    if (
+      error.code === "IDENTITY_EMAIL_NOT_VERIFIED" ||
+      error.code === "IDENTITY_INVALID_CREDENTIALS"
+    ) {
+      status = 401;
+    } else if (error.code === "IDENTITY_LOGIN_THROTTLED") {
+      status = 429;
+    }
 
     return {
       status,
@@ -402,5 +409,212 @@ describe("the identity journey, over the wire", () => {
     expect(loggedOut.cookie).toContain("Max-Age=0");
 
     expect((await get("/me", cookieHeader(token))).status).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hardened journey: durable sessions + per-account throttle, over the wire.
+//
+// A second app/server, deliberately separate from the journey above so it can
+// wire the *durable* posture (auth-security items 3 + 4) without disturbing the
+// canonical flow: a SQL-backed session store (hashed at rest, revoke-on-reset
+// by default) and a per-account login limiter over the SQL rate-limit store.
+// `createApp({ db })` installs both schemas before the first request.
+// ---------------------------------------------------------------------------
+
+describe("the hardened identity journey, over the wire", () => {
+  let hardenedDb: Database.Database;
+  let hardenedServer: Server;
+  let hardenedBase: string;
+  let hardenedIdentity: Identity;
+  const hardenedInbox: CapturedLink[] = [];
+
+  const hardenedMailer: IdentityMailer = {
+    sendVerificationEmail(args) {
+      hardenedInbox.push({ ...args, kind: "verify" });
+    },
+    sendPasswordResetEmail(args) {
+      hardenedInbox.push({ ...args, kind: "reset" });
+    },
+  };
+
+  async function hPost(
+    path: string,
+    body: Record<string, unknown>,
+    cookie?: string,
+  ): Promise<{ status: number; json: unknown; cookie: string | null }> {
+    const response = await fetch(`${hardenedBase}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(cookie === undefined ? {} : { cookie }),
+      },
+      body: JSON.stringify(body),
+    });
+
+    return {
+      status: response.status,
+      json: await response.json(),
+      cookie: response.headers.get("set-cookie"),
+    };
+  }
+
+  async function hGet(path: string, cookie?: string): Promise<{ status: number; json: unknown }> {
+    const init: RequestInit = cookie === undefined ? {} : { headers: { cookie } };
+    const response = await fetch(`${hardenedBase}${path}`, init);
+
+    return { status: response.status, json: await response.json() };
+  }
+
+  beforeAll(async () => {
+    hardenedDb = new Database(":memory:");
+
+    // The kernel adapter, @keel/db, and both durable stores all take the same
+    // SqlDatabase shape, so one wrapper around the in-memory DB satisfies all of
+    // them — and the session store therefore shares the kernel-installed tables.
+    const handle = adapt(hardenedDb);
+
+    // The SQL stores prepare their statements eagerly at construction, so the
+    // tables must exist before `createIdentity`. `createApp` would also install
+    // them (idempotent), but it runs after the identity is built — so install up
+    // front here too.
+    await installSessionSchema(handle);
+    await installRateLimitSchema(handle);
+
+    hardenedIdentity = createIdentity({
+      db: createDb(handle),
+      secret: "hardened-integration-secret-0123456789",
+      mailer: hardenedMailer,
+      verificationUrl: (token) => `https://app.test/auth/verify?token=${token}`,
+      resetUrl: (token) => `https://app.test/auth/reset?token=${token}`,
+      // Item 3: durable sessions, hashed at rest, revoke-on-reset by default.
+      sessionStore: sqlSessionStore(handle),
+      // Item 4: a per-account login throttle over the SQL rate-limit store.
+      // Small bucket, glacial refill — three failures lock the account within
+      // the test window.
+      loginRateLimiter: new RateLimiter({
+        store: sqlRateLimitStore(handle),
+        capacity: 3,
+        refillPerSecond: 1 / 900,
+      }),
+    });
+
+    // `identity` is the module-level handle the shared `buildConfig` routes read;
+    // point it at the hardened service for this server's lifetime.
+    identity = hardenedIdentity;
+
+    hardenedServer = await serve(await createApp(buildConfig(hardenedDb)), {
+      port: 0,
+      logError: () => {},
+    });
+    hardenedBase = `http://127.0.0.1:${hardenedServer.port}`;
+  });
+
+  afterAll(async () => {
+    await hardenedServer.close();
+    hardenedDb.close();
+  });
+
+  it("compromised-account flow: a victim's reset ends an attacker's live session", async () => {
+    hardenedInbox.length = 0;
+
+    // The victim registers and verifies.
+    await hPost("/auth/register", {
+      email: "victim@example.com",
+      password: "correct horse staple",
+    });
+    const verifyToken = hardenedInbox.find((e) => e.kind === "verify")!.token;
+    await hGet(`/auth/verify?token=${encodeURIComponent(verifyToken)}`);
+
+    // The ATTACKER has stolen the victim's credentials and logs in, riding a
+    // real session cookie into the gated route.
+    const attackerLogin = await hPost("/auth/login", {
+      email: "victim@example.com",
+      password: "correct horse staple",
+    });
+    expect(attackerLogin.status).toBe(200);
+    const attackerToken = tokenFromSetCookie(attackerLogin.cookie);
+    expect((await hGet("/me", cookieHeader(attackerToken))).status).toBe(200);
+
+    // The victim notices, and resets their password.
+    hardenedInbox.length = 0;
+    await hPost("/auth/request-reset", { email: "victim@example.com" });
+    const resetToken = hardenedInbox.find((e) => e.kind === "reset")!.token;
+    const reset = await hPost("/auth/reset", { token: resetToken, password: "fresh new password" });
+    expect(reset.status).toBe(200);
+
+    // The attacker's previously-live session is now DEAD — revoke-on-reset by
+    // default killed it via the SQL store's deleteByUserId. No bespoke wiring.
+    expect((await hGet("/me", cookieHeader(attackerToken))).status).toBe(401);
+  });
+
+  it("a DB snapshot of the session row cannot be replayed as a live token", async () => {
+    hardenedInbox.length = 0;
+
+    await hPost("/auth/register", { email: "snap@example.com", password: "correct horse staple" });
+    await hGet(
+      `/auth/verify?token=${encodeURIComponent(
+        hardenedInbox.find((e) => e.kind === "verify")!.token,
+      )}`,
+    );
+
+    const loggedIn = await hPost("/auth/login", {
+      email: "snap@example.com",
+      password: "correct horse staple",
+    });
+    const liveToken = tokenFromSetCookie(loggedIn.cookie);
+
+    // What an attacker would lift from a DB dump: the stored primary-key value.
+    // It is a SHA-256 digest, never the plaintext token the client presents.
+    const stored = hardenedDb.prepare("SELECT token FROM keel_sessions").all() as Array<{
+      token: string;
+    }>;
+    expect(stored).toHaveLength(1);
+    const storedKey = stored[0]!.token;
+
+    // The plaintext token is NOT what is at rest...
+    expect(storedKey).not.toBe(liveToken);
+    expect(storedKey).toMatch(/^[a-f0-9]{64}$/); // a sha256 hex digest
+
+    // ...and presenting the stored digest as a cookie resolves to no session
+    // (it hashes again and matches nothing). The snapshot is not replayable.
+    expect((await hGet("/me", cookieHeader(storedKey))).status).toBe(401);
+
+    // The real plaintext token still works — hashing stayed invisible to the user.
+    expect((await hGet("/me", cookieHeader(liveToken))).status).toBe(200);
+  });
+
+  it("per-account throttle: N failed logins refuse with IDENTITY_LOGIN_THROTTLED", async () => {
+    hardenedInbox.length = 0;
+
+    await hPost("/auth/register", {
+      email: "throttle@example.com",
+      password: "correct horse staple",
+    });
+    await hGet(
+      `/auth/verify?token=${encodeURIComponent(
+        hardenedInbox.find((e) => e.kind === "verify")!.token,
+      )}`,
+    );
+
+    // Three wrong-password attempts drain the 3-token bucket — each is a normal
+    // 401 invalid-credentials.
+    for (let i = 0; i < 3; i++) {
+      const bad = await hPost("/auth/login", {
+        email: "throttle@example.com",
+        password: "wrong password",
+      });
+      expect(bad.status).toBe(401);
+      expect(bad.json).toMatchObject({ code: "IDENTITY_INVALID_CREDENTIALS" });
+    }
+
+    // The next attempt — even with the CORRECT password — is throttled. The
+    // account is locked, not the credential check.
+    const throttled = await hPost("/auth/login", {
+      email: "throttle@example.com",
+      password: "correct horse staple",
+    });
+    expect(throttled.status).toBe(429);
+    expect(throttled.json).toMatchObject({ code: "IDENTITY_LOGIN_THROTTLED" });
   });
 });

@@ -51,6 +51,7 @@ import {
 } from "@keel/auth";
 import type { Clock, Session, SessionStore } from "@keel/auth";
 import type { Db } from "@keel/db";
+import type { RateLimiter } from "@keel/ratelimit";
 
 import { assertStrongSecret, IdentityError } from "./errors";
 import { packResetToken, resetSigner, unpackResetToken, verifySigner } from "./tokens";
@@ -117,6 +118,21 @@ const dummyHash = (): Promise<string> =>
 
 const invalidToken = (kind: "verification" | "reset"): IdentityError =>
   new IdentityError("IDENTITY_INVALID_TOKEN", `The ${kind} link is invalid or has expired.`);
+
+/**
+ * A store that can revoke *every* session for one user in a single statement —
+ * the `deleteByUserId` affordance `sqlSessionStore` adds over the core three-verb
+ * {@link SessionStore} (ADR 0013). Identity feature-detects this so revoke-on-
+ * reset is automatic on a SQL store, with no extra wiring, while a bare memory
+ * store (which has no `user_id` index) is left untouched.
+ */
+interface UserRevocableStore extends SessionStore {
+  deleteByUserId(userId: string): Promise<number>;
+}
+
+/** True iff the store exposes `deleteByUserId` (i.e. it is SQL-backed). */
+const canRevokeByUser = (store: SessionStore): store is UserRevocableStore =>
+  typeof (store as Partial<UserRevocableStore>).deleteByUserId === "function";
 
 const assertValidEmail = (email: string): void => {
   const trimmed = email.trim();
@@ -199,13 +215,44 @@ export interface IdentityOptions {
   readonly sessionStore?: SessionStore;
 
   /**
-   * Optional hook called on a successful password reset.
+   * Per-account login throttle — the **inner, account-keyed** defense.
    *
-   * The reset itself is already single-use (the per-user-hash signing secret
-   * dies with the old password), so this hook only matters if the caller
-   * wants to *also* kill any pre-reset login sessions — common in
-   * compromised-account flows. Wire `sqlSessionStore`'s `deleteByUserId`
-   * (ADR 0013), or one `DELETE … WHERE user_id = ?` on a custom store.
+   * When present, `login` checks this limiter under the key
+   * `login:<normalizedEmail>` before it answers, and burns one token on each
+   * *failed* attempt; once the bucket is empty it refuses with a coded
+   * `IDENTITY_LOGIN_THROTTLED` (a successful login spends nothing, so a real
+   * user is never locked out by their own sign-in). Wire it over
+   * `sqlRateLimitStore` so the cap is **fleet-correct** — N failures throttle
+   * the account across every node, not per process — typically a small bucket
+   * (e.g. `capacity: 5, refillPerSecond: 5/900` ≈ 5 attempts per 15 minutes).
+   *
+   * This is the credential-stuffing defense: it bounds guesses against *one
+   * account* no matter how many IPs an attacker spreads them over. The IP-keyed
+   * limiter on the `secureStack` (the request-context client IP) is the OUTER
+   * layer — it caps a single client's request rate, but a botnet rotating IPs
+   * sails through it, which is exactly the gap this account-keyed limiter
+   * closes. Keep both; this one is the defense, the IP limiter is the moat.
+   *
+   * Enumeration-safe: the key is `login:<email>` for *every* email, existing or
+   * not, so the throttle reveals nothing about whether an account exists — the
+   * same posture `login` keeps elsewhere (one scrypt on every path,
+   * `IDENTITY_INVALID_CREDENTIALS` for both unknown-email and wrong-password).
+   */
+  readonly loginRateLimiter?: RateLimiter;
+
+  /**
+   * Optional hook called on a successful password reset, *in addition to* the
+   * built-in revoke-on-reset.
+   *
+   * Revoke-on-reset is now the **default**: when the configured `sessionStore`
+   * is SQL-backed (it exposes `deleteByUserId`, per ADR 0013), `resetPassword`
+   * already deletes every one of the user's sessions — so a victim resetting
+   * their password ends an attacker's stolen session with no extra wiring. This
+   * hook is the escape hatch for the cases that default cannot cover: a store
+   * with no `deleteByUserId` (a bare {@link MemorySessionStore}, or a custom
+   * one), or a *second* tier to invalidate — e.g. an edge `SignedSessions`
+   * revocation list (ADR 0013 §8) the SQL `deleteByUserId` cannot reach. It runs
+   * on every successful reset, store-backed revocation or not.
    */
   readonly revokeUserSessions?: (userId: string) => void | Promise<void>;
 
@@ -250,8 +297,10 @@ export function createIdentity(options: IdentityOptions): Identity {
 
   const verifyTokens = verifySigner(options.secret, options.clock);
 
+  const sessionStore = options.sessionStore ?? new MemorySessionStore();
+
   const sessions = new Sessions({
-    store: options.sessionStore ?? new MemorySessionStore(),
+    store: sessionStore,
     ...(options.clock ? { clock: options.clock } : {}),
   });
 
@@ -357,6 +406,14 @@ export function createIdentity(options: IdentityOptions): Identity {
      * email — that is the intentional UX-over-leak tradeoff and is
      * documented at the module level.
      *
+     * **Per-account throttle.** With a {@link IdentityOptions.loginRateLimiter}
+     * wired, each *failed* attempt burns a token from a `login:<email>` bucket;
+     * once it empties, `login` refuses with `IDENTITY_LOGIN_THROTTLED` before it
+     * touches the DB or scrypt. The bucket is keyed by email regardless of
+     * whether the account exists, so it never leaks existence, and a successful
+     * login spends nothing — a real user is never throttled by their own
+     * sign-in. Over `sqlRateLimitStore` the cap is fleet-correct. See the option.
+     *
      * **Rehash-on-login.** After a password verifies, if the stored hash was
      * minted under weaker scrypt parameters than today's default (a legacy or
      * pre-bump hash), we re-hash the just-proven plaintext at the current cost
@@ -368,16 +425,55 @@ export function createIdentity(options: IdentityOptions): Identity {
     async login(email, password) {
       const normalized = userRepo.normalizeEmail(email);
 
+      // Per-account throttle (the inner defense). The key is `login:<email>` for
+      // EVERY email — existing or not — so the throttle leaks nothing about
+      // whether an account exists. We peek with cost 0 (which never spends), and
+      // refuse before touching the DB or scrypt once the bucket is empty.
+      const throttleKey = `login:${normalized}`;
+
+      if (options.loginRateLimiter !== undefined) {
+        // Cost 0 never spends — it just reports how many tokens remain. An empty
+        // bucket means the account is throttled; we then ask the limiter for the
+        // real retry hint with a cost-1 check, which *denies* on an empty bucket
+        // and so still spends nothing.
+        const peek = await options.loginRateLimiter.check(throttleKey, 0);
+
+        if (peek.remaining < 1) {
+          const denied = await options.loginRateLimiter.check(throttleKey, 1);
+
+          throw new IdentityError(
+            "IDENTITY_LOGIN_THROTTLED",
+            "Too many failed login attempts. Try again later.",
+            { retryAfterMs: denied.retryAfterMs },
+          );
+        }
+      }
+
+      // Burn one token from the per-account bucket on a failed attempt — the
+      // penalty that drains it toward the throttle. Spent on BOTH the unknown-
+      // email and wrong-password paths, so the two stay indistinguishable; a
+      // successful login spends nothing, so a real user is never locked out by
+      // their own sign-in.
+      const penalize = async (): Promise<void> => {
+        if (options.loginRateLimiter !== undefined) {
+          await options.loginRateLimiter.check(throttleKey, 1);
+        }
+      };
+
       const user = await userRepo.findUserByEmail(db, normalized);
 
       if (!user) {
         // Equalize CPU so a missing user costs the same as a wrong password.
         await verifyPassword(password, await dummyHash());
 
+        await penalize();
+
         throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
       if (!(await verifyPassword(password, user.passwordHash))) {
+        await penalize();
+
         throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
@@ -446,8 +542,14 @@ export function createIdentity(options: IdentityOptions): Identity {
      * token's HMAC no longer verifies. A leaked or replayed link cannot
      * reset the password a second time, and cannot undo a legitimate reset.
      *
-     * Pre-reset login sessions are not touched here — call the
-     * `revokeUserSessions` hook if your deployment also wants those killed.
+     * **Revoke-on-reset is the default.** When the session store is SQL-backed
+     * (it exposes `deleteByUserId`), every one of the user's live sessions is
+     * deleted as part of the reset — so the compromised-account flow (an
+     * attacker holding a stolen session, the victim resetting their password)
+     * ends the attacker's session. A bare memory store has no `deleteByUserId`
+     * and is left untouched; wire {@link IdentityOptions.revokeUserSessions} to
+     * cover that case (or to invalidate a second tier, e.g. edge tokens). The
+     * optional hook always runs too, after the store-backed revocation.
      */
     async resetPassword(token, newPassword) {
       assertValidPassword(newPassword);
@@ -474,6 +576,15 @@ export function createIdentity(options: IdentityOptions): Identity {
       const newHash = await hashPassword(newPassword);
       await userRepo.setPasswordHash(db, user.id, newHash);
 
+      // Revoke-on-reset by default: a SQL-backed store can drop every session
+      // for this user in one statement (ADR 0013), so a victim's reset ends an
+      // attacker's stolen session without any caller wiring.
+      if (canRevokeByUser(sessionStore)) {
+        await sessionStore.deleteByUserId(String(user.id));
+      }
+
+      // The hook still runs (on every store), for a memory store that cannot
+      // revoke by user, or a second tier the SQL delete cannot reach.
       if (options.revokeUserSessions) {
         await options.revokeUserSessions(String(user.id));
       }

@@ -11,7 +11,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import { installSessionSchema, MemorySessionStore, Sessions, sqlSessionStore } from "../src/index";
+import {
+  installSessionSchema,
+  MemorySessionStore,
+  Sessions,
+  sha256,
+  sqlSessionStore,
+} from "../src/index";
 import type { Session, SqlDatabase, SqlStatement } from "../src/index";
 
 interface Row {
@@ -149,6 +155,34 @@ describe("sqlSessionStore", () => {
     await store.save(session);
 
     expect(await store.find("t1")).toEqual(session);
+  });
+
+  it("stores the token's SHA-256 digest, never the plaintext (snapshot-safe)", async () => {
+    const { db, rows } = makeFakeDb();
+    const store = sqlSessionStore(db);
+
+    await store.save(session);
+
+    // The row is keyed by sha256(token) — the plaintext "t1" is nowhere in the
+    // table, so a leaked DB dump holds nothing a client could present.
+    expect(rows.has("t1")).toBe(false);
+    expect(rows.has(sha256("t1"))).toBe(true);
+    expect(rows.get(sha256("t1"))?.token).toBe(sha256("t1"));
+
+    // find/delete still take (and return) the plaintext — hashing is invisible.
+    const found = await store.find("t1");
+    expect(found?.token).toBe("t1");
+  });
+
+  it("find returns undefined when only the raw digest (not the plaintext) is presented", async () => {
+    // Defense-in-depth: an attacker holding a snapshot digest cannot replay it
+    // as a token — presenting the digest hashes it AGAIN and matches no row.
+    const { db } = makeFakeDb();
+    const store = sqlSessionStore(db);
+
+    await store.save(session);
+
+    expect(await store.find(sha256("t1"))).toBeUndefined();
   });
 
   it("save upserts on the primary key (re-save overwrites, never duplicates)", async () => {

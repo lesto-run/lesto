@@ -17,6 +17,7 @@ export type IdentityErrorCode =
   | "IDENTITY_WEAK_SECRET"
   | "IDENTITY_INVALID_CREDENTIALS"
   | "IDENTITY_EMAIL_NOT_VERIFIED"
+  | "IDENTITY_LOGIN_THROTTLED"
   | "IDENTITY_INVALID_TOKEN";
 
 /** Anything the identity layer can refuse to do. */
