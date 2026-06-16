@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { I18n, interpolate } from "../src/index";
 
@@ -103,6 +103,82 @@ describe("I18n.has", () => {
 describe("I18n.locales", () => {
   it("lists the known locale names", () => {
     expect(make().locales()).toEqual(["en", "fr"]);
+  });
+});
+
+describe("I18n.onMissing", () => {
+  const withHook = (onMissing: (locale: string, key: string) => void): I18n =>
+    new I18n({ defaultLocale: "en", locales: { en, fr }, onMissing });
+
+  it("fires once with the requested locale and key when a key resolves nowhere", () => {
+    const missing: Array<[string, string]> = [];
+    const i18n = withHook((locale, key) => {
+      missing.push([locale, key]);
+    });
+
+    expect(i18n.t("fr", "nope")).toBe("nope");
+    // The *requested* locale (fr), not the fallback (en), names the gap.
+    expect(missing).toEqual([["fr", "nope"]]);
+  });
+
+  it("does not fire when the key is present in the requested locale", () => {
+    const onMissing = vi.fn();
+    expect(withHook(onMissing).t("fr", "greeting", { name: "Ada" })).toBe("Bonjour, Ada !");
+    expect(onMissing).not.toHaveBeenCalled();
+  });
+
+  it("does not fire when the key resolves only via fallback", () => {
+    const onMissing = vi.fn();
+    // `plain` is missing in fr but present in en — a fallback hit, not a miss.
+    expect(withHook(onMissing).t("fr", "plain")).toBe("Just text.");
+    expect(onMissing).not.toHaveBeenCalled();
+  });
+
+  it("fires when fallback is off and the key is absent from the requested locale", () => {
+    const missing: Array<[string, string]> = [];
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: { en, fr },
+      fallback: false,
+      onMissing: (locale, key) => {
+        missing.push([locale, key]);
+      },
+    });
+
+    expect(i18n.t("fr", "plain")).toBe("plain");
+    expect(missing).toEqual([["fr", "plain"]]);
+  });
+
+  it("fires for a missing pluralized key, carrying the category-suffixed key", () => {
+    const missing: Array<[string, string]> = [];
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: { en: {} },
+      onMissing: (locale, key) => {
+        missing.push([locale, key]);
+      },
+    });
+
+    expect(i18n.plural("en", "cart", 2)).toBe("cart.other");
+    expect(missing).toEqual([["en", "cart.other"]]);
+  });
+
+  it("is not fired by has() — a predicate must not log a miss", () => {
+    const onMissing = vi.fn();
+    expect(withHook(onMissing).has("en", "nope")).toBe(false);
+    expect(onMissing).not.toHaveBeenCalled();
+  });
+
+  it("swallows a throwing hook so t still returns the visible key", () => {
+    const i18n = withHook(() => {
+      throw new Error("counter exploded");
+    });
+
+    expect(i18n.t("en", "nope")).toBe("nope");
+  });
+
+  it("translates normally when no onMissing hook is configured", () => {
+    expect(make().t("en", "nope")).toBe("nope");
   });
 });
 

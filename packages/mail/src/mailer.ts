@@ -24,6 +24,16 @@ import type { JobContext, JsonValue, Queue } from "@keel/queue";
  * ({@link RenderedEmail.messageId}) precisely so an idempotent provider can
  * dedupe; transports SHOULD forward it (e.g. SMTP `Message-ID`, a provider's
  * idempotency key) so retries collapse to a single send.
+ *
+ * ## Delivery observability (opt-in hooks)
+ *
+ * `onDelivered` / `onFailed` fire once per attempt so an operator can answer
+ * "did the password reset go out?" without reading the queue. Their payloads
+ * carry only operational identifiers — mailer name, job id, attempt number (and
+ * an error code on failure). **No recipient address, subject, or body ever
+ * reaches a hook**, so wiring them to a log/metrics/OTLP sink can never leak
+ * PII. A hook that throws is swallowed (a broken metrics sink must not fail a
+ * delivery or trigger a spurious retry); see {@link Mailer.deliver}.
  */
 
 const DELIVER_JOB = "keel.mail.deliver";
@@ -104,6 +114,52 @@ export interface MailTransport {
 }
 
 /**
+ * What a delivery-observability hook learns about an attempt.
+ *
+ * Deliberately **PII-free**: a hook gets the mailer name, the queue job id, and
+ * the attempt number — never the recipient address, subject, or body. That is
+ * the whole point: these are safe to forward to a log line, a counter, or an
+ * OTLP span without a privacy review. `jobId` ties an event back to the queue
+ * row; `attempt` distinguishes the first try from an at-least-once retry of the
+ * same job.
+ */
+export interface DeliveryEvent {
+  /** The registered mailer name (e.g. `"verify"`). Not the recipient. */
+  readonly mailerName: string;
+
+  /** The @keel/queue job id carrying this delivery. */
+  readonly jobId: number;
+
+  /** 1-based attempt number; > 1 means an at-least-once retry. */
+  readonly attempt: number;
+}
+
+/** A {@link DeliveryEvent} plus the coded reason an attempt failed. */
+export interface DeliveryFailure extends DeliveryEvent {
+  /**
+   * The {@link MailErrorCode} when the failure was a coded mail error, else
+   * `"MAIL_TRANSPORT_ERROR"` for any other throw (a transport reject, a thrown
+   * builder, etc.). Branch on this, never on a message string.
+   */
+  readonly code: MailErrorCode | "MAIL_TRANSPORT_ERROR";
+}
+
+/**
+ * Fires once after the transport accepts an email. The hook is observational —
+ * its return value is ignored and a throw is swallowed, so a broken sink can
+ * neither fail nor retry a delivery.
+ */
+export type OnDelivered = (event: DeliveryEvent) => void | Promise<void>;
+
+/**
+ * Fires once when an attempt fails (a thrown builder/render, a header-injection
+ * refusal, or a transport reject) — *before* the error propagates to the queue
+ * for its retry decision. Swallowing a throw here keeps a broken sink from
+ * masking the real failure.
+ */
+export type OnFailed = (failure: DeliveryFailure) => void | Promise<void>;
+
+/**
  * What a renderer may hand back: HTML, or HTML paired with a plain-text
  * alternative. Returning `text` is how a renderer (e.g. react-email's
  * `render(el, { plainText: true })`) auto-fills the multipart text part — the
@@ -139,6 +195,21 @@ export interface MailerOptions {
    * mailer cannot park forever. Defaults to 10.
    */
   readonly maxUnknownMailerParks?: number;
+
+  /**
+   * Observability seam: called once after the transport accepts an email. The
+   * {@link DeliveryEvent} carries only operational ids (mailer name, job id,
+   * attempt) — never the recipient or body — so it is safe to forward to logs,
+   * metrics, or an OTLP span. A throw here is swallowed.
+   */
+  readonly onDelivered?: OnDelivered;
+
+  /**
+   * Observability seam: called once when an attempt fails, before the error
+   * propagates to the queue. The {@link DeliveryFailure} adds a coded reason to
+   * the PII-free {@link DeliveryEvent}. A throw here is swallowed.
+   */
+  readonly onFailed?: OnFailed;
 }
 
 const DEFAULT_PARK_MS = 60_000;
@@ -173,6 +244,10 @@ export class Mailer {
 
   private readonly maxUnknownMailerParks: number;
 
+  private readonly onDelivered: OnDelivered | undefined;
+
+  private readonly onFailed: OnFailed | undefined;
+
   private readonly builders = new Map<string, Builder>();
 
   constructor(options: MailerOptions) {
@@ -182,6 +257,8 @@ export class Mailer {
     this.defaultFrom = options.defaultFrom;
     this.unknownMailerParkMs = options.unknownMailerParkMs ?? DEFAULT_PARK_MS;
     this.maxUnknownMailerParks = options.maxUnknownMailerParks ?? DEFAULT_MAX_PARKS;
+    this.onDelivered = options.onDelivered;
+    this.onFailed = options.onFailed;
 
     this.queue.define(DELIVER_JOB, (payload, context) =>
       this.deliver(payload as unknown as DeliverPayload, context),
@@ -235,17 +312,59 @@ export class Mailer {
     };
   }
 
-  // Runs inside the worker: build → render → validate headers → hand to the transport.
+  // Runs inside the worker: build → render → validate headers → hand to the
+  // transport, wrapped in the delivery-observability envelope.
   private async deliver(payload: DeliverPayload, context: JobContext): Promise<void> {
+    const event: DeliveryEvent = {
+      mailerName: payload.mailer,
+      jobId: context.job.id,
+      attempt: context.attempt,
+    };
+
+    let delivered = false;
+
+    try {
+      // `attempt` returns false for a *successful* park (no email went out, the
+      // job is deliberately re-enqueued) so neither hook fires; true once the
+      // transport accepts. A genuine failure — including the finally-exhausted
+      // unknown mailer — throws and is reported below.
+      delivered = await this.attempt(payload, context.job.id);
+    } catch (error) {
+      // Report, then re-throw so the queue still makes its retry decision. The
+      // failure payload carries only the coded reason — no recipient or body.
+      await this.notify(this.onFailed, { ...event, code: failureCode(error) });
+
+      throw error;
+    }
+
+    if (delivered) {
+      await this.notify(this.onDelivered, event);
+    }
+  }
+
+  /**
+   * Do one delivery attempt. Returns `true` once the transport accepts the
+   * email; `false` for a successful unknown-mailer park (no email sent, job
+   * re-enqueued). Throws on a real failure — including an exhausted park.
+   */
+  private async attempt(payload: DeliverPayload, jobId: number): Promise<boolean> {
     const build = this.builders.get(payload.mailer);
 
     if (!build) {
       await this.parkUnknownMailer(payload);
 
-      return;
+      return false;
     }
 
-    const email = await build(payload.params);
+    await this.deliverEmail(build, payload.params, jobId);
+
+    return true;
+  }
+
+  // The delivery work itself: build the email, render it, validate every
+  // header-bound value, and hand a {@link RenderedEmail} to the transport.
+  private async deliverEmail(build: Builder, params: JsonValue, jobId: number): Promise<void> {
+    const email = await build(params);
     const rendered = await this.renderBody(email);
     const from = email.from ?? this.defaultFrom;
 
@@ -267,11 +386,31 @@ export class Mailer {
       to: email.to,
       subject: email.subject,
       html: rendered.html,
-      messageId: messageIdFor(context.job.id),
+      messageId: messageIdFor(jobId),
       ...(from === undefined ? {} : { from }),
       ...(text === undefined ? {} : { text }),
       ...(headers === undefined ? {} : { headers }),
     });
+  }
+
+  /**
+   * Run an observability hook, swallowing any throw.
+   *
+   * An observability sink is best-effort: a broken metrics call must never fail
+   * a real delivery or, worse, mask the actual failure that `onFailed` is
+   * reporting. So the hook's result is awaited but its rejection is discarded.
+   */
+  private async notify<E>(
+    hook: ((event: E) => void | Promise<void>) | undefined,
+    event: E,
+  ): Promise<void> {
+    if (hook === undefined) return;
+
+    try {
+      await hook(event);
+    } catch {
+      // Intentionally ignored — see method doc.
+    }
   }
 
   /**
@@ -331,6 +470,18 @@ export class Mailer {
 /** Derive the stable, retry-invariant message id from a delivery job's id. */
 export function messageIdFor(jobId: number): string {
   return `keel-mail-${jobId}`;
+}
+
+/**
+ * Classify a thrown delivery error into a stable code for {@link OnFailed}.
+ *
+ * A coded {@link MailError} (empty body, no renderer, header injection, the
+ * exhausted unknown-mailer) surfaces its own `code`; anything else — a transport
+ * reject, a thrown builder — collapses to `"MAIL_TRANSPORT_ERROR"`. The hook can
+ * thus branch on a closed set without ever parsing a message string.
+ */
+export function failureCode(error: unknown): MailErrorCode | "MAIL_TRANSPORT_ERROR" {
+  return error instanceof MailError ? error.code : "MAIL_TRANSPORT_ERROR";
 }
 
 /** Reject CR or LF anywhere in a header-bound value. */

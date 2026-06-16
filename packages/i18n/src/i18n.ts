@@ -17,7 +17,7 @@
 
 import { interpolate } from "./interpolate";
 
-import type { I18nOptions, Messages, Params } from "./types";
+import type { I18nOptions, Messages, OnMissing, Params } from "./types";
 
 /**
  * Read `key` from a catalog only if it is the catalog's OWN property.
@@ -42,10 +42,13 @@ export class I18n {
 
   private readonly fallback: boolean;
 
+  private readonly onMissing: OnMissing | undefined;
+
   constructor(options: I18nOptions) {
     this.catalogs = options.locales;
     this.defaultLocale = options.defaultLocale;
     this.fallback = options.fallback ?? true;
+    this.onMissing = options.onMissing;
   }
 
   /**
@@ -59,7 +62,14 @@ export class I18n {
     const template = this.lookup(locale, key);
 
     // Invariant: an unknown key surfaces as its own name, never an empty string.
-    if (template === undefined) return key;
+    if (template === undefined) {
+      // Observability seam: count the miss against the *requested* locale, then
+      // fall through to the visible key. A throwing counter must not break a
+      // translation, so its rejection is swallowed.
+      this.reportMissing(locale, key);
+
+      return key;
+    }
 
     return interpolate(template, params);
   }
@@ -87,6 +97,17 @@ export class I18n {
   }
 
   // -- internals ------------------------------------------------------------
+
+  /** Fire the missing-key counter, swallowing a throw so `t` stays total. */
+  private reportMissing(locale: string, key: string): void {
+    if (this.onMissing === undefined) return;
+
+    try {
+      this.onMissing(locale, key);
+    } catch {
+      // A broken counter must not break translation — see {@link OnMissing}.
+    }
+  }
 
   /** Resolve `key`'s template, consulting the default locale when allowed. */
   private lookup(locale: string, key: string): string | undefined {

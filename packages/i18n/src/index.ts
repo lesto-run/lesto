@@ -11,4 +11,4 @@ export { I18n } from "./i18n";
 
 export { interpolate } from "./interpolate";
 
-export type { I18nOptions, Messages, Params } from "./types";
+export type { I18nOptions, Messages, OnMissing, Params } from "./types";

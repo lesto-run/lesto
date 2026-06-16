@@ -40,16 +40,39 @@
  *
  * Delivery is **at-least-once**; every `RenderedEmail` carries a stable,
  * job-derived `messageId` so an idempotent transport can dedupe retries.
+ *
+ * ## Delivery observability
+ *
+ * Pass `onDelivered` / `onFailed` to watch deliveries without reading the queue:
+ *
+ *   new Mailer({ queue, transport,
+ *     onDelivered: ({ mailerName, jobId, attempt }) => metrics.inc("mail.sent", { mailerName }),
+ *     onFailed:    ({ mailerName, code }) => metrics.inc("mail.failed", { mailerName, code }),
+ *   });
+ *
+ * Both payloads are PII-free — mailer name, job id, attempt, and (on failure) a
+ * coded reason — so they are safe to forward to logs, counters, or an OTLP span.
  */
 
-export { Mailer, MailError, assertHeaders, assertNoInjection, messageIdFor } from "./mailer";
+export {
+  Mailer,
+  MailError,
+  assertHeaders,
+  assertNoInjection,
+  failureCode,
+  messageIdFor,
+} from "./mailer";
 export type {
+  DeliveryEvent,
+  DeliveryFailure,
   Email,
   EmailRenderer,
   MailerOptions,
   MailErrorCode,
   MailTemplate,
   MailTransport,
+  OnDelivered,
+  OnFailed,
   RenderedBody,
   RenderedEmail,
 } from "./mailer";

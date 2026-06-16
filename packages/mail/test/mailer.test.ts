@@ -1,11 +1,18 @@
 import Database from "better-sqlite3";
 import { installSchema, Queue } from "@keel/queue";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Mailer, MailError, assertHeaders, assertNoInjection, messageIdFor } from "../src/index";
+import {
+  Mailer,
+  MailError,
+  assertHeaders,
+  assertNoInjection,
+  failureCode,
+  messageIdFor,
+} from "../src/index";
 
 import type { SqlDatabase } from "@keel/queue";
-import type { RenderedEmail } from "../src/index";
+import type { DeliveryEvent, DeliveryFailure, RenderedEmail } from "../src/index";
 
 let raw: Database.Database;
 let queue: Queue;
@@ -288,5 +295,202 @@ describe("header guard helpers", () => {
 
   it("messageIdFor derives a stable id from a job id", () => {
     expect(messageIdFor(42)).toBe("keel-mail-42");
+  });
+
+  it("failureCode surfaces a MailError's code and collapses anything else", () => {
+    expect(failureCode(new MailError("MAIL_EMPTY_BODY", "x"))).toBe("MAIL_EMPTY_BODY");
+    expect(failureCode(new Error("socket reset"))).toBe("MAIL_TRANSPORT_ERROR");
+    expect(failureCode("not an error")).toBe("MAIL_TRANSPORT_ERROR");
+  });
+});
+
+describe("Mailer — delivery observability hooks", () => {
+  it("fires onDelivered with a PII-free { mailerName, jobId, attempt } after the transport accepts", async () => {
+    const delivered: DeliveryEvent[] = [];
+    const mailer = new Mailer({
+      queue,
+      transport,
+      defaultFrom: "hi@app.com",
+      onDelivered: (event) => {
+        delivered.push(event);
+      },
+    });
+    mailer.define("welcome", () => ({
+      to: "ada@example.com",
+      subject: "Top secret subject",
+      html: "<p>private body</p>",
+    }));
+
+    const id = await mailer.send("welcome", {});
+    expect((await queue.runOnce())?.outcome).toBe("done");
+
+    // Exactly the operational ids — nothing more.
+    expect(delivered).toEqual([{ mailerName: "welcome", jobId: id, attempt: 1 }]);
+
+    // The payload leaks no recipient address, subject, or body.
+    const blob = JSON.stringify(delivered);
+    expect(blob).not.toContain("ada@example.com");
+    expect(blob).not.toContain("Top secret subject");
+    expect(blob).not.toContain("private body");
+
+    // It really delivered, too.
+    expect(sent).toHaveLength(1);
+  });
+
+  it("fires onFailed (not onDelivered) with a coded reason when the build/render fails", async () => {
+    const delivered: DeliveryEvent[] = [];
+    const failed: DeliveryFailure[] = [];
+    const mailer = new Mailer({
+      queue,
+      transport,
+      onDelivered: (e) => {
+        delivered.push(e);
+      },
+      onFailed: (f) => {
+        failed.push(f);
+      },
+    });
+    // No html, no react → MAIL_EMPTY_BODY at render time.
+    mailer.define("broken", () => ({ to: "ada@example.com", subject: "S" }));
+
+    const id = await mailer.send("broken", {}, { maxAttempts: 1 });
+    expect((await queue.runOnce())?.outcome).toBe("failed");
+
+    expect(delivered).toHaveLength(0);
+    expect(failed).toEqual([
+      { mailerName: "broken", jobId: id, attempt: 1, code: "MAIL_EMPTY_BODY" },
+    ]);
+    // PII-free even on the failure path.
+    expect(JSON.stringify(failed)).not.toContain("ada@example.com");
+  });
+
+  it("classifies a transport reject as MAIL_TRANSPORT_ERROR and lets the queue retry", async () => {
+    const failed: DeliveryFailure[] = [];
+    const rejectingTransport = {
+      send: async (): Promise<void> => {
+        throw new Error("connection refused");
+      },
+    };
+    const mailer = new Mailer({
+      queue,
+      transport: rejectingTransport,
+      onFailed: (f) => {
+        failed.push(f);
+      },
+    });
+    mailer.define("rejects", () => ({ to: "x@example.com", subject: "S", html: "<p>.</p>" }));
+
+    await mailer.send("rejects", {}, { maxAttempts: 1 });
+    expect((await queue.runOnce())?.outcome).toBe("failed");
+
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.code).toBe("MAIL_TRANSPORT_ERROR");
+  });
+
+  it("threads the attempt number across an at-least-once retry", async () => {
+    // A zero backoff makes the retried job immediately eligible for runOnce.
+    const fastQueue = new Queue({ db: raw as unknown as SqlDatabase, baseBackoffMs: 0 });
+    const events: DeliveryEvent[] = [];
+    let calls = 0;
+    const flakyTransport = {
+      send: async (): Promise<void> => {
+        calls += 1;
+        if (calls === 1) throw new Error("transient");
+      },
+    };
+    const mailer = new Mailer({
+      queue: fastQueue,
+      transport: flakyTransport,
+      onDelivered: (e) => {
+        events.push({ ...e, mailerName: `delivered:${e.mailerName}` });
+      },
+      onFailed: (f) => {
+        events.push({ ...f, mailerName: `failed:${f.mailerName}` });
+      },
+    });
+    mailer.define("flaky", () => ({ to: "x@example.com", subject: "S", html: "<p>.</p>" }));
+
+    const id = await mailer.send("flaky", {}, { maxAttempts: 3 });
+
+    // Attempt 1 rejects → retry scheduled.
+    expect((await fastQueue.runOnce())?.outcome).toBe("retry");
+    // Attempt 2 succeeds.
+    expect((await fastQueue.runOnce())?.outcome).toBe("done");
+
+    expect(events).toEqual([
+      { mailerName: "failed:flaky", jobId: id, attempt: 1, code: "MAIL_TRANSPORT_ERROR" },
+      { mailerName: "delivered:flaky", jobId: id, attempt: 2 },
+    ]);
+  });
+
+  it("does NOT fire either hook for a parked unknown mailer", async () => {
+    const onDelivered = vi.fn();
+    const onFailed = vi.fn();
+    const mailer = new Mailer({
+      queue,
+      transport,
+      unknownMailerParkMs: 1_000,
+      onDelivered,
+      onFailed,
+    });
+
+    await mailer.send("ghost", {}, { maxAttempts: 1 });
+    expect((await queue.runOnce())?.outcome).toBe("done");
+
+    expect(onDelivered).not.toHaveBeenCalled();
+    expect(onFailed).not.toHaveBeenCalled();
+  });
+
+  it("fires onFailed when the unknown-mailer park budget is finally exhausted", async () => {
+    const failed: DeliveryFailure[] = [];
+    const mailer = new Mailer({
+      queue,
+      transport,
+      unknownMailerParkMs: 0,
+      maxUnknownMailerParks: 1,
+      onFailed: (f) => {
+        failed.push(f);
+      },
+    });
+    await mailer.send("ghost", {}, { maxAttempts: 1 });
+
+    // park 1 → done (no hook), park 2 → exceeds budget → failed (hook fires).
+    expect((await queue.runOnce())?.outcome).toBe("done");
+    expect((await queue.runOnce())?.outcome).toBe("failed");
+
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.code).toBe("MAIL_UNKNOWN_MAILER");
+  });
+
+  it("swallows a throwing onDelivered so the delivery still succeeds", async () => {
+    const mailer = new Mailer({
+      queue,
+      transport,
+      onDelivered: () => {
+        throw new Error("metrics sink down");
+      },
+    });
+    mailer.define("ok", () => ({ to: "x@example.com", subject: "S", html: "<p>.</p>" }));
+
+    await mailer.send("ok", {}, { maxAttempts: 1 });
+    // A broken hook must not turn a real delivery into a failure/retry.
+    expect((await queue.runOnce())?.outcome).toBe("done");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("swallows a throwing onFailed so the real error still reaches the queue", async () => {
+    const mailer = new Mailer({
+      queue,
+      transport,
+      onFailed: () => {
+        throw new Error("metrics sink down");
+      },
+    });
+    // MAIL_EMPTY_BODY is the real failure; the hook's throw must not mask it.
+    mailer.define("broken", () => ({ to: "x@example.com", subject: "S" }));
+
+    const id = await mailer.send("broken", {}, { maxAttempts: 1 });
+    expect((await queue.runOnce())?.outcome).toBe("failed");
+    expect((await queue.find(id))?.lastError).toContain("html` or `react");
   });
 });
