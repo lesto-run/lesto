@@ -18,6 +18,7 @@ export { Context } from "./handler-context";
 export { DEFAULT_RENDER_DEADLINE_MS } from "./render-page";
 export type {
   Layout,
+  PageCachePolicy,
   PageDef,
   PageLoad,
   PageMetadata,

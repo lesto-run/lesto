@@ -438,6 +438,43 @@ describe("private data → no-store page (review 2d)", () => {
 
     expect((await app.handle("GET", "/p")).headers["cache-control"]).toBe("private, no-store");
   });
+
+  // The per-route opt-out of the app-wide `private` cache cliff (ui-client item 8):
+  // an island-free marketing page on a private-data app should stay cacheable.
+  it("cache: public keeps a private-free page CACHEABLE on a private-data app (the opt-out)", async () => {
+    const app = keel()
+      // A private source is registered → the app-wide flag flips on…
+      .data(sessionSrc, () => ({ name: "Ada" }))
+      // …but THIS page binds nothing private and opts out, so it stays cacheable.
+      .page("/marketing", {
+        cache: "public",
+        component: () => createElement("main", null, "Welcome"),
+      });
+
+    expect((await app.handle("GET", "/marketing")).headers["cache-control"]).toBeUndefined();
+  });
+
+  it("without the opt-out, the same private-data app still stamps the page no-store", async () => {
+    // Same app shape, no `cache` override → the conservative app-wide rule holds.
+    const app = keel()
+      .data(sessionSrc, () => ({ name: "Ada" }))
+      .page("/marketing", { component: () => createElement("main", null, "Welcome") });
+
+    expect((await app.handle("GET", "/marketing")).headers["cache-control"]).toBe(
+      "private, no-store",
+    );
+  });
+
+  it("cache: auto is explicit shorthand for the default — still no-store on a private-data app", async () => {
+    const app = keel()
+      .data(sessionSrc, () => ({ name: "Ada" }))
+      .page("/me", {
+        cache: "auto",
+        component: () => createElement("main", null, createElement(Greeting, {})),
+      });
+
+    expect((await app.handle("GET", "/me")).headers["cache-control"]).toBe("private, no-store");
+  });
 });
 
 describe("renderPageResponse — default (no resolver, no client module)", () => {

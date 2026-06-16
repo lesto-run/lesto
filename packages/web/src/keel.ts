@@ -494,9 +494,20 @@ export class Keel {
     // inline their data with no client waterfall.
     const isStatic = payload.def.static === true;
 
+    // The per-route opt-out of the app-wide `private` cache cliff (ADR 0010 §3a).
+    // `this.hasPrivateData` is an APP-WIDE flag — registering any private source
+    // flips it — so without an override EVERY dynamic page on the app is stamped
+    // `private, no-store`, even an island-free marketing page that inlines nothing
+    // private. A page that declares `cache: "public"` asserts its island graph
+    // binds no private source (the author knows it; the framework can't, since the
+    // component is an arbitrary React function and a streamed page can't report
+    // what it inlined before its headers flush), so its document keeps the default
+    // cacheable policy. `"auto"`/unset follows the safe app-wide rule.
+    const privateData = payload.def.cache === "public" ? false : this.hasPrivateData;
+
     return (c) => {
       const options: RenderPageOptions = {
-        privateData: this.hasPrivateData,
+        privateData,
         ...(this.clientModuleSrc === undefined ? {} : { clientModule: this.clientModuleSrc }),
         ...(this.serverRenderer === undefined ? {} : { serverRenderer: this.serverRenderer }),
         ...(this.renderDeadlineMs === undefined ? {} : { renderDeadlineMs: this.renderDeadlineMs }),

@@ -89,7 +89,47 @@ export interface PageDef<Path extends string = string, Loaded = unknown> {
    * `no-store` (see `.data()`); only the cacheable shell is shared.
    */
   static?: boolean;
+
+  /**
+   * This page's cache posture — the per-route opt-out of the app-wide `private`
+   * cache cliff (ADR 0010 §3a).
+   *
+   * `private`-scoped data is tracked at the APP level (`keel().data(src, …)` with
+   * any private source flips a single flag), because a streamed page can't report
+   * which sources it inlined before its headers flush, and `Vary: Cookie` is not
+   * honored by shared caches — "do not store" is the only safe default. The
+   * conservative consequence: once ANY private source is registered, EVERY
+   * dynamically rendered page is stamped `Cache-Control: private, no-store`,
+   * including an island-free marketing page that inlines nothing private.
+   *
+   * This field lets a route opt back out. It is an explicit per-route OVERRIDE,
+   * not auto-detection: the page `component` is an arbitrary React function, so
+   * which `defineIsland`s it renders — and which sources they bind — is not
+   * knowable at registration without rendering, and not safe to derive mid-stream
+   * (see above). The author, who DOES know their page's island graph, asserts it:
+   *
+   * - `"auto"` (the default, or unset) — the app-wide rule above: stamp
+   *   `private, no-store` iff the app has a private source AND this page renders
+   *   dynamically. Safe-by-default.
+   * - `"public"` — assert this page's island graph binds NO private source, so
+   *   keep the default (cacheable) policy even on a private-data app. Use it for
+   *   the island-free (or shared-only) marketing page the app-wide flag would
+   *   otherwise make uncacheable. It only SUPPRESSES the page-document stamp; the
+   *   data endpoints (`/__keel/data/<name>`) keep their own per-source headers.
+   *
+   * A `static` page is already cacheable (no resolver runs), so `cache` is moot
+   * there and ignored.
+   */
+  cache?: PageCachePolicy;
 }
+
+/**
+ * A page's per-route cache posture (see {@link PageDef.cache}).
+ *
+ * `"auto"` follows the app-wide private-data rule (safe default); `"public"`
+ * asserts the page binds no private source and stays cacheable.
+ */
+export type PageCachePolicy = "auto" | "public";
 
 /**
  * The props a page component receives, inferred from its `load`.
