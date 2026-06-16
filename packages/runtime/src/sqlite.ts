@@ -95,7 +95,11 @@ export async function openSqlite(
 
       return {
         run: async (params = []) => statement.run(...params),
-        get: async (params = []) => statement.get(...params),
+        // A miss is `undefined`, never the driver's `null`: the SQL stores
+        // (sessions, rate limits, cache) cast `.get()` to `… | undefined` and
+        // guard on `undefined`, and the pg adapter already normalizes the same
+        // way (`rows[0] ?? undefined`). Honor that one contract on both drivers.
+        get: async (params = []) => statement.get(...params) ?? undefined,
         all: async (params = []) => statement.all(...params),
       };
     },

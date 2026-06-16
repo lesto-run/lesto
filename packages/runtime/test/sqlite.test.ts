@@ -43,6 +43,11 @@ describe("openSqlite", () => {
     const all = await db.prepare("SELECT name FROM t").all();
     expect(all).toEqual([{ name: "ada" }]);
 
+    // A miss normalizes to `undefined` (not the driver's `null`) — the contract
+    // every SQL store guards on.
+    const missing = await db.prepare("SELECT name FROM t WHERE id = ?").get([999]);
+    expect(missing).toBeUndefined();
+
     close();
   });
 
