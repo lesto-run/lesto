@@ -89,6 +89,19 @@ export interface RenderedPage {
   /** The app's response status — the build fails the page if it is not 2xx. */
   readonly status: number;
 
+  /**
+   * The page's raw bytes — the canonical, lossless payload written through the
+   * sink. A static site is the live app rendered offline, so a route that
+   * answers with binary (a generated PNG, a font) must land byte-identical;
+   * carrying bytes here is what keeps that round-trip exact.
+   */
+  readonly body: Uint8Array;
+
+  /**
+   * The page decoded as UTF-8 text — a convenience view for the common HTML
+   * route (and the manifest/log). Derived from {@link RenderedPage.body}; for a
+   * binary route it is a lossy decode, so the sink writes `body`, never this.
+   */
   readonly html: string;
 }
 
@@ -96,6 +109,12 @@ export interface RenderedPage {
  * Where prerendered files go.
  *
  * The default writes to the local filesystem ({@link nodeSink}), but any sink —
- * S3, an in-memory map, a CDN upload — satisfies the same shape.
+ * S3, an in-memory map, a CDN upload — satisfies the same shape. The seam
+ * carries **bytes** so a prerendered binary route is not decoded (and corrupted)
+ * on its way to disk; a `string` convenience overload UTF-8-encodes text for the
+ * common HTML case, so every existing string call site keeps working unchanged.
  */
-export type OutputSink = (path: string, contents: string) => Promise<void>;
+export interface OutputSink {
+  (path: string, contents: Uint8Array): Promise<void>;
+  (path: string, contents: string): Promise<void>;
+}

@@ -32,12 +32,13 @@ function echoHandler(): { handle: PageHandler; calls: string[] } {
   return { handle, calls };
 }
 
-// A capturing sink: each written page lands in the map, keyed by its path.
+// A capturing sink: each written page lands in the map, keyed by its path. The
+// sink carries bytes, so the map decodes them to a string for easy assertions.
 function mapSink(): { sink: OutputSink; written: Map<string, string> } {
   const written = new Map<string, string>();
 
-  const sink: OutputSink = (path, contents) => {
-    written.set(path, contents);
+  const sink: OutputSink = (path: string, contents: Uint8Array | string) => {
+    written.set(path, typeof contents === "string" ? contents : new TextDecoder().decode(contents));
 
     return Promise.resolve();
   };
@@ -132,15 +133,23 @@ describe("prerenderSite", () => {
 
     const pages = await prerenderSite(site, handle);
 
-    // basePath "/" leaves routes as-is; "/" stays "/".
+    // basePath "/" leaves routes as-is; "/" stays "/". Each page also carries the
+    // raw bytes the sink will write; `html` is their UTF-8 view.
     expect(calls).toEqual(["GET /", "GET /about"]);
     expect(pages).toEqual([
-      { path: "/", outputPath: "marketing/index.html", status: 200, html: "<html>/</html>" },
+      {
+        path: "/",
+        outputPath: "marketing/index.html",
+        status: 200,
+        html: "<html>/</html>",
+        body: new TextEncoder().encode("<html>/</html>"),
+      },
       {
         path: "/about",
         outputPath: "marketing/about/index.html",
         status: 200,
         html: "<html>/about</html>",
+        body: new TextEncoder().encode("<html>/about</html>"),
       },
     ]);
   });
@@ -183,67 +192,122 @@ describe("prerenderSite", () => {
   });
 
   // A static site is the live app rendered offline, so prerendering must capture
-  // whatever body arm the handler produced — string, bytes, stream, or none — and
-  // write each as HTML. These four cases pin down `bodyToString`'s every branch.
+  // whatever body arm the handler produced — string, bytes, stream, or none — as
+  // raw bytes. These cases pin down every branch of `bodyToBytes`.
   const onePage: StaticSite = { name: "marketing", render: "static", basePath: "/", pages: ["/"] };
 
-  it("captures a string body verbatim", async () => {
+  it("captures a string body verbatim, as UTF-8 bytes", async () => {
     const [page] = await prerenderSite(onePage, bodyHandler("<html>hi</html>"));
 
     expect(page?.html).toBe("<html>hi</html>");
+    expect(page?.body).toEqual(new TextEncoder().encode("<html>hi</html>"));
   });
 
-  it("captures an absent body as the empty string", async () => {
+  it("captures an absent body as empty bytes", async () => {
     // No body (e.g. a 204) becomes an empty file, not the string "undefined".
     const [page] = await prerenderSite(onePage, bodyHandler(undefined));
 
     expect(page?.html).toBe("");
+    expect(page?.body).toEqual(new Uint8Array(0));
   });
 
-  it("decodes a Uint8Array body as UTF-8", async () => {
+  it("passes a Uint8Array body through untouched", async () => {
     const bytes = new TextEncoder().encode("<html>bytes</html>");
     const [page] = await prerenderSite(onePage, bodyHandler(bytes));
 
+    expect(page?.body).toBe(bytes);
     expect(page?.html).toBe("<html>bytes</html>");
   });
 
-  it("drains a multi-chunk ReadableStream body in order", async () => {
+  it("preserves a binary (non-UTF-8) body bit-exact", async () => {
+    // Bytes a string seam would corrupt: a PNG signature, a lone 0xFF, a NUL.
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]);
+    const [page] = await prerenderSite(onePage, bodyHandler(png));
+
+    expect(Array.from(page?.body ?? [])).toEqual(Array.from(png));
+  });
+
+  it("drains a multi-chunk ReadableStream body in order, concatenating bytes", async () => {
     // The `.page` routes stream React SSR this way; the prerenderer must read the
-    // stream to completion and concatenate the chunks in the order they arrive.
-    const encoder = new TextEncoder();
-    const chunks = ["<html>", "streamed", "</html>"];
+    // stream to completion and concatenate the chunks in the order they arrive —
+    // including chunks that are not valid UTF-8 on their own.
+    const chunks = [
+      new TextEncoder().encode("<html>"),
+      new Uint8Array([0x00, 0xff]),
+      new TextEncoder().encode("</html>"),
+    ];
 
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        for (const chunk of chunks) controller.enqueue(chunk);
         controller.close();
       },
     });
 
     const [page] = await prerenderSite(onePage, bodyHandler(stream));
 
-    expect(page?.html).toBe("<html>streamed</html>");
+    const expected = new Uint8Array([
+      ...new TextEncoder().encode("<html>"),
+      0x00,
+      0xff,
+      ...new TextEncoder().encode("</html>"),
+    ]);
+    expect(Array.from(page?.body ?? [])).toEqual(Array.from(expected));
   });
 });
 
 describe("writePages", () => {
-  it("hands every page to the sink", async () => {
-    const written = new Map<string, string>();
-    const sink: OutputSink = (path, contents) => {
-      written.set(path, contents);
+  it("hands every page's bytes to the sink", async () => {
+    const written = new Map<string, Uint8Array>();
+    const sink: OutputSink = (path: string, contents: Uint8Array | string) => {
+      written.set(
+        path,
+        typeof contents === "string" ? new TextEncoder().encode(contents) : contents,
+      );
 
       return Promise.resolve();
     };
 
     const pages: RenderedPage[] = [
-      { path: "/", outputPath: "a/index.html", status: 200, html: "<a>" },
-      { path: "/b", outputPath: "a/b/index.html", status: 200, html: "<b>" },
+      {
+        path: "/",
+        outputPath: "a/index.html",
+        status: 200,
+        html: "<a>",
+        body: new TextEncoder().encode("<a>"),
+      },
+      {
+        path: "/b",
+        outputPath: "a/b/index.html",
+        status: 200,
+        html: "<b>",
+        body: new TextEncoder().encode("<b>"),
+      },
     ];
 
     await writePages(pages, sink);
 
-    expect(written.get("a/index.html")).toBe("<a>");
-    expect(written.get("a/b/index.html")).toBe("<b>");
+    // The sink receives the raw `body`, not the decoded `html` view.
+    expect(written.get("a/index.html")).toEqual(new TextEncoder().encode("<a>"));
+    expect(written.get("a/b/index.html")).toEqual(new TextEncoder().encode("<b>"));
+  });
+
+  it("writes a binary page's bytes through the sink bit-exact", async () => {
+    const captured: Uint8Array[] = [];
+    const sink: OutputSink = (_path, contents: Uint8Array | string) => {
+      captured.push(contents as Uint8Array);
+
+      return Promise.resolve();
+    };
+
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+    const pages: RenderedPage[] = [
+      { path: "/logo.png", outputPath: "a/logo.png", status: 200, html: "", body: png },
+    ];
+
+    await writePages(pages, sink);
+
+    expect(captured[0]).toBe(png);
   });
 });
 
@@ -254,7 +318,7 @@ describe("nodeSink", () => {
     if (root) await rm(root, { recursive: true, force: true });
   });
 
-  it("writes a page to disk, creating its directories", async () => {
+  it("writes a page to disk, creating its directories (string convenience arm)", async () => {
     root = await mkdtemp(join(tmpdir(), "keel-sites-"));
 
     const sink = nodeSink(root);
@@ -262,6 +326,18 @@ describe("nodeSink", () => {
 
     const written = await readFile(join(root, "marketing/about/index.html"), "utf8");
     expect(written).toBe("<html>about</html>");
+  });
+
+  it("writes binary bytes to disk bit-exact (the canonical byte arm)", async () => {
+    root = await mkdtemp(join(tmpdir(), "keel-sites-"));
+
+    const sink = nodeSink(root);
+    // Bytes a UTF-8 string seam would corrupt: a PNG signature, a lone 0xFF, a NUL.
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]);
+    await sink("assets/logo.png", png);
+
+    const written = await readFile(join(root, "assets/logo.png"));
+    expect(Array.from(written)).toEqual(Array.from(png));
   });
 
   it("refuses to write outside the output root", async () => {

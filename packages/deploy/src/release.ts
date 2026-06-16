@@ -105,11 +105,22 @@ export async function shipRelease(
   assertVersionSegment(options.version);
 
   // The same publish loop a plain ship runs, with every key staged under the
-  // release's immutable prefix.
+  // release's immutable prefix. `shipStatic` only ever hands `put` the bytes it
+  // read, so the staged view forwards the canonical byte arm of the seam.
+  const stage = (key: string): string => `${RELEASES_DIR}/${options.version}/${key}`;
+
   const staged: ShipDeps = {
     read: store.read,
-    put: (key, contents, contentType) =>
-      store.put(`${RELEASES_DIR}/${options.version}/${key}`, contents, contentType),
+    // The seam's `put` is overloaded (bytes or text); a forwarder must accept the
+    // union to satisfy it. Re-narrow to the byte overload — the only arm a string
+    // can take here is still a valid `store.put` call — so the prefixed put has a
+    // single path, no untestable branch.
+    put: (key: string, contents: Uint8Array | string, contentType: string): Promise<void> =>
+      (store.put as (k: string, c: Uint8Array | string, ct: string) => Promise<void>)(
+        stage(key),
+        contents,
+        contentType,
+      ),
   };
 
   const { site, routes } = await shipStatic(target, outRoot, staged);

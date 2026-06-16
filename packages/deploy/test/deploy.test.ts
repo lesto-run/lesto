@@ -155,17 +155,20 @@ describe("planDeploy", () => {
 });
 
 describe("shipStatic", () => {
-  it("reads each file and puts it through the injected uploader, in plan order", async () => {
+  it("reads each file as bytes and puts it through the injected uploader, in plan order", async () => {
     const plan = planDeploy([marketing], [marketingManifest]);
     const target = staticTarget(plan, "marketing");
 
-    // An in-memory uploader: capture every put, serve a body keyed by file.
-    const puts: { key: string; contents: string; contentType: string }[] = [];
+    // An in-memory uploader: capture every put as bytes, serve a body keyed by file.
+    const puts: { key: string; contents: Uint8Array; contentType: string }[] = [];
 
     const deps: ShipDeps = {
-      read: (outRoot, file) => Promise.resolve(`<${outRoot}:${file}>`),
-      put: (key, contents, contentType) => {
-        puts.push({ key, contents, contentType });
+      read: (outRoot, file) => Promise.resolve(new TextEncoder().encode(`<${outRoot}:${file}>`)),
+      put: (key: string, contents: Uint8Array | string, contentType: string) => {
+        // The seam carries bytes; normalize to assert on a decoded view.
+        const bytes = typeof contents === "string" ? new TextEncoder().encode(contents) : contents;
+
+        puts.push({ key, contents: bytes, contentType });
 
         return Promise.resolve();
       },
@@ -175,7 +178,13 @@ describe("shipStatic", () => {
 
     expect(result).toEqual({ site: "marketing", routes: ["/", "/about"] });
 
-    expect(puts).toEqual([
+    expect(
+      puts.map((put) => ({
+        key: put.key,
+        contents: new TextDecoder().decode(put.contents),
+        contentType: put.contentType,
+      })),
+    ).toEqual([
       {
         key: "marketing/index.html",
         contents: "<out:marketing/index.html>",
@@ -187,6 +196,37 @@ describe("shipStatic", () => {
         contentType: "text/html; charset=utf-8",
       },
     ]);
+  });
+
+  it("passes a Uint8Array body through untouched (the canonical byte arm)", async () => {
+    const target: StaticTarget = {
+      kind: "static",
+      site: "assets",
+      basePath: "/",
+      routing: { basePath: "/", mode: "static" },
+      files: [{ file: "logo.png", route: "/logo.png", contentType: "image/png" }],
+    };
+
+    // A "binary" payload that includes the bytes a UTF-8 round-trip would mangle:
+    // a lone 0xFF/0xFE and an embedded NUL.
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x10]);
+
+    let captured: Uint8Array | undefined;
+
+    const deps: ShipDeps = {
+      read: () => Promise.resolve(png),
+      put: (_key, contents: Uint8Array | string) => {
+        captured = contents as Uint8Array;
+
+        return Promise.resolve();
+      },
+    };
+
+    await shipStatic(target, "out", deps);
+
+    // Bit-exact: same instance's bytes survive, not a decoded-then-reencoded copy.
+    expect(captured).toBeInstanceOf(Uint8Array);
+    expect(Array.from(captured ?? [])).toEqual(Array.from(png));
   });
 });
 
@@ -221,12 +261,33 @@ describe("nodeUploader", () => {
     expect(await readFile(join(distRoot, "page.html"), "utf8")).toBe("<h1>hi</h1>");
   });
 
-  it("creates nested directories under the dist root as needed", async () => {
+  it("creates nested directories under the dist root as needed (string convenience arm)", async () => {
     const deps = nodeUploader(distRoot);
 
+    // The string overload: hand the seam HTML text, it lands as UTF-8 on disk.
     await deps.put("a/b/c.html", "nested", "text/html; charset=utf-8");
 
     expect(await readFile(join(distRoot, "a/b/c.html"), "utf8")).toBe("nested");
+  });
+
+  it("round-trips a binary asset bit-exact through read then put", async () => {
+    // Bytes that a UTF-8 string seam would corrupt: a PNG signature, a lone 0xFF,
+    // and an embedded NUL.
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x00, 0xff, 0xfe]);
+    await writeFile(join(outRoot, "logo.png"), png);
+
+    const target: StaticTarget = {
+      kind: "static",
+      site: "assets",
+      basePath: "/",
+      routing: { basePath: "/", mode: "static" },
+      files: [{ file: "logo.png", route: "/logo.png", contentType: "image/png" }],
+    };
+
+    await shipStatic(target, outRoot, nodeUploader(distRoot));
+
+    const out = await readFile(join(distRoot, "logo.png"));
+    expect(Array.from(out)).toEqual(Array.from(png));
   });
 
   it("refuses to publish a file that escapes the dist root", async () => {
@@ -262,8 +323,8 @@ function memoryStore(): {
   const pointer: { current?: string; flips: number } = { flips: 0 };
 
   const store: ReleaseStore = {
-    read: (_outRoot, file) => Promise.resolve(`bytes of ${file}`),
-    put: (key) => {
+    read: (_outRoot, file) => Promise.resolve(new TextEncoder().encode(`bytes of ${file}`)),
+    put: (key: string) => {
       puts.push(key);
 
       return Promise.resolve();

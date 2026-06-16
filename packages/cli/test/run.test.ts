@@ -114,7 +114,10 @@ function depsWith(overrides: Partial<CliDeps> = {}): CliDeps {
     createEntry: vi.fn(() => Promise.resolve()),
     loadSites: () => Promise.resolve([]),
     sink: () => () => Promise.resolve(),
-    uploader: () => ({ read: () => Promise.resolve(""), put: () => Promise.resolve() }),
+    uploader: () => ({
+      read: () => Promise.resolve(new Uint8Array()),
+      put: () => Promise.resolve(),
+    }),
     releaseStore: () => memoryReleaseStore().store,
     now: () => 0,
     out: (line) => lines.push(line),
@@ -133,9 +136,12 @@ function memoryReleaseStore(): {
   const pointer: { current?: string } = {};
 
   const store: ReleaseStore = {
-    read: (_outRoot, file) => Promise.resolve(`bytes:${file}`),
-    put: (key, contents) => {
-      shipped.set(key, contents);
+    read: (_outRoot, file) => Promise.resolve(new TextEncoder().encode(`bytes:${file}`)),
+    put: (key, contents: Uint8Array | string) => {
+      shipped.set(
+        key,
+        typeof contents === "string" ? contents : new TextDecoder().decode(contents),
+      );
 
       return Promise.resolve();
     },
@@ -390,8 +396,11 @@ function recordingSink(): {
   const sink = (outDir: string): OutputSink => {
     outDirs.push(outDir);
 
-    return (path, contents) => {
-      written.set(path, contents);
+    return (path: string, contents: Uint8Array | string) => {
+      written.set(
+        path,
+        typeof contents === "string" ? contents : new TextDecoder().decode(contents),
+      );
 
       return Promise.resolve();
     };
@@ -825,9 +834,12 @@ function recordingUploader(): {
     distDirs.push(distDir);
 
     return {
-      read: (_outRoot, file) => Promise.resolve(`bytes:${file}`),
-      put: (key, contents) => {
-        shipped.set(key, contents);
+      read: (_outRoot, file) => Promise.resolve(new TextEncoder().encode(`bytes:${file}`)),
+      put: (key, contents: Uint8Array | string) => {
+        shipped.set(
+          key,
+          typeof contents === "string" ? contents : new TextDecoder().decode(contents),
+        );
 
         return Promise.resolve();
       },
