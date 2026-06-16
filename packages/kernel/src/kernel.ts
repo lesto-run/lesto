@@ -18,7 +18,7 @@
  * delegation.
  */
 
-import type { Dialect } from "@keel/db";
+import type { Dialect, SqlDatabase } from "@keel/db";
 
 import { Migrator } from "@keel/migrate";
 import type { MigrationEntry } from "@keel/migrate";
@@ -28,26 +28,27 @@ import type { Keel, KeelResponse, UiDialect } from "@keel/web";
 import { installDurableSchema } from "./secure-stack";
 
 /**
- * The one database handle the kernel threads through the migrator.
+ * The one database handle the kernel threads through the migrator — the canonical
+ * `@keel/db` SQL surface, re-exported here under the kernel's own name.
  *
  * `@keel/migrate` consumes `exec` (for DDL) + `prepare` (for the bookkeeping
  * table); `@keel/db` consumes the same shape for the runtime query layer. A
  * single better-sqlite3 (or future Postgres) adapter satisfies both
- * structurally, so the kernel hands the same handle to the migrator and the
- * app wraps it in `createDb(handle)` for its controllers.
+ * structurally, so the kernel hands the same handle to the migrator and the app
+ * wraps it in `createDb(handle)` for its controllers.
+ *
+ * It used to be a *separate* interface with the identical shape, which made the
+ * kernel's handle and `@keel/queue`'s `SqlDatabase` nominally distinct: feeding
+ * one `openSqlite` handle into both `createApp` and `new Queue({ db })` forced a
+ * `handle as unknown as SqlDatabase` cast even though the methods matched. It is
+ * now an alias of `@keel/db`'s `SqlDatabase` (which `@keel/queue` re-exports too),
+ * so the same handle flows into `createDb`, `createApp`, `new Queue({ db })`, and
+ * every `installSchema` with NO cast. The kernel's `schemas` seam closes over the
+ * same type — see {@link KeelAppConfig.schemas}. The alias is retained (rather
+ * than dropped for a bare re-export) so existing imports of `KernelDatabase`
+ * keep resolving.
  */
-export interface KernelDatabase {
-  exec(sql: string): Promise<void>;
-
-  prepare(sql: string): {
-    run(params?: unknown[]): Promise<{ changes: number; lastInsertRowid?: number | bigint }>;
-    get(params?: unknown[]): Promise<unknown>;
-    all(params?: unknown[]): Promise<unknown[]>;
-  };
-
-  /** Run `fn` in one transaction on one connection (ADR 0006); see `@keel/db`. */
-  transaction<T>(fn: (tx: KernelDatabase) => Promise<T>): Promise<T>;
-}
+export type KernelDatabase = SqlDatabase;
 
 /**
  * Everything needed to assemble an app: a composed `keel()` app, its database,
@@ -106,6 +107,35 @@ export interface KeelAppConfig {
    * tables. Defaults to `true`.
    */
   durable?: boolean;
+
+  /**
+   * Extra schema installers a battery brings to the table — run in order against
+   * the same `db`, right after migrations (and the durable-store install).
+   *
+   * This is the kernel seam for first-class batteries that ride a SQL table of
+   * their own but are NOT part of the app's `migrations`. `@keel/queue` is the
+   * motivating case: `@keel/mail` enqueues delivery jobs onto the queue, so a
+   * mail app needs the `keel_jobs` table before the first `mailer.send`. Without
+   * this seam the app had to *remember* to call `@keel/queue`'s `installSchema`
+   * separately, or the first send hit a missing table. Now it declares the
+   * dependency once:
+   *
+   *   import { installSchema } from "@keel/queue";
+   *   await createApp({ db, app, migrations, schemas: [installSchema] });
+   *
+   * Each installer takes the same {@link KernelDatabase} handle `createApp` runs
+   * everything else against — so one `openSqlite` handle feeds `createDb`,
+   * `createApp`, and `new Queue({ db })` with no cast (the unified `@keel/db` SQL
+   * surface). Installers are expected to be idempotent (`IF NOT EXISTS`), like
+   * the durable-store install, so they are safe at every boot. They run AFTER
+   * `installDurableSchema` and in array order, awaited serially, so a later
+   * installer may depend on an earlier one's tables.
+   *
+   * Orthogonal to {@link durable}: `durable` governs only the built-in
+   * session/rate-limit schemas; `schemas` is the open-ended list a battery opts
+   * into. Absent (or empty) means no extra installers run.
+   */
+  schemas?: ReadonlyArray<(db: KernelDatabase) => Promise<void>>;
 }
 
 /** A booted application: a request handler plus the record of what migrations ran. */
@@ -151,6 +181,16 @@ export async function createApp(config: KeelAppConfig): Promise<App> {
   // A ternary (not a bare `if`) so coverage scores both arms — the install and
   // the explicit `durable: false` skip — without an un-instrumentable implicit else.
   await (config.durable === false ? Promise.resolve() : installDurableSchema(config.db));
+
+  // Then the battery-declared installers (Finding #2): a mail app passes
+  // `schemas: [installSchema]` so `@keel/queue`'s `keel_jobs` table exists before
+  // the first `mailer.send` enqueues. Run serially, in array order, against the
+  // same handle — a later installer may build on an earlier one's tables, and the
+  // serial await keeps the boot order deterministic. `?? []` so the absent case is
+  // a zero-iteration loop, not an implicit branch coverage can't reach.
+  for (const installSchema of config.schemas ?? []) {
+    await installSchema(config.db);
+  }
 
   // The keel() app owns dispatch (routes, pages, and middleware all live on it),
   // so the kernel just delegates to app.handle once the schema is ready.

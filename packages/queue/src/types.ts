@@ -81,39 +81,14 @@ export type Dialect = "sqlite" | "postgres";
 
 // ---- the minimal SQL surface (driver-agnostic) ----
 //
-// The terminals are **asynchronous** (ADR 0006): `run` / `get` / `all` and
-// `exec` return Promises so a networked Postgres pool — which speaks over a
-// socket — can back the same surface as in-process SQLite. `prepare(sql)` stays
-// *synchronous*: it only compiles a statement object; binding + execution is
-// what awaits. There is no sync escape hatch.
-//
-// Parameters are *positional* (an ordered array), to keep the contract scalar
-// across SQLite (variadic binds) and Postgres (`$1`, `$2`). Where a value is
-// reused inside one statement, it is repeated at each `?` position.
-
-export interface SqlStatement {
-  /**
-   * Execute a write. `lastInsertRowid` is **optional**: SQLite supplies it
-   * natively, but Postgres has no implicit row id (use `RETURNING id`), so a
-   * driver may omit it.
-   */
-  run(params?: unknown[]): Promise<{ changes: number; lastInsertRowid?: number | bigint }>;
-  get(params?: unknown[]): Promise<unknown>;
-  all(params?: unknown[]): Promise<unknown[]>;
-}
-
-export interface SqlDatabase {
-  exec(sql: string): Promise<void>;
-
-  prepare(sql: string): SqlStatement;
-
-  /**
-   * Run `fn` inside a single transaction on a single connection. Commits when
-   * `fn` resolves, rolls back when it rejects (re-raising the original error).
-   *
-   * First-class because correctness depends on it: on a pooled driver, separate
-   * `exec("BEGIN")` / `exec("COMMIT")` calls would land on *different* pooled
-   * connections and the transaction would silently wrap nothing.
-   */
-  transaction<T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<T>;
-}
+// This surface is OWNED by `@keel/db`, not redeclared here. The queue once
+// carried its own structurally-identical copy, which made `@keel/db`'s
+// `SqlDatabase` and the queue's two *nominally distinct* types: sharing one
+// `openSqlite` handle across `createDb` and `new Queue({ db })` forced a
+// `handle as unknown as SqlDatabase` cast even though the shapes matched to the
+// method. Re-exporting the canonical `@keel/db` types instead means a single
+// handle flows into `createDb`, `new Queue({ db })`, and `installSchema` with NO
+// cast (ADR 0006's async terminals, positional params, and sync `prepare` are
+// all defined there). `@keel/queue` adding `@keel/db` to its dependencies is the
+// only cost; the queue still speaks the same minimal surface, just by reference.
+export type { SqlDatabase, SqlStatement } from "@keel/db";

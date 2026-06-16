@@ -18,7 +18,6 @@ import {
 } from "../src/index";
 
 import type { MailingLists } from "../src/index";
-import type { SqlDatabase as QueueDatabase } from "@keel/queue";
 import type { RenderedEmail } from "@keel/mail";
 
 // ---------------------------------------------------------------------------
@@ -106,10 +105,12 @@ beforeEach(async () => {
   // in the test fixture.
   await new Migrator(sql, [mailingListsMigration]).migrate();
 
-  // The queue rides the SAME async adapter as @keel/db — one connection, one seam.
-  await installSchema(sql as unknown as QueueDatabase);
+  // The queue rides the SAME async adapter as @keel/db — one connection, one
+  // seam, and now one TYPE: `@keel/queue` re-exports `@keel/db`'s `SqlDatabase`,
+  // so the handle flows straight into `installSchema` and `new Queue` — no cast.
+  await installSchema(sql);
 
-  queue = new Queue({ db: sql as unknown as QueueDatabase });
+  queue = new Queue({ db: sql });
   mailer = new Mailer({ queue, transport });
 
   // The broadcast template spreads `params.headers` into the email it returns —

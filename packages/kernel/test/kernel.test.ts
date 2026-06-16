@@ -126,6 +126,51 @@ describe("createApp", () => {
     expect(app.migrationsApplied).toEqual([]);
   });
 
+  it("runs config.schemas installers in order after migrate, against the same db", async () => {
+    // The Finding #2 seam: a battery (e.g. @keel/queue for @keel/mail) declares its
+    // own table via `schemas`, run after migrations against the same handle. Prove
+    // order (a later installer sees an earlier one's table) AND that the table the
+    // installer created is real and queryable through the migrated handle.
+    const order: string[] = [];
+
+    const app = await createApp({
+      db,
+      app: keel().get("/ping", (c) => c.text("pong")),
+      migrations: [createPosts],
+      schemas: [
+        async (database) => {
+          order.push("first");
+          await database.exec("CREATE TABLE IF NOT EXISTS battery_a (id INTEGER PRIMARY KEY)");
+        },
+        async (database) => {
+          // Depends on the first installer's table existing — proves serial order.
+          order.push("second");
+          await database.exec("INSERT INTO battery_a (id) VALUES (1)");
+        },
+      ],
+    });
+
+    // Migrations ran first; the seam did not disturb the applied list.
+    expect(app.migrationsApplied).toEqual(["001_create_posts"]);
+    // Installers ran in array order.
+    expect(order).toEqual(["first", "second"]);
+    // The installer's table is real on the same handle and carries the second
+    // installer's row — one db threaded through migrate + every schema installer.
+    const row = await db.prepare("SELECT COUNT(*) AS n FROM battery_a").get();
+    expect((row as { n: number }).n).toBe(1);
+  });
+
+  it("runs no schema installers when config.schemas is absent", async () => {
+    // The absent case is a zero-iteration loop, not a thrown error — booting an
+    // app with no batteries declared must touch no extra tables.
+    const app = await createApp({
+      db,
+      app: keel().get("/ping", (c) => c.text("pong")),
+    });
+
+    expect((await app.handle("GET", "/ping")).body).toBe("pong");
+  });
+
   it("delegates an unmatched path to a plain 404", async () => {
     const app = await createApp({ db, app: keel().get("/ping", (c) => c.text("pong")) });
 
