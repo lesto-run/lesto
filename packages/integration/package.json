@@ -22,6 +22,7 @@
     "@keel/ratelimit": "workspace:*",
     "@keel/kernel": "workspace:*",
     "@keel/migrate": "workspace:*",
+    "@keel/observability": "workspace:*",
     "@keel/pg": "workspace:*",
     "@keel/router": "workspace:*",
     "@keel/runtime": "workspace:*",

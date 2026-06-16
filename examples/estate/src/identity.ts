@@ -36,6 +36,8 @@ import { createIdentity, insertUser, usersMigration } from "@keel/identity";
 import { findUserByEmail } from "@keel/identity";
 import type { Identity } from "@keel/identity";
 
+import type { TraceSeams } from "@keel/observability";
+
 import { isDemoMode } from "./edge";
 import { createDemoMailer } from "./emails/mailer";
 import type { SentEmail } from "./emails/mailer";
@@ -134,7 +136,18 @@ async function seedDemoAccounts(db: Db): Promise<void> {
  * Node, `bun:sqlite` under Bun) — which is what lets `keel.app.ts` boot under
  * either runtime. That async open is why this function is async.
  */
-export async function buildIdentity(secret?: string): Promise<{
+export async function buildIdentity(
+  secret?: string,
+  /**
+   * The tracer's seam hooks (operability-dx item 3). When wired, every executed
+   * query becomes a `db.query` span, every auth lifecycle event an
+   * `identity.<type>` span, and every rendered email a `mail.delivered` span —
+   * each a child of the in-flight request span. Absent (a static build, a unit
+   * test) runs untraced, exactly as before. This is the canonical dogfood: the
+   * SAME seam signatures a production app wires.
+   */
+  seams?: TraceSeams,
+): Promise<{
   identity: Identity;
   handle: SqlDatabase;
   close: () => void;
@@ -148,16 +161,28 @@ export async function buildIdentity(secret?: string): Promise<{
   await new Migrator(sql, [usersMigration]).migrate();
   await installSessionSchema(sql);
   await installRateLimitSchema(sql);
-  const db = createDb(sql);
+
+  // Wire `db.onQuery` to the tracer: every executed query becomes a child span of
+  // the request that ran it. The seeded-account queries above run before the db
+  // is instrumented (boot work, not a request), so only request-time queries
+  // trace — exactly what we want.
+  const db = createDb(sql, seams === undefined ? {} : { onQuery: seams.onQuery });
   await seedDemoAccounts(db);
 
   // The demo's mailer renders real react-email templates (no SMTP; it records
   // them). A genuine onboarding/reset flow therefore produces real HTML — the
-  // seeded accounts arrive pre-verified, so they send nothing.
-  const mailer = createDemoMailer();
+  // seeded accounts arrive pre-verified, so they send nothing. When tracing is
+  // on, each rendered message emits a `mail.delivered` span through the seam.
+  const mailer = createDemoMailer(
+    undefined,
+    seams === undefined ? undefined : () => seams.onDelivered({ mailerName: "identity", jobId: 0, attempt: 1 }),
+  );
 
   const identity = createIdentity({
     db,
+    // Each auth lifecycle event (login, verify, reset, revoke) becomes an
+    // `identity.<type>` span — the observability seam wired to the tracer.
+    ...(seams === undefined ? {} : { onEvent: seams.onEvent }),
     sessionStore: sqlSessionStore(sql),
     // The INNER, per-account login throttle (auth-security item 4): five failed
     // attempts per ~15 minutes for one account, fleet-correct over the shared SQL

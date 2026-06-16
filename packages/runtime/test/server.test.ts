@@ -7,6 +7,7 @@ import { serve } from "../src/index";
 import {
   adoptRequestId,
   applyServerLimits,
+  closeWithDrain,
   drainServer,
   establishContext,
   healthResponse,
@@ -39,6 +40,7 @@ import type { AccessEntry, Server } from "../src/index";
 import type { App } from "@keel/kernel";
 import { currentContext } from "@keel/web";
 import type { KeelResponse } from "@keel/web";
+import { parseTraceparent } from "@keel/observability";
 
 // Track the live server so each test tears its socket down, even on failure.
 let server: Server | undefined;
@@ -716,6 +718,7 @@ describe("serve", () => {
         spans.push(record);
 
         return {
+          data: { traceId: "t".repeat(32), spanId: "s".repeat(32) },
           setAttribute: (key: string, value: unknown) => (record.attributes[key] = value),
           setStatus: (status: "ok" | "error") => (record.status = status),
           end: () => {},
@@ -801,6 +804,7 @@ describe("serve", () => {
         spans.push(record);
 
         return {
+          data: { traceId: "t".repeat(32), spanId: "s".repeat(32) },
           setAttribute: (key: string, value: unknown) => (record.attributes[key] = value),
           setStatus: (status: "ok" | "error") => (record.status = status),
           end: () => (record.ended = true),
@@ -851,6 +855,92 @@ describe("serve", () => {
         ended: true,
       },
     ]);
+  });
+
+  it("joins an inbound W3C traceparent and publishes the request span on the context", async () => {
+    // A recording tracer that captures the inbound trace passed to startSpan AND
+    // exposes a `data` so the runtime can publish it on the context.
+    const started: Array<{ name: string; inbound: unknown }> = [];
+
+    const tracer = {
+      startSpan: (name: string, inbound?: unknown) => {
+        started.push({ name, inbound });
+
+        return {
+          data: { traceId: "a".repeat(32), spanId: "deadbeefdeadbeef" },
+          setAttribute: () => undefined,
+          setStatus: () => undefined,
+          end: () => undefined,
+        };
+      },
+    };
+
+    // The handler reads the span the runtime published on the request context —
+    // proving a seam fired during the request can parent on it.
+    let seenSpanTraceId: string | undefined;
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => {
+        seenSpanTraceId = (currentContext()?.span as { data: { traceId: string } } | undefined)
+          ?.data.traceId;
+
+        return { status: 200, headers: {}, body: "ok" };
+      },
+    };
+
+    server = await serve(app, { port: 0, tracer, parseTraceparent });
+
+    const trace = "4bf92f3577b34da6a3ce929d0e0e4736";
+    const parent = "00f067aa0ba902b7";
+
+    await makeRequest(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { traceparent: `00-${trace}-${parent}-01` },
+    });
+
+    // The inbound trace was parsed and handed to the root span. `parseTraceparent`
+    // also carries `flags`; the runtime reads only trace + parent, so we match on
+    // those rather than the whole record.
+    expect(started[0]?.name).toBe("http.request");
+    expect(started[0]?.inbound).toMatchObject({ traceId: trace, parentId: parent });
+
+    // The span was published on the request context for child seams to read.
+    expect(seenSpanTraceId).toBe("a".repeat(32));
+  });
+
+  it("roots a fresh trace when the inbound traceparent is absent or malformed", async () => {
+    const started: Array<{ inbound: unknown }> = [];
+
+    const tracer = {
+      startSpan: (_name: string, inbound?: unknown) => {
+        started.push({ inbound });
+
+        return {
+          data: { traceId: "t".repeat(32), spanId: "s".repeat(32) },
+          setAttribute: () => undefined,
+          setStatus: () => undefined,
+          end: () => undefined,
+        };
+      },
+    };
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: {}, body: "ok" }),
+    };
+
+    server = await serve(app, { port: 0, tracer, parseTraceparent });
+
+    // A garbage header parses to undefined → a fresh root (no inbound).
+    await makeRequest(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { traceparent: "not-a-valid-traceparent" },
+    });
+
+    expect(started[0]?.inbound).toBeUndefined();
   });
 
   it("tags an HTML response with an ETag and 304s a matching conditional GET", async () => {
@@ -1616,6 +1706,69 @@ describe("drainServer", () => {
     await drained;
 
     expect(h.calls.cleared).toEqual(["handle"]);
+  });
+});
+
+/** A `ClosableServer` whose `close` callback fires immediately — no real timers. */
+function instantClosable(): ClosableServer {
+  return {
+    close: (cb) => cb(),
+    closeIdleConnections: () => {},
+    closeAllConnections: () => {},
+  };
+}
+
+describe("closeWithDrain", () => {
+  it("drains first, then runs the drain hook (the order traces depend on)", async () => {
+    const order: string[] = [];
+
+    const draining: ClosableServer = {
+      close: (cb) => {
+        order.push("drain");
+        cb();
+      },
+      closeIdleConnections: () => {},
+      closeAllConnections: () => {},
+    };
+
+    await closeWithDrain(
+      draining,
+      100,
+      async () => {
+        order.push("flush");
+      },
+      () => {},
+    );
+
+    expect(order).toEqual(["drain", "flush"]);
+  });
+
+  it("is a plain drain when no hook is given", async () => {
+    let logged = false;
+
+    await closeWithDrain(instantClosable(), 100, undefined, () => {
+      logged = true;
+    });
+
+    // No hook ran, nothing was logged — a clean no-op past the drain.
+    expect(logged).toBe(false);
+  });
+
+  it("contains a rejecting hook: logs it and still resolves (a failed flush never wedges shutdown)", async () => {
+    const errors: Array<{ message: string; error: unknown }> = [];
+
+    const boom = new Error("collector unreachable");
+
+    await expect(
+      closeWithDrain(
+        instantClosable(),
+        100,
+        () => Promise.reject(boom),
+        (message, error) => errors.push({ message, error }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(errors).toEqual([{ message: "drain hook failed (kept shutting down)", error: boom }]);
   });
 });
 

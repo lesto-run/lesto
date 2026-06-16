@@ -53,6 +53,15 @@ export const SIGNATURE_HEADER = "x-keel-signature";
 export const TIMESTAMP_HEADER = "x-keel-timestamp";
 
 /**
+ * The W3C trace-context header. A webhook is a hop to another service, so it
+ * carries `traceparent` outbound — the receiver's tracing joins the SAME trace
+ * the request that enqueued the delivery belonged to. Verbatim W3C, never an
+ * invented format (`@keel/observability` owns the parse/format; this package
+ * only forwards the captured value, so it takes no tracing dependency).
+ */
+export const TRACEPARENT_HEADER = "traceparent";
+
+/**
  * Default replay tolerance for {@link verify}: a signed request is accepted only
  * if its timestamp is within five minutes of now. Wide enough for clock skew and
  * queue latency, narrow enough that a captured request is useless soon after.
@@ -174,6 +183,16 @@ export const systemResolver: Resolver = async (hostname) => {
   return records.map((record) => record.address);
 };
 
+/**
+ * Captures the W3C `traceparent` for the request currently in flight, at SEND
+ * time — so the value is the trace of the request that ENQUEUED the delivery, not
+ * the unrelated worker poll that ships it later. Returns `undefined` when there
+ * is no active trace (no request, no tracer). Injected so this package takes no
+ * tracing dependency; the wiring site passes a closure over
+ * `@keel/observability`'s `formatTraceparent` and the request context's span.
+ */
+export type TraceparentSource = () => string | undefined;
+
 export interface WebhooksOptions {
   readonly queue: Queue;
   readonly fetch?: FetchLike;
@@ -186,6 +205,14 @@ export interface WebhooksOptions {
 
   /** Allow/deny a destination URL. Defaults to {@link defaultUrlGuard}. */
   readonly urlGuard?: UrlGuard;
+
+  /**
+   * Captures the outbound `traceparent` at SEND time (see {@link TraceparentSource}).
+   * Absent → no trace header is emitted (the untraced default). The captured
+   * value rides the queue payload so the worker emits it at delivery time, joining
+   * the receiver to the enqueuing request's trace.
+   */
+  readonly traceparent?: TraceparentSource;
 }
 
 interface DeliverPayload {
@@ -194,6 +221,13 @@ interface DeliverPayload {
   readonly payload: JsonValue;
   /** A REFERENCE to the secret — never the secret itself. */
   readonly secretId?: string;
+  /**
+   * The W3C `traceparent` captured at send time, carried to delivery so the
+   * outbound POST joins the enqueuing request's trace. Absent when no trace was
+   * active. It is a propagation id, not a secret — safe to persist in the queue
+   * row (unlike the signing secret, which is never written).
+   */
+  readonly traceparent?: string;
 }
 
 /**
@@ -340,12 +374,15 @@ export class Webhooks {
 
   private readonly urlGuard: UrlGuard;
 
+  private readonly traceparent: TraceparentSource | undefined;
+
   constructor(options: WebhooksOptions) {
     this.queue = options.queue;
     this.fetchFn = options.fetch ?? (globalThis.fetch as unknown as FetchLike);
     this.secrets = options.secrets;
     this.resolver = options.resolver ?? systemResolver;
     this.urlGuard = options.urlGuard ?? defaultUrlGuard;
+    this.traceparent = options.traceparent;
 
     this.queue.define(DELIVER_JOB, (payload) => this.deliver(payload as unknown as DeliverPayload));
   }
@@ -362,6 +399,11 @@ export class Webhooks {
     payload: JsonValue,
     options: { secretId?: string; maxAttempts?: number } = {},
   ): Promise<number> {
+    // Capture the trace HERE, at enqueue time, while the request span is still in
+    // flight — the worker that delivers later has no such context, so capturing at
+    // delivery would lose the join. Absent (no tracer/request) leaves it off.
+    const traceparent = this.traceparent?.();
+
     return this.queue.enqueue(
       DELIVER_JOB,
       {
@@ -369,6 +411,7 @@ export class Webhooks {
         event,
         payload,
         ...(options.secretId === undefined ? {} : { secretId: options.secretId }),
+        ...(traceparent === undefined ? {} : { traceparent }),
       },
       options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts },
     );
@@ -393,6 +436,14 @@ export class Webhooks {
       [EVENT_HEADER]: payload.event,
       [TIMESTAMP_HEADER]: String(timestamp),
     };
+
+    // Forward the trace captured at send time so the receiver's tracing joins the
+    // enqueuing request's trace. Verbatim W3C — the captured string is whatever
+    // `@keel/observability`'s `formatTraceparent` produced; this package never
+    // synthesizes the format itself.
+    if (payload.traceparent !== undefined) {
+      headers[TRACEPARENT_HEADER] = payload.traceparent;
+    }
 
     if (payload.secretId !== undefined) {
       // Sign `${timestamp}.${body}`, not the bare body, so the receiver's

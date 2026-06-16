@@ -42,8 +42,8 @@ export type { HandleOptions } from "./types";
 // (the `onError` sink, bootstrap modules) without reaching across to `@keel/ui`.
 export type { StreamErrorSink, StreamOptions } from "@keel/ui/server";
 
-export { currentContext, runWithContext } from "./context";
-export type { RequestContext } from "./context";
+export { currentContext, currentRequestSpan, runWithContext } from "./context";
+export type { RequestContext, RequestContextSpan } from "./context";
 
 export { runPipeline } from "./middleware";
 export type { Middleware, Next } from "./middleware";

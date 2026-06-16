@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTableSql, defineTable, dropTableSql, integer, text } from "@keel/db";
-import { keel } from "@keel/web";
+import { currentContext, currentRequestSpan, keel, runWithContext } from "@keel/web";
 import { Migrator } from "@keel/migrate";
 import { contentEntriesMigration } from "@keel/content-store";
 import type { App, KeelAppConfig, KernelDatabase } from "@keel/kernel";
@@ -258,6 +258,46 @@ describe("run serve / dev", () => {
     expect(lines).toEqual(["listening on http://127.0.0.1:3000"]);
   });
 
+  it("wires no tracer on serve when KEEL_OTLP_URL is unset", async () => {
+    const serve = fakeServe(3000);
+
+    await run(["serve"], depsWith({ serve, env: {} }));
+
+    const [, options] = serve.mock.calls[0]!;
+
+    expect(options?.tracer).toBeUndefined();
+    expect(options?.onDrain).toBeUndefined();
+  });
+
+  it("wires the OTLP tracer on serve when KEEL_OTLP_URL is set, and stops the interval on shutdown", async () => {
+    const close = vi.fn(() => Promise.resolve());
+    const serve = vi.fn(
+      (_app: App, _options?: ServeOptions): Promise<Server> =>
+        Promise.resolve({ port: 3000, close }),
+    );
+    const installShutdown = vi.fn();
+
+    await run(
+      ["serve"],
+      depsWith({
+        serve,
+        installShutdown,
+        env: { KEEL_OTLP_URL: "http://collector:4318/v1/traces" },
+      }),
+    );
+
+    const [, options] = serve.mock.calls[0]!;
+
+    expect(options?.tracer).toBeDefined();
+    expect(typeof options?.onDrain).toBe("function");
+
+    // The shutdown hook drains, then stops the flush interval — it resolves cleanly.
+    const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
+    await expect(drain()).resolves.toBeUndefined();
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it("wires /readyz to a real database ping that answers true when the DB is up", async () => {
     const serve = fakeServe(3000);
 
@@ -357,6 +397,88 @@ describe("run dev", () => {
     const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
     await drain();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires no tracer on dev when KEEL_OTLP_URL is unset (tracing off by default)", async () => {
+    const serve = fakeServe(5173);
+
+    await run(["dev"], depsWith({ serve, env: {}, loadSites: () => Promise.resolve(sites) }));
+
+    const [, options] = serve.mock.calls[0]!;
+
+    expect(options?.tracer).toBeUndefined();
+    expect(options?.onDrain).toBeUndefined();
+  });
+
+  it("wires the OTLP tracer on dev when KEEL_OTLP_URL is set, flushing on drain", async () => {
+    const calls: string[] = [];
+
+    const fetchFn = ((url: string) => {
+      calls.push(url);
+
+      return Promise.resolve({ ok: true, status: 200 } as Response);
+    }) as unknown as typeof fetch;
+
+    vi.stubGlobal("fetch", fetchFn);
+
+    try {
+      // A serve fake that mirrors the real runtime's `close`: it runs the wired
+      // `onDrain` hook (the final flush) before resolving — so the drain test
+      // exercises the same flush path production runs.
+      let capturedOnDrain: (() => Promise<void>) | undefined;
+
+      const close = vi.fn(async () => {
+        await capturedOnDrain?.();
+      });
+
+      const serve = vi.fn((_app: App, options?: ServeOptions): Promise<Server> => {
+        capturedOnDrain = options?.onDrain;
+
+        return Promise.resolve({ port: 5173, close });
+      });
+
+      const installShutdown = vi.fn();
+
+      await run(
+        ["dev"],
+        depsWith({
+          serve,
+          installShutdown,
+          env: { KEEL_OTLP_URL: "http://collector:4318/v1/traces", KEEL_OTLP_SERVICE: "estate" },
+          loadSites: () => Promise.resolve(sites),
+        }),
+      );
+
+      const [, options] = serve.mock.calls[0]!;
+
+      // The full serve-options slice rode in: a request tracer, the traceparent
+      // parser, and a drain flush.
+      expect(options?.tracer).toBeDefined();
+      expect(typeof options?.parseTraceparent).toBe("function");
+      expect(typeof options?.onDrain).toBe("function");
+
+      // Mint a span and publish it on a request context, so the shared
+      // `currentRequestSpan` seam (the tracer's `currentSpan`) reads it back —
+      // then end it so the drain flush has a batch to ship.
+      const span = options!.tracer!.startSpan("http.request");
+
+      runWithContext({ requestId: "r-1", span }, () => {
+        expect(currentContext()?.span).toBe(span);
+        expect(currentRequestSpan()).toBe(span);
+      });
+
+      span.end();
+
+      // The shutdown hook drains the server (whose close runs onDrain → flush),
+      // then stops the interval.
+      const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
+      await drain();
+
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(calls).toEqual(["http://collector:4318/v1/traces"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("serves the client bundle through readAsset when one is provided", async () => {

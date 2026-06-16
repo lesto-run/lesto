@@ -10,6 +10,7 @@ import {
   SIGNATURE_HEADER,
   systemResolver,
   TIMESTAMP_HEADER,
+  TRACEPARENT_HEADER,
   verify,
   WebhookError,
   Webhooks,
@@ -187,6 +188,60 @@ describe("Webhooks delivery", () => {
 
     await queue.runOnce();
     expect(calls[0]?.init.headers[SIGNATURE_HEADER]).toBeUndefined();
+  });
+
+  it("captures the traceparent at send time, carries it on the payload, and emits it on delivery", async () => {
+    const captured = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+    const hooks = new Webhooks({
+      queue,
+      fetch: fakeFetch({ ok: true, status: 200 }),
+      resolver: publicResolver,
+      // The source captures at SEND time (here, a fixed value standing in for the
+      // request's in-flight trace); the worker emits it later at delivery.
+      traceparent: () => captured,
+    });
+
+    const id = await hooks.send("https://example.com/hook", "ping", { ok: true });
+
+    // The trace id rode the persisted payload (it is a propagation id, not a secret).
+    expect(rawPayload(id)).toContain(captured);
+
+    await queue.runOnce();
+
+    // The deliverer forwarded it verbatim on the outbound POST.
+    expect(calls[0]?.init.headers[TRACEPARENT_HEADER]).toBe(captured);
+  });
+
+  it("emits no traceparent when the source returns undefined (no active trace)", async () => {
+    const hooks = new Webhooks({
+      queue,
+      fetch: fakeFetch({ ok: true, status: 200 }),
+      resolver: publicResolver,
+      traceparent: () => undefined,
+    });
+
+    const id = await hooks.send("https://example.com/hook", "ping", { ok: true });
+
+    expect(rawPayload(id)).not.toContain(TRACEPARENT_HEADER);
+
+    await queue.runOnce();
+
+    expect(calls[0]?.init.headers[TRACEPARENT_HEADER]).toBeUndefined();
+  });
+
+  it("emits no traceparent when no source is configured at all (the untraced default)", async () => {
+    const hooks = new Webhooks({
+      queue,
+      fetch: fakeFetch({ ok: true, status: 200 }),
+      resolver: publicResolver,
+    });
+
+    await hooks.send("https://example.com/hook", "ping", { ok: true });
+
+    await queue.runOnce();
+
+    expect(calls[0]?.init.headers[TRACEPARENT_HEADER]).toBeUndefined();
   });
 
   it("fails (coded) and retries on a non-2xx response", async () => {

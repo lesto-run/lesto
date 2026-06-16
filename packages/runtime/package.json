@@ -24,5 +24,8 @@
     "@keel/queue": "workspace:*",
     "@keel/sites": "workspace:*",
     "@keel/web": "workspace:*"
+  },
+  "devDependencies": {
+    "@keel/observability": "workspace:*"
   }
 }

@@ -60,6 +60,44 @@ sails through — no per-form token to mint or verify. The `Set-Cookie` it retur
 survives the path-mount front door verbatim, which is what makes the same-origin
 session work.
 
+## Tracing — the two-env-var setup (estate is the OTLP reference)
+
+Estate dogfoods Keel's OTLP tracing the way every Keel app wires it. Tracing is
+**off by default** (no tracer, no spans, zero overhead) and turns on with **one
+environment variable**:
+
+```bash
+# Point KEEL_OTLP_URL at any OTLP/HTTP collector's trace endpoint:
+KEEL_OTLP_URL=http://localhost:4318/v1/traces  bun run examples/estate/serve.ts
+```
+
+Two more optional vars tune it:
+
+| Variable            | Purpose                                                  | Default  |
+| ------------------- | -------------------------------------------------------- | -------- |
+| `KEEL_OTLP_URL`     | The collector's trace endpoint. **Absent → tracing off.**| _(unset)_ |
+| `KEEL_OTLP_SERVICE` | The `service.name` resource attribute.                   | `keel`   |
+| `KEEL_OTLP_HEADERS` | Extra headers, comma-separated `key=value` (an auth token, a tenant id), e.g. `authorization=Bearer t,x-tenant=acme`. | _(none)_ |
+
+With `KEEL_OTLP_URL` set, every served request mints an `http.request` span, and
+the per-domain seams wired in `src/app.ts` / `src/identity.ts` become **child
+spans of the request span**: a `db.query` per executed query, an
+`identity.<event>` per auth lifecycle event, a `mail.delivered` per rendered
+email, and a `client.island_error` per browser hydration-failure beacon. An
+inbound W3C `traceparent` header joins the request into the caller's trace (one
+trace across services), and an outbound webhook carries `traceparent` onward.
+
+Spans flush to the collector on a **5-second interval** and once more on
+**graceful drain** (`SIGTERM`/`SIGINT`), so a rolling restart never drops the
+final batch. The exporter buffer is bounded (drop-oldest, with a drop count), so
+telemetry sheds load under backpressure instead of leaking memory.
+
+The wiring is the canonical reference: `serve.ts` constructs the tracer with
+`tracesFromEnv(process.env, { currentSpan: currentRequestSpan })` and passes
+`{ tracer, parseTraceparent, onDrain }` to `serve` — exactly what `keel serve`
+does, and exactly the contract the Cloudflare edge adapter mirrors with
+`ctx.waitUntil(traces.flush())`.
+
 ## How the pieces compose
 
 | Concern                                           | Package                                              |

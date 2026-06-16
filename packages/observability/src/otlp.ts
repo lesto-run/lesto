@@ -90,6 +90,17 @@ export function otlpTraceRequest(spans: readonly SpanData[], serviceName: string
   };
 }
 
+/**
+ * The default ceiling on the unbounded span buffer.
+ *
+ * A flush that never ran (the collector is down, no interval was started) used
+ * to let the buffer grow without limit — a slow memory leak under load, exactly
+ * the failure telemetry must never cause. We cap it at a generous default and
+ * drop the OLDEST span when full (the newest signal is the one an operator most
+ * wants), tallying every drop so the loss is observable, not silent.
+ */
+export const DEFAULT_MAX_BUFFERED_SPANS = 10_000;
+
 /** What the OTLP exporter needs to reach a collector. Everything that varies is injected. */
 export interface OtlpHttpExporterOptions {
   /** The collector's trace endpoint, e.g. `http://localhost:4318/v1/traces`. */
@@ -104,6 +115,13 @@ export interface OtlpHttpExporterOptions {
   /** The HTTP seam; defaults to the global `fetch`. */
   readonly fetchFn?: typeof fetch;
 
+  /**
+   * The most spans the buffer may hold between flushes. When full, the OLDEST is
+   * dropped to admit the newest (and counted — see {@link OtlpHttpExporter.dropped}).
+   * Defaults to {@link DEFAULT_MAX_BUFFERED_SPANS}.
+   */
+  readonly maxBufferedSpans?: number;
+
   /** Where a failed flush is reported. Defaults to `console.error`. */
   readonly onError?: (error: unknown) => void;
 }
@@ -114,6 +132,11 @@ export interface OtlpHttpExporterOptions {
  * Batching is the caller's cadence to own — flush at request end (an edge
  * worker's `waitUntil`), on an interval (a node service), or at shutdown. A
  * flush failure reports to `onError` and drops the batch; it never throws.
+ *
+ * The buffer is BOUNDED ({@link OtlpHttpExporterOptions.maxBufferedSpans}): if
+ * spans pile up faster than they flush (a down collector, a missing interval),
+ * the oldest are dropped to admit the newest and the loss is counted in
+ * {@link dropped} — telemetry sheds load instead of leaking memory.
  */
 export class OtlpHttpExporter implements SpanExporter {
   private readonly buffer: SpanData[] = [];
@@ -126,17 +149,38 @@ export class OtlpHttpExporter implements SpanExporter {
 
   private readonly fetchFn: typeof fetch;
 
+  private readonly maxBufferedSpans: number;
+
   private readonly onError: (error: unknown) => void;
+
+  /**
+   * How many spans were dropped because the buffer was full when they arrived.
+   *
+   * A non-zero count means the exporter is shedding telemetry under backpressure
+   * — the collector is unreachable, or no flush cadence is draining the buffer.
+   * Read it to surface the loss (a periodic log, a metric) so dropped traces are
+   * a known fact, not a silent gap.
+   */
+  dropped = 0;
 
   constructor(options: OtlpHttpExporterOptions) {
     this.url = options.url;
     this.headers = options.headers ?? {};
     this.serviceName = options.serviceName ?? "keel";
     this.fetchFn = options.fetchFn ?? fetch;
+    this.maxBufferedSpans = options.maxBufferedSpans ?? DEFAULT_MAX_BUFFERED_SPANS;
     this.onError = options.onError ?? ((error) => console.error("[keel/observability]", error));
   }
 
   export(span: SpanData): void {
+    // Drop-oldest at the ceiling: a backed-up buffer (down collector, no flush
+    // cadence) sheds its stalest span to admit the freshest, and counts the loss
+    // so it is observable rather than an unbounded memory leak.
+    if (this.buffer.length >= this.maxBufferedSpans) {
+      this.buffer.shift();
+      this.dropped += 1;
+    }
+
     this.buffer.push(span);
   }
 

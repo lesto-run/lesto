@@ -23,6 +23,22 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 /**
+ * The slice of a tracing span the request context publishes — just what a seam
+ * needs to parent a child span on the in-flight request and to read its trace
+ * ids. Structurally satisfied by `@keel/observability`'s `Span`, so this
+ * transport-free core stays dependency-free.
+ */
+export interface RequestContextSpan {
+  readonly data: { readonly traceId: string; readonly spanId: string };
+
+  setAttribute(key: string, value: unknown): unknown;
+
+  setStatus(status: "ok" | "error"): unknown;
+
+  end(): void;
+}
+
+/**
  * What every request carries, plus room to grow.
  *
  * `requestId` is always present — the transport mints one per request so every
@@ -56,6 +72,20 @@ export interface RequestContext {
    * (a test, a background task) that never wired one.
    */
   signal?: AbortSignal;
+
+  /**
+   * The request's root tracing span, published by the transport when a tracer is
+   * wired. A seam fired DURING the request (a `@keel/db` query, a `@keel/queue`
+   * job drained inline) parents its child span on this, so a query/job shows up
+   * under the request that caused it — and the span's `data.traceId`/`data.spanId`
+   * are the ids an outbound `traceparent` continues. Absent when no tracer is
+   * configured (the zero-overhead default) or outside a served request.
+   *
+   * Typed structurally — just the slice a consumer reads — so this transport-free
+   * core takes no dependency on `@keel/observability`; the runtime publishes a
+   * value the tracing package's `Span` satisfies.
+   */
+  span?: RequestContextSpan;
 
   /** Room to grow: a user, a tenant, a request-scoped cache — keyed by feature. */
   [key: string]: unknown;
@@ -95,4 +125,20 @@ export function runWithContext<T>(context: RequestContext, fn: () => T): T {
  */
 export function currentContext(): RequestContext | undefined {
   return storage.getStore();
+}
+
+/**
+ * The tracing span for the request currently in flight, or `undefined` outside
+ * one (or when no tracer is wired).
+ *
+ * The shared seam the observability wiring reads: a battery's `on*` hook (a
+ * `@keel/db` query, a `@keel/queue` job drained inline, a `@keel/identity` event)
+ * parents its child span on this, so the work shows up under the request that
+ * caused it. Both the CLI's `serve`/`dev` wiring and an app's bespoke wiring
+ * (estate) pass this as the tracer's `currentSpan` — one definition, so they can
+ * never read the context's span differently. `undefined` is the honest answer
+ * outside a request, so the hook roots a standalone span rather than crashing.
+ */
+export function currentRequestSpan(): RequestContextSpan | undefined {
+  return storage.getStore()?.span;
 }

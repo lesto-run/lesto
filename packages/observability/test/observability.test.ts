@@ -401,4 +401,77 @@ describe("OtlpHttpExporter", () => {
 
     spy.mockRestore();
   });
+
+  it("caps the buffer: drops the oldest span and counts the drop when full", async () => {
+    const { fetchFn, calls } = fakeFetch(200);
+
+    // A tiny ceiling so the cap is reached deterministically.
+    const otlp = new OtlpHttpExporter({
+      url: "http://collector/v1/traces",
+      fetchFn,
+      maxBufferedSpans: 2,
+    });
+
+    const span = (name: string): SpanData => ({ ...fullSpan, name });
+
+    otlp.export(span("a"));
+    otlp.export(span("b"));
+
+    // The third arrival evicts the oldest ("a"), counting one drop.
+    otlp.export(span("c"));
+
+    expect(otlp.dropped).toBe(1);
+
+    await otlp.flush();
+
+    const body = JSON.parse(calls[0]?.init.body as string) as {
+      resourceSpans: Array<{ scopeSpans: Array<{ spans: Array<{ name: string }> }> }>;
+    };
+
+    const names = body.resourceSpans[0]?.scopeSpans[0]?.spans.map((s) => s.name);
+
+    // "a" was dropped; the freshest two survive.
+    expect(names).toEqual(["b", "c"]);
+  });
+
+  it("starts with a zero drop count and a default ceiling that does not drop under normal load", () => {
+    const otlp = new OtlpHttpExporter({ url: "http://c/v1/traces" });
+
+    expect(otlp.dropped).toBe(0);
+
+    // A handful of spans is nowhere near the 10k default ceiling — no drops.
+    for (let i = 0; i < 100; i++) otlp.export({ ...fullSpan, name: `n${i}` });
+
+    expect(otlp.dropped).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The inbound-trace join: a span adopting a `traceparent`'s ids.
+// ---------------------------------------------------------------------------
+
+describe("startSpan with an inbound trace", () => {
+  it("adopts the inbound traceId and points back at the inbound parentId", () => {
+    const span = tracer.startSpan("http.request", {
+      inbound: { traceId: "a".repeat(32), parentId: "b".repeat(16) },
+    });
+
+    expect(span.data.traceId).toBe("a".repeat(32));
+    expect(span.data.parentSpanId).toBe("b".repeat(16));
+    // The span still mints its OWN fresh spanId.
+    expect(span.data.spanId).toBe("id-1");
+  });
+
+  it("a live parent wins over an inbound trace (a real span we own)", () => {
+    const root = tracer.startSpan("root"); // id-1 trace, id-2 span
+
+    const child = tracer.startSpan("child", {
+      parent: root,
+      inbound: { traceId: "z".repeat(32), parentId: "z".repeat(16) },
+    });
+
+    // The live parent's trace + span, NOT the inbound ids.
+    expect(child.data.traceId).toBe(root.data.traceId);
+    expect(child.data.parentSpanId).toBe(root.data.spanId);
+  });
 });

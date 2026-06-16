@@ -30,6 +30,7 @@
     "@keel/kernel": "workspace:*",
     "@keel/mcp": "workspace:*",
     "@keel/migrate": "workspace:*",
+    "@keel/observability": "workspace:*",
     "@keel/openapi": "workspace:*",
     "@keel/router": "workspace:*",
     "@keel/runtime": "workspace:*",

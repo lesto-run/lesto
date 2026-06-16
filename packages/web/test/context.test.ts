@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { currentContext, runWithContext } from "../src/index";
+import { currentContext, currentRequestSpan, runWithContext } from "../src/index";
 
-import type { RequestContext } from "../src/index";
+import type { RequestContext, RequestContextSpan } from "../src/index";
+
+/** A minimal span standing in for `@keel/observability`'s `Span`, structurally. */
+function fakeSpan(): RequestContextSpan {
+  return {
+    data: { traceId: "t".repeat(32), spanId: "s".repeat(32) },
+    setAttribute: () => undefined,
+    setStatus: () => undefined,
+    end: () => undefined,
+  };
+}
 
 describe("request context", () => {
   it("exposes the active context inside runWithContext", () => {
@@ -73,6 +83,23 @@ describe("request context", () => {
 
     expect(seenA).toBe("A");
     expect(seenB).toBe("B");
+  });
+
+  it("exposes the request span inside the context, and undefined outside one", () => {
+    const span = fakeSpan();
+
+    const seen = runWithContext({ requestId: "traced", span }, () => currentRequestSpan());
+
+    expect(seen).toBe(span);
+
+    // Outside any request — no context, no span.
+    expect(currentRequestSpan()).toBeUndefined();
+  });
+
+  it("returns undefined for the span when the context has no tracer wired", () => {
+    const seen = runWithContext({ requestId: "untraced" }, () => currentRequestSpan());
+
+    expect(seen).toBeUndefined();
   });
 
   it("supports the extensible store via the index signature", () => {

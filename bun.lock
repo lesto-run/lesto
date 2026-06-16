@@ -71,6 +71,7 @@
         "@keel/flags": "workspace:*",
         "@keel/identity": "workspace:*",
         "@keel/migrate": "workspace:*",
+        "@keel/observability": "workspace:*",
         "@keel/ratelimit": "workspace:*",
         "@keel/runtime": "workspace:*",
         "@keel/sites": "workspace:*",
@@ -155,6 +156,7 @@
         "@keel/kernel": "workspace:*",
         "@keel/mcp": "workspace:*",
         "@keel/migrate": "workspace:*",
+        "@keel/observability": "workspace:*",
         "@keel/openapi": "workspace:*",
         "@keel/router": "workspace:*",
         "@keel/runtime": "workspace:*",
@@ -581,6 +583,7 @@
         "@keel/kernel": "workspace:*",
         "@keel/mail": "workspace:*",
         "@keel/migrate": "workspace:*",
+        "@keel/observability": "workspace:*",
         "@keel/pg": "workspace:*",
         "@keel/queue": "workspace:*",
         "@keel/ratelimit": "workspace:*",
@@ -710,6 +713,9 @@
         "@keel/queue": "workspace:*",
         "@keel/sites": "workspace:*",
         "@keel/web": "workspace:*",
+      },
+      "devDependencies": {
+        "@keel/observability": "workspace:*",
       },
     },
     "packages/seo": {

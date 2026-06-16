@@ -30,6 +30,8 @@ import { createApp, secureStack } from "@keel/kernel";
 import type { App, KeelAppConfig } from "@keel/kernel";
 import { fromRequestMiddleware, keel } from "@keel/web";
 
+import type { TraceSeams } from "@keel/observability";
+
 import { buildEstateRoutes } from "./controllers";
 import { buildIdentity } from "./identity";
 
@@ -49,8 +51,8 @@ const NODE_RATE_LIMIT = { capacity: 60, refillPerSecond: 10 } as const;
  * boots. Returning a factory (not a singleton) is what keeps every test world
  * isolated.
  */
-export async function buildAppConfig(secret?: string): Promise<KeelAppConfig> {
-  const { identity, handle } = await buildIdentity(secret);
+export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promise<KeelAppConfig> {
+  const { identity, handle } = await buildIdentity(secret, seams);
 
   // Zero-token, header-based CSRF on every state-changing request, plus a
   // DURABLE per-client rate limit over the shared SQL handle (ADR 0013):
@@ -72,6 +74,14 @@ export async function buildAppConfig(secret?: string): Promise<KeelAppConfig> {
     .client("/client.js")
     .route(buildEstateRoutes(identity));
 
+  // The client-error beacon sink (operability-dx item 3): a hydration failure in
+  // a real browser POSTs to `/__keel/client-errors`, and this wires that beacon to
+  // the tracer as a `client.island_error` span — paired with the server traces.
+  // Absent seams leave the default structured-log sink in place.
+  if (seams !== undefined) {
+    app.clientErrors((event) => seams.onClientError(event));
+  }
+
   return {
     db: handle,
     app,
@@ -79,6 +89,6 @@ export async function buildAppConfig(secret?: string): Promise<KeelAppConfig> {
 }
 
 /** Boot the app the kernel way: `createApp` over a fresh config. */
-export async function buildApp(secret?: string): Promise<App> {
-  return createApp(await buildAppConfig(secret));
+export async function buildApp(secret?: string, seams?: TraceSeams): Promise<App> {
+  return createApp(await buildAppConfig(secret, seams));
 }

@@ -22,15 +22,17 @@ export type { RawRequest } from "./request";
 export { applyResponse } from "./response";
 export type { WritableResponse } from "./response";
 
-export { serve, DEFAULT_SECURITY_HEADERS, RECOMMENDED_CSP } from "./server";
+export { serve, closeWithDrain, DEFAULT_SECURITY_HEADERS, RECOMMENDED_CSP } from "./server";
 export type {
   Server,
   ServeOptions,
   HealthOptions,
   AccessEntry,
   EtagConfig,
+  InboundTrace,
   RequestSpan,
   RequestTracer,
+  TraceparentParser,
 } from "./server";
 
 export { resolveClient } from "./trust-proxy";

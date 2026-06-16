@@ -26,6 +26,8 @@ import { buildStaticSites, nodeSink } from "@keel/sites";
 import type { SiteManifest } from "@keel/sites";
 import type { KeelResponse } from "@keel/web";
 
+import type { TraceSeams } from "@keel/observability";
+
 import { buildApp } from "./app";
 import sites from "../keel.sites";
 
@@ -66,6 +68,14 @@ export interface ProductionBuildOptions {
    * back to the fail-closed serve-path resolution.
    */
   readonly secret?: string;
+
+  /**
+   * The tracer's seam hooks (operability-dx item 3). `serve.ts` constructs the
+   * OTLP `Traces` from the env and passes its seams here, so db queries, auth
+   * events, mail deliveries, and client-error beacons all become spans. Absent
+   * (a static build, a unit test) runs untraced.
+   */
+  readonly seams?: TraceSeams;
 }
 
 /**
@@ -79,7 +89,7 @@ export async function buildProductionSite(
   projectRoot: string,
   options: ProductionBuildOptions = {},
 ): Promise<ProductionSite> {
-  const app = await buildApp(options.secret);
+  const app = await buildApp(options.secret, options.seams);
 
   const handle = app.handle.bind(app);
 

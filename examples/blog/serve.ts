@@ -13,6 +13,14 @@
  * The database is opened with `@keel/runtime`'s `openSqlite`: under Node it
  * boots on better-sqlite3, and under Bun (whose runtime can't dlopen that
  * native addon) it transparently falls back to the built-in `bun:sqlite`.
+ *
+ * OTLP TRACING (the two-env-var setup): `keel serve`/`dev` and the estate
+ * reference turn tracing on with one env var — set `KEEL_OTLP_URL` to a
+ * collector's trace endpoint (e.g. `http://localhost:4318/v1/traces`), with
+ * optional `KEEL_OTLP_SERVICE` (the `service.name`, default `keel`) and
+ * `KEEL_OTLP_HEADERS` (comma-separated `key=value`). Absent, tracing is off
+ * (zero overhead). The canonical wiring + the full contract live in
+ * `examples/estate/README.md` ("Tracing — the two-env-var setup").
  */
 
 import { openSqlite, serve } from "@keel/runtime";

@@ -14,10 +14,34 @@ export interface TracerOptions {
   readonly idGenerator?: () => string;
 }
 
+/**
+ * An inbound trace adopted from a W3C `traceparent` — the cross-process join.
+ *
+ * Unlike {@link StartSpanOptions.parent} (a live `Span` we hold), this carries
+ * ONLY the ids another system sent: the `traceId` to continue and the `parentId`
+ * (the caller's 16-hex span) to point back at. The runtime parses an inbound
+ * `traceparent` into this shape so the request's root span joins the upstream
+ * trace instead of starting a fresh one.
+ */
+export interface InboundTrace {
+  readonly traceId: string;
+
+  readonly parentId: string;
+}
+
 /** Where a new span sits in the tree, and what it starts knowing. */
 export interface StartSpanOptions {
   /** Given a parent, the new span joins its trace as a child; absent, it roots a fresh trace. */
   readonly parent?: Span;
+
+  /**
+   * Given an inbound trace (parsed from a W3C `traceparent`), the new span
+   * continues THAT trace: it adopts the inbound `traceId` and points back at the
+   * inbound `parentId`. Used for the cross-process join — a request's root span
+   * joining the caller's trace. Ignored when {@link parent} is also set (a live
+   * parent wins, since it carries a real span we own).
+   */
+  readonly inbound?: InboundTrace;
 
   readonly attributes?: Record<string, unknown>;
 }
@@ -89,14 +113,30 @@ export class Tracer {
 
   startSpan(name: string, options: StartSpanOptions = {}): Span {
     const parent = options.parent;
+    const inbound = options.inbound;
 
-    // A child shares its parent's trace; a root opens a new one.
-    const traceId = parent === undefined ? this.idGenerator() : parent.data.traceId;
+    // The trace this span belongs to, and the span it points back at, in order of
+    // precedence: a live parent we own (its trace, its span) > an inbound trace
+    // adopted from a `traceparent` (its trace id, the caller's span) > a fresh
+    // root (a new trace, no parent).
+    const traceId =
+      parent !== undefined
+        ? parent.data.traceId
+        : inbound !== undefined
+          ? inbound.traceId
+          : this.idGenerator();
+
+    const parentSpanId =
+      parent !== undefined
+        ? parent.data.spanId
+        : inbound !== undefined
+          ? inbound.parentId
+          : undefined;
 
     const data: SpanData = {
       traceId,
       spanId: this.idGenerator(),
-      ...(parent === undefined ? {} : { parentSpanId: parent.data.spanId }),
+      ...(parentSpanId === undefined ? {} : { parentSpanId }),
       name,
       startedAt: this.clock(),
       attributes: { ...options.attributes },

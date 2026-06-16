@@ -21,6 +21,7 @@
     "@keel/flags": "workspace:*",
     "@keel/identity": "workspace:*",
     "@keel/migrate": "workspace:*",
+    "@keel/observability": "workspace:*",
     "@keel/ratelimit": "workspace:*",
     "@keel/runtime": "workspace:*",
     "@keel/sites": "workspace:*",

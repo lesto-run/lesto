@@ -34,8 +34,15 @@ export interface DemoMailer extends IdentityMailer {
 /**
  * Build the demo's mailer. `log` defaults to a no-op so tests and the static
  * build stay quiet; the serve path can pass `console.log` to narrate deliveries.
+ *
+ * `onDelivered` is the observability seam (operability-dx item 3): fired once
+ * after a message renders, so estate's mail delivery shows up as a `mail.delivered`
+ * span. Absent (the untraced default) it does nothing.
  */
-export function createDemoMailer(log: (line: string) => void = () => {}): DemoMailer {
+export function createDemoMailer(
+  log: (line: string) => void = () => {},
+  onDelivered?: () => void,
+): DemoMailer {
   const outbox: SentEmail[] = [];
 
   const deliver = async (to: string, subject: string, message: ReactElement): Promise<void> => {
@@ -44,6 +51,9 @@ export function createDemoMailer(log: (line: string) => void = () => {}): DemoMa
     const [html, text] = await Promise.all([render(message), render(message, { plainText: true })]);
     outbox.push({ to, subject, html, text });
     log(`mail → ${to}: ${subject}`);
+
+    // The delivery span: estate dogfoods the mail observability seam.
+    onDelivered?.();
   };
 
   return {

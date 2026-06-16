@@ -15,7 +15,11 @@
 
 import { createApp } from "@keel/kernel";
 import type { KeelAppConfig, KernelDatabase } from "@keel/kernel";
+import { currentRequestSpan } from "@keel/web";
 import type { UiDialect } from "@keel/web";
+
+import { parseTraceparent, tracesFromEnv } from "@keel/observability";
+import type { CurrentSpan, Traces, TracesEnv } from "@keel/observability";
 
 import { deleteEntry, persistEntries, pruneEntries } from "@keel/content-store";
 import type { RuntimeEntry } from "@keel/content-core";
@@ -34,6 +38,15 @@ import { parsePort, parseStringFlag } from "./flags";
 
 /** The default port for `serve`/`dev` when no `--port` flag is given. */
 const DEFAULT_PORT = 3000;
+
+/**
+ * How often `serve`/`dev` flush buffered spans to the collector when tracing is
+ * on. A long-lived node service flushes on a steady cadence (and once more on
+ * drain) — five seconds keeps the collector close to live without a request per
+ * span. The interval is `unref`'d (see {@link Traces.startInterval}) so it never
+ * holds the process open on its own.
+ */
+const TRACE_FLUSH_INTERVAL_MS = 5_000;
 
 /**
  * The synthetic single site `dev` falls back to when a project declares none (a
@@ -138,6 +151,15 @@ export interface CliDeps {
    */
   installShutdown?: (drain: () => Promise<void>) => void;
 
+  /**
+   * The environment the OTLP tracer reads its two-var setup from
+   * (`KEEL_OTLP_URL` + service-name/headers — see {@link TracesEnv}). Defaults to
+   * `process.env`, so the bin needs no extra wiring; a test injects a literal.
+   * `KEEL_OTLP_URL` absent means tracing is off (no tracer, zero overhead) — the
+   * safe default.
+   */
+  env?: TracesEnv;
+
   /** Where a line of output goes (the bin passes `console.log`). */
   out: (line: string) => void;
 }
@@ -212,11 +234,83 @@ function databaseReady(db: KernelDatabase): () => Promise<boolean> {
 }
 
 /**
+ * The in-flight request span, as the tracer's `currentSpan` seam.
+ *
+ * `@keel/web`'s `currentRequestSpan` (tested there) reads the span the runtime
+ * published on the request context; a tracer seam (a db query, an inline job)
+ * parents its child span on it. `RequestContextSpan` is structurally the tracing
+ * `Span` — both carry `data.{traceId,spanId}` and the fluent setters — so the
+ * cast on the function reference is true: it narrows the read-only context shape
+ * to the tracer's seam type without introducing any new logic to cover.
+ */
+const requestSpan = currentRequestSpan as CurrentSpan;
+
+/**
+ * The tracing wired onto a long-lived `serve`/`dev` server, or `undefined` when
+ * tracing is off (`KEEL_OTLP_URL` unset).
+ *
+ * `serveOptions` is the slice handed to `deps.serve` — the request tracer (so
+ * every request mints a span), the `traceparent` parser (so a cross-service
+ * request joins one trace), and the `onDrain` flush (so the last batch reaches
+ * the collector on a rolling restart). `stopInterval` halts the steady flush
+ * cadence; the caller stops it on shutdown, after the final drain flush has run.
+ */
+interface ServeTracing {
+  readonly serveOptions: {
+    readonly tracer: Traces["requestTracer"];
+    readonly parseTraceparent: typeof parseTraceparent;
+    readonly onDrain: () => Promise<void>;
+  };
+
+  readonly stopInterval: () => void;
+}
+
+/**
+ * Construct the OTLP tracer from the environment and the flush lifecycle a
+ * long-lived server runs.
+ *
+ * `tracesFromEnv` reads the two-var setup (`KEEL_OTLP_URL` is the on switch) and
+ * builds the `Tracer` + `OtlpHttpExporter`; absent a URL it returns `undefined`
+ * and so do we — the server runs untraced, zero overhead. With tracing on we
+ * start the steady flush interval and hand back the serve-options slice
+ * (request tracer + `traceparent` parser + an `onDrain` final flush). The request
+ * span seam reads `context.span`, so a db query or inline job fired during a
+ * request parents on the request span.
+ *
+ * THE CONTRACT (mirrored by `@keel/cloudflare`, edge-deploy #3): the env vars
+ * are `KEEL_OTLP_URL` / `KEEL_OTLP_SERVICE` / `KEEL_OTLP_HEADERS`; the flush API
+ * is `traces.flush()` (an edge worker calls it from `ctx.waitUntil`); here the
+ * node tier flushes on an interval AND on drain.
+ */
+function buildServeTracing(deps: CliDeps): ServeTracing | undefined {
+  const traces = tracesFromEnv(deps.env ?? {}, { currentSpan: requestSpan });
+
+  if (traces === undefined) return undefined;
+
+  const stopInterval = traces.startInterval(TRACE_FLUSH_INTERVAL_MS);
+
+  return {
+    serveOptions: {
+      tracer: traces.requestTracer,
+      parseTraceparent,
+      // Drain flush: ship whatever is still buffered after in-flight requests
+      // finish, so a rolling restart does not drop the final spans.
+      onDrain: () => traces.flush(),
+    },
+    stopInterval,
+  };
+}
+
+/**
  * Boot the app and stand a server in front of it, printing the listening URL.
  *
  * Resolves once the server is listening — the core does not block forever; the
  * bin is what keeps the process alive after this returns. `/readyz` is wired to
  * a real database ping so it reports the node's true readiness, not a constant.
+ *
+ * When `KEEL_OTLP_URL` is set, an OTLP tracer is constructed and wired: every
+ * request mints a span, an inbound `traceparent` joins one trace, spans flush on
+ * an interval, and a final flush runs on graceful drain.
  */
 async function runServe(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
@@ -225,12 +319,25 @@ async function runServe(args: readonly string[], deps: CliDeps): Promise<number>
 
   const { port } = parsePort(args, DEFAULT_PORT);
 
+  // Construct the OTLP tracer from the env (off unless `KEEL_OTLP_URL` is set).
+  // When on, its serve-options slice (request tracer + `traceparent` parser +
+  // drain flush) rides into `serve` and the steady flush interval is running.
+  const tracing = buildServeTracing(deps);
+
   const server = await deps.serve(app, {
     port,
     health: { isReady: databaseReady(config.db) },
+    ...(tracing === undefined ? {} : tracing.serveOptions),
   });
 
-  deps.installShutdown?.(() => server.close());
+  // On graceful shutdown: drain the server (its `onDrain` flushes the final
+  // batch), THEN stop the flush interval — order matters, so the last flush is
+  // not cut short by a stopped cadence.
+  deps.installShutdown?.(async () => {
+    await server.close();
+
+    tracing?.stopInterval();
+  });
 
   deps.out(`listening on http://127.0.0.1:${server.port}`);
 
@@ -493,13 +600,21 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
 
   const { port } = parsePort(args, DEFAULT_PORT);
 
+  // Tracing is wired on `dev` exactly as on `serve` (off unless `KEEL_OTLP_URL`
+  // is set), so a developer sees the same spans locally that production emits.
+  const tracing = buildServeTracing(deps);
+
   // Wrap the dev dispatcher as the app the server fronts; migrations already ran.
   const server = await deps.serve(
     { handle: dispatch, migrationsApplied: app.migrationsApplied },
-    { port },
+    { port, ...(tracing === undefined ? {} : tracing.serveOptions) },
   );
 
-  deps.installShutdown?.(() => server.close());
+  deps.installShutdown?.(async () => {
+    await server.close();
+
+    tracing?.stopInterval();
+  });
 
   deps.out(`dev server on http://127.0.0.1:${server.port}`);
 

@@ -68,7 +68,10 @@ export interface HealthOptions {
  *
  * Structurally satisfied by `@keel/observability`'s `Span`/`Tracer`, so the
  * runtime records real traces without depending on the tracing package: what
- * varies is injected, as everywhere else in this file.
+ * varies is injected, as everywhere else in this file. `data` exposes the span's
+ * trace + span ids so the request context can carry the span as the parent for
+ * any child span a seam (a db query, a queue job) opens during the request, and
+ * so the join with an inbound `traceparent` is recorded on the right trace id.
  */
 export interface RequestSpan {
   setAttribute(key: string, value: unknown): unknown;
@@ -76,12 +79,42 @@ export interface RequestSpan {
   setStatus(status: "ok" | "error"): unknown;
 
   end(): void;
+
+  /**
+   * The span's flat record — at minimum its `traceId`/`spanId`, the ids a child
+   * span and the outbound `traceparent` read. `@keel/observability`'s `Span.data`
+   * satisfies this; the runtime reads only what it needs.
+   */
+  readonly data: { readonly traceId: string; readonly spanId: string };
 }
 
-/** Mints {@link RequestSpan}s — `@keel/observability`'s `Tracer`, structurally. */
-export interface RequestTracer {
-  startSpan(name: string): RequestSpan;
+/**
+ * The inbound trace context the server adopts from a W3C `traceparent` header, so
+ * the request's root span JOINS the upstream trace rather than starting a fresh
+ * one. Structurally what `@keel/observability`'s `parseTraceparent` returns.
+ */
+export interface InboundTrace {
+  /** The 32-hex trace id this request belongs to — the root span adopts it. */
+  readonly traceId: string;
+
+  /** The 16-hex caller span id — the parent of the root span we mint. */
+  readonly parentId: string;
 }
+
+/**
+ * Mints {@link RequestSpan}s — `@keel/observability`'s `Tracer`, structurally.
+ *
+ * `startSpan` optionally takes an {@link InboundTrace}: when an inbound
+ * `traceparent` was parsed, the runtime passes it so the request span continues
+ * that trace (same `traceId`, parented on the caller's span). Absent, the span
+ * roots a new trace, as before.
+ */
+export interface RequestTracer {
+  startSpan(name: string, inbound?: InboundTrace): RequestSpan;
+}
+
+/** Parses a W3C `traceparent` header — `@keel/observability`'s parser, structurally. */
+export type TraceparentParser = (header: string | undefined) => InboundTrace | undefined;
 
 /** One served request, as the access log records it. */
 export interface AccessEntry {
@@ -247,12 +280,34 @@ export interface ServeOptions {
   /**
    * Mints one span per served request — the trace counterpart of the access
    * log. Off by default (no tracer, no spans, zero overhead); pass
-   * `@keel/observability`'s `Tracer` (it satisfies this structurally, so the
-   * runtime takes no dependency) and every request records a `http.request`
+   * `@keel/observability`'s request tracer (it satisfies this structurally, so
+   * the runtime takes no dependency) and every request records a `http.request`
    * span carrying method, path, status, and the request id, with `error`
-   * status on a 5xx.
+   * status on a 5xx. The span is also published on the request context
+   * (`context.span`), so a seam fired during the request — a db query, an inline
+   * queue job — parents its child span on it.
    */
   readonly tracer?: RequestTracer;
+
+  /**
+   * Parses a W3C `traceparent` request header into the inbound trace the root
+   * span joins, so a cross-service request continues ONE trace rather than
+   * starting a fresh one per hop. Injected (not imported) so the runtime stays
+   * free of the tracing package — pass `@keel/observability`'s `parseTraceparent`.
+   * Absent (or no inbound header) roots a new trace, as before. Only consulted
+   * when a {@link tracer} is also set.
+   */
+  readonly parseTraceparent?: TraceparentParser;
+
+  /**
+   * A drain hook run once during a graceful shutdown, AFTER in-flight requests
+   * finish — where the tracer flushes its last buffered spans to the collector
+   * so a deploy's rolling restart does not drop the final batch. Injected so the
+   * runtime takes no dependency on the tracer; the CLI wires it to
+   * `traces.flush()`. Awaited (its rejection is contained) before `close()`
+   * resolves. Absent → nothing extra runs on drain.
+   */
+  readonly onDrain?: () => Promise<void>;
 
   /** The clock used for request latency. Injected for tests; defaults to `Date.now`. */
   readonly now?: () => number;
@@ -714,6 +769,9 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
     logError,
     now: options.now ?? Date.now,
     ...(options.tracer === undefined ? {} : { tracer: options.tracer }),
+    ...(options.parseTraceparent === undefined
+      ? {}
+      : { parseTraceparent: options.parseTraceparent }),
   };
 
   installProcessSafetyNet(logError);
@@ -741,10 +799,40 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
       resolve({
         port: address.port,
 
-        close: () => drainServer(server, drainTimeoutMs),
+        // Drain in-flight requests, THEN run the drain hook (the tracer's final
+        // flush) — so the last buffered spans reach the collector before the
+        // process exits. The hook's rejection is contained: a failed flush must
+        // never wedge a shutdown.
+        close: () => closeWithDrain(server, drainTimeoutMs, options.onDrain, logError),
       });
     });
   });
+}
+
+/**
+ * Drain the server, then run an optional drain hook (the tracer's final flush).
+ *
+ * The order is the contract: let in-flight requests finish FIRST (they may emit
+ * their last spans), then flush. A rejecting hook is logged and swallowed — a
+ * telemetry flush that fails on shutdown must not block the deploy's restart.
+ * Pure over its injected pieces so both the with-hook and without-hook paths are
+ * testable without a real socket.
+ */
+export async function closeWithDrain(
+  server: ClosableServer,
+  drainTimeoutMs: number,
+  onDrain: (() => Promise<void>) | undefined,
+  logError: (message: string, error: unknown) => void,
+): Promise<void> {
+  await drainServer(server, drainTimeoutMs);
+
+  if (onDrain === undefined) return;
+
+  try {
+    await onDrain();
+  } catch (error) {
+    logError("drain hook failed (kept shutting down)", error);
+  }
 }
 
 interface HandleDeps {
@@ -774,6 +862,9 @@ interface HandleDeps {
 
   /** Mints one span per request, or absent for the zero-overhead default. */
   readonly tracer?: RequestTracer;
+
+  /** Parses an inbound `traceparent` for the cross-process join; absent → fresh trace. */
+  readonly parseTraceparent?: TraceparentParser;
 }
 
 /**
@@ -984,9 +1075,27 @@ async function handle(
   return runWithContext(context, async () => {
     const start = deps.now();
 
+    // A W3C `traceparent` on the inbound request joins this hop to the caller's
+    // trace: the root span continues the SAME trace id, parented on the caller's
+    // span, so one request crossing services is one trace — not a fresh trace per
+    // hop. Parsed only when a tracer is wired (no tracer, no parse), and the
+    // parser is injected so the runtime takes no dependency on the tracing
+    // package. A malformed/absent header parses to `undefined` and roots a fresh
+    // trace, the safe default.
+    const inbound =
+      deps.tracer === undefined
+        ? undefined
+        : deps.parseTraceparent?.(firstHeader(req.headers["traceparent"]));
+
     // The request's span opens with the work and closes beside the access line,
     // so trace timing and the logged latency describe the same window.
-    const span = deps.tracer?.startSpan("http.request");
+    const span = deps.tracer?.startSpan("http.request", inbound);
+
+    // Publish the span on the request context so a seam fired DURING the request
+    // (a `@keel/db` query, an inline `@keel/queue` job) parents its child span on
+    // it — a query shows up under the request that ran it. Absent when no tracer
+    // is wired (the zero-overhead default).
+    if (span !== undefined) context.span = span;
 
     // Compute the request line BEFORE reading the body, so a 413 (body over the
     // limit) is still attributed to the right method+path rather than the GET /
