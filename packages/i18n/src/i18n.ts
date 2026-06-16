@@ -13,11 +13,25 @@
  *   i18n.t("fr", "cart.one");                  // falls back to en
  *   i18n.plural("en", "cart", 1);              // "1 item"
  *   i18n.plural("en", "cart", 3);              // "3 items"
+ *
+ * Pluralization is **locale-correct**: the category for `count` is chosen by the
+ * platform's `Intl.PluralRules` (zero-dep, present on Node and Workers), so
+ * `fr` treats 0 as singular, `ru`/`pl` distinguish `few`/`many`, and `ar` spans
+ * all six categories. A catalog need only supply the categories its language
+ * uses (`one`/`other` for English); `other` is the universal fallback, so a
+ * catalog keyed only by the bare/`other` key keeps working unchanged.
  */
 
 import { interpolate } from "./interpolate";
 
 import type { I18nOptions, Messages, OnMissing, Params } from "./types";
+
+/**
+ * The CLDR plural categories, in resolution order. `other` is mandatory in
+ * every language and is the fallback when a catalog omits the category that
+ * `Intl.PluralRules` selected — so a single `key.other` entry always resolves.
+ */
+type PluralCategory = Intl.LDMLPluralRule;
 
 /**
  * Read `key` from a catalog only if it is the catalog's OWN property.
@@ -43,6 +57,14 @@ export class I18n {
   private readonly fallback: boolean;
 
   private readonly onMissing: OnMissing | undefined;
+
+  /**
+   * Memoized `Intl.PluralRules` per locale. Constructing the rules object parses
+   * CLDR data, so a hot `plural` loop builds it once per locale rather than once
+   * per call. `null` records a locale whose tag `Intl` rejected, so the failed
+   * construction is attempted only once.
+   */
+  private readonly pluralRules = new Map<string, Intl.PluralRules | null>();
 
   constructor(options: I18nOptions) {
     this.catalogs = options.locales;
@@ -77,11 +99,22 @@ export class I18n {
   /**
    * Translate a pluralized `key` by `count`.
    *
-   * Picks `key.one` when `count === 1`, otherwise `key.other`, and threads
-   * `count` into the params so the chosen template can render it.
+   * The CLDR category for `count` is chosen by the locale's `Intl.PluralRules`
+   * (so `fr` makes 0 singular, `ru`/`pl` split `few`/`many`, `ar` uses all six),
+   * then looked up as `key.<category>`. When the catalog omits that category the
+   * `t` fallback chain takes over — and because every language defines `other`,
+   * a catalog with only `key.other` still resolves. `count` is threaded into the
+   * params so the chosen template can render it.
    */
   plural(locale: string, key: string, count: number, params: Params = {}): string {
-    const suffix = count === 1 ? "one" : "other";
+    const category = this.pluralCategory(locale, count);
+
+    const selected = this.lookup(locale, `${key}.${category}`);
+
+    // The selected category may be absent (a catalog needn't spell out every
+    // category for a language it doesn't use). Fall back to `other`, which CLDR
+    // guarantees in every locale, before surfacing a visible miss via `t`.
+    const suffix = selected === undefined && category !== "other" ? "other" : category;
 
     return this.t(locale, `${key}.${suffix}`, { ...params, count });
   }
@@ -97,6 +130,41 @@ export class I18n {
   }
 
   // -- internals ------------------------------------------------------------
+
+  /**
+   * The CLDR plural category `Intl.PluralRules` assigns to `count` in `locale`.
+   *
+   * The rules object is memoized per locale. A locale tag that `Intl` cannot
+   * parse (a structurally invalid BCP-47 string) throws on construction; rather
+   * than break a translation, the failure is recorded as `null` and the count
+   * resolves to `other` — the universal category — keeping `plural` total like
+   * `t`.
+   */
+  private pluralCategory(locale: string, count: number): PluralCategory {
+    const rules = this.rulesFor(locale);
+
+    return rules === null ? "other" : rules.select(count);
+  }
+
+  /** Build-or-fetch the cached `Intl.PluralRules` for `locale`; `null` if its tag is invalid. */
+  private rulesFor(locale: string): Intl.PluralRules | null {
+    const cached = this.pluralRules.get(locale);
+
+    if (cached !== undefined) return cached;
+
+    let rules: Intl.PluralRules | null;
+    try {
+      rules = new Intl.PluralRules(locale);
+    } catch {
+      // An unparseable locale tag is a developer error, not runtime data — a
+      // pluralization must not throw, so it degrades to the `other` category.
+      rules = null;
+    }
+
+    this.pluralRules.set(locale, rules);
+
+    return rules;
+  }
 
   /** Fire the missing-key counter, swallowing a throw so `t` stays total. */
   private reportMissing(locale: string, key: string): void {

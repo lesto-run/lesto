@@ -72,12 +72,16 @@ describe("I18n.t", () => {
 });
 
 describe("I18n.plural", () => {
-  it("uses .one and interpolates count when count === 1", () => {
+  it("uses .one and interpolates count when English selects `one`", () => {
     expect(make().plural("en", "cart", 1)).toBe("1 item in your cart");
   });
 
-  it("uses .other and interpolates count when count !== 1", () => {
+  it("uses .other and interpolates count when English selects `other`", () => {
     expect(make().plural("en", "cart", 3)).toBe("3 items in your cart");
+  });
+
+  it("uses .other for zero in English (English has no `zero` category)", () => {
+    expect(make().plural("en", "cart", 0)).toBe("0 items in your cart");
   });
 
   it("merges caller params alongside count", () => {
@@ -87,6 +91,128 @@ describe("I18n.plural", () => {
     });
 
     expect(i18n.plural("en", "x", 2, { who: "Ada" })).toBe("2 for Ada");
+  });
+
+  // -- locale-correct categories (Intl.PluralRules) -------------------------
+
+  it("treats 0 as singular in French (fr selects `one` for 0 and 1)", () => {
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: {
+        en: { "cart.one": "{count} item", "cart.other": "{count} items" },
+        fr: { "cart.one": "{count} article", "cart.other": "{count} articles" },
+      },
+    });
+
+    expect(i18n.plural("fr", "cart", 0)).toBe("0 article");
+    expect(i18n.plural("fr", "cart", 1)).toBe("1 article");
+    expect(i18n.plural("fr", "cart", 2)).toBe("2 articles");
+  });
+
+  it("selects one/few/many for Russian", () => {
+    const ru: Messages = {
+      "file.one": "{count} файл",
+      "file.few": "{count} файла",
+      "file.many": "{count} файлов",
+    };
+    const i18n = new I18n({ defaultLocale: "ru", locales: { ru } });
+
+    expect(i18n.plural("ru", "file", 1)).toBe("1 файл"); // one
+    expect(i18n.plural("ru", "file", 2)).toBe("2 файла"); // few
+    expect(i18n.plural("ru", "file", 5)).toBe("5 файлов"); // many
+    expect(i18n.plural("ru", "file", 21)).toBe("21 файл"); // one (21)
+    expect(i18n.plural("ru", "file", 0)).toBe("0 файлов"); // many (0)
+  });
+
+  it("selects one/few/many for Polish", () => {
+    const pl: Messages = {
+      "item.one": "{count} element",
+      "item.few": "{count} elementy",
+      "item.many": "{count} elementów",
+    };
+    const i18n = new I18n({ defaultLocale: "pl", locales: { pl } });
+
+    expect(i18n.plural("pl", "item", 1)).toBe("1 element"); // one
+    expect(i18n.plural("pl", "item", 2)).toBe("2 elementy"); // few
+    expect(i18n.plural("pl", "item", 5)).toBe("5 elementów"); // many
+    expect(i18n.plural("pl", "item", 22)).toBe("22 elementy"); // few (22)
+  });
+
+  it("selects all six categories for Arabic", () => {
+    const ar: Messages = {
+      "day.zero": "صفر أيام",
+      "day.one": "يوم واحد",
+      "day.two": "يومان",
+      "day.few": "{count} أيام",
+      "day.many": "{count} يوماً",
+      "day.other": "{count} يوم",
+    };
+    const i18n = new I18n({ defaultLocale: "ar", locales: { ar } });
+
+    expect(i18n.plural("ar", "day", 0)).toBe("صفر أيام"); // zero
+    expect(i18n.plural("ar", "day", 1)).toBe("يوم واحد"); // one
+    expect(i18n.plural("ar", "day", 2)).toBe("يومان"); // two
+    expect(i18n.plural("ar", "day", 3)).toBe("3 أيام"); // few
+    expect(i18n.plural("ar", "day", 11)).toBe("11 يوماً"); // many
+    expect(i18n.plural("ar", "day", 100)).toBe("100 يوم"); // other
+  });
+
+  // -- `other` fallback for omitted categories ------------------------------
+
+  it("falls back to .other when the selected category is absent from the catalog", () => {
+    // Russian selects `few` for 2, but the catalog only spells `other`; the
+    // bare-language catalog must keep working.
+    const i18n = new I18n({
+      defaultLocale: "ru",
+      locales: { ru: { "file.other": "{count} файлов" } },
+    });
+
+    expect(i18n.plural("ru", "file", 2)).toBe("2 файлов");
+  });
+
+  it("surfaces the .other key when the selected category resolves nowhere", () => {
+    const i18n = new I18n({ defaultLocale: "ar", locales: { ar: {} } });
+
+    // 2 selects `two` in Arabic, but with neither `two` nor `other` in the
+    // catalog the selection collapses to the universal `other`, so the visible
+    // miss names `day.other` — the key a translator should add first.
+    expect(i18n.plural("ar", "day", 2)).toBe("day.other");
+  });
+
+  it("surfaces the selected-category key when it is present but renders the bare key", () => {
+    // When the selected category DOES resolve (no `other` collapse), the
+    // selected suffix is kept — here `two` exists, so 2 renders it.
+    const i18n = new I18n({
+      defaultLocale: "ar",
+      locales: { ar: { "day.two": "يومان" } },
+    });
+
+    expect(i18n.plural("ar", "day", 2)).toBe("يومان");
+  });
+
+  // -- robustness: malformed locale tag -------------------------------------
+
+  it("degrades to the `other` category for a locale tag Intl cannot parse", () => {
+    // A structurally invalid BCP-47 tag throws inside Intl.PluralRules; plural
+    // must stay total and resolve `other` rather than propagate the RangeError.
+    const i18n = new I18n({
+      defaultLocale: "not a locale",
+      locales: { "not a locale": { "cart.other": "{count} items" } },
+    });
+
+    expect(i18n.plural("not a locale", "cart", 1)).toBe("1 items");
+  });
+
+  it("memoizes the rules per locale across repeated calls", () => {
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: { en: { "cart.one": "{count} item", "cart.other": "{count} items" } },
+    });
+
+    // Two calls exercise the cache-hit branch (second call returns the memoized
+    // rules) as well as the malformed-tag cache-hit on repeat.
+    expect(i18n.plural("en", "cart", 1)).toBe("1 item");
+    expect(i18n.plural("en", "cart", 2)).toBe("2 items");
   });
 });
 
