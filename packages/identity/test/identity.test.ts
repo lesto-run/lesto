@@ -407,6 +407,36 @@ describe("login", () => {
     expect(afterSecond!.passwordHash).toBe(stored!.passwordHash);
   });
 
+  it("still logs in when the best-effort rehash persist fails", async () => {
+    const { identity } = buildIdentity();
+    const password = "correct horse staple";
+
+    const salt = randomBytes(16);
+    const key = scryptSync(password, salt, 64, { N: 2 ** 14, r: 8, p: 1 });
+    const legacyHash = `scrypt$${salt.toString("hex")}$${key.toString("hex")}`;
+
+    await userRepo.insertUser(db, {
+      email: "ada@example.com",
+      passwordHash: legacyHash,
+      emailVerifiedAt: new Date().toISOString(),
+    });
+
+    // The upgrade write fails — the login must succeed anyway (the proven
+    // credentials are valid; only the cost upgrade is deferred).
+    const spy = vi
+      .spyOn(userRepo, "setPasswordHash")
+      .mockRejectedValueOnce(new Error("write conflict"));
+
+    const { session } = await identity.login("ada@example.com", password);
+
+    expect(session).toBeDefined();
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // The stored hash was left untouched — and a later login can retry the upgrade.
+    const stored = await userRepo.findUserByEmail(db, "ada@example.com");
+    expect(stored!.passwordHash).toBe(legacyHash);
+  });
+
   it("does not rehash a current-cost hash on login", async () => {
     const { identity, sent } = buildIdentity();
 

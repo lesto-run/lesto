@@ -224,7 +224,7 @@ class SmtpConnection {
 }
 
 function buildMessage(email: RenderedEmail, from: string): string {
-  const lines: string[] = [
+  const headers: string[] = [
     `From: ${from}`,
     `To: ${email.to}`,
     `Subject: ${email.subject}`,
@@ -233,16 +233,15 @@ function buildMessage(email: RenderedEmail, from: string): string {
   ];
 
   for (const [name, value] of Object.entries(email.headers ?? {})) {
-    lines.push(`${name}: ${value}`);
+    headers.push(`${name}: ${value}`);
   }
 
   let body: string;
 
   if (email.text !== undefined) {
     const boundary = `keel-${email.messageId}`;
-    lines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+    headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
     body = [
-      "",
       `--${boundary}`,
       "Content-Type: text/plain; charset=utf-8",
       "",
@@ -254,12 +253,14 @@ function buildMessage(email: RenderedEmail, from: string): string {
       `--${boundary}--`,
     ].join("\r\n");
   } else {
-    lines.push('Content-Type: text/html; charset="utf-8"');
-    body = `\r\n${email.html}`;
+    headers.push('Content-Type: text/html; charset="utf-8"');
+    body = email.html;
   }
 
-  // RFC 5321 dot-stuffing: a line that is just "." would end DATA early.
-  const message = `${lines.join("\r\n")}${body}`.replace(/\n\./g, "\n..");
+  // A blank line separates the header block from the body (RFC 5322 §2.1) —
+  // without it a client folds the body into the headers. Then RFC 5321
+  // dot-stuffing: a body line that is just "." would otherwise end DATA early.
+  const message = `${headers.join("\r\n")}\r\n\r\n${body}`.replace(/\n\./g, "\n..");
 
   return `${message}\r\n.`;
 }

@@ -161,10 +161,10 @@ export class Mailer {
   /**
    * Define an email template by name.
    *
-   * A static `from` is validated for header injection up front — a bad
-   * `defaultFrom`-overriding address never reaches a worker. Per-message
-   * `to`/`subject`/`from`/`headers` are validated again at deliver time, since
-   * they are only known once params arrive.
+   * The template is a function of its params, so the concrete `to`/`subject`/
+   * `from`/`headers` only exist once it runs. They are validated for header
+   * injection at deliver time (see {@link deliver}) — and again at the transport
+   * edge — rather than here, where there is nothing concrete to check yet.
    */
   define<P extends JsonValue>(name: string, build: (params: P) => Email | Promise<Email>): this {
     this.builders.set(name, build as Builder);

@@ -169,6 +169,33 @@ describe("createSmtpTransport", () => {
     expect(fake.ended).toBe(true);
   });
 
+  it("separates the header block from the body with a blank line (RFC 5322 §2.1)", async () => {
+    const fake = new FakeSocket([
+      "220 ready\r\n",
+      "250 ok\r\n", // EHLO
+      "250 ok\r\n", // MAIL FROM
+      "250 ok\r\n", // RCPT TO
+      "354 go\r\n", // DATA
+      "250 queued\r\n", // body
+      "221 bye\r\n", // QUIT
+    ]);
+
+    const transport = createSmtpTransport({
+      host: "mail.test",
+      port: 25,
+      secure: false,
+      connect: async () => fake,
+    });
+
+    await transport.send({ ...base(), from: "from@app.com" });
+
+    // The DATA payload is the one write carrying the HTML body. The last header
+    // must be followed by a blank line (CRLF CRLF) before the body — a single
+    // CRLF folds the body into the headers and clients mis-parse the message.
+    const message = fake.written.find((line) => line.includes("<p>Hi</p>"));
+    expect(message).toContain('Content-Type: text/html; charset="utf-8"\r\n\r\n<p>Hi</p>');
+  });
+
   it("performs STARTTLS and AUTH LOGIN, and a multipart body for text+html", async () => {
     const plain = new FakeSocket([
       "220 ready\r\n",
@@ -208,6 +235,8 @@ describe("createSmtpTransport", () => {
     expect(body).toBeDefined();
     expect(body).toContain("text/plain");
     expect(body).toContain("text/html");
+    // A blank line ends the header block before the first MIME boundary.
+    expect(body).toContain('boundary="keel-keel-mail-7"\r\n\r\n--keel-keel-mail-7');
   });
 
   it("falls back to the auth user as From when none is given", async () => {

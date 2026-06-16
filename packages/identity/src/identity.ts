@@ -386,8 +386,16 @@ export function createIdentity(options: IdentityOptions): Identity {
       }
 
       // Transparently upgrade a stale hash now that we hold the proven plaintext.
+      // Best-effort: a failed re-hash or persist must NEVER deny an otherwise-
+      // valid login. On failure the stored hash simply stays at its old (still
+      // valid) cost and the upgrade is retried on the next sign-in — swallowing
+      // here is strictly safer than blocking auth on a transient write error.
       if (needsRehash(user.passwordHash)) {
-        await userRepo.setPasswordHash(db, user.id, await hashPassword(password));
+        try {
+          await userRepo.setPasswordHash(db, user.id, await hashPassword(password));
+        } catch {
+          // The login succeeded; the cost upgrade can wait for the next login.
+        }
       }
 
       const session = await sessions.create(String(user.id), sessionTtlMs);
