@@ -14,10 +14,15 @@ import { hydrateDocumentIslands } from "@keel/ui/client";
 
 import { AccountIsland } from "./src/ui/account-island";
 import { LiveListing } from "./src/ui/live-listing";
+import { DeferredPanel } from "./src/ui/deferred-panel";
 
 // Each island's declaration (carried on `.island`) is what the client registers,
 // so the browser mounts the very components the server reserved slots for:
-// Account (server-resolved data) and LiveListing (client-fetched via @keel/client).
-const registry = new Registry().defineClient(AccountIsland.island).defineClient(LiveListing.island);
+// Account (eager, server-resolved data), LiveListing (client-fetched via
+// @keel/client), and DeferredPanel (hydrated only when scrolled into view).
+const registry = new Registry()
+  .defineClient(AccountIsland.island)
+  .defineClient(LiveListing.island)
+  .defineClient(DeferredPanel.island);
 
 hydrateDocumentIslands(registry);

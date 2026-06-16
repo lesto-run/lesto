@@ -24,6 +24,7 @@ import { createGuard, definePolicy } from "@keel/authz";
 
 import { Button, Hero, ListingCard, Main, Section, SiteHeader } from "./ui/components";
 import { LiveListing } from "./ui/live-listing";
+import { DeferredPanel } from "./ui/deferred-panel";
 import { buildContentRoutes } from "./content";
 import { LISTINGS, findListing, formatPrice } from "./listings";
 import type { Listing } from "./listings";
@@ -85,6 +86,15 @@ function LabIndex(): ReactNode {
           </p>
 
           <LiveListing listingId="malibu-cliff" />
+        </Section>
+
+        <Section title="Deferred hydration (the DeferredPanel island)">
+          <p className="copy">
+            Below the fold on purpose: this island's JavaScript wires up only when it scrolls into
+            view (`hydrate: "visible"`).
+          </p>
+
+          <DeferredPanel />
         </Section>
       </Main>
     </>

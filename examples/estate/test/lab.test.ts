@@ -45,6 +45,17 @@ describe("/lab — SSR data fetching + typed param", () => {
   });
 });
 
+describe("/lab — deferred (visible) hydration island", () => {
+  it("ships the DeferredPanel with a visible-hydration strategy in its mount script", async () => {
+    const app = await buildApp();
+
+    const html = await body(await app.handle("GET", "/lab"));
+
+    expect(html).toContain('"component":"DeferredPanel"');
+    expect(html).toContain('"strategy":"visible"');
+  });
+});
+
 describe("/lab/streaming — shell-first streaming", () => {
   it("streams the shell then the suspended listings", async () => {
     const app = await buildApp();
