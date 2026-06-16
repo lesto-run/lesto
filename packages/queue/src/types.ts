@@ -68,6 +68,46 @@ export interface RunResult {
   readonly outcome: RunOutcome;
 }
 
+/**
+ * The observability record for one processed job — what {@link JobObserver} sees.
+ *
+ * Carries only the metadata an operator or tracer needs (queue, id, outcome,
+ * attempt, duration); the payload BODY is deliberately omitted so a sink can never
+ * leak job contents into a log or span. `durationMs` measures the processing span:
+ * the handler call (or the terminal transition for a poison/unhandled job), not
+ * the time the job waited in the queue.
+ */
+export interface JobEvent {
+  readonly queue: string;
+  readonly id: number;
+  readonly name: string;
+  readonly outcome: RunOutcome;
+  readonly attempt: number;
+  readonly durationMs: number;
+}
+
+/** A sink invoked once per processed job. A throw is contained, never fatal. */
+export type JobObserver = (event: JobEvent) => void;
+
+/**
+ * A queue's health at a glance — for dashboards, the MCP surface, and tracing.
+ *
+ * The per-status counts stay TOP-LEVEL keys (`ready`, `running`, `done`,
+ * `failed`), each a real `number` (Postgres returns `COUNT(*)` as a string, so
+ * every count is coerced via `Number()`). On top of the counts:
+ *
+ * - `depth` — the backlog: jobs `ready` AND already eligible (`run_at <= now`),
+ *   i.e. work a worker could claim right now. Distinct from the `ready` count,
+ *   which also includes jobs scheduled for the future.
+ * - `oldestReadyAgeMs` — how long the oldest such eligible job has waited, in
+ *   milliseconds, or `null` when the backlog is empty. The headline latency
+ *   signal: a growing value means workers are falling behind.
+ */
+export type QueueStats = Partial<Record<JobStatus, number>> & {
+  readonly depth: number;
+  readonly oldestReadyAgeMs: number | null;
+};
+
 /** A clock we can stop. Injected everywhere time matters, so tests are deterministic. */
 export type Clock = () => Date;
 

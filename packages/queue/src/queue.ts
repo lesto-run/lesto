@@ -7,8 +7,11 @@ import type {
   EnqueueOptions,
   Job,
   JobHandler,
+  JobObserver,
   JobStatus,
   JsonValue,
+  QueueStats,
+  RunOutcome,
   RunResult,
   SqlDatabase,
 } from "./types";
@@ -29,6 +32,12 @@ const TABLE = "keel_jobs";
  * RETURNING *`. On Postgres the subselect adds `FOR UPDATE SKIP LOCKED`, so
  * concurrent workers each skip rows another has already locked and every job is
  * claimed exactly once — behind this exact API (see {@link Queue.claim}).
+ *
+ * Two observability seams are optional and additive: a `work({ onJob })` /
+ * `runOnce({ onJob })` sink fires once per processed job with its outcome and
+ * `durationMs` (no payload), and {@link Queue.stats} reports per-status counts
+ * plus the backlog signals `depth` + `oldestReadyAgeMs`. Both are inert by
+ * default — no sink, no cost.
  */
 
 /**
@@ -188,6 +197,13 @@ export interface WorkOptions {
    * `QueueError`; branch on its code, log it, ship it to your tracer.
    */
   readonly onError?: (error: QueueError) => void;
+
+  /**
+   * The observability seam for processed jobs: fires once per job this worker
+   * runs, with its outcome, attempt, and processing `durationMs` (NO payload).
+   * Forwarded straight to {@link Queue#runOnce} — see {@link JobObserver}.
+   */
+  readonly onJob?: JobObserver;
 }
 
 export interface Worker {
@@ -340,7 +356,7 @@ export class Queue {
 
   /** Claim and run exactly one job. Returns the outcome, or `null` when idle. */
   async runOnce(
-    options: { queue?: string; visibilityMs?: number } = {},
+    options: { queue?: string; visibilityMs?: number; onJob?: JobObserver } = {},
   ): Promise<RunResult | null> {
     await this.reclaim();
 
@@ -351,6 +367,11 @@ export class Queue {
     if (!row) {
       return null;
     }
+
+    // Bracket the processing span here, the moment after the claim resolves, so
+    // `durationMs` measures the WORK (parse + handler + terminal transition) and
+    // never the time the job waited in the queue.
+    const start = performance.now();
 
     // The row is claimed (attempts incremented, locked) BEFORE the payload is
     // parsed. A poison payload — invalid JSON a producer wrote — must not throw
@@ -373,7 +394,7 @@ export class Queue {
         }),
       );
 
-      return { job: meta, outcome };
+      return this.observed(meta, outcome, start, options.onJob);
     }
 
     const job: Job = { ...meta, payload };
@@ -385,19 +406,49 @@ export class Queue {
         new QueueError("QUEUE_HANDLER_NOT_FOUND", `No handler for job "${job.name}".`),
       );
 
-      return { job, outcome };
+      return this.observed(job, outcome, start, options.onJob);
     }
 
     try {
       await handler(job.payload, { job, attempt: job.attempts });
       await this.complete(job);
 
-      return { job, outcome: "done" };
+      return this.observed(job, "done", start, options.onJob);
     } catch (error) {
       const outcome = await this.fail(job, error);
 
-      return { job, outcome };
+      return this.observed(job, outcome, start, options.onJob);
     }
+  }
+
+  /**
+   * Assemble the {@link RunResult} and, if a sink is present, report the processed
+   * job through it. The sink runs on the same metadata every outcome shares, after
+   * the terminal transition has landed; a throwing sink is contained so a broken
+   * observer can never break job processing or resurrect the very loop it watches.
+   */
+  private observed(
+    job: Job,
+    outcome: RunOutcome,
+    start: number,
+    onJob: JobObserver | undefined,
+  ): RunResult {
+    if (onJob) {
+      try {
+        onJob({
+          queue: job.queue,
+          id: job.id,
+          name: job.name,
+          outcome,
+          attempt: job.attempts,
+          durationMs: performance.now() - start,
+        });
+      } catch {
+        // A throwing observability sink is not allowed to break job processing.
+      }
+    }
+
+    return { job, outcome };
   }
 
   /** Start a polling worker. The returned handle drains gracefully on `stop()`. */
@@ -408,6 +459,7 @@ export class Queue {
     const concurrency = options.concurrency ?? 1;
     const sleep = options.sleep ?? defaultSleep;
     const onError = options.onError;
+    const onJob = options.onJob;
 
     let running = true;
 
@@ -441,7 +493,9 @@ export class Queue {
     const loop = async (): Promise<void> => {
       while (running) {
         try {
-          const result = await this.runOnce({ queue, visibilityMs });
+          const result = await this.runOnce(
+            onJob ? { queue, visibilityMs, onJob } : { queue, visibilityMs },
+          );
           if (result === null) {
             await sleep(pollMs);
           }
@@ -462,22 +516,46 @@ export class Queue {
     };
   }
 
-  /** A count of jobs by status for one queue — for dashboards, MCP, and tests. */
-  async stats(queue: string = this.defaultQueue): Promise<Partial<Record<JobStatus, number>>> {
+  /**
+   * A queue's health: per-status counts plus the two backlog signals
+   * (`depth`, `oldestReadyAgeMs`) — for dashboards, MCP, tracing, and tests.
+   */
+  async stats(queue: string = this.defaultQueue): Promise<QueueStats> {
     // `COUNT(*)` comes back a STRING from node-postgres (it returns `bigint`
     // columns as strings to avoid precision loss); better-sqlite3 returns a
-    // number. Type the raw row as `string | number` and coerce with `Number(…)`
+    // number. Type each count as `string | number` and coerce with `Number(…)`
     // so `stats()` always yields the numbers its return type promises — the same
     // coercion every other read path applies to Postgres-stringified integers.
-    const rows = (await this.db
+    const counts = (await this.db
       .prepare(`SELECT status, COUNT(*) AS n FROM ${TABLE} WHERE queue = ? GROUP BY status`)
       .all([queue])) as Array<{ status: JobStatus; n: string | number }>;
 
-    return rows.reduce<Partial<Record<JobStatus, number>>>((counts, row) => {
-      counts[row.status] = Number(row.n);
+    // The backlog = jobs `ready` AND already eligible (`run_at <= now`): the work
+    // a worker could claim this instant. `depth` is its count; `oldest` is the
+    // earliest `run_at` among them (ISO-8601 sorts chronologically, so `MIN` is
+    // the oldest), from which the wait age is derived. A future-scheduled `ready`
+    // job is excluded from BOTH — it is not yet a backlog.
+    const now = nowIso(this.clock);
+    const backlog = (await this.db
+      .prepare(
+        `SELECT COUNT(*) AS n, MIN(run_at) AS oldest
+           FROM ${TABLE}
+          WHERE queue = ? AND status = 'ready' AND run_at <= ?`,
+      )
+      .get([queue, now])) as { n: string | number; oldest: string | null };
 
-      return counts;
+    const stats = counts.reduce<Partial<Record<JobStatus, number>>>((acc, row) => {
+      acc[row.status] = Number(row.n);
+
+      return acc;
     }, {});
+
+    // An empty backlog has no oldest job: `MIN` over zero rows is SQL `NULL`, so
+    // the age is `null` rather than a misleading 0.
+    const oldestReadyAgeMs =
+      backlog.oldest === null ? null : this.clock().getTime() - new Date(backlog.oldest).getTime();
+
+    return { ...stats, depth: Number(backlog.n), oldestReadyAgeMs };
   }
 
   /** Fetch one job by id, or `null`. */

@@ -59,7 +59,7 @@ export { and, eq, gt, gte, inList, isNotNull, isNull, like, lt, lte, ne, or } fr
 export type { Condition } from "./conditions";
 
 export { createDb } from "./queries";
-export type { Db, SelectQuery } from "./queries";
+export type { Db, DbOptions, QueryEvent, SelectQuery } from "./queries";
 
 export type { SqlDatabase, SqlStatement } from "./sql";
 

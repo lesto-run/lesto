@@ -17,6 +17,10 @@
  * {@link SqlDatabase}. Columns are addressed through the typed `Table`
  * value, so the only strings interpolated into SQL are identifiers we own;
  * every user-supplied value rides a `?` placeholder.
+ *
+ * An optional {@link DbOptions.onQuery} sink observes every executed query (sql +
+ * measured `durationMs`) for tracing; with no sink the driver handle flows through
+ * untouched and there is zero measurement cost.
  */
 
 import type { Column } from "./columns";
@@ -451,6 +455,15 @@ export interface Db {
   transaction<R>(fn: (tx: Db) => Promise<R>): Promise<R>;
 }
 
+/** A single executed query, reported to {@link DbOptions.onQuery}. */
+export interface QueryEvent {
+  /** The SQL text sent to the driver (identifiers only — every value rode a `?`). */
+  readonly sql: string;
+
+  /** Wall-clock duration of the driver round-trip, in milliseconds (fractional). */
+  readonly durationMs: number;
+}
+
 /** Options for {@link createDb}. */
 export interface DbOptions {
   /**
@@ -460,15 +473,77 @@ export interface DbOptions {
    * {@link Db.transaction} inherits its parent's dialect.
    */
   readonly dialect?: Dialect;
+
+  /**
+   * Observability seam: invoked once per *executed* query with the SQL text and a
+   * measured `durationMs`. Fires for every `get`/`all`/`run` a statement runs —
+   * the select/insert/update/delete terminals AND the {@link Db.raw} escape hatch
+   * (`exec` runs no statement and never reports). Default `undefined` = zero
+   * behaviour change and zero measurement cost.
+   *
+   * The hook NEVER changes the query's result or its timing the caller observes:
+   * it runs after the driver resolves and its own throw is swallowed, so a broken
+   * sink can never break a query. A `tx` opened by {@link Db.transaction} inherits
+   * the same sink, so spans inside a transaction report too.
+   */
+  readonly onQuery?: (event: QueryEvent) => void;
+}
+
+/**
+ * Wrap a driver handle so each prepared statement reports its executed
+ * `get`/`all`/`run` to `onQuery`. The measurement brackets ONLY the driver call;
+ * the sink runs after the result resolves and its throw is contained, so neither
+ * the result nor the latency the caller sees is touched. `prepare` is sync (it
+ * compiles, it does not touch the wire), so it is forwarded untimed; `exec` and
+ * `transaction` pass through (a `tx`'s own `prepare` is re-wrapped one level down
+ * by the nested {@link createDb}).
+ */
+function instrument(sql: SqlDatabase, onQuery: (event: QueryEvent) => void): SqlDatabase {
+  // Time, run the terminal, then report — never letting a broken sink leak out.
+  const timed = async <T>(statement: string, run: () => Promise<T>): Promise<T> => {
+    const start = performance.now();
+    const result = await run();
+    const durationMs = performance.now() - start;
+
+    try {
+      onQuery({ sql: statement, durationMs });
+    } catch {
+      // A throwing observability sink must never break the query it observed.
+    }
+
+    return result;
+  };
+
+  return {
+    exec: (statement) => sql.exec(statement),
+
+    prepare: (statement) => {
+      const stmt = sql.prepare(statement);
+
+      return {
+        run: (params) => timed(statement, () => stmt.run(params)),
+        get: (params) => timed(statement, () => stmt.get(params)),
+        all: (params) => timed(statement, () => stmt.all(params)),
+      };
+    },
+
+    transaction: (fn) => sql.transaction(fn),
+  };
 }
 
 /** Build a {@link Db} bound to the given driver handle. */
 export function createDb(sql: SqlDatabase, options: DbOptions = {}): Db {
   const dialect = options.dialect ?? "sqlite";
-  const select = makeSelect(sql, dialect);
-  const insert = makeInsert(sql);
-  const update = makeUpdate(sql);
-  const deleteFrom = makeDelete(sql);
+  const onQuery = options.onQuery;
+
+  // Instrument the handle once, here, so every terminal AND `raw` reports through
+  // one seam. With no sink the original handle flows through untouched.
+  const handle = onQuery ? instrument(sql, onQuery) : sql;
+
+  const select = makeSelect(handle, dialect);
+  const insert = makeInsert(handle);
+  const update = makeUpdate(handle);
+  const deleteFrom = makeDelete(handle);
 
   return {
     select: () => select,
@@ -476,10 +551,15 @@ export function createDb(sql: SqlDatabase, options: DbOptions = {}): Db {
     update,
     delete: deleteFrom,
     exec: async (statement) => {
-      await sql.exec(statement);
+      await handle.exec(statement);
     },
     raw: async <R = Record<string, unknown>>(statement: string, params: readonly unknown[] = []) =>
-      (await sql.prepare(statement).all([...params])) as R[],
-    transaction: (fn) => sql.transaction((txSql) => fn(createDb(txSql, { dialect }))),
+      (await handle.prepare(statement).all([...params])) as R[],
+    transaction: (fn) =>
+      // A `tx` inherits both the dialect and the sink: re-wrapping inside the
+      // nested createDb instruments the transaction's own connection handle.
+      handle.transaction((txSql) =>
+        fn(createDb(txSql, onQuery ? { dialect, onQuery } : { dialect })),
+      ),
   };
 }

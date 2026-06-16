@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { cronMatches, installSchema, Queue, QueueError, Scheduler } from "../src/index";
 
-import type { SqlDatabase } from "../src/index";
+import type { JobEvent, SqlDatabase } from "../src/index";
 
 // A clock we can stop, so every time-dependent path is deterministic.
 let now: Date;
@@ -396,6 +396,161 @@ describe("stats & find", () => {
 
     expect(await queue.stats()).toMatchObject({ done: 1, ready: 1 });
     expect(await queue.find(99_999)).toBeNull();
+  });
+
+  it("reports backlog depth and the oldest ready job's age", async () => {
+    queue.define("s", () => {});
+
+    // Two jobs enqueued 5s apart; both ready and already eligible.
+    await queue.enqueue("s");
+    advance(5000);
+    await queue.enqueue("s");
+
+    // `depth` is the eligible backlog (2); `oldestReadyAgeMs` is the wait of the
+    // FIRST job, now 5s old at the clock's `now`.
+    const stats = await queue.stats();
+    expect(stats.depth).toBe(2);
+    expect(stats.oldestReadyAgeMs).toBe(5000);
+    expect(stats.ready).toBe(2);
+  });
+
+  it("excludes a future-scheduled job from depth and oldest-age", async () => {
+    queue.define("s", () => {});
+
+    // A job scheduled 60s out is `ready` in the status counts but NOT part of the
+    // eligible backlog — a worker could not claim it now.
+    await queue.enqueue("s", {}, { delayMs: 60_000 });
+
+    const stats = await queue.stats();
+    expect(stats.ready).toBe(1); // counted by status
+    expect(stats.depth).toBe(0); // but not yet eligible
+    expect(stats.oldestReadyAgeMs).toBeNull(); // empty backlog → null, not 0
+  });
+
+  it("coerces Postgres-stringified counts (int8) to real numbers", async () => {
+    // node-postgres hands COUNT(*) back as a STRING; a capture driver mimics that
+    // so we prove `stats()` returns numbers, not strings, on the PG shape.
+    const capture: SqlDatabase = {
+      prepare: (sql) => ({
+        run: async () => ({ changes: 0 }),
+        all: async () =>
+          sql.includes("GROUP BY status")
+            ? [
+                { status: "ready", n: "3" },
+                { status: "done", n: "1" },
+              ]
+            : [],
+        get: async () => ({ n: "3", oldest: "2026-06-08T11:59:55.000Z" }),
+      }),
+      exec: async () => {},
+      transaction: async (fn) => fn(capture),
+    };
+
+    const stats = await new Queue({ db: capture, clock }).stats();
+
+    // Every count is a real number despite the driver returning strings.
+    expect(stats.ready).toBe(3);
+    expect(stats.done).toBe(1);
+    expect(typeof stats.ready).toBe("number");
+    expect(stats.depth).toBe(3);
+    expect(typeof stats.depth).toBe("number");
+    // 12:00:00 (clock now) − 11:59:55 (oldest run_at) = 5000ms.
+    expect(stats.oldestReadyAgeMs).toBe(5000);
+  });
+});
+
+describe("onJob observability seam", () => {
+  it("fires once per processed job with outcome, attempt, duration — and NO payload", async () => {
+    const events: JobEvent[] = [];
+    queue.define<{ secret: string }>("s", () => {});
+
+    const id = await queue.enqueue("s", { secret: "do-not-leak" });
+    const result = await queue.runOnce({ onJob: (event) => events.push(event) });
+
+    expect(result?.outcome).toBe("done");
+    expect(events).toHaveLength(1);
+
+    const event = events[0]!;
+    expect(event).toMatchObject({ queue: "default", id, name: "s", outcome: "done", attempt: 1 });
+    expect(typeof event.durationMs).toBe("number");
+    expect(event.durationMs).toBeGreaterThanOrEqual(0);
+
+    // The event carries only metadata — no payload key at all, so a sink can
+    // never leak job contents into a log or span.
+    expect(event).not.toHaveProperty("payload");
+    expect(Object.keys(event).toSorted()).toEqual(
+      ["attempt", "durationMs", "id", "name", "outcome", "queue"].toSorted(),
+    );
+  });
+
+  it("reports a retry then a terminal failure outcome", async () => {
+    const outcomes: string[] = [];
+    queue.define("boom", () => {
+      throw new Error("nope");
+    });
+    await queue.enqueue("boom", {}, { maxAttempts: 2 });
+
+    await queue.runOnce({ onJob: (event) => outcomes.push(event.outcome) });
+    advance(1000);
+    await queue.runOnce({ onJob: (event) => outcomes.push(event.outcome) });
+
+    expect(outcomes).toEqual(["retry", "failed"]);
+  });
+
+  it("reports a no-handler failure and a poison-payload outcome", async () => {
+    const events: JobEvent[] = [];
+
+    // No registered handler → failed.
+    const ghost = await queue.enqueue("ghost", {}, { maxAttempts: 1 });
+    await queue.runOnce({ onJob: (event) => events.push(event) });
+    expect(events.at(-1)).toMatchObject({ id: ghost, outcome: "failed", attempt: 1 });
+
+    // Poison payload (corrupt the stored JSON) → routed through fail().
+    queue.define("p", () => {});
+    const poison = await queue.enqueue("p", { ok: true }, { maxAttempts: 1 });
+    database.prepare("UPDATE keel_jobs SET payload = ? WHERE id = ?").run("{not json", poison);
+    await queue.runOnce({ onJob: (event) => events.push(event) });
+    expect(events.at(-1)).toMatchObject({ id: poison, outcome: "failed" });
+  });
+
+  it("does not fire when the queue is idle", async () => {
+    const events: JobEvent[] = [];
+
+    expect(await queue.runOnce({ onJob: (event) => events.push(event) })).toBeNull();
+    expect(events).toEqual([]);
+  });
+
+  it("a throwing sink is contained — job processing still completes", async () => {
+    queue.define("s", () => {});
+    const id = await queue.enqueue("s");
+
+    const result = await queue.runOnce({
+      onJob: () => {
+        throw new Error("sink exploded");
+      },
+    });
+
+    // The job ran to completion despite the reporter throwing.
+    expect(result?.outcome).toBe("done");
+    expect((await queue.find(id))?.status).toBe("done");
+  });
+
+  it("forwards through work() — every drained job is observed", async () => {
+    const events: JobEvent[] = [];
+    queue.define<{ tag: string }>("t", () => {});
+    await queue.enqueue("t", { tag: "a" });
+    await queue.enqueue("t", { tag: "b" });
+
+    const worker = queue.work({
+      pollMs: 1,
+      sleep: yieldingSleep,
+      onJob: (event) => events.push(event),
+    });
+    await waitUntil(() => events.length === 2);
+    await worker.stop();
+
+    expect(events.map((event) => event.outcome)).toEqual(["done", "done"]);
+    expect(events.map((event) => event.name)).toEqual(["t", "t"]);
   });
 });
 

@@ -24,7 +24,7 @@ import {
   text,
 } from "../src/index";
 
-import type { Db, InferInsert, InferRow, InferUpdate, SqlDatabase } from "../src/index";
+import type { Db, InferInsert, InferRow, InferUpdate, QueryEvent, SqlDatabase } from "../src/index";
 
 // ---------------------------------------------------------------------------
 // Test rig
@@ -754,5 +754,79 @@ describe("raw", () => {
     const rows = await db.raw("SELECT email FROM users WHERE score > 99");
 
     expect(rows).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// onQuery — the observability seam
+// ---------------------------------------------------------------------------
+
+describe("onQuery observability seam", () => {
+  it("fires once per executed query (select/insert/update/delete/raw), with a measured duration", async () => {
+    const events: QueryEvent[] = [];
+    const observed = createDb(sql, { onQuery: (event) => events.push(event) });
+
+    await observed.insert(users).values({ email: "ada@x", passwordHash: "h" }).run();
+    await observed.insert(users).values({ email: "bob@x", passwordHash: "h" }).returning().get();
+    await observed.select().from(users).all();
+    await observed.select().from(users).where(eq(users.email, "ada@x")).get();
+    await observed.select().from(users).count();
+    await observed.update(users).set({ passwordHash: "n" }).where(eq(users.email, "ada@x")).run();
+    await observed.delete(users).where(eq(users.email, "bob@x")).run();
+    await observed.raw("SELECT email FROM users");
+
+    // One event per executed statement — eight in all.
+    expect(events).toHaveLength(8);
+
+    // Every event names the SQL it timed and carries a finite, non-negative
+    // duration in milliseconds.
+    for (const event of events) {
+      expect(typeof event.sql).toBe("string");
+      expect(event.sql.length).toBeGreaterThan(0);
+      expect(typeof event.durationMs).toBe("number");
+      expect(event.durationMs).toBeGreaterThanOrEqual(0);
+      expect(Number.isFinite(event.durationMs)).toBe(true);
+    }
+
+    // A spot-check that the reported SQL is the real statement, not a placeholder.
+    expect(events.some((event) => event.sql.includes("INSERT INTO"))).toBe(true);
+    expect(events.some((event) => event.sql.includes("COUNT(*)"))).toBe(true);
+  });
+
+  it("does NOT fire for exec (no statement is run)", async () => {
+    const events: QueryEvent[] = [];
+    const observed = createDb(sql, { onQuery: (event) => events.push(event) });
+
+    await observed.exec('CREATE TABLE IF NOT EXISTS "noop" ("x" TEXT)');
+
+    expect(events).toEqual([]);
+  });
+
+  it("a throwing sink is contained — it never breaks the query or its result", async () => {
+    const observed = createDb(sql, {
+      onQuery: () => {
+        throw new Error("sink exploded");
+      },
+    });
+
+    // The insert and the read both succeed despite the reporter throwing.
+    await expect(
+      observed.insert(users).values({ email: "ok@x", passwordHash: "h" }).run(),
+    ).resolves.toMatchObject({ changes: 1 });
+
+    const row = await observed.select().from(users).where(eq(users.email, "ok@x")).get();
+    expect(row?.email).toBe("ok@x");
+  });
+
+  it("a transaction inherits the sink — spans inside it report too", async () => {
+    const events: QueryEvent[] = [];
+    const observed = createDb(sql, { onQuery: (event) => events.push(event) });
+
+    await observed.transaction(async (tx) => {
+      await tx.insert(users).values({ email: "tx@x", passwordHash: "h" }).run();
+    });
+
+    // The insert inside the transaction reported through the inherited sink.
+    expect(events.some((event) => event.sql.includes("INSERT INTO"))).toBe(true);
   });
 });

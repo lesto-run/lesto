@@ -1,7 +1,14 @@
 import { WorkflowError } from "./errors";
 import { systemSleep } from "./sleep";
 
-import type { Dialect, Sleep, SqlDatabase, WorkflowContext, WorkflowFn } from "./types";
+import type {
+  Dialect,
+  Sleep,
+  SqlDatabase,
+  StepObserver,
+  WorkflowContext,
+  WorkflowFn,
+} from "./types";
 
 const TABLE = "keel_workflow_steps";
 
@@ -41,6 +48,13 @@ interface StepRow {
 export interface EngineOptions {
   readonly db: SqlDatabase;
   readonly sleep?: Sleep;
+
+  /**
+   * Observability seam: fires once per step pass with its `durationMs` and a
+   * `replayed` flag (executed `fn` vs. replayed a memoized result) — see
+   * {@link StepObserver}. No step result is carried. Inert by default.
+   */
+  readonly onStep?: StepObserver;
 }
 
 /**
@@ -50,11 +64,16 @@ export interface EngineOptions {
  * persisted the first time it runs, so re-running the same run id SKIPS already
  * completed steps and replays their results — crash-safe resume, DBOS-style.
  * No external engine, no Postgres required: it runs on any `SqlDatabase`.
+ *
+ * An optional `onStep` sink ({@link EngineOptions.onStep}) observes every step
+ * pass (executed or replayed, with a `durationMs`) for tracing; inert by default.
  */
 export class Engine {
   readonly #db: SqlDatabase;
 
   readonly #sleep: Sleep;
+
+  readonly #onStep: StepObserver | undefined;
 
   // The registry of known workflows, by name.
   readonly #workflows = new Map<string, WorkflowFn<never, unknown>>();
@@ -64,6 +83,9 @@ export class Engine {
 
     // Honor an injected sleep; otherwise wait on a real timer.
     this.#sleep = options.sleep ?? systemSleep;
+
+    // The optional per-step observability sink; undefined = inert.
+    this.#onStep = options.onStep;
   }
 
   /** Register a workflow under a name. Chainable. */
@@ -92,14 +114,41 @@ export class Engine {
       .run([runId, key, result]);
   }
 
-  /** Build the durable context bound to one run id. */
-  #context(runId: string): WorkflowContext {
+  /**
+   * Report one step pass through the observability sink, if present. A throwing
+   * sink is contained: an observer must never break the workflow it observes.
+   */
+  #report(workflow: string, runId: string, key: string, replayed: boolean, start: number): void {
+    if (this.#onStep === undefined) return;
+
+    try {
+      this.#onStep({
+        runId,
+        workflow,
+        step: key,
+        replayed,
+        durationMs: performance.now() - start,
+      });
+    } catch {
+      // A throwing observability sink is not allowed to break the workflow.
+    }
+  }
+
+  /** Build the durable context bound to one run id of a named workflow. */
+  #context(workflow: string, runId: string): WorkflowContext {
     return {
       step: async <T>(key: string, fn: () => T | Promise<T>): Promise<T> => {
+        const start = performance.now();
+
         const existing = await this.#read(runId, key);
 
-        // Durable memoization: a completed step replays without calling `fn`.
-        if (existing !== undefined) return JSON.parse(existing.result) as T;
+        // Durable memoization: a completed step replays without calling `fn`. The
+        // replay still reports — a tracer wants to see the resumed step too.
+        if (existing !== undefined) {
+          this.#report(workflow, runId, key, true, start);
+
+          return JSON.parse(existing.result) as T;
+        }
 
         // First execution: run, persist, return.
         const result = await fn();
@@ -109,6 +158,8 @@ export class Engine {
         // and leave NO row, so resume would RE-RUN the step (breaking exactly-once).
         // Coalesce to JSON null so every completed step records a durable row.
         await this.#write(runId, key, JSON.stringify(result ?? null));
+
+        this.#report(workflow, runId, key, false, start);
 
         return result;
       },
@@ -126,7 +177,7 @@ export class Engine {
       throw new WorkflowError("WORKFLOW_UNKNOWN", `No workflow named "${name}".`, { name });
     }
 
-    const ctx = this.#context(runId);
+    const ctx = this.#context(name, runId);
 
     return (fn as WorkflowFn<I, O>)(input, ctx);
   }

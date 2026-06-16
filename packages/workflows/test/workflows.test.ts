@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Engine, installWorkflowSchema, WorkflowError } from "../src/index";
 
-import type { Sleep, SqlDatabase } from "../src/index";
+import type { Sleep, SqlDatabase, StepEvent } from "../src/index";
 
 // A small better-sqlite3 adapter presenting the ADR 0006 async seam: the sync
 // engine's terminals are wrapped in resolved Promises; `prepare()` stays sync.
@@ -147,6 +147,68 @@ describe("Engine", () => {
     });
 
     await expect(engine.run("ghost", "run-1", undefined)).rejects.toBeInstanceOf(WorkflowError);
+  });
+});
+
+describe("onStep observability seam", () => {
+  it("fires once per step pass — executed first, replayed on resume — with a duration and no result", async () => {
+    const events: StepEvent[] = [];
+
+    const engine = new Engine({ db, onStep: (event) => events.push(event) }).define<
+      { amount: number },
+      number
+    >("checkout", async (input, ctx) => {
+      const charged = await ctx.step("charge", () => input.amount);
+      await ctx.step("notify", () => {});
+
+      return charged;
+    });
+
+    await engine.run("checkout", "order-1", { amount: 50 });
+
+    // Two executed steps, in order, each flagged not-replayed.
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.step)).toEqual(["charge", "notify"]);
+    expect(events.every((event) => event.replayed === false)).toBe(true);
+
+    const first = events[0]!;
+    expect(first).toMatchObject({ runId: "order-1", workflow: "checkout", step: "charge" });
+    expect(typeof first.durationMs).toBe("number");
+    expect(first.durationMs).toBeGreaterThanOrEqual(0);
+
+    // The event carries only metadata — never the step RESULT (no leak).
+    expect(first).not.toHaveProperty("result");
+    expect(Object.keys(first).toSorted()).toEqual(
+      ["durationMs", "replayed", "runId", "step", "workflow"].toSorted(),
+    );
+
+    // Resume the SAME run id: both steps replay from the journal, now flagged
+    // replayed — the tracer sees the resumed steps too.
+    await engine.run("checkout", "order-1", { amount: 50 });
+
+    expect(events).toHaveLength(4);
+    expect(events.slice(2).every((event) => event.replayed === true)).toBe(true);
+    expect(events.slice(2).map((event) => event.step)).toEqual(["charge", "notify"]);
+  });
+
+  it("a throwing sink is contained — the workflow still runs and persists", async () => {
+    let ran = 0;
+
+    const engine = new Engine({
+      db,
+      onStep: () => {
+        throw new Error("sink exploded");
+      },
+    }).define<void, number>("count", async (_input, ctx) => ctx.step("once", () => ++ran));
+
+    const result = await engine.run("count", "run-1", undefined);
+
+    // The step ran and its result returned despite the reporter throwing.
+    expect(result).toBe(1);
+
+    // It also persisted: resume replays instead of re-running.
+    await engine.run("count", "run-1", undefined);
+    expect(ran).toBe(1);
   });
 });
 

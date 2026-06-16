@@ -45,8 +45,8 @@ export {
 } from "./http-cache";
 export type { CacheControlOptions, NotModifiedResponse } from "./http-cache";
 
-export { runWorker } from "./worker";
-export type { RunWorkerOptions } from "./worker";
+export { defaultWorkerErrorSink, runWorker } from "./worker";
+export type { RunWorkerOptions, WorkerErrorSink } from "./worker";
 
 export { contentTypeOf, dispatchSites, isBinaryType, staticCacheControl } from "./sites";
 export type { AppHandler, DispatchSitesDeps, RequestOptions, StaticReader } from "./sites";

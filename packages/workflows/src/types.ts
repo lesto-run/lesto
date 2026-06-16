@@ -33,6 +33,27 @@ export interface SqlDatabase {
 export type Sleep = (ms: number) => Promise<void>;
 
 /**
+ * The observability record for one step pass — what {@link StepObserver} sees.
+ *
+ * Fires once each time a `ctx.step(key, fn)` is reached for a run, whether it
+ * EXECUTED `fn` (the first pass) or REPLAYED a memoized result (a resume). The
+ * `replayed` flag distinguishes the two: a tracer can fold replays into a "resumed
+ * from step N" span without re-timing work that already happened. `durationMs`
+ * times this pass only — the `fn` call on a fresh execution, or the journal read
+ * on a replay. No step RESULT is carried, so a sink can never leak step output.
+ */
+export interface StepEvent {
+  readonly runId: string;
+  readonly workflow: string;
+  readonly step: string;
+  readonly replayed: boolean;
+  readonly durationMs: number;
+}
+
+/** A sink invoked once per step pass. A throw is contained, never fatal. */
+export type StepObserver = (event: StepEvent) => void;
+
+/**
  * Which SQL dialect the workflow schema installs for. Defaults to `"sqlite"`.
  * The step-journal table is all `TEXT` columns under a composite primary key —
  * no auto-increment key, no epoch-ms integer — so its DDL is byte-identical on

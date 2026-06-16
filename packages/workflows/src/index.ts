@@ -28,6 +28,8 @@ export type {
   Sleep,
   SqlDatabase,
   SqlStatement,
+  StepEvent,
+  StepObserver,
   WorkflowContext,
   WorkflowFn,
 } from "./types";
