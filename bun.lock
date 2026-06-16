@@ -28,6 +28,20 @@
         "vitest": "^4.1.8",
       },
     },
+    "examples/admin": {
+      "name": "@keel/example-admin",
+      "version": "0.0.0",
+      "dependencies": {
+        "@keel/admin": "workspace:*",
+        "@keel/db": "workspace:*",
+        "@keel/kernel": "workspace:*",
+        "@keel/migrate": "workspace:*",
+        "@keel/runtime": "workspace:*",
+        "@keel/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+        "zod": "^4.0.0",
+      },
+    },
     "examples/blog": {
       "name": "@keel/example-blog",
       "version": "0.0.0",
@@ -1000,6 +1014,8 @@
     "@keel/deploy": ["@keel/deploy@workspace:packages/deploy"],
 
     "@keel/errors": ["@keel/errors@workspace:packages/errors"],
+
+    "@keel/example-admin": ["@keel/example-admin@workspace:examples/admin"],
 
     "@keel/example-blog": ["@keel/example-blog@workspace:examples/blog"],
 
