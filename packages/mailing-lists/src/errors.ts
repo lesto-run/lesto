@@ -7,7 +7,13 @@
 
 import { KeelError } from "@keel/errors";
 
-export type MailingListErrorCode = "MAILING_LIST_INVALID_TOKEN";
+export type MailingListErrorCode =
+  /** No subscriber matched a presented confirm/unsubscribe token. */
+  | "MAILING_LIST_INVALID_TOKEN"
+  /** A subscribe email failed shape validation before it could be stored. */
+  | "MAILING_LIST_INVALID_EMAIL"
+  /** A resumed broadcast referenced an id with no broadcast row. */
+  | "MAILING_LIST_UNKNOWN_BROADCAST";
 
 export class MailingListError extends KeelError<MailingListErrorCode> {
   constructor(code: MailingListErrorCode, message: string, details?: Record<string, unknown>) {
