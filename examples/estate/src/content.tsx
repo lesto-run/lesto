@@ -14,10 +14,9 @@
  * query + render path is identical.
  */
 
-import Database from "better-sqlite3";
-
 import { createDb, createTableSql, defineTable, eq, integer, text } from "@keel/db";
-import type { SqlDatabase } from "@keel/db";
+import type { Db } from "@keel/db";
+import { openSqlite } from "@keel/runtime";
 import { keel, type Keel } from "@keel/web";
 import { Registry } from "@keel/ui";
 import { renderTree } from "@keel/ui/server";
@@ -70,44 +69,6 @@ const blocks = new Registry()
     ),
   });
 
-/** Adapt better-sqlite3's variadic, synchronous API to `@keel/db`'s async handle. */
-function adapt(raw: Database.Database): SqlDatabase {
-  const adapted: SqlDatabase = {
-    exec: async (sql) => {
-      raw.exec(sql);
-    },
-    prepare: (sql) => {
-      const statement = raw.prepare(sql);
-
-      return {
-        run: async (params = []) => statement.run(...(params as never[])),
-        get: async (params = []) => statement.get(...(params as never[])),
-        all: async (params = []) => statement.all(...(params as never[])),
-      };
-    },
-    transaction: async (fn) => {
-      raw.exec("BEGIN");
-
-      try {
-        const out = await fn(adapted);
-        raw.exec("COMMIT");
-
-        return out;
-      } catch (error) {
-        try {
-          raw.exec("ROLLBACK");
-        } catch {
-          /* preserve the original error */
-        }
-
-        throw error;
-      }
-    },
-  };
-
-  return adapted;
-}
-
 /** A seeded page: its slug, title, and block tree. */
 interface SeedPage {
   slug: string;
@@ -140,20 +101,37 @@ const SEED: readonly SeedPage[] = [
   },
 ];
 
-// Build + seed the store once at module load. better-sqlite3 is synchronous, so
-// the DDL + seed run inline here; the request-time query path uses the async `Db`.
-const raw = new Database(":memory:");
-const db = createDb(adapt(raw));
+// Open + seed the store once, lazily. `openSqlite` is the framework's PORTABLE
+// sqlite seam (better-sqlite3 under Node/vitest, bun:sqlite under `bun run`), so
+// this works in the test runner AND in the real `bun run build`/`serve` — a
+// direct `better-sqlite3` import crashes the latter because Bun cannot dlopen the
+// native addon. The open is async, so it is memoized behind a promise the
+// request path awaits (estate's identity layer opens its DB the same way).
+let storePromise: Promise<Db> | undefined;
 
-raw.exec(createTableSql(pages));
+function store(): Promise<Db> {
+  storePromise ??= (async () => {
+    const { db: handle } = await openSqlite(":memory:");
+    const db = createDb(handle);
 
-const insert = raw.prepare("INSERT INTO pages (slug, title, tree) VALUES (?, ?, ?)");
-for (const page of SEED) {
-  insert.run(page.slug, page.title, JSON.stringify(page.tree));
+    await handle.exec(createTableSql(pages));
+
+    for (const page of SEED) {
+      await db
+        .insert(pages)
+        .values({ slug: page.slug, title: page.title, tree: JSON.stringify(page.tree) })
+        .run();
+    }
+
+    return db;
+  })();
+
+  return storePromise;
 }
 
 /** Load a stored page's title + block tree by slug, or `undefined` if none. */
 async function loadPage(slug: string): Promise<{ title: string; tree: UiNode } | undefined> {
+  const db = await store();
   const row = await db.select().from(pages).where(eq(pages.slug, slug)).get();
 
   if (row === undefined) return undefined;
