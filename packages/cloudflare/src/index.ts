@@ -21,14 +21,17 @@ export { toFetchHandler } from "./fetch-handler";
 export type {
   EdgeAccessEntry,
   EdgeDispatch,
+  EdgeExecutionContext,
+  EdgeInboundTrace,
   EdgeOptions,
   EdgeRequestOptions,
   EdgeRequestSpan,
   EdgeRequestTracer,
+  EdgeTraceparentParser,
 } from "./fetch-handler";
 
 export { withAssets } from "./assets";
-export type { AssetFetcher } from "./assets";
+export type { AssetAppHandler, AssetExecutionContext, AssetFetcher } from "./assets";
 
 export { wranglerConfig } from "./wrangler";
 export type { WranglerConfig, WranglerOptions } from "./wrangler";

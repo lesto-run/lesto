@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { KeelError } from "@keel/errors";
-import { currentContext } from "@keel/web";
+import { currentContext, currentRequestSpan } from "@keel/web";
 
 import type { DeployPlan } from "@keel/deploy";
 
@@ -10,10 +10,15 @@ import {
   toFetchHandler,
   withAssets,
   wranglerConfig,
+  type AssetAppHandler,
   type AssetFetcher,
   type EdgeAccessEntry,
   type EdgeDispatch,
+  type EdgeExecutionContext,
+  type EdgeInboundTrace,
   type EdgeRequestOptions,
+  type EdgeRequestTracer,
+  type EdgeTraceparentParser,
 } from "../src/index";
 
 // A dispatcher that records what it was called with and echoes a fixed response.
@@ -46,6 +51,73 @@ const throwingDispatch =
   () => {
     throw error;
   };
+
+/** One recorded edge span — what it was minted with and how it was finished. */
+interface RecordedSpan {
+  name: string;
+  inbound: EdgeInboundTrace | undefined;
+  attributes: Record<string, unknown>;
+  status?: string;
+  ended: boolean;
+  data: { traceId: string; spanId: string };
+}
+
+/**
+ * A recording tracer satisfying the structural `EdgeRequestTracer` seam, standing
+ * in for `@keel/observability`'s request tracer. Each minted span carries `data`
+ * ids (so it is assignable to the request context's span slice) and records the
+ * inbound trace it was joined to, so a test can assert the traceparent join.
+ */
+function recordingTracer(): { tracer: EdgeRequestTracer; spans: RecordedSpan[] } {
+  const spans: RecordedSpan[] = [];
+
+  const tracer: EdgeRequestTracer = {
+    startSpan: (name, inbound) => {
+      const index = spans.length;
+
+      const record: RecordedSpan = {
+        name,
+        inbound,
+        attributes: {},
+        ended: false,
+        data: {
+          traceId: inbound?.traceId ?? `trace-${index}`,
+          spanId: `span-${index}`,
+        },
+      };
+
+      spans.push(record);
+
+      return {
+        data: record.data,
+        setAttribute: (key, value) => (record.attributes[key] = value),
+        setStatus: (status) => (record.status = status),
+        end: () => (record.ended = true),
+      };
+    },
+  };
+
+  return { tracer, spans };
+}
+
+/** The W3C spec's example `traceparent` header — one trace across a hop. */
+const EXAMPLE_TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+/** The inbound join {@link EXAMPLE_TRACEPARENT} parses to. */
+const EXAMPLE_INBOUND: EdgeInboundTrace = {
+  traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+  parentId: "00f067aa0ba902b7",
+};
+
+/**
+ * A parser standing in for `@keel/observability`'s `parseTraceparent`: it returns
+ * the join for the spec's example header, and `undefined` for anything else.
+ */
+const exampleTraceparentParser: EdgeTraceparentParser = (header) =>
+  header === EXAMPLE_TRACEPARENT ? EXAMPLE_INBOUND : undefined;
+
+/** A parser that rejects everything — the malformed/absent-header path. */
+const rejectingParser: EdgeTraceparentParser = () => undefined;
 
 describe("toFetchHandler", () => {
   it("adapts method, path, query, and headers into the dispatcher", async () => {
@@ -166,28 +238,7 @@ describe("toFetchHandler", () => {
   });
 
   it("mints one span per request when a tracer is wired, error-flagged on a 500", async () => {
-    const spans: Array<{
-      name: string;
-      attributes: Record<string, unknown>;
-      status?: string;
-      ended: boolean;
-    }> = [];
-
-    // A recording tracer satisfying the structural EdgeRequestTracer seam,
-    // standing in for @keel/observability's Tracer.
-    const tracer = {
-      startSpan: (name: string) => {
-        const record: (typeof spans)[number] = { name, attributes: {}, ended: false };
-
-        spans.push(record);
-
-        return {
-          setAttribute: (key: string, value: unknown) => (record.attributes[key] = value),
-          setStatus: (status: "ok" | "error") => (record.status = status),
-          end: () => (record.ended = true),
-        };
-      },
-    };
+    const { tracer, spans } = recordingTracer();
 
     const handler = toFetchHandler(throwingDispatch(new Error("boom")), {
       tracer,
@@ -201,6 +252,7 @@ describe("toFetchHandler", () => {
     expect(spans).toEqual([
       {
         name: "http.request",
+        inbound: undefined,
         attributes: {
           "http.method": "GET",
           "http.path": "/mls/saved",
@@ -209,6 +261,7 @@ describe("toFetchHandler", () => {
         },
         status: "error",
         ended: true,
+        data: { traceId: "trace-0", spanId: "span-0" },
       },
     ]);
 
@@ -221,6 +274,226 @@ describe("toFetchHandler", () => {
 
     expect(spans[1]?.status).toBe("ok");
     expect(spans[1]?.ended).toBe(true);
+  });
+
+  it("joins an inbound W3C traceparent so the request span continues the caller's trace", async () => {
+    const { tracer, spans } = recordingTracer();
+
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    await toFetchHandler(dispatch, {
+      tracer,
+      parseTraceparent: exampleTraceparentParser,
+      logRequest: () => undefined,
+    })(new Request("https://example.com/mls", { headers: { traceparent: EXAMPLE_TRACEPARENT } }));
+
+    // The request span was minted with the parsed inbound trace — the cross-process
+    // join the node tier makes, now on the edge.
+    expect(spans[0]?.inbound).toEqual(EXAMPLE_INBOUND);
+  });
+
+  it("roots a fresh trace when the inbound header is absent or malformed", async () => {
+    const { tracer, spans } = recordingTracer();
+
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    await toFetchHandler(dispatch, {
+      tracer,
+      parseTraceparent: rejectingParser,
+      logRequest: () => undefined,
+    })(new Request("https://example.com/mls", { headers: { traceparent: "garbage" } }));
+
+    // No inbound join — the span roots its own trace.
+    expect(spans[0]?.inbound).toBeUndefined();
+  });
+
+  it("does not parse a traceparent when no tracer is wired (zero overhead)", async () => {
+    let parserCalled = false;
+
+    const parseTraceparent: EdgeTraceparentParser = () => {
+      parserCalled = true;
+
+      return undefined;
+    };
+
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    // No tracer → the inbound header is never even parsed.
+    await toFetchHandler(dispatch, { parseTraceparent, logRequest: () => undefined })(
+      new Request("https://example.com/mls", {
+        headers: { traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" },
+      }),
+    );
+
+    expect(parserCalled).toBe(false);
+  });
+
+  it("passes undefined to the parser when the request carries no traceparent header", async () => {
+    const { tracer } = recordingTracer();
+
+    // The parser records exactly what it was handed: an absent header is the
+    // Web Headers `.get()` null, normalized to `undefined` before the parser.
+    let received: string | undefined | "unset" = "unset";
+    const parseTraceparent: EdgeTraceparentParser = (header) => {
+      received = header;
+
+      return undefined;
+    };
+
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    await toFetchHandler(dispatch, { tracer, parseTraceparent, logRequest: () => undefined })(
+      new Request("https://example.com/mls"),
+    );
+
+    expect(received).toBeUndefined();
+  });
+
+  it("mints a span without an inbound when a tracer is wired but no parser is passed", async () => {
+    const { tracer, spans } = recordingTracer();
+
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    // Tracer but no parseTraceparent: the request still gets a span, just no join.
+    await toFetchHandler(dispatch, { tracer, logRequest: () => undefined })(
+      new Request("https://example.com/mls", {
+        headers: { traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" },
+      }),
+    );
+
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.inbound).toBeUndefined();
+  });
+
+  it("publishes the request span on the context, so a seam parents on it", async () => {
+    const { tracer, spans } = recordingTracer();
+
+    // The dispatcher reads the span the runtime published on the context — exactly
+    // how a @keel/db onQuery seam would find the request span to parent its child.
+    let seenSpanData: { traceId: string; spanId: string } | undefined;
+
+    const dispatch: EdgeDispatch = () => {
+      seenSpanData = currentRequestSpan()?.data;
+
+      return Promise.resolve({ status: 200, headers: {}, body: "ok" });
+    };
+
+    await toFetchHandler(dispatch, { tracer, logRequest: () => undefined })(
+      new Request("https://example.com/mls"),
+    );
+
+    // The span the handler minted is the one the in-request seam would read.
+    expect(seenSpanData).toEqual(spans[0]?.data);
+  });
+
+  it("does not publish a span on the context when no tracer is wired", async () => {
+    let seen: unknown = "unset";
+
+    const dispatch: EdgeDispatch = () => {
+      seen = currentRequestSpan();
+
+      return Promise.resolve({ status: 200, headers: {}, body: "ok" });
+    };
+
+    await toFetchHandler(dispatch, { logRequest: () => undefined })(
+      new Request("https://example.com/mls"),
+    );
+
+    expect(seen).toBeUndefined();
+  });
+
+  it("flushes telemetry via ctx.waitUntil AFTER the response, on the happy path", async () => {
+    const { tracer } = recordingTracer();
+
+    let flushed = false;
+    const flush = (): Promise<void> => {
+      flushed = true;
+
+      return Promise.resolve();
+    };
+
+    const scheduled: Array<Promise<unknown>> = [];
+    const ctx: EdgeExecutionContext = { waitUntil: (promise) => scheduled.push(promise) };
+
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    const response = await toFetchHandler(dispatch, { tracer, flush, logRequest: () => undefined })(
+      new Request("https://example.com/mls"),
+      ctx,
+    );
+
+    expect(response.status).toBe(200);
+
+    // The flush was handed to waitUntil — scheduled, not awaited on the response's
+    // critical path — and it ran, so the request's spans are not lost after return.
+    expect(scheduled).toHaveLength(1);
+
+    await Promise.all(scheduled);
+
+    expect(flushed).toBe(true);
+  });
+
+  it("flushes via ctx.waitUntil even when the dispatch throws (the error path drains too)", async () => {
+    const flushes: number[] = [];
+    const flush = (): Promise<void> => {
+      flushes.push(1);
+
+      return Promise.resolve();
+    };
+
+    const scheduled: Array<Promise<unknown>> = [];
+    const ctx: EdgeExecutionContext = { waitUntil: (promise) => scheduled.push(promise) };
+
+    const response = await toFetchHandler(throwingDispatch(new Error("boom")), {
+      flush,
+      logError: () => undefined,
+      logRequest: () => undefined,
+    })(new Request("https://example.com/mls"), ctx);
+
+    // The handler still answered (a safe 500), and the flush was still scheduled.
+    expect(response.status).toBe(500);
+    expect(scheduled).toHaveLength(1);
+
+    await Promise.all(scheduled);
+
+    expect(flushes).toEqual([1]);
+  });
+
+  it("never calls flush when no ctx is passed — a node-shaped caller stays one-arg", async () => {
+    let flushed = false;
+    const flush = (): Promise<void> => {
+      flushed = true;
+
+      return Promise.resolve();
+    };
+
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    // Driven with one argument (no ExecutionContext): the waitUntil flush is skipped.
+    await toFetchHandler(dispatch, { flush, logRequest: () => undefined })(
+      new Request("https://example.com/mls"),
+    );
+
+    expect(flushed).toBe(false);
+  });
+
+  it("never calls waitUntil when a ctx is passed but no flush is configured", async () => {
+    let waitUntilCalled = false;
+    const ctx: EdgeExecutionContext = {
+      waitUntil: () => {
+        waitUntilCalled = true;
+      },
+    };
+
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    // A ctx but no flush option: nothing to drain, so waitUntil is never touched.
+    await toFetchHandler(dispatch, { logRequest: () => undefined })(
+      new Request("https://example.com/mls"),
+      ctx,
+    );
+
+    expect(waitUntilCalled).toBe(false);
   });
 
   it("logs one access line per request — method, path, status, latency, id", async () => {
@@ -479,6 +752,46 @@ describe("withAssets", () => {
 
     expect(await response.text()).toBe("signed-in");
     expect(assetsCalled).toBe(false);
+  });
+
+  it("forwards the ExecutionContext to the app on a POST (so its waitUntil flush rides through)", async () => {
+    let seenCtx: EdgeExecutionContext | undefined;
+
+    const app: AssetAppHandler = (_request, ctx) => {
+      seenCtx = ctx;
+
+      return Promise.resolve(new Response("ok", { status: 200 }));
+    };
+
+    const ctx: EdgeExecutionContext = { waitUntil: () => undefined };
+
+    // A POST never touches the assets binding; the ctx must still reach the app.
+    await withAssets(assetsServing("/x", "x"), app)(
+      new Request("https://example.com/mls/api/sign-in", { method: "POST" }),
+      ctx,
+    );
+
+    expect(seenCtx).toBe(ctx);
+  });
+
+  it("forwards the ExecutionContext to the app on an asset 404 fall-through", async () => {
+    let seenCtx: EdgeExecutionContext | undefined;
+
+    const app: AssetAppHandler = (_request, ctx) => {
+      seenCtx = ctx;
+
+      return Promise.resolve(new Response("app", { status: 200 }));
+    };
+
+    const ctx: EdgeExecutionContext = { waitUntil: () => undefined };
+
+    // A GET that misses the assets binding falls through to the app — with the ctx.
+    await withAssets(assetsServing("/client.js", "x"), app)(
+      new Request("https://example.com/mls"),
+      ctx,
+    );
+
+    expect(seenCtx).toBe(ctx);
   });
 });
 

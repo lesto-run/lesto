@@ -30,7 +30,7 @@ import {
   statusForError,
   withSecurityHeaders,
 } from "@keel/web";
-import type { AnyKeelResponse, KeelBody, RequestContext } from "@keel/web";
+import type { AnyKeelResponse, KeelBody, RequestContext, RequestContextSpan } from "@keel/web";
 
 /** The per-request inputs the dispatcher reads, the same shape the node server passes. */
 export interface EdgeRequestOptions {
@@ -72,9 +72,17 @@ export interface EdgeAccessEntry {
 /**
  * One span over one served edge request — the same narrow tracing surface the
  * node server mints through, so a deployment wires one `Tracer` to both tiers.
- * Structurally satisfied by `@keel/observability`'s `Tracer`; no dependency.
+ * Structurally satisfied by `@keel/observability`'s `Span`; no dependency.
+ *
+ * `data` carries the trace + span ids the runtime publishes on the request
+ * context: it makes this assignable to `@keel/web`'s {@link RequestContextSpan},
+ * so a seam fired DURING the edge request (a `@keel/db` query, an inline
+ * `@keel/queue` job) parents its child span on the request span exactly as the
+ * node tier does — completing op#3's "same tracing contract, both tiers".
  */
 export interface EdgeRequestSpan {
+  readonly data: { readonly traceId: string; readonly spanId: string };
+
   setAttribute(key: string, value: unknown): unknown;
 
   setStatus(status: "ok" | "error"): unknown;
@@ -82,9 +90,51 @@ export interface EdgeRequestSpan {
   end(): void;
 }
 
-/** Mints {@link EdgeRequestSpan}s — `@keel/observability`'s `Tracer`, structurally. */
+/**
+ * An inbound W3C trace context the edge request joins — the ids parsed off the
+ * `traceparent` header. Structurally what `@keel/observability`'s
+ * `parseTraceparent` returns (and what its `RequestTracer.startSpan` accepts), so
+ * a Worker passes the SAME parser the node server does and one request crossing
+ * services stays one trace. No dependency on the tracing package.
+ */
+export interface EdgeInboundTrace {
+  readonly traceId: string;
+
+  readonly parentId: string;
+}
+
+/**
+ * Mints {@link EdgeRequestSpan}s — `@keel/observability`'s request tracer,
+ * structurally. `startSpan(name, inbound?)` adopts an inbound `traceparent` join
+ * when one was parsed (the cross-process continuation), exactly as the node
+ * server's `RequestTracer` does; absent, it roots a fresh trace.
+ */
 export interface EdgeRequestTracer {
-  startSpan(name: string): EdgeRequestSpan;
+  startSpan(name: string, inbound?: EdgeInboundTrace): EdgeRequestSpan;
+}
+
+/**
+ * Parses a W3C `traceparent` header into the inbound trace the request span
+ * continues — `@keel/observability`'s `parseTraceparent`, structurally. Injected
+ * so the adapter takes no dependency on the tracing package; a Worker passes the
+ * SAME parser the node server gets, so the propagation format never diverges.
+ */
+export type EdgeTraceparentParser = (header: string | undefined) => EdgeInboundTrace | undefined;
+
+/**
+ * The slice of Cloudflare's `ExecutionContext` the adapter uses: `waitUntil`,
+ * which extends the Worker's lifetime past the returned `Response` until the
+ * given promise settles. The edge has no steady process to flush traces on an
+ * interval (the node tier's cadence), so it schedules the exporter's `flush`
+ * here — the spans drain AFTER the response is sent, never on its critical path
+ * and never lost when the isolate would otherwise be frozen at `return`.
+ *
+ * Structurally Cloudflare's `ExecutionContext`; optional on the handler so a
+ * node-shaped caller (a test, the local dev server) can drive the same handler
+ * with no second argument.
+ */
+export interface EdgeExecutionContext {
+  waitUntil(promise: Promise<unknown>): void;
 }
 
 /** The largest request body the edge reads before refusing it with 413. Defaults to 1 MiB (node parity). */
@@ -123,9 +173,35 @@ export interface EdgeOptions {
   /**
    * Mints one span per served request, mirroring the node server's `tracer`
    * option. Off by default; pair with an `OtlpHttpExporter` flushed through the
-   * Worker's `waitUntil` to ship traces without holding the response.
+   * Worker's `waitUntil` (see {@link flush}) to ship traces without holding the
+   * response. The minted span is published on the request context, so a seam
+   * fired during the request parents its child span on it.
    */
   readonly tracer?: EdgeRequestTracer;
+
+  /**
+   * Parses an inbound `traceparent` header into the trace the request span
+   * joins, so a request crossing services stays one trace. Pass
+   * `@keel/observability`'s `parseTraceparent` (it satisfies this structurally).
+   * Absent — or a malformed/missing header — roots a fresh trace, the safe
+   * default. Only consulted when a {@link tracer} is also set.
+   */
+  readonly parseTraceparent?: EdgeTraceparentParser;
+
+  /**
+   * Drains buffered telemetry after the response is sent. When a `ctx`
+   * (Cloudflare's `ExecutionContext`) is passed to the handler, this is scheduled
+   * via `ctx.waitUntil(flush())` so the spans this request produced ship AFTER
+   * the `Response` returns — off the request's critical path, and never lost to
+   * the isolate freezing at `return` (the failure mode the edge has no interval
+   * to cover). Pair it with the exporter behind {@link tracer}, e.g.
+   * `flush: () => exporter.flush()`. Idempotent and must never throw — a flush
+   * fault is the exporter's to swallow, never the request's to fail on.
+   *
+   * No-op without a `ctx` (a node-shaped caller has no `waitUntil`); the node
+   * tier flushes on its own interval + drain instead.
+   */
+  readonly flush?: () => Promise<void>;
 
   /**
    * Default response headers merged under every response — the app's own headers
@@ -353,11 +429,20 @@ async function dispatchHardened(
  * merges the default security headers under the response — the same hardening the
  * node `serve` applies. The body passes through in whatever arm the dispatcher
  * produced (string, bytes, or stream), each accepted natively by a `Response`.
+ *
+ * The returned handler takes Cloudflare's `(request, ctx?)`: the optional second
+ * argument is the Worker `ExecutionContext`. When tracing is wired and a `ctx` is
+ * passed, the exporter's `flush` is scheduled through `ctx.waitUntil` so the
+ * spans this request produced drain AFTER the `Response` returns — the edge has
+ * no steady process to flush on an interval, so this is how no span is lost once
+ * the isolate freezes at `return` (edge-deploy #3). The `ctx` is OPTIONAL so a
+ * node-shaped caller (a test, the local dev server) drives the same handler with
+ * one argument — the arity is purely additive.
  */
 export function toFetchHandler(
   dispatch: EdgeDispatch,
   options: EdgeOptions = {},
-): (request: Request) => Promise<Response> {
+): (request: Request, ctx?: EdgeExecutionContext) => Promise<Response> {
   const securityHeaders = securityDefaults(options.securityHeaders ?? DEFAULT_SECURITY_HEADERS, {
     csp: options.csp,
     crossOriginEmbedderPolicy: options.crossOriginEmbedderPolicy,
@@ -376,12 +461,24 @@ export function toFetchHandler(
 
   const tracer = options.tracer;
 
-  return async (request) => {
+  const flush = options.flush;
+
+  return async (request, ctx) => {
     const start = now();
+
+    // A W3C `traceparent` on the inbound request joins this hop to the caller's
+    // trace, exactly as the node server does: parsed only when a tracer is wired
+    // (no tracer, no parse), and the parser is injected so the adapter takes no
+    // dependency on the tracing package. A malformed/absent header parses to
+    // `undefined` and roots a fresh trace — the safe default.
+    const inbound =
+      tracer === undefined
+        ? undefined
+        : options.parseTraceparent?.(request.headers.get("traceparent") ?? undefined);
 
     // The request's span opens with the work and closes beside the access line,
     // exactly as the node server does — one tracing contract across both tiers.
-    const span = tracer?.startSpan("http.request");
+    const span = tracer?.startSpan("http.request", inbound);
 
     const url = new URL(request.url);
 
@@ -391,42 +488,63 @@ export function toFetchHandler(
 
     const context = edgeContext(request, url, headers, requestId);
 
+    // Publish the span on the request context so a seam fired DURING the request
+    // (a `@keel/db` query, an inline `@keel/queue` job) parents its child span on
+    // it — a query shows up under the request that ran it, the same as the node
+    // tier. `EdgeRequestSpan.data` is exactly the slice `RequestContextSpan`
+    // reads, so this is the structural assignment, not a cast.
+    if (span !== undefined) {
+      context.span = span as RequestContextSpan;
+    }
+
     return runWithContext(context, async () => {
-      const response = await dispatchHardened(
-        request,
-        url,
-        headers,
-        dispatch,
-        logError,
-        maxBodyBytes,
-      );
+      try {
+        const response = await dispatchHardened(
+          request,
+          url,
+          headers,
+          dispatch,
+          logError,
+          maxBodyBytes,
+        );
 
-      const hardened = withSecurityHeaders(response, securityHeaders);
+        const hardened = withSecurityHeaders(response, securityHeaders);
 
-      // One access line per served request — the same shape the node server logs,
-      // stitched to the request id so an edge log and any context-tagged work line up.
-      logRequest({
-        method: request.method,
-        path: url.pathname,
-        status: hardened.status,
-        ms: now() - start,
-        requestId,
-      });
+        // One access line per served request — the same shape the node server logs,
+        // stitched to the request id so an edge log and any context-tagged work line up.
+        logRequest({
+          method: request.method,
+          path: url.pathname,
+          status: hardened.status,
+          ms: now() - start,
+          requestId,
+        });
 
-      if (span !== undefined) {
-        span.setAttribute("http.method", request.method);
-        span.setAttribute("http.path", url.pathname);
-        span.setAttribute("http.status_code", hardened.status);
-        span.setAttribute("keel.request_id", requestId);
-        // A 5xx is the server's failure; everything else was answered as designed.
-        span.setStatus(hardened.status >= 500 ? "error" : "ok");
-        span.end();
+        if (span !== undefined) {
+          span.setAttribute("http.method", request.method);
+          span.setAttribute("http.path", url.pathname);
+          span.setAttribute("http.status_code", hardened.status);
+          span.setAttribute("keel.request_id", requestId);
+          // A 5xx is the server's failure; everything else was answered as designed.
+          span.setStatus(hardened.status >= 500 ? "error" : "ok");
+          span.end();
+        }
+
+        return new Response(toBodyInit(hardened.body), {
+          status: hardened.status,
+          headers: hardened.headers,
+        });
+      } finally {
+        // Drain the spans this request produced AFTER the response is sent. The
+        // edge has no flush interval, so `waitUntil` extends the isolate's life
+        // past `return` until the exporter has shipped the batch — the contract
+        // that makes "no span lost after return" true. Scheduled in `finally` so
+        // the error path flushes too; the no-op when there is no `ctx`/`flush`
+        // keeps a node-shaped caller and an untraced worker free of cost.
+        if (ctx !== undefined && flush !== undefined) {
+          ctx.waitUntil(flush());
+        }
       }
-
-      return new Response(toBodyInit(hardened.body), {
-        status: hardened.status,
-        headers: hardened.headers,
-      });
     });
   };
 }

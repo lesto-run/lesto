@@ -15,6 +15,7 @@
 
   "dependencies": {
     "@keel/auth": "workspace:*",
+    "@keel/cloudflare": "workspace:*",
     "@keel/db": "workspace:*",
     "@keel/identity": "workspace:*",
     "@keel/mail": "workspace:*",

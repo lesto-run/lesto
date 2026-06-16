@@ -15,6 +15,19 @@ export interface AssetFetcher {
   fetch(request: Request): Promise<Response>;
 }
 
+/**
+ * The slice of Cloudflare's `ExecutionContext` an app handler may need — just
+ * `waitUntil`, forwarded UNTOUCHED to the wrapped handler so the dynamic
+ * fall-through can schedule its post-response work (e.g. an OTLP `waitUntil`
+ * flush). Optional, so a node-shaped caller drives the wrapper with one argument.
+ */
+export interface AssetExecutionContext {
+  waitUntil(promise: Promise<unknown>): void;
+}
+
+/** A Worker fetch handler that may read the `ExecutionContext` (e.g. for `waitUntil`). */
+export type AssetAppHandler = (request: Request, ctx?: AssetExecutionContext) => Promise<Response>;
+
 /** The methods static assets answer; everything else belongs to the app. */
 const ASSET_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD"]);
 
@@ -30,18 +43,24 @@ const ASSET_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD"]);
  * For a `GET`/`HEAD`, the binding is asked first; a hit (or a 304, a range) is
  * returned as-is, and only a 404 — "no such asset" — falls through to the app,
  * so a dynamic route is never shadowed by a missing file.
+ *
+ * The Worker `ExecutionContext` (`ctx`) is forwarded to the app handler on every
+ * fall-through, so a dynamic route keeps its `ctx.waitUntil` — the seam the OTLP
+ * flush rides on. The assets binding never needs it (a static hit does no
+ * post-response work), so it is passed only to the app. Optional, so a node-shaped
+ * caller drives the wrapper with one argument.
  */
 export function withAssets(
   assets: AssetFetcher,
-  handler: (request: Request) => Promise<Response>,
-): (request: Request) => Promise<Response> {
-  return async (request) => {
+  handler: AssetAppHandler,
+): (request: Request, ctx?: AssetExecutionContext) => Promise<Response> {
+  return async (request, ctx) => {
     if (!ASSET_METHODS.has(request.method)) {
-      return handler(request);
+      return handler(request, ctx);
     }
 
     const asset = await assets.fetch(request);
 
-    return asset.status === 404 ? handler(request) : asset;
+    return asset.status === 404 ? handler(request, ctx) : asset;
   };
 }

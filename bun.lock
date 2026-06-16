@@ -578,6 +578,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@keel/auth": "workspace:*",
+        "@keel/cloudflare": "workspace:*",
         "@keel/db": "workspace:*",
         "@keel/identity": "workspace:*",
         "@keel/kernel": "workspace:*",

@@ -11,10 +11,24 @@
  *
  * `env.SESSION_SECRET` is a wrangler secret (`wrangler secret put SESSION_SECRET`),
  * never committed — it is the trust root for every signed session.
+ *
+ * This is also the canonical OTLP-on-Workers reference (edge-deploy #3). Tracing
+ * is constructed the SAME env-driven way the node entry (`serve.ts`) uses —
+ * `tracesFromEnv`, off unless `KEEL_OTLP_URL` is set — but off the Worker `env`
+ * binding, not `process.env`, and with the platform `fetch` injected. The edge
+ * has no steady process to flush spans on an interval, so each request schedules
+ * the exporter's `flush()` through `ctx.waitUntil` (see `fetch` below): the spans
+ * drain AFTER the `Response` returns, never on its critical path and never lost
+ * when the isolate would otherwise freeze at `return`.
  */
 
 import { toFetchHandler, withAssets } from "@keel/cloudflare";
-import type { AssetFetcher } from "@keel/cloudflare";
+import type { AssetExecutionContext, AssetFetcher } from "@keel/cloudflare";
+
+import { parseTraceparent, tracesFromEnv } from "@keel/observability";
+import type { CurrentSpan, Traces } from "@keel/observability";
+
+import { currentRequestSpan } from "@keel/web";
 
 // The Preact server dialect. This import is only honest because wrangler bundles
 // this worker with the react→preact/compat alias block (wrangler.jsonc): inside
@@ -35,10 +49,20 @@ interface Env {
   readonly KEEL_DEMO?: string;
   /** The Cloudflare D1 database backing the DB-driven `/lab/content` page. */
   readonly DB?: D1Database;
+
+  /**
+   * OTLP tracing knobs, off the Worker `env` binding (NOT `process.env` — there
+   * is none on the edge). `KEEL_OTLP_URL` is the on switch: absent, tracing is
+   * off and the Worker pays nothing. The same two-env-var setup the node entry
+   * reads, so one deployment configures both tiers identically.
+   */
+  readonly KEEL_OTLP_URL?: string;
+  readonly KEEL_OTLP_SERVICE?: string;
+  readonly KEEL_OTLP_HEADERS?: string;
 }
 
 /** A Cloudflare Worker fetch handler — what both `toFetchHandler` and `withAssets` produce. */
-type FetchHandler = (request: Request) => Promise<Response>;
+type FetchHandler = (request: Request, ctx?: AssetExecutionContext) => Promise<Response>;
 
 /**
  * The app/handler is built once per isolate and reused across requests, not
@@ -64,6 +88,68 @@ let cachedHandler: FetchHandler | undefined;
 let cachedStore: ContentStore | undefined;
 
 /**
+ * The tracing handle, built once per isolate off the `env` binding.
+ *
+ * `undefined` means tracing is off (no `KEEL_OTLP_URL`) OR not yet built. The
+ * `built` flag distinguishes the two so we construct exactly once per isolate:
+ * `tracesFromEnv` legitimately returns `undefined` when tracing is off, and we
+ * must not re-run construction every request chasing a handle that will always
+ * be absent.
+ */
+let cachedTraces: Traces | undefined;
+let tracesBuilt = false;
+
+/**
+ * Build (once per isolate) the OTLP tracing handle from the Worker `env`.
+ *
+ * The SAME `tracesFromEnv` call the node entry makes — off unless `KEEL_OTLP_URL`
+ * is set — but reading the Worker `env` binding (there is no `process.env` on the
+ * edge) and injecting the platform `fetch` as the exporter's HTTP seam. The
+ * `currentSpan` seam reads the request span the adapter publishes on the context,
+ * so a db query / auth event fired during a request parents on it.
+ */
+function tracesFor(env: Env): Traces | undefined {
+  if (!tracesBuilt) {
+    cachedTraces = tracesFromEnv(env, {
+      currentSpan: currentRequestSpan as CurrentSpan,
+      fetchFn: fetch,
+    });
+
+    tracesBuilt = true;
+  }
+
+  return cachedTraces;
+}
+
+/**
+ * A structured JSON access log — one line per served request, machine-readable.
+ *
+ * The deployed prod target logged errors only; this gives the edge the per-request
+ * access log the node server has, as JSON (not the adapter's default human line)
+ * so a log pipeline can index method/path/status/latency/request-id directly. The
+ * canonical OTLP-on-Workers reference logs traces AND a structured access line.
+ */
+function logEdgeRequest(entry: {
+  readonly method: string;
+  readonly path: string;
+  readonly status: number;
+  readonly ms: number;
+  readonly requestId: string;
+}): void {
+  console.log(
+    JSON.stringify({
+      level: "info",
+      msg: "request",
+      method: entry.method,
+      path: entry.path,
+      status: entry.status,
+      ms: entry.ms,
+      request_id: entry.requestId,
+    }),
+  );
+}
+
+/**
  * The fetch handler for `secret` + `demo`, built once per isolate and reused.
  *
  * Keyed by both the secret and the demo flag: the demo flag changes whether the
@@ -72,8 +158,18 @@ let cachedStore: ContentStore | undefined;
  * derived from the per-isolate `DB` binding (stable for the isolate's lifetime),
  * so it is built inside the rebuild and reused across requests — never re-opened
  * (which would re-run its seed check) per request.
+ *
+ * The tracing handle (`traces`) is isolate-stable too, so it is folded into the
+ * handler here: when tracing is on, every request mints a span (joined to an
+ * inbound `traceparent`, published on the context for child spans) and the
+ * exporter's `flush` is wired so `fetch` can drain it through `ctx.waitUntil`.
  */
-function handlerFor(secret: string, demo: boolean, d1: D1Database | undefined): FetchHandler {
+function handlerFor(
+  secret: string,
+  demo: boolean,
+  d1: D1Database | undefined,
+  traces: Traces | undefined,
+): FetchHandler {
   if (cachedHandler === undefined || cachedSecret !== secret || cachedDemo !== demo) {
     cachedStore = d1 === undefined ? undefined : d1ContentStore(d1);
 
@@ -83,7 +179,15 @@ function handlerFor(secret: string, demo: boolean, d1: D1Database | undefined): 
       ...(cachedStore === undefined ? {} : { contentStore: cachedStore }),
     });
 
-    cachedHandler = toFetchHandler((method, path, options) => app.handle(method, path, options));
+    cachedHandler = toFetchHandler((method, path, options) => app.handle(method, path, options), {
+      logRequest: logEdgeRequest,
+      // When tracing is off these are absent and the adapter mints no spans and
+      // schedules no flush — the zero-overhead default. When on, the request span
+      // joins an inbound `traceparent` and `flush` drains the buffer per request.
+      ...(traces === undefined
+        ? {}
+        : { tracer: traces.requestTracer, parseTraceparent, flush: () => traces.flush() }),
+    });
     cachedSecret = secret;
     cachedDemo = demo;
   }
@@ -92,14 +196,19 @@ function handlerFor(secret: string, demo: boolean, d1: D1Database | undefined): 
 }
 
 export default {
-  fetch(request: Request, env: Env): Promise<Response> {
+  fetch(request: Request, env: Env, ctx: AssetExecutionContext): Promise<Response> {
+    // The tracer is built once per isolate off `env` (off unless KEEL_OTLP_URL).
+    const traces = tracesFor(env);
+
     // edgeSecret FAILS CLOSED: an unset SESSION_SECRET outside demo mode throws
     // here, so the Worker refuses to serve rather than sign with a public secret.
-    const handler = handlerFor(edgeSecret(env), isDemoMode(env), env.DB);
+    const handler = handlerFor(edgeSecret(env), isDemoMode(env), env.DB, traces);
 
     // Static marketing files first (cached at the PoP); the live app for the rest.
     // `env.ASSETS` is per-request, so this thin wrap happens every time; the
-    // handler it wraps is the cached, isolate-lifetime one built above.
-    return withAssets(env.ASSETS, handler)(request);
+    // handler it wraps is the cached, isolate-lifetime one built above. `ctx` is
+    // forwarded so the dynamic handler can flush its spans via `ctx.waitUntil`
+    // AFTER the response returns — the edge's no-span-loss contract.
+    return withAssets(env.ASSETS, handler)(request, ctx);
   },
 };
