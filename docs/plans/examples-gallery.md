@@ -98,6 +98,22 @@ prove "hosted UX" as a Node `serve.ts` runbook rather than a Worker.
    unsubscribe, all over HTTP in the journey test. Hosted: the journey clicked
    through on a deployed Worker; a broadcast killed mid-fan-out resumes with no
    double-send.
+   **Status (2026-06-16): DONE.** `examples/mailing-lists` shipped — `run.ts`
+   (in-process journey), `serve.ts` (node:http + live `queue.work()` worker + SMTP
+   transport), 3 journey tests (subscribe→confirm→broadcast→unsubscribe;
+   rate-limit-mounted; exactly-once-per-recipient). Typecheck/oxlint/oxfmt clean.
+   Local-DX leg verified via `run.ts`; hosted-UX leg verified over the wire against
+   `serve.ts` (worker delivered confirmation mail; same-client burst throttled
+   `202×5 → 429` with a real IP key; unconfirmed-broadcast correctly enqueued 0).
+   The `List-Unsubscribe` real-inbox leg + the kill-mid-fan-out resume are documented
+   as the Mailpit runbook in the example README (manual, not automated).
+   **DX findings** (README has detail; routed to owning plans for triage):
+   (1) `rateLimit` keys on `currentContext()?.ip`, so the package's mandated guard
+   degrades to one shared bucket under in-process `app.handle()` — only works hosted
+   → `auth-security`/ratelimit. (2) `createApp` installs durable schema but not the
+   queue schema the mail battery needs → `operability-dx`/kernel. (3) three
+   structurally-identical `SqlDatabase` types force a `as unknown as` cast when
+   sharing one connection across db+kernel+queue → `data-persistence`.
 
 2. **`examples/admin`** — `[Wave 3 backlog]`
    A clickable admin panel (`@keel/admin`, data #6) over a seeded table: paginated +
@@ -128,6 +144,8 @@ prove "hosted UX" as a Node `serve.ts` runbook rather than a Worker.
 
 ---
 
-**Status (2026-06-16):** plan created; §7 reframed from "Post-1.0 adoption surface"
-to this per-wave QA gate. No example built yet. Next executable step is increment 0
-(workspace wiring), then increment 1 (`examples/mailing-lists`) as the template.
+**Status (2026-06-16):** §7 reframed to this per-wave QA gate. **Increment 0 DONE**
+(`examples/*` workspace glob + `examples:test` script + ungated CI step; commit
+`87410bb`). **Increment 1 DONE** (`examples/mailing-lists`, the template — see its
+status above). Next executable step is increment 2 (`examples/admin`), then
+increment 3 (`examples/release-rollback`) and the increment 4 estate hosted-QA pass.

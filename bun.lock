@@ -72,6 +72,22 @@
         "zod": "^4.0.0",
       },
     },
+    "examples/mailing-lists": {
+      "name": "@keel/example-mailing-lists",
+      "version": "0.0.0",
+      "dependencies": {
+        "@keel/db": "workspace:*",
+        "@keel/kernel": "workspace:*",
+        "@keel/mail": "workspace:*",
+        "@keel/mailing-lists": "workspace:*",
+        "@keel/queue": "workspace:*",
+        "@keel/ratelimit": "workspace:*",
+        "@keel/runtime": "workspace:*",
+        "@keel/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+        "zod": "^4.0.0",
+      },
+    },
     "packages/admin": {
       "name": "@keel/admin",
       "version": "0.0.0",
@@ -987,6 +1003,8 @@
     "@keel/example-blog": ["@keel/example-blog@workspace:examples/blog"],
 
     "@keel/example-estate": ["@keel/example-estate@workspace:examples/estate"],
+
+    "@keel/example-mailing-lists": ["@keel/example-mailing-lists@workspace:examples/mailing-lists"],
 
     "@keel/feeds": ["@keel/feeds@workspace:packages/feeds"],
 
