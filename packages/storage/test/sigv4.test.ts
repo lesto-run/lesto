@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { encodeRfc3986 } from "../src/index";
 import { hashHex, presignUrl, signRequest, UNSIGNED_PAYLOAD } from "../src/sigv4";
 
 import type { SigV4Credentials } from "../src/sigv4";
@@ -130,6 +131,17 @@ describe("signRequest", () => {
     );
 
     expect(headers.Authorization).toMatch(/Signature=[0-9a-f]{64}$/);
+  });
+});
+
+describe("encodeRfc3986 (shared signer export)", () => {
+  it("is re-exported from the package entry point for cross-package consumers", () => {
+    // The remote ReleaseStore in @keel/deploy signs and sends object keys, so it
+    // must encode them with the SAME strict encoder the signer canonicalizes
+    // under. Pin that the entry point exposes it and that it escapes what
+    // encodeURIComponent leaves literal (`!*'()`) plus a space, but never a slash.
+    expect(encodeRfc3986("a/b!c*d'e(f)g h")).toBe("a%2Fb%21c%2Ad%27e%28f%29g%20h");
+    expect(encodeRfc3986("plain")).toBe("plain");
   });
 });
 

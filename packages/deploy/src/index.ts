@@ -35,5 +35,8 @@ export type { ShipDeps, ShipResult } from "./ship";
 export { nodeReleaseStore, rollback, shipRelease } from "./release";
 export type { Release, ReleaseStore, ShipReleaseOptions } from "./release";
 
+export { remoteReleaseStore } from "./remote";
+export type { RemoteReleaseStoreOptions } from "./remote";
+
 export { DeployError } from "./errors";
 export type { DeployErrorCode } from "./errors";

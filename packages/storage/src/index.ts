@@ -37,7 +37,7 @@ export { FileBackend } from "./file";
 export { S3Backend } from "./s3";
 export type { S3BackendOptions } from "./s3";
 
-export { hashHex, presignUrl, signRequest, UNSIGNED_PAYLOAD } from "./sigv4";
+export { encodeRfc3986, hashHex, presignUrl, signRequest, UNSIGNED_PAYLOAD } from "./sigv4";
 export type { SigV4Credentials, SigV4Request } from "./sigv4";
 
 export { KeelError, StorageError } from "./errors";

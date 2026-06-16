@@ -44,7 +44,10 @@ export const UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD";
 
 /** Lowercase-hex SHA-256 of a string or bytes — the payload-hash primitive. */
 export async function hashHex(data: string | Uint8Array): Promise<string> {
-  const bytes = typeof data === "string" ? ENCODER.encode(data) : data;
+  // Assert an `ArrayBuffer` backing (never `SharedArrayBuffer`): TS 5.7's
+  // generic `Uint8Array<ArrayBufferLike>` is not assignable to the stricter
+  // `BufferSource` a DOM/Workers-lib consumer sees, but our bytes always are.
+  const bytes = (typeof data === "string" ? ENCODER.encode(data) : data) as Uint8Array<ArrayBuffer>;
   const digest = await crypto.subtle.digest("SHA-256", bytes);
 
   return toHex(new Uint8Array(digest));
@@ -170,7 +173,8 @@ async function deriveSigningKey(
 async function hmac(key: Uint8Array, message: string): Promise<Uint8Array> {
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
-    key,
+    // ArrayBuffer-backed (see `hashHex`): satisfies `BufferSource` under DOM/Workers libs.
+    key as Uint8Array<ArrayBuffer>,
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],

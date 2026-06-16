@@ -19,7 +19,9 @@ export type DeployErrorCode =
   /** A staged release failed its pre-flip health gate; the pointer did not move. */
   | "DEPLOY_RELEASE_UNHEALTHY"
   /** A rollback named a version that was never published. */
-  | "DEPLOY_UNKNOWN_RELEASE";
+  | "DEPLOY_UNKNOWN_RELEASE"
+  /** A remote object store (R2 / S3) answered a release operation with a non-2xx. */
+  | "DEPLOY_REMOTE_ERROR";
 
 /** Anything the deploy layer can refuse to do, coded for machines. */
 export class DeployError extends KeelError<DeployErrorCode> {

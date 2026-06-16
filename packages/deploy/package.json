@@ -23,6 +23,7 @@
 
   "dependencies": {
     "@keel/errors": "workspace:*",
-    "@keel/sites": "workspace:*"
+    "@keel/sites": "workspace:*",
+    "@keel/storage": "workspace:*"
   }
 }
