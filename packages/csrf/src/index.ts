@@ -10,7 +10,7 @@
 
 export { generateToken, verifyToken } from "./token";
 
-export { csrf, defaultExtractToken } from "./middleware";
+export { CSRF_DENIED_KIND, csrf, defaultExtractToken } from "./middleware";
 export type { CsrfOptions } from "./middleware";
 
 export { CsrfError, KeelError } from "./errors";

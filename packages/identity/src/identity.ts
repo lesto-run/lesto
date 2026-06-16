@@ -172,6 +172,30 @@ export interface IdentityMailer {
   sendPasswordResetEmail(args: { to: string; url: string; token: string }): void | Promise<void>;
 }
 
+/**
+ * A coded identity lifecycle event — the observability seam {@link IdentityOptions.onEvent}
+ * receives, owned here, consumed by OTLP wiring elsewhere (operability-dx item 3).
+ *
+ * The `type` is a stable, machine-readable code: logs, traces, and the audit
+ * sink branch on it, never on prose. Every variant carries `at` (the emitting
+ * clock's wall-time in ms) so a consumer can order events without its own clock.
+ *
+ * **No secrets travel here.** A payload never carries a raw session/verification/
+ * reset token, a password (plain or hashed), or a cleartext email address. The
+ * subject is identified by `userId` — the surrogate primary key — which is safe
+ * to log and is all a trace needs to correlate a user's events. The `login_failed`
+ * variant deliberately omits even a `userId`: at the point it fires we may not
+ * have resolved a user (an unknown-email guess looks identical to a wrong
+ * password, by design — the enumeration-safe posture `login` keeps everywhere),
+ * and attaching one would both leak existence and lie on the unknown-email path.
+ */
+export type IdentityEvent =
+  | { readonly type: "login_succeeded"; readonly userId: string; readonly at: number }
+  | { readonly type: "login_failed"; readonly at: number }
+  | { readonly type: "password_reset"; readonly userId: string; readonly at: number }
+  | { readonly type: "email_verified"; readonly userId: string; readonly at: number }
+  | { readonly type: "session_revoked"; readonly userId: string; readonly at: number };
+
 export interface IdentityOptions {
   /** The database handle the service queries through. Explicit, never global. */
   readonly db: Db;
@@ -258,6 +282,22 @@ export interface IdentityOptions {
 
   /** Injected clock — tests pass one so TTL is deterministic. */
   readonly clock?: Clock;
+
+  /**
+   * Optional observability hook fired on each identity lifecycle event —
+   * `login_succeeded` / `login_failed` / `password_reset` / `email_verified` /
+   * `session_revoked` (see {@link IdentityEvent}).
+   *
+   * Purely observational: it shapes nothing. The event's outcome (the session,
+   * the thrown error) is identical whether or not a hook is wired, so emitting is
+   * safe on every path. Wire it to a tracer/audit sink (the dogfood: estate
+   * forwards these to OTLP). Payloads carry only a `userId` and a timestamp — no
+   * tokens, no passwords, no cleartext emails — so a sink can log them freely.
+   *
+   * A returned promise is awaited so a sink that flushes asynchronously is not
+   * dropped mid-write; a synchronous hook (the common case) adds no latency.
+   */
+  readonly onEvent?: (event: IdentityEvent) => void | Promise<void>;
 }
 
 /**
@@ -303,6 +343,22 @@ export function createIdentity(options: IdentityOptions): Identity {
     store: sessionStore,
     ...(options.clock ? { clock: options.clock } : {}),
   });
+
+  // The event timestamp comes from the same injected clock the rest of the
+  // service uses (default `Date.now`), so a test stepping the clock sees
+  // deterministic `at` values and the event line is correlatable with the
+  // session/token TTLs it sits next to.
+  const eventClock = options.clock ?? Date.now;
+
+  // Emit a lifecycle event to the optional sink. Fire-and-forget in spirit —
+  // never throws into the caller's path (a broken sink must not break auth) — but
+  // awaited so an async sink that flushes a span is not dropped mid-write. With no
+  // hook wired this is a single comparison and a return.
+  const emit = async (event: IdentityEvent): Promise<void> => {
+    if (options.onEvent === undefined) return;
+
+    await options.onEvent(event);
+  };
 
   return {
     /**
@@ -387,6 +443,10 @@ export function createIdentity(options: IdentityOptions): Identity {
         const now = new Date().toISOString();
         await userRepo.markEmailVerified(db, user.id, now);
 
+        // Emit on the real transition only — a second (idempotent) verify is a
+        // no-op and must not re-announce an event that already happened.
+        await emit({ type: "email_verified", userId: String(user.id), at: eventClock() });
+
         return { ...user, emailVerifiedAt: now };
       }
 
@@ -441,6 +501,11 @@ export function createIdentity(options: IdentityOptions): Identity {
         if (peek.remaining < 1) {
           const denied = await options.loginRateLimiter.check(throttleKey, 1);
 
+          // A throttled attempt is a failed login. No `userId` — the throttle
+          // refuses before resolving a user, and is enumeration-safe by design
+          // (it keys on every email, existing or not), so attaching one would leak.
+          await emit({ type: "login_failed", at: eventClock() });
+
           throw new IdentityError(
             "IDENTITY_LOGIN_THROTTLED",
             "Too many failed login attempts. Try again later.",
@@ -468,11 +533,21 @@ export function createIdentity(options: IdentityOptions): Identity {
 
         await penalize();
 
+        // A failed login — no `userId`, because there is no user, and because the
+        // unknown-email and wrong-password paths must stay indistinguishable.
+        await emit({ type: "login_failed", at: eventClock() });
+
         throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
       if (!(await verifyPassword(password, user.passwordHash))) {
         await penalize();
+
+        // A failed login. Even though we now hold a `user`, we omit its id to keep
+        // this branch byte-identical to the unknown-email one above — a sink must
+        // not be able to tell "wrong password for a real account" from "no such
+        // account", the same leak the coded error already avoids.
+        await emit({ type: "login_failed", at: eventClock() });
 
         throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
       }
@@ -495,6 +570,10 @@ export function createIdentity(options: IdentityOptions): Identity {
       }
 
       const session = await sessions.create(String(user.id), sessionTtlMs);
+
+      // The credentials proved out and a session exists. The token never travels
+      // in the event — only the subject's id, which a trace correlates on.
+      await emit({ type: "login_succeeded", userId: String(user.id), at: eventClock() });
 
       return { user, session };
     },
@@ -576,24 +655,48 @@ export function createIdentity(options: IdentityOptions): Identity {
       const newHash = await hashPassword(newPassword);
       await userRepo.setPasswordHash(db, user.id, newHash);
 
+      const userId = String(user.id);
+
+      // The password changed — the reset is complete. The token (single-use via
+      // the password-hash binding) is already dead by now and never travels here.
+      await emit({ type: "password_reset", userId, at: eventClock() });
+
       // Revoke-on-reset by default: a SQL-backed store can drop every session
       // for this user in one statement (ADR 0013), so a victim's reset ends an
       // attacker's stolen session without any caller wiring.
       if (canRevokeByUser(sessionStore)) {
-        await sessionStore.deleteByUserId(String(user.id));
+        await sessionStore.deleteByUserId(userId);
+
+        // Announce the revocation only when the store actually performed it — a
+        // bare memory store has no `deleteByUserId` and revokes nothing, so it
+        // emits nothing here (the `revokeUserSessions` hook, if wired, is the
+        // caller's own second tier and is not the framework's to announce).
+        await emit({ type: "session_revoked", userId, at: eventClock() });
       }
 
       // The hook still runs (on every store), for a memory store that cannot
       // revoke by user, or a second tier the SQL delete cannot reach.
       if (options.revokeUserSessions) {
-        await options.revokeUserSessions(String(user.id));
+        await options.revokeUserSessions(userId);
       }
 
       return { ...user, passwordHash: newHash };
     },
 
     async logout(token) {
-      if (token !== undefined) await sessions.revoke(token);
+      if (token === undefined) return;
+
+      // Resolve the session before revoking so the event can name its subject.
+      // `verify` returns the live session (or undefined for an unknown/expired
+      // token); we emit `session_revoked` only when a real session was actually
+      // ended, so a logout of a stale or bogus token announces nothing.
+      const session = await sessions.verify(token);
+
+      await sessions.revoke(token);
+
+      if (session !== undefined) {
+        await emit({ type: "session_revoked", userId: session.userId, at: eventClock() });
+      }
     },
 
     async currentUser(token) {

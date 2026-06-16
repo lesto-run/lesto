@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { keel } from "@keel/web";
 
-import { createGuard, definePolicy } from "../src/index";
+import { AUTHZ_DENIED_KIND, createGuard, definePolicy } from "../src/index";
 
 const policy = definePolicy({
   roles: ["member", "admin"],
@@ -96,6 +96,55 @@ describe("createGuard options", () => {
 
     expect(response.status).toBe(303);
     expect(response.headers["Location"]).toBe("/login");
+  });
+
+  it("fires onDenied with the coded kind and the refused request on a refusal", async () => {
+    const onDenied = vi.fn();
+    const { can } = createGuard(policy, { onDenied });
+
+    const app = keel()
+      .use((c, next) => {
+        c.set("roles", ["member"]);
+        return next();
+      })
+      .get("/admin", can("admin.access"), (c) => c.text("secret"));
+
+    const response = await app.handle("GET", "/admin");
+
+    // The refusal is unchanged — the hook only observes.
+    expect(response.status).toBe(403);
+
+    expect(onDenied).toHaveBeenCalledTimes(1);
+    expect(AUTHZ_DENIED_KIND).toBe("authz_forbidden");
+
+    // The seam is uniform with csrf/ratelimit: kind + the bare KeelRequest.
+    const [kind, req] = onDenied.mock.calls[0]!;
+    expect(kind).toBe(AUTHZ_DENIED_KIND);
+    expect(req).toMatchObject({ method: "GET", path: "/admin" });
+  });
+
+  it("awaits an async onDenied, and never fires it when the subject is permitted", async () => {
+    const seen: string[] = [];
+    const onDenied = async (kind: string): Promise<void> => {
+      seen.push(kind);
+    };
+    const { can } = createGuard(policy, { onDenied });
+
+    // Permitted: the handler runs and onDenied stays silent.
+    const allowed = keel()
+      .use((c, next) => {
+        c.set("roles", ["admin"]);
+        return next();
+      })
+      .get("/admin", can("admin.access"), (c) => c.text("ok"));
+
+    expect((await allowed.handle("GET", "/admin")).status).toBe(200);
+    expect(seen).toEqual([]);
+
+    // Refused: the async hook is awaited before the 403 is returned.
+    const refused = keel().get("/admin", can("admin.access"), (c) => c.text("secret"));
+    expect((await refused.handle("GET", "/admin")).status).toBe(403);
+    expect(seen).toEqual([AUTHZ_DENIED_KIND]);
   });
 });
 

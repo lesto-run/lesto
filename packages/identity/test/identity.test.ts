@@ -24,7 +24,7 @@ import {
 
 import * as userRepo from "../src/user";
 
-import type { Identity, IdentityMailer, IdentityOptions } from "../src/index";
+import type { Identity, IdentityEvent, IdentityMailer, IdentityOptions } from "../src/index";
 
 // ---------------------------------------------------------------------------
 // Test rig
@@ -994,5 +994,307 @@ describe("login throttling", () => {
         },
       );
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// identity event seam (onEvent) — auth-security item 6
+// ---------------------------------------------------------------------------
+
+describe("onEvent seam", () => {
+  /**
+   * An identity over the SHARED SQL session store, with an event sink — so
+   * revoke-on-reset (and thus `session_revoked`) actually fires by default.
+   */
+  function eventfulIdentity(extra: Partial<IdentityOptions> = {}): {
+    identity: Identity;
+    sent: CapturedEmail[];
+    events: IdentityEvent[];
+  } {
+    const { mailer, sent } = captureMailer();
+    const events: IdentityEvent[] = [];
+
+    const identity = createIdentity({
+      db,
+      secret: "test-secret-0123456789abcdefghij",
+      mailer,
+      verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+      resetUrl: (token) => `https://app.test/reset?token=${token}`,
+      sessionStore: sqlSessionStore(sql),
+      onEvent: (event) => {
+        events.push(event);
+      },
+      clock: () => clock(),
+      ...extra,
+    });
+
+    return { identity, sent, events };
+  }
+
+  it("emits email_verified with the userId on the real verification transition", async () => {
+    const { identity, sent, events } = eventfulIdentity();
+
+    const { user } = await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+
+    expect(events).toEqual([{ type: "email_verified", userId: String(user!.id), at: clock() }]);
+  });
+
+  it("does NOT re-emit email_verified on an idempotent second verify", async () => {
+    const { identity, sent, events } = eventfulIdentity();
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+    events.length = 0;
+
+    advance(10_000);
+    await identity.verifyEmail(sent[0]!.token);
+
+    // The second verify is a no-op; no event re-announces a flip that didn't happen.
+    expect(events).toEqual([]);
+  });
+
+  it("emits login_succeeded with the userId on a valid login", async () => {
+    const { identity, sent, events } = eventfulIdentity();
+
+    const { user } = await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+    events.length = 0;
+
+    await identity.login("ada@example.com", "correct horse staple");
+
+    expect(events).toEqual([{ type: "login_succeeded", userId: String(user!.id), at: clock() }]);
+  });
+
+  it("emits login_failed (no userId) for a wrong password", async () => {
+    const { identity, sent, events } = eventfulIdentity();
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+    events.length = 0;
+
+    await expect(identity.login("ada@example.com", "wrong password")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_CREDENTIALS",
+    });
+
+    expect(events).toEqual([{ type: "login_failed", at: clock() }]);
+    // The enumeration-safe posture: a failed login never names a subject.
+    expect(events[0]).not.toHaveProperty("userId");
+  });
+
+  it("emits login_failed (no userId) for an unknown email", async () => {
+    const { identity, events } = eventfulIdentity();
+
+    await expect(identity.login("nobody@example.com", "whatever")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_CREDENTIALS",
+    });
+
+    expect(events).toEqual([{ type: "login_failed", at: clock() }]);
+  });
+
+  it("emits login_failed (no userId) when the per-account throttle refuses", async () => {
+    const limiter = new RateLimiter({
+      store: sqlRateLimitStore(sql),
+      capacity: 1,
+      refillPerSecond: 1 / 900,
+      clock: () => clock(),
+    });
+    const { identity, sent, events } = eventfulIdentity({ loginRateLimiter: limiter });
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+    events.length = 0;
+
+    // First wrong attempt drains the 1-token bucket (a login_failed)...
+    await expect(identity.login("ada@example.com", "wrong")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_CREDENTIALS",
+    });
+    // ...the next is refused by the throttle BEFORE the credential check — still
+    // a login_failed, still subjectless.
+    await expect(identity.login("ada@example.com", "wrong")).rejects.toMatchObject({
+      code: "IDENTITY_LOGIN_THROTTLED",
+    });
+
+    expect(events).toEqual([
+      { type: "login_failed", at: clock() },
+      { type: "login_failed", at: clock() },
+    ]);
+  });
+
+  it("does NOT emit login_failed for an unverified-email refusal (not a guess)", async () => {
+    const { identity, events } = eventfulIdentity();
+
+    await identity.register("ada@example.com", "correct horse staple");
+    events.length = 0;
+
+    await expect(identity.login("ada@example.com", "correct horse staple")).rejects.toMatchObject({
+      code: "IDENTITY_EMAIL_NOT_VERIFIED",
+    });
+
+    // Correct password, just unverified — not a failed login attempt.
+    expect(events).toEqual([]);
+  });
+
+  it("emits password_reset then session_revoked (in that order) on a SQL-backed reset", async () => {
+    const { identity, sent, events } = eventfulIdentity();
+
+    const { user } = await identity.register("ada@example.com", "old password 1");
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+    await identity.login("ada@example.com", "old password 1");
+    await identity.requestPasswordReset("ada@example.com");
+    events.length = 0;
+
+    const resetToken = sent.find((e) => e.kind === "reset")!.token;
+    await identity.resetPassword(resetToken, "brand new password");
+
+    const userId = String(user!.id);
+    expect(events).toEqual([
+      { type: "password_reset", userId, at: clock() },
+      { type: "session_revoked", userId, at: clock() },
+    ]);
+  });
+
+  it("emits password_reset but NOT session_revoked on a memory store (nothing was revoked)", async () => {
+    // No sessionStore override => the default MemorySessionStore, which has no
+    // deleteByUserId, so the reset revokes nothing and announces nothing.
+    const { mailer, sent } = captureMailer();
+    const events: IdentityEvent[] = [];
+    const identity = createIdentity({
+      db,
+      secret: "test-secret-0123456789abcdefghij",
+      mailer,
+      verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+      resetUrl: (token) => `https://app.test/reset?token=${token}`,
+      onEvent: (event) => {
+        events.push(event);
+      },
+      clock: () => clock(),
+    });
+
+    const { user } = await identity.register("ada@example.com", "old password 1");
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+    await identity.requestPasswordReset("ada@example.com");
+    events.length = 0;
+
+    await identity.resetPassword(sent.find((e) => e.kind === "reset")!.token, "brand new password");
+
+    expect(events).toEqual([{ type: "password_reset", userId: String(user!.id), at: clock() }]);
+  });
+
+  it("emits session_revoked with the session's userId on logout of a live session", async () => {
+    const { identity, sent, events } = eventfulIdentity();
+
+    const { user } = await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+    const { session } = await identity.login("ada@example.com", "correct horse staple");
+    events.length = 0;
+
+    await identity.logout(session.token);
+
+    expect(events).toEqual([{ type: "session_revoked", userId: String(user!.id), at: clock() }]);
+  });
+
+  it("does NOT emit on logout of undefined, an unknown, or an expired token", async () => {
+    const { identity, sent, events } = eventfulIdentity({ sessionTtlMs: 1000 });
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+    const { session } = await identity.login("ada@example.com", "correct horse staple");
+    events.length = 0;
+
+    // No token, then a token that names no session — neither ends anything.
+    await identity.logout(undefined);
+    await identity.logout("not-a-real-session-token");
+    expect(events).toEqual([]);
+
+    // An expired token resolves to no live session, so logout announces nothing.
+    advance(2000);
+    await identity.logout(session.token);
+    expect(events).toEqual([]);
+  });
+
+  it("awaits an async onEvent sink (a flushed span is never dropped mid-write)", async () => {
+    const order: string[] = [];
+    const { mailer, sent } = captureMailer();
+    const identity = createIdentity({
+      db,
+      secret: "test-secret-0123456789abcdefghij",
+      mailer,
+      verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+      resetUrl: (token) => `https://app.test/reset?token=${token}`,
+      onEvent: async (event) => {
+        await Promise.resolve();
+        order.push(event.type);
+      },
+      clock: () => clock(),
+    });
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+
+    // The async sink ran to completion before verifyEmail resolved.
+    expect(order).toEqual(["email_verified"]);
+  });
+
+  it("never emits anything when no onEvent hook is wired (the seam is opt-in)", async () => {
+    // The default buildIdentity wires no onEvent; the whole journey must run with
+    // the emit short-circuit (options.onEvent === undefined) taken every time.
+    const { identity, sent } = buildIdentity({ sessionStore: sqlSessionStore(sql) });
+
+    const { user } = await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+    const { session } = await identity.login("ada@example.com", "correct horse staple");
+    await identity.logout(session.token);
+    await identity.requestPasswordReset("ada@example.com");
+    await identity.resetPassword(sent.find((e) => e.kind === "reset")!.token, "brand new password");
+
+    // No throw, no sink — proves the no-hook path of `emit` is reachable.
+    expect(user!.email).toBe("ada@example.com");
+  });
+
+  it("payloads are grep-clean of tokens, passwords, and cleartext emails", async () => {
+    const { identity, sent, events } = eventfulIdentity({
+      loginRateLimiter: new RateLimiter({
+        store: sqlRateLimitStore(sql),
+        capacity: 5,
+        refillPerSecond: 1 / 900,
+        clock: () => clock(),
+      }),
+    });
+
+    // Drive EVERY event variant: email_verified, login_succeeded, login_failed,
+    // password_reset, session_revoked.
+    const password = "correct horse staple";
+    await identity.register("ada@example.com", password);
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+    const { session } = await identity.login("ada@example.com", password);
+    await identity.logout(session.token);
+    await identity.login("ada@example.com", "wrong password").catch(() => undefined);
+    await identity.requestPasswordReset("ada@example.com");
+    await identity.resetPassword(sent.find((e) => e.kind === "reset")!.token, "brand new password");
+
+    // We saw all five distinct types.
+    expect(new Set(events.map((e) => e.type))).toEqual(
+      new Set([
+        "email_verified",
+        "login_succeeded",
+        "session_revoked",
+        "login_failed",
+        "password_reset",
+      ]),
+    );
+
+    // The whole event stream, serialized, must contain no secret material: no
+    // password, no email address, and none of the issued tokens.
+    const blob = JSON.stringify(events);
+
+    expect(blob).not.toContain(password);
+    expect(blob).not.toContain("brand new password");
+    expect(blob).not.toContain("ada@example.com");
+    expect(blob).not.toContain("ada"); // not even the local-part fragment
+    for (const email of sent) {
+      expect(blob).not.toContain(email.token);
+    }
+    expect(blob).not.toContain(session.token);
   });
 });

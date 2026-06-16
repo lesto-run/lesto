@@ -26,7 +26,7 @@
 export { definePolicy } from "./policy";
 export type { Policy, PolicyConfig } from "./policy";
 
-export { createGuard } from "./guard";
+export { AUTHZ_DENIED_KIND, createGuard } from "./guard";
 export type { Guard, GuardOptions } from "./guard";
 
 export { AuthzError, KeelError } from "./errors";

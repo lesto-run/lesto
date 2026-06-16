@@ -23,18 +23,22 @@ const TOO_MANY_REQUESTS = 429;
 const MS_PER_SECOND = 1000;
 
 /**
- * The bucket key for a request whose client IP the context could not resolve.
- *
- * Outside a request, or with trust-proxy off and no socket address threaded
- * through, there is no per-client identity to key on. We fall back to one shared
- * bucket rather than skip the limit: a missing IP must *tighten* the gate (a
- * single global ceiling), never open it. A WHY a deployment behind a proxy
- * should enable trust-proxy so each client gets its own bucket.
+ * The bucket key for a dispatch whose client IP we cannot key on — both the
+ * in-request "IP unresolved" case and the out-of-request "no client to key on"
+ * case (a build prerender, a batch task, a test that calls `app.handle` outside
+ * a transport). One shared bucket rather than no gate: a missing IP must
+ * *tighten* the gate (a single global ceiling), never open it. The two cases
+ * differ only in observability — the in-request one trips
+ * {@link RateLimitOptions.onUnknownClient} (it is a misconfig); the out-of-
+ * request one is silent (there is no client to key on by design).
  */
 export const UNKNOWN_CLIENT_KEY = "ratelimit:unknown-client";
 
-/** The error code logs and tests branch on when the shared fallback bucket is hit. */
+/** The error code logs and tests branch on when the in-request fallback is hit. */
 export const RATELIMIT_UNKNOWN_CLIENT_CODE = "RATELIMIT_UNKNOWN_CLIENT";
+
+/** The coded `kind` the {@link RateLimitOptions.onDenied} seam reports a throttle under. */
+export const RATELIMIT_DENIED_KIND = "ratelimit_exceeded";
 
 /** What `rateLimit` needs to stand up a limiter, plus how to key a request. */
 export interface RateLimitOptions {
@@ -63,45 +67,77 @@ export interface RateLimitOptions {
   readonly keyFor?: (request: KeelRequest) => string;
 
   /**
-   * Called the first time the *default* key derivation cannot resolve a client
-   * IP and falls back to the single shared {@link UNKNOWN_CLIENT_KEY} bucket.
+   * Called the first time the *default* key derivation runs inside a request
+   * context that does not carry a resolved client IP, and so falls back to the
+   * single shared {@link UNKNOWN_CLIENT_KEY} bucket. Fires only for *in-request*
+   * misconfig — an out-of-request dispatch (a build prerender, a batch task, a
+   * test that calls `app.handle` outside a transport) takes the same fallback
+   * key silently, because there is no client to key on by design.
    *
    * WHY this seam exists: the fallback is a *silent* degradation. It is correct
    * on a node server with trust-proxy off (a missing IP tightens the gate), but
-   * a real hazard when this middleware runs somewhere no request context is ever
-   * established — e.g. an edge handler that dispatches without `runWithContext`.
-   * There, *every* request shares the one global bucket: per-client limiting is
-   * gone (a bypass) and any one client can 429 the whole fleet (a DoS amplifier).
-   * Making the fallback observable lets an operator detect the misconfiguration
-   * instead of discovering it in production. It fires once per middleware (not
-   * per request) so a legitimately context-less deployment is not flooded with
-   * logs. Defaults to a `console.warn`; inject to route it to a real logger, or
-   * pass a no-op to silence it. A custom {@link keyFor} bypasses this entirely —
-   * an explicit key is the operator's own choice, not an unresolved fallback.
+   * a real hazard when a transport establishes a per-request context yet leaves
+   * `ip` unresolved — every request shares the one global bucket: per-client
+   * limiting is gone (a bypass) and any one client can 429 the whole fleet (a
+   * DoS amplifier). Making the fallback observable lets an operator detect the
+   * misconfiguration instead of discovering it in production. It fires once per
+   * middleware (not per request), so a steady stream of unresolved requests is
+   * not a log flood. Defaults to a `console.warn`; inject to route it to a real
+   * logger, or pass a no-op to silence it. A custom {@link keyFor} bypasses
+   * this entirely — an explicit key is the operator's own choice, not an
+   * unresolved fallback.
    */
   readonly onUnknownClient?: () => void;
+
+  /**
+   * Optional observability hook fired the moment a request is throttled — the
+   * uniform `onDenied(kind, c)` seam shared across `@keel/csrf`, `@keel/authz`,
+   * and `@keel/ratelimit` (owned by auth-security item 6, consumed by OTLP wiring
+   * in operability-dx item 3).
+   *
+   * `kind` is the coded reason (here always {@link RATELIMIT_DENIED_KIND}); `c` is
+   * the throttled {@link KeelRequest}. Purely observational: it shapes nothing —
+   * the `429` (and its `Retry-After`) is identical whether or not a hook is wired
+   * — so firing is safe on the deny path. Distinct from {@link onUnknownClient},
+   * which warns about a *misconfiguration* (no resolvable client IP); this fires on
+   * an ordinary, correct throttle. A returned promise is awaited so an async sink
+   * is not dropped mid-write.
+   */
+  readonly onDenied?: (kind: string, c: KeelRequest) => void | Promise<void>;
 }
 
 /**
- * The default warning for the unresolved-client fallback: one `console.warn`,
- * carrying the stable {@link RATELIMIT_UNKNOWN_CLIENT_CODE} so logs and ops
- * tooling branch on the code, never the prose.
+ * The default warning for the in-request unresolved-client fallback: one
+ * `console.warn`, carrying the stable {@link RATELIMIT_UNKNOWN_CLIENT_CODE} so
+ * logs and ops tooling branch on the code, never the prose.
  */
 function warnUnknownClient(): void {
   console.warn(
-    `[${RATELIMIT_UNKNOWN_CLIENT_CODE}] rateLimit could not resolve a client IP and is ` +
-      `keying every request to a single shared bucket. This breaks per-client limiting. ` +
-      `Ensure a request context is established (e.g. enable trust-proxy on the node server) ` +
-      `or pass a custom keyFor. Common cause: mounting rateLimit on a deploy target that ` +
-      `dispatches without runWithContext.`,
+    `[${RATELIMIT_UNKNOWN_CLIENT_CODE}] rateLimit ran inside a request context that ` +
+      `carries no resolved client IP, and is keying every such request to a single shared ` +
+      `bucket. This breaks per-client limiting. Enable trust-proxy on the node server, have ` +
+      `the transport set context.ip, or pass a custom keyFor that pulls the client identity ` +
+      `from the request.`,
   );
 }
 
 /**
  * Build the default key derivation: the context's resolved client IP, or the
- * shared fallback — invoking `onUnknownClient` the first time it falls back so
- * the silent degradation is observable. Warn-once is kept here, in the closure,
- * so each middleware tracks its own "already warned" latch.
+ * shared fallback.
+ *
+ * Two fallback cases, deliberately distinguished:
+ *
+ *   - **No request context at all** (`currentContext()` is undefined) — an
+ *     out-of-request dispatch: a build prerender (`buildStaticSites` calls
+ *     `app.handle` directly), a batch task, a test. There is no client to key
+ *     on by design; fall back to {@link UNKNOWN_CLIENT_KEY} *silently*.
+ *   - **Context present but `ip` undefined** — an in-request dispatch whose
+ *     transport did not resolve a client identity (trust-proxy off behind a
+ *     proxy, a hand-rolled transport that forgot to set `ip`). That is the
+ *     misconfig the warn-once seam is for; trip {@link onUnknownClient}.
+ *
+ * Warn-once is kept here, in the closure, so each middleware tracks its own
+ * "already warned" latch.
  *
  * It takes the {@link KeelRequest} to match the public `keyFor` signature, but
  * ignores it: the resolved client IP rides the ambient context, not the request
@@ -111,11 +147,11 @@ function defaultKeyFor(onUnknownClient: () => void): (request: KeelRequest) => s
   let warned = false;
 
   return () => {
-    const ip = currentContext()?.ip;
+    const context = currentContext();
 
-    if (ip !== undefined) return ip;
+    if (context?.ip !== undefined) return context.ip;
 
-    if (!warned) {
+    if (context !== undefined && !warned) {
       warned = true;
       onUnknownClient();
     }
@@ -163,6 +199,12 @@ export function rateLimit(options: RateLimitOptions): Middleware {
 
     if (result.allowed) {
       return next();
+    }
+
+    // Announce the throttle before answering — observation only, never a bypass:
+    // the `429` is returned regardless of whether (or how) the hook resolves.
+    if (options.onDenied !== undefined) {
+      await options.onDenied(RATELIMIT_DENIED_KIND, request);
     }
 
     // Denied: answer 429 ourselves, never reaching a controller. `Retry-After`

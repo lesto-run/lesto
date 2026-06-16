@@ -26,7 +26,7 @@
  */
 
 export { createIdentity } from "./identity";
-export type { Identity, IdentityMailer, IdentityOptions } from "./identity";
+export type { Identity, IdentityEvent, IdentityMailer, IdentityOptions } from "./identity";
 
 export {
   deleteUser,

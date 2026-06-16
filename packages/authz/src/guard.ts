@@ -16,9 +16,12 @@
  * list however it likes and stashes it with `c.set("roles", …)`.
  */
 
-import type { AnyKeelResponse, Context, Handler } from "@keel/web";
+import type { AnyKeelResponse, Context, Handler, KeelRequest } from "@keel/web";
 
 import type { Policy } from "./policy";
+
+/** The coded `kind` the {@link GuardOptions.onDenied} seam reports a refusal under. */
+export const AUTHZ_DENIED_KIND = "authz_forbidden";
 
 /** How a guard finds the current subject's roles, and what it returns when refusing. */
 export interface GuardOptions {
@@ -27,6 +30,21 @@ export interface GuardOptions {
 
   /** Build the refusal response. Defaults to a plain 403. */
   onDeny?: (c: Context, permission: string) => AnyKeelResponse;
+
+  /**
+   * Optional observability hook fired the moment the guard refuses — the uniform
+   * `onDenied(kind, c)` seam shared across `@keel/csrf`, `@keel/authz`, and
+   * `@keel/ratelimit` (owned by auth-security item 6, consumed by OTLP wiring in
+   * operability-dx item 3).
+   *
+   * `kind` is the coded reason (here always {@link AUTHZ_DENIED_KIND}); `c` is the
+   * refused {@link KeelRequest} (the guard's `Context.req`, so the seam matches the
+   * other two middleware byte-for-byte). Purely observational and distinct from
+   * {@link onDeny}: `onDeny` *builds the response*, `onDenied` only *watches* —
+   * the refusal is identical whether or not it is wired. A returned promise is
+   * awaited so an async sink is not dropped mid-write.
+   */
+  onDenied?: (kind: string, c: KeelRequest) => void | Promise<void>;
 }
 
 /** A policy bound to a way of reading the request's subject — the enforcement surface. */
@@ -60,6 +78,7 @@ export function createGuard<Role extends string, Permission extends string>(
 ): Guard<Permission> {
   const rolesOf = options.rolesOf ?? defaultRolesOf;
   const onDeny = options.onDeny ?? forbidden;
+  const onDenied = options.onDenied;
 
   const ensure = (c: Context, permission: Permission): boolean =>
     policy.allows(rolesOf(c), permission);
@@ -68,7 +87,19 @@ export function createGuard<Role extends string, Permission extends string>(
     ensure,
 
     can(permission: Permission): Handler {
-      return (c, next) => (ensure(c, permission) ? next() : onDeny(c, permission));
+      return async (c, next) => {
+        if (ensure(c, permission)) return next();
+
+        // Announce the refusal before answering — observation only, never a
+        // bypass: the `onDeny` response is returned regardless of whether (or how)
+        // the hook resolves. `c.req` is passed so the seam is the same shape as the
+        // csrf/ratelimit middleware, which key off the bare request.
+        if (onDenied !== undefined) {
+          await onDenied(AUTHZ_DENIED_KIND, c.req);
+        }
+
+        return onDeny(c, permission);
+      };
     },
   };
 }

@@ -6,6 +6,7 @@ import {
   MemoryRateLimitStore,
   RateLimiter,
   rateLimit,
+  RATELIMIT_DENIED_KIND,
   RATELIMIT_UNKNOWN_CLIENT_CODE,
   UNKNOWN_CLIENT_KEY,
 } from "../src/index";
@@ -101,11 +102,32 @@ describe("rateLimit middleware", () => {
     const limiter = new RateLimiter({ store, capacity: 5, refillPerSecond: 1, clock: () => 1000 });
     const middleware = rateLimit({ capacity: 5, refillPerSecond: 1, limiter });
 
-    // No context, so the default key is the shared fallback.
-    await middleware(request, async () => okResponse);
+    // In a request context whose transport did not resolve a client IP, the
+    // default key is the shared fallback — the in-request misconfig case.
+    await runWithContext({ requestId: "1" }, () => middleware(request, async () => okResponse));
 
     // The bucket under the fallback key was touched — proof the fallback was used.
     expect(await bucketAt(store, UNKNOWN_CLIENT_KEY)).toBeDefined();
+  });
+
+  it("takes the same shared bucket silently when dispatched outside any request context", async () => {
+    // The build prerender / batch task / out-of-transport test path: there is no
+    // client to key on by design. Same bucket as the misconfig case (a missing
+    // IP must always *tighten* the gate, never open it), but no warning.
+    const store = new MemoryRateLimitStore();
+    const limiter = new RateLimiter({ store, capacity: 5, refillPerSecond: 1, clock: () => 1000 });
+    const onUnknownClient = vi.fn();
+    const middleware = rateLimit({
+      capacity: 5,
+      refillPerSecond: 1,
+      limiter,
+      onUnknownClient,
+    });
+
+    await middleware(request, async () => okResponse);
+
+    expect(await bucketAt(store, UNKNOWN_CLIENT_KEY)).toBeDefined();
+    expect(onUnknownClient).not.toHaveBeenCalled();
   });
 
   it("honors a custom keyFor", async () => {
@@ -171,16 +193,30 @@ describe("rateLimit unresolved-client detection", () => {
     vi.restoreAllMocks();
   });
 
-  it("fires onUnknownClient once when the IP cannot be resolved, not per request", async () => {
+  it("fires onUnknownClient once when an in-request IP cannot be resolved, not per request", async () => {
     const onUnknownClient = vi.fn();
     const middleware = rateLimit({ capacity: 5, refillPerSecond: 1, onUnknownClient });
 
-    // No context on either call: both fall back to the shared bucket.
+    // Two in-request dispatches whose transport did not set ip: both fall back
+    // to the shared bucket, but the warn-once latch keeps it to a single seam fire.
+    await runWithContext({ requestId: "1" }, () => middleware(request, async () => okResponse));
+    await runWithContext({ requestId: "2" }, () => middleware(request, async () => okResponse));
+
+    expect(onUnknownClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire onUnknownClient when dispatched outside any request context", async () => {
+    // The build prerender / batch task path: no current context at all. Same
+    // fallback bucket, but silent — there is no transport to misconfig, so the
+    // warning would be noise. Separately covered by the bucket-touched test
+    // above; this one pins the silence directly.
+    const onUnknownClient = vi.fn();
+    const middleware = rateLimit({ capacity: 5, refillPerSecond: 1, onUnknownClient });
+
     await middleware(request, async () => okResponse);
     await middleware(request, async () => okResponse);
 
-    // Warn-once: the second context-less request must not re-fire the seam.
-    expect(onUnknownClient).toHaveBeenCalledTimes(1);
+    expect(onUnknownClient).not.toHaveBeenCalled();
   });
 
   it("does not fire onUnknownClient when the context resolves a client IP", async () => {
@@ -198,14 +234,14 @@ describe("rateLimit unresolved-client detection", () => {
     const onUnknownClient = vi.fn();
     const middleware = rateLimit({ capacity: 5, refillPerSecond: 1, onUnknownClient });
 
-    // Resolved first (no warning), then context-less (warns), then context-less
-    // again (warn-once latch holds). The latch is set only by a real fallback,
-    // so a resolved request in between does not reset it.
+    // Resolved first (no warning), then in-request with no ip (warns), then the
+    // same again (warn-once latch holds). The latch is set only by a real
+    // misconfig, so a resolved request in between does not reset it.
     await runWithContext({ requestId: "1", ip: "10.0.0.1" }, () =>
       middleware(request, async () => okResponse),
     );
-    await middleware(request, async () => okResponse);
-    await middleware(request, async () => okResponse);
+    await runWithContext({ requestId: "2" }, () => middleware(request, async () => okResponse));
+    await runWithContext({ requestId: "3" }, () => middleware(request, async () => okResponse));
 
     expect(onUnknownClient).toHaveBeenCalledTimes(1);
   });
@@ -219,8 +255,9 @@ describe("rateLimit unresolved-client detection", () => {
       onUnknownClient,
     });
 
-    // No context, but an explicit key means there is no unresolved fallback.
-    await middleware(request, async () => okResponse);
+    // In-request with no ip would normally warn — but an explicit key means
+    // there is no unresolved fallback to detect.
+    await runWithContext({ requestId: "1" }, () => middleware(request, async () => okResponse));
 
     expect(onUnknownClient).not.toHaveBeenCalled();
   });
@@ -229,10 +266,47 @@ describe("rateLimit unresolved-client detection", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const middleware = rateLimit({ capacity: 5, refillPerSecond: 1 });
 
-    await middleware(request, async () => okResponse);
+    await runWithContext({ requestId: "1" }, () => middleware(request, async () => okResponse));
 
     expect(warn).toHaveBeenCalledTimes(1);
     // Logs branch on the stable code, never the prose.
     expect(warn.mock.calls[0]?.[0]).toContain(RATELIMIT_UNKNOWN_CLIENT_CODE);
+  });
+});
+
+describe("rateLimit onDenied seam", () => {
+  it("fires onDenied with the coded kind and the throttled request on a 429", async () => {
+    const onDenied = vi.fn();
+    const limiter = fixedLimiter(1, 1);
+    const middleware = rateLimit({ capacity: 1, refillPerSecond: 1, limiter, onDenied });
+
+    // First request spends the only token (allowed); the second is throttled.
+    expect((await middleware(request, async () => okResponse)).status).toBe(200);
+    expect(onDenied).not.toHaveBeenCalled();
+
+    const denied = await middleware(request, async () => okResponse);
+
+    // The 429 (and its Retry-After) is unchanged — the hook only observes.
+    expect(denied.status).toBe(429);
+    expect(denied.headers["Retry-After"]).toBe("1");
+
+    expect(onDenied).toHaveBeenCalledTimes(1);
+    expect(onDenied).toHaveBeenCalledWith(RATELIMIT_DENIED_KIND, request);
+    expect(RATELIMIT_DENIED_KIND).toBe("ratelimit_exceeded");
+  });
+
+  it("awaits an async onDenied before answering the 429", async () => {
+    const seen: string[] = [];
+    const onDenied = async (kind: string): Promise<void> => {
+      seen.push(kind);
+    };
+    const limiter = fixedLimiter(1, 1);
+    const middleware = rateLimit({ capacity: 1, refillPerSecond: 1, limiter, onDenied });
+
+    await middleware(request, async () => okResponse);
+    const denied = await middleware(request, async () => okResponse);
+
+    expect(denied.status).toBe(429);
+    expect(seen).toEqual([RATELIMIT_DENIED_KIND]);
   });
 });

@@ -14,7 +14,12 @@
 export { RateLimiter } from "./limiter";
 export type { RateLimiterOptions } from "./limiter";
 
-export { rateLimit, RATELIMIT_UNKNOWN_CLIENT_CODE, UNKNOWN_CLIENT_KEY } from "./middleware";
+export {
+  rateLimit,
+  RATELIMIT_DENIED_KIND,
+  RATELIMIT_UNKNOWN_CLIENT_CODE,
+  UNKNOWN_CLIENT_KEY,
+} from "./middleware";
 export type { RateLimitOptions } from "./middleware";
 
 export { MemoryRateLimitStore } from "./store";

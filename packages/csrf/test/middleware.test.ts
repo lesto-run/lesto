@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { csrf, CsrfError, defaultExtractToken, generateToken } from "../src/index";
+import {
+  CSRF_DENIED_KIND,
+  csrf,
+  CsrfError,
+  defaultExtractToken,
+  generateToken,
+} from "../src/index";
 
 import type { AnyKeelResponse, KeelRequest } from "@keel/web";
 
@@ -118,6 +124,43 @@ describe("csrf middleware", () => {
     );
 
     expect(response.status).toBe(200);
+  });
+
+  it("fires onDenied with the coded kind and the refused request on a 403", async () => {
+    const onDenied = vi.fn();
+    const middleware = csrf({ secret: SECRET, sessionFor, onDenied });
+
+    const request = requestWith({ method: "POST" });
+    const response = await middleware(request, async () => okResponse);
+
+    // The refusal stands exactly as before — the hook only watches.
+    expect(response.status).toBe(403);
+
+    expect(onDenied).toHaveBeenCalledTimes(1);
+    expect(onDenied).toHaveBeenCalledWith(CSRF_DENIED_KIND, request);
+    expect(CSRF_DENIED_KIND).toBe("csrf_token_invalid");
+  });
+
+  it("awaits an async onDenied before answering, and never fires it on an allowed request", async () => {
+    const seen: string[] = [];
+    const onDenied = async (kind: string): Promise<void> => {
+      seen.push(kind);
+    };
+    const middleware = csrf({ secret: SECRET, sessionFor, onDenied });
+
+    // An allowed request: a valid token means no refusal, so onDenied stays silent.
+    const token = generateToken(SESSION, SECRET);
+    const allowed = await middleware(
+      requestWith({ method: "POST", headers: { "x-csrf-token": token } }),
+      async () => okResponse,
+    );
+    expect(allowed.status).toBe(200);
+    expect(seen).toEqual([]);
+
+    // A refused request awaits the async hook, then returns the 403.
+    const refused = await middleware(requestWith({ method: "POST" }), async () => okResponse);
+    expect(refused.status).toBe(403);
+    expect(seen).toEqual([CSRF_DENIED_KIND]);
   });
 });
 

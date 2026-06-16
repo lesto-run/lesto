@@ -21,6 +21,9 @@ import type { KeelRequest, Middleware } from "@keel/web";
 
 const FORBIDDEN = 403;
 
+/** The coded `kind` the {@link CsrfOptions.onDenied} seam reports a refusal under. */
+export const CSRF_DENIED_KIND = "csrf_token_invalid";
+
 /** The methods that mutate state — the ones a CSRF token must accompany. */
 const DEFAULT_GUARDED_METHODS: readonly string[] = ["POST", "PUT", "PATCH", "DELETE"];
 
@@ -57,6 +60,20 @@ export interface CsrfOptions {
    * never needs a token and is always let through.
    */
   readonly methods?: readonly string[];
+
+  /**
+   * Optional observability hook fired the moment a request is refused — the
+   * uniform `onDenied(kind, c)` seam shared across `@keel/csrf`, `@keel/authz`,
+   * and `@keel/ratelimit` (owned by auth-security item 6, consumed by OTLP wiring
+   * in operability-dx item 3).
+   *
+   * `kind` is the coded reason (here always {@link CSRF_DENIED_KIND}); `c` is the
+   * refused {@link KeelRequest}. Purely observational: it shapes nothing — the
+   * `403` is identical whether or not a hook is wired — so firing is safe on the
+   * refusal path. Wire it to a tracer/audit sink. A returned promise is awaited so
+   * an async sink is not dropped mid-write.
+   */
+  readonly onDenied?: (kind: string, c: KeelRequest) => void | Promise<void>;
 }
 
 /**
@@ -122,6 +139,12 @@ export function csrf(options: CsrfOptions): Middleware {
       token !== undefined && verifyToken(token, options.sessionFor(request), options.secret);
 
     if (!ok) {
+      // Announce the refusal before answering — observation only, never a bypass:
+      // the `403` is returned regardless of whether (or how) the hook resolves.
+      if (options.onDenied !== undefined) {
+        await options.onDenied(CSRF_DENIED_KIND, request);
+      }
+
       return { status: FORBIDDEN, headers: { "content-type": "text/plain" }, body: "Forbidden" };
     }
 
