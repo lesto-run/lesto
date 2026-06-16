@@ -24,12 +24,17 @@ import type { AssetFetcher } from "@keel/cloudflare";
 import { preactServerRenderer } from "@keel/ui/server";
 
 import { buildEdgeApp, edgeSecret, isDemoMode } from "./src/edge";
+import { d1ContentStore } from "./src/content";
+import type { ContentStore } from "./src/content";
+import type { D1Database } from "./src/d1";
 
 /** The bindings this Worker is configured with (see wrangler.jsonc). */
 interface Env {
   readonly ASSETS: AssetFetcher;
   readonly SESSION_SECRET?: string;
   readonly KEEL_DEMO?: string;
+  /** The Cloudflare D1 database backing the DB-driven `/lab/content` page. */
+  readonly DB?: D1Database;
 }
 
 /** A Cloudflare Worker fetch handler — what both `toFetchHandler` and `withAssets` produce. */
@@ -56,17 +61,27 @@ type FetchHandler = (request: Request) => Promise<Response>;
 let cachedSecret: string | undefined;
 let cachedDemo: boolean | undefined;
 let cachedHandler: FetchHandler | undefined;
+let cachedStore: ContentStore | undefined;
 
 /**
  * The fetch handler for `secret` + `demo`, built once per isolate and reused.
  *
  * Keyed by both the secret and the demo flag: the demo flag changes whether the
  * passwordless `?as=` sign-in is reachable, so a flag change must rebuild rather
- * than serve a handler with the wrong auth posture.
+ * than serve a handler with the wrong auth posture. The D1 content store is
+ * derived from the per-isolate `DB` binding (stable for the isolate's lifetime),
+ * so it is built inside the rebuild and reused across requests — never re-opened
+ * (which would re-run its seed check) per request.
  */
-function handlerFor(secret: string, demo: boolean): FetchHandler {
+function handlerFor(secret: string, demo: boolean, d1: D1Database | undefined): FetchHandler {
   if (cachedHandler === undefined || cachedSecret !== secret || cachedDemo !== demo) {
-    const app = buildEdgeApp(secret, { serverRenderer: preactServerRenderer, demo });
+    cachedStore = d1 === undefined ? undefined : d1ContentStore(d1);
+
+    const app = buildEdgeApp(secret, {
+      serverRenderer: preactServerRenderer,
+      demo,
+      ...(cachedStore === undefined ? {} : { contentStore: cachedStore }),
+    });
 
     cachedHandler = toFetchHandler((method, path, options) => app.handle(method, path, options));
     cachedSecret = secret;
@@ -80,7 +95,7 @@ export default {
   fetch(request: Request, env: Env): Promise<Response> {
     // edgeSecret FAILS CLOSED: an unset SESSION_SECRET outside demo mode throws
     // here, so the Worker refuses to serve rather than sign with a public secret.
-    const handler = handlerFor(edgeSecret(env), isDemoMode(env));
+    const handler = handlerFor(edgeSecret(env), isDemoMode(env), env.DB);
 
     // Static marketing files first (cached at the PoP); the live app for the rest.
     // `env.ASSETS` is per-request, so this thin wrap happens every time; the

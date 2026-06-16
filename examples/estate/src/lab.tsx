@@ -14,7 +14,6 @@
  *   - the data route the CSR island calls           (`GET /lab/api/listings/:id`)
  */
 
-import { Suspense, use } from "react";
 import type { ReactNode } from "react";
 
 import { keel } from "@keel/web";
@@ -26,6 +25,7 @@ import { Button, Hero, ListingCard, Main, Section, SiteHeader } from "./ui/compo
 import { LiveListing } from "./ui/live-listing";
 import { DeferredPanel } from "./ui/deferred-panel";
 import { buildContentRoutes } from "./content";
+import type { ContentStore } from "./content";
 import { LISTINGS, findListing, formatPrice } from "./listings";
 import type { Listing } from "./listings";
 
@@ -66,7 +66,7 @@ function LabIndex(): ReactNode {
         <Section title="Pages">
           <p className="copy">
             <Button href="/lab/listings/bel-air-glen">SSR data + typed param</Button>{" "}
-            <Button href="/lab/streaming">Streaming &lt;Suspense&gt;</Button>{" "}
+            <Button href="/lab/streaming">Async server data</Button>{" "}
             <Button variant="ghost" href="/lab/flags?preview=1">
               Feature flag
             </Button>{" "}
@@ -139,50 +139,40 @@ function ListingDetailPage({
   );
 }
 
-/** A deliberately slow data source, to make the streaming boundary observable. */
+/** A deliberately slow data source, to show the load awaiting before render. */
 function slowListings(): Promise<readonly Listing[]> {
   return new Promise((resolve) => setTimeout(() => resolve(LISTINGS), 30));
 }
 
-/** The suspending child: it `use()`s the promise, so the shell streams before it. */
-function ResolvedListings({ promise }: { promise: Promise<readonly Listing[]> }): ReactNode {
-  const listings = use(promise);
-
-  return (
-    <section className="grid">
-      {listings.map((listing) => (
-        <ListingCard
-          key={listing.id}
-          title={listing.title}
-          neighborhood={listing.neighborhood}
-          price={formatPrice(listing.price)}
-          beds={listing.beds}
-          baths={listing.baths}
-        />
-      ))}
-    </section>
-  );
-}
-
-/** Shell-first streaming: the header + hero paint immediately, listings stream in. */
-function StreamingPage({
-  listingsPromise,
-}: {
-  listingsPromise: Promise<readonly Listing[]>;
-}): ReactNode {
+/**
+ * Async server data: the `load` awaits a slow source, then the component renders
+ * the resolved listings. Portable across runtimes — on Node the document still
+ * streams shell-first (every `.page` does), and the Worker renders it buffered
+ * under Preact, where a `<Suspense>` + `use()` boundary could not resolve.
+ */
+function AsyncDataPage({ listings }: { listings: readonly Listing[] }): ReactNode {
   return (
     <>
       <SiteHeader />
 
       <Main>
         <Hero
-          heading="Streaming"
-          sub="The shell paints first; the listings stream in when ready."
+          heading="Async server data"
+          sub="The load awaited a slow source on the server; the listings render resolved."
         />
 
-        <Suspense fallback={<p className="copy">Streaming the listings…</p>}>
-          <ResolvedListings promise={listingsPromise} />
-        </Suspense>
+        <section className="grid">
+          {listings.map((listing) => (
+            <ListingCard
+              key={listing.id}
+              title={listing.title}
+              neighborhood={listing.neighborhood}
+              price={formatPrice(listing.price)}
+              beds={listing.beds}
+              baths={listing.baths}
+            />
+          ))}
+        </section>
       </Main>
     </>
   );
@@ -217,8 +207,13 @@ function AdminPage(): ReactNode {
   );
 }
 
-/** Build the `/lab` sub-app — mounted by `controllers.ts`. */
-export function buildLabRoutes(): Keel {
+/**
+ * Build the `/lab` sub-app — mounted by both the Node app (`controllers.ts`) and
+ * the Worker (`edge.ts`). `contentStore` is the DB-driven page's backend: the Node
+ * SQLite store on the server, the D1 store on the edge, or `undefined` when no
+ * store is configured (the content page then renders a "configure D1" view).
+ */
+export function buildLabRoutes(contentStore?: ContentStore): Keel {
   // The flag- and authz-gated pages live in their own sub-routers so the gate
   // wraps ONLY that page, not the whole lab zone.
   const flagGated = keel()
@@ -242,13 +237,13 @@ export function buildLabRoutes(): Keel {
         component: ListingDetailPage,
       })
       .page("/lab/streaming", {
-        load: () => ({ listingsPromise: slowListings() }),
-        component: StreamingPage,
+        load: async () => ({ listings: await slowListings() }),
+        component: AsyncDataPage,
       })
       .route(flagGated)
       .route(adminGated)
       // DB-driven (WordPress-style) pages: a block tree loaded by slug.
-      .route(buildContentRoutes())
+      .route(buildContentRoutes(contentStore))
       // The data route the LiveListing island fetches (typed by `LabApi`).
       .get("/lab/api/listings/:id", (c) => {
         const listing = findListing(c.param("id"));

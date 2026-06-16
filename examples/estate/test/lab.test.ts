@@ -56,14 +56,13 @@ describe("/lab — deferred (visible) hydration island", () => {
   });
 });
 
-describe("/lab/streaming — shell-first streaming", () => {
-  it("streams the shell then the suspended listings", async () => {
+describe("/lab/streaming — async server data", () => {
+  it("awaits a slow source in load, then renders the resolved listings", async () => {
     const app = await buildApp();
 
     const html = await body(await app.handle("GET", "/lab/streaming"));
 
-    // The shell hero AND (after the suspended boundary resolves) the listings.
-    expect(html).toContain("Streaming");
+    expect(html).toContain("Async server data");
     expect(html).toContain("Malibu Cliffside");
   });
 });

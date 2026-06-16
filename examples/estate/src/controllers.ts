@@ -27,6 +27,7 @@ import { EstateLayout } from "./ui/layout";
 import { HomePage, AboutPage, MlsPage } from "./pages";
 import { StyleGuidePage } from "./styleguide";
 import { buildLabRoutes } from "./lab";
+import { nodeContentStore } from "./content-node";
 import { LISTINGS } from "./listings";
 import { DEFAULT_DEMO, DEMO_ACCOUNTS } from "./identity";
 
@@ -188,7 +189,8 @@ export function buildEstateRoutes(identity: Identity): Keel {
 
         return c.json({ user: sessionUser(user.email), saved: LISTINGS.slice(0, 2) });
       })
-      // The /lab feature-demo zone (SSR + CSR fetch, streaming, flags, authz).
-      .route(buildLabRoutes())
+      // The /lab feature-demo zone (SSR + CSR fetch, async data, flags, authz,
+      // DB-driven content over portable SQLite).
+      .route(buildLabRoutes(nodeContentStore()))
   );
 }

@@ -25,6 +25,8 @@ import type { ServerRenderer } from "@keel/ui/server";
 import { sessionSource } from "./session-source";
 import { EstateLayout } from "./ui/layout";
 import { HomePage, MlsPage } from "./pages";
+import { buildLabRoutes } from "./lab";
+import type { ContentStore } from "./content";
 import { LISTINGS } from "./listings";
 
 /** A signed-in person. */
@@ -74,6 +76,14 @@ export interface EdgeAppOptions {
    * closed rather than silently exposing impersonation.
    */
   readonly demo?: boolean;
+
+  /**
+   * The DB-driven content store for the `/lab/content/:slug` page (ADR 0004's
+   * content duality). On the deployed Worker this is the Cloudflare D1 store
+   * (`d1ContentStore(env.DB)`, wired in `worker.ts`); absent, the content page
+   * renders a "configure a D1 binding" view rather than 404ing the link.
+   */
+  readonly contentStore?: ContentStore;
 }
 
 /**
@@ -185,7 +195,9 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel
       if (user === undefined) return c.json({ error: "sign in required" }, 401);
 
       return c.json({ user, saved: LISTINGS.slice(0, 2) });
-    });
+    })
+    // The /lab feature-demo zone, on the edge too (DB-driven content over D1).
+    .route(buildLabRoutes(options.contentStore));
 
   // The matched-pair SERVER half (ADR 0008): the Worker passes the Preact
   // renderer (its bundle is aliased), the in-process tests leave it unset (React).

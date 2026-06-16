@@ -12,6 +12,21 @@
     "directory": "./out/marketing",
     "binding": "ASSETS",
   },
+  // Cloudflare D1 backs the DB-driven `/lab/content/:slug` page — a Worker has no
+  // filesystem SQLite, so the content store uses D1 on the edge (Node/`bun run`
+  // use `openSqlite`). One-time setup before `wrangler deploy`:
+  //   1. wrangler d1 create estate        # creates the DB, prints its id
+  //   2. paste that id into `database_id` below
+  // The `pages` table is created + seeded lazily on first request (idempotent),
+  // so no separate migration step is needed for the demo. Absent this binding,
+  // the content page renders a "configure a D1 binding" view instead of 404ing.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "estate",
+      "database_id": "REPLACE_WITH_d1_create_output",
+    },
+  ],
   // Preact by default on the edge (ADR 0007/0008): the worker bundle resolves
   // every React specifier to Preact's compat layer — the same alias set
   // `build-client.ts --preact` applies to the client bundle, so the SSR'd markup

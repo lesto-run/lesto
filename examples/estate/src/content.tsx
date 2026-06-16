@@ -5,18 +5,17 @@
  * UiNode block tree stored in a `pages` table, loaded by slug at request time and
  * rendered through a `Registry` of block components (`@keel/ui`'s `renderTree`).
  * The same `keel()` router serves both — a hand-authored `/lab/streaming` beside a
- * DB-driven `/lab/content/:slug` — which is the whole point: one app, two content
- * models.
+ * DB-driven `/lab/content/:slug` — one app, two content models.
  *
- * The store here is a self-contained in-memory SQLite seeded at module load, so
- * the demo owns its data without threading estate's identity DB through every
- * layer. A real deploy points `createDb` at its primary database instead; the
- * query + render path is identical.
+ * The STORE is injected, so the page runs on either runtime with the identical
+ * query + render path: Node/Bun use portable SQLite (`openSqlite`), the Cloudflare
+ * Worker uses D1 (`d1ContentStore`), since a Worker has no filesystem SQLite. Both
+ * create the table idempotently and seed once, so a persistent D1 isn't reseeded
+ * on every cold start.
  */
 
 import { createDb, createTableSql, defineTable, eq, integer, text } from "@keel/db";
-import type { Db } from "@keel/db";
-import { openSqlite } from "@keel/runtime";
+import type { Db, SqlDatabase } from "@keel/db";
 import { keel, type Keel } from "@keel/web";
 import { Registry } from "@keel/ui";
 import { renderTree } from "@keel/ui/server";
@@ -24,6 +23,8 @@ import type { UiNode } from "@keel/ui";
 import type { ReactNode } from "react";
 
 import { Hero, Main, SiteHeader } from "./ui/components";
+import { d1ToSqlDatabase } from "./d1";
+import type { D1Database } from "./d1";
 
 /** The block-page table: a slug, a title, and the serialized UiNode tree. */
 const pages = defineTable("pages", {
@@ -101,36 +102,63 @@ const SEED: readonly SeedPage[] = [
   },
 ];
 
-// Open + seed the store once, lazily. `openSqlite` is the framework's PORTABLE
-// sqlite seam (better-sqlite3 under Node/vitest, bun:sqlite under `bun run`), so
-// this works in the test runner AND in the real `bun run build`/`serve` — a
-// direct `better-sqlite3` import crashes the latter because Bun cannot dlopen the
-// native addon. The open is async, so it is memoized behind a promise the
-// request path awaits (estate's identity layer opens its DB the same way).
-let storePromise: Promise<Db> | undefined;
+/** Create the table if absent and seed it once (idempotent — safe on a persistent D1). */
+async function ensureSeeded(handle: SqlDatabase, db: Db): Promise<void> {
+  await handle.exec(createTableSql(pages).replace(/^CREATE TABLE/, "CREATE TABLE IF NOT EXISTS"));
 
-function store(): Promise<Db> {
-  storePromise ??= (async () => {
-    const { db: handle } = await openSqlite(":memory:");
-    const db = createDb(handle);
+  const first = SEED[0];
+  if (first === undefined) return;
 
-    await handle.exec(createTableSql(pages));
+  // Already seeded? (A persistent D1 keeps its rows across cold starts.)
+  const existing = await db.select().from(pages).where(eq(pages.slug, first.slug)).get();
+  if (existing !== undefined) return;
 
-    for (const page of SEED) {
-      await db
-        .insert(pages)
-        .values({ slug: page.slug, title: page.title, tree: JSON.stringify(page.tree) })
-        .run();
-    }
+  for (const page of SEED) {
+    await db
+      .insert(pages)
+      .values({ slug: page.slug, title: page.title, tree: JSON.stringify(page.tree) })
+      .run();
+  }
+}
 
-    return db;
-  })();
+/** A lazily-opened, seeded content store: a getter that resolves a ready `Db` once. */
+export type ContentStore = () => Promise<Db>;
 
-  return storePromise;
+/**
+ * Build a content store from an opener: memoizes it so the DB opens + seeds
+ * exactly once, then is reused. Exported so the Node-only store
+ * (`content-node.ts`, which pulls in `openSqlite`/better-sqlite3) can live in its
+ * own module — keeping THIS module, and so the Worker bundle that imports it,
+ * free of any filesystem-SQLite dependency the edge can't load.
+ */
+export function makeContentStore(
+  open: () => Promise<{ handle: SqlDatabase; db: Db }>,
+): ContentStore {
+  let ready: Promise<Db> | undefined;
+
+  return () =>
+    (ready ??= (async () => {
+      const { handle, db } = await open();
+      await ensureSeeded(handle, db);
+
+      return db;
+    })());
+}
+
+/** The Cloudflare edge content store — a D1 binding adapted to `@keel/db`. */
+export function d1ContentStore(d1: D1Database): ContentStore {
+  return makeContentStore(async () => {
+    const handle = d1ToSqlDatabase(d1);
+
+    return { handle, db: createDb(handle) };
+  });
 }
 
 /** Load a stored page's title + block tree by slug, or `undefined` if none. */
-async function loadPage(slug: string): Promise<{ title: string; tree: UiNode } | undefined> {
+async function loadPage(
+  store: ContentStore,
+  slug: string,
+): Promise<{ title: string; tree: UiNode } | undefined> {
   const db = await store();
   const row = await db.select().from(pages).where(eq(pages.slug, slug)).get();
 
@@ -139,16 +167,33 @@ async function loadPage(slug: string): Promise<{ title: string; tree: UiNode } |
   return { title: row.title, tree: JSON.parse(row.tree) as UiNode };
 }
 
-/** Render a loaded block tree through the Registry, or a not-found view. */
+/** Render a loaded block tree through the Registry, or a not-found / unconfigured view. */
 function ContentPage({
   slug,
   title,
   tree,
+  configured,
 }: {
   slug: string;
   title?: string;
   tree?: UiNode;
+  configured: boolean;
 }): ReactNode {
+  if (!configured) {
+    return (
+      <>
+        <SiteHeader />
+
+        <Main>
+          <Hero
+            heading="DB-driven page"
+            sub="No content store is configured — set a Cloudflare D1 binding (see wrangler.jsonc)."
+          />
+        </Main>
+      </>
+    );
+  }
+
   if (tree === undefined || title === undefined) {
     return (
       <>
@@ -177,14 +222,27 @@ function ContentPage({
   );
 }
 
-/** The DB-driven content routes — mounted into the `/lab` zone. */
-export function buildContentRoutes(): Keel {
+/**
+ * The DB-driven content routes, over an injected store — mounted into `/lab`.
+ *
+ * `store` is the Node SQLite store on the server and the D1 store on the edge.
+ * `undefined` means no store is configured (e.g. a Worker deployed without a D1
+ * binding): the page renders a clear "configure D1" view instead of crashing.
+ */
+export function buildContentRoutes(store?: ContentStore): Keel {
   return keel().page("/lab/content/:slug", {
-    load: async (c): Promise<{ slug: string; title?: string; tree?: UiNode }> => {
+    load: async (
+      c,
+    ): Promise<{ slug: string; title?: string; tree?: UiNode; configured: boolean }> => {
       const slug = c.param("slug");
-      const page = await loadPage(slug);
 
-      return page === undefined ? { slug } : { slug, title: page.title, tree: page.tree };
+      if (store === undefined) return { slug, configured: false };
+
+      const page = await loadPage(store, slug);
+
+      return page === undefined
+        ? { slug, configured: true }
+        : { slug, title: page.title, tree: page.tree, configured: true };
     },
     component: ContentPage,
   });
