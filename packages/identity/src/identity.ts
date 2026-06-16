@@ -686,11 +686,13 @@ export function createIdentity(options: IdentityOptions): Identity {
     async logout(token) {
       if (token === undefined) return;
 
-      // Resolve the session before revoking so the event can name its subject.
-      // `verify` returns the live session (or undefined for an unknown/expired
-      // token); we emit `session_revoked` only when a real session was actually
-      // ended, so a logout of a stale or bogus token announces nothing.
-      const session = await sessions.verify(token);
+      // With a sink wired, resolve the session first so the event can name its
+      // subject: `verify` returns the live session (or undefined for an unknown/
+      // expired token), and we emit `session_revoked` only when a real session was
+      // actually ended — a logout of a stale or bogus token announces nothing. With
+      // NO sink wired we skip that extra read entirely: logout stays a single
+      // delete, unchanged from before the seam existed.
+      const session = options.onEvent !== undefined ? await sessions.verify(token) : undefined;
 
       await sessions.revoke(token);
 
