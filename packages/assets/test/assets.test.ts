@@ -20,7 +20,7 @@ describe("synthesizeEntry", () => {
     expect(source).toContain('import Island0 from "/app/islands/account.tsx";');
     expect(source).toContain(".defineClient(Island0.island)");
     expect(source).toContain('import { hydrateDocumentIslands } from "@keel/ui/client";');
-    expect(source).toContain("hydrateDocumentIslands(registry);");
+    expect(source).toContain("hydrateDocumentIslands(registry, {");
   });
 
   it("dynamic-imports a lazy (visible) island so only its bytes split", () => {
@@ -57,7 +57,65 @@ describe("synthesizeEntry", () => {
     const source = synthesizeEntry([]);
 
     expect(source).toContain("const registry = new Registry()");
-    expect(source).toContain("hydrateDocumentIslands(registry);");
+    // Even an island-less app wires the beacon — the hydrate call still runs (it
+    // is a no-op) and the result still feeds report(), so the wiring is uniform.
+    expect(source).toContain("hydrateDocumentIslands(registry, {");
+    expect(source).toContain("beacon.report(result);");
+  });
+});
+
+describe("synthesizeEntry — client error beacon (ADR 0011)", () => {
+  const islands: IslandFile[] = [
+    { name: "Account", importPath: "/a.tsx", lazy: false, ssr: false },
+  ];
+
+  it("inlines the beacon runtime and wires both hydration sinks into the hydrate call", () => {
+    const source = synthesizeEntry(islands);
+
+    // The runtime is inlined (no @keel/assets import in the browser graph).
+    expect(source).not.toContain("@keel/assets");
+    expect(source).toContain("const reportClientErrors =");
+    expect(source).toContain("const beacon = (() => {");
+
+    // The sinks are passed INTO hydrateDocumentIslands (so a deferred island that
+    // fails later still reports), and the synchronous result drives the summary.
+    expect(source).toContain("const result = hydrateDocumentIslands(registry, {");
+    expect(source).toContain("onMountError: beacon.onMountError,");
+    expect(source).toContain("onRecoverableError: beacon.onRecoverableError,");
+    expect(source).toContain("beacon.report(result);");
+  });
+
+  it("emits the POST path and never inlines free text that could carry PII", () => {
+    const source = synthesizeEntry(islands);
+
+    expect(source).toContain('"/__keel/client-errors"');
+    // The runtime reads error.code / constructor.name / typeof — never .message.
+    expect(source).not.toContain(".message");
+  });
+
+  it("passes an author-set sampleRate through to the runtime constructor", () => {
+    const source = synthesizeEntry(islands, { sampleRate: 0.5 });
+
+    expect(source).toContain("reportClientErrors({ sampleRate: 0.5 });");
+  });
+
+  it("passes an author-set dev flag through (the overlay path)", () => {
+    const source = synthesizeEntry(islands, { dev: true });
+
+    expect(source).toContain("reportClientErrors({ dev: true });");
+  });
+
+  it("emits both knobs together when both are set", () => {
+    const source = synthesizeEntry(islands, { sampleRate: 0.25, dev: false });
+
+    expect(source).toContain("reportClientErrors({ sampleRate: 0.25, dev: false });");
+  });
+
+  it("emits an empty options object when no knobs are set (runtime defaults apply)", () => {
+    const source = synthesizeEntry(islands);
+
+    // No build-time override → the runtime falls back to its conservative defaults.
+    expect(source).toContain("reportClientErrors({  });");
   });
 });
 

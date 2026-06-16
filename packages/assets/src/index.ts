@@ -26,7 +26,17 @@ export type {
 } from "./build-client";
 
 export { synthesizeEntry } from "./synthesize";
-export type { IslandFile } from "./synthesize";
+export type { BeaconConfig, IslandFile } from "./synthesize";
+
+export {
+  BEACON_PATH,
+  DEFAULT_SAMPLE_RATE,
+  errorClass,
+  hydrateEvent,
+  reportClientErrors,
+  shouldSample,
+} from "./client-beacon";
+export type { BeaconEvent, BeaconEventKind, BeaconOptions, BeaconPayload } from "./client-beacon";
 
 export { isChunkFile } from "./chunks";
 

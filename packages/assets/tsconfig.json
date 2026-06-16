@@ -3,7 +3,13 @@
 
   "compilerOptions": {
     "rootDir": ".",
-    "types": ["node", "bun"]
+    "types": ["node", "bun"],
+
+    // This package now also ships a browser client runtime — the island error
+    // beacon (`client-beacon.ts`) inlined into the synthesized entry — so the DOM
+    // lib joins ES2023: `document`, `fetch`, and friends are real here, exactly as
+    // in `@keel/ui` which ships the hydration runtime.
+    "lib": ["ES2023", "DOM"]
   },
 
   // `scripts/` holds the standalone Bun bundle-size assertion — Bun-run, not
