@@ -21,7 +21,15 @@
  */
 
 export { createAdmin } from "./admin";
-export type { Admin, AdminResource } from "./admin";
+export type {
+  Admin,
+  AdminOptions,
+  AdminResource,
+  AuditEvent,
+  ListOptions,
+  MutationAction,
+  MutationContext,
+} from "./admin";
 
 export { AdminError } from "./errors";
 export type { AdminErrorCode } from "./errors";

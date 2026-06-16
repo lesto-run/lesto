@@ -14,7 +14,7 @@ import {
 
 import { AdminError, createAdmin } from "../src/index";
 
-import type { Admin, AdminErrorCode, AdminResource } from "../src/index";
+import type { Admin, AdminErrorCode, AdminResource, AuditEvent } from "../src/index";
 
 // ---------------------------------------------------------------------------
 // Test rig
@@ -153,6 +153,50 @@ describe("createAdmin", () => {
       expect(Object.keys(rows[0]!)).toEqual(["id", "title", "body"]);
       expect(rows[0]).not.toHaveProperty("secret");
     });
+
+    it("paginates with limit + offset, ordered by the primary key", async () => {
+      for (let i = 1; i <= 5; i++) {
+        await admin.create("posts", { title: `Post ${i}`, body: `body ${i}` });
+      }
+
+      const page1 = await admin.list("posts", { limit: 2, offset: 0 });
+      const page2 = await admin.list("posts", { limit: 2, offset: 2 });
+      const page3 = await admin.list("posts", { limit: 2, offset: 4 });
+
+      expect(page1.map((r) => r["id"])).toEqual([1, 2]);
+      expect(page2.map((r) => r["id"])).toEqual([3, 4]);
+      expect(page3.map((r) => r["id"])).toEqual([5]);
+    });
+
+    it("applies offset alone (limit falls back to the default page size)", async () => {
+      for (let i = 1; i <= 3; i++) {
+        await admin.create("posts", { title: `Post ${i}`, body: "b" });
+      }
+
+      const rows = await admin.list("posts", { offset: 1 });
+
+      expect(rows.map((r) => r["id"])).toEqual([2, 3]);
+    });
+
+    it("caps rows at the default page size (50) when no limit is given", async () => {
+      for (let i = 1; i <= 51; i++) {
+        await admin.create("posts", { title: `Post ${i}`, body: "b" });
+      }
+
+      const rows = await admin.list("posts");
+
+      expect(rows).toHaveLength(50);
+      expect(rows.at(-1)?.["id"]).toBe(50);
+    });
+
+    it("still hides undeclared columns on a paginated page", async () => {
+      await admin.create("posts", { title: "First", body: "one", secret: "hidden" });
+
+      const rows = await admin.list("posts", { limit: 1, offset: 0 });
+
+      expect(rows[0]).toEqual({ id: 1, title: "First", body: "one" });
+      expect(rows[0]).not.toHaveProperty("secret");
+    });
   });
 
   describe("get", () => {
@@ -218,6 +262,51 @@ describe("createAdmin", () => {
 
       await expectCode(() => admin.update("posts", 1, { title: "" }), "ADMIN_VALIDATION_FAILED");
     });
+
+    it("maps @keel/db's DB_EMPTY_UPDATE to ADMIN_EMPTY_UPDATE for an empty patch", async () => {
+      // The update schema makes every field optional, so `{}` passes
+      // validation; @keel/db then refuses the no-column UPDATE with
+      // DB_EMPTY_UPDATE, which the admin re-codes to its own stable code.
+      await admin.create("posts", { title: "Real", body: "ok" });
+
+      try {
+        await admin.update("posts", 1, {});
+        expect.unreachable("expected an AdminError");
+      } catch (error) {
+        const adminError = error as AdminError;
+
+        expect(adminError.code).toBe("ADMIN_EMPTY_UPDATE");
+        expect(adminError.details["cause"]).toBe("DB_EMPTY_UPDATE");
+      }
+    });
+
+    it("re-throws a non-empty-update db error unchanged", async () => {
+      // The catch around the UPDATE only re-codes DB_EMPTY_UPDATE; every other
+      // failure must propagate verbatim. We drive that with a stub Db whose
+      // pre-check SELECT succeeds (so we reach the UPDATE) but whose UPDATE run
+      // rejects with a plain driver error.
+      const boom = new Error("driver exploded");
+      const stubDb = {
+        select: () => ({
+          from: () => ({
+            where: () => ({ get: async () => ({ id: 1, title: "Real", body: "ok" }) }),
+          }),
+        }),
+        update: () => ({
+          set: () => ({
+            where: () => ({
+              run: async () => {
+                throw boom;
+              },
+            }),
+          }),
+        }),
+      } as unknown as Db;
+
+      const stubAdmin = createAdmin(stubDb, [postsResource]);
+
+      await expect(stubAdmin.update("posts", 1, { title: "x" })).rejects.toBe(boom);
+    });
   });
 
   describe("destroy", () => {
@@ -275,6 +364,70 @@ describe("createAdmin", () => {
       await slugAdmin.create("by_slug", { slug: "hello", body: "world" });
 
       expect(await slugAdmin.get("by_slug", "hello")).toEqual({ id: "hello", body: "world" });
+    });
+  });
+
+  describe("onMutation audit hook", () => {
+    it("does not require a hook — mutations run with none injected", async () => {
+      // The default `admin` from beforeEach is built WITHOUT an onMutation hook;
+      // the create/update/destroy below must each complete cleanly.
+      const created = await admin.create("posts", { title: "Quiet", body: "b" });
+      await admin.update("posts", created["id"], { title: "Hushed" });
+
+      await expect(admin.destroy("posts", created["id"])).resolves.toBeUndefined();
+    });
+
+    it("emits create/update/destroy events with actor, resource, id, and patch", async () => {
+      const events: AuditEvent[] = [];
+      const audited = createAdmin(db, [postsResource], {
+        onMutation: (event) => events.push(event),
+      });
+
+      const actor = { id: "u-1", email: "ada@example.com" };
+
+      const created = await audited.create(
+        "posts",
+        { title: "New", body: "fresh", secret: "s" },
+        { actor },
+      );
+      await audited.update("posts", created["id"], { title: "Edited" }, { actor });
+      await audited.destroy("posts", created["id"], { actor });
+
+      expect(events).toEqual([
+        {
+          action: "create",
+          actor,
+          resource: "posts",
+          id: 1,
+          // The patch is the VALIDATED attributes — `secret` was accepted by
+          // the insert schema even though projection hides it.
+          patch: { title: "New", body: "fresh", secret: "s" },
+        },
+        { action: "update", actor, resource: "posts", id: 1, patch: { title: "Edited" } },
+        { action: "destroy", actor, resource: "posts", id: 1, patch: undefined },
+      ]);
+    });
+
+    it("reports an undefined actor when no context is passed", async () => {
+      const events: AuditEvent[] = [];
+      const audited = createAdmin(db, [postsResource], {
+        onMutation: (event) => events.push(event),
+      });
+
+      await audited.create("posts", { title: "Anon", body: "b" });
+
+      expect(events[0]).toMatchObject({ action: "create", actor: undefined, resource: "posts" });
+    });
+
+    it("does NOT emit when a mutation fails (validation rejects before the write)", async () => {
+      const events: AuditEvent[] = [];
+      const audited = createAdmin(db, [postsResource], {
+        onMutation: (event) => events.push(event),
+      });
+
+      await expectCode(() => audited.create("posts", { title: "" }), "ADMIN_VALIDATION_FAILED");
+
+      expect(events).toHaveLength(0);
     });
   });
 

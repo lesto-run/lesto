@@ -12,14 +12,20 @@
  *   - feature flags (`@keel/flags`, off → 404)      (`/lab/flags`)
  *   - authorization (`@keel/authz`, deny-by-default)(`/lab/admin`)
  *   - the data route the CSR island calls           (`GET /lab/api/listings/:id`)
+ *   - admin CRUD + an audit trail (`@keel/admin`)    (`/lab/admin/api/*`)
  */
 
 import type { ReactNode } from "react";
 
 import { keel } from "@keel/web";
-import type { Handler, Keel } from "@keel/web";
+import type { Context, Handler, KeelResponse, Keel } from "@keel/web";
 import { defineFlags } from "@keel/flags";
 import { createGuard, definePolicy } from "@keel/authz";
+import { createTableSql, defineTable, integer, text } from "@keel/db";
+import type { Db } from "@keel/db";
+import { AdminError, createAdmin } from "@keel/admin";
+import type { Admin, AuditEvent } from "@keel/admin";
+import { z } from "zod";
 
 import { Button, Hero, ListingCard, Main, Section, SiteHeader } from "./ui/components";
 import { LiveListing } from "./ui/live-listing";
@@ -207,6 +213,191 @@ function AdminPage(): ReactNode {
   );
 }
 
+// ---------------------------------------------------------------------------
+// The @keel/admin dogfood — `/lab/admin/api/*`
+//
+// `@keel/admin` is the generic CRUD backbone a WordPress-style admin UI sits
+// on. This wires it over the SAME injected store the DB-driven content page
+// uses (`ContentStore = () => Promise<Db>`), so the admin runs unchanged on
+// Node SQLite (server) and Cloudflare D1 (edge) — no driver in this module the
+// Worker can't load. It exists to PROVE the Wave-3 admin hardening end to end:
+// paginated `list`, the `fields` projection allow-list, and — the headline —
+// the optional `onMutation` audit hook, which every write here flows through so
+// the audit trail is observable at `GET /lab/admin/api/audit`.
+// ---------------------------------------------------------------------------
+
+/** A tiny admin-managed resource: a note with a title + body and an int PK. */
+const notes = defineTable("notes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+});
+
+const noteInsert = z.object({
+  title: z.string().min(1, "Title is required."),
+  body: z.string(),
+});
+
+const noteUpdate = z.object({
+  title: z.string().min(1).optional(),
+  body: z.string().optional(),
+});
+
+/** Map an admin error code to the HTTP status the admin UI / API expects. */
+function statusForAdminError(code: string): number {
+  switch (code) {
+    case "ADMIN_UNKNOWN_RESOURCE":
+    case "ADMIN_RECORD_NOT_FOUND":
+      return 404;
+    case "ADMIN_VALIDATION_FAILED":
+    case "ADMIN_EMPTY_UPDATE":
+      return 422;
+    default:
+      return 500;
+  }
+}
+
+/** Run an admin call, turning any `AdminError` into a coded JSON error response. */
+async function adminJson(c: Context, run: () => Promise<unknown>): Promise<KeelResponse> {
+  try {
+    return c.json(await run());
+  } catch (error) {
+    if (error instanceof AdminError) {
+      return c.json({ error: error.code }, statusForAdminError(error.code));
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * The admin wiring for one runtime: the `Admin` itself plus the in-process
+ * audit log the {@link AuditEvent}s land in. A getter resolves both lazily and
+ * exactly once (the underlying store memoizes its `Db`), creating the `notes`
+ * table idempotently on first touch.
+ */
+interface AdminWiring {
+  readonly admin: Admin;
+  readonly audit: readonly AuditEvent[];
+}
+
+/**
+ * Build a lazy admin over the injected content store. The audit log is a plain
+ * array the `onMutation` hook appends to — the simplest observable sink, and all
+ * the dogfood needs to prove the event reaches a host. A real app would forward
+ * the event to a durable audit table or a log pipeline instead.
+ */
+function makeAdminWiring(store: ContentStore): () => Promise<AdminWiring> {
+  const audit: AuditEvent[] = [];
+  let ready: Promise<AdminWiring> | undefined;
+
+  const open = async (): Promise<AdminWiring> => {
+    const db: Db = await store();
+
+    // Create the table idempotently — safe on a persistent D1 across cold starts.
+    await db.exec(createTableSql(notes).replace(/^CREATE TABLE/, "CREATE TABLE IF NOT EXISTS"));
+
+    const admin = createAdmin(
+      db,
+      [
+        {
+          name: "notes",
+          table: notes,
+          insertSchema: noteInsert,
+          updateSchema: noteUpdate,
+          fields: ["title", "body"],
+        },
+      ],
+      { onMutation: (event) => audit.push(event) },
+    );
+
+    return { admin, audit };
+  };
+
+  return () => (ready ??= open());
+}
+
+/** The audit actor for a write — the demo's `?role` knob, so events are attributed. */
+function actorOf(c: Context): { actor: string } {
+  return { actor: c.query("role") ?? "anonymous" };
+}
+
+/** Read a positive integer query param, or `undefined` when absent/invalid. */
+function intQuery(c: Context, name: string): number | undefined {
+  const raw = c.query(name);
+  if (raw === undefined) return undefined;
+
+  const value = Number(raw);
+
+  return Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * The admin CRUD + audit routes, over the injected store — mounted into `/lab`.
+ *
+ * Every write carries an `actor` (the demo's `?role` knob, so the audit event is
+ * attributed without a real session), and every write flows through the
+ * `onMutation` hook, so `GET /lab/admin/api/audit` shows the trail. When no
+ * store is configured (a Worker without a D1 binding) the routes answer 503 —
+ * the same honest "not configured" signal the content page renders.
+ */
+function buildAdminRoutes(store?: ContentStore): Keel {
+  if (store === undefined) {
+    return keel().get("/lab/admin/api/*rest", (c) =>
+      c.json({ error: "admin store not configured" }, 503),
+    );
+  }
+
+  const wiring = makeAdminWiring(store);
+
+  return (
+    keel()
+      // List notes — paginated + projected (id + declared fields only).
+      .get("/lab/admin/api/notes", async (c) => {
+        const { admin } = await wiring();
+        const limit = intQuery(c, "limit");
+        const offset = intQuery(c, "offset");
+
+        return adminJson(c, () =>
+          admin.list("notes", {
+            ...(limit === undefined ? {} : { limit }),
+            ...(offset === undefined ? {} : { offset }),
+          }),
+        );
+      })
+      // Create — body is the validated attributes; the audit event records the actor.
+      .post("/lab/admin/api/notes", async (c) => {
+        const { admin } = await wiring();
+
+        return adminJson(c, () => admin.create("notes", c.req.body, actorOf(c)));
+      })
+      // Update — `:id` plus a patch; an empty patch surfaces ADMIN_EMPTY_UPDATE (422).
+      .patch("/lab/admin/api/notes/:id", async (c) => {
+        const { admin } = await wiring();
+
+        return adminJson(c, () =>
+          admin.update("notes", Number(c.param("id")), c.req.body, actorOf(c)),
+        );
+      })
+      // Destroy — records a patch-less audit event.
+      .delete("/lab/admin/api/notes/:id", async (c) => {
+        const { admin } = await wiring();
+
+        return adminJson(c, async () => {
+          await admin.destroy("notes", Number(c.param("id")), actorOf(c));
+
+          return { ok: true };
+        });
+      })
+      // The audit trail the onMutation hook fills — the dogfood's observability.
+      .get("/lab/admin/api/audit", async (c) => {
+        const { audit } = await wiring();
+
+        return c.json(audit);
+      })
+  );
+}
+
 /**
  * Build the `/lab` sub-app — mounted by both the Node app (`controllers.ts`) and
  * the Worker (`edge.ts`). `contentStore` is the DB-driven page's backend: the Node
@@ -244,6 +435,8 @@ export function buildLabRoutes(contentStore?: ContentStore): Keel {
       .route(adminGated)
       // DB-driven (WordPress-style) pages: a block tree loaded by slug.
       .route(buildContentRoutes(contentStore))
+      // The @keel/admin dogfood: paginated CRUD + the onMutation audit trail.
+      .route(buildAdminRoutes(contentStore))
       // The data route the LiveListing island fetches (typed by `LabApi`).
       .get("/lab/api/listings/:id", (c) => {
         const listing = findListing(c.param("id"));
