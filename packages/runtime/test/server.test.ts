@@ -5,17 +5,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { serve } from "../src/index";
 import {
+  adoptRequestId,
   applyServerLimits,
   drainServer,
+  establishContext,
   healthResponse,
   ifNoneMatch,
   installProcessSafetyNet,
+  probeReady,
   readBody,
   requestAbortSignal,
+  requestCancellation,
   requestLineOf,
   respondWithError,
   securityDefaults,
   withEtag,
+  withRequestId,
   withSecurityHeaders,
   withTimeout,
 } from "../src/server";
@@ -30,8 +35,10 @@ import type {
   ServerLimits,
 } from "../src/server";
 
-import type { Server } from "../src/index";
+import type { AccessEntry, Server } from "../src/index";
 import type { App } from "@keel/kernel";
+import { currentContext } from "@keel/web";
+import type { KeelResponse } from "@keel/web";
 
 // Track the live server so each test tears its socket down, even on failure.
 let server: Server | undefined;
@@ -480,6 +487,277 @@ describe("serve", () => {
     expect(resolved).toBe(true);
   });
 
+  it("aborts the wedged handler's context signal after answering 503", async () => {
+    // The handler reads its own abort signal; on timeout the runtime must fire it,
+    // so a cooperative handler stops rather than accumulating as a zombie.
+    let abortReason: unknown;
+
+    let resolveAborted: () => void;
+    const aborted = new Promise<void>((resolve) => {
+      resolveAborted = resolve;
+    });
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: () =>
+        new Promise(() => {
+          const signal = currentContext()?.signal;
+
+          signal?.addEventListener("abort", () => {
+            abortReason = signal.reason;
+            resolveAborted();
+          });
+        }),
+    };
+
+    server = await serve(app, { port: 0, handlerTimeoutMs: 20 });
+
+    const slow = await makeRequest(server.port, { method: "GET", path: "/slow" });
+
+    expect(slow.status).toBe(503);
+
+    // The wedged handler's signal fired with the timeout reason — proof the
+    // runtime cancelled it rather than merely freeing the socket.
+    await aborted;
+
+    expect(abortReason).toBeInstanceOf(RuntimeError);
+    expect((abortReason as RuntimeError).code).toBe("RUNTIME_HANDLER_TIMEOUT");
+  });
+
+  it("echoes a minted X-Request-Id on every response", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: {}, body: "ok" }),
+    };
+
+    server = await serve(app, { port: 0, newRequestId: () => "minted-77" });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/" });
+
+    expect(response.headers["x-request-id"]).toBe("minted-77");
+  });
+
+  it("ignores a client-sent X-Request-Id when the proxy is untrusted (forgeable)", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: {}, body: "ok" }),
+    };
+
+    // Default trustProxy is false: an inbound id is a forgery, never adopted.
+    server = await serve(app, { port: 0, newRequestId: () => "minted-88" });
+
+    const response = await makeRequest(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "x-request-id": "forged-id" },
+    });
+
+    expect(response.headers["x-request-id"]).toBe("minted-88");
+  });
+
+  it("adopts a well-formed inbound X-Request-Id behind the trustProxy gate", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: {}, body: "ok" }),
+    };
+
+    // trustProxy true: the loopback peer is trusted, so its id is the upstream's.
+    server = await serve(app, { port: 0, trustProxy: true, newRequestId: () => "minted-99" });
+
+    const response = await makeRequest(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "x-request-id": "upstream-trace-1" },
+    });
+
+    expect(response.headers["x-request-id"]).toBe("upstream-trace-1");
+  });
+
+  it("echoes the request id even on a 500 error response", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => {
+        throw new Error("boom");
+      },
+    };
+
+    server = await serve(app, {
+      port: 0,
+      logError: () => {},
+      newRequestId: () => "err-id-1",
+    });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/" });
+
+    expect(response.status).toBe(500);
+    expect(response.headers["x-request-id"]).toBe("err-id-1");
+  });
+
+  it("attributes a 413 to the right method and path (request line read before the body)", async () => {
+    const entries: AccessEntry[] = [];
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: {}, body: "unreached" }),
+    };
+
+    server = await serve(app, {
+      port: 0,
+      maxBodyBytes: 8,
+      logRequest: (entry) => entries.push(entry),
+    });
+
+    const response = await makeRequest(server.port, {
+      method: "POST",
+      path: "/upload",
+      body: "this body is well over eight bytes",
+      contentType: "text/plain",
+    });
+
+    expect(response.status).toBe(413);
+
+    // The 413 is attributed to POST /upload, not the GET / default — the request
+    // line was computed before readBody rejected.
+    expect(entries[0]).toMatchObject({ method: "POST", path: "/upload", status: 413 });
+  });
+
+  it("defaults the access log to a structured JSON line", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: {}, body: "ok" }),
+    };
+
+    // No logRequest injected: the default structured-JSON sink runs.
+    server = await serve(app, { port: 0, newRequestId: () => "json-id-1" });
+
+    await makeRequest(server.port, { method: "GET", path: "/x" });
+
+    const line = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
+
+    expect(line).toMatchObject({
+      level: "info",
+      event: "http.access",
+      method: "GET",
+      path: "/x",
+      status: 200,
+      request_id: "json-id-1",
+    });
+    // A clean response carries no `truncated` field.
+    expect(line.truncated).toBeUndefined();
+
+    logSpy.mockRestore();
+  });
+
+  it("bounds the readiness probe: a wedged probe answers 503 rather than hanging", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: {}, body: "unreached" }),
+    };
+
+    server = await serve(app, {
+      port: 0,
+      // A probe that never settles; the bound must turn it into a prompt 503.
+      health: { isReady: () => new Promise<boolean>(() => {}), readyTimeoutMs: 20 },
+    });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/readyz" });
+
+    expect(response.status).toBe(503);
+    expect(response.body).toBe("not ready");
+  });
+
+  it("reports a stream truncation in the access entry and through logError", async () => {
+    const entries: AccessEntry[] = [];
+
+    const errors: Array<{ message: string; error: unknown }> = [];
+
+    const app: App = {
+      migrationsApplied: [],
+      // A stream body the transport pipes; the dispatch contract types `body` as a
+      // string, but the runtime widens it for the stream arm — cast at this seam,
+      // exactly where a page render hands the transport its streamed HTML.
+      handle: async () =>
+        ({
+          status: 200,
+          headers: { "content-type": "text/html" },
+          // A stream that errors mid-flight: the body is truncated after the shell.
+          body: new ReadableStream({
+            start(controller) {
+              controller.error(new Error("producer blew up"));
+            },
+          }),
+        }) as unknown as KeelResponse,
+    };
+
+    server = await serve(app, {
+      port: 0,
+      logRequest: (entry) => entries.push(entry),
+      logError: (message, error) => errors.push({ message, error }),
+    });
+
+    await makeRequest(server.port, { method: "GET", path: "/stream" }).catch(() => {});
+
+    // The access entry flags the truncation, and the fault is surfaced via logError.
+    expect(entries[0]?.truncated).toBe(true);
+    expect(errors.some((e) => e.message === "response body truncated mid-stream")).toBe(true);
+  });
+
+  it("flags a truncation on the span attribute and the default JSON access line", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const spans: Array<{ attributes: Record<string, unknown>; status?: string }> = [];
+
+    const tracer = {
+      startSpan: () => {
+        const record: (typeof spans)[number] = { attributes: {} };
+
+        spans.push(record);
+
+        return {
+          setAttribute: (key: string, value: unknown) => (record.attributes[key] = value),
+          setStatus: (status: "ok" | "error") => (record.status = status),
+          end: () => {},
+        };
+      },
+    };
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () =>
+        ({
+          status: 200,
+          headers: { "content-type": "text/html" },
+          body: new ReadableStream({
+            start(controller) {
+              controller.error(new Error("producer blew up"));
+            },
+          }),
+        }) as unknown as KeelResponse,
+    };
+
+    // No logRequest injected: the default JSON sink runs, so its truncated branch
+    // is exercised; the tracer is wired so the span attribute branch runs too.
+    server = await serve(app, {
+      port: 0,
+      tracer,
+      logError: () => {},
+      newRequestId: () => "trunc-id",
+    });
+
+    await makeRequest(server.port, { method: "GET", path: "/stream" }).catch(() => {});
+
+    // The span carries the truncation attribute.
+    expect(spans[0]?.attributes["keel.response.truncated"]).toBe(true);
+
+    // The default structured line carries `truncated: true`.
+    const line = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
+    expect(line).toMatchObject({ event: "http.access", truncated: true, request_id: "trunc-id" });
+
+    logSpy.mockRestore();
+  });
+
   it("access-logs every request with method, path, status, and latency", async () => {
     const entries: Array<{ method: string; path: string; status: number; ms: number }> = [];
 
@@ -868,6 +1146,181 @@ describe("withTimeout", () => {
     const failure = new Error("handler blew up");
 
     await expect(withTimeout(Promise.reject(failure), 1000)).rejects.toBe(failure);
+  });
+
+  it("fires onTimeout once at the deadline, before rejecting", async () => {
+    let fired = 0;
+
+    await expect(
+      withTimeout(new Promise<number>(() => {}), 5, () => {
+        fired += 1;
+      }),
+    ).rejects.toMatchObject({ code: "RUNTIME_HANDLER_TIMEOUT" });
+
+    expect(fired).toBe(1);
+  });
+
+  it("never fires onTimeout when the work settles before the deadline", async () => {
+    let fired = 0;
+
+    const value = await withTimeout(Promise.resolve(9), 1000, () => {
+      fired += 1;
+    });
+
+    expect(value).toBe(9);
+    expect(fired).toBe(0);
+  });
+});
+
+describe("adoptRequestId", () => {
+  it("adopts a well-formed inbound id from a trusted peer", () => {
+    expect(adoptRequestId("abc-123_DEF.4", true)).toBe("abc-123_DEF.4");
+  });
+
+  it("rejects an inbound id when the peer is not trusted (forgeable)", () => {
+    expect(adoptRequestId("abc-123", false)).toBeUndefined();
+  });
+
+  it("rejects a malformed inbound id even from a trusted peer", () => {
+    // A space, a slash, a control char — all outside the conservative token shape.
+    expect(adoptRequestId("has space", true)).toBeUndefined();
+    expect(adoptRequestId("a/b", true)).toBeUndefined();
+    expect(adoptRequestId("", true)).toBeUndefined();
+  });
+
+  it("rejects an over-long inbound id (bounded length)", () => {
+    expect(adoptRequestId("x".repeat(129), true)).toBeUndefined();
+    expect(adoptRequestId("x".repeat(128), true)).toBe("x".repeat(128));
+  });
+
+  it("yields undefined when no inbound id was sent, even from a trusted peer", () => {
+    expect(adoptRequestId(undefined, true)).toBeUndefined();
+  });
+});
+
+describe("establishContext", () => {
+  it("mints the fallback id when the peer is untrusted, ignoring an inbound id", () => {
+    const context = establishContext(
+      { socket: { remoteAddress: "5.6.7.8" }, headers: { "x-request-id": "forged" } },
+      false,
+      "minted-id",
+    );
+
+    expect(context.requestId).toBe("minted-id");
+    expect(context.ip).toBe("5.6.7.8");
+  });
+
+  it("adopts a trusted inbound id and resolves the forwarded client", () => {
+    const context = establishContext(
+      {
+        socket: { remoteAddress: "10.0.0.1" },
+        headers: {
+          "x-request-id": "upstream-9",
+          "x-forwarded-for": "203.0.113.7",
+          "x-forwarded-proto": "https",
+        },
+      },
+      true,
+      "minted-id",
+    );
+
+    // Trusted peer: the upstream id is adopted and the forwarded identity believed.
+    expect(context.requestId).toBe("upstream-9");
+    expect(context.ip).toBe("203.0.113.7");
+    expect(context.protocol).toBe("https");
+  });
+
+  it("falls back to the minted id when a trusted peer sent no inbound id", () => {
+    const context = establishContext(
+      { socket: { remoteAddress: "10.0.0.1" }, headers: {} },
+      true,
+      "minted-id",
+    );
+
+    expect(context.requestId).toBe("minted-id");
+  });
+});
+
+describe("probeReady", () => {
+  it("resolves the probe's result when it answers before the deadline", async () => {
+    expect(await probeReady(() => true, 1000)).toBe(true);
+    expect(await probeReady(async () => false, 1000)).toBe(false);
+  });
+
+  it("resolves false when the probe overruns the deadline", async () => {
+    // A probe that never settles: the deadline must answer "not ready", not hang.
+    expect(await probeReady(() => new Promise<boolean>(() => {}), 5)).toBe(false);
+  });
+
+  it("resolves false when the probe throws", async () => {
+    expect(
+      await probeReady(() => {
+        throw new Error("db ping failed");
+      }, 1000),
+    ).toBe(false);
+  });
+});
+
+describe("withRequestId", () => {
+  it("echoes the request id onto a response that did not set one", () => {
+    const out = withRequestId(
+      { status: 200, headers: { "content-type": "text/html" }, body: "" },
+      "rid-1",
+    );
+
+    expect(out.headers["X-Request-Id"]).toBe("rid-1");
+  });
+
+  it("never overrides an X-Request-Id the app already set, in any casing", () => {
+    const out = withRequestId(
+      { status: 200, headers: { "x-request-id": "app-owned" }, body: "" },
+      "rid-1",
+    );
+
+    expect(out.headers["x-request-id"]).toBe("app-owned");
+    expect(out.headers["X-Request-Id"]).toBeUndefined();
+  });
+});
+
+describe("requestCancellation", () => {
+  it("aborts with RUNTIME_HANDLER_TIMEOUT when the deadline fires", () => {
+    const { res } = fakeAbortableRes(false);
+
+    const { signal, abortTimeout } = requestCancellation(res);
+
+    expect(signal.aborted).toBe(false);
+
+    abortTimeout();
+
+    expect(signal.aborted).toBe(true);
+    expect((signal.reason as RuntimeError).code).toBe("RUNTIME_HANDLER_TIMEOUT");
+  });
+
+  it("aborts with RUNTIME_CLIENT_DISCONNECTED when the client hangs up first", () => {
+    const { res, fireClose } = fakeAbortableRes(false);
+
+    const { signal } = requestCancellation(res);
+
+    fireClose();
+
+    expect(signal.aborted).toBe(true);
+    expect((signal.reason as RuntimeError).code).toBe("RUNTIME_CLIENT_DISCONNECTED");
+  });
+
+  it("is idempotent: a timeout after a disconnect does not re-abort", () => {
+    const { res, fireClose } = fakeAbortableRes(false);
+
+    const { signal, abortTimeout } = requestCancellation(res);
+
+    fireClose();
+
+    const firstReason = signal.reason;
+
+    abortTimeout();
+
+    // The first abort wins; the second is a no-op on an already-aborted controller.
+    expect(signal.reason).toBe(firstReason);
+    expect((signal.reason as RuntimeError).code).toBe("RUNTIME_CLIENT_DISCONNECTED");
   });
 });
 

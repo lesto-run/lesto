@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { defineDataSource } from "@keel/ui";
 
+import { CLIENT_ERRORS_ROUTE } from "../src/client-errors";
+import type { ClientErrorEvent } from "../src/client-errors";
 import { fromRequestMiddleware, keel } from "../src/keel";
 import type { Handler } from "../src/keel";
 import type { Middleware } from "../src/middleware";
@@ -342,5 +344,100 @@ describe("keel().data() — island data sources (ADR 0010)", () => {
     expect(
       (await app.handle("GET", "/__keel/data/session", { headers: { "x-allow": "1" } })).status,
     ).toBe(200);
+  });
+});
+
+describe("keel() client-error beacon (built-in route)", () => {
+  it("accepts a beacon at POST /__keel/client-errors out of the box, answering 204", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // No .clientErrors() wiring: the built-in route + default sink are present.
+    const app = keel();
+
+    const response = await app.handle("POST", CLIENT_ERRORS_ROUTE, {
+      body: { failed: ["Cart"], missing: [] },
+    });
+
+    expect(response.status).toBe(204);
+
+    // The default sink logged one structured line.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(errorSpy.mock.calls[0]?.[0] as string)).toMatchObject({
+      event: "client.island_error",
+      failed: ["Cart"],
+    });
+
+    errorSpy.mockRestore();
+  });
+
+  it("keeps the built-in route OUT of routes() — it is an internal endpoint", () => {
+    const app = keel().get("/a", (c) => c.text("a"));
+
+    // openapi/mcp enumerate routes(); the internal beacon receiver must not leak.
+    expect(app.routes()).toEqual([{ method: "GET", pattern: "/a" }]);
+  });
+
+  it("forwards beacons to an injected sink via .clientErrors()", async () => {
+    const seen: ClientErrorEvent[] = [];
+
+    const app = keel().clientErrors((event) => seen.push(event));
+
+    const response = await app.handle("POST", CLIENT_ERRORS_ROUTE, {
+      body: { failed: ["Nav"], missing: ["Footer"], failedCount: 1, missingCount: 1 },
+    });
+
+    expect(response.status).toBe(204);
+    expect(seen).toEqual([
+      { failed: ["Nav"], missing: ["Footer"], failedCount: 1, missingCount: 1 },
+    ]);
+  });
+
+  it("lets a user route at the same path override the built-in", async () => {
+    const app = keel().post(CLIENT_ERRORS_ROUTE, (c) => c.text("mine", 201));
+
+    const response = await app.handle("POST", CLIENT_ERRORS_ROUTE, { body: {} });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toBe("mine");
+  });
+
+  it("wraps the built-in route in the app's top-level middleware", async () => {
+    const seen: ClientErrorEvent[] = [];
+
+    const app = keel()
+      .use((c, next) => (c.header("x-allow") === "1" ? next() : c.text("denied", 403)))
+      .clientErrors((event) => seen.push(event));
+
+    // The guard mounted before any route also covers the built-in beacon route.
+    const denied = await app.handle("POST", CLIENT_ERRORS_ROUTE, { body: { failed: [] } });
+    expect(denied.status).toBe(403);
+    expect(seen).toEqual([]);
+
+    const allowed = await app.handle("POST", CLIENT_ERRORS_ROUTE, {
+      body: { failed: [] },
+      headers: { "x-allow": "1" },
+    });
+    expect(allowed.status).toBe(204);
+    expect(seen).toHaveLength(1);
+  });
+});
+
+describe("keel().renderDeadline()", () => {
+  it("is chainable and returns the same app", () => {
+    const app = keel();
+
+    expect(app.renderDeadline(5000)).toBe(app);
+  });
+
+  it("refuses a non-positive or non-finite deadline with a coded error", () => {
+    expect(() => keel().renderDeadline(0)).toThrowError(
+      expect.objectContaining({ code: "WEB_BAD_RENDER_DEADLINE" }),
+    );
+    expect(() => keel().renderDeadline(-1)).toThrowError(
+      expect.objectContaining({ code: "WEB_BAD_RENDER_DEADLINE" }),
+    );
+    expect(() => keel().renderDeadline(Number.POSITIVE_INFINITY)).toThrowError(
+      expect.objectContaining({ code: "WEB_BAD_RENDER_DEADLINE" }),
+    );
   });
 });

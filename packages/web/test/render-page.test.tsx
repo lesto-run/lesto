@@ -5,6 +5,9 @@ import { z } from "zod";
 
 import { defineDataSource, defineIsland } from "@keel/ui";
 import { preactServerRenderer, reactServerRenderer } from "@keel/ui/server";
+import * as uiServer from "@keel/ui/server";
+
+import { DEFAULT_RENDER_DEADLINE_MS } from "../src/render-page";
 
 import { runWithContext } from "../src/context";
 import { applyUiDialect, keel } from "../src/keel";
@@ -459,6 +462,59 @@ describe("renderPageResponse — default (no resolver, no client module)", () =>
     expect(html).toContain("<main>plain</main>");
     // No IslandDataProvider wrap and no head module tag.
     expect(html).not.toContain('type="module"');
+  });
+});
+
+/** A bare GET context for driving `renderPageResponse` directly. */
+function plainContext(): Context {
+  return new RequestCtx({
+    method: "GET",
+    path: "/",
+    params: {},
+    query: {},
+    headers: {},
+    body: undefined,
+  });
+}
+
+describe("render deadline (configurable)", () => {
+  it("passes the configured renderDeadlineMs to the streaming renderer", async () => {
+    const streamSpy = vi.spyOn(uiServer, "renderPageStream");
+
+    await renderPageResponse(
+      { component: () => createElement("main", null, "x") },
+      plainContext(),
+      [],
+      { renderDeadlineMs: 1234 },
+    );
+
+    expect(streamSpy.mock.calls[0]?.[1]).toMatchObject({ renderTimeoutMs: 1234 });
+  });
+
+  it("falls back to the default deadline when none is configured", async () => {
+    const streamSpy = vi.spyOn(uiServer, "renderPageStream");
+
+    await renderPageResponse(
+      { component: () => createElement("main", null, "x") },
+      plainContext(),
+      [],
+    );
+
+    expect(streamSpy.mock.calls[0]?.[1]).toMatchObject({
+      renderTimeoutMs: DEFAULT_RENDER_DEADLINE_MS,
+    });
+  });
+
+  it("threads .renderDeadline() from the app through to every page render", async () => {
+    const streamSpy = vi.spyOn(uiServer, "renderPageStream");
+
+    const app = keel()
+      .renderDeadline(2500)
+      .page("/", { component: () => createElement("main", null, "home") });
+
+    await app.handle("GET", "/");
+
+    expect(streamSpy.mock.calls[0]?.[1]).toMatchObject({ renderTimeoutMs: 2500 });
   });
 });
 

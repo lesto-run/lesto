@@ -30,7 +30,7 @@ import { applyResponse } from "./response";
 import { toKeelRequest } from "./request";
 import { RuntimeError } from "./errors";
 import { etagFor, etagMatches, respondNotModified } from "./http-cache";
-import { resolveClient } from "./trust-proxy";
+import { peerIsTrusted, resolveClient } from "./trust-proxy";
 
 import type { ForwardHeaders, TrustProxy } from "./trust-proxy";
 import type { NotModifiedResponse } from "./http-cache";
@@ -52,6 +52,14 @@ export interface HealthOptions {
 
   /** Whether the app is ready to take traffic (DB reachable, warmed, …). Defaults to always-ready. */
   readonly isReady?: () => boolean | Promise<boolean>;
+
+  /**
+   * The longest the readiness probe may run before it is treated as not-ready
+   * (a 503). A probe that pings a wedged database must not hold `/readyz` open —
+   * an orchestrator needs a prompt "not ready", not a hung socket. Defaults to
+   * 1s.
+   */
+  readonly readyTimeoutMs?: number;
 }
 
 /**
@@ -92,6 +100,16 @@ export interface AccessEntry {
    * context-tagged work the handler logged can be stitched into one trace.
    */
   readonly requestId: string;
+
+  /**
+   * Whether the response body was truncated — the stream tore down mid-flight
+   * (the producer errored, or the client hung up) so the client received an
+   * incomplete body. Present (`true`) only on a truncated streamed response;
+   * absent on a clean response, which is the common case the log stays quiet
+   * about. The runtime's tracer reads the same fact off the span attribute
+   * `keel.response.truncated`.
+   */
+  readonly truncated?: boolean;
 }
 
 export interface ServeOptions {
@@ -110,9 +128,14 @@ export interface ServeOptions {
 
   /**
    * The longest a single handler may run before we answer 503 and free the
-   * socket. The handler is abandoned, not cancelled — JS cannot kill a running
-   * task — but the client and its socket are released rather than held forever
-   * by a hung or pathologically slow controller. Defaults to 30s.
+   * socket. On overrun the request's own `context.signal` is ABORTED (with a
+   * coded `RUNTIME_HANDLER_TIMEOUT` reason), so a cooperative handler — a
+   * streaming render, an upstream fetch that takes an `AbortSignal` — actually
+   * stops rather than running on for a response no one will read; the socket and
+   * client are freed regardless. JS cannot kill a non-cooperative running task,
+   * so an uncooperative handler is still abandoned, but it can no longer
+   * accumulate as a zombie holding live resources past the deadline. Defaults to
+   * 30s.
    *
    * This bounds a slow *async* handler (one awaiting I/O): the deadline is a
    * `setTimeout`, so it can only fire when the event loop is free to run it. It
@@ -212,7 +235,12 @@ export interface ServeOptions {
 
   /**
    * Where a one-line access record goes for each served request. Injected so a
-   * test can assert without writing to the console; defaults to `console.log`.
+   * test can assert without writing to the console; defaults to
+   * {@link defaultLogRequest}, which now emits a structured JSON line (one object
+   * per request: method, path, status, ms, request_id, and `truncated` when the
+   * body was torn down mid-stream) so a log pipeline parses it rather than
+   * scraping a string. The seam signature is unchanged — a custom sink still
+   * receives the {@link AccessEntry} and formats it however it likes.
    */
   readonly logRequest?: (entry: AccessEntry) => void;
 
@@ -273,6 +301,19 @@ export function requestLineOf(req: Pick<IncomingMessage, "method" | "url">): {
     method: req.method ?? "GET",
     url: req.url ?? "/",
   };
+}
+
+/**
+ * The pathname of a raw request URL — the query stripped off.
+ *
+ * Computed from the request line BEFORE the body is read, so a 413 (body over the
+ * limit, which rejects mid-`readBody`) is still attributed to the real path in
+ * the access log rather than a default. Mirrors `toKeelRequest`'s pathname
+ * extraction (same throwaway base, same `URL.pathname`) so the early-attributed
+ * path is byte-identical to the one a successfully-parsed request would carry.
+ */
+export function pathOf(url: string): string {
+  return new URL(url, "http://localhost").pathname;
 }
 
 /**
@@ -379,10 +420,19 @@ export function readBody(req: BodyStream, maxBytes: number): Promise<string> {
  * so its late resolution or rejection is swallowed, never surfacing as an
  * unhandled rejection. The timer is `unref`'d so a pending deadline never keeps
  * the process alive on its own.
+ *
+ * `onTimeout`, when given, fires once at the deadline BEFORE the rejection — the
+ * transport passes the request's `abortTimeout` here, so the deadline both frees
+ * the socket (the 503) AND aborts the handler's `context.signal`: a cooperative
+ * handler stops working rather than running on as a zombie. It is called at most
+ * once (only if the timer wins the race); a handler that settles first clears the
+ * timer and `onTimeout` never runs.
  */
-export function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+export function withTimeout<T>(work: Promise<T>, ms: number, onTimeout?: () => void): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
+      onTimeout?.();
+
       reject(
         new RuntimeError("RUNTIME_HANDLER_TIMEOUT", "Request handler exceeded its time limit.", {
           ms,
@@ -405,18 +455,59 @@ export function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/** How long a readiness probe may run before the probe itself is treated as not-ready. */
+const DEFAULT_READY_TIMEOUT_MS = 1_000;
+
+/**
+ * Run the readiness probe, but never let it hang the endpoint.
+ *
+ * A readiness probe typically pings the database; if that ping wedges (a
+ * connection pool exhausted, a network partition) an unbounded `await` would
+ * hold the `/readyz` request open forever — and an orchestrator polling readiness
+ * would see a hung socket rather than the "not ready" it needs to stop routing
+ * traffic. So we race the probe against a short deadline: an overrun is itself a
+ * "not ready" signal (a probe that cannot answer in a second is not healthy),
+ * returning `false` rather than throwing, so the endpoint always answers 503
+ * promptly. A probe that loses the race is left to settle on its own (its result
+ * is ignored). Pure over the injected `now`-free timer so the overrun branch is
+ * testable without real waiting.
+ */
+export function probeReady(
+  isReady: () => boolean | Promise<boolean>,
+  timeoutMs: number,
+): Promise<boolean> {
+  // The deadline: a `false` (not-ready) that wins the race when the probe hangs.
+  // `unref`'d so a pending probe deadline never keeps the process alive on its own.
+  const deadline = new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+
+    timer.unref();
+  });
+
+  // The probe, run through `Promise.resolve().then` so a *synchronous* throw is
+  // funneled into the same rejected-promise path as an async one; a throw (sync
+  // or async) is "not ready", never a crash of the endpoint.
+  const probe = Promise.resolve()
+    .then(isReady)
+    .catch(() => false);
+
+  return Promise.race([probe, deadline]);
+}
+
 /**
  * Answer a liveness/readiness probe, or `undefined` to let the app handle it.
  *
  * Liveness (`/health`) is a bare 200 — the process is up. Readiness (`/readyz`)
- * consults the injected probe and is a 503 when the app is not ready to take
- * traffic. Both answer only GET/HEAD; anything else falls through to the app so
- * a real route at the same path still works.
+ * consults the injected probe — bounded by {@link probeReady}, so a wedged probe
+ * answers 503 rather than hanging the endpoint — and is a 503 when the app is not
+ * ready to take traffic. Both answer only GET/HEAD; anything else falls through
+ * to the app so a real route at the same path still works.
  */
 export async function healthResponse(
   method: string,
   path: string,
   options: HealthOptions,
+  readyTimeoutMs: number = DEFAULT_READY_TIMEOUT_MS,
 ): Promise<KeelResponse | undefined> {
   if (method !== "GET" && method !== "HEAD") return undefined;
 
@@ -427,7 +518,7 @@ export async function healthResponse(
   }
 
   if (path === (options.readyPath ?? DEFAULT_READY_PATH)) {
-    const ready = await (options.isReady ?? (() => true))();
+    const ready = await probeReady(options.isReady ?? (() => true), readyTimeoutMs);
 
     return ready
       ? { status: 200, headers, body: "ready" }
@@ -702,14 +793,51 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
 }
 
 /**
- * Build the per-request context: a fresh id, plus the trust-proxy-resolved
+ * The shape of a request id we are willing to ADOPT from an inbound header.
+ *
+ * An upstream that mints request ids (a load balancer, an API gateway) sends
+ * them on `X-Request-Id` so one id spans the whole hop chain. We adopt such an
+ * id only when {@link establishContext}'s trust policy already believes the peer
+ * (the SAME gate that guards the forwarding headers — a client we do not trust
+ * can forge this header just as easily as `X-Forwarded-For`), AND only when it
+ * is well-formed: a bounded, conservative token charset. An id that fails either
+ * test is dropped and we mint our own, so a hostile value can never poison a log
+ * line or a downstream system that keys on the id.
+ */
+const REQUEST_ID_SHAPE = /^[A-Za-z0-9._-]{1,128}$/;
+
+/**
+ * The request id to use: an adopted inbound id, or `undefined` to mint a fresh
+ * one.
+ *
+ * `trusted` is whether the trust-proxy policy believes the immediate peer (so an
+ * inbound id is the upstream's, not a forgery). Only a trusted, well-formed
+ * (see {@link REQUEST_ID_SHAPE}) `X-Request-Id` is adopted; everything else
+ * yields `undefined` and the caller mints its own. Pure and exported so the
+ * adopt / reject-malformed / reject-untrusted branches are unit-testable.
+ */
+export function adoptRequestId(inbound: string | undefined, trusted: boolean): string | undefined {
+  if (!trusted) return undefined;
+
+  if (inbound === undefined) return undefined;
+
+  return REQUEST_ID_SHAPE.test(inbound) ? inbound : undefined;
+}
+
+/**
+ * Build the per-request context: the request id, plus the trust-proxy-resolved
  * client IP and protocol.
  *
- * The id is minted here (one per request, for tracing); the IP/protocol come
- * from {@link resolveClient}, which believes the forwarding headers only when
- * the policy trusts the socket peer (see the spoofing hazard there). We collapse
- * a repeated forwarding header to its first value before handing it over. Pure
- * over its inputs and exported so the id-stamping and the trust resolution are
+ * The id is the one to TAG this request with (logs, the `X-Request-Id` echo,
+ * tracing): a well-formed inbound `X-Request-Id` is adopted when the trust policy
+ * believes the peer — the same gate that guards the forwarding headers, since a
+ * client we do not trust can forge either — otherwise the minted `fallbackId`
+ * stands. The IP/protocol come from {@link resolveClient}, which believes the
+ * forwarding headers only when the policy trusts the socket peer (see the
+ * spoofing hazard there). The trust decision is computed once and reused for both
+ * the id adoption and the header resolution, so they can never disagree. We
+ * collapse a repeated forwarding header to its first value before handing it
+ * over. Pure over its inputs and exported so id adoption and trust resolution are
  * testable without a socket.
  *
  * `exactOptionalPropertyTypes` is on, so we attach `ip` only when one resolved —
@@ -718,8 +846,17 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
 export function establishContext(
   source: ContextSource,
   trustProxy: TrustProxy,
-  requestId: string,
+  fallbackId: string,
 ): RequestContext {
+  const peerAddress = source.socket?.remoteAddress;
+
+  // One trust decision, reused below for BOTH the forwarding headers and the
+  // inbound request id — a client we do not trust can forge either alike.
+  const trusted = peerIsTrusted(trustProxy, peerAddress);
+
+  const requestId =
+    adoptRequestId(firstHeader(source.headers["x-request-id"]), trusted) ?? fallbackId;
+
   const xff = firstHeader(source.headers["x-forwarded-for"]);
   const xfp = firstHeader(source.headers["x-forwarded-proto"]);
 
@@ -730,7 +867,7 @@ export function establishContext(
     ...(xfp !== undefined && { "x-forwarded-proto": xfp }),
   };
 
-  const client = resolveClient(trustProxy, source.socket?.remoteAddress, forwarded);
+  const client = resolveClient(trustProxy, peerAddress, forwarded);
 
   return {
     requestId,
@@ -752,18 +889,29 @@ export interface AbortableResponse {
 }
 
 /**
- * A per-request `AbortSignal` that fires if the client hangs up before the
- * response finished.
+ * A per-request cancellation: the `AbortSignal` the handler reads, plus the
+ * `abortTimeout` the transport calls when the handler overruns its deadline.
  *
- * `close` fires on *every* response end, so it cannot mean "disconnect" on its
- * own; `writableFinished` is the discriminator — `true` is a clean completion we
- * leave alone, `false` is the client gone while we were still writing, which
- * aborts the signal with a coded reason. Long-running or streaming work reads
- * this off the request context to cancel rather than render into a dead socket.
- * It only ever aborts — a finished response simply never fires it — so it adds no
- * teardown the caller must remember.
+ * The signal fires on EITHER of two events, whichever comes first:
+ *
+ *   - the client hangs up before the response finished — `close` fires while
+ *     `writableFinished` is still `false` (a clean completion sets it `true`, so
+ *     the disconnect branch is the discriminator), aborting with a coded
+ *     `RUNTIME_CLIENT_DISCONNECTED`;
+ *   - the handler exceeds `handlerTimeoutMs` — the transport calls
+ *     `abortTimeout()`, aborting with a coded `RUNTIME_HANDLER_TIMEOUT`.
+ *
+ * Both abort the SAME controller, so a streaming render or an upstream fetch that
+ * reads `context.signal` stops on whichever happens — it no longer keeps working
+ * for a response no one will read, and a wedged handler is actively cancelled
+ * rather than left to accumulate as a zombie holding live resources. `abortTimeout`
+ * is idempotent (an already-aborted controller ignores a second abort), so the
+ * disconnect-then-timeout race is harmless.
  */
-export function requestAbortSignal(res: AbortableResponse): AbortSignal {
+export function requestCancellation(res: AbortableResponse): {
+  signal: AbortSignal;
+  abortTimeout: () => void;
+} {
   const aborter = new AbortController();
 
   res.on("close", () => {
@@ -777,7 +925,22 @@ export function requestAbortSignal(res: AbortableResponse): AbortSignal {
     }
   });
 
-  return aborter.signal;
+  const abortTimeout = (): void => {
+    aborter.abort(
+      new RuntimeError("RUNTIME_HANDLER_TIMEOUT", "Request handler exceeded its time limit."),
+    );
+  };
+
+  return { signal: aborter.signal, abortTimeout };
+}
+
+/**
+ * A per-request `AbortSignal` that fires if the client hangs up before the
+ * response finished — the disconnect-only half of {@link requestCancellation},
+ * kept as a focused export for callers that want only that signal.
+ */
+export function requestAbortSignal(res: AbortableResponse): AbortSignal {
+  return requestCancellation(res).signal;
 }
 
 /**
@@ -803,15 +966,20 @@ async function handle(
   // does — through every `await` — sees this exact context, and nothing leaks
   // into the next request: the context is torn down when this call settles. The
   // id and resolved client identity are decided here, before the app runs, so a
-  // middleware (rate-limit) and the access log both read the same values.
-  const requestId = deps.newRequestId();
+  // middleware (rate-limit) and the access log both read the same values. The id
+  // is a fresh mint UNLESS a trusted upstream sent a well-formed `X-Request-Id`,
+  // which `establishContext` adopts behind the trust-proxy gate.
+  const context = establishContext(req, deps.trustProxy, deps.newRequestId());
 
-  const context = establishContext(req, deps.trustProxy, requestId);
+  const requestId = context.requestId;
 
   // Publish a per-request abort signal on the context: it fires if the client
-  // hangs up before the response finished, so a streaming render or a long
-  // handler can stop rather than work for a response no one will read.
-  context.signal = requestAbortSignal(res);
+  // hangs up OR the handler overruns its deadline, so a streaming render or a
+  // long handler stops rather than work for a response no one will read.
+  // `abortTimeout` is the deadline half, called by `withTimeout` on overrun.
+  const cancellation = requestCancellation(res);
+
+  context.signal = cancellation.signal;
 
   return runWithContext(context, async () => {
     const start = deps.now();
@@ -820,15 +988,31 @@ async function handle(
     // so trace timing and the logged latency describe the same window.
     const span = deps.tracer?.startSpan("http.request");
 
-    let method = "GET";
-    let path = "/";
+    // Compute the request line BEFORE reading the body, so a 413 (body over the
+    // limit) is still attributed to the right method+path rather than the GET /
+    // default — an oversized POST to /upload logs as exactly that. The path is the
+    // URL's pathname (query stripped); `pathOf` mirrors `toKeelRequest`'s parsing
+    // so the attributed path is the same one the matched request would carry.
+    const line = requestLineOf(req);
+
+    const method = line.method;
+    const path = pathOf(line.url);
     let status = 500;
+
+    // Set true when a streamed body tears down mid-flight; rides the access entry
+    // and the span so an operator sees the client got an incomplete response.
+    let truncated = false;
+
+    const onTruncated = (reason: unknown): void => {
+      truncated = true;
+
+      // A truncation is the server failing to deliver what it promised; surface
+      // it like an unhandled error so it is not silently swallowed.
+      deps.logError("response body truncated mid-stream", reason);
+    };
 
     try {
       const body = await readBody(req, deps.maxBodyBytes);
-
-      const line = requestLineOf(req);
-      method = line.method;
 
       const request = toKeelRequest({
         method: line.method,
@@ -836,12 +1020,19 @@ async function handle(
         headers: req.headers,
         body,
       });
-      path = request.path;
+
+      // `path` was already set from the same URL before the body read (so a 413
+      // is attributed correctly); `request.path` is the identical pathname.
 
       const probe =
         deps.health === undefined
           ? undefined
-          : await healthResponse(request.method, request.path, deps.health);
+          : await healthResponse(
+              request.method,
+              request.path,
+              deps.health,
+              deps.health.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+            );
 
       const response =
         probe ??
@@ -852,14 +1043,20 @@ async function handle(
             body: request.body,
           }),
           deps.handlerTimeoutMs,
+          cancellation.abortTimeout,
         ));
 
-      // Attach an ETag to a cacheable HTML response, then harden it. Security
-      // headers go on last so they cover the 304 path too — a Not-Modified
-      // response is hardened exactly like the full one it stands in for.
+      // Attach an ETag to a cacheable HTML response, then harden it, then echo the
+      // request id. Security headers go on before the 304 split so they cover both
+      // paths; the `X-Request-Id` echo rides every response so a client and the
+      // server logs share one correlation id (an adopted upstream id is echoed
+      // back verbatim, closing the trace loop).
       const tagged = withEtag(response, deps.etag);
 
-      const hardened = withSecurityHeaders(tagged.response, deps.securityHeaders);
+      const hardened = withRequestId(
+        withSecurityHeaders(tagged.response, deps.securityHeaders),
+        requestId,
+      );
 
       // A conditional GET whose validator still matches gets a bodiless 304: the
       // client already holds these bytes. We echo the same headers (ETag and all)
@@ -871,7 +1068,11 @@ async function handle(
       } else {
         status = hardened.status;
 
-        applyResponse(res, hardened);
+        // Await delivery: a buffered body resolves synchronously (nothing to
+        // wait on), but a STREAMED body resolves only once it is fully flushed or
+        // torn down — so the access entry and span below describe the real
+        // outcome, including a mid-stream truncation, rather than racing it.
+        await applyResponse(res, hardened, { onTruncated });
       }
     } catch (error) {
       status = statusForError(error);
@@ -881,17 +1082,31 @@ async function handle(
         deps.logError("unhandled error serving request", error);
       }
 
-      respondWithError(res, status, deps.securityHeaders);
+      respondWithError(res, status, deps.securityHeaders, requestId);
     } finally {
       // The request id rides on the access line too, so a log and any
-      // context-tagged work the handler emitted share one correlation id.
-      deps.logRequest({ method, path, status, ms: deps.now() - start, requestId });
+      // context-tagged work the handler emitted share one correlation id. A
+      // truncated body is flagged only when it happened — the common clean case
+      // leaves the field absent.
+      deps.logRequest({
+        method,
+        path,
+        status,
+        ms: deps.now() - start,
+        requestId,
+        ...(truncated ? { truncated: true } : {}),
+      });
 
       if (span !== undefined) {
         span.setAttribute("http.method", method);
         span.setAttribute("http.path", path);
         span.setAttribute("http.status_code", status);
         span.setAttribute("keel.request_id", requestId);
+
+        // The tracer reads this to mark a delivered-but-incomplete response; set
+        // only when it happened, so a clean response carries no attribute.
+        if (truncated) span.setAttribute("keel.response.truncated", true);
+
         // A 5xx is the server's failure; everything else (4xx included) is a
         // request the server answered as designed.
         span.setStatus(status >= 500 ? "error" : "ok");
@@ -899,6 +1114,26 @@ async function handle(
       }
     }
   });
+}
+
+/**
+ * Merge an `X-Request-Id` echo onto a response, without disturbing a header the
+ * app set itself.
+ *
+ * The runtime owns the request-id correlation, so every response carries the id
+ * it logged and traced — but an app that set its own `X-Request-Id` (an
+ * unusual but legitimate override) wins, matched case-insensitively so any
+ * casing is respected. Returns a fresh response object; the input is never
+ * mutated (the per-request-object invariant the response factories protect).
+ */
+export function withRequestId(response: AnyKeelResponse, requestId: string): AnyKeelResponse {
+  const hasOwn = Object.keys(response.headers).some(
+    (name) => name.toLowerCase() === "x-request-id",
+  );
+
+  if (hasOwn) return response;
+
+  return { ...response, headers: { ...response.headers, "X-Request-Id": requestId } };
 }
 
 /** The slice of a response the error path needs — narrow, so a test can fake it. */
@@ -917,7 +1152,10 @@ export interface ErrorResponse {
  * threw) we cannot send a fresh status, so we just end the socket — the
  * invariant we protect is that the socket never hangs open, not that every
  * failure becomes a clean status line. Default response headers are merged in
- * so an error response is hardened like any other.
+ * so an error response is hardened like any other, and the `X-Request-Id` is
+ * echoed (when one is given) so even a 500 carries the id the logs and trace
+ * recorded — an operator pivots from the client's failed response straight to
+ * the server-side record.
  *
  * The body is always a known string (see {@link bodyForStatus}), so we write it
  * directly via `writeHead` + `end` rather than through {@link applyResponse}:
@@ -928,6 +1166,7 @@ export function respondWithError(
   res: ErrorResponse,
   status: number,
   securityHeaders: Record<string, string> | false = false,
+  requestId?: string,
 ): void {
   if (!res.headersSent) {
     const body = bodyForStatus(status);
@@ -937,7 +1176,12 @@ export function respondWithError(
       securityHeaders,
     );
 
-    res.writeHead(hardened.status, hardened.headers);
+    const headers =
+      requestId === undefined
+        ? hardened.headers
+        : { ...hardened.headers, "X-Request-Id": requestId };
+
+    res.writeHead(hardened.status, headers);
 
     // The local `body` is the string we just built; no cast, no narrowing.
     res.end(body);
@@ -953,9 +1197,29 @@ function defaultLogError(message: string, error: unknown): void {
   console.error(message, error);
 }
 
-/** The default access log: one line per request, method · path · status · latency · id. */
+/**
+ * The default access log: one structured JSON line per request.
+ *
+ * Structured (a single JSON object) so a log pipeline parses it rather than
+ * scraping a string — `status`/`request_id`/`truncated` are queryable fields,
+ * the posture the worker error sink takes too. `truncated` is emitted only when
+ * the body was torn down mid-stream, so a clean line stays compact. A custom
+ * `logRequest` sink overrides this wholesale; the {@link AccessEntry} it receives
+ * is unchanged.
+ */
 function defaultLogRequest(entry: AccessEntry): void {
-  console.log(`${entry.method} ${entry.path} ${entry.status} ${entry.ms}ms ${entry.requestId}`);
+  console.log(
+    JSON.stringify({
+      level: "info",
+      event: "http.access",
+      method: entry.method,
+      path: entry.path,
+      status: entry.status,
+      ms: entry.ms,
+      request_id: entry.requestId,
+      ...(entry.truncated === true ? { truncated: true } : {}),
+    }),
+  );
 }
 
 /** The slice of `process` the safety net listens on — injectable for tests. */

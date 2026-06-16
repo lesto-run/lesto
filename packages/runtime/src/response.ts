@@ -78,16 +78,39 @@ const fromWeb: FromWeb = (body) =>
  * Resolves once the body is fully flushed or the socket is torn down — never
  * rejects, so a caller can `void` it without risking an unhandled rejection.
  *
+ * A truncated stream — the producer errored, the bridge threw, or the client
+ * hung up mid-body — is reported through `options.onTruncated` (when supplied)
+ * so the caller can mark its access entry and span: the bytes the client got are
+ * incomplete, and an operator should be able to see that. The reason carried to
+ * the sink is the underlying error of whichever path tore the body down. It
+ * fires at most once per pipe, on the truncation paths only — a clean, fully-
+ * flushed stream never calls it.
+ *
  * `bridge` defaults to the real {@link fromWeb}; it is a parameter only so a test
  * can drive the synchronous-throw arm deterministically.
  */
 export function pipeStream(
   res: WritableResponse,
   body: ReadableStream,
-  bridge: FromWeb = fromWeb,
+  options: { onTruncated?: (reason: unknown) => void; bridge?: FromWeb } = {},
 ): Promise<void> {
+  const bridge = options.bridge ?? fromWeb;
+
   return new Promise<void>((resolve) => {
     let source: Readable | undefined;
+
+    // Fire the truncation sink at most once: each tear-down path can be reached
+    // exactly once per pipe, but guarding here keeps the report a single event
+    // even if two paths ever raced.
+    let reported = false;
+
+    const reportTruncated = (reason: unknown): void => {
+      if (reported) return;
+
+      reported = true;
+
+      options.onTruncated?.(reason);
+    };
 
     // A write-side failure (client gone) must not escape as an uncaught throw,
     // and `pipe` leaves the source running when the destination dies — so we
@@ -96,7 +119,11 @@ export function pipeStream(
     // tear-down path has a listener before it can fire. `source` is read through
     // the closure, so it sees whichever value `bridge` later assigned (or stays
     // `undefined` on the synchronous-throw path, where there is nothing to free).
-    res.on("error", () => {
+    res.on("error", (error: Error) => {
+      // The client went away mid-body: the response is truncated. The destination
+      // error is the honest reason for the report.
+      reportTruncated(error);
+
       source?.destroy();
 
       resolve();
@@ -106,7 +133,10 @@ export function pipeStream(
       source = bridge(body);
     } catch (error) {
       // No stream to pipe: headers are already on the wire, so the only honest
-      // signal is to destroy the socket — same as a mid-stream read failure.
+      // signal is to destroy the socket — same as a mid-stream read failure —
+      // and the body is truncated.
+      reportTruncated(error);
+
       res.destroy(error as Error);
 
       resolve();
@@ -117,6 +147,8 @@ export function pipeStream(
     // A read-side failure can't reach the socket through `pipe`; tear it down
     // ourselves so the client sees a reset rather than a silently-truncated body.
     source.on("error", (error: Error) => {
+      reportTruncated(error);
+
       res.destroy(error);
 
       resolve();
@@ -145,10 +177,16 @@ export function pipeStream(
  * for the stream arm. The caller (`handle`) treats both uniformly: it does not
  * await the result today, and the per-request access log fires immediately —
  * the stream's completion is the socket's concern, not the log's.
+ *
+ * `options.onTruncated`, when supplied, is forwarded to {@link pipeStream} for
+ * the stream arm so a body torn down mid-flight (producer error, client
+ * disconnect) is reported to the caller's access entry/span. The buffered arms
+ * never truncate, so they ignore it.
  */
 export function applyResponse(
   res: WritableResponse,
   response: AnyKeelResponse,
+  options: { onTruncated?: (reason: unknown) => void } = {},
 ): void | Promise<void> {
   res.writeHead(response.status, response.headers);
 
@@ -161,7 +199,11 @@ export function applyResponse(
   }
 
   if (isReadableStream(body)) {
-    return pipeStream(res, body);
+    return pipeStream(
+      res,
+      body,
+      options.onTruncated === undefined ? {} : { onTruncated: options.onTruncated },
+    );
   }
 
   // The remaining arm is `Uint8Array`: copy into a Buffer the socket can flush.

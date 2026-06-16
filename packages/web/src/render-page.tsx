@@ -116,7 +116,7 @@ const badRequest = (): AnyKeelResponse => ({
 });
 
 /**
- * A hard deadline for a page's streamed render.
+ * The default hard deadline for a page's streamed render.
  *
  * React ships no default timeout, so a hung `<Suspense>` boundary — a
  * never-resolving `load`, a suspending component whose data never settles — would
@@ -124,8 +124,12 @@ const badRequest = (): AnyKeelResponse => ({
  * deadline the render is aborted (a coded `UI_STREAM_TIMEOUT`), bounding it even
  * for a still-connected client. The request's own abort signal is chained in for
  * the client-disconnect case, whichever fires first.
+ *
+ * An app may override it per-app through `keel().renderDeadline(ms)`, which flows
+ * here as {@link RenderPageOptions.renderDeadlineMs}; this constant is the value
+ * when none was configured.
  */
-const RENDER_DEADLINE_MS = 10_000;
+export const DEFAULT_RENDER_DEADLINE_MS = 10_000;
 
 /** Build the `<head>` children: the always-on charset + viewport, then the page's own tags. */
 function headElements(metadata: PageMetadata): ReactElement[] {
@@ -193,6 +197,17 @@ export interface RenderPageOptions {
    * (`WEB_DIALECT_MISMATCH`), before any request is served.
    */
   serverRenderer?: ServerRenderer;
+
+  /**
+   * The hard deadline (ms) for this page's streamed render — the app-level
+   * override of {@link DEFAULT_RENDER_DEADLINE_MS}, set through
+   * `keel().renderDeadline(ms)`. Chained with the request's own abort signal
+   * (whichever fires first aborts the render), so an app on a slow data tier can
+   * lengthen the bound, or a latency-sensitive one tighten it, without forking
+   * the renderer. Absent → the default. Only the React streaming path observes a
+   * render deadline; the Preact buffered path has no streaming twin to bound.
+   */
+  renderDeadlineMs?: number;
 }
 
 /**
@@ -269,7 +284,7 @@ export async function renderPageResponse(
       : await renderPageStream(
           { element: documentElement, errors: [], islands: [] },
           {
-            renderTimeoutMs: RENDER_DEADLINE_MS,
+            renderTimeoutMs: options.renderDeadlineMs ?? DEFAULT_RENDER_DEADLINE_MS,
             ...(c.signal === undefined ? {} : { signal: c.signal }),
           },
         );

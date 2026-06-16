@@ -78,8 +78,12 @@ function forwardedChain(value: string | undefined): string[] {
  * hop is configured (the count gates *how many* forwarded hops to peel, not
  * *whether* to trust the peer — a zero-hop policy trusts no forwarding); a
  * predicate is consulted with the peer's address; `false` trusts nobody.
+ *
+ * Exported because the SAME gate that decides whether to believe the forwarding
+ * headers also decides whether to adopt an inbound `X-Request-Id` (an untrusted
+ * client can forge either) — the transport reuses this one decision for both.
  */
-function peerIsTrusted(policy: TrustProxy, peerAddress: string | undefined): boolean {
+export function peerIsTrusted(policy: TrustProxy, peerAddress: string | undefined): boolean {
   if (policy === false) return false;
 
   if (policy === true || policy === "all") return true;

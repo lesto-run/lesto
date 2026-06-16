@@ -205,8 +205,10 @@ describe("applyResponse", () => {
     // rather than leaning on the process safety net.
     const failure = new TypeError("Invalid state: ReadableStream is locked");
 
-    const result = pipeStream(sink, streamOf(new Uint8Array([1])), () => {
-      throw failure;
+    const result = pipeStream(sink, streamOf(new Uint8Array([1])), {
+      bridge: () => {
+        throw failure;
+      },
     });
 
     // Resolves rather than rejecting: even a synchronous construction failure is
@@ -253,7 +255,7 @@ describe("applyResponse", () => {
     // pipe runs over this exact source and we can assert it was destroyed.
     const source = new Readable({ read() {} });
 
-    const result = pipeStream(sink, streamOf(new Uint8Array([1])), () => source);
+    const result = pipeStream(sink, streamOf(new Uint8Array([1])), { bridge: () => source });
 
     sink.emit("error", new Error("client went away"));
 
@@ -261,5 +263,114 @@ describe("applyResponse", () => {
 
     // The leak fix: the source is destroyed, not left running after the client left.
     expect(source.destroyed).toBe(true);
+  });
+
+  it("forwards a truncation through applyResponse's onTruncated sink on a source error", async () => {
+    const sink = new StreamSink();
+
+    const failure = new Error("producer blew up mid-stream");
+
+    const reasons: unknown[] = [];
+
+    // applyResponse threads its onTruncated down to pipeStream for the stream arm.
+    const result = applyResponse(
+      sink,
+      {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        body: failingStream(failure),
+      },
+      { onTruncated: (reason) => reasons.push(reason) },
+    );
+
+    await expect(result).resolves.toBeUndefined();
+
+    // The producer's error is the honest truncation reason, reported exactly once.
+    expect(reasons).toEqual([failure]);
+  });
+
+  it("reports a client-disconnect truncation with the destination error", async () => {
+    const sink = new StreamSink();
+
+    const stalled = new ReadableStream<Uint8Array>({
+      start() {
+        // Never closes — only the destination error ends it.
+      },
+    });
+
+    const reasons: unknown[] = [];
+
+    const disconnect = new Error("client went away");
+
+    const result = pipeStream(sink, stalled, { onTruncated: (reason) => reasons.push(reason) });
+
+    sink.emit("error", disconnect);
+
+    await expect(result).resolves.toBeUndefined();
+
+    expect(reasons).toEqual([disconnect]);
+  });
+
+  it("reports a bridge-throw truncation with the construction error", async () => {
+    const sink = new StreamSink();
+
+    const failure = new TypeError("Invalid state: ReadableStream is locked");
+
+    const reasons: unknown[] = [];
+
+    const result = pipeStream(sink, streamOf(new Uint8Array([1])), {
+      onTruncated: (reason) => reasons.push(reason),
+      bridge: () => {
+        throw failure;
+      },
+    });
+
+    await expect(result).resolves.toBeUndefined();
+
+    expect(reasons).toEqual([failure]);
+  });
+
+  it("does not report a truncation for a clean, fully-flushed stream", async () => {
+    const sink = new StreamSink();
+
+    const reasons: unknown[] = [];
+
+    const result = applyResponse(
+      sink,
+      {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        body: streamOf(new Uint8Array([1, 2, 3])),
+      },
+      { onTruncated: (reason) => reasons.push(reason) },
+    );
+
+    await result;
+
+    // A clean delivery never fires the sink — the field stays quiet.
+    expect(reasons).toEqual([]);
+  });
+
+  it("fires the truncation sink at most once even if the source and destination both error", async () => {
+    const sink = new StreamSink();
+
+    // A source that errors AND a destination error: only one truncation report.
+    const source = new Readable({ read() {} });
+
+    const reasons: unknown[] = [];
+
+    const result = pipeStream(sink, streamOf(new Uint8Array([1])), {
+      onTruncated: (reason) => reasons.push(reason),
+      bridge: () => source,
+    });
+
+    // Destination error first (the client hung up), then the source errors too.
+    sink.emit("error", new Error("client went away"));
+    source.emit("error", new Error("source also blew up"));
+
+    await expect(result).resolves.toBeUndefined();
+
+    // The guard collapses the two tear-down paths into a single report.
+    expect(reasons.length).toBe(1);
   });
 });

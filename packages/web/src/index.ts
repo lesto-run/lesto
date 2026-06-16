@@ -15,7 +15,26 @@ export { Context } from "./handler-context";
 
 // Page rendering: the lean route contract (load / params / metadata / access /
 // flags) plus the props/layout/metadata types a page is authored against.
-export type { Layout, PageDef, PageLoad, PageMetadata, PageProps } from "./render-page";
+export { DEFAULT_RENDER_DEADLINE_MS } from "./render-page";
+export type {
+  Layout,
+  PageDef,
+  PageLoad,
+  PageMetadata,
+  PageProps,
+  RenderPageOptions,
+} from "./render-page";
+
+// The client-error beacon receiver — a built-in route on every `keel()` app, plus
+// the sink seam the observability wave wires to OTLP. The event is PII-free by
+// construction (component names + counts only).
+export {
+  CLIENT_ERRORS_ROUTE,
+  defaultClientErrorSink,
+  MAX_CLIENT_ERROR_BYTES,
+  normalizeClientError,
+} from "./client-errors";
+export type { ClientErrorEvent, ClientErrorSink } from "./client-errors";
 
 export type { HandleOptions } from "./types";
 

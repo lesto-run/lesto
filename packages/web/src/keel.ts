@@ -30,6 +30,8 @@ import type { DataSource } from "@keel/ui";
 import { preactServerRenderer, reactServerRenderer } from "@keel/ui/server";
 import type { ServerRenderer } from "@keel/ui/server";
 
+import { CLIENT_ERRORS_ROUTE, clientErrorsHandler, defaultClientErrorSink } from "./client-errors";
+import type { ClientErrorSink } from "./client-errors";
 import { WebError } from "./errors";
 import { Context } from "./handler-context";
 import type { Middleware, Next } from "./middleware";
@@ -167,6 +169,19 @@ export class Keel {
   // against. The CLI sets this from the single `ui.dialect` key that ALSO drives
   // the client alias — the two are never wired independently.
   private serverRenderer: ServerRenderer | undefined;
+
+  // The app-level streamed-render deadline (ms), set via `.renderDeadline()`.
+  // Undefined = the renderer's DEFAULT_RENDER_DEADLINE_MS. Threaded into every
+  // page render so a slow-data app can lengthen the bound, or a latency-sensitive
+  // one tighten it, without forking the renderer.
+  private renderDeadlineMs: number | undefined;
+
+  // Where the client-error beacon (`POST /__keel/client-errors`, registered as a
+  // built-in below) forwards its normalized events. Defaults to the structured-log
+  // sink; `.clientErrors(sink)` swaps it (the observability wave wires OTLP here).
+  // The route reads this field at request time, so an override set after
+  // construction still takes effect.
+  private clientErrorSink: ClientErrorSink = defaultClientErrorSink;
 
   // The compiled matcher, rebuilt on demand and invalidated whenever a route is added.
   private table: RouteTable<readonly Handler[]> | undefined;
@@ -321,6 +336,50 @@ export class Keel {
     return this;
   }
 
+  /**
+   * Set the hard deadline (ms) for this app's streamed page renders — the
+   * app-level override of the renderer's `DEFAULT_RENDER_DEADLINE_MS` (10s).
+   *
+   * React ships no render timeout, so a hung `<Suspense>` boundary would hold the
+   * socket open indefinitely; this is the bound that aborts it (chained with the
+   * request's own abort signal, whichever fires first). An app fronting a slow
+   * data tier raises it; a latency-sensitive one tightens it. A non-positive value
+   * is a wiring bug — a zero/negative deadline would abort every render before it
+   * began — and is refused with a coded {@link WebError} (`WEB_BAD_RENDER_DEADLINE`).
+   * Only the React streaming path observes it; the Preact buffered path has no
+   * streaming twin to bound.
+   */
+  renderDeadline(ms: number): this {
+    if (!Number.isFinite(ms) || ms <= 0) {
+      throw new WebError(
+        "WEB_BAD_RENDER_DEADLINE",
+        `render deadline must be a positive number of milliseconds; got ${ms}`,
+        { ms },
+      );
+    }
+
+    this.renderDeadlineMs = ms;
+
+    return this;
+  }
+
+  /**
+   * Override where the client-error beacon (`POST /__keel/client-errors`) forwards
+   * its events.
+   *
+   * The route is a built-in — registered for every app — so this only swaps its
+   * SINK; the default is a structured-log sink. The observability wave wires this
+   * to OTLP (`onClientError → tracer`), so a hydration failure in a real browser
+   * becomes an operator-visible event paired with the server-side traces. The
+   * route stays PII-free regardless of the sink: only component names and counts
+   * ever reach it.
+   */
+  clientErrors(sink: ClientErrorSink): this {
+    this.clientErrorSink = sink;
+
+    return this;
+  }
+
   /** The server-render dialect this app emits, or `undefined` for the React default. */
   get serverDialect(): UiDialect | undefined {
     return this.serverRenderer?.dialect;
@@ -440,6 +499,7 @@ export class Keel {
         privateData: this.hasPrivateData,
         ...(this.clientModuleSrc === undefined ? {} : { clientModule: this.clientModuleSrc }),
         ...(this.serverRenderer === undefined ? {} : { serverRenderer: this.serverRenderer }),
+        ...(this.renderDeadlineMs === undefined ? {} : { renderDeadlineMs: this.renderDeadlineMs }),
       };
 
       if (!isStatic) {
@@ -476,6 +536,20 @@ export class Keel {
       for (const route of this.collected) {
         table.add(route.method, route.pattern, this.chainOf(route));
       }
+
+      // The client-error beacon receiver is a BUILT-IN: registered into the
+      // matcher (not `collected`) so every app accepts the browser's
+      // hydration-failure beacon out of the box, WITHOUT leaking into
+      // `routes()` — the surface `openapi`/`mcp` enumerate and `.route()` merges,
+      // neither of which should see an internal endpoint. Added LAST, and the
+      // table resolves first-match-wins, so a user route declared at the same path
+      // overrides this default. Wrapped in the app's top-level middleware so the
+      // security batteries cover it; the handler reads `this.clientErrorSink` per
+      // request, so `.clientErrors()` swaps the sink even after the table is built.
+      table.add("POST", CLIENT_ERRORS_ROUTE, [
+        ...this.useChain,
+        clientErrorsHandler((event) => this.clientErrorSink(event)),
+      ] as readonly Handler[]);
 
       this.table = table;
     }
