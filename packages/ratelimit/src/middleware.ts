@@ -5,13 +5,16 @@
  * The token-bucket decision stays in `RateLimiter`, untouched. This adapter is
  * the plumbing: pick the key for *this* requester, ask the limiter, and either
  * let the request through or answer `429 Too Many Requests` with a `Retry-After`
- * the limiter computed. Keying by client IP is why trust-proxy matters — behind
- * a proxy every request shares the proxy's socket address, so without the
- * context's resolved `ip` the whole fleet would share one bucket.
+ * the limiter computed. The key derivation (`keyFor`) is handed the request, so
+ * a caller can bucket by an API-key header, a user, or a route param straight
+ * from the request — no detour through the ambient context. By default the key
+ * is the client IP, which is why trust-proxy matters: behind a proxy every
+ * request shares the proxy's socket address, so without the context's resolved
+ * `ip` the whole fleet would share one bucket.
  */
 
 import { currentContext } from "@keel/web";
-import type { Middleware } from "@keel/web";
+import type { KeelRequest, Middleware } from "@keel/web";
 
 import { RateLimiter } from "./limiter";
 import { MemoryRateLimitStore } from "./store";
@@ -49,11 +52,15 @@ export interface RateLimitOptions {
   readonly limiter?: RateLimiter;
 
   /**
-   * How a request maps to a bucket key. Defaults to the client IP from the
-   * request context (see {@link UNKNOWN_CLIENT_KEY} when it is absent). Override
-   * to key by user id, API key, or a composite.
+   * How a request maps to a bucket key. Receives the {@link KeelRequest} so the
+   * key can come straight from the request — an `Authorization`/API-key header, a
+   * route param, a body field, or a composite — *without* reaching through the
+   * ambient {@link currentContext}. Defaults to the client IP from the request
+   * context (see {@link UNKNOWN_CLIENT_KEY} when it is absent); the default
+   * ignores its argument because the context, not the request shape, carries the
+   * resolved IP.
    */
-  readonly keyFor?: () => string;
+  readonly keyFor?: (request: KeelRequest) => string;
 
   /**
    * Called the first time the *default* key derivation cannot resolve a client
@@ -95,8 +102,12 @@ function warnUnknownClient(): void {
  * shared fallback — invoking `onUnknownClient` the first time it falls back so
  * the silent degradation is observable. Warn-once is kept here, in the closure,
  * so each middleware tracks its own "already warned" latch.
+ *
+ * It takes the {@link KeelRequest} to match the public `keyFor` signature, but
+ * ignores it: the resolved client IP rides the ambient context, not the request
+ * shape. A caller who wants to key off the request supplies their own `keyFor`.
  */
-function defaultKeyFor(onUnknownClient: () => void): () => string {
+function defaultKeyFor(onUnknownClient: () => void): (request: KeelRequest) => string {
   let warned = false;
 
   return () => {
@@ -116,8 +127,9 @@ function defaultKeyFor(onUnknownClient: () => void): () => string {
 /**
  * A rate-limit middleware over a token bucket per client.
  *
- * On each request it derives the client key (the context IP by default), spends
- * a token, and:
+ * On each request it derives the client key — the context IP by default, or
+ * whatever {@link RateLimitOptions.keyFor} pulls from the request — spends a
+ * token, and:
  *
  *   - allows the request through when the bucket had one to spend; or
  *   - short-circuits with `429 Too Many Requests` when it did not, attaching a
@@ -146,8 +158,8 @@ export function rateLimit(options: RateLimitOptions): Middleware {
   // through the (injectable, warn-once) onUnknownClient seam.
   const keyFor = options.keyFor ?? defaultKeyFor(options.onUnknownClient ?? warnUnknownClient);
 
-  return async (_request, next) => {
-    const result = await limiter.check(keyFor());
+  return async (request, next) => {
+    const result = await limiter.check(keyFor(request));
 
     if (result.allowed) {
       return next();

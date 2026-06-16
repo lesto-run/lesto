@@ -124,6 +124,35 @@ describe("rateLimit middleware", () => {
     expect(await bucketAt(store, "tenant:acme")).toBeDefined();
   });
 
+  it("keys from the request itself, so distinct API keys get distinct buckets", async () => {
+    // The whole point of the request-arg keyFor: bucket by request data (here an
+    // API-key header) with no ambient context in play. capacity 1 + frozen clock
+    // means each key gets exactly one token before it 429s.
+    const store = new MemoryRateLimitStore();
+    const limiter = new RateLimiter({ store, capacity: 1, refillPerSecond: 1, clock: () => 1000 });
+
+    const middleware = rateLimit({
+      capacity: 1,
+      refillPerSecond: 1,
+      limiter,
+      keyFor: (req) => `api-key:${req.headers["x-api-key"] ?? "anon"}`,
+    });
+
+    const withKey = (apiKey: string): KeelRequest => ({
+      ...request,
+      headers: { "x-api-key": apiKey },
+    });
+
+    // "acme" spends its only token, then 429s — but "globex" still has a full
+    // bucket, proving the key came straight off each request.
+    expect((await middleware(withKey("acme"), async () => okResponse)).status).toBe(200);
+    expect((await middleware(withKey("acme"), async () => okResponse)).status).toBe(429);
+    expect((await middleware(withKey("globex"), async () => okResponse)).status).toBe(200);
+
+    expect(await bucketAt(store, "api-key:acme")).toBeDefined();
+    expect(await bucketAt(store, "api-key:globex")).toBeDefined();
+  });
+
   it("builds a default limiter from capacity/refill when none is injected", async () => {
     // capacity 1 with the real clock: a tight burst of two trips the limit, so
     // the default-constructed limiter is exercised (not an injected one).
