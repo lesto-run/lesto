@@ -42,7 +42,13 @@
  *     use) — so missing-user and wrong-password paths spend the same scrypt cost.
  */
 
-import { hashPassword, MemorySessionStore, Sessions, verifyPassword } from "@keel/auth";
+import {
+  hashPassword,
+  MemorySessionStore,
+  needsRehash,
+  Sessions,
+  verifyPassword,
+} from "@keel/auth";
 import type { Clock, Session, SessionStore } from "@keel/auth";
 import type { Db } from "@keel/db";
 
@@ -87,10 +93,11 @@ const DEFAULT_RESET_TTL_MS = 60 * 60 * 1000;
 /**
  * A *constant* scrypt hash of a placeholder password, computed lazily.
  *
- * `login` runs `verifyPassword(candidate, dummyHash())` whenever the supplied
- * email matches no user, so the no-user and wrong-password paths spend the same
- * CPU. Computed on first use and memoized — NOT at module load: `hashPassword`
- * calls `randomBytes`, and a Cloudflare Worker forbids generating random values
+ * `login` runs `verifyPassword(candidate, await dummyHash())` whenever the
+ * supplied email matches no user, so the no-user and wrong-password paths spend
+ * the same CPU. Computed on first use and memoized as a *promise* (so racing
+ * first-callers share one derive) — NOT at module load: `hashPassword` calls
+ * `randomBytes`, and a Cloudflare Worker forbids generating random values
  * in global scope (module evaluation), so an eager module-level constant made
  * `@keel/identity` impossible to even *import* in a Worker. Deferring it keeps
  * the package import-safe on the edge; the one-time cost lands on the first
@@ -103,9 +110,10 @@ const DEFAULT_RESET_TTL_MS = 60 * 60 * 1000;
  * subsequent miss spends exactly one scrypt and is indistinguishable from a
  * wrong-password hit — the property the rest of this doc describes.
  */
-let dummyHashCache: string | undefined;
+let dummyHashCache: Promise<string> | undefined;
 
-const dummyHash = (): string => (dummyHashCache ??= hashPassword("__keel_identity_timing_decoy__"));
+const dummyHash = (): Promise<string> =>
+  (dummyHashCache ??= hashPassword("__keel_identity_timing_decoy__"));
 
 const invalidToken = (kind: "verification" | "reset"): IdentityError =>
   new IdentityError("IDENTITY_INVALID_TOKEN", `The ${kind} link is invalid or has expired.`);
@@ -279,7 +287,7 @@ export function createIdentity(options: IdentityOptions): Identity {
       if (await userRepo.findUserByEmail(db, normalized)) {
         // Burn the same CPU we'd burn on a real insert so the response time
         // doesn't betray the collision. We discard the result.
-        hashPassword(password);
+        await hashPassword(password);
 
         return { status: "verification_sent", user: undefined };
       }
@@ -288,7 +296,7 @@ export function createIdentity(options: IdentityOptions): Identity {
       try {
         user = await userRepo.insertUser(db, {
           email: normalized,
-          passwordHash: hashPassword(password),
+          passwordHash: await hashPassword(password),
           emailVerifiedAt: null,
         });
       } catch {
@@ -340,14 +348,22 @@ export function createIdentity(options: IdentityOptions): Identity {
      * Verify credentials and mint a session.
      *
      * Always spends one scrypt operation — on a missing user, we still call
-     * `verifyPassword(candidate, dummyHash())` so missing-email and wrong-
-     * password are timing-indistinguishable.
+     * `verifyPassword(candidate, await dummyHash())` so missing-email and
+     * wrong-password are timing-indistinguishable.
      *
      * `IDENTITY_INVALID_CREDENTIALS` covers both unknown-email and bad-
      * password. `IDENTITY_EMAIL_NOT_VERIFIED` is distinct (better-auth
      * pattern), which leaks the existence of an unverified registered
      * email — that is the intentional UX-over-leak tradeoff and is
      * documented at the module level.
+     *
+     * **Rehash-on-login.** After a password verifies, if the stored hash was
+     * minted under weaker scrypt parameters than today's default (a legacy or
+     * pre-bump hash), we re-hash the just-proven plaintext at the current cost
+     * and persist it. The whole user base walks up to the current cost as
+     * people sign in — no forced reset. This runs only on the *success* path,
+     * so it never adds work an attacker can trigger, and never on the
+     * timing-decoy or wrong-password branches.
      */
     async login(email, password) {
       const normalized = userRepo.normalizeEmail(email);
@@ -356,17 +372,22 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       if (!user) {
         // Equalize CPU so a missing user costs the same as a wrong password.
-        verifyPassword(password, dummyHash());
+        await verifyPassword(password, await dummyHash());
 
         throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
-      if (!verifyPassword(password, user.passwordHash)) {
+      if (!(await verifyPassword(password, user.passwordHash))) {
         throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
       if (requireVerifiedEmail && !userRepo.isEmailVerified(user)) {
         throw new IdentityError("IDENTITY_EMAIL_NOT_VERIFIED", "Email address not verified.");
+      }
+
+      // Transparently upgrade a stale hash now that we hold the proven plaintext.
+      if (needsRehash(user.passwordHash)) {
+        await userRepo.setPasswordHash(db, user.id, await hashPassword(password));
       }
 
       const session = await sessions.create(String(user.id), sessionTtlMs);
@@ -442,7 +463,7 @@ export function createIdentity(options: IdentityOptions): Identity {
         throw invalidToken("reset");
       }
 
-      const newHash = hashPassword(newPassword);
+      const newHash = await hashPassword(newPassword);
       await userRepo.setPasswordHash(db, user.id, newHash);
 
       if (options.revokeUserSessions) {

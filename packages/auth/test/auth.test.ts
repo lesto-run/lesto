@@ -6,6 +6,7 @@ import {
   hashPassword,
   KeelError,
   MemorySessionStore,
+  needsRehash,
   Sessions,
   systemClock,
   verifyPassword,
@@ -25,75 +26,166 @@ const stoppedClock = (start: number): { clock: Clock; advance: (ms: number) => v
   };
 };
 
+// The current-format param prefix `scrypt$N$r$p` (defaults match the live cost).
+const params = (n = 2 ** 17, r = 8, p = 1): string => `scrypt$${n}$${r}$${p}`;
+
 describe("hashPassword / verifyPassword", () => {
-  it("round-trips: a hashed password verifies against itself", () => {
-    const stored = hashPassword("correct horse battery staple");
+  it("round-trips: a hashed password verifies against itself", async () => {
+    const stored = await hashPassword("correct horse battery staple");
 
-    expect(stored.startsWith("scrypt$")).toBe(true);
-    expect(verifyPassword("correct horse battery staple", stored)).toBe(true);
+    // The current format is self-describing: scrypt$N$r$p$salt$hash.
+    expect(stored.startsWith(`scrypt$${2 ** 17}$8$1$`)).toBe(true);
+    expect(stored.split("$")).toHaveLength(6);
+    expect(await verifyPassword("correct horse battery staple", stored)).toBe(true);
   });
 
-  it("rejects the wrong password", () => {
-    const stored = hashPassword("correct horse battery staple");
+  it("rejects the wrong password", async () => {
+    const stored = await hashPassword("correct horse battery staple");
 
-    expect(verifyPassword("Tr0ub4dour&3", stored)).toBe(false);
+    expect(await verifyPassword("Tr0ub4dour&3", stored)).toBe(false);
   });
 
-  it("returns false for a stored string with too few $-parts", () => {
-    expect(verifyPassword("anything", "scrypt$onlytwoparts")).toBe(false);
+  it("uses a fresh salt per call (two hashes of the same password differ)", async () => {
+    const a = await hashPassword("same password");
+    const b = await hashPassword("same password");
+
+    expect(a).not.toBe(b);
+    expect(await verifyPassword("same password", a)).toBe(true);
+    expect(await verifyPassword("same password", b)).toBe(true);
   });
 
-  it("returns false for a stored string with too many $-parts", () => {
-    expect(verifyPassword("anything", "scrypt$aa$bb$cc")).toBe(false);
+  it("returns false for a stored string with too few $-parts", async () => {
+    expect(await verifyPassword("anything", "scrypt$onlytwoparts")).toBe(false);
   });
 
-  it("returns false for a stored string with the wrong algorithm prefix", () => {
-    expect(verifyPassword("anything", "bcrypt$abcd$ef01")).toBe(false);
+  it("returns false for a stored string with the wrong segment count (4 or 5)", async () => {
+    expect(await verifyPassword("anything", "scrypt$aa$bb$cc")).toBe(false);
+    expect(await verifyPassword("anything", "scrypt$131072$8$1$aa")).toBe(false);
   });
 
-  // Fail-closed regression: a malformed stored hash must reject EVERY password.
-  // Before the fix, the candidate key was derived to the stored hash's length,
-  // so an empty/short stored hash made timingSafeEqual return true for all.
-  //
-  // hashPassword fixes the salt at 16 bytes and the scrypt key at 64 bytes, so
-  // a well-formed stored string carries 32 + 128 hex chars respectively.
+  it("returns false for a stored string with the wrong algorithm prefix", async () => {
+    expect(await verifyPassword("anything", "bcrypt$abcd$ef01")).toBe(false);
+  });
+
+  // The salt is fixed at 16 bytes and the scrypt key at 64 bytes, so a
+  // well-formed stored string carries 32 + 128 hex chars respectively.
   const SALT_HEX = "a".repeat(16 * 2);
   const KEY_HEX = "b".repeat(64 * 2);
 
-  it("rejects every password when the stored hash is empty (auth fails closed)", () => {
-    const empty = `scrypt$${SALT_HEX}$`;
-
-    expect(verifyPassword("", empty)).toBe(false);
-    expect(verifyPassword("any password at all", empty)).toBe(false);
-    expect(verifyPassword(" ", empty)).toBe(false);
+  it("rejects a current-format hash with non-numeric params", async () => {
+    expect(await verifyPassword("x", `scrypt$notanumber$8$1$${SALT_HEX}$${KEY_HEX}`)).toBe(false);
+    expect(await verifyPassword("x", `scrypt$131072$r$1$${SALT_HEX}$${KEY_HEX}`)).toBe(false);
+    expect(await verifyPassword("x", `scrypt$131072$8$p$${SALT_HEX}$${KEY_HEX}`)).toBe(false);
   });
 
-  it("rejects every password when the stored hash is truncated", () => {
+  it("rejects a current-format hash with non-positive or non-integer params", async () => {
+    expect(await verifyPassword("x", `scrypt$0$8$1$${SALT_HEX}$${KEY_HEX}`)).toBe(false);
+    expect(await verifyPassword("x", `scrypt$131072$8$1.5$${SALT_HEX}$${KEY_HEX}`)).toBe(false);
+  });
+
+  it("rejects a current-format hash whose N is not a power of two", async () => {
+    expect(await verifyPassword("x", `scrypt$100000$8$1$${SALT_HEX}$${KEY_HEX}`)).toBe(false);
+  });
+
+  it("rejects every password when the stored hash is empty (auth fails closed)", async () => {
+    const empty = `${params()}$${SALT_HEX}$`;
+
+    expect(await verifyPassword("", empty)).toBe(false);
+    expect(await verifyPassword("any password at all", empty)).toBe(false);
+    expect(await verifyPassword(" ", empty)).toBe(false);
+  });
+
+  it("rejects every password when the stored hash is truncated", async () => {
     // One byte short of the 64-byte key.
-    const truncated = `scrypt$${SALT_HEX}$${"b".repeat((64 - 1) * 2)}`;
+    const truncated = `${params()}$${SALT_HEX}$${"b".repeat((64 - 1) * 2)}`;
 
-    expect(verifyPassword("any password at all", truncated)).toBe(false);
+    expect(await verifyPassword("any password at all", truncated)).toBe(false);
   });
 
-  it("rejects every password when the stored hash is oversized", () => {
+  it("rejects every password when the stored hash is oversized", async () => {
     // One byte longer than the 64-byte key.
-    const oversized = `scrypt$${SALT_HEX}$${"b".repeat((64 + 1) * 2)}`;
+    const oversized = `${params()}$${SALT_HEX}$${"b".repeat((64 + 1) * 2)}`;
 
-    expect(verifyPassword("any password at all", oversized)).toBe(false);
+    expect(await verifyPassword("any password at all", oversized)).toBe(false);
   });
 
-  it("rejects when the salt is the wrong length", () => {
+  it("rejects when the salt is the wrong length", async () => {
     const shortSalt = "ab"; // 1 byte, not the expected 16
-    const badSalt = `scrypt$${shortSalt}$${KEY_HEX}`;
+    const badSalt = `${params()}$${shortSalt}$${KEY_HEX}`;
 
-    expect(verifyPassword("any password at all", badSalt)).toBe(false);
+    expect(await verifyPassword("any password at all", badSalt)).toBe(false);
   });
 
-  it("still verifies a correctly-shaped, correct password", () => {
-    const stored = hashPassword("the right password");
+  it("still verifies a correctly-shaped, correct password", async () => {
+    const stored = await hashPassword("the right password");
 
-    expect(verifyPassword("the right password", stored)).toBe(true);
-    expect(verifyPassword("the wrong password", stored)).toBe(false);
+    expect(await verifyPassword("the right password", stored)).toBe(true);
+    expect(await verifyPassword("the wrong password", stored)).toBe(false);
+  });
+
+  // --- Backward-compatibility: legacy parameterless format -----------------
+  // Old rows are `scrypt$salt$hash`, minted under N=2^14. They must still
+  // verify so existing users are not locked out, and be flagged for rehash.
+  it("verifies a legacy parameterless hash (scrypt$salt$hash, N=2^14)", async () => {
+    const { scryptSync, randomBytes } = await import("node:crypto");
+    const salt = randomBytes(16);
+    const key = scryptSync("legacy password", salt, 64, { N: 2 ** 14, r: 8, p: 1 });
+    const legacy = `scrypt$${salt.toString("hex")}$${key.toString("hex")}`;
+
+    expect(legacy.split("$")).toHaveLength(3);
+    expect(await verifyPassword("legacy password", legacy)).toBe(true);
+    expect(await verifyPassword("wrong", legacy)).toBe(false);
+  });
+
+  it("verifies a hash minted under non-default (older, smaller-N) params", async () => {
+    const { scryptSync, randomBytes } = await import("node:crypto");
+    const salt = randomBytes(16);
+    const key = scryptSync("aged password", salt, 64, {
+      N: 2 ** 15,
+      r: 8,
+      p: 1,
+      maxmem: 256 * 1024 * 1024,
+    });
+    const aged = `scrypt$${2 ** 15}$8$1$${salt.toString("hex")}$${key.toString("hex")}`;
+
+    expect(await verifyPassword("aged password", aged)).toBe(true);
+  });
+});
+
+describe("needsRehash", () => {
+  it("returns false for a hash minted at the current cost", async () => {
+    const stored = await hashPassword("current");
+
+    expect(needsRehash(stored)).toBe(false);
+  });
+
+  it("returns true for a legacy parameterless hash", () => {
+    const SALT_HEX = "a".repeat(32);
+    const KEY_HEX = "b".repeat(128);
+
+    expect(needsRehash(`scrypt$${SALT_HEX}$${KEY_HEX}`)).toBe(true);
+  });
+
+  it("returns true when N is below the current default", () => {
+    const SALT_HEX = "a".repeat(32);
+    const KEY_HEX = "b".repeat(128);
+
+    expect(needsRehash(`scrypt$${2 ** 15}$8$1$${SALT_HEX}$${KEY_HEX}`)).toBe(true);
+  });
+
+  it("returns true when r or p is below the current default", () => {
+    const SALT_HEX = "a".repeat(32);
+    const KEY_HEX = "b".repeat(128);
+
+    // r below default (the parse still requires a power-of-two N).
+    expect(needsRehash(`scrypt$${2 ** 17}$4$1$${SALT_HEX}$${KEY_HEX}`)).toBe(true);
+    // p below default is impossible above zero (default p=1), but a hash with a
+    // higher N/r and matching p stays stable — exercised by the false case.
+  });
+
+  it("returns false for a malformed string (nothing to rehash from)", () => {
+    expect(needsRehash("not a hash")).toBe(false);
+    expect(needsRehash("scrypt$bad$8$1$aa$bb")).toBe(false);
   });
 });
 

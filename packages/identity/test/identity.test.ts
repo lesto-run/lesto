@@ -1,3 +1,5 @@
+import { randomBytes, scryptSync } from "node:crypto";
+
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -371,6 +373,51 @@ describe("login", () => {
     const { session } = await identity.login("ada@example.com", "correct horse staple");
 
     expect(session.token).toBeDefined();
+  });
+
+  // Rehash-on-login: a user whose stored hash predates the current scrypt cost
+  // logs in normally AND has the stored hash transparently upgraded.
+  it("rehashes a stale (legacy-format) password hash on successful login", async () => {
+    const { identity } = buildIdentity();
+    const password = "correct horse staple";
+
+    // Seed a user with a *legacy* parameterless hash (scrypt$salt$hash, N=2^14),
+    // born verified — the pre-versioned shape that must keep working.
+    const salt = randomBytes(16);
+    const key = scryptSync(password, salt, 64, { N: 2 ** 14, r: 8, p: 1 });
+    const legacyHash = `scrypt$${salt.toString("hex")}$${key.toString("hex")}`;
+
+    await userRepo.insertUser(db, {
+      email: "ada@example.com",
+      passwordHash: legacyHash,
+      emailVerifiedAt: new Date().toISOString(),
+    });
+
+    const { user } = await identity.login("ada@example.com", password);
+
+    // The login succeeded; the stored hash was upgraded to the current format.
+    const stored = await userRepo.findUserById(db, user.id);
+    expect(stored!.passwordHash).not.toBe(legacyHash);
+    expect(stored!.passwordHash.startsWith(`scrypt$${2 ** 17}$8$1$`)).toBe(true);
+
+    // The original password still logs in against the upgraded hash, and no
+    // further rehash happens on the second login.
+    const second = await identity.login("ada@example.com", password);
+    const afterSecond = await userRepo.findUserById(db, second.user.id);
+    expect(afterSecond!.passwordHash).toBe(stored!.passwordHash);
+  });
+
+  it("does not rehash a current-cost hash on login", async () => {
+    const { identity, sent } = buildIdentity();
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+
+    const before = (await userRepo.findUserByEmail(db, "ada@example.com"))!.passwordHash;
+    await identity.login("ada@example.com", "correct horse staple");
+    const after = (await userRepo.findUserByEmail(db, "ada@example.com"))!.passwordHash;
+
+    expect(after).toBe(before);
   });
 });
 

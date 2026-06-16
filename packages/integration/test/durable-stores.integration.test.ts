@@ -142,7 +142,7 @@ describe.each(drivers)("durable stores: $name", (driver) => {
       const now = new Date().toISOString();
       await insertUser(db, {
         email: "ada@example.com",
-        passwordHash: hashPassword("correct horse battery staple"),
+        passwordHash: await hashPassword("correct horse battery staple"),
         emailVerifiedAt: now,
       });
 

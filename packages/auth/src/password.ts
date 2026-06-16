@@ -1,16 +1,53 @@
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import type { ScryptOptions } from "node:crypto";
+import { promisify } from "node:util";
 
 /**
- * Password hashing on scrypt.
+ * Password hashing on scrypt — versioned, self-describing, and async.
  *
- * A stored hash is a single self-describing string:
+ * A stored hash is a single string that carries its own cost parameters:
  *
- *   scrypt$<saltHex>$<hashHex>
+ *   scrypt$<N>$<r>$<p>$<saltHex>$<hashHex>
  *
- * The salt travels with the hash so verification needs nothing but the stored
- * value and the candidate password. Comparison is constant-time so a timing
- * side channel can't leak how many leading bytes matched.
+ * The salt AND the scrypt work factors (`N`, `r`, `p`) travel with the hash, so
+ * verification needs nothing but the stored value and the candidate password.
+ * Because the parameters are read back from the stored string, a hash minted
+ * under an *older* (cheaper) cost still verifies for as long as it lives in the
+ * database — we never assume the current defaults. {@link needsRehash} reports
+ * when a stored hash is below today's cost so the caller can transparently
+ * re-hash it on the next successful login.
+ *
+ * Two correctness properties this module is built around:
+ *
+ *   - **Async, bounded scrypt.** scrypt is CPU- *and* memory-hard; the
+ *     synchronous `scryptSync` would block the event loop for the full derive,
+ *     turning a flood of login attempts into a denial-of-service amplifier. We
+ *     use the libuv-threadpool `scrypt` (promisified) and pass an explicit
+ *     `maxmem` so the work factor can be raised past Node's default 32 MiB
+ *     ceiling without the derive throwing.
+ *   - **Fail closed.** Comparison is constant-time, and any malformed stored
+ *     string (wrong tag, wrong arity, non-numeric params, mis-sized salt/key)
+ *     verifies to `false` rather than throwing — a caller comparing user input
+ *     never has to wrap this in a try/catch, and a truncated stored hash can
+ *     never make verification pass for every password.
+ *
+ * @see needsRehash for the rehash-on-login seam.
  */
+
+/**
+ * Promisified scrypt that preserves the cost-parameter `options` overload.
+ *
+ * `util.promisify(scrypt)`'s inferred type collapses to the 3-arg
+ * `(password, salt, keylen)` signature and drops the `options` overload we
+ * depend on, so we promisify the value and re-assert the fuller call signature.
+ * The derive runs on the libuv threadpool, off the event loop.
+ */
+const scryptAsync = promisify(scrypt) as (
+  password: string,
+  salt: Buffer,
+  keylen: number,
+  options: ScryptOptions,
+) => Promise<Buffer>;
 
 /** The algorithm tag every stored hash leads with. */
 const PREFIX = "scrypt";
@@ -21,44 +58,194 @@ const SALT_BYTES = 16;
 /** scrypt's derived-key length, in bytes. */
 const KEY_BYTES = 64;
 
-/** Hash a password with a fresh random salt. */
-export function hashPassword(password: string): string {
+/**
+ * Current scrypt cost parameters — what {@link hashPassword} mints today.
+ *
+ *   - `N` is the CPU/memory cost (must be a power of two). 2^17 = 131072 lands
+ *     around ~150–200 ms per derive on 2025-class server hardware and ~128 MiB
+ *     of working memory (≈ `128 · N · r` bytes), comfortably above the OWASP
+ *     scrypt floor. This is a deliberate bump from the legacy default of 2^14.
+ *   - `r` (block size, 8) and `p` (parallelism, 1) are the standard pairing.
+ */
+const DEFAULT_N = 2 ** 17;
+const DEFAULT_R = 8;
+const DEFAULT_P = 1;
+
+/**
+ * The scrypt memory ceiling, in bytes.
+ *
+ * scrypt needs roughly `128 · N · r` bytes of working memory; at the default
+ * cost that is ~128 MiB, which exceeds Node's built-in 32 MiB `maxmem` default
+ * and would make the derive throw. We set the ceiling to 256 MiB — double the
+ * default-cost footprint — so today's parameters work and there is headroom for
+ * a future bump without re-touching this constant.
+ */
+const MAXMEM = 256 * 1024 * 1024;
+
+/** The parsed cost parameters carried by (or inferred for) a stored hash. */
+interface ScryptParams {
+  readonly N: number;
+  readonly r: number;
+  readonly p: number;
+}
+
+/**
+ * Parse a stored hash into its parameters, salt, and expected key.
+ *
+ * Returns `undefined` — never throws — for anything that is not a hash this
+ * module could have produced, in either shape:
+ *
+ *   - **current**: `scrypt$N$r$p$saltHex$hashHex` (six segments)
+ *   - **legacy**:  `scrypt$saltHex$hashHex` (three segments, no params) — the
+ *     pre-versioned format, read back at the cost it was actually minted under
+ *     (N=2^14, r=8, p=1). Old rows must still verify; they get upgraded by the
+ *     {@link needsRehash} seam on the next login.
+ *
+ * Every numeric/size invariant is checked here so {@link verifyPassword} can be
+ * a thin constant-time comparison and {@link needsRehash} can reuse the parse.
+ */
+function parseStored(
+  stored: string,
+): { params: ScryptParams; salt: Buffer; expected: Buffer } | undefined {
+  const parts = stored.split("$");
+
+  const [prefix] = parts;
+
+  // Wrong algorithm tag: not a hash we produced.
+  if (prefix !== PREFIX) return undefined;
+
+  let params: ScryptParams;
+  let saltHex: string;
+  let hashHex: string;
+
+  if (parts.length === 6) {
+    // Current format: scrypt$N$r$p$salt$hash.
+    const [, nRaw, rRaw, pRaw, salt, hash] = parts as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+
+    const N = Number(nRaw);
+    const r = Number(rRaw);
+    const p = Number(pRaw);
+
+    // Reject non-numeric / non-positive / non-integer params. scrypt also
+    // requires N to be a power of two greater than one — anything else is not a
+    // string we minted, so fail closed rather than hand garbage to the derive.
+    if (!isPositiveInteger(N) || !isPositiveInteger(r) || !isPositiveInteger(p)) return undefined;
+    if (!isPowerOfTwo(N)) return undefined;
+
+    params = { N, r, p };
+    saltHex = salt;
+    hashHex = hash;
+  } else if (parts.length === 3) {
+    // Legacy format: scrypt$salt$hash — minted before the format carried its
+    // parameters. Read it at the cost it was actually produced under.
+    const [, salt, hash] = parts as [string, string, string];
+
+    params = { N: 2 ** 14, r: 8, p: 1 };
+    saltHex = salt;
+    hashHex = hash;
+  } else {
+    // Wrong number of segments: not a hash we produced.
+    return undefined;
+  }
+
+  const salt = Buffer.from(saltHex, "hex");
+  const expected = Buffer.from(hashHex, "hex");
+
+  // Fail closed on mis-sized material. We must NOT derive the candidate key to
+  // `expected.length`: an empty or truncated stored hash would then make scrypt
+  // produce a same-length buffer and `timingSafeEqual` would report equality
+  // for EVERY password — auth failing open. The salt and key widths are fixed,
+  // so anything else cannot be ours.
+  if (salt.length !== SALT_BYTES || expected.length !== KEY_BYTES) return undefined;
+
+  return { params, salt, expected };
+}
+
+/** True iff `value` is a finite integer strictly greater than zero. */
+function isPositiveInteger(value: number): boolean {
+  return Number.isInteger(value) && value > 0;
+}
+
+/** True iff `value` is a power of two greater than one (scrypt's N constraint). */
+function isPowerOfTwo(value: number): boolean {
+  return value > 1 && (value & (value - 1)) === 0;
+}
+
+/**
+ * Hash a password with a fresh random salt under the current cost parameters.
+ *
+ * Async: the scrypt derive runs on the libuv threadpool so it never blocks the
+ * event loop. The returned string is self-describing — it carries the salt and
+ * the `N`/`r`/`p` it was minted under, so {@link verifyPassword} needs only the
+ * candidate and the stored value.
+ */
+export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(SALT_BYTES);
 
-  const hash = scryptSync(password, salt, KEY_BYTES);
+  const hash = await scryptAsync(password, salt, KEY_BYTES, {
+    N: DEFAULT_N,
+    r: DEFAULT_R,
+    p: DEFAULT_P,
+    maxmem: MAXMEM,
+  });
 
-  return `${PREFIX}$${salt.toString("hex")}$${hash.toString("hex")}`;
+  return `${PREFIX}$${DEFAULT_N}$${DEFAULT_R}$${DEFAULT_P}$${salt.toString("hex")}$${hash.toString(
+    "hex",
+  )}`;
 }
 
 /**
  * Verify a candidate password against a stored hash.
  *
- * Returns false — never throws — for a malformed stored string, whether the
- * algorithm prefix is wrong or the `$`-delimited shape is wrong. A caller
- * comparing user input should not have to wrap this in a try/catch.
+ * Resolves `false` — never rejects — for a malformed stored string, whatever
+ * the cause (wrong prefix, wrong arity, non-numeric params, mis-sized
+ * salt/key). The candidate key is derived under the parameters read back from
+ * `stored`, so a hash minted under an older cost still verifies. Comparison is
+ * constant-time.
  */
-export function verifyPassword(password: string, stored: string): boolean {
-  const [prefix, saltHex, hashHex, ...rest] = stored.split("$");
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const parsed = parseStored(stored);
 
-  // Wrong number of segments: not a hash we produced. A well-formed hash has
-  // exactly three parts, so a defined fourth segment (or a missing salt/hash)
-  // means the shape is wrong.
-  if (saltHex === undefined || hashHex === undefined || rest.length > 0) return false;
+  if (parsed === undefined) return false;
 
-  // Wrong algorithm tag: not a hash we produced.
-  if (prefix !== PREFIX) return false;
+  const { params, salt, expected } = parsed;
 
-  const salt = Buffer.from(saltHex, "hex");
-  const expected = Buffer.from(hashHex, "hex");
-
-  // Fail closed on malformed stored material. We must NOT derive the candidate
-  // key to `expected.length`: an empty or truncated stored hash would then make
-  // scrypt produce a same-length (e.g. zero-length) buffer and timingSafeEqual
-  // would report equality for EVERY password — auth failing open. The salt and
-  // key widths are fixed by hashPassword, so anything else cannot be ours.
-  if (salt.length !== SALT_BYTES || expected.length !== KEY_BYTES) return false;
-
-  const actual = scryptSync(password, salt, KEY_BYTES);
+  const actual = await scryptAsync(password, salt, KEY_BYTES, {
+    N: params.N,
+    r: params.r,
+    p: params.p,
+    maxmem: MAXMEM,
+  });
 
   return timingSafeEqual(actual, expected);
+}
+
+/**
+ * Report whether a stored hash was minted under weaker parameters than today's
+ * defaults — the rehash-on-login seam.
+ *
+ * A caller that has *just verified* a password (so it holds the plaintext) can
+ * call this and, when it returns `true`, re-hash the plaintext with
+ * {@link hashPassword} and persist the upgraded value. That transparently walks
+ * the whole user base up to the current cost as people log in, with no forced
+ * reset. Legacy (parameterless) hashes — and any hash whose `N`/`r`/`p` are
+ * below the current defaults — report `true`. A malformed string reports
+ * `false`: it is not a hash we can re-derive, so the caller should leave it
+ * alone (a failed verify will already have rejected the login).
+ */
+export function needsRehash(stored: string): boolean {
+  const parsed = parseStored(stored);
+
+  if (parsed === undefined) return false;
+
+  const { N, r, p } = parsed.params;
+
+  return N < DEFAULT_N || r < DEFAULT_R || p < DEFAULT_P;
 }

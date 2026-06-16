@@ -112,7 +112,7 @@ async function seedDemoAccounts(db: Db): Promise<void> {
 
     await insertUser(db, {
       email: demo.email,
-      passwordHash: hashPassword(demo.password),
+      passwordHash: await hashPassword(demo.password),
       // Seeded users are born verified — the demo skips the email click.
       emailVerifiedAt: now,
     });
