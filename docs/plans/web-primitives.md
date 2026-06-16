@@ -39,6 +39,25 @@ comments; one conventional commit on `main`.
    Require RSS channel `<description>` and Atom `id`/`updated` in the types (or synthesize defaults); accept `Date` inputs and format RFC 822 / RFC 3339; strip/reject `\r\n` and `#` in robots.txt paths and the sitemap URL.
    Acceptance: the "valid RSS 2.0 / Atom 1.0" docstrings become true; a `\n`-bearing Disallow path is refused.
 
+## Shipped beyond the plan
+
+- **react-email rendering support** — `[Wave 3 | done 2026-06-16 | commits a31cd54, daee9c9]`. The
+  email story was "react-email templates" in positioning only; the framework now backs it for real —
+  deliberately **without** a new package or a React dep in `@keel/mail` core:
+  - **Render hook → plain text.** `EmailRenderer` may return `{ html, text }`; a react-email renderer
+    supplies the plain-text alternative (`render(el, { plainText: true })`) and the mailer fills
+    `RenderedEmail.text` → SMTP `multipart/alternative`. An explicit `email.text` wins.
+  - **Typed `mailer.template(name, build)`.** Returns a `MailTemplate` whose `.send` params are bound
+    to the builder, so a wrong shape is a compile error. The open `send(name, params)` stays
+    string-keyed on purpose — the parked unknown-mailer path (item 2) dispatches to names not defined
+    on this deploy, so it cannot be type-checked.
+  - **Shared base layout + dogfood.** Reusable `EmailLayout`/`EmailHeading`/`EmailText`/`EmailAction`
+    and the verify/reset templates live in `examples/estate` (real multipart html+text); the
+    bring-your-own-render hook is documented in `@keel/mail`'s module doc.
+  - **Design call:** react-email components need a React/react-email dep, so they stay in the example
+    (the copy-paste reference), keeping `@keel/mail` dependency-light. A `@keel/mail-react` adapter is
+    the home for *importable* base components if multiple apps ever need them — deferred, not built.
+
 ## Owned elsewhere (do not duplicate)
 
 - Identity's use of the mailer (verify/reset wiring, estate dogfood) → **auth-security** items 2–4 reference item 1 here.
