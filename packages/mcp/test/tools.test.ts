@@ -15,7 +15,7 @@ import { contentEntriesMigration } from "@keel/content-store";
 import { buildTools, dispatch } from "../src/tools";
 import { McpError } from "../src/errors";
 
-import type { KeelMcpContext } from "../src/tools";
+import type { KeelMcpContext, McpAuditRecord } from "../src/tools";
 
 // The DI boundary: the kernel speaks "array of positional params"; this adapter
 // maps that onto better-sqlite3's variadic bind. The terminals are async (ADR
@@ -81,10 +81,20 @@ let raw: Database.Database;
 let routes: ReadonlyArray<{ method: string; pattern: string }>;
 let app: App;
 
+// Every dispatch lands here; tests assert the audit trail is never empty.
+let audited: McpAuditRecord[];
+
+// A context with the mandatory audit sink wired to the capturing array. Each
+// test starts a fresh sink; `mode` defaults to read-only unless overridden.
+function context(overrides: Partial<KeelMcpContext> = {}): KeelMcpContext {
+  return { app, routes, audit: (record) => void audited.push(record), ...overrides };
+}
+
 beforeEach(async () => {
   raw = new Database(":memory:");
   const db = adapt(raw);
   queryDb = createDb(db);
+  audited = [];
 
   const keelApp = keel().get("/posts", async (c) =>
     c.json({ posts: await queryDb.select().from(posts).orderBy(posts.id, "asc").all() }),
@@ -101,7 +111,7 @@ afterEach(() => {
 
 describe("buildTools", () => {
   it("returns the Keel tools with stable names, descriptions, and input schemas", () => {
-    const tools = buildTools({ app, routes });
+    const tools = buildTools(context());
 
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_routes",
@@ -129,19 +139,42 @@ describe("buildTools", () => {
 
     expect(generateUi?.inputSchema).toMatchObject({ required: ["prompt"] });
   });
+
+  it("marks exactly the state-mutating tools destructive", () => {
+    const tools = buildTools(context());
+
+    const destructive = tools.filter((tool) => tool.destructive).map((tool) => tool.name);
+
+    // The content writes plus `handle_request` (which can POST/DELETE) are the
+    // destructive set; the read tools are not.
+    expect(destructive.toSorted()).toEqual([
+      "create_content_entry",
+      "delete_content_entry",
+      "handle_request",
+      "update_content_entry",
+    ]);
+  });
 });
 
 describe("list_routes handler", () => {
   it("returns the app's routes", async () => {
-    const tools = buildTools({ app, routes });
+    const ctx = context();
+    const tools = buildTools(ctx);
 
-    const result = (await dispatch(tools, "list_routes", {})) as {
+    const result = (await dispatch(ctx, tools, "list_routes", {})) as {
       method: string;
       pattern: string;
     }[];
 
     expect(result).toEqual(routes);
     expect(result.some((route) => route.method === "GET" && route.pattern === "/posts")).toBe(true);
+  });
+
+  it("is readable in read-only mode without operator escalation", async () => {
+    const ctx = context({ mode: "read-only" });
+    const tools = buildTools(ctx);
+
+    await expect(dispatch(ctx, tools, "list_routes", {})).resolves.toEqual(routes);
   });
 });
 
@@ -176,9 +209,10 @@ describe("content tools", () => {
   });
 
   it("list_content_collections returns each collection with its entry count", async () => {
-    const tools = buildTools({ app, routes });
+    const ctx = context();
+    const tools = buildTools(ctx);
 
-    const collections = await dispatch(tools, "list_content_collections", {});
+    const collections = await dispatch(ctx, tools, "list_content_collections", {});
 
     expect(collections).toEqual([
       { name: "posts", count: 2 },
@@ -187,9 +221,10 @@ describe("content tools", () => {
   });
 
   it("get_content_entry returns the entry when it exists", async () => {
-    const tools = buildTools({ app, routes });
+    const ctx = context();
+    const tools = buildTools(ctx);
 
-    const result = await dispatch(tools, "get_content_entry", {
+    const result = await dispatch(ctx, tools, "get_content_entry", {
       collection: "posts",
       slug: "hello",
     });
@@ -198,9 +233,10 @@ describe("content tools", () => {
   });
 
   it("get_content_entry returns null when the entry is absent", async () => {
-    const tools = buildTools({ app, routes });
+    const ctx = context();
+    const tools = buildTools(ctx);
 
-    const result = await dispatch(tools, "get_content_entry", {
+    const result = await dispatch(ctx, tools, "get_content_entry", {
       collection: "posts",
       slug: "missing",
     });
@@ -209,9 +245,10 @@ describe("content tools", () => {
   });
 
   it("query_content lists all of a collection's entries", async () => {
-    const tools = buildTools({ app, routes });
+    const ctx = context();
+    const tools = buildTools(ctx);
 
-    const entries = (await dispatch(tools, "query_content", {
+    const entries = (await dispatch(ctx, tools, "query_content", {
       collection: "posts",
     })) as RuntimeEntry[];
 
@@ -219,9 +256,10 @@ describe("content tools", () => {
   });
 
   it("query_content caps the result at the given limit", async () => {
-    const tools = buildTools({ app, routes });
+    const ctx = context();
+    const tools = buildTools(ctx);
 
-    const entries = (await dispatch(tools, "query_content", {
+    const entries = (await dispatch(ctx, tools, "query_content", {
       collection: "posts",
       limit: 1,
     })) as RuntimeEntry[];
@@ -233,19 +271,21 @@ describe("content tools", () => {
 
 describe("content write tools", () => {
   // The write tools mutate a content-store database; give the context one,
-  // migrated to hold the content_entries table.
+  // migrated to hold the content_entries table, AND operator mode so the gate
+  // lets them through.
   async function withContentDb(): Promise<KeelMcpContext> {
     const contentDb = adapt(raw);
 
     await new Migrator(contentDb, [contentEntriesMigration]).migrate();
 
-    return { app, routes, contentDb };
+    return context({ contentDb, mode: "operator" });
   }
 
   it("create_content_entry writes an entry the read tools can then see", async () => {
-    const tools = buildTools(await withContentDb());
+    const ctx = await withContentDb();
+    const tools = buildTools(ctx);
 
-    const created = (await dispatch(tools, "create_content_entry", {
+    const created = (await dispatch(ctx, tools, "create_content_entry", {
       collection: "posts",
       slug: "fresh",
       data: { title: "Fresh" },
@@ -255,14 +295,18 @@ describe("content write tools", () => {
     expect(created).toMatchObject({ collection: "posts", slug: "fresh", title: "Fresh" });
 
     // The write re-hydrated the runtime, so a read tool now finds it.
-    const read = await dispatch(tools, "get_content_entry", { collection: "posts", slug: "fresh" });
+    const read = await dispatch(ctx, tools, "get_content_entry", {
+      collection: "posts",
+      slug: "fresh",
+    });
     expect(read).toMatchObject({ title: "Fresh" });
   });
 
   it("create_content_entry accepts a bare entry with no data or body", async () => {
-    const tools = buildTools(await withContentDb());
+    const ctx = await withContentDb();
+    const tools = buildTools(ctx);
 
-    const created = (await dispatch(tools, "create_content_entry", {
+    const created = (await dispatch(ctx, tools, "create_content_entry", {
       collection: "pages",
       slug: "blank",
     })) as RuntimeEntry;
@@ -271,15 +315,16 @@ describe("content write tools", () => {
   });
 
   it("update_content_entry changes an existing entry", async () => {
-    const tools = buildTools(await withContentDb());
+    const ctx = await withContentDb();
+    const tools = buildTools(ctx);
 
-    await dispatch(tools, "create_content_entry", {
+    await dispatch(ctx, tools, "create_content_entry", {
       collection: "posts",
       slug: "edit",
       data: { title: "Old" },
     });
 
-    const updated = (await dispatch(tools, "update_content_entry", {
+    const updated = (await dispatch(ctx, tools, "update_content_entry", {
       collection: "posts",
       slug: "edit",
       data: { title: "New" },
@@ -289,11 +334,12 @@ describe("content write tools", () => {
   });
 
   it("delete_content_entry removes an entry and reports the count", async () => {
-    const tools = buildTools(await withContentDb());
+    const ctx = await withContentDb();
+    const tools = buildTools(ctx);
 
-    await dispatch(tools, "create_content_entry", { collection: "posts", slug: "gone" });
+    await dispatch(ctx, tools, "create_content_entry", { collection: "posts", slug: "gone" });
 
-    const result = await dispatch(tools, "delete_content_entry", {
+    const result = await dispatch(ctx, tools, "delete_content_entry", {
       collection: "posts",
       slug: "gone",
     });
@@ -301,12 +347,142 @@ describe("content write tools", () => {
     expect(result).toEqual({ deleted: 1 });
   });
 
-  it("refuses to write when no content store is configured", async () => {
-    const tools = buildTools({ app, routes });
+  it("refuses to write when no content store is configured (operator mode)", async () => {
+    // Operator mode clears the mode gate, so the refusal here is purely the
+    // missing content store — not the governance.
+    const ctx = context({ mode: "operator" });
+    const tools = buildTools(ctx);
 
     await expect(
-      dispatch(tools, "create_content_entry", { collection: "posts", slug: "x" }),
+      dispatch(ctx, tools, "create_content_entry", { collection: "posts", slug: "x" }),
     ).rejects.toMatchObject({ code: "MCP_CONTENT_STORE_UNAVAILABLE" });
+  });
+});
+
+describe("mode gating", () => {
+  // A migrated content store, so the only thing standing between a write and
+  // success is the mode gate.
+  async function contentDb(): Promise<KernelDatabase> {
+    const db = adapt(raw);
+
+    await new Migrator(db, [contentEntriesMigration]).migrate();
+
+    return db;
+  }
+
+  it("read-only is the default — write tools refuse without an explicit mode", async () => {
+    const ctx = context({ contentDb: await contentDb() });
+    const tools = buildTools(ctx);
+
+    const error = await dispatch(ctx, tools, "create_content_entry", {
+      collection: "posts",
+      slug: "x",
+    }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(McpError);
+    expect(error).toMatchObject({
+      code: "MCP_OPERATOR_REQUIRED",
+      details: { tool: "create_content_entry", mode: "read-only" },
+    });
+  });
+
+  it("every destructive content tool refuses in read-only mode", async () => {
+    const ctx = context({ contentDb: await contentDb(), mode: "read-only" });
+    const tools = buildTools(ctx);
+
+    for (const name of ["create_content_entry", "update_content_entry", "delete_content_entry"]) {
+      await expect(
+        dispatch(ctx, tools, name, { collection: "posts", slug: "x" }),
+      ).rejects.toMatchObject({ code: "MCP_OPERATOR_REQUIRED" });
+    }
+  });
+
+  it("handle_request refuses in read-only mode", async () => {
+    const ctx = context({ mode: "read-only" });
+    const tools = buildTools(ctx);
+
+    await expect(
+      dispatch(ctx, tools, "handle_request", { method: "GET", path: "/posts" }),
+    ).rejects.toMatchObject({ code: "MCP_OPERATOR_REQUIRED", details: { tool: "handle_request" } });
+  });
+});
+
+describe("audit sink", () => {
+  it("records a successful dispatch with a hash, ok outcome, and duration", async () => {
+    let clock = 1_000;
+    const ctx = context();
+    const tools = buildTools(ctx);
+
+    // A fake clock advances 5ms between start and record, so the duration is
+    // deterministic rather than a flaky wall-clock read.
+    await dispatch(ctx, tools, "list_routes", {}, { now: () => (clock += 5) });
+
+    expect(audited).toHaveLength(1);
+    expect(audited[0]).toMatchObject({ tool: "list_routes", outcome: "ok", durationMs: 5 });
+    expect(audited[0]?.inputHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("hashes the input — equal inputs hash equal, different inputs differ", async () => {
+    const ctx = context();
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "get_content_entry", { collection: "posts", slug: "a" });
+    await dispatch(ctx, tools, "get_content_entry", { collection: "posts", slug: "a" });
+    await dispatch(ctx, tools, "get_content_entry", { collection: "posts", slug: "b" });
+
+    expect(audited[0]?.inputHash).toBe(audited[1]?.inputHash);
+    expect(audited[0]?.inputHash).not.toBe(audited[2]?.inputHash);
+  });
+
+  it("audits an unserializable input rather than throwing on the hash", async () => {
+    const ctx = context();
+    const tools = buildTools(ctx);
+
+    // A BigInt cannot be JSON-serialized; the hash falls back to a literal so the
+    // dispatch is still audited.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    await dispatch(ctx, tools, "list_routes", circular);
+
+    expect(audited).toHaveLength(1);
+    expect(audited[0]?.inputHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("records an error outcome when a tool throws", async () => {
+    const ctx = context({ mode: "read-only" });
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "handle_request", { method: "GET", path: "/x" }).catch(() => {});
+
+    expect(audited).toHaveLength(1);
+    expect(audited[0]).toMatchObject({ tool: "handle_request", outcome: "error" });
+  });
+
+  it("audits even an unknown-tool refusal", async () => {
+    const ctx = context();
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "nope", {}).catch(() => {});
+
+    expect(audited).toHaveLength(1);
+    expect(audited[0]).toMatchObject({ tool: "nope", outcome: "error" });
+  });
+
+  it("awaits an async sink before resolving", async () => {
+    const writes: string[] = [];
+
+    const ctx = context({
+      audit: async (record) => {
+        await Promise.resolve();
+        writes.push(record.tool);
+      },
+    });
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "list_routes", {});
+
+    expect(writes).toEqual(["list_routes"]);
   });
 });
 
@@ -314,9 +490,10 @@ describe("handle_request handler", () => {
   it("dispatches to app.handle and returns the response", async () => {
     await queryDb.insert(posts).values({ title: "Hello, MCP" }).run();
 
-    const tools = buildTools({ app, routes });
+    const ctx = context({ mode: "operator" });
+    const tools = buildTools(ctx);
 
-    const response = (await dispatch(tools, "handle_request", {
+    const response = (await dispatch(ctx, tools, "handle_request", {
       method: "GET",
       path: "/posts",
     })) as { status: number; body: string };
@@ -328,8 +505,8 @@ describe("handle_request handler", () => {
     expect(payload.posts[0]?.title).toBe("Hello, MCP");
   });
 
-  it("forwards query and body through to the app", async () => {
-    // A stub App proves the handler threads method/path/query/body verbatim.
+  it("forwards query, allowlisted headers, and body through to the app", async () => {
+    // A stub App proves the handler threads method/path/query/headers/body.
     const calls: { method: string; path: string; options: unknown }[] = [];
 
     const stubApp: App = {
@@ -341,12 +518,20 @@ describe("handle_request handler", () => {
       },
     };
 
-    const tools = buildTools({ app: stubApp, routes });
+    const ctx = context({ app: stubApp, mode: "operator" });
+    const tools = buildTools(ctx);
 
-    const response = (await dispatch(tools, "handle_request", {
+    const response = (await dispatch(ctx, tools, "handle_request", {
       method: "POST",
       path: "/posts",
       query: { draft: "true" },
+      headers: {
+        // An allowlisted header (case-insensitive) survives...
+        Cookie: "session=abc",
+        Authorization: "Bearer t",
+        // ...while a spoofable infra header is dropped.
+        "X-Forwarded-For": "10.0.0.1",
+      },
       body: { title: "x" },
     })) as { status: number };
 
@@ -355,34 +540,112 @@ describe("handle_request handler", () => {
     expect(calls[0]).toEqual({
       method: "POST",
       path: "/posts",
-      options: { query: { draft: "true" }, body: { title: "x" } },
+      options: {
+        query: { draft: "true" },
+        headers: { cookie: "session=abc", authorization: "Bearer t" },
+        body: { title: "x" },
+      },
     });
+  });
+
+  it("carries an empty header map when none are given", async () => {
+    const calls: { options: unknown }[] = [];
+
+    const stubApp: App = {
+      migrationsApplied: [],
+      handle: async (_method, _path, options) => {
+        calls.push({ options });
+
+        return { status: 200, headers: {}, body: "" };
+      },
+    };
+
+    const ctx = context({ app: stubApp, mode: "operator" });
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "handle_request", { method: "GET", path: "/posts" });
+
+    expect(calls[0]?.options).toEqual({ headers: {}, body: undefined });
+  });
+
+  it("ignores a non-object headers input", async () => {
+    const calls: { options: unknown }[] = [];
+
+    const stubApp: App = {
+      migrationsApplied: [],
+      handle: async (_method, _path, options) => {
+        calls.push({ options });
+
+        return { status: 200, headers: {}, body: "" };
+      },
+    };
+
+    const ctx = context({ app: stubApp, mode: "operator" });
+    const tools = buildTools(ctx);
+
+    // A string (or null) where an object is expected yields no headers, never a crash.
+    await dispatch(ctx, tools, "handle_request", {
+      method: "GET",
+      path: "/posts",
+      headers: "not-an-object",
+    });
+    await dispatch(ctx, tools, "handle_request", {
+      method: "GET",
+      path: "/posts",
+      headers: null,
+    });
+
+    expect(calls[0]?.options).toEqual({ headers: {}, body: undefined });
+    expect(calls[1]?.options).toEqual({ headers: {}, body: undefined });
+  });
+
+  it("drops a header whose value is not a string", async () => {
+    const calls: { options: unknown }[] = [];
+
+    const stubApp: App = {
+      migrationsApplied: [],
+      handle: async (_method, _path, options) => {
+        calls.push({ options });
+
+        return { status: 200, headers: {}, body: "" };
+      },
+    };
+
+    const ctx = context({ app: stubApp, mode: "operator" });
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "handle_request", {
+      method: "GET",
+      path: "/posts",
+      headers: { cookie: 42 },
+    });
+
+    expect(calls[0]?.options).toEqual({ headers: {}, body: undefined });
   });
 });
 
 describe("generate_ui handler", () => {
   it("returns the injected generateUi output", async () => {
-    const context: KeelMcpContext = {
-      app,
-      routes,
-      generateUi: (prompt) => Promise.resolve({ rendered: prompt }),
-    };
+    const ctx = context({ generateUi: (prompt) => Promise.resolve({ rendered: prompt }) });
 
-    const tools = buildTools(context);
+    const tools = buildTools(ctx);
 
-    const result = await dispatch(tools, "generate_ui", { prompt: "a login form" });
+    const result = await dispatch(ctx, tools, "generate_ui", { prompt: "a login form" });
 
     expect(result).toEqual({ rendered: "a login form" });
   });
 
   it("throws MCP_GENERATE_UNAVAILABLE when generateUi is not configured", async () => {
-    const tools = buildTools({ app, routes });
+    const ctx = context();
+    const tools = buildTools(ctx);
 
-    await expect(dispatch(tools, "generate_ui", { prompt: "x" })).rejects.toMatchObject({
+    await expect(dispatch(ctx, tools, "generate_ui", { prompt: "x" })).rejects.toMatchObject({
       code: "MCP_GENERATE_UNAVAILABLE",
     });
 
-    const error = await dispatch(tools, "generate_ui", { prompt: "x" }).catch((e: unknown) => e);
+    const error = await dispatch(ctx, tools, "generate_ui", { prompt: "x" }).catch(
+      (e: unknown) => e,
+    );
 
     expect(error).toBeInstanceOf(McpError);
   });
@@ -390,22 +653,24 @@ describe("generate_ui handler", () => {
 
 describe("dispatch", () => {
   it("runs a found tool's handler", async () => {
-    const tools = buildTools({ app, routes });
+    const ctx = context();
+    const tools = buildTools(ctx);
 
-    const result = await dispatch(tools, "list_routes", {});
+    const result = await dispatch(ctx, tools, "list_routes", {});
 
     expect(result).toEqual(routes);
   });
 
   it("throws MCP_UNKNOWN_TOOL for an unknown name", async () => {
-    const tools = buildTools({ app, routes });
+    const ctx = context();
+    const tools = buildTools(ctx);
 
-    await expect(dispatch(tools, "nope", {})).rejects.toMatchObject({
+    await expect(dispatch(ctx, tools, "nope", {})).rejects.toMatchObject({
       code: "MCP_UNKNOWN_TOOL",
       details: { name: "nope" },
     });
 
-    const error = await dispatch(tools, "nope", {}).catch((e: unknown) => e);
+    const error = await dispatch(ctx, tools, "nope", {}).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(McpError);
   });

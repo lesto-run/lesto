@@ -26,7 +26,13 @@ import { nodeReleaseStore, nodeUploader } from "@keel/deploy";
 
 import { buildClient, bunBuildClientDeps } from "@keel/assets";
 
+import { writeFile } from "node:fs/promises";
+
+import { createApp } from "@keel/kernel";
+
 import { run } from "./run";
+import { runMcp, startMcpServer } from "./mcp";
+import { runOpenApi } from "./openapi";
 
 /** Where `keel dev` looks for built client assets (e.g. a bundled `/client.js`). */
 const DEV_ASSET_DIR = "out";
@@ -136,6 +142,36 @@ const loadSites = async (): Promise<readonly Site[]> => {
     throw error;
   }
 };
+
+const [command, ...commandArgs] = argv;
+
+// `mcp` and `openapi` live in their own command files (operability-dx #4/#5);
+// the bin dispatches them here, before the shared `run` core, because they bring
+// dependencies (`@keel/mcp`, `@keel/openapi`) the rest of the CLI does not. The
+// MCP protocol owns stdout (it is the transport), so its logs and audit trail go
+// to stderr.
+if (command === "mcp") {
+  await runMcp(commandArgs, {
+    loadApp,
+    createApp,
+    startMcpServer,
+    audit: console.error,
+    log: console.error,
+  });
+
+  // The MCP server runs until its stdio transport closes; `runMcp` resolves then.
+  process.exit(0);
+}
+
+if (command === "openapi") {
+  const exit = await runOpenApi(commandArgs, {
+    loadApp,
+    write: (path, contents) => writeFile(path, contents, "utf8"),
+    out: console.log,
+  });
+
+  process.exit(exit);
+}
 
 const code = await run(argv, {
   loadApp,

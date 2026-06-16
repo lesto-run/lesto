@@ -6,4 +6,4 @@
  */
 
 export { toJson, toOpenApi } from "./openapi";
-export type { OpenApiInfo, RouteEntry } from "./openapi";
+export type { OpenApiInfo, OpenApiOptions, RouteEntry } from "./openapi";

@@ -15,7 +15,13 @@
 export { run } from "./run";
 export type { CliDeps } from "./run";
 
-export { parsePort, parseStringFlag } from "./flags";
+export { runMcp } from "./mcp";
+export type { McpDeps } from "./mcp";
+
+export { runOpenApi } from "./openapi";
+export type { OpenApiDeps } from "./openapi";
+
+export { hasFlag, parsePort, parseStringFlag } from "./flags";
 export type { PortFlag } from "./flags";
 
 export { CliError, KeelError } from "./errors";

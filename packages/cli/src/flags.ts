@@ -52,3 +52,13 @@ export function parseStringFlag(args: readonly string[], name: string): string |
 
   return args[index + 1];
 }
+
+/**
+ * True iff a boolean flag (`--<name>`) is present, order-independent.
+ *
+ * A bare switch with no value: its presence is the signal. `keel mcp --operator`
+ * opts into operator mode; absent leaves the safe read-only default.
+ */
+export function hasFlag(args: readonly string[], name: string): boolean {
+  return args.includes(`--${name}`);
+}

@@ -102,6 +102,78 @@ describe("toOpenApi", () => {
   });
 });
 
+describe("internal-route filtering", () => {
+  it("drops routes flagged internal before export", () => {
+    const withInternal: readonly RouteEntry[] = [
+      { method: "GET", pattern: "/posts" },
+      { method: "GET", pattern: "/healthz", internal: true },
+      { method: "POST", pattern: "/admin/flush", internal: true },
+    ];
+
+    const spec = toOpenApi(withInternal, { title: "Blog", version: "1.0.0" });
+    const paths = spec["paths"] as Record<string, unknown>;
+
+    expect(Object.keys(paths)).toEqual(["/posts"]);
+    expect(paths).not.toHaveProperty("/healthz");
+    expect(paths).not.toHaveProperty("/admin/flush");
+  });
+
+  it("keeps a route explicitly flagged internal: false", () => {
+    const spec = toOpenApi([{ method: "GET", pattern: "/posts", internal: false }], {
+      title: "Blog",
+      version: "1.0.0",
+    });
+    const paths = spec["paths"] as Record<string, unknown>;
+
+    expect(Object.keys(paths)).toEqual(["/posts"]);
+  });
+
+  it("drops routes the caller's isInternal predicate matches", () => {
+    const spec = toOpenApi(
+      [
+        { method: "GET", pattern: "/posts" },
+        { method: "GET", pattern: "/admin/posts" },
+        { method: "POST", pattern: "/admin/posts" },
+      ],
+      { title: "Blog", version: "1.0.0" },
+      { isInternal: (route) => route.pattern.startsWith("/admin") },
+    );
+    const paths = spec["paths"] as Record<string, unknown>;
+
+    expect(Object.keys(paths)).toEqual(["/posts"]);
+  });
+
+  it("excludes a route matched by EITHER the flag or the predicate", () => {
+    const spec = toOpenApi(
+      [
+        { method: "GET", pattern: "/posts" },
+        { method: "GET", pattern: "/metrics", internal: true },
+        { method: "GET", pattern: "/admin" },
+      ],
+      { title: "Blog", version: "1.0.0" },
+      { isInternal: (route) => route.pattern === "/admin" },
+    );
+    const paths = spec["paths"] as Record<string, unknown>;
+
+    expect(Object.keys(paths)).toEqual(["/posts"]);
+  });
+
+  it("leaves no empty path bucket when a path's every route is internal", () => {
+    const spec = toOpenApi(
+      [
+        { method: "GET", pattern: "/posts" },
+        { method: "GET", pattern: "/posts/:id", internal: true },
+        { method: "DELETE", pattern: "/posts/:id", internal: true },
+      ],
+      { title: "Blog", version: "1.0.0" },
+    );
+    const paths = spec["paths"] as Record<string, unknown>;
+
+    expect(Object.keys(paths)).toEqual(["/posts"]);
+    expect(paths).not.toHaveProperty("/posts/{id}");
+  });
+});
+
 describe("toJson", () => {
   it("round-trips the spec through a 2-space-indented JSON string", () => {
     const spec = toOpenApi(routes, { title: "Blog", version: "1.0.0" });

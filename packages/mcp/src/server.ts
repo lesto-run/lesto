@@ -34,11 +34,19 @@ export async function startMcpServer(context: KeelMcpContext): Promise<void> {
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema,
+      // Surface the destructive flag so a client can warn before invoking a tool
+      // that mutates state or drives the live app.
+      annotations: { destructiveHint: tool.destructive },
     })),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const result = await dispatch(tools, request.params.name, request.params.arguments ?? {});
+    const result = await dispatch(
+      context,
+      tools,
+      request.params.name,
+      request.params.arguments ?? {},
+    );
 
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],

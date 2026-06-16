@@ -15,7 +15,14 @@
  */
 
 export { buildTools, dispatch } from "./tools";
-export type { KeelMcpContext, KeelTool } from "./tools";
+export type {
+  DispatchOptions,
+  KeelMcpContext,
+  KeelTool,
+  McpAuditRecord,
+  McpAuditSink,
+  McpMode,
+} from "./tools";
 
 export { startMcpServer } from "./server";
 
