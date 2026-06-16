@@ -24,6 +24,8 @@
     "@keel/sites": "workspace:*",
     "@keel/ui": "workspace:*",
     "@keel/web": "workspace:*",
+    "@react-email/components": "^1.0.12",
+    "@react-email/render": "^2.0.8",
     "better-sqlite3": "^11.10.0",
     "preact": "^10.29.2",
     "preact-render-to-string": "^6",

@@ -33,9 +33,11 @@ import { openSqlite } from "@keel/runtime";
 
 import { createIdentity, insertUser, usersMigration } from "@keel/identity";
 import { findUserByEmail } from "@keel/identity";
-import type { Identity, IdentityMailer } from "@keel/identity";
+import type { Identity } from "@keel/identity";
 
 import { isDemoMode } from "./edge";
+import { createDemoMailer } from "./emails/mailer";
+import type { SentEmail } from "./emails/mailer";
 
 /**
  * The committed demo identity secret — used ONLY in demo mode.
@@ -120,18 +122,6 @@ async function seedDemoAccounts(db: Db): Promise<void> {
 }
 
 /**
- * A null mailer.
- *
- * The estate demo never actually sends email — the seeded accounts arrive
- * pre-verified, and no production "forgot password" flow runs in a demo.
- * Identity still requires *an* outbound seam, so this is the explicit no-op.
- */
-const silentMailer: IdentityMailer = {
-  sendVerificationEmail: () => {},
-  sendPasswordResetEmail: () => {},
-};
-
-/**
  * Build a fresh Identity wired to a fresh in-memory DB, with the demo seeded.
  *
  * Returns the raw `sql` handle too: the app threads it into `createApp`'s `db`
@@ -147,6 +137,8 @@ export async function buildIdentity(secret?: string): Promise<{
   identity: Identity;
   handle: SqlDatabase;
   close: () => void;
+  /** The demo mailer's record of rendered verify/reset emails (see {@link createDemoMailer}). */
+  outbox: readonly SentEmail[];
 }> {
   const { db: sql, close } = await openSqlite();
 
@@ -157,6 +149,11 @@ export async function buildIdentity(secret?: string): Promise<{
   const db = createDb(sql);
   await seedDemoAccounts(db);
 
+  // The demo's mailer renders real react-email templates (no SMTP; it records
+  // them). A genuine onboarding/reset flow therefore produces real HTML — the
+  // seeded accounts arrive pre-verified, so they send nothing.
+  const mailer = createDemoMailer();
+
   const identity = createIdentity({
     db,
     sessionStore: sqlSessionStore(sql),
@@ -164,12 +161,10 @@ export async function buildIdentity(secret?: string): Promise<{
     // no tokens) overrides the fail-closed runtime resolution. Absent it, the
     // serve/Worker paths still demand a real `KEEL_AUTH_SECRET` (or `KEEL_DEMO=1`).
     secret: secret ?? identitySecret(),
-    mailer: silentMailer,
-    // Demo never sends mail; these URLs exist only so the option types are
-    // satisfied. If you flip the demo into a real onboarding flow, swap them.
+    mailer,
     verificationUrl: (token) => `/mls/api/verify?token=${token}`,
     resetUrl: (token) => `/mls/api/reset?token=${token}`,
   });
 
-  return { identity, handle: sql, close };
+  return { identity, handle: sql, close, outbox: mailer.outbox };
 }
