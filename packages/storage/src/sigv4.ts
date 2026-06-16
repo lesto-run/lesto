@@ -224,8 +224,14 @@ function canonicalQuery(url: URL): string {
 /**
  * RFC 3986 percent-encoding — stricter than `encodeURIComponent`, which leaves
  * `!*'()` unescaped. AWS requires those escaped too (but never the slash).
+ *
+ * Exported because a request must be **sent** under the exact same encoding it
+ * is **signed** under: the S3 backend encodes object keys and query values with
+ * this so the wire URL matches the canonical URL byte-for-byte (otherwise S3
+ * answers `SignatureDoesNotMatch` for any key/prefix containing `!*'()`, a
+ * space, `*`, or `~`).
  */
-function encodeRfc3986(value: string): string {
+export function encodeRfc3986(value: string): string {
   return encodeURIComponent(value).replace(
     /[!*'()]/g,
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,

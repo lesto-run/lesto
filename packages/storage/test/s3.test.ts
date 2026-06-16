@@ -225,6 +225,44 @@ describe("S3Backend url()", () => {
 
     expect(url).not.toContain("X-Amz-Signature");
   });
+
+  it("strict-encodes special chars in a public URL key", async () => {
+    const { backend } = makeBackend(() => new Response(null, { status: 200 }), {
+      publicBaseUrl: "https://cdn.example.com",
+    });
+
+    // A space and `(` must be percent-encoded; the slash stays a separator.
+    expect(await backend.url("photos/ada (1).png")).toBe(
+      "https://cdn.example.com/photos/ada%20%281%29.png",
+    );
+  });
+});
+
+describe("S3Backend wire encoding matches the signature (no SignatureDoesNotMatch)", () => {
+  // The signer canonicalizes the path/query with strict RFC 3986; the request
+  // must travel under the SAME encoding or S3 rejects it. encodeURIComponent
+  // leaves `!*'()` literal and URLSearchParams serializes a space as `+`, so
+  // these pin that the backend uses the strict encoder on the wire.
+  it("strict-encodes `!*'()` and spaces in an object key", async () => {
+    const { backend, calls } = makeBackend(() => new Response(null, { status: 200 }));
+
+    await backend.put("photos/ada (1)!'.jpg", Buffer.from("x"));
+
+    expect(calls[0]!.url).toBe(
+      "https://s3.us-east-1.amazonaws.com/my-bucket/photos/ada%20%281%29%21%27.jpg",
+    );
+  });
+
+  it("strict-encodes a list prefix (space→%20, *→%2A, ~ literal — never +)", async () => {
+    const { backend, calls } = makeBackend(
+      () => new Response("<ListBucketResult></ListBucketResult>", { status: 200 }),
+    );
+
+    await backend.list("a b*c~d");
+
+    expect(calls[0]!.url).toContain("prefix=a%20b%2Ac~d");
+    expect(calls[0]!.url).not.toContain("prefix=a+b");
+  });
 });
 
 describe("Storage facade url()", () => {

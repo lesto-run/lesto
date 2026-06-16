@@ -1,5 +1,5 @@
 import { StorageError } from "./errors";
-import { hashHex, presignUrl, signRequest } from "./sigv4";
+import { encodeRfc3986, hashHex, presignUrl, signRequest } from "./sigv4";
 
 import type { SigV4Credentials } from "./sigv4";
 import type { StorageBackend, UrlOptions } from "./types";
@@ -102,9 +102,14 @@ export class S3Backend implements StorageBackend {
 
   async list(prefix?: string): Promise<string[]> {
     const url = new URL(this.endpoint);
-    url.pathname = `/${encodeURIComponent(this.options.bucket)}`;
-    url.searchParams.set("list-type", "2");
-    if (prefix !== undefined) url.searchParams.set("prefix", prefix);
+    url.pathname = `/${encodeRfc3986(this.options.bucket)}`;
+
+    // Build the query with the SAME strict encoding the signer canonicalizes
+    // under — `URLSearchParams` would serialize a space as `+` and leave `*`/`~`
+    // alone, diverging from the signature and tripping `SignatureDoesNotMatch`.
+    const query = ["list-type=2"];
+    if (prefix !== undefined) query.push(`prefix=${encodeRfc3986(prefix)}`);
+    url.search = query.join("&");
 
     const response = await this.signedFetch("GET", url);
 
@@ -130,8 +135,15 @@ export class S3Backend implements StorageBackend {
 
     // A public URL prefers the configured CDN/public domain; otherwise it is the
     // plain path-style object URL (which only resolves if the object is public).
+    // Encode each key segment so a key with a space or reserved char yields a
+    // valid URL (slashes stay path separators).
     if (this.publicBaseUrl !== undefined) {
-      return `${this.publicBaseUrl}/${key}`;
+      const encoded = key
+        .split("/")
+        .map((segment) => encodeRfc3986(segment))
+        .join("/");
+
+      return `${this.publicBaseUrl}/${encoded}`;
     }
 
     return this.objectUrl(key).toString();
@@ -178,9 +190,13 @@ export class S3Backend implements StorageBackend {
   /** The path-style URL for an object: `${endpoint}/${bucket}/${key}`. */
   private objectUrl(key: string): URL {
     const url = new URL(this.endpoint);
-    url.pathname = `/${encodeURIComponent(this.options.bucket)}/${key
+    // Encode each path segment with the signer's strict RFC-3986 rules (not
+    // `encodeURIComponent`, which leaves `!*'()` literal) so the path we PUT/GET
+    // on the wire is byte-identical to the one we sign — keys like
+    // `photo (1).jpg` must not desync the signature.
+    url.pathname = `/${encodeRfc3986(this.options.bucket)}/${key
       .split("/")
-      .map((segment) => encodeURIComponent(segment))
+      .map((segment) => encodeRfc3986(segment))
       .join("/")}`;
 
     return url;
