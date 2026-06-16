@@ -24,6 +24,7 @@ import { createGuard, definePolicy } from "@keel/authz";
 
 import { Button, Hero, ListingCard, Main, Section, SiteHeader } from "./ui/components";
 import { LiveListing } from "./ui/live-listing";
+import { buildContentRoutes } from "./content";
 import { LISTINGS, findListing, formatPrice } from "./listings";
 import type { Listing } from "./listings";
 
@@ -70,6 +71,9 @@ function LabIndex(): ReactNode {
             </Button>{" "}
             <Button variant="ghost" href="/lab/admin?role=admin">
               Authorization
+            </Button>{" "}
+            <Button variant="ghost" href="/lab/content/welcome">
+              DB-driven page
             </Button>
           </p>
         </Section>
@@ -233,6 +237,8 @@ export function buildLabRoutes(): Keel {
       })
       .route(flagGated)
       .route(adminGated)
+      // DB-driven (WordPress-style) pages: a block tree loaded by slug.
+      .route(buildContentRoutes())
       // The data route the LiveListing island fetches (typed by `LabApi`).
       .get("/lab/api/listings/:id", (c) => {
         const listing = findListing(c.param("id"));

@@ -91,6 +91,23 @@ describe("/lab/admin — the authorization gate (@keel/authz, deny-by-default)",
   });
 });
 
+describe("/lab/content/:slug — DB-driven (WordPress-style) pages", () => {
+  it("loads a block tree from the database and renders it through the Registry", async () => {
+    const app = await buildApp();
+
+    const html = await body(await app.handle("GET", "/lab/content/welcome"));
+
+    expect(html).toContain("This page is data, not code.");
+    expect(html).toContain("Rendered from a serialized block tree");
+  });
+
+  it("renders a not-found view for an unknown slug", async () => {
+    const app = await buildApp();
+
+    expect(await body(await app.handle("GET", "/lab/content/nope"))).toContain("Not found");
+  });
+});
+
 describe("/lab/api/listings/:id — the CSR island's data route", () => {
   it("answers JSON for a real id", async () => {
     const app = await buildApp();
