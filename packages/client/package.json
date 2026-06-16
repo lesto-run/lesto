@@ -1,0 +1,25 @@
+{
+  "name": "@keel/client",
+  "version": "0.0.0",
+  "description": "Keel's typed, browser-safe fetch client — call your routes over native fetch with end-to-end types, no codegen.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "dependencies": {
+    "@keel/errors": "workspace:*",
+    "@keel/router": "workspace:*"
+  }
+}
