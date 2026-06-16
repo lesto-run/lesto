@@ -181,3 +181,34 @@ Launch = end of Wave 4 with Wave 0–4 exit criteria all green. 1.0 = end of Wav
 - **Hooks/config orphans.** The review allowed wire-or-delete. **Call: delete from the v1 surface** — a plugin system designed under launch pressure would be the wrong one. The WordPress-lesson extensibility bet returns post-1.0 as its own ADR.
 - **Compression.** core-runtime P1. Kept pre-1.0 (Wave 5) but not pre-launch: every serious deploy fronts a compressing CDN/proxy; document that until it lands.
 - **CSP/nonce.** Multiple domains touch it; none can use it until the island inline scripts carry nonces. **Deferred post-1.0 as one coherent increment**, not piecemeal.
+
+---
+
+## 7. Post-1.0 — the adoption surface (an examples gallery)
+
+Not a launch or 1.0 gate. Once the batteries are true (Waves 3–4) and the public
+API is frozen (Wave 5), the framework needs a per-feature **examples gallery** —
+the way SST (`examples/`) and Next.js (`examples/`) make a large surface legible:
+one minimal, self-contained, runnable example per battery, beside the two
+integrated flagships (`examples/estate`, `examples/blog`).
+
+The motivation is concrete: estate exercises ~16 of the ~61 packages. The other
+~45 are tested in isolation but have no runnable proof a reader can clone and run.
+Each gallery example IS the live evidence behind a §1 scope-table claim — the
+durable antidote to "ARCHITECTURE.md is aspirational."
+
+- One `examples/<feature>/` per battery: a tiny app/script exercising ONLY that
+  package's real public API, with a test and a README ("what it shows / how to
+  run"). Targets the packages estate doesn't touch — `queue`, `storage`, `cache`,
+  `mail`, `pubsub`, `webhooks`, `workflows`, `forms`, `rbac`, `openapi`, `pg`, the
+  `content-*` markdown pipeline, `observability`, `i18n`, `seo`, `feeds`, `cors`,
+  `csrf`, `ratelimit`, `config`, `mcp`, …
+- Wiring prerequisite: add `examples/*` to the workspace globs (currently
+  `packages/*` only) so each example links its `workspace:*` deps, plus a root
+  script that runs every example's test (examples stay OUT of the 100% coverage
+  gate, like estate/blog).
+- estate stays the INTEGRATED flagship (many batteries on one app); the gallery is
+  the per-feature breadth. The two are complementary, not redundant.
+
+**Done:** every shipped battery has a runnable, tested example; the gallery's
+tests run in CI; the docs link each battery to its example.
