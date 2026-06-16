@@ -42,6 +42,24 @@ export interface DynamicSite extends BaseSite {
 export type Site = StaticSite | DynamicSite;
 
 /**
+ * A response body the prerenderer can capture, mirroring `@keel/web`'s `KeelBody`.
+ *
+ * We restate the union here rather than depend on `@keel/web`: `RenderResponse`
+ * is deliberately structural, so the app's own `handle` is a `PageHandler` with
+ * no adapter and no package coupling. The arms, in order of how common they are:
+ *
+ *   - `string` — the dominant case: HTML pre-rendered, plain text. Captured as-is.
+ *   - `Uint8Array` — raw bytes, decoded as UTF-8.
+ *   - `ReadableStream<Uint8Array>` — a body produced incrementally. The framework's
+ *     `.page` routes stream React SSR this way, so prerendering must drain it.
+ *   - `undefined` — no body (e.g. a 204); captured as the empty string.
+ *
+ * Widening, never narrowing: a `string` is still a valid body, so every existing
+ * handler and test keeps working unchanged.
+ */
+export type KeelResponseBody = string | Uint8Array | ReadableStream<Uint8Array> | undefined;
+
+/**
  * The slice of a response the prerenderer needs.
  *
  * `@keel/web`'s `KeelResponse` satisfies this structurally, so the app's own
@@ -50,7 +68,11 @@ export type Site = StaticSite | DynamicSite;
 export interface RenderResponse {
   readonly status: number;
 
-  readonly body: string;
+  /**
+   * The response body, in any arm `@keel/web` may produce. `prerenderSite`
+   * drains it to a `string` before it becomes a {@link RenderedPage}'s `html`.
+   */
+  readonly body: KeelResponseBody;
 }
 
 /** Renders one path to a response. Pass the app's `handle`. */

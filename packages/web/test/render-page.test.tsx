@@ -332,6 +332,67 @@ describe("keel().data() + a defineIsland on a page (the canonical island)", () =
   });
 });
 
+// A PRIVATE source + a DEFERRED (ssr:false) island that binds it — estate's
+// "Account" shape: a cacheable static page whose island fetches per-user data on
+// the client, while a dynamic page inlines the same data per request.
+const sessionSrc = defineDataSource<{ name: string } | null>("session");
+
+const AccountIsh = defineIsland({
+  name: "AccountIsh",
+  // ssr:false (the default) — the server paints the fallback; the client mounts.
+  component: (props) =>
+    createElement("span", { className: "in" }, (props.session as { name: string }).name),
+  fallback: () => createElement("a", { className: "out" }, "Sign in"),
+  data: { session: sessionSrc },
+});
+
+describe("PageDef.static — auth-aware static (no render-time resolver)", () => {
+  it("a static page BINDS its island's data (client fetch), never inlines a build-time value", async () => {
+    const app = keel()
+      .client("/client.js")
+      // At prerender time nobody is signed in — this `null` must NOT be baked in.
+      .data(sessionSrc, () => null)
+      .page("/", {
+        static: true,
+        component: () => createElement("main", null, createElement(AccountIsh, {})),
+      });
+
+    const html = await drain(await app.handle("GET", "/"));
+
+    // The island emits a BIND + parse-time primer so the CLIENT fetches per-user
+    // data — the build-time value is not inlined into the cacheable document.
+    expect(html).toContain('"bind"');
+    expect(html).toContain("/__keel/data/session");
+    expect(html).toContain("__keelData");
+  });
+
+  it("leaves a static page CACHEABLE (no no-store) even when the app has a private source", async () => {
+    const app = keel()
+      .data(sessionSrc, () => null)
+      .page("/", { static: true, component: () => createElement(AccountIsh, {}) });
+
+    const response = await app.handle("GET", "/");
+
+    // The shared cache may keep the static shell; only the data endpoint is no-store.
+    expect(response.headers["cache-control"]).toBeUndefined();
+  });
+
+  it("a DYNAMIC page (the default) INLINES the same island's data and is stamped no-store", async () => {
+    const app = keel()
+      .data(sessionSrc, () => ({ name: "Jade" }))
+      .page("/", { component: () => createElement(AccountIsh, {}) });
+
+    const response = await app.handle("GET", "/");
+    const html = await drain(response);
+
+    // Inlined into the mount (no bind, no primer), and the per-user document is no-store.
+    expect(html).toContain('"session":{"name":"Jade"}');
+    expect(html).not.toContain('"bind"');
+    expect(html).not.toContain("__keelData");
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+  });
+});
+
 describe("private data → no-store page (review 2d)", () => {
   // `defineDataSource` defaults to scope: "private".
   const session = defineDataSource<{ name: string }>("session");
@@ -346,7 +407,7 @@ describe("private data → no-store page (review 2d)", () => {
 
   it("stamps Cache-Control: private, no-store on a page that could inline a private source", async () => {
     const app = keel()
-      .data(session, () => ({ name: "Ada" }))
+      .data(sessionSrc, () => ({ name: "Ada" }))
       .page("/me", {
         component: () => createElement("main", null, createElement(Greeting, {})),
       });
@@ -366,7 +427,7 @@ describe("private data → no-store page (review 2d)", () => {
   });
 
   it("a sub-app's private source makes the parent's pages no-store too (.route merge)", async () => {
-    const sub = keel().data(session, () => ({ name: "Bo" }));
+    const sub = keel().data(sessionSrc, () => ({ name: "Bo" }));
 
     const app = keel()
       .route(sub)

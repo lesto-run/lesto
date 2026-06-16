@@ -59,7 +59,9 @@ describe("the prerendered marketing zone", () => {
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("text/html");
     expect(response.body).toContain("data-keel-island");
-    expect(response.body).toContain('id="keel-islands"');
+    // The co-located mount script `defineIsland` emits (replaces the old single
+    // `<script id="keel-islands">` manifest) — carrying the Account island's name.
+    expect(response.body).toContain("data-keel-island-mount");
     expect(response.body).toContain('"component":"Account"');
     expect(response.body).toContain('src="/client.js"');
   });
@@ -158,7 +160,10 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
     const cookie = cookieFrom(signIn.headers["Set-Cookie"] ?? signIn.headers["set-cookie"]);
 
     const before = await dispatch("GET", "/__keel/data/session", { headers: { cookie } });
-    expect(JSON.parse(before.body)).toEqual({ id: DEFAULT_DEMO.email, name: DEFAULT_DEMO.displayName });
+    expect(JSON.parse(before.body)).toEqual({
+      id: DEFAULT_DEMO.email,
+      name: DEFAULT_DEMO.displayName,
+    });
 
     // Sign out: this drives sqlSessionStore.delete through the full HTTP journey.
     const signOut = await dispatch("POST", "/mls/api/sign-out", {

@@ -34,7 +34,7 @@ import { WebError } from "./errors";
 import { Context } from "./handler-context";
 import type { Middleware, Next } from "./middleware";
 import { renderPageResponse } from "./render-page";
-import type { Layout, PageDef } from "./render-page";
+import type { Layout, PageDef, RenderPageOptions } from "./render-page";
 import type { AnyKeelResponse, HandleOptions, KeelRequest, KeelResponse } from "./types";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -427,27 +427,38 @@ export class Keel {
    * island `undefined`; the render error path contains it to that island.
    */
   private pageHandler(payload: PagePayload): Handler {
+    // A static (prerendered, cacheable) page resolves NO per-request data at
+    // render: its islands must fetch their per-user data on the client (bind +
+    // primer), or a build-time value would be baked into the cached HTML for
+    // every visitor (auth-aware static — ADR 0010/0012, `PageDef.static`). A
+    // dynamic page (the default) gets the render-time resolver, so its islands
+    // inline their data with no client waterfall.
+    const isStatic = payload.def.static === true;
+
     return (c) => {
-      const resolver = createSourceResolver((name) => {
-        const loader = this.dataLoaders.get(name);
-
-        if (loader === undefined) {
-          throw new WebError(
-            "WEB_UNKNOWN_DATA_SOURCE",
-            `island bound to data source "${name}", which no .data() registered`,
-            { source: name },
-          );
-        }
-
-        return loader(c);
-      });
-
-      return renderPageResponse(payload.def, c, payload.layouts, {
-        resolver,
+      const options: RenderPageOptions = {
         privateData: this.hasPrivateData,
         ...(this.clientModuleSrc === undefined ? {} : { clientModule: this.clientModuleSrc }),
         ...(this.serverRenderer === undefined ? {} : { serverRenderer: this.serverRenderer }),
-      });
+      };
+
+      if (!isStatic) {
+        options.resolver = createSourceResolver((name) => {
+          const loader = this.dataLoaders.get(name);
+
+          if (loader === undefined) {
+            throw new WebError(
+              "WEB_UNKNOWN_DATA_SOURCE",
+              `island bound to data source "${name}", which no .data() registered`,
+              { source: name },
+            );
+          }
+
+          return loader(c);
+        });
+      }
+
+      return renderPageResponse(payload.def, c, payload.layouts, options);
     };
   }
 

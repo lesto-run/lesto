@@ -1,37 +1,34 @@
 /**
  * The estate's routes for both zones, on one composable `keel()` app.
  *
- *   marketing (`/`, `/about`) — the static zone. Its pages prerender to HTML and
- *   carry the `Account` island, so they are cacheable yet auth-aware.
+ *   marketing (`/`, `/about`) — the static zone. Registered `static: true`, so the
+ *   pages prerender to cacheable HTML yet carry the auth-aware `Account` island:
+ *   no render-time session is baked in, the client resolves it (ADR 0010/0012).
  *
- *   mls (`/mls/*`) — the dynamic zone. It owns the session: it mints the cookie
- *   on sign-in via `Identity.login`, answers `/mls/api/session` with the current
- *   user (what the marketing island calls), and gates `/mls/saved`.
+ *   mls (`/mls/*`) — the dynamic zone. It owns the session: it mints the cookie on
+ *   sign-in via `Identity.login`, answers `/__keel/data/session` with the current
+ *   user (what the marketing island binds), and gates `/mls/saved`.
  *
  * Built through a factory so the handlers close over their own {@link Identity}
- * (no module-scoped DB handle). The pages still render through the retained
- * `renderDocument`/`Registry`/island path (ADR 0004 reserves it for hand-authored
- * and DB-driven views alike) — only dispatch moved off the legacy
- * `Application`/`Controller`/`Router` onto `keel()`. Converting these to `.page`
- * waits on islands-through-pages (Phase 4); until then `renderDocument` keeps the
- * Account island hydrating exactly as before.
+ * (no module-scoped DB handle). Pages are plain React (`pages.tsx`) rendered by
+ * `.page`, wrapped in the `EstateLayout`; the client runtime module is declared on
+ * the ROOT app (app.ts `.client(...)`), because `.route()` composes a sub-app's
+ * routes/layouts/data but not its client-module config.
  */
 
 import { keel } from "@keel/web";
 import type { Context, Keel } from "@keel/web";
-import { island } from "@keel/ui";
-import type { UiNode } from "@keel/ui";
 
 import { clearSessionCookie, IdentityError, readSessionToken, sessionCookie } from "@keel/identity";
 import type { Identity } from "@keel/identity";
 
-import { registry } from "./registry";
 import { sessionSource } from "./session-source";
-import { renderDocument } from "./document";
-import { LISTINGS, formatPrice } from "./listings";
+import { EstateLayout } from "./ui/layout";
+import { HomePage, AboutPage, MlsPage } from "./pages";
+import { LISTINGS } from "./listings";
 import { DEFAULT_DEMO, DEMO_ACCOUNTS } from "./identity";
 
-/** What the client sees on `/mls/api/session` — the same shape the Account island consumes. */
+/** What the client sees on `/__keel/data/session` — the same shape the Account island consumes. */
 interface SessionResponseUser {
   readonly id: string;
   readonly name: string;
@@ -41,9 +38,8 @@ interface SessionResponseUser {
  * Pull a single field out of a urlencoded form body.
  *
  * The runtime hands a non-JSON body through as the raw string, so a form POST
- * arrives as `"_csrf=abc&email=x&password=y"`. Returns `undefined` when the
- * body is not a string or the field is absent — callers treat that as "not
- * supplied".
+ * arrives as `"_csrf=abc&email=x&password=y"`. Returns `undefined` when the body
+ * is not a string or the field is absent — callers treat that as "not supplied".
  */
 function formField(body: unknown, field: string): string | undefined {
   if (typeof body !== "string") return undefined;
@@ -61,33 +57,6 @@ function sessionUser(email: string): SessionResponseUser {
   return { id: email, name: displayNameFor(email) };
 }
 
-/** The site header, carrying the account control passed in (island or panel). */
-function header(accountSlot: UiNode): UiNode {
-  return { type: "SiteHeader", children: [accountSlot] };
-}
-
-/** The page's `<main>` landmark, wrapping the primary content below the header. */
-function main(...children: UiNode[]): UiNode {
-  return { type: "Main", children };
-}
-
-/** A grid node over every listing, prices formatted for display. */
-function listingGrid(): UiNode {
-  return {
-    type: "ListingGrid",
-    children: LISTINGS.map((listing) => ({
-      type: "ListingCard",
-      props: {
-        title: listing.title,
-        neighborhood: listing.neighborhood,
-        price: formatPrice(listing.price),
-        beds: listing.beds,
-        baths: listing.baths,
-      },
-    })),
-  };
-}
-
 /** The estate app's routes, closing over the {@link Identity} they authenticate against. */
 export function buildEstateRoutes(identity: Identity): Keel {
   /** The current user (an Identity model), or undefined when signed out. */
@@ -99,122 +68,58 @@ export function buildEstateRoutes(identity: Identity): Keel {
 
   return (
     keel()
+      .layout(EstateLayout)
       // --- marketing (static) zone ---
-      // The static home page: hero + listings, with the auth-aware Account island.
-      .get("/", (c) => {
-        const tree: UiNode = {
-          type: "Page",
-          children: [
-            header(island("Account")),
-            main(
-              {
-                type: "Hero",
-                props: {
-                  heading: "Extraordinary homes, quietly sold.",
-                  sub: "Beverly Hills · Bel Air · Malibu",
-                },
-              },
-              listingGrid(),
-            ),
-          ],
-        };
-
-        return c.html(
-          renderDocument(
-            registry,
-            tree,
-            "Jade Mills Estates",
+      // Prerendered + cacheable, yet auth-aware: `static: true` renders with no
+      // render-time resolver, so the Account island binds + primes its session
+      // for the CLIENT to resolve, never baking a build-time value into the file.
+      .page("/", {
+        static: true,
+        component: HomePage,
+        metadata: () => ({
+          title: "Jade Mills Estates",
+          description:
             "Extraordinary homes, quietly sold across Beverly Hills, Bel Air, and Malibu — browse Jade Mills' luxury listings.",
-          ),
-        );
+        }),
       })
-      // The static about page — also carries the island, also prerenders.
-      .get("/about", (c) => {
-        const tree: UiNode = {
-          type: "Page",
-          children: [
-            header(island("Account")),
-            main(
-              {
-                type: "Hero",
-                props: {
-                  heading: "About Jade",
-                  sub: "Four decades at the top of luxury real estate.",
-                },
-              },
-              {
-                type: "Copy",
-                props: {
-                  text: "This marketing site is prerendered to static HTML and served from a CDN — yet the Account control still reflects who you are, resolved on the client against the same-origin /mls session.",
-                },
-              },
-            ),
-          ],
-        };
-
-        return c.html(
-          renderDocument(
-            registry,
-            tree,
-            "About · Jade Mills Estates",
+      .page("/about", {
+        static: true,
+        component: AboutPage,
+        metadata: () => ({
+          title: "About · Jade Mills Estates",
+          description:
             "Four decades at the top of luxury real estate — about Jade Mills and the Jade Mills Estates marketing site.",
-          ),
-        );
+        }),
       })
       // --- mls (dynamic) zone ---
-      // The dynamic MLS landing page: server-rendered, with a real sign-in form.
-      .get("/mls", async (c) => {
-        const user = await currentUser(c);
+      // Server-rendered per request: its `load` reads the session and renders the
+      // matching sign-in/greeting. Dynamic (no `static`), so it is no-store.
+      .page("/mls", {
+        load: async (c) => {
+          const user = await currentUser(c);
+          const name = user === undefined ? undefined : displayNameFor(user.email);
 
-        const name = user === undefined ? undefined : displayNameFor(user.email);
-
-        const tree: UiNode = {
-          type: "Page",
-          children: [
-            header({
-              type: "SignInPanel",
-              props: {
-                signedIn: user !== undefined,
-                demoEmail: DEFAULT_DEMO.email,
-                demoPassword: DEFAULT_DEMO.password,
-                ...(name && { name }),
-              },
-            }),
-            main(
-              {
-                type: "Hero",
-                props: {
-                  heading: user === undefined ? "MLS Search" : `Welcome back, ${name}`,
-                  sub:
-                    user === undefined
-                      ? "Sign in to save listings."
-                      : "Your saved searches are at /mls/saved.",
-                },
-              },
-              listingGrid(),
-            ),
-          ],
-        };
-
-        return c.html(
-          renderDocument(
-            registry,
-            tree,
-            "MLS · Jade Mills Estates",
-            "Search the Jade Mills MLS and sign in to save listings.",
-          ),
-        );
+          return {
+            signedIn: user !== undefined,
+            ...(name === undefined ? {} : { name }),
+            demoEmail: DEFAULT_DEMO.email,
+            demoPassword: DEFAULT_DEMO.password,
+          };
+        },
+        component: MlsPage,
+        metadata: () => ({
+          title: "MLS · Jade Mills Estates",
+          description: "Search the Jade Mills MLS and sign in to save listings.",
+        }),
       })
       /**
        * The session data source the marketing Account island binds to (ADR 0010).
        *
-       * This replaces the hand-written `/mls/api/session` route + the island's
-       * client fetch: the framework auto-exposes it at `/__keel/data/session` and
-       * delivers its value to the island as a prop (primed parallel with the
-       * client bundle, not a `doc → js → fetch` waterfall). It is an identity
-       * *probe*, not a gated resource — "nobody is signed in" is a normal answer
-       * (`null`, 200), never a 401. The DTO is allowlisted to `{ id, name }`; the
-       * gated resources (`/mls/saved`, any POST) still answer 401/403.
+       * Auto-exposed at `/__keel/data/session`; the framework delivers its value to
+       * the island as a prop (primed parallel with client.js on the static page).
+       * An identity *probe*, not a gated resource — "nobody is signed in" is a
+       * normal answer (`null`, 200), never a 401. The DTO is allowlisted to
+       * `{ id, name }`; the gated resources (`/mls/saved`, any POST) still 401/403.
        */
       .data(sessionSource, async (c) => {
         const user = await currentUser(c);
@@ -225,11 +130,8 @@ export function buildEstateRoutes(identity: Identity): Keel {
        * Sign in — runs the real `Identity.login` flow.
        *
        * CSRF is handled upstream by the `originCheck` middleware (`secureStack`):
-       * a cross-site POST is refused with a 403 before dispatch ever reaches this
-       * handler, so it only sees same-origin form posts. The form POSTs `email`
-       * and `password`. Bad credentials surface as 401 — Identity throws
-       * `IDENTITY_INVALID_CREDENTIALS` (or `IDENTITY_EMAIL_NOT_VERIFIED`, which
-       * cannot happen for the demo's pre-verified seeds).
+       * a cross-site POST is refused with a 403 before dispatch. The form POSTs
+       * `email` and `password`; bad credentials surface as 401.
        */
       .post("/mls/api/sign-in", async (c) => {
         const email = formField(c.req.body, "email") ?? "";
@@ -252,10 +154,8 @@ export function buildEstateRoutes(identity: Identity): Keel {
         }
       })
       /**
-       * Sign out: revoke the session and clear the cookie.
-       *
-       * The `originCheck` middleware refuses a cross-site POST before it arrives,
-       * so a forgery cannot reach here to silently sign the user out. Revoking is
+       * Sign out: revoke the session and clear the cookie. The `originCheck`
+       * middleware refuses a cross-site POST before it arrives. Revoking is
        * idempotent — a request without a session token just clears the cookie.
        */
       .post("/mls/api/sign-out", async (c) => {

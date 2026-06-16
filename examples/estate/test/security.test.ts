@@ -1,22 +1,23 @@
 /**
- * Security regressions for the estate demo's auth + document layer.
+ * Security regressions for the estate demo's auth layer.
  *
- * These pin CSRF binding on the /mls POSTs, HTML-safe document serialization,
+ * These pin CSRF binding on the /mls POSTs, the no-store per-user session route,
  * and the real-credential login flow that replaced the `?as=<id>` impersonation
  * demo. The impersonation fence is gone because there is no impersonation: a
- * sign-in now goes through `Identity.login` and a wrong password is rejected
- * the same way a real deploy would reject it.
+ * sign-in now goes through `Identity.login` and a wrong password is rejected the
+ * same way a real deploy would reject it.
+ *
+ * Document/manifest XSS escaping is no longer asserted here: the pages render
+ * through the framework's `.page` seam now, and that escaping (title/meta via
+ * `@keel/ui`'s `renderMetadata`, island props via `serializeScriptJson`) is
+ * pinned at 100% coverage in `@keel/ui` and `@keel/web` themselves.
  */
 
 import { describe, expect, it } from "vitest";
 
 import { SESSION_COOKIE } from "@keel/identity";
-import { island } from "@keel/ui";
-import type { UiNode } from "@keel/ui";
 
 import { buildApp } from "../src/app";
-import { renderDocument } from "../src/document";
-import { registry } from "../src/registry";
 import { DEFAULT_DEMO } from "../src/identity";
 
 // ---------------------------------------------------------------------------
@@ -28,52 +29,6 @@ import { DEFAULT_DEMO } from "../src/identity";
 describe("the session cookie", () => {
   it("carries the __Host- prefix so the browser enforces Secure + Path=/ + no Domain", () => {
     expect(SESSION_COOKIE).toBe("__Host-keel_session");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Document serialization
-// ---------------------------------------------------------------------------
-
-describe("renderDocument", () => {
-  it("HTML-escapes the title so it cannot break out of <title> (XSS)", () => {
-    const html = renderDocument(
-      registry,
-      { type: "Page", children: [] },
-      "</title><script>x</script>",
-    );
-
-    expect(html).not.toContain("</title><script>x");
-    expect(html).toContain("&lt;/title&gt;&lt;script&gt;");
-  });
-
-  it("escapes < > & in the island manifest so attacker props cannot break the script tag", () => {
-    const tree: UiNode = {
-      type: "Page",
-      children: [island("Account", { evil: "</script><script>alert(1)</script>" })],
-    };
-
-    const html = renderDocument(registry, tree, "ok");
-
-    expect(html).not.toContain("</script><script>alert(1)");
-    expect(html).toContain("\\u003c/script\\u003e\\u003cscript\\u003e");
-  });
-
-  it("escapes U+2028/U+2029 in the manifest so a raw line terminator cannot truncate the script", () => {
-    const lineSeparator = String.fromCharCode(0x2028);
-    const paragraphSeparator = String.fromCharCode(0x2029);
-
-    const tree: UiNode = {
-      type: "Page",
-      children: [island("Account", { evil: `a${lineSeparator}b${paragraphSeparator}c` })],
-    };
-
-    const html = renderDocument(registry, tree, "ok");
-
-    expect(html).not.toContain(lineSeparator);
-    expect(html).not.toContain(paragraphSeparator);
-    expect(html).toContain("\\u2028");
-    expect(html).toContain("\\u2029");
   });
 });
 

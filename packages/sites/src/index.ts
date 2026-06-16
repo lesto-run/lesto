@@ -38,6 +38,7 @@ export type {
   PagesSource,
   PageHandler,
   RenderResponse,
+  KeelResponseBody,
   RenderedPage,
   OutputSink,
 } from "./types";

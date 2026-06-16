@@ -35,8 +35,12 @@ export async function buildAppConfig(secret?: string): Promise<KeelAppConfig> {
 
   // Zero-token, header-based CSRF on every state-changing request, applied
   // before the routes so it wraps the whole app (matched routes and 404s alike).
+  // `.client(...)` is declared on the ROOT: it emits the `<script type="module">`
+  // hydration tag in every page's <head>, and `.route()` composes a sub-app's
+  // routes/layouts/data but NOT its client-module config, so it must live here.
   const app = keel()
     .use(...secureStack({ originCheck: {} }).map(fromRequestMiddleware))
+    .client("/client.js")
     .route(buildEstateRoutes(identity));
 
   return {

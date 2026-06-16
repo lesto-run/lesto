@@ -71,6 +71,24 @@ export interface PageDef<Path extends string = string, Loaded = unknown> {
   params?: ZodType;
 
   metadata?: (loaded: Loaded) => PageMetadata;
+
+  /**
+   * Mark this page as STATIC — prerendered once and served as a cacheable file,
+   * not rendered per request (ADR 0010/0012, the "auth-aware static" mode).
+   *
+   * A dynamic page (the default) resolves its islands' data sources AT RENDER and
+   * inlines the values into the document, so a per-request page ships its
+   * per-user data with no client waterfall. That is exactly WRONG for a page that
+   * is built once and cached: the build-time value (e.g. "signed out", because no
+   * request cookie exists at prerender) would be baked into the HTML every
+   * visitor receives. A `static` page therefore renders with NO render-time
+   * resolver — its islands fall back to client-side `bind` + parse-time primer,
+   * fetching their per-user data fresh in the browser — and the document is left
+   * cacheable (never stamped `no-store`), even on an app that has private data
+   * sources. The data ENDPOINT each island fetches still carries its own
+   * `no-store` (see `.data()`); only the cacheable shell is shared.
+   */
+  static?: boolean;
 }
 
 /**

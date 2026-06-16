@@ -14,6 +14,7 @@ import {
   type OutputSink,
   type PageHandler,
   type RenderedPage,
+  type RenderResponse,
   type Site,
   type StaticSite,
 } from "../src/index";
@@ -47,6 +48,11 @@ function mapSink(): { sink: OutputSink; written: Map<string, string> } {
 // A handler that answers every page with a fixed status, echoing the path.
 function statusHandler(status: number): PageHandler {
   return (_method, path) => Promise.resolve({ status, body: `<html>${path}</html>` });
+}
+
+// A handler that yields a fixed body, to drive each `KeelResponseBody` arm.
+function bodyHandler(body: RenderResponse["body"]): PageHandler {
+  return () => Promise.resolve({ status: 200, body });
 }
 
 describe("defineSites", () => {
@@ -174,6 +180,49 @@ describe("prerenderSite", () => {
       "listings/index.html",
       "listings/listings/villa-1/index.html",
     ]);
+  });
+
+  // A static site is the live app rendered offline, so prerendering must capture
+  // whatever body arm the handler produced — string, bytes, stream, or none — and
+  // write each as HTML. These four cases pin down `bodyToString`'s every branch.
+  const onePage: StaticSite = { name: "marketing", render: "static", basePath: "/", pages: ["/"] };
+
+  it("captures a string body verbatim", async () => {
+    const [page] = await prerenderSite(onePage, bodyHandler("<html>hi</html>"));
+
+    expect(page?.html).toBe("<html>hi</html>");
+  });
+
+  it("captures an absent body as the empty string", async () => {
+    // No body (e.g. a 204) becomes an empty file, not the string "undefined".
+    const [page] = await prerenderSite(onePage, bodyHandler(undefined));
+
+    expect(page?.html).toBe("");
+  });
+
+  it("decodes a Uint8Array body as UTF-8", async () => {
+    const bytes = new TextEncoder().encode("<html>bytes</html>");
+    const [page] = await prerenderSite(onePage, bodyHandler(bytes));
+
+    expect(page?.html).toBe("<html>bytes</html>");
+  });
+
+  it("drains a multi-chunk ReadableStream body in order", async () => {
+    // The `.page` routes stream React SSR this way; the prerenderer must read the
+    // stream to completion and concatenate the chunks in the order they arrive.
+    const encoder = new TextEncoder();
+    const chunks = ["<html>", "streamed", "</html>"];
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    });
+
+    const [page] = await prerenderSite(onePage, bodyHandler(stream));
+
+    expect(page?.html).toBe("<html>streamed</html>");
   });
 });
 
