@@ -691,13 +691,6 @@
         "@keel/web": "workspace:*",
       },
     },
-    "packages/rbac": {
-      "name": "@keel/rbac",
-      "version": "0.0.0",
-      "dependencies": {
-        "@keel/errors": "workspace:*",
-      },
-    },
     "packages/router": {
       "name": "@keel/router",
       "version": "0.0.0",
@@ -722,6 +715,9 @@
     "packages/seo": {
       "name": "@keel/seo",
       "version": "0.0.0",
+      "dependencies": {
+        "@keel/errors": "workspace:*",
+      },
     },
     "packages/sites": {
       "name": "@keel/sites",
@@ -1066,8 +1062,6 @@
     "@keel/queue": ["@keel/queue@workspace:packages/queue"],
 
     "@keel/ratelimit": ["@keel/ratelimit@workspace:packages/ratelimit"],
-
-    "@keel/rbac": ["@keel/rbac@workspace:packages/rbac"],
 
     "@keel/router": ["@keel/router@workspace:packages/router"],
 
