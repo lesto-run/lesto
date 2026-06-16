@@ -10,13 +10,13 @@ import { KeelError } from "@keel/errors";
 
 export { KeelError };
 
-export type FeedErrorCode = "FEED_INVALID_DATE" | "FEED_UNESCAPABLE_VALUE";
+export type SeoErrorCode = "SEO_INJECTED_NEWLINE" | "SEO_INJECTED_FRAGMENT";
 
-/** Anything the feed builders can refuse to do. */
-export class FeedError extends KeelError<FeedErrorCode> {
-  constructor(code: FeedErrorCode, message: string, details?: Record<string, unknown>) {
+/** Anything the SEO builders can refuse to do. */
+export class SeoError extends KeelError<SeoErrorCode> {
+  constructor(code: SeoErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 
-    this.name = "FeedError";
+    this.name = "SeoError";
   }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { escape } from "../src/escape";
+import { KeelError, SeoError } from "../src/errors";
 import { jsonLd } from "../src/json-ld";
 import { metaTags } from "../src/meta-tags";
 import { robots } from "../src/robots";
@@ -117,6 +118,30 @@ describe("sitemap", () => {
 
     expect(xml).toContain("<loc>https://example.com/?a=1&amp;b=2</loc>");
   });
+
+  it("refuses a loc bearing a newline with a coded error", () => {
+    try {
+      sitemap([{ loc: "https://example.com/\n<loc>evil</loc>" }]);
+      expect.unreachable("sitemap should have refused the injected newline");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SeoError);
+      expect((error as SeoError).code).toBe("SEO_INJECTED_NEWLINE");
+      expect((error as SeoError).details.field).toBe("Sitemap loc");
+    }
+  });
+
+  it("refuses a loc bearing a '#' fragment", () => {
+    expect(() => sitemap([{ loc: "https://example.com/page#frag" }])).toThrow(SeoError);
+  });
+
+  it("checks the resolved URL, so a base-joined relative loc is still guarded", () => {
+    try {
+      sitemap([{ loc: "/page#frag" }], { baseUrl: "https://example.com" });
+      expect.unreachable("sitemap should have refused the resolved fragment");
+    } catch (error) {
+      expect((error as SeoError).code).toBe("SEO_INJECTED_FRAGMENT");
+    }
+  });
 });
 
 describe("robots", () => {
@@ -140,6 +165,46 @@ describe("robots", () => {
 
   it("renders just the user-agent line for empty input", () => {
     expect(robots({})).toBe("User-agent: *");
+  });
+
+  it("refuses a Disallow path bearing a newline with a coded error", () => {
+    try {
+      robots({ disallow: ["/admin\nDisallow: /"] });
+      expect.unreachable("robots should have refused the injected newline");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SeoError);
+      expect(error).toBeInstanceOf(KeelError);
+      expect((error as SeoError).code).toBe("SEO_INJECTED_NEWLINE");
+      expect((error as SeoError).details.field).toBe("Disallow path");
+    }
+  });
+
+  it("refuses a carriage return in a Disallow path", () => {
+    expect(() => robots({ disallow: ["/admin\rDisallow: /"] })).toThrow(SeoError);
+  });
+
+  it("refuses a '#' in a Disallow path (it would open a comment)", () => {
+    try {
+      robots({ disallow: ["/admin#secret"] });
+      expect.unreachable("robots should have refused the injected fragment");
+    } catch (error) {
+      expect((error as SeoError).code).toBe("SEO_INJECTED_FRAGMENT");
+      expect((error as SeoError).details.field).toBe("Disallow path");
+    }
+  });
+
+  it("refuses an injected newline in an Allow path", () => {
+    expect(() => robots({ allow: ["/ok\nDisallow: /"] })).toThrow(SeoError);
+  });
+
+  it("refuses an injected newline in the Sitemap URL", () => {
+    try {
+      robots({ sitemap: "https://example.com/s.xml\nDisallow: /" });
+      expect.unreachable("robots should have refused the injected sitemap URL");
+    } catch (error) {
+      expect((error as SeoError).code).toBe("SEO_INJECTED_NEWLINE");
+      expect((error as SeoError).details.field).toBe("Sitemap URL");
+    }
   });
 });
 

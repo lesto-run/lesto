@@ -12,6 +12,9 @@
 export { rss } from "./rss";
 export { atom } from "./atom";
 
+export { rfc822, rfc3339 } from "./dates";
+export type { DateInput } from "./dates";
+
 export { escapeXml } from "./xml";
 
 export { KeelError, FeedError } from "./errors";

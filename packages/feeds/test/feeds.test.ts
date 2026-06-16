@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { FeedItem, FeedMeta } from "../src/types";
 
 import { atom } from "../src/atom";
+import { rfc822, rfc3339 } from "../src/dates";
 import { FeedError, KeelError } from "../src/errors";
 import { rss } from "../src/rss";
 import { escapeXml } from "../src/xml";
@@ -36,6 +37,34 @@ describe("escapeXml", () => {
   });
 });
 
+describe("date formatting", () => {
+  // 2026-06-08T13:04:05.000Z — a Monday.
+  const date = new Date(Date.UTC(2026, 5, 8, 13, 4, 5));
+
+  it("formats a Date as an RFC 822 (RSS) UTC timestamp", () => {
+    expect(rfc822(date)).toBe("Mon, 08 Jun 2026 13:04:05 GMT");
+  });
+
+  it("formats a Date as an RFC 3339 (Atom) UTC timestamp without milliseconds", () => {
+    expect(rfc3339(date)).toBe("2026-06-08T13:04:05Z");
+  });
+
+  it("passes an already-formatted string through untouched in both dialects", () => {
+    expect(rfc822("Mon, 08 Jun 2026 00:00:00 GMT")).toBe("Mon, 08 Jun 2026 00:00:00 GMT");
+    expect(rfc3339("2026-06-08T00:00:00Z")).toBe("2026-06-08T00:00:00Z");
+  });
+
+  it("refuses an invalid Date with a stable code", () => {
+    try {
+      rfc822(new Date("not a date"));
+      expect.unreachable("rfc822 should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(FeedError);
+      expect((error as FeedError).code).toBe("FEED_INVALID_DATE");
+    }
+  });
+});
+
 describe("rss", () => {
   it("renders a valid document shell with no items", () => {
     const meta: FeedMeta = { title: "Keel Blog", link: "https://keel.dev/blog" };
@@ -52,6 +81,13 @@ describe("rss", () => {
 
     // An empty feed carries no items.
     expect(xml).not.toContain(`<item>`);
+  });
+
+  it("synthesizes the required channel <description> from the title", () => {
+    // RSS 2.0 requires <description>; absent one, it mirrors the title.
+    const xml = rss({ title: "Keel Blog", link: "https://keel.dev/blog" }, []);
+
+    expect(xml).toContain(`<description>Keel Blog</description>`);
   });
 
   it("renders every optional channel field when present", () => {
@@ -72,10 +108,23 @@ describe("rss", () => {
     expect(xml).toContain(`<lastBuildDate>Mon, 08 Jun 2026 00:00:00 GMT</lastBuildDate>`);
   });
 
-  it("omits every optional channel field when absent", () => {
+  it("formats a Date <lastBuildDate> as RFC 822", () => {
+    const xml = rss(
+      {
+        title: "Keel Blog",
+        link: "https://keel.dev/blog",
+        updated: new Date(Date.UTC(2026, 5, 8, 0, 0, 0)),
+      },
+      [],
+    );
+
+    expect(xml).toContain(`<lastBuildDate>Mon, 08 Jun 2026 00:00:00 GMT</lastBuildDate>`);
+  });
+
+  it("omits the optional channel fields (but never the required description) when absent", () => {
     const xml = rss({ title: "Bare", link: "https://keel.dev" }, []);
 
-    expect(xml).not.toContain(`<description>`);
+    expect(xml).toContain(`<description>Bare</description>`);
     expect(xml).not.toContain(`<guid`);
     expect(xml).not.toContain(`<managingEditor>`);
     expect(xml).not.toContain(`<lastBuildDate>`);
@@ -103,6 +152,18 @@ describe("rss", () => {
     expect(xml).toContain(`</item>`);
   });
 
+  it("formats a Date item <pubDate> as RFC 822", () => {
+    const item: FeedItem = {
+      title: "Hello",
+      link: "https://keel.dev/blog/hello",
+      published: new Date(Date.UTC(2026, 5, 8, 0, 0, 0)),
+    };
+
+    const xml = rss({ title: "Keel Blog", link: "https://keel.dev/blog" }, [item]);
+
+    expect(xml).toContain(`<pubDate>Mon, 08 Jun 2026 00:00:00 GMT</pubDate>`);
+  });
+
   it("renders an item with NO optional fields present", () => {
     const item: FeedItem = { title: "Bare item", link: "https://keel.dev/x" };
 
@@ -110,7 +171,8 @@ describe("rss", () => {
 
     expect(xml).toContain(`<title>Bare item</title>`);
     expect(xml).toContain(`<link>https://keel.dev/x</link>`);
-    expect(xml).not.toContain(`<description>`);
+    // The item carries no description of its own.
+    expect(xml).not.toContain(`<description>A first post</description>`);
     expect(xml).not.toContain(`<guid`);
     expect(xml).not.toContain(`<author>`);
     expect(xml).not.toContain(`<pubDate>`);
@@ -148,6 +210,15 @@ describe("atom", () => {
     expect(xml).not.toContain(`<entry>`);
   });
 
+  it("synthesizes the required feed <id> from the link and an RFC 3339 <updated>", () => {
+    // Atom 1.0 requires <id> and <updated>; absent input, id mirrors the link
+    // and updated falls back to now (a valid RFC 3339 instant).
+    const xml = atom({ title: "Keel Blog", link: "https://keel.dev/blog" }, []);
+
+    expect(xml).toContain(`<id>https://keel.dev/blog</id>`);
+    expect(xml).toMatch(/<updated>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z<\/updated>/);
+  });
+
   it("renders every optional feed field when present", () => {
     const meta: FeedMeta = {
       title: "Keel Blog",
@@ -166,12 +237,37 @@ describe("atom", () => {
     expect(xml).toContain(`<author><name>Ada</name></author>`);
   });
 
-  it("omits every optional feed field when absent", () => {
+  it("formats a Date feed <updated> as RFC 3339", () => {
+    const xml = atom(
+      {
+        title: "Keel Blog",
+        link: "https://keel.dev/blog",
+        updated: new Date(Date.UTC(2026, 5, 8, 0, 0, 0)),
+      },
+      [],
+    );
+
+    expect(xml).toContain(`<updated>2026-06-08T00:00:00Z</updated>`);
+  });
+
+  it("falls the feed <updated> back to the newest entry's published date", () => {
+    const item: FeedItem = {
+      title: "Hello",
+      link: "https://keel.dev/blog/hello",
+      published: "2026-06-08T00:00:00Z",
+    };
+
+    const xml = atom({ title: "Keel Blog", link: "https://keel.dev/blog" }, [item]);
+
+    expect(xml).toContain(`<updated>2026-06-08T00:00:00Z</updated>`);
+  });
+
+  it("omits the optional feed fields (but never the required id/updated) when absent", () => {
     const xml = atom({ title: "Bare", link: "https://keel.dev" }, []);
 
-    expect(xml).not.toContain(`<id>`);
+    expect(xml).toContain(`<id>https://keel.dev</id>`);
+    expect(xml).toContain(`<updated>`);
     expect(xml).not.toContain(`<subtitle>`);
-    expect(xml).not.toContain(`<updated>`);
     expect(xml).not.toContain(`<author>`);
   });
 
@@ -197,17 +293,31 @@ describe("atom", () => {
     expect(xml).toContain(`</entry>`);
   });
 
-  it("renders an entry with NO optional fields present", () => {
-    const item: FeedItem = { title: "Bare item", link: "https://keel.dev/x" };
+  it("formats a Date entry <updated> as RFC 3339", () => {
+    const item: FeedItem = {
+      title: "Hello",
+      link: "https://keel.dev/blog/hello",
+      published: new Date(Date.UTC(2026, 5, 8, 0, 0, 0)),
+    };
 
     const xml = atom({ title: "Keel Blog", link: "https://keel.dev/blog" }, [item]);
 
-    expect(xml).toContain(`<title>Bare item</title>`);
-    expect(xml).toContain(`<link href="https://keel.dev/x"/>`);
-    expect(xml).not.toContain(`<id>`);
+    expect(xml).toContain(`<updated>2026-06-08T00:00:00Z</updated>`);
+  });
+
+  it("synthesizes a missing entry id and updated from the link and the feed time", () => {
+    const item: FeedItem = { title: "Bare item", link: "https://keel.dev/x" };
+
+    const xml = atom(
+      { title: "Keel Blog", link: "https://keel.dev/blog", updated: "2026-06-08T00:00:00Z" },
+      [item],
+    );
+
+    // Entry <id> mirrors its link; entry <updated> inherits the feed's time.
+    expect(xml).toContain(`<id>https://keel.dev/x</id>`);
+    // Two <updated> instances (feed + entry), both the resolved feed time.
+    expect(xml.match(/<updated>2026-06-08T00:00:00Z<\/updated>/g)).toHaveLength(2);
     expect(xml).not.toContain(`<summary>`);
-    // No entry-level updated; the feed has no updated either.
-    expect(xml).not.toContain(`<updated>`);
   });
 
   it("XML-escapes & and < in titles and link attributes", () => {

@@ -19,3 +19,6 @@ export type { RobotsInput } from "./robots";
 export { jsonLd } from "./json-ld";
 
 export { escape } from "./escape";
+
+export { KeelError, SeoError } from "./errors";
+export type { SeoErrorCode } from "./errors";

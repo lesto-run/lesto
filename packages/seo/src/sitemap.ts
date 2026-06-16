@@ -1,4 +1,5 @@
 import { escape } from "./escape";
+import { assertNoInjection } from "./guard";
 
 /** One entry in a sitemap. `loc` may be relative if a `baseUrl` is supplied. */
 export interface SitemapUrl {
@@ -17,7 +18,8 @@ export interface SitemapOptions {
  *
  * A relative `loc` is resolved against `baseUrl` when one is given; an absolute
  * `loc` (it has a scheme) is left untouched. Absent `lastmod`/`priority` emit
- * no child element. Every value is XML-escaped.
+ * no child element. Every value is XML-escaped, and the resolved URL is refused
+ * with a coded `SeoError` if it carries a `\r`/`\n` or a `#` fragment.
  */
 export function sitemap(urls: SitemapUrl[], options: SitemapOptions = {}): string {
   const { baseUrl } = options;
@@ -33,7 +35,11 @@ export function sitemap(urls: SitemapUrl[], options: SitemapOptions = {}): strin
 }
 
 function renderUrl(url: SitemapUrl, baseUrl: string | undefined): string {
-  const children: string[] = [`  <loc>${escape(resolve(url.loc, baseUrl))}</loc>`];
+  const loc = resolve(url.loc, baseUrl);
+
+  assertNoInjection("Sitemap loc", loc);
+
+  const children: string[] = [`  <loc>${escape(loc)}</loc>`];
 
   if (url.lastmod !== undefined) {
     children.push(`  <lastmod>${escape(url.lastmod)}</lastmod>`);
