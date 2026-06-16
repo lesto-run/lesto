@@ -432,6 +432,7 @@
       "dependencies": {
         "@keel/errors": "workspace:*",
         "@keel/sites": "workspace:*",
+        "@keel/storage": "workspace:*",
       },
     },
     "packages/e2e": {
@@ -516,6 +517,7 @@
       "name": "@keel/kernel",
       "version": "0.0.0",
       "dependencies": {
+        "@keel/auth": "workspace:*",
         "@keel/cors": "workspace:*",
         "@keel/csrf": "workspace:*",
         "@keel/db": "workspace:*",

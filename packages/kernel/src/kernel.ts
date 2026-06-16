@@ -25,6 +25,8 @@ import type { MigrationEntry } from "@keel/migrate";
 
 import type { Keel, KeelResponse, UiDialect } from "@keel/web";
 
+import { installDurableSchema } from "./secure-stack";
+
 /**
  * The one database handle the kernel threads through the migrator.
  *
@@ -88,6 +90,22 @@ export interface KeelAppConfig {
    * from the same value, so the two can never diverge.
    */
   ui?: { dialect: UiDialect };
+
+  /**
+   * Install the durable-store schemas (sessions + rate limits, ADR 0013) on the
+   * `db` after migrate, so a SQL-backed `sqlSessionStore` / `sqlRateLimitStore`
+   * has its tables ready before the first request. This is the pit-of-success
+   * default: a `createApp({ db })` app gets durable, fleet-correct stores with
+   * zero config — pair it with `secureStack({ db })` for limits and
+   * `durableStores(db)` for the session half.
+   *
+   * Set `false` to opt OUT — for a deploy whose sessions/limits are deliberately
+   * per-process memory, or a fleet member that defers schema installation to the
+   * release step that owns the migration. The schema install is idempotent
+   * (`IF NOT EXISTS`), so leaving it on is harmless even when nothing uses the
+   * tables. Defaults to `true`.
+   */
+  durable?: boolean;
 }
 
 /** A booted application: a request handler plus the record of what migrations ran. */
@@ -124,6 +142,15 @@ export async function createApp(config: KeelAppConfig): Promise<App> {
       : await new Migrator(config.db, config.migrations, {
           dialect: config.dialect ?? "sqlite",
         }).migrate();
+
+  // Durable stores are the pit-of-success default (ADR 0013): install the
+  // session + rate-limit schemas right after migrate so a SQL-backed store has
+  // its tables before the first request. Idempotent (`IF NOT EXISTS`), so it is
+  // safe even when nothing uses the tables; `durable: false` opts a deliberately
+  // memory-store (or migration-deferring) deploy out of the install entirely.
+  // A ternary (not a bare `if`) so coverage scores both arms — the install and
+  // the explicit `durable: false` skip — without an un-instrumentable implicit else.
+  await (config.durable === false ? Promise.resolve() : installDurableSchema(config.db));
 
   // The keel() app owns dispatch (routes, pages, and middleware all live on it),
   // so the kernel just delegates to app.handle once the schema is ready.

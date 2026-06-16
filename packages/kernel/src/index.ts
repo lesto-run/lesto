@@ -28,5 +28,11 @@
 export { createApp } from "./kernel";
 export type { App, KeelAppConfig, KernelDatabase } from "./kernel";
 
-export { secureStack } from "./secure-stack";
-export type { SecureStackOptions } from "./secure-stack";
+export {
+  durableStores,
+  installDurableSchema,
+  KERNEL_MEMORY_STORES_CODE,
+  resetMemoryStoresWarning,
+  secureStack,
+} from "./secure-stack";
+export type { DurableStores, SecureStackOptions } from "./secure-stack";

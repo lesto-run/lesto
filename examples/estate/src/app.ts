@@ -14,6 +14,16 @@
  * The request-shaped batteries drop onto the `keel()` chain via
  * `fromRequestMiddleware`, applied with `.use` before the routes so every route
  * (and every unmatched path — a CORS preflight, say) runs inside them.
+ *
+ * Durable by default (ADR 0013): the same `handle` is threaded into BOTH
+ * `secureStack({ db })` — so the node rate limiter keys against the shared
+ * `keel_rate_limits` table instead of a per-process `Map` — AND `createApp`'s
+ * `db` slot, where the kernel installs the session + rate-limit schemas after
+ * migrate. Sessions are already SQL-backed in `buildIdentity` (its own
+ * `sqlSessionStore`), so a `createApp({ db })` boot shares sessions and limits
+ * through SQL with zero extra wiring. The `:memory:` demo resets both on
+ * restart, but the wiring is exactly what a file-backed SQLite or Postgres
+ * deploy copies for real fleet-correctness.
  */
 
 import { createApp, secureStack } from "@keel/kernel";
@@ -22,6 +32,15 @@ import { fromRequestMiddleware, keel } from "@keel/web";
 
 import { buildEstateRoutes } from "./controllers";
 import { buildIdentity } from "./identity";
+
+/**
+ * The node serve path's per-client rate limit — a generous token bucket (a burst
+ * of 60, refilling 10/s) wired DURABLY over the shared SQL handle by
+ * `secureStack({ db })`. Generous on purpose: it sheds a flood without tripping
+ * normal browsing, and (unlike the edge's per-isolate memory limiter, ADR 0013
+ * §8) it is fleet-correct — every node throttles against the same buckets.
+ */
+const NODE_RATE_LIMIT = { capacity: 60, refillPerSecond: 10 } as const;
 
 /**
  * A fresh `KeelAppConfig` — fresh identity, fresh seeded DB — each call.
@@ -33,13 +52,23 @@ import { buildIdentity } from "./identity";
 export async function buildAppConfig(secret?: string): Promise<KeelAppConfig> {
   const { identity, handle } = await buildIdentity(secret);
 
-  // Zero-token, header-based CSRF on every state-changing request, applied
-  // before the routes so it wraps the whole app (matched routes and 404s alike).
-  // `.client(...)` is declared on the ROOT: it emits the `<script type="module">`
-  // hydration tag in every page's <head>, and `.route()` composes a sub-app's
-  // routes/layouts/data but NOT its client-module config, so it must live here.
+  // Zero-token, header-based CSRF on every state-changing request, plus a
+  // DURABLE per-client rate limit over the shared SQL handle (ADR 0013):
+  // `secureStack({ db })` auto-wires `sqlRateLimitStore`, so the limiter keys
+  // against `keel_rate_limits` rather than per-process memory — fleet-correct
+  // with zero config. Applied before the routes so it wraps the whole app
+  // (matched routes and 404s alike). `.client(...)` is declared on the ROOT: it
+  // emits the `<script type="module">` hydration tag in every page's <head>, and
+  // `.route()` composes a sub-app's routes/layouts/data but NOT its client-module
+  // config, so it must live here.
   const app = keel()
-    .use(...secureStack({ originCheck: {} }).map(fromRequestMiddleware))
+    .use(
+      ...secureStack({
+        originCheck: {},
+        rateLimit: NODE_RATE_LIMIT,
+        db: handle,
+      }).map(fromRequestMiddleware),
+    )
     .client("/client.js")
     .route(buildEstateRoutes(identity));
 
