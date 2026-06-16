@@ -75,6 +75,7 @@ describe("securityDefaults", () => {
 describe("statusForError", () => {
   it("maps the coded transport refusals to their statuses", () => {
     expect(statusForError(new KeelError("RUNTIME_INVALID_JSON", "x"))).toBe(400);
+    expect(statusForError(new KeelError("ROUTER_MALFORMED_PARAM", "x"))).toBe(400);
     expect(statusForError(new KeelError("WEB_VALIDATION_FAILED", "x"))).toBe(422);
     expect(statusForError(new KeelError("RUNTIME_BODY_TOO_LARGE", "x"))).toBe(413);
     expect(statusForError(new KeelError("RUNTIME_HANDLER_TIMEOUT", "x"))).toBe(503);

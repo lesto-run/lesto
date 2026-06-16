@@ -10,7 +10,10 @@ import { KeelError } from "@keel/errors";
 
 export { KeelError };
 
-export type RouterErrorCode = "ROUTER_AMBIGUOUS_SEGMENT";
+export type RouterErrorCode =
+  | "ROUTER_AMBIGUOUS_SEGMENT"
+  | "ROUTER_MALFORMED_PARAM"
+  | "ROUTER_MISSING_PARAM";
 
 /** Anything the router can refuse to do. */
 export class RouterError extends KeelError<RouterErrorCode> {

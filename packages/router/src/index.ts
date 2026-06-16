@@ -5,6 +5,11 @@
  *   table.add("GET", "/posts/:id", handler);
  *   table.match("GET", "/posts/3");   // { value: handler, params: { id: "3" } }
  *
+ * Captured params are URL-decoded at match time, so `/posts/a%2Fb` binds the one
+ * param `"a/b"` (a `%2F` never smuggles a path separator) and a malformed `%`
+ * refuses with a coded `RouterError` the web tier maps to a 400 (see `RouteTable`).
+ * `pathFor` is the inverse — it encodes params back into a path that round-trips.
+ *
  * The pattern compiler (`compile`) and type-level param inference (`ParamKeys` /
  * `PathParams`) give `keel()` handlers their `c.param(...)` keys with no codegen.
  */
@@ -12,7 +17,7 @@
 // The generic matcher the `keel()` builder dispatches over, plus the shared
 // pattern compiler and the type-level param inference that gives handlers their
 // `c.param(...)` keys with no codegen.
-export { RouteTable } from "./table";
+export { pathFor, RouteTable } from "./table";
 export type { Match } from "./table";
 export { compile, escapeRegExp, PARAM_SEGMENT } from "./compile";
 export type { CompiledPattern } from "./compile";
