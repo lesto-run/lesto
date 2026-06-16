@@ -10,7 +10,11 @@ import { KeelError } from "@keel/errors";
 
 export { KeelError };
 
-export type StorageErrorCode = "STORAGE_NOT_FOUND" | "STORAGE_INVALID_KEY";
+export type StorageErrorCode =
+  | "STORAGE_NOT_FOUND"
+  | "STORAGE_INVALID_KEY"
+  | "STORAGE_BACKEND_ERROR"
+  | "STORAGE_URL_UNSUPPORTED";
 
 /** Anything object storage can refuse to do. */
 export class StorageError extends KeelError<StorageErrorCode> {

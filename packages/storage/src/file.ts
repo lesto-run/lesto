@@ -10,6 +10,10 @@ import type { StorageBackend } from "./types";
 /**
  * A backend that maps keys to files under a single root directory.
  *
+ * **Local/dev only.** It uses `node:fs` and a single local disk: it cannot run
+ * on an edge runtime, cannot be shared across instances, and has no `url()`.
+ * Use `S3Backend` in production.
+ *
  * Keys are relative POSIX-ish paths; parent directories are created on `put`.
  * A path-traversal guard refuses any key that could escape the root.
  */

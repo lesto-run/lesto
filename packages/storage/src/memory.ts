@@ -5,7 +5,9 @@ import type { StorageBackend } from "./types";
 /**
  * An in-memory backend — a `Map` of key to bytes.
  *
- * Perfect for tests and ephemeral caches; nothing survives the process.
+ * **Local/dev only.** Perfect for tests and ephemeral caches; nothing survives
+ * the process and nothing is shared across instances. Use `S3Backend` in
+ * production. There is no `url()` — bytes in a `Map` have no addressable URL.
  */
 export class MemoryBackend implements StorageBackend {
   private readonly store = new Map<string, Buffer>();

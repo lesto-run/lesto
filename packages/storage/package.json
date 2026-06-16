@@ -1,7 +1,7 @@
 {
   "name": "@keel/storage",
   "version": "0.0.0",
-  "description": "Keel's object storage — a pluggable backend (in-memory, local filesystem; S3 to come).",
+  "description": "Keel's object storage — a pluggable backend (S3/R2 for production; in-memory and local filesystem for dev).",
   "type": "module",
   "private": true,
 
