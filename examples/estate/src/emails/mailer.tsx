@@ -17,11 +17,13 @@ import type { ReactElement } from "react";
 
 import { ResetPasswordEmail, VerifyEmail } from "./templates";
 
-/** One rendered message the demo "sent" — the HTML is the real react-email output. */
+/** One rendered message the demo "sent" — the real react-email html + text parts. */
 export interface SentEmail {
   readonly to: string;
   readonly subject: string;
   readonly html: string;
+  /** The plain-text alternative, rendered alongside the html for multipart delivery. */
+  readonly text: string;
 }
 
 export interface DemoMailer extends IdentityMailer {
@@ -37,8 +39,10 @@ export function createDemoMailer(log: (line: string) => void = () => {}): DemoMa
   const outbox: SentEmail[] = [];
 
   const deliver = async (to: string, subject: string, message: ReactElement): Promise<void> => {
-    const html = await render(message);
-    outbox.push({ to, subject, html });
+    // Render the component twice — once to HTML, once to plain text — so the
+    // message is multipart-ready (better deliverability, text-only clients).
+    const [html, text] = await Promise.all([render(message), render(message, { plainText: true })]);
+    outbox.push({ to, subject, html, text });
     log(`mail → ${to}: ${subject}`);
   };
 

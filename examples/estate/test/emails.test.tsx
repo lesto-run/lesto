@@ -46,6 +46,10 @@ describe("the demo identity mailer", () => {
     expect(mailer.outbox[0]!.to).toBe("ada@example.com");
     expect(mailer.outbox[0]!.subject).toBe("Confirm your email");
     expect(mailer.outbox[0]!.html).toContain("https://estate.test/v?token=1");
+    // A plain-text alternative is rendered alongside the html (multipart-ready):
+    // the text carries the link but none of the HTML tags.
+    expect(mailer.outbox[0]!.text).toContain("https://estate.test/v?token=1");
+    expect(mailer.outbox[0]!.text).not.toContain("<html");
   });
 
   it("renders a real verification email when a new account registers", async () => {
