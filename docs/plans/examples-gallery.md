@@ -114,12 +114,34 @@ prove "hosted UX" as a Node `serve.ts` runbook rather than a Worker.
    queue schema the mail battery needs → `operability-dx`/kernel. (3) three
    structurally-identical `SqlDatabase` types force a `as unknown as` cast when
    sharing one connection across db+kernel+queue → `data-persistence`.
+   **All three addressed (2026-06-16) by 3 parallel worktree agents, integrated +
+   re-verified serially on `main`:** (1) PARTLY — `rateLimit`'s `keyFor` now receives
+   the request (`768ba0d`); the in-process no-IP-context half remains a
+   `@keel/web`/runtime follow-up. (2) FIXED — `createApp` gained a `schemas` install
+   seam (`aed3893`). (3) FIXED — `SqlDatabase` unified across db/kernel/queue, casts
+   gone (`aed3893`). Example workarounds dropped in `0d8fdc3`. All gated packages
+   stayed 100%; `ws:typecheck` + `examples:test` green.
 
 2. **`examples/admin`** — `[Wave 3 backlog]`
    A clickable admin panel (`@keel/admin`, data #6) over a seeded table: paginated +
    projected list, with the `onMutation` audit hook logging every write.
    Acceptance — local: pagination/projection exercised over HTTP; audit hook fires on
    create/update/delete. Hosted: the panel browsed; the audit trail observed.
+   **Status (2026-06-16): DONE** (commit `2527fe7`). `examples/admin` over a `products`
+   table: `GET /admin/products` (paginated `?limit=&offset=` + projected — `cost` is
+   real but absent from `fields`, so never leaks), get/create/update/destroy, and
+   `GET /admin/audit` showing the trail the `onMutation` hook persisted. Verified
+   local (5 tests + `run.ts`: paged `[1,2]/[3,4]/[5]`, 3 audit rows) and hosted
+   (`serve.ts` over the wire: pagination, create/update/delete firing the hook,
+   actor from `x-admin-actor`, 404/422 coded errors). **New DX findings (next loop's
+   input):** (a) `onMutation` is sync `(e) => void` but real audit sinks are async →
+   fire-and-forget can fail silently/out-of-order; an awaited `Promise<void>` hook
+   would make auditing transactional. (b) `AuditEvent` carries `patch` but no
+   `before` snapshot → diff auditing must re-read the row. (c) `@keel/admin` is
+   programmatic-only → every host re-hand-rolls the same 6-route HTTP shell + code→
+   status table; a shippable opt-in `keel()` admin sub-router would remove it. (d) no
+   request error boundary, so `c.valid`'s `WebError` is uncatchable at a route. →
+   triage to `data-persistence` (admin) / `core-runtime` (error boundary).
 
 3. **`examples/release-rollback`** — `[Wave 3 backlog | ops UX]`
    The remote R2/S3 `ReleaseStore` (edge #5, `d560468`) as a deploy → version →
@@ -144,8 +166,10 @@ prove "hosted UX" as a Node `serve.ts` runbook rather than a Worker.
 
 ---
 
-**Status (2026-06-16):** §7 reframed to this per-wave QA gate. **Increment 0 DONE**
-(`examples/*` workspace glob + `examples:test` script + ungated CI step; commit
-`87410bb`). **Increment 1 DONE** (`examples/mailing-lists`, the template — see its
-status above). Next executable step is increment 2 (`examples/admin`), then
-increment 3 (`examples/release-rollback`) and the increment 4 estate hosted-QA pass.
+**Status (2026-06-16):** §7 reframed to this per-wave QA gate. **Increments 0, 1, 2
+DONE** — workspace wiring (`87410bb`); `examples/mailing-lists` (`f3ac6af`) + its 3
+findings fixed in the framework (`768ba0d`, `aed3893`) and its workarounds dropped
+(`0d8fdc3`); `examples/admin` (`2527fe7`). The loop is working: each example both
+proves a battery and feeds findings back. Next executable step is increment 3
+(`examples/release-rollback`), then the increment 4 estate hosted-QA pass — plus
+triaging the four `@keel/admin` findings above into their owning plans.
