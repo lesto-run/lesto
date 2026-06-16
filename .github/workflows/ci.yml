@@ -56,6 +56,13 @@ jobs:
         working-directory: packages/integration
         run: bun run test
 
+      # The examples gallery is the per-wave QA gate (docs/plans/examples-gallery.md):
+      # each `examples/<feature>/` wires ONLY a battery's real public API and proves
+      # the journey over HTTP. Run ungated — examples are OUT of the 100% coverage
+      # gate by design (coverage-gate.ts globs packages/ only), like estate/blog.
+      - name: Test (examples gallery)
+        run: bun run examples:test
+
       - name: Format check
         run: bun run ws:format:check
 

@@ -28,6 +28,50 @@
         "vitest": "^4.1.8",
       },
     },
+    "examples/blog": {
+      "name": "@keel/example-blog",
+      "version": "0.0.0",
+      "dependencies": {
+        "@keel/db": "workspace:*",
+        "@keel/kernel": "workspace:*",
+        "@keel/migrate": "workspace:*",
+        "@keel/runtime": "workspace:*",
+        "@keel/ui": "workspace:*",
+        "@keel/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+        "react": "^19",
+        "react-dom": "^19",
+      },
+    },
+    "examples/estate": {
+      "name": "@keel/example-estate",
+      "version": "0.0.0",
+      "dependencies": {
+        "@keel/admin": "workspace:*",
+        "@keel/auth": "workspace:*",
+        "@keel/authz": "workspace:*",
+        "@keel/client": "workspace:*",
+        "@keel/cloudflare": "workspace:*",
+        "@keel/csrf": "workspace:*",
+        "@keel/db": "workspace:*",
+        "@keel/flags": "workspace:*",
+        "@keel/identity": "workspace:*",
+        "@keel/migrate": "workspace:*",
+        "@keel/ratelimit": "workspace:*",
+        "@keel/runtime": "workspace:*",
+        "@keel/sites": "workspace:*",
+        "@keel/ui": "workspace:*",
+        "@keel/web": "workspace:*",
+        "@react-email/components": "^1.0.12",
+        "@react-email/render": "^2.0.8",
+        "better-sqlite3": "^11.10.0",
+        "preact": "^10.29.2",
+        "preact-render-to-string": "^6",
+        "react": "^19",
+        "react-dom": "^19",
+        "zod": "^4.0.0",
+      },
+    },
     "packages/admin": {
       "name": "@keel/admin",
       "version": "0.0.0",
@@ -939,6 +983,10 @@
     "@keel/deploy": ["@keel/deploy@workspace:packages/deploy"],
 
     "@keel/errors": ["@keel/errors@workspace:packages/errors"],
+
+    "@keel/example-blog": ["@keel/example-blog@workspace:examples/blog"],
+
+    "@keel/example-estate": ["@keel/example-estate@workspace:examples/estate"],
 
     "@keel/feeds": ["@keel/feeds@workspace:packages/feeds"],
 
