@@ -70,6 +70,20 @@ const RESOURCE = "products";
 // that this app has no boundary to catch (see the README DX finding on the
 // missing request error boundary). One validation authority, one error vocabulary.
 
+/**
+ * A non-negative integer from a query/path string, or `undefined` when absent or
+ * malformed. Guards the seam to `@keel/admin`: a bad `?limit=abc` or `/products/x`
+ * must not reach the query as `NaN` (`Number("abc")`), which SQLite rejects with
+ * `no such column: NaN`. `undefined` lets `list` fall back to its default page;
+ * a bad id resolves to a clean 404.
+ */
+function toInt(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+
 /** Map an `AdminError` code to the HTTP status the admin UI branches on. */
 function statusForAdminError(error: AdminError): number {
   switch (error.code) {
@@ -117,21 +131,23 @@ export function buildAdminApp(deps: { admin: Admin; db: Db }): Keel {
 
   return keel()
     .get("/admin/products", async (c) => {
-      // Pagination knobs come off the query string. `list` defaults limit to 50
-      // and offset to 0 when absent, so a bare `GET /admin/products` is page one.
-      const limit = c.query("limit");
-      const offset = c.query("offset");
+      // Paging comes off the query string, parsed defensively: a malformed
+      // `?limit=abc` resolves to `undefined` → `list`'s default page (50), never
+      // `NaN` (which reaches the query as `no such column: NaN`). Absent → page one.
+      const limit = toInt(c.query("limit"));
+      const offset = toInt(c.query("offset"));
 
-      const options: { limit?: number; offset?: number } = {};
-      if (limit !== undefined) options.limit = Number(limit);
-      if (offset !== undefined) options.offset = Number(offset);
-
-      const rows = await admin.list(RESOURCE, options);
+      const rows = await admin.list(RESOURCE, { limit, offset });
 
       // Echo the effective paging back so a UI can render "showing N, offset M".
-      return c.json({ rows, limit: options.limit ?? null, offset: options.offset ?? 0 });
+      return c.json({ rows, limit: limit ?? null, offset: offset ?? 0 });
     })
-    .get("/admin/products/:id", (c) => respond(c, () => admin.get(RESOURCE, Number(c.param("id")))))
+    .get("/admin/products/:id", (c) => {
+      const id = toInt(c.param("id"));
+      if (id === undefined) return c.json({ error: "ADMIN_RECORD_NOT_FOUND" }, 404);
+
+      return respond(c, () => admin.get(RESOURCE, id));
+    })
     .post("/admin/products", (c) => {
       // The actor is carried by the host (a real app reads it off the session);
       // here a header stands in so the audit trail records *who*. The admin layer
@@ -143,22 +159,24 @@ export function buildAdminApp(deps: { admin: Admin; db: Db }): Keel {
       return respond(c, () => admin.create(RESOURCE, c.req.body, { actor }), 201);
     })
     .patch("/admin/products/:id", (c) => {
+      const id = toInt(c.param("id"));
+      if (id === undefined) return c.json({ error: "ADMIN_RECORD_NOT_FOUND" }, 404);
+
       const actor = c.header("x-admin-actor") ?? "anonymous";
 
-      return respond(c, () => admin.update(RESOURCE, Number(c.param("id")), c.req.body, { actor }));
+      return respond(c, () => admin.update(RESOURCE, id, c.req.body, { actor }));
     })
     .delete("/admin/products/:id", (c) => {
+      const id = toInt(c.param("id"));
+      if (id === undefined) return c.json({ error: "ADMIN_RECORD_NOT_FOUND" }, 404);
+
       const actor = c.header("x-admin-actor") ?? "anonymous";
 
-      return respond(
-        c,
-        async () => {
-          await admin.destroy(RESOURCE, Number(c.param("id")), { actor });
+      return respond(c, async () => {
+        await admin.destroy(RESOURCE, id, { actor });
 
-          return { deleted: Number(c.param("id")) };
-        },
-        200,
-      );
+        return { deleted: id };
+      });
     })
     .get("/admin/audit", async (c) => {
       const rows: AuditRow[] = await readAuditLog(db);

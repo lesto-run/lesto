@@ -82,6 +82,27 @@ describe("@keel/admin example — the admin journey over HTTP", () => {
     }
   });
 
+  it("tolerates malformed paging and a non-numeric id instead of crashing", async () => {
+    const { app, close } = await boot();
+
+    try {
+      // A garbage `?limit=` must fall back to the default page — not reach the
+      // query as `NaN`, which SQLite rejects with `no such column: NaN`.
+      const listed = await app.handle("GET", "/admin/products", {
+        query: { limit: "abc", offset: "xyz" },
+      });
+      expect(listed.status).toBe(200);
+      expect(body<{ rows: unknown[] }>(listed).rows).toHaveLength(5);
+
+      // A non-numeric id resolves to a clean 404, never a NaN-bound query.
+      const got = await app.handle("GET", "/admin/products/not-a-number");
+      expect(got.status).toBe(404);
+      expect(body<{ error: string }>(got).error).toBe("ADMIN_RECORD_NOT_FOUND");
+    } finally {
+      close();
+    }
+  });
+
   it("create / update / destroy each fire the onMutation hook into the audit trail", async () => {
     // Start empty so the only audit rows are the ones this test produces.
     const { app, close } = await boot(false);
