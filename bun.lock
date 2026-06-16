@@ -85,6 +85,14 @@
         "@keel/web": "workspace:*",
       },
     },
+    "packages/client": {
+      "name": "@keel/client",
+      "version": "0.0.0",
+      "dependencies": {
+        "@keel/errors": "workspace:*",
+        "@keel/router": "workspace:*",
+      },
+    },
     "packages/cloudflare": {
       "name": "@keel/cloudflare",
       "version": "0.0.0",
@@ -875,6 +883,8 @@
     "@keel/cache": ["@keel/cache@workspace:packages/cache"],
 
     "@keel/cli": ["@keel/cli@workspace:packages/cli"],
+
+    "@keel/client": ["@keel/client@workspace:packages/client"],
 
     "@keel/cloudflare": ["@keel/cloudflare@workspace:packages/cloudflare"],
 

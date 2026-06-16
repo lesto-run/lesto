@@ -12,9 +12,12 @@
   },
   "dependencies": {
     "@keel/auth": "workspace:*",
+    "@keel/authz": "workspace:*",
+    "@keel/client": "workspace:*",
     "@keel/cloudflare": "workspace:*",
     "@keel/csrf": "workspace:*",
     "@keel/db": "workspace:*",
+    "@keel/flags": "workspace:*",
     "@keel/identity": "workspace:*",
     "@keel/migrate": "workspace:*",
     "@keel/runtime": "workspace:*",

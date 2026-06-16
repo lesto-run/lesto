@@ -25,6 +25,8 @@ import type { Identity } from "@keel/identity";
 import { sessionSource } from "./session-source";
 import { EstateLayout } from "./ui/layout";
 import { HomePage, AboutPage, MlsPage } from "./pages";
+import { StyleGuidePage } from "./styleguide";
+import { buildLabRoutes } from "./lab";
 import { LISTINGS } from "./listings";
 import { DEFAULT_DEMO, DEMO_ACCOUNTS } from "./identity";
 
@@ -89,6 +91,15 @@ export function buildEstateRoutes(identity: Identity): Keel {
           title: "About · Jade Mills Estates",
           description:
             "Four decades at the top of luxury real estate — about Jade Mills and the Jade Mills Estates marketing site.",
+        }),
+      })
+      // A static design-system gallery — no islands, pure prerendered showcase.
+      .page("/styleguide", {
+        static: true,
+        component: StyleGuidePage,
+        metadata: () => ({
+          title: "Style Guide · Jade Mills Estates",
+          description: "The estate design system — a living gallery of every UI primitive.",
         }),
       })
       // --- mls (dynamic) zone ---
@@ -177,5 +188,7 @@ export function buildEstateRoutes(identity: Identity): Keel {
 
         return c.json({ user: sessionUser(user.email), saved: LISTINGS.slice(0, 2) });
       })
+      // The /lab feature-demo zone (SSR + CSR fetch, streaming, flags, authz).
+      .route(buildLabRoutes())
   );
 }

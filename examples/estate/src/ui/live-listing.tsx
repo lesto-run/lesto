@@ -1,0 +1,73 @@
+/**
+ * `LiveListing` — the CSR (client-side) data-fetching island.
+ *
+ * The counterpart to the `Account` island's server-resolved data: this one mounts
+ * fresh on the client (`ssr: false`) and fetches its listing itself, through the
+ * typed `@keel/client` over the `/lab/api/listings/:id` route. It is the demo of
+ * "fetch on the client with end-to-end types" — `api.get` is constrained to the
+ * shared {@link LabApi} contract, so the `:id` param and the `Listing` response
+ * are both typed with no codegen. The server paints the fallback until it mounts.
+ */
+
+import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
+
+import { defineIsland } from "@keel/ui";
+import { createApi } from "@keel/client";
+
+import { formatPrice } from "../listings";
+import type { Listing } from "../listings";
+import type { LabApi } from "../lab-api";
+
+// Same-origin typed client; the contract is the one the server route fulfils.
+const api = createApi<LabApi>();
+
+type LoadState =
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "loaded"; listing: Listing };
+
+/** The mounted island: fetch the listing by id on mount, render its card. */
+function LiveListingView({ listingId }: { listingId: string }): ReactNode {
+  const [state, setState] = useState<LoadState>({ status: "loading" });
+
+  useEffect(() => {
+    let active = true;
+
+    void (async () => {
+      try {
+        const listing = await api.get("/lab/api/listings/:id", { params: { id: listingId } });
+
+        if (active) setState({ status: "loaded", listing });
+      } catch {
+        if (active) setState({ status: "error" });
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [listingId]);
+
+  if (state.status === "loading") return <p className="copy">Loading {listingId} on the client…</p>;
+
+  if (state.status === "error") return <p className="copy">Could not load {listingId}.</p>;
+
+  return (
+    <article className="card">
+      <h2>{state.listing.title}</h2>
+
+      <p className="card__where">{state.listing.neighborhood}</p>
+
+      <p className="card__price">{formatPrice(state.listing.price)}</p>
+
+      <p className="copy">Fetched in the browser via the typed @keel/client.</p>
+    </article>
+  );
+}
+
+export const LiveListing = defineIsland({
+  name: "LiveListing",
+  component: LiveListingView,
+  fallback: () => <p className="copy">Loading listing…</p>,
+});

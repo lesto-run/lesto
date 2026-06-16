@@ -13,9 +13,11 @@ import { Registry } from "@keel/ui";
 import { hydrateDocumentIslands } from "@keel/ui/client";
 
 import { AccountIsland } from "./src/ui/account-island";
+import { LiveListing } from "./src/ui/live-listing";
 
-// The island's declaration (carried on `.island`) is what the client registers,
-// so the browser mounts the very component the server reserved a slot for.
-const registry = new Registry().defineClient(AccountIsland.island);
+// Each island's declaration (carried on `.island`) is what the client registers,
+// so the browser mounts the very components the server reserved slots for:
+// Account (server-resolved data) and LiveListing (client-fetched via @keel/client).
+const registry = new Registry().defineClient(AccountIsland.island).defineClient(LiveListing.island);
 
 hydrateDocumentIslands(registry);

@@ -11,6 +11,8 @@
 import { defineSites } from "@keel/sites";
 
 export default defineSites([
-  { name: "marketing", render: "static", basePath: "/", pages: ["/", "/about"] },
+  { name: "marketing", render: "static", basePath: "/", pages: ["/", "/about", "/styleguide"] },
   { name: "mls", render: "dynamic", basePath: "/mls" },
+  // The feature-demo zone — dynamic (streaming, flags, authz, CSR fetch).
+  { name: "lab", render: "dynamic", basePath: "/lab" },
 ]);

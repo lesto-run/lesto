@@ -58,6 +58,56 @@ export function Copy({ text }: { text: string }): ReactNode {
   return <p className="copy">{text}</p>;
 }
 
+// --- design-system primitives (showcased on /styleguide) ---
+
+/** A call-to-action: a link styled as a button (solid by default, or `ghost`). */
+export function Button({
+  href,
+  variant,
+  children,
+}: {
+  href?: string;
+  variant?: "solid" | "ghost";
+  children: ReactNode;
+}): ReactNode {
+  const className = variant === "ghost" ? "button button--ghost" : "button";
+
+  return href === undefined ? (
+    <button className={className} type="button">
+      {children}
+    </button>
+  ) : (
+    <a className={className} href={href}>
+      {children}
+    </a>
+  );
+}
+
+/** A small rounded label — a status or category chip. */
+export function Badge({ children }: { children: ReactNode }): ReactNode {
+  return <span className="badge">{children}</span>;
+}
+
+/** A titled section block — the unit the style guide and lab pages are built from. */
+export function Section({ title, children }: { title: string; children: ReactNode }): ReactNode {
+  return (
+    <section className="section">
+      <h2>{title}</h2>
+
+      {children}
+    </section>
+  );
+}
+
+/** A color swatch with its name — a design-token chip for the style guide. */
+export function Swatch({ color, name }: { color: string; name: string }): ReactNode {
+  return (
+    <span>
+      <span className="swatch" style={{ background: color }} /> {name}
+    </span>
+  );
+}
+
 /** One listing: title, neighborhood, price, and size. */
 export function ListingCard({
   title,
