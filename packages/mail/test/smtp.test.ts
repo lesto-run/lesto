@@ -281,7 +281,40 @@ describe("createSmtpTransport", () => {
 
     await transport.send({ ...base(), from: "f@app.com", html: "line1\n.\nline2" });
     const dataPayload = fake.written.find((l) => l.includes("line1"));
-    expect(dataPayload).toContain("\n..\n");
+    // The lone-dot line is escaped to "..", CRLF-framed like every other line.
+    expect(dataPayload).toContain("\r\n..\r\n");
+  });
+
+  it("normalizes bare-LF body lines to CRLF on the wire (RFC 5321 §2.3.8)", async () => {
+    const fake = new FakeSocket([
+      "220 ready\r\n",
+      "250 ok\r\n",
+      "250 ok\r\n",
+      "250 ok\r\n",
+      "354 go\r\n",
+      "250 queued\r\n",
+      "221 bye\r\n",
+    ]);
+    const transport = createSmtpTransport({
+      host: "h",
+      port: 25,
+      secure: false,
+      connect: async () => fake,
+    });
+
+    // react-email's plain-text render emits LF-only line breaks; they must reach
+    // the relay as CRLF, with no bare LF surviving anywhere in the message.
+    await transport.send({
+      ...base(),
+      from: "f@app.com",
+      text: "one\ntwo",
+      html: "<p>a</p>\n<p>b</p>",
+    });
+    const data = fake.written.find((l) => l.includes("one"));
+    expect(data).toBeDefined();
+    expect(/[^\r]\n/.test(data!)).toBe(false);
+    expect(data).toContain("one\r\ntwo");
+    expect(data).toContain("<p>a</p>\r\n<p>b</p>");
   });
 
   it("extracts the bare address from an angle-bracketed From", async () => {

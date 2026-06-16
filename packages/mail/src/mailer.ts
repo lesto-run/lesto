@@ -55,7 +55,7 @@ export interface Email {
   readonly react?: unknown;
 
   /**
-   * Plain-text alternative. When present along`html`, transports emit a
+   * Plain-text alternative. When present alongside `html`, transports emit a
    * `multipart/alternative` body so text-only clients still render.
    */
   readonly text?: string;

@@ -257,10 +257,16 @@ function buildMessage(email: RenderedEmail, from: string): string {
     body = email.html;
   }
 
-  // A blank line separates the header block from the body (RFC 5322 §2.1) —
-  // without it a client folds the body into the headers. Then RFC 5321
-  // dot-stuffing: a body line that is just "." would otherwise end DATA early.
-  const message = `${headers.join("\r\n")}\r\n\r\n${body}`.replace(/\n\./g, "\n..");
+  // Assemble, then fix the body line by line for the wire:
+  //   1. A blank line separates the header block from the body (RFC 5322 §2.1) —
+  //      without it a client folds the body into the headers.
+  //   2. Every line ends with CRLF (RFC 5321 §2.3.8) — a bare LF/CR is illegal in
+  //      DATA, and react-email's plain-text render emits LF. Normalize so a
+  //      rendered body never reaches a strict relay half-terminated.
+  //   3. Dot-stuffing: a body line that is just "." would otherwise end DATA early.
+  const message = `${headers.join("\r\n")}\r\n\r\n${body}`
+    .replace(/\r\n|\r|\n/g, "\r\n")
+    .replace(/\n\./g, "\n..");
 
   return `${message}\r\n.`;
 }
