@@ -103,6 +103,62 @@ describe("Mailer", () => {
     expect(sent[0]?.from).toBeUndefined();
   });
 
+  it("auto-fills the multipart text part from a renderer that returns { html, text }", async () => {
+    const mailer = new Mailer({
+      queue,
+      transport,
+      render: () => ({ html: "<p>Hi</p>", text: "Hi" }),
+    });
+    mailer.define("welcome", () => ({ to: "x@example.com", subject: "Hi", react: {} }));
+
+    await mailer.send("welcome", {});
+    await queue.runOnce();
+
+    expect(sent[0]?.html).toBe("<p>Hi</p>");
+    expect(sent[0]?.text).toBe("Hi");
+  });
+
+  it("lets an explicit email.text win over a renderer-supplied text", async () => {
+    const mailer = new Mailer({
+      queue,
+      transport,
+      render: () => ({ html: "<p>Hi</p>", text: "auto" }),
+    });
+    mailer.define("welcome", () => ({
+      to: "x@example.com",
+      subject: "Hi",
+      react: {},
+      text: "explicit",
+    }));
+
+    await mailer.send("welcome", {});
+    await queue.runOnce();
+
+    expect(sent[0]?.text).toBe("explicit");
+  });
+
+  it("template() binds params for type-safe sends and delivers like define+send", async () => {
+    const mailer = new Mailer({ queue, transport, defaultFrom: "hi@app.com" });
+    const welcome = mailer.template("welcome", (p: { to: string; name: string }) => ({
+      to: p.to,
+      subject: `Welcome ${p.name}`,
+      html: `<p>Hi ${p.name}</p>`,
+    }));
+
+    expect(welcome.name).toBe("welcome");
+
+    const id = await welcome.send({ to: "ada@example.com", name: "Ada" });
+    expect((await queue.runOnce())?.outcome).toBe("done");
+
+    expect(sent[0]).toEqual({
+      to: "ada@example.com",
+      subject: "Welcome Ada",
+      html: "<p>Hi Ada</p>",
+      from: "hi@app.com",
+      messageId: messageIdFor(id),
+    });
+  });
+
   it("fails when the template has no body", async () => {
     const mailer = new Mailer({ queue, transport });
     mailer.define("empty", () => ({ to: "x@example.com", subject: "Empty" }));

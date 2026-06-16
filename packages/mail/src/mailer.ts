@@ -103,7 +103,21 @@ export interface MailTransport {
   send(email: RenderedEmail): Promise<void>;
 }
 
-export type EmailRenderer = (element: unknown) => string | Promise<string>;
+/**
+ * What a renderer may hand back: HTML, or HTML paired with a plain-text
+ * alternative. Returning `text` is how a renderer (e.g. react-email's
+ * `render(el, { plainText: true })`) auto-fills the multipart text part — the
+ * mailer drops it into {@link RenderedEmail.text} so the transport emits
+ * `multipart/alternative` with no per-template effort.
+ */
+export interface RenderedBody {
+  readonly html: string;
+  readonly text?: string;
+}
+
+export type EmailRenderer = (
+  element: unknown,
+) => string | RenderedBody | Promise<string | RenderedBody>;
 
 type Builder = (params: JsonValue) => Email | Promise<Email>;
 
@@ -129,6 +143,22 @@ export interface MailerOptions {
 
 const DEFAULT_PARK_MS = 60_000;
 const DEFAULT_MAX_PARKS = 10;
+
+/**
+ * A type-safe sender bound to one template's params — the typed face of
+ * {@link Mailer.template}. `send`'s argument is exactly the builder's param
+ * type, so a wrong-shaped payload is a *compile* error. The open
+ * {@link Mailer.send} stays string-keyed (it must, for deploy-skew dynamic
+ * dispatch to an as-yet-undefined mailer); this is the typed path for the
+ * common case where the call site knows the template.
+ */
+export interface MailTemplate<P extends JsonValue> {
+  /** The registered mailer name. */
+  readonly name: string;
+
+  /** Queue this template with type-checked params. Returns the job id. */
+  send(params: P, options?: { maxAttempts?: number }): Promise<number>;
+}
 
 export class Mailer {
   private readonly queue: Queue;
@@ -181,6 +211,30 @@ export class Mailer {
     return this.queue.enqueue(DELIVER_JOB, { mailer: name, params }, options);
   }
 
+  /**
+   * Define a template AND get back a {@link MailTemplate} sender for it.
+   *
+   *   const welcome = mailer.template(
+   *     "welcome",
+   *     (p: { to: string; name: string }) => ({ to: p.to, subject: "Hi", react: <W {...p} /> }),
+   *   );
+   *   welcome.send({ to: "ada@x.com", name: "Ada" }); // typed — wrong shape won't compile
+   *
+   * The runtime is exactly {@link define} + {@link send}; the value it adds is the
+   * type binding between the template's params and what you send it.
+   */
+  template<P extends JsonValue>(
+    name: string,
+    build: (params: P) => Email | Promise<Email>,
+  ): MailTemplate<P> {
+    this.define(name, build);
+
+    return {
+      name,
+      send: (params, options) => this.send(name, params, options),
+    };
+  }
+
   // Runs inside the worker: build → render → validate headers → hand to the transport.
   private async deliver(payload: DeliverPayload, context: JobContext): Promise<void> {
     const build = this.builders.get(payload.mailer);
@@ -192,8 +246,13 @@ export class Mailer {
     }
 
     const email = await build(payload.params);
-    const html = await this.renderBody(email);
+    const rendered = await this.renderBody(email);
     const from = email.from ?? this.defaultFrom;
+
+    // An explicit `email.text` wins; otherwise a renderer-supplied plain-text
+    // alternative (react-email's `plainText` render) auto-fills the multipart
+    // text part — so deliverability improves with zero per-template work.
+    const text = email.text ?? rendered.text;
 
     assertNoInjection("to", email.to, "MAIL_INVALID_ADDRESS");
     assertNoInjection("subject", email.subject, "MAIL_INVALID_HEADER");
@@ -207,10 +266,10 @@ export class Mailer {
     await this.transport.send({
       to: email.to,
       subject: email.subject,
-      html,
+      html: rendered.html,
       messageId: messageIdFor(context.job.id),
       ...(from === undefined ? {} : { from }),
-      ...(email.text === undefined ? {} : { text: email.text }),
+      ...(text === undefined ? {} : { text }),
       ...(headers === undefined ? {} : { headers }),
     });
   }
@@ -246,9 +305,9 @@ export class Mailer {
     );
   }
 
-  private async renderBody(email: Email): Promise<string> {
+  private async renderBody(email: Email): Promise<RenderedBody> {
     if (email.html !== undefined) {
-      return email.html;
+      return { html: email.html };
     }
 
     if (email.react !== undefined) {
@@ -259,7 +318,10 @@ export class Mailer {
         );
       }
 
-      return this.render(email.react);
+      // The hook may return just HTML or `{ html, text }`; normalize to the latter.
+      const rendered = await this.render(email.react);
+
+      return typeof rendered === "string" ? { html: rendered } : rendered;
     }
 
     throw new MailError("MAIL_EMPTY_BODY", "An email must provide `html` or `react`.");
