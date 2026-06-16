@@ -35,7 +35,6 @@ import {
 } from "@keel/mailing-lists";
 import type { List, MailingLists } from "@keel/mailing-lists";
 import { installSchema, Queue } from "@keel/queue";
-import type { SqlDatabase as QueueDatabase } from "@keel/queue";
 import { rateLimit } from "@keel/ratelimit";
 import { fromRequestMiddleware, keel } from "@keel/web";
 import type { Keel, Middleware } from "@keel/web";
@@ -173,7 +172,9 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
 
   // The mailer rides @keel/queue. The Queue object is just a handle here — it
   // touches no table until a job is enqueued/run, so we build it before migrate.
-  const queue = new Queue({ db: handle as unknown as QueueDatabase });
+  // One unified `SqlDatabase` flows from the kernel handle into both @keel/db and
+  // @keel/queue, so there is no cast.
+  const queue = new Queue({ db: handle });
 
   const mailer = new Mailer({ queue, transport });
   defineMailers(mailer);
@@ -191,17 +192,16 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
   const subscribeLimiter =
     options.subscribeLimiter ?? rateLimit({ capacity: 5, refillPerSecond: 1 });
 
-  // The kernel migrates the mailing-list schema (and installs the durable-store
-  // schema) before dispatch is live.
+  // The kernel migrates the mailing-list schema, installs the durable-store
+  // schema, then runs each `schemas` installer — so the mail battery declares its
+  // @keel/queue schema once and the kernel creates the queue tables before
+  // dispatch is live. No separate post-boot install, no cast.
   const app = await createApp({
     db: handle,
     app: buildMailingListsApp({ lists, subscribeLimiter }),
     migrations: [mailingListsMigration],
+    schemas: [installSchema],
   });
-
-  // The queue schema is the mail battery's own, not part of the kernel's app
-  // migrations — install it on the same handle. Idempotent (`IF NOT EXISTS`).
-  await installSchema(handle as unknown as QueueDatabase);
 
   const list = await insertList(db, { name: "Weekly Digest" });
 

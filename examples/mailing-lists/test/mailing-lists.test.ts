@@ -136,27 +136,44 @@ describe("@keel/mailing-lists example — the journey over HTTP", () => {
     }
   });
 
-  it("rate-limits the public subscribe endpoint (the package's mandate)", async () => {
-    // capacity 1, effectively no refill — the second call in a burst is denied.
+  it("rate-limits subscribe per client, keyed off the request (finding #1)", async () => {
+    // `keyFor` now receives the request, so we bucket by a client header even
+    // in-process — where `app.handle` establishes no IP context for the default
+    // key. capacity 1, ~no refill, so a client's second call in a burst is denied.
     const { app, list, outbox, drain, close } = await boot(
-      rateLimit({ capacity: 1, refillPerSecond: 0.01, keyFor: () => "one-client" }),
+      rateLimit({
+        capacity: 1,
+        refillPerSecond: 0.01,
+        keyFor: (req) => req.headers["x-client-id"] ?? "anon",
+      }),
     );
 
     try {
+      const clientA = { "x-client-id": "client-a" };
       const first = await app.handle("POST", `/lists/${list.id}/subscribe`, {
+        headers: clientA,
         body: { email: "ada@example.com" },
       });
       expect(first.status).toBe(202);
 
+      // Same client, second call in the burst → throttled.
       const second = await app.handle("POST", `/lists/${list.id}/subscribe`, {
-        body: { email: "grace@example.com" },
+        headers: clientA,
+        body: { email: "ada-again@example.com" },
       });
       expect(second.status).toBe(429);
 
-      // The throttled call never reached the service, so no second email exists.
+      // A DIFFERENT client has its own bucket → allowed. This is what request-
+      // keying buys: real per-client limiting with no ambient IP context.
+      const other = await app.handle("POST", `/lists/${list.id}/subscribe`, {
+        headers: { "x-client-id": "client-b" },
+        body: { email: "grace@example.com" },
+      });
+      expect(other.status).toBe(202);
+
+      // Two distinct clients got through; the throttled retry sent no mail.
       await drain();
-      expect(outbox).toHaveLength(1);
-      expect(outbox[0]?.to).toBe("ada@example.com");
+      expect(outbox.map((m) => m.to).toSorted()).toEqual(["ada@example.com", "grace@example.com"]);
     } finally {
       close();
     }

@@ -10,12 +10,12 @@ DX** (wire it, run it) and **hosted UX** (deploy it, click it).
 
 The full double opt-in journey as HTTP routes over the `createMailingLists` service:
 
-| Route | Does |
-| --- | --- |
+| Route                           | Does                                                                                                |
+| ------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `POST /lists/:listId/subscribe` | Begin double opt-in — pending row + confirmation email. **Rate-limited** (the package mandates it). |
-| `GET /confirm/:token` | Complete double opt-in — flips the subscriber to `subscribed`, rotating the token. |
-| `POST /lists/:listId/broadcast` | Fan an issue out to every **confirmed** recipient; each email carries `List-Unsubscribe`. |
-| `GET /unsubscribe/:token` | One-click opt out. |
+| `GET /confirm/:token`           | Complete double opt-in — flips the subscriber to `subscribed`, rotating the token.                  |
+| `POST /lists/:listId/broadcast` | Fan an issue out to every **confirmed** recipient; each email carries `List-Unsubscribe`.           |
+| `GET /unsubscribe/:token`       | One-click opt out.                                                                                  |
 
 It composes four batteries the way a real app does: `@keel/mailing-lists` (the
 service), `@keel/mail` (delivery), `@keel/queue` (durable enqueue under the mailer),
@@ -76,28 +76,29 @@ enforced with a **real per-client IP key**, no unknown-client fallback), and a
 broadcast to an unconfirmed address correctly enqueued **0** — double opt-in
 refusing to mail an address that never confirmed.
 
-## DX findings (filed back to the owning plans)
+## DX findings (surfaced here, then fixed)
 
-The point of the gallery is to surface friction wiring the real API. This example found:
+The point of the gallery is to surface friction wiring the real API. This example
+found three, and the loop closed them:
 
-1. **The mandated rate-limit guard can't be exercised through in-process dispatch.**
-   `rateLimit` keys on `currentContext()?.ip`, which `app.handle()` never
-   establishes — so the guardrail the package *requires* on `subscribe` silently
-   degrades to one shared bucket (and warns once) in exactly the in-process path
-   this example's test and `run.ts` use. It only works per-client on the hosted leg
-   (`serve.ts`), where the runtime sets the context. Compounding it: `keyFor: () =>
-   string` takes no request argument, so you can't key by anything in the request
-   (e.g. the email) without the ambient context. → *owner: `auth-security` /
-   `ratelimit`.*
+1. **`keyFor` couldn't see the request — PARTLY FIXED** (`feat(ratelimit)!`,
+   commit `768ba0d`). `rateLimit`'s `keyFor` now receives the `KeelRequest`, so a
+   caller can bucket by request data (an API key, a client header, a route param)
+   instead of being forced through the ambient `currentContext()`. The rate-limit
+   test above now proves real _per-client_ limiting in-process by keying on a
+   client header. **Still open:** the deeper half — in-process `app.handle()`
+   establishes no client-IP context, so the _default_ IP key still degrades to a
+   shared bucket there. That's a `@keel/web`/runtime concern (let `app.handle`
+   establish a client context), tracked separately.
 
-2. **`createApp` installs the durable-store schema but not the queue schema.** The
-   mail battery rides `@keel/queue`, yet a `createApp({ … })` app must remember to
-   call `installSchema` from `@keel/queue` itself or the first `send` hits a missing
-   table. There's no kernel seam to declare "this app uses the queue." → *owner:
-   `operability-dx` / kernel.*
+2. **`createApp` didn't install the queue schema — FIXED** (`feat(kernel)`, commit
+   `aed3893`). `KeelAppConfig` gained a `schemas` seam: the mail battery now
+   declares its queue schema once (`createApp({ …, schemas: [installSchema] })`)
+   and the kernel creates the queue tables right after migrate. No separate
+   post-boot install — see `buildApp` in `src/app.ts`.
 
-3. **Three structurally-identical `SqlDatabase` types force a cast.** Sharing one
-   connection across `@keel/db`, `@keel/kernel`, and `@keel/queue` needs
-   `handle as unknown as QueueDatabase`. They should be one type (or re-export one
-   another) so composing db + queue is cast-free. → *owner: `data-persistence` /
-   `durable-stores`.*
+3. **Three structurally-identical `SqlDatabase` types forced a cast — FIXED**
+   (same commit `aed3893`). `@keel/db`'s `SqlDatabase` is now canonical;
+   `@keel/queue` and `@keel/kernel` re-export/alias it. One `openSqlite` handle
+   flows into `createDb`, `createApp`, and `new Queue({ db })` with **no cast** —
+   the `as unknown as QueueDatabase` is gone from this example.
