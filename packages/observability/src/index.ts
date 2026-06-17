@@ -33,6 +33,39 @@
  *
  * `traceparent` (parse/format) is the W3C propagation primitive — verbatim, never
  * an invented format — that joins a trace across a process boundary.
+ *
+ * ── The v1 observability cut: TRACES ONLY (said out loud) ───────────────────
+ *
+ * This package is distributed TRACING and nothing else. v1 ships NO metrics
+ * pipeline (no counters, no latency histograms) and NO logs pipeline (no log
+ * aggregation/shipping) from here. That is a deliberate scope line, not an
+ * oversight: the operability plan defers metrics and logs post-1.0
+ * (`docs/plans/operability-dx.md`), and the launch story is spans + the runtime's
+ * structured access log. If you reach for a counter or a histogram here, it does
+ * not exist on purpose — the seam to add one is a future increment, not a gap to
+ * patch around.
+ *
+ * ── The `keel.request_id` → trace join ──────────────────────────────────────
+ *
+ * Traces and the access log are two records of ONE request, joined by a shared
+ * id. The runtime mints a per-request id, puts it on every access-log entry as
+ * `requestId`, sets it on the request span as the `keel.request_id` attribute,
+ * and echoes it back on the `X-Request-Id` response header. So a span found in
+ * the collector and an access-log line are correlated by an exact-match query on
+ * that one value — the trace tells you the shape (parent/child spans, timings),
+ * the access log tells you the outcome (method, path, status, ms), and
+ * `keel.request_id` is the key that lines them up. No metrics layer is needed to
+ * bridge the two; the id is the join.
+ *
+ * ── The NIH boundary line: W3C `traceparent`, verbatim ──────────────────────
+ *
+ * Cross-process propagation is W3C Trace Context `traceparent` EXACTLY (see
+ * `traceparent.ts`) — never a Keel-invented header or format. That is a settled
+ * decision: the W3C wire is what every collector, vendor, and sibling service
+ * already speaks, so adopting it verbatim is the difference between joining the
+ * world's traces and stranding ours. We do not extend it, we do not abbreviate
+ * it, and we do not ship an alternative — if a hop needs propagation, it carries
+ * `traceparent`.
  */
 
 export { InMemoryExporter } from "./exporter";

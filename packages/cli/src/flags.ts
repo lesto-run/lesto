@@ -44,13 +44,27 @@ export function parsePort(args: readonly string[], fallback: number): PortFlag {
  * The flag's value is the token immediately after it. A missing flag — or a
  * trailing flag with no value — returns `undefined`, leaving the caller to apply
  * whatever default the command wants.
+ *
+ * A following token that is itself a flag (it starts with `--`) is NOT consumed
+ * as the value: `keel build --out --target blog` means `--out` was given no
+ * value and `--target blog` is the next flag, not `--out --target`. Without this
+ * guard a fat-fingered, value-less flag would silently swallow the next flag as
+ * its value — `--out` would become `"--target"` and a real directory would never
+ * be written. Treating a `--`-prefixed follower as "no value" returns `undefined`
+ * so the caller falls back to its default, which is the safe, predictable shape.
  */
 export function parseStringFlag(args: readonly string[], name: string): string | undefined {
   const index = args.indexOf(`--${name}`);
 
   if (index === -1) return undefined;
 
-  return args[index + 1];
+  const raw = args[index + 1];
+
+  // A trailing flag (nothing after it) or a follower that is itself a flag both
+  // mean "no value" — never consume another flag as this one's value.
+  if (raw === undefined || raw.startsWith("--")) return undefined;
+
+  return raw;
 }
 
 /**

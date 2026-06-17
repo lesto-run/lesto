@@ -1359,9 +1359,15 @@ describe("parseStringFlag", () => {
     expect(parseStringFlag(["--target"], "target")).toBeUndefined();
   });
 
-  it("takes the immediately-following token verbatim, even if it looks like a flag", () => {
-    // Documented semantics: the value is whatever follows the flag. The command
-    // then validates it (e.g. an unknown --target name is a clear error).
-    expect(parseStringFlag(["--target", "--out"], "target")).toBe("--out");
+  it("does NOT consume a following flag as the value", () => {
+    // `keel build --out --target blog` means `--out` was given no value; the
+    // parser must not swallow the next flag (`--target`) as `--out`'s value, or a
+    // value-less `--out` would silently become `"--target"` and never write a dir.
+    expect(parseStringFlag(["--out", "--target", "blog"], "out")).toBeUndefined();
+  });
+
+  it("does NOT consume a following flag even when that flag is the last token", () => {
+    // The guard fires on the `--` prefix, not on there being a token after it.
+    expect(parseStringFlag(["--target", "--out"], "target")).toBeUndefined();
   });
 });

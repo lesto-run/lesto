@@ -314,6 +314,41 @@ describe("content write tools", () => {
     expect(created).toMatchObject({ collection: "pages", slug: "blank" });
   });
 
+  it("a write to one collection leaves the other DB-backed collections intact", async () => {
+    // The incremental refresh patches only the collection it wrote — it must not
+    // drop entries the runtime already holds for OTHER collections. Author a
+    // `pages` entry, then write to `posts`, and assert the `pages` entry is still
+    // readable: proof the refresh is collection-scoped, not a full clobber.
+    const ctx = await withContentDb();
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "create_content_entry", {
+      collection: "pages",
+      slug: "about",
+      data: { title: "About" },
+    });
+
+    await dispatch(ctx, tools, "create_content_entry", {
+      collection: "posts",
+      slug: "first",
+      data: { title: "First" },
+    });
+
+    // The just-written post is readable...
+    const post = await dispatch(ctx, tools, "get_content_entry", {
+      collection: "posts",
+      slug: "first",
+    });
+    expect(post).toMatchObject({ title: "First" });
+
+    // ...and the `pages` collection written earlier survived the `posts` refresh.
+    const page = await dispatch(ctx, tools, "get_content_entry", {
+      collection: "pages",
+      slug: "about",
+    });
+    expect(page).toMatchObject({ title: "About" });
+  });
+
   it("update_content_entry changes an existing entry", async () => {
     const ctx = await withContentDb();
     const tools = buildTools(ctx);

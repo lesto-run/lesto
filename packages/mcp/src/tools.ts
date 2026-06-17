@@ -12,8 +12,9 @@ import { createHash } from "node:crypto";
 import type { App } from "@keel/kernel";
 import type { SqlDatabase } from "@keel/migrate";
 
-import { getCollections, getEntry, query } from "@keel/content-core";
-import { createEntry, deleteEntry, hydrateRuntime, updateEntry } from "@keel/content-store";
+import { getCollections, getEntry, query, setData } from "@keel/content-core";
+import type { RuntimeEntry } from "@keel/content-core";
+import { createEntry, deleteEntry, loadEntries, updateEntry } from "@keel/content-store";
 import type { WriteEntryInput } from "@keel/content-store";
 
 import { McpError } from "./errors";
@@ -123,6 +124,60 @@ function modeOf(context: KeelMcpContext): McpMode {
 }
 
 /**
+ * An incremental view over content-core's runtime store, scoped to one tool set.
+ *
+ * Every content write must refresh the runtime so the read tools see it. The
+ * naive refresh is `hydrateRuntime(db)`, which reloads EVERY collection from the
+ * database on each write — so an agent that authors N entries pays
+ * O(N · total-entries): a full re-read per write, the cost climbing with the
+ * whole store. Over a session that authors a collection that is O(N²).
+ *
+ * This collapses it to O(N · changed-collection): the first write seeds an
+ * authoritative collections map with one full load; thereafter each write reloads
+ * ONLY the collection it touched (`loadEntries(db, collection)`) and patches that
+ * key, leaving every other collection's already-loaded entries untouched. The
+ * full map is handed to `setData` each time, so content-core's reads stay
+ * consistent — but the database read is bounded by the changed collection, not
+ * the store.
+ *
+ * The seed is lazy and memoized (the first write loads everything once; later
+ * writes never reload an untouched collection), and the map is owned by this
+ * closure — one per `buildTools`, so two servers never share a stale view.
+ */
+interface ContentRuntime {
+  /**
+   * Refresh the runtime after a write to `collection`: reload just that
+   * collection from the database, patch it into the map, and republish.
+   */
+  refresh(db: SqlDatabase, collection: string): Promise<void>;
+}
+
+function createContentRuntime(): ContentRuntime {
+  // The authoritative collections map, seeded once on the first write. `undefined`
+  // until then — so a tool set that never writes pays nothing.
+  let collections: Record<string, RuntimeEntry[]> | undefined;
+
+  return {
+    refresh: async (db, collection) => {
+      // Seed once with a single full load; every later write reuses this map and
+      // only re-reads the collection it changed.
+      collections ??= await loadEntries(db);
+
+      // Reload ONLY the written collection. `loadEntries(db, name)` keys by
+      // collection; a now-empty collection (its last entry deleted) yields no key,
+      // so we clear it rather than leave a stale array behind.
+      const reloaded = await loadEntries(db, collection);
+
+      collections[collection] = reloaded[collection] ?? [];
+
+      // Republish the patched full map; content-core's `setData` is a full
+      // replace, but the database read above touched only one collection.
+      setData(collections);
+    },
+  };
+}
+
+/**
  * Refuse a destructive tool outside operator mode.
  *
  * The named tool is the one the caller is about to run; surfacing it (and the
@@ -213,6 +268,11 @@ const WRITE_ENTRY_SCHEMA = {
  * read tools, then the content write tools.
  */
 export function buildTools(context: KeelMcpContext): KeelTool[] {
+  // One incremental runtime view per tool set: the content writes refresh through
+  // it so each write re-reads only the collection it changed, never the whole
+  // store (see {@link createContentRuntime}).
+  const runtime = createContentRuntime();
+
   const listRoutes: KeelTool = {
     name: "list_routes",
     description: "List every route the running Keel app answers, in resolution order.",
@@ -349,10 +409,13 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
 
       const db = requireContentDb(context);
 
-      const { entry } = await createEntry(db, toWriteInput(input));
+      const write = toWriteInput(input);
 
-      // The write changed the database; refresh the runtime so reads see it.
-      await hydrateRuntime(db);
+      const { entry } = await createEntry(db, write);
+
+      // The write changed one collection; refresh just that collection so reads
+      // see it, without re-reading the rest of the store.
+      await runtime.refresh(db, write.collection);
 
       return entry;
     },
@@ -368,9 +431,11 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
 
       const db = requireContentDb(context);
 
-      const { entry } = await updateEntry(db, toWriteInput(input));
+      const write = toWriteInput(input);
 
-      await hydrateRuntime(db);
+      const { entry } = await updateEntry(db, write);
+
+      await runtime.refresh(db, write.collection);
 
       return entry;
     },
@@ -393,9 +458,11 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
 
       const db = requireContentDb(context);
 
-      const result = await deleteEntry(db, String(input.collection), String(input.slug));
+      const collection = String(input.collection);
 
-      await hydrateRuntime(db);
+      const result = await deleteEntry(db, collection, String(input.slug));
+
+      await runtime.refresh(db, collection);
 
       return result;
     },
