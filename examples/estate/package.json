@@ -7,6 +7,7 @@
   "scripts": {
     "start": "bun run serve.ts",
     "build": "bun run build.ts",
+    "deploy": "bun run build.ts && wrangler deploy",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

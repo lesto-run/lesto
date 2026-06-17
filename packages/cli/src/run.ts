@@ -56,6 +56,29 @@ const TRACE_FLUSH_INTERVAL_MS = 5_000;
  */
 const APP_ONLY_SITE: Site = { name: "app", render: "dynamic", basePath: "/" };
 
+/**
+ * The Cloudflare deploy driver — the swappable edge `keel deploy --cloudflare`
+ * pushes a Worker (and its bound Static Assets) through.
+ *
+ * Deploying to a specific platform is an irreducible edge — the platform owns the
+ * upload protocol and it moves — so Keel drives a thin driver here rather than
+ * reimplementing it (ADR 0015). The bin wires this to the official `wrangler`
+ * CLI today; because the CLI core only ever sees this interface, a future
+ * direct-Cloudflare-API client (no spawned binary — for the agent control plane)
+ * is a drop-in replacement that needs no change to `runDeploy`.
+ */
+export interface CloudflareDeployer {
+  /**
+   * Deploy the Worker and its bound Static Assets (the driver reads the
+   * project's `wrangler.jsonc`). Returns the live `url` when the driver can
+   * determine it, so the deploy can be health-gated before it is trusted.
+   */
+  deploy: () => Promise<{ readonly url: string | undefined }>;
+
+  /** Roll the Worker back to its previous deployment — the one-step undo. */
+  rollback: () => Promise<void>;
+}
+
 /** The seams the command core depends on — all injected, never imported live. */
 export interface CliDeps {
   /**
@@ -144,6 +167,21 @@ export interface CliDeps {
   now: () => number;
 
   /**
+   * The Cloudflare deploy driver `keel deploy --cloudflare` pushes the Worker
+   * through (the bin wires the `wrangler` CLI; tests inject a fake). See
+   * {@link CloudflareDeployer}.
+   */
+  cloudflare: CloudflareDeployer;
+
+  /**
+   * Probe a deployed URL's health, resolving `true` iff it answers OK. Runs
+   * after a `--cloudflare` deploy and gates the result: a failing probe rolls the
+   * Worker back. The bin wires a timed `fetch` (a thrown/timed-out request is
+   * `false`); tests inject a fake.
+   */
+  checkHealth: (url: string) => Promise<boolean>;
+
+  /**
    * Register a graceful-shutdown hook for the long-running `serve`/`dev`
    * commands: the bin wires SIGTERM/SIGINT to drain the server and exit, so a
    * deploy's rolling restart lets in-flight requests finish instead of severing
@@ -177,7 +215,8 @@ const USAGE = [
   "  dev               Run every site live on one origin for local development (--port)",
   "  build             Prerender static sites to disk (--target <name>, --out <dir>, default out)",
   "  deploy            Build and ship static sites; print the routing plan (--target, --out, --dist;",
-  "                    --release for a versioned, atomically-flipped release, --version <v> to name it)",
+  "                    --release for a versioned, atomically-flipped release, --version <v> to name it;",
+  "                    --cloudflare to push the Worker + assets via wrangler, health-gated --health-url <url>)",
   "  rollback          Flip the live pointer to a published release: rollback --to <version> (--dist)",
   "  content:build     Compile markdown content into the content store (--prune drops stale rows)",
   "  content:new       Scaffold a new content entry: content:new <collection> <title>",
@@ -649,6 +688,48 @@ function versionStamp(now: () => number): string {
  * back in one step. `--version <v>` names the release; absent, a timestamp
  * stamp is derived from the injected clock.
  */
+/**
+ * Deploy to Cloudflare: push the Worker + its Static Assets, then health-gate it.
+ *
+ * `wrangler deploy` (the driver behind {@link CloudflareDeployer}) ships the
+ * Worker and the assets it binds in one atomic, Cloudflare-versioned step — so
+ * unlike the static-release path there is no Keel-owned pointer to flip. What Keel
+ * adds is the gate: probe the live URL after the push and, if it answers
+ * unhealthy, roll the Worker back to its previous deployment rather than leave a
+ * broken release live (a coded `CLI_DEPLOY_UNHEALTHY`).
+ *
+ * The probe target is `--health-url` when given, else the URL the driver reported
+ * with `/readyz` appended. With neither — the driver could not determine a URL and
+ * none was supplied — the deploy still lands but the gate is skipped, and the CLI
+ * says so out loud rather than silently shipping ungated.
+ */
+async function deployToCloudflare(args: readonly string[], deps: CliDeps): Promise<number> {
+  const { url } = await deps.cloudflare.deploy();
+
+  const healthUrl =
+    parseStringFlag(args, "health-url") ?? (url === undefined ? undefined : `${url}/readyz`);
+
+  if (healthUrl !== undefined && !(await deps.checkHealth(healthUrl))) {
+    await deps.cloudflare.rollback();
+
+    throw new CliError(
+      "CLI_DEPLOY_UNHEALTHY",
+      `Post-deploy health check failed at ${healthUrl}; rolled the Worker back to its previous deployment.`,
+      { healthUrl },
+    );
+  }
+
+  deps.out(url === undefined ? "deployed the Worker" : `deployed → ${url}`);
+
+  deps.out(
+    healthUrl === undefined
+      ? "health check skipped — no URL to probe (pass --health-url to gate the deploy)"
+      : `health check passed: ${healthUrl}`,
+  );
+
+  return 0;
+}
+
 async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
 
@@ -664,6 +745,13 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
   const selected = selectTarget(sites, target);
 
   const manifest = await buildStaticSites(selected, app.handle, deps.sink(outDir));
+
+  // Cloudflare ships differently: `wrangler deploy` uploads the Worker AND its
+  // bound Static Assets in one atomic step, so the build above merely freshens
+  // `out/` for it — there is no separate static ship or pointer flip here.
+  if (args.includes("--cloudflare")) {
+    return deployToCloudflare(args, deps);
+  }
 
   const plan = planDeploy(selected, manifest);
   const version = parseStringFlag(args, "version") ?? versionStamp(deps.now);

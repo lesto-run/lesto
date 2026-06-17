@@ -120,6 +120,8 @@ function depsWith(overrides: Partial<CliDeps> = {}): CliDeps {
     }),
     releaseStore: () => memoryReleaseStore().store,
     now: () => 0,
+    cloudflare: { deploy: () => Promise.resolve({ url: undefined }), rollback: vi.fn() },
+    checkHealth: () => Promise.resolve(true),
     out: (line) => lines.push(line),
     ...overrides,
   };
@@ -1100,6 +1102,112 @@ describe("run deploy", () => {
     expect(code).toBe(0);
     expect(pointer.current).toBe("2026-06-11T00-00-00-000Z");
     expect(lines).toContain("current → 2026-06-11T00-00-00-000Z");
+  });
+
+  it("--cloudflare deploys the Worker and health-checks the URL it reported", async () => {
+    const { sink } = recordingSink();
+    const deploy = vi.fn(() => Promise.resolve({ url: "https://estate.workers.dev" }));
+    const rollback = vi.fn(() => Promise.resolve());
+    const checked: string[] = [];
+
+    const code = await run(
+      ["deploy", "--cloudflare"],
+      depsWith({
+        loadApp,
+        loadSites: () => Promise.resolve(sites),
+        sink,
+        cloudflare: { deploy, rollback },
+        checkHealth: (url) => {
+          checked.push(url);
+
+          return Promise.resolve(true);
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(deploy).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
+    // Probed the reported URL's /readyz; no separate static ship on this path.
+    expect(checked).toEqual(["https://estate.workers.dev/readyz"]);
+    expect(lines).toEqual([
+      "deployed → https://estate.workers.dev",
+      "health check passed: https://estate.workers.dev/readyz",
+    ]);
+  });
+
+  it("--cloudflare rolls the Worker back and refuses when the health check fails", async () => {
+    const { sink } = recordingSink();
+    const rollback = vi.fn(() => Promise.resolve());
+
+    await expect(
+      run(
+        ["deploy", "--cloudflare"],
+        depsWith({
+          loadApp,
+          loadSites: () => Promise.resolve(sites),
+          sink,
+          cloudflare: {
+            deploy: () => Promise.resolve({ url: "https://estate.workers.dev" }),
+            rollback,
+          },
+          checkHealth: () => Promise.resolve(false),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "CLI_DEPLOY_UNHEALTHY" });
+
+    // The broken release was rolled back rather than left live.
+    expect(rollback).toHaveBeenCalledOnce();
+  });
+
+  it("--cloudflare skips the health gate (out loud) when the driver reports no URL", async () => {
+    const { sink } = recordingSink();
+    const checkHealth = vi.fn(() => Promise.resolve(true));
+
+    const code = await run(
+      ["deploy", "--cloudflare"],
+      depsWith({
+        loadApp,
+        loadSites: () => Promise.resolve(sites),
+        sink,
+        cloudflare: { deploy: () => Promise.resolve({ url: undefined }), rollback: vi.fn() },
+        checkHealth,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(checkHealth).not.toHaveBeenCalled();
+    expect(lines).toEqual([
+      "deployed the Worker",
+      "health check skipped — no URL to probe (pass --health-url to gate the deploy)",
+    ]);
+  });
+
+  it("--cloudflare health-checks an explicit --health-url instead of the reported one", async () => {
+    const { sink } = recordingSink();
+    const checked: string[] = [];
+
+    const code = await run(
+      ["deploy", "--cloudflare", "--health-url", "https://estate.example.com/healthz"],
+      depsWith({
+        loadApp,
+        loadSites: () => Promise.resolve(sites),
+        sink,
+        cloudflare: {
+          deploy: () => Promise.resolve({ url: "https://estate.workers.dev" }),
+          rollback: vi.fn(),
+        },
+        checkHealth: (url) => {
+          checked.push(url);
+
+          return Promise.resolve(true);
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(checked).toEqual(["https://estate.example.com/healthz"]);
+    expect(lines).toContain("health check passed: https://estate.example.com/healthz");
   });
 });
 

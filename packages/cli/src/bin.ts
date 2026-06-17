@@ -8,6 +8,7 @@
  * open socket, so we only exit non-`serve` commands.
  */
 
+import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 import { watch } from "node:fs";
 import { join } from "node:path";
@@ -31,8 +32,69 @@ import { writeFile } from "node:fs/promises";
 import { createApp } from "@keel/kernel";
 
 import { run } from "./run";
+import type { CloudflareDeployer } from "./run";
 import { runMcp, startMcpServer } from "./mcp";
 import { runOpenApi } from "./openapi";
+
+/**
+ * Run a `wrangler` subcommand, streaming its output and resolving with the
+ * captured stdout (so the deploy URL can be parsed from it). A non-zero exit — or
+ * a missing binary — rejects, which `runDeploy` surfaces.
+ *
+ * This is the irreducible deploy edge: it spawns Cloudflare's official tool, so it
+ * lives in this coverage-excluded wiring while the gated orchestration around it
+ * (deploy → health → rollback) is fully tested in `run.ts`. The exact flags are
+ * validated against a real account at deploy time, not in CI.
+ */
+function runWrangler(subcommand: readonly string[]): Promise<string> {
+  return new Promise((resolveOutput, reject) => {
+    const child = spawn("wrangler", [...subcommand], { stdio: ["inherit", "pipe", "inherit"] });
+
+    let stdout = "";
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+
+      process.stdout.write(chunk);
+    });
+
+    child.on("error", reject);
+
+    child.on("close", (code) => {
+      if (code === 0) resolveOutput(stdout);
+      else reject(new Error(`wrangler ${subcommand[0] ?? ""} exited with code ${code ?? "null"}`));
+    });
+  });
+}
+
+/** The real Cloudflare driver: the official `wrangler` CLI (see {@link CloudflareDeployer}). */
+const wranglerDeployer: CloudflareDeployer = {
+  deploy: async () => {
+    const output = await runWrangler(["deploy"]);
+
+    // wrangler prints the live URL on a successful deploy; recover it so the
+    // result can be health-gated. Absent a match, the gate is skipped (out loud).
+    const match = output.match(/https:\/\/\S+\.workers\.dev\S*/);
+
+    return { url: match?.[0] };
+  },
+
+  rollback: async () => {
+    await runWrangler(["rollback", "--message", "keel deploy: post-deploy health check failed"]);
+  },
+};
+
+/** Probe a deployed URL, resolving `true` iff it answers OK within the timeout. */
+async function httpHealthCheck(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+
+    return response.ok;
+  } catch {
+    // A refused connection, DNS miss, non-2xx, or timeout all mean "not healthy".
+    return false;
+  }
+}
 
 /** Where `keel dev` looks for built client assets (e.g. a bundled `/client.js`). */
 const DEV_ASSET_DIR = "out";
@@ -187,6 +249,8 @@ const code = await run(argv, {
   uploader: nodeUploader,
   releaseStore: nodeReleaseStore,
   now: Date.now,
+  cloudflare: wranglerDeployer,
+  checkHealth: httpHealthCheck,
   // On a deploy's rolling restart, drain in-flight requests then exit cleanly.
   installShutdown: (drain) => {
     const shutdown = (): void => {
