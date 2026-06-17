@@ -54,7 +54,7 @@ Content is reachable from every surface: author with `keel content:new`, compile
 | Package | What it does |
 |---|---|
 | [`@keel/auth`](./packages/auth) | Authentication primitives on `node:crypto` — password hashing, tokens, and sessions. |
-| [`@keel/rbac`](./packages/rbac) | Role-based authorization — roles, wildcard permissions, and inheritance, as pure logic. |
+| [`@keel/authz`](./packages/authz) | First-class authorization — a declarative role/permission policy (wildcard grants, cycle-safe role inheritance) and the guard middleware that enforces it. |
 
 ### Platform
 
