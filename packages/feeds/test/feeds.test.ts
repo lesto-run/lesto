@@ -250,7 +250,7 @@ describe("atom", () => {
     expect(xml).toContain(`<updated>2026-06-08T00:00:00Z</updated>`);
   });
 
-  it("falls the feed <updated> back to the newest entry's published date", () => {
+  it("falls the feed <updated> back to the first dated entry's published date", () => {
     const item: FeedItem = {
       title: "Hello",
       link: "https://keel.dev/blog/hello",
@@ -260,6 +260,25 @@ describe("atom", () => {
     const xml = atom({ title: "Keel Blog", link: "https://keel.dev/blog" }, [item]);
 
     expect(xml).toContain(`<updated>2026-06-08T00:00:00Z</updated>`);
+  });
+
+  it("uses the FIRST dated entry for the feed <updated>, not a later entry's date", () => {
+    // The contract is "first dated entry" (feeds are listed newest-first), not a
+    // max-date scan: the later "Older" date must not become the feed time.
+    const items: FeedItem[] = [
+      { title: "Newer", link: "https://keel.dev/blog/newer", published: "2026-06-08T00:00:00Z" },
+      { title: "Older", link: "https://keel.dev/blog/older", published: "2026-01-01T00:00:00Z" },
+    ];
+
+    const xml = atom({ title: "Keel Blog", link: "https://keel.dev/blog" }, items);
+
+    // The feed-level fields are everything before the first <entry>.
+    const head = xml.slice(0, xml.indexOf("<entry>"));
+
+    expect(head).toContain(`<updated>2026-06-08T00:00:00Z</updated>`);
+    expect(head).not.toContain("2026-01-01");
+    // The older entry still carries its own date.
+    expect(xml).toContain(`<updated>2026-01-01T00:00:00Z</updated>`);
   });
 
   it("omits the optional feed fields (but never the required id/updated) when absent", () => {
