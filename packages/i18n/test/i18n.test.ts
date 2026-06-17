@@ -214,6 +214,58 @@ describe("I18n.plural", () => {
     expect(i18n.plural("en", "cart", 1)).toBe("1 item");
     expect(i18n.plural("en", "cart", 2)).toBe("2 items");
   });
+
+  // -- requested-locale cohesion (no default-locale plural bleed) -----------
+
+  it("renders the requested locale's own `other` rather than the default locale's exact-category form", () => {
+    // fr selects `one` for count 1, but this fr catalog spells only `cart.other`.
+    // The default (en) DOES spell `cart.one`, so a fallback-aware probe would
+    // borrow the English singular ("1 item") into a French page. Resolution must
+    // instead stay in French and use fr's own `other`.
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: {
+        en: { "cart.one": "{count} item", "cart.other": "{count} items" },
+        fr: { "cart.other": "{count} articles" },
+      },
+    });
+
+    expect(i18n.plural("fr", "cart", 1)).toBe("1 articles");
+  });
+
+  it("borrows the default locale's CORRECT category when the requested locale spells neither form", () => {
+    // fr has no `cart.*` at all → defer to en, selecting the category by EN's
+    // rules so the borrowed English plural is grammatical (`one`, not `other`).
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: {
+        en: { "cart.one": "{count} item", "cart.other": "{count} items" },
+        fr: {},
+      },
+    });
+
+    expect(i18n.plural("fr", "cart", 1)).toBe("1 item");
+    expect(i18n.plural("fr", "cart", 3)).toBe("3 items");
+  });
+
+  it("collapses to `other` when neither the requested nor the default locale spells the key", () => {
+    const i18n = new I18n({ defaultLocale: "en", locales: { en: {}, fr: {} } });
+
+    expect(i18n.plural("fr", "cart", 1)).toBe("cart.other");
+  });
+
+  it("does not consult the default locale for a plural when fallback is off", () => {
+    // ru selects `many` for 5; this catalog spells only `one`, fallback is off,
+    // so resolution collapses to ru's `other` and surfaces the visible miss
+    // rather than reaching across to a default locale.
+    const i18n = new I18n({
+      defaultLocale: "en",
+      fallback: false,
+      locales: { ru: { "file.one": "{count} файл" } },
+    });
+
+    expect(i18n.plural("ru", "file", 5)).toBe("file.other");
+  });
 });
 
 describe("I18n.has", () => {

@@ -101,22 +101,11 @@ export class I18n {
    *
    * The CLDR category for `count` is chosen by the locale's `Intl.PluralRules`
    * (so `fr` makes 0 singular, `ru`/`pl` split `few`/`many`, `ar` uses all six),
-   * then looked up as `key.<category>`. When the catalog omits that category the
-   * `t` fallback chain takes over — and because every language defines `other`,
-   * a catalog with only `key.other` still resolves. `count` is threaded into the
-   * params so the chosen template can render it.
+   * then resolved to a catalog suffix by {@link pluralSuffix}. `count` is threaded
+   * into the params so the chosen template can render it.
    */
   plural(locale: string, key: string, count: number, params: Params = {}): string {
-    const category = this.pluralCategory(locale, count);
-
-    const selected = this.lookup(locale, `${key}.${category}`);
-
-    // The selected category may be absent (a catalog needn't spell out every
-    // category for a language it doesn't use). Fall back to `other`, which CLDR
-    // guarantees in every locale, before surfacing a visible miss via `t`.
-    const suffix = selected === undefined && category !== "other" ? "other" : category;
-
-    return this.t(locale, `${key}.${suffix}`, { ...params, count });
+    return this.t(locale, `${key}.${this.pluralSuffix(locale, key, count)}`, { ...params, count });
   }
 
   /** Whether `key` resolves in `locale` (honouring fallback). */
@@ -130,6 +119,42 @@ export class I18n {
   }
 
   // -- internals ------------------------------------------------------------
+
+  /**
+   * The catalog suffix to render `key` at `count` in `locale`.
+   *
+   * Plural categories are per-language, so resolution PREFERS the requested
+   * locale's own forms: the category `Intl.PluralRules` selected, then its
+   * universal `other`. This keeps a half-translated catalog (one that spells only
+   * `key.other`) in its own language instead of borrowing the default locale's
+   * exact-category form — the bleed `count === 1` would otherwise cause when the
+   * default locale spells `one` and the requested locale does not. Only when the
+   * requested locale spells NEITHER form does it defer to the default locale, and
+   * then it re-selects the category by the *default* locale's rules, so the
+   * borrowed string is itself grammatical (English `count === 1` renders `one`,
+   * never `other`). With nothing resolvable it collapses to `other` — the
+   * category CLDR guarantees everywhere — so `t` surfaces the `key.other` miss a
+   * translator should add first.
+   */
+  private pluralSuffix(locale: string, key: string, count: number): PluralCategory {
+    const spelled = (loc: string, category: PluralCategory): boolean =>
+      own(this.catalogs[loc], `${key}.${category}`) !== undefined;
+
+    const category = this.pluralCategory(locale, count);
+
+    if (spelled(locale, category)) return category;
+    if (spelled(locale, "other")) return "other";
+
+    // The requested locale spells neither form. If fallback can reach the default
+    // locale, pick the category by ITS rules so the borrowed plural is correct.
+    if (this.fallback && locale !== this.defaultLocale) {
+      const fallbackCategory = this.pluralCategory(this.defaultLocale, count);
+
+      if (spelled(this.defaultLocale, fallbackCategory)) return fallbackCategory;
+    }
+
+    return "other";
+  }
 
   /**
    * The CLDR plural category `Intl.PluralRules` assigns to `count` in `locale`.
