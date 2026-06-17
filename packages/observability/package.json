@@ -9,6 +9,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./rum": {
+      "types": "./src/rum.ts",
+      "import": "./src/rum.ts"
     }
   },
   "scripts": {

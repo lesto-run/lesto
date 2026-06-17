@@ -37,6 +37,21 @@ export {
 } from "./client-errors";
 export type { ClientErrorEvent, ClientErrorSink } from "./client-errors";
 
+// The browser-RUM span receiver — a built-in route on every `keel()` app, plus the
+// sink seam the observability wiring points at `traces.seams.onBrowserSpan`. Each
+// span carries the SSR-injected server trace id, so a browser span lands in the
+// same collector as the server `http.request` span (ARCHITECTURE.md §7). PII-free
+// by construction (same-origin paths + timing numbers + vital values only).
+export {
+  BROWSER_SPANS_ROUTE,
+  defaultBrowserSpanSink,
+  MAX_ATTRIBUTE_CHARS,
+  MAX_BROWSER_SPANS_BYTES,
+  normalizeBrowserSpan,
+  normalizeBrowserSpans,
+} from "./browser-spans";
+export type { BrowserSpanSink } from "./browser-spans";
+
 export type { HandleOptions } from "./types";
 
 // Re-exported so a caller can type the streaming options a page render forwards

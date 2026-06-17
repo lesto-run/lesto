@@ -248,6 +248,22 @@ export interface RenderPageOptions {
    * render deadline; the Preact buffered path has no streaming twin to bound.
    */
   renderDeadlineMs?: number;
+
+  /**
+   * The W3C `traceparent` for THIS request's server span, injected into the head
+   * as `<meta name="keel-traceparent" content="00-…">` (ARCHITECTURE.md §7).
+   *
+   * This is the browser→server join: the browser RUM runtime
+   * (`@keel/observability`'s `startBrowserRum`) reads this meta and adopts its
+   * trace id, so every span the browser emits — navigation, resource, web-vital —
+   * lands UNDER the same `http.request` span the server already recorded. One
+   * trace, UI → API → DB. Absent (tracing off, or a static page rendered before any
+   * request span exists) → no meta, and the browser roots its own trace instead.
+   * The value is a spec-valid traceparent string; the framework builds it from the
+   * request span's ids, so this option carries no PII and is safe in cached markup
+   * only when the trace it names is the request's own.
+   */
+  traceparent?: string;
 }
 
 /**
@@ -296,6 +312,14 @@ export async function renderPageResponse(
       : createElement(IslandDataProvider, { resolver: options.resolver }, page);
 
   const head = headElements(def.metadata === undefined ? {} : def.metadata(loaded));
+
+  // The browser→server trace join (ARCHITECTURE.md §7): stamp the request span's
+  // `traceparent` into the head so the browser RUM runtime adopts its trace id and
+  // its spans parent on the server request span. Emitted BEFORE the client module
+  // so the meta is already in the document when the hydration entry reads it.
+  if (options.traceparent !== undefined) {
+    head.push(createElement("meta", { name: "keel-traceparent", content: options.traceparent }));
+  }
 
   // The client module boots hydration: a deferred head `type="module"` script,
   // after the metadata, so every co-located mount script is present when it runs.

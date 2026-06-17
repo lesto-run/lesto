@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@keel/errors": "workspace:*",
+    "@keel/observability": "workspace:*",
     "@keel/router": "workspace:*"
   }
 }

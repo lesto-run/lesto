@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  browserSpanToData,
   createTraces,
   InMemoryExporter,
   parseOtlpHeaders,
   Tracer,
   tracesFromEnv,
 } from "../src/index";
-import type { Span, SpanData } from "../src/index";
+import type { BrowserSpan, Span, SpanData } from "../src/index";
 
 // A counting id-generator so trace/span ids are predictable in order.
 function counting(): () => string {
@@ -235,6 +236,91 @@ describe("createTraces seam hooks", () => {
   });
 });
 
+describe("browserSpanToData", () => {
+  const base: BrowserSpan = {
+    traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+    spanId: "00f067aa0ba902b7",
+    parentSpanId: "0102030405060708",
+    name: "browser.navigation",
+    startedAt: 1000,
+    endedAt: 1120,
+    attributes: { "browser.load_ms": 120 },
+    status: 1,
+  };
+
+  it("preserves the browser's ids and timestamps verbatim (the cross-tier join)", () => {
+    const data = browserSpanToData(base);
+
+    expect(data.traceId).toBe(base.traceId);
+    expect(data.spanId).toBe(base.spanId);
+    expect(data.parentSpanId).toBe(base.parentSpanId);
+    expect(data.startedAt).toBe(1000);
+    expect(data.endedAt).toBe(1120);
+    expect(data.attributes).toEqual({ "browser.load_ms": 120 });
+    // The attribute bag is copied, not shared.
+    expect(data.attributes).not.toBe(base.attributes);
+  });
+
+  it("translates each OTLP status code to the named status", () => {
+    expect(browserSpanToData({ ...base, status: 0 }).status).toBe("unset");
+    expect(browserSpanToData({ ...base, status: 1 }).status).toBe("ok");
+    expect(browserSpanToData({ ...base, status: 2 }).status).toBe("error");
+  });
+
+  it("omits parentSpanId for a browser-rooted span", () => {
+    const rooted: BrowserSpan = { ...base };
+
+    delete (rooted as { parentSpanId?: string }).parentSpanId;
+
+    expect(browserSpanToData(rooted).parentSpanId).toBeUndefined();
+  });
+});
+
+describe("createTraces onBrowserSpan seam", () => {
+  const span: BrowserSpan = {
+    traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+    spanId: "00f067aa0ba902b7",
+    parentSpanId: "0102030405060708",
+    name: "browser.resource",
+    startedAt: 2000,
+    endedAt: 2042,
+    attributes: { "browser.resource_path": "/client.js" },
+    status: 1,
+  };
+
+  it("writes the browser span straight to the exporter, joined by trace id", () => {
+    const exported: SpanData[] = [];
+
+    const { tracer } = fixtureTracer();
+
+    const traces = createTraces({
+      tracer,
+      flush: async () => {},
+      exportSpan: (data) => exported.push(data),
+    });
+
+    traces.seams.onBrowserSpan(span);
+
+    expect(exported).toHaveLength(1);
+    expect(exported[0]?.traceId).toBe(span.traceId);
+    expect(exported[0]?.spanId).toBe(span.spanId);
+    expect(exported[0]?.parentSpanId).toBe(span.parentSpanId);
+    expect(exported[0]?.name).toBe("browser.resource");
+    expect(exported[0]?.status).toBe("ok");
+  });
+
+  it("is a no-op when no exportSpan is wired (nowhere to export to)", () => {
+    const { tracer, exporter } = fixtureTracer();
+
+    const traces = createTraces({ tracer, flush: async () => {} });
+
+    traces.seams.onBrowserSpan(span);
+
+    // Nothing minted on the tracer, nothing exported.
+    expect(exporter.spans).toHaveLength(0);
+  });
+});
+
 describe("createTraces request tracer", () => {
   it("starts a fresh root span when no inbound trace is given", () => {
     const { tracer } = fixtureTracer();
@@ -405,5 +491,38 @@ describe("tracesFromEnv", () => {
     await traces!.flush();
 
     expect(errors).toHaveLength(1);
+  });
+
+  it("wires exportSpan so a browser span flushes to the collector under its own ids", async () => {
+    const { fetchFn, calls } = fakeFetch();
+
+    const traces = tracesFromEnv({ KEEL_OTLP_URL: "http://c/v1/traces" }, { fetchFn });
+
+    // A browser RUM span arrives with the SERVER trace id already adopted — the
+    // exportSpan wiring writes it straight to the same exporter the server seams use.
+    traces!.seams.onBrowserSpan({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      parentSpanId: "0102030405060708",
+      name: "browser.navigation",
+      startedAt: 1000,
+      endedAt: 1120,
+      attributes: { "browser.load_ms": 120 },
+      status: 1,
+    });
+
+    await traces!.flush();
+
+    const body = JSON.parse(calls[0]?.init.body as string) as {
+      resourceSpans: Array<{
+        scopeSpans: Array<{ spans: Array<{ traceId: string; name: string }> }>;
+      }>;
+    };
+
+    const exported = body.resourceSpans[0]?.scopeSpans[0]?.spans[0];
+
+    expect(exported?.name).toBe("browser.navigation");
+    // The browser span kept the SERVER trace id — the join lands in the collector.
+    expect(exported?.traceId).toBe("4bf92f3577b34da6a3ce929d0e0e4736");
   });
 });

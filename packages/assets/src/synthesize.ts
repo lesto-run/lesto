@@ -29,6 +29,8 @@ import {
   shouldSample,
 } from "./client-beacon";
 import { AssetsError } from "./errors";
+import { rumImport, rumStartCall } from "./rum-client";
+import type { RumConfig } from "./rum-client";
 
 /** One island module discovered under `app/islands/`, classified for splitting. */
 export interface IslandFile {
@@ -147,11 +149,24 @@ function beaconRuntime(): string {
  * (or the ADR-0011 dev overlay under `beacon.dev`). The sinks are passed into
  * `hydrateDocumentIslands` so a deferred island that fails LATER still reports,
  * and the synchronous result drives the hydrate-summary.
+ *
+ * Finally, the entry starts browser RUM (ARCHITECTURE.md §7): it imports
+ * `startBrowserRum` from `@keel/observability/rum` and calls it, so the browser
+ * reads the SSR-injected `keel-traceparent` meta, adopts the server trace id, and
+ * POSTs navigation/resource/web-vital spans under it — UI → API → DB, one trace.
+ * RUM is started AFTER hydration so its `PerformanceObserver` (with `buffered:
+ * true`) still sees the load-time entries while the page's interactive work is
+ * already wired.
  */
-export function synthesizeEntry(islands: readonly IslandFile[], beacon: BeaconConfig = {}): string {
+export function synthesizeEntry(
+  islands: readonly IslandFile[],
+  beacon: BeaconConfig = {},
+  rum: RumConfig = {},
+): string {
   const imports: string[] = [
     `import { Registry } from "@keel/ui";`,
     `import { hydrateDocumentIslands } from "@keel/ui/client";`,
+    rumImport(),
   ];
 
   const registrations: string[] = [];
@@ -204,6 +219,10 @@ export function synthesizeEntry(islands: readonly IslandFile[], beacon: BeaconCo
     `});`,
     "",
     `beacon.report(result);`,
+    "",
+    // Browser RUM: read the SSR `keel-traceparent` meta, adopt the server trace id,
+    // and POST navigation/resource/web-vital spans under it (ARCHITECTURE.md §7).
+    rumStartCall(rum),
     "",
   ].join("\n");
 }

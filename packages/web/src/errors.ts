@@ -15,7 +15,8 @@ export type WebErrorCode =
   | "WEB_UNKNOWN_DATA_SOURCE"
   | "WEB_VALIDATION_FAILED"
   | "WEB_BAD_RENDER_DEADLINE"
-  | "WEB_CLIENT_ERROR_BODY_TOO_LARGE";
+  | "WEB_CLIENT_ERROR_BODY_TOO_LARGE"
+  | "WEB_BROWSER_SPANS_BODY_TOO_LARGE";
 
 /** Anything the web dispatch core can refuse to do. */
 export class WebError extends KeelError<WebErrorCode> {

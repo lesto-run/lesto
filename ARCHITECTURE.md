@@ -121,6 +121,8 @@ State lives in the one DB → **web tier stateless** → zero-downtime **rolling
 
 OpenTelemetry-first, auto-instrumented: **one trace spans UI → API/controller → DB query** (browser spans stitch to the server trace — the thing no JS meta-framework ships), structured logs, profiling, queue/workflow spans. Exporters: Datadog, Honeycomb, Grafana/Tempo, any OTLP.
 
+**Browser→server stitching is shipped, not aspirational.** The server stamps the in-flight request span's W3C `traceparent` into a `<meta name="keel-traceparent">` on every dynamically rendered page; `@keel/observability`'s browser RUM client (`startBrowserRum`, imported by the synthesized `@keel/assets` client entry from the node-free `@keel/observability/rum` subpath) reads it, **adopts the server trace id**, and emits browser spans for navigation timing, same-origin resource fetches, and Core Web Vitals (LCP/INP/CLS) — PII-free (same-origin paths + timing numbers only) and bounded-sampled. Those spans POST to the built-in `POST /__keel/browser-spans` receiver (`@keel/web`), which routes them through `traces.seams.onBrowserSpan` to the **same OTLP exporter** the server spans use, so a page load's browser spans land **under the server `http.request` span, one traceId**. Outbound `@keel/client` data fetches carry a `traceparent` (`wrapFetch`) on same-origin requests, so the API handler joins the same trace — UI → API → DB, unbroken. Proven end-to-end in `packages/integration/test/rum.integration.test.ts` against a local OTLP collector.
+
 ---
 
 ## 8. Build order (dependency-aware)

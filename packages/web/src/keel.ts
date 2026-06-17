@@ -24,6 +24,7 @@
  * the edge adapter both feed.
  */
 
+import { formatTraceparent } from "@keel/observability";
 import { RouteTable } from "@keel/router";
 import type { Match } from "@keel/router";
 import { createSourceResolver, dataSourceHref } from "@keel/ui";
@@ -31,8 +32,11 @@ import type { DataSource } from "@keel/ui";
 import { preactServerRenderer, reactServerRenderer } from "@keel/ui/server";
 import type { ServerRenderer } from "@keel/ui/server";
 
+import { BROWSER_SPANS_ROUTE, browserSpansHandler, defaultBrowserSpanSink } from "./browser-spans";
+import type { BrowserSpanSink } from "./browser-spans";
 import { CLIENT_ERRORS_ROUTE, clientErrorsHandler, defaultClientErrorSink } from "./client-errors";
 import type { ClientErrorSink } from "./client-errors";
+import { currentRequestSpan } from "./context";
 import { WebError } from "./errors";
 import { Context } from "./handler-context";
 import type { Middleware, Next } from "./middleware";
@@ -197,6 +201,14 @@ export class Keel {
   // The route reads this field at request time, so an override set after
   // construction still takes effect.
   private clientErrorSink: ClientErrorSink = defaultClientErrorSink;
+
+  // Where the browser-RUM receiver (`POST /__keel/browser-spans`, registered as a
+  // built-in below) forwards each normalized browser span. Defaults to the
+  // structured-log sink; `.browserSpans(sink)` swaps it to `traces.seams.onBrowserSpan`
+  // so a navigation/resource/vital span lands in the SAME collector as the server
+  // spans, joined by trace id (ARCHITECTURE.md §7's UI→API→DB trace). Read per
+  // request, so an override set after construction still takes effect.
+  private browserSpanSink: BrowserSpanSink = defaultBrowserSpanSink;
 
   // The compiled matcher, rebuilt on demand and invalidated whenever a route is added.
   private table: RouteTable<readonly Handler[]> | undefined;
@@ -395,6 +407,25 @@ export class Keel {
     return this;
   }
 
+  /**
+   * Override where the browser-RUM receiver (`POST /__keel/browser-spans`)
+   * forwards its normalized spans.
+   *
+   * The route is a built-in — registered for every app — so this only swaps its
+   * SINK; the default is a structured-log sink. The canonical wiring points it at
+   * `traces.seams.onBrowserSpan`, so a browser navigation/resource/web-vital span
+   * lands in the SAME OTLP collector as the server `http.request` span, joined by
+   * the trace id the page adopted from the SSR-injected `keel-traceparent` meta —
+   * the UI→API→DB trace ARCHITECTURE.md §7 promises. The route stays PII-free
+   * regardless of the sink: only same-origin paths, timing numbers, and vital
+   * values ever reach it.
+   */
+  browserSpans(sink: BrowserSpanSink): this {
+    this.browserSpanSink = sink;
+
+    return this;
+  }
+
   /** The server-render dialect this app emits, or `undefined` for the React default. */
   get serverDialect(): UiDialect | undefined {
     return this.serverRenderer?.dialect;
@@ -550,6 +581,19 @@ export class Keel {
       };
 
       if (!isStatic) {
+        // The browser→server trace join (ARCHITECTURE.md §7): when a tracer is
+        // wired, the runtime publishes this request's span on the context, so we
+        // stamp its `traceparent` into the page head and the browser RUM runtime
+        // adopts the trace id. Only a DYNAMIC page does this — a static page is
+        // prerendered with no live request span, and baking one request's trace id
+        // into cached HTML would mis-join every later visitor. Absent a span
+        // (tracing off), no meta is emitted.
+        const span = currentRequestSpan();
+
+        if (span !== undefined) {
+          options.traceparent = formatTraceparent(span.data.traceId, span.data.spanId);
+        }
+
         options.resolver = createSourceResolver((name) => {
           const loader = this.dataLoaders.get(name);
 
@@ -596,6 +640,19 @@ export class Keel {
       table.add("POST", CLIENT_ERRORS_ROUTE, [
         ...this.useChain,
         clientErrorsHandler((event) => this.clientErrorSink(event)),
+      ] as readonly Handler[]);
+
+      // The browser-RUM span receiver is a BUILT-IN too, registered the same way
+      // (into the matcher, not `collected`, so it never leaks into `routes()` and
+      // is overridable by a user route at the same path). Wrapped in the app's
+      // top-level middleware so the security batteries cover it; the handler reads
+      // `this.browserSpanSink` per request, so `.browserSpans()` swaps the sink even
+      // after the table is built. This is the server end of the UI→API→DB trace
+      // (ARCHITECTURE.md §7): the browser's navigation/resource/vital spans land
+      // here and route to the exporter, joined to the server trace by trace id.
+      table.add("POST", BROWSER_SPANS_ROUTE, [
+        ...this.useChain,
+        browserSpansHandler((span) => this.browserSpanSink(span)),
       ] as readonly Handler[]);
 
       this.table = table;

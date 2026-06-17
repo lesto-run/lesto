@@ -17,9 +17,10 @@
 
 import { OtlpHttpExporter } from "./otlp";
 import type { OtlpHttpExporterOptions } from "./otlp";
+import type { BrowserSpan } from "./rum";
 import { Tracer } from "./tracer";
 import type { InboundTrace } from "./tracer";
-import type { Span } from "./types";
+import type { Span, SpanData } from "./types";
 
 /**
  * The environment a {@link tracesFromEnv} reads — the two-env-var setup, plus a
@@ -98,6 +99,20 @@ export interface TracesOptions {
    * wires this to `currentContext()?.span`.
    */
   readonly currentSpan?: CurrentSpan;
+
+  /**
+   * Writes a pre-built {@link SpanData} straight to the exporter, bypassing the
+   * tracer's id minting.
+   *
+   * The `onBrowserSpan` seam needs this: a browser span arrives with its OWN ids
+   * (the page adopted the server trace id, the browser minted its span id) and its
+   * OWN epoch-ms timestamps. Re-minting them through `tracer.startSpan` would
+   * discard the join. So the wiring hands the raw `SpanData` to the exporter
+   * directly — the same exporter the tracer feeds, so browser and server spans
+   * share one collector and one trace id. Absent → `onBrowserSpan` drops the span
+   * (no exporter to write to), the honest no-op when tracing was wired without it.
+   */
+  readonly exportSpan?: (span: SpanData) => void;
 }
 
 /**
@@ -198,6 +213,47 @@ export interface TraceSeams {
     readonly failedCount: number;
     readonly missingCount: number;
   }): void;
+
+  /**
+   * `@keel/web`'s browser-spans receiver sink — one EXPORTED span per browser RUM
+   * span, joined to the server trace.
+   *
+   * Unlike every other seam (each turns a server-side EVENT into a freshly-minted
+   * child span), this hands through a span the BROWSER already authored: its ids
+   * (the adopted server trace id + the browser's span id), its epoch-ms
+   * timestamps, and a PII-free attribute bag. The wiring writes it straight to the
+   * exporter via {@link TracesOptions.exportSpan}, so a navigation/resource/vital
+   * span lands in the SAME collector as the server `http.request` span, under one
+   * trace id — the UI→API→DB join ARCHITECTURE.md §7 promises. With no
+   * `exportSpan` wired, this is a no-op (nothing to export to).
+   */
+  onBrowserSpan(span: BrowserSpan): void;
+}
+
+/** OTLP status codes (0 unset, 1 ok, 2 error), the inverse of the exporter's map. */
+const SPAN_STATUS_FOR_CODE = { 0: "unset", 1: "ok", 2: "error" } as const;
+
+/**
+ * Map a browser-authored {@link BrowserSpan} onto the internal {@link SpanData}.
+ *
+ * The browser already chose the ids (the adopted server trace id + its own span
+ * id) and the epoch-ms timestamps, so this preserves them verbatim — that
+ * preservation IS the cross-tier join. Only the status shape differs: the browser
+ * speaks the OTLP code (0/1/2), the internal record speaks the named status, so we
+ * translate. The attribute bag is copied into a fresh mutable record, since
+ * `SpanData.attributes` is mutable by contract.
+ */
+export function browserSpanToData(span: BrowserSpan): SpanData {
+  return {
+    traceId: span.traceId,
+    spanId: span.spanId,
+    ...(span.parentSpanId === undefined ? {} : { parentSpanId: span.parentSpanId }),
+    name: span.name,
+    startedAt: span.startedAt,
+    endedAt: span.endedAt,
+    attributes: { ...span.attributes },
+    status: SPAN_STATUS_FOR_CODE[span.status],
+  };
 }
 
 /**
@@ -300,6 +356,15 @@ export function createTraces(options: TracesOptions): Traces {
         },
         "error",
       ),
+
+    // A browser span keeps its OWN ids and timestamps (the join), so it is written
+    // straight to the exporter rather than re-minted through the tracer. With no
+    // `exportSpan` wired this is the honest no-op — there is nowhere to export to.
+    onBrowserSpan: (span) => {
+      if (options.exportSpan === undefined) return;
+
+      options.exportSpan(browserSpanToData(span));
+    },
   };
 
   const requestTracer: RequestTracer = {
@@ -368,6 +433,10 @@ export function tracesFromEnv(
   return createTraces({
     tracer,
     flush: () => exporter.flush(),
+    // The browser-spans seam writes pre-built spans straight to this exporter, so
+    // a RUM span shares the collector + trace id with the server spans the tracer
+    // feeds. Wired here so the env-driven app gets the join for free.
+    exportSpan: (span) => exporter.export(span),
     ...(options.currentSpan === undefined ? {} : { currentSpan: options.currentSpan }),
   });
 }

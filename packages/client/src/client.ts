@@ -24,6 +24,7 @@
  * wires `AbortSignal`, and surfaces a non-2xx as a coded {@link ClientError}.
  */
 
+import { wrapFetch } from "@keel/observability";
 import type { PathParams } from "@keel/router";
 
 import { ClientError } from "./errors";
@@ -133,6 +134,29 @@ export interface Api<C extends object> {
   ): Promise<ResponseOf<Spec<C, "DELETE", P>>>;
 }
 
+/**
+ * The browser trace context the client stamps onto SAME-ORIGIN requests, so a
+ * data fetch joins the page's trace (ARCHITECTURE.md §7's UI→API→DB join).
+ *
+ * `traceId` is the trace the page adopted from the SSR-injected
+ * `keel-traceparent` meta (read via `@keel/observability`'s `readTraceparentMeta`).
+ * Given it, `createApi` wraps its `fetch` with `@keel/observability`'s
+ * {@link wrapFetch}, which adds an outbound W3C `traceparent` (a fresh child span
+ * per request) on same-origin calls only — never cross-origin, so the trace id
+ * cannot leak to a third party. `origin` and `randomSpanId` are injected for tests
+ * and default to the live browser origin and a `crypto`-backed id.
+ */
+export interface TraceContext {
+  /** The page's trace id — every request carries a `traceparent` continuing it. */
+  traceId: string;
+
+  /** The same-origin gate. Defaults to the live `location.origin`. */
+  origin?: string;
+
+  /** A fresh 16-hex span id per request. Defaults to a `crypto`-backed generator. */
+  randomSpanId?: () => string;
+}
+
 /** What `createApi` accepts. */
 export interface ApiOptions {
   /** Prepended to every path. Default `""` (same-origin). e.g. `"https://api.example.com"`. */
@@ -143,6 +167,15 @@ export interface ApiOptions {
 
   /** The `fetch` implementation — defaults to the global. Injected for tests/edge. */
   fetch?: typeof fetch;
+
+  /**
+   * The browser trace context to propagate (ARCHITECTURE.md §7). When set, the
+   * client wraps its `fetch` so a same-origin request carries an outbound
+   * `traceparent` continuing the page's trace — so the server handler joins the
+   * SAME trace the page's browser RUM spans belong to. Absent → no propagation
+   * (the plain client, byte-for-byte as before).
+   */
+  trace?: TraceContext;
 }
 
 /** The internal, erased shape of a request's options (the public types are per-route). */
@@ -189,6 +222,40 @@ function applyQuery(url: string, query: Record<string, string | undefined> | und
   return qs === "" ? url : `${url}?${qs}`;
 }
 
+/** The same-origin gate for trace propagation — the live browser origin, or a stub off-browser. */
+function defaultOrigin(): string {
+  return typeof location === "undefined" ? "http://localhost" : location.origin;
+}
+
+/**
+ * A fresh 16-hex span id for an outbound `traceparent`, drawn from `crypto` when
+ * present (the browser ships it), falling back to `Math.random` where it is not.
+ *
+ * A span id is a correlation key, not a security token, so the weaker fallback is
+ * acceptable rather than failing propagation outright on an ancient runtime.
+ */
+function defaultSpanId(): string {
+  const api = typeof crypto === "undefined" ? undefined : crypto;
+
+  if (api?.getRandomValues !== undefined) {
+    const bytes = new Uint8Array(8);
+
+    api.getRandomValues(bytes);
+
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  let out = "";
+
+  for (let i = 0; i < 8; i++) {
+    out += Math.floor(Math.random() * 256)
+      .toString(16)
+      .padStart(2, "0");
+  }
+
+  return out;
+}
+
 /** Read a response body as JSON, or as text when it is not JSON (used on the error path). */
 async function readBody(response: Response): Promise<unknown> {
   const text = await response.text();
@@ -212,7 +279,21 @@ async function readBody(response: Response): Promise<unknown> {
  */
 export function createApi<C extends object>(options: ApiOptions = {}): Api<C> {
   const baseUrl = options.baseUrl ?? "";
-  const fetchImpl = options.fetch ?? fetch;
+
+  // When a trace context is configured, wrap `fetch` so a same-origin request
+  // carries an outbound `traceparent` continuing the page's trace (the UI→API
+  // join). The wrapper is `@keel/observability`'s `wrapFetch`, so client and the
+  // browser RUM runtime propagate identically. Absent → the bare configured fetch.
+  const fetchImpl =
+    options.trace === undefined
+      ? (options.fetch ?? fetch)
+      : wrapFetch({
+          traceId: options.trace.traceId,
+          origin: options.trace.origin ?? defaultOrigin(),
+          randomSpanId: options.trace.randomSpanId ?? defaultSpanId,
+          fetchImpl: options.fetch ?? fetch,
+        });
+
   const baseHeaders = options.headers ?? {};
 
   const request = async (

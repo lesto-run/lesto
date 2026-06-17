@@ -80,6 +80,14 @@ export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promi
   // Absent seams leave the default structured-log sink in place.
   if (seams !== undefined) {
     app.clientErrors((event) => seams.onClientError(event));
+
+    // The browser-RUM receiver (ARCHITECTURE.md §7): the browser POSTs the spans
+    // it built from `PerformanceObserver` — navigation, resource, web-vital — to
+    // `/__keel/browser-spans`, each carrying the SERVER trace id it adopted from
+    // the SSR-injected `keel-traceparent` meta. Wiring the sink to
+    // `seams.onBrowserSpan` lands them in the SAME OTLP collector as the server
+    // spans, joined by trace id — making the UI→API→DB trace real, not aspirational.
+    app.browserSpans((span) => seams.onBrowserSpan(span));
   }
 
   return {

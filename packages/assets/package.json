@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@keel/errors": "workspace:*",
+    "@keel/observability": "workspace:*",
     "preact": "^10.29.2"
   },
   "devDependencies": {

@@ -15,7 +15,7 @@
  */
 
 export { createApi } from "./client";
-export type { Api, ApiContract, ApiMethod, ApiOptions, RouteSpec } from "./client";
+export type { Api, ApiContract, ApiMethod, ApiOptions, RouteSpec, TraceContext } from "./client";
 
 export { ClientError, KeelError } from "./errors";
 export type { ClientErrorCode } from "./errors";

@@ -8,6 +8,7 @@ import type { BuildClientDeps, BundleArtifact, BundleRequest } from "../src/buil
 import { isChunkFile } from "../src/chunks";
 import { AssetsError } from "../src/errors";
 import { PREACT_ALIAS } from "../src/preact-alias";
+import { RUM_MODULE, rumImport, rumStartCall } from "../src/rum-client";
 import { islandFileFromModule, synthesizeEntry } from "../src/synthesize";
 import type { IslandFile } from "../src/synthesize";
 
@@ -116,6 +117,47 @@ describe("synthesizeEntry — client error beacon (ADR 0011)", () => {
 
     // No build-time override → the runtime falls back to its conservative defaults.
     expect(source).toContain("reportClientErrors({  });");
+  });
+});
+
+describe("rum-client — the browser-RUM wiring snippets (ARCHITECTURE.md §7)", () => {
+  it("imports startBrowserRum from the node-free observability subpath", () => {
+    expect(RUM_MODULE).toBe("@keel/observability/rum");
+    expect(rumImport()).toBe('import { startBrowserRum } from "@keel/observability/rum";');
+  });
+
+  it("emits a bare start call when no sample rate is set (runtime default applies)", () => {
+    expect(rumStartCall()).toBe("startBrowserRum();");
+    expect(rumStartCall({})).toBe("startBrowserRum();");
+  });
+
+  it("passes an author-set sampleRate through to the runtime", () => {
+    expect(rumStartCall({ sampleRate: 0.25 })).toBe("startBrowserRum({ sampleRate: 0.25 });");
+  });
+});
+
+describe("synthesizeEntry — browser RUM (ARCHITECTURE.md §7)", () => {
+  const islands: IslandFile[] = [
+    { name: "Account", importPath: "/a.tsx", lazy: false, ssr: false },
+  ];
+
+  it("imports startBrowserRum and calls it AFTER hydration", () => {
+    const source = synthesizeEntry(islands);
+
+    expect(source).toContain('import { startBrowserRum } from "@keel/observability/rum";');
+    expect(source).toContain("startBrowserRum();");
+
+    // RUM starts after hydration is wired (its buffered observer still sees load
+    // entries), so the call follows the hydrate + report lines in the entry.
+    expect(source.indexOf("startBrowserRum();")).toBeGreaterThan(
+      source.indexOf("beacon.report(result);"),
+    );
+  });
+
+  it("threads an author-set RUM sample rate into the start call", () => {
+    const source = synthesizeEntry(islands, {}, { sampleRate: 0.5 });
+
+    expect(source).toContain("startBrowserRum({ sampleRate: 0.5 });");
   });
 });
 

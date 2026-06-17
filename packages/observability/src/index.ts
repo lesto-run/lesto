@@ -83,7 +83,25 @@ export type { InboundTrace, StartSpanOptions, TracerOptions } from "./tracer";
 export { formatTraceparent, parseTraceparent, TRACEPARENT_HEADER } from "./traceparent";
 export type { Traceparent } from "./traceparent";
 
-export { createTraces, parseOtlpHeaders, tracesFromEnv } from "./traces";
+export { browserSpanToData, createTraces, parseOtlpHeaders, tracesFromEnv } from "./traces";
 export type { CurrentSpan, Traces, TracesEnv, TracesOptions, TraceSeams } from "./traces";
+
+// Browser RUM — the browser half of the UI→API→DB trace (ARCHITECTURE.md §7).
+// `startBrowserRum` observes the page's performance and POSTs spans under the
+// SSR-injected server trace id; `wrapFetch` carries an outbound `traceparent` on
+// same-origin fetches so the server handler joins the same trace.
+export {
+  BROWSER_SPANS_PATH,
+  BrowserTracer,
+  browserRumEnvironment,
+  DEFAULT_RUM_SAMPLE_RATE,
+  defaultSendBrowserSpans,
+  readTraceparentMeta,
+  shouldSampleRum,
+  startBrowserRum,
+  TRACEPARENT_META_NAME,
+  wrapFetch,
+} from "./rum";
+export type { BrowserSpan, BrowserSpansPayload, RumEnvironment, RumOptions } from "./rum";
 
 export type { Clock, Span, SpanData, SpanExporter, SpanStatus } from "./types";

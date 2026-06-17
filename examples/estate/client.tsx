@@ -21,6 +21,7 @@
 
 import { Registry } from "@keel/ui";
 import { hydrateDocumentIslands } from "@keel/ui/client";
+import { startBrowserRum } from "@keel/observability/rum";
 
 import AccountIsland from "./app/islands/account";
 import LiveListing from "./app/islands/live-listing";
@@ -36,3 +37,10 @@ const registry = new Registry()
   .defineClient(DeferredPanel.island);
 
 hydrateDocumentIslands(registry);
+
+// Browser RUM (ARCHITECTURE.md §7): read the SSR-injected `keel-traceparent` meta,
+// adopt the server trace id, and POST navigation/resource/web-vital spans under it
+// to `/__keel/browser-spans` — so a page load's browser spans stitch to the server
+// `http.request` span. This is the canonical synthesized-entry shape: the same
+// `startBrowserRum()` call `@keel/assets` emits, checked in here for inspection.
+startBrowserRum();

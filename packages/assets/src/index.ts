@@ -30,6 +30,11 @@ export type {
 export { islandFileFromModule, synthesizeEntry } from "./synthesize";
 export type { BeaconConfig, IslandFile } from "./synthesize";
 
+// The browser-RUM wiring the synthesized entry emits (ARCHITECTURE.md §7): the
+// `@keel/observability/rum` import + the `startBrowserRum()` call.
+export { RUM_MODULE, rumImport, rumStartCall } from "./rum-client";
+export type { RumConfig } from "./rum-client";
+
 export {
   BEACON_PATH,
   DEFAULT_SAMPLE_RATE,

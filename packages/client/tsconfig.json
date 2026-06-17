@@ -2,7 +2,13 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
-    "types": ["node"]
+    "types": ["node"],
+
+    // This browser-safe client now propagates the page's trace on same-origin
+    // fetches (ARCHITECTURE.md §7), reading `location.origin` and `crypto` for the
+    // outbound span id — so the DOM lib joins ES2023, exactly as `@keel/assets`
+    // and `@keel/observability` do for their own browser code.
+    "lib": ["ES2023", "DOM"]
   },
   "include": ["src", "test"]
 }

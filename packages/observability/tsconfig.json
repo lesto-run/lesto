@@ -3,7 +3,14 @@
 
   "compilerOptions": {
     "rootDir": ".",
-    "types": ["node"]
+    "types": ["node"],
+
+    // This package now ALSO ships a browser runtime — the RUM client (`rum.ts`)
+    // inlined into `@keel/assets`' synthesized entry — so the DOM lib joins ES2023:
+    // `document`, `fetch`, `PerformanceObserver`, `location`, and `crypto` are real
+    // here, exactly as `@keel/assets` (the island error beacon) and `@keel/ui` (the
+    // hydration runtime) already do for their own browser code.
+    "lib": ["ES2023", "DOM"]
   },
 
   "include": ["src", "test"]

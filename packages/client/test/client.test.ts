@@ -182,6 +182,131 @@ describe("createApi — requests", () => {
   });
 });
 
+describe("createApi — trace propagation (ARCHITECTURE.md §7)", () => {
+  const traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+
+  it("stamps an outbound traceparent on a same-origin request when a trace is set", async () => {
+    const { fn, calls } = makeFetch(() => json({ saved: [] }));
+
+    const api = createApi<SampleApi>({
+      fetch: fn,
+      baseUrl: "https://app.test",
+      trace: { traceId, origin: "https://app.test", randomSpanId: () => "aaaaaaaaaaaaaaaa" },
+    });
+
+    await api.get("/mls/saved");
+
+    const headers = new Headers(calls[0]?.init.headers);
+    expect(headers.get("traceparent")).toBe(`00-${traceId}-aaaaaaaaaaaaaaaa-01`);
+  });
+
+  it("never stamps a cross-origin request (no trace-id leak)", async () => {
+    const { fn, calls } = makeFetch(() => json({ saved: [] }));
+
+    const api = createApi<SampleApi>({
+      fetch: fn,
+      baseUrl: "https://api.other.test",
+      trace: { traceId, origin: "https://app.test", randomSpanId: () => "aaaaaaaaaaaaaaaa" },
+    });
+
+    await api.get("/mls/saved");
+
+    expect(new Headers(calls[0]?.init.headers).has("traceparent")).toBe(false);
+  });
+
+  it("defaults the origin and span-id generator when omitted (the browser-safe path)", async () => {
+    const { fn, calls } = makeFetch(() => json({ saved: [] }));
+
+    // No origin/randomSpanId: defaultOrigin() → localhost (no `location` in node),
+    // defaultSpanId() → a crypto-backed 16-hex id. A same-origin request to the
+    // localhost default carries a well-formed traceparent.
+    const api = createApi<SampleApi>({
+      fetch: fn,
+      baseUrl: "http://localhost",
+      trace: { traceId },
+    });
+
+    await api.get("/mls/saved");
+
+    const traceparent = new Headers(calls[0]?.init.headers).get("traceparent");
+    expect(traceparent).toMatch(new RegExp(`^00-${traceId}-[0-9a-f]{16}-01$`));
+  });
+
+  it("reads location.origin for the default same-origin gate when a browser `location` exists", async () => {
+    const { fn, calls } = makeFetch(() => json({ saved: [] }));
+
+    // A browser-like `location` makes defaultOrigin() read its origin (the non-node
+    // branch). A request to that origin is then same-origin and carries the header.
+    vi.stubGlobal("location", { origin: "https://browser.test" });
+
+    try {
+      const api = createApi<SampleApi>({
+        fetch: fn,
+        baseUrl: "https://browser.test",
+        trace: { traceId, randomSpanId: () => "cccccccccccccccc" },
+      });
+
+      await api.get("/mls/saved");
+
+      expect(new Headers(calls[0]?.init.headers).get("traceparent")).toBe(
+        `00-${traceId}-cccccccccccccccc-01`,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("wraps the GLOBAL fetch when a trace is set but no fetch is injected", async () => {
+    let sawUrl: string | undefined;
+    let sawTraceparent: string | null = null;
+
+    vi.stubGlobal("fetch", (async (input: string | URL | Request, init?: RequestInit) => {
+      sawUrl = String(input);
+      sawTraceparent = new Headers(init?.headers).get("traceparent");
+
+      return json({ saved: [] });
+    }) as typeof fetch);
+
+    try {
+      // No `fetch` option: the trace path must still wrap the GLOBAL fetch.
+      const api = createApi<SampleApi>({
+        baseUrl: "http://localhost",
+        trace: { traceId, origin: "http://localhost", randomSpanId: () => "bbbbbbbbbbbbbbbb" },
+      });
+
+      await api.get("/mls/saved");
+
+      expect(sawUrl).toBe("http://localhost/mls/saved");
+      expect(sawTraceparent).toBe(`00-${traceId}-bbbbbbbbbbbbbbbb-01`);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("falls back to Math.random for the span id when crypto is absent", async () => {
+    const { fn, calls } = makeFetch(() => json({ saved: [] }));
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    vi.stubGlobal("crypto", undefined);
+
+    try {
+      const api = createApi<SampleApi>({
+        fetch: fn,
+        baseUrl: "http://localhost",
+        trace: { traceId },
+      });
+
+      await api.get("/mls/saved");
+
+      const traceparent = new Headers(calls[0]?.init.headers).get("traceparent");
+      expect(traceparent).toMatch(new RegExp(`^00-${traceId}-[0-9a-f]{16}-01$`));
+      expect(randomSpy).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      randomSpy.mockRestore();
+    }
+  });
+});
+
 describe("createApi — error path", () => {
   it("throws CLIENT_HTTP_ERROR with status + parsed JSON body on a non-2xx", async () => {
     const { fn } = makeFetch(() => json({ error: "nope" }, 401));

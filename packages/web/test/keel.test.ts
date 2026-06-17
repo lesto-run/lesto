@@ -1,12 +1,53 @@
+import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { defineDataSource } from "@keel/ui";
+import type { BrowserSpan } from "@keel/observability";
 
+import { BROWSER_SPANS_ROUTE } from "../src/browser-spans";
 import { CLIENT_ERRORS_ROUTE } from "../src/client-errors";
 import type { ClientErrorEvent } from "../src/client-errors";
+import { runWithContext } from "../src/context";
 import { fromRequestMiddleware, keel } from "../src/keel";
 import type { Handler } from "../src/keel";
 import type { Middleware } from "../src/middleware";
+
+/** A live-span stub the runtime would publish on the request context. */
+function fakeRequestSpan(
+  traceId: string,
+  spanId: string,
+): {
+  data: { traceId: string; spanId: string };
+  setAttribute: () => unknown;
+  setStatus: () => unknown;
+  end: () => void;
+} {
+  return {
+    data: { traceId, spanId },
+    setAttribute: () => undefined,
+    setStatus: () => undefined,
+    end: () => undefined,
+  };
+}
+
+/** Drain a streamed response body to a single string for assertions. */
+async function drainBody(body: unknown): Promise<string> {
+  const stream = body as ReadableStream<Uint8Array>;
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+
+  let out = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+
+    if (done) break;
+
+    out += decoder.decode(value, { stream: true });
+  }
+
+  return out + decoder.decode();
+}
 
 // Hoisted: these capture nothing from their test, so they live at module scope.
 const guard: Handler = (c, next) => (c.query("ok") === "1" ? next() : c.text("denied", 403));
@@ -439,6 +480,129 @@ describe("keel() client-error beacon (built-in route)", () => {
     });
     expect(allowed.status).toBe(204);
     expect(seen).toHaveLength(1);
+  });
+});
+
+describe("keel() browser-RUM span receiver (built-in route)", () => {
+  const SPAN = {
+    traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+    spanId: "00f067aa0ba902b7",
+    parentSpanId: "0102030405060708",
+    name: "browser.navigation",
+    startedAt: 1000,
+    endedAt: 1120,
+    attributes: { "browser.load_ms": 120 },
+    status: 1,
+  };
+
+  it("accepts a batch at POST /__keel/browser-spans out of the box, answering 204", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    // No .browserSpans() wiring: the built-in route + default sink are present.
+    const app = keel();
+
+    const response = await app.handle("POST", BROWSER_SPANS_ROUTE, {
+      body: { v: 1, traceId: SPAN.traceId, spans: [SPAN] },
+    });
+
+    expect(response.status).toBe(204);
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(infoSpy.mock.calls[0]?.[0] as string)).toMatchObject({
+      event: "browser.span",
+      name: "browser.navigation",
+      trace_id: SPAN.traceId,
+    });
+
+    infoSpy.mockRestore();
+  });
+
+  it("keeps the built-in route OUT of routes() — it is an internal endpoint", () => {
+    const app = keel().get("/a", (c) => c.text("a"));
+
+    expect(app.routes()).toEqual([{ method: "GET", pattern: "/a" }]);
+  });
+
+  it("forwards spans to an injected sink via .browserSpans()", async () => {
+    const seen: BrowserSpan[] = [];
+
+    const app = keel().browserSpans((span) => seen.push(span));
+
+    const response = await app.handle("POST", BROWSER_SPANS_ROUTE, {
+      body: { spans: [SPAN] },
+    });
+
+    expect(response.status).toBe(204);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.traceId).toBe(SPAN.traceId);
+  });
+
+  it("is chainable and returns the same app", () => {
+    const app = keel();
+
+    expect(app.browserSpans(() => {})).toBe(app);
+  });
+
+  it("wraps the built-in route in the app's top-level middleware", async () => {
+    const seen: BrowserSpan[] = [];
+
+    const app = keel()
+      .use((c, next) => (c.header("x-allow") === "1" ? next() : c.text("denied", 403)))
+      .browserSpans((span) => seen.push(span));
+
+    const denied = await app.handle("POST", BROWSER_SPANS_ROUTE, { body: { spans: [SPAN] } });
+    expect(denied.status).toBe(403);
+    expect(seen).toEqual([]);
+
+    const allowed = await app.handle("POST", BROWSER_SPANS_ROUTE, {
+      body: { spans: [SPAN] },
+      headers: { "x-allow": "1" },
+    });
+    expect(allowed.status).toBe(204);
+    expect(seen).toHaveLength(1);
+  });
+});
+
+describe("keel() — the browser→server trace join meta (ARCHITECTURE.md §7)", () => {
+  it("stamps the request span's traceparent into a dynamic page's head", async () => {
+    const app = keel().page("/", { component: () => createElement("main", null, "home") });
+
+    const span = fakeRequestSpan(
+      "4bf92f3577b34da6a3ce929d0e0e4736",
+      "00f067aa0ba902b7abcdef0123456789",
+    );
+
+    const response = await runWithContext({ requestId: "r", span }, () => app.handle("GET", "/"));
+
+    const html = await drainBody(response.body);
+
+    // The traceparent meta carries the trace id and the 16-hex-truncated span id.
+    expect(html).toContain(
+      '<meta name="keel-traceparent" content="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"/>',
+    );
+  });
+
+  it("emits no traceparent meta when no request span is in flight (tracing off)", async () => {
+    const app = keel().page("/", { component: () => createElement("main", null, "home") });
+
+    // No span on the context → no meta.
+    const html = await drainBody((await app.handle("GET", "/")).body);
+
+    expect(html).not.toContain("keel-traceparent");
+  });
+
+  it("emits no traceparent meta on a STATIC page (no live request span to bake in)", async () => {
+    const app = keel().page("/s", {
+      static: true,
+      component: () => createElement("main", null, "static"),
+    });
+
+    const span = fakeRequestSpan("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7");
+
+    const html = await drainBody(
+      (await runWithContext({ requestId: "r", span }, () => app.handle("GET", "/s"))).body,
+    );
+
+    expect(html).not.toContain("keel-traceparent");
   });
 });
 

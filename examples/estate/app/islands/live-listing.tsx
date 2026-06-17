@@ -18,13 +18,24 @@ import type { ReactNode } from "react";
 
 import { defineIsland } from "@keel/ui";
 import { createApi } from "@keel/client";
+import { readTraceparentMeta } from "@keel/observability/rum";
 
 import { formatPrice } from "../../src/listings";
 import type { Listing } from "../../src/listings";
 import type { LabApi } from "../../src/lab-api";
 
 // Same-origin typed client; the contract is the one the server route fulfils.
-const api = createApi<LabApi>();
+//
+// The trace context (ARCHITECTURE.md §7): read the SSR-injected `keel-traceparent`
+// meta and, when present, hand the page's trace id to the client so this CSR data
+// fetch carries an outbound `traceparent` continuing it — the server `/lab/api`
+// handler then joins the SAME trace the page's browser RUM spans belong to, so the
+// UI→API hop is one unbroken trace. Absent the meta (tracing off), the plain client.
+const pageTrace = readTraceparentMeta();
+
+const api = createApi<LabApi>(
+  pageTrace === undefined ? {} : { trace: { traceId: pageTrace.traceId } },
+);
 
 type LoadState =
   | { status: "loading" }
