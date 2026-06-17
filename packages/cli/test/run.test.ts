@@ -1323,6 +1323,33 @@ describe("run deploy", () => {
     ]);
   });
 
+  it("--cloudflare bundles the island client into out/ before deploying", async () => {
+    const built: Array<{ outDir: string; mode: string; dialect: string }> = [];
+    const deploy = vi.fn(() => Promise.resolve({ url: undefined }));
+
+    const code = await run(
+      ["deploy", "--cloudflare"],
+      depsWith({
+        loadApp,
+        loadSites: () => Promise.resolve(sites),
+        sink: recordingSink().sink,
+        cloudflare: { deploy, rollback: vi.fn() },
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: (options) => {
+          built.push(options);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    // /client.js + chunks must land in out/ so the deployed Worker's island
+    // hydrates — the documented one-command deploy must not ship a dead island.
+    expect(built).toEqual([{ outDir: "out", mode: "production", dialect: "react" }]);
+    expect(deploy).toHaveBeenCalledOnce();
+  });
+
   it("--cloudflare rolls the Worker back and refuses when the health check fails", async () => {
     const { sink } = recordingSink();
     const rollback = vi.fn(() => Promise.resolve());

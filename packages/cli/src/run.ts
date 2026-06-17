@@ -832,10 +832,17 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
 
   const selected = selectTarget(sites, target);
 
+  // Build the island client (ADR 0011 Seam 3) so `/client.js` + its chunks land
+  // in `out/` alongside the prerendered HTML — exactly as `build` does — on every
+  // deploy path. Without it a scaffold's deferred island ships a `<script
+  // src="/client.js">` that 404s and never hydrates. No-ops when there is no
+  // `app/islands/`.
+  await buildClientIfPresent(deps, outDir, "production", dialectOf(config));
+
   const manifest = await buildStaticSites(selected, app.handle, deps.sink(outDir));
 
   // Cloudflare ships differently: `wrangler deploy` uploads the Worker AND its
-  // bound Static Assets in one atomic step, so the build above merely freshens
+  // bound Static Assets in one atomic step, so the builds above merely freshen
   // `out/` for it — there is no separate static ship or pointer flip here.
   if (args.includes("--cloudflare")) {
     return deployToCloudflare(args, deps);
