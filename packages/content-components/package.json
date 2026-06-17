@@ -1,7 +1,7 @@
 {
   "name": "@keel/content-components",
   "version": "0.1.0",
-  "description": "HTML rendering components for Docks content collections",
+  "description": "HTML rendering components for Docks content collections. SUPPORTED surface is HtmlContent only; components beyond HtmlContent ship PREVIEW (experimental, coverage-gate-exempt).",
   "type": "module",
   "sideEffects": false,
   "publishConfig": {

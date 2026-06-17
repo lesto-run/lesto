@@ -1,6 +1,8 @@
 # Keel — Architecture & Product Vision
 
-> **Keel is a batteries-included, AI-native, fullstack JavaScript framework.** It gives the JS ecosystem first-class, *in-house* solutions for the "hard parts" that Rails, Laravel, and WordPress ship in the box and Next.js leaves you to assemble: ORM + migrations, jobs/queues, durable workflows, caching, pub/sub, transactional email, mailing lists, users & auth, roles/permissions/RBAC, webhooks, crons, content management, an admin UI — plus an extensibility model (hooks/plugins/themes), observability, and agent control built in.
+> **Keel is a batteries-included, AI-native, fullstack JavaScript framework.** It gives the JS ecosystem first-class, *in-house* solutions for the "hard parts" that Rails, Laravel, and WordPress ship in the box and Next.js leaves you to assemble: ORM + migrations, jobs/queues, durable workflows, caching, pub/sub, transactional email, mailing lists, users & auth, roles/permissions/RBAC, webhooks, crons, content management, an admin UI — plus observability and agent control built in, and a post-1.0 extensibility model (hooks/plugins/themes).
+>
+> **Honesty note (v1):** the extensibility model is a *designed, deferred* bet, not a shipped battery — see [ADR 0014](./docs/adr/0014-plugin-system.md). The earlier `@keel/hooks`/`@keel/config` prototypes were orphans (zero importers) and were removed from the v1 surface; §3.5, §4, and §8 below describe the eventual shape, not current code.
 >
 > Best of **Rails** (conventions, ORM, generators, **Solid-trifecta-on-the-DB**) + **Laravel** (in-house batteries: queues, mail, cache, events) + **WordPress** (content, admin, and the **actions/filters/plugins/themes** that let anyone build anything onto the platform) + **Next.js** (React, SSR, file routing, DX). Forward nods to **Ghost** (memberships/newsletters), **Webflow** (visual builder), **Carrd** (dead-simple sites), **Supabase** (Postgres-as-the-platform).
 
@@ -36,7 +38,7 @@ The north star: **change your site — content, UI, schema, data — and deploy 
 |---|---|---|
 | **Tracks** (`/`) | Rails/Laravel **backend** — ActiveRecord ORM, migrations, router, controllers, generators, CLI | Built (33 tests). SQLite today; **Postgres adapter = the scale substrate, to add** |
 | **Loom** (`/loom`) | Next-like **frontend + theme engine** — React, Vite 6 SSR + hydration; AI-native UI rendering (UI-tree → React against a vetted registry) | Built (13 tests). Registry to re-base on **shadcn** |
-| **Docks** (folding in from owned repo `rdimascio/downto`, `@usedocks/*`) | WordPress-like **content/CMS** — schema-driven collections, markdown/MDX, embeddings + vector search, an **MCP server**, and **Studio** (mature visual editor: React + CodeMirror + Hono, git-backed publish, Anthropic chat) | Mature, pre-1.0. To integrate; content DB-backable via Tracks |
+| **Docks** (folding in from owned repo `rdimascio/downto`, `@usedocks/*`) | WordPress-like **content/CMS** — schema-driven collections, markdown/MDX, embeddings + vector search, an **MCP server**, and **Studio** (mature visual editor: React + CodeMirror + Hono, git-backed publish, Anthropic chat) | **v1 supported surface = the store/engine/CLI/MCP seam** (`@keel/content-store`, `@keel/content-core`, `keel content:build`, the `@keel/mcp` content tools, `HtmlContent`). The rest of the folded-in estate — search, embeddings, prose, lint, seo, query, vite, components beyond `HtmlContent` — ships **PREVIEW** (experimental, coverage-gate-exempt). Search is brute-force O(n), practical to ~10k docs; embeddings download a ~25MB model on a cold build. Consolidation to ~7 packages is post-1.0. |
 
 `loom/keel-server.js` is the working prototype of the unified runtime: **Tracks ORM query → Loom UI tree → SSR'd hydrated React**, plus a JSON API route. The Rails⋈Next spine, proven.
 
@@ -51,7 +53,11 @@ Because the database *is* the platform, its dev/ops lifecycle is foundational, n
 - **Data masking** — deterministic, referentially-stable maskers (email/name/phone/redact/hash) to pull prod data locally with PII masked; `db/masking.js` config + `tracks db:mask`. ✅ built.
 - Zero-config local: embedded SQLite, in-DB queue/cache, dev mail-catcher; same APIs over Postgres in prod.
 
-## 3.5 The extensibility system (the WordPress lesson — in-house)
+## 3.5 The extensibility system (the WordPress lesson — in-house) — *post-1.0, deferred (ADR 0014)*
+
+> **Status:** not built in v1. The `@keel/hooks`/`@keel/config` prototypes were
+> removed as orphans; this is the eventual shape, designed against real consumers
+> post-1.0 ([ADR 0014](./docs/adr/0014-plugin-system.md)), not a current API.
 
 The thing no JS meta-framework has, and the reason WP/Rails/Laravel are platforms:
 
@@ -60,7 +66,7 @@ The thing no JS meta-framework has, and the reason WP/Rails/Laravel are platform
 - **Plugins** — installable packages that register hooks, models, routes, jobs, admin panels, MCP tools, and Loom components.
 - **Themes/templates** — Loom *is* the theme engine; a theme is a set of Loom templates binding content → components.
 
-This is built in-house on the one substrate and exposed equally to code, plugins, and **agents** (an agent can register/trigger hooks via MCP).
+When built (post-1.0), this lives in-house on the one substrate and is exposed equally to code, plugins, and **agents** (an agent can register/trigger hooks via MCP). It is not yet wired in v1.
 
 ---
 
@@ -98,7 +104,7 @@ Each capability = an in-house Keel API on the one DB; thin drivers only at the e
 Two layers, both on Postgres; the queue is always-on, workflows opt in.
 
 - **Queue (foundation, always-on) — built in-house on the DB.** Durable job queue via `SELECT … FOR UPDATE SKIP LOCKED` + visibility-timeout reclaim (the Rails-8 Solid Queue / `pgmq` pattern — a well-understood ~few-hundred-line primitive, *not* reinventing Temporal). Owned API (`defineJob`), zero infra, idempotent-by-convention. A Redis/BullMQ driver can slot under the same API for extreme throughput later.
-- **Durable workflows (first-class, opt-in) — on the same DB.** Multi-step, crash-surviving orchestration (`sleep`, `waitForEvent`, sagas) for drip/newsletter sequences, multi-step deploys, and long-running agent ops. **Build a thin in-house layer on the DB, or adopt [DBOS](https://github.com/dbos-inc/dbos-transact-ts)** (PG-native durable workflows+queues as a library — the cleanest "adopt" option that stays on our substrate). Decide build-vs-DBOS at that slice.
+- **Durable workflows (first-class, opt-in) — on the same DB.** Multi-step, crash-surviving orchestration (`sleep`, `waitForEvent`, sagas) for drip/newsletter sequences, multi-step deploys, and long-running agent ops. **Build a thin in-house layer on the DB, or adopt [DBOS](https://github.com/dbos-inc/dbos-transact-ts)** (PG-native durable workflows+queues as a library — the cleanest "adopt" option that stays on our substrate). Decide build-vs-DBOS at that slice. **Shipped today (`@keel/workflows`):** the step-memoization half only — completed steps journal to the DB and replay when `run()` is re-invoked with the same `runId` (caller-driven resume). The *crash-safe* half — a run journal, a queue-backed resume driver that re-invokes workflows automatically after a crash, durable `sleep`, and `waitForEvent` — is post-1.0.
 - **Demoted to optional adapter:** Vercel `workflow` (confirmed self-hostable, Apache-2.0, good — but brings its own store model rather than living on our one DB), Inngest, Temporal, Trigger.dev.
 
 **Why on the DB, not Redis-first:** coherence (one substrate humans + agents reason about), zero-ops local + small prod, and it's where Rails/Supabase are converging. Keep the driver seam for scale.
@@ -119,8 +125,8 @@ OpenTelemetry-first, auto-instrumented: **one trace spans UI → API/controller 
 
 ## 8. Build order (dependency-aware)
 
-1. ✅ **Queue + scheduler** (in-house, SQLite atomic-claim now / Postgres `SKIP LOCKED` next) with graceful-drain + reclaim — **built & proves the deploy-durability model** (`test/durability-demo.js`: a worker SIGKILLed mid-job is reclaimed and completed, zero loss). Plus the DB lifecycle (§3.4): seeding, transactional testing, masking — all built & tested.
-2. **Hooks / events / plugins** extensibility core (§3.5) — everything else registers through it. ← **next**
+1. ✅ **Queue + scheduler** (in-house, SQLite atomic-claim now / Postgres `SKIP LOCKED` next) with graceful-drain + reclaim — **built**; the reclaim mechanism (a worker that drops a job mid-flight releases it for another worker to claim and complete, no loss) is covered in `packages/queue/test/queue.test.ts`. Plus the DB lifecycle (§3.4): seeding, transactional testing, masking — all built & tested. *(Note: the **scheduler** dedupes cron firings in in-process memory — run exactly one scheduler instance per deployment; see `packages/queue/src/scheduler.ts`.)*
+2. **Hooks / events / plugins** extensibility core (§3.5) — everything else registers through it. ← **deferred post-1.0** (ADR 0014; the orphan prototypes were removed from the v1 surface).
 3. **Auth + users + RBAC** (better-auth over the DB).
 4. **Mailers** (react-email) **+ webhooks** — on the queue.
 5. **shadcn-based Loom registry + Forms.**

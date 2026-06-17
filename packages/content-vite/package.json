@@ -1,7 +1,7 @@
 {
   "name": "@keel/content-vite",
   "version": "0.1.0",
-  "description": "Vite plugin for Docks content collections",
+  "description": "PREVIEW (not part of the supported v1 content seam) — Vite plugin for Docks content collections. Experimental, coverage-gate-exempt.",
   "type": "module",
   "sideEffects": false,
   "publishConfig": {

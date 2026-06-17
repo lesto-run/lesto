@@ -1,6 +1,7 @@
 {
   "name": "@keel/content-prose",
   "version": "0.1.0",
+  "description": "PREVIEW (not part of the supported v1 content seam) — prose-quality analysis for Docks content; experimental, coverage-gate-exempt.",
   "type": "module",
   "sideEffects": false,
   "publishConfig": {

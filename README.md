@@ -20,7 +20,7 @@ Fifty `@keel/*` packages and counting. The highlights below are grouped by domai
 | Package | What it does |
 |---|---|
 | [`@keel/queue`](./packages/queue) | Durable job queue — at-least-once delivery with visibility-timeout reclaim, on the SQL database, no Redis. |
-| [`@keel/workflows`](./packages/workflows) | Durable workflows — DBOS-style step memoization on the SQL database, with crash-safe resume. |
+| [`@keel/workflows`](./packages/workflows) | Resumable step memoization on the SQL database — completed steps replay when `run()` is re-invoked with the same `runId` (caller-driven resume; not crash-safe durable execution — a run journal + resume driver is post-1.0). |
 | [`@keel/cache`](./packages/cache) | TTL cache — pluggable stores (in-memory or SQL-backed) over an injected clock. |
 | [`@keel/pubsub`](./packages/pubsub) | In-process publish/subscribe hub — synchronous registration, awaited delivery. |
 
@@ -35,6 +35,8 @@ Fifty `@keel/*` packages and counting. The highlights below are grouped by domai
 ### Content
 
 The WordPress-class content engine — folded in from Docks (`@usedocks/*`), rebuilt on the substrate. Fifteen `@keel/content-*` packages; the load-bearing ones:
+
+> **Supported in v1 vs. preview.** The **supported** content surface is the store/engine/CLI/MCP seam: `@keel/content-store`, `@keel/content-core`, the `keel content:build` CLI, the `@keel/mcp` content tools, and `HtmlContent` from `@keel/content-components`. Everything else — search, embeddings, prose, lint, seo, query, vite, and content components beyond `HtmlContent` — ships **PREVIEW**: experimental, coverage-gate-exempt, and may change. Two preview limits worth knowing: `@keel/content-search` is brute-force O(n) and practical only up to **~10k documents**; `@keel/content-embeddings` downloads the `all-MiniLM-L6-v2` model (~25MB, via `@huggingface/transformers`) on a fresh build environment's first run (cache the model directory in CI).
 
 | Package | What it does |
 |---|---|
@@ -60,8 +62,6 @@ Content is reachable from every surface: author with `keel content:new`, compile
 
 | Package | What it does |
 |---|---|
-| [`@keel/hooks`](./packages/hooks) | WordPress-style extensibility core — actions (side effects) and filters (value transforms), instance-based and pure. |
-| [`@keel/config`](./packages/config) | Typed configuration loader — read, validate, and coerce config from a string source. |
 | [`@keel/observability`](./packages/observability) | In-house distributed-tracing core — OpenTelemetry-shaped, with no OpenTelemetry dependency. |
 
 ### UI / Web

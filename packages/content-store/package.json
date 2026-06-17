@@ -1,7 +1,7 @@
 {
   "name": "@keel/content-store",
   "version": "0.0.0",
-  "description": "Keel content on the SQL substrate — persists @keel/content-core entries to the database and hydrates the runtime from it.",
+  "description": "SUPPORTED (v1 content seam) — Keel content on the SQL substrate — persists @keel/content-core entries to the database and hydrates the runtime from it.",
   "type": "module",
   "private": true,
 

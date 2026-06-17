@@ -10,6 +10,25 @@ import type { Clock, JsonValue } from "./types";
  * All of the *deciding* lives in `tick(now)` — a pure function of the clock —
  * so it is trivially testable without real timers. `start()` is the thin wire
  * that calls `tick` on a cadence; that is all it does, and all it should.
+ *
+ * ── HARD DEPLOYMENT CONSTRAINT: run exactly ONE scheduler instance ──────────
+ *
+ * Cron de-duplication is **in-process memory**, not durable. Each cron entry
+ * remembers the last minute-key it fired (`CronEntry.lastMinuteKey`) and each
+ * interval entry remembers its last run time (`IntervalEntry.lastRunAt`) — both
+ * live only in this object's heap. Two scheduler instances (two app processes,
+ * two replicas behind a load balancer, two pods) keep SEPARATE memory and will
+ * each independently decide the same cron/interval is due, **double-firing every
+ * scheduled job**. There is no shared lock, no claimed-firing row, nothing in the
+ * database that coordinates across instances.
+ *
+ * So: in a horizontally-scaled / rolling-deploy fleet, run the scheduler on a
+ * SINGLE designated instance (a leader, a dedicated scheduler process, or a
+ * single-replica deployment) — even though the queue WORKERS it enqueues into
+ * may be many. Persisted, atomically-claimed cron firings that make multi-instance
+ * scheduling safe are deferred post-1.0 (see `docs/plans/data-persistence.md`
+ * item 10). Note the no-overlap guard in `start()` defends only against a slow
+ * tick within ONE instance; it does nothing across instances.
  */
 
 const CRON_FIELDS = 5;
