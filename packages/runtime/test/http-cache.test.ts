@@ -131,7 +131,8 @@ describe("etagMatches", () => {
 describe("respondNotModified", () => {
   it("writes a 304 with the given headers and ends with no body", () => {
     const calls: Array<
-      { kind: "writeHead"; status: number; headers: Record<string, string> } | { kind: "end" }
+      | { kind: "writeHead"; status: number; headers: Record<string, string | string[]> }
+      | { kind: "end" }
     > = [];
 
     const res: NotModifiedResponse = {
@@ -153,7 +154,8 @@ describe("respondNotModified", () => {
 
   it("strips Content-Length so a bodiless 304 never declares a body length", () => {
     const calls: Array<
-      { kind: "writeHead"; status: number; headers: Record<string, string> } | { kind: "end" }
+      | { kind: "writeHead"; status: number; headers: Record<string, string | string[]> }
+      | { kind: "end" }
     > = [];
 
     const res: NotModifiedResponse = {
@@ -178,5 +180,30 @@ describe("respondNotModified", () => {
       },
       { kind: "end" },
     ]);
+  });
+
+  it("echoes a multi-valued Set-Cookie list intact so a 304 re-sets every cookie", () => {
+    const calls: Array<
+      | { kind: "writeHead"; status: number; headers: Record<string, string | string[]> }
+      | { kind: "end" }
+    > = [];
+
+    const res: NotModifiedResponse = {
+      writeHead: (status, headers) => calls.push({ kind: "writeHead", status, headers }),
+      end: () => calls.push({ kind: "end" }),
+    };
+
+    respondNotModified(res, {
+      ETag: '"abc"',
+      "set-cookie": ["session=s; HttpOnly", "csrf=c; Secure"],
+    });
+
+    // The Set-Cookie list survives the 304 as a list — node emits one line per
+    // element, so a not-modified response still re-sets both cookies.
+    expect(calls[0]).toEqual({
+      kind: "writeHead",
+      status: 304,
+      headers: { ETag: '"abc"', "set-cookie": ["session=s; HttpOnly", "csrf=c; Secure"] },
+    });
   });
 });

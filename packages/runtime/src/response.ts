@@ -1,4 +1,11 @@
-import { Readable } from "node:stream";
+import { Readable, type Transform } from "node:stream";
+import {
+  brotliCompressSync,
+  createBrotliCompress,
+  createGzip,
+  gzipSync,
+  constants as zlibConstants,
+} from "node:zlib";
 
 import type { AnyKeelResponse, KeelBody } from "@keel/web";
 
@@ -15,9 +22,15 @@ import type { AnyKeelResponse, KeelBody } from "@keel/web";
  * the stream to it, and a mid-stream failure `destroy`s the socket. They are
  * required here (not optional) so a fake exercising the string/bytes arms still
  * satisfies the type — those arms simply never call them.
+ *
+ * `writeHead`'s header value widens to `string | string[]`: a `Set-Cookie`
+ * carrying several cookies arrives as a list, and node's real `writeHead` accepts
+ * a string-array value natively, emitting one header line per element — exactly
+ * the per-cookie framing RFC 6265 requires (a comma-joined `Set-Cookie` is
+ * ambiguous and dropped by browsers). A single-valued header stays a bare string.
  */
 export interface WritableResponse {
-  writeHead(status: number, headers: Record<string, string>): void;
+  writeHead(status: number, headers: Record<string, string | string[]>): void;
 
   end(body?: string | Uint8Array): void;
 
@@ -88,13 +101,24 @@ const fromWeb: FromWeb = (body) =>
  *
  * `bridge` defaults to the real {@link fromWeb}; it is a parameter only so a test
  * can drive the synchronous-throw arm deterministically.
+ *
+ * `transform`, when supplied, is a node `Transform` (a zlib compressor) inserted
+ * between the source and the socket: `source -> transform -> res`. It is part of
+ * the tear-down chain — a source/transform error or a client disconnect destroys
+ * the WHOLE chain (so a resource-backed body and the compressor's buffers are
+ * freed) and reports the truncation, exactly as the no-transform path does.
  */
 export function pipeStream(
   res: WritableResponse,
   body: ReadableStream,
-  options: { onTruncated?: (reason: unknown) => void; bridge?: FromWeb } = {},
+  options: {
+    onTruncated?: (reason: unknown) => void;
+    bridge?: FromWeb;
+    transform?: Transform;
+  } = {},
 ): Promise<void> {
   const bridge = options.bridge ?? fromWeb;
+  const transform = options.transform;
 
   return new Promise<void>((resolve) => {
     let source: Readable | undefined;
@@ -112,9 +136,18 @@ export function pipeStream(
       options.onTruncated?.(reason);
     };
 
+    // Tear down every stage we have: the source (freeing what backs it) and the
+    // compressor (freeing its buffers). `pipe` does not propagate a destination
+    // failure upstream, so we do it ourselves — the leak fix, now covering the
+    // optional transform too.
+    const destroyUpstream = (): void => {
+      source?.destroy();
+      transform?.destroy();
+    };
+
     // A write-side failure (client gone) must not escape as an uncaught throw,
     // and `pipe` leaves the source running when the destination dies — so we
-    // tear the source down ourselves, freeing whatever backs it. Registered
+    // tear the upstream down ourselves, freeing whatever backs it. Registered
     // first so it also covers the `error` a `destroy(error)` below emits — every
     // tear-down path has a listener before it can fire. `source` is read through
     // the closure, so it sees whichever value `bridge` later assigned (or stays
@@ -124,7 +157,7 @@ export function pipeStream(
       // error is the honest reason for the report.
       reportTruncated(error);
 
-      source?.destroy();
+      destroyUpstream();
 
       resolve();
     });
@@ -136,6 +169,8 @@ export function pipeStream(
       // signal is to destroy the socket — same as a mid-stream read failure —
       // and the body is truncated.
       reportTruncated(error);
+
+      transform?.destroy();
 
       res.destroy(error as Error);
 
@@ -149,15 +184,311 @@ export function pipeStream(
     source.on("error", (error: Error) => {
       reportTruncated(error);
 
+      transform?.destroy();
+
       res.destroy(error);
 
       resolve();
     });
 
-    const piped = source.pipe(res as unknown as NodeJS.WritableStream);
+    // A compressor fault (a malformed input it cannot encode) is just as
+    // truncating: the bytes downstream are incomplete, so we tear the socket down
+    // and report it, the same as a source error.
+    transform?.on("error", (error: Error) => {
+      reportTruncated(error);
+
+      source?.destroy();
+
+      res.destroy(error);
+
+      resolve();
+    });
+
+    // Insert the compressor between source and socket when present:
+    // `source -> transform -> res`. Without one, the source pipes straight to res
+    // exactly as before — byte-for-byte the original path.
+    const piped =
+      transform === undefined
+        ? source.pipe(res as unknown as NodeJS.WritableStream)
+        : source.pipe(transform).pipe(res as unknown as NodeJS.WritableStream);
 
     piped.on("finish", () => resolve());
   });
+}
+
+/**
+ * A content encoding the server may negotiate for a response body.
+ *
+ * `"br"` (Brotli) and `"gzip"` are the two the web converged on; `"identity"` is
+ * the no-op — the body goes out as-is. We deliberately do NOT offer `deflate`
+ * (its raw-vs-zlib ambiguity has burned enough clients) or `zstd` (not yet
+ * universal in browsers as of v1).
+ */
+export type ContentEncoding = "br" | "gzip" | "identity";
+
+/**
+ * The content-type prefixes whose bodies are worth compressing.
+ *
+ * Text-shaped payloads (HTML, JSON, JS, CSS, SVG, plain text) shrink a lot and
+ * dominate a dynamic app's bytes; everything else is either already compressed
+ * (a PNG, a woff2, a video — see {@link isAlreadyEncoded}) or too small to pay
+ * for the CPU. An allowlist (not a denylist) is the safe default: an unknown
+ * type is left uncompressed rather than spending CPU on a body that won't shrink.
+ */
+const COMPRESSIBLE_TYPES: readonly string[] = [
+  "text/",
+  "application/json",
+  "application/javascript",
+  "application/manifest+json",
+  "application/xml",
+  "image/svg+xml",
+];
+
+/**
+ * Parse an `Accept-Encoding` request header into the best encoding we offer.
+ *
+ * We prefer Brotli over gzip (smaller for the same text) and fall back to
+ * `identity` when the client accepts neither — honoring an explicit `q=0` that
+ * forbids an encoding, so a client that sent `gzip;q=0` never receives gzip. A
+ * missing header is `identity`: an absent `Accept-Encoding` means "send me what
+ * you have", not "compress freely". Pure over the raw header string so every
+ * row of the negotiation matrix is unit-testable without a socket.
+ */
+export function negotiateEncoding(acceptEncoding: string | undefined): ContentEncoding {
+  if (acceptEncoding === undefined) return "identity";
+
+  // Map each offered token to its q-value (default 1), so a `;q=0` forbids it
+  // and a higher q is preferred — though for our two codings the fixed br > gzip
+  // order already decides ties, the q-parse is what lets a client OPT OUT.
+  const accepted = new Map<string, number>();
+
+  for (const part of acceptEncoding.split(",")) {
+    const [rawToken, ...params] = part.trim().split(";");
+    const token = rawToken?.trim().toLowerCase();
+
+    if (token === undefined || token === "") continue;
+
+    const q = qValueOf(params);
+
+    accepted.set(token, q);
+  }
+
+  // A wildcard sets the floor for anything not named explicitly.
+  const star = accepted.get("*");
+
+  const allows = (token: string): boolean => {
+    const q = accepted.get(token) ?? star;
+
+    return q !== undefined && q > 0;
+  };
+
+  if (allows("br")) return "br";
+
+  if (allows("gzip")) return "gzip";
+
+  return "identity";
+}
+
+/** The `q=` weight of an `Accept-Encoding` token's params; defaults to 1 (accepted). */
+function qValueOf(params: string[]): number {
+  for (const param of params) {
+    const eq = param.indexOf("=");
+
+    if (eq === -1) continue;
+
+    if (param.slice(0, eq).trim().toLowerCase() === "q") {
+      const q = Number(param.slice(eq + 1));
+
+      return Number.isNaN(q) ? 1 : q;
+    }
+  }
+
+  return 1;
+}
+
+/** Read a header value (single or multi) by case-insensitive name as one string. */
+function headerValue(headers: Record<string, string | string[]>, name: string): string | undefined {
+  const lower = name.toLowerCase();
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower) {
+      return Array.isArray(value) ? value.join(", ") : value;
+    }
+  }
+
+  return undefined;
+}
+
+/** Whether a response already carries a `Content-Encoding` (we never double-encode). */
+function isAlreadyEncoded(headers: Record<string, string | string[]>): boolean {
+  const encoding = headerValue(headers, "content-encoding");
+
+  // An explicit `identity` is "not encoded"; any real coding means hands-off.
+  return encoding !== undefined && encoding.toLowerCase() !== "identity";
+}
+
+/**
+ * Whether a response body is worth compressing: a text-shaped content-type that
+ * is not already encoded.
+ *
+ * The content-type allowlist ({@link COMPRESSIBLE_TYPES}) keeps us off bodies
+ * that won't shrink — an image, a font, a video are already compressed, and
+ * spending CPU to gzip them only makes them bigger. A response the app already
+ * encoded is left untouched. Pure over the header map so the allow / skip /
+ * already-encoded branches are unit-testable.
+ */
+export function isCompressibleType(headers: Record<string, string | string[]>): boolean {
+  if (isAlreadyEncoded(headers)) return false;
+
+  const contentType = headerValue(headers, "content-type");
+
+  if (contentType === undefined) return false;
+
+  const type = contentType.toLowerCase();
+
+  return COMPRESSIBLE_TYPES.some((prefix) => type.startsWith(prefix));
+}
+
+/** Drop any entry matching `name` case-insensitively, returning a fresh map. */
+function withoutHeader(
+  headers: Record<string, string | string[]>,
+  name: string,
+): Record<string, string | string[]> {
+  const lower = name.toLowerCase();
+
+  return Object.fromEntries(Object.entries(headers).filter(([key]) => key.toLowerCase() !== lower));
+}
+
+/**
+ * Append a token to a comma-separated header (e.g. `Vary`), without duplicating
+ * it.
+ *
+ * `Vary: Accept-Encoding` is the contract that a compressed response demands: a
+ * shared cache MUST key on the request's `Accept-Encoding`, or it would serve a
+ * brotli body to a client that only speaks gzip. We add the token to whatever
+ * `Vary` the app already set (case-insensitively de-duped) rather than clobber
+ * it, so an app varying on, say, `Cookie` keeps that.
+ */
+function appendVary(
+  headers: Record<string, string | string[]>,
+  token: string,
+): Record<string, string | string[]> {
+  const existing = headerValue(headers, "vary");
+
+  const tokens = existing === undefined ? [] : existing.split(",").map((t) => t.trim());
+
+  const present = tokens.some((t) => t.toLowerCase() === token.toLowerCase());
+
+  const next = present ? tokens.join(", ") : [...tokens, token].join(", ");
+
+  return { ...withoutHeader(headers, "vary"), Vary: next };
+}
+
+/** Brotli quality 5 — the practical sweet spot for on-the-fly text (good ratio, low latency). */
+const BROTLI_QUALITY = 5;
+
+/** Compress a buffered body with the chosen real coding (the caller handles `identity`). */
+function compressBytes(bytes: Buffer, encoding: "br" | "gzip"): Buffer {
+  if (encoding === "br") {
+    return brotliCompressSync(bytes, {
+      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY },
+    });
+  }
+
+  return gzipSync(bytes);
+}
+
+/**
+ * Apply the negotiated content encoding to a BUFFERED response (string or bytes),
+ * always setting an accurate `Content-Length`.
+ *
+ * Two jobs, both about getting the framing right:
+ *
+ *   - When `encoding` is `br`/`gzip`, the body is compressed to bytes, and the
+ *     response gains `Content-Encoding`, a `Vary: Accept-Encoding`, and a
+ *     `Content-Length` of the COMPRESSED size — so the wire framing matches the
+ *     bytes that actually go out.
+ *   - When `encoding` is `identity` (the client took nothing, or the type isn't
+ *     compressible), the body is untouched but we still set `Content-Length` to
+ *     its byte length — closing the gap where a buffered response went out with
+ *     no declared length and forced chunked encoding for a body we knew in full.
+ *
+ * Pure and exported: it returns a fresh response (the input is never mutated, per
+ * the per-response-object invariant), so the compressed-vs-identity and the
+ * length-accounting branches are unit-testable without a socket. The caller has
+ * already decided the body is buffered and the type compressible; this just
+ * executes the chosen plan.
+ */
+export function encodeBuffered(
+  response: AnyKeelResponse,
+  body: string | Uint8Array,
+  encoding: ContentEncoding,
+): AnyKeelResponse {
+  const raw = typeof body === "string" ? Buffer.from(body, "utf8") : Buffer.from(body);
+
+  if (encoding === "identity") {
+    return {
+      ...response,
+      headers: { ...response.headers, "Content-Length": String(raw.byteLength) },
+      body: raw,
+    };
+  }
+
+  const compressed = compressBytes(raw, encoding);
+
+  return {
+    ...response,
+    headers: {
+      ...appendVary(response.headers, "Accept-Encoding"),
+      "Content-Encoding": encoding,
+      "Content-Length": String(compressed.byteLength),
+    },
+    body: compressed,
+  };
+}
+
+/**
+ * The zlib transform that compresses a STREAMED body on the fly, or `undefined`
+ * for `identity`.
+ *
+ * A stream cannot be length-prefixed (its size is unknown until it ends), so —
+ * unlike the buffered arm — there is no `Content-Length` to set; the encoding is
+ * declared by `Content-Encoding`/`Vary` (added by {@link encodeStreamHeaders})
+ * and the bytes are chunked. The transform is piped between the source and the
+ * socket in {@link applyResponse}.
+ */
+function streamCompressor(encoding: ContentEncoding): Transform | undefined {
+  if (encoding === "br") {
+    return createBrotliCompress({
+      params: { [zlibConstants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY },
+    });
+  }
+
+  if (encoding === "gzip") return createGzip();
+
+  return undefined;
+}
+
+/**
+ * Add the `Content-Encoding`/`Vary` framing a compressed STREAM declares.
+ *
+ * The stream body itself is encoded by the {@link streamCompressor} transform in
+ * {@link applyResponse}; this just stamps the headers that tell the client (and
+ * any shared cache) how to read it. `identity` returns the headers untouched.
+ */
+export function encodeStreamHeaders(
+  response: AnyKeelResponse,
+  encoding: ContentEncoding,
+): AnyKeelResponse {
+  if (encoding === "identity") return response;
+
+  return {
+    ...response,
+    headers: {
+      ...appendVary(response.headers, "Accept-Encoding"),
+      "Content-Encoding": encoding,
+    },
+  };
 }
 
 /**
@@ -182,11 +513,23 @@ export function pipeStream(
  * the stream arm so a body torn down mid-flight (producer error, client
  * disconnect) is reported to the caller's access entry/span. The buffered arms
  * never truncate, so they ignore it.
+ *
+ * `options.streamEncoding`, when `br`/`gzip`, inserts a zlib transform between
+ * the source stream and the socket so a streamed body is compressed on the fly;
+ * the caller has already stamped the `Content-Encoding`/`Vary` framing (see
+ * {@link encodeStreamHeaders}). It is ignored on the buffered arms — those are
+ * compressed up front (see {@link encodeBuffered}), so a buffered body never
+ * reaches the transform path. Truncation is still reported through the transform:
+ * a source error or a client disconnect tears the whole chain down and fires
+ * `onTruncated`, preserving the item-4 behavior.
  */
 export function applyResponse(
   res: WritableResponse,
   response: AnyKeelResponse,
-  options: { onTruncated?: (reason: unknown) => void } = {},
+  options: {
+    onTruncated?: (reason: unknown) => void;
+    streamEncoding?: ContentEncoding;
+  } = {},
 ): void | Promise<void> {
   res.writeHead(response.status, response.headers);
 
@@ -199,11 +542,13 @@ export function applyResponse(
   }
 
   if (isReadableStream(body)) {
-    return pipeStream(
-      res,
-      body,
-      options.onTruncated === undefined ? {} : { onTruncated: options.onTruncated },
-    );
+    const compressor =
+      options.streamEncoding === undefined ? undefined : streamCompressor(options.streamEncoding);
+
+    return pipeStream(res, body, {
+      ...(options.onTruncated === undefined ? {} : { onTruncated: options.onTruncated }),
+      ...(compressor === undefined ? {} : { transform: compressor }),
+    });
   }
 
   // The remaining arm is `Uint8Array`: copy into a Buffer the socket can flush.

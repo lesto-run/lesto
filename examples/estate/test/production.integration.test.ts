@@ -40,9 +40,10 @@ afterAll(async () => {
   if (outDir) await rm(outDir, { recursive: true, force: true });
 });
 
-/** Pull the session cookie's `name=value` out of a `Set-Cookie` header. */
-function cookieFrom(setCookie: string | undefined): string {
-  return (setCookie ?? "").split(";")[0] ?? "";
+/** Pull the session cookie's `name=value` out of a `Set-Cookie` header (now a multimap, so a list is possible). */
+function cookieFrom(setCookie: string | string[] | undefined): string {
+  const first = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+  return (first ?? "").split(";")[0] ?? "";
 }
 
 // A same-origin browser form post: content-type + the Fetch-Metadata signal

@@ -8,6 +8,7 @@ import {
   adoptRequestId,
   applyServerLimits,
   closeWithDrain,
+  compressResponse,
   drainServer,
   establishContext,
   healthResponse,
@@ -27,6 +28,9 @@ import {
 } from "../src/server";
 import { etagFor } from "../src/index";
 import { RuntimeError } from "../src/errors";
+import { gunzipSync } from "node:zlib";
+
+import type { AnyKeelResponse } from "@keel/web";
 
 import type {
   AbortableResponse,
@@ -98,6 +102,45 @@ function makeRequest(
     if (options.body !== undefined) {
       req.write(options.body);
     }
+
+    req.end();
+  });
+}
+
+/** Like {@link makeRequest}, but returns the RAW response bytes (for a compressed body). */
+function makeRequestRaw(
+  port: number,
+  options: { method: string; path: string; headers?: Record<string, string> },
+): Promise<{
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  body: Buffer;
+}> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: "127.0.0.1",
+        port,
+        method: options.method,
+        path: options.path,
+        headers: { ...options.headers },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks),
+          }),
+        );
+      },
+    );
+
+    req.on("error", reject);
 
     req.end();
   });
@@ -1134,7 +1177,7 @@ describe("readBody", () => {
 
 describe("respondWithError", () => {
   it("writes a fresh status and safe body when headers have not been sent", () => {
-    const calls: Array<{ status: number; headers: Record<string, string> }> = [];
+    const calls: Array<{ status: number; headers: Record<string, string | string[]> }> = [];
 
     let ended: string | undefined;
 
@@ -1528,6 +1571,17 @@ describe("withEtag", () => {
     expect(result.response.headers["ETag"]).toBe(result.etag);
   });
 
+  it("recognizes HTML when the content-type is a (degenerate) list value", () => {
+    // The widened header map allows a list value; the HTML check joins it first.
+    const response: AnyKeelResponse = {
+      status: 200,
+      headers: { "content-type": ["text/html"] },
+      body: "<h1>List</h1>",
+    };
+
+    expect(withEtag(response, {}).etag).toBe(etagFor("<h1>List</h1>"));
+  });
+
   it("attaches a weak ETag when configured", () => {
     const result = withEtag(htmlResponse("<h1>Home</h1>"), { weak: true });
 
@@ -1815,5 +1869,235 @@ describe("requestAbortSignal", () => {
     fireClose();
 
     expect(signal.aborted).toBe(false);
+  });
+});
+
+/** Read a header value (single or list) by case-insensitive name as one string. */
+function headerOf(
+  headers: Record<string, string | string[]>,
+  name: string,
+): string | string[] | undefined {
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === name.toLowerCase()) return value;
+  }
+
+  return undefined;
+}
+
+/** A buffered HTML 200 — the compressible input for the compression tests. */
+function htmlBody(body: string): AnyKeelResponse {
+  return { status: 200, headers: { "content-type": "text/html" }, body };
+}
+
+describe("compressResponse", () => {
+  const html = htmlBody;
+
+  it("returns the response untouched when compression is disabled", () => {
+    const response = html("hello");
+
+    const result = compressResponse(response, "gzip", false);
+
+    expect(result.response).toBe(response);
+    expect(result.streamEncoding).toBeUndefined();
+  });
+
+  it("compresses a buffered HTML body and reports no stream encoding", () => {
+    const text = "compress me ".repeat(50);
+
+    const result = compressResponse(html(text), "gzip", true);
+
+    expect(headerOf(result.response.headers, "content-encoding")).toBe("gzip");
+    expect(result.streamEncoding).toBeUndefined();
+    expect(gunzipSync(result.response.body as Buffer).toString("utf8")).toBe(text);
+  });
+
+  it("sets Content-Length on a non-compressible buffered body (identity)", () => {
+    const response: AnyKeelResponse = {
+      status: 200,
+      headers: { "content-type": "image/png" },
+      body: new Uint8Array([1, 2, 3, 4]),
+    };
+
+    const result = compressResponse(response, "gzip", true);
+
+    // Not compressed (an image), but the length is now declared.
+    expect(headerOf(result.response.headers, "content-encoding")).toBeUndefined();
+    expect(headerOf(result.response.headers, "content-length")).toBe("4");
+  });
+
+  it("returns a stream encoding for a compressible stream the client accepts", () => {
+    const response: AnyKeelResponse = {
+      status: 200,
+      headers: { "content-type": "text/html" },
+      body: new ReadableStream(),
+    };
+
+    const result = compressResponse(response, "br, gzip", true);
+
+    // The header framing is stamped and the chosen coding is handed back for
+    // applyResponse to insert the transform.
+    expect(result.streamEncoding).toBe("br");
+    expect(headerOf(result.response.headers, "content-encoding")).toBe("br");
+  });
+
+  it("leaves a stream untouched when its type is not compressible", () => {
+    const response: AnyKeelResponse = {
+      status: 200,
+      headers: { "content-type": "application/octet-stream" },
+      body: new ReadableStream(),
+    };
+
+    const result = compressResponse(response, "gzip", true);
+
+    expect(result.response).toBe(response);
+    expect(result.streamEncoding).toBeUndefined();
+  });
+
+  it("leaves a compressible stream untouched when the client accepts no coding", () => {
+    const response: AnyKeelResponse = {
+      status: 200,
+      headers: { "content-type": "text/html" },
+      body: new ReadableStream(),
+    };
+
+    const result = compressResponse(response, "identity", true);
+
+    expect(result.response).toBe(response);
+    expect(result.streamEncoding).toBeUndefined();
+  });
+});
+
+describe("serve — Set-Cookie multimap + compression (live socket)", () => {
+  it("delivers two Set-Cookie lines for a session + CSRF cookie", async () => {
+    const app: App = {
+      migrationsApplied: [],
+
+      handle: async () => ({
+        status: 200,
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "set-cookie": ["session=s; HttpOnly", "csrf=c; Secure"],
+        },
+        body: "ok",
+      }),
+    };
+
+    server = await serve(app, { port: 0 });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/" });
+
+    // node's http client surfaces repeated Set-Cookie lines as a string array —
+    // BOTH cookies arrived, never one comma-joined line.
+    expect(response.headers["set-cookie"]).toEqual(["session=s; HttpOnly", "csrf=c; Secure"]);
+  });
+
+  it("gzip-compresses a text body end-to-end when the client accepts it", async () => {
+    const text = "the quick brown fox ".repeat(80);
+
+    const app: App = {
+      migrationsApplied: [],
+
+      handle: async () => ({
+        status: 200,
+        headers: { "content-type": "text/html" },
+        body: text,
+      }),
+    };
+
+    server = await serve(app, { port: 0 });
+
+    const response = await makeRequestRaw(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "accept-encoding": "gzip" },
+    });
+
+    expect(response.headers["content-encoding"]).toBe("gzip");
+    expect(response.headers["vary"]).toContain("Accept-Encoding");
+    // The wire bytes are gzip; decompressing yields the source HTML.
+    expect(gunzipSync(response.body).toString("utf8")).toBe(text);
+  });
+
+  it("sets Content-Length and no encoding when the client accepts none", async () => {
+    const app: App = {
+      migrationsApplied: [],
+
+      handle: async () => ({
+        status: 200,
+        headers: { "content-type": "text/html" },
+        body: "plain body",
+      }),
+    };
+
+    server = await serve(app, { port: 0 });
+
+    const response = await makeRequestRaw(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "accept-encoding": "identity" },
+    });
+
+    expect(response.headers["content-encoding"]).toBeUndefined();
+    expect(response.headers["content-length"]).toBe("10");
+    expect(response.body.toString("utf8")).toBe("plain body");
+  });
+
+  it("sends the body uncompressed when compression is disabled", async () => {
+    const text = "uncompressed ".repeat(40);
+
+    const app: App = {
+      migrationsApplied: [],
+
+      handle: async () => ({
+        status: 200,
+        headers: { "content-type": "text/html" },
+        body: text,
+      }),
+    };
+
+    server = await serve(app, { port: 0, compress: false });
+
+    const response = await makeRequestRaw(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "accept-encoding": "gzip" },
+    });
+
+    expect(response.headers["content-encoding"]).toBeUndefined();
+    expect(response.body.toString("utf8")).toBe(text);
+  });
+
+  it("compresses a STREAMED HTML body on the fly through the zlib transform", async () => {
+    const text = "streamed compress ".repeat(60);
+
+    const app: App = {
+      migrationsApplied: [],
+
+      handle: async () =>
+        ({
+          status: 200,
+          headers: { "content-type": "text/html" },
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(text));
+              controller.close();
+            },
+          }),
+        }) as unknown as KeelResponse,
+    };
+
+    server = await serve(app, { port: 0 });
+
+    const response = await makeRequestRaw(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "accept-encoding": "gzip" },
+    });
+
+    // A stream is compressed through the transform — chunked, no Content-Length —
+    // and decompresses back to the source HTML.
+    expect(response.headers["content-encoding"]).toBe("gzip");
+    expect(response.headers["content-length"]).toBeUndefined();
+    expect(gunzipSync(response.body).toString("utf8")).toBe(text);
   });
 });

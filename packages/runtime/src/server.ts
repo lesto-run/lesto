@@ -26,7 +26,14 @@ import type {
 export { DEFAULT_SECURITY_HEADERS, RECOMMENDED_CSP, securityDefaults, withSecurityHeaders };
 export type { SecurityHeaderOptions };
 
-import { applyResponse } from "./response";
+import {
+  applyResponse,
+  encodeBuffered,
+  encodeStreamHeaders,
+  isCompressibleType,
+  negotiateEncoding,
+} from "./response";
+import type { ContentEncoding } from "./response";
 import { toKeelRequest } from "./request";
 import { RuntimeError } from "./errors";
 import { etagFor, etagMatches, respondNotModified } from "./http-cache";
@@ -248,6 +255,21 @@ export interface ServeOptions {
    * always set its own `ETag` and opt a given response out.
    */
   readonly etag?: false | { readonly weak?: boolean };
+
+  /**
+   * Response compression, negotiated from the request's `Accept-Encoding`.
+   *
+   * On by default: a text-shaped response (HTML, JSON, JS, CSS, SVG — the
+   * allowlist in `response.ts`) whose client accepts it is sent Brotli- or
+   * gzip-compressed (Brotli preferred), with `Content-Encoding` and a
+   * `Vary: Accept-Encoding`. A buffered body is compressed up front and gains an
+   * accurate `Content-Length`; a streamed body is compressed on the fly through a
+   * zlib transform. Already-encoded bodies and non-text types are left untouched,
+   * and a client that accepts neither coding gets the body verbatim — but a
+   * buffered body still gains its `Content-Length`. Pass `false` to disable
+   * compression wholesale (e.g. when a CDN in front already compresses).
+   */
+  readonly compress?: false;
 
   /**
    * Whom to believe about the client IP and protocol (see {@link TrustProxy}).
@@ -642,11 +664,69 @@ export function withEtag(
 }
 
 /** True iff a header map declares an HTML content-type (any header casing). */
-function isHtml(headers: Record<string, string>): boolean {
+function isHtml(headers: Record<string, string | string[]>): boolean {
   return Object.entries(headers).some(
     ([name, value]) =>
-      name.toLowerCase() === "content-type" && value.toLowerCase().includes("text/html"),
+      name.toLowerCase() === "content-type" &&
+      // Content-Type is single-valued in practice; collapse a (degenerate) list
+      // before the check so the function is total over the widened header map.
+      (Array.isArray(value) ? value.join(", ") : value).toLowerCase().includes("text/html"),
   );
+}
+
+/**
+ * Apply the negotiated content encoding to a response just before it is written.
+ *
+ * The single decision point that ties together the pure pieces in `response.ts`:
+ *
+ *   - Compression off (`enabled` is `false`): the response goes out untouched —
+ *     no encoding, no `Content-Length` added. Disabling means hands-off, for a
+ *     deployment whose CDN already compresses.
+ *   - A BUFFERED body (string or bytes): always re-emitted through
+ *     {@link encodeBuffered}, so it gains an accurate `Content-Length`. When the
+ *     type is compressible and the client accepts a coding, that body is
+ *     Brotli/gzip-compressed (the length is the compressed size); otherwise it is
+ *     left as bytes with its uncompressed length. `streamEncoding` is absent.
+ *   - A STREAMED body: when the type is compressible and a coding is accepted,
+ *     {@link encodeStreamHeaders} stamps `Content-Encoding`/`Vary` and the chosen
+ *     coding is returned as `streamEncoding` for {@link applyResponse} to insert
+ *     the zlib transform; a stream has no known length, so no `Content-Length`.
+ *     Otherwise the stream passes through verbatim.
+ *
+ * Pure over its inputs and exported, so the whole negotiation matrix — each
+ * coding × {buffered, stream, non-compressible, already-encoded, disabled} — is
+ * unit-testable without a socket. The returned `streamEncoding`, when present, is
+ * the coding `applyResponse` compresses the stream with.
+ */
+export function compressResponse(
+  response: AnyKeelResponse,
+  acceptEncoding: string | undefined,
+  enabled: boolean,
+): { response: AnyKeelResponse; streamEncoding?: ContentEncoding } {
+  if (!enabled) return { response };
+
+  const { body } = response;
+
+  // A streamed body: compress on the fly when worth it, else pass it through. No
+  // `Content-Length` either way — a stream's size is unknown until it ends.
+  if (body instanceof ReadableStream) {
+    if (!isCompressibleType(response.headers)) return { response };
+
+    const encoding = negotiateEncoding(acceptEncoding);
+
+    if (encoding === "identity") return { response };
+
+    return { response: encodeStreamHeaders(response, encoding), streamEncoding: encoding };
+  }
+
+  // A buffered body (string or bytes): always re-emitted with an accurate
+  // `Content-Length`. Compressible-and-accepted → the negotiated coding; anything
+  // else → `identity` (just the length), so even an image gains its length.
+  const encoding = isCompressibleType(response.headers)
+    ? negotiateEncoding(acceptEncoding)
+    : "identity";
+
+  return { response: encodeBuffered(response, body, encoding) };
 }
 
 /** The socket-level timeouts {@link applyServerLimits} sets — the slice it writes. */
@@ -763,6 +843,7 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
       crossOriginEmbedderPolicy: options.crossOriginEmbedderPolicy,
     }),
     etag: options.etag ?? {},
+    compress: options.compress !== false,
     trustProxy: options.trustProxy ?? false,
     newRequestId: options.newRequestId ?? randomUUID,
     logRequest: options.logRequest ?? defaultLogRequest,
@@ -847,6 +928,9 @@ interface HandleDeps {
 
   /** Conditional-GET ETag behaviour for HTML responses; `false` disables it. */
   readonly etag: EtagConfig;
+
+  /** Whether to negotiate response compression from `Accept-Encoding`; `false` disables it. */
+  readonly compress: boolean;
 
   /** Whom to believe about the client IP/protocol; `false` trusts nothing. */
   readonly trustProxy: TrustProxy;
@@ -1177,11 +1261,28 @@ async function handle(
       } else {
         status = hardened.status;
 
+        // Negotiate compression from the client's `Accept-Encoding` (after the
+        // 304 split, so a not-modified response stays bodiless). A buffered body
+        // is compressed up front and gains an accurate `Content-Length`; a stream
+        // is compressed through a zlib transform `applyResponse` inserts. The ETag
+        // above was computed over the uncompressed body, and `Vary: Accept-Encoding`
+        // keeps a shared cache from cross-serving codings.
+        const encoded = compressResponse(
+          hardened,
+          firstHeader(req.headers["accept-encoding"]),
+          deps.compress,
+        );
+
         // Await delivery: a buffered body resolves synchronously (nothing to
         // wait on), but a STREAMED body resolves only once it is fully flushed or
         // torn down — so the access entry and span below describe the real
         // outcome, including a mid-stream truncation, rather than racing it.
-        await applyResponse(res, hardened, { onTruncated });
+        await applyResponse(res, encoded.response, {
+          onTruncated,
+          ...(encoded.streamEncoding === undefined
+            ? {}
+            : { streamEncoding: encoded.streamEncoding }),
+        });
       }
     } catch (error) {
       status = statusForError(error);
@@ -1249,7 +1350,7 @@ export function withRequestId(response: AnyKeelResponse, requestId: string): Any
 export interface ErrorResponse {
   readonly headersSent: boolean;
 
-  writeHead(status: number, headers: Record<string, string>): void;
+  writeHead(status: number, headers: Record<string, string | string[]>): void;
 
   end(body?: string): void;
 }

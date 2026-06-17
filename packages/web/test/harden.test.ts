@@ -11,6 +11,8 @@ import {
   withSecurityHeaders,
 } from "../src/index";
 
+import { mergeHeaders } from "../src/harden";
+
 import type { AnyKeelResponse } from "../src/index";
 
 const response = (headers: Record<string, string> = {}): AnyKeelResponse => ({
@@ -26,8 +28,12 @@ describe("withSecurityHeaders", () => {
       "X-Content-Type-Options": "nosniff",
     });
 
-    // The response's own value wins the merge; a default it didn't set is added.
-    expect(hardened.headers["x-frame-options"]).toBe("SAMEORIGIN");
+    // The response's own value wins the merge, de-duped case-insensitively onto a
+    // SINGLE entry (the default's `X-Frame-Options` casing) — never two collided
+    // case variants that would emit the header twice on the wire. A default the
+    // response did not set is added.
+    expect(hardened.headers["X-Frame-Options"]).toBe("SAMEORIGIN");
+    expect(hardened.headers["x-frame-options"]).toBeUndefined();
     expect(hardened.headers["X-Content-Type-Options"]).toBe("nosniff");
   });
 
@@ -72,6 +78,51 @@ describe("securityDefaults", () => {
   });
 });
 
+describe("mergeHeaders", () => {
+  it("keeps the under headers when the over map is empty", () => {
+    expect(mergeHeaders({ "content-type": "text/html" }, {})).toEqual({
+      "content-type": "text/html",
+    });
+  });
+
+  it("lets an over header win, de-duped onto one entry across casing", () => {
+    // Under `X-Frame-Options`, over `x-frame-options`: one entry, over wins, under
+    // the under-layer's casing — never two collided variants.
+    const merged = mergeHeaders({ "X-Frame-Options": "DENY" }, { "x-frame-options": "SAMEORIGIN" });
+
+    expect(merged).toEqual({ "X-Frame-Options": "SAMEORIGIN" });
+  });
+
+  it("accumulates Set-Cookie from both layers instead of clobbering", () => {
+    // Two middleware layers each set a cookie; both must reach the wire.
+    const merged = mergeHeaders(
+      { "set-cookie": "session=s; HttpOnly" },
+      { "set-cookie": "csrf=c; Secure" },
+    );
+
+    expect(merged).toEqual({ "set-cookie": ["session=s; HttpOnly", "csrf=c; Secure"] });
+  });
+
+  it("accumulates Set-Cookie when the layers are already lists", () => {
+    const merged = mergeHeaders({ "set-cookie": ["a=1", "b=2"] }, { "Set-Cookie": ["c=3"] });
+
+    // The under casing wins the key; every cookie from both layers is preserved.
+    expect(merged).toEqual({ "set-cookie": ["a=1", "b=2", "c=3"] });
+  });
+
+  it("carries a Set-Cookie present in only one layer through untouched", () => {
+    expect(mergeHeaders({ "set-cookie": "only=1" }, { "content-type": "text/html" })).toEqual({
+      "set-cookie": "only=1",
+      "content-type": "text/html",
+    });
+
+    expect(mergeHeaders({ "content-type": "text/html" }, { "set-cookie": "only=1" })).toEqual({
+      "content-type": "text/html",
+      "set-cookie": "only=1",
+    });
+  });
+});
+
 describe("statusForError", () => {
   it("maps the coded transport refusals to their statuses", () => {
     expect(statusForError(new KeelError("RUNTIME_INVALID_JSON", "x"))).toBe(400);
@@ -79,6 +130,7 @@ describe("statusForError", () => {
     expect(statusForError(new KeelError("WEB_VALIDATION_FAILED", "x"))).toBe(422);
     expect(statusForError(new KeelError("RUNTIME_BODY_TOO_LARGE", "x"))).toBe(413);
     expect(statusForError(new KeelError("RUNTIME_HANDLER_TIMEOUT", "x"))).toBe(503);
+    expect(statusForError(new KeelError("CLOUDFLARE_DISPATCH_TIMEOUT", "x"))).toBe(503);
   });
 
   it("maps any other coded error to a 500", () => {

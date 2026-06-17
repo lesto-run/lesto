@@ -199,7 +199,7 @@ function stripWeak(etag: string): string {
  * nothing on the wire — the client reuses what it already cached.
  */
 export interface NotModifiedResponse {
-  writeHead(status: number, headers: Record<string, string>): void;
+  writeHead(status: number, headers: Record<string, string | string[]>): void;
 
   end(): void;
 }
@@ -216,14 +216,15 @@ export interface NotModifiedResponse {
  * The headers we echo are the ones hardened for the *200* this 304 stands in
  * for, so we strip `Content-Length` before writing them: a positive declared
  * length on a bodiless response is a framing inconsistency a client may read as
- * a truncated body. No code in the stack sets `Content-Length` today, so this is
- * cheap insurance against a future caller — the invariant ("a 304 never declares
- * a body length") now lives here rather than resting on nobody upstream ever
- * setting it.
+ * a truncated body. The buffered-response compression path now DOES set a
+ * `Content-Length` upstream, so this strip is load-bearing — it keeps the 304
+ * bodiless. A multi-valued header (a `Set-Cookie` list) is echoed intact: node's
+ * `writeHead` emits one line per element, so a 304 still re-sets the cookies the
+ * matching 200 would have.
  */
 export function respondNotModified(
   res: NotModifiedResponse,
-  headers: Record<string, string>,
+  headers: Record<string, string | string[]>,
 ): void {
   res.writeHead(304, withoutContentLength(headers));
 
@@ -235,9 +236,12 @@ export function respondNotModified(
  *
  * Headers arrive lowercased through our own stack, but an app may set any
  * casing on a response it owns, so we match case-insensitively and rebuild the
- * map rather than deleting a single known key.
+ * map rather than deleting a single known key. Multi-valued entries (a
+ * `Set-Cookie` list) are preserved as-is.
  */
-function withoutContentLength(headers: Record<string, string>): Record<string, string> {
+function withoutContentLength(
+  headers: Record<string, string | string[]>,
+): Record<string, string | string[]> {
   return Object.fromEntries(
     Object.entries(headers).filter(([name]) => name.toLowerCase() !== "content-length"),
   );

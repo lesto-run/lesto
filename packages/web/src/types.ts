@@ -61,6 +61,27 @@ export interface KeelRequest {
 export type KeelBody = string | Uint8Array | ReadableStream;
 
 /**
+ * A response header map: a name to a single value, OR to a *list* of values.
+ *
+ * One header name with several values is rare but real, and `Set-Cookie` is the
+ * one where it MUST NOT be flattened: per RFC 6265 every cookie is its own
+ * `Set-Cookie` line, and the values cannot be comma-joined the way an ordinary
+ * multi-valued header (`Vary`, `Accept`) may be — a cookie value can itself
+ * contain a comma (an `Expires` date), so a joined line is ambiguous and the
+ * browser drops cookies. So a response that sets a session cookie AND a CSRF
+ * cookie carries `{ "set-cookie": [sessionCookie, csrfCookie] }`, and each
+ * transport emits one line per element (node `writeHead` takes a string array
+ * natively; a Worker calls `Headers.append` per value).
+ *
+ * The single-string arm is the overwhelmingly common case and is unchanged: a
+ * `Content-Type`, a `Location`, every default security header is one value. The
+ * array arm is purely additive — `string` is assignable to `string | string[]`,
+ * so every existing header map and every consumer that reads a single value (and
+ * every map literal in the codebase) keeps compiling.
+ */
+export type HeaderMap = Record<string, string | string[]>;
+
+/**
  * A response the runtime can write back verbatim.
  *
  * Generic in its body kind, defaulting to `string` — so the bare `KeelResponse`
@@ -76,11 +97,16 @@ export type KeelBody = string | Uint8Array | ReadableStream;
  * checked covariantly, and `string` ⊆ `KeelBody`). So binary and streamed
  * responses flow through the transport without forcing every dispatch-core
  * consumer to widen with them.
+ *
+ * `headers` is a {@link HeaderMap}: each name carries a single string or a list
+ * of values. The list arm exists so `Set-Cookie` can be a *multimap* — two
+ * cookies are two `Set-Cookie` lines, never one comma-joined line a browser
+ * would mangle (see {@link HeaderMap}).
  */
 export interface KeelResponse<B extends KeelBody = string> {
   status: number;
 
-  headers: Record<string, string>;
+  headers: HeaderMap;
 
   /** The response body. Defaults to a `string`; a transport may carry any {@link KeelBody}. */
   body: B;

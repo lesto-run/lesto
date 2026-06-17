@@ -18,7 +18,7 @@
 
 import { KeelError } from "@keel/errors";
 
-import type { AnyKeelResponse } from "./types";
+import type { AnyKeelResponse, HeaderMap } from "./types";
 
 /**
  * A restrictive default `Permissions-Policy`: powerful features off until asked.
@@ -63,6 +63,72 @@ export const RECOMMENDED_CSP =
 /** The header `require-corp` rides on when COEP is opted in. */
 const COEP_HEADER = "Cross-Origin-Embedder-Policy";
 
+/**
+ * Merge an OVER header map onto an UNDER one — the over layer wins, matched by
+ * name case-insensitively, with `Set-Cookie` accumulated rather than clobbered.
+ *
+ * The hazard a naive `{ ...under, ...over }` spread hides: object keys are
+ * case-*sensitive*, so an under-layer `set-cookie` and an over-layer `Set-Cookie`
+ * survive as TWO entries — and a node `writeHead`/`Headers` then emits both,
+ * silently doubling a cookie or leaking the under value the over meant to
+ * replace. HTTP header names are case-insensitive, so we resolve collisions by
+ * lowercased name: the over value replaces the under value under the SAME key,
+ * whatever its casing.
+ *
+ * `Set-Cookie` is the one header we ACCUMULATE instead of replace: two layers
+ * each setting a cookie (a session middleware under a CSRF middleware) both
+ * belong on the wire — losing either drops a cookie. So when both layers carry
+ * `set-cookie`, their values concatenate into one list (under first, over
+ * second), which each transport then emits as one line per element. Every other
+ * header keeps last-writer-wins: an over `Content-Type` replaces the under one.
+ *
+ * Pure and total over a {@link HeaderMap}: a single string and a string list are
+ * both handled, so a response whose header is already an array merges as cleanly
+ * as a fresh one.
+ */
+export function mergeHeaders(under: HeaderMap, over: HeaderMap): HeaderMap {
+  // The chosen value per lowercased name, plus the original-cased key it lives
+  // under — so an over header replaces the under header under that same key
+  // (no second case variant), and a Set-Cookie accumulates into one list.
+  const byLower = new Map<string, { key: string; value: string | string[] }>();
+
+  const put = (name: string, value: string | string[]): void => {
+    const lower = name.toLowerCase();
+    const existing = byLower.get(lower);
+
+    // Set-Cookie is a multimap: a value already present accumulates with the new
+    // one (under then over) instead of being overwritten — both cookies ride.
+    if (lower === "set-cookie" && existing !== undefined) {
+      byLower.set(lower, {
+        key: existing.key,
+        value: [...asList(existing.value), ...asList(value)],
+      });
+
+      return;
+    }
+
+    // Any other header: the new value wins, written under the key already chosen
+    // for this name (so casing does not split it into two entries).
+    byLower.set(lower, { key: existing?.key ?? name, value });
+  };
+
+  for (const [name, value] of Object.entries(under)) put(name, value);
+  for (const [name, value] of Object.entries(over)) put(name, value);
+
+  const merged: HeaderMap = {};
+
+  for (const { key, value } of byLower.values()) {
+    merged[key] = value;
+  }
+
+  return merged;
+}
+
+/** Normalize a header value to a list, so a single value and an array merge alike. */
+function asList(value: string | string[]): string[] {
+  return Array.isArray(value) ? value : [value];
+}
+
 /** Merge the default headers under a response; the response's own headers win. */
 export function withSecurityHeaders(
   response: AnyKeelResponse,
@@ -70,7 +136,7 @@ export function withSecurityHeaders(
 ): AnyKeelResponse {
   if (defaults === false) return response;
 
-  return { ...response, headers: { ...defaults, ...response.headers } };
+  return { ...response, headers: mergeHeaders(defaults, response.headers) };
 }
 
 /** The CSP and COEP knobs {@link securityDefaults} folds into the base header map. */
@@ -131,6 +197,10 @@ export function statusForError(error: unknown): number {
     if (error.code === "WEB_VALIDATION_FAILED") return 422;
     if (error.code === "RUNTIME_BODY_TOO_LARGE") return 413;
     if (error.code === "RUNTIME_HANDLER_TIMEOUT") return 503;
+    // The edge dispatch deadline (`@keel/cloudflare`'s `timeoutMs`) is the edge
+    // twin of `RUNTIME_HANDLER_TIMEOUT` — an overrun the server owns, freed with
+    // a 503 — so it maps to the same status in this shared registry.
+    if (error.code === "CLOUDFLARE_DISPATCH_TIMEOUT") return 503;
   }
 
   return 500;
