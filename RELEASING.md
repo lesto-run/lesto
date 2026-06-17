@@ -6,8 +6,36 @@ This is the source of truth for **how a release happens** and **what gets publis
 > **Status:** the pipeline (Changesets config, scripts, and `.github/workflows/release.yml`)
 > is wired, but **nothing has been published yet** — the public surface is still
 > `private`, and the publish workflow is **skipped** until the `RELEASE_ENABLED`
-> repository variable is set to `true` (and an `NPM_TOKEN` secret exists). The first
-> publish is the de-privatization step below.
+> repository variable is set to `true` (and an `NPM_TOKEN` secret exists). Publish day is
+> gated on a rename first (the current names are taken — see §0), then the
+> de-privatization step below.
+
+## 0. The names must be free — confirm FIRST (gate)
+
+A release is impossible until the names it would publish under are actually available on
+npm. **As of 2026-06-17 they are not:**
+
+- `create-keel` is **taken** — `npm view create-keel version` → `1.0.0`. So `npm create keel`
+  would run a stranger's package, not this scaffold. This alone blocks the entrypoint.
+- `keel` is **taken** — `npm view keel version` → `0.458.0`.
+- the `@keel/<pkg>` member names read as free today, but the scope is moot the moment the
+  brand changes.
+
+So **publish day starts with a rename**, not de-privatization. Choose the brand + npm
+scope, confirm every name a publish would claim is free, then rename the workspace before
+any step below:
+
+```sh
+# nothing printed = free to claim:
+npm view @<scope>/cli version
+npm view @<scope>/db version
+npm view create-<name> version   # the `npm create <name>` entrypoint
+```
+
+The rename is mechanical but wide — ~2,760 `@keel/` occurrences across ~520 files, the
+`keel` CLI bin (`packages/cli` → `bin`), and the `create-keel` package name/scaffold — so
+it lands as one sweep, gated green, ahead of de-privatization. Until it does, leave
+`RELEASE_ENABLED` unset.
 
 ## The published surface
 
