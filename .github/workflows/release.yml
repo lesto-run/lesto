@@ -1,10 +1,13 @@
 # Release: version + publish the public @keel/* surface via Changesets.
 #
-# On every push to main, this opens (or updates) a "Version Packages" PR that
-# applies the queued changesets. Merging that PR runs `release`, which publishes
-# the bumped packages to npm with provenance. It is a no-op until (a) the public
-# surface is de-privatized and versioned (see RELEASING.md) and (b) an NPM_TOKEN
-# secret exists — so it stays dormant until the team is ready to publish.
+# When armed, a push to main opens (or updates) a "Version Packages" PR that
+# applies the queued changesets; merging that PR publishes the bumped packages to
+# npm with provenance.
+#
+# Dormant by default: the whole job is gated on the `RELEASE_ENABLED` repository
+# variable (Settings → Variables). Until it is set to `true` the job is SKIPPED —
+# no wasted CI, nothing runs. Arm it only after the public surface is de-privatized
+# and an `NPM_TOKEN` secret exists (see RELEASING.md).
 name: Release
 
 on:
@@ -23,8 +26,9 @@ permissions:
 
 jobs:
   release:
-    # Guard: do nothing until publishing is armed (the secret is the switch).
-    if: ${{ github.repository_owner != '' }}
+    # The real switch: the job is skipped entirely unless RELEASE_ENABLED=true,
+    # so it costs nothing on a normal push and cannot publish before the team arms it.
+    if: ${{ vars.RELEASE_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -5,8 +5,9 @@ This is the source of truth for **how a release happens** and **what gets publis
 
 > **Status:** the pipeline (Changesets config, scripts, and `.github/workflows/release.yml`)
 > is wired, but **nothing has been published yet** — the public surface is still
-> `private`, and the publish workflow is dormant until an `NPM_TOKEN` secret exists.
-> The first publish is the de-privatization step below.
+> `private`, and the publish workflow is **skipped** until the `RELEASE_ENABLED`
+> repository variable is set to `true` (and an `NPM_TOKEN` secret exists). The first
+> publish is the de-privatization step below.
 
 ## The published surface
 
@@ -49,9 +50,10 @@ Commit the generated `.changeset/*.md` alongside the code.
    only, so bump `KEEL_DEP_RANGE` in lockstep when the surface's minor moves.
 3. **Version.** `bun run version` consumes the queued changesets, bumping versions and
    writing changelogs. Commit the result.
-4. **Publish.** `bun run release` (`changeset publish`) publishes the bumped packages
-   to npm with provenance. In CI this is the `changesets/action` step in
-   `.github/workflows/release.yml`, gated on the `NPM_TOKEN` secret.
+4. **Arm + publish.** Set the `RELEASE_ENABLED` repository variable to `true` and add
+   the `NPM_TOKEN` secret. `bun run release` (`changeset publish`) publishes the bumped
+   packages to npm with provenance — in CI this is the `changesets/action` step in
+   `.github/workflows/release.yml`, which stays skipped until `RELEASE_ENABLED` is set.
 
 ## Verifying the published shape without a registry
 
