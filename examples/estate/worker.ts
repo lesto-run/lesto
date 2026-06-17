@@ -56,8 +56,9 @@ interface Env {
    * flagship-tier substrate for the DB-driven `/lab/content` page. When present it
    * takes PRECEDENCE over D1: the content store runs over `hyperdriveToSqlDatabase`
    * (Postgres at scale, same `SqlDatabase` surface) instead of D1's edge SQLite.
-   * Absent, the page uses D1 exactly as before. Configure with a `[[hyperdrive]]`
-   * binding named `HYPERDRIVE` in wrangler.jsonc (see the README runbook).
+   * Absent, the page uses D1 exactly as before. To exercise it, add a
+   * `[[hyperdrive]]` binding named `HYPERDRIVE` to wrangler.jsonc; this example
+   * ships D1-only by default.
    */
   readonly HYPERDRIVE?: Hyperdrive;
 
@@ -171,7 +172,10 @@ function logEdgeRequest(entry: {
  * `{ rows, rowCount }` node-postgres shape `hyperdriveToSqlDatabase` reads.
  */
 function hyperdriveConnection(hyperdrive: Hyperdrive): HyperdriveConnection {
-  const sql = postgres(hyperdrive.connectionString);
+  // Pin to ONE connection: the adapter runs a transaction as three separate
+  // queries (BEGIN, body, COMMIT), and postgres-js's default pool would scatter
+  // them across connections — silently voiding `db.transaction()` atomicity.
+  const sql = postgres(hyperdrive.connectionString, { max: 1 });
 
   return {
     query: async (text, values = []) => {
@@ -220,6 +224,9 @@ function handlerFor(
   hyperdrive: Hyperdrive | undefined,
   traces: Traces | undefined,
 ): FetchHandler {
+  // The d1/hyperdrive bindings are deliberately NOT part of the rebuild key: they
+  // are isolate-stable for the isolate's lifetime, and keying on their identity
+  // would risk spurious per-request rebuilds that re-run the store's seed check.
   if (cachedHandler === undefined || cachedSecret !== secret || cachedDemo !== demo) {
     cachedStore = contentStoreFor(d1, hyperdrive);
 
