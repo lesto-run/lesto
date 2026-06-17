@@ -1,0 +1,48 @@
+# Release: version + publish the public @keel/* surface via Changesets.
+#
+# On every push to main, this opens (or updates) a "Version Packages" PR that
+# applies the queued changesets. Merging that PR runs `release`, which publishes
+# the bumped packages to npm with provenance. It is a no-op until (a) the public
+# surface is de-privatized and versioned (see RELEASING.md) and (b) an NPM_TOKEN
+# secret exists — so it stays dormant until the team is ready to publish.
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the version PR / tags
+  pull-requests: write
+  id-token: write # npm provenance
+
+jobs:
+  release:
+    # Guard: do nothing until publishing is armed (the secret is the switch).
+    if: ${{ github.repository_owner != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+
+      - run: bun install --frozen-lockfile
+
+      - name: Version or publish
+        uses: changesets/action@v1
+        with:
+          version: bun run version
+          publish: bun run release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
