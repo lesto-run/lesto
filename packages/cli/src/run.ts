@@ -246,11 +246,13 @@ const USAGE = [
   "  serve             Boot the app over HTTP (--port, default 3000)",
   "  dev               Run every site live on one origin for local development (--port)",
   "  build             Prerender static sites to disk (--target <name>, --out <dir>, default out)",
-  "  deploy            Build and ship static sites; print the routing plan (--target, --out, --dist;",
-  "                    --release for a versioned, atomically-flipped release, --version <v> to name it;",
-  "                    publish a release to S3/R2 with --bucket <name> --endpoint <url> [--region auto]",
-  "                    [--pointer <key>] (implies --release; credentials from the environment), else --dist;",
-  "                    --cloudflare to push the Worker + assets via wrangler, health-gated --health-url <url>)",
+  "  deploy            Build and ship the app. --cloudflare is the one-command edge deploy:",
+  "                    `keel deploy --cloudflare` pushes the Worker + its Static Assets via wrangler",
+  "                    (health-gated with --health-url <url>). Otherwise it ships static sites and prints",
+  "                    the routing plan (--target, --out, --dist; --release for a versioned,",
+  "                    atomically-flipped release, --version <v> to name it; publish a release to S3/R2",
+  "                    with --bucket <name> --endpoint <url> [--region auto] [--pointer <key>] (implies",
+  "                    --release; credentials from the environment), else --dist)",
   "  rollback          Flip the live pointer to a published release: rollback --to <version>",
   "                    (--dist for local, or --bucket/--endpoint for a remote S3/R2 store)",
   "  content:build     Compile markdown content into the content store (--prune drops stale rows)",
@@ -853,12 +855,20 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
           uploader: deps.uploader(parseStringFlag(args, "dist") ?? DEFAULT_DIST_DIR),
         };
 
+  // Track whether any STATIC target actually shipped. An all-dynamic plan (the
+  // freshly scaffolded app — one dynamic zone at `/`) ships nothing on this path,
+  // so without a closing word `keel deploy` would print only "run `keel serve`"
+  // and look like a no-op. We name the live-tier paths out loud below instead.
+  let shippedStatic = false;
+
   for (const deployTarget of plan.targets) {
     if (deployTarget.kind !== "static") {
       deps.out(`${deployTarget.site}: run \`${deployTarget.run}\` (dynamic)`);
 
       continue;
     }
+
+    shippedStatic = true;
 
     if (shipper.kind === "release") {
       const shipped = await shipRelease(deployTarget, outDir, shipper.store, { version });
@@ -881,6 +891,18 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
 
   for (const rule of plan.routing) {
     deps.out(`route ${rule.basePath} → ${rule.mode}`);
+  }
+
+  // Nothing static shipped: this default path has no remote tier of its own, so
+  // say where the live app goes rather than exit silently. `keel deploy
+  // --cloudflare` is the one-command edge deploy (Worker + assets via wrangler);
+  // `keel serve` is the self-hosted node tier. (A `--release`/remote run DID ship
+  // — its own lines already reported it — so this hint is for the bare default.)
+  if (!shippedStatic && shipper.kind === "copy") {
+    deps.out(
+      "no static routes to ship — deploy the live app with `keel deploy --cloudflare` " +
+        "(Worker + assets via wrangler) or self-host it with `keel serve`",
+    );
   }
 
   return 0;

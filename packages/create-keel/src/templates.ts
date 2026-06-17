@@ -20,12 +20,15 @@
  *
  * `@keel/cli` is the `keel` binary `keel dev`/`build` runs (its absence was a
  * silent break — blocker #9); `@keel/assets` is the client-bundle pipeline the
- * island build needs in the app's graph. The rest are the app's own runtime
- * (db/kernel/migrate/runtime, the web router, the UI engine).
+ * island build needs in the app's graph; `@keel/cloudflare` is the edge adapter
+ * the deploy template's `worker.ts` fronts the app with (`keel deploy
+ * --cloudflare`). The rest are the app's own runtime (db/kernel/migrate/runtime,
+ * the web router, the UI engine).
  */
 export const KEEL_PACKAGES = [
   "@keel/cli",
   "@keel/assets",
+  "@keel/cloudflare",
   "@keel/db",
   "@keel/kernel",
   "@keel/migrate",
@@ -167,7 +170,9 @@ const NewPost = z.object({
 // The app — built through a factory so its handlers close over the typed
 // \`Db\`. No \`this\`, no global database connection, no inheritance for domain
 // types. One \`keel()\` surface for the whole app; grow it by chaining more
-// \`.get\`/\`.post\`/\`.page\` calls.
+// \`.get\`/\`.post\`/\`.page\` calls. The Cloudflare \`worker.ts\` builds its own
+// minimal edge twin of this (the island home page, no SQLite \`/posts\`) — see its
+// header for why and how to light the data routes on the edge over D1.
 function buildApp(db: Db) {
   return (
     keel()
@@ -317,10 +322,111 @@ export function tsconfig(): string {
       types: ["node"],
       skipLibCheck: true,
     },
-    include: ["keel.app.ts", "keel.sites.ts", "app"],
+    include: ["keel.app.ts", "keel.sites.ts", "worker.ts", "app"],
   };
 
   return `${JSON.stringify(config, null, 2)}\n`;
+}
+
+/**
+ * `worker.ts` — the Cloudflare Worker entry, the scaffold's edge twin.
+ *
+ * Keel's dispatcher is pure, so the Worker is a thin adapter (ADR 0002):
+ * `toFetchHandler` turns the app's `handle` into `fetch(Request) => Response`, and
+ * `withAssets` serves the prerendered `out/` files from the Static Assets binding
+ * first, falling through to the live app.
+ *
+ * This builds its OWN minimal `keel()` app rather than importing `keel.app.ts` —
+ * the same edge-twin split `examples/estate` makes — because `keel.app.ts` opens a
+ * filesystem SQLite handle (`openSqlite`, via the native `better-sqlite3` addon) at
+ * module scope, which a Worker has no filesystem for. So the edge serves the
+ * island home page (the deploy's hydratable proof); to run the SQLite-backed
+ * `/posts` routes on the edge too, wire a Cloudflare D1 binding and build the full
+ * `buildApp(db)` over `@keel/db`'s D1 adapter (see `examples/estate`).
+ *
+ * The deferred island still hydrates: `keel build` shipped the Preact `/client.js`
+ * into `out/`, served here from `ASSETS`, and the deferred island mounts fresh on
+ * the client over the React server fallback (ADR 0008's deferred pairing) — so no
+ * Preact server alias is needed here; the Worker server-renders React.
+ *
+ *   keel deploy --cloudflare        # builds out/, then `wrangler deploy`
+ */
+export function worker(): string {
+  return `import { createElement } from "react";
+
+import { toFetchHandler, withAssets } from "@keel/cloudflare";
+import type { AssetExecutionContext, AssetFetcher } from "@keel/cloudflare";
+
+import { keel } from "@keel/web";
+
+import Counter from "./app/islands/counter";
+
+/** The bindings this Worker is configured with (see wrangler.jsonc). */
+interface Env {
+  readonly ASSETS: AssetFetcher;
+}
+
+// The edge twin of \`keel.app.ts\`'s home page — the same client module tag and
+// Counter island, no SQLite-backed \`/posts\` (the Worker has no filesystem DB).
+// Built ONCE at module scope (per isolate) and reused across every request.
+const app = keel()
+  .client("/client.js")
+  .page("/", {
+    component: () =>
+      createElement(
+        "main",
+        null,
+        createElement("h1", null, "Welcome to Keel"),
+        createElement(Counter, { start: 0 }),
+      ),
+  });
+
+const handler = toFetchHandler((method, path, options) => app.handle(method, path, options));
+
+export default {
+  fetch(request: Request, env: Env, ctx: AssetExecutionContext): Promise<Response> {
+    // Static files from \`out/\` first (cached at the PoP); the live app for the
+    // rest. \`env.ASSETS\` is per-request, so this thin wrap happens every time; the
+    // handler it wraps is the cached, isolate-lifetime one above.
+    return withAssets(env.ASSETS, handler)(request, ctx);
+  },
+};
+`;
+}
+
+/**
+ * `wrangler.jsonc` — the Cloudflare deploy config (`keel deploy --cloudflare`).
+ *
+ * The minimal wiring: `nodejs_compat` (the app's runtime leans on `node:*`), the
+ * `worker.ts` entry, and the Static Assets binding rooted at `out/` (what `keel
+ * build` prerenders — the marketing HTML and the island `/client.js`). The binding
+ * MUST be named `ASSETS`: that is the binding `worker.ts` reads as `env.ASSETS`.
+ *
+ * `name` seeds the `*.workers.dev` subdomain; rename it (and run `wrangler deploy`)
+ * to publish under your own. `compatibility_date` pins the Workers runtime
+ * semantics — bump it deliberately. This is JSONC: comments and trailing commas
+ * are allowed, so the file documents itself in place.
+ */
+export function wranglerConfig(name: string): string {
+  return `{
+	// Generated by \`create-keel\`. The minimal Cloudflare deploy config; see the
+	// README's "Deploy to Cloudflare" section. Run: keel deploy --cloudflare
+	"name": ${JSON.stringify(name)},
+	"main": "worker.ts",
+	"compatibility_date": "2026-06-01",
+	// node:crypto / node:* the app's runtime reaches for; off, the bundle fails.
+	"compatibility_flags": [
+		"nodejs_compat",
+	],
+	// The prerendered static site (\`keel build\` → out/): served first at the PoP,
+	// a miss falls through to the Worker. The binding name MUST be \`ASSETS\` — that
+	// is what \`worker.ts\` reads as \`env.ASSETS\`.
+	"assets": {
+		"directory": "./out",
+		"binding": "ASSETS",
+	},
+}
+`;
 }
 
 /** `.gitignore` — keep build artefacts and the local SQLite file out of git. */
@@ -344,6 +450,31 @@ bun run dev
 \`keel dev\` loads \`keel.app.ts\` (which default-exports the app config) and
 boots it: the kernel runs migrations and stands up request dispatch over
 the typed \`@keel/db\` handle the route handlers query through.
+
+## Deploy to Cloudflare
+
+\`\`\`sh
+keel deploy --cloudflare
+\`\`\`
+
+This prerenders the static site into \`out/\` and runs \`wrangler deploy\` —
+shipping the Worker (\`worker.ts\`) and its bound Static Assets in one atomic,
+Cloudflare-versioned step. \`worker.ts\` fronts the app through
+\`@keel/cloudflare\`'s \`toFetchHandler\` + \`withAssets\`, serving the prerendered
+files first and the live app second.
+
+A Worker has no filesystem SQLite, so \`worker.ts\` builds a minimal edge twin
+of the home page (the hydrating island) rather than importing \`keel.app.ts\`
+(which opens a local SQLite handle at module scope). To run the \`/posts\` data
+routes on the edge too, wire a Cloudflare D1 binding (see \`wrangler.jsonc\` and
+the \`examples/estate\` reference in the Keel source) and build the full app over
+\`@keel/db\`'s D1 adapter. Edit \`wrangler.jsonc\`'s \`name\` to pick your
+\`*.workers.dev\` subdomain, then:
+
+\`\`\`sh
+wrangler login        # one-time, authenticates wrangler against your account
+keel deploy --cloudflare
+\`\`\`
 
 ## Structure
 

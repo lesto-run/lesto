@@ -26,5 +26,7 @@ export {
   packageJson,
   readme,
   tsconfig,
+  worker,
+  wranglerConfig,
 } from "./templates";
 export type { KeelDepResolver } from "./templates";

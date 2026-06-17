@@ -17,6 +17,8 @@ import {
   readme,
   scaffold,
   tsconfig,
+  worker,
+  wranglerConfig,
 } from "../src/index";
 
 import type { KeelDepResolver, ScaffoldIO } from "../src/index";
@@ -57,6 +59,8 @@ describe("scaffold", () => {
       "keel.app.ts",
       "keel.sites.ts",
       "app/islands/counter.tsx",
+      "worker.ts",
+      "wrangler.jsonc",
       "tsconfig.json",
       ".gitignore",
       "README.md",
@@ -124,6 +128,8 @@ describe("scaffold", () => {
       // blocker #9's silent break.
       "@keel/cli",
       "@keel/assets",
+      // The edge adapter the deploy template's worker.ts fronts the app with.
+      "@keel/cloudflare",
       "@keel/db",
       "@keel/kernel",
       "@keel/migrate",
@@ -170,6 +176,33 @@ describe("scaffold", () => {
     expect(island).toContain("export default defineIsland({");
     expect(island).toContain('name: "Counter"');
     expect(island).toContain("useState");
+  });
+
+  it("scaffolds the Cloudflare deploy files (worker.ts + wrangler.jsonc)", async () => {
+    const targetDir = join(workspace, "edgey");
+
+    await scaffold({ name: "edgey", targetDir }, realIO);
+
+    const workerTs = await readFile(join(targetDir, "worker.ts"), "utf8");
+    const wrangler = await readFile(join(targetDir, "wrangler.jsonc"), "utf8");
+
+    // worker.ts is the thin @keel/cloudflare adapter: toFetchHandler over the edge
+    // app, fronted by the ASSETS binding via withAssets.
+    expect(workerTs).toContain('from "@keel/cloudflare"');
+    expect(workerTs).toContain("toFetchHandler");
+    expect(workerTs).toContain("withAssets(env.ASSETS, handler)");
+    // It builds its own minimal edge twin (the island home page), never importing
+    // keel.app.ts — which opens a filesystem SQLite handle a Worker has no fs for.
+    expect(workerTs).not.toContain('from "./keel.app"');
+    expect(workerTs).toContain('import Counter from "./app/islands/counter"');
+
+    // wrangler.jsonc is valid JSONC (comments + trailing commas) wiring the
+    // nodejs_compat flag, the worker entry, and the ASSETS binding rooted at out/.
+    expect(wrangler).toContain('"name": "edgey"');
+    expect(wrangler).toContain('"main": "worker.ts"');
+    expect(wrangler).toContain("nodejs_compat");
+    expect(wrangler).toContain('"binding": "ASSETS"');
+    expect(wrangler).toContain('"directory": "./out"');
   });
 
   it("refuses to clobber an existing target", async () => {
@@ -294,6 +327,49 @@ describe("templates", () => {
 
   it("readme names the project", () => {
     expect(readme("acme")).toContain("# acme");
+  });
+
+  it("readme documents the one-command Cloudflare deploy path", () => {
+    const out = readme("acme");
+
+    expect(out).toContain("## Deploy to Cloudflare");
+    expect(out).toContain("keel deploy --cloudflare");
+  });
+
+  it("worker fronts the app with @keel/cloudflare's toFetchHandler + withAssets", () => {
+    const out = worker();
+
+    expect(out).toContain('from "@keel/cloudflare"');
+    expect(out).toContain("toFetchHandler");
+    expect(out).toContain("withAssets(env.ASSETS, handler)");
+    // The edge twin builds its own island home page rather than importing the
+    // SQLite-booting keel.app.ts.
+    expect(out).not.toContain('from "./keel.app"');
+    expect(out).toContain('import Counter from "./app/islands/counter"');
+  });
+
+  it("wranglerConfig embeds the name and is valid JSON once its comments are stripped", () => {
+    const out = wranglerConfig("acme");
+
+    // The raw file carries JSONC comments and a trailing comma — both legal JSONC,
+    // which is what wrangler reads. Strip them to assert the underlying shape.
+    const stripped = out
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n")
+      .replace(/,(\s*[}\]])/g, "$1");
+
+    const parsed = JSON.parse(stripped) as {
+      name: string;
+      main: string;
+      compatibility_flags: string[];
+      assets: { directory: string; binding: string };
+    };
+
+    expect(parsed.name).toBe("acme");
+    expect(parsed.main).toBe("worker.ts");
+    expect(parsed.compatibility_flags).toContain("nodejs_compat");
+    expect(parsed.assets).toEqual({ directory: "./out", binding: "ASSETS" });
   });
 });
 

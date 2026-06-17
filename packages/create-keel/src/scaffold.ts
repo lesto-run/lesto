@@ -18,6 +18,8 @@ import {
   packageJson,
   readme,
   tsconfig,
+  worker,
+  wranglerConfig,
 } from "./templates";
 import type { KeelDepResolver } from "./templates";
 
@@ -96,12 +98,16 @@ export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promis
   // The starter, declared as (relative name -> contents). One source of truth for
   // both what gets written and what manifest comes back. `keel.sites.ts` is what
   // makes `keel build`/`dev` whole (its absence used to crash); the island under
-  // `app/islands/` is what `keel build` bundles into `/client.js`.
+  // `app/islands/` is what `keel build` bundles into `/client.js`. `worker.ts` +
+  // `wrangler.jsonc` are the scaffold→deploy path: `keel deploy --cloudflare`
+  // builds `out/` and `wrangler deploy`s the Worker that fronts the app.
   const files: ReadonlyArray<readonly [string, string]> = [
     ["package.json", packageJson(name, keelDep)],
     ["keel.app.ts", keelApp()],
     ["keel.sites.ts", keelSites()],
     ["app/islands/counter.tsx", islandCounter()],
+    ["worker.ts", worker()],
+    ["wrangler.jsonc", wranglerConfig(name)],
     ["tsconfig.json", tsconfig()],
     [".gitignore", gitignore()],
     ["README.md", readme(name)],

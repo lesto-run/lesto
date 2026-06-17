@@ -1047,6 +1047,31 @@ describe("run deploy", () => {
     ).rejects.toMatchObject({ code: "CLI_UNKNOWN_TARGET" });
   });
 
+  it("an all-dynamic plan ships nothing static — points at --cloudflare / serve, not a silent no-op", async () => {
+    const { sink } = recordingSink();
+    const { uploader, shipped } = recordingUploader();
+
+    // The freshly scaffolded shape: one dynamic zone at the root, no static sites.
+    // The default deploy has nothing to upload, so it must NAME the live-tier paths
+    // rather than print only "run `keel serve`" and look like it did nothing.
+    const dynamicOnly: readonly Site[] = [{ name: "app", render: "dynamic", basePath: "/" }];
+
+    const code = await run(
+      ["deploy"],
+      depsWith({ loadApp, loadSites: () => Promise.resolve(dynamicOnly), sink, uploader }),
+    );
+
+    expect(code).toBe(0);
+    // Nothing was uploaded by the copy shipper.
+    expect(shipped.size).toBe(0);
+    expect(lines).toEqual([
+      "app: run `keel serve` (dynamic)",
+      "route / → dynamic",
+      "no static routes to ship — deploy the live app with `keel deploy --cloudflare` " +
+        "(Worker + assets via wrangler) or self-host it with `keel serve`",
+    ]);
+  });
+
   it("--release stages an immutable versioned tree and flips the pointer", async () => {
     const { sink } = recordingSink();
     const { store, shipped, pointer } = memoryReleaseStore();
