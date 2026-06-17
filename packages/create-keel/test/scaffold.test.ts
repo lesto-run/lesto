@@ -139,6 +139,12 @@ describe("scaffold", () => {
       expect(manifest.dependencies[dep]).toBeDefined();
     }
 
+    // @keel/* deps default to published ^0.x ranges (the outsider path — `--local`
+    // swaps to file: pins). This locks the default the scaffold actually emits.
+    for (const keelPkg of KEEL_PACKAGES) {
+      expect(manifest.dependencies[keelPkg]).toMatch(/^\^0\./);
+    }
+
     // The legacy @keel/orm dep is gone — scaffolded apps use @keel/db.
     expect(manifest.dependencies["@keel/orm"]).toBeUndefined();
 
@@ -312,17 +318,6 @@ describe("dep resolvers", () => {
       // The path ends at the package's directory name, with the @keel/ scope stripped.
       expect(specifier).toContain(pkg.replace("@keel/", ""));
       expect(specifier).not.toContain("@keel/");
-    }
-  });
-
-  it("the default-resolver manifest carries published ranges for every @keel dep", () => {
-    // packageJson with the scaffold's default resolver — the bytes an outsider gets.
-    const parsed = JSON.parse(packageJson("acme", publishedRangePin)) as {
-      dependencies: Record<string, string>;
-    };
-
-    for (const pkg of KEEL_PACKAGES) {
-      expect(parsed.dependencies[pkg]).toMatch(/^\^0\./);
     }
   });
 });
