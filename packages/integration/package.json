@@ -1,10 +1,10 @@
 {
   "name": "@keel/integration",
   "version": "0.0.0",
+  "license": "MIT",
   "description": "Keel's built-in integration & E2E suite — boots the real stack over a real socket and exercises the seams unit tests mock.",
   "type": "module",
   "private": true,
-
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -12,7 +12,6 @@
     "format": "oxfmt test",
     "format:check": "oxfmt --check test"
   },
-
   "dependencies": {
     "@keel/auth": "workspace:*",
     "@keel/cache": "workspace:*",

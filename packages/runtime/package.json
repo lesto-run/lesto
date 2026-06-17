@@ -1,6 +1,7 @@
 {
   "name": "@keel/runtime",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "description": "Keel's transport tier — the node:http server that serves a Keel app, plus a queue-worker runner.",
   "type": "module",

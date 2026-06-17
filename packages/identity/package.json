@@ -1,17 +1,16 @@
 {
   "name": "@keel/identity",
   "version": "0.0.0",
+  "license": "MIT",
   "description": "Keel's batteries-included auth: users on the SQL DB, register/verify/login/reset flows composed from @keel/auth + @keel/db + @keel/migrate + @keel/mail + @keel/csrf.",
   "type": "module",
   "private": true,
-
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     }
   },
-
   "scripts": {
     "test": "vitest run",
     "test:cov": "vitest run --coverage",
@@ -20,7 +19,6 @@
     "format": "oxfmt src test",
     "format:check": "oxfmt --check src test"
   },
-
   "dependencies": {
     "@keel/auth": "workspace:*",
     "@keel/db": "workspace:*",

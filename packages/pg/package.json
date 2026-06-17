@@ -1,6 +1,7 @@
 {
   "name": "@keel/pg",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "description": "Keel's Postgres driver — adapts a node-postgres Pool to the async @keel/db SqlDatabase seam (ADR 0006).",
   "type": "module",

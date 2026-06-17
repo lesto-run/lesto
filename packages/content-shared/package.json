@@ -1,6 +1,7 @@
 {
   "name": "@keel/content-shared",
   "version": "0.1.0",
+  "license": "MIT",
   "description": "Shared utilities for the Docks monorepo",
   "type": "module",
   "exports": {

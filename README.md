@@ -144,3 +144,9 @@ $ curl http://127.0.0.1:3000/api/posts
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — the product vision, the three pillars (Tracks, Loom, Docks), and the dependency-aware build order.
 - [CONVENTIONS.md](./CONVENTIONS.md) — the engineering conventions, in full.
+
+## License
+
+Keel is open source under the [MIT License](./LICENSE). Every published `@keel/*`
+package carries the same `"license": "MIT"`; an app you scaffold with
+`create-keel` ships as `UNLICENSED` so you choose its license.

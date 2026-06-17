@@ -1,23 +1,21 @@
 {
   "name": "@keel/ui-kit",
   "version": "0.0.0",
+  "license": "MIT",
   "description": "Keel's vetted starter component library for @keel/ui — the default design system the app and the AI compose with.",
   "type": "module",
   "private": true,
-
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     }
   },
-
   "dependencies": {
     "@keel/ui": "workspace:*",
     "react": "^19",
     "react-dom": "^19"
   },
-
   "scripts": {
     "test": "vitest run",
     "test:cov": "vitest run --coverage",

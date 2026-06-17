@@ -1,17 +1,16 @@
 {
   "name": "@keel/kernel",
   "version": "0.0.0",
+  "license": "MIT",
   "description": "Keel's application kernel — assembles the database, migrations, router, and controllers into one bootable app.",
   "type": "module",
   "private": true,
-
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     }
   },
-
   "dependencies": {
     "@keel/auth": "workspace:*",
     "@keel/cors": "workspace:*",
@@ -22,7 +21,6 @@
     "@keel/router": "workspace:*",
     "@keel/web": "workspace:*"
   },
-
   "scripts": {
     "test": "vitest run",
     "test:cov": "vitest run --coverage",

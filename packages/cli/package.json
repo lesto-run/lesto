@@ -1,6 +1,7 @@
 {
   "name": "@keel/cli",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "description": "Keel's `keel` command-line tool — load a project's keel.app.ts and run, serve, migrate, or inspect routes.",
   "bin": {

@@ -1,19 +1,17 @@
 {
   "name": "create-keel",
   "version": "0.0.0",
+  "license": "MIT",
   "description": "The Keel project scaffolder — `bun create keel <name>` / `npm create keel <name>`.",
   "type": "module",
   "private": true,
-
   "bin": "./src/bin.ts",
-
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     }
   },
-
   "scripts": {
     "test": "vitest run",
     "test:cov": "vitest run --coverage",
@@ -22,7 +20,6 @@
     "format": "oxfmt src test",
     "format:check": "oxfmt --check src test"
   },
-
   "dependencies": {
     "@keel/errors": "workspace:*"
   }

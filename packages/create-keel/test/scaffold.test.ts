@@ -208,6 +208,18 @@ describe("templates", () => {
     expect(parsed.name).toBe("acme");
   });
 
+  it("declares the scaffolded app UNLICENSED (the user's own private project)", () => {
+    const parsed = JSON.parse(packageJson("acme", fakePin)) as {
+      private: boolean;
+      license: string;
+    };
+
+    // A generated app is private and ships no license of its own — the author
+    // picks one; it never inherits Keel's MIT.
+    expect(parsed.private).toBe(true);
+    expect(parsed.license).toBe("UNLICENSED");
+  });
+
   it("pins every @keel dep through the injected resolver, never the workspace protocol", () => {
     const parsed = JSON.parse(packageJson("acme", fakePin)) as {
       dependencies: Record<string, string>;

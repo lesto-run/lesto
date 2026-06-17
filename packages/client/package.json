@@ -1,6 +1,7 @@
 {
   "name": "@keel/client",
   "version": "0.0.0",
+  "license": "MIT",
   "description": "Keel's typed, browser-safe fetch client — call your routes over native fetch with end-to-end types, no codegen.",
   "type": "module",
   "private": true,

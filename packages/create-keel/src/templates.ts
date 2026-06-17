@@ -64,6 +64,10 @@ export function packageJson(name: string, keelDep: KeelDepResolver): string {
     version: "0.0.0",
     type: "module",
     private: true,
+    // A scaffolded app is the user's own private project, not a Keel package — so
+    // it declares `UNLICENSED` rather than inheriting Keel's MIT. The author
+    // changes this to whatever license their project ships under.
+    license: "UNLICENSED",
 
     scripts: {
       dev: "keel dev",
