@@ -181,13 +181,6 @@
         "@keel/web": "workspace:*",
       },
     },
-    "packages/config": {
-      "name": "@keel/config",
-      "version": "0.0.0",
-      "dependencies": {
-        "@keel/errors": "workspace:*",
-      },
-    },
     "packages/content-components": {
       "name": "@keel/content-components",
       "version": "0.1.0",
@@ -552,10 +545,6 @@
         "react": "^19",
         "react-dom": "^19",
       },
-    },
-    "packages/hooks": {
-      "name": "@keel/hooks",
-      "version": "0.0.0",
     },
     "packages/i18n": {
       "name": "@keel/i18n",
@@ -977,8 +966,6 @@
 
     "@keel/cloudflare": ["@keel/cloudflare@workspace:packages/cloudflare"],
 
-    "@keel/config": ["@keel/config@workspace:packages/config"],
-
     "@keel/content-components": ["@keel/content-components@workspace:packages/content-components"],
 
     "@keel/content-core": ["@keel/content-core@workspace:packages/content-core"],
@@ -1032,8 +1019,6 @@
     "@keel/flags": ["@keel/flags@workspace:packages/flags"],
 
     "@keel/forms": ["@keel/forms@workspace:packages/forms"],
-
-    "@keel/hooks": ["@keel/hooks@workspace:packages/hooks"],
 
     "@keel/i18n": ["@keel/i18n@workspace:packages/i18n"],
 
