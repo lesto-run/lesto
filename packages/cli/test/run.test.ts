@@ -1149,8 +1149,9 @@ describe("run deploy", () => {
       },
     ]);
 
-    // The versioned release machinery is unchanged on the remote target: files
-    // staged under the immutable prefix, then the pointer flipped.
+    // The versioned release machinery is unchanged on the remote target: both
+    // files staged under the immutable prefix, then the pointer flipped.
+    expect(shipped.size).toBe(2);
     expect([...shipped.keys()].every((key) => key.startsWith("releases/v1/"))).toBe(true);
     expect(pointer.current).toBe("v1");
   });
@@ -1228,7 +1229,10 @@ describe("run deploy", () => {
       bucket: "site",
       region: "auto",
     });
-    // It really shipped a release (staged tree), not a copy.
+    // It really shipped a release (the two marketing pages staged under the
+    // immutable prefix), not a copy — asserting the count so the prefix check
+    // cannot pass vacuously on an empty ship.
+    expect(shipped.size).toBe(2);
     expect([...shipped.keys()].every((key) => key.startsWith("releases/v1/"))).toBe(true);
   });
 
