@@ -1,0 +1,659 @@
+{
+  "baseline": null,
+  "focus": null,
+  "assessments": [
+    {
+      "key": "crash-safety-dos",
+      "items": [
+        {
+          "name": "Per-request error boundary",
+          "status": "resolved",
+          "evidence": "server.ts:1287 catch in handle maps error to status",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Was the launch blocker; closed."
+        },
+        {
+          "name": "Body-size cap 413",
+          "status": "resolved",
+          "evidence": "server.ts:446-490 readBody rejects over maxBytes; default 1 MiB",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Heap bounded."
+        },
+        {
+          "name": "unhandledRejection net",
+          "status": "resolved",
+          "evidence": "server.ts:1457-1470 single listener, skips uncaughtException",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Async net only."
+        },
+        {
+          "name": "Handler timeout",
+          "status": "resolved",
+          "evidence": "server.ts:508-533 withTimeout 503 plus signal abort; default 30s",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Async handlers only."
+        },
+        {
+          "name": "Header and socket timeouts",
+          "status": "resolved",
+          "evidence": "server.ts:861 maxHeaderSize 16KiB; applyServerLimits 748-755",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Below Node defaults."
+        },
+        {
+          "name": "Slow-body timeout",
+          "status": "resolved",
+          "evidence": "server.ts:870 requestTimeout 30s",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "node:http requestTimeout."
+        },
+        {
+          "name": "Graceful SIGTERM drain",
+          "status": "resolved",
+          "evidence": "drainServer 795-817 wired via bin.ts:191-198",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "End-to-end from CLI."
+        },
+        {
+          "name": "Edge adapter parity",
+          "status": "resolved",
+          "evidence": "fetch-handler.ts dispatchHardened 638-683 readBounded 307-339",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "Closes CF bypass finding."
+        },
+        {
+          "name": "Streaming teardown",
+          "status": "resolved",
+          "evidence": "response.ts:111-160 pipeStream destroys upstream",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "No leak on disconnect."
+        },
+        {
+          "name": "Default rate limiting",
+          "status": "open",
+          "evidence": "secure-stack.ts:112-120 rateLimit opt-in; none in handle",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "Request volume unbounded by default."
+        },
+        {
+          "name": "Connection-count cap",
+          "status": "open",
+          "evidence": "No maxConnections on createServer server.ts:860-867",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "One-line maxConnections."
+        },
+        {
+          "name": "Sync-blocking work ReDoS",
+          "status": "partial",
+          "evidence": "server.ts:180-186 timeout does not cover sync work",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "Mitigated by body cap."
+        }
+      ],
+      "dimension": "crash-safety and DoS surface",
+      "scoreBefore": 2,
+      "scoreNow": 8.5,
+      "whatChanged": "Baseline launch blocker resolved. server.ts now has error boundary, 1 MiB body cap, rejection net, handler timeout, socket limits, SIGTERM drain. Edge adapter at parity. 111 tests pass.",
+      "summary": "Crash-safety moved from the worst launch blocker to a strength. The baseline said the web tier could not carry production traffic because one malformed JSON POST crashes the server; that and adjacent gaps are closed in the current tree (clean, on main), backed by 111 passing tests in packages/runtime/test/server.test.ts. On by default: never-throwing per-request error boundary, 1 MiB streaming body cap (413), guarded JSON parsing (400), async unhandledRejection net, 30s handler timeout (503 plus signal abort), node:http socket limits below Node defaults (request 30s, headers 15s, keep-alive 5s, 16 KiB headers) covering slow-loris/slow-body/oversized-header, leak-safe stream teardown, and SIGTERM/SIGINT graceful drain wired end-to-end through the real CLI entrypoint. The Cloudflare edge adapter reached full hardening parity, closing the prior CF-adapter-bypasses-all-hardening finding. What keeps it short of 9-10: rate limiting is opt-in (a bare app ships none, so request volume is unbounded though per-request memory and time are bounded), no connection-count cap (the one low-hanging fruit, a one-line maxConnections), and event-loop-blocking synchronous work (ReDoS) is undefended by design (mitigated by the body cap and router pattern refusal). An unauthenticated client-facing deploy is now safe against the crash, hang, and memory-exhaustion vectors that mattered most; the residual exposure is rate-based flooding, which still requires the app to wire secureStack with rateLimit."
+    },
+    {
+      "key": "security-wiring",
+      "dimension": "Security primitives AND whether they are wired",
+      "scoreBefore": 2,
+      "scoreNow": 8,
+      "whatChanged": "The single biggest change since the 2026-06-09 baseline: a real request middleware pipeline now exists and is wired, so the security batteries are no longer dead code. `packages/web/src/middleware.ts` adds `runPipeline` (onion model); `packages/web/src/keel.ts` adds `.use()`, `fromRequestMiddleware`, and runs global middleware even on 404s and malformed-param paths (keel.ts:499-507); `packages/kernel/src/secure-stack.ts` adds `secureStack` composing cors->rateLimit->originCheck->csrf in safe order. Every individual baseline finding was fixed: CORS *+credentials now throws (cors.ts:117), CSRF tokens bind sessionId via HMAC (token.ts:36-39), webhooks were rewritten (webhooks.ts now 513 lines vs the old plaintext-secret/no-SSRF version) for secret-by-reference + full SSRF guard + replay protection, verifyPassword fails closed (password.ts:166). The Cloudflare adapter (cloudflare/src/fetch-handler.ts) \u2014 previously a hardening bypass per the CVE review \u2014 now runs the SAME shared hardening (error boundary, security headers, body cap, trusted cf-connecting-ip). Both example apps (estate node + edge) actually mount secureStack via .use(). All security package + estate security tests pass (csrf 60, auth 60, webhooks 38, estate security 17).",
+      "summary": "Security primitives are now genuinely wired through a real middleware pipeline, not isolated libraries. A default deploy that composes secureStack (as both example apps do) gets: origin-check CSRF, rate limiting, secure-by-default trust-proxy, strong security headers on BOTH node and edge transports, __Host- HttpOnly Secure cookies, scrypt password hashing that fails closed, SSRF-guarded webhooks with secret-by-reference and replay protection, and hashed-at-rest SQL session tokens. Every confirmed 2026-06-09 security finding is resolved with file:line evidence. The honest gaps that keep this short of 9-10: secureStack/CSRF are OPT-IN (an app that never calls .use(secureStack) ships with zero CSRF/CORS/ratelimit \u2014 there is no app-wide secure default the kernel forces), identity defaults to MemorySessionStore when no store is passed, the admin package enforces no authz/CSRF itself (relies on the app composing guards), and a documented DNS-rebinding TOCTOU residual remains in the webhook SSRF guard. Posture of a deploy that follows the example wiring is strong; posture of a deploy that forgets to wire secureStack is unprotected.",
+      "items": [
+        {
+          "name": "Middleware/security pipeline that actually runs the primitives",
+          "status": "resolved",
+          "evidence": "packages/web/src/middleware.ts:45 `export function runPipeline(...)` onion; packages/web/src/keel.ts:66 `fromRequestMiddleware`, keel.ts:213 `.use`, keel.ts:502-505 global middleware wraps even 404/malformed; packages/kernel/src/secure-stack.ts:284 `secureStack` composes cors->rateLimit->originCheck->csrf",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "The core risk named in the prompt is resolved: the batteries are no longer unmountable. Pipeline is pure + unit-testable and runs on every request, matched or not."
+        },
+        {
+          "name": "CORS wildcard + credentials guard",
+          "status": "resolved",
+          "evidence": "packages/cors/src/cors.ts:117 `if (credentials && policy === \"*\") throw new CorsError(\"CORS_WILDCARD_WITH_CREDENTIALS\", ...)`; resolveOrigin echoes only allow-list members; Vary: Origin on both allow and deny paths (cors.ts:142,163)",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Baseline finding (reflects any origin with Allow-Credentials:true) fixed. Fails loud at config time, never reflects."
+        },
+        {
+          "name": "CSRF token session binding",
+          "status": "resolved",
+          "evidence": "packages/csrf/src/token.ts:36-39 `sign(nonce, sessionId, secret)` HMAC over `nonce + \\0 + sessionId`; verifyToken recomputes for presenting session (token.ts:71); middleware fail-closed on missing token (csrf/src/middleware.ts:138)",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Baseline finding (no session binding) fixed. Also has originCheck (Fetch-Metadata) zero-token CSRF that deliberately never reads Content-Type to dodge the SvelteKit/Astro/Hono CVE class (origin.ts:18-25)."
+        },
+        {
+          "name": "Webhook HMAC secret at rest",
+          "status": "resolved",
+          "evidence": "packages/webhooks/src/webhooks.ts:223 DeliverPayload stores only `secretId` reference; webhooks.ts:172 SecretSource resolves real secret at delivery; module doc invariant 1 (webhooks.ts:21-24): 'The signing secret is NEVER written into a queue row'",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Baseline finding (plaintext secret in queue payload forever) fixed. A leaked queue table now leaks no secrets."
+        },
+        {
+          "name": "Webhook SSRF guard + redirect handling",
+          "status": "resolved",
+          "evidence": "packages/webhooks/src/webhooks.ts:325 defaultUrlGuard (http/https only, IPv4+IPv6 private/loopback/link-local/metadata/CGNAT/multicast ranges, mapped-IPv4, localhost by name); webhooks.ts:470-475 fetch with `redirect: \"manual\"` so a guarded URL can't 302 to a private endpoint; blocked URL is a permanentFailure (webhooks.ts:434)",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Baseline finding (no SSRF guard) fixed thoroughly. One documented RESIDUAL: DNS-rebinding TOCTOU between guard resolve and fetch resolve (webhooks.ts:39-47) \u2014 mitigated (blocks on any private resolution, manual redirect) but not fully closed; needs an IP-pinning FetchLike to eliminate."
+        },
+        {
+          "name": "verifyPassword fail-open on truncated/empty hash",
+          "status": "resolved",
+          "evidence": "packages/auth/src/password.ts:166 `if (salt.length !== SALT_BYTES || expected.length !== KEY_BYTES) return undefined;` BEFORE deriving candidate key to expected.length; verifyPassword returns false for any malformed stored string (password.ts:216)",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Baseline High finding (timingSafeEqual true for every password on 0-length hash) fixed. Also bumped scrypt N to 2^17, async off the event loop, rehash-on-login seam."
+        },
+        {
+          "name": "Secure / __Host- / HttpOnly session cookies",
+          "status": "resolved",
+          "evidence": "packages/identity/src/cookies.ts:21 `export const SESSION_COOKIE = \"__Host-keel_session\"`; cookies.ts:31 `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Lax`; CSRF companion cookie deliberately readable but Secure+SameSite=Strict (csrf/src/cookie.ts:28)",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "__Host- prefix is browser-enforced (Secure + Path=/ + no Domain). Reverse-proxy gotcha documented. Strong default."
+        },
+        {
+          "name": "Auth session store beyond MemorySessionStore",
+          "status": "resolved",
+          "evidence": "packages/auth/src/sql-session-store.ts:78 `sqlSessionStore` with BIGINT expires_at, deleteByUserId/deleteExpired; tokens hashed at rest sha256 (sql-session-store.ts:95-101); kernel installs schema after migrate (kernel.ts:183 installDurableSchema)",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Not memory-only anymore. SQL store hashes tokens so a DB dump holds no replayable bearer tokens. Edge uses stateless signed sessions (edge.ts:101 SignedSessions). RESIDUAL: identity defaults to MemorySessionStore when no store passed (identity.ts:340) \u2014 fleet-incorrect unless app wires SQL, but example does."
+        },
+        {
+          "name": "Cloudflare edge adapter runs the same hardening (no bypass)",
+          "status": "resolved",
+          "evidence": "packages/cloudflare/src/fetch-handler.ts:769 runWithContext + error boundary (dispatchHardened:638), withSecurityHeaders (fetch-handler.ts:789), body cap readBounded (fetch-handler.ts:307), trusted ip from cf-connecting-ip (fetch-handler.ts:585); module doc: 'runs the SAME transport-neutral hardening the node server does' (fetch-handler.ts:14-18)",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "The CVE-review P0 'CF adapter bypasses all hardening' is resolved. secureStack middleware rides on app.handle, which the worker fronts, so CSRF/ratelimit run on the edge too (estate edge.ts:122 wires secureStack)."
+        },
+        {
+          "name": "Trust-proxy / spoofable client IP for rate-limit + audit keys",
+          "status": "resolved",
+          "evidence": "packages/runtime/src/trust-proxy.ts:160 resolveClient \u2014 default trusts nothing (peer socket + http), hop-aware XFF only when peer is trusted; right-most-entry default defeats prepended forgery (trust-proxy.ts:126); ratelimit unknown-client fallback TIGHTENS to one shared bucket, not bypass (ratelimit/src/middleware.ts:35,154)",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Secure-by-default. Rate-limit keys on context.ip; missing IP tightens (single global ceiling) and warns once rather than opening the gate."
+        },
+        {
+          "name": "RBAC/authz enforced as middleware",
+          "status": "resolved",
+          "evidence": "packages/authz/src/guard.ts:89 `can(permission)` Keel Handler reads roles from context, returns 403 on deny; ensure() for row-level checks (guard.ts:83); coded AUTHZ_DENIED_KIND onDenied seam",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Real middleware, not a library. Decoupled from user model via injectable rolesOf. The prompt's 'rbac' package is now 'authz'."
+        },
+        {
+          "name": "Secure defaults are OPT-IN, not enforced app-wide by the kernel",
+          "status": "partial",
+          "evidence": "secure-stack.ts:135 csrf 'Absent (the default) -> NO CSRF enforcement'; secureStack returns [] for an empty options object; kernel createApp (kernel.ts:161) never injects secureStack \u2014 an app that omits `.use(...secureStack(...))` ships with zero CSRF/CORS/ratelimit",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "This is the main thing keeping the score below 9. The primitives are correct and the examples wire them, but the framework does not force an app-wide secure baseline; a forgetful app is unprotected. originCheck is at least zero-config when mounted. Admin package likewise enforces no authz/CSRF itself."
+        }
+      ]
+    },
+    {
+      "key": "data-layer",
+      "dimension": "data layer safety & scale",
+      "scoreBefore": 3,
+      "scoreNow": 9,
+      "whatChanged": "The entire synchronous ORM (`packages/orm` with `class Model`, sync `SqlDatabase`/`SqlStatement`) \u2014 the single biggest cap on the stateless-scale story in the BEFORE baseline (REVIEW-2026-06-09) \u2014 has been deleted and replaced by two packages: `@keel/db` (schema-as-value query builder + DDL, async terminals) and `@keel/pg` (a real node-postgres pooled adapter). The SQL surface is now ASYNCHRONOUS with a first-class `transaction()` primitive (packages/db/src/sql.ts:24-50). Every BEFORE finding for this dimension is fixed: ORM identifier injection (now `quoteIdentifier` + `byKey` allowlist everywhere), `offset()`-without-`limit()` (dialect-aware render), empty `IN ()` (renders `1 = 0`), `Model.create({id})` PK drop (Model gone; insert uses only supplied keys), `Migrator.rollback` reversing the wrong migration (now throws `MIGRATE_MISSING_MIGRATION`), non-transactional migrations (per-migration `transaction()` span + PG advisory xact-lock), and the queue worker having no error boundary (poll loop try/catch + report + backoff). Tests/coverage all green: db 57 tests / 100%, pg 18 / 100%, migrate 24 / 100%, queue 68 / 100%. Tree is clean on main (no in-flight uncommitted work for this dimension).",
+      "summary": "This dimension has been transformed from the framework's hardest scale blocker into one of its strongest areas. The synchronous-Model ORM is gone; the data layer is async-first with a real Postgres adapter, dialect-aware DDL/queries, transactional migrations with cross-process locking, and a production-grade at-least-once job queue with fencing tokens and a real worker error boundary. Identifier safety is structural (quote + allowlist), values are always parameterized, and unbounded UPDATE/DELETE are refused. All four packages compile, pass, and hit 100% coverage. Remaining gaps are minor and documented: the migrate `Schema` DSL (`dropTable`/`addColumn`/`addIndex`) interpolates developer-authored identifiers without `quoteIdentifier` (inconsistent with @keel/db, low risk since not request-fed), the pg driver itself is correctly excluded from coverage (needs a live PG to exercise \u2014 so the adapter is tested against a fake pool, not an end-to-end PG journey), and the scheduler/retention cron dedup is honestly single-instance-only (multi-instance durable firing deferred post-1.0). Score 9/10: the architecture and safety are production-grade; the deduction is for the absence of a real-Postgres integration test leg and the two residual identifier/single-instance caveats.",
+      "items": [
+        {
+          "name": "SqlDatabase/SqlStatement now ASYNC (the headline scale cap removed)",
+          "status": "resolved",
+          "evidence": "packages/db/src/sql.ts:30-49 \u2014 `run(params?): Promise<{changes; lastInsertRowid?}>`, `get/all: Promise<...>`, `exec(sql): Promise<void>`, and a first-class `transaction<T>(fn): Promise<T>`. Comment (sql.ts:12-17): 'The terminals are asynchronous (ADR 0006)... There is no sync escape hatch'. `prepare()` stays sync (compile-only). grep confirms no deasync/Atomics.wait anywhere.",
+          "isLowHangingFruit": false,
+          "effort": "XL",
+          "note": "This was THE cap on the stateless-scale story. Now fully removed \u2014 a networked PG pool backs the identical surface as in-process SQLite."
+        },
+        {
+          "name": "Postgres adapter exists and is real",
+          "status": "resolved",
+          "evidence": "packages/pg/src/adapter.ts:93-136 `createPgDatabase` \u2014 `?`\u2192`$n` translation, pooled `transaction()` that checks out ONE client and brackets BEGIN/COMMIT/ROLLBACK, `release(failure)` to discard broken clients. packages/pg/src/pg-driver.ts:19-25 builds a real `pg.Pool` via dynamic require. 100% coverage (41/41 stmts) against a fake pool; the real driver is deliberately coverage-excluded like sqlite-drivers.ts.",
+          "isLowHangingFruit": false,
+          "effort": "XL",
+          "note": "Kernel threads `dialect` (kernel.ts:21,173); `openPostgres({connectionString})` is the documented entry."
+        },
+        {
+          "name": "ORM identifier injection \u2014 quoting + allowlist",
+          "status": "resolved",
+          "evidence": "packages/db/src/identifier.ts:18-26 `quoteIdentifier` double-quotes + doubles embedded quotes + rejects NUL. Every identifier path uses it: queries.ts (table/column/orderBy via `column.spec.name`), conditions.ts (all 13 builders), ddl.ts. Values are ALWAYS `?` placeholders + allowlisted by `key in table.byKey` (queries.ts:275,345).",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "BEFORE flagged orm/relation.ts:78-96 \u2014 that file is gone. SQL injection is now structurally impossible on the query/condition path."
+        },
+        {
+          "name": "Migrations transactional (partial-failure safety)",
+          "status": "resolved",
+          "evidence": "packages/migrate/src/migrator.ts:177 each pending migration's DDL + bookkeeping INSERT run inside one `db.transaction()` span; migrator.ts:120-133 wraps the whole PG run in a transaction holding `pg_advisory_xact_lock` (cross-process, released atomically at COMMIT). rollback (migrator.ts:228) is symmetric. 100% coverage (24 tests).",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "BEFORE: 'migrations not transactional (migrator.ts:72)'. SQLite = per-migration BEGIN/COMMIT (Rails-style); PG = whole-run atomic under the xact lock. Dialect-correct rollback granularity is documented."
+        },
+        {
+          "name": "Migrator.rollback reverses wrong migration when file missing",
+          "status": "resolved",
+          "evidence": "packages/migrate/src/migrator.ts:213-219 \u2014 if the most-recently-applied version has no loaded definition it THROWS `MIGRATE_MISSING_MIGRATION` rather than silently picking an older entry.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "BEFORE: migrator.ts:92 reversed the wrong migration. Now refuses."
+        },
+        {
+          "name": "Queue worker error boundary (transient DB fault must not kill the worker)",
+          "status": "resolved",
+          "evidence": "packages/queue/src/queue.ts:570-584 \u2014 the poll loop wraps `runOnce` in try/catch, routes non-handler faults to `onError` as coded `QUEUE_WORKER_POLL_FAILED`, backs off `pollMs`, and keeps polling. `report()` (queue.ts:546-563) contains a throwing reporter. Reclaim moved to its own cadence (queue.ts:597-615) sharing the boundary.",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "BEFORE: 'queue worker loop has no error boundary \u2014 one DB error kills the worker permanently (queue.ts:269)'. Now fully contained."
+        },
+        {
+          "name": "Queue at-least-once correctness (atomic claim, FOR UPDATE SKIP LOCKED, fencing)",
+          "status": "resolved",
+          "evidence": "packages/queue/src/queue.ts:401-417 atomic `UPDATE ... WHERE id=(SELECT ... LIMIT 1 [FOR UPDATE SKIP LOCKED])` adds the lock clause on PG; terminal transitions (complete/fail, queue.ts:690-745) are FENCED by `status='running' AND locked_until=<claim token>` so a reclaimed/re-claimed row can't be resurrected. Poison payloads route through fail() (queue.ts:459-474). 100% coverage (68 tests).",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "Production-grade. Dialect mismatch between installSchema and Queue is loudly documented as a footgun (queue.ts:50-56) \u2014 could be auto-detected but is acceptable as-is."
+        },
+        {
+          "name": "Empty IN-list breaks Postgres / offset-without-limit invalid SQL",
+          "status": "resolved",
+          "evidence": "packages/db/src/conditions.ts:110-112 `inList([])` \u2192 `{ sql: '1 = 0', params: [] }`. packages/db/src/queries.ts:153-163 offset-without-limit forks on dialect (`OFFSET n` on PG, `LIMIT -1 OFFSET n` on SQLite).",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Both BEFORE findings (relation.ts:81, relation.ts:169) fixed and dialect-correct."
+        },
+        {
+          "name": "Migrate Schema DSL interpolates identifiers without quoteIdentifier",
+          "status": "open",
+          "evidence": "packages/migrate/src/schema.ts:24-64 \u2014 dropTable `DROP TABLE ${name}`, addColumn `ALTER TABLE ${table} ADD COLUMN ${name} ${type}`, addIndex `CREATE ${unique}INDEX ${name} ON ${table} (${cols.join(', ')})` interpolate raw, unlike @keel/db's ddl.ts which quotes everything via quoteIdentifier.",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "Low risk: these take developer-authored migration strings, not request input. But it is an inconsistency with the rest of the data layer and an easy hardening win \u2014 route names through quoteIdentifier."
+        },
+        {
+          "name": "No real-Postgres integration test leg",
+          "status": "partial",
+          "evidence": "packages/pg/src/pg-driver.ts:4-8 header: 'Excluded from coverage... needs pg installed and, to exercise meaningfully, a live Postgres. The adapter's decisions ... live in the covered adapter.ts, tested against a fake pool.' No test spins up a real PG to run a migrate+enqueue+claim journey end-to-end.",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "The translation/pooling/transaction logic is 100% covered against a fake pool, but the SQL the layers emit has never been executed by a real Postgres in CI. This is the main reason the score isn't 10 \u2014 dialect-fork SQL (BIGINT identity, FOR UPDATE SKIP LOCKED, advisory lock) is unproven against a live engine."
+        },
+        {
+          "name": "Scheduler/retention cron dedup is single-instance only",
+          "status": "open",
+          "evidence": "packages/queue/src/scheduler.ts:14-32 \u2014 'Cron de-duplication is in-process memory, not durable... Two scheduler instances ... will each independently decide the same cron is due, double-firing every scheduled job.' Same caveat in retention.ts:29-32.",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "Honestly documented and deferred post-1.0 (docs/plans/data-persistence.md item 10). Not a hidden bug \u2014 but in a horizontally-scaled fleet you must pin the scheduler to one instance. Persisted atomically-claimed cron firings would close it."
+        }
+      ]
+    },
+    {
+      "key": "observability-deploy",
+      "dimension": "observability & deploy/ops",
+      "scoreBefore": 3,
+      "scoreNow": 6.5,
+      "whatChanged": "Since the 2026-06-09 baseline (which had no CI, treated observability only as an incidental bug note \"tracer end() not idempotent\", and per memory described deploy as \"file copy + routing-rule printer\"), Wave 4/5 built a real distributed-tracing core and wired it into both runtimes. @keel/observability is now imported by runtime/server.ts, cloudflare/fetch-handler.ts, web/context.ts, webhooks, and the CLI. The node CLI (packages/cli/src/run.ts buildServeTracing) constructs an OTLP tracer from KEEL_OTLP_URL and passes tracer + parseTraceparent + onDrain-flush into serve, with a 5s flush interval and a real DB-ping /readyz probe. The edge adapter (fetch-handler.ts) mirrors it with ctx.waitUntil flush. Deploy gained versioned releases with atomic pointer flip + keel rollback, and a genuine remote S3/R2 release store (packages/deploy/src/remote.ts) over fetch+SigV4. The full trace+access-log round-trip is verified against a live OTLP collector in integration tests (observability-loop, tracing). Commits e85aed0..10f0113 (Wave 4 OTLP keystone + edge waitUntil), and Wave 5 edge-deploy work.",
+      "summary": "Observability is the strong half: real per-request http.request spans, W3C traceparent join, request-id correlation across span+access-log+X-Request-Id header, a bounded never-throws OTLP/HTTP exporter, flush-on-interval+drain (node) and ctx.waitUntil (edge), structured JSON access logs on both tiers, and /health + /readyz(+real DB ping) + graceful SIGTERM drain all wired in production via the CLI bin. End-to-end proven against a live collector. Deliberate v1 scope: traces only, no metrics/log-aggregation (documented). Two observability gaps remain: the per-domain child-span seams (db.query/queue.job/identity/mail) are built but NOT auto-wired by createApp or the CLI \u2014 they require manual createDb(handle,{onQuery:traces.seams.onQuery}) app-level plumbing (done only in the estate example), so out-of-the-box keel serve emits root request spans but no child spans; and edge tracing is opt-in, not auto-constructed from env by @keel/cloudflare. Deploy/ops is the weaker half: keel deploy is prerender + routing-plan + ship-to-LOCAL-DISK + print rules. The real R2/S3 remoteReleaseStore exists and is tested but is unreachable from the CLI (bin wires only nodeUploader/nodeReleaseStore; no endpoint/bucket/cred flags). There is no wrangler deploy invocation \u2014 the framework generates wrangler.jsonc but never pushes the Worker; the estate example has no deploy script. The shipRelease health-gate (verify) and rollback are real but the CLI never passes a verify gate. Verdict: you can SEE this in prod (traces+logs+health) with modest app-level wiring; you cannot yet DEPLOY safely to a real target via the framework's own CLI.",
+      "items": [
+        {
+          "name": "@keel/observability is imported and wired into the request path",
+          "status": "resolved",
+          "evidence": "packages/runtime/src/server.ts:1176 `const span = deps.tracer?.startSpan(\"http.request\", inbound);` + cli/src/run.ts:327-331 `deps.serve(app, { ...tracing.serveOptions })`; importers grep shows web/context.ts, cloudflare/fetch-handler.ts, webhooks, cli all import @keel/observability",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Real per-request span minted, published on context, ended beside the access line. Confirmed live by integration/test/observability-loop.integration.test.ts (span+log share request id)."
+        },
+        {
+          "name": "Structured request access logging (both tiers)",
+          "status": "resolved",
+          "evidence": "packages/runtime/src/server.ts:1420 defaultLogRequest emits JSON {level,event:\"http.access\",method,path,status,ms,request_id}; cloudflare/src/fetch-handler.ts:154 defaultEdgeLogRequest mirrors the exact shape",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "On by default, queryable JSON, truncated flag on torn streams. Node and edge log identically."
+        },
+        {
+          "name": "OTLP exporter is production-safe (bounded buffer, never throws)",
+          "status": "resolved",
+          "evidence": "packages/observability/src/otlp.ts:179 drop-oldest at DEFAULT_MAX_BUFFERED_SPANS=10000 with `this.dropped++`; flush() catches and routes to onError, never throws (line 205)",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Telemetry sheds load instead of leaking memory; a down collector cannot take the app down."
+        },
+        {
+          "name": "Per-domain trace seams (db.query/queue.job/identity/mail) NOT auto-wired by framework",
+          "status": "partial",
+          "evidence": "createTraces builds traces.seams (observability/src/traces.ts:233) but grep for `.seams`/`onQuery` in cli/runtime/kernel src returns ZERO consumers; kernel/src/kernel.ts createApp takes no traces param; only integration/test/tracing.integration.test.ts:108 and examples/estate/src/serve.ts:65 wire them manually",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "Out-of-the-box `keel serve` emits the http.request root span but no db/queue/identity child spans. The mechanism works (proven in tests) but the app author must manually thread seams into every battery factory; createApp offers no seam for it. This is the gap between 'has tracing' and 'has useful tracing by default'."
+        },
+        {
+          "name": "Edge (Cloudflare) tracing is opt-in, not auto-constructed from env",
+          "status": "partial",
+          "evidence": "cloudflare/src/fetch-handler.ts:200 tracer/flush are optional EdgeOptions; index.ts:19 example passes none; no tracesFromEnv call anywhere in packages/cloudflare/src. Only examples/estate/worker.ts:113 constructs it from env binding (app-level)",
+          "isLowHangingFruit": true,
+          "effort": "M",
+          "note": "The wiring is correct and proven (estate worker.ts + edge-tracing integration test), but the framework's cloudflare package doesn't build it from env \u2014 every Worker app must replicate the estate's tracesFor(env) boilerplate."
+        },
+        {
+          "name": "Outbound W3C traceparent propagation",
+          "status": "partial",
+          "evidence": "packages/webhooks/src/webhooks.ts:451 forwards captured traceparent on outbound delivery; formatTraceparent exported (observability/index.ts:83) but grep shows NO generic outbound-fetch wrapper uses it \u2014 only webhooks propagate",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Webhooks join the receiver's trace to the enqueuing request. There is no app-wide traced fetch helper, so arbitrary outbound calls a handler makes are not propagated."
+        },
+        {
+          "name": "Metrics and log aggregation pipelines",
+          "status": "open",
+          "evidence": "packages/observability/src/index.ts:37-46 'The v1 observability cut: TRACES ONLY ... v1 ships NO metrics pipeline ... and NO logs pipeline'",
+          "isLowHangingFruit": false,
+          "effort": "XL",
+          "note": "Deliberate, documented scope line (deferred to docs/plans/operability-dx.md). No counters, no latency histograms, no log shipping. exporter.dropped is a number you must surface yourself."
+        },
+        {
+          "name": "keel deploy ships to LOCAL DISK only; real remote target unreachable from CLI",
+          "status": "partial",
+          "evidence": "cli/src/bin.ts:187-188 `uploader: nodeUploader, releaseStore: nodeReleaseStore` (both fs copies); remote.ts remoteReleaseStore (S3/R2 over SigV4) exists+tested but grep `remoteReleaseStore` outside deploy/ = ZERO hits; runDeploy (run.ts:652) has no endpoint/bucket/cred flags",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "From a user's seat, keel deploy = prerender + plan + copy to dist/ + print routing rules. The real cloud uploader is built and solid but the CLI never reaches it. This is the single biggest deploy/ops gap."
+        },
+        {
+          "name": "No actual Cloudflare Worker push (wrangler deploy)",
+          "status": "open",
+          "evidence": "cloudflare/src/wrangler.ts generates+serializes wrangler.jsonc but no command invokes `wrangler deploy`; examples/estate/package.json scripts has start/build/test/typecheck only \u2014 no deploy script (worker.ts header comment says `wrangler deploy` but nothing runs it)",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "Framework produces a reproducible, drift-locked wrangler.jsonc but the operator must run wrangler by hand. The gallery-as-QA-gate requirement (feature not done until it deploys) is not met by the framework CLI itself."
+        },
+        {
+          "name": "Versioned releases + atomic flip + rollback",
+          "status": "resolved",
+          "evidence": "deploy/src/release.ts:99 shipRelease stages under releases/<version>/ then setCurrent (atomic symlink rename, line 188-199); cli/src/run.ts:720 runRollback wired to `keel rollback --to <v>` with DEPLOY_UNKNOWN_RELEASE guard",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Real and CLI-wired for the local/release-store path. Atomic on POSIX (symlink rename) and on object stores (single pointer-object write)."
+        },
+        {
+          "name": "Pre-flip health gate exists but CLI never uses it",
+          "status": "partial",
+          "evidence": "deploy/src/release.ts:73 ShipReleaseOptions.verify gate (DEPLOY_RELEASE_UNHEALTHY); cli/src/run.ts:686 `shipRelease(deployTarget, outDir, store, { version })` passes NO verify \u2014 no --health-check flag in runDeploy",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "The gate is dead code from the CLI's perspective: a release flips as soon as files stage. A --health-check URL flag wired to a fetch-200 verify() would make safe deploys real with no architectural change."
+        },
+        {
+          "name": "Health/readiness endpoints + graceful drain (operability basics)",
+          "status": "resolved",
+          "evidence": "runtime/src/server.ts:583 healthResponse (/health bare 200, /readyz with probeReady timeout); cli/src/run.ts:329 `health: { isReady: databaseReady(config.db) }` real DB ping; bin.ts:191 installShutdown wires SIGTERM/SIGINT -> drain -> exit; server.ts:795 drainServer (close idle, force after grace)",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "/readyz fails closed on DB outage (bounded probe), drain lets in-flight requests finish then flushes final spans. This is the part that makes a rolling restart safe. Fully wired in the bin."
+        }
+      ]
+    },
+    {
+      "key": "maturity-ci",
+      "dimension": "maturity, tests, CI, hygiene",
+      "scoreBefore": 2,
+      "scoreNow": 6.5,
+      "whatChanged": "Massive movement from the 2026-06-09 baseline (docs/REVIEW-2026-06-09.md graded production-readiness 2/10). The legacy CommonJS root that review flagged (\"Legacy CommonJS root (lib/, bin/tracks.js, test/, root pkg \\\"tracks\\\") duplicates ported packages\") is GONE \u2014 no lib/, bin/tracks.js, or \"tracks\" pkg exists; the buggy `orm` package is also deleted. CI grew from informational to fully blocking: .github/workflows/ci.yml now runs typecheck (ws:typecheck), lint (oxlint), a SERIAL 100%-coverage gate (scripts/coverage-gate.ts via ws:test:cov), format check (ws:format:check), plus dedicated jobs for bundle-size, browser e2e, scaffold-loop, and a real-Postgres db-parity leg. 58 tracked packages, ~3901 passing tests, 56 packages declare test:cov and the non-content gated packages verified at literal 100% (errors/csrf/cors all 100/100/100). Format check and lint both pass clean (exit 0) across the workspace. Remaining debt: the dev-facing `bun run ws:test` is flaky, content-* run ungated, and dead `loom/` prototype + committed sqlite binaries linger.",
+      "items": [
+        {
+          "name": "Legacy CommonJS root removed (lib/, bin/tracks.js, root \"tracks\" pkg)",
+          "status": "resolved",
+          "evidence": "`ls lib bin/tracks.js` -> \"legacy CJS root GONE\"; baseline docs/REVIEW-2026-06-09.md:105-108 flagged it; root package.json:1-18 has no \"tracks\", only workspaces [\"packages/*\",\"examples/*\"] and ws:* scripts",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "The single biggest hygiene win vs baseline: the duplicated ported-package CJS root and its `npm test` legacy suite are deleted, along with the buggy `orm` package the review's top SQLi finding targeted."
+        },
+        {
+          "name": "CI gates typecheck+lint+test+format as blocking",
+          "status": "resolved",
+          "evidence": ".github/workflows/ci.yml:32-67 runs Typecheck/Lint/Test(coverage-gated)/Format check in sequence; ci.yml:3-6 \"Every job is blocking\"; lint exit 0, ws:format:check exit 0 verified locally",
+          "isLowHangingFruit": false,
+          "effort": "M",
+          "note": "Format step is now blocking (the content-* format debt that kept it informational was paid down \u2014 all 58 packages check clean, confirmed by running ws:format:check)."
+        },
+        {
+          "name": "100% coverage gate enforced serially (deterministic on CI)",
+          "status": "resolved",
+          "evidence": "scripts/coverage-gate.ts:26-44 iterates packages with test:cov and runs each serially; spot-check errors/csrf/cors all report 100% statements/branches/functions; CONVENTIONS-grade bar held",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "Serial gate is a deliberate, well-documented fix for the parallel-coverage flakiness (coverage-gate.ts:5-12). 56 of 58 packages carry test:cov."
+        },
+        {
+          "name": "Developer-facing `bun run ws:test` is non-deterministic (flaky)",
+          "status": "open",
+          "evidence": "`bun run ws:test` exited code 1 on a re-run: \"@keel/auth ... 1 failed ... Test timed out in 5000ms\" and \"@keel/content-mcp bootstrap.test.ts 1 failed ... timed out\"; both PASS in isolation (auth 60/60, content-mcp 80/80). package.json:11 ws:test is `bun run --filter '@keel/*' test` with no throttle",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "Same CPU-oversubscription that coverage-gate.ts was written to dodge still poisons the plain dev command. CI is safe (uses serial ws:test:cov) but `ws:test` gives developers false RED. Cheapest fix: bump timeouts on scrypt/MCP-transport tests or route ws:test through a throttled/serial runner."
+        },
+        {
+          "name": "content-* packages run UNGATED for coverage in CI",
+          "status": "partial",
+          "evidence": "coverage-gate.ts:27 `if (dir.startsWith(\"content-\")) continue;`; ci.yml:50-51 runs content-* via `--filter ... test` with no threshold; content-core/vitest.config.ts has NO thresholds block (frozen); content-mcp/vitest.config.ts pins statements:98/branches:90 (below the 100 bar)",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "15 content packages now HAVE suites (content-mcp 80 tests, content-core 688) \u2014 big improvement over the baseline's \"6 arrived with no tests\" \u2014 but they are explicitly excluded from the 100% gate, so a content regression to 0% coverage would not fail CI. The ratchet is real but unfinished."
+        },
+        {
+          "name": "CONTENT_COVERAGE.md is stale / contradicts current state",
+          "status": "open",
+          "evidence": "CONTENT_COVERAGE.md:28-49 says \"all 47 packages\" and lists content-mcp/content-mdx/content-search/content-seo/content-embeddings/content-components as \"none\" tests; actual: content-mcp runs 80 tests, content-mdx runs a suite, repo has 58 packages",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "Tracking doc no longer matches reality \u2014 understates progress and misstates package count. A 10-minute refresh would make the coverage-debt ledger trustworthy again."
+        },
+        {
+          "name": "Dead `loom/` prototype still tracked, incl. committed sqlite binaries",
+          "status": "open",
+          "evidence": "`git ls-files loom/` -> 25 files incl. loom/db/keel.sqlite3{,-shm,-wal}; `git check-ignore loom/db/keel.sqlite3` -> NOT ignored (.gitignore:6 only `*.db`, not `*.sqlite3`); last loom commit 2026-06-09 \"Baseline\"; not in workspaces glob",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "22 source files of an abandoned pre-Keel rendering-engine prototype plus 76K of committed sqlite WAL binaries. Pure deletion candidate; also add `*.sqlite3*` to .gitignore to prevent recurrence."
+        },
+        {
+          "name": "Stale empty package dirs (config/, hooks/, rbac/)",
+          "status": "open",
+          "evidence": "`ls packages/config packages/hooks packages/rbac` -> each only has coverage/ + node_modules/, no package.json, 0 git-tracked files (`git ls-files` empty); they only surface as \"no test script\" noise",
+          "isLowHangingFruit": true,
+          "effort": "S",
+          "note": "Leftover working-tree cruft from renamed/deleted packages. Harmless (untracked) but pollutes `ls packages/*/` enumerations and tooling. `rm -rf` them."
+        },
+        {
+          "name": "No release/publish engineering (versions, build, changesets)",
+          "status": "open",
+          "evidence": "All 58 packages are version 0.1.0 and `private: true` (58/58); no .changeset dir; `git grep '\"prepublishOnly\"|\"publish\"'` -> none; 0/58 packages have a build script; only publishConfig.access:public stubs on content-* (content-core/package.json:7)",
+          "isLowHangingFruit": false,
+          "effort": "L",
+          "note": "For a framework meant to be installed via create-keel + @keel/*@latest, there is no actual publish path, no version-bump tooling, no build step, no dist artifacts. This is the dominant gap keeping release-engineering maturity below 7."
+        },
+        {
+          "name": "Bus factor / version maturity",
+          "status": "open",
+          "evidence": "`git shortlog -sn` -> 237 commits, single author \"Keel\"; all packages pinned at 0.1.0; 237 total commits over a ~1-week window (all 30 recent commits dated 2026-06-16)",
+          "isLowHangingFruit": false,
+          "effort": "XL",
+          "note": "Single-contributor, ~1-week-old, pre-1.0 codebase. Not fixable by a task \u2014 it is the structural maturity ceiling. Noted for honest scoring, not as an actionable item."
+        },
+        {
+          "name": "Typecheck clean across workspace",
+          "status": "resolved",
+          "evidence": "58/58 packages declare a typecheck script; spot-check `bun run --cwd packages/kernel typecheck` (tsc --noEmit) exit 0; ci.yml:32-33 gates it",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Strict TS base enforced repo-wide and CI-gated."
+        }
+      ],
+      "summary": "Release-engineering maturity has climbed sharply from the 2/10 baseline. The headline baseline hygiene crime \u2014 a duplicated legacy CommonJS root (lib/, bin/tracks.js, root \"tracks\" pkg) whose `npm test` ran a parallel legacy suite \u2014 is fully deleted, as is the buggy `orm` package. CI is now genuinely strict: every job (typecheck, lint, a serial 100%-coverage gate, format check, bundle-size, e2e, scaffold-loop, real-Postgres parity) is blocking, and lint + format both verify clean across all 58 packages. The non-content packages hit a literal 100% coverage bar (verified errors/csrf/cors at 100/100/100), with ~3901 tests passing. What holds the score at 6.5 rather than higher: (1) the developer-facing `bun run ws:test` is FLAKY \u2014 it failed on re-run with 5s timeouts in @keel/auth and @keel/content-mcp that pass cleanly in isolation, a CPU-oversubscription regression that CI escapes only because it uses the serial gate; (2) the 15 content-* packages run coverage-UNGATED (the gate script skips `content-*`, and content-mcp's config pins 98/90, below the 100 bar) so the 100%-everywhere claim has an asterisk; (3) lingering hygiene cruft \u2014 the dead `loom/` prototype is still git-tracked including committed sqlite binaries (not matched by .gitignore's `*.db`), plus three empty stale package dirs (config/hooks/rbac); and (4) no release engineering at all \u2014 every package is 0.1.0/private, zero build scripts, no changesets, no publish path, single author. The low-hanging fruit is unusually clean: deflake/serialize ws:test, delete loom + add `*.sqlite3*` to .gitignore, remove the empty dirs, and refresh the stale CONTENT_COVERAGE.md ledger."
+    },
+    {
+      "key": "framework-correctness",
+      "dimension": "framework correctness/polish",
+      "scoreBefore": 6,
+      "scoreNow": 9,
+      "whatChanged": "Six of the seven medium correctness findings from the 2026-06-09 REVIEW baseline are now fixed in committed code on `main` (tree clean, no uncommitted in-flight changes), each backed by a named regression test: i18n now reads catalogs via Object.hasOwn (packages/i18n/src/i18n.ts:45), tracer end() is idempotent via an `ended` flag (packages/observability/src/tracer.ts:84), ui-kit coerces numeric props before CSS interpolation (packages/ui-kit/src/components.tsx:392 + safeHref allowlist), content-core/content-query paginate() reject page/perPage<1 via validateRange (packages/content-core/src/query.ts:186), getCollections() routes through getCollection so unpublished filtering applies (packages/content-core/src/runtime.ts:204), and create-keel pins @keel/* via a file: resolver instead of workspace:* (packages/create-keel/src/scaffold.ts:35). All touched test suites pass: i18n 40, observability 64, ui 234, ui-kit 31, content-core 688, create-keel 16. The one remaining gap is the ui treeJsonSchema children allow-list, which is partial (latent).",
+      "items": [
+        {
+          "name": "i18n prototype-member lookup (Object.prototype bleed)",
+          "status": "resolved",
+          "evidence": "packages/i18n/src/i18n.ts:45-49 `function own(catalog, key){ ... return Object.hasOwn(catalog, key) ? catalog[key] : undefined; }` \u2014 every catalog read (lookup() at :207/:213, pluralSuffix's spelled() at :141) goes through it. Regression tests packages/i18n/test/i18n.test.ts:59 `treats inherited Object.prototype members as misses` covering constructor/toString/hasOwnProperty/__proto__, and :368 for interpolate placeholders.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Fully closed; bare bracket reads of constructor/toString no longer leak prototype functions into output."
+        },
+        {
+          "name": "tracer end() not idempotent -> double-export",
+          "status": "resolved",
+          "evidence": "packages/observability/src/tracer.ts:80-91 `end(){ if (this.ended) return; this.ended = true; this.data.endedAt = this.clock(); this.exporter.export(this.data); }` with `private ended = false` at :58. withSpan's explicit-end-plus-finally-end (:159-169) therefore exports once. observability suite 64 tests pass.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Second end() is a silent no-op; span never double-counted."
+        },
+        {
+          "name": "ui-kit numeric props injected into inline CSS",
+          "status": "resolved",
+          "evidence": "packages/ui-kit/src/components.tsx:392-394 `function numericProp(value, fallback){ return typeof value === 'number' && Number.isFinite(value) ? value : fallback; }`; Grid.columns interpolated into `repeat(${columns}, 1fr)` only after coercion (:168,:172), Stack.gap coerced before gapPx (:140). A CSS-bearing string or NaN/Infinity collapses to the default, never interpolated verbatim. Also safeHref allowlist (:43-72) blocks javascript:/data:/protocol-relative hrefs. ui-kit suite 31 tests pass.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Both the numeric-prop CSS-smuggling vector and the href XSS vector are guarded."
+        },
+        {
+          "name": "ui treeJsonSchema children allow-list looser than validateTree",
+          "status": "partial",
+          "evidence": "validateTree enforces the allow-list precisely: packages/ui/src/validate.ts:25-32 `allowsChild` returns `policy.includes(childType)` for an array policy. But the emitted JSON Schema does NOT: packages/ui/src/schema.ts:79-85 `acceptsChildren` collapses a non-empty array to a boolean true, and :106 emits `children: { type: 'array', items: nodeRef }` where nodeRef is the universal `#/$defs/node` \u2014 so the schema admits ANY component as a child of an allow-list parent. The divergence is even asserted: packages/ui/test/ui.test.tsx:303 `expect(list.properties.children?.items.$ref).toBe('#/$defs/node')` for a `children:['Text']` component. The schema.ts:71 comment claims it 'mirrors the runtime validateTree policy exactly' \u2014 true only for the boolean case, not the allow-list case.",
+          "isLowHangingFruit": true,
+          "effort": "M",
+          "note": "Latent: every shipped component (ui-kit) uses children:true/false, so no live model is mis-constrained today. But the moment a component declares children:[...types], the model-facing JSON Schema under-constrains relative to validateTree. To close: emit `items: { oneOf: [stringLeaf, ...variantsFor(allowlist)] }` for array policies. Comment overclaims and should be corrected either way."
+        },
+        {
+          "name": "content-core paginate() accepts page<=0 / perPage=0",
+          "status": "resolved",
+          "evidence": "packages/content-core/src/query.ts:186-187 `validateRange(page, 1, Number.MAX_SAFE_INTEGER, 'page'); validateRange(perPage, 1, ...)`; validateRange throws ValidationError when value<min (packages/content-shared/src/validation.ts:104-114). @keel/content-query mirrors it at packages/content-query/src/index.ts:179-180. content-core suite 688 tests pass.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "page<1/perPage<1 now throw a coded ValidationError. Minor residual: validateRange does not reject NaN (NaN<min is false), but the reported page<=0/perPage=0 cases are covered."
+        },
+        {
+          "name": "runtime getCollections() bypasses unpublished-filtering",
+          "status": "resolved",
+          "evidence": "packages/content-core/src/runtime.ts:204-212 `getCollections()` maps `Object.keys(collections)` through `getCollection(name)`, which applies workflow filterPublishedEntries (:132-143) unless filterUnpublished===false. Comment at :206 'listing collections must never leak drafts that single-collection access hides'. Regression test packages/content-core/src/__tests__/workflow.test.ts:474 `getCollections with filterUnpublished` ('previously bypassed the unpublished filter').",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "Draft-leak via the collection-listing path is closed; same filter as getCollection/getEntry."
+        },
+        {
+          "name": "create-keel scaffold emits workspace:* deps",
+          "status": "resolved",
+          "evidence": "packages/create-keel/src/scaffold.ts:35-36 default resolver `fileColonPin = (pkg) => `file:${join(PACKAGES_DIR, pkg.replace('@keel/',''))}``; packageJson(name, keelDep) injects it (templates.ts:59-60). No `workspace:` token remains in templates.ts. Regression test packages/create-keel/test/scaffold.test.ts:212 'pins every @keel dep through the injected resolver, never the workspace protocol'. create-keel suite 16 tests pass.",
+          "isLowHangingFruit": false,
+          "effort": "S",
+          "note": "`bun install` on a scaffolded app now resolves @keel/* via file: paths; resolver flips to a ^0.x range at publish (one-line change)."
+        }
+      ],
+      "summary": "The hardening effort has substantially closed the medium correctness backlog for this dimension. Of the seven specific findings re-checked against the current (clean, fully committed) tree, six are genuinely resolved with file:line evidence AND a dedicated regression test each: i18n prototype-member bleed (Object.hasOwn guard), tracer double-export (idempotent end() flag), ui-kit numeric-prop CSS injection (numericProp coercion + safeHref allowlist), paginate() page<=0 (validateRange throwing ValidationError in both content-core and content-query), getCollections() draft leak (routed through getCollection), and create-keel workspace:* scaffold (file: dep resolver). All affected test suites pass (i18n 40, observability 64, ui 234, ui-kit 31, content-core 688, create-keel 16). The single remaining gap is partial and latent: treeJsonSchema collapses an array children allow-list to admit any node (schema.ts:106) while validateTree enforces the precise list (validate.ts:31) \u2014 the schema.ts:71 'mirrors validateTree exactly' comment overclaims. It bites nothing today because every shipped component uses boolean children policies, but it is a low-hanging-fruit fix (emit a oneOf over the allow-list variants) plus a comment correction. Score raised from ~6 to 9: the dimension is in strong production shape with one cosmetic/latent schema-tightness item left."
+    }
+  ],
+  "judge": {
+    "productionScoreBefore": 2.5,
+    "productionScoreNow": 6.8,
+    "rationale": "This is a calibrated, heavily-weighted score (crash-safety + security + data-layer carry the most weight), not an average of the six dimensions (whose mean would be ~7.6). The three heavily-weighted dimensions are genuinely strong and verified against the clean tree: crash-safety (8.5) has a real never-throwing per-request error boundary, 1 MiB body cap, handler timeout, socket/slow-loris limits, and SIGTERM drain wired through the actual CLI (118 server tests); security (8) has a real onion middleware pipeline with every 2026-06-09 finding fixed at file:line (CSRF session-binding, CORS wildcard+credentials guard, SSRF-guarded webhooks with secret-by-reference, fail-closed scrypt, hashed-at-rest SQL sessions) and the Cloudflare adapter at hardening parity; data-layer (9) deleted the synchronous ORM, ships an async @keel/db + a real node-postgres @keel/pg adapter with parameterized values, identifier quoting+allowlist, transactional cross-process-locked migrations, and a fenced at-least-once queue. Those are real, structural, verifiable wins and they pull the floor up dramatically from the 2/10 baseline. BUT three things cap the ceiling and force the score well below the dimension mean: (1) deploy is verified to be a file copy \u2014 remoteReleaseStore has ZERO references in cli/src, bin.ts wires only fs-based nodeReleaseStore/nodeUploader, and NO code anywhere invokes `wrangler deploy`, so the framework cannot ship a Worker or push to a real remote target via its own CLI; (2) the batteries are wired but OPT-IN, not enforced \u2014 the kernel never injects secureStack (an app that forgets `.use()` ships with zero CSRF/CORS/rate-limit), and the per-domain trace seams have ZERO framework consumers (out-of-the-box `keel serve` emits no child spans); (3) there is no live-Postgres integration journey (the pg driver is correctly coverage-excluded and tested only against a fake pool) and zero release engineering (0/61 packages have a build script, no .changeset, no publish path, single author, ~1 week of history). A framework whose own deploy command writes to local disk and whose security defaults are silently absent unless hand-wired is not yet production-shippable as a product, even though an expertly-wired single app on it would be reasonably safe. 6.8 reflects: excellent runtime safety primitives, real data layer, but a hollow deploy/ops story and opt-in-not-enforced defaults.",
+    "biggestRemainingBlockers": [
+      "Deploy is a file copy, not a deploy: `keel deploy` prerenders + writes to LOCAL DISK only. The real S3/R2 remoteReleaseStore exists and is tested but has ZERO references in cli/src (verified), bin.ts wires only fs-based nodeReleaseStore/nodeUploader, runDeploy exposes no endpoint/bucket/cred flags, and NOTHING anywhere invokes `wrangler deploy` \u2014 so the framework generates wrangler.jsonc but never pushes the Worker. You cannot deploy to any real target via the framework's own CLI. This is structural (needs CLI flags + remote-store wiring + a wrangler-invoke step + a deploy script in the estate example) and is the single largest gap to being a usable product.",
+      "Secure defaults are OPT-IN, not enforced by the kernel: kernel createApp never injects secureStack (verified \u2014 only a doc comment references it), so an app that omits `.use(...secureStack(...))` ships with zero CSRF/CORS/rate-limit. identity defaults to MemorySessionStore when no store is passed, and admin enforces no authz/CSRF itself. The primitives are excellent but a forgetful app is unprotected; the kernel should force an app-wide secure baseline.",
+      "No live-Postgres integration leg: @keel/pg adapter.ts is real and 100% covered against a FAKE pool, but pg-driver.ts is (correctly) coverage-excluded and no test spins up a real Postgres to run a migrate -> enqueue -> claim -> complete journey end-to-end. The async data layer's headline scale claim is architecturally sound but not proven against a real engine \u2014 a CI db-parity job exists but the journey coverage is the gap.",
+      "Trace seams built but not auto-wired: createTraces builds db.query/queue.job/identity/mail seams but they have ZERO consumers in cli/runtime/kernel src (verified). Out-of-the-box `keel serve` emits root request spans but no child spans; observability requires per-app manual plumbing (done only in the estate example). Combined with traces-only (no metrics/logs pipeline), prod visibility out-of-the-box is shallow.",
+      "No rate limiting by default + no connection-count cap: a bare app ships zero rate limiting (opt-in via secureStack), and createServer sets no maxConnections, so request VOLUME and concurrent-connection count are unbounded even though per-request memory/time are bounded. Rate-based flooding remains the residual DoS vector.",
+      "No release/publish engineering: 0/61 packages have a build script, no .changeset directory, no publish path, all packages 0.1.0/private, single author, ~1 week of history. There is no story for versioning, building, or shipping the framework itself to consumers."
+    ],
+    "lowHangingFruit": [
+      {
+        "item": "Add a connection-count cap (`server.maxConnections`) on createServer",
+        "impact": "medium",
+        "effort": "S",
+        "why": "Closes the last named crash-safety/DoS gap with a one-line change; bounds concurrent sockets so connection-exhaustion floods can't pin the process. Highest value-per-minute fix in the tree.",
+        "location": "packages/runtime/src/server.ts:860-867 (the createServer call in applyServerLimits)"
+      },
+      {
+        "item": "Pass the migrate Schema DSL identifiers through quoteIdentifier",
+        "impact": "medium",
+        "effort": "S",
+        "why": "schema.ts dropTable/addColumn/addIndex interpolate developer identifiers RAW into DDL (verified at :25,:45,:63), inconsistent with @keel/db's ddl.ts which quotes everything. Low live risk (not request-fed) but a defense-in-depth + consistency fix; reuse the existing quoteIdentifier helper.",
+        "location": "packages/migrate/src/schema.ts:25,45,63"
+      },
+      {
+        "item": "Delete the dead loom/ prototype and its committed sqlite binaries; add *.sqlite3* to .gitignore",
+        "impact": "medium",
+        "effort": "S",
+        "why": "loom/ is git-tracked (25 files incl. keel.sqlite3/-shm/-wal) but not in the workspaces glob and last touched at baseline; .gitignore has *.db but NOT *.sqlite3 (verified), so binaries can recur. Removes confusing dead code and committed binaries from the repo.",
+        "location": "loom/ (git-tracked), .gitignore:5 (add *.sqlite3*)"
+      },
+      {
+        "item": "Remove the three empty stale package dirs (config/, hooks/, rbac/)",
+        "impact": "low",
+        "effort": "S",
+        "why": "Each contains only coverage/ + node_modules with zero git-tracked files; they surface as 'no test script' noise in tooling and imply packages that don't exist. Pure cleanup.",
+        "location": "packages/config, packages/hooks, packages/rbac"
+      },
+      {
+        "item": "Wire the existing pre-flip health gate into the deploy CLI (add --health-check passing shipRelease's verify)",
+        "impact": "medium",
+        "effort": "S",
+        "why": "ShipReleaseOptions.verify (DEPLOY_RELEASE_UNHEALTHY) already exists and is tested but runDeploy passes no verify gate. A flag + plumb-through makes the existing atomic-flip+rollback machinery actually gate on health before flipping. (Note: full value depends on real-remote deploy, which is structural.)",
+        "location": "packages/cli/src/run.ts:686 (shipRelease call), deploy/src/release.ts:73"
+      },
+      {
+        "item": "Tighten the ui treeJsonSchema children allow-list to a oneOf over allowed variants; fix the overclaiming comment",
+        "impact": "low",
+        "effort": "M",
+        "why": "schema.ts:106 collapses an array children allow-list to admit ANY node while validateTree enforces the precise list; the 'mirrors validateTree exactly' comment overclaims. Latent (no shipped component uses array policy today) but a correctness/comment-honesty fix.",
+        "location": "packages/ui/src/schema.ts:79-85,106 (and the comment at :71)"
+      },
+      {
+        "item": "Refresh or delete the stale CONTENT_COVERAGE.md ledger",
+        "impact": "low",
+        "effort": "S",
+        "why": "It claims '47 packages' and lists content-mcp/content-mdx as having 'none' tests, but content-mcp actually runs 80 tests and the repo has 61 packages. A misleading doc; either regenerate or remove.",
+        "location": "CONTENT_COVERAGE.md:28-49"
+      },
+      {
+        "item": "Throttle/serialize the dev-facing ws:test to deflake it",
+        "impact": "medium",
+        "effort": "M",
+        "why": "`bun run ws:test` is non-deterministic (5s timeouts in @keel/auth and @keel/content-mcp that pass in isolation) due to CPU oversubscription; CI escapes via the serial gate but the DX command lies. Add a concurrency throttle to the --filter fan-out (mirror the serial gate's approach).",
+        "location": "package.json:11 (ws:test = bun run --filter '@keel/*' test)"
+      }
+    ],
+    "keepGoingRecommendation": "pivot",
+    "scoreCeilingOfFruit": 7.4
+  }
+}
