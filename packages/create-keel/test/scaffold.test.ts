@@ -91,12 +91,11 @@ describe("scaffold", () => {
     expect(app).toContain('.post("/posts"');
 
     // The two conventions the starter demonstrates: boundary validation with
-    // Zod via c.valid, and CSRF on by default via secureStack/originCheck
-    // (the request-shaped batteries adapted onto the chain).
+    // Zod via c.valid, and security declared in one place via the config's
+    // `secure` field (rate-limit from the kernel default + originCheck CSRF).
     expect(app).toContain("c.valid(NewPost)");
     expect(app).toContain("z.object({");
-    expect(app).toContain("secureStack({ originCheck: {} })");
-    expect(app).toContain("fromRequestMiddleware");
+    expect(app).toContain("secure: { originCheck: {} }");
 
     // The Preact-by-default island pipeline: the single ui.dialect key, the
     // client module tag, the home page, and the island import.

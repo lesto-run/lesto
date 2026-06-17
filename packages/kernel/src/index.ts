@@ -25,7 +25,7 @@
  *   await app.handle("GET", "/posts");     // the keel() route's response
  */
 
-export { createApp } from "./kernel";
+export { createApp, KERNEL_DEFAULT_RATE_LIMIT } from "./kernel";
 export type { App, KeelAppConfig, KernelDatabase } from "./kernel";
 
 export {

@@ -107,10 +107,10 @@ export function keelApp(): string {
  *     untrusted body through a Zod schema with \`c.valid\` before it touches the
  *     database. A bad body is a 422, never a crash. The schema is the only place
  *     input is checked; everything past it is typed and trusted.
- *   - CSRF on by default: \`secureStack({ originCheck: {} })\` refuses a
- *     state-changing request that didn't come from this origin (it reads the
- *     browser's \`Sec-Fetch-Site\`), with no per-form token plumbing. The
- *     request-shaped batteries drop onto the chain via \`fromRequestMiddleware\`.
+ *   - Security on by default, declared in one place: the config's \`secure\` field.
+ *     Per-client rate-limiting is on from the kernel default, and \`originCheck\`
+ *     adds zero-token CSRF — a state-changing request from another origin is
+ *     refused (it reads the browser's \`Sec-Fetch-Site\`), with no token plumbing.
  */
 
 import { createElement } from "react";
@@ -120,9 +120,8 @@ import type { Db } from "@keel/db";
 
 import type { MigrationEntry } from "@keel/migrate";
 
-import { fromRequestMiddleware, keel } from "@keel/web";
+import { keel } from "@keel/web";
 import { openSqlite } from "@keel/runtime";
-import { secureStack } from "@keel/kernel";
 import type { KeelAppConfig } from "@keel/kernel";
 
 import { z } from "zod";
@@ -168,10 +167,8 @@ const NewPost = z.object({
 function buildApp(db: Db) {
   return (
     keel()
-      // Security batteries, on by default. \`originCheck\` is the zero-token CSRF
-      // defense: a cross-site POST/PUT/PATCH/DELETE is refused at the door. Add
-      // \`cors\`, \`rateLimit\`, or the signed-token \`csrf\` here as you need them.
-      .use(...secureStack({ originCheck: {} }).map(fromRequestMiddleware))
+      // Security is declared on the config below (\`secure\`), not wired here — so
+      // this surface stays pure routes + pages.
       // The hydration runtime: \`keel build\`/\`dev\` bundle \`app/islands/\` into
       // this \`/client.js\` (the Preact dialect — see \`ui\` below), and every page
       // gets the head module tag that boots it.
@@ -222,6 +219,12 @@ const config: KeelAppConfig = {
   db: handle,
   app: buildApp(db),
   migrations: [createPosts],
+  // Security, declared in one place (ADR 0016). Per-client rate-limiting is ALREADY
+  // on by the kernel default; \`originCheck\` layers zero-token CSRF over it — a
+  // cross-site POST/PUT/PATCH/DELETE is refused at the door (it reads the browser's
+  // \`Sec-Fetch-Site\`). Add \`cors\` / the signed-token \`csrf\`, retune \`rateLimit\`,
+  // or set \`secure: false\` to opt out entirely.
+  secure: { originCheck: {} },
   // The headline default (ADR 0011 Increment 3): \`preact\` ships a ~10 KB island
   // client. The single \`ui.dialect\` key drives BOTH the client bundle's
   // \`react\`→\`preact/compat\` alias (read by \`keel dev\`/\`build\`) and — for a
@@ -347,9 +350,10 @@ the typed \`@keel/db\` handle the route handlers query through.
 - The \`POST /posts\` handler validates the request body at the boundary with
   a Zod schema via \`c.valid\` — a bad body is a 422, never a crash.
   See \`docs/adr/0005-validation-at-the-boundary.md\` in the Keel source.
-- Security is on by default: \`secureStack({ originCheck: {} })\` refuses
-  cross-site state-changing requests (zero-token, header-based CSRF). Note a
-  non-browser client (e.g. \`curl\`) sends no \`Sec-Fetch-Site\`, so it is
-  refused too — pass \`Sec-Fetch-Site: same-origin\` when testing by hand.
+- Security is on by default, declared via the config's \`secure\` field: per-client
+  rate-limiting comes from the kernel default, and \`secure: { originCheck: {} }\`
+  adds zero-token, header-based CSRF — cross-site state-changing requests are
+  refused. Note a non-browser client (e.g. \`curl\`) sends no \`Sec-Fetch-Site\`, so
+  it is refused too — pass \`Sec-Fetch-Site: same-origin\` when testing by hand.
 `;
 }

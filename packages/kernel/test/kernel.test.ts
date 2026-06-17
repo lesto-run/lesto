@@ -244,3 +244,72 @@ describe("createApp", () => {
     expect(app.migrationsApplied).toEqual([]);
   });
 });
+
+describe("createApp — secure baseline (ADR 0016)", () => {
+  const rateLimitRows = (): number =>
+    (raw.prepare("SELECT count(*) AS n FROM keel_rate_limits").get() as { n: number }).n;
+
+  it("rate-limits by default (omitted secure), keyed through the durable SQL store", async () => {
+    const app = await createApp({
+      db,
+      app: keel().get("/ping", (c) => c.text("pong")),
+    });
+
+    expect((await app.handle("GET", "/ping")).body).toBe("pong");
+    // The default baseline ran the rate-limit middleware, which persisted a bucket
+    // to the kernel-installed SQL store — proof the net is on without tripping it.
+    expect(rateLimitRows()).toBeGreaterThanOrEqual(1);
+  });
+
+  it("secure: false opts out entirely — no rate-limit middleware runs", async () => {
+    const app = await createApp({
+      db,
+      app: keel().get("/ping", (c) => c.text("pong")),
+      secure: false,
+    });
+
+    expect((await app.handle("GET", "/ping")).body).toBe("pong");
+    // Opted out: the limiter never ran, so it never touched the store.
+    expect(rateLimitRows()).toBe(0);
+  });
+
+  it("secure: { rateLimit } applies the app's own limit (a tighter custom bucket)", async () => {
+    const app = await createApp({
+      db,
+      app: keel().get("/ping", (c) => c.text("pong")),
+      dialect: "sqlite",
+      // capacity 1, no refill → the second request is deterministically shed.
+      secure: { rateLimit: { capacity: 1, refillPerSecond: 0 } },
+    });
+
+    expect((await app.handle("GET", "/ping")).status).toBe(200);
+    expect((await app.handle("GET", "/ping")).status).toBe(429);
+  });
+
+  it("secure: { originCheck } refuses a cross-site state change but admits same-origin", async () => {
+    const app = await createApp({
+      db,
+      app: keel().post("/save", (c) => c.text("saved")),
+      secure: { originCheck: {} },
+    });
+
+    expect(
+      (await app.handle("POST", "/save", { headers: { "sec-fetch-site": "same-origin" } })).status,
+    ).toBe(200);
+    expect(
+      (await app.handle("POST", "/save", { headers: { "sec-fetch-site": "cross-site" } })).status,
+    ).toBe(403);
+  });
+
+  it("durable: false keeps the rate-limit baseline on per-process memory (no SQL store)", async () => {
+    // Opting out of the durable schema means no SQL store to wire, so the default
+    // rate limiter falls back to memory — the baseline still applies, table-free.
+    const app = await createApp({
+      db,
+      app: keel().get("/ping", (c) => c.text("pong")),
+      durable: false,
+    });
+
+    expect((await app.handle("GET", "/ping")).body).toBe("pong");
+  });
+});

@@ -85,6 +85,11 @@ export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promi
   return {
     db: handle,
     app,
+    // estate composes its own secureStack above (originCheck + a DURABLE rate
+    // limit over the shared SQL handle), so opt OUT of the kernel's default
+    // rate-limit baseline — otherwise every request would burn a token in two
+    // limiters, halving capacity and doubling the store round-trips (ADR 0016).
+    secure: false,
   };
 }
 

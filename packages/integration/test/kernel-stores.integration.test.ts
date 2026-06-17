@@ -88,6 +88,10 @@ describe.each(drivers)("createApp({ db }) durable by default: $name", (driver) =
       createApp({
         db: handle,
         dialect: driver.name,
+        // This app composes its OWN secureStack (the small shared-SQL bucket under
+        // test), so opt out of the kernel's default rate-limit baseline — otherwise
+        // two limiters would fight over the same bucket (ADR 0016).
+        secure: false,
         app: keel()
           .use(
             ...secureStack({ db: handle, dialect: driver.name, rateLimit: policy }).map(

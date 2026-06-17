@@ -23,9 +23,60 @@ import type { Dialect, SqlDatabase } from "@keel/db";
 import { Migrator } from "@keel/migrate";
 import type { MigrationEntry } from "@keel/migrate";
 
-import type { Keel, KeelResponse, UiDialect } from "@keel/web";
+import { runPipeline } from "@keel/web";
+import type { Keel, KeelRequest, KeelResponse, Middleware, UiDialect } from "@keel/web";
 
-import { installDurableSchema } from "./secure-stack";
+import { installDurableSchema, secureStack } from "./secure-stack";
+import type { SecureStackOptions } from "./secure-stack";
+
+/**
+ * The default per-client rate limit a `createApp` app gets unless it says
+ * otherwise — a flood-shedding safety net, not a tight quota. Generous on
+ * purpose: a single client rarely issues 100 dynamic requests in a burst, and
+ * the bucket refills at 50/s, so legitimate use (and any normal test) never
+ * trips it while a sustained flood is shed. Apps tune it via `secure.rateLimit`.
+ */
+export const KERNEL_DEFAULT_RATE_LIMIT = { capacity: 100, refillPerSecond: 50 } as const;
+
+/**
+ * Resolve the app-wide security middleware the kernel wraps every request in.
+ *
+ * Deny-by-omission would be the wrong default (a forgetful app shipping with no
+ * rate limit is the readiness review's residual DoS vector), so the safe baseline
+ * is rate-limiting ON, keyed per client IP — see {@link KERNEL_DEFAULT_RATE_LIMIT}.
+ * The CSRF/CORS layers are deliberately NOT defaulted: a forced origin/token check
+ * 403s legitimate non-browser API clients, and their safe policy is
+ * deployment-specific, so they stay one field away (`secure: { originCheck: {} }`)
+ * rather than implicit (ADR 0016).
+ *
+ *   - `secure: false` — opt out entirely (an app composing its own `secureStack`).
+ *   - `secure` omitted — the rate-limit baseline above.
+ *   - `secure: {...}` — layered OVER the baseline: a spelled `rateLimit` retunes
+ *     it; `originCheck`/`cors`/`csrf` add to it; the durable store + dialect are
+ *     threaded in so the app need not repeat the `db` wiring.
+ *
+ * The rate-limit store is the fleet-correct SQL one when the durable schema is
+ * installed (`durable !== false`, the default); a `durable: false` deploy gets
+ * per-process memory buckets, matching its opt-out of the SQL stores.
+ */
+function resolveSecure(config: KeelAppConfig): readonly Middleware[] {
+  if (config.secure === false) return [];
+
+  const durableWiring: Pick<SecureStackOptions, "db" | "dialect"> =
+    config.durable === false ? {} : { db: config.db, dialect: config.dialect ?? "sqlite" };
+
+  // The rate-limit baseline is always present; the app's own `secure` fields LAYER
+  // over it — a spelled `rateLimit` retunes it, while `originCheck`/`cors`/`csrf`
+  // add to it — so turning ON a CSRF check never silently turns OFF the DoS net.
+  // Opt out of the baseline entirely with `secure: false` (handled above).
+  return secureStack({
+    rateLimit: { ...KERNEL_DEFAULT_RATE_LIMIT },
+    ...durableWiring,
+    // `config.secure` is `SecureStackOptions | undefined` here (the `false` case
+    // returned above); spreading `undefined` is a no-op, so no fallback is needed.
+    ...config.secure,
+  });
+}
 
 /**
  * The one database handle the kernel threads through the migrator — the canonical
@@ -136,6 +187,26 @@ export interface KeelAppConfig {
    * into. Absent (or empty) means no extra installers run.
    */
   schemas?: ReadonlyArray<(db: KernelDatabase) => Promise<void>>;
+
+  /**
+   * The app-wide security baseline the kernel wraps every request in (ADR 0016).
+   *
+   * Omitted — the pit-of-success default: per-client rate limiting is ON (a
+   * flood-shedding net, see {@link KERNEL_DEFAULT_RATE_LIMIT}), keyed by the
+   * resolved client IP and backed by the same durable SQL store the kernel
+   * installs. CSRF/CORS stay OFF by default — a forced origin/token check refuses
+   * legitimate non-browser API clients, and their safe policy is
+   * deployment-specific — so a browser app turns them on explicitly, one field
+   * away: `secure: { originCheck: {} }`.
+   *
+   * `{ ...SecureStackOptions }` — layer your own policy OVER the baseline: add
+   * `originCheck` (CSRF) / `cors` / the signed-token `csrf`, or retune `rateLimit`.
+   * The rate-limit net stays on unless you override it, and the kernel threads its
+   * `db` + `dialect` in so you need not repeat them. `false` — opt out entirely,
+   * for an app that composes `secureStack` on its own `keel()` chain (and must not
+   * get it twice).
+   */
+  secure?: SecureStackOptions | false;
 }
 
 /** A booted application: a request handler plus the record of what migrations ran. */
@@ -208,8 +279,34 @@ export async function createApp(config: KeelAppConfig): Promise<App> {
   // process, so the CLI does not force it. The `applyUiDialect` / `.renderer()`
   // seam + the `WEB_DIALECT_MISMATCH` guard remain for that bespoke wiring; the
   // CLI drives only the client half from `ui.dialect`.
+  // The app-wide security baseline (rate-limit on by default; CSRF/CORS opt-in).
+  // Built ONCE here — the rate limiter's buckets must outlive a single request —
+  // then wrapped around every dispatch. An opt-out (`secure: false`) yields an
+  // empty list and the original zero-overhead delegation.
+  const secure = resolveSecure(config);
+
   return {
     migrationsApplied,
-    handle: (method, path, options) => config.app.handle(method, path, options),
+    handle: (method, path, options) => {
+      if (secure.length === 0) return config.app.handle(method, path, options);
+
+      // The security middleware reads the request (originCheck inspects headers;
+      // rate-limit reads the ambient request context's resolved IP, established by
+      // the transport around this call), then delegates to the app. The pipeline's
+      // coded refusals (429/403) are string-bodied, so the narrow back to
+      // `KeelResponse` holds.
+      const request: KeelRequest = {
+        method,
+        path,
+        params: {},
+        query: options?.query ?? {},
+        headers: options?.headers ?? {},
+        body: options?.body,
+      };
+
+      return runPipeline(secure, request, () =>
+        config.app.handle(method, path, options),
+      ) as Promise<KeelResponse>;
+    },
   };
 }
