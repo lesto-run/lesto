@@ -9,7 +9,9 @@ deployed app whose [`README.md`](../../examples/estate/README.md) and
 
 The web tier is stateless — state lives in the one database — so a Worker is a pure
 request handler. You ship two things: the Worker (your app behind the
-`@keel/cloudflare` fetch handler) and the island client assets.
+`@keel/cloudflare` fetch handler) and the island client assets. The **background
+tier** (queue workers, the cron scheduler) can't live in a Worker — it runs as a
+separate long-running Node process; see [deployment-topology.md](./deployment-topology.md).
 
 ## 1. A `wrangler.jsonc`
 
