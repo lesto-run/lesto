@@ -58,12 +58,19 @@ export interface EngineOptions {
 }
 
 /**
- * The durable workflow engine.
+ * The resumable step-memoization engine.
  *
  * A workflow is an async function composed of steps. Each step's result is
- * persisted the first time it runs, so re-running the same run id SKIPS already
- * completed steps and replays their results — crash-safe resume, DBOS-style.
- * No external engine, no Postgres required: it runs on any `SqlDatabase`.
+ * persisted the first time it runs, so re-invoking `run()` with the SAME `runId`
+ * SKIPS already-completed steps and replays their results instead of re-executing
+ * them. No external engine, no Postgres required: it runs on any `SqlDatabase`.
+ *
+ * **This is step memoization, not crash-safe durable execution.** There is no run
+ * journal, no scheduler, and nothing re-invokes a workflow after a crash: resume
+ * is *caller-driven*. To resume an interrupted run, the application must call
+ * `run(name, runId, input)` again with the same `runId` (e.g. from a retry queue);
+ * completed steps then replay and execution continues from the first incomplete
+ * step. A durable run journal + queue-backed resume driver is deferred post-1.0.
  *
  * An optional `onStep` sink ({@link EngineOptions.onStep}) observes every step
  * pass (executed or replayed, with a `durationMs`) for tracing; inert by default.
@@ -107,11 +114,32 @@ export class Engine {
     return row as StepRow;
   }
 
-  /** Persist a step's result so future runs replay it instead of re-executing. */
-  async #write(runId: string, key: string, result: string): Promise<void> {
-    await this.#db
-      .prepare(`INSERT INTO ${TABLE} (run_id, step_key, result) VALUES (?, ?, ?)`)
+  /**
+   * Persist a step's result so future runs replay it instead of re-executing.
+   *
+   * `ON CONFLICT DO NOTHING` makes the write idempotent under the step-journal
+   * race: if two passes of the same `(runId, key)` execute concurrently (this is
+   * memoization, not a distributed lock — `run()` is re-invoked by the caller),
+   * both can find no row in `#read`, both run `fn`, and both reach here. The
+   * composite PRIMARY KEY would make the second INSERT throw; `DO NOTHING`
+   * collapses it to a no-op so the first writer wins and the loser does not crash.
+   * The caller re-reads the row afterward to return the winning memoized value,
+   * so the two passes converge on one result. The clause is identical on SQLite
+   * and Postgres, so no dialect fork is needed.
+   *
+   * Returns whether THIS call inserted the row (`true`) or lost the race to an
+   * existing one (`false`), via the driver's reported `changes`.
+   */
+  async #write(runId: string, key: string, result: string): Promise<boolean> {
+    const { changes } = await this.#db
+      .prepare(
+        `INSERT INTO ${TABLE} (run_id, step_key, result) VALUES (?, ?, ?)
+         ON CONFLICT (run_id, step_key) DO NOTHING`,
+      )
       .run([runId, key, result]);
+
+    // 0 changes = a concurrent pass already journaled this step; we lost the race.
+    return changes > 0;
   }
 
   /**
@@ -157,7 +185,20 @@ export class Engine {
         // undefined — not a string — which would violate `result TEXT NOT NULL`
         // and leave NO row, so resume would RE-RUN the step (breaking exactly-once).
         // Coalesce to JSON null so every completed step records a durable row.
-        await this.#write(runId, key, JSON.stringify(result ?? null));
+        const won = await this.#write(runId, key, JSON.stringify(result ?? null));
+
+        // Step-journal race: if a concurrent pass of the same (runId, key) wrote
+        // the row first, our INSERT was a no-op (`changes === 0`). The conflicting
+        // row provably exists now, so re-read it and return the WINNING memoized
+        // value — both passes converge on one result instead of the caller seeing
+        // a locally-computed value the journal does not hold.
+        if (!won) {
+          const winner = (await this.#read(runId, key)) as StepRow;
+
+          this.#report(workflow, runId, key, true, start);
+
+          return JSON.parse(winner.result) as T;
+        }
 
         this.#report(workflow, runId, key, false, start);
 

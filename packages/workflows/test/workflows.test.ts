@@ -139,6 +139,66 @@ describe("Engine", () => {
     expect(true).toBe(true);
   });
 
+  it("converges on the winner's value when a concurrent pass wins the step-journal race", async () => {
+    let fnRuns = 0;
+
+    // A db wrapper that simulates the step-journal race: the very first time the
+    // engine prepares the step INSERT, a *concurrent* pass has already journaled
+    // a different result for the same (run_id, step_key). The wrapped INSERT runs
+    // through the real driver, so `ON CONFLICT DO NOTHING` reports `changes: 0`
+    // and the engine must re-read and return the WINNER's value — not its own.
+    let raced = false;
+    const racing: SqlDatabase = {
+      exec: (sql) => db.exec(sql),
+      transaction: (fn) => db.transaction(fn),
+      prepare: (sql) => {
+        const stmt = db.prepare(sql);
+
+        if (sql.includes("INSERT INTO keel_workflow_steps") && !raced) {
+          return {
+            get: (params) => stmt.get(params),
+            run: async (params) => {
+              raced = true;
+
+              // The concurrent pass commits its row FIRST, before our INSERT lands.
+              await db
+                .prepare(
+                  "INSERT INTO keel_workflow_steps (run_id, step_key, result) VALUES (?, ?, ?)",
+                )
+                .run(["race-1", "compute", '"from-winner"']);
+
+              // Now our INSERT hits the existing PK and DO-NOTHINGs (changes: 0).
+              return stmt.run(params);
+            },
+          };
+        }
+
+        return stmt;
+      },
+    };
+
+    const engine = new Engine({ db: racing }).define<void, string>("racer", async (_input, ctx) =>
+      ctx.step("compute", () => {
+        fnRuns += 1;
+        return "from-loser";
+      }),
+    );
+
+    const result = await engine.run("racer", "race-1", undefined);
+
+    // Our fn DID run (we lost the race only at write time), but the returned value
+    // is the WINNER's journaled result, so both passes converge on one answer.
+    expect(fnRuns).toBe(1);
+    expect(result).toBe("from-winner");
+
+    // The journal holds exactly the winner's row — our INSERT was a no-op.
+    const row = database
+      .prepare("SELECT result FROM keel_workflow_steps WHERE run_id = ? AND step_key = ?")
+      .get("race-1", "compute") as { result: string };
+
+    expect(row.result).toBe('"from-winner"');
+  });
+
   it("throws WORKFLOW_UNKNOWN for an unregistered name", async () => {
     const engine = new Engine({ db });
 
