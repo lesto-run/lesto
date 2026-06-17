@@ -156,7 +156,7 @@ describe("BrowserTracer", () => {
     expect(tracer.traceId).toBe("ffffffffffffffffffffffffffffffff");
 
     // A rooted span has no parent — the browser trace stands alone.
-    const span = tracer.vitalSpan("CLS", 100, 10);
+    const span = tracer.vitalSpan("layout-shift", 100, 10);
 
     expect(span.parentSpanId).toBeUndefined();
   });
@@ -311,6 +311,19 @@ describe("wrapFetch", () => {
     await wrapped(new Request("https://app.test/data"));
 
     expect(new Headers(calls[0]?.init?.headers).get("traceparent")).toContain("4bf92f");
+  });
+
+  it("preserves a Request object's own headers when stamping (no init)", async () => {
+    const { fetchImpl, calls } = recordingFetch();
+    const wrapped = wrapFetch({ ...base, fetchImpl });
+
+    await wrapped(new Request("https://app.test/data", { headers: { authorization: "Bearer t" } }));
+
+    // fetch(request, { headers }) would replace the Request's headers wholesale;
+    // wrapFetch must keep them and ADD the traceparent, not drop the Authorization.
+    const headers = new Headers(calls[0]?.init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer t");
+    expect(headers.get("traceparent")).toContain("4bf92f");
   });
 
   it("never stamps a cross-origin request (no trace-id leak)", async () => {
@@ -517,7 +530,12 @@ describe("startBrowserRum", () => {
     }
 
     const vitals = payload.spans.filter((span) => span.name === "browser.web_vital");
-    expect(vitals.map((span) => span.attributes["browser.vital"])).toEqual(["LCP", "INP", "CLS"]);
+    // layout-shift is emitted RAW (per-shift), never relabeled as the cumulative CLS.
+    expect(vitals.map((span) => span.attributes["browser.vital"])).toEqual([
+      "LCP",
+      "INP",
+      "layout-shift",
+    ]);
   });
 
   it("excludes a layout-shift that followed recent input (per the CLS spec)", () => {

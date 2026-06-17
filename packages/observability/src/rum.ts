@@ -134,7 +134,7 @@ interface ResourceEntryLike extends PerfEntryLike {
   readonly initiatorType: string;
 }
 
-/** A layout-shift entry, structurally — its `value` accumulates into CLS. */
+/** A layout-shift entry, structurally — `value` is ONE shift's score (CLS is the cumulative sum of these, which RUM does not compute here). */
 interface LayoutShiftLike extends PerfEntryLike {
   readonly value: number;
   readonly hadRecentInput: boolean;
@@ -182,8 +182,9 @@ export interface RumOptions {
 /**
  * The entry types RUM observes. `navigation` is the page load's phase timeline;
  * `resource` is each sub-resource fetch (island chunk, data fetch, image);
- * `largest-contentful-paint` / `layout-shift` are the Core Web Vitals an
- * observer reports. `first-input` (INP's seed) is observed too. Each is
+ * `largest-contentful-paint` (LCP) is a Core Web Vital. `layout-shift` entries are
+ * emitted RAW (one span per eligible shift) — RUM does not sum them into the
+ * cumulative CLS metric. `first-input` (INP's seed) is observed too. Each is
  * `buffered: true` so an entry that fired before the observer attached is still
  * delivered.
  */
@@ -346,7 +347,7 @@ export class BrowserTracer {
   }
 
   /**
-   * Map a Web-Vital entry (LCP / first-input for INP / layout-shift for CLS) to a
+   * Map a Web-Vital entry (LCP / first-input for INP / a raw layout-shift) to a
    * point-in-time `browser.web_vital` span. A vital is a measurement, not a window,
    * so its span is zero-width (start == end) and carries the value as an attribute.
    */
@@ -411,7 +412,15 @@ export function wrapFetch(options: {
     // id where it could leak to a third party.
     if (url === undefined || url.origin !== origin) return fetchImpl(input, init);
 
-    const headers = new Headers(init?.headers);
+    // `fetch(input, init)` builds the request's headers from `init.headers` when
+    // present, else from a Request `input` — it does NOT merge the two. Mirror that
+    // so `fetch(new Request(url, { headers }))` keeps its own headers instead of
+    // losing them all to the traceparent stamp.
+    const headers = new Headers(
+      typeof input === "object" && "url" in input && init?.headers === undefined
+        ? input.headers
+        : init?.headers,
+    );
 
     // Never overwrite a traceparent the caller already set — they own propagation.
     // The outbound parent-id is THIS request's fresh child span; the server then
@@ -509,13 +518,16 @@ function spanForEntry(tracer: BrowserTracer, entry: PerfEntryLike): BrowserSpan 
     return tracer.vitalSpan("INP", entry.duration, entry.startTime);
   }
 
-  // A layout-shift WITHOUT recent input contributes to CLS; one right after an
-  // input is user-initiated and excluded by spec. A shift we exclude yields no span.
+  // A layout-shift WITHOUT recent input is CLS-eligible; one right after an input
+  // is user-initiated and excluded by spec (an excluded shift yields no span). We
+  // emit each eligible shift's RAW score under a `layout-shift` label — not a
+  // `CLS` one — because the cumulative metric is a session-windowed sum this
+  // dispatcher does not compute. (×1000 so a sub-unit score survives Math.round.)
   const shift = entry as LayoutShiftLike;
 
   if (shift.hadRecentInput) return undefined;
 
-  return tracer.vitalSpan("CLS", shift.value * 1000, shift.startTime);
+  return tracer.vitalSpan("layout-shift", shift.value * 1000, shift.startTime);
 }
 
 /**
