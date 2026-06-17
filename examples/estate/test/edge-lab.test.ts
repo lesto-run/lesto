@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildEdgeApp } from "../src/edge";
 import { d1ContentStore } from "../src/content";
-import type { D1Database, D1PreparedStatement } from "../src/d1";
+import type { D1Database, D1PreparedStatement } from "@keel/cloudflare";
 import type { KeelResponse } from "@keel/web";
 
 // >= 32 bytes: the secret-strength guard rejects shorter signing secrets.

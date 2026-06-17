@@ -23,8 +23,8 @@ import type { UiNode } from "@keel/ui";
 import type { ReactNode } from "react";
 
 import { Hero, Main, SiteHeader } from "./ui/components";
-import { d1ToSqlDatabase } from "./d1";
-import type { D1Database } from "./d1";
+import { d1ToSqlDatabase } from "@keel/cloudflare";
+import type { D1Database } from "@keel/cloudflare";
 
 /** The block-page table: a slug, a title, and the serialized UiNode tree. */
 const pages = defineTable("pages", {

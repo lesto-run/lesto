@@ -1,21 +1,21 @@
 /**
- * A Cloudflare D1 adapter for `@keel/db`.
+ * A first-party Cloudflare D1 adapter for `@keel/db`.
  *
  * D1 is Cloudflare's SQLite — the only SQL database a Worker can reach (a Worker
- * has no filesystem, so `openSqlite`/better-sqlite3/`bun:sqlite` are off the
- * table on the edge). This wraps a `D1Database` binding in the same
- * `SqlDatabase` surface `createDb` consumes, so the DB-driven content page runs
- * the IDENTICAL query path on the edge as it does on Node — only the driver
- * differs.
+ * has no filesystem, so `openSqlite`/better-sqlite3/`bun:sqlite` are off the table
+ * on the edge). `d1ToSqlDatabase` wraps a `D1Database` binding in the same
+ * `SqlDatabase` surface `@keel/db`'s `createDb` consumes, so a DB-driven page runs
+ * the IDENTICAL query path on Workers as it does on Node — only the driver differs.
  *
- * A minimal `D1Database` shape is declared locally rather than pulling in
- * `@cloudflare/workers-types`: estate already types its Worker bindings by hand
- * (see `worker.ts`), and only these few methods are used.
+ * A minimal `D1Database` shape is declared here rather than depending on
+ * `@cloudflare/workers-types`: only these few methods are used, and keeping the
+ * type local means a consumer that hand-types its Worker env (the common case) needs
+ * no extra dependency.
  *
  * D1 has no interactive transactions (its atomic primitive is `batch()`), so
- * `transaction` degrades to running `fn` directly — sound here because the
- * content store only ever reads and one-shot seeds, neither of which needs
- * rollback. A future writer that needs atomicity would use `d1.batch` directly.
+ * `transaction` degrades to running `fn` directly on the same handle — sound for the
+ * read + one-shot-seed workloads `@keel/db` drives on the edge. A writer that needs
+ * cross-statement atomicity should reach for `d1.batch` directly.
  */
 
 import type { SqlDatabase } from "@keel/db";
@@ -73,7 +73,7 @@ export function d1ToSqlDatabase(d1: D1Database): SqlDatabase {
         ).results,
     }),
 
-    // D1 has no interactive transaction; the content store needs none (read +
+    // D1 has no interactive transaction; the edge workloads need none (read +
     // one-shot seed). Run the body directly on the same handle.
     transaction: async (fn) => fn(adapted),
   };

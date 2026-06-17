@@ -58,5 +58,8 @@ export type {
   WranglerPlacement,
 } from "./wrangler";
 
+export { d1ToSqlDatabase } from "./d1";
+export type { D1Database, D1PreparedStatement } from "./d1";
+
 export { CloudflareError } from "./errors";
 export type { CloudflareErrorCode } from "./errors";

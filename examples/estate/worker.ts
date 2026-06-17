@@ -40,7 +40,7 @@ import { preactServerRenderer } from "@keel/ui/server";
 import { buildEdgeApp, edgeSecret, isDemoMode } from "./src/edge";
 import { d1ContentStore } from "./src/content";
 import type { ContentStore } from "./src/content";
-import type { D1Database } from "./src/d1";
+import type { D1Database } from "@keel/cloudflare";
 
 /** The bindings this Worker is configured with (see wrangler.jsonc). */
 interface Env {

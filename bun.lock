@@ -177,6 +177,7 @@
       "name": "@keel/cloudflare",
       "version": "0.0.0",
       "dependencies": {
+        "@keel/db": "workspace:*",
         "@keel/deploy": "workspace:*",
         "@keel/errors": "workspace:*",
         "@keel/web": "workspace:*",
