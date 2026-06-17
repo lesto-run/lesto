@@ -229,6 +229,14 @@ describe("pathFor — reverse routing round-trips with match", () => {
       expect.objectContaining({ code: "ROUTER_MISSING_PARAM" }),
     );
   });
+
+  it("refuses an empty-string param — it would build a path that can never route back", () => {
+    // encodeURIComponent("") === "", so this would yield "/files/", which the
+    // `[^/]+` capture never matches; refuse it loudly rather than ship a 404ing link.
+    expect(() => pathFor("/files/:p", { p: "" })).toThrowError(
+      expect.objectContaining({ code: "ROUTER_MISSING_PARAM" }),
+    );
+  });
 });
 
 describe("RouteTable declaration-time safety", () => {

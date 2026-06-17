@@ -200,6 +200,26 @@ describe("keel middleware (.use) + per-route chain", () => {
 
     expect((await app.handle("GET", "/quiet")).status).toBe(404);
   });
+
+  it("runs global middleware for a malformed-param path, then re-raises the coded refusal", async () => {
+    // `/q/%zz` can't route (a malformed percent-encoding), but global middleware
+    // — CORS, rate-limit — must still SEE the request rather than being skipped by
+    // a throw before the chain. The coded error then propagates for the transport
+    // to map to a 400.
+    let seen = false;
+    const app = keel()
+      .use((_c, next) => {
+        seen = true;
+
+        return next();
+      })
+      .get("/q/:term", (c) => c.text("ok"));
+
+    await expect(app.handle("GET", "/q/%zz")).rejects.toMatchObject({
+      code: "ROUTER_MALFORMED_PARAM",
+    });
+    expect(seen).toBe(true);
+  });
 });
 
 // A CORS-style request middleware: answers a preflight, else delegates and adds a header.

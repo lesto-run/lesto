@@ -25,6 +25,7 @@
  */
 
 import { RouteTable } from "@keel/router";
+import type { Match } from "@keel/router";
 import { createSourceResolver, dataSourceHref } from "@keel/ui";
 import type { DataSource } from "@keel/ui";
 import { preactServerRenderer, reactServerRenderer } from "@keel/ui/server";
@@ -109,6 +110,20 @@ const notFound = (): KeelResponse => ({
 
 /** The terminal for an unmatched request — a fresh plain 404, run after any app-level middleware. */
 const notFoundHandler: Handler = () => notFound();
+
+/**
+ * A terminal that re-raises `error` — used when a path is unroutable because a
+ * param failed to decode (a malformed percent-encoding). It runs LAST, after the
+ * app's global middleware, so a CORS preflight and a rate-limit still see the
+ * request (the {@link Keel.handle} invariant); the coded error then propagates to
+ * the transport, which maps it to a 400 — exactly as it does for an error thrown
+ * deeper in the chain.
+ */
+const raisingHandler =
+  (error: unknown): Handler =>
+  () => {
+    throw error;
+  };
 
 /**
  * Run a handler chain over a context, returning the response it produces.
@@ -446,14 +461,31 @@ export class Keel {
    * params, and runs the route's handler chain. No match still runs the app's
    * top-level `.use` middleware (wrapping a 404 terminal), so global concerns —
    * a CORS preflight to an unrouted `OPTIONS`, a rate-limit on an unknown path —
-   * are answered for every request, matched or not. The declared return is the
-   * string-bodied {@link KeelResponse} dispatch contract;
+   * are answered for every request, matched or not. A path that fails to route
+   * because a param is a malformed percent-encoding (`match` throws a coded
+   * `ROUTER_MALFORMED_PARAM`) is treated the same way: the global middleware runs
+   * around a terminal that re-raises the coded error, so it still reaches the
+   * transport as a 400 without slipping past CORS/rate-limit. The declared return
+   * is the string-bodied {@link KeelResponse} dispatch contract;
    * a handler may produce a wider body (bytes, a stream — a page streams its
    * HTML), which the transport, not this contract, writes — so it is narrowed
    * back here.
    */
   async handle(method: string, path: string, options?: HandleOptions): Promise<KeelResponse> {
-    const match = this.matcher().match(method, path);
+    const matcher = this.matcher();
+
+    let match: Match<readonly Handler[]> | undefined;
+    let malformed: unknown;
+
+    try {
+      match = matcher.match(method, path);
+    } catch (error) {
+      // A malformed percent-encoded param can't be routed, but global middleware
+      // must still see the request — defer the coded refusal to a terminal below.
+      // (Only `.match` can throw here, and only `ROUTER_MALFORMED_PARAM`; a bad
+      // pattern fails earlier in `matcher()`, outside this try, as before.)
+      malformed = error;
+    }
 
     const request: KeelRequest = {
       method,
@@ -465,8 +497,12 @@ export class Keel {
     };
 
     // A match runs its baked chain (middleware + handler/page); a miss still runs
-    // the app's global middleware around a 404, so CORS/rate-limit see every request.
-    const chain = match === undefined ? [...this.useChain, notFoundHandler] : match.value;
+    // the app's global middleware, around a 404 for an unknown path or a re-raise
+    // for a malformed param — either way CORS/rate-limit see every request.
+    const chain =
+      match !== undefined
+        ? match.value
+        : [...this.useChain, malformed === undefined ? notFoundHandler : raisingHandler(malformed)];
 
     const response = await runChain(chain, new Context(request));
 

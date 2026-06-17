@@ -146,17 +146,19 @@ export class RouteTable<T> {
  * which `match` decodes back to `{ p: "a/b" }` as one segment, never two.
  *
  * Throws a coded {@link RouterError} (`ROUTER_MISSING_PARAM`) if the pattern needs
- * a param the caller did not supply — a wiring bug caught here, not a broken link
- * shipped to a user.
+ * a param the caller did not supply, or supplied empty: a `[^/]+` capture matches
+ * one-or-more chars, so an empty value would yield a path that can never route
+ * back (`/files/` misses `/files/:p`). Both are wiring bugs caught here, not
+ * broken links shipped to a user.
  */
 export const pathFor = (pattern: string, params: Record<string, string> = {}): string =>
   pattern.replace(PARAM_SEGMENT, (_segment, paramName: string) => {
     const value = params[paramName];
 
-    if (value === undefined) {
+    if (value === undefined || value === "") {
       throw new RouterError(
         "ROUTER_MISSING_PARAM",
-        `Pattern "${pattern}" needs a "${paramName}" param.`,
+        `Pattern "${pattern}" needs a non-empty "${paramName}" param.`,
         { pattern, param: paramName },
       );
     }
