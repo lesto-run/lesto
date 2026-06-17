@@ -202,9 +202,16 @@ export const ISLAND_ATTR = "data-keel-island";
 export const ISLAND_MOUNT_ATTR = "data-keel-island-mount";
 
 /**
- * Author an island node by hand-free sugar: `island("Account", { plan: "pro" })`.
+ * Author an island NODE by hand-free sugar: `island("Account", { plan: "pro" })`.
  * It is exactly the `UiNode` you would have written — nothing magic, so it
  * composes as a child anywhere a node is allowed.
+ *
+ * This is the DEMOTED Registry/`UiNode` content path's sugar (ADR 0011 Increment
+ * 2): a node in an AI-/DB-driven tree the `renderPage` walk turns into a marked
+ * shell + a page-wide manifest entry. A hand-authored `.page` does NOT use this —
+ * it drops a `defineIsland` component (`<AccountIsland />`) straight into JSX,
+ * which self-emits its shell + co-located mount script. Same `IslandMount` wire,
+ * different authoring surface.
  */
 export function island(name: string, props: Record<string, unknown> = {}): UiNode {
   return { type: name, props };

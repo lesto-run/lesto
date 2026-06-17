@@ -310,7 +310,16 @@ const intersectionObserve: ObserveFn = (container, onVisible) => {
 };
 
 /**
- * Hydrate every island in `manifest`, pairing each mount's `id` to its shell.
+ * Hydrate every island in an explicit `manifest` array, pairing each mount's `id`
+ * to its shell — the shared mount engine BOTH island paths run on.
+ *
+ * Public callers reach it through the page-wide-array niche (the DEMOTED Registry/
+ * `UiNode` content path: a `#keel-islands` manifest the server emitted from
+ * `renderPage`, read and passed here, as the e2e fixture and AI-content apps do).
+ * The CANONICAL `.page` path calls {@link hydrateDocumentIslands} instead, which
+ * scans the co-located mount scripts and feeds them HERE — so the two emission
+ * shapes converge onto this one mount loop, with one set of strategies, binds,
+ * and resilience semantics. Estate and blog go through `hydrateDocumentIslands`.
  *
  * A mount whose shell is absent from the DOM is skipped and reported in
  * `missing` (a page may legitimately render only some islands). A mount whose

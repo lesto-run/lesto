@@ -4,17 +4,27 @@
  * It builds a registry holding the page's island declarations and calls
  * `hydrateDocumentIslands`, which scans the document for the co-located
  * `data-keel-island-mount` scripts `defineIsland` emitted, then finds each marked
- * shell and mounts the real client component (here, `Account`, which resolves the
- * same-origin session). Bundle this to `/client.js` (estate's `build-client.ts`,
- * or `@keel/assets`); until then the pages degrade gracefully to their fallbacks.
+ * shell and mounts the real client component.
+ *
+ * This is the CANONICAL synthesized shape (ADR 0011 Increment 2): one client
+ * entry point that registers exactly the islands declared under `app/islands/`
+ * (one `defineIsland` default-export per file) and hands them to
+ * `hydrateDocumentIslands`. It is what `@keel/assets`' `synthesizeEntry` would
+ * generate from the same `app/islands/` convention — estate keeps it checked in
+ * (its bespoke worker path bundles this file directly) so the source is
+ * inspectable, but its content matches the framework's synthesized entry byte for
+ * byte in shape: import the defaults, `.defineClient(Island.island)`, hydrate.
+ *
+ * Bundle this to `/client.js`; until then the pages degrade gracefully to their
+ * fallbacks.
  */
 
 import { Registry } from "@keel/ui";
 import { hydrateDocumentIslands } from "@keel/ui/client";
 
-import { AccountIsland } from "./src/ui/account-island";
-import { LiveListing } from "./src/ui/live-listing";
-import { DeferredPanel } from "./src/ui/deferred-panel";
+import AccountIsland from "./app/islands/account";
+import LiveListing from "./app/islands/live-listing";
+import DeferredPanel from "./app/islands/deferred-panel";
 
 // Each island's declaration (carried on `.island`) is what the client registers,
 // so the browser mounts the very components the server reserved slots for:

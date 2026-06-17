@@ -19,6 +19,16 @@
  * behavior: an island renders its static fallback and is invisible to callers
  * that never asked for a manifest. `renderPage` is the additive door to the
  * manifest.
+ *
+ * SCOPE (ADR 0011 Increment 2 — the path convergence): this whole `UiNode`/
+ * Registry walk is the DEMOTED niche — the AI-/DB-driven content tree, where a
+ * `type` is a JSON string a model emitted and an island is collected into one
+ * page-wide `#keel-islands` manifest. The CANONICAL island path is `defineIsland`
+ * in a hand-authored `.page` (co-located mount scripts, `hydrateDocumentIslands`,
+ * the synthesized `@keel/assets` client) — that path does NOT come through here.
+ * Both emit the byte-identical {@link IslandMount} (the shared `islandMount`
+ * author), so the one wire contract and the one set of island invariants serve
+ * both; only the EMISSION (page-wide array vs. co-located per island) differs.
  */
 
 import { createElement, Fragment } from "react";
@@ -32,10 +42,24 @@ import { isNodeObject } from "./node";
 import { validateProps } from "./props";
 import type { Registry } from "./registry";
 
-/** One thing the renderer couldn't render, located by `path`. */
+/**
+ * One thing the renderer couldn't render, located by `path`.
+ *
+ * `type` is the stable diagnostic kind (`invalid_node`, `unknown_component`,
+ * `invalid_props`, `render_threw`) — branch on it, never on the prose. `detail`
+ * is a human-readable note (the offending component name, the prop-validation
+ * message); `cause` carries the actual thrown value for a `render_threw` (the
+ * component's own `Error`, or the `UI_ISLAND_PROPS_NOT_SERIALIZABLE` an island's
+ * bad prop raised), so an operator gets the real stack rather than a bare
+ * "something threw". Both are OPTIONAL — a plain `invalid_node` needs neither —
+ * and mirror `validate.ts`'s `TreeError.detail`, so the render walk and the pure
+ * tree walk report the same diagnostic shape.
+ */
 export interface RenderError {
   path: string;
   type: string;
+  detail?: string;
+  cause?: unknown;
 }
 
 /**
@@ -195,7 +219,7 @@ function build(walk: Walk, node: unknown, path: string): ReactElement | null {
 
   // Malformed: not a string, not a node object. Render nothing, report it.
   if (!isNodeObject(node)) {
-    walk.errors.push({ path, type: "invalid_node" });
+    walk.errors.push({ path, type: "invalid_node", detail: "node must be a string or an object" });
 
     return null;
   }
@@ -211,12 +235,23 @@ function build(walk: Walk, node: unknown, path: string): ReactElement | null {
 
   // Unknown component: nothing vetted to render. Degrade to nothing.
   if (def === undefined) {
-    walk.errors.push({ path, type: "unknown_component" });
+    walk.errors.push({ path, type: "unknown_component", detail: node.type });
 
     return null;
   }
 
-  const { props } = validateProps(def.props, node.props ?? {});
+  // Validate props as the pure `validateTree` walk does, but here in the render
+  // path too: a missing-required or out-of-enum prop was previously DROPPED on
+  // the floor (only the parallel `validateTree` reported it), so a renderer-only
+  // caller got a silently-degraded component with no diagnostic. Surface each as
+  // an `invalid_props` (the same kind `validate.ts` emits), then render with the
+  // reconciled bag — the render still proceeds (defaults applied, the bad value
+  // dropped), it is just no longer silent.
+  const { props, errors: propErrors } = validateProps(def.props, node.props ?? {});
+
+  for (const detail of propErrors) {
+    walk.errors.push({ path, type: "invalid_props", detail });
+  }
 
   const childNodes: ReactNode = (node.children ?? []).map((child, index) =>
     build(walk, child, `${path}.children[${index}]`),
@@ -233,9 +268,9 @@ function build(walk: Walk, node: unknown, path: string): ReactElement | null {
  * plus (when a page is being built) its manifest entry.
  *
  * Props are validated against the client schema and asserted serializable; a
- * non-serializable prop is contained as a `render_threw` diagnostic, exactly
- * like a server component that throws, so the island degrades to nothing rather
- * than crashing the surrounding page.
+ * non-serializable prop is contained as a `render_threw` diagnostic carrying the
+ * raised `UiError` as its `cause`, exactly like a server component that throws,
+ * so the island degrades to nothing rather than crashing the surrounding page.
  *
  * The shell contents are the crux of the hydration contract. A deferred island
  * (`ssr` falsy) holds only the fallback — the client mounts the live component
@@ -276,11 +311,19 @@ function buildIsland(
       : (client.fallback?.(props) as ReactNode);
 
     return createElement("div", { key: path, [ISLAND_ATTR]: path }, contents);
-  } catch {
-    walk.errors.push({ path, type: "render_threw" });
+  } catch (error) {
+    // Carry the actual throw (an island's `UI_ISLAND_PROPS_NOT_SERIALIZABLE`, or
+    // a coded `UI_ISLAND_SSR_DATA_UNRESOLVED`) as `cause` so an operator sees the
+    // real error, plus its message as `detail` — instead of a bare "threw".
+    walk.errors.push({ path, type: "render_threw", detail: errorDetail(error), cause: error });
 
     return null;
   }
+}
+
+/** A human-readable note for a thrown value: its `.message` if it has one, else its `String`. */
+function errorDetail(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Invoke a component's render, containing any throw as a reported error. */
@@ -296,8 +339,10 @@ function safeRender(
 
     // Re-key so React can place sibling elements without a missing-key warning.
     return createElement(Fragment, { key: path }, element);
-  } catch {
-    errors.push({ path, type: "render_threw" });
+  } catch (error) {
+    // The component's own throw, carried (not swallowed): `cause` is the real
+    // error for an operator's stack, `detail` its message for a quick read.
+    errors.push({ path, type: "render_threw", detail: errorDetail(error), cause: error });
 
     return null;
   }

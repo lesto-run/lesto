@@ -37,10 +37,16 @@ export type { TreeError } from "./validate";
 export { assertClientDef, island, ISLAND_ATTR, ISLAND_MOUNT_ATTR } from "./island";
 export type { ClientComponentDef, HydrationStrategy, IslandMount } from "./island";
 
-// Self-describing islands for the `.page` path (ADR 0011): a component that
-// emits its own shell + co-located mount script + data primer, so islands need
-// no page-wide manifest walk. The client half (`hydrateDocumentIslands`) is in
-// the `@keel/ui/client` subpath.
+// Self-describing islands for the `.page` path (ADR 0011) — THE CANONICAL island
+// authoring path. A component that emits its own shell + co-located mount script
+// + data primer, so islands need no page-wide manifest walk. Every `.page`/
+// `keel()` app (estate, blog) authors islands this way; its client half is
+// `hydrateDocumentIslands` (the `@keel/ui/client` subpath), and `@keel/assets`
+// synthesizes the client entry from a one-`defineIsland`-per-file `app/islands/`
+// convention. The Registry/`island()`/`renderPage`/`hydrateIslands` array form
+// below is now the DEMOTED niche (ADR 0011 Increment 2): it serves the AI-/DB-
+// driven `UiNode` content tree, where a `type` is a JSON string a model emitted
+// and the page is a walked manifest — NOT a hand-authored React `.page`.
 export { defineIsland } from "./define-island";
 export type { IslandComponent, IslandDef } from "./define-island";
 
@@ -60,9 +66,14 @@ export type { DataSource, DataSourceScope, IslandBind } from "./data";
 export { createSourceResolver, IslandDataContext, IslandDataProvider } from "./data-resolve";
 export type { SourceResolver } from "./data-resolve";
 
-// The audited seam for inlining the island manifest into a `<script>`: escapes
-// the breakout characters `JSON.stringify` leaves raw. Manifest emission MUST go
-// through this — never a bare stringify or a `String.replace` splice.
+// The audited seam for inlining island JSON into a `<script>`: escapes the
+// breakout characters `JSON.stringify` leaves raw. ALL island-manifest emission
+// MUST go through this — never a bare stringify or a `String.replace` splice.
+// `serializeScriptJson` is the canonical per-island form (one mount object, used
+// by `defineIsland`'s co-located mount script); `serializeManifest` is the
+// page-wide ARRAY form, now scoped to the DEMOTED Registry/`UiNode` content path
+// (ADR 0011 Increment 2) where `renderPage` collects every island into one
+// `#keel-islands` manifest.
 export { serializeManifest, serializeScriptJson } from "./serialize";
 
 // Resource hints + LCP/modulepreload conventions over React 19's native APIs.

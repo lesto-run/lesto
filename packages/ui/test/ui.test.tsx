@@ -53,6 +53,17 @@ const Boom: ComponentDef = {
   },
 };
 
+// Throws a NON-Error value (a bare string), so `render_threw`'s detail falls
+// through to `String(error)` rather than reading `.message`.
+const BoomString: ComponentDef = {
+  name: "BoomString",
+  props: {},
+  children: false,
+  render: () => {
+    throw "just a string";
+  },
+};
+
 function registry(): Registry {
   return new Registry().define(Box).define(Text).define(Badge);
 }
@@ -542,7 +553,8 @@ describe("renderTree", () => {
       children: [{ type: "Ghost" }],
     });
 
-    expect(errors).toEqual([{ path: "$.children[0]", type: "unknown_component" }]);
+    // The diagnostic names the offending component as `detail` (ui#7).
+    expect(errors).toEqual([{ path: "$.children[0]", type: "unknown_component", detail: "Ghost" }]);
 
     const html = renderToStaticMarkup(element);
 
@@ -552,7 +564,9 @@ describe("renderTree", () => {
   it("degrades a malformed node safely", () => {
     const { element, errors } = renderTree(registry(), { type: "Box", children: [true] });
 
-    expect(errors).toEqual([{ path: "$.children[0]", type: "invalid_node" }]);
+    expect(errors).toEqual([
+      { path: "$.children[0]", type: "invalid_node", detail: "node must be a string or an object" },
+    ]);
     expect(renderToStaticMarkup(element)).toBe('<div class="box"></div>');
   });
 
@@ -560,10 +574,12 @@ describe("renderTree", () => {
     const { element, errors } = renderTree(registry(), 99);
 
     expect(element).toBeNull();
-    expect(errors).toEqual([{ path: "$", type: "invalid_node" }]);
+    expect(errors).toEqual([
+      { path: "$", type: "invalid_node", detail: "node must be a string or an object" },
+    ]);
   });
 
-  it("contains a component whose render throws", () => {
+  it("contains a component whose render throws, carrying the error as cause + detail", () => {
     const r = registry().define(Boom);
 
     const { element, errors } = renderTree(r, {
@@ -571,12 +587,63 @@ describe("renderTree", () => {
       children: [{ type: "Boom" }, { type: "Text", props: { value: "still here" } }],
     });
 
-    expect(errors).toContainEqual({ path: "$.children[0]", type: "render_threw" });
+    // ui#7: the thrown Error rides along as `cause` (the real stack) and its
+    // message as `detail`, instead of a bare `render_threw`.
+    const thrown = errors.find((error) => error.path === "$.children[0]");
+    expect(thrown).toBeDefined();
+    expect(thrown?.type).toBe("render_threw");
+    expect(thrown?.detail).toBe("kaboom");
+    expect(thrown?.cause).toBeInstanceOf(Error);
+    expect((thrown?.cause as Error | undefined)?.message).toBe("kaboom");
 
     // The throw is contained — the rest of the tree still renders.
     const html = renderToStaticMarkup(element);
 
     expect(html).toContain('<div class="box">');
     expect(html).toContain("<span>still here</span>");
+  });
+
+  it("surfaces a missing required prop as invalid_props in the render walk (ui#7)", () => {
+    // `Text.value` is required. The render walk previously DROPPED the prop error
+    // on the floor (only the parallel validateTree reported it); now it surfaces
+    // here too, and the render still proceeds (the component renders empty).
+    const { element, errors } = renderTree(registry(), {
+      type: "Box",
+      children: [{ type: "Text" }],
+    });
+
+    expect(errors).toContainEqual({
+      path: "$.children[0]",
+      type: "invalid_props",
+      detail: 'missing required prop "value"',
+    });
+
+    // The render is not aborted — the bad component renders with the empty bag.
+    expect(renderToStaticMarkup(element)).toContain('<div class="box">');
+  });
+
+  it("stringifies a non-Error throw into render_threw detail (ui#7)", () => {
+    const r = registry().define(BoomString);
+
+    const { errors } = renderTree(r, { type: "BoomString" });
+
+    const thrown = errors.find((error) => error.type === "render_threw");
+    // A thrown string has no `.message`, so detail is its String() form, and the
+    // raw value still rides as cause.
+    expect(thrown?.detail).toBe("just a string");
+    expect(thrown?.cause).toBe("just a string");
+  });
+
+  it("surfaces an out-of-enum prop as invalid_props (ui#7)", () => {
+    const { errors } = renderTree(registry(), {
+      type: "Badge",
+      props: { tone: "loud" },
+    });
+
+    expect(errors).toContainEqual({
+      path: "$",
+      type: "invalid_props",
+      detail: 'prop "tone" must be one of [info, warn]',
+    });
   });
 });

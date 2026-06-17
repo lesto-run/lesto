@@ -11,12 +11,14 @@
 
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { gzipSync } from "node:zlib";
 
 import type { BunPlugin } from "bun";
 
 import type { BuildClientDeps, BundleArtifact, BundleRequest } from "./build-client";
 import { AssetsError } from "./errors";
 import { PREACT_ALIAS } from "./preact-alias";
+import { islandFileFromModule } from "./synthesize";
 import type { IslandFile } from "./synthesize";
 
 /** The island module file extensions an `app/islands/` directory may hold. */
@@ -42,20 +44,14 @@ function preactAliasPlugin(appRoot: string): BunPlugin {
   };
 }
 
-/** Read one island module's declaration, classifying it eager/lazy by its hydrate strategy. */
+/**
+ * Read one island module's declaration, classifying it eager/lazy by its hydrate
+ * strategy. The classification + the malformed-module refusal
+ * (`ASSETS_BAD_ISLAND_MODULE`) live in the pure {@link islandFileFromModule} so
+ * they are unit-tested; this only performs the Bun-only dynamic `import`.
+ */
 async function readIsland(path: string): Promise<IslandFile> {
-  const module = (await import(path)) as {
-    default: { island: { name: string; hydrate?: string; ssr?: boolean } };
-  };
-
-  const def = module.default.island;
-
-  return {
-    name: def.name,
-    importPath: path,
-    lazy: def.hydrate === "visible",
-    ssr: def.ssr === true,
-  };
+  return islandFileFromModule(path, await import(path));
 }
 
 /** Whether a directory entry is an island module (by extension), ignoring synthesized/hidden files. */
@@ -149,5 +145,10 @@ export function bunBuildClientDeps(appRoot: string): BuildClientDeps {
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, contents);
     },
+
+    // The gzipped byte length the size report + budget speak — the same `gzipSync`
+    // the standalone `bundle-size` script measures with, so the in-build budget and
+    // the CI assertion agree to the byte.
+    gzipSize: (contents) => gzipSync(contents).byteLength,
   };
 }

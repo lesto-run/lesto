@@ -28,6 +28,7 @@ import {
   reportClientErrors,
   shouldSample,
 } from "./client-beacon";
+import { AssetsError } from "./errors";
 
 /** One island module discovered under `app/islands/`, classified for splitting. */
 export interface IslandFile {
@@ -47,6 +48,44 @@ export interface IslandFile {
    * client dialect with the CLI's React server renderer — {@link buildClient}).
    */
   readonly ssr: boolean;
+}
+
+/**
+ * Classify one island module into an {@link IslandFile} from its loaded exports,
+ * or refuse it with a coded {@link AssetsError} if it is not a well-formed island.
+ *
+ * A module under `app/islands/` MUST default-export a `defineIsland` component,
+ * which carries its declaration on `.island` (an object with a string `name`, and
+ * the optional `hydrate`/`ssr` discriminants). If the default export is missing,
+ * or carries no `.island`, or that island has no string `name`, the synthesizer
+ * cannot read what it needs — so this throws `ASSETS_BAD_ISLAND_MODULE` naming the
+ * file, rather than letting `module.default.island.name` blow up as a raw
+ * `TypeError: Cannot read properties of undefined` deep in the Bun-only loader.
+ *
+ * Pure (no `import()`, no Bun) so the diagnostic is pinned by a unit test; the
+ * real `await import(path)` lives in `bun.ts`, which hands its module here.
+ */
+export function islandFileFromModule(importPath: string, module: unknown): IslandFile {
+  const island = (module as { default?: { island?: unknown } } | undefined)?.default?.island as
+    | { name?: unknown; hydrate?: unknown; ssr?: unknown }
+    | undefined;
+
+  if (island === undefined || island === null || typeof island.name !== "string") {
+    throw new AssetsError(
+      "ASSETS_BAD_ISLAND_MODULE",
+      `island module "${importPath}" has no defineIsland default export — a file under ` +
+        `app/islands/ must \`export default defineIsland({ … })\`, whose component carries ` +
+        `its declaration on \`.island\``,
+      { importPath },
+    );
+  }
+
+  return {
+    name: island.name,
+    importPath,
+    lazy: island.hydrate === "visible",
+    ssr: island.ssr === true,
+  };
 }
 
 /** A safe JS identifier for the Nth statically-imported island. */

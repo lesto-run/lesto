@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { createElement } from "react";
 
@@ -133,18 +133,56 @@ describe("Registry client components", () => {
     expect(r.clients()).toEqual([Account, Ping]);
   });
 
-  it("lets a client component shadow a server component of the same name", () => {
-    const r = new Registry().define(Box).defineClient({ ...Ping, name: "Box" });
+  it("lets a client component shadow a server component of the same name, and WARNS (ui#7)", () => {
+    const warnings: string[] = [];
+    const r = new Registry((message) => warnings.push(message))
+      .define(Box)
+      .defineClient({ ...Ping, name: "Box" });
 
     expect(r.has("Box")).toBe(false);
     expect(r.hasClient("Box")).toBe(true);
+
+    // The cross-namespace shadow is loud: a `type` resolving to one thing flipped
+    // from a server component to an island — almost always a rename slip.
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('client component "Box" shadows a server component');
   });
 
-  it("lets a server component shadow a client component of the same name", () => {
-    const r = new Registry().defineClient(Ping).define({ ...Box, name: "Ping" });
+  it("lets a server component shadow a client component of the same name, and WARNS (ui#7)", () => {
+    const warnings: string[] = [];
+    const r = new Registry((message) => warnings.push(message))
+      .defineClient(Ping)
+      .define({ ...Box, name: "Ping" });
 
     expect(r.hasClient("Ping")).toBe(false);
     expect(r.has("Ping")).toBe(true);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('server component "Ping" shadows a client component');
+  });
+
+  it("does NOT warn on a same-namespace redefinition (last-write-wins is intent)", () => {
+    const warnings: string[] = [];
+    const r = new Registry((message) => warnings.push(message))
+      .define(Box)
+      .define({ ...Box }) // redefine the SAME server name — legitimate, no shadow
+      .defineClient(Ping)
+      .defineClient({ ...Ping }); // redefine the SAME client name — legitimate
+
+    expect(r.has("Box")).toBe(true);
+    expect(r.hasClient("Ping")).toBe(true);
+    expect(warnings).toEqual([]);
+  });
+
+  it("uses console.warn by default for a cross-namespace shadow", () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    new Registry().define(Box).defineClient({ ...Ping, name: "Box" });
+
+    expect(spy).toHaveBeenCalledOnce();
+    expect(spy.mock.calls[0]?.[0]).toContain("[keel/ui]");
+
+    spy.mockRestore();
   });
 
   it("accepts a lazy (load) client component", () => {
@@ -259,7 +297,13 @@ describe("renderPage — data binds", () => {
 
     const page = renderPage(r, island("Account"));
 
-    expect(page.errors).toEqual([{ path: "$", type: "render_threw" }]);
+    // ui#7: the contained throw rides as `cause` — the actual coded UiError, not a
+    // bare `render_threw`.
+    expect(page.errors).toHaveLength(1);
+    expect(page.errors[0]).toMatchObject({ path: "$", type: "render_threw" });
+    expect((page.errors[0]?.cause as UiError | undefined)?.code).toBe(
+      "UI_ISLAND_SSR_DATA_UNRESOLVED",
+    );
     expect(page.islands).toEqual([]);
   });
 });
@@ -307,7 +351,7 @@ describe("renderPage", () => {
     const page = renderPage(registry(), { type: "Nope" });
 
     expect(page.element).toBeNull();
-    expect(page.errors).toEqual([{ path: "$", type: "unknown_component" }]);
+    expect(page.errors).toEqual([{ path: "$", type: "unknown_component", detail: "Nope" }]);
     expect(page.islands).toEqual([]);
   });
 
@@ -348,7 +392,12 @@ describe("renderPage", () => {
     const page = renderPage(registry(), island("Ping", { onClick: () => undefined }));
 
     expect(page.islands).toEqual([]);
-    expect(page.errors).toEqual([{ path: "$", type: "render_threw" }]);
+    // ui#7: the serialize guard's UiError is carried as `cause`.
+    expect(page.errors).toHaveLength(1);
+    expect(page.errors[0]).toMatchObject({ path: "$", type: "render_threw" });
+    expect((page.errors[0]?.cause as UiError | undefined)?.code).toBe(
+      "UI_ISLAND_PROPS_NOT_SERIALIZABLE",
+    );
     expect(renderToStaticMarkup(page.element)).toBe("");
   });
 

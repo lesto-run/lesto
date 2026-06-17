@@ -91,7 +91,12 @@ export function assertSerializable(
 }
 
 /**
- * Serialize an island manifest for safe embedding in an inline `<script>`.
+ * Serialize a page-wide island manifest ARRAY for safe embedding in an inline
+ * `<script>` — the DEMOTED Registry/`UiNode` content path's emission (ADR 0011
+ * Increment 2). The canonical `.page` path uses {@link serializeScriptJson} on
+ * one mount object per island (co-located, streaming-safe); this array form is
+ * the niche where `renderPage` walks an AI-/DB-driven tree into one
+ * `#keel-islands` manifest. Same audited escape, applied to the whole array.
  *
  * `JSON.stringify` alone is NOT safe to drop into HTML. A string value carrying
  * `</script>` (or `<!--`, or the JS line terminators U+2028 / U+2029) terminates

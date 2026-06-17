@@ -16,16 +16,18 @@
 
 export { buildClient } from "./build-client";
 export type {
+  ArtifactSize,
   BuildClientDeps,
   BuildClientOptions,
   BuildClientResult,
   BuildMode,
+  BuildReport,
   BundleArtifact,
   BundleRequest,
   Dialect,
 } from "./build-client";
 
-export { synthesizeEntry } from "./synthesize";
+export { islandFileFromModule, synthesizeEntry } from "./synthesize";
 export type { BeaconConfig, IslandFile } from "./synthesize";
 
 export {

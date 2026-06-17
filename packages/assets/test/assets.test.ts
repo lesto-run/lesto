@@ -8,7 +8,7 @@ import type { BuildClientDeps, BundleArtifact, BundleRequest } from "../src/buil
 import { isChunkFile } from "../src/chunks";
 import { AssetsError } from "../src/errors";
 import { PREACT_ALIAS } from "../src/preact-alias";
-import { synthesizeEntry } from "../src/synthesize";
+import { islandFileFromModule, synthesizeEntry } from "../src/synthesize";
 import type { IslandFile } from "../src/synthesize";
 
 describe("synthesizeEntry", () => {
@@ -193,6 +193,10 @@ function fakeDeps(overrides: Partial<BuildClientDeps> = {}): {
 
       return Promise.resolve();
     },
+    // A deterministic fake "gzip size": the content's character length. Real gzip
+    // lives in `bun.ts` (the excluded Bun edge); the orchestration only needs a
+    // number, so a fake keeps the measure/report/budget logic covered offline.
+    gzipSize: (contents) => contents.length,
     ...overrides,
   };
 
@@ -458,5 +462,168 @@ describe("buildClient", () => {
 
     expect(result.entry).toBe("/out/client.js");
     expect(written.get("/out/client.js")).toBe("ENTRY");
+  });
+});
+
+describe("islandFileFromModule — malformed-module refusal (ASSETS_BAD_ISLAND_MODULE)", () => {
+  it("classifies a well-formed defineIsland module eager/lazy/ssr from its .island", () => {
+    const file = islandFileFromModule("/app/islands/account.tsx", {
+      default: { island: { name: "Account", hydrate: "visible", ssr: false } },
+    });
+
+    expect(file).toEqual({
+      name: "Account",
+      importPath: "/app/islands/account.tsx",
+      lazy: true,
+      ssr: false,
+    });
+  });
+
+  it("defaults lazy=false / ssr=false when the declaration omits hydrate/ssr", () => {
+    const file = islandFileFromModule("/a.tsx", { default: { island: { name: "Plain" } } });
+
+    expect(file).toMatchObject({ name: "Plain", lazy: false, ssr: false });
+  });
+
+  it("treats an ssr:true eager island as ssr (the matched-pair guard's input)", () => {
+    const file = islandFileFromModule("/r.tsx", { default: { island: { name: "R", ssr: true } } });
+
+    expect(file.ssr).toBe(true);
+  });
+
+  it.each([
+    ["no default export", { notDefault: {} }],
+    ["a default with no .island", { default: {} }],
+    ["an undefined module", undefined],
+    ["an island with a non-string name", { default: { island: { name: 42 } } }],
+    ["a null island", { default: { island: null } }],
+  ])("refuses %s with ASSETS_BAD_ISLAND_MODULE naming the file", (_label, module) => {
+    try {
+      islandFileFromModule("/app/islands/broken.tsx", module);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(AssetsError);
+      expect((error as AssetsError).code).toBe("ASSETS_BAD_ISLAND_MODULE");
+      expect((error as AssetsError).message).toContain("/app/islands/broken.tsx");
+      expect((error as AssetsError).details).toEqual({ importPath: "/app/islands/broken.tsx" });
+    }
+  });
+});
+
+describe("buildClient — gzip sizes + budget (ADR 0011: narrate, shout when over)", () => {
+  it("measures the entry + each chunk by gzipSize and returns them, entry first", async () => {
+    const { deps } = fakeDeps();
+
+    const result = await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+      deps,
+    );
+
+    // The fake gzipSize is content.length: "ENTRY" = 5, "CHUNK" = 5. The entry is
+    // measured by its CONFIGURED name (client.js), not the bundler's entry.js.
+    expect(result.sizes).toEqual([
+      { fileName: "client.js", kind: "entry", gzipBytes: 5 },
+      { fileName: "chunk-deadbeef.js", kind: "chunk", gzipBytes: 5 },
+    ]);
+  });
+
+  it("narrates the dialect/mode and each artifact's gzip size through the report seam", async () => {
+    const lines: string[] = [];
+    const { deps } = fakeDeps();
+
+    await buildClient(
+      {
+        islandsDir: "/app/islands",
+        outDir: "/out",
+        mode: "production",
+        dialect: "preact",
+        report: (line) => lines.push(line),
+      },
+      deps,
+    );
+
+    const narration = lines.join("\n");
+
+    expect(narration).toContain("keel: client (preact, production)");
+    expect(narration).toContain("entry client.js:");
+    expect(narration).toContain("chunk chunk-deadbeef.js:");
+    expect(narration).toContain("gzip");
+  });
+
+  it("passes a generous budget: the report notes the budget, the build does NOT throw", async () => {
+    const lines: string[] = [];
+    const { deps } = fakeDeps();
+
+    const result = await buildClient(
+      {
+        islandsDir: "/app/islands",
+        outDir: "/out",
+        mode: "production",
+        dialect: "react",
+        budgetBytes: 1000,
+        report: (line) => lines.push(line),
+      },
+      deps,
+    );
+
+    expect(result.entry).toBe("/out/client.js");
+    // The entry line carries the budget note, NOT the "OVER" flag.
+    const entryLine = lines.find((line) => line.includes("entry client.js"));
+    expect(entryLine).toContain("budget");
+    expect(entryLine).not.toContain("OVER");
+  });
+
+  it("FAILS the build with ASSETS_BUDGET_EXCEEDED when the entry blows the budget", async () => {
+    const lines: string[] = [];
+    // "ENTRY" gzips to 5 (the fake); a budget of 4 is exceeded.
+    const { deps } = fakeDeps();
+
+    try {
+      await buildClient(
+        {
+          islandsDir: "/app/islands",
+          outDir: "/out",
+          mode: "production",
+          dialect: "react",
+          budgetBytes: 4,
+          report: (line) => lines.push(line),
+        },
+        deps,
+      );
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(AssetsError);
+      expect((error as AssetsError).code).toBe("ASSETS_BUDGET_EXCEEDED");
+      expect((error as AssetsError).message).toContain("client.js");
+      expect((error as AssetsError).details).toMatchObject({
+        fileName: "client.js",
+        gzipBytes: 5,
+        budgetBytes: 4,
+      });
+    }
+
+    // The build still NARRATED before it threw — the report flags the entry OVER.
+    const entryLine = lines.find((line) => line.includes("entry client.js"));
+    expect(entryLine).toContain("OVER");
+  });
+
+  it("with no budget set, reports sizes without a budget note and never fails", async () => {
+    const lines: string[] = [];
+    const { deps } = fakeDeps();
+
+    const result = await buildClient(
+      {
+        islandsDir: "/app/islands",
+        outDir: "/out",
+        mode: "development",
+        dialect: "react",
+        report: (line) => lines.push(line),
+      },
+      deps,
+    );
+
+    expect(result.sizes).toHaveLength(2);
+    const entryLine = lines.find((line) => line.includes("entry client.js"));
+    expect(entryLine).not.toContain("budget");
   });
 });

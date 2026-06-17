@@ -40,6 +40,36 @@ export interface BuildClientOptions {
   readonly mode: BuildMode;
 
   readonly dialect: Dialect;
+
+  /**
+   * The maximum gzipped size, in bytes, the client ENTRY may reach before the
+   * build fails with `ASSETS_BUDGET_EXCEEDED`. The regression guard the
+   * standalone `bundle-size` script asserts in CI (react ≤ 65 KB, preact ≤ 15 KB,
+   * ADR 0007/0011), now enforceable INSIDE the build so a configured app fails its
+   * own `keel build` on a blown budget. Omitted = measure-and-report only, never
+   * fail (the size still rides into {@link BuildClientResult} and the report).
+   */
+  readonly budgetBytes?: number;
+
+  /**
+   * Where the build narrates what it decided — per-artifact gzip sizes, the
+   * budget verdict (ADR 0011: "the build narrates what it decided"). Defaults to a
+   * no-op; the CLI wires `console.log`. A seam, not a global, so the narration is
+   * asserted in a test.
+   */
+  readonly report?: BuildReport;
+}
+
+/** One line of build narration. */
+export type BuildReport = (line: string) => void;
+
+/** The gzipped size of one written artifact, in bytes — the report + budget unit. */
+export interface ArtifactSize {
+  readonly fileName: string;
+
+  readonly kind: "entry" | "chunk";
+
+  readonly gzipBytes: number;
 }
 
 /** One artifact a bundle produced — the entry, or a content-hashed split chunk. */
@@ -80,15 +110,26 @@ export interface BuildClientDeps {
 
   /** Write a file. */
   write(path: string, contents: string | Uint8Array): Promise<void>;
+
+  /**
+   * The gzipped byte length of `contents` — the size unit the report + budget use
+   * (a network-meaningful number; raw bytes mislead since every byte ships
+   * gzipped). Injected (real impl: `node:zlib` `gzipSync` in `bun.ts`) so the
+   * measure/report/budget logic is exercised under vitest with a fake.
+   */
+  gzipSize(contents: string | Uint8Array): number;
 }
 
-/** What a build produced: the written paths and the islands it bundled. */
+/** What a build produced: the written paths, the islands it bundled, and per-artifact sizes. */
 export interface BuildClientResult {
   readonly entry: string;
 
   readonly chunks: readonly string[];
 
   readonly islands: readonly IslandFile[];
+
+  /** The gzipped size of the entry and each chunk — what the build measured + reported. */
+  readonly sizes: readonly ArtifactSize[];
 }
 
 /** The default entry file name when none is given. */
@@ -149,6 +190,9 @@ export async function buildClient(
   options: BuildClientOptions,
   deps: BuildClientDeps,
 ): Promise<BuildClientResult> {
+  // Narration is opt-in: a no-op unless the caller (the CLI) wires a report sink.
+  const report: BuildReport = options.report ?? (() => {});
+
   const islands = await deps.listIslands(options.islandsDir);
 
   // The matched pair (ADR 0008): the `preact` dialect aliases only the CLIENT
@@ -211,6 +255,18 @@ export async function buildClient(
 
   await deps.write(entryPath, entryArtifact.contents);
 
+  // Measure the gzipped size of each artifact AS IT SHIPS (gzip is the
+  // network-meaningful unit; raw bytes mislead). The entry is measured by its
+  // configured name, not the bundler's `entry.js`, so the report names the file
+  // the browser actually fetches.
+  const sizes: ArtifactSize[] = [
+    {
+      fileName: options.entryName ?? DEFAULT_ENTRY,
+      kind: "entry",
+      gzipBytes: deps.gzipSize(entryArtifact.contents),
+    },
+  ];
+
   const chunks: string[] = [];
   const newChunkNames: string[] = [];
 
@@ -222,6 +278,12 @@ export async function buildClient(
     const chunkPath = join(options.outDir, artifact.fileName);
 
     await deps.write(chunkPath, artifact.contents);
+
+    sizes.push({
+      fileName: artifact.fileName,
+      kind: "chunk",
+      gzipBytes: deps.gzipSize(artifact.contents),
+    });
 
     chunks.push(chunkPath);
   }
@@ -246,5 +308,60 @@ export async function buildClient(
   // will retain. Written last, after the dir is consistent.
   await deps.write(markerPath, JSON.stringify(newChunkNames));
 
-  return { entry: entryPath, chunks, islands };
+  // Narrate what the build decided (ADR 0011): the dialect/mode, then each
+  // artifact's gzipped size, with the entry's budget verdict inline. A no-op
+  // `report` by default; the CLI wires `console.log`.
+  narrateSizes(sizes, options, report);
+
+  // Enforce the entry budget: a blown size promise FAILS the build (the ~10 KB
+  // island bundle creeping back toward 118 KB must never ship silently). Measured
+  // on the ENTRY only — the chunks are lazily fetched, so they are reported but
+  // not budgeted (a per-chunk budget is future work; the entry is the cliff).
+  const entrySize = sizes[0] as ArtifactSize;
+
+  if (options.budgetBytes !== undefined && entrySize.gzipBytes > options.budgetBytes) {
+    throw new AssetsError(
+      "ASSETS_BUDGET_EXCEEDED",
+      `client entry "${entrySize.fileName}" is ${kb(entrySize.gzipBytes)} gzip, over the ` +
+        `${kb(options.budgetBytes)} budget — split a heavy island (hydrate: "visible"), drop a ` +
+        `dependency, or build the preact dialect`,
+      {
+        fileName: entrySize.fileName,
+        gzipBytes: entrySize.gzipBytes,
+        budgetBytes: options.budgetBytes,
+      },
+    );
+  }
+
+  return { entry: entryPath, chunks, islands, sizes };
+}
+
+/** Human-readable KB to one decimal place — the size unit the report speaks. */
+function kb(bytes: number): string {
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+/** Narrate the dialect/mode and each artifact's gzip size, flagging an over-budget entry. */
+function narrateSizes(
+  sizes: readonly ArtifactSize[],
+  options: BuildClientOptions,
+  report: BuildReport,
+): void {
+  report(`keel: client (${options.dialect}, ${options.mode}) — ${sizes.length} artifact(s):`);
+
+  for (const size of sizes) {
+    const over =
+      size.kind === "entry" &&
+      options.budgetBytes !== undefined &&
+      size.gzipBytes > options.budgetBytes;
+
+    const budgetNote =
+      size.kind === "entry" && options.budgetBytes !== undefined
+        ? ` (budget ${kb(options.budgetBytes)}${over ? " — OVER" : ""})`
+        : "";
+
+    report(
+      `  ${size.kind === "entry" ? "entry" : "chunk"} ${size.fileName}: ${kb(size.gzipBytes)} gzip${budgetNote}`,
+    );
+  }
 }
