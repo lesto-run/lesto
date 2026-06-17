@@ -18,7 +18,7 @@ import type { DateInput } from "./dates";
  * Only `title` and `link` are required of the caller. The fields a valid feed
  * cannot omit — RSS `<description>`, Atom `<id>` and `<updated>` — are
  * synthesized from what is present (description ← title, id ← link, updated ←
- * the newest item or now) when not supplied, so every emitted document is spec-valid.
+ * the first dated item or now) when not supplied, so every emitted document is spec-valid.
  */
 export interface FeedMeta {
   readonly title: string;

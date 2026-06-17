@@ -33,8 +33,9 @@ function renderEntry(item: FeedItem, feedUpdated: string): string {
 
 /**
  * Resolve the feed's `<updated>` time: the caller's value if given, else the
- * newest entry's `published`, else now. The result is an RFC 3339 string,
- * reused as the fallback `<updated>` for any entry lacking its own date.
+ * first dated entry's `published` (feeds are conventionally listed newest-first,
+ * so that is the latest), else now. The result is an RFC 3339 string, reused as
+ * the fallback `<updated>` for any entry lacking its own date.
  */
 function resolveUpdated(meta: FeedMeta, items: FeedItem[]): string {
   if (meta.updated !== undefined) return rfc3339(meta.updated);
@@ -52,7 +53,7 @@ function resolveUpdated(meta: FeedMeta, items: FeedItem[]): string {
  * Atom 1.0 requires the feed to carry `<id>`, `<title>`, and `<updated>`, and
  * every entry to carry the same three. Titles and links come from the caller;
  * the feed `<id>` is synthesized from its link, `<updated>` from the caller's
- * date (or the newest entry's, or now), and each entry's missing `<id>` /
+ * date (or the first dated entry's, or now), and each entry's missing `<id>` /
  * `<updated>` from its link and the feed's update time — so the document is
  * always spec-valid. Dates accept a `Date` and render as RFC 3339; a
  * pre-formatted string is passed through. All text is XML-escaped, in both
