@@ -56,6 +56,27 @@ const throwingDispatch =
     throw error;
   };
 
+/** A dispatcher returning a buffered HTML 200 — the edge ETag/304 path's input. */
+const htmlDispatch =
+  (body: string, headers: Record<string, string> = {}): EdgeDispatch =>
+  () =>
+    Promise.resolve({ status: 200, headers: { "content-type": "text/html", ...headers }, body });
+
+/** A dispatcher that never settles — only a timeout (or disconnect) ends it. */
+const stalledDispatch: EdgeDispatch = () => new Promise(() => undefined);
+
+/**
+ * A dispatcher returning a REJECTED promise — an async rejection, not a sync
+ * throw, so it flows through `raceTimeout` rather than being caught before it.
+ */
+function rejectingDispatch(error: unknown): EdgeDispatch {
+  async function dispatch(): Promise<never> {
+    throw error;
+  }
+
+  return dispatch;
+}
+
 /** One recorded edge span — what it was minted with and how it was finished. */
 interface RecordedSpan {
   name: string;
@@ -690,6 +711,312 @@ describe("toFetchHandler — hardening (edge parity)", () => {
     })(new Request("https://example.com/"));
 
     expect(response.headers.get("content-security-policy")).toBe("default-src 'self'");
+  });
+});
+
+describe("toFetchHandler — Set-Cookie multimap", () => {
+  it("emits one Set-Cookie line per value, never a comma-joined line", async () => {
+    const { dispatch } = recordingDispatch({
+      status: 200,
+      body: "ok",
+      headers: { "content-type": "text/plain" },
+    });
+
+    // A dispatcher that returns TWO cookies as a list — a session and a CSRF token.
+    const twoCookies: EdgeDispatch = (method, path, options) => {
+      void dispatch(method, path, options);
+
+      return Promise.resolve({
+        status: 200,
+        headers: {
+          "content-type": "text/plain",
+          "set-cookie": ["session=s; HttpOnly", "csrf=c; Secure"],
+        },
+        body: "ok",
+      });
+    };
+
+    const response = await toFetchHandler(twoCookies)(new Request("https://example.com/"));
+
+    // Workers' Headers.getSetCookie() exposes each line separately — both cookies
+    // reached the browser as two lines, not one mangled comma-joined line.
+    expect(response.headers.getSetCookie()).toEqual(["session=s; HttpOnly", "csrf=c; Secure"]);
+  });
+});
+
+describe("toFetchHandler — edge ETag / 304", () => {
+  it("attaches a SHA-256 ETag to a buffered HTML 200", async () => {
+    const response = await toFetchHandler(htmlDispatch("<h1>Home</h1>"), {
+      logRequest: () => undefined,
+    })(new Request("https://example.com/"));
+
+    const etag = response.headers.get("etag");
+
+    expect(etag).toMatch(/^"[0-9a-f]{32}"$/);
+  });
+
+  it("answers 304 when If-None-Match matches the computed ETag", async () => {
+    const handler = toFetchHandler(htmlDispatch("<h1>Home</h1>"), { logRequest: () => undefined });
+
+    // First request learns the ETag...
+    const first = await handler(new Request("https://example.com/"));
+    const etag = first.headers.get("etag") ?? "";
+
+    // ...a conditional GET with that ETag gets a bodiless 304.
+    const second = await handler(
+      new Request("https://example.com/", { headers: { "if-none-match": etag } }),
+    );
+
+    expect(second.status).toBe(304);
+    expect(await second.text()).toBe("");
+    // The 304 still carries the validator.
+    expect(second.headers.get("etag")).toBe(etag);
+  });
+
+  it("matches a weak validator and a wildcard If-None-Match", async () => {
+    const handler = toFetchHandler(htmlDispatch("<h1>Home</h1>"), { logRequest: () => undefined });
+
+    const first = await handler(new Request("https://example.com/"));
+    const etag = first.headers.get("etag") ?? "";
+
+    // `W/"..."` compares equal to the strong tag.
+    const weak = await handler(
+      new Request("https://example.com/", { headers: { "if-none-match": `W/${etag}` } }),
+    );
+    expect(weak.status).toBe(304);
+
+    // `*` matches any current representation.
+    const star = await handler(
+      new Request("https://example.com/", { headers: { "if-none-match": "*" } }),
+    );
+    expect(star.status).toBe(304);
+  });
+
+  it("does not 304 when If-None-Match is absent or does not match", async () => {
+    const handler = toFetchHandler(htmlDispatch("<h1>Home</h1>"), { logRequest: () => undefined });
+
+    const stale = await handler(
+      new Request("https://example.com/", { headers: { "if-none-match": '"other"' } }),
+    );
+
+    expect(stale.status).toBe(200);
+    expect(await stale.text()).toBe("<h1>Home</h1>");
+  });
+
+  it("does not tag a non-HTML, a non-200, an app-tagged, or a streamed response", async () => {
+    const log = { logRequest: () => undefined };
+
+    // Non-HTML.
+    const json = await toFetchHandler(
+      () =>
+        Promise.resolve({
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      log,
+    )(new Request("https://example.com/"));
+    expect(json.headers.get("etag")).toBeNull();
+
+    // Non-200.
+    const created = await toFetchHandler(
+      () => Promise.resolve({ status: 201, headers: { "content-type": "text/html" }, body: "x" }),
+      log,
+    )(new Request("https://example.com/"));
+    expect(created.headers.get("etag")).toBeNull();
+
+    // App already set its own ETag.
+    const owned = await toFetchHandler(
+      htmlDispatch("x", { etag: '"app"' }),
+      log,
+    )(new Request("https://example.com/"));
+    expect(owned.headers.get("etag")).toBe('"app"');
+
+    // Streamed body — cannot be hashed without draining it.
+    const streamed = await toFetchHandler(
+      () =>
+        Promise.resolve({
+          status: 200,
+          headers: { "content-type": "text/html" },
+          body: new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(new TextEncoder().encode("<h1>s</h1>"));
+              c.close();
+            },
+          }),
+        }),
+      log,
+    )(new Request("https://example.com/"));
+    expect(streamed.headers.get("etag")).toBeNull();
+  });
+
+  it("recognizes HTML from a (degenerate) list-valued content-type", async () => {
+    const response = await toFetchHandler(
+      () =>
+        Promise.resolve({
+          status: 200,
+          headers: { "content-type": ["text/html"] },
+          body: "<h1>List</h1>",
+        }),
+      { logRequest: () => undefined },
+    )(new Request("https://example.com/"));
+
+    expect(response.headers.get("etag")).toMatch(/^"[0-9a-f]{32}"$/);
+  });
+
+  it("tags a Uint8Array HTML body too", async () => {
+    const bytes = new TextEncoder().encode("<h1>bytes</h1>");
+
+    const response = await toFetchHandler(
+      () => Promise.resolve({ status: 200, headers: { "content-type": "text/html" }, body: bytes }),
+      { logRequest: () => undefined },
+    )(new Request("https://example.com/"));
+
+    expect(response.headers.get("etag")).toMatch(/^"[0-9a-f]{32}"$/);
+  });
+
+  it("skips ETag entirely when disabled", async () => {
+    const response = await toFetchHandler(htmlDispatch("<h1>Home</h1>"), {
+      etag: false,
+      logRequest: () => undefined,
+    })(new Request("https://example.com/"));
+
+    expect(response.headers.get("etag")).toBeNull();
+  });
+});
+
+describe("toFetchHandler — timeoutMs", () => {
+  it("answers a coded 503 when the dispatch overruns the deadline", async () => {
+    const response = await toFetchHandler(stalledDispatch, {
+      timeoutMs: 5,
+      logRequest: () => undefined,
+      logError: () => undefined,
+    })(new Request("https://example.com/slow"));
+
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe("Service Unavailable");
+  });
+
+  it("aborts the request signal on overrun so a cooperative handler stops", async () => {
+    let signal: AbortSignal | undefined;
+
+    const captureSignal: EdgeDispatch = () => {
+      signal = currentContext()?.signal;
+
+      return new Promise(() => undefined);
+    };
+
+    await toFetchHandler(captureSignal, {
+      timeoutMs: 5,
+      logRequest: () => undefined,
+      logError: () => undefined,
+    })(new Request("https://example.com/slow"));
+
+    expect(signal).toBeDefined();
+    expect(signal?.aborted).toBe(true);
+    expect((signal?.reason as CloudflareError | undefined)?.code).toBe(
+      "CLOUDFLARE_DISPATCH_TIMEOUT",
+    );
+  });
+
+  it("answers normally when the dispatch finishes within the deadline", async () => {
+    const { dispatch } = recordingDispatch({ status: 200, body: "fast" });
+
+    const response = await toFetchHandler(dispatch, {
+      timeoutMs: 1000,
+      logRequest: () => undefined,
+    })(new Request("https://example.com/"));
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("fast");
+  });
+
+  it("propagates a dispatch rejection that loses the race to the error boundary", async () => {
+    // The dispatch's promise REJECTS before the (generous) deadline — the race's
+    // reject arm forwards it, and the error boundary maps it to a coded status
+    // (here 413). An async rejection, NOT a sync throw, so it flows through the race.
+    const response = await toFetchHandler(
+      rejectingDispatch(new KeelError("RUNTIME_BODY_TOO_LARGE", "too big")),
+      {
+        timeoutMs: 1000,
+        logRequest: () => undefined,
+        logError: () => undefined,
+      },
+    )(new Request("https://example.com/", { method: "POST" }));
+
+    expect(response.status).toBe(413);
+  });
+});
+
+describe("toFetchHandler — request cancellation", () => {
+  it("fires the context signal when the client disconnects", async () => {
+    let signal: AbortSignal | undefined;
+
+    const dispatch: EdgeDispatch = () => {
+      signal = currentContext()?.signal;
+
+      return Promise.resolve({ status: 200, headers: {}, body: "ok" });
+    };
+
+    // A pre-aborted request signal (the client already hung up) is adopted at once.
+    const aborted = AbortSignal.abort(new Error("client gone"));
+
+    await toFetchHandler(dispatch, { logRequest: () => undefined })(
+      new Request("https://example.com/", { signal: aborted }),
+    );
+
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("forwards a client disconnect that arrives mid-request onto the context signal", async () => {
+    const controller = new AbortController();
+
+    let aborted = false;
+
+    const dispatch: EdgeDispatch = () => {
+      currentContext()?.signal?.addEventListener("abort", () => {
+        aborted = true;
+      });
+
+      // Disconnect AFTER the handler started reading the signal.
+      controller.abort(new Error("client left"));
+
+      return Promise.resolve({ status: 200, headers: {}, body: "ok" });
+    };
+
+    await toFetchHandler(dispatch, { logRequest: () => undefined })(
+      new Request("https://example.com/", { signal: controller.signal }),
+    );
+
+    expect(aborted).toBe(true);
+  });
+});
+
+describe("toFetchHandler — default access log", () => {
+  it("emits one structured JSON line mirroring the node shape", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const { dispatch } = recordingDispatch({ status: 200, body: "ok" });
+
+    await toFetchHandler(dispatch, { newRequestId: () => "edge-log-1", now: () => 0 })(
+      new Request("https://example.com/mls/saved"),
+    );
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+
+    const line = JSON.parse((logSpy.mock.calls[0]?.[0] as string) ?? "{}");
+
+    expect(line).toEqual({
+      level: "info",
+      event: "http.access",
+      method: "GET",
+      path: "/mls/saved",
+      status: 200,
+      ms: 0,
+      request_id: "edge-log-1",
+    });
+
+    logSpy.mockRestore();
   });
 });
 

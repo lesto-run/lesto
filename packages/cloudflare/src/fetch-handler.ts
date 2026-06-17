@@ -32,6 +32,8 @@ import {
 } from "@keel/web";
 import type { AnyKeelResponse, KeelBody, RequestContext, RequestContextSpan } from "@keel/web";
 
+import { CloudflareError } from "./errors";
+
 /** The per-request inputs the dispatcher reads, the same shape the node server passes. */
 export interface EdgeRequestOptions {
   readonly query: Record<string, string>;
@@ -140,9 +142,27 @@ export interface EdgeExecutionContext {
 /** The largest request body the edge reads before refusing it with 413. Defaults to 1 MiB (node parity). */
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
-/** The default edge access log: one line per request, method · path · status · latency · id. */
+/**
+ * The default edge access log: one structured JSON line per request.
+ *
+ * Mirrors the node server's `defaultLogRequest` shape exactly (`level`, `event`,
+ * `method`, `path`, `status`, `ms`, `request_id`) so one log pipeline parses both
+ * tiers identically — a queryable object, not a string to scrape. A custom
+ * `logRequest` sink overrides this wholesale; the {@link EdgeAccessEntry} it
+ * receives is unchanged.
+ */
 function defaultEdgeLogRequest(entry: EdgeAccessEntry): void {
-  console.log(`${entry.method} ${entry.path} ${entry.status} ${entry.ms}ms ${entry.requestId}`);
+  console.log(
+    JSON.stringify({
+      level: "info",
+      event: "http.access",
+      method: entry.method,
+      path: entry.path,
+      status: entry.status,
+      ms: entry.ms,
+      request_id: entry.requestId,
+    }),
+  );
 }
 
 /**
@@ -209,6 +229,29 @@ export interface EdgeOptions {
    * `false` to send none, or a map to replace the defaults wholesale.
    */
   readonly securityHeaders?: false | Record<string, string>;
+
+  /**
+   * Conditional-GET ETag/304 for buffered dynamic edge responses.
+   *
+   * On by default: a buffered (string/bytes) HTML 200 without its own `ETag` is
+   * hashed (async Web-Crypto SHA-256), and a request whose `If-None-Match` still
+   * matches is answered with a bodiless 304 — the edge twin of the node server's
+   * `etag`, finally mirrored now that a Worker can hash asynchronously. A streamed
+   * body cannot be tagged (hashing drains it) and is sent untagged, exactly as on
+   * node. Pass `false` to disable.
+   */
+  readonly etag?: false;
+
+  /**
+   * The longest a single dispatch may run before the edge answers 503 and frees
+   * the request. The platform enforces a coarse CPU ceiling; this is a
+   * cooperative app-level cap (the edge twin of the node server's
+   * `handlerTimeoutMs`) so a slow upstream answers a clean coded 503 rather than
+   * letting the isolate be killed mid-flight. On overrun the request's
+   * `context.signal` is aborted so a cooperative handler stops. Off by default
+   * (no timer, no overhead).
+   */
+  readonly timeoutMs?: number;
 
   /** A Content-Security-Policy, off by default (see the node server's `csp`). */
   readonly csp?: { readonly policy: string; readonly mode: "enforce" | "report-only" };
@@ -344,24 +387,199 @@ function toBodyInit(body: KeelBody): BodyInit {
 }
 
 /**
+ * Build a Web `Headers` from a Keel header map, emitting one line per value.
+ *
+ * A `KeelResponse` header map carries a single string OR a list of values, and
+ * the list is load-bearing for `Set-Cookie`: per RFC 6265 each cookie is its own
+ * `Set-Cookie` line and they cannot be comma-joined (a cookie's `Expires` date
+ * contains a comma). Workers' `Headers` models this exactly — `append` adds a
+ * line without replacing — so a list value is appended element by element while a
+ * single value is set once. A naive `new Response(body, { headers: map })` cannot
+ * express a list at all (its init type is `Record<string, string>`), which is
+ * precisely why the seam builds `Headers` itself: two cookies reach the browser
+ * as two lines, not one mangled line.
+ */
+function toHeaders(map: Record<string, string | string[]>): Headers {
+  const headers = new Headers();
+
+  for (const [name, value] of Object.entries(map)) {
+    if (Array.isArray(value)) {
+      for (const line of value) headers.append(name, line);
+    } else {
+      headers.set(name, value);
+    }
+  }
+
+  return headers;
+}
+
+/** Lowercase-hex a digest's bytes — the textual form an ETag wraps in quotes. */
+function toHex(bytes: ArrayBuffer): string {
+  return Array.from(new Uint8Array(bytes))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Compute a strong ETag for a buffered edge body via async Web-Crypto SHA-256.
+ *
+ * The node tier hashes over `node:crypto` (synchronous SHA-1); a Worker has no
+ * `node:crypto`, so the edge uses the platform's `crypto.subtle.digest` — which
+ * is async, the reason this could not be mirrored until now. SHA-256 truncated to
+ * 32 hex chars (128 bits) is ample to distinguish bodies; this is a cache key for
+ * change detection, never a security boundary. A `string` body is UTF-8 encoded
+ * first; raw bytes are hashed as-is.
+ */
+async function edgeEtag(body: string | Uint8Array): Promise<string> {
+  const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body;
+
+  const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
+
+  return `"${toHex(digest).slice(0, 32)}"`;
+}
+
+/** Drop a leading `W/` so weak and strong forms of one tag compare equal. */
+function stripWeak(etag: string): string {
+  return etag.startsWith("W/") ? etag.slice(2) : etag;
+}
+
+/**
+ * Whether a request's `If-None-Match` matches the response's ETag.
+ *
+ * The edge twin of the node `etagMatches` (RFC 7232's weak compare): the list is
+ * comma-split so a client offering several cached tags still matches, `W/"x"` and
+ * `"x"` compare equal (a 304 only promises semantic equivalence), and a literal
+ * `*` matches any current representation. Self-contained because the edge package
+ * does not depend on `@keel/runtime` where the node copy lives.
+ */
+function ifNoneMatchMatches(ifNoneMatch: string | null, etag: string): boolean {
+  if (ifNoneMatch === null) return false;
+
+  const wanted = stripWeak(etag);
+
+  return ifNoneMatch
+    .split(",")
+    .map((candidate) => candidate.trim())
+    .some((candidate) => candidate === "*" || stripWeak(candidate) === wanted);
+}
+
+/** True iff a header map declares an HTML content-type (any header casing). */
+function declaresHtml(headers: Record<string, string | string[]>): boolean {
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() !== "content-type") continue;
+
+    const text = Array.isArray(value) ? value.join(", ") : value;
+
+    if (text.toLowerCase().includes("text/html")) return true;
+  }
+
+  return false;
+}
+
+/** Whether a header map already carries a header named `name` (any casing). */
+function hasHeader(headers: Record<string, string | string[]>, name: string): boolean {
+  const lower = name.toLowerCase();
+
+  return Object.keys(headers).some((key) => key.toLowerCase() === lower);
+}
+
+/**
+ * Attach a conditional-GET ETag to a buffered, cacheable HTML edge response.
+ *
+ * The edge half of the node server's `withEtag`, gated to exactly the same shape:
+ * a 200 with a buffered (string/bytes) HTML body, where the app has not set its
+ * own `ETag`. A streamed body cannot be tagged (hashing would drain it), a
+ * non-200 carries no cacheable entity, and a non-HTML payload owns its own
+ * caching — each passes through untagged. Returns the (possibly tagged) response
+ * and the tag to compare `If-None-Match` against, or `undefined` when none was
+ * added. Async because {@link edgeEtag} is.
+ */
+async function withEdgeEtag(
+  response: AnyKeelResponse,
+): Promise<{ response: AnyKeelResponse; etag: string | undefined }> {
+  if (response.status !== 200) return { response, etag: undefined };
+
+  if (hasHeader(response.headers, "etag")) return { response, etag: undefined };
+
+  if (!declaresHtml(response.headers)) return { response, etag: undefined };
+
+  const { body } = response;
+
+  // Only a fully-buffered body can be hashed; a stream would have to be drained.
+  if (typeof body !== "string" && !(body instanceof Uint8Array)) {
+    return { response, etag: undefined };
+  }
+
+  const etag = await edgeEtag(body);
+
+  return { response: { ...response, headers: { ...response.headers, ETag: etag } }, etag };
+}
+
+/**
+ * Race a dispatch against a deadline, refusing with a coded 503 on overrun.
+ *
+ * A Worker has a platform CPU ceiling, but a cooperative `timeoutMs` lets an app
+ * cap a slow upstream itself and answer a clean 503 rather than letting the
+ * isolate be killed — the edge twin of the node server's `handlerTimeoutMs`. On
+ * overrun we throw a coded {@link CloudflareError} (mapped to 503 by
+ * `statusForError`), and the request's `context.signal` is aborted so a
+ * cooperative handler stops working for a response no one will read. The timer is
+ * cleared whichever way the race settles, so a fast dispatch leaves nothing
+ * pending.
+ */
+function raceTimeout(
+  work: Promise<AnyKeelResponse>,
+  timeoutMs: number,
+  onTimeout: () => void,
+): Promise<AnyKeelResponse> {
+  return new Promise<AnyKeelResponse>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      onTimeout();
+
+      reject(
+        new CloudflareError(
+          "CLOUDFLARE_DISPATCH_TIMEOUT",
+          "Edge dispatch exceeded its time limit.",
+          { timeoutMs },
+        ),
+      );
+    }, timeoutMs);
+
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+
+        return resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+
+        return reject(error);
+      },
+    );
+  });
+}
+
+/**
  * Build the per-request context for the edge.
  *
  * Mirrors the node server's context: a fresh id, the client identity, and an
  * abort signal. On Cloudflare the trustworthy client IP is `cf-connecting-ip`
  * (set by the edge, not forgeable by the client), the protocol comes from the
- * request URL, and `request.signal` already fires when the client disconnects —
- * so streaming/long work reads `currentContext()?.signal` and cancels for free.
+ * request URL, and the `signal` fires when the client disconnects OR (when a
+ * `timeoutMs` is configured) the dispatch overruns — so streaming/long work
+ * reads `currentContext()?.signal` and cancels for free.
  */
 function edgeContext(
-  request: Request,
   url: URL,
   headers: Record<string, string>,
   requestId: string,
+  signal: AbortSignal,
 ): RequestContext {
   const context: RequestContext = {
     requestId,
     protocol: url.protocol === "https:" ? "https" : "http",
-    signal: request.signal,
+    signal,
   };
 
   const ip = headers["cf-connecting-ip"];
@@ -371,6 +589,41 @@ function edgeContext(
   }
 
   return context;
+}
+
+/**
+ * A per-request abort signal that fires on EITHER the client disconnecting or the
+ * dispatch deadline (when one is set) — the edge twin of the node server's
+ * `requestCancellation`.
+ *
+ * `request.signal` already aborts when the client hangs up, but it is read-only:
+ * we cannot also abort it on a timeout. So we mint our own controller, forward the
+ * client's disconnect onto it, and return an `abortTimeout` the deadline calls —
+ * both feed the SAME signal, so a cooperative handler stops on whichever happens.
+ * When the request is already aborted (a disconnect that beat us here), we adopt
+ * the reason immediately so the signal is correct from the first read.
+ */
+function edgeCancellation(request: Request): {
+  signal: AbortSignal;
+  abortTimeout: () => void;
+} {
+  const controller = new AbortController();
+
+  const onClientAbort = (): void => controller.abort(request.signal.reason);
+
+  if (request.signal.aborted) {
+    onClientAbort();
+  } else {
+    request.signal.addEventListener("abort", onClientAbort, { once: true });
+  }
+
+  const abortTimeout = (): void => {
+    controller.abort(
+      new CloudflareError("CLOUDFLARE_DISPATCH_TIMEOUT", "Edge dispatch exceeded its time limit."),
+    );
+  };
+
+  return { signal: controller.signal, abortTimeout };
 }
 
 /**
@@ -389,6 +642,8 @@ async function dispatchHardened(
   dispatch: EdgeDispatch,
   logError: (message: string, error: unknown) => void,
   maxBodyBytes: number,
+  timeoutMs: number | undefined,
+  abortTimeout: () => void,
 ): Promise<AnyKeelResponse> {
   const decoded = await decodeBody(request, headers["content-type"], maxBodyBytes);
 
@@ -401,11 +656,17 @@ async function dispatchHardened(
   }
 
   try {
-    return await dispatch(request.method, url.pathname, {
+    const work = dispatch(request.method, url.pathname, {
       query: queryFrom(url.searchParams),
       headers,
       body: decoded.body,
     });
+
+    // A configured `timeoutMs` races the dispatch: on overrun the race rejects
+    // with the coded timeout (mapped to 503 below) AND aborts `context.signal` via
+    // `abortTimeout`, so a cooperative handler stops. Absent, the dispatch is
+    // awaited directly — no timer, no overhead.
+    return await (timeoutMs === undefined ? work : raceTimeout(work, timeoutMs, abortTimeout));
   } catch (error) {
     const status = statusForError(error);
 
@@ -463,6 +724,10 @@ export function toFetchHandler(
 
   const flush = options.flush;
 
+  const timeoutMs = options.timeoutMs;
+
+  const etagEnabled = options.etag !== false;
+
   return async (request, ctx) => {
     const start = now();
 
@@ -486,7 +751,11 @@ export function toFetchHandler(
 
     const requestId = newRequestId();
 
-    const context = edgeContext(request, url, headers, requestId);
+    // A per-request signal that fires on client disconnect OR (when configured) a
+    // dispatch overrun — both feed the one signal the context publishes.
+    const cancellation = edgeCancellation(request);
+
+    const context = edgeContext(url, headers, requestId, cancellation.signal);
 
     // Publish the span on the request context so a seam fired DURING the request
     // (a `@keel/db` query, an inline `@keel/queue` job) parents its child span on
@@ -506,16 +775,31 @@ export function toFetchHandler(
           dispatch,
           logError,
           maxBodyBytes,
+          timeoutMs,
+          cancellation.abortTimeout,
         );
 
-        const hardened = withSecurityHeaders(response, securityHeaders);
+        // Tag a cacheable HTML response (async SHA-256), then harden it. A
+        // conditional GET whose validator still matches is answered with a
+        // bodiless 304 — the client already holds the bytes. The tag is computed
+        // on the body BEFORE hardening adds security headers, exactly as the node
+        // tier does. Disabled responses (and non-HTML/streamed/non-200) skip it.
+        const tagged = etagEnabled ? await withEdgeEtag(response) : { response, etag: undefined };
+
+        const hardened = withSecurityHeaders(tagged.response, securityHeaders);
+
+        const notModified =
+          tagged.etag !== undefined &&
+          ifNoneMatchMatches(request.headers.get("if-none-match"), tagged.etag);
+
+        const status = notModified ? 304 : hardened.status;
 
         // One access line per served request — the same shape the node server logs,
         // stitched to the request id so an edge log and any context-tagged work line up.
         logRequest({
           method: request.method,
           path: url.pathname,
-          status: hardened.status,
+          status,
           ms: now() - start,
           requestId,
         });
@@ -523,16 +807,23 @@ export function toFetchHandler(
         if (span !== undefined) {
           span.setAttribute("http.method", request.method);
           span.setAttribute("http.path", url.pathname);
-          span.setAttribute("http.status_code", hardened.status);
+          span.setAttribute("http.status_code", status);
           span.setAttribute("keel.request_id", requestId);
           // A 5xx is the server's failure; everything else was answered as designed.
-          span.setStatus(hardened.status >= 500 ? "error" : "ok");
+          span.setStatus(status >= 500 ? "error" : "ok");
           span.end();
+        }
+
+        // A 304 carries the validators but no body; a normal response carries its
+        // body. Headers go out through `toHeaders` so a multi-valued `Set-Cookie`
+        // becomes one line per cookie (never a comma-joined line a browser drops).
+        if (notModified) {
+          return new Response(null, { status: 304, headers: toHeaders(hardened.headers) });
         }
 
         return new Response(toBodyInit(hardened.body), {
           status: hardened.status,
-          headers: hardened.headers,
+          headers: toHeaders(hardened.headers),
         });
       } finally {
         // Drain the spans this request produced AFTER the response is sent. The
