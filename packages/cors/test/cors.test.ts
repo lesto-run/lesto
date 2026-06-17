@@ -57,14 +57,18 @@ describe("corsHeaders — single string origin", () => {
     });
   });
 
-  it("returns no headers when the origin does not match", () => {
-    expect(corsHeaders("https://evil.example.com", { origin: "https://app.example.com" })).toEqual(
-      {},
-    );
+  it("denies a non-matching origin but still varies on Origin (cache-safe deny)", () => {
+    // The deny path must carry `Vary: Origin` under a non-wildcard policy, or a
+    // shared cache could replay this empty deny over an allowed origin's hit.
+    expect(corsHeaders("https://evil.example.com", { origin: "https://app.example.com" })).toEqual({
+      Vary: "Origin",
+    });
   });
 
-  it("returns no headers when the request has no origin", () => {
-    expect(corsHeaders(undefined, { origin: "https://app.example.com" })).toEqual({});
+  it("varies on Origin even when the request carries no origin (non-wildcard policy)", () => {
+    expect(corsHeaders(undefined, { origin: "https://app.example.com" })).toEqual({
+      Vary: "Origin",
+    });
   });
 });
 
@@ -79,12 +83,12 @@ describe("corsHeaders — array origin allow-list", () => {
     });
   });
 
-  it("returns no headers for a non-member origin", () => {
-    expect(corsHeaders("https://c.example.com", { origin: allow })).toEqual({});
+  it("denies a non-member origin but still varies on Origin", () => {
+    expect(corsHeaders("https://c.example.com", { origin: allow })).toEqual({ Vary: "Origin" });
   });
 
-  it("returns no headers when the request has no origin", () => {
-    expect(corsHeaders(undefined, { origin: allow })).toEqual({});
+  it("varies on Origin when the request has no origin (allow-list policy)", () => {
+    expect(corsHeaders(undefined, { origin: allow })).toEqual({ Vary: "Origin" });
   });
 
   it("echoes a member origin WITH credentials, but never a non-member", () => {
@@ -97,9 +101,11 @@ describe("corsHeaders — array origin allow-list", () => {
       Vary: "Origin",
     });
 
-    expect(corsHeaders("https://evil.example.com", { origin: allow, credentials: true })).toEqual(
-      {},
-    );
+    // A non-member earns no Access-Control-* headers (no credentialed reflection)
+    // but still carries Vary: Origin so the deny is not cached cross-origin.
+    expect(corsHeaders("https://evil.example.com", { origin: allow, credentials: true })).toEqual({
+      Vary: "Origin",
+    });
   });
 });
 

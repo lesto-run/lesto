@@ -88,7 +88,11 @@ describe("secureStack — cors + rateLimit (safe to enable)", () => {
   it("answers a CORS preflight (OPTIONS) with 204", async () => {
     const app = await createApp({ db, app: buildApp({ cors: { origin: "*" } }) });
 
-    const response = await app.handle("OPTIONS", "/api/items");
+    // A real CORS preflight carries Access-Control-Request-Method; without it the
+    // bare OPTIONS falls through to the app (auth-security#8 tightened this).
+    const response = await app.handle("OPTIONS", "/api/items", {
+      headers: { origin: "https://example.com", "access-control-request-method": "GET" },
+    });
 
     expect(response.status).toBe(204);
     expect(response.headers["Access-Control-Allow-Origin"]).toBe("*");

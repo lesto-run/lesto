@@ -49,16 +49,15 @@ export interface CorsOptions {
 const DEFAULT_METHODS: readonly string[] = ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE"];
 
 /**
- * The resolved allowed origin, plus whether it was *echoed* (a specific origin)
- * rather than the wildcard. We add `Vary: Origin` only when the response
- * depends on the request's origin — i.e. when we echoed it.
+ * The resolved allowed origin. We add `Vary: Origin` whenever the *policy* is
+ * non-wildcard — i.e. whenever the response could differ by the request's origin
+ * (a member is echoed and allowed, a non-member gets nothing), so a shared cache
+ * keyed on URL alone can never serve one origin's CORS response to another. The
+ * caller derives that from `policy === "*"`, so this carries only the value.
  */
 interface ResolvedOrigin {
   /** The value for `Access-Control-Allow-Origin`, or `undefined` to deny. */
   allowOrigin: string | undefined;
-
-  /** True when `allowOrigin` is the request's own origin, not `"*"`. */
-  echoed: boolean;
 }
 
 /**
@@ -78,24 +77,24 @@ function resolveOrigin(
   // Wildcard policy. Credentials with "*" never reaches here, so a plain "*"
   // is always safe to advertise — it can never be paired with credentials.
   if (policy === "*") {
-    return { allowOrigin: "*", echoed: false };
+    return { allowOrigin: "*" };
   }
 
   // Allow-list policy: echo the request origin only when it is a member.
   if (Array.isArray(policy)) {
     if (requestOrigin !== undefined && policy.includes(requestOrigin)) {
-      return { allowOrigin: requestOrigin, echoed: true };
+      return { allowOrigin: requestOrigin };
     }
 
-    return { allowOrigin: undefined, echoed: false };
+    return { allowOrigin: undefined };
   }
 
   // Single exact-match policy: echo it only when the request matches.
   if (requestOrigin === policy) {
-    return { allowOrigin: policy, echoed: true };
+    return { allowOrigin: policy };
   }
 
-  return { allowOrigin: undefined, echoed: false };
+  return { allowOrigin: undefined };
 }
 
 /**
@@ -123,11 +122,24 @@ export function corsHeaders(
     );
   }
 
-  const { allowOrigin, echoed } = resolveOrigin(requestOrigin, policy);
+  const { allowOrigin } = resolveOrigin(requestOrigin, policy);
 
-  // A denied origin gets no headers at all — the browser will block the read.
+  // Whenever the policy is non-wildcard the response is origin-dependent — a
+  // member gets headers, a non-member gets none — so `Vary: Origin` MUST ride on
+  // BOTH outcomes. Without it on the deny path, a shared cache keyed on URL alone
+  // could store one origin's response and replay it to a different origin: serve
+  // the allowed origin's `Access-Control-Allow-Origin` to an outsider, or cache
+  // the empty deny over an allowed origin's hit. A `"*"` policy is the same for
+  // every origin, so it needs no `Vary`.
+  const variesByOrigin = policy !== "*";
+
+  // A denied origin gets no Access-Control-* headers — the browser blocks the
+  // read — but still carries `Vary: Origin` so the deny is not cached
+  // cross-origin. A denial only ever happens under a non-wildcard policy (the
+  // wildcard always resolves to `"*"` and never denies), so the deny path varies
+  // by origin unconditionally.
   if (allowOrigin === undefined) {
-    return {};
+    return { Vary: "Origin" };
   }
 
   const headers: Record<string, string> = {
@@ -147,8 +159,8 @@ export function corsHeaders(
     headers["Access-Control-Max-Age"] = String(options.maxAge);
   }
 
-  // The response varies by origin only when we reflected a specific one.
-  if (echoed) {
+  // The response varies by origin under any non-wildcard policy.
+  if (variesByOrigin) {
     headers["Vary"] = "Origin";
   }
 

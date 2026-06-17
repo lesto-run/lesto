@@ -29,9 +29,16 @@
  * browser always sends at least one; a request with neither is a non-browser
  * client (curl, server-to-server, a native app) where CSRF — an ambient-cookie
  * attack — does not apply, so a token-authed API can allow them.
+ *
+ * **Strict mode.** By default `same-site` (a sibling subdomain) is allowed: the
+ * baseline trusts the whole registrable domain. An app that wants the tighter
+ * posture — only a request from *exactly our origin* is trusted — sets
+ * {@link OriginCheckOptions.strict}. Then `Sec-Fetch-Site` must be `same-origin`
+ * (not merely `same-site`/`none`), and the `Origin` fallback must equal an
+ * allow-listed origin (the allow-list IS the same-origin set in strict mode).
  */
 
-import type { Middleware } from "@keel/web";
+import type { KeelRequest, Middleware } from "@keel/web";
 
 const FORBIDDEN = 403;
 
@@ -41,10 +48,27 @@ const DEFAULT_GUARDED_METHODS: readonly string[] = ["POST", "PUT", "PATCH", "DEL
 /** The one `Sec-Fetch-Site` value that marks a cross-origin initiator — a CSRF vector. */
 const CROSS_SITE = "cross-site";
 
+/** The `Sec-Fetch-Site` value strict mode demands: exactly our own origin. */
+const SAME_ORIGIN = "same-origin";
+
+/**
+ * The coded `kind` an origin-check refusal reports through {@link OriginCheckOptions.onDenied}.
+ *
+ *   - `origin_cross_site` — the default refusal: a cross-site initiator, an
+ *     un-allowlisted `Origin`, or no evidence at all.
+ *   - `origin_not_same_origin` — a strict-mode refusal: evidence that the
+ *     request is same-*site* (or otherwise not same-origin) when strict mode
+ *     requires same-origin.
+ *
+ * Stable codes so an audit sink branches on the reason, never on prose.
+ */
+export const ORIGIN_DENIED_KIND = "origin_cross_site";
+export const ORIGIN_STRICT_DENIED_KIND = "origin_not_same_origin";
+
 export interface OriginCheckOptions {
   /**
    * The origins a state-changing request may legitimately originate from — the
-   * app's own origin(s), e.g. `["https://app.example.com"]`. Used ONLY for the
+   * app's own origin(s), e.g. `["https://app.example.com"]`. Used for the
    * `Origin`-header fallback when a client sent no `Sec-Fetch-Site`. Compared
    * case-insensitively. Configure it explicitly; it is never derived from the
    * spoofable `Host` header. Omit it to rely on Fetch Metadata alone (which needs
@@ -66,6 +90,31 @@ export interface OriginCheckOptions {
    * clients are legitimate and CSRF does not apply.
    */
   readonly allowNoOrigin?: boolean;
+
+  /**
+   * Require *same-origin*, not merely same-site. Defaults to `false`.
+   *
+   * The default trusts the whole registrable domain: a `Sec-Fetch-Site` of
+   * `same-site` (a sibling subdomain like `cdn.example.com` posting to
+   * `app.example.com`) passes. With `strict: true` only `same-origin` passes,
+   * and the `Origin` fallback must equal an allow-listed origin (so the
+   * allow-list IS the same-origin set). Choose this when subdomains are not part
+   * of the trust boundary — a request from a sibling host you do not fully
+   * control should not be able to drive a state change.
+   */
+  readonly strict?: boolean;
+
+  /**
+   * Optional observability hook fired the moment a request is refused — the
+   * uniform `onDenied(kind, c)` seam shared across `@keel/csrf`, `@keel/authz`,
+   * and `@keel/ratelimit`.
+   *
+   * `kind` is the coded reason ({@link ORIGIN_DENIED_KIND} or
+   * {@link ORIGIN_STRICT_DENIED_KIND}); `c` is the refused {@link KeelRequest}.
+   * Purely observational — the `403` is identical whether or not a hook is wired.
+   * A returned promise is awaited so an async sink is not dropped mid-write.
+   */
+  readonly onDenied?: (kind: string, c: KeelRequest) => void | Promise<void>;
 }
 
 /** The 403 an origin-check failure answers with — the same shape `csrf` uses. */
@@ -78,13 +127,15 @@ function forbidden(): { status: number; headers: Record<string, string>; body: s
  * origin, via `Sec-Fetch-Site` (preferred) then `Origin` (fallback).
  *
  * A safe method flows straight through. A guarded one is allowed only when the
- * evidence says same-origin; everything ambiguous fails closed. It never reads
- * `Content-Type`, so it is immune to the content-type-parsing bypass class.
+ * evidence says same-origin (or same-site, unless {@link OriginCheckOptions.strict}
+ * is set); everything ambiguous fails closed. It never reads `Content-Type`, so
+ * it is immune to the content-type-parsing bypass class.
  */
 export function originCheck(options: OriginCheckOptions = {}): Middleware {
   const guarded = options.methods ?? DEFAULT_GUARDED_METHODS;
   const allowed = new Set((options.allowedOrigins ?? []).map((origin) => origin.toLowerCase()));
   const allowNoOrigin = options.allowNoOrigin ?? false;
+  const strict = options.strict ?? false;
 
   return async (request, next) => {
     // A safe method changes no state; no origin evidence is required to proceed.
@@ -92,23 +143,43 @@ export function originCheck(options: OriginCheckOptions = {}): Middleware {
       return next();
     }
 
+    // Announce a refusal under its coded kind (observation only), then answer.
+    const deny = async (kind: string): Promise<ReturnType<typeof forbidden>> => {
+      if (options.onDenied !== undefined) {
+        await options.onDenied(kind, request);
+      }
+
+      return forbidden();
+    };
+
     const secFetchSite = request.headers["sec-fetch-site"];
 
     if (secFetchSite !== undefined) {
-      // Fetch Metadata is authoritative and needs no allowlist: only a cross-site
-      // initiator is a forgery. Case-insensitive, though the spec lowercases it.
-      return secFetchSite.toLowerCase() === CROSS_SITE ? forbidden() : next();
+      const value = secFetchSite.toLowerCase();
+
+      // Strict: only the exact same origin is trusted — same-site (a sibling
+      // subdomain) is refused, with its own coded reason.
+      if (strict) {
+        return value === SAME_ORIGIN ? next() : deny(ORIGIN_STRICT_DENIED_KIND);
+      }
+
+      // Default: Fetch Metadata is authoritative and needs no allowlist — only a
+      // cross-site initiator is a forgery. Case-insensitive, though the spec
+      // lowercases it.
+      return value === CROSS_SITE ? deny(ORIGIN_DENIED_KIND) : next();
     }
 
     const origin = request.headers["origin"];
 
     if (origin !== undefined) {
       // No Fetch Metadata (an older client): verify the Origin against our own
-      // configured origins. With no allowlist we cannot vouch for it — fail closed.
-      return allowed.has(origin.toLowerCase()) ? next() : forbidden();
+      // configured origins. With no allowlist we cannot vouch for it — fail
+      // closed. The allow-list is the same-origin set, so this path is identical
+      // in strict and non-strict mode; a non-member is refused either way.
+      return allowed.has(origin.toLowerCase()) ? next() : deny(ORIGIN_DENIED_KIND);
     }
 
     // Neither signal: a non-browser client. Fail closed unless the app opted in.
-    return allowNoOrigin ? next() : forbidden();
+    return allowNoOrigin ? next() : deny(ORIGIN_DENIED_KIND);
   };
 }

@@ -29,7 +29,14 @@ describe("cors middleware", () => {
     const middleware = cors({ origin: "https://app.example.com" });
 
     const response = await middleware(
-      requestWith({ method: "OPTIONS", headers: { origin: "https://app.example.com" } }),
+      requestWith({
+        method: "OPTIONS",
+        headers: {
+          origin: "https://app.example.com",
+          // The header that MAKES it a preflight — the method the real request will use.
+          "access-control-request-method": "POST",
+        },
+      }),
       async () => {
         dispatched = true;
         return okResponse;
@@ -41,6 +48,27 @@ describe("cors middleware", () => {
     expect(response.headers["Access-Control-Allow-Origin"]).toBe("https://app.example.com");
     // A preflight never reaches the inner stack.
     expect(dispatched).toBe(false);
+  });
+
+  it("lets a bare OPTIONS (no Access-Control-Request-Method) fall through to the controller", async () => {
+    let dispatched = false;
+
+    const middleware = cors({ origin: "*" });
+
+    // An OPTIONS without the request-method header is NOT a preflight — it is an
+    // ordinary OPTIONS the app may handle itself, so it must reach the stack.
+    const response = await middleware(
+      requestWith({ method: "OPTIONS", headers: { origin: "https://anywhere.example" } }),
+      async () => {
+        dispatched = true;
+        return okResponse;
+      },
+    );
+
+    expect(dispatched).toBe(true);
+    expect(response.status).toBe(200);
+    // The CORS policy is still advertised on the passed-through response.
+    expect(response.headers["Access-Control-Allow-Origin"]).toBe("*");
   });
 
   it("merges the CORS headers under a real response, controller headers winning", async () => {
