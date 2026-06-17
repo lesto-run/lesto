@@ -449,6 +449,43 @@ describe("default clock", () => {
   });
 });
 
+describe("sqlStore.sweep", () => {
+  it("deletes only entries whose deadline has passed, never NULL or future ones", async () => {
+    const db = makeSqlDatabase();
+    await installCacheSchema(db);
+    const store = sqlStore(db);
+
+    // Three entries: a past deadline, a future deadline, and a never-expiring one.
+    await store.set("expired", { value: "x", expiresAt: 100 });
+    await store.set("alive", { value: "y", expiresAt: 10_000 });
+    await store.set("eternal", { value: "z", expiresAt: null });
+
+    // Sweep at now=200: only `expired` (deadline 100 < 200) is removed. `alive`
+    // (10_000) is still in the future; `eternal` (NULL) never sweeps.
+    expect(await store.sweep(200)).toBe(1);
+
+    expect(await store.get("expired")).toBeUndefined();
+    expect(await store.get("alive")).toEqual({ value: "y", expiresAt: 10_000 });
+    expect(await store.get("eternal")).toEqual({ value: "z", expiresAt: null });
+  });
+
+  it("treats a deadline exactly equal to now as still alive (strict <)", async () => {
+    const db = makeSqlDatabase();
+    await installCacheSchema(db);
+    const store = sqlStore(db);
+
+    await store.set("edge", { value: "v", expiresAt: 500 });
+
+    // now == the deadline → NOT swept (only strictly-past entries are dead).
+    expect(await store.sweep(500)).toBe(0);
+    expect(await store.get("edge")).toEqual({ value: "v", expiresAt: 500 });
+
+    // One ms later it is strictly past → swept.
+    expect(await store.sweep(501)).toBe(1);
+    expect(await store.get("edge")).toBeUndefined();
+  });
+});
+
 describe("postgres dialect", () => {
   it("installs expires_at as BIGINT (epoch-ms overflows int4)", async () => {
     let captured = "";

@@ -1,4 +1,4 @@
-import { QueueError } from "./errors";
+import { isPermanentFailure, QueueError } from "./errors";
 import { isoAfter, nowIso, systemClock } from "./time";
 
 import type {
@@ -82,6 +82,25 @@ export async function installSchema(db: SqlDatabase, dialect: Dialect = "sqlite"
     CREATE INDEX IF NOT EXISTS idx_${TABLE}_claim
       ON ${TABLE} (status, queue, run_at);
   `);
+
+  // A PARTIAL index over only the rows the claim subselect ever scans —
+  // `status = 'ready'`. Once a queue retires millions of `done`/`failed` rows
+  // (between `prune` runs), the full `(status, queue, run_at)` index above still
+  // carries every terminal row; this one indexes ONLY the claimable backlog, so
+  // the hot path stays small no matter how much history accumulates.
+  //
+  // Postgres-only by deliberate choice: the constant predicate must MATCH the
+  // claim's `status = 'ready'` for the planner to use a partial index, and only
+  // Postgres is the engine where a large terminal-row tail is an operational
+  // concern (a Postgres deployment is the multi-million-row one). SQLite — the
+  // single-connection dev/edge engine — is well served by the full index above
+  // and skips the extra write-amplification a second index costs.
+  if (dialect === "postgres") {
+    await db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_${TABLE}_ready
+         ON ${TABLE} (queue, priority DESC, run_at) WHERE status = 'ready'`,
+    );
+  }
 }
 
 interface Row {
@@ -183,6 +202,20 @@ export interface WorkOptions {
   readonly concurrency?: number;
   readonly pollMs?: number;
   readonly visibilityMs?: number;
+
+  /**
+   * How often to RECLAIM stalled jobs, in ms. Defaults to `visibilityMs` — a job
+   * cannot be stale until its visibility deadline lapses, so reclaiming roughly
+   * once per window catches every stalled row without scanning on every poll.
+   *
+   * This is the cadence change that makes RECLAIM independent of the poll loop:
+   * `runOnce` no longer reclaims, so a hot 200ms poll loop no longer issues a
+   * RECLAIM `UPDATE` on every empty tick (it ran one wasted full-table `UPDATE`
+   * per poll). The reclaim now rides its own timer here, scanning at the rate
+   * stalls can actually occur. Reclaim faults route through {@link onError} like
+   * any poll fault.
+   */
+  readonly reclaimMs?: number;
 
   /** Injected so tests can drive the poll loop without real time. */
   readonly sleep?: (ms: number) => Promise<void>;
@@ -317,6 +350,43 @@ export class Queue {
     return result.changes;
   }
 
+  /**
+   * Delete terminal jobs that finished more than `olderThanMs` ago. Returns how
+   * many rows were removed.
+   *
+   * Retention, not correctness: a `done`/`failed` row is inert — no worker will
+   * ever claim it again — but it lingers forever as history, and an unbounded
+   * `keel_jobs` table eventually bloats the index every claim scans. `prune`
+   * sheds that history on whatever cadence the caller chooses (the SQL stores'
+   * `sweep` pattern — the framework starts no timer; see {@link retentionRecipe}).
+   *
+   * Only `finished_at IS NOT NULL` rows are eligible, so an in-flight `ready` or
+   * `running` job is NEVER pruned regardless of age — `finished_at` is stamped
+   * only by the terminal transitions. The cutoff is computed from the injected
+   * clock, so it is deterministic under a frozen clock in tests. `olderThanMs`
+   * is clamped at 0: a negative value would prune jobs "finished in the future"
+   * and is meaningless, so it degrades to "everything already finished."
+   */
+  async prune(olderThanMs: number): Promise<number> {
+    const cutoff = isoAfter(this.clock, -Math.max(0, olderThanMs));
+
+    // `finished_at < cutoff` — ISO-8601 sorts chronologically, so a string
+    // comparison is the age comparison (the same trick the claim/reclaim paths
+    // use). The status guard is redundant with `finished_at IS NOT NULL` (only
+    // terminal rows carry it) but states the intent and lets the planner use the
+    // status index.
+    const result = await this.db
+      .prepare(
+        `DELETE FROM ${TABLE}
+          WHERE status IN ('done', 'failed')
+            AND finished_at IS NOT NULL
+            AND finished_at < ?`,
+      )
+      .run([cutoff]);
+
+    return result.changes;
+  }
+
   /** Atomically claim the next eligible row, or `undefined` if the queue is idle. */
   private async claimRow(queue: string, visibilityMs: number): Promise<Row | undefined> {
     const now = nowIso(this.clock);
@@ -354,12 +424,18 @@ export class Queue {
     return row ? hydrate(row) : null;
   }
 
-  /** Claim and run exactly one job. Returns the outcome, or `null` when idle. */
+  /**
+   * Claim and run exactly one job. Returns the outcome, or `null` when idle.
+   *
+   * `runOnce` does NOT reclaim stalled jobs — that is now a separate cadence
+   * (see {@link Queue.work}'s `reclaimMs`), so a hot poll loop no longer issues a
+   * RECLAIM `UPDATE` on every empty tick. A caller driving the queue manually
+   * (or in a test) calls {@link Queue.reclaim} on whatever cadence it wants;
+   * `work()` runs it on its own timer.
+   */
   async runOnce(
     options: { queue?: string; visibilityMs?: number; onJob?: JobObserver } = {},
   ): Promise<RunResult | null> {
-    await this.reclaim();
-
     const row = await this.claimRow(
       options.queue ?? this.defaultQueue,
       options.visibilityMs ?? 30_000,
@@ -456,6 +532,7 @@ export class Queue {
     const queue = options.queue ?? this.defaultQueue;
     const visibilityMs = options.visibilityMs ?? 30_000;
     const pollMs = options.pollMs ?? 200;
+    const reclaimMs = options.reclaimMs ?? visibilityMs;
     const concurrency = options.concurrency ?? 1;
     const sleep = options.sleep ?? defaultSleep;
     const onError = options.onError;
@@ -506,7 +583,41 @@ export class Queue {
       }
     };
 
-    const drained = Promise.all(Array.from({ length: concurrency }, () => loop()));
+    // RECLAIM on its OWN cadence, not per-poll. One reclaim sweep per `reclaimMs`
+    // returns every job whose visibility deadline has lapsed to `ready` for the
+    // worker loops above to re-claim. It shares the poll loop's error boundary —
+    // a transient fault is reported and the cadence keeps going.
+    //
+    // The wait is sliced into `pollMs` chunks rather than one `sleep(reclaimMs)`
+    // so `stop()` stays responsive: `reclaimMs` defaults to `visibilityMs` (30s),
+    // and a single 30s sleep would make `stop()` block on this loop for up to
+    // that long. Re-checking `running` every `pollMs` (and on the next clock tick
+    // for a fired sweep) bounds the drain to one `pollMs`, exactly like the poll
+    // loop above.
+    const reclaimLoop = async (): Promise<void> => {
+      let lastReclaim = this.clock().getTime();
+
+      while (running) {
+        await sleep(pollMs);
+
+        if (!running) break;
+
+        if (this.clock().getTime() - lastReclaim < reclaimMs) continue;
+
+        lastReclaim = this.clock().getTime();
+
+        try {
+          await this.reclaim();
+        } catch (error) {
+          report(error);
+        }
+      }
+    };
+
+    const drained = Promise.all([
+      ...Array.from({ length: concurrency }, () => loop()),
+      reclaimLoop(),
+    ]);
 
     return {
       stop: async (): Promise<void> => {
@@ -593,7 +704,12 @@ export class Queue {
     const now = nowIso(this.clock);
     const message = error instanceof Error ? error.message : String(error);
 
-    if (job.attempts >= job.maxAttempts) {
+    // A handler can mark its failure PERMANENT (see `permanentFailure`): the
+    // work can never succeed on a later attempt — an SSRF-blocked URL, a payload
+    // no handler version can process — so retrying is pure waste. Treat it like
+    // an exhausted job and retire it to `failed` after THIS attempt, regardless
+    // of how many `maxAttempts` remain. A normal failure still retries below.
+    if (job.attempts >= job.maxAttempts || isPermanentFailure(error)) {
       // `?` order: error (last_error), now (finished_at), now (updated_at), id,
       // locked_until (fence).
       await this.db

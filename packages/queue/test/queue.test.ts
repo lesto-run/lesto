@@ -1,7 +1,16 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { cronMatches, installSchema, Queue, QueueError, Scheduler } from "../src/index";
+import {
+  cronMatches,
+  installSchema,
+  isPermanentFailure,
+  permanentFailure,
+  PERMANENT_FAILURE,
+  Queue,
+  QueueError,
+  Scheduler,
+} from "../src/index";
 
 import type { JobEvent, SqlDatabase } from "../src/index";
 
@@ -92,7 +101,7 @@ const waitUntil = async (predicate: () => boolean, timeoutMs = 1000): Promise<vo
 };
 
 describe("installSchema dialect", () => {
-  it("sqlite (default): the surrogate key is INTEGER ... AUTOINCREMENT", async () => {
+  it("sqlite (default): the surrogate key is INTEGER ... AUTOINCREMENT, no PG partial index", async () => {
     let captured = "";
     const capture: SqlDatabase = {
       prepare: () => ({
@@ -101,7 +110,7 @@ describe("installSchema dialect", () => {
         all: async () => [],
       }),
       exec: async (sql) => {
-        captured = sql;
+        captured += `${sql}\n`;
       },
       transaction: async (fn) => fn(capture),
     };
@@ -110,9 +119,11 @@ describe("installSchema dialect", () => {
 
     expect(captured).toContain("INTEGER PRIMARY KEY AUTOINCREMENT");
     expect(captured).not.toContain("GENERATED ALWAYS AS IDENTITY");
+    // The partial `WHERE status = 'ready'` index is Postgres-only.
+    expect(captured).not.toContain("idx_keel_jobs_ready");
   });
 
-  it("postgres: the surrogate key is BIGINT ... GENERATED ALWAYS AS IDENTITY", async () => {
+  it("postgres: BIGINT identity key plus the partial WHERE status='ready' index", async () => {
     let captured = "";
     const capture: SqlDatabase = {
       prepare: () => ({
@@ -121,7 +132,7 @@ describe("installSchema dialect", () => {
         all: async () => [],
       }),
       exec: async (sql) => {
-        captured = sql;
+        captured += `${sql}\n`;
       },
       transaction: async (fn) => fn(capture),
     };
@@ -130,6 +141,9 @@ describe("installSchema dialect", () => {
 
     expect(captured).toContain("BIGINT  PRIMARY KEY GENERATED ALWAYS AS IDENTITY");
     expect(captured).not.toContain("AUTOINCREMENT");
+    // The partial index lands ONLY on Postgres, and only over `status = 'ready'`.
+    expect(captured).toContain("idx_keel_jobs_ready");
+    expect(captured).toContain("WHERE status = 'ready'");
   });
 });
 
@@ -775,6 +789,194 @@ describe("work", () => {
 
     expect(done).toContain("no-seam");
     expect(done).toContain("throwing-reporter");
+  });
+
+  it("reports a fault raised by the reclaim cadence through onError, and keeps running", async () => {
+    // A db whose RECLAIM UPDATE throws once (the reclaim loop's catch), while the
+    // poll loop's claim path delegates normally — proof the reclaim cadence has
+    // its own error boundary independent of the poll loop.
+    let reclaimThrown = false;
+    const flaky: SqlDatabase = {
+      exec: (sql) => db.exec(sql),
+      prepare: (sql) => {
+        if (sql.includes("status = 'ready', locked_until = NULL") && !reclaimThrown) {
+          reclaimThrown = true;
+          throw new Error("reclaim blip");
+        }
+
+        return db.prepare(sql);
+      },
+      transaction: (fn) => db.transaction(fn),
+    };
+
+    const reported: QueueError[] = [];
+    const resilient = new Queue({ db: flaky, clock });
+    const done: string[] = [];
+    resilient.define<{ tag: string }>("t", (payload) => {
+      done.push(payload.tag);
+    });
+
+    const worker = resilient.work({
+      pollMs: 1,
+      reclaimMs: 1,
+      visibilityMs: 1000,
+      sleep: yieldingSleep,
+      onError: (error) => reported.push(error),
+    });
+
+    // Advance past the reclaim cadence so the loop fires (and throws once), then
+    // enqueue work to prove neither loop died.
+    advance(2000);
+    await waitUntil(() => reclaimThrown);
+    await resilient.enqueue("t", { tag: "after-reclaim-fault" });
+    await waitUntil(() => done.includes("after-reclaim-fault"));
+    await worker.stop();
+
+    // The reclaim fault was surfaced as a coded QueueError, the loop survived.
+    expect(reported.some((e) => e.code === "QUEUE_WORKER_POLL_FAILED")).toBe(true);
+    expect(done).toContain("after-reclaim-fault");
+  });
+
+  it("reclaims a stranded job on its OWN cadence, not per-poll", async () => {
+    // A job is claimed by a now-dead worker (claimed directly, never completed),
+    // so it sits `running` past its visibility deadline. `runOnce` no longer
+    // reclaims, so ONLY the worker's independent reclaim loop can return it to
+    // `ready` — proof the cadence is wired and decoupled from the poll.
+    const ran: number[] = [];
+    queue.define("slow", () => {
+      ran.push(1);
+    });
+    const id = await queue.enqueue("slow");
+
+    await queue.claim("default", 1000); // strand it under a dead worker
+    expect((await queue.find(id))?.status).toBe("running");
+
+    const worker = queue.work({
+      pollMs: 1,
+      reclaimMs: 1,
+      visibilityMs: 1000,
+      sleep: yieldingSleep,
+    });
+
+    // Past the visibility deadline → the reclaim loop frees it, a worker re-claims
+    // and the handler finally runs.
+    advance(1001);
+    await waitUntil(() => ran.length === 1);
+    await worker.stop();
+
+    expect((await queue.find(id))?.status).toBe("done");
+  });
+});
+
+describe("prune", () => {
+  it("deletes only terminal jobs finished older than the cutoff", async () => {
+    // A `done` job finished long ago, a `failed` job finished long ago, and a
+    // fresh `done` job — only the two aged terminal rows should be pruned.
+    queue.define("ok", () => {});
+    queue.define("boom", () => {
+      throw new Error("nope");
+    });
+
+    const oldDone = await queue.enqueue("ok");
+    await queue.runOnce(); // → done, finished_at = now
+
+    const oldFailed = await queue.enqueue("boom", {}, { maxAttempts: 1 });
+    await queue.runOnce(); // attempt 1 == maxAttempts → failed, finished_at = now
+
+    // Move time forward, then create a fresh `done` job and an in-flight one.
+    advance(60_000);
+    const freshDone = await queue.enqueue("ok");
+    await queue.runOnce(); // → done at the later time
+    const pending = await queue.enqueue("ok"); // never run → ready, finished_at NULL
+
+    // Prune everything that finished more than 10s before now: the two original
+    // terminal rows qualify; the fresh `done` (just finished) and the `ready`
+    // (never finished) do not.
+    expect(await queue.prune(10_000)).toBe(2);
+
+    expect(await queue.find(oldDone)).toBeNull();
+    expect(await queue.find(oldFailed)).toBeNull();
+    expect((await queue.find(freshDone))?.status).toBe("done");
+    expect((await queue.find(pending))?.status).toBe("ready");
+  });
+
+  it("never prunes a ready or running job regardless of age, and clamps a negative window", async () => {
+    queue.define("slow", () => {});
+    const ready = await queue.enqueue("slow"); // ready, finished_at NULL
+    await queue.claim("default", 30_000); // → running, still finished_at NULL
+
+    advance(1_000_000);
+
+    // A negative window clamps to 0 (prune everything already finished) — but the
+    // ready/running rows have no `finished_at`, so they are still untouched.
+    expect(await queue.prune(-5000)).toBe(0);
+    expect((await queue.find(ready))?.status).toBe("running");
+  });
+});
+
+describe("permanent (non-retryable) failures", () => {
+  it("permanentFailure stamps an existing error in place, preserving its identity", () => {
+    const coded = new QueueError("QUEUE_HANDLER_NOT_FOUND", "x");
+    const marked = permanentFailure(coded);
+
+    // Same object — code, message, instanceof all preserved — plus the marker.
+    expect(marked).toBe(coded);
+    expect(marked).toBeInstanceOf(QueueError);
+    expect(marked.code).toBe("QUEUE_HANDLER_NOT_FOUND");
+    expect(isPermanentFailure(marked)).toBe(true);
+    expect((marked as unknown as Record<string, unknown>)[PERMANENT_FAILURE]).toBe(true);
+  });
+
+  it("permanentFailure wraps a non-object (string) in a coded QueueError", () => {
+    const marked = permanentFailure("doomed");
+
+    expect(marked).toBeInstanceOf(QueueError);
+    expect((marked as unknown as QueueError).code).toBe("QUEUE_PERMANENT_FAILURE");
+    expect((marked as unknown as QueueError).message).toBe("doomed");
+    expect(isPermanentFailure(marked)).toBe(true);
+  });
+
+  it("permanentFailure stringifies a non-object, non-string value", () => {
+    const marked = permanentFailure(42);
+
+    expect((marked as unknown as QueueError).message).toBe("42");
+    expect(isPermanentFailure(marked)).toBe(true);
+  });
+
+  it("isPermanentFailure is false for plain errors, non-objects, and a non-true flag", () => {
+    expect(isPermanentFailure(new Error("plain"))).toBe(false);
+    expect(isPermanentFailure(null)).toBe(false);
+    expect(isPermanentFailure("nope")).toBe(false);
+    expect(isPermanentFailure({ [PERMANENT_FAILURE]: "yes" })).toBe(false);
+  });
+
+  it("a handler throwing a permanent failure fails the job after ONE attempt, ignoring maxAttempts", async () => {
+    // maxAttempts is high, but the permanent marker retires the job immediately.
+    queue.define("blocked", () => {
+      throw permanentFailure(new Error("url is blocked forever"));
+    });
+    const id = await queue.enqueue("blocked", {}, { maxAttempts: 5 });
+
+    const result = await queue.runOnce();
+
+    expect(result?.outcome).toBe("failed");
+    const job = await queue.find(id);
+    expect(job?.status).toBe("failed");
+    expect(job?.attempts).toBe(1); // not 5 — no retries were burned
+    expect(job?.lastError).toContain("url is blocked forever");
+  });
+
+  it("a normal (non-permanent) failure still retries under maxAttempts", async () => {
+    queue.define("flaky", () => {
+      throw new Error("transient");
+    });
+    const id = await queue.enqueue("flaky", {}, { maxAttempts: 3 });
+
+    const result = await queue.runOnce();
+
+    // Unchanged behavior: a plain throw retries (attempt 1 < 3).
+    expect(result?.outcome).toBe("retry");
+    expect((await queue.find(id))?.status).toBe("ready");
   });
 });
 

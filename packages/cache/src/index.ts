@@ -15,6 +15,7 @@ export type { CacheOptions, WriteOptions } from "./cache";
 export { MemoryStore } from "./memory-store";
 
 export { installCacheSchema, sqlStore } from "./sql-store";
+export type { SqlCacheStore } from "./sql-store";
 
 export { systemClock } from "./time";
 

@@ -4,6 +4,21 @@ import type { CacheStore, Dialect, SqlDatabase, StoredEntry } from "./types";
 const TABLE = "keel_cache";
 
 /**
+ * A SQL cache store plus the sweep the SQL backing makes cheap.
+ *
+ * The {@link import("./cache").Cache} policy already evicts an expired entry on
+ * READ (a stale row behind a hot key is dropped the moment it is noticed), so
+ * only entries that are never read again accumulate — exactly the session store's
+ * situation, and `sweep` is its `deleteExpired` twin. `sweep(now)` deletes every
+ * row whose `expires_at` deadline has passed; a never-expiring entry
+ * (`expires_at IS NULL`) is left untouched. The CALLER owns the cadence (the
+ * retention recipe in `@keel/queue`); the store starts no timer.
+ */
+export interface SqlCacheStore extends CacheStore {
+  sweep(now: number): Promise<number>;
+}
+
+/**
  * Create the cache table if it is not already there.
  *
  * `value` holds the JSON-encoded payload; `expires_at` is a nullable epoch-ms
@@ -45,8 +60,8 @@ interface CacheRow {
  * store can hold any JSON-representable value. Writes upsert on the primary key,
  * so re-caching a key overwrites rather than duplicates.
  */
-export function sqlStore(db: SqlDatabase): CacheStore {
-  // The four statements are prepared eagerly, here at construction time —
+export function sqlStore(db: SqlDatabase): SqlCacheStore {
+  // The statements are prepared eagerly, here at construction time —
   // `prepare()` is synchronous (ADR 0006), so the cached handles cost nothing
   // to hold and every terminal below reuses them. Only the I/O verbs await.
   const selectByKey = db.prepare(`SELECT value, expires_at FROM ${TABLE} WHERE key = ?`);
@@ -60,6 +75,15 @@ export function sqlStore(db: SqlDatabase): CacheStore {
   const deleteByKey = db.prepare(`DELETE FROM ${TABLE} WHERE key = ?`);
 
   const deleteAll = db.prepare(`DELETE FROM ${TABLE}`);
+
+  // `expires_at IS NOT NULL` first so a never-expiring entry (NULL deadline) is
+  // never swept; among the rest, `< ?` is the strict expiry comparison (an entry
+  // whose deadline is exactly `now` is treated as still alive this instant, the
+  // same boundary `Cache.read` uses with `<= clock()` evicting only once now has
+  // passed — here we delete only what is already strictly past).
+  const sweepExpired = db.prepare(
+    `DELETE FROM ${TABLE} WHERE expires_at IS NOT NULL AND expires_at < ?`,
+  );
 
   return {
     async get(key) {
@@ -87,6 +111,12 @@ export function sqlStore(db: SqlDatabase): CacheStore {
 
     async clear() {
       await deleteAll.run();
+    },
+
+    async sweep(now) {
+      const { changes } = await sweepExpired.run([now]);
+
+      return changes;
     },
   };
 }

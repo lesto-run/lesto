@@ -17,8 +17,24 @@ export type { QueueOptions, Worker, WorkOptions } from "./queue";
 export { cronMatches, Scheduler } from "./scheduler";
 export type { SchedulerHandle, SchedulerOptions, StartOptions } from "./scheduler";
 
-export { KeelError, QueueError } from "./errors";
-export type { QueueErrorCode } from "./errors";
+export { RetentionScheduler } from "./retention";
+export type {
+  RetentionClock,
+  RetentionHandle,
+  RetentionOptions,
+  RetentionResult,
+  RetentionStartOptions,
+  RetentionTask,
+} from "./retention";
+
+export {
+  isPermanentFailure,
+  KeelError,
+  permanentFailure,
+  PERMANENT_FAILURE,
+  QueueError,
+} from "./errors";
+export type { PermanentFailure, QueueErrorCode } from "./errors";
 
 export { systemClock } from "./time";
 
