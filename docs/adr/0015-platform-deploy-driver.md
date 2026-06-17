@@ -64,9 +64,9 @@ determinable URL the deploy still lands but the gate is skipped out loud.
   time (this repo's CI has no `wrangler` or Cloudflare credentials, so a *live*
   deploy is not exercised in CI — the tested contract is the gated orchestration).
 - **Deferred (follow-ups), not in this slice:** wiring `wranglerConfig` into the
-  deploy path to verify/emit `wrangler.jsonc` (needs a deploy-config surface);
-  wiring `remoteReleaseStore` into the CLI for a generic S3/R2 *static* target
-  (`keel deploy --release` with remote credential flags); and a CLI-convention
-  example exercising `keel deploy --cloudflare` end-to-end (the estate is
-  in-process, so it deploys via its own `bun run deploy` = build + `wrangler
-  deploy`).
+  deploy path to verify/emit `wrangler.jsonc` (needs a deploy-config surface); and
+  a CLI-convention example exercising `keel deploy --cloudflare` end-to-end (the
+  estate is in-process, so it deploys via its own `bun run deploy` = build +
+  `wrangler deploy`). Wiring `remoteReleaseStore` into the CLI for a generic S3/R2
+  *static* target — `keel deploy --release --bucket/--endpoint`, credentials from
+  the environment — is now **done** (ADR 0017).

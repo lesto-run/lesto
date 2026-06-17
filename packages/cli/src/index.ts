@@ -13,7 +13,7 @@
  */
 
 export { run } from "./run";
-export type { CliDeps } from "./run";
+export type { CliDeps, ReleaseTarget } from "./run";
 
 export { runMcp } from "./mcp";
 export type { McpDeps } from "./mcp";

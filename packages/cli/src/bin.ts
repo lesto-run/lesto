@@ -23,7 +23,8 @@ import type { RuntimeEntry } from "@keel/content-core";
 import { nodeSink } from "@keel/sites";
 import type { Site } from "@keel/sites";
 
-import { nodeReleaseStore, nodeUploader } from "@keel/deploy";
+import { nodeReleaseStore, nodeUploader, remoteReleaseStore } from "@keel/deploy";
+import type { ReleaseStore } from "@keel/deploy";
 
 import { buildClient, bunBuildClientDeps } from "@keel/assets";
 
@@ -32,7 +33,7 @@ import { writeFile } from "node:fs/promises";
 import { createApp } from "@keel/kernel";
 
 import { run } from "./run";
-import type { CloudflareDeployer } from "./run";
+import type { CloudflareDeployer, ReleaseTarget } from "./run";
 import { runMcp, startMcpServer } from "./mcp";
 import { runOpenApi } from "./openapi";
 
@@ -94,6 +95,56 @@ async function httpHealthCheck(url: string): Promise<boolean> {
     // A refused connection, DNS miss, non-2xx, or timeout all mean "not healthy".
     return false;
   }
+}
+
+/** A set, non-empty env var, else `undefined` (treating empty as unset). */
+function readEnv(name: string): string | undefined {
+  const value = process.env[name];
+
+  return value !== undefined && value !== "" ? value : undefined;
+}
+
+/** Like {@link readEnv} but required: a clear, secret-free message names the var. */
+function requireEnv(name: string): string {
+  const value = readEnv(name);
+
+  if (value === undefined) {
+    throw new Error(`Set ${name} to deploy to a remote release store.`);
+  }
+
+  return value;
+}
+
+/**
+ * Build the {@link ReleaseStore} for a resolved {@link ReleaseTarget}: the on-disk
+ * `nodeReleaseStore` for a local target, or the S3/R2 `remoteReleaseStore` for a
+ * remote one — its SigV4 credentials read from the environment. This is the
+ * irreducible credential edge, so it lives in the coverage-excluded wiring; the
+ * CLI core only ever sees the seam.
+ *
+ * Credentials resolve as a FAMILY, not field by field: the `KEEL_DEPLOY_` family
+ * is preferred (its access key is the marker), else the conventional `AWS_` names
+ * CI already injects. Picking a prefix once — rather than falling back per field —
+ * means a `KEEL_DEPLOY_` access key can never be paired with an `AWS_` secret into
+ * a mismatched keypair when only half of one family is set.
+ */
+function releaseStore(target: ReleaseTarget): ReleaseStore {
+  if (target.kind === "local") return nodeReleaseStore(target.distDir);
+
+  const prefix = readEnv("KEEL_DEPLOY_ACCESS_KEY_ID") !== undefined ? "KEEL_DEPLOY_" : "AWS_";
+  const sessionToken = readEnv(`${prefix}SESSION_TOKEN`);
+
+  return remoteReleaseStore({
+    endpoint: target.endpoint,
+    bucket: target.bucket,
+    region: target.region,
+    accessKeyId: requireEnv(`${prefix}ACCESS_KEY_ID`),
+    secretAccessKey: requireEnv(`${prefix}SECRET_ACCESS_KEY`),
+    // Spread the optionals only when set — `exactOptionalPropertyTypes` forbids
+    // assigning `undefined` to an optional property.
+    ...(target.pointerKey !== undefined ? { pointerKey: target.pointerKey } : {}),
+    ...(sessionToken !== undefined ? { sessionToken } : {}),
+  });
 }
 
 /** Where `keel dev` looks for built client assets (e.g. a bundled `/client.js`). */
@@ -247,7 +298,7 @@ const code = await run(argv, {
   buildClientAssets,
   watchIslands,
   uploader: nodeUploader,
-  releaseStore: nodeReleaseStore,
+  releaseStore,
   now: Date.now,
   cloudflare: wranglerDeployer,
   checkHealth: httpHealthCheck,

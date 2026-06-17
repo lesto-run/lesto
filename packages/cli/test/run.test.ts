@@ -14,7 +14,7 @@ import type { OutputSink, Site } from "@keel/sites";
 import type { ReleaseStore } from "@keel/deploy";
 
 import { CliError, parsePort, parseStringFlag, run } from "../src/index";
-import type { CliDeps } from "../src/index";
+import type { CliDeps, ReleaseTarget } from "../src/index";
 
 // --- A real-enough app, built over an in-memory better-sqlite3 adapter. ---
 
@@ -1050,7 +1050,7 @@ describe("run deploy", () => {
   it("--release stages an immutable versioned tree and flips the pointer", async () => {
     const { sink } = recordingSink();
     const { store, shipped, pointer } = memoryReleaseStore();
-    const distDirs: string[] = [];
+    const targets: ReleaseTarget[] = [];
 
     const code = await run(
       ["deploy", "--release", "--version", "v7", "--dist", "blue-green"],
@@ -1058,8 +1058,8 @@ describe("run deploy", () => {
         loadApp,
         loadSites: () => Promise.resolve(sites),
         sink,
-        releaseStore: (distDir) => {
-          distDirs.push(distDir);
+        releaseStore: (target) => {
+          targets.push(target);
 
           return store;
         },
@@ -1067,7 +1067,8 @@ describe("run deploy", () => {
     );
 
     expect(code).toBe(0);
-    expect(distDirs).toEqual(["blue-green"]);
+    // No bucket/endpoint flags → the local on-disk store, rooted at --dist.
+    expect(targets).toEqual([{ kind: "local", distDir: "blue-green" }]);
 
     // Every file landed under the release's immutable prefix, never in place.
     expect([...shipped.keys()].every((key) => key.startsWith("releases/v7/"))).toBe(true);
@@ -1102,6 +1103,163 @@ describe("run deploy", () => {
     expect(code).toBe(0);
     expect(pointer.current).toBe("2026-06-11T00-00-00-000Z");
     expect(lines).toContain("current → 2026-06-11T00-00-00-000Z");
+  });
+
+  it("--release with --bucket/--endpoint builds a remote S3/R2 release target", async () => {
+    const { sink } = recordingSink();
+    const { store, shipped, pointer } = memoryReleaseStore();
+    const targets: ReleaseTarget[] = [];
+
+    const code = await run(
+      [
+        "deploy",
+        "--release",
+        "--version",
+        "v1",
+        "--bucket",
+        "site",
+        "--endpoint",
+        "https://acct.r2.cloudflarestorage.com",
+        "--region",
+        "us-east-1",
+        "--pointer",
+        "sites/marketing/current",
+      ],
+      depsWith({
+        loadApp,
+        loadSites: () => Promise.resolve(sites),
+        sink,
+        releaseStore: (target) => {
+          targets.push(target);
+
+          return store;
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    // The flags resolve to the remote target; credentials are NOT among them.
+    expect(targets).toEqual([
+      {
+        kind: "remote",
+        endpoint: "https://acct.r2.cloudflarestorage.com",
+        bucket: "site",
+        region: "us-east-1",
+        pointerKey: "sites/marketing/current",
+      },
+    ]);
+
+    // The versioned release machinery is unchanged on the remote target: files
+    // staged under the immutable prefix, then the pointer flipped.
+    expect([...shipped.keys()].every((key) => key.startsWith("releases/v1/"))).toBe(true);
+    expect(pointer.current).toBe("v1");
+  });
+
+  it("--release defaults a remote region to auto (R2) and omits an unset pointer", async () => {
+    const { sink } = recordingSink();
+    const { store } = memoryReleaseStore();
+    let target: ReleaseTarget | undefined;
+
+    const code = await run(
+      [
+        "deploy",
+        "--release",
+        "--version",
+        "v1",
+        "--bucket",
+        "site",
+        "--endpoint",
+        "https://acct.r2.cloudflarestorage.com",
+      ],
+      depsWith({
+        loadApp,
+        loadSites: () => Promise.resolve(sites),
+        sink,
+        releaseStore: (t) => {
+          target = t;
+
+          return store;
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(target).toEqual({
+      kind: "remote",
+      endpoint: "https://acct.r2.cloudflarestorage.com",
+      bucket: "site",
+      region: "auto",
+    });
+  });
+
+  it("treats --bucket/--endpoint as a release even without --release (no silent local copy)", async () => {
+    const { sink } = recordingSink();
+    const { store, shipped } = memoryReleaseStore();
+    let target: ReleaseTarget | undefined;
+
+    // No --release flag: naming a remote bucket must still take the release path,
+    // never fall through to a local in-place copy that drops the remote flags.
+    const code = await run(
+      [
+        "deploy",
+        "--version",
+        "v1",
+        "--bucket",
+        "site",
+        "--endpoint",
+        "https://acct.r2.cloudflarestorage.com",
+      ],
+      depsWith({
+        loadApp,
+        loadSites: () => Promise.resolve(sites),
+        sink,
+        releaseStore: (t) => {
+          target = t;
+
+          return store;
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(target).toEqual({
+      kind: "remote",
+      endpoint: "https://acct.r2.cloudflarestorage.com",
+      bucket: "site",
+      region: "auto",
+    });
+    // It really shipped a release (staged tree), not a copy.
+    expect([...shipped.keys()].every((key) => key.startsWith("releases/v1/"))).toBe(true);
+  });
+
+  it("--release refuses a --bucket with no --endpoint (CLI_DEPLOY_INCOMPLETE_REMOTE)", async () => {
+    const { sink } = recordingSink();
+
+    await expect(
+      run(
+        ["deploy", "--release", "--bucket", "site"],
+        depsWith({ loadApp, loadSites: () => Promise.resolve(sites), sink }),
+      ),
+    ).rejects.toMatchObject({
+      code: "CLI_DEPLOY_INCOMPLETE_REMOTE",
+      details: { bucket: "site", endpoint: undefined },
+    });
+  });
+
+  it("refuses an --endpoint with no --bucket (CLI_DEPLOY_INCOMPLETE_REMOTE)", async () => {
+    const { sink } = recordingSink();
+
+    // No --release either: the endpoint alone implies a remote release, so the
+    // incomplete-pair guard still fires (and reports the captured, non-secret flags).
+    await expect(
+      run(
+        ["deploy", "--endpoint", "https://acct.r2.cloudflarestorage.com"],
+        depsWith({ loadApp, loadSites: () => Promise.resolve(sites), sink }),
+      ),
+    ).rejects.toMatchObject({
+      code: "CLI_DEPLOY_INCOMPLETE_REMOTE",
+      details: { bucket: undefined, endpoint: "https://acct.r2.cloudflarestorage.com" },
+    });
   });
 
   it("--cloudflare deploys the Worker and health-checks the URL it reported", async () => {
@@ -1214,7 +1372,7 @@ describe("run deploy", () => {
 describe("run rollback", () => {
   it("flips the pointer back to a published release and reports the move", async () => {
     const { store, pointer } = memoryReleaseStore();
-    const distDirs: string[] = [];
+    const targets: ReleaseTarget[] = [];
 
     await store.put("releases/v1/marketing/index.html", "old", "text/html");
     await store.setCurrent("v2");
@@ -1222,8 +1380,8 @@ describe("run rollback", () => {
     const code = await run(
       ["rollback", "--to", "v1", "--dist", "blue-green"],
       depsWith({
-        releaseStore: (distDir) => {
-          distDirs.push(distDir);
+        releaseStore: (target) => {
+          targets.push(target);
 
           return store;
         },
@@ -1231,7 +1389,7 @@ describe("run rollback", () => {
     );
 
     expect(code).toBe(0);
-    expect(distDirs).toEqual(["blue-green"]);
+    expect(targets).toEqual([{ kind: "local", distDir: "blue-green" }]);
     expect(pointer.current).toBe("v1");
     expect(lines).toEqual(["rolled back: v2 → v1"]);
   });
@@ -1245,6 +1403,44 @@ describe("run rollback", () => {
 
     expect(code).toBe(0);
     expect(lines).toEqual(["now serving v1"]);
+  });
+
+  it("rolls back against a remote S3/R2 store named by --bucket/--endpoint", async () => {
+    const { store, pointer } = memoryReleaseStore();
+    let target: ReleaseTarget | undefined;
+
+    await store.put("releases/v1/marketing/index.html", "old", "text/html");
+    await store.setCurrent("v2");
+
+    const code = await run(
+      [
+        "rollback",
+        "--to",
+        "v1",
+        "--bucket",
+        "site",
+        "--endpoint",
+        "https://acct.r2.cloudflarestorage.com",
+      ],
+      depsWith({
+        releaseStore: (t) => {
+          target = t;
+
+          return store;
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    // Rollback resolves the same remote target deploy --release does (shared helper).
+    expect(target).toEqual({
+      kind: "remote",
+      endpoint: "https://acct.r2.cloudflarestorage.com",
+      bucket: "site",
+      region: "auto",
+    });
+    expect(pointer.current).toBe("v1");
+    expect(lines).toEqual(["rolled back: v2 → v1"]);
   });
 
   it("refuses to run without --to (no guessing under pressure)", async () => {

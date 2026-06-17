@@ -40,6 +40,35 @@ import { parsePort, parseStringFlag } from "./flags";
 const DEFAULT_PORT = 3000;
 
 /**
+ * Where a release publishes — the discriminated target the `releaseStore` seam
+ * builds a {@link ReleaseStore} from.
+ *
+ * `local` is the on-disk store (`releases/<version>/` trees under `--dist` behind
+ * an atomically-renamed `current` symlink). `remote` is the same versioned
+ * machinery over a generic S3-compatible object store (Cloudflare R2, AWS S3,
+ * MinIO): the core resolves the bucket *addressing* from flags, while the
+ * **credentials** stay in the environment — the bin reads them when it builds the
+ * store, so a secret never rides a flag, a log line, or an error's details.
+ */
+export type ReleaseTarget =
+  | { readonly kind: "local"; readonly distDir: string }
+  | {
+      readonly kind: "remote";
+
+      /** Service endpoint origin, e.g. `https://<account>.r2.cloudflarestorage.com`. */
+      readonly endpoint: string;
+
+      /** The bucket releases publish into. */
+      readonly bucket: string;
+
+      /** The signing region — `auto` for R2, e.g. `us-east-1` for S3. */
+      readonly region: string;
+
+      /** A custom live-pointer key, so one bucket can host several sites. */
+      readonly pointerKey?: string;
+    };
+
+/**
  * How often `serve`/`dev` flush buffered spans to the collector when tracing is
  * on. A long-lived node service flushes on a steady cadence (and once more on
  * drain) — five seconds keeps the collector close to live without a request per
@@ -157,11 +186,14 @@ export interface CliDeps {
   uploader: (distDir: string) => ShipDeps;
 
   /**
-   * Build a versioned release store rooted at `distDir` (the bin passes
-   * `nodeReleaseStore`). Backs `deploy --release` and `rollback`: immutable
-   * `releases/<version>/` trees behind an atomically-flipped `current` pointer.
+   * Build a versioned release store for a {@link ReleaseTarget}. Backs
+   * `deploy --release` and `rollback`: immutable `releases/<version>/` trees
+   * behind an atomically-flipped `current` pointer. The bin maps a `local`
+   * target to `nodeReleaseStore` and a `remote` one to `remoteReleaseStore`
+   * (S3/R2), reading the remote credentials from the environment so the core
+   * never handles a secret.
    */
-  releaseStore: (distDir: string) => ReleaseStore;
+  releaseStore: (target: ReleaseTarget) => ReleaseStore;
 
   /** The clock release version stamps derive from (the bin passes `Date.now`). */
   now: () => number;
@@ -216,8 +248,11 @@ const USAGE = [
   "  build             Prerender static sites to disk (--target <name>, --out <dir>, default out)",
   "  deploy            Build and ship static sites; print the routing plan (--target, --out, --dist;",
   "                    --release for a versioned, atomically-flipped release, --version <v> to name it;",
+  "                    publish a release to S3/R2 with --bucket <name> --endpoint <url> [--region auto]",
+  "                    [--pointer <key>] (implies --release; credentials from the environment), else --dist;",
   "                    --cloudflare to push the Worker + assets via wrangler, health-gated --health-url <url>)",
-  "  rollback          Flip the live pointer to a published release: rollback --to <version> (--dist)",
+  "  rollback          Flip the live pointer to a published release: rollback --to <version>",
+  "                    (--dist for local, or --bucket/--endpoint for a remote S3/R2 store)",
   "  content:build     Compile markdown content into the content store (--prune drops stale rows)",
   "  content:new       Scaffold a new content entry: content:new <collection> <title>",
   "  content:delete    Delete a content entry: content:delete <collection> <slug>",
@@ -663,6 +698,49 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
 /** The default dist directory `deploy` ships static artifacts into. */
 const DEFAULT_DIST_DIR = "dist";
 
+/** The default signing region for a remote release — R2's value. S3 passes its own. */
+const DEFAULT_REMOTE_REGION = "auto";
+
+/**
+ * Resolve where a release publishes from the command's flags.
+ *
+ * Naming a `--bucket` (or `--endpoint`) selects a remote S3/R2 store; together
+ * they are required, so a typo in either flag surfaces as a clear
+ * `CLI_DEPLOY_INCOMPLETE_REMOTE` rather than silently falling back to local disk.
+ * `--region` defaults to `auto` (R2); `--pointer` overrides the live-pointer key.
+ * With neither bucket nor endpoint, the target is the local `--dist` store.
+ *
+ * Credentials are deliberately NOT flags — the bin reads them from the
+ * environment when it builds the store — so nothing secret reaches the args.
+ */
+function releaseTargetFromArgs(args: readonly string[]): ReleaseTarget {
+  const bucket = parseStringFlag(args, "bucket");
+  const endpoint = parseStringFlag(args, "endpoint");
+
+  if (bucket === undefined && endpoint === undefined) {
+    return { kind: "local", distDir: parseStringFlag(args, "dist") ?? DEFAULT_DIST_DIR };
+  }
+
+  if (bucket === undefined || endpoint === undefined) {
+    throw new CliError(
+      "CLI_DEPLOY_INCOMPLETE_REMOTE",
+      "a remote release needs both --bucket and --endpoint (credentials come from the environment).",
+      { bucket, endpoint },
+    );
+  }
+
+  const pointerKey = parseStringFlag(args, "pointer");
+
+  return {
+    kind: "remote",
+    endpoint,
+    bucket,
+    region: parseStringFlag(args, "region") ?? DEFAULT_REMOTE_REGION,
+    // `exactOptionalPropertyTypes` forbids assigning `undefined`; omit when absent.
+    ...(pointerKey !== undefined ? { pointerKey } : {}),
+  };
+}
+
 /** "route" or "routes" — the count noun the deploy output reads with. */
 function routeNoun(count: number): string {
   return count === 1 ? "route" : "routes";
@@ -739,8 +817,16 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
 
   const target = parseStringFlag(args, "target");
   const outDir = parseStringFlag(args, "out") ?? DEFAULT_OUT_DIR;
-  const distDir = parseStringFlag(args, "dist") ?? DEFAULT_DIST_DIR;
-  const release = args.includes("--release");
+
+  // Naming a remote bucket implies a release: the remote store is *only* ever a
+  // release store (immutable trees + an atomic pointer — there is no in-place
+  // remote copy), so `--bucket`/`--endpoint` opt into the release path on their
+  // own. This also means remote flags can never silently fall through to a local
+  // copy when `--release` is forgotten.
+  const release =
+    args.includes("--release") ||
+    parseStringFlag(args, "bucket") !== undefined ||
+    parseStringFlag(args, "endpoint") !== undefined;
 
   const selected = selectTarget(sites, target);
 
@@ -756,12 +842,16 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
   const plan = planDeploy(selected, manifest);
   const version = parseStringFlag(args, "version") ?? versionStamp(deps.now);
 
-  // One shipper, chosen up front: the versioned release store or the legacy
-  // in-place copy — discriminated so each branch holds its own dependency.
+  // One shipper, chosen up front: the versioned release store (local disk or a
+  // remote S3/R2 target, resolved from the flags) or the legacy in-place copy —
+  // discriminated so each branch holds its own dependency.
   const shipper: { kind: "release"; store: ReleaseStore } | { kind: "copy"; uploader: ShipDeps } =
     release
-      ? { kind: "release", store: deps.releaseStore(distDir) }
-      : { kind: "copy", uploader: deps.uploader(distDir) };
+      ? { kind: "release", store: deps.releaseStore(releaseTargetFromArgs(args)) }
+      : {
+          kind: "copy",
+          uploader: deps.uploader(parseStringFlag(args, "dist") ?? DEFAULT_DIST_DIR),
+        };
 
   for (const deployTarget of plan.targets) {
     if (deployTarget.kind !== "static") {
@@ -800,10 +890,11 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
  * Flip the live pointer back to an already-published release.
  *
  * `--to <version>` names the target (required; refusing to guess is the point
- * of a rollback under pressure); `--dist <dir>` locates the release store. The
- * flip is the same atomic pointer move a deploy ends with, and an unknown
- * version is refused by the store (`DEPLOY_UNKNOWN_RELEASE`) rather than
- * pointing the site at nothing.
+ * of a rollback under pressure); the release store is located the same way
+ * `deploy --release` chose it — `--dist <dir>` for local disk, or
+ * `--bucket`/`--endpoint` for a remote S3/R2 store. The flip is the same atomic
+ * pointer move a deploy ends with, and an unknown version is refused by the
+ * store (`DEPLOY_UNKNOWN_RELEASE`) rather than pointing the site at nothing.
  */
 async function runRollback(args: readonly string[], deps: CliDeps): Promise<number> {
   const version = parseStringFlag(args, "to");
@@ -816,9 +907,7 @@ async function runRollback(args: readonly string[], deps: CliDeps): Promise<numb
     );
   }
 
-  const distDir = parseStringFlag(args, "dist") ?? DEFAULT_DIST_DIR;
-
-  const result = await rollback(deps.releaseStore(distDir), version);
+  const result = await rollback(deps.releaseStore(releaseTargetFromArgs(args)), version);
 
   deps.out(
     result.from === undefined
