@@ -98,7 +98,7 @@ throw new QueueError("QUEUE_HANDLER_NOT_FOUND", `No handler for job "${name}".`,
 | `@keel/mail` | ✅ `defineMailer`, queued delivery on `@keel/queue`, 100% coverage |
 | `@keel/webhooks` | ✅ signed delivery + inbound verify on `@keel/queue`, 100% coverage |
 | `@keel/cache` | ✅ TTL cache, memory + SQL stores, injected clock, 100% coverage |
-| `@keel/hooks` | ✅ actions/filters extensibility core, 100% coverage |
+| `@keel/hooks` · `@keel/config` · `@keel/rbac` | ❌ removed from the v1 surface — `hooks`/`config` were orphan prototypes (zero importers); `rbac` folded into `@keel/authz`'s `definePolicy` (one authorization story). The plugin/extensibility model is a designed post-1.0 bet (ADR 0014). |
 | `@keel/migrate` | ✅ Tracks-style migrator over `@keel/db` value-DDL on a `SqlDatabase` interface, 100% coverage |
 | `@keel/router` | ✅ RESTful router (`resources`, named routes), 100% coverage |
 | Tracks server (`lib/*` router/controller/migrations, CJS) | ⏳ remaining to port → `packages/*` |
