@@ -144,6 +144,12 @@ $ curl http://127.0.0.1:3000/api/posts
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — the product vision, the three pillars (Tracks, Loom, Docks), and the dependency-aware build order.
 - [CONVENTIONS.md](./CONVENTIONS.md) — the engineering conventions, in full.
+- [docs/guide/quickstart.md](./docs/guide/quickstart.md) — scaffold, run, and deploy your first app.
+
+## Contributing & security
+
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — how to set up, run the gate, and open a change that meets the bar.
+- [SECURITY.md](./SECURITY.md) — how to report a vulnerability privately (please don't open a public issue).
 
 ## License
 

@@ -60,7 +60,7 @@ tracked by the v1 roadmap.
 | **Add a LICENSE** (`L-5d07b979`) | No `LICENSE` file and no `license` field anywhere → all-rights-reserved by default → legally un-adoptable. |
 | **Release engineering** (`L-ff94be39`) | All 58 packages `private` at 0.0.0/0.1.0; no `.changeset`, no publish path; `create-keel` uses `file:` pins → `npm create keel-app` can't resolve for outsiders. Add Changesets + semver + a (dry-run-able) publish workflow; switch the scaffold to real ranges with a `file:`/`--local` dev fallback. |
 | **Public docs site** (`L-5d64ad98`) | Internal ADRs are not user docs. Quickstart + battery pages (linking gallery examples) + a deploy runbook. |
-| **OSS governance** (`L-7c36dc4d`) | No `SECURITY.md` / `CONTRIBUTING.md` / `CODE_OF_CONDUCT.md` — required for the "platforms win via ecosystem" thesis Keel itself cites. |
+| **OSS governance** (`L-7c36dc4d`) | No `SECURITY.md` / `CONTRIBUTING.md` / issue+PR templates — the contributor on-ramp + vuln-disclosure path the "platforms win via ecosystem" thesis needs. (Code of Conduct intentionally omitted.) |
 
 ### B · Make the Claims True — credibility (P2–P3)
 
