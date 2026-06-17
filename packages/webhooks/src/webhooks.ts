@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
 
 import { KeelError } from "@keel/errors";
+import { permanentFailure } from "@keel/queue";
 import type { JsonValue, Queue } from "@keel/queue";
 
 /**
@@ -422,10 +423,18 @@ export class Webhooks {
     const blockedReason = await this.urlGuard(payload.url, this.resolver);
 
     if (blockedReason !== undefined) {
-      throw new WebhookError(
-        "WEBHOOK_URL_BLOCKED",
-        `Refusing to deliver webhook: ${blockedReason}`,
-        { url: payload.url },
+      // A blocked URL is a PERMANENT failure: an SSRF-refused or unroutable URL
+      // resolves to the same private/reserved address on every attempt, so the
+      // guard will refuse it identically forever. Mark it non-retryable
+      // (`permanentFailure`) so the queue's `fail()` retires the job to `failed`
+      // after THIS attempt instead of burning the full `maxAttempts` backoff
+      // schedule on a delivery that can never succeed. The error stays a coded
+      // `WEBHOOK_URL_BLOCKED` `WebhookError` — the marker is stamped in place, so
+      // a caller can still branch on the code and `instanceof WebhookError`.
+      throw permanentFailure(
+        new WebhookError("WEBHOOK_URL_BLOCKED", `Refusing to deliver webhook: ${blockedReason}`, {
+          url: payload.url,
+        }),
       );
     }
 

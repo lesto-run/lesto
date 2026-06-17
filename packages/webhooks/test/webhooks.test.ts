@@ -500,4 +500,46 @@ describe("Webhooks SSRF integration", () => {
     expect((await queue.runOnce())?.outcome).toBe("failed");
     expect((await queue.find(id))?.lastError).toContain("Refusing to deliver");
   });
+
+  it("a blocked URL fails PERMANENTLY after one attempt, never burning maxAttempts", async () => {
+    // maxAttempts is high (5), but a blocked URL can never succeed on a retry —
+    // it resolves to the same private/reserved address every time. The deliverer
+    // marks the failure permanent (`permanentFailure`), so the queue retires the
+    // job to `failed` after THIS attempt instead of scheduling four more doomed
+    // retries.
+    const hooks = new Webhooks({
+      queue,
+      fetch: fakeFetch({ ok: true, status: 200 }),
+      resolver: publicResolver,
+    });
+    const id = await hooks.send("http://169.254.169.254/latest/", "steal", {}, { maxAttempts: 5 });
+
+    const result = await queue.runOnce();
+
+    expect(result?.outcome).toBe("failed"); // NOT "retry"
+    const job = await queue.find(id);
+    expect(job?.status).toBe("failed");
+    expect(job?.attempts).toBe(1); // one attempt, not 5
+    expect(job?.lastError).toContain("Refusing to deliver");
+    expect(calls).toHaveLength(0); // fetch never called
+  });
+
+  it("a TRANSIENT delivery failure still retries under maxAttempts (unchanged)", async () => {
+    // Contrast: a real non-2xx from a public host is NOT permanent — the receiver
+    // might recover — so it retries as before. Proof the permanent signal is
+    // scoped to the blocked-URL path and did not make every failure terminal.
+    const hooks = new Webhooks({
+      queue,
+      fetch: fakeFetch({ ok: false, status: 503 }),
+      resolver: publicResolver,
+    });
+    const id = await hooks.send("https://example.com/hook", "ping", {}, { maxAttempts: 5 });
+
+    const result = await queue.runOnce();
+
+    expect(result?.outcome).toBe("retry"); // still retries
+    const job = await queue.find(id);
+    expect(job?.status).toBe("ready");
+    expect(job?.attempts).toBe(1); // attempt 1 of 5 — four remain
+  });
 });
