@@ -17,8 +17,9 @@
  * anywhere in the identity / queue / cache / rate-limit wiring surfaces here.
  *
  * The SQLite leg always runs (the normal gate); the Postgres leg runs only when
- * `KEEL_PG_URL` is set (its own CI job with a Postgres service), threading
- * `dialect: "postgres"` so the PG `FOR UPDATE`/`FOR UPDATE SKIP LOCKED` paths are
+ * `KEEL_PG_URL` is set — the `db-parity-postgres` CI job runs the whole integration
+ * suite against a real Postgres, like the `durable-stores`/`kernel-stores` siblings.
+ * It threads `dialect: "postgres"` so the PG `FOR UPDATE`/`FOR UPDATE SKIP LOCKED` paths are
  * exercised. `:memory:` is unshareable across two opens, so — like
  * `kernel-stores` — both app processes share ONE opened handle: the fleet shape,
  * one socket, serial (`fileParallelism: false`).
@@ -217,7 +218,8 @@ async function bootApp(handle: KernelDatabase, dialect: Dialect): Promise<AppPro
       return c.json({ ok: allowed }, allowed ? 200 : 429);
     })
     .post("/jobs/ping", async (c) => {
-      const id = await queue.enqueue("ping", { n: (authBody(c) as unknown as { n: number }).n });
+      const { n } = c.req.body as { n: number };
+      const id = await queue.enqueue("ping", { n });
 
       return c.json({ ok: true, id });
     })

@@ -252,8 +252,10 @@ jobs:
   # (which bundles the Worker and reads the assets dir but never contacts the
   # Cloudflare API — so no secrets, no account). Its own job (like `scaffold-loop`
   # and `db-parity-postgres`) because it needs Node 22 on PATH for wrangler, which
-  # the Bun-only jobs do not carry. A green dry-run is the standing guarantee that
-  # `keel deploy --cloudflare` works from a fresh scaffold on every PR.
+  # the Bun-only jobs do not carry. A green dry-run is the standing guarantee that a
+  # fresh scaffold's shipped Worker bundles and its wrangler config validates on every
+  # PR; the `keel deploy --cloudflare` flag-parsing + health-gate are covered by CLI
+  # unit tests.
   deploy-cloudflare-dry:
     runs-on: ubuntu-latest
     steps:
@@ -301,44 +303,3 @@ jobs:
       - name: wrangler deploy --dry-run
         working-directory: cf-dry-app
         run: npx --yes wrangler@4 deploy --dry-run
-
-  # The full-app journey boots a real Keel app over a socket on Postgres and
-  # asserts the fleet contract — a SECOND process resolves the session the first
-  # minted, and a rate-limit bucket the first drained returns 429 on the second.
-  # Like `db-parity-postgres` this is the ONLY place its Postgres leg runs (its
-  # SQLite leg rides the normal gate), against a real Postgres service, with `pg`
-  # installed ad-hoc as the @keel/pg peer the workspace lockfile does not carry.
-  full-app-postgres-integration:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.5"
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Install the pg driver (peer of @keel/pg)
-        working-directory: packages/integration
-        run: bun add pg
-
-      - name: Full-app journey + cross-process sharing (SQLite + Postgres)
-        working-directory: packages/integration
-        env:
-          KEEL_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
-        run: bun run test full-app-postgres
