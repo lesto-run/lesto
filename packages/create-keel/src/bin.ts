@@ -2,9 +2,14 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { CreateKeelError, scaffold } from "./index";
+import { CreateKeelError, fileColonPin, scaffold } from "./index";
 
-const name = process.argv[2] ?? "keel-app";
+// `--local` pins `@keel/*` deps at in-repo `file:` paths (in-monorepo dev / e2e)
+// instead of the default published `^0.x` ranges. The project name is the first
+// non-flag argument.
+const argv = process.argv.slice(2);
+const local = argv.includes("--local");
+const name = argv.find((arg) => !arg.startsWith("-")) ?? "keel-app";
 const targetDir = join(process.cwd(), name);
 
 const io = {
@@ -17,7 +22,10 @@ const io = {
 };
 
 try {
-  const files = await scaffold({ name, targetDir }, io);
+  const files = await scaffold(
+    local ? { name, targetDir, keelDep: fileColonPin } : { name, targetDir },
+    io,
+  );
   console.log(
     `Scaffolded ${name} (${files.length} files). Next: cd ${name} && bun install && bun run dev`,
   );

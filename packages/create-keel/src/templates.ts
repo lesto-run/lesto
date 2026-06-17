@@ -38,12 +38,12 @@ export const KEEL_PACKAGES = [
  * Resolve a `@keel/*` package name to the dependency specifier the scaffold pins
  * it at.
  *
- * The packages are NOT published yet, so a scaffolded app cannot resolve a
- * `@keel/*@latest` dist-tag — the original blocker #9 break. Until the `0.x`
- * publish at launch the scaffolder pins each to a `file:` path at the in-repo
- * package (computed from the scaffolder's own location), so `bun install`
- * resolves it today. At publish these flip to a real `^0.x` version range — the
- * one line that changes is the resolver the scaffolder injects.
+ * Two implementations live in `scaffold.ts`: `publishedRangePin` (the default — a
+ * published `^0.x` range an outsider installs from the registry) and
+ * `fileColonPin` (a `file:` path at the in-repo package, selected by
+ * `create-keel --local` for in-monorepo dev before anything is published). The
+ * resolver is injected so a test can pin to a fake specifier and the publish
+ * decision lives in exactly one place.
  */
 export type KeelDepResolver = (pkg: (typeof KEEL_PACKAGES)[number]) => string;
 

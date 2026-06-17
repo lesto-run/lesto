@@ -22,17 +22,28 @@ import {
 import type { KeelDepResolver } from "./templates";
 
 /**
- * The default `@keel/*` dependency pin: a `file:` path to the in-repo package.
+ * The two ways a scaffolded app pins its `@keel/*` dependencies.
  *
- * The packages are not published yet (blocker #9: `@keel/*@latest` could not
- * resolve), so the scaffold pins each to its in-repo directory — computed from
- * this module's location (`packages/create-keel/src` → `packages/<dir>`) — so
- * `bun install` resolves it today against the workspace-linked packages. At the
- * `0.x` publish this single function flips to returning a real `^0.x` range.
+ * `publishedRangePin` (the DEFAULT) pins each to a published `^0.x` range — what
+ * an outsider gets from `npm create keel-app`, resolvable from the registry once
+ * the `0.x` publish lands (see `RELEASING.md`). `fileColonPin` pins each to a
+ * `file:` path at the in-repo package — the in-monorepo dev/e2e mode, selected by
+ * `create-keel --local`, so `bun install` resolves against the workspace packages
+ * before anything is published.
+ *
+ * The resolver is injectable (`ScaffoldOptions.keelDep`), so a test can pin to a
+ * fake specifier and the publish line lives in exactly one place.
  */
 const PACKAGES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-const fileColonPin: KeelDepResolver = (pkg) =>
+/** The published range a scaffolded app pins each `@keel/*` dep at by default. */
+const KEEL_DEP_RANGE = "^0.1.0";
+
+/** Default pin: the published `^0.x` range (resolves from the registry post-publish). */
+export const publishedRangePin: KeelDepResolver = () => KEEL_DEP_RANGE;
+
+/** `--local` pin: a `file:` path at the in-repo package (in-monorepo dev). */
+export const fileColonPin: KeelDepResolver = (pkg) =>
   `file:${join(PACKAGES_DIR, pkg.replace("@keel/", ""))}`;
 
 /** The filesystem operations `scaffold` needs — injected so tests can fake them. */
@@ -51,10 +62,10 @@ export interface ScaffoldOptions {
   targetDir: string;
 
   /**
-   * How each `@keel/*` dependency is pinned. Defaults to a `file:` path at the
-   * in-repo package (the unpublished-package story — blocker #9). Injected so a
-   * test can pin to a fake specifier without depending on the repo layout, and so
-   * the `0.x` publish can flip it to a real version range in one place.
+   * How each `@keel/*` dependency is pinned. Defaults to `publishedRangePin` (a
+   * `^0.x` range an outsider installs from the registry); `create-keel --local`
+   * passes `fileColonPin` for in-monorepo dev. Injected so a test can pin to a
+   * fake specifier without depending on the repo layout.
    */
   keelDep?: KeelDepResolver;
 }
@@ -69,7 +80,7 @@ export interface ScaffoldOptions {
  */
 export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promise<string[]> {
   const { name, targetDir } = options;
-  const keelDep = options.keelDep ?? fileColonPin;
+  const keelDep = options.keelDep ?? publishedRangePin;
 
   // Never clobber an existing directory.
   if (await io.exists(targetDir)) {

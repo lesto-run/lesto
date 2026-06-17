@@ -6,12 +6,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   CreateKeelError,
+  fileColonPin,
   gitignore,
   islandCounter,
   keelApp,
   keelSites,
   KEEL_PACKAGES,
   packageJson,
+  publishedRangePin,
   readme,
   scaffold,
   tsconfig,
@@ -286,5 +288,41 @@ describe("templates", () => {
 
   it("readme names the project", () => {
     expect(readme("acme")).toContain("# acme");
+  });
+});
+
+describe("dep resolvers", () => {
+  it("publishedRangePin (the default) pins every @keel dep at a published ^0.x range", () => {
+    for (const pkg of KEEL_PACKAGES) {
+      const specifier = publishedRangePin(pkg);
+
+      // A registry-resolvable semver range — what an outsider installs. Never a
+      // local `file:` path or the monorepo-only `workspace:` protocol.
+      expect(specifier).toMatch(/^\^0\./);
+      expect(specifier).not.toContain("file:");
+      expect(specifier).not.toContain("workspace:");
+    }
+  });
+
+  it("fileColonPin (the --local mode) pins every @keel dep at a file: path to the in-repo package", () => {
+    for (const pkg of KEEL_PACKAGES) {
+      const specifier = fileColonPin(pkg);
+
+      expect(specifier.startsWith("file:")).toBe(true);
+      // The path ends at the package's directory name, with the @keel/ scope stripped.
+      expect(specifier).toContain(pkg.replace("@keel/", ""));
+      expect(specifier).not.toContain("@keel/");
+    }
+  });
+
+  it("the default-resolver manifest carries published ranges for every @keel dep", () => {
+    // packageJson with the scaffold's default resolver — the bytes an outsider gets.
+    const parsed = JSON.parse(packageJson("acme", publishedRangePin)) as {
+      dependencies: Record<string, string>;
+    };
+
+    for (const pkg of KEEL_PACKAGES) {
+      expect(parsed.dependencies[pkg]).toMatch(/^\^0\./);
+    }
   });
 });

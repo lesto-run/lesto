@@ -14,7 +14,7 @@
 export { CreateKeelError, KeelError } from "./errors";
 export type { CreateKeelErrorCode } from "./errors";
 
-export { scaffold } from "./scaffold";
+export { scaffold, fileColonPin, publishedRangePin } from "./scaffold";
 export type { ScaffoldIO, ScaffoldOptions } from "./scaffold";
 
 export {

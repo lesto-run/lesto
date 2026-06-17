@@ -99,8 +99,10 @@ test.beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "keel-scaffold-loop-"));
   appDir = join(workspace, APP_NAME);
 
-  // 1. Scaffold a fresh app via create-keel's own bin.
-  await run("bun", [CREATE_KEEL_BIN, APP_NAME], workspace);
+  // 1. Scaffold a fresh app via create-keel's own bin. `--local` pins the @keel/*
+  //    deps at in-repo `file:` paths (the in-monorepo dev mode) — the default emits
+  //    published `^0.x` ranges, which only resolve from the registry post-publish.
+  await run("bun", [CREATE_KEEL_BIN, APP_NAME, "--local"], workspace);
 
   // 2. "Install" the workspace-linked packages: link the app's node_modules at the
   //    repo's installed workspace node_modules (the publish-equivalent of `bun
