@@ -81,6 +81,7 @@
         "@react-email/components": "^1.0.12",
         "@react-email/render": "^2.0.8",
         "better-sqlite3": "^11.10.0",
+        "postgres": "^3.4.9",
         "preact": "^10.29.2",
         "preact-render-to-string": "^6",
         "react": "^19",
@@ -182,6 +183,7 @@
         "@keel/db": "workspace:*",
         "@keel/deploy": "workspace:*",
         "@keel/errors": "workspace:*",
+        "@keel/pg": "workspace:*",
         "@keel/web": "workspace:*",
       },
     },
@@ -2263,6 +2265,8 @@
     "pluralize": ["pluralize@8.0.0", "", {}, "sha512-Nc3IT5yHzflTfbjgqWcCPpo7DaKy4FnpB0l/zCAW0Tc7jxAiuqSxHasntB3D7887LSrA93kDJ9IXovxJYxyLCA=="],
 
     "postcss": ["postcss@8.5.15", "", { "dependencies": { "nanoid": "^3.3.12", "picocolors": "^1.1.1", "source-map-js": "^1.2.1" } }, "sha512-FfR8sjd4em2T6fb3I2MwAJU7HWVMr9zba+enmQeeWFfCbm+UOC/0X4DS8XtpUTMwWMGbjKYP7xjfNekzyGmB3A=="],
+
+    "postgres": ["postgres@3.4.9", "", {}, "sha512-GD3qdB0x1z9xgFI6cdRD6xu2Sp2WCOEoe3mtnyB5Ee0XrrL5Pe+e4CCnJrRMnL1zYtRDZmQQVbvOttLnKDLnaw=="],
 
     "preact": ["preact@10.29.2", "", {}, "sha512-7tNmwg/7mzzAoB/8kSg6Hl37JraAZw3Z3A0JSY7VXlZwo82Xn0G7wKbNNs2qoF4ZEEsQGTwDAroNdqKs1ofJxQ=="],
 

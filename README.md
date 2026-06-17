@@ -13,6 +13,8 @@ Fifty `@keel/*` packages and counting. The highlights below are grouped by domai
 | Package | What it does |
 |---|---|
 | [`@keel/migrate`](./packages/migrate) | Tracks-style migrator — version-stamped, idempotent migrations over `@keel/db` schema-as-value DDL on an injected SQL database. |
+| [`@keel/pg`](./packages/pg) | The Node Postgres driver — adapts a node-postgres `Pool` to the same async `SqlDatabase` seam SQLite satisfies (`openPostgres`), so an app moves from SQLite to Postgres with no change above the driver. |
+| [`@keel/cloudflare`](./packages/cloudflare) | Run a Keel app on Cloudflare Workers — the `fetch`-handler + static-assets adapter, plus the edge's two SQL drivers for the same `SqlDatabase` surface: `d1ToSqlDatabase` (D1, the edge's SQLite) and `hyperdriveToSqlDatabase` (Cloudflare Hyperdrive fronting a real Postgres). Both bundle for Workers with no `node:*` builtins. |
 | [`@keel/storage`](./packages/storage) | Object storage behind one API — pluggable backends (in-memory, local filesystem; S3 to come). |
 
 ### Async

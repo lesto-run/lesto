@@ -28,6 +28,7 @@ The north star: **change your site — content, UI, schema, data — and deploy 
 
 - **Local dev needs nothing** — SQLite + DB queue/cache + mail-catcher.
 - **Production = one Postgres** + thin edge drivers; optionally a Redis driver later for extreme throughput, behind the same API.
+- **One `SqlDatabase` surface, four substrate drivers — the tier picks one, the app never changes.** Node: `openPostgres` over `pg` (`@keel/pg`) at scale, `openSqlite` in dev. Cloudflare Workers (no filesystem, no node sockets): `d1ToSqlDatabase` over D1 (the edge's SQLite) or `hyperdriveToSqlDatabase` over **Cloudflare Hyperdrive** (the edge's Postgres — pooled, connection-cached, fronting a real Postgres), both in `@keel/cloudflare`. Same async `SqlDatabase` seam, same `?`→`$n` dialect (shared with `@keel/pg`), so a DB-driven page runs the identical query path on every tier.
 - **Managed "Keel Cloud" is a later commercial layer** that one-click-provisions Postgres + edges — the Vercel→Next / Forge→Laravel / .com→.org model.
 
 ---
@@ -114,6 +115,8 @@ Two layers, both on Postgres; the queue is always-on, workflows opt in.
 ## 6. Deployment & durability model
 
 State lives in the one DB → **web tier stateless** → zero-downtime **rolling restarts** (no Redis, no sticky sessions). The DB queue is durable (**at-least-once + visibility-timeout reclaim**); workers **graceful-drain on SIGTERM**; a worker killed mid-job (a deploy) releases the job, which is reclaimed and re-run. Jobs idempotent by convention; workflows give exactly-once *effects* via checkpointing. Deploy tooling: Kamal-style rolling deploy is the model.
+
+**Per-tier durability substrate.** On the Node tier the durable store is one Postgres reached over `openPostgres` (`@keel/pg`, a node-postgres `Pool`). On the Cloudflare Workers tier — where there is no filesystem and no node socket — the same durable data is reached over `hyperdriveToSqlDatabase` (Cloudflare Hyperdrive fronting a real Postgres, with edge-side pooling + connection caching), or `d1ToSqlDatabase` for D1's edge SQLite where Postgres scale is not needed. All three satisfy the identical async `SqlDatabase` surface, so "SQLite local → Postgres at scale, same APIs" holds on the flagship edge tier, not only on Node. The Hyperdrive driver bundles for Workers with zero `node:*` builtins; a live binding needs a publicly-reachable Postgres, a `wrangler hyperdrive create` config, and a token with the `hyperdrive` scope.
 
 ---
 

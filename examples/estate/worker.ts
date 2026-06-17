@@ -38,9 +38,10 @@ import { currentRequestSpan } from "@keel/web";
 import { preactServerRenderer } from "@keel/ui/server";
 
 import { buildEdgeApp, edgeSecret, isDemoMode } from "./src/edge";
-import { d1ContentStore } from "./src/content";
+import { d1ContentStore, hyperdriveContentStore } from "./src/content";
 import type { ContentStore } from "./src/content";
-import type { D1Database } from "@keel/cloudflare";
+import type { D1Database, Hyperdrive, HyperdriveConnection } from "@keel/cloudflare";
+import postgres from "postgres";
 
 /** The bindings this Worker is configured with (see wrangler.jsonc). */
 interface Env {
@@ -49,6 +50,16 @@ interface Env {
   readonly KEEL_DEMO?: string;
   /** The Cloudflare D1 database backing the DB-driven `/lab/content` page. */
   readonly DB?: D1Database;
+
+  /**
+   * An optional Cloudflare Hyperdrive binding fronting a real Postgres — the
+   * flagship-tier substrate for the DB-driven `/lab/content` page. When present it
+   * takes PRECEDENCE over D1: the content store runs over `hyperdriveToSqlDatabase`
+   * (Postgres at scale, same `SqlDatabase` surface) instead of D1's edge SQLite.
+   * Absent, the page uses D1 exactly as before. Configure with a `[[hyperdrive]]`
+   * binding named `HYPERDRIVE` in wrangler.jsonc (see the README runbook).
+   */
+  readonly HYPERDRIVE?: Hyperdrive;
 
   /**
    * OTLP tracing knobs, off the Worker `env` binding (NOT `process.env` — there
@@ -150,14 +161,52 @@ function logEdgeRequest(entry: {
 }
 
 /**
+ * Adapt the Hyperdrive binding's postgres connection to the `HyperdriveConnection`
+ * the content store consumes — `query(text, values) => { rows, rowCount }`.
+ *
+ * The Worker speaks to Hyperdrive's `connectionString` with postgres-js (`postgres`),
+ * a Workers-compatible client. `sql.unsafe(text, params)` runs an already-`$n`-bound
+ * statement (the adapter translates `?`→`$n` before it gets here) and returns a
+ * result array whose `.count` is the affected/returned row count — mapped to the
+ * `{ rows, rowCount }` node-postgres shape `hyperdriveToSqlDatabase` reads.
+ */
+function hyperdriveConnection(hyperdrive: Hyperdrive): HyperdriveConnection {
+  const sql = postgres(hyperdrive.connectionString);
+
+  return {
+    query: async (text, values = []) => {
+      const result = await sql.unsafe(text, values as never[]);
+
+      return { rows: [...result], rowCount: result.count };
+    },
+  };
+}
+
+/**
+ * Build the DB-driven content store from the per-isolate bindings, preferring
+ * Hyperdrive (real Postgres at scale) over D1 (edge SQLite) when its binding is
+ * present. Absent both, `undefined` — the content page renders its "configure a
+ * binding" view rather than 404ing. Either way the page runs the IDENTICAL query
+ * path; only the substrate (and dialect) differs (ADR 0006's same-surface promise).
+ */
+function contentStoreFor(
+  d1: D1Database | undefined,
+  hyperdrive: Hyperdrive | undefined,
+): ContentStore | undefined {
+  if (hyperdrive !== undefined) return hyperdriveContentStore(hyperdriveConnection(hyperdrive));
+
+  return d1 === undefined ? undefined : d1ContentStore(d1);
+}
+
+/**
  * The fetch handler for `secret` + `demo`, built once per isolate and reused.
  *
  * Keyed by both the secret and the demo flag: the demo flag changes whether the
  * passwordless `?as=` sign-in is reachable, so a flag change must rebuild rather
- * than serve a handler with the wrong auth posture. The D1 content store is
- * derived from the per-isolate `DB` binding (stable for the isolate's lifetime),
- * so it is built inside the rebuild and reused across requests — never re-opened
- * (which would re-run its seed check) per request.
+ * than serve a handler with the wrong auth posture. The content store is derived
+ * from the per-isolate bindings (Hyperdrive preferred over D1, both stable for the
+ * isolate's lifetime), so it is built inside the rebuild and reused across requests
+ * — never re-opened (which would re-run its seed check) per request.
  *
  * The tracing handle (`traces`) is isolate-stable too, so it is folded into the
  * handler here: when tracing is on, every request mints a span (joined to an
@@ -168,10 +217,11 @@ function handlerFor(
   secret: string,
   demo: boolean,
   d1: D1Database | undefined,
+  hyperdrive: Hyperdrive | undefined,
   traces: Traces | undefined,
 ): FetchHandler {
   if (cachedHandler === undefined || cachedSecret !== secret || cachedDemo !== demo) {
-    cachedStore = d1 === undefined ? undefined : d1ContentStore(d1);
+    cachedStore = contentStoreFor(d1, hyperdrive);
 
     const app = buildEdgeApp(secret, {
       serverRenderer: preactServerRenderer,
@@ -202,7 +252,7 @@ export default {
 
     // edgeSecret FAILS CLOSED: an unset SESSION_SECRET outside demo mode throws
     // here, so the Worker refuses to serve rather than sign with a public secret.
-    const handler = handlerFor(edgeSecret(env), isDemoMode(env), env.DB, traces);
+    const handler = handlerFor(edgeSecret(env), isDemoMode(env), env.DB, env.HYPERDRIVE, traces);
 
     // Static marketing files first (cached at the PoP); the live app for the rest.
     // `env.ASSETS` is per-request, so this thin wrap happens every time; the

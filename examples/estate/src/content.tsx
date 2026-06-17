@@ -15,7 +15,7 @@
  */
 
 import { createDb, createTableSql, defineTable, eq, integer, text } from "@keel/db";
-import type { Db, SqlDatabase } from "@keel/db";
+import type { Db, Dialect, SqlDatabase } from "@keel/db";
 import { keel, type Keel } from "@keel/web";
 import { Registry } from "@keel/ui";
 import { renderTree } from "@keel/ui/server";
@@ -23,8 +23,8 @@ import type { UiNode } from "@keel/ui";
 import type { ReactNode } from "react";
 
 import { Hero, Main, SiteHeader } from "./ui/components";
-import { d1ToSqlDatabase } from "@keel/cloudflare";
-import type { D1Database } from "@keel/cloudflare";
+import { d1ToSqlDatabase, hyperdriveToSqlDatabase } from "@keel/cloudflare";
+import type { D1Database, HyperdriveConnection } from "@keel/cloudflare";
 
 /** The block-page table: a slug, a title, and the serialized UiNode tree. */
 const pages = defineTable("pages", {
@@ -102,9 +102,16 @@ const SEED: readonly SeedPage[] = [
   },
 ];
 
-/** Create the table if absent and seed it once (idempotent — safe on a persistent D1). */
-async function ensureSeeded(handle: SqlDatabase, db: Db): Promise<void> {
-  await handle.exec(createTableSql(pages).replace(/^CREATE TABLE/, "CREATE TABLE IF NOT EXISTS"));
+/**
+ * Create the table if absent and seed it once (idempotent — safe on a persistent
+ * D1 or Hyperdrive-fronted Postgres). The DDL is rendered for `dialect` so the
+ * `pages` table installs on either edge substrate: SQLite-shaped on D1, Postgres-
+ * shaped (BIGINT id, GENERATED ALWAYS AS IDENTITY) over Hyperdrive.
+ */
+async function ensureSeeded(handle: SqlDatabase, db: Db, dialect: Dialect): Promise<void> {
+  await handle.exec(
+    createTableSql(pages, dialect).replace(/^CREATE TABLE/, "CREATE TABLE IF NOT EXISTS"),
+  );
 
   const first = SEED[0];
   if (first === undefined) return;
@@ -132,14 +139,14 @@ export type ContentStore = () => Promise<Db>;
  * free of any filesystem-SQLite dependency the edge can't load.
  */
 export function makeContentStore(
-  open: () => Promise<{ handle: SqlDatabase; db: Db }>,
+  open: () => Promise<{ handle: SqlDatabase; db: Db; dialect?: Dialect }>,
 ): ContentStore {
   let ready: Promise<Db> | undefined;
 
   return () =>
     (ready ??= (async () => {
-      const { handle, db } = await open();
-      await ensureSeeded(handle, db);
+      const { handle, db, dialect } = await open();
+      await ensureSeeded(handle, db, dialect ?? "sqlite");
 
       return db;
     })());
@@ -151,6 +158,22 @@ export function d1ContentStore(d1: D1Database): ContentStore {
     const handle = d1ToSqlDatabase(d1);
 
     return { handle, db: createDb(handle) };
+  });
+}
+
+/**
+ * The Cloudflare edge content store over Hyperdrive-fronted Postgres — the
+ * flagship-tier twin of {@link d1ContentStore}. `connection` is a postgres client
+ * the Worker has connected to `env.HYPERDRIVE.connectionString`; it is adapted to
+ * `@keel/db` by `hyperdriveToSqlDatabase`, so the IDENTICAL query + render path
+ * runs over Postgres at scale instead of D1's edge SQLite. The dialect is
+ * `"postgres"` so the table installs and binds (`?`→`$n`) the Postgres way.
+ */
+export function hyperdriveContentStore(connection: HyperdriveConnection): ContentStore {
+  return makeContentStore(async () => {
+    const handle = hyperdriveToSqlDatabase(connection);
+
+    return { handle, db: createDb(handle, { dialect: "postgres" }), dialect: "postgres" };
   });
 }
 

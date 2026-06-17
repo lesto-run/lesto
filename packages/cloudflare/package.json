@@ -23,6 +23,7 @@
     "@keel/db": "workspace:*",
     "@keel/deploy": "workspace:*",
     "@keel/errors": "workspace:*",
+    "@keel/pg": "workspace:*",
     "@keel/web": "workspace:*"
   }
 }
