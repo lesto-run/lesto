@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   and,
+  boolean,
   createDb,
   createTableSql,
   DbError,
@@ -22,6 +23,7 @@ import {
   or,
   real,
   text,
+  timestamp,
 } from "../src/index";
 
 import type { Db, InferInsert, InferRow, InferUpdate, QueryEvent, SqlDatabase } from "../src/index";
@@ -136,6 +138,17 @@ describe("column builders", () => {
     expect(real("x").spec.sqlType).toBe("REAL");
   });
 
+  it("boolean/timestamp carry a logical kind but store as INTEGER", () => {
+    expect(boolean("x").spec.kind).toBe("boolean");
+    expect(boolean("x").spec.sqlType).toBe("INTEGER");
+    expect(timestamp("x").spec.kind).toBe("timestamp");
+    expect(timestamp("x").spec.sqlType).toBe("INTEGER");
+    // the existing three keep kind === their storage, lower-cased.
+    expect(text("x").spec.kind).toBe("text");
+    expect(integer("x").spec.kind).toBe("integer");
+    expect(real("x").spec.kind).toBe("real");
+  });
+
   it(".notNull / .unique / .default produce fresh specs (immutable chains)", () => {
     const base = text("e");
 
@@ -160,6 +173,68 @@ describe("column builders", () => {
     expect(auto.spec.primaryKey).toBe(true);
     expect(auto.spec.autoIncrement).toBe(true);
     expect(auto.spec.hasDefault).toBe(true);
+  });
+});
+
+describe("rich column types (boolean, timestamp)", () => {
+  // A second fixture so the shared `users` table's column count stays fixed.
+  const events = defineTable("events", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    active: boolean("active").notNull(),
+    archived: boolean("archived"), // nullable
+    occurredAt: timestamp("occurred_at").notNull(),
+    deletedAt: timestamp("deleted_at"), // nullable
+  });
+
+  let edb: Db;
+  let eraw: Database.Database;
+
+  beforeEach(async () => {
+    eraw = new Database(":memory:");
+    edb = createDb(adapt(eraw));
+    await edb.exec(createTableSql(events));
+  });
+
+  afterEach(() => {
+    eraw.close();
+  });
+
+  it("DDL stores both as INTEGER (sqlite) / BIGINT (postgres)", () => {
+    const sqlite = createTableSql(events);
+    expect(sqlite).toContain('"active" INTEGER');
+    expect(sqlite).toContain('"occurred_at" INTEGER');
+
+    const pg = createTableSql(events, "postgres");
+    expect(pg).toContain('"active" BIGINT');
+    expect(pg).toContain('"occurred_at" BIGINT');
+  });
+
+  it("boolean round-trips 0/1 ⇄ false/true; timestamp round-trips epoch-ms ⇄ Date", async () => {
+    const when = new Date("2026-06-18T12:34:56.000Z");
+
+    const created = await edb
+      .insert(events)
+      .values({ active: true, archived: false, occurredAt: when })
+      .returning()
+      .get();
+
+    expect(created.active).toBe(true);
+    expect(created.archived).toBe(false);
+    expect(created.occurredAt).toBeInstanceOf(Date);
+    expect(created.occurredAt.getTime()).toBe(when.getTime());
+  });
+
+  it("a nullable boolean / timestamp left unset stays null (never false / Invalid Date)", async () => {
+    const created = await edb
+      .insert(events)
+      .values({ active: false, occurredAt: new Date(0) })
+      .returning()
+      .get();
+
+    expect(created.active).toBe(false); // a real `false`, not a dropped null
+    expect(created.archived).toBeNull();
+    expect(created.deletedAt).toBeNull();
+    expect(created.occurredAt.getTime()).toBe(0);
   });
 });
 

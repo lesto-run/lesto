@@ -19,8 +19,26 @@
  * one source of truth.
  */
 
-/** The underlying SQL type a column maps to. */
+/** The underlying SQL storage type a column maps to. */
 export type SqlType = "TEXT" | "INTEGER" | "REAL";
+
+/**
+ * The *logical* kind of a column — what the value means, as opposed to how it is
+ * stored ({@link SqlType}). The two diverge for `boolean` and `timestamp`, which
+ * both store as `INTEGER` (a `0/1` flag, an epoch-ms instant) but hydrate to a JS
+ * `boolean` / `Date`. The query layer dispatches on `kind` to coerce a raw cell to
+ * its `InferRow` type; DDL renders the storage `sqlType`. (ADR 0018, Increment 1.)
+ */
+export type ColumnKind = "text" | "integer" | "real" | "boolean" | "timestamp";
+
+/** The storage type each logical kind lands in. */
+const STORAGE: Record<ColumnKind, SqlType> = {
+  text: "TEXT",
+  integer: "INTEGER",
+  real: "REAL",
+  boolean: "INTEGER",
+  timestamp: "INTEGER",
+};
 
 /**
  * The runtime spec for a column. Carries everything DDL needs to render the
@@ -28,6 +46,7 @@ export type SqlType = "TEXT" | "INTEGER" | "REAL";
  */
 export interface ColumnSpec {
   readonly name: string;
+  readonly kind: ColumnKind;
   readonly sqlType: SqlType;
   readonly nullable: boolean;
   readonly unique: boolean;
@@ -137,11 +156,12 @@ function builder<T, N extends boolean, D extends boolean>(
   return self;
 }
 
-/** Seed a builder with the column's name and SQL type. New columns are nullable, non-unique, non-key. */
-function seed<T>(name: string, sqlType: SqlType): ColumnBuilder<T, true, false> {
+/** Seed a builder from the column's name + logical kind. New columns are nullable, non-unique, non-key. */
+function seed<T>(name: string, kind: ColumnKind): ColumnBuilder<T, true, false> {
   return builder<T, true, false>({
     name,
-    sqlType,
+    kind,
+    sqlType: STORAGE[kind],
     nullable: true,
     unique: false,
     primaryKey: false,
@@ -152,17 +172,27 @@ function seed<T>(name: string, sqlType: SqlType): ColumnBuilder<T, true, false> 
 
 /** A `TEXT` column — JS `string`. */
 export function text(name: string): ColumnBuilder<string, true, false> {
-  return seed<string>(name, "TEXT");
+  return seed<string>(name, "text");
 }
 
 /** An `INTEGER` column — JS `number`. */
 export function integer(name: string): ColumnBuilder<number, true, false> {
-  return seed<number>(name, "INTEGER");
+  return seed<number>(name, "integer");
 }
 
 /** A `REAL` column — JS `number`. */
 export function real(name: string): ColumnBuilder<number, true, false> {
-  return seed<number>(name, "REAL");
+  return seed<number>(name, "real");
+}
+
+/** A `boolean` column — stored as `INTEGER` `0/1`, read back as a JS `boolean`. */
+export function boolean(name: string): ColumnBuilder<boolean, true, false> {
+  return seed<boolean>(name, "boolean");
+}
+
+/** A `timestamp` column — stored as epoch-ms `INTEGER`, read back as a JS `Date`. */
+export function timestamp(name: string): ColumnBuilder<Date, true, false> {
+  return seed<Date>(name, "timestamp");
 }
 
 /** Extract a column's JS cell type, accounting for nullability. */

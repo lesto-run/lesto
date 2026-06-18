@@ -23,7 +23,7 @@
  * untouched and there is zero measurement cost.
  */
 
-import type { Column } from "./columns";
+import type { Column, ColumnKind } from "./columns";
 import type { Condition } from "./conditions";
 import type { Dialect } from "./ddl";
 import { DbError } from "./errors";
@@ -37,21 +37,53 @@ function bind(value: unknown): unknown {
 
   if (typeof value === "boolean") return value ? 1 : 0;
 
+  // A `timestamp` column's JS value is a `Date`; it stores as its epoch-ms
+  // integer (the same number `hydrate` reads back). Drivers reject a Date object.
+  if (value instanceof Date) return value.getTime();
+
   return value;
 }
 
 /**
- * Hydrate a raw row (snake_case keys) into the camelCase row the consumer
- * expects, using the table's `byColumn` map. Unknown columns are passed
- * through (defensive — a future column added in DDL would otherwise drop).
+ * Coerce one raw cell to its `InferRow` JS type, dispatched on the column's
+ * logical {@link ColumnKind}.
  *
- * A numeric column (`INTEGER` / `REAL`) is coerced to a JS `number`: node-postgres
- * hands `BIGINT` (and other numerics) back as a *string*, whereas SQLite returns
- * a number, so a non-null numeric cell is normalized here. `InferRow` types these
- * columns as `number`, so this is what makes that type honest on both drivers —
- * and what lets `createTableSql` widen `INTEGER` to `BIGINT` on Postgres (to dodge
- * int4 overflow) without leaking a string up to the caller. `null` stays `null`;
- * a `TEXT` column is never coerced (a numeric-looking string stays a string).
+ * Driver-agnostic by construction: node-postgres hands an `INTEGER`/`BIGINT`-backed
+ * column back as a *string* while SQLite returns a number, so every numeric-storage
+ * kind runs through `Number(...)` — one branch-free path identical on both engines.
+ * That is what makes `InferRow` honest across drivers (and lets `createTableSql`
+ * widen `INTEGER`→`BIGINT` on Postgres without leaking a string to the caller).
+ *
+ *   - `boolean`   — `0/1` (or `"0"/"1"`) → `false/true`
+ *   - `timestamp` — epoch-ms (number or string) → `Date`
+ *   - `integer`/`real` — → `number`
+ *   - `text` / unknown column — passed through untouched (a numeric-looking string
+ *     in a `TEXT` column stays a string)
+ *
+ * `null` always stays `null` (a nullable boolean/timestamp does not become
+ * `false`/`Invalid Date`).
+ */
+function coerceCell(kind: ColumnKind | undefined, value: unknown): unknown {
+  if (value === null) return null;
+
+  switch (kind) {
+    case "boolean":
+      return Number(value) === 1;
+    case "timestamp":
+      return new Date(Number(value));
+    case "integer":
+    case "real":
+      return Number(value);
+    default:
+      return value;
+  }
+}
+
+/**
+ * Hydrate a raw row (snake_case keys) into the camelCase row the consumer
+ * expects, using the table's `byColumn` map. Unknown columns are passed through
+ * (defensive — a future column added in DDL would otherwise drop), with their
+ * value untouched since the table has no `kind` for them.
  */
 function hydrate<T extends Table>(table: T, raw: unknown): InferRow<T> {
   const row = raw as Record<string, unknown>;
@@ -59,10 +91,7 @@ function hydrate<T extends Table>(table: T, raw: unknown): InferRow<T> {
 
   for (const [columnName, value] of Object.entries(row)) {
     const key = table.byColumn[columnName] ?? columnName;
-    const sqlType = table.byKey[key]?.sqlType;
-    const numeric = sqlType === "INTEGER" || sqlType === "REAL";
-
-    out[key] = numeric && typeof value === "string" ? Number(value) : value;
+    out[key] = coerceCell(table.byKey[key]?.kind, value);
   }
 
   return out as InferRow<T>;

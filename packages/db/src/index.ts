@@ -39,11 +39,12 @@
  * `docs/adr/0004-data-layer-style.md` for the why.
  */
 
-export { integer, real, text } from "./columns";
+export { boolean, integer, real, text, timestamp } from "./columns";
 export type {
   CellType,
   Column,
   ColumnBuilder,
+  ColumnKind,
   ColumnSpec,
   IsOptionalOnInsert,
   SqlType,

@@ -20,6 +20,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  boolean,
   createDb,
   createTableSql,
   defineTable,
@@ -32,6 +33,7 @@ import {
   lt,
   lte,
   text,
+  timestamp,
 } from "@lesto/db";
 import type { Db, Dialect, SqlDatabase } from "@lesto/db";
 import { Migrator } from "@lesto/migrate";
@@ -206,6 +208,37 @@ describe.each(drivers)("data-layer parity: $name", (driver) => {
     ).rejects.toThrow("boom");
 
     expect(await db.select().from(items).count()).toBe(0);
+  });
+
+  // The pg leg is the one that matters here: node-postgres hands the INTEGER/BIGINT
+  // storage back as a *string*, so `boolean`/`timestamp` hydration must coerce it to
+  // `false/true` and a `Date` identically to SQLite's number path (ADR 0018 §1).
+  it("boolean + timestamp store as INTEGER and round-trip identically on both drivers", async () => {
+    const events = defineTable("parity_events", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      active: boolean("active").notNull(),
+      archived: boolean("archived"), // nullable
+      occurredAt: timestamp("occurred_at").notNull(),
+      deletedAt: timestamp("deleted_at"), // nullable
+    });
+
+    await handle.exec("DROP TABLE IF EXISTS parity_events");
+    await handle.exec(createTableSql(events, driver.name));
+
+    const when = new Date("2026-06-18T12:34:56.000Z");
+    const created = await db
+      .insert(events)
+      .values({ active: true, archived: false, occurredAt: when })
+      .returning()
+      .get();
+
+    expect(created.active).toBe(true);
+    expect(created.archived).toBe(false);
+    expect(created.occurredAt).toBeInstanceOf(Date);
+    expect(created.occurredAt.getTime()).toBe(when.getTime());
+    expect(created.deletedAt).toBeNull();
+
+    await handle.exec("DROP TABLE parity_events");
   });
 });
 
