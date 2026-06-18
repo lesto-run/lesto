@@ -131,8 +131,9 @@ describe("openSqlite", () => {
       }),
     ).rejects.toBe(original);
 
-    // BEGIN ran; the throwing ROLLBACK was swallowed; COMMIT never ran.
-    expect(execed).toEqual(["BEGIN"]);
+    // The FK pragma ran at open; BEGIN ran; the throwing ROLLBACK was swallowed
+    // (so it isn't recorded); COMMIT never ran.
+    expect(execed).toEqual(["PRAGMA foreign_keys = ON", "BEGIN"]);
 
     close();
   });

@@ -9,9 +9,41 @@
  * list that drifts.
  */
 
-import type { ColumnSpec } from "./columns";
+import type { ColumnReference, ColumnSpec, ReferentialAction } from "./columns";
+import { DbError } from "./errors";
 import { quoteIdentifier } from "./identifier";
 import type { Table } from "./table";
+
+/** Each referential action's SQL keyword — identical on SQLite and Postgres. */
+const REFERENTIAL_SQL: Record<ReferentialAction, string> = {
+  cascade: "CASCADE",
+  restrict: "RESTRICT",
+  "set null": "SET NULL",
+  "no action": "NO ACTION",
+};
+
+/**
+ * Render a column's inline `REFERENCES` clause. The target thunk is resolved here,
+ * at render time, when every `defineTable` has sealed and the target carries its
+ * `tableName` (ADR 0018, Increment 0); a reference to a column that was never placed
+ * in a table fails loud rather than emitting `REFERENCES undefined(...)`.
+ */
+function referencesClause(reference: ColumnReference): string {
+  const target = reference.resolve().spec;
+
+  if (target.tableName === undefined) {
+    throw new DbError(
+      "DB_UNRESOLVED_REFERENCE",
+      `Foreign key references column "${target.name}", which is not part of a table — reference a column from a defineTable() schema.`,
+    );
+  }
+
+  let clause = `REFERENCES ${quoteIdentifier(target.tableName)}(${quoteIdentifier(target.name)})`;
+  if (reference.onDelete) clause += ` ON DELETE ${REFERENTIAL_SQL[reference.onDelete]}`;
+  if (reference.onUpdate) clause += ` ON UPDATE ${REFERENTIAL_SQL[reference.onUpdate]}`;
+
+  return clause;
+}
 
 /**
  * Which SQL dialect a {@link createTableSql} call should render for.
@@ -79,6 +111,8 @@ function modifiers(spec: ColumnSpec, dialect: Dialect): string {
   if (spec.defaultValue !== undefined) parts.push(`DEFAULT ${renderDefault(spec.defaultValue)}`);
 
   if (spec.unique) parts.push("UNIQUE");
+
+  if (spec.references) parts.push(referencesClause(spec.references));
 
   return parts.length === 0 ? "" : ` ${parts.join(" ")}`;
 }

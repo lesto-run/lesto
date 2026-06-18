@@ -45,8 +45,10 @@ export type {
   Column,
   ColumnBuilder,
   ColumnKind,
+  ColumnReference,
   ColumnSpec,
   IsOptionalOnInsert,
+  ReferentialAction,
   SqlType,
 } from "./columns";
 

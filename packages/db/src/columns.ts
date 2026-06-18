@@ -41,6 +41,26 @@ const STORAGE: Record<ColumnKind, SqlType> = {
 };
 
 /**
+ * What a foreign key does to the child row when its parent changes. ANSI-standard
+ * and spelled identically on SQLite and Postgres, so the DDL never forks.
+ * (`set null` requires a nullable column — the DB enforces that at delete time.)
+ */
+export type ReferentialAction = "cascade" | "restrict" | "set null" | "no action";
+
+/** A foreign key declared on a column via `.references()`. */
+export interface ColumnReference {
+  /**
+   * Resolves the target column. A *thunk* (not the column itself) so two tables can
+   * reference each other across a circular import; it is called once at DDL-render
+   * time, by when every `defineTable` has sealed and the target carries its
+   * `tableName` (ADR 0018, Increment 0).
+   */
+  readonly resolve: () => Column;
+  readonly onDelete?: ReferentialAction;
+  readonly onUpdate?: ReferentialAction;
+}
+
+/**
  * The runtime spec for a column. Carries everything DDL needs to render the
  * column declaration, and everything the query compiler needs to bind values.
  */
@@ -63,6 +83,9 @@ export interface ColumnSpec {
    * here, so a column reference is self-describing.
    */
   readonly tableName?: string;
+
+  /** The foreign key declared on this column, if any (`.references(...)`). */
+  readonly references?: ColumnReference;
 }
 
 /**
@@ -123,6 +146,23 @@ export interface ColumnBuilder<
 
   /** Stamp a default literal. The column is then optional on insert. */
   default(value: T): ColumnBuilder<T, Nullable, true>;
+
+  /**
+   * Declare a foreign key to another column. The target is a thunk (`() =>
+   * users.id`) so two tables can reference each other across imports. Its column
+   * type must match this one's — `references(() => users.id)` on a `text` column is
+   * a compile error — which is the anti-ORM win: a wrong reference fails at compile
+   * time, not as a pluralized string at runtime (ADR 0018 §2).
+   *
+   * A *self*-reference (a table pointing at its own column) needs the thunk's
+   * return type annotated to break TypeScript's circular inference —
+   * `references((): Column<number> => employees.id)` — the same one-line ceremony
+   * Drizzle requires. Cross-table references need no annotation.
+   */
+  references(
+    target: () => Column<T, boolean, boolean>,
+    options?: { onDelete?: ReferentialAction; onUpdate?: ReferentialAction },
+  ): ColumnBuilder<T, Nullable, HasDefault>;
 }
 
 /** Compose a fresh builder around a (frozen) spec. */
@@ -153,6 +193,8 @@ function builder<T, N extends boolean, D extends boolean>(
         defaultValue:
           value instanceof Date ? value.getTime() : (value as string | number | boolean | null),
       }),
+    references: (target, options) =>
+      builder({ ...spec, references: { resolve: target, ...options } }),
   };
 
   return self;

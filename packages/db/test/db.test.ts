@@ -26,7 +26,15 @@ import {
   timestamp,
 } from "../src/index";
 
-import type { Db, InferInsert, InferRow, InferUpdate, QueryEvent, SqlDatabase } from "../src/index";
+import type {
+  Column,
+  Db,
+  InferInsert,
+  InferRow,
+  InferUpdate,
+  QueryEvent,
+  SqlDatabase,
+} from "../src/index";
 
 // ---------------------------------------------------------------------------
 // Test rig
@@ -292,6 +300,83 @@ describe("rich column types (boolean, timestamp)", () => {
       createdAt: timestamp("created_at").notNull().default(new Date(123_456)),
     });
     expect(createTableSql(withDefault)).toContain("DEFAULT 123456");
+  });
+});
+
+describe("foreign keys", () => {
+  const authors = defineTable("authors", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+  });
+
+  it(".references stores the (thunk) target and actions on the spec", () => {
+    const col = integer("author_id").references(() => authors.id, { onDelete: "cascade" });
+    expect(col.spec.references?.resolve().spec.name).toBe("id");
+    expect(col.spec.references?.onDelete).toBe("cascade");
+    expect(col.spec.references?.onUpdate).toBeUndefined();
+  });
+
+  it("renders an inline REFERENCES clause, identical on both dialects", () => {
+    const posts = defineTable("posts", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      authorId: integer("author_id")
+        .notNull()
+        .references(() => authors.id),
+    });
+
+    expect(createTableSql(posts)).toContain(
+      '"author_id" INTEGER NOT NULL REFERENCES "authors"("id")',
+    );
+    // The FK SQL is ANSI-standard, so only the integer width forks (BIGINT on pg).
+    expect(createTableSql(posts, "postgres")).toContain(
+      '"author_id" BIGINT NOT NULL REFERENCES "authors"("id")',
+    );
+  });
+
+  it("appends ON DELETE / ON UPDATE actions only when given", () => {
+    const withActions = defineTable("with_actions", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      authorId: integer("author_id").references(() => authors.id, {
+        onDelete: "cascade",
+        onUpdate: "restrict",
+      }),
+    });
+
+    expect(createTableSql(withActions)).toContain(
+      'REFERENCES "authors"("id") ON DELETE CASCADE ON UPDATE RESTRICT',
+    );
+  });
+
+  it("resolves a self-reference at render time", () => {
+    // A self-reference needs the thunk's return type annotated to break TS's
+    // circular inference (the table is defined in terms of itself) — the same
+    // small ceremony Drizzle requires; the runtime resolution is unaffected.
+    const employees = defineTable("employees", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      managerId: integer("manager_id").references((): Column<number> => employees.id, {
+        onDelete: "set null",
+      }),
+    });
+
+    expect(createTableSql(employees)).toContain(
+      '"manager_id" INTEGER REFERENCES "employees"("id") ON DELETE SET NULL',
+    );
+  });
+
+  it("refuses (fail-loud) a reference to a column that is not part of a table", () => {
+    const broken = defineTable("broken", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      ref: integer("ref").references(() => integer("orphan")),
+    });
+
+    let thrown: unknown;
+    try {
+      createTableSql(broken);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(DbError);
+    expect((thrown as DbError).code).toBe("DB_UNRESOLVED_REFERENCE");
   });
 });
 

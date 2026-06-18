@@ -240,6 +240,39 @@ describe.each(drivers)("data-layer parity: $name", (driver) => {
 
     await handle.exec("DROP TABLE parity_events");
   });
+
+  // The headline of ADR 0018 §2: a declared foreign key is ENFORCED end-to-end, not
+  // merely rendered. Postgres and better-sqlite3 both enforce FKs out of the box; the
+  // `PRAGMA foreign_keys = ON` that openSqlite issues guarantees the same on the
+  // bun:sqlite fallback (which defaults them OFF). Either way the orphan is rejected.
+  it("a foreign key rejects an orphan insert on both drivers", async () => {
+    const fkParents = defineTable("fk_parents", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      name: text("name").notNull(),
+    });
+    const fkChildren = defineTable("fk_children", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      parentId: integer("parent_id")
+        .notNull()
+        .references(() => fkParents.id, { onDelete: "cascade" }),
+    });
+
+    await handle.exec("DROP TABLE IF EXISTS fk_children");
+    await handle.exec("DROP TABLE IF EXISTS fk_parents");
+    await handle.exec(createTableSql(fkParents, driver.name));
+    await handle.exec(createTableSql(fkChildren, driver.name));
+
+    const parent = await db.insert(fkParents).values({ name: "p" }).returning().get();
+    // a child pointing at a real parent is accepted
+    await db.insert(fkChildren).values({ parentId: parent.id }).run();
+
+    // an orphan (a parent id that does not exist) is rejected. Assert rejection only —
+    // better-sqlite3 and node-postgres word the constraint error differently.
+    await expect(db.insert(fkChildren).values({ parentId: 999_999 }).run()).rejects.toThrow();
+
+    await handle.exec("DROP TABLE fk_children");
+    await handle.exec("DROP TABLE fk_parents");
+  });
 });
 
 // ---------------------------------------------------------------------------

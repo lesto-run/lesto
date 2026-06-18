@@ -181,11 +181,27 @@ nullable-then-backfill column"). Cycles are rare; SQLite can't `ALTER … ADD
 CONSTRAINT` at all, so the nullable-then-backfill pattern is the documented escape.
 Validation, not automation.
 
-*Estate dogfood (non-breaking):* `posts.authorId` becomes a real
-`references(() => users.id)` FK. This is a **schema-only** change — existing
-hand-written user/post queries keep working unchanged; nothing in estate is left
-half-migrated, because no app code is forced to adopt a new read API in this
-increment.
+*Dogfood (deferred, non-breaking when it lands):* the first draft said estate's
+`posts.authorId` becomes a real `references(() => users.id)` FK — but **that schema
+does not exist** (estate has standalone `pages`/`notes`, no posts→users). The real
+by-convention FKs that "exist only in the developer's head" are in
+`@lesto/mailing-lists`: `subscribers.listId → lists.id`, `broadcasts.listId →
+lists.id`, the two on `broadcast_deliveries`. The natural dogfood is
+`subscribers.listId.references(() => lists.id, { onDelete: "cascade" })` — a
+schema-only change (the migration already creates `lists` before `subscribers`).
+It is **deferred out of this increment** to keep it small and verified: FK
+enforcement is now live in better-sqlite3, so the change must be proven not to break
+any mailing-lists test that inserts under a synthetic `listId`. The increment's
+acceptance is the parity gate (an orphan rejected on both drivers), not the dogfood.
+
+**Also deferred out of Increment 2** (decided in a design consult): the coded
+`DB_FK_VIOLATION` mapping — `@lesto/runtime` has no `@lesto/db` dependency, so
+mapping the SQLite error there would add a dependency edge purely to rename an
+error; the whole constraint-violation family (FK, unique, …) gets coded later in a
+dedicated adapter error-seam. And `assertAcyclicReferences` — `createSchemaSql` was
+already cut, so it would have zero callers, and the DB rejects a real create-order
+cycle at `CREATE TABLE` anyway. A reference to a column never placed in a table is
+still caught loud, at render time, by `DB_UNRESOLVED_REFERENCE`.
 
 ### 3 · Joins in the query builder — qualified columns, namespaced rows
 

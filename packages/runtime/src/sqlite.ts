@@ -78,6 +78,13 @@ export async function openSqlite(
 ): Promise<OpenSqlite> {
   const raw = engines.betterSqlite(filename) ?? (await engines.bunSqlite(filename));
 
+  // Enforce foreign keys for the connection's whole life. better-sqlite3 already
+  // defaults this ON, but bun:sqlite (the fallback) defaults it OFF — and the flag is
+  // per-connection AND a no-op if issued inside a transaction. So issue it
+  // synchronously here, on the one shared connection, before any statement or BEGIN:
+  // FK constraints (ADR 0018) then bite on either engine, matching Postgres.
+  raw.exec("PRAGMA foreign_keys = ON");
+
   // The shared `exec`/`prepare` half of the seam over the one connection. Both
   // the top-level db and a tx-scoped handle reuse these closures — there is only
   // ever one connection, so they always hit the same engine handle.
