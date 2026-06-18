@@ -856,6 +856,13 @@ describe("transaction", () => {
 // ---------------------------------------------------------------------------
 
 describe("conditions", () => {
+  it("qualifies a placed column by its table; a free-standing column renders bare", () => {
+    // A column reachable through a table qualifies — unambiguous the moment a query
+    // joins (ADR 0018 §3); a builder never placed in a table has no table to name.
+    expect(eq(users.email, "a@x").sql).toBe('"users"."email" = ?');
+    expect(eq(text("loose"), "x").sql).toBe('"loose" = ?');
+  });
+
   beforeEach(async () => {
     await db.insert(users).values({ email: "a@x", passwordHash: "h" }).run();
     await db

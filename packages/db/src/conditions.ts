@@ -23,13 +23,29 @@ export interface Condition {
   readonly params: readonly unknown[];
 }
 
+/**
+ * Render a column as a table-qualified identifier — `"users"."email"`. Qualifying
+ * every condition (not only a join's `ON`) keeps one rendering rule and makes a
+ * column reference unambiguous the moment a query touches more than one table
+ * (ADR 0018 §3). It is valid, identical-semantics SQL for a single-table query too.
+ * `tableName` is stamped by `defineTable` (Increment 0); a free-standing column that
+ * was never placed in a table has none, and falls back to a bare identifier.
+ */
+function qualified(column: Column<unknown, boolean, boolean>): string {
+  const { tableName, name } = column.spec;
+
+  return tableName === undefined
+    ? quoteIdentifier(name)
+    : `${quoteIdentifier(tableName)}.${quoteIdentifier(name)}`;
+}
+
 /** `column = value` — the workhorse condition. */
 export function eq<C extends Column<unknown, boolean, boolean>>(
   column: C,
   value: NonNullable<CellType<C>>,
 ): Condition {
   return {
-    sql: `${quoteIdentifier(column.spec.name)} = ?`,
+    sql: `${qualified(column)} = ?`,
     params: [bind(value)],
   };
 }
@@ -40,7 +56,7 @@ export function ne<C extends Column<unknown, boolean, boolean>>(
   value: NonNullable<CellType<C>>,
 ): Condition {
   return {
-    sql: `${quoteIdentifier(column.spec.name)} <> ?`,
+    sql: `${qualified(column)} <> ?`,
     params: [bind(value)],
   };
 }
@@ -51,7 +67,7 @@ export function gt<C extends Column<unknown, boolean, boolean>>(
   value: NonNullable<CellType<C>>,
 ): Condition {
   return {
-    sql: `${quoteIdentifier(column.spec.name)} > ?`,
+    sql: `${qualified(column)} > ?`,
     params: [bind(value)],
   };
 }
@@ -62,7 +78,7 @@ export function gte<C extends Column<unknown, boolean, boolean>>(
   value: NonNullable<CellType<C>>,
 ): Condition {
   return {
-    sql: `${quoteIdentifier(column.spec.name)} >= ?`,
+    sql: `${qualified(column)} >= ?`,
     params: [bind(value)],
   };
 }
@@ -73,7 +89,7 @@ export function lt<C extends Column<unknown, boolean, boolean>>(
   value: NonNullable<CellType<C>>,
 ): Condition {
   return {
-    sql: `${quoteIdentifier(column.spec.name)} < ?`,
+    sql: `${qualified(column)} < ?`,
     params: [bind(value)],
   };
 }
@@ -84,7 +100,7 @@ export function lte<C extends Column<unknown, boolean, boolean>>(
   value: NonNullable<CellType<C>>,
 ): Condition {
   return {
-    sql: `${quoteIdentifier(column.spec.name)} <= ?`,
+    sql: `${qualified(column)} <= ?`,
     params: [bind(value)],
   };
 }
@@ -108,7 +124,7 @@ export function inList<C extends Column<unknown, boolean, boolean>>(
   const placeholders = values.map(() => "?").join(", ");
 
   return {
-    sql: `${quoteIdentifier(column.spec.name)} IN (${placeholders})`,
+    sql: `${qualified(column)} IN (${placeholders})`,
     params: values.map((value) => bind(value)),
   };
 }
@@ -124,7 +140,7 @@ export function like<C extends Column<string, boolean, boolean>>(
   pattern: string,
 ): Condition {
   return {
-    sql: `${quoteIdentifier(column.spec.name)} LIKE ?`,
+    sql: `${qualified(column)} LIKE ?`,
     params: [pattern],
   };
 }
@@ -132,7 +148,7 @@ export function like<C extends Column<string, boolean, boolean>>(
 /** `column IS NULL`. Defined separately because SQL `= NULL` does not match. */
 export function isNull(column: Column<unknown, boolean, boolean>): Condition {
   return {
-    sql: `${quoteIdentifier(column.spec.name)} IS NULL`,
+    sql: `${qualified(column)} IS NULL`,
     params: [],
   };
 }
@@ -140,7 +156,7 @@ export function isNull(column: Column<unknown, boolean, boolean>): Condition {
 /** `column IS NOT NULL`. */
 export function isNotNull(column: Column<unknown, boolean, boolean>): Condition {
   return {
-    sql: `${quoteIdentifier(column.spec.name)} IS NOT NULL`,
+    sql: `${qualified(column)} IS NOT NULL`,
     params: [],
   };
 }
