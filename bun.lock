@@ -140,6 +140,19 @@
         "@lesto/web": "workspace:*",
       },
     },
+    "packages/bench": {
+      "name": "@lesto/bench",
+      "version": "0.0.0",
+      "bin": {
+        "lesto-bench": "./src/bin.ts",
+      },
+      "dependencies": {
+        "@lesto/errors": "workspace:*",
+        "@lesto/queue": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/ui": "workspace:*",
+      },
+    },
     "packages/cache": {
       "name": "@lesto/cache",
       "version": "0.0.0",
@@ -1001,6 +1014,8 @@
     "@lesto/auth": ["@lesto/auth@workspace:packages/auth"],
 
     "@lesto/authz": ["@lesto/authz@workspace:packages/authz"],
+
+    "@lesto/bench": ["@lesto/bench@workspace:packages/bench"],
 
     "@lesto/cache": ["@lesto/cache@workspace:packages/cache"],
 

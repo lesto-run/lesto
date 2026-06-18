@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+
+  "compilerOptions": {
+    "rootDir": ".",
+    "types": ["node"],
+
+    // The SSR workload builds a real React element tree to render to a string,
+    // so the JSX-bearing renderer needs the DOM lib + the react-jsx transform —
+    // the same pair `@lesto/ui` declares.
+    "lib": ["ES2023", "DOM"],
+
+    "jsx": "react-jsx"
+  },
+
+  "include": ["src", "test"]
+}
