@@ -9,7 +9,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { watch } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -28,11 +28,7 @@ import type { ReleaseStore } from "@lesto/deploy";
 
 import { buildClient, bunBuildClientDeps } from "@lesto/assets";
 
-import { writeFile } from "node:fs/promises";
-
 import { createApp } from "@lesto/kernel";
-
-import { mkdir } from "node:fs/promises";
 
 import { run } from "./run";
 import type { CloudflareDeployer, ReleaseTarget } from "./run";
@@ -304,6 +300,7 @@ if (command === "generate" || command === "g") {
         return false;
       }
     },
+    read: (path) => readFile(join(projectRoot, path), "utf8"),
     write: async (path, contents) => {
       const absolute = join(projectRoot, path);
 

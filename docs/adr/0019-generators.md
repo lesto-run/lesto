@@ -60,12 +60,21 @@ unit-tested with no disk; the bin wires the real `fs` `exists`/`write`.
    than performing magic. Wiring a generated file into `lesto.app.ts` is a human edit
    — the generator does not parse and rewrite the author's app file (that path is a
    known footgun and is explicitly deferred; see "What this is NOT").
-4. **Idempotent, never destructive.** A file that already exists is **skipped**, never
-   clobbered or appended to. Re-running a generator after the author has edited what
-   it first emitted is a no-op on that file. The generator owns no state to drift; the
-   filesystem is the truth.
+4. **Idempotent, never destructive — but never *silent*.** A file that already exists is
+   **skipped**, never clobbered or appended to. Re-running a generator after the author
+   has edited what it first emitted is a no-op on that file; the generator owns no state
+   to drift, the filesystem is the truth. The skip is *reported differentially* so a
+   re-run is never a hidden data-loss surprise: a byte-identical file prints
+   `exists <path> (unchanged)` (a true no-op), while a file whose contents have drifted —
+   e.g. the author re-ran with **new fields** and the freshly-rendered output no longer
+   matches — prints `exists <path> (differs — left unchanged; edit or delete to
+   regenerate)`. We deliberately do **not** add a `--force` flag (it would invite the
+   clobber this principle exists to forbid); the author resolves a `differs` by editing
+   or deleting the file and re-running.
 5. **`--dry-run` previews, writes nothing.** Every generator supports `--dry-run`:
-   it prints the plan (`would write <path>` per file) and touches no disk — the safe
+   it prints the *real* plan and touches no disk — `would write <path>` for a file it
+   would create, `would skip <path>` for one that already exists (so the preview never
+   mislabels a file that a real run would leave untouched). This is the safe
    look-before-you-leap, and the same flag every CI/agent driver can use to assert a
    plan without side effects.
 6. **Typed + test-stubbed.** Every generator emits a companion test that is
@@ -157,8 +166,11 @@ are pure planners behind the `GenerateIO` seam, dispatched from the bin under
 
 **Dispatch, idempotency, dry-run** are shared by all three in the one `runGenerate`
 core: parse + validate the generator / name / fields up front (a coded refusal touches
-no disk), then per planned file — `--dry-run` prints `would write` and skips; an
-existing file prints `exists` and skips (idempotent); otherwise write and print `wrote`.
+no disk — a duplicate field key, an unknown type, or a name with extra `:` segments all
+fail here), then per planned file — `--dry-run` prints `would write`/`would skip` and
+writes nothing; an existing file is read and skipped, printing `exists … (unchanged)` or
+`exists … (differs — …)` per its contents (idempotent, never silent); otherwise write
+and print `wrote`.
 
 *Acceptance (met):* `lesto g model Post title:string published:boolean` writes
 `app/models/post.ts` (a typed `posts` table with `text`/`boolean` columns + `Post` type

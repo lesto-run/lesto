@@ -36,6 +36,9 @@ export interface GenerateIO {
   /** True iff a path already exists (so generation can skip rather than clobber). */
   exists: (path: string) => Promise<boolean>;
 
+  /** Read an existing file's contents (used to tell "unchanged" from "differs"). */
+  read: (path: string) => Promise<string>;
+
   /** Write a file's contents, creating parent directories as needed. */
   write: (path: string, contents: string) => Promise<void>;
 }
@@ -89,8 +92,15 @@ interface Field {
   readonly builder: "text" | "integer" | "real" | "boolean" | "timestamp";
 }
 
-/** A valid identifier head: a `field:type` name or a resource name component. */
+/** A valid identifier head: a resource name component. */
 const NAME_PART = /^[A-Za-z][A-Za-z0-9]*$/;
+
+/**
+ * A valid field name: an identifier head that may also carry `_`/`-` word
+ * separators (`published_at`, `blog-post`), so a `snake_case`/`kebab-case` field
+ * is accepted just like a resource name and normalized through {@link words}.
+ */
+const FIELD_NAME_PART = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
 /**
  * Split a `CamelCase` / `snake_case` / `kebab-case` name into its lowercase
@@ -202,7 +212,19 @@ export function resourceName(raw: string): ResourceName {
  * column that will not compile.
  */
 export function parseField(token: string): Field {
-  const [name, type] = token.split(":");
+  const segments = token.split(":");
+
+  // Exactly one `:` — a third segment (`title:string:garbage`) is a typo, never
+  // silently dropped, so the author sees the mistake instead of a swallowed tail.
+  if (segments.length > 2) {
+    throw new CliError(
+      "CLI_GENERATE_BAD_FIELD",
+      `"${token}" is not a field — write it as name:type, e.g. title:string.`,
+      { token },
+    );
+  }
+
+  const [name, type] = segments;
 
   if (name === undefined || name === "" || type === undefined || type === "") {
     throw new CliError(
@@ -212,7 +234,7 @@ export function parseField(token: string): Field {
     );
   }
 
-  if (!NAME_PART.test(name)) {
+  if (!FIELD_NAME_PART.test(name)) {
     throw new CliError(
       "CLI_GENERATE_BAD_FIELD",
       `"${name}" is not a valid field name — use letters and digits, e.g. title or publishedAt.`,
@@ -233,6 +255,32 @@ export function parseField(token: string): Field {
   const parts = words(name);
 
   return { key: camelCase(parts), column: snakeCase(parts), builder };
+}
+
+/**
+ * Parse every `field:type` token, refusing a duplicate key. Two tokens that
+ * normalize to the same JS key (`title:string title:integer`, or
+ * `published_at:… publishedAt:…`) would emit a `defineTable` object with a
+ * repeated property — non-compiling TS (TS1117) — so the clash is refused by a
+ * stable code up front rather than written to disk.
+ */
+function parseFields(tokens: readonly string[]): Field[] {
+  const fields = tokens.map(parseField);
+  const seen = new Set<string>();
+
+  for (const field of fields) {
+    if (seen.has(field.key)) {
+      throw new CliError(
+        "CLI_GENERATE_BAD_FIELD",
+        `field "${field.key}" is declared twice — each field must be unique.`,
+        { key: field.key },
+      );
+    }
+
+    seen.add(field.key);
+  }
+
+  return fields;
 }
 
 /** A file a generator would write: its path and rendered contents. */
@@ -472,7 +520,7 @@ import ${name.pascal} from "./${name.fileStem}";
 
 describe("${name.pascal} island", () => {
   it("declares its name", () => {
-    expect(${name.pascal}.name).toBe("${name.pascal}");
+    expect(${name.pascal}.island.name).toBe("${name.pascal}");
   });
 });
 `;
@@ -541,7 +589,7 @@ function planFiles(
   fieldTokens: readonly string[],
   now: () => number,
 ): GeneratedFile[] {
-  if (generator === "model") return planModel(name, fieldTokens.map(parseField));
+  if (generator === "model") return planModel(name, parseFields(fieldTokens));
 
   if (generator === "migration") return planMigration(name, versionStamp(now));
 
@@ -555,8 +603,11 @@ function planFiles(
  * front — a bad input is refused by a stable code before a single file is
  * touched. Then for each planned file:
  *
- *   - `--dry-run`: print `would write <path>` and write nothing.
- *   - an existing file: print `exists <path>` and SKIP it (idempotent — never
+ *   - `--dry-run`: print `would write <path>` (or `would skip <path>` for a path
+ *     that already exists) and write nothing.
+ *   - an existing file: read it and print `exists <path> (unchanged)` if it is
+ *     byte-identical, or `exists <path> (differs — left unchanged; edit or delete
+ *     to regenerate)` if it is not — then SKIP it either way (idempotent — never
  *     clobbered, never duplicated).
  *   - otherwise: write it and print `wrote <path>`.
  *
@@ -594,15 +645,26 @@ export async function runGenerate(args: readonly string[], deps: GenerateDeps): 
 
   for (const file of files) {
     if (dryRun) {
-      deps.out(`would write ${file.path}`);
+      // A dry run reports the REAL plan: a path that already exists would be
+      // skipped on a real run, so say so rather than mislabeling it "would write".
+      deps.out(`would ${(await deps.exists(file.path)) ? "skip" : "write"} ${file.path}`);
 
       continue;
     }
 
     // Idempotency: an existing file is left exactly as it is — the generator is
-    // safe to re-run after the author has edited what it first emitted.
+    // safe to re-run after the author has edited what it first emitted. The
+    // message distinguishes a byte-identical file (a true no-op) from one whose
+    // contents differ, so a re-run with new fields is not a silent data-loss
+    // surprise — the author is told to edit or delete the file to regenerate.
     if (await deps.exists(file.path)) {
-      deps.out(`exists ${file.path}`);
+      const current = await deps.read(file.path);
+
+      deps.out(
+        current === file.contents
+          ? `exists ${file.path} (unchanged)`
+          : `exists ${file.path} (differs — left unchanged; edit or delete to regenerate)`,
+      );
 
       continue;
     }

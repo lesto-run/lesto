@@ -9,14 +9,15 @@ import type { GenerateDeps } from "../src/generate";
 const FIXED_NOW = Date.parse("2026-06-18T12:34:56.000Z");
 const FIXED_VERSION = "20260618123456";
 
-// Capture writes, the existence set, and printed lines.
+// Capture writes, the existing files (path → contents), and printed lines.
 let written: { path: string; contents: string }[];
-let existing: Set<string>;
+let existing: Map<string, string>;
 let lines: string[];
 
 function depsWith(overrides: Partial<GenerateDeps> = {}): GenerateDeps {
   return {
     exists: (path) => Promise.resolve(existing.has(path)),
+    read: (path) => Promise.resolve(existing.get(path) ?? ""),
     write: (path, contents) => {
       written.push({ path, contents });
 
@@ -46,7 +47,7 @@ function contentsAt(path: string): string | undefined {
 
 beforeEach(() => {
   written = [];
-  existing = new Set();
+  existing = new Map();
   lines = [];
 });
 
@@ -123,6 +124,33 @@ describe("parseField", () => {
       column: "published_at",
       builder: "timestamp",
     });
+  });
+
+  it("accepts a snake_case / kebab-case field name, normalizing it", () => {
+    expect(parseField("published_at:boolean")).toEqual({
+      key: "publishedAt",
+      column: "published_at",
+      builder: "boolean",
+    });
+    expect(parseField("blog-post:string")).toEqual({
+      key: "blogPost",
+      column: "blog_post",
+      builder: "text",
+    });
+  });
+
+  it("refuses a token with more than one colon, never swallowing the tail", () => {
+    const error = (() => {
+      try {
+        parseField("title:string:garbage");
+
+        return undefined;
+      } catch (caught) {
+        return caught as CliError;
+      }
+    })();
+
+    expect(error?.code).toBe("CLI_GENERATE_BAD_FIELD");
   });
 
   it("refuses a token with no type", () => {
@@ -276,7 +304,7 @@ describe("runGenerate — island", () => {
 
     const test = contentsAt("app/islands/counter.test.tsx") ?? "";
 
-    expect(test).toContain('expect(Counter.name).toBe("Counter");');
+    expect(test).toContain('expect(Counter.island.name).toBe("Counter");');
   });
 });
 
@@ -291,27 +319,63 @@ describe("runGenerate — dry-run", () => {
       "would write app/models/post.test.ts",
     ]);
   });
+
+  it("labels an existing file 'would skip', not 'would write'", async () => {
+    existing.set("app/models/post.ts", "anything");
+
+    await runGenerate(["model", "Post", "title:string", "--dry-run"], depsWith());
+
+    expect(written).toHaveLength(0);
+    expect(lines).toEqual(["would skip app/models/post.ts", "would write app/models/post.test.ts"]);
+  });
 });
 
 describe("runGenerate — idempotency", () => {
   it("skips a file that already exists rather than clobbering it", async () => {
-    existing.add("app/models/post.ts");
+    // Capture the model the generator emits, then pre-seed it byte-identical so a
+    // re-run reports a true no-op on it.
+    await runGenerate(["model", "Post", "title:string"], depsWith());
+    existing.set("app/models/post.ts", contentsAt("app/models/post.ts") ?? "");
+    written = [];
+    lines = [];
 
     await runGenerate(["model", "Post", "title:string"], depsWith());
 
     // The existing model is left alone; only the missing test is written.
     expect(written.map((file) => file.path)).toEqual(["app/models/post.test.ts"]);
-    expect(lines).toEqual(["exists app/models/post.ts", "wrote app/models/post.test.ts"]);
+    expect(lines).toEqual([
+      "exists app/models/post.ts (unchanged)",
+      "wrote app/models/post.test.ts",
+    ]);
   });
 
-  it("is a full no-op when both files already exist", async () => {
-    existing.add("app/models/post.ts");
-    existing.add("app/models/post.test.ts");
+  it("is a full no-op when both files already exist unchanged", async () => {
+    await runGenerate(["model", "Post"], depsWith());
+    existing.set("app/models/post.ts", contentsAt("app/models/post.ts") ?? "");
+    existing.set("app/models/post.test.ts", contentsAt("app/models/post.test.ts") ?? "");
+    written = [];
+    lines = [];
 
     await runGenerate(["model", "Post"], depsWith());
 
     expect(written).toHaveLength(0);
-    expect(lines).toEqual(["exists app/models/post.ts", "exists app/models/post.test.ts"]);
+    expect(lines).toEqual([
+      "exists app/models/post.ts (unchanged)",
+      "exists app/models/post.test.ts (unchanged)",
+    ]);
+  });
+
+  it("reports 'differs' when an existing file's contents have drifted", async () => {
+    // A re-run with NEW fields would emit different contents — the existing file
+    // is left unchanged but the author is told so, never a silent skip.
+    existing.set("app/models/post.ts", "// hand-edited, no longer what the generator emits\n");
+
+    await runGenerate(["model", "Post", "title:string", "body:text"], depsWith());
+
+    expect(written.map((file) => file.path)).toEqual(["app/models/post.test.ts"]);
+    expect(lines[0]).toBe(
+      "exists app/models/post.ts (differs — left unchanged; edit or delete to regenerate)",
+    );
   });
 });
 
@@ -346,6 +410,14 @@ describe("runGenerate — refusals", () => {
     const error = await refusal(["model", "Post", "title:blob"]);
 
     expect(error.code).toBe("CLI_GENERATE_BAD_FIELD");
+    expect(written).toHaveLength(0);
+  });
+
+  it("refuses a model with a duplicate field key before touching the filesystem", async () => {
+    const error = await refusal(["model", "Post", "title:string", "title:integer"]);
+
+    expect(error.code).toBe("CLI_GENERATE_BAD_FIELD");
+    expect(error.message).toContain('field "title" is declared twice');
     expect(written).toHaveLength(0);
   });
 });
