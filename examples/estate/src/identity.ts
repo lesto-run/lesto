@@ -32,7 +32,7 @@ import { Migrator } from "@lesto/migrate";
 import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@lesto/ratelimit";
 import { openSqlite } from "@lesto/runtime";
 
-import { createIdentity, insertUser, usersMigration } from "@lesto/identity";
+import { createIdentity, insertUser, totpMigration, usersMigration } from "@lesto/identity";
 import { findUserByEmail } from "@lesto/identity";
 import type { Identity } from "@lesto/identity";
 
@@ -157,8 +157,10 @@ export async function buildIdentity(
   const { db: sql, close } = await openSqlite();
 
   // Order is the contract: migrate, build the db, seed, then the service.
-  // A query before migrate would hit an empty schema.
-  await new Migrator(sql, [usersMigration]).migrate();
+  // A query before migrate would hit an empty schema. The TOTP factor tables
+  // (ADR 0020) migrate alongside users so the demo's second-factor enrollment
+  // has somewhere to land.
+  await new Migrator(sql, [usersMigration, totpMigration]).migrate();
   await installSessionSchema(sql);
   await installRateLimitSchema(sql);
 
@@ -175,7 +177,9 @@ export async function buildIdentity(
   // on, each rendered message emits a `mail.delivered` span through the seam.
   const mailer = createDemoMailer(
     undefined,
-    seams === undefined ? undefined : () => seams.onDelivered({ mailerName: "identity", jobId: 0, attempt: 1 }),
+    seams === undefined
+      ? undefined
+      : () => seams.onDelivered({ mailerName: "identity", jobId: 0, attempt: 1 }),
   );
 
   const identity = createIdentity({
@@ -200,6 +204,9 @@ export async function buildIdentity(
     // serve/Worker paths still demand a real `LESTO_AUTH_SECRET` (or `LESTO_DEMO=1`).
     secret: secret ?? identitySecret(),
     mailer,
+    // The issuer label the user's authenticator app shows for the enrolled TOTP
+    // factor (ADR 0020).
+    appName: "Jade Mills Estates",
     verificationUrl: (token) => `/mls/api/verify?token=${token}`,
     resetUrl: (token) => `/mls/api/reset?token=${token}`,
   });

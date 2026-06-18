@@ -18,7 +18,16 @@ export type IdentityErrorCode =
   | "IDENTITY_INVALID_CREDENTIALS"
   | "IDENTITY_EMAIL_NOT_VERIFIED"
   | "IDENTITY_LOGIN_THROTTLED"
-  | "IDENTITY_INVALID_TOKEN";
+  | "IDENTITY_INVALID_TOKEN"
+  // --- second factor (TOTP, ADR 0020) ---
+  /** No live session backed the call that must be made by a signed-in user. */
+  | "IDENTITY_NOT_AUTHENTICATED"
+  /** A TOTP factor is already enrolled + confirmed; re-enrolling is refused. */
+  | "IDENTITY_TOTP_ALREADY_ENROLLED"
+  /** No (confirmed) TOTP factor exists for the user the challenge targets. */
+  | "IDENTITY_TOTP_NOT_ENROLLED"
+  /** A TOTP code or recovery code did not verify (enumeration-quiet). */
+  | "IDENTITY_INVALID_TOTP";
 
 /** Anything the identity layer can refuse to do. */
 export class IdentityError extends LestoError<IdentityErrorCode> {

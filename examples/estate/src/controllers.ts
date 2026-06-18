@@ -19,7 +19,12 @@
 import { lesto } from "@lesto/web";
 import type { Context, Lesto } from "@lesto/web";
 
-import { clearSessionCookie, IdentityError, readSessionToken, sessionCookie } from "@lesto/identity";
+import {
+  clearSessionCookie,
+  IdentityError,
+  readSessionToken,
+  sessionCookie,
+} from "@lesto/identity";
 import type { Identity } from "@lesto/identity";
 
 import { sessionSource } from "./session-source";
@@ -188,6 +193,86 @@ export function buildEstateRoutes(identity: Identity): Lesto {
         if (user === undefined) return c.json({ error: "sign in required" }, 401);
 
         return c.json({ user: sessionUser(user.email), saved: LISTINGS.slice(0, 2) });
+      })
+      /**
+       * Begin TOTP (2FA) enrollment for the signed-in user (ADR 0020).
+       *
+       * Returns the base32 secret plus the `otpauth://` provisioning URI the user
+       * scans into an authenticator app (rendered as a QR by any QR library). The
+       * secret is returned only here, never re-fetchable. A signed-out caller, or
+       * one whose factor is already confirmed, gets a coded error.
+       */
+      .post("/mls/api/totp/enroll", async (c) => {
+        const token = readSessionToken(c.header("cookie"));
+
+        try {
+          const { secret, keyUri } = await identity.enrollTotp(token);
+
+          return c.json({ secret, keyUri });
+        } catch (error) {
+          if (error instanceof IdentityError) {
+            return c.json(
+              { error: error.code },
+              error.code === "IDENTITY_NOT_AUTHENTICATED" ? 401 : 409,
+            );
+          }
+
+          throw error;
+        }
+      })
+      /**
+       * Confirm enrollment with the first authenticator code. On success returns
+       * the one-time-visible recovery codes; a wrong code is a 400.
+       */
+      .post("/mls/api/totp/confirm", async (c) => {
+        const token = readSessionToken(c.header("cookie"));
+        const code = formField(c.req.body, "code") ?? "";
+
+        try {
+          const { recoveryCodes } = await identity.confirmTotp(token, code);
+
+          return c.json({ status: "enrolled", recoveryCodes });
+        } catch (error) {
+          if (error instanceof IdentityError) {
+            return c.json(
+              { error: error.code },
+              error.code === "IDENTITY_NOT_AUTHENTICATED" ? 401 : 400,
+            );
+          }
+
+          throw error;
+        }
+      })
+      /**
+       * Verify a second-factor challenge — the step the app runs after a password
+       * login when the user has a confirmed factor. A code OR a single-use recovery
+       * code is accepted; a bad code is a 401.
+       */
+      .post("/mls/api/totp/challenge", async (c) => {
+        // The challenge needs the user *id*, so resolve the full identity user
+        // (the local `currentUser` narrows to `{ email }`).
+        const user = await identity.currentUser(readSessionToken(c.header("cookie")));
+
+        if (user === undefined) return c.json({ error: "sign in required" }, 401);
+
+        const code = formField(c.req.body, "code") ?? "";
+        const recovery = formField(c.req.body, "recovery") === "1";
+
+        try {
+          if (recovery) {
+            await identity.verifyRecoveryCode(user.id, code);
+          } else {
+            await identity.verifyTotpChallenge(user.id, code);
+          }
+
+          return c.json({ status: "verified" });
+        } catch (error) {
+          if (error instanceof IdentityError) {
+            return c.json({ error: error.code }, 401);
+          }
+
+          throw error;
+        }
       })
       // The /lab feature-demo zone (SSR + CSR fetch, async data, flags, authz,
       // DB-driven content over portable SQLite).

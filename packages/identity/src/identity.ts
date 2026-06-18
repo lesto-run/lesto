@@ -43,11 +43,17 @@
  */
 
 import {
+  generateRecoveryCodes,
+  generateTotpSecret,
   hashPassword,
+  hashRecoveryCodes,
   MemorySessionStore,
   needsRehash,
   Sessions,
+  totpKeyUri,
   verifyPassword,
+  verifyRecoveryCode,
+  verifyTotp,
 } from "@lesto/auth";
 import type { Clock, Session, SessionStore } from "@lesto/auth";
 import type { Db } from "@lesto/db";
@@ -55,6 +61,7 @@ import type { RateLimiter } from "@lesto/ratelimit";
 
 import { assertStrongSecret, IdentityError } from "./errors";
 import { packResetToken, resetSigner, unpackResetToken, verifySigner } from "./tokens";
+import * as totpRepo from "./totp";
 
 // Namespace import so test code can `vi.spyOn(userRepo, "findUserByEmail")`
 // to drive the rare race path (pre-check returns nothing → INSERT races a
@@ -280,6 +287,14 @@ export interface IdentityOptions {
    */
   readonly revokeUserSessions?: (userId: string) => void | Promise<void>;
 
+  /**
+   * The issuer label shown in the user's authenticator app for an enrolled TOTP
+   * factor (ADR 0020) — typically your app/product name. Embedded in the
+   * `otpauth://` provisioning URI {@link Identity.enrollTotp} returns. Default
+   * `"Lesto"`.
+   */
+  readonly appName?: string;
+
   /** Injected clock — tests pass one so TTL is deterministic. */
   readonly clock?: Clock;
 
@@ -320,6 +335,45 @@ export interface Identity {
   resetPassword(token: string, newPassword: string): Promise<User>;
   logout(token: string | undefined): Promise<void>;
   currentUser(token: string | undefined): Promise<User | undefined>;
+
+  /**
+   * Begin TOTP enrollment for the signed-in user (ADR 0020, Increment 1).
+   *
+   * Generates a fresh secret, stores it *unconfirmed*, and returns the secret +
+   * the `otpauth://` provisioning URI the app renders as a QR code. The secret is
+   * returned **only here** — it is never re-fetchable, matching authenticator-app
+   * onboarding. Throws `IDENTITY_NOT_AUTHENTICATED` without a live session, or
+   * `IDENTITY_TOTP_ALREADY_ENROLLED` when a confirmed factor already exists.
+   */
+  enrollTotp(token: string | undefined): Promise<{ secret: string; keyUri: string }>;
+
+  /**
+   * Confirm enrollment with the first code from the authenticator, returning the
+   * one-time-visible recovery codes. On success: stamps the factor confirmed and
+   * mints fresh scrypt-hashed recovery codes (the plaintext is returned once,
+   * never stored). Throws `IDENTITY_INVALID_TOTP` on a wrong code,
+   * `IDENTITY_TOTP_NOT_ENROLLED` with no pending factor, or
+   * `IDENTITY_TOTP_ALREADY_ENROLLED` if it was already confirmed.
+   */
+  confirmTotp(token: string | undefined, code: string): Promise<{ recoveryCodes: string[] }>;
+
+  /** True iff the user has a confirmed TOTP factor — the caller's MFA-gate probe. */
+  hasTotp(userId: number): Promise<boolean>;
+
+  /**
+   * Verify a TOTP challenge for a user (the second step after `login`). Resolves
+   * `void` on success; throws `IDENTITY_INVALID_TOTP` for an unknown user, an
+   * unconfirmed/absent factor, or a wrong code — all enumeration-quiet.
+   */
+  verifyTotpChallenge(userId: number, code: string): Promise<void>;
+
+  /**
+   * Spend a single-use recovery code for a user (the break-glass second step).
+   * Marks the matched code used so a replay is refused. Throws
+   * `IDENTITY_INVALID_TOTP` for an unknown user / no factor / no matching unused
+   * code.
+   */
+  verifyRecoveryCode(userId: number, code: string): Promise<void>;
 }
 
 /** Build an {@link Identity} bound to the given options. */
@@ -334,6 +388,8 @@ export function createIdentity(options: IdentityOptions): Identity {
   const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
   const verificationTtlMs = options.verificationTtlMs ?? DEFAULT_VERIFICATION_TTL_MS;
   const resetTtlMs = options.resetTtlMs ?? DEFAULT_RESET_TTL_MS;
+
+  const appName = options.appName ?? "Lesto";
 
   const verifyTokens = verifySigner(options.secret, options.clock);
 
@@ -358,6 +414,23 @@ export function createIdentity(options: IdentityOptions): Identity {
     if (options.onEvent === undefined) return;
 
     await options.onEvent(event);
+  };
+
+  // Resolve a session token to its user, or refuse — the gate the TOTP
+  // enrollment/confirm methods stand behind (they mutate the signed-in user's
+  // own factor, so an anonymous caller has no business there).
+  const requireUser = async (token: string | undefined): Promise<User> => {
+    if (token !== undefined) {
+      const session = await sessions.verify(token);
+
+      if (session !== undefined) {
+        const user = await userRepo.findUserById(db, Number(session.userId));
+
+        if (user !== undefined) return user;
+      }
+    }
+
+    throw new IdentityError("IDENTITY_NOT_AUTHENTICATED", "Sign in to manage your authenticator.");
   };
 
   return {
@@ -709,6 +782,99 @@ export function createIdentity(options: IdentityOptions): Identity {
       if (session === undefined) return undefined;
 
       return await userRepo.findUserById(db, Number(session.userId));
+    },
+
+    async enrollTotp(token) {
+      const user = await requireUser(token);
+
+      // A confirmed factor is final — re-enrolling would silently invalidate the
+      // user's working authenticator. An *unconfirmed* one is fine to replace
+      // (they abandoned a half-finished setup), so only a confirmed one refuses.
+      const existing = await totpRepo.findTotpFactor(db, user.id);
+
+      if (existing?.confirmed === true) {
+        throw new IdentityError(
+          "IDENTITY_TOTP_ALREADY_ENROLLED",
+          "A confirmed authenticator is already enrolled.",
+        );
+      }
+
+      const secret = generateTotpSecret();
+      await totpRepo.upsertUnconfirmedFactor(db, user.id, secret);
+
+      return { secret, keyUri: totpKeyUri({ secret, issuer: appName, account: user.email }) };
+    },
+
+    async confirmTotp(token, code) {
+      const user = await requireUser(token);
+
+      const factor = await totpRepo.findTotpFactor(db, user.id);
+
+      // Nothing to confirm: the user never called `enrollTotp` (or it was wiped).
+      if (factor === undefined) {
+        throw new IdentityError(
+          "IDENTITY_TOTP_NOT_ENROLLED",
+          "Start enrollment before confirming a code.",
+        );
+      }
+
+      // Confirming twice is a misuse, not a no-op: the recovery codes were already
+      // shown once and would be silently rotated. Refuse rather than re-mint.
+      if (factor.confirmed) {
+        throw new IdentityError(
+          "IDENTITY_TOTP_ALREADY_ENROLLED",
+          "A confirmed authenticator is already enrolled.",
+        );
+      }
+
+      if (!verifyTotp(factor.secret, code, { clock: eventClock })) {
+        throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
+      }
+
+      await totpRepo.confirmFactor(db, user.id);
+
+      // Mint the backup codes exactly once, here. The plaintext is returned for
+      // one-time display; only the scrypt hashes are persisted (ADR 0020).
+      const recoveryCodes = generateRecoveryCodes();
+      await totpRepo.replaceRecoveryCodes(db, user.id, await hashRecoveryCodes(recoveryCodes));
+
+      return { recoveryCodes };
+    },
+
+    async hasTotp(userId) {
+      const factor = await totpRepo.findTotpFactor(db, userId);
+
+      return factor?.confirmed === true;
+    },
+
+    async verifyTotpChallenge(userId, code) {
+      const factor = await totpRepo.findTotpFactor(db, userId);
+
+      // Unknown user, no factor, or an unconfirmed one all collapse to the same
+      // coded refusal — a challenge must not reveal which case it hit.
+      if (factor === undefined || !factor.confirmed) {
+        throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
+      }
+
+      if (!verifyTotp(factor.secret, code, { clock: eventClock })) {
+        throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
+      }
+    },
+
+    async verifyRecoveryCode(userId, code) {
+      const candidates = await totpRepo.findUnusedRecoveryCodes(db, userId);
+
+      // Check every still-unused code; the first that matches is spent. No factor
+      // / no unused codes / no match all surface the same coded refusal.
+      for (const candidate of candidates) {
+        if (await verifyRecoveryCode(code, candidate.codeHash)) {
+          await totpRepo.markRecoveryCodeUsed(db, candidate.id);
+
+          return;
+        }
+      }
+
+      throw new IdentityError("IDENTITY_INVALID_TOTP", "That recovery code is invalid or used.");
     },
   };
 }

@@ -10,7 +10,12 @@
  *   await sessions.verify(session.token); // the live session
  *   await sessions.revoke(session.token);
  *
+ *   const secret = generateTotpSecret();           // RFC 6238 base32 secret
+ *   verifyTotp(secret, totpCode(secret)!);          // second-factor primitive
+ *   const codes = generateRecoveryCodes();          // single-use, scrypt-hashed at rest
+ *
  * OAuth / social sign-in via better-auth is a future adapter, out of scope here.
+ * WebAuthn/passkey + magic-link factors are designed in ADR 0020 (follow-ups).
  */
 
 export { hashPassword, needsRehash, verifyPassword } from "./password";
@@ -18,6 +23,11 @@ export { hashPassword, needsRehash, verifyPassword } from "./password";
 export { sha256 } from "./hash";
 
 export { generateToken } from "./token";
+
+export { generateTotpSecret, totpCode, totpKeyUri, verifyTotp } from "./totp";
+export type { TotpKeyUriOptions, TotpOptions, TotpVerifyOptions } from "./totp";
+
+export { generateRecoveryCodes, hashRecoveryCodes, verifyRecoveryCode } from "./recovery-codes";
 
 export { MemorySessionStore, Sessions } from "./sessions";
 export type { SessionsOptions } from "./sessions";

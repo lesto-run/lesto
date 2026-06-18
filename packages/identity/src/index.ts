@@ -43,6 +43,19 @@ export {
 export type { User, UserInput } from "./user";
 
 export {
+  confirmFactor,
+  findTotpFactor,
+  findUnusedRecoveryCodes,
+  markRecoveryCodeUsed,
+  recoveryCodes,
+  replaceRecoveryCodes,
+  totpFactors,
+  totpMigration,
+  upsertUnconfirmedFactor,
+} from "./totp";
+export type { RecoveryCode, TotpFactor } from "./totp";
+
+export {
   clearSessionCookie,
   readCookie,
   readSessionToken,
