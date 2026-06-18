@@ -199,6 +199,15 @@ export async function buildIdentity(
       capacity: 5,
       refillPerSecond: 5 / (15 * 60),
     }),
+    // The per-account SECOND-FACTOR throttle (auth-security): five failed TOTP /
+    // recovery-code attempts per ~15 minutes for one account, fleet-correct over
+    // the shared SQL store. Once a password is stolen the 6-digit code is the only
+    // barrier left — this bounds an attacker iterating codes against ONE account.
+    totpRateLimiter: new RateLimiter({
+      store: sqlRateLimitStore(sql),
+      capacity: 5,
+      refillPerSecond: 5 / (15 * 60),
+    }),
     // An explicit secret (the static prerender passes a throwaway one — it signs
     // no tokens) overrides the fail-closed runtime resolution. Absent it, the
     // serve/Worker paths still demand a real `LESTO_AUTH_SECRET` (or `LESTO_DEMO=1`).

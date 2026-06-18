@@ -227,6 +227,49 @@ function codesMatch(a: string, b: string): boolean {
 }
 
 /**
+ * Verify a candidate code against `secret`, returning the **matched step counter**
+ * (the RFC 6238 moving factor `floor(epochSeconds / timeStep)` of the step the
+ * code belongs to), or `undefined` when nothing matched.
+ *
+ * This is {@link verifyTotp}'s engine — it carries the same fail-closed,
+ * constant-time, ±`window` drift contract — but surfaces *which* step matched so a
+ * caller can enforce single-use within the live window (RFC 6238 §5.2): persist
+ * the returned step and refuse any later code whose step is ≤ it. The truncation
+ * math is untouched; this only reports the offset that already won the compare.
+ *
+ * Total and fail-closed: a non-base32 secret, a wrong-length or non-digit code, or
+ * simply no match across the window all return `undefined` — never an exception.
+ */
+export function verifyTotpStep(
+  secret: string,
+  code: string,
+  options: TotpVerifyOptions = {},
+): number | undefined {
+  const timeStep = options.timeStep ?? DEFAULT_TIME_STEP_SECONDS;
+  const digits = options.digits ?? DEFAULT_DIGITS;
+  const window = options.window ?? DEFAULT_WINDOW;
+  const clock = options.clock ?? systemClock;
+
+  // A code that is not exactly `digits` ASCII digits cannot match any step;
+  // reject early so we never feed garbage to the constant-time compare.
+  if (!new RegExp(`^[0-9]{${digits}}$`).test(code)) return undefined;
+
+  const base = counterFor(clock, timeStep);
+
+  for (let offset = -window; offset <= window; offset += 1) {
+    const step = base + offset;
+    const expected = hotp(secret, step, digits);
+
+    // `undefined` means a bad secret — fail closed for every offset.
+    if (expected === undefined) return undefined;
+
+    if (codesMatch(expected, code)) return step;
+  }
+
+  return undefined;
+}
+
+/**
  * Verify a candidate code against `secret`, tolerating ±`window` steps of drift.
  *
  * Total and fail-closed: a non-base32 secret, a wrong-length or non-digit code,
@@ -235,29 +278,12 @@ function codesMatch(a: string, b: string): boolean {
  * (±1) accepts a code that is up to one step (30 s) stale or early, covering
  * clock skew between the server and the authenticator without meaningfully
  * widening the guess space.
+ *
+ * A thin boolean façade over {@link verifyTotpStep} (which additionally reports
+ * the matched step for single-use enforcement).
  */
 export function verifyTotp(secret: string, code: string, options: TotpVerifyOptions = {}): boolean {
-  const timeStep = options.timeStep ?? DEFAULT_TIME_STEP_SECONDS;
-  const digits = options.digits ?? DEFAULT_DIGITS;
-  const window = options.window ?? DEFAULT_WINDOW;
-  const clock = options.clock ?? systemClock;
-
-  // A code that is not exactly `digits` ASCII digits cannot match any step;
-  // reject early so we never feed garbage to the constant-time compare.
-  if (!new RegExp(`^[0-9]{${digits}}$`).test(code)) return false;
-
-  const base = counterFor(clock, timeStep);
-
-  for (let offset = -window; offset <= window; offset += 1) {
-    const expected = hotp(secret, base + offset, digits);
-
-    // `undefined` means a bad secret — fail closed for every offset.
-    if (expected === undefined) return false;
-
-    if (codesMatch(expected, code)) return true;
-  }
-
-  return false;
+  return verifyTotpStep(secret, code, options) !== undefined;
 }
 
 /** The fields a provisioning URI carries. */

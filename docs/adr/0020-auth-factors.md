@@ -102,8 +102,13 @@ the storage + flows over **two tables**:
 
 ```ts
 // totp_factors: at most one per user (UNIQUE user_id), the enrolled secret.
+//   confirmed       — boolean flag (false until the first code proves the factor)
+//   confirmed_at    — the instant it was confirmed (null while unconfirmed)
+//   last_used_step  — the RFC 6238 step counter of the last accepted code (null
+//                     before the first success), the live-window replay guard
 totp_factors(id pk, user_id unique not null, secret not null,
-             confirmed_at timestamp null, created_at, updated_at)
+             confirmed boolean not null, confirmed_at timestamp null,
+             last_used_step integer null, created_at, updated_at)
 
 // recovery_codes: N single-use, scrypt-hashed backup codes per user.
 recovery_codes(id pk, user_id not null, code_hash not null,
@@ -126,19 +131,38 @@ The three flows, each a coded, fail-closed `Identity` method:
   **Returns the secret exactly once, at enroll** — never re-fetchable, matching every
   authenticator-onboarding UX.
 - **confirm** (`confirmTotp(token, code)`): the user types the first code from their
-  app. On a valid `verifyTotp`, stamps `confirmed_at` *and* mints the recovery codes
-  — `generateRecoveryCodes()` returns the **plaintext** codes once (shown to the user,
-  never stored), persisting only their scrypt `hashPassword` digests. An invalid code
-  throws `IDENTITY_INVALID_TOTP`; an already-confirmed factor throws
+  app. On a valid code, **mints + persists the recovery codes FIRST** —
+  `generateRecoveryCodes()` returns the **plaintext** codes once (shown to the user,
+  never stored), persisting only their scrypt `hashPassword` digests — and **stamps the
+  factor confirmed LAST**. The order is deliberate: a crash between the two steps leaves
+  the factor *unconfirmed* (so it is re-confirmable) rather than stranding a confirmed
+  factor with no recovery codes — a lockout. The accepted step is recorded in
+  `last_used_step` so the confirming code cannot later be replayed as a challenge. An
+  invalid code throws `IDENTITY_INVALID_TOTP`; an already-confirmed factor throws
   `IDENTITY_TOTP_ALREADY_ENROLLED`. This is the enroll→challenge→verify boundary.
 - **verify a challenge** (`verifyTotpChallenge(userId, code)` and
   `verifyRecoveryCode(userId, code)`): the second-factor step *after* `login` proves
-  the password. `verifyTotpChallenge` checks the live code; `verifyRecoveryCode`
-  finds an *unused* code whose `verifyPassword(code, code_hash)` matches, marks it
-  `used_at` (single-use — a replay finds it spent), and is the break-glass path when
-  the authenticator is lost. Both are enumeration-quiet: an unknown user / no factor /
-  bad code all surface the same `IDENTITY_INVALID_TOTP`, spending one constant-time
-  comparison.
+  the password. `verifyTotpChallenge` checks the live code via `verifyTotpStep` (which
+  returns the **matched step counter**), then enforces single-use *within the live
+  window* (RFC 6238 §5.2): a code whose matched step is ≤ the stored `last_used_step`
+  is refused, and the accepted step is persisted — so a code sniffed off the wire
+  cannot be replayed during the ±window it is still valid for. `verifyRecoveryCode`
+  finds an *unused* code whose `verifyPassword(code, code_hash)` matches and
+  **atomically claims** it with a conditional `UPDATE … WHERE id = ? AND used_at IS
+  NULL`: a 0-row result means a concurrent consumer already spent it (the lost-race
+  branch), so the check-then-mark TOCTOU is closed and a replay always finds it spent.
+  Both are enumeration-quiet: an unknown user / no factor / bad code all surface the
+  same `IDENTITY_INVALID_TOTP`, spending one constant-time comparison.
+
+**Brute-force throttle.** Both challenge verifiers stand behind an optional per-account
+limiter, `totpRateLimiter` (mirroring `loginRateLimiter` exactly): keyed
+`totp:<userId>`, it burns one token on each *failed* attempt and, once drained, refuses
+with `IDENTITY_TOTP_THROTTLED` *before* the secret is touched — a successful verify
+spends nothing, so a real user never locks themselves out. After a stolen password the
+6-digit code (or a fixed recovery string) is the only barrier left; without this cap an
+attacker holding the password could simply iterate codes. Wired over `sqlRateLimitStore`
+the cap is fleet-correct (estate dogfoods 5 attempts / ~15 min). This is the same
+inner-defense posture the per-account login throttle takes.
 
 `login` itself is **unchanged** in Increment 1 — TOTP is exposed as an explicit
 second step the caller orchestrates (`login` → if `hasTotp(userId)` → challenge),
@@ -147,8 +171,11 @@ rather than baking a `mfaRequired` branch into the password contract now. A
 first-class `login` MFA gate; the seam is already here.)
 
 *Acceptance (this increment):* enroll → confirm → challenge-verify journey green; a
-recovery-code path green (one code verifies once, a replay is refused); secrets and
-recovery codes hashed/stored per the model above; 100% coverage on both packages.
+recovery-code path green (one code verifies once, a replay is refused, and a concurrent
+double-spend loses the atomic claim); a live-window replay of a TOTP code is refused; the
+per-account `totp:<userId>` throttle refuses with `IDENTITY_TOTP_THROTTLED` once drained;
+secrets and recovery codes hashed/stored per the model above; 100% coverage on both
+packages.
 
 ### 2 · WebAuthn / passkeys — **deferred (designed here, not implemented)**
 

@@ -24,7 +24,7 @@ export { sha256 } from "./hash";
 
 export { generateToken } from "./token";
 
-export { generateTotpSecret, totpCode, totpKeyUri, verifyTotp } from "./totp";
+export { generateTotpSecret, totpCode, totpKeyUri, verifyTotp, verifyTotpStep } from "./totp";
 export type { TotpKeyUriOptions, TotpOptions, TotpVerifyOptions } from "./totp";
 
 export { generateRecoveryCodes, hashRecoveryCodes, verifyRecoveryCode } from "./recovery-codes";

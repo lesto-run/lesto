@@ -27,7 +27,9 @@ export type IdentityErrorCode =
   /** No (confirmed) TOTP factor exists for the user the challenge targets. */
   | "IDENTITY_TOTP_NOT_ENROLLED"
   /** A TOTP code or recovery code did not verify (enumeration-quiet). */
-  | "IDENTITY_INVALID_TOTP";
+  | "IDENTITY_INVALID_TOTP"
+  /** Too many failed second-factor attempts for this user; the bucket is drained. */
+  | "IDENTITY_TOTP_THROTTLED";
 
 /** Anything the identity layer can refuse to do. */
 export class IdentityError extends LestoError<IdentityErrorCode> {

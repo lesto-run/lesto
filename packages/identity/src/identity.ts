@@ -53,7 +53,7 @@ import {
   totpKeyUri,
   verifyPassword,
   verifyRecoveryCode,
-  verifyTotp,
+  verifyTotpStep,
 } from "@lesto/auth";
 import type { Clock, Session, SessionStore } from "@lesto/auth";
 import type { Db } from "@lesto/db";
@@ -272,6 +272,24 @@ export interface IdentityOptions {
   readonly loginRateLimiter?: RateLimiter;
 
   /**
+   * Per-account second-factor throttle — the brute-force defense on the TOTP and
+   * recovery-code challenge, mirroring {@link loginRateLimiter}.
+   *
+   * A confirmed factor turns a 6-digit code into the *only* remaining barrier
+   * after a stolen password, and a recovery code is a fixed break-glass string;
+   * without a cap, an attacker who already holds the password can simply iterate
+   * codes. When present, `verifyTotpChallenge` and `verifyRecoveryCode` check this
+   * limiter under the key `totp:<userId>` and burn one token on each *failed*
+   * attempt; once the bucket empties they refuse with a coded
+   * `IDENTITY_TOTP_THROTTLED` before touching the secret (a *successful* verify
+   * spends nothing, so a legitimate user is never locked out of their own
+   * second step). Wire it over `sqlRateLimitStore` so the cap is fleet-correct —
+   * N failures throttle the account across every node — typically a small bucket
+   * (e.g. `capacity: 5, refillPerSecond: 5/900` ≈ 5 attempts per 15 minutes).
+   */
+  readonly totpRateLimiter?: RateLimiter;
+
+  /**
    * Optional hook called on a successful password reset, *in addition to* the
    * built-in revoke-on-reset.
    *
@@ -349,9 +367,12 @@ export interface Identity {
 
   /**
    * Confirm enrollment with the first code from the authenticator, returning the
-   * one-time-visible recovery codes. On success: stamps the factor confirmed and
-   * mints fresh scrypt-hashed recovery codes (the plaintext is returned once,
-   * never stored). Throws `IDENTITY_INVALID_TOTP` on a wrong code,
+   * one-time-visible recovery codes. On success: mints + persists fresh
+   * scrypt-hashed recovery codes FIRST (the plaintext is returned once, never
+   * stored), then stamps the factor confirmed LAST — so a crash between the two
+   * leaves the factor unconfirmed and re-confirmable rather than stranding a
+   * confirmed factor with no recovery codes. Throws `IDENTITY_INVALID_TOTP` on a
+   * wrong code (or a replay of an already-accepted step),
    * `IDENTITY_TOTP_NOT_ENROLLED` with no pending factor, or
    * `IDENTITY_TOTP_ALREADY_ENROLLED` if it was already confirmed.
    */
@@ -363,15 +384,20 @@ export interface Identity {
   /**
    * Verify a TOTP challenge for a user (the second step after `login`). Resolves
    * `void` on success; throws `IDENTITY_INVALID_TOTP` for an unknown user, an
-   * unconfirmed/absent factor, or a wrong code — all enumeration-quiet.
+   * unconfirmed/absent factor, a wrong code, or a *replay* of an already-accepted
+   * code inside its live ±window (RFC 6238 §5.2) — all enumeration-quiet. With a
+   * {@link IdentityOptions.totpRateLimiter} wired, a drained `totp:<userId>` bucket
+   * refuses with `IDENTITY_TOTP_THROTTLED` before the secret is touched.
    */
   verifyTotpChallenge(userId: number, code: string): Promise<void>;
 
   /**
    * Spend a single-use recovery code for a user (the break-glass second step).
-   * Marks the matched code used so a replay is refused. Throws
-   * `IDENTITY_INVALID_TOTP` for an unknown user / no factor / no matching unused
-   * code.
+   * Atomically claims the matched code (a conditional `used_at IS NULL` UPDATE), so
+   * a replay — or a concurrent second consumer racing the same code — is refused.
+   * Throws `IDENTITY_INVALID_TOTP` for an unknown user / no factor / no matching
+   * unused code. With a {@link IdentityOptions.totpRateLimiter} wired, a drained
+   * `totp:<userId>` bucket refuses with `IDENTITY_TOTP_THROTTLED` first.
    */
   verifyRecoveryCode(userId: number, code: string): Promise<void>;
 }
@@ -431,6 +457,37 @@ export function createIdentity(options: IdentityOptions): Identity {
     }
 
     throw new IdentityError("IDENTITY_NOT_AUTHENTICATED", "Sign in to manage your authenticator.");
+  };
+
+  // Refuse a second-factor attempt once the per-account `totp:<userId>` bucket is
+  // drained — the brute-force guard on the TOTP/recovery challenge, mirroring the
+  // login throttle's peek-then-deny. Cost-0 peek never spends; the cost-1 retry
+  // hint denies on an empty bucket and so also spends nothing. With no limiter
+  // wired this is a single comparison and a return.
+  const assertTotpNotThrottled = async (userId: number): Promise<void> => {
+    if (options.totpRateLimiter === undefined) return;
+
+    const key = `totp:${userId}`;
+    const peek = await options.totpRateLimiter.check(key, 0);
+
+    if (peek.remaining < 1) {
+      const denied = await options.totpRateLimiter.check(key, 1);
+
+      throw new IdentityError(
+        "IDENTITY_TOTP_THROTTLED",
+        "Too many failed verification attempts. Try again later.",
+        { retryAfterMs: denied.retryAfterMs },
+      );
+    }
+  };
+
+  // Burn one token from the per-account second-factor bucket on a FAILED attempt —
+  // the penalty that drains it toward the throttle. A successful verify never
+  // calls this, so a real user is never locked out of their own second step.
+  const penalizeTotp = async (userId: number): Promise<void> => {
+    if (options.totpRateLimiter !== undefined) {
+      await options.totpRateLimiter.check(`totp:${userId}`, 1);
+    }
   };
 
   return {
@@ -827,16 +884,26 @@ export function createIdentity(options: IdentityOptions): Identity {
         );
       }
 
-      if (!verifyTotp(factor.secret, code, { clock: eventClock })) {
+      // A freshly enrolled, unconfirmed factor has never recorded a step
+      // (`upsertUnconfirmedFactor` writes `lastUsedStep: null`), so the only check
+      // here is that the code matches — `verifyTotpStep` returns the matched step.
+      const step = verifyTotpStep(factor.secret, code, { clock: eventClock });
+
+      if (step === undefined) {
         throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
       }
 
-      await totpRepo.confirmFactor(db, user.id);
-
-      // Mint the backup codes exactly once, here. The plaintext is returned for
-      // one-time display; only the scrypt hashes are persisted (ADR 0020).
+      // Mint + persist the backup codes FIRST, then stamp the factor confirmed
+      // LAST. A crash between the two now leaves the factor *unconfirmed* — so it
+      // is re-confirmable and never strands the user with a confirmed factor but no
+      // recovery codes (a lockout). The plaintext codes are returned for one-time
+      // display; only the scrypt hashes are persisted (ADR 0020).
       const recoveryCodes = generateRecoveryCodes();
       await totpRepo.replaceRecoveryCodes(db, user.id, await hashRecoveryCodes(recoveryCodes));
+
+      // Record the accepted step so this code can never be replayed, then confirm.
+      await totpRepo.recordTotpStep(db, user.id, step);
+      await totpRepo.confirmFactor(db, user.id);
 
       return { recoveryCodes };
     },
@@ -848,31 +915,62 @@ export function createIdentity(options: IdentityOptions): Identity {
     },
 
     async verifyTotpChallenge(userId, code) {
+      // Refuse before touching the secret once the per-account bucket is drained —
+      // the brute-force guard (a 6-digit code is the only barrier after a stolen
+      // password). Keyed `totp:<userId>` for every user, factor or not.
+      await assertTotpNotThrottled(userId);
+
       const factor = await totpRepo.findTotpFactor(db, userId);
 
       // Unknown user, no factor, or an unconfirmed one all collapse to the same
-      // coded refusal — a challenge must not reveal which case it hit.
+      // coded refusal — a challenge must not reveal which case it hit. This counts
+      // as a failed attempt against the throttle bucket.
       if (factor === undefined || !factor.confirmed) {
+        await penalizeTotp(userId);
+
         throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
       }
 
-      if (!verifyTotp(factor.secret, code, { clock: eventClock })) {
+      const step = verifyTotpStep(factor.secret, code, { clock: eventClock });
+
+      // A non-matching code, OR a replay of a step we have already spent inside its
+      // still-live ±window (RFC 6238 §5.2), is a failed attempt — burn a token and
+      // refuse, enumeration-quiet.
+      if (step === undefined || (factor.lastUsedStep !== null && step <= factor.lastUsedStep)) {
+        await penalizeTotp(userId);
+
         throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
       }
+
+      // Accepted: persist the step so the same code cannot be replayed. A success
+      // spends no throttle token — a real user never locks themselves out.
+      await totpRepo.recordTotpStep(db, userId, step);
     },
 
     async verifyRecoveryCode(userId, code) {
+      // The same per-account brute-force guard the TOTP challenge stands behind —
+      // a recovery code is a fixed break-glass string and equally guessable.
+      await assertTotpNotThrottled(userId);
+
       const candidates = await totpRepo.findUnusedRecoveryCodes(db, userId);
 
-      // Check every still-unused code; the first that matches is spent. No factor
-      // / no unused codes / no match all surface the same coded refusal.
+      // Check every still-unused code; the first that matches is *atomically*
+      // claimed — `markRecoveryCodeUsed` flips the row only while it is still
+      // unused and reports whether it won. A concurrent consumer racing the same
+      // code loses the claim (0 rows changed) and falls through to the refusal,
+      // closing the check-then-mark TOCTOU. No factor / no unused codes / no match
+      // all surface the same coded refusal.
       for (const candidate of candidates) {
         if (await verifyRecoveryCode(code, candidate.codeHash)) {
-          await totpRepo.markRecoveryCodeUsed(db, candidate.id);
+          if (await totpRepo.markRecoveryCodeUsed(db, candidate.id)) return;
 
-          return;
+          // Lost the race: another request spent this code between our read and our
+          // conditional UPDATE. Refuse — a recovery code is single-use.
+          break;
         }
       }
+
+      await penalizeTotp(userId);
 
       throw new IdentityError("IDENTITY_INVALID_TOTP", "That recovery code is invalid or used.");
     },

@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { generateTotpSecret, totpCode, totpKeyUri, verifyTotp } from "../src/index";
+import { generateTotpSecret, totpCode, totpKeyUri, verifyTotp, verifyTotpStep } from "../src/index";
 
 import type { Clock } from "../src/index";
 
@@ -163,6 +163,46 @@ describe("verifyTotp", () => {
       .trim();
 
     expect(verifyTotp(display, code, { clock })).toBe(true);
+  });
+});
+
+describe("verifyTotpStep", () => {
+  const secret = generateTotpSecret();
+
+  it("returns the matched step counter for a valid code", () => {
+    const clock = fixedClock(1_700_000_000_000);
+    const code = totpCode(secret, { clock })!;
+
+    // floor(1_700_000_000 / 30) is the step the code belongs to.
+    const expectedStep = Math.floor(1_700_000_000 / 30);
+
+    expect(verifyTotpStep(secret, code, { clock })).toBe(expectedStep);
+  });
+
+  it("returns the EARLIER step for a code from the previous window (drift)", () => {
+    const earlierStep = Math.floor(1_700_000_000 / 30);
+    const codeEarlier = totpCode(secret, { clock: fixedClock(1_700_000_000_000) })!;
+
+    // Checked one step later, the matched step is still the code's own (earlier) one.
+    expect(verifyTotpStep(secret, codeEarlier, { clock: fixedClock(1_700_000_030_000) })).toBe(
+      earlierStep,
+    );
+  });
+
+  it("returns undefined when nothing matches across the window", () => {
+    // A wrong code at a realistic instant — no step in the ±window produces it.
+    expect(
+      verifyTotpStep(secret, "000000", { clock: fixedClock(1_700_000_000_000) }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for a wrong-length / non-digit code (fail closed)", () => {
+    expect(verifyTotpStep(secret, "123", { clock: fixedClock(0) })).toBeUndefined();
+    expect(verifyTotpStep(secret, "abcdef", { clock: fixedClock(0) })).toBeUndefined();
+  });
+
+  it("returns undefined for a malformed secret (fail closed)", () => {
+    expect(verifyTotpStep("not!base32", "000000", { clock: fixedClock(0) })).toBeUndefined();
   });
 });
 

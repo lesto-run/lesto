@@ -1,13 +1,18 @@
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installSessionSchema, sqlSessionStore, totpCode } from "@lesto/auth";
 import { createDb, eq } from "@lesto/db";
 import type { Db, SqlDatabase } from "@lesto/db";
 import { Migrator } from "@lesto/migrate";
+import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@lesto/ratelimit";
 
 import { createIdentity, IdentityError, totpMigration } from "../src/index";
+import { markRecoveryCodeUsed } from "../src/totp";
 import { recoveryCodes as recoveryCodesTable, totpFactors } from "../src/totp";
+// Namespace import so a test can `vi.spyOn` the conditional-claim helper to force
+// the lost-race branch (a code unused at find-time but 0-row at the UPDATE).
+import * as totpRepo from "../src/totp";
 import { usersMigration } from "../src/user";
 
 import type { Identity, IdentityMailer, IdentityOptions } from "../src/index";
@@ -108,7 +113,19 @@ beforeEach(async () => {
 
   await new Migrator(sql, [usersMigration, totpMigration]).migrate();
   await installSessionSchema(sql);
+  await installRateLimitSchema(sql);
 });
+
+/** A SQL-backed per-account TOTP limiter: `capacity` failed attempts, slow refill. */
+function totpLimiter(capacity: number): RateLimiter {
+  return new RateLimiter({
+    store: sqlRateLimitStore(sql),
+    capacity,
+    // ~1 token / 15 min: deterministic over the stepped clock (no refill in-test).
+    refillPerSecond: 1 / 900,
+    clock: () => clock(),
+  });
+}
 
 afterEach(() => {
   raw.close();
@@ -158,6 +175,10 @@ describe("TOTP journey", () => {
     }
 
     // 3. Challenge: the second step after a password login verifies the live code.
+    //    Advance one step (30s) so the challenge code belongs to a LATER step than
+    //    the one `confirmTotp` just recorded — otherwise the confirming code would
+    //    be (correctly) refused as a live-window replay (RFC 6238 §5.2).
+    now += 30 * 1000;
     await expect(identity.verifyTotpChallenge(userId, codeFor(secret))).resolves.toBeUndefined();
   });
 
@@ -406,6 +427,242 @@ describe("verifyRecoveryCode", () => {
       expect(error).toBeInstanceOf(IdentityError);
       expect((error as IdentityError).code).toBe("IDENTITY_INVALID_TOTP");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// replay within the live window (RFC 6238 §5.2) — auth-security
+// ---------------------------------------------------------------------------
+
+describe("TOTP live-window replay guard", () => {
+  it("refuses the SAME code used twice within its window", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+    await identity.confirmTotp(token, codeFor(secret));
+
+    // Move one step past the confirm code so the first challenge is itself valid.
+    now += 30 * 1000;
+    const code = codeFor(secret);
+
+    // First use of this code succeeds and records its step.
+    await expect(identity.verifyTotpChallenge(userId, code)).resolves.toBeUndefined();
+
+    // The SAME code, replayed at the same instant (still inside its ±window),
+    // matches the same step ≤ last_used_step and is refused.
+    await expect(identity.verifyTotpChallenge(userId, code)).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_TOTP",
+    });
+
+    // A persisted last_used_step proves the accepted step was recorded.
+    const factor = await db.select().from(totpFactors).where(eq(totpFactors.userId, userId)).get();
+
+    expect(factor?.lastUsedStep).toBeGreaterThan(0);
+
+    // A fresh code from a later step still verifies (the guard is ≤, not a freeze).
+    now += 30 * 1000;
+    await expect(identity.verifyTotpChallenge(userId, codeFor(secret))).resolves.toBeUndefined();
+  });
+
+  it("refuses replaying the confirmation code as the first challenge", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+    const code = codeFor(secret);
+
+    // Confirm with `code` — its step is now recorded as last_used_step.
+    await identity.confirmTotp(token, code);
+
+    // Re-presenting the confirmation code as a challenge (same step) is a replay.
+    await expect(identity.verifyTotpChallenge(userId, code)).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_TOTP",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recovery-code single-use is atomic (no check-then-mark race) — auth-security
+// ---------------------------------------------------------------------------
+
+describe("recovery-code atomic claim", () => {
+  it("a code already marked used cannot be consumed again via the conditional path", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+    const { recoveryCodes } = await identity.confirmTotp(token, codeFor(secret));
+
+    // Grab the stored row id for the first code, then mark it used out-of-band —
+    // simulating the racing consumer that won the claim first.
+    const stored = await db
+      .select()
+      .from(recoveryCodesTable)
+      .where(eq(recoveryCodesTable.userId, userId))
+      .all();
+    const firstRowId = stored[0]!.id;
+
+    // The conditional UPDATE wins the first time…
+    expect(await markRecoveryCodeUsed(db, firstRowId)).toBe(true);
+    // …and loses (0 rows) the second time, because `used_at IS NULL` no longer holds.
+    expect(await markRecoveryCodeUsed(db, firstRowId)).toBe(false);
+
+    // Through the service: a code whose row is already used is refused — the
+    // verifier matches the hash but the atomic claim returns 0 rows (lost race).
+    const usedCode = recoveryCodes[0]!;
+    await expect(identity.verifyRecoveryCode(userId, usedCode)).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_TOTP",
+    });
+
+    // A still-unused code is unaffected.
+    await expect(identity.verifyRecoveryCode(userId, recoveryCodes[1]!)).resolves.toBeUndefined();
+  });
+
+  it("refuses when the conditional claim loses the race (0 rows changed)", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+    const { recoveryCodes } = await identity.confirmTotp(token, codeFor(secret));
+
+    // The code is still unused (so it surfaces in `findUnusedRecoveryCodes` and the
+    // hash matches), but a concurrent consumer claimed it between our read and our
+    // UPDATE — force the conditional claim to report 0 rows changed.
+    const spy = vi.spyOn(totpRepo, "markRecoveryCodeUsed").mockResolvedValue(false);
+
+    await expect(identity.verifyRecoveryCode(userId, recoveryCodes[0]!)).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_TOTP",
+    });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// second-factor brute-force throttle (per account) — auth-security
+// ---------------------------------------------------------------------------
+
+describe("second-factor throttle", () => {
+  it("refuses with IDENTITY_TOTP_THROTTLED after the bucket is drained (challenge)", async () => {
+    const identity = buildIdentity({ totpRateLimiter: totpLimiter(3) });
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+    await identity.confirmTotp(token, codeFor(secret));
+    now += 30 * 1000;
+
+    // Three wrong codes drain the 3-token bucket — each a plain INVALID_TOTP.
+    for (let i = 0; i < 3; i++) {
+      await expect(identity.verifyTotpChallenge(userId, "000000")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_TOTP",
+      });
+    }
+
+    // The fourth attempt is throttled — refused BEFORE the secret is touched, with
+    // the retry hint in the details.
+    const throttled = await identity.verifyTotpChallenge(userId, "000000").catch((e: unknown) => e);
+    expect((throttled as IdentityError).code).toBe("IDENTITY_TOTP_THROTTLED");
+    expect((throttled as IdentityError).details?.["retryAfterMs"]).toBeGreaterThan(0);
+
+    // Even a VALID code is refused once throttled (the gate is before verification).
+    await expect(identity.verifyTotpChallenge(userId, codeFor(secret))).rejects.toMatchObject({
+      code: "IDENTITY_TOTP_THROTTLED",
+    });
+  });
+
+  it("does not throttle on a successful challenge (a real user never locks themselves out)", async () => {
+    const identity = buildIdentity({ totpRateLimiter: totpLimiter(2) });
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+    await identity.confirmTotp(token, codeFor(secret));
+
+    // Many successful challenges spend nothing — step forward each time so the
+    // code is fresh (not a replay), and the bucket stays full.
+    for (let i = 0; i < 5; i++) {
+      now += 30 * 1000;
+      await expect(identity.verifyTotpChallenge(userId, codeFor(secret))).resolves.toBeUndefined();
+    }
+  });
+
+  it("refuses with IDENTITY_TOTP_THROTTLED after the bucket is drained (recovery)", async () => {
+    const identity = buildIdentity({ totpRateLimiter: totpLimiter(2) });
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+    const { recoveryCodes } = await identity.confirmTotp(token, codeFor(secret));
+
+    // Two wrong recovery codes drain the 2-token bucket.
+    for (let i = 0; i < 2; i++) {
+      await expect(identity.verifyRecoveryCode(userId, "zzzz-zzzz-zz")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_TOTP",
+      });
+    }
+
+    // The next attempt is throttled — even a genuine, still-unused recovery code is
+    // refused, because the gate sits before the lookup.
+    await expect(identity.verifyRecoveryCode(userId, recoveryCodes[0]!)).rejects.toMatchObject({
+      code: "IDENTITY_TOTP_THROTTLED",
+    });
+  });
+
+  it("shares the bucket across BOTH challenge and recovery for one account", async () => {
+    const identity = buildIdentity({ totpRateLimiter: totpLimiter(2) });
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+    await identity.confirmTotp(token, codeFor(secret));
+    now += 30 * 1000;
+
+    // One failed TOTP + one failed recovery drain the shared `totp:<userId>` bucket.
+    await expect(identity.verifyTotpChallenge(userId, "000000")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_TOTP",
+    });
+    await expect(identity.verifyRecoveryCode(userId, "zzzz-zzzz-zz")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_TOTP",
+    });
+
+    // The third attempt — on EITHER verifier — is throttled.
+    await expect(identity.verifyTotpChallenge(userId, codeFor(secret))).rejects.toMatchObject({
+      code: "IDENTITY_TOTP_THROTTLED",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// confirmTotp orders recovery-code minting BEFORE the confirmed stamp — auth-security
+// ---------------------------------------------------------------------------
+
+describe("confirmTotp crash-ordering", () => {
+  it("leaves the factor UNCONFIRMED (re-confirmable) when recovery-code persistence fails", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+
+    // Make the recovery-code INSERT fail — drop the table so the persist throws
+    // AFTER the code verifies but BEFORE the factor is stamped confirmed.
+    raw.prepare("DROP TABLE recovery_codes").run();
+
+    await expect(identity.confirmTotp(token, codeFor(secret))).rejects.toThrow();
+
+    // The factor must NOT be confirmed — the stamp comes last, so a crash before it
+    // leaves the user re-confirmable rather than locked out (confirmed, no codes).
+    expect(await identity.hasTotp(userId)).toBe(false);
+
+    // Restore the table and re-confirm cleanly: the factor was still unconfirmed.
+    raw
+      .prepare(
+        "CREATE TABLE recovery_codes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, code_hash TEXT NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL)",
+      )
+      .run();
+    now += 30 * 1000;
+    const { recoveryCodes } = await identity.confirmTotp(token, codeFor(secret));
+
+    expect(recoveryCodes).toHaveLength(10);
+    expect(await identity.hasTotp(userId)).toBe(true);
   });
 });
 

@@ -46,6 +46,11 @@ export const totpFactors = defineTable("totp_factors", {
   secret: text("secret").notNull(),
   confirmed: boolean("confirmed").notNull(),
   confirmedAt: timestamp("confirmed_at"),
+  // The RFC 6238 step counter of the last code we *accepted* for this factor
+  // (`floor(epochSeconds / timeStep)`), or `null` before the first success.
+  // Verification refuses a code whose matched step is ≤ this, so a code observed
+  // on the wire cannot be replayed inside its still-live ±window (RFC 6238 §5.2).
+  lastUsedStep: integer("last_used_step"),
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 });
@@ -93,6 +98,7 @@ export async function upsertUnconfirmedFactor(
       secret,
       confirmed: false,
       confirmedAt: null,
+      lastUsedStep: null,
       createdAt: now,
       updatedAt: now,
     })
@@ -107,6 +113,18 @@ export async function confirmFactor(db: Db, userId: number): Promise<void> {
   await db
     .update(totpFactors)
     .set({ confirmed: true, confirmedAt: now, updatedAt: now })
+    .where(eq(totpFactors.userId, userId))
+    .run();
+}
+
+/**
+ * Persist the step counter of a just-accepted TOTP code so a replay inside the
+ * live ±window is refused next time (RFC 6238 §5.2). Bumps `updatedAt`.
+ */
+export async function recordTotpStep(db: Db, userId: number, step: number): Promise<void> {
+  await db
+    .update(totpFactors)
+    .set({ lastUsedStep: step, updatedAt: new Date() })
     .where(eq(totpFactors.userId, userId))
     .run();
 }
@@ -135,9 +153,22 @@ export async function findUnusedRecoveryCodes(db: Db, userId: number): Promise<R
     .all();
 }
 
-/** Stamp a recovery code as used — single-use enforcement; a replay finds it spent. */
-export async function markRecoveryCodeUsed(db: Db, id: number): Promise<void> {
-  await db.update(recoveryCodes).set({ usedAt: new Date() }).where(eq(recoveryCodes.id, id)).run();
+/**
+ * Atomically claim a recovery code: stamp `usedAt` only while it is still unused
+ * (`WHERE id = ? AND used_at IS NULL`). Returns `true` iff this call won the
+ * claim — a `changes` of 0 means a concurrent consumer already spent it, so the
+ * caller must treat it as "lost the race" and refuse. This closes the
+ * check-then-mark TOCTOU: two requests racing the same code both find it unused
+ * in `findUnusedRecoveryCodes`, but only one conditional UPDATE flips a row.
+ */
+export async function markRecoveryCodeUsed(db: Db, id: number): Promise<boolean> {
+  const { changes } = await db
+    .update(recoveryCodes)
+    .set({ usedAt: new Date() })
+    .where(and(eq(recoveryCodes.id, id), isNull(recoveryCodes.usedAt)))
+    .run();
+
+  return changes > 0;
 }
 
 /**
