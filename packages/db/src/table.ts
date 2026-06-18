@@ -75,18 +75,27 @@ export function defineTable<C extends Record<string, Column<unknown, boolean, bo
   const byKey: Record<string, ColumnSpec> = {};
   const byColumn: Record<string, string> = {};
 
+  // A fresh object: spreading `columns` preserves the precise `C` type (so the
+  // return needs no cast). The loop then replaces each column with a copy whose
+  // spec carries the owning table (ADR 0018 §0) — written onto `table`, never the
+  // caller's builders, so two tables can't poison a shared column's identity.
+  const table = Object.assign({}, columns, { tableName, columnList, byKey, byColumn });
+
   for (const [key, column] of Object.entries(columns)) {
-    columnList.push(column);
-    byKey[key] = column.spec;
-    byColumn[column.spec.name] = key;
+    // The copy keeps the builder's phantom type; only the spec is replaced.
+    // Chaining a modifier off a *placed* column (`users.email.notNull()`) is
+    // nonsensical, so the original spec its methods close over is never observed.
+    const withTable: Column<unknown, boolean, boolean> = {
+      ...column,
+      spec: { ...column.spec, tableName },
+    };
+    (table as Record<string, unknown>)[key] = withTable;
+    columnList.push(withTable);
+    byKey[key] = withTable.spec;
+    byColumn[withTable.spec.name] = key;
   }
 
-  return Object.assign({}, columns, {
-    tableName,
-    columnList,
-    byKey,
-    byColumn,
-  });
+  return table;
 }
 
 /** The row shape SELECT produces — every column with nullability folded in. */

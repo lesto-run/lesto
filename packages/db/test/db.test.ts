@@ -117,6 +117,16 @@ describe("defineTable", () => {
     expect(users.email.spec.unique).toBe(true);
     expect(users.email.spec.nullable).toBe(false);
   });
+
+  it("stamps the owning table name onto each placed column (ADR 0018 §0)", () => {
+    // A free-standing builder doesn't know its table yet...
+    expect(text("x").spec.tableName).toBeUndefined();
+    // ...but every column reference reachable through a defined table does, so a
+    // foreign-key thunk or a join can read the owning table off the column alone.
+    expect(users.email.spec.tableName).toBe("users");
+    expect(users.byKey["passwordHash"]?.tableName).toBe("users");
+    expect(users.columnList[0]?.spec.tableName).toBe("users");
+  });
 });
 
 describe("column builders", () => {

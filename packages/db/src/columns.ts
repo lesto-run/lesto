@@ -35,6 +35,15 @@ export interface ColumnSpec {
   readonly autoIncrement: boolean;
   readonly hasDefault: boolean;
   readonly defaultValue?: string | number | boolean | null;
+
+  /**
+   * The owning table's name, stamped by `defineTable`. Absent on a free-standing
+   * builder (`text("x").spec.tableName === undefined`); present once the column
+   * is placed in a table (`users.email.spec.tableName === "users"`). Foreign-key
+   * DDL and table-qualified join rendering (ADR 0018) read the owning table from
+   * here, so a column reference is self-describing.
+   */
+  readonly tableName?: string;
 }
 
 /**
