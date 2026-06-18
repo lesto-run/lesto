@@ -2,7 +2,7 @@
  * Vector similarity search using cosine similarity.
  *
  * Searches against pre-built embeddings without requiring the model at runtime.
- * Embeddings are generated at build time using @volo/content-embeddings.
+ * Embeddings are generated at build time using @lesto/content-embeddings.
  */
 
 import type { EmbeddingResult, SearchResult, SearchOptions, SearchIndex } from "./types";

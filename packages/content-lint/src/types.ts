@@ -1,5 +1,5 @@
 /**
- * @volo/content-lint - Type Definitions
+ * @lesto/content-lint - Type Definitions
  *
  * Browser-safe types for markdown linting (accessibility + structural rules).
  */

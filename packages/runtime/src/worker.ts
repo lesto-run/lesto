@@ -1,4 +1,4 @@
-import type { Queue, QueueError, Worker } from "@volo/queue";
+import type { Queue, QueueError, Worker } from "@lesto/queue";
 
 /**
  * Where a worker poll-loop fault goes — the runner's observability seam.

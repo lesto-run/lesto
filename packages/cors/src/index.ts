@@ -1,5 +1,5 @@
 /**
- * @volo/cors — CORS header computation.
+ * @lesto/cors — CORS header computation.
  *
  *   const headers = corsHeaders(req.headers.origin, {
  *     origin: ["https://app.example.com"],

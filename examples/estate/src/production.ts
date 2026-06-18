@@ -20,23 +20,23 @@
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
-import { dispatchSites, nodeStaticReader } from "@volo/runtime";
-import type { RequestOptions } from "@volo/runtime";
-import { buildStaticSites, nodeSink } from "@volo/sites";
-import type { SiteManifest } from "@volo/sites";
-import type { VoloResponse } from "@volo/web";
+import { dispatchSites, nodeStaticReader } from "@lesto/runtime";
+import type { RequestOptions } from "@lesto/runtime";
+import { buildStaticSites, nodeSink } from "@lesto/sites";
+import type { SiteManifest } from "@lesto/sites";
+import type { LestoResponse } from "@lesto/web";
 
-import type { TraceSeams } from "@volo/observability";
+import type { TraceSeams } from "@lesto/observability";
 
 import { buildApp } from "./app";
-import sites from "../volo.sites";
+import sites from "../lesto.sites";
 
 /** The dispatcher a server fronts: `(method, path, options?) -> response`. */
 export type SiteDispatch = (
   method: string,
   path: string,
   options?: RequestOptions,
-) => Promise<VoloResponse>;
+) => Promise<LestoResponse>;
 
 /** What the production build produced — the dispatcher plus the prerender manifest. */
 export interface ProductionSite {
@@ -50,7 +50,7 @@ export interface ProductionBuildOptions {
   /**
    * Bundle the client in Preact's compat dialect (`build-client.ts --preact`).
    *
-   * Defaults to the `VOLO_PREACT=1` env opt-in — the node serve path, whose SSR
+   * Defaults to the `LESTO_PREACT=1` env opt-in — the node serve path, whose SSR
    * is always React, where the alias is sound only because estate's lone island
    * is deferred. The Cloudflare deploy (`build.ts`) passes `true` explicitly:
    * the Worker SSRs in Preact (see `worker.ts` + the `wrangler.jsonc` alias), so
@@ -64,7 +64,7 @@ export interface ProductionBuildOptions {
    * The prerender boots the dynamic app only to render the STATIC marketing
    * zone, which signs no tokens — so the value is irrelevant to the output, and
    * `build.ts` passes an ephemeral one. This is what lets a CI build run with no
-   * `VOLO_AUTH_SECRET` (a runtime-only Worker secret); absent it, the app falls
+   * `LESTO_AUTH_SECRET` (a runtime-only Worker secret); absent it, the app falls
    * back to the fail-closed serve-path resolution.
    */
   readonly secret?: string;
@@ -103,14 +103,14 @@ export async function buildProductionSite(
   // invariants are the bulk of an un-minified client bundle) — addressing both
   // Lighthouse's "Minify JavaScript" and "Reduce unused JavaScript" diagnostics.
   //
-  // The default path bundles real React, unchanged. `VOLO_PREACT=1` (or the
+  // The default path bundles real React, unchanged. `LESTO_PREACT=1` (or the
   // explicit `preactClient` option the deploy build passes) opts the CLIENT
   // bundle into Preact's compat layer (see `build-client.ts`): materially
   // smaller, and sound for estate's lone DEFERRED island (`Account`, `ssr:false`,
   // a fresh `createRoot` mount with no server markup to hydrate). An `ssr: true`
   // island additionally needs the server dialect matched — which the Worker does
   // (preactServerRenderer) and the node serve path, always-React SSR, does not.
-  const preactClient = options.preactClient ?? process.env["VOLO_PREACT"] === "1";
+  const preactClient = options.preactClient ?? process.env["LESTO_PREACT"] === "1";
   const preact = preactClient ? ["--preact"] : [];
 
   execFileSync(

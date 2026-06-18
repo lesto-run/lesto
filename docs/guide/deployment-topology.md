@@ -1,6 +1,6 @@
 # Deployment topology
 
-Volo's pitch is "stateless web tier; state lives in the one database." That makes the
+Lesto's pitch is "stateless web tier; state lives in the one database." That makes the
 web tier trivially scalable — but the **background tier** (queue workers, the cron
 scheduler, retention sweeps) is a *long-running process*, and on Cloudflare Workers
 the web tier can't host it. This is the topology that reconciles "edge-first" with the
@@ -12,7 +12,7 @@ single-instance scheduler constraint.
                          ┌─────────────────────────┐
    requests ───────────► │  Web tier (stateless)   │
                          │  Cloudflare Worker       │ ──┐
-                         │  (or `volo serve` on Node)│   │
+                         │  (or `lesto serve` on Node)│   │
                          └─────────────────────────┘   │
                                                          ├──► one regional Postgres
                          ┌─────────────────────────┐   │     (the shared substrate:
@@ -22,8 +22,8 @@ single-instance scheduler constraint.
                          └─────────────────────────┘
 ```
 
-1. **Web tier — stateless, scale freely.** A Cloudflare Worker (`@volo/cloudflare`) or
-   a Node process (`volo serve`). It only handles requests; it holds no state and runs
+1. **Web tier — stateless, scale freely.** A Cloudflare Worker (`@lesto/cloudflare`) or
+   a Node process (`lesto serve`). It only handles requests; it holds no state and runs
    no timers. Scale it to N replicas — they coordinate through the database.
 2. **Worker process — long-running Node, the background tier.** Runs `queue.work()`
    (job delivery), a `Scheduler` (crons), and a `RetentionScheduler` (sweeps). A
@@ -54,11 +54,11 @@ A minimal background entrypoint (run with `bun worker.ts` / `node`, as its own
 deployment — NOT in the Worker):
 
 ```ts
-import { Queue, Scheduler, RetentionScheduler } from "@volo/queue";
-import { openPostgres } from "@volo/pg"; // openSqlite (from @volo/runtime) on a single Node node
+import { Queue, Scheduler, RetentionScheduler } from "@lesto/queue";
+import { openPostgres } from "@lesto/pg"; // openSqlite (from @lesto/runtime) on a single Node node
 
 // Queue takes the SqlDatabase directly (it issues raw SKIP LOCKED claims).
-const { db } = await openPostgres({ connectionString: process.env.VOLO_PG_URL! });
+const { db } = await openPostgres({ connectionString: process.env.LESTO_PG_URL! });
 const queue = new Queue({ db });
 
 // 1. Deliver jobs (scale this process's replicas freely — claims are SKIP LOCKED-safe).
@@ -89,9 +89,9 @@ process.on("SIGTERM", async () => {
 
 | Deploy | Web tier | Background tier |
 |---|---|---|
-| **Local / single-node Node** | `volo serve` | same process (`queue.work()` in `serve.ts`) — fine |
-| **Scaled Node** | N× `volo serve` | 1× worker process (the recipe above) |
-| **Cloudflare Workers** | the Worker (`@volo/cloudflare`) | 1× Node worker process alongside, on one Postgres |
+| **Local / single-node Node** | `lesto serve` | same process (`queue.work()` in `serve.ts`) — fine |
+| **Scaled Node** | N× `lesto serve` | 1× worker process (the recipe above) |
+| **Cloudflare Workers** | the Worker (`@lesto/cloudflare`) | 1× Node worker process alongside, on one Postgres |
 
 See [deploy-cloudflare.md](./deploy-cloudflare.md) for the web-tier deploy and
 [ARCHITECTURE.md](../../ARCHITECTURE.md) §6 for the durability model.

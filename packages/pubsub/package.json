@@ -1,8 +1,8 @@
 {
-  "name": "@volo/pubsub",
+  "name": "@lesto/pubsub",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's in-process publish/subscribe hub — synchronous registration, awaited delivery.",
+  "description": "Lesto's in-process publish/subscribe hub — synchronous registration, awaited delivery.",
   "type": "module",
   "private": true,
   "exports": {

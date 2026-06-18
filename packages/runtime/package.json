@@ -1,9 +1,9 @@
 {
-  "name": "@volo/runtime",
+  "name": "@lesto/runtime",
   "version": "0.0.0",
   "license": "MIT",
   "private": true,
-  "description": "Volo's transport tier — the node:http server that serves a Volo app, plus a queue-worker runner.",
+  "description": "Lesto's transport tier — the node:http server that serves a Lesto app, plus a queue-worker runner.",
   "type": "module",
   "exports": {
     ".": {
@@ -20,13 +20,13 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*",
-    "@volo/kernel": "workspace:*",
-    "@volo/queue": "workspace:*",
-    "@volo/sites": "workspace:*",
-    "@volo/web": "workspace:*"
+    "@lesto/errors": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/queue": "workspace:*",
+    "@lesto/sites": "workspace:*",
+    "@lesto/web": "workspace:*"
   },
   "devDependencies": {
-    "@volo/observability": "workspace:*"
+    "@lesto/observability": "workspace:*"
   }
 }

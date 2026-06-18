@@ -1,8 +1,8 @@
 {
-  "name": "@volo/identity",
+  "name": "@lesto/identity",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's batteries-included auth: users on the SQL DB, register/verify/login/reset flows composed from @volo/auth + @volo/db + @volo/migrate + @volo/mail + @volo/csrf.",
+  "description": "Lesto's batteries-included auth: users on the SQL DB, register/verify/login/reset flows composed from @lesto/auth + @lesto/db + @lesto/migrate + @lesto/mail + @lesto/csrf.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,11 +20,11 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/auth": "workspace:*",
-    "@volo/db": "workspace:*",
-    "@volo/errors": "workspace:*",
-    "@volo/mail": "workspace:*",
-    "@volo/migrate": "workspace:*",
-    "@volo/ratelimit": "workspace:*"
+    "@lesto/auth": "workspace:*",
+    "@lesto/db": "workspace:*",
+    "@lesto/errors": "workspace:*",
+    "@lesto/mail": "workspace:*",
+    "@lesto/migrate": "workspace:*",
+    "@lesto/ratelimit": "workspace:*"
   }
 }

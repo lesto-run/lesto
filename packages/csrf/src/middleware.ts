@@ -17,7 +17,7 @@
 import { assertStrongSecret } from "./errors";
 import { verifyToken } from "./token";
 
-import type { VoloRequest, Middleware } from "@volo/web";
+import type { LestoRequest, Middleware } from "@lesto/web";
 
 const FORBIDDEN = 403;
 
@@ -44,7 +44,7 @@ export interface CsrfOptions {
    * cookie value, a header, an anon id). Required: a double-submit token is
    * meaningless without the identity half of the binding.
    */
-  readonly sessionFor: (request: VoloRequest) => string;
+  readonly sessionFor: (request: LestoRequest) => string;
 
   /**
    * The token the client presented, or `undefined` when none was found.
@@ -52,7 +52,7 @@ export interface CsrfOptions {
    * Defaults to {@link defaultExtractToken} (the `x-csrf-token` header, then a
    * `_csrf` form field). Override to read a different header or a JSON body.
    */
-  readonly extractToken?: (request: VoloRequest) => string | undefined;
+  readonly extractToken?: (request: LestoRequest) => string | undefined;
 
   /**
    * Which methods to guard. Defaults to the state-changing four
@@ -63,17 +63,17 @@ export interface CsrfOptions {
 
   /**
    * Optional observability hook fired the moment a request is refused — the
-   * uniform `onDenied(kind, c)` seam shared across `@volo/csrf`, `@volo/authz`,
-   * and `@volo/ratelimit` (owned by auth-security item 6, consumed by OTLP wiring
+   * uniform `onDenied(kind, c)` seam shared across `@lesto/csrf`, `@lesto/authz`,
+   * and `@lesto/ratelimit` (owned by auth-security item 6, consumed by OTLP wiring
    * in operability-dx item 3).
    *
    * `kind` is the coded reason (here always {@link CSRF_DENIED_KIND}); `c` is the
-   * refused {@link VoloRequest}. Purely observational: it shapes nothing — the
+   * refused {@link LestoRequest}. Purely observational: it shapes nothing — the
    * `403` is identical whether or not a hook is wired — so firing is safe on the
    * refusal path. Wire it to a tracer/audit sink. A returned promise is awaited so
    * an async sink is not dropped mid-write.
    */
-  readonly onDenied?: (kind: string, c: VoloRequest) => void | Promise<void>;
+  readonly onDenied?: (kind: string, c: LestoRequest) => void | Promise<void>;
 }
 
 /**
@@ -87,7 +87,7 @@ export interface CsrfOptions {
  * Returns `undefined` when neither carries a token, which the middleware treats
  * as a failed check on a guarded method.
  */
-export function defaultExtractToken(request: VoloRequest): string | undefined {
+export function defaultExtractToken(request: LestoRequest): string | undefined {
   const header = request.headers[TOKEN_HEADER];
 
   if (header !== undefined && header.length > 0) {

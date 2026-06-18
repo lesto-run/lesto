@@ -1,10 +1,10 @@
 /**
- * The `users` table — identity's only persisted entity — as a `@volo/db`
+ * The `users` table — identity's only persisted entity — as a `@lesto/db`
  * schema value, plus the small helper functions identity calls.
  *
  *   id              the surrogate primary key SQLite auto-assigns
  *   email           lower-cased, unique; the natural identifier the user types
- *   passwordHash    the scrypt hash from @volo/auth's `hashPassword`
+ *   passwordHash    the scrypt hash from @lesto/auth's `hashPassword`
  *   emailVerifiedAt ISO timestamp; `null` until verification completes
  *   createdAt       ISO timestamp; stamped by `insertUser` (no DB trigger)
  *   updatedAt       ISO timestamp; stamped by every write helper
@@ -27,8 +27,8 @@ import {
   text,
   type Db,
   type InferRow,
-} from "@volo/db";
-import type { Migration } from "@volo/migrate";
+} from "@lesto/db";
+import type { Migration } from "@lesto/migrate";
 
 export const users = defineTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -111,7 +111,7 @@ export function normalizeEmail(email: string): string {
 
 /**
  * The migration that creates `users`. Versioned with a sortable, stable
- * prefix — `@volo/migrate` applies migrations in lexicographic order, so a
+ * prefix — `@lesto/migrate` applies migrations in lexicographic order, so a
  * timestamped version lets later identity migrations slot in cleanly.
  *
  * Crucially, `up`/`down` execute the *schema-as-value's* DDL — exactly one

@@ -20,7 +20,7 @@ export interface HandleOptions {
 }
 
 /** A normalized inbound request: what the router matched, plus query and body. */
-export interface VoloRequest {
+export interface LestoRequest {
   method: string;
 
   path: string;
@@ -55,10 +55,10 @@ export interface VoloRequest {
  *     The runtime pipes it to the socket; because a stream cannot be hashed
  *     without consuming it, the conditional-GET ETag path skips a stream body.
  *
- * Widening, never narrowing: a `string` is still a valid `VoloBody`, so every
+ * Widening, never narrowing: a `string` is still a valid `LestoBody`, so every
  * existing response and consumer keeps working unchanged.
  */
-export type VoloBody = string | Uint8Array | ReadableStream;
+export type LestoBody = string | Uint8Array | ReadableStream;
 
 /**
  * A response header map: a name to a single value, OR to a *list* of values.
@@ -84,17 +84,17 @@ export type HeaderMap = Record<string, string | string[]>;
 /**
  * A response the runtime can write back verbatim.
  *
- * Generic in its body kind, defaulting to `string` — so the bare `VoloResponse`
+ * Generic in its body kind, defaulting to `string` — so the bare `LestoResponse`
  * is exactly the string-bodied shape it has always been. That default is the
  * load-bearing backward-compatibility move: every existing reference
- * (`Promise<VoloResponse>` on the kernel's `App.handle`, the prerenderer's
+ * (`Promise<LestoResponse>` on the kernel's `App.handle`, the prerenderer's
  * structural `RenderResponse`, a test that does `JSON.parse(response.body)`)
  * keeps seeing `body: string` and compiles unchanged.
  *
  * The transport tier widens it where it must accept any arm: `applyResponse`,
- * the site dispatcher, and the edge adapter take a `VoloResponse<VoloBody>`, and
- * a string-bodied `VoloResponse` is assignable to that (a property's type is
- * checked covariantly, and `string` ⊆ `VoloBody`). So binary and streamed
+ * the site dispatcher, and the edge adapter take a `LestoResponse<LestoBody>`, and
+ * a string-bodied `LestoResponse` is assignable to that (a property's type is
+ * checked covariantly, and `string` ⊆ `LestoBody`). So binary and streamed
  * responses flow through the transport without forcing every dispatch-core
  * consumer to widen with them.
  *
@@ -103,20 +103,20 @@ export type HeaderMap = Record<string, string | string[]>;
  * cookies are two `Set-Cookie` lines, never one comma-joined line a browser
  * would mangle (see {@link HeaderMap}).
  */
-export interface VoloResponse<B extends VoloBody = string> {
+export interface LestoResponse<B extends LestoBody = string> {
   status: number;
 
   headers: HeaderMap;
 
-  /** The response body. Defaults to a `string`; a transport may carry any {@link VoloBody}. */
+  /** The response body. Defaults to a `string`; a transport may carry any {@link LestoBody}. */
   body: B;
 }
 
 /**
- * A {@link VoloResponse} that may carry any body arm — string, bytes, or stream.
+ * A {@link LestoResponse} that may carry any body arm — string, bytes, or stream.
  *
- * The explicit name for `VoloResponse<VoloBody>`, used by the transport seams
+ * The explicit name for `LestoResponse<LestoBody>`, used by the transport seams
  * (`applyResponse`, the dispatcher, the edge adapter) and by the bytes helper,
  * so a reader sees "this accepts any body" without decoding the generic.
  */
-export type AnyVoloResponse = VoloResponse<VoloBody>;
+export type AnyLestoResponse = LestoResponse<LestoBody>;

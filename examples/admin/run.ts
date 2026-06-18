@@ -17,7 +17,7 @@
  *     `action`, `resource`, `recordId`, and `actor` (carried via `x-admin-actor`).
  */
 
-import { openSqlite } from "@volo/runtime";
+import { openSqlite } from "@lesto/runtime";
 
 import { buildApp } from "./src/app";
 
@@ -49,7 +49,7 @@ async function main(): Promise<void> {
 
   // 3. Create — fires the onMutation audit hook.
   const created = await app.handle("POST", "/admin/products", {
-    headers: { "x-admin-actor": "ada@volo.dev" },
+    headers: { "x-admin-actor": "ada@lesto.dev" },
     body: { name: "Galley Apron", price: 3000, stock: 25, cost: 1100 },
   });
   const newProduct = body<{ id: number; name: string }>(created);
@@ -57,14 +57,14 @@ async function main(): Promise<void> {
 
   // 4. Update — fires the hook again.
   const updated = await app.handle("PATCH", `/admin/products/${newProduct.id}`, {
-    headers: { "x-admin-actor": "ada@volo.dev" },
+    headers: { "x-admin-actor": "ada@lesto.dev" },
     body: { price: 2700, stock: 30 },
   });
   console.log(`PATCH /admin/products/${newProduct.id} -> ${updated.status}`, body(updated));
 
   // 5. Destroy — fires the hook a third time.
   const destroyed = await app.handle("DELETE", `/admin/products/${newProduct.id}`, {
-    headers: { "x-admin-actor": "ada@volo.dev" },
+    headers: { "x-admin-actor": "ada@lesto.dev" },
   });
   console.log(`DELETE /admin/products/${newProduct.id} -> ${destroyed.status}`, body(destroyed));
 

@@ -1,8 +1,8 @@
 {
-  "name": "@volo/ui-kit",
+  "name": "@lesto/ui-kit",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's vetted starter component library for @volo/ui — the default design system the app and the AI compose with.",
+  "description": "Lesto's vetted starter component library for @lesto/ui — the default design system the app and the AI compose with.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,7 +12,7 @@
     }
   },
   "dependencies": {
-    "@volo/ui": "workspace:*",
+    "@lesto/ui": "workspace:*",
     "react": "^19",
     "react-dom": "^19"
   },

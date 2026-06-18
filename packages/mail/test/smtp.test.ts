@@ -83,7 +83,7 @@ const base = (): Omit<RenderedEmail, "from"> => ({
   to: "ada@example.com",
   subject: "Hello",
   html: "<p>Hi</p>",
-  messageId: "volo-mail-7",
+  messageId: "lesto-mail-7",
 });
 
 // A reply per command, delivered as Buffers and optionally split into partial
@@ -165,7 +165,7 @@ describe("createSmtpTransport", () => {
     expect(fake.written.some((line) => line.startsWith("EHLO client.test"))).toBe(true);
     expect(fake.written.some((line) => line.startsWith("MAIL FROM:<from@app.com>"))).toBe(true);
     expect(fake.written.some((line) => line.startsWith("RCPT TO:<ada@example.com>"))).toBe(true);
-    expect(fake.written.some((line) => line.includes("Message-ID: <volo-mail-7>"))).toBe(true);
+    expect(fake.written.some((line) => line.includes("Message-ID: <lesto-mail-7>"))).toBe(true);
     expect(fake.ended).toBe(true);
   });
 
@@ -236,7 +236,7 @@ describe("createSmtpTransport", () => {
     expect(body).toContain("text/plain");
     expect(body).toContain("text/html");
     // A blank line ends the header block before the first MIME boundary.
-    expect(body).toContain('boundary="volo-volo-mail-7"\r\n\r\n--volo-volo-mail-7');
+    expect(body).toContain('boundary="lesto-lesto-mail-7"\r\n\r\n--lesto-lesto-mail-7');
   });
 
   it("falls back to the auth user as From when none is given", async () => {

@@ -8,9 +8,9 @@ import { dispatchSitesDev, nodeStaticReader } from "../src/index";
 
 import type { AppHandler, RequestOptions, StaticReader } from "../src/index";
 
-import type { Site } from "@volo/sites";
+import type { Site } from "@lesto/sites";
 
-import type { AnyVoloResponse } from "@volo/web";
+import type { AnyLestoResponse } from "@lesto/web";
 
 /** A static reader over a fixed map; an absent key is a missing asset. */
 function fakeReader(files: Record<string, string>): StaticReader {
@@ -74,7 +74,7 @@ describe("dispatchSitesDev — live rendering", () => {
 
     const dispatch = dispatchSitesDev({ sites: [mls], handle });
 
-    const response: AnyVoloResponse = await dispatch("POST", "/mls/session");
+    const response: AnyLestoResponse = await dispatch("POST", "/mls/session");
 
     expect(response.status).toBe(302);
     expect(response.headers).toEqual({ "set-cookie": "session=abc; HttpOnly" });
@@ -88,7 +88,7 @@ describe("dispatchSitesDev — live rendering", () => {
 
     const options: RequestOptions = {
       query: { as: "jade" },
-      headers: { cookie: "volo_session=abc" },
+      headers: { cookie: "lesto_session=abc" },
       body: { saved: true },
     };
 
@@ -271,7 +271,7 @@ describe("dispatchSitesDev — client asset passthrough", () => {
       // The end-to-end contract: a `/client.js` request must read `client.js`
       // under the asset root. A leading slash left on would resolve absolute and
       // the reader's traversal guard would refuse it — this pins the fix.
-      root = await mkdtemp(join(tmpdir(), "volo-dev-asset-"));
+      root = await mkdtemp(join(tmpdir(), "lesto-dev-asset-"));
       await writeFile(join(root, "client.js"), "/* bundle */", "utf8");
 
       const dispatch = dispatchSitesDev({

@@ -1,4 +1,4 @@
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
 /** Stable codes for the Cloudflare adapter's refusals. */
 export type CloudflareErrorCode =
@@ -8,4 +8,4 @@ export type CloudflareErrorCode =
   | "CLOUDFLARE_DISPATCH_TIMEOUT";
 
 /** Anything the Cloudflare adapter can refuse to do. */
-export class CloudflareError extends VoloError<CloudflareErrorCode> {}
+export class CloudflareError extends LestoError<CloudflareErrorCode> {}

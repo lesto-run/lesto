@@ -1,5 +1,5 @@
 /**
- * @volo/content-lint - Markdown Linting for Documentation
+ * @lesto/content-lint - Markdown Linting for Documentation
  *
  * A browser-safe package for checking markdown content for:
  * - Accessibility issues (a11y rules)
@@ -7,7 +7,7 @@
  *
  * @example
  * ```ts
- * import { lint, lintA11y, lintStructural } from "@volo/content-lint";
+ * import { lint, lintA11y, lintStructural } from "@lesto/content-lint";
  *
  * // Run all lint checks (a11y + structural)
  * const diagnostics = lint(markdownContent, "path/to/file.md");
@@ -19,7 +19,7 @@
  * const structuralDiagnostics = lintStructural(markdownContent, "path/to/file.md");
  *
  * // Run specific checks
- * import { createLineIndex, checkAltText, checkNoEmptyUrl } from "@volo/content-lint";
+ * import { createLineIndex, checkAltText, checkNoEmptyUrl } from "@lesto/content-lint";
  * const lineIndex = createLineIndex(content);
  * const altTextIssues = checkAltText(content, file, lineIndex);
  * const emptyUrlIssues = checkNoEmptyUrl(content, file, lineIndex);

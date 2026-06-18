@@ -5,12 +5,12 @@
  * the code, never on a message string, which is free to change for humans.
  */
 
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
 export type RateLimitErrorCode = "RATELIMIT_STORE_CONFLICT";
 
 /** Anything the rate-limit store can refuse to do. */
-export class RateLimitError extends VoloError<RateLimitErrorCode> {
+export class RateLimitError extends LestoError<RateLimitErrorCode> {
   constructor(code: RateLimitErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

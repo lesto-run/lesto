@@ -12,11 +12,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { openSqlite } from "@volo/runtime";
-import { rateLimit } from "@volo/ratelimit";
-import { subscribedRecipients } from "@volo/mailing-lists";
-import type { Middleware } from "@volo/web";
-import type { RenderedEmail } from "@volo/mail";
+import { openSqlite } from "@lesto/runtime";
+import { rateLimit } from "@lesto/ratelimit";
+import { subscribedRecipients } from "@lesto/mailing-lists";
+import type { Middleware } from "@lesto/web";
+import type { RenderedEmail } from "@lesto/mail";
 
 import { buildApp } from "../src/app";
 
@@ -77,7 +77,7 @@ async function boot(subscribeLimiter?: Middleware) {
   return { ...booted, outbox, drain, subscribeAndConfirm, close };
 }
 
-describe("@volo/mailing-lists example — the journey over HTTP", () => {
+describe("@lesto/mailing-lists example — the journey over HTTP", () => {
   it("drives subscribe → confirm → broadcast → unsubscribe end to end", async () => {
     const { app, db, list, outbox, drain, close } = await boot();
 
@@ -183,7 +183,7 @@ describe("@volo/mailing-lists example — the journey over HTTP", () => {
     const { app, list, close } = await boot();
 
     try {
-      // Volo has no request error boundary yet, so the routes validate the body
+      // Lesto has no request error boundary yet, so the routes validate the body
       // themselves — a missing/wrong-typed field must be a clean 422, never an
       // uncaught throw that would 500 the endpoint.
       const noEmail = await app.handle("POST", `/lists/${list.id}/subscribe`, { body: {} });

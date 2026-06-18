@@ -1,10 +1,10 @@
 /**
- * @volo/content-markdown - High-performance markdown rendering.
+ * @lesto/content-markdown - High-performance markdown rendering.
  *
  * This package handles .md files only. Output is HTML rendered via
  * dangerouslySetInnerHTML, so inline event handlers work correctly.
  *
- * For .mdx files, use @volo/content-mdx which provides React-compatible components.
+ * For .mdx files, use @lesto/content-mdx which provides React-compatible components.
  *
  * ## Performance
  *
@@ -16,7 +16,7 @@
  *
  * @example
  * ```ts
- * import { createRenderer } from '@volo/content-markdown';
+ * import { createRenderer } from '@lesto/content-markdown';
  *
  * // Fast path (hybrid) - recommended for most use cases
  * const renderer = createRenderer();

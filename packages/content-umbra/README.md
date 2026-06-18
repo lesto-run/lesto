@@ -1,17 +1,17 @@
-# @volo/content-umbra
+# @lesto/content-umbra
 
 Fast frontmatter parsing for markdown files.
 
 ## Installation
 
 ```bash
-npm install @volo/content-umbra
+npm install @lesto/content-umbra
 ```
 
 ## Quick Start
 
 ```typescript
-import { parseFrontmatter } from "@volo/content-umbra";
+import { parseFrontmatter } from "@lesto/content-umbra";
 
 const content = `---
 title: Hello World

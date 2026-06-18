@@ -23,8 +23,8 @@ import {
   type RenderOptions,
   type RenderResult,
   type Renderer,
-} from "@volo/content-markdown";
-import type * as ContentMdxModule from "@volo/content-mdx";
+} from "@lesto/content-markdown";
+import type * as ContentMdxModule from "@lesto/content-mdx";
 
 /** Lazy-loaded MDX module - cached after first successful import */
 type MdxModule = typeof ContentMdxModule;
@@ -33,7 +33,7 @@ let mdxLoadAttempted = false;
 
 /**
  * Lazy-load the MDX module.
- * Returns null if @volo/content-mdx is not installed.
+ * Returns null if @lesto/content-mdx is not installed.
  */
 async function getMdxModule(): Promise<MdxModule | null> {
   if (mdxModule) return mdxModule;
@@ -41,7 +41,7 @@ async function getMdxModule(): Promise<MdxModule | null> {
 
   mdxLoadAttempted = true;
   try {
-    mdxModule = await import("@volo/content-mdx");
+    mdxModule = await import("@lesto/content-mdx");
     return mdxModule;
   } catch {
     return null;
@@ -161,8 +161,8 @@ async function buildMdxEntry(
   const mdx = await getMdxModule();
   if (!mdx) {
     throw new Error(
-      `MDX file detected (${doc.file.absolutePath}) but @volo/content-mdx is not installed.\n` +
-        `Install it with: bun add @volo/content-mdx\n` +
+      `MDX file detected (${doc.file.absolutePath}) but @lesto/content-mdx is not installed.\n` +
+        `Install it with: bun add @lesto/content-mdx\n` +
         `Or use .md extension instead of .mdx for plain markdown.`,
     );
   }

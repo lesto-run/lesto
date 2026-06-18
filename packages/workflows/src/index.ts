@@ -1,5 +1,5 @@
 /**
- * @volo/workflows — resumable step memoization on the SQL database.
+ * @lesto/workflows — resumable step memoization on the SQL database.
  *
  * Each step's result is journaled the first time it runs; re-invoking `run()`
  * with the same `runId` replays completed steps instead of re-executing them.
@@ -27,7 +27,7 @@ export type { EngineOptions } from "./engine";
 
 export { systemSleep } from "./sleep";
 
-export { VoloError, WorkflowError } from "./errors";
+export { LestoError, WorkflowError } from "./errors";
 export type { WorkflowErrorCode } from "./errors";
 
 export type {

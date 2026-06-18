@@ -1,8 +1,8 @@
 {
-  "name": "@volo/webhooks",
+  "name": "@lesto/webhooks",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo webhooks — HMAC-signed outbound delivery (retried on @volo/queue) and inbound signature verification.",
+  "description": "Lesto webhooks — HMAC-signed outbound delivery (retried on @lesto/queue) and inbound signature verification.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,8 +12,8 @@
     }
   },
   "dependencies": {
-    "@volo/errors": "workspace:*",
-    "@volo/queue": "workspace:*"
+    "@lesto/errors": "workspace:*",
+    "@lesto/queue": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

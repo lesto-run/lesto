@@ -1,5 +1,5 @@
 /**
- * @volo/csrf — stateless double-submit CSRF tokens.
+ * @lesto/csrf — stateless double-submit CSRF tokens.
  *
  *   const { token, cookie } = csrfToken(sessionId, secret); // mint + companion cookie
  *   // set `cookie` as a Set-Cookie; surface `token` to the page to resubmit
@@ -22,7 +22,7 @@ export type { CsrfTokenOptions, IssuedCsrfToken } from "./issue";
 export { CSRF_DENIED_KIND, csrf, defaultExtractToken } from "./middleware";
 export type { CsrfOptions } from "./middleware";
 
-export { CsrfError, VoloError } from "./errors";
+export { CsrfError, LestoError } from "./errors";
 export type { CsrfErrorCode } from "./errors";
 
 // The token-free companion: an Origin / Fetch-Metadata check that needs no

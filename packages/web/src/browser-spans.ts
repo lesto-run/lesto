@@ -1,13 +1,13 @@
 /**
- * The browser-RUM span receiver — `POST /__volo/browser-spans`.
+ * The browser-RUM span receiver — `POST /__lesto/browser-spans`.
  *
- * The browser-side RUM runtime (`@volo/observability`'s `startBrowserRum`, inlined
- * into `@volo/assets`' synthesized client entry) POSTs the spans it built from the
+ * The browser-side RUM runtime (`@lesto/observability`'s `startBrowserRum`, inlined
+ * into `@lesto/assets`' synthesized client entry) POSTs the spans it built from the
  * page's `PerformanceObserver` records: a `browser.navigation` span for the page
  * load's phases, a `browser.resource` span per same-origin fetch (the island chunk
  * and data fetch — the UI→API hop), and `browser.web_vital` spans for LCP/INP/CLS.
  * Each carries the SERVER trace id (adopted from the SSR-injected
- * `<meta name="volo-traceparent">`) and parents on the server request span, so
+ * `<meta name="lesto-traceparent">`) and parents on the server request span, so
  * this receiver is the seam that lands them in the SAME OTLP collector as the
  * server spans — UI → API → DB, one trace.
  *
@@ -29,15 +29,15 @@
  *     half-recorded.
  */
 
-import type { BrowserSpan } from "@volo/observability";
+import type { BrowserSpan } from "@lesto/observability";
 
 import type { Context } from "./handler-context";
 import { WebError } from "./errors";
-import type { Handler } from "./volo";
-import type { VoloResponse } from "./types";
+import type { Handler } from "./lesto";
+import type { LestoResponse } from "./types";
 
 /** The built-in path the browser RUM runtime POSTs to. */
-export const BROWSER_SPANS_ROUTE = "/__volo/browser-spans";
+export const BROWSER_SPANS_ROUTE = "/__lesto/browser-spans";
 
 /**
  * The largest browser-spans payload we accept, in bytes of its JSON form.
@@ -197,7 +197,7 @@ export function normalizeBrowserSpans(body: Record<string, unknown>): BrowserSpa
  * The default sink: one structured JSON line per browser span.
  *
  * Structured so a log pipeline branches on `name`/`trace_id` rather than scraping
- * a string — the posture every other Volo sink takes. PII-free: only the span's
+ * a string — the posture every other Lesto sink takes. PII-free: only the span's
  * ids, name, timestamps, and its already-PII-free attribute bag are emitted.
  */
 export function defaultBrowserSpanSink(span: BrowserSpan): void {
@@ -243,7 +243,7 @@ function jsonByteLength(body: unknown): number | undefined {
 }
 
 /**
- * Build the `POST /__volo/browser-spans` handler over a {@link BrowserSpanSink}.
+ * Build the `POST /__lesto/browser-spans` handler over a {@link BrowserSpanSink}.
  *
  * Bounds the body (a coded 413 over {@link MAX_BROWSER_SPANS_BYTES}), refuses a
  * non-object body (a 400 — the one strict check), and otherwise normalizes the
@@ -252,7 +252,7 @@ function jsonByteLength(body: unknown): number | undefined {
  * registered as a built-in and unit-tested directly.
  */
 export function browserSpansHandler(sink: BrowserSpanSink): Handler {
-  return (c: Context): VoloResponse => {
+  return (c: Context): LestoResponse => {
     const body = c.req.body;
 
     const size = jsonByteLength(body);
@@ -268,7 +268,7 @@ export function browserSpansHandler(sink: BrowserSpanSink): Handler {
 
       return {
         status: 413,
-        headers: { "content-type": "text/plain", "x-volo-error": error.code },
+        headers: { "content-type": "text/plain", "x-lesto-error": error.code },
         body: "Payload Too Large",
       };
     }

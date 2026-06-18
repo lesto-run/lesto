@@ -1,4 +1,4 @@
-import { stripFrontmatter } from "@volo/content-shared/markdown";
+import { stripFrontmatter } from "@lesto/content-shared/markdown";
 
 export function generateExcerpt(markdown: string, maxLength: number): string {
   const content = stripFrontmatter(markdown);

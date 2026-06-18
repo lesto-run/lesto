@@ -1,11 +1,11 @@
-# React + Edge Performance Battles — Lessons for Volo
+# React + Edge Performance Battles — Lessons for Lesto
 
 - **Date:** 2026-06-10
-- **Audience:** Volo maintainers
+- **Audience:** Lesto maintainers
 - **Scope:** A deep-research pass into the hard-fought React performance battles
   other frameworks have already lost and won — hydration races, shrinking the
   React runtime, the Cloudflare Workers platform walls, and RSC double-render —
-  read against Volo's *actual* model (the code, not the architecture doc) so the
+  read against Lesto's *actual* model (the code, not the architecture doc) so the
   lessons are concrete rather than aspirational.
 
 ## TL;DR
@@ -17,9 +17,9 @@ wrong time (nested-island races, hydrate-before-HTML-complete), the React
 runtime being 100–150KB you ship to every visitor, the Cloudflare platform's
 hard walls (no CommonJS `require`, a compressed bundle ceiling, a global-scope
 startup-CPU budget, a streaming-API that once threw), and Server Components quietly
-rendering a layout twice per request. The good news, confirmed by reading Volo's
+rendering a layout twice per request. The good news, confirmed by reading Lesto's
 code: most of the *hydration* battles are **latent, not live** for us today —
-Volo ships a single, fully-buffered HTML string with a flat island manifest and
+Lesto ships a single, fully-buffered HTML string with a flat island manifest and
 no nested islands, so the race conditions that motivate Astro's fixes have no
 window to occur. What *is* live and was acted on in this change-set: a smaller
 client runtime (an opt-in `react`→`preact/compat` alias, ~92% smaller raw, ~108KB
@@ -69,10 +69,10 @@ runtime can tell its own DOM is complete — with a `DOMContentLoaded` fallback.
 
 React already gives each root its own hydration-error resilience. The
 orchestration layer *above* the roots — the loop that mounts every island — did
-not: in Volo, if one island's `mount()` threw, the `for` loop aborted and every
+not: in Lesto, if one island's `mount()` threw, the `for` loop aborted and every
 island after it in the manifest never hydrated. That is the same class of problem
 (one region's failure cascading into others) the Astro fixes guard against, at the
-layer where Volo actually has it.
+layer where Lesto actually has it.
 
 ---
 
@@ -98,7 +98,7 @@ It is not free. The correctness traps are real:
   [Vite PR #15602](https://github.com/vitejs/vite/pull/15602).
 - **CJS-only React libraries** resist aliasing entirely.
 
-There is also a tooling reality specific to how Volo builds: `bun build` (the CLI)
+There is also a tooling reality specific to how Lesto builds: `bun build` (the CLI)
 has **no `--alias` or `--tsconfig-override` flag** (only `--external`/
 `--conditions`), so aliasing `react`→`preact/compat` for the client bundle
 requires the `Bun.build()` JS API with an `onResolve` resolver plugin — exactly
@@ -153,14 +153,14 @@ corrected" section below). The remedy either way is to move initialization out o
 the module top level into the request handler or to build time. This is the
 finding that motivated keeping per-request construction off the Worker's hot
 path — though note the documented budget is on *startup* CPU, and the win in
-Volo's worker is about not redoing that work on *every* request either.
+Lesto's worker is about not redoing that work on *every* request either.
 
 ### The `_routes.json` 100-rule cap (Pages-specific)
 
 Cloudflare **Pages** caps `_routes.json` at 100 include/exclude rules; the Astro
 adapter had to collapse its rules to fit. See
 [adapters PR #394](https://github.com/withastro/adapters/pull/394). This cap is a
-*Pages* mechanism; a pure-Worker router (which is what Volo ships) routes in code
+*Pages* mechanism; a pure-Worker router (which is what Lesto ships) routes in code
 and may never hit this identical cap.
 
 ---
@@ -179,26 +179,26 @@ more than once.
 
 ---
 
-## What applies to Volo (and what doesn't)
+## What applies to Lesto (and what doesn't)
 
 The honest mapping, grounded in the code (`packages/ui/src/hydrate.tsx`,
 `examples/estate/worker.ts`, `examples/estate/build-client.ts`):
 
-| Finding | Status for Volo | Why |
+| Finding | Status for Lesto | Why |
 | --- | --- | --- |
 | Nested-island race (#7197) | **Latent** | The manifest is a flat `readonly IslandMount[]`; no island is ever an ancestor of another, so there is no parent-before-child ordering to enforce. Ids are tree paths (`$`, `$.children[0]`) but nesting is not yet representable. |
-| `isConnected` guard (#7197) | **Not applicable as written** | Volo's `root` seam legitimately mounts into *detached* trees — an existing test mounts into a `document.createElement('section')` that is never appended, so `container.isConnected === false` by design. A naive Astro-style connectivity guard would skip that mount and break the contract for zero benefit, because Volo has no late-arriving-DOM scenario. |
-| Hydrate-before-HTML-complete (#8178) | **Latent** | `renderPageMarkup` buffers the *complete* HTML string before any client code runs (`VoloResponse.body` is a finished string, not a stream), so `hydrateIslands` only ever runs against a fully-settled document. There is no partial-DOM window to gate on. Revisit only if `stream.tsx` (`renderPageStream`) is ever wired to drive client hydration of a progressively-streamed document. |
+| `isConnected` guard (#7197) | **Not applicable as written** | Lesto's `root` seam legitimately mounts into *detached* trees — an existing test mounts into a `document.createElement('section')` that is never appended, so `container.isConnected === false` by design. A naive Astro-style connectivity guard would skip that mount and break the contract for zero benefit, because Lesto has no late-arriving-DOM scenario. |
+| Hydrate-before-HTML-complete (#8178) | **Latent** | `renderPageMarkup` buffers the *complete* HTML string before any client code runs (`LestoResponse.body` is a finished string, not a stream), so `hydrateIslands` only ever runs against a fully-settled document. There is no partial-DOM window to gate on. Revisit only if `stream.tsx` (`renderPageStream`) is ever wired to drive client hydration of a progressively-streamed document. |
 | Per-island mount resilience | **Live — done this change-set** | The mount loop is exactly the orchestration layer where one failure could cascade; it now catches per island. |
 | `preact/compat` size win (#15503) | **Live — done this change-set** | estate ships a React island runtime; the alias is wired as opt-in. |
-| `preact/compat` correctness traps (#4107/#4267, Vite #15602) | **Live constraint** | The alias is sound *only* for deferred (`ssr: false`) islands; estate's lone `Account` island qualifies. There is no Vite dev/prod skew because Volo does not use Vite — the same `build-client.ts` produces dev and prod bundles. |
-| Vite `optimizeDeps` dev-mode alias skew | **Not applicable** | Dev-mode-only, and Vite-specific (the `ssrLoadModule` alias-skew class — see Vite #15602 above); Volo's client build is `Bun.build`, not Vite. |
-| No `require()` in workerd (#15796) | **Live constraint** | The estate worker runs on workerd. Volo's packages are ESM, but any future transitive CJS dependency in the worker graph is a latent `require is not defined`. |
-| SSR streaming threw on workerd (#3777) | **Latent** | Volo does not stream SSR on the edge today (buffered string). The lesson applies the day `renderPageStream` reaches the worker. |
+| `preact/compat` correctness traps (#4107/#4267, Vite #15602) | **Live constraint** | The alias is sound *only* for deferred (`ssr: false`) islands; estate's lone `Account` island qualifies. There is no Vite dev/prod skew because Lesto does not use Vite — the same `build-client.ts` produces dev and prod bundles. |
+| Vite `optimizeDeps` dev-mode alias skew | **Not applicable** | Dev-mode-only, and Vite-specific (the `ssrLoadModule` alias-skew class — see Vite #15602 above); Lesto's client build is `Bun.build`, not Vite. |
+| No `require()` in workerd (#15796) | **Live constraint** | The estate worker runs on workerd. Lesto's packages are ESM, but any future transitive CJS dependency in the worker graph is a latent `require is not defined`. |
+| SSR streaming threw on workerd (#3777) | **Latent** | Lesto does not stream SSR on the edge today (buffered string). The lesson applies the day `renderPageStream` reaches the worker. |
 | Compressed bundle ceiling (#218) | **Live constraint** | The estate worker is well under the cap, but the same dead-code-in-worker failure mode exists; keep prerender-only code out of the worker graph. |
 | Global-scope startup-CPU budget (#10723) | **Live — motivated this change-set** | The worker built its Router/controllers/`SignedSessions` on every request; that is per-request CPU on the edge for an identical result. |
-| `_routes.json` 100-rule cap (#394) | **Not applicable (likely)** | That is a Cloudflare *Pages* cap; Volo routes in code inside a pure Worker. |
-| RSC double-render (#49115) | **Latent (design rule)** | Volo has no RSC today, but the rule stands: `react-dom/server`'s `renderToStaticMarkup` in `render.tsx` must stay a pure function of its inputs. |
+| `_routes.json` 100-rule cap (#394) | **Not applicable (likely)** | That is a Cloudflare *Pages* cap; Lesto routes in code inside a pure Worker. |
+| RSC double-render (#49115) | **Latent (design rule)** | Lesto has no RSC today, but the rule stands: `react-dom/server`'s `renderToStaticMarkup` in `render.tsx` must stay a pure function of its inputs. |
 
 ---
 
@@ -228,7 +228,7 @@ Highest-leverage first. `[DONE]` items were implemented in this change-set;
    `try` and stays a fatal page-wide throw — that is a build-time programming
    error, not a per-visitor runtime fault. `failed` is empty on every success
    path, so the common case reads exactly as before plus one always-empty array.
-   `MountErrorSink` is exported from the `@volo/ui/client` barrel.
+   `MountErrorSink` is exported from the `@lesto/ui/client` barrel.
 
 3. **`[DONE]` Opt-in `preact/compat` client bundle.** `build-client.ts` uses
    `Bun.build()` with a single `onResolve` plugin (`bun build` CLI has no
@@ -236,9 +236,9 @@ Highest-leverage first. `[DONE]` items were implemented in this change-set;
    `react`→`preact/compat`, `react-dom/client`→`preact/compat/client`,
    `react/jsx-runtime` + `react/jsx-dev-runtime`→`preact/jsx-runtime`,
    `react-dom`→a local shim, and `react-dom/server`→a local shim. The alias is
-   gated on `VOLO_PREACT=1` (read in `src/production.ts` and `dev.ts`), **default
+   gated on `LESTO_PREACT=1` (read in `src/production.ts` and `dev.ts`), **default
    OFF** — so the default bundle is the same real React. Two shims are mandatory
-   because `@volo/ui`'s barrel (reached via `src/registry.tsx`) drags server-only
+   because `@lesto/ui`'s barrel (reached via `src/registry.tsx`) drags server-only
    modules into the client graph: `preact-react-dom-shim.ts` re-exports
    `preact/compat` plus inert React-19 resource hints (`preload`, `preinit`,
    `preinitModule`, `preconnect`, `prefetchDNS`) that `preact/compat` lacks, and
@@ -250,27 +250,27 @@ Highest-leverage first. `[DONE]` items were implemented in this change-set;
    ~118549 gzip; `--preact` = 30369 bytes raw / ~10241 gzip — ~92% smaller raw,
    ~108KB smaller gzip (gzip figures vary by a few bytes across zlib versions). The large delta is partly because the alias path drops
    `react-dom/server` (otherwise pulled into the React client bundle by the
-   `@volo/ui` barrel) via the inert server shim. **Constraint:** safe ONLY for
+   `@lesto/ui` barrel) via the inert server shim. **Constraint:** safe ONLY for
    `ssr: false` (deferred, `createRoot`) islands. (Findings 5, 6.)
 
-4. **`[DONE]` Make `preact/compat` safe for `ssr: true` islands.** `@volo/ui`'s
+4. **`[DONE]` Make `preact/compat` safe for `ssr: true` islands.** `@lesto/ui`'s
    server renderer is now pluggable: `renderPageMarkup` takes an injectable
    `ServerRenderer` (default `reactServerRenderer` = real `react-dom/server`, so
    the default path is byte-for-byte unchanged), and a `preactServerRenderer`
-   adapter ships from the new `@volo/ui/server-preact` subpath (backed by
+   adapter ships from the new `@lesto/ui/server-preact` subpath (backed by
    `preact-render-to-string`, an optional peer dep). A Preact-client app passes
    that adapter so server- and client-emitted markup match, closing the
    `ssr: true` mismatch. Capability + end-to-end proof only — no app rewired
    (estate has no `ssr: true` island). See ADR 0008. (Finding 6, finding 4.)
 
-5. **`[DONE]` Lazy island hydration (`client:visible` analogue).** `@volo/ui` added
+5. **`[DONE]` Lazy island hydration (`client:visible` analogue).** `@lesto/ui` added
    opt-in `hydrate: "visible"` per client component: `buildIsland` threads a
    `strategy: "visible"` flag onto the wire (omitted for the default `"load"`, so
    existing manifests are unchanged), and `hydrateIslands` gained an injectable
    `observe?: ObserveFn` seam (default `IntersectionObserver`) that defers a
    visible island's *mount work* — render, effects, and on-mount fetches — until
    its region first intersects the viewport, recording it under a new
-   `HydrationResult.deferred`. It defers mount WORK, not bundle BYTES (Volo still
+   `HydrationResult.deferred`. It defers mount WORK, not bundle BYTES (Lesto still
    ships one `client.js`); true byte deferral needs per-island code-splitting, a
    separate follow-up. See ADR 0008's companion note. (Finding 3.)
 
@@ -291,7 +291,7 @@ Highest-leverage first. `[DONE]` items were implemented in this change-set;
    13.)
 
 9. **`[PROPOSED]` Streaming-complete marker, *if* `renderPageStream` ever drives
-   client hydration.** Volo buffers today, so there is no partial-DOM window. The
+   client hydration.** Lesto buffers today, so there is no partial-DOM window. The
    day the stream path feeds the client, adopt Astro's end-of-island sentinel +
    `DOMContentLoaded` fallback. (Finding 2.)
 
@@ -330,7 +330,7 @@ Two figures circulating about these bugs are worth pinning down precisely
 
 ## Open questions
 
-- **Will Volo ever stream SSR on the edge?** If `renderPageStream` reaches the
+- **Will Lesto ever stream SSR on the edge?** If `renderPageStream` reaches the
   worker, three latent findings go live at once: workerd's `ReadableStream`
   history (#3777), the streaming-complete hydration marker (#8178), and any
   partial-DOM hydration ordering. Worth a deliberate decision before that path is
@@ -350,7 +350,7 @@ Two figures circulating about these bugs are worth pinning down precisely
 
 - **Where does the per-island mount-resilience contract get documented?** The new
   catch-and-continue behaviour, the `failed` field, and the `onMountError` seam
-  extend the `hydrateIslands` contract and touch `@volo/ui` (another agent's
-  package); an ADR or the `@volo/ui` changelog should record the dividing line
+  extend the `hydrateIslands` contract and touch `@lesto/ui` (another agent's
+  package); an ADR or the `@lesto/ui` changelog should record the dividing line
   (manifest/registry drift = fatal throw; per-island render failure = catch, sink,
   continue).

@@ -9,7 +9,7 @@ const base = (): RenderedEmail => ({
   subject: "Hello",
   html: "<p>Hi</p>",
   from: "hi@app.com",
-  messageId: "volo-mail-9",
+  messageId: "lesto-mail-9",
 });
 
 const okResponse = (): Response => new Response(JSON.stringify({ id: "abc" }), { status: 200 });
@@ -43,7 +43,7 @@ describe("createFetchProviderTransport", () => {
     expect(init.method).toBe("POST");
     const headers = init.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer key_123");
-    expect(headers["idempotency-key"]).toBe("volo-mail-9");
+    expect(headers["idempotency-key"]).toBe("lesto-mail-9");
     const body = JSON.parse(init.body as string) as ProviderRequestBody;
     expect(body).toMatchObject({
       from: "hi@app.com",
@@ -51,7 +51,7 @@ describe("createFetchProviderTransport", () => {
       subject: "Hello",
       html: "<p>Hi</p>",
       text: "Hi",
-      messageId: "volo-mail-9",
+      messageId: "lesto-mail-9",
       headers: { "List-Unsubscribe": "<u>" },
     });
   });

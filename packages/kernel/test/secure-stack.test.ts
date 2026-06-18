@@ -1,9 +1,9 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { currentContext, fromRequestMiddleware, volo, runWithContext } from "@volo/web";
-import type { Volo } from "@volo/web";
-import { generateToken } from "@volo/csrf";
+import { currentContext, fromRequestMiddleware, lesto, runWithContext } from "@lesto/web";
+import type { Lesto } from "@lesto/web";
+import { generateToken } from "@lesto/csrf";
 
 import { createApp, secureStack } from "../src/index";
 import type { SecureStackOptions } from "../src/index";
@@ -53,12 +53,12 @@ function adapt(raw: Database.Database): KernelDatabase {
 const SECRET = "kernel-secret-0123456789abcdefghi";
 const SESSION = "anon";
 
-// A volo() app exercising both a state-changing route and reading the context,
+// A lesto() app exercising both a state-changing route and reading the context,
 // with the secure stack mounted as the app's outermost middleware. The security
 // batteries are request-and-next middleware, bridged into the handler chain by
-// `fromRequestMiddleware` — the production wiring (see create-volo's template).
-function buildApp(options: SecureStackOptions): Volo {
-  return volo()
+// `fromRequestMiddleware` — the production wiring (see create-lesto's template).
+function buildApp(options: SecureStackOptions): Lesto {
+  return lesto()
     .use(...secureStack(options).map(fromRequestMiddleware))
     .post("/api/items", (c) => c.json({ created: true }, 201))
     .get("/api/whoami", (c) => c.json({ requestId: currentContext()?.requestId ?? null }));

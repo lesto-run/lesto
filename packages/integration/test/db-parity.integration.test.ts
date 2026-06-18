@@ -1,19 +1,19 @@
 /**
  * Cross-driver parity: the SAME conformance body run against SQLite and Postgres
- * (ADR 0006 Wave 6). It proves the async `@volo/db` query layer + the two driver
- * adapters (`@volo/runtime`'s `openSqlite`, `@volo/pg`'s `openPostgres`) behave
+ * (ADR 0006 Wave 6). It proves the async `@lesto/db` query layer + the two driver
+ * adapters (`@lesto/runtime`'s `openSqlite`, `@lesto/pg`'s `openPostgres`) behave
  * identically — insert/returning, get/all/orderBy/limit/offset/count, update/
  * delete change-counts, transaction commit-visible / rollback-invisible, the
  * `?`→`$n` round-trip with a reused position, snake→camel hydration, and
  * null/boolean binding.
  *
  * The SQLite leg always runs (in the gate). The Postgres leg runs ONLY when
- * `VOLO_PG_URL` is set (its own CI job with a Postgres service) — so the coverage
+ * `LESTO_PG_URL` is set (its own CI job with a Postgres service) — so the coverage
  * gate never depends on a container, and a developer opts in with a real PG.
  *
  * The table DDL is now rendered by the dialect layer (`createTableSql(items,
  * driver.name)`): the previous hand-written `AUTOINCREMENT`/`SERIAL` workaround
- * is gone, so this suite also proves `@volo/db`'s installer runs unchanged on a
+ * is gone, so this suite also proves `@lesto/db`'s installer runs unchanged on a
  * real Postgres.
  */
 
@@ -32,10 +32,10 @@ import {
   lt,
   lte,
   text,
-} from "@volo/db";
-import type { Db, Dialect, SqlDatabase } from "@volo/db";
-import { Migrator } from "@volo/migrate";
-import { openSqlite } from "@volo/runtime";
+} from "@lesto/db";
+import type { Db, Dialect, SqlDatabase } from "@lesto/db";
+import { Migrator } from "@lesto/migrate";
+import { openSqlite } from "@lesto/runtime";
 
 // The schema-as-value drives every query (column refs, insert, select) AND the
 // CREATE TABLE: one source of truth, rendered per dialect by `createTableSql`.
@@ -51,7 +51,7 @@ interface Driver {
   open(): Promise<{ db: SqlDatabase; close: () => unknown }>;
 }
 
-const PG_URL = process.env["VOLO_PG_URL"];
+const PG_URL = process.env["LESTO_PG_URL"];
 
 const drivers: Driver[] = [{ name: "sqlite", open: () => openSqlite() }];
 
@@ -59,7 +59,7 @@ if (PG_URL !== undefined) {
   drivers.push({
     name: "postgres",
     open: async () => {
-      const { openPostgres } = await import("@volo/pg");
+      const { openPostgres } = await import("@lesto/pg");
 
       return openPostgres({ connectionString: PG_URL });
     },
@@ -68,7 +68,7 @@ if (PG_URL !== undefined) {
 
 /** Open ONE fresh, independent Postgres session (its own pool) — for the advisory-lock race. */
 async function openPostgresHandle(): Promise<{ db: SqlDatabase; close: () => Promise<void> }> {
-  const { openPostgres } = await import("@volo/pg");
+  const { openPostgres } = await import("@lesto/pg");
 
   // Only ever called from the PG-only describe, so the URL is present.
   return openPostgres({ connectionString: PG_URL! });
@@ -226,9 +226,9 @@ describe.each(drivers)("schema installers on $name", (driver) => {
     handle = opened.db;
     close = opened.close;
 
-    await handle.exec("DROP TABLE IF EXISTS volo_jobs");
-    await handle.exec("DROP TABLE IF EXISTS volo_cache");
-    await handle.exec("DROP TABLE IF EXISTS volo_workflow_steps");
+    await handle.exec("DROP TABLE IF EXISTS lesto_jobs");
+    await handle.exec("DROP TABLE IF EXISTS lesto_cache");
+    await handle.exec("DROP TABLE IF EXISTS lesto_workflow_steps");
     await handle.exec("DROP TABLE IF EXISTS schema_migrations");
     await handle.exec("DROP TABLE IF EXISTS installer_items");
   });
@@ -238,7 +238,7 @@ describe.each(drivers)("schema installers on $name", (driver) => {
   });
 
   it("queue.installSchema installs and enqueue→claim round-trips", async () => {
-    const { Queue, installSchema } = await import("@volo/queue");
+    const { Queue, installSchema } = await import("@lesto/queue");
 
     await installSchema(handle, driver.name);
 
@@ -252,7 +252,7 @@ describe.each(drivers)("schema installers on $name", (driver) => {
   });
 
   it("cache.installCacheSchema installs and set→get round-trips (BIGINT expires_at)", async () => {
-    const { installCacheSchema, sqlStore } = await import("@volo/cache");
+    const { installCacheSchema, sqlStore } = await import("@lesto/cache");
 
     await installCacheSchema(handle, driver.name);
 
@@ -265,7 +265,7 @@ describe.each(drivers)("schema installers on $name", (driver) => {
   });
 
   it("workflows.installWorkflowSchema installs and a step memoizes", async () => {
-    const { Engine, installWorkflowSchema } = await import("@volo/workflows");
+    const { Engine, installWorkflowSchema } = await import("@lesto/workflows");
 
     await installWorkflowSchema(handle, driver.name);
 

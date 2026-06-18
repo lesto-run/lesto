@@ -1,8 +1,8 @@
 {
-  "name": "@volo/router",
+  "name": "@lesto/router",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's RESTful router — declare routes and named paths, resolve method+path to a controller#action.",
+  "description": "Lesto's RESTful router — declare routes and named paths, resolve method+path to a controller#action.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*"
+    "@lesto/errors": "workspace:*"
   }
 }

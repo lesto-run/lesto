@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { ServerRenderer } from "@volo/ui/server";
+import type { ServerRenderer } from "@lesto/ui/server";
 
 import { buildEdgeApp } from "../src/edge";
 
@@ -79,7 +79,7 @@ describe("buildEdgeApp page rendering — the injected dialect (the matched pair
 
     const html = await drain(response.body);
     expect(html).toContain("Jade Mills Estates");
-    expect(html).toContain("data-volo-island");
+    expect(html).toContain("data-lesto-island");
     expect(html).not.toContain("via-preact");
   });
 });

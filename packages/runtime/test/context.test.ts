@@ -2,13 +2,13 @@ import { request as httpRequest } from "node:http";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { currentContext } from "@volo/web";
+import { currentContext } from "@lesto/web";
 
 import { serve } from "../src/index";
 import { establishContext } from "../src/server";
 
 import type { ContextSource } from "../src/server";
-import type { App } from "@volo/kernel";
+import type { App } from "@lesto/kernel";
 import type { AccessEntry, Server } from "../src/index";
 
 describe("establishContext", () => {

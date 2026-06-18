@@ -1,5 +1,5 @@
-import { setData } from "@volo/content-core";
-import type { SqlDatabase } from "@volo/migrate";
+import { setData } from "@lesto/content-core";
+import type { SqlDatabase } from "@lesto/migrate";
 
 import { loadEntries } from "./load";
 

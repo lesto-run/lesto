@@ -1,11 +1,11 @@
 /**
- * `@volo/ui/server` — the server-render half of the engine.
+ * `@lesto/ui/server` — the server-render half of the engine.
  *
  * Everything here imports `react-dom/server` (or its Preact twin,
  * `preact-render-to-string`) directly or transitively: the buffered and streamed
  * page renderers and the two server-render dialects. It is split out of the core
- * `@volo/ui` barrel for one load-bearing reason — a CLIENT bundle that imports
- * `@volo/ui` (for `Registry`, `defineIsland`, the island/data tokens) must NEVER
+ * `@lesto/ui` barrel for one load-bearing reason — a CLIENT bundle that imports
+ * `@lesto/ui` (for `Registry`, `defineIsland`, the island/data tokens) must NEVER
  * drag `react-dom/server` into the browser graph. React's `react-dom/server` is
  * ~60 KB gzip of code the browser never runs (the browser only *hydrates*), and
  * before this split the barrel pulled it into every client bundle, defeating the
@@ -13,11 +13,11 @@
  *
  * So the rule is mechanical: anything that calls `renderToString` /
  * `renderToStaticMarkup` / `renderToReadableStream` lives behind this subpath; a
- * server (the `@volo/web` page renderer, estate's `document.ts`) reaches for it
+ * server (the `@lesto/web` page renderer, estate's `document.ts`) reaches for it
  * explicitly. The core barrel stays isomorphic — safe to import from a module the
  * client bundle reaches.
  *
- * Mirrors `@volo/ui/client` (the browser-only hydration runtime) and
+ * Mirrors `@lesto/ui/client` (the browser-only hydration runtime) and
  * `react-dom`'s own server/client split.
  */
 

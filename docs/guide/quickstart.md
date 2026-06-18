@@ -1,4 +1,4 @@
-# Quickstart — your first Volo app
+# Quickstart — your first Lesto app
 
 This walks the first five minutes: scaffold an app, run it, see a server-rendered
 page with a live (hydrated) island, and add a route. It mirrors the CI-gated
@@ -13,29 +13,29 @@ ones that are actually exercised on every change.
 ## 1. Scaffold
 
 ```sh
-npm create volo-app my-app
-# or, with Bun:  bun create volo my-app
+npm create lesto-app my-app
+# or, with Bun:  bun create lesto my-app
 cd my-app
 bun install
 ```
 
 > **Pre-publish note.** Until the first `0.x` publish (see [RELEASING.md](../../RELEASING.md)),
-> the public `@volo/*` packages are not on npm yet. To try Volo from a clone of this
+> the public `@lesto/*` packages are not on npm yet. To try Lesto from a clone of this
 > repo, scaffold with the in-monorepo flag, which pins the packages at local `file:`
 > paths instead of registry ranges:
 >
 > ```sh
-> bun packages/create-volo/src/bin.ts my-app --local
+> bun packages/create-lesto/src/bin.ts my-app --local
 > ```
 
-The scaffold writes a small but real app: a `posts` table (a `@volo/db` value), a
-migration, a code-first `volo()` app with `/`, `GET /posts`, and `POST /posts`, and
+The scaffold writes a small but real app: a `posts` table (a `@lesto/db` value), a
+migration, a code-first `lesto()` app with `/`, `GET /posts`, and `POST /posts`, and
 one island (`app/islands/counter.tsx`).
 
 ## 2. Run it
 
 ```sh
-bun run dev          # volo dev — every site live on one origin (default :3000)
+bun run dev          # lesto dev — every site live on one origin (default :3000)
 ```
 
 Open <http://localhost:3000>. The page is server-rendered; the **count** button is
@@ -53,12 +53,12 @@ curl -H "Sec-Fetch-Site: same-origin" http://localhost:3000/posts
 
 ## 3. The shape of the app
 
-`volo.app.ts` is the whole application — it default-exports the `VoloAppConfig` that
-`volo dev` boots:
+`lesto.app.ts` is the whole application — it default-exports the `LestoAppConfig` that
+`lesto dev` boots:
 
 - **`posts`** — a table defined as a value with `defineTable`; the same value backs
   the migration's DDL and the typed row every query returns.
-- **`buildApp(db)`** — a closure factory returning a `volo()` app. Routes read top to
+- **`buildApp(db)`** — a closure factory returning a `lesto()` app. Routes read top to
   bottom: `.get`/`.post` for the API, `.page` for server-rendered pages, `.client`
   for the island bundle.
 - **Validation at the boundary** — `POST /posts` runs the body through a Zod schema
@@ -69,7 +69,7 @@ curl -H "Sec-Fetch-Site: same-origin" http://localhost:3000/posts
 In `buildApp`, chain another handler:
 
 ```ts
-// add `eq` to the existing `@volo/db` import at the top of volo.app.ts
+// add `eq` to the existing `@lesto/db` import at the top of lesto.app.ts
 .get("/posts/:id", async (c) => {
   const id = Number(c.param("id"));
   const post = await db.select().from(posts).where(eq(posts.id, id)).get();
@@ -77,7 +77,7 @@ In `buildApp`, chain another handler:
 })
 ```
 
-Restart `volo dev` and `curl http://localhost:3000/posts/1`.
+Restart `lesto dev` and `curl http://localhost:3000/posts/1`.
 
 ## Next
 

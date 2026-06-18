@@ -1,11 +1,11 @@
 {
-  "name": "@volo/cli",
+  "name": "@lesto/cli",
   "version": "0.0.0",
   "license": "MIT",
   "private": true,
-  "description": "Volo's `volo` command-line tool — load a project's volo.app.ts and run, serve, migrate, or inspect routes.",
+  "description": "Lesto's `lesto` command-line tool — load a project's lesto.app.ts and run, serve, migrate, or inspect routes.",
   "bin": {
-    "volo": "./src/bin.ts"
+    "lesto": "./src/bin.ts"
   },
   "type": "module",
   "exports": {
@@ -23,19 +23,19 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/assets": "workspace:*",
-    "@volo/content-core": "workspace:*",
-    "@volo/content-store": "workspace:*",
-    "@volo/deploy": "workspace:*",
-    "@volo/errors": "workspace:*",
-    "@volo/kernel": "workspace:*",
-    "@volo/mcp": "workspace:*",
-    "@volo/migrate": "workspace:*",
-    "@volo/observability": "workspace:*",
-    "@volo/openapi": "workspace:*",
-    "@volo/router": "workspace:*",
-    "@volo/runtime": "workspace:*",
-    "@volo/sites": "workspace:*",
-    "@volo/web": "workspace:*"
+    "@lesto/assets": "workspace:*",
+    "@lesto/content-core": "workspace:*",
+    "@lesto/content-store": "workspace:*",
+    "@lesto/deploy": "workspace:*",
+    "@lesto/errors": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/mcp": "workspace:*",
+    "@lesto/migrate": "workspace:*",
+    "@lesto/observability": "workspace:*",
+    "@lesto/openapi": "workspace:*",
+    "@lesto/router": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/sites": "workspace:*",
+    "@lesto/web": "workspace:*"
   }
 }

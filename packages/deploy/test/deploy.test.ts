@@ -16,7 +16,7 @@ import {
 } from "../src/index";
 
 import type { ReleaseStore, ShipDeps, StaticTarget } from "../src/index";
-import type { Site, SiteManifest } from "@volo/sites";
+import type { Site, SiteManifest } from "@lesto/sites";
 
 // A two-zone project: a static marketing site at the root, a dynamic app at /mls
 // — the exact split the routing manifest exists to express.
@@ -88,7 +88,7 @@ describe("planDeploy", () => {
     ]);
   });
 
-  it("plans a dynamic site into a node target that runs `volo serve` and needs the db", () => {
+  it("plans a dynamic site into a node target that runs `lesto serve` and needs the db", () => {
     const plan = planDeploy([mls], []);
 
     expect(plan.targets).toEqual([
@@ -97,7 +97,7 @@ describe("planDeploy", () => {
         site: "mls",
         basePath: "/mls",
         routing: { basePath: "/mls", mode: "dynamic" },
-        run: "volo serve",
+        run: "lesto serve",
         needsDatabase: true,
       },
     ]);
@@ -235,8 +235,8 @@ describe("nodeUploader", () => {
   let distRoot: string;
 
   beforeEach(async () => {
-    outRoot = await mkdtemp(join(tmpdir(), "volo-deploy-out-"));
-    distRoot = await mkdtemp(join(tmpdir(), "volo-deploy-dist-"));
+    outRoot = await mkdtemp(join(tmpdir(), "lesto-deploy-out-"));
+    distRoot = await mkdtemp(join(tmpdir(), "lesto-deploy-dist-"));
   });
 
   afterEach(async () => {
@@ -458,8 +458,8 @@ describe("nodeReleaseStore", () => {
   let distRoot: string;
 
   beforeEach(async () => {
-    outRoot = await mkdtemp(join(tmpdir(), "volo-release-out-"));
-    distRoot = await mkdtemp(join(tmpdir(), "volo-release-dist-"));
+    outRoot = await mkdtemp(join(tmpdir(), "lesto-release-out-"));
+    distRoot = await mkdtemp(join(tmpdir(), "lesto-release-dist-"));
 
     await writeFile(join(outRoot, "index.html"), "<h1>v</h1>", "utf8");
   });

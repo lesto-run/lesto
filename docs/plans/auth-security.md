@@ -1,8 +1,8 @@
 # Auth & Security — v1 plan
 
 Derived from `docs/reviews/auth-security.md`, reconciled with `docs/ROADMAP-V1.md` (which rules).
-Packages: `@volo/auth`, `@volo/identity`, `@volo/csrf`, `@volo/cors`, `@volo/ratelimit`,
-`@volo/authz`, `@volo/rbac`, `@volo/flags`.
+Packages: `@lesto/auth`, `@lesto/identity`, `@lesto/csrf`, `@lesto/cors`, `@lesto/ratelimit`,
+`@lesto/authz`, `@lesto/rbac`, `@lesto/flags`.
 ADR 0013 durable stores are **done** (async store interfaces, `sqlSessionStore`/`sqlRateLimitStore`,
 cross-driver atomicity proof) — referenced, not re-planned. The package layer has **no P0**; the
 launch-blocking edge findings are owned by **edge-deploy** (its items 1–2) and the `trustProxy`
@@ -39,11 +39,11 @@ comments; one conventional commit on `main`.
    Acceptance: every event covered; payloads grep-clean of tokens/passwords/emails-in-clear where avoidable; estate dashboard-able in the Wave 4 integration test.
 
 7. **authz/rbac consolidation** — `[Wave 5 | P1]`
-   Fold `@volo/rbac`'s wildcard permissions + cycle-safe inheritance into `@volo/authz`'s `definePolicy`; delete or attic `@volo/rbac`. One authorization story before the API freezes.
+   Fold `@lesto/rbac`'s wildcard permissions + cycle-safe inheritance into `@lesto/authz`'s `definePolicy`; delete or attic `@lesto/rbac`. One authorization story before the API freezes.
    Acceptance: rbac's test matrix ports into authz; `createGuard` unchanged for existing callers; memoize resolved grants per role while in the file.
 
 8. **CSRF/CORS small-correctness batch** — `[Wave 5 | P2]`
-   Files: `packages/csrf` (a `csrfToken(c)` issuance helper that sets the companion cookie — or rename the battery's docs away from "double-submit"; `originCheck` `strict` option requiring `same-origin`), `packages/cors` (gate preflight handling on `Access-Control-Request-Method`; emit `Vary: Origin` whenever policy ≠ `"*"`), estate's edge `readCookie` duplication replaced with the `@volo/identity` cookie module.
+   Files: `packages/csrf` (a `csrfToken(c)` issuance helper that sets the companion cookie — or rename the battery's docs away from "double-submit"; `originCheck` `strict` option requiring `same-origin`), `packages/cors` (gate preflight handling on `Access-Control-Request-Method`; emit `Vary: Origin` whenever policy ≠ `"*"`), estate's edge `readCookie` duplication replaced with the `@lesto/identity` cookie module.
    Acceptance: each fix pinned; docs match behavior.
 
 ## Owned elsewhere (do not duplicate)

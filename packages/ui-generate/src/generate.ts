@@ -1,5 +1,5 @@
 /**
- * Generate a validated @volo/ui tree from a prompt.
+ * Generate a validated @lesto/ui tree from a prompt.
  *
  * The registry is the vetted vocabulary. We turn it into a JSON Schema and hand
  * the model that schema as a *forced* tool — `render_ui` — so the model can only
@@ -11,8 +11,8 @@
  * output is always re-validated before it reaches a caller.
  */
 
-import { treeJsonSchema, validateTree } from "@volo/ui";
-import type { Registry } from "@volo/ui";
+import { treeJsonSchema, validateTree } from "@lesto/ui";
+import type { Registry } from "@lesto/ui";
 
 import { GenerateError } from "./errors";
 

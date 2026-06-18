@@ -1,6 +1,6 @@
 /**
  * The example's QA gate: drive the admin journey through the REAL HTTP routes
- * (not the `@volo/admin` service methods directly), the way a browser or `curl`
+ * (not the `@lesto/admin` service methods directly), the way a browser or `curl`
  * would.
  *
  * It asserts the two capabilities this example exists to prove, plus the error
@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { openSqlite } from "@volo/runtime";
+import { openSqlite } from "@lesto/runtime";
 
 import { buildApp } from "../src/app";
 
@@ -32,7 +32,7 @@ async function boot(seed = true) {
   return { ...booted, close };
 }
 
-describe("@volo/admin example — the admin journey over HTTP", () => {
+describe("@lesto/admin example — the admin journey over HTTP", () => {
   it("paginates the list by limit + offset and projects away the hidden `cost` column", async () => {
     const { app, seeded, close } = await boot();
 
@@ -110,7 +110,7 @@ describe("@volo/admin example — the admin journey over HTTP", () => {
     try {
       // 1. Create — fires the hook with action "create".
       const created = await app.handle("POST", "/admin/products", {
-        headers: { "x-admin-actor": "ada@volo.dev" },
+        headers: { "x-admin-actor": "ada@lesto.dev" },
         body: { name: "Galley Apron", price: 3000, stock: 25, cost: 1100 },
       });
       expect(created.status).toBe(201);
@@ -121,7 +121,7 @@ describe("@volo/admin example — the admin journey over HTTP", () => {
 
       // 2. Update — fires the hook with action "update".
       const updated = await app.handle("PATCH", `/admin/products/${product.id}`, {
-        headers: { "x-admin-actor": "ada@volo.dev" },
+        headers: { "x-admin-actor": "ada@lesto.dev" },
         body: { price: 2700 },
       });
       expect(updated.status).toBe(200);
@@ -133,7 +133,7 @@ describe("@volo/admin example — the admin journey over HTTP", () => {
 
       // 3. Destroy — fires the hook with action "destroy".
       const destroyed = await app.handle("DELETE", `/admin/products/${product.id}`, {
-        headers: { "x-admin-actor": "ada@volo.dev" },
+        headers: { "x-admin-actor": "ada@lesto.dev" },
       });
       expect(destroyed.status).toBe(200);
       expect(body<{ deleted: number }>(destroyed)).toEqual({ deleted: product.id });
@@ -148,7 +148,7 @@ describe("@volo/admin example — the admin journey over HTTP", () => {
       for (const row of trail.rows) {
         expect(row.resource).toBe("products");
         expect(row.recordId).toBe(String(product.id));
-        expect(row.actor).toBe("ada@volo.dev");
+        expect(row.actor).toBe("ada@lesto.dev");
       }
     } finally {
       close();
@@ -170,7 +170,7 @@ describe("@volo/admin example — the admin journey over HTTP", () => {
     }
   });
 
-  it("maps @volo/admin's coded errors to HTTP status (404 not-found, 422 bad body)", async () => {
+  it("maps @lesto/admin's coded errors to HTTP status (404 not-found, 422 bad body)", async () => {
     const { app, close } = await boot();
 
     try {

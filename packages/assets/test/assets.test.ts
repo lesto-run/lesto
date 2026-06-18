@@ -20,7 +20,7 @@ describe("synthesizeEntry", () => {
 
     expect(source).toContain('import Island0 from "/app/islands/account.tsx";');
     expect(source).toContain(".defineClient(Island0.island)");
-    expect(source).toContain('import { hydrateDocumentIslands } from "@volo/ui/client";');
+    expect(source).toContain('import { hydrateDocumentIslands } from "@lesto/ui/client";');
     expect(source).toContain("hydrateDocumentIslands(registry, {");
   });
 
@@ -73,8 +73,8 @@ describe("synthesizeEntry — client error beacon (ADR 0011)", () => {
   it("inlines the beacon runtime and wires both hydration sinks into the hydrate call", () => {
     const source = synthesizeEntry(islands);
 
-    // The runtime is inlined (no @volo/assets import in the browser graph).
-    expect(source).not.toContain("@volo/assets");
+    // The runtime is inlined (no @lesto/assets import in the browser graph).
+    expect(source).not.toContain("@lesto/assets");
     expect(source).toContain("const reportClientErrors =");
     expect(source).toContain("const beacon = (() => {");
 
@@ -89,7 +89,7 @@ describe("synthesizeEntry — client error beacon (ADR 0011)", () => {
   it("emits the POST path and never inlines free text that could carry PII", () => {
     const source = synthesizeEntry(islands);
 
-    expect(source).toContain('"/__volo/client-errors"');
+    expect(source).toContain('"/__lesto/client-errors"');
     // The runtime reads error.code / constructor.name / typeof — never .message.
     expect(source).not.toContain(".message");
   });
@@ -122,8 +122,8 @@ describe("synthesizeEntry — client error beacon (ADR 0011)", () => {
 
 describe("rum-client — the browser-RUM wiring snippets (ARCHITECTURE.md §7)", () => {
   it("imports startBrowserRum from the node-free observability subpath", () => {
-    expect(RUM_MODULE).toBe("@volo/observability/rum");
-    expect(rumImport()).toBe('import { startBrowserRum } from "@volo/observability/rum";');
+    expect(RUM_MODULE).toBe("@lesto/observability/rum");
+    expect(rumImport()).toBe('import { startBrowserRum } from "@lesto/observability/rum";');
   });
 
   it("emits a bare start call when no sample rate is set (runtime default applies)", () => {
@@ -144,7 +144,7 @@ describe("synthesizeEntry — browser RUM (ARCHITECTURE.md §7)", () => {
   it("imports startBrowserRum and calls it AFTER hydration", () => {
     const source = synthesizeEntry(islands);
 
-    expect(source).toContain('import { startBrowserRum } from "@volo/observability/rum";');
+    expect(source).toContain('import { startBrowserRum } from "@lesto/observability/rum";');
     expect(source).toContain("startBrowserRum();");
 
     // RUM starts after hydration is wired (its buffered observer still sees load
@@ -176,7 +176,7 @@ describe("isChunkFile", () => {
 
 describe("PREACT_ALIAS", () => {
   it("maps every React specifier the client graph pulls to a Preact target", () => {
-    // No `react-dom`/`react-dom/server` entries: after the `@volo/ui` barrel
+    // No `react-dom`/`react-dom/server` entries: after the `@lesto/ui` barrel
     // split the client never imports the server-render surface, so neither
     // specifier reaches the browser graph and no inert shim is needed.
     expect(PREACT_ALIAS).toEqual({
@@ -586,7 +586,7 @@ describe("buildClient — gzip sizes + budget (ADR 0011: narrate, shout when ove
 
     const narration = lines.join("\n");
 
-    expect(narration).toContain("volo: client (preact, production)");
+    expect(narration).toContain("lesto: client (preact, production)");
     expect(narration).toContain("entry client.js:");
     expect(narration).toContain("chunk chunk-deadbeef.js:");
     expect(narration).toContain("gzip");

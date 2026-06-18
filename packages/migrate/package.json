@@ -1,8 +1,8 @@
 {
-  "name": "@volo/migrate",
+  "name": "@lesto/migrate",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's migrator — a Tracks-style migration system (ordering, bookkeeping, indexes) over @volo/db schema-as-value DDL on an injected SQL database.",
+  "description": "Lesto's migrator — a Tracks-style migration system (ordering, bookkeeping, indexes) over @lesto/db schema-as-value DDL on an injected SQL database.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,10 +20,10 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*"
+    "@lesto/errors": "workspace:*"
   },
   "devDependencies": {
-    "@volo/db": "workspace:*",
+    "@lesto/db": "workspace:*",
     "better-sqlite3": "^11.10.0"
   }
 }

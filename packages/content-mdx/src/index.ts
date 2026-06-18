@@ -1,18 +1,18 @@
 /**
- * @volo/content-mdx - MDX compilation for React applications
+ * @lesto/content-mdx - MDX compilation for React applications
  *
  * This package provides:
  * - MDX compilation via mdx-bundler
  * - Syntax highlighting via rehype-pretty-code
- * - React components for rendering (import from @volo/content-mdx/components)
+ * - React components for rendering (import from @lesto/content-mdx/components)
  *
- * Unlike @volo/content-markdown, this package uses proper React patterns
+ * Unlike @lesto/content-markdown, this package uses proper React patterns
  * for interactive features like copy buttons.
  *
  * @example
  * ```ts
- * import { compileMDX } from '@volo/content-mdx';
- * import { MDXContent } from '@volo/content-mdx/components';
+ * import { compileMDX } from '@lesto/content-mdx';
+ * import { MDXContent } from '@lesto/content-mdx/components';
  *
  * const result = await compileMDX({ source: '# Hello' });
  * // In React: <MDXContent code={result.code} />

@@ -28,7 +28,7 @@ interface Row {
 
 /** An error shaped like a SQLite unique violation. */
 function uniqueViolation(): Error {
-  return new Error("UNIQUE constraint failed: volo_rate_limits.key");
+  return new Error("UNIQUE constraint failed: lesto_rate_limits.key");
 }
 
 /**
@@ -145,10 +145,10 @@ describe("installRateLimitSchema", () => {
 
     expect(execed).toHaveLength(4);
     const [create, index] = execed;
-    expect(create).toContain("CREATE TABLE IF NOT EXISTS volo_rate_limits");
+    expect(create).toContain("CREATE TABLE IF NOT EXISTS lesto_rate_limits");
     expect(create).toContain("tokens     DOUBLE PRECISION NOT NULL");
     expect(create).toContain("updated_at BIGINT NOT NULL");
-    expect(index).toContain("CREATE INDEX IF NOT EXISTS volo_rate_limits_updated_at");
+    expect(index).toContain("CREATE INDEX IF NOT EXISTS lesto_rate_limits_updated_at");
   });
 });
 

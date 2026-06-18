@@ -10,7 +10,7 @@ describe("nodeStaticReader", () => {
   let root: string;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), "volo-static-"));
+    root = await mkdtemp(join(tmpdir(), "lesto-static-"));
   });
 
   afterEach(async () => {
@@ -60,7 +60,7 @@ describe("nodeStaticReader", () => {
   });
 
   it("does not let a same-prefix sibling masquerade as being under the root", async () => {
-    // `root` is `.../volo-static-XXXX`; its sibling `.../volo-static-XXXXevil`
+    // `root` is `.../lesto-static-XXXX`; its sibling `.../lesto-static-XXXXevil`
     // shares the entire root string as a prefix. Only the trailing-separator
     // check distinguishes them — a naive `startsWith(root)` (without `+ sep`)
     // would wrongly accept this path, so this test pins that exact guarantee.

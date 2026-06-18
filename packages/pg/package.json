@@ -1,9 +1,9 @@
 {
-  "name": "@volo/pg",
+  "name": "@lesto/pg",
   "version": "0.0.0",
   "license": "MIT",
   "private": true,
-  "description": "Volo's Postgres driver — adapts a node-postgres Pool to the async @volo/db SqlDatabase seam (ADR 0006).",
+  "description": "Lesto's Postgres driver — adapts a node-postgres Pool to the async @lesto/db SqlDatabase seam (ADR 0006).",
   "type": "module",
   "exports": {
     ".": {
@@ -24,6 +24,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/db": "workspace:*"
+    "@lesto/db": "workspace:*"
   }
 }

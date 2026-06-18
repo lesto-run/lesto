@@ -1,7 +1,7 @@
 /**
- * The ported `@volo/rbac` matrix.
+ * The ported `@lesto/rbac` matrix.
  *
- * When `@volo/rbac` was folded into `definePolicy` (one authorization story
+ * When `@lesto/rbac` was folded into `definePolicy` (one authorization story
  * before the API freeze), its full test matrix moved here verbatim in behavior —
  * every wildcard, inheritance, cycle, and multi-role case is preserved, retold in
  * the policy's declarative shape. `Permissions#can(roles, perm)` becomes

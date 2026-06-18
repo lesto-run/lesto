@@ -1,9 +1,9 @@
 /**
- * @volo/content-store — content on the one substrate.
+ * @lesto/content-store — content on the one substrate.
  *
- * The content engine (@volo/content-core) reads markdown and produces entries.
+ * The content engine (@lesto/content-core) reads markdown and produces entries.
  * This package writes those entries to the SQL database and reads them back into
- * the runtime, so content lives on the same DB as everything else in Volo —
+ * the runtime, so content lives on the same DB as everything else in Lesto —
  * SQLite locally, Postgres at scale — rather than in generated files.
  *
  *   new Migrator(db, [contentEntriesMigration]).migrate();

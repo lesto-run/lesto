@@ -1,5 +1,5 @@
 {
-  "name": "@volo/content-components",
+  "name": "@lesto/content-components",
   "version": "0.1.0",
   "description": "HTML rendering components for Docks content collections. SUPPORTED surface is HtmlContent only; components beyond HtmlContent ship PREVIEW (experimental, coverage-gate-exempt).",
   "type": "module",
@@ -50,17 +50,17 @@
   },
   "homepage": "https://github.com/usedocks/docks/tree/main/packages/components#readme",
   "dependencies": {
-    "@volo/content-shared": "workspace:*"
+    "@lesto/content-shared": "workspace:*"
   },
   "peerDependencies": {
-    "@volo/content-mdx": "workspace:*",
+    "@lesto/content-mdx": "workspace:*",
     "react": ">=18",
     "react-dom": ">=18",
     "vue": ">=3",
     "svelte": ">=4"
   },
   "peerDependenciesMeta": {
-    "@volo/content-mdx": {
+    "@lesto/content-mdx": {
       "optional": true
     },
     "react": {

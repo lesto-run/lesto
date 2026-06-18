@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
 import {
   bodyForStatus,
@@ -13,9 +13,9 @@ import {
 
 import { mergeHeaders } from "../src/harden";
 
-import type { AnyVoloResponse } from "../src/index";
+import type { AnyLestoResponse } from "../src/index";
 
-const response = (headers: Record<string, string> = {}): AnyVoloResponse => ({
+const response = (headers: Record<string, string> = {}): AnyLestoResponse => ({
   status: 200,
   headers,
   body: "ok",
@@ -125,19 +125,19 @@ describe("mergeHeaders", () => {
 
 describe("statusForError", () => {
   it("maps the coded transport refusals to their statuses", () => {
-    expect(statusForError(new VoloError("RUNTIME_INVALID_JSON", "x"))).toBe(400);
-    expect(statusForError(new VoloError("ROUTER_MALFORMED_PARAM", "x"))).toBe(400);
-    expect(statusForError(new VoloError("WEB_VALIDATION_FAILED", "x"))).toBe(422);
-    expect(statusForError(new VoloError("RUNTIME_BODY_TOO_LARGE", "x"))).toBe(413);
-    expect(statusForError(new VoloError("RUNTIME_HANDLER_TIMEOUT", "x"))).toBe(503);
-    expect(statusForError(new VoloError("CLOUDFLARE_DISPATCH_TIMEOUT", "x"))).toBe(503);
+    expect(statusForError(new LestoError("RUNTIME_INVALID_JSON", "x"))).toBe(400);
+    expect(statusForError(new LestoError("ROUTER_MALFORMED_PARAM", "x"))).toBe(400);
+    expect(statusForError(new LestoError("WEB_VALIDATION_FAILED", "x"))).toBe(422);
+    expect(statusForError(new LestoError("RUNTIME_BODY_TOO_LARGE", "x"))).toBe(413);
+    expect(statusForError(new LestoError("RUNTIME_HANDLER_TIMEOUT", "x"))).toBe(503);
+    expect(statusForError(new LestoError("CLOUDFLARE_DISPATCH_TIMEOUT", "x"))).toBe(503);
   });
 
   it("maps any other coded error to a 500", () => {
-    expect(statusForError(new VoloError("SOME_OTHER_CODE", "x"))).toBe(500);
+    expect(statusForError(new LestoError("SOME_OTHER_CODE", "x"))).toBe(500);
   });
 
-  it("maps a non-VoloError throw to a 500", () => {
+  it("maps a non-LestoError throw to a 500", () => {
     expect(statusForError(new Error("plain"))).toBe(500);
     expect(statusForError("a string thrown")).toBe(500);
   });

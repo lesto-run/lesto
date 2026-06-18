@@ -8,11 +8,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { encodeBase64 } from "@volo/content-shared/encoding";
+import { encodeBase64 } from "@lesto/content-shared/encoding";
 import { parseBinaryIndex, binarySearch, binaryQuantize } from "../src/binary";
 import type { BinarySearchIndex } from "../src/types";
 
-// Mirror of @volo/content-embeddings serializeBinaryOnlyIndex (v3, binary-only).
+// Mirror of @lesto/content-embeddings serializeBinaryOnlyIndex (v3, binary-only).
 // Inlined to avoid loading the embeddings package (it pulls @huggingface/transformers
 // at module load), while still exercising the exact wire format the writer emits.
 function serializeBinaryOnlyIndex(index: BinarySearchIndex): string {

@@ -1,5 +1,5 @@
 {
-  "name": "@volo/content-prose",
+  "name": "@lesto/content-prose",
   "version": "0.1.0",
   "license": "MIT",
   "description": "PREVIEW (not part of the supported v1 content seam) — prose-quality analysis for Docks content; experimental, coverage-gate-exempt.",
@@ -27,7 +27,7 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/content-shared": "workspace:*",
+    "@lesto/content-shared": "workspace:*",
     "cuss": "^2.0.0",
     "fillers": "^2.0.0",
     "hedges": "^2.0.0",

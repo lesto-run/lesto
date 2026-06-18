@@ -7,7 +7,7 @@ import {
   constants as zlibConstants,
 } from "node:zlib";
 
-import type { AnyVoloResponse, VoloBody } from "@volo/web";
+import type { AnyLestoResponse, LestoBody } from "@lesto/web";
 
 /**
  * The slice of a node:http `ServerResponse` we write through.
@@ -39,8 +39,8 @@ export interface WritableResponse {
   destroy(error?: Error): void;
 }
 
-/** A `VoloBody` that is the Web/global `ReadableStream` — the stream arm. */
-function isReadableStream(body: VoloBody): body is ReadableStream {
+/** A `LestoBody` that is the Web/global `ReadableStream` — the stream arm. */
+function isReadableStream(body: LestoBody): body is ReadableStream {
   return body instanceof ReadableStream;
 }
 
@@ -420,10 +420,10 @@ function compressBytes(bytes: Buffer, encoding: "br" | "gzip"): Buffer {
  * executes the chosen plan.
  */
 export function encodeBuffered(
-  response: AnyVoloResponse,
+  response: AnyLestoResponse,
   body: string | Uint8Array,
   encoding: ContentEncoding,
-): AnyVoloResponse {
+): AnyLestoResponse {
   const raw = typeof body === "string" ? Buffer.from(body, "utf8") : Buffer.from(body);
 
   if (encoding === "identity") {
@@ -477,9 +477,9 @@ function streamCompressor(encoding: ContentEncoding): Transform | undefined {
  * any shared cache) how to read it. `identity` returns the headers untouched.
  */
 export function encodeStreamHeaders(
-  response: AnyVoloResponse,
+  response: AnyLestoResponse,
   encoding: ContentEncoding,
-): AnyVoloResponse {
+): AnyLestoResponse {
   if (encoding === "identity") return response;
 
   return {
@@ -492,9 +492,9 @@ export function encodeStreamHeaders(
 }
 
 /**
- * Write a {@link VoloResponse} onto the socket: status line, headers, then body.
+ * Write a {@link LestoResponse} onto the socket: status line, headers, then body.
  *
- * The body has three arms (see `VoloBody`), each written the way its kind
+ * The body has three arms (see `LestoBody`), each written the way its kind
  * demands:
  *
  *   - `string` — `end(string)`, exactly as before: the original path, byte-for-
@@ -525,7 +525,7 @@ export function encodeStreamHeaders(
  */
 export function applyResponse(
   res: WritableResponse,
-  response: AnyVoloResponse,
+  response: AnyLestoResponse,
   options: {
     onTruncated?: (reason: unknown) => void;
     streamEncoding?: ContentEncoding;

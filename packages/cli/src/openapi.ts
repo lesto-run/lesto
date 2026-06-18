@@ -1,5 +1,5 @@
 /**
- * `volo openapi` — export the app's route surface as an OpenAPI 3.1 document.
+ * `lesto openapi` — export the app's route surface as an OpenAPI 3.1 document.
  *
  * The MCP control plane drives the app for agents; this makes the same surface
  * legible to *humans and tools* — a spec a generated client, a Swagger UI, or a
@@ -12,29 +12,29 @@
  *
  * Internal routes are excludable: pass `--exclude <prefix>` (repeatable) to drop
  * anything whose path starts with that prefix — a health probe, an admin zone —
- * from the exported surface, layered on top of the `@volo/openapi` filter.
+ * from the exported surface, layered on top of the `@lesto/openapi` filter.
  *
  * Like `run`, the core is pure and fully injected: a test hands it a fake
  * `loadApp` and a spy `write` and asserts on the document and the path it wrote.
  */
 
-import { toJson, toOpenApi } from "@volo/openapi";
-import type { OpenApiOptions, RouteEntry } from "@volo/openapi";
+import { toJson, toOpenApi } from "@lesto/openapi";
+import type { OpenApiOptions, RouteEntry } from "@lesto/openapi";
 
-import type { VoloAppConfig } from "@volo/kernel";
+import type { LestoAppConfig } from "@lesto/kernel";
 
 import { parseStringFlag } from "./flags";
 
-/** Where `volo openapi` writes when no `--out` flag is given. */
+/** Where `lesto openapi` writes when no `--out` flag is given. */
 const DEFAULT_OUT = "openapi.json";
 
 /** The document's `info` block when the app declares no `meta` of its own. */
-const DEFAULT_INFO = { title: "Volo API", version: "0.0.0" } as const;
+const DEFAULT_INFO = { title: "Lesto API", version: "0.0.0" } as const;
 
-/** The seams `volo openapi` depends on — all injected, never imported live. */
+/** The seams `lesto openapi` depends on — all injected, never imported live. */
 export interface OpenApiDeps {
-  /** Load the project's app config (the bin reads `volo.app.ts`; tests fake it). */
-  loadApp: () => Promise<VoloAppConfig>;
+  /** Load the project's app config (the bin reads `lesto.app.ts`; tests fake it). */
+  loadApp: () => Promise<LestoAppConfig>;
 
   /** Write the serialized document to a path (the bin passes an fs writer; tests spy). */
   write: (path: string, contents: string) => Promise<void>;
@@ -83,7 +83,7 @@ function internalFilter(prefixes: readonly string[]): OpenApiOptions {
 /**
  * Export the app's routes as an OpenAPI 3.1 document on disk.
  *
- * Loads the app (no boot needed — the route list is declared on the `volo()`
+ * Loads the app (no boot needed — the route list is declared on the `lesto()`
  * app, not produced by migrating), builds the spec with internal routes
  * filtered out, and writes it to `--out` (default `openapi.json`). Prints the
  * path and route count, then the standing limitation so the schema gap is never

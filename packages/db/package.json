@@ -1,8 +1,8 @@
 {
-  "name": "@volo/db",
+  "name": "@lesto/db",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's schema-and-query layer — a Drizzle-shaped, typed query DSL over the minimal SQL surface, with the schema as the single source of truth for both DDL and query types.",
+  "description": "Lesto's schema-and-query layer — a Drizzle-shaped, typed query DSL over the minimal SQL surface, with the schema as the single source of truth for both DDL and query types.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*"
+    "@lesto/errors": "workspace:*"
   }
 }

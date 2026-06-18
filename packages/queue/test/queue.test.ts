@@ -120,7 +120,7 @@ describe("installSchema dialect", () => {
     expect(captured).toContain("INTEGER PRIMARY KEY AUTOINCREMENT");
     expect(captured).not.toContain("GENERATED ALWAYS AS IDENTITY");
     // The partial `WHERE status = 'ready'` index is Postgres-only.
-    expect(captured).not.toContain("idx_volo_jobs_ready");
+    expect(captured).not.toContain("idx_lesto_jobs_ready");
   });
 
   it("postgres: BIGINT identity key plus the partial WHERE status='ready' index", async () => {
@@ -142,7 +142,7 @@ describe("installSchema dialect", () => {
     expect(captured).toContain("BIGINT  PRIMARY KEY GENERATED ALWAYS AS IDENTITY");
     expect(captured).not.toContain("AUTOINCREMENT");
     // The partial index lands ONLY on Postgres, and only over `status = 'ready'`.
-    expect(captured).toContain("idx_volo_jobs_ready");
+    expect(captured).toContain("idx_lesto_jobs_ready");
     expect(captured).toContain("WHERE status = 'ready'");
   });
 });
@@ -273,17 +273,17 @@ describe("runOnce", () => {
 
     // Corrupt the stored JSON so claim's parse will throw — a payload no producer
     // could have written through `enqueue`, but a manual write or a bug could.
-    database.prepare("UPDATE volo_jobs SET payload = ? WHERE id = ?").run("{not json", id);
+    database.prepare("UPDATE lesto_jobs SET payload = ? WHERE id = ?").run("{not json", id);
 
     // The row's status is read with raw SQL: `find` parses the payload too, and a
     // poison row is exactly the case that would make `find` itself throw.
     const statusOf = (jobId: number): string =>
-      (database.prepare("SELECT status, last_error FROM volo_jobs WHERE id = ?").get(jobId) as {
+      (database.prepare("SELECT status, last_error FROM lesto_jobs WHERE id = ?").get(jobId) as {
         status: string;
         last_error: string | null;
       })!.status;
     const lastErrorOf = (jobId: number): string | null =>
-      (database.prepare("SELECT last_error FROM volo_jobs WHERE id = ?").get(jobId) as {
+      (database.prepare("SELECT last_error FROM lesto_jobs WHERE id = ?").get(jobId) as {
         last_error: string | null;
       })!.last_error;
 
@@ -522,7 +522,7 @@ describe("onJob observability seam", () => {
     // Poison payload (corrupt the stored JSON) → routed through fail().
     queue.define("p", () => {});
     const poison = await queue.enqueue("p", { ok: true }, { maxAttempts: 1 });
-    database.prepare("UPDATE volo_jobs SET payload = ? WHERE id = ?").run("{not json", poison);
+    database.prepare("UPDATE lesto_jobs SET payload = ? WHERE id = ?").run("{not json", poison);
     await queue.runOnce({ onJob: (event) => events.push(event) });
     expect(events.at(-1)).toMatchObject({ id: poison, outcome: "failed" });
   });
@@ -574,7 +574,7 @@ describe("poison-payload tolerance on the public Job-or-null surface", () => {
   // must surface it as the CODED `QUEUE_POISON_PAYLOAD` — not a raw SyntaxError
   // that strands the row `running` (claim) or hides which row is corrupt (find).
   const poison = async (id: number): Promise<void> => {
-    database.prepare("UPDATE volo_jobs SET payload = ? WHERE id = ?").run("{not json", id);
+    database.prepare("UPDATE lesto_jobs SET payload = ? WHERE id = ?").run("{not json", id);
   };
 
   it("claim() throws the coded poison error (not a raw SyntaxError)", async () => {
@@ -988,7 +988,7 @@ describe("transaction (claim atomicity seam)", () => {
     const id = await queue.enqueue("x");
 
     const out = await db.transaction(async (tx) => {
-      await tx.prepare("UPDATE volo_jobs SET name = ? WHERE id = ?").run(["committed", id]);
+      await tx.prepare("UPDATE lesto_jobs SET name = ? WHERE id = ?").run(["committed", id]);
 
       return "ok";
     });
@@ -997,7 +997,7 @@ describe("transaction (claim atomicity seam)", () => {
 
     await expect(
       db.transaction(async (tx) => {
-        await tx.prepare("UPDATE volo_jobs SET name = ? WHERE id = ?").run(["doomed", id]);
+        await tx.prepare("UPDATE lesto_jobs SET name = ? WHERE id = ?").run(["doomed", id]);
         throw new Error("abort");
       }),
     ).rejects.toThrow("abort");

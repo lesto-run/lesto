@@ -1,5 +1,5 @@
-import type { RuntimeEntry } from "@volo/content-core";
-import type { SqlDatabase } from "@volo/migrate";
+import type { RuntimeEntry } from "@lesto/content-core";
+import type { SqlDatabase } from "@lesto/migrate";
 
 import { ContentStoreError } from "./errors";
 import { loadEntry } from "./load";

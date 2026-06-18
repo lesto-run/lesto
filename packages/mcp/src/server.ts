@@ -1,8 +1,8 @@
 /**
- * The stdio transport for the Volo MCP control plane.
+ * The stdio transport for the Lesto MCP control plane.
  *
  * This is pure wiring and lives behind a coverage exclusion: it owns no business
- * logic. It builds the SDK `Server`, registers the Volo tool set (the real logic,
+ * logic. It builds the SDK `Server`, registers the Lesto tool set (the real logic,
  * in `tools.ts`), and connects a process `StdioServerTransport`. Everything an
  * agent can actually *do* is decided by `buildTools` / `dispatch`, which are
  * tested directly; this file only carries those decisions onto the wire.
@@ -13,19 +13,19 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import { buildTools, dispatch } from "./tools";
-import type { VoloMcpContext } from "./tools";
+import type { LestoMcpContext } from "./tools";
 
 /**
- * Stand up the MCP server over stdio and serve the Volo tool set.
+ * Stand up the MCP server over stdio and serve the Lesto tool set.
  *
  * Resolves once the transport is connected; the server then runs until the
  * client disconnects or the process exits.
  */
-export async function startMcpServer(context: VoloMcpContext): Promise<void> {
+export async function startMcpServer(context: LestoMcpContext): Promise<void> {
   const tools = buildTools(context);
 
   const server = new Server(
-    { name: "@volo/mcp", version: "0.0.0" },
+    { name: "@lesto/mcp", version: "0.0.0" },
     { capabilities: { tools: {} } },
   );
 

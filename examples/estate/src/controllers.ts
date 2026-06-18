@@ -1,12 +1,12 @@
 /**
- * The estate's routes for both zones, on one composable `volo()` app.
+ * The estate's routes for both zones, on one composable `lesto()` app.
  *
  *   marketing (`/`, `/about`) — the static zone. Registered `static: true`, so the
  *   pages prerender to cacheable HTML yet carry the auth-aware `Account` island:
  *   no render-time session is baked in, the client resolves it (ADR 0010/0012).
  *
  *   mls (`/mls/*`) — the dynamic zone. It owns the session: it mints the cookie on
- *   sign-in via `Identity.login`, answers `/__volo/data/session` with the current
+ *   sign-in via `Identity.login`, answers `/__lesto/data/session` with the current
  *   user (what the marketing island binds), and gates `/mls/saved`.
  *
  * Built through a factory so the handlers close over their own {@link Identity}
@@ -16,11 +16,11 @@
  * routes/layouts/data but not its client-module config.
  */
 
-import { volo } from "@volo/web";
-import type { Context, Volo } from "@volo/web";
+import { lesto } from "@lesto/web";
+import type { Context, Lesto } from "@lesto/web";
 
-import { clearSessionCookie, IdentityError, readSessionToken, sessionCookie } from "@volo/identity";
-import type { Identity } from "@volo/identity";
+import { clearSessionCookie, IdentityError, readSessionToken, sessionCookie } from "@lesto/identity";
+import type { Identity } from "@lesto/identity";
 
 import { sessionSource } from "./session-source";
 import { EstateLayout } from "./ui/layout";
@@ -31,7 +31,7 @@ import { nodeContentStore } from "./content-node";
 import { LISTINGS } from "./listings";
 import { DEFAULT_DEMO, DEMO_ACCOUNTS } from "./identity";
 
-/** What the client sees on `/__volo/data/session` — the same shape the Account island consumes. */
+/** What the client sees on `/__lesto/data/session` — the same shape the Account island consumes. */
 interface SessionResponseUser {
   readonly id: string;
   readonly name: string;
@@ -61,7 +61,7 @@ function sessionUser(email: string): SessionResponseUser {
 }
 
 /** The estate app's routes, closing over the {@link Identity} they authenticate against. */
-export function buildEstateRoutes(identity: Identity): Volo {
+export function buildEstateRoutes(identity: Identity): Lesto {
   /** The current user (an Identity model), or undefined when signed out. */
   const currentUser = async (c: Context): Promise<{ email: string } | undefined> => {
     const user = await identity.currentUser(readSessionToken(c.header("cookie")));
@@ -70,7 +70,7 @@ export function buildEstateRoutes(identity: Identity): Volo {
   };
 
   return (
-    volo()
+    lesto()
       .layout(EstateLayout)
       // --- marketing (static) zone ---
       // Prerendered + cacheable, yet auth-aware: `static: true` renders with no
@@ -127,7 +127,7 @@ export function buildEstateRoutes(identity: Identity): Volo {
       /**
        * The session data source the marketing Account island binds to (ADR 0010).
        *
-       * Auto-exposed at `/__volo/data/session`; the framework delivers its value to
+       * Auto-exposed at `/__lesto/data/session`; the framework delivers its value to
        * the island as a prop (primed parallel with client.js on the static page).
        * An identity *probe*, not a gated resource — "nobody is signed in" is a
        * normal answer (`null`, 200), never a 401. The DTO is allowlisted to

@@ -1,9 +1,9 @@
 {
-  "name": "volo-e2e",
+  "name": "lesto-e2e",
   "version": "0.0.0",
   "license": "MIT",
   "private": true,
-  "description": "Volo's browser E2E suite — Playwright against a minimal in-repo island fixture, proving hydration in a real browser. Named outside @volo/* so the workspace test filter skips it; run by its own CI job.",
+  "description": "Lesto's browser E2E suite — Playwright against a minimal in-repo island fixture, proving hydration in a real browser. Named outside @lesto/* so the workspace test filter skips it; run by its own CI job.",
   "type": "module",
   "scripts": {
     "test:e2e": "playwright test island-hydration.spec.ts",
@@ -11,8 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@volo/runtime": "workspace:*",
-    "@volo/ui": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/ui": "workspace:*",
     "react": "^19",
     "react-dom": "^19"
   },

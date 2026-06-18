@@ -102,7 +102,7 @@ is gated on Tier-2 streaming SSR existing.
 - **Goal:** one tested hardening pipeline that both the Node server and the CF adapter call, so the
   edge gets context, security headers, ETag/304, and the same error→status mapping.
 - **Approach:** factor the transport-independent middle of `handle` into a pure-ish wrapper, e.g.
-  `harden(dispatch, hardenDeps)` returning a `(request) => Promise<AnyVoloResponse>` that:
+  `harden(dispatch, hardenDeps)` returning a `(request) => Promise<AnyLestoResponse>` that:
   1. `establishContext` + `runWithContext` (so `currentContext()` works on the edge),
   2. runs dispatch inside the context with the error boundary → `statusForError`/`bodyForStatus`,
   3. `withEtag` + conditional-304 decision (return a 304 marker the adapter renders),
@@ -112,7 +112,7 @@ is gated on Tier-2 streaming SSR existing.
   CF handler wraps `harden` and renders the result (including 304) into a Web `Response`. Trust-proxy
   on the edge resolves from CF's `cf-connecting-ip` / `x-forwarded-*` per the configured policy.
 - **Files:** new `runtime/src/harden.ts` (or `web` if it must be transport-free and shared without a
-  runtime dep — check the dependency direction; context already lives in `@volo/web`), refactor
+  runtime dep — check the dependency direction; context already lives in `@lesto/web`), refactor
   `runtime/src/server.ts#handle`, rewrite `cloudflare/src/fetch-handler.ts` to call it.
 - **Edge specifics to decide:** body-size cap and handler timeout are partly the CF platform's job
   (request size limit, wall-clock limit) — document what we delegate vs enforce. Context + headers +
@@ -125,13 +125,13 @@ is gated on Tier-2 streaming SSR existing.
   contract). Land in its own PR.
 
 ### #3 — Zero-config CSRF default (Origin / Sec-Fetch-Site)
-- **Goal:** a brand-new Volo app has CSRF protection by default, without token plumbing; the existing
+- **Goal:** a brand-new Lesto app has CSRF protection by default, without token plumbing; the existing
   signed-token middleware remains the documented stronger opt-in.
 - **Change:** add an `Origin`/`Sec-Fetch-Site`-based default check, mounted by the kernel by default
   (overridable/disable-able), in the shared `harden` layer (#1) so it's live on both runtimes. On a
   state-changing method (POST/PUT/PATCH/DELETE), require `Sec-Fetch-Site` ∈ {`same-origin`,
   `same-site`} **or** an `Origin` whose host matches the request host; else 403. Safe methods pass.
-- **Bake in the field's CVEs from day one** (so Volo never rediscovers them): host comparison
+- **Bake in the field's CVEs from day one** (so Lesto never rediscovers them): host comparison
   **case-insensitive**; if the check ever branches on `Content-Type`, include `text/plain`, strip
   `;`-parameters, lowercase before matching, and treat **absent** `Content-Type` as *unsafe*. Prefer
   `Sec-Fetch-Site` as primary (no content-type dependence at all) with `Origin`-vs-host as fallback.

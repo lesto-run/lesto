@@ -1,5 +1,5 @@
 /**
- * @volo/authz — first-class authorization, the one authorization story.
+ * @lesto/authz — first-class authorization, the one authorization story.
  *
  *   const policy = definePolicy({
  *     roles: ["guest", "member", "agent", "admin"],
@@ -23,7 +23,7 @@
  * couples to a specific user model.
  *
  * Richer authorization — the wildcard grants and cycle-safe role inheritance that
- * used to live in the standalone `@volo/rbac` — fold into the same `definePolicy`:
+ * used to live in the standalone `@lesto/rbac` — fold into the same `definePolicy`:
  *
  *   const policy = definePolicy({
  *     roles: ["author", "editor", "admin"],
@@ -48,5 +48,5 @@ export type { Policy, PolicyConfig } from "./policy";
 export { AUTHZ_DENIED_KIND, createGuard } from "./guard";
 export type { Guard, GuardOptions } from "./guard";
 
-export { AuthzError, VoloError } from "./errors";
+export { AuthzError, LestoError } from "./errors";
 export type { AuthzErrorCode } from "./errors";

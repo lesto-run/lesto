@@ -24,7 +24,7 @@ Eight sub-day wins. Independent of each other; do them first, in this order.
 | 0.1 | **Real readiness probe** — CLI `runServe` passes an `isReady` that pings the DB handle so `/readyz` stops returning 200 over a dead DB | S | `runtime/server.ts:395`, `cli/run.ts:134`, `cli/bin.ts:57` | `/readyz` → 503 when a `SELECT 1` fails |
 | 0.2 | **Edge body cap + handler timeout** — mirror the node `maxBytes` tally + `withTimeout` race into the CF adapter before `request.text()` | S | `cloudflare/fetch-handler.ts:115` | oversized edge body → 413; overrun → 503; tests |
 | 0.3 | **Edge access log** — copy the node `logRequest` shape into `toFetchHandler` (today it logs errors only) | S | `cloudflare/fetch-handler.ts:231` | one structured access line per edge request |
-| 0.4 | **Stronger default `secureStack`** in the scaffold — add `rateLimit` + a CSRF token to the generated app (primitives already compose in safe order) | S | `create-volo/templates.ts`, `kernel/secure-stack.ts:85` | new apps ship rate-limit + CSRF by default |
+| 0.4 | **Stronger default `secureStack`** in the scaffold — add `rateLimit` + a CSRF token to the generated app (primitives already compose in safe order) | S | `create-lesto/templates.ts`, `kernel/secure-stack.ts:85` | new apps ship rate-limit + CSRF by default |
 | 0.5 | **Seed a span per request** — wire the (already-built, orphaned) tracer into dispatch with the in-memory exporter; this is also the seam Phase 4 attaches OTel to | M | `kernel/kernel.ts`, `web/application.ts:92`, `observability/index.ts` | every dispatch opens/closes a span |
 | 0.6 | **Flip CI format step to blocking** — `ws:format:check` already exits 0 everywhere; delete `continue-on-error` | S | `.github/workflows/ci.yml:62` | format regressions fail CI |
 | 0.7 | **`git rm` 4 stray lockfiles** — 2 `package-lock.json` + 2 `pnpm-lock.yaml` against a bun-only toolchain | S | root, `loom/`, `content-markdown/`, `content-shared/` | only `bun.lock` tracked |
@@ -46,10 +46,10 @@ files calling the sync terminals.
 | Step | Work | Effort |
 |------|------|--------|
 | 1.1 | **ADR 0006 — async data layer.** Decide & document: `SqlStatement`/`SqlDatabase` become `Promise`-returning; `.get()/.all()/.run()/.count()` become async; no sync escape hatch (a sync-over-async shim re-introduces the blocking footgun). | S |
-| 1.2 | **Flip the interface** in `@volo/db`: `exec`, `run`, `get`, `all` → `Promise`. Update the query builder so terminals `await` the driver. Keep `defineTable`/columns/conditions/DDL untouched (pure values). | M |
+| 1.2 | **Flip the interface** in `@lesto/db`: `exec`, `run`, `get`, `all` → `Promise`. Update the query builder so terminals `await` the driver. Keep `defineTable`/columns/conditions/DDL untouched (pure values). | M |
 | 1.3 | **SQLite driver stays the dev default** — wrap `openSqlite` so its sync better-sqlite3/`bun:sqlite` calls present the async interface (trivially `async`). Zero-config local is preserved. | S |
-| 1.4 | **Postgres adapter** — new `@volo/pg` (or `@volo/db/pg`): a `node-postgres` (`pg`) `Pool` implementing the async `SqlDatabase`; `?`→`$1` placeholder translation; type/row mapping. | L |
-| 1.5 | **Migrate `@volo/migrate`** to `await` its DDL/bookkeeping (it owns `exec` + the versions table). | M |
+| 1.4 | **Postgres adapter** — new `@lesto/pg` (or `@lesto/db/pg`): a `node-postgres` (`pg`) `Pool` implementing the async `SqlDatabase`; `?`→`$1` placeholder translation; type/row mapping. | L |
+| 1.5 | **Migrate `@lesto/migrate`** to `await` its DDL/bookkeeping (it owns `exec` + the versions table). | M |
 | 1.6 | **Ripple the ~10 consumers**: identity, mailing-lists, admin, cache `sql-store`, content-store, queue, workflows, mcp — make their query helpers + the controllers/services that call them `async`/`await`. Most are already in async request paths. | L |
 | 1.7 | **Kernel + examples**: `createApp` accepts an async db; `examples/estate` + `examples/blog` + the scaffold await their queries. | M |
 | 1.8 | **Cross-driver test matrix** — run the gated suites against **both** SQLite and a Postgres test container; the existing 100% bar must hold on both. | M |
@@ -76,15 +76,15 @@ story" blocker.
 
 ## Phase 3 — Real deploy path (independent — can run parallel to Phase 1) → +deploy dimension
 
-Today `volo deploy` is a planner + non-atomic file copy; the dynamic tier just
-prints `run volo serve`.
+Today `lesto deploy` is a planner + non-atomic file copy; the dynamic tier just
+prints `run lesto serve`.
 
 | Step | Work | Effort |
 |------|------|--------|
 | 3.1 | **Atomic static swap** — ship into a versioned dir, swap a `current` symlink; a deploy is instantaneous and reversible. | M |
 | 3.2 | **Post-deploy health gate** — after swap, poll the new target's `/readyz` (now real, 0.1); abort + roll back on failure. | M |
-| 3.3 | **Rollback command** — `volo rollback` repoints `current` to the previous version. | S |
-| 3.4 | **Dynamic-tier deploy** — beyond printing `volo serve`: a container recipe (Dockerfile already exists) or a process-target adapter, with the same health-gate. | L |
+| 3.3 | **Rollback command** — `lesto rollback` repoints `current` to the previous version. | S |
+| 3.4 | **Dynamic-tier deploy** — beyond printing `lesto serve`: a container recipe (Dockerfile already exists) or a process-target adapter, with the same health-gate. | L |
 | 3.5 | **Real uploader backend** — an S3/R2 implementation of the existing injectable `ShipDeps` seam (the local file copy stays the default). | M |
 
 **Exit criteria:** a deploy is atomic, health-gated, and reversible; the dynamic
@@ -98,7 +98,7 @@ Builds on the span seam from fruit 0.5.
 
 | Step | Work | Effort |
 |------|------|--------|
-| 4.1 | **OTel exporter adapter** for `@volo/observability` (it ships in-memory only today) — OTLP out, behind the existing exporter interface. | M |
+| 4.1 | **OTel exporter adapter** for `@lesto/observability` (it ships in-memory only today) — OTLP out, behind the existing exporter interface. | M |
 | 4.2 | **Metrics** — request count, latency histogram, error-rate counter, emitted from dispatch on both node and edge. | M |
 | 4.3 | **Edge parity** — spans + the access log (0.3) on the CF handler, the real prod target. | S |
 | 4.4 | **Structured request log** — promote the one-line access log to structured fields (status, latency, correlation id) consumable by a log pipeline. | S |
@@ -114,7 +114,7 @@ SLOs are graphable. Removes the "no metrics/traces, lying readiness" blocker.
 |------|------|--------|
 | 5.1 | **SQL-backed session store** (post-1, poolable) — sessions survive restart and are shared across a fleet (today in-memory only). | M |
 | 5.2 | **SQL-backed rate-limit store** — same, so limits are fleet-wide not per-process. | M |
-| 5.3 | **Wire `@volo/rbac` into a request-path authorization middleware** — it's pure logic wired into zero request paths today; mount it in `secureStack`. | M |
+| 5.3 | **Wire `@lesto/rbac` into a request-path authorization middleware** — it's pure logic wired into zero request paths today; mount it in `secureStack`. | M |
 | 5.4 | **Default `secureStack` hardening** — fold in rate-limit + CSRF token across kernel defaults (extends fruit 0.4 from scaffold-only to the framework default story). | S |
 
 **Exit criteria:** sessions/rate-limits survive a restart and a fleet; an

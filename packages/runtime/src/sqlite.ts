@@ -2,11 +2,11 @@
  * Open a local SQLite database as a `KernelDatabase` — the one driver seam,
  * owned by the framework instead of pasted into every app.
  *
- * The kernel, migrator, and `@volo/db` query layer all speak a minimal SQL
+ * The kernel, migrator, and `@lesto/db` query layer all speak a minimal SQL
  * surface in terms of "an array of positional params". A real SQLite driver
  * binds variadically, so this adapter is the single place that maps the array
  * onto a `...spread` call. Before this lived here it was copy-pasted into every
- * example, the CLI fixture, and the scaffolder's generated `volo.app.ts`; now a
+ * example, the CLI fixture, and the scaffolder's generated `lesto.app.ts`; now a
  * consumer writes `const { db } = await openSqlite()` and is done.
  *
  * The canonical driver is **better-sqlite3** (the one the kernel's own
@@ -32,7 +32,7 @@
  * dev default; fleets run Postgres.
  */
 
-import type { KernelDatabase } from "@volo/kernel";
+import type { KernelDatabase } from "@lesto/kernel";
 
 import { realSqliteEngines } from "./sqlite-drivers";
 

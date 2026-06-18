@@ -1,12 +1,12 @@
-import { sanitizeJsonLd } from "@volo/content-shared/sanitize";
+import { sanitizeJsonLd } from "@lesto/content-shared/sanitize";
 
 /**
  * Component for rendering JSON-LD structured data.
  *
  * @example
  * ```tsx
- * import { JsonLd } from '@volo/content-components/react';
- * import { jsonLd } from '@volo/content-seo';
+ * import { JsonLd } from '@lesto/content-components/react';
+ * import { jsonLd } from '@lesto/content-seo';
  *
  * function PostPage({ post }) {
  *   return (

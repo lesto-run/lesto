@@ -1,5 +1,5 @@
 {
-  "name": "@volo/content-core",
+  "name": "@lesto/content-core",
   "version": "0.1.0",
   "description": "SUPPORTED (v1 content seam) — schema-driven content engine for markdown in TypeScript applications. The store/engine/CLI/MCP seam is the supported surface; sibling content-* packages (search, embeddings, prose, lint, seo, query, vite, components beyond HtmlContent) ship PREVIEW.",
   "type": "module",
@@ -49,11 +49,11 @@
   "homepage": "https://usedocks.dev",
   "dependencies": {
     "@standard-schema/spec": "^1.0.0",
-    "@volo/content-embeddings": "workspace:*",
-    "@volo/content-markdown": "workspace:*",
-    "@volo/content-search": "workspace:*",
-    "@volo/content-shared": "workspace:*",
-    "@volo/content-umbra": "workspace:*",
+    "@lesto/content-embeddings": "workspace:*",
+    "@lesto/content-markdown": "workspace:*",
+    "@lesto/content-search": "workspace:*",
+    "@lesto/content-shared": "workspace:*",
+    "@lesto/content-umbra": "workspace:*",
     "chokidar": "^4.0.3",
     "fast-glob": "^3.3.3",
     "fast-json-stringify": "^6.1.1",
@@ -67,17 +67,17 @@
     "@content-collections/core": "^0.9.0",
     "@types/picomatch": "^3.0.2",
     "@types/serialize-javascript": "^5.0.4",
-    "@volo/content-mdx": "workspace:*",
+    "@lesto/content-mdx": "workspace:*",
     "tsdown": "^0.17.3",
     "valibot": "^1.2.0",
     "zod": "^4.1.13"
   },
   "peerDependencies": {
-    "@volo/content-mdx": "workspace:*",
+    "@lesto/content-mdx": "workspace:*",
     "zod": "^4.0.0"
   },
   "peerDependenciesMeta": {
-    "@volo/content-mdx": {
+    "@lesto/content-mdx": {
       "optional": true
     },
     "zod": {

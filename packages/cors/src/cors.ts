@@ -7,7 +7,7 @@
  * socket, no framework.
  */
 
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
 export type CorsErrorCode = "CORS_WILDCARD_WITH_CREDENTIALS";
 
@@ -15,7 +15,7 @@ export type CorsErrorCode = "CORS_WILDCARD_WITH_CREDENTIALS";
  * A misconfigured CORS policy. Carries a stable `code` so callers branch on the
  * machine-readable reason, never the prose.
  */
-export class CorsError extends VoloError<CorsErrorCode> {
+export class CorsError extends LestoError<CorsErrorCode> {
   constructor(code: CorsErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

@@ -1,4 +1,4 @@
-import type { VoloRequest } from "@volo/web";
+import type { LestoRequest } from "@lesto/web";
 
 import { RuntimeError } from "./errors";
 
@@ -102,13 +102,13 @@ function parseBody(contentType: string | undefined, body: string): unknown {
 }
 
 /**
- * Normalize a raw socket request into the transport-free {@link VoloRequest}
+ * Normalize a raw socket request into the transport-free {@link LestoRequest}
  * the dispatch core operates over.
  *
  * Pure: no I/O, no clock, no router. `params` is left empty — the router fills
  * it during dispatch when it matches the path against a route pattern.
  */
-export function toVoloRequest(input: RawRequest): VoloRequest {
+export function toLestoRequest(input: RawRequest): LestoRequest {
   // The base is a throwaway: only the path and query of a relative URL matter.
   const url = new URL(input.url, "http://localhost");
 

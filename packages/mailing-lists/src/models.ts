@@ -1,5 +1,5 @@
 /**
- * The persisted entities a mailing-list is made of, as `@volo/db` schema
+ * The persisted entities a mailing-list is made of, as `@lesto/db` schema
  * values — plus the camelCase helper functions the service speaks.
  *
  *   lists                 — a named list subscribers join.
@@ -11,13 +11,13 @@
  *                           ledger that makes a fan-out resumable and exactly-once.
  *
  * The status columns are strings with a fixed set of legal values
- * (`SubscriberStatus` / `DeliveryStatus`). `@volo/db` has no runtime enum
+ * (`SubscriberStatus` / `DeliveryStatus`). `@lesto/db` has no runtime enum
  * constraint today; the type narrows at the API boundary (the helper
  * signatures) and the database stores whatever string the call sites pass.
  *
  * No global connection: every helper takes an explicit `db: Db`. That
  * follows the JS-y direction laid out in `docs/adr/0004-data-layer-style.md`
- * and matches `@volo/identity`'s shape exactly.
+ * and matches `@lesto/identity`'s shape exactly.
  *
  * ## Dialect
  *
@@ -39,8 +39,8 @@ import {
   text,
   type Db,
   type InferRow,
-} from "@volo/db";
-import type { Migration } from "@volo/migrate";
+} from "@lesto/db";
+import type { Migration } from "@lesto/migrate";
 
 export const lists = defineTable("lists", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -353,7 +353,7 @@ export async function markDeliveryEnqueued(db: Db, id: number, jobId: number): P
 /**
  * The migration that creates the mailing-list tables and their indexes.
  *
- * Versioned with a sortable, stable prefix — `@volo/migrate` applies in
+ * Versioned with a sortable, stable prefix — `@lesto/migrate` applies in
  * lexicographic order, so a timestamped version lets later migrations slot
  * in cleanly. All four tables share the migration; rolling back drops them in
  * dependency order (deliveries → broadcasts, subscribers → lists), so no drop

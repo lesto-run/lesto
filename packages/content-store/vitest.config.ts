@@ -1,6 +1,6 @@
 import { defineConfig } from "vitest/config";
 
-// New Volo code — held to the full bar. content-store is written here, not
+// New Lesto code — held to the full bar. content-store is written here, not
 // folded in, so it ships at 100% coverage from its first commit.
 export default defineConfig({
   test: {

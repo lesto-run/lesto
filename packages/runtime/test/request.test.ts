@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { toVoloRequest } from "../src/index";
+import { toLestoRequest } from "../src/index";
 
-describe("toVoloRequest", () => {
+describe("toLestoRequest", () => {
   it("derives method, splits path from query, and parses the query string", () => {
-    const request = toVoloRequest({
+    const request = toLestoRequest({
       method: "GET",
       url: "/posts?author=ada&tag=math",
       headers: {},
@@ -20,11 +20,11 @@ describe("toVoloRequest", () => {
   });
 
   it("normalizes headers: lowercased keys, first value of a list, dropping the absent", () => {
-    const request = toVoloRequest({
+    const request = toLestoRequest({
       method: "GET",
       url: "/",
       headers: {
-        Cookie: "volo_session=abc",
+        Cookie: "lesto_session=abc",
         "Set-Cookie": ["a=1", "b=2"], // a list keeps its first value
         "X-Empty": [], // an empty list flattens to ""
         "X-Absent": undefined, // an absent value is dropped entirely
@@ -32,14 +32,14 @@ describe("toVoloRequest", () => {
       body: "",
     });
 
-    expect(request.headers["cookie"]).toBe("volo_session=abc");
+    expect(request.headers["cookie"]).toBe("lesto_session=abc");
     expect(request.headers["set-cookie"]).toBe("a=1");
     expect(request.headers["x-empty"]).toBe("");
     expect("x-absent" in request.headers).toBe(false);
   });
 
   it("parses a JSON body when the content-type is application/json", () => {
-    const request = toVoloRequest({
+    const request = toLestoRequest({
       method: "POST",
       url: "/posts",
       headers: { "content-type": "application/json; charset=utf-8" },
@@ -51,7 +51,7 @@ describe("toVoloRequest", () => {
 
   it("rejects a malformed JSON body with a typed RUNTIME_INVALID_JSON error", () => {
     expect(() =>
-      toVoloRequest({
+      toLestoRequest({
         method: "POST",
         url: "/posts",
         headers: { "content-type": "application/json" },
@@ -61,7 +61,7 @@ describe("toVoloRequest", () => {
   });
 
   it("keeps a non-JSON body as the raw string", () => {
-    const request = toVoloRequest({
+    const request = toLestoRequest({
       method: "POST",
       url: "/posts",
       headers: { "content-type": "text/plain" },
@@ -72,7 +72,7 @@ describe("toVoloRequest", () => {
   });
 
   it("keeps the body raw when no content-type header is present", () => {
-    const request = toVoloRequest({
+    const request = toLestoRequest({
       method: "POST",
       url: "/posts",
       headers: {},
@@ -83,7 +83,7 @@ describe("toVoloRequest", () => {
   });
 
   it("treats an empty body as undefined regardless of content-type", () => {
-    const request = toVoloRequest({
+    const request = toLestoRequest({
       method: "GET",
       url: "/posts",
       headers: { "content-type": "application/json" },
@@ -94,7 +94,7 @@ describe("toVoloRequest", () => {
   });
 
   it("reads the content-type header case-insensitively and from a list", () => {
-    const request = toVoloRequest({
+    const request = toLestoRequest({
       method: "POST",
       url: "/posts",
       headers: { "Content-Type": ["application/json", "ignored"] },
@@ -105,7 +105,7 @@ describe("toVoloRequest", () => {
   });
 
   it("ignores unrelated headers when locating the content-type", () => {
-    const request = toVoloRequest({
+    const request = toLestoRequest({
       method: "POST",
       url: "/posts",
       headers: { accept: "application/json", "x-trace": undefined },
@@ -116,7 +116,7 @@ describe("toVoloRequest", () => {
   });
 
   it("yields an empty query record when the url has no query string", () => {
-    const request = toVoloRequest({
+    const request = toLestoRequest({
       method: "GET",
       url: "/posts",
       headers: {},

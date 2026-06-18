@@ -13,14 +13,14 @@ import { describe, expect, it } from "vitest";
 
 import { buildEdgeApp } from "../src/edge";
 import { d1ContentStore, hyperdriveContentStore } from "../src/content";
-import type { D1Database, D1PreparedStatement, HyperdriveConnection } from "@volo/cloudflare";
-import type { VoloResponse } from "@volo/web";
+import type { D1Database, D1PreparedStatement, HyperdriveConnection } from "@lesto/cloudflare";
+import type { LestoResponse } from "@lesto/web";
 
 // >= 32 bytes: the secret-strength guard rejects shorter signing secrets.
 const SECRET = "edge-lab-secret-0123456789abcdefg";
 
 /** Drain a `.page` body (React streams on the in-process edge app). */
-async function body(response: VoloResponse): Promise<string> {
+async function body(response: LestoResponse): Promise<string> {
   if (typeof response.body === "string") return response.body;
 
   const reader = (response.body as unknown as ReadableStream<Uint8Array>).getReader();

@@ -5,7 +5,7 @@ import {
   type GenerateResult,
   type WatchHandle,
   type WatchOptions,
-} from "@volo/content-core/build";
+} from "@lesto/content-core/build";
 import type { Plugin, ResolvedConfig, ViteDevServer, UserConfig, Rollup } from "vite";
 
 export interface RawMarkdownOptions {
@@ -46,7 +46,7 @@ export interface DocksPluginOptions {
 const DEFAULT_BUNDLE_LIMITS: Required<Omit<BundleSizeLimit, "failOnExceed">> = {
   clientMain: 400,
   clientTotal: 500,
-  bannedPackages: ["@volo/content-core"],
+  bannedPackages: ["@lesto/content-core"],
 };
 
 export function docks(options: DocksPluginOptions = {}): Plugin {
@@ -73,7 +73,7 @@ export function docks(options: DocksPluginOptions = {}): Plugin {
     name: "docks",
 
     config(config: UserConfig) {
-      // Configure @volo/content-content alias to point to generated directory
+      // Configure @lesto/content-content alias to point to generated directory
       // This works alongside tsconfig paths for TypeScript
       const root = config.root ?? process.cwd();
       resolvedOutDir = outDir ?? path.join(root, ".docks", "generated");
@@ -82,13 +82,13 @@ export function docks(options: DocksPluginOptions = {}): Plugin {
       const configPatch: Partial<UserConfig> = {
         resolve: {
           alias: {
-            "@volo/content-content": resolvedOutDir,
+            "@lesto/content-content": resolvedOutDir,
           },
         },
-        // Exclude @volo/content-content from Vite's dependency optimization
+        // Exclude @lesto/content-content from Vite's dependency optimization
         // to prevent stale data after content regeneration
         optimizeDeps: {
-          exclude: ["@volo/content-content"],
+          exclude: ["@lesto/content-content"],
         },
       };
 
@@ -152,7 +152,7 @@ export function docks(options: DocksPluginOptions = {}): Plugin {
 
             try {
               // Use Vite's ssrLoadModule to properly resolve the alias
-              const mod = (await server.ssrLoadModule("@volo/content-content")) as {
+              const mod = (await server.ssrLoadModule("@lesto/content-content")) as {
                 getEntry: (collection: string, slug: string) => { content?: string } | undefined;
               };
               const entry = mod.getEntry(collection!, slug!);

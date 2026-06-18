@@ -1,8 +1,8 @@
 {
-  "name": "create-volo",
+  "name": "create-lesto",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "The Volo project scaffolder — `bun create volo <name>` / `npm create volo <name>`.",
+  "description": "The Lesto project scaffolder — `bun create lesto <name>` / `npm create lesto <name>`.",
   "type": "module",
   "private": true,
   "bin": "./src/bin.ts",
@@ -21,6 +21,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*"
+    "@lesto/errors": "workspace:*"
   }
 }

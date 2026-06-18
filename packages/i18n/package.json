@@ -1,8 +1,8 @@
 {
-  "name": "@volo/i18n",
+  "name": "@lesto/i18n",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's internationalization core — message catalogs, interpolation, pluralization. Pure, no deps.",
+  "description": "Lesto's internationalization core — message catalogs, interpolation, pluralization. Pure, no deps.",
   "type": "module",
   "private": true,
   "exports": {

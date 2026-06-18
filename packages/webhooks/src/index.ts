@@ -1,5 +1,5 @@
 /**
- * @volo/webhooks — signed, retried outbound webhooks on @volo/queue, plus inbound verification.
+ * @lesto/webhooks — signed, retried outbound webhooks on @lesto/queue, plus inbound verification.
  *
  *   // sending: `secretId` is a REFERENCE resolved to the real secret at delivery
  *   // time via the Webhooks `secrets` source; the raw secret never enters the queue.
@@ -8,9 +8,9 @@
  *
  *   // receiving: the deliverer signs `${timestamp}.${body}`, so verify MUST be
  *   // given the timestamp — without it the signature check fails on every real
- *   // webhook. Read `x-volo-timestamp` as a Number and pass `{ timestamp }`.
- *   const timestamp = Number(req.headers["x-volo-timestamp"]);
- *   if (!verify(rawBody, req.headers["x-volo-signature"], secret, { timestamp })) reject();
+ *   // webhook. Read `x-lesto-timestamp` as a Number and pass `{ timestamp }`.
+ *   const timestamp = Number(req.headers["x-lesto-timestamp"]);
+ *   if (!verify(rawBody, req.headers["x-lesto-signature"], secret, { timestamp })) reject();
  */
 
 export {

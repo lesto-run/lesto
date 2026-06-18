@@ -1,8 +1,8 @@
 {
-  "name": "@volo/errors",
+  "name": "@lesto/errors",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's shared error foundation — the VoloError base every package error extends, plus a Result type.",
+  "description": "Lesto's shared error foundation — the LestoError base every package error extends, plus a Result type.",
   "type": "module",
   "private": true,
   "exports": {

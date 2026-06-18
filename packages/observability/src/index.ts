@@ -1,5 +1,5 @@
 /**
- * @volo/observability — an in-house distributed-tracing core.
+ * @lesto/observability — an in-house distributed-tracing core.
  *
  *   const exporter = new InMemoryExporter();
  *   const tracer = new Tracer({ exporter });
@@ -23,10 +23,10 @@
  * exporter + tracer, drives the flush lifecycle, and hands back the per-domain
  * seam hooks (`db.onQuery`, `identity.onEvent`, …) every battery terminates in:
  *
- *   // The two-env-var setup (VOLO_OTLP_URL is the on switch):
- *   //   VOLO_OTLP_URL=http://localhost:4318/v1/traces
- *   //   VOLO_OTLP_SERVICE=my-app            (service.name; default "volo")
- *   //   VOLO_OTLP_HEADERS=authorization=Bearer t   (optional, comma-separated)
+ *   // The two-env-var setup (LESTO_OTLP_URL is the on switch):
+ *   //   LESTO_OTLP_URL=http://localhost:4318/v1/traces
+ *   //   LESTO_OTLP_SERVICE=my-app            (service.name; default "lesto")
+ *   //   LESTO_OTLP_HEADERS=authorization=Bearer t   (optional, comma-separated)
  *   const traces = tracesFromEnv(process.env, { currentSpan });
  *   const db = createDb(sql, { onQuery: traces?.seams.onQuery });
  *   const stop = traces?.startInterval(5_000);   // flush cadence; stop on drain
@@ -45,22 +45,22 @@
  * not exist on purpose — the seam to add one is a future increment, not a gap to
  * patch around.
  *
- * ── The `volo.request_id` → trace join ──────────────────────────────────────
+ * ── The `lesto.request_id` → trace join ──────────────────────────────────────
  *
  * Traces and the access log are two records of ONE request, joined by a shared
  * id. The runtime mints a per-request id, puts it on every access-log entry as
- * `requestId`, sets it on the request span as the `volo.request_id` attribute,
+ * `requestId`, sets it on the request span as the `lesto.request_id` attribute,
  * and echoes it back on the `X-Request-Id` response header. So a span found in
  * the collector and an access-log line are correlated by an exact-match query on
  * that one value — the trace tells you the shape (parent/child spans, timings),
  * the access log tells you the outcome (method, path, status, ms), and
- * `volo.request_id` is the key that lines them up. No metrics layer is needed to
+ * `lesto.request_id` is the key that lines them up. No metrics layer is needed to
  * bridge the two; the id is the join.
  *
  * ── The NIH boundary line: W3C `traceparent`, verbatim ──────────────────────
  *
  * Cross-process propagation is W3C Trace Context `traceparent` EXACTLY (see
- * `traceparent.ts`) — never a Volo-invented header or format. That is a settled
+ * `traceparent.ts`) — never a Lesto-invented header or format. That is a settled
  * decision: the W3C wire is what every collector, vendor, and sibling service
  * already speaks, so adopting it verbatim is the difference between joining the
  * world's traces and stranding ours. We do not extend it, we do not abbreviate

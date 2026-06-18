@@ -1,8 +1,8 @@
 # Changesets
 
 This directory holds [Changesets](https://github.com/changesets/changesets) — the
-release tooling for the Volo monorepo. Every change that affects a published
-`@volo/*` package should add a changeset describing the bump:
+release tooling for the Lesto monorepo. Every change that affects a published
+`@lesto/*` package should add a changeset describing the bump:
 
 ```sh
 bun changeset          # interactively record what changed and the semver bump

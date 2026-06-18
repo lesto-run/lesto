@@ -5,13 +5,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  CreateVoloError,
+  CreateLestoError,
   fileColonPin,
   gitignore,
   islandCounter,
-  voloApp,
-  voloSites,
-  VOLO_PACKAGES,
+  lestoApp,
+  lestoSites,
+  LESTO_PACKAGES,
   packageJson,
   publishedRangePin,
   readme,
@@ -21,11 +21,11 @@ import {
   wranglerConfig,
 } from "../src/index";
 
-import type { VoloDepResolver, ScaffoldIO } from "../src/index";
+import type { LestoDepResolver, ScaffoldIO } from "../src/index";
 
-// A deterministic dep resolver for the pure-template tests: pin every @volo/*
+// A deterministic dep resolver for the pure-template tests: pin every @lesto/*
 // package to a fake `file:` path, so a test never depends on the repo layout.
-const fakePin: VoloDepResolver = (pkg) => `file:/fake/packages/${pkg.replace("@volo/", "")}`;
+const fakePin: LestoDepResolver = (pkg) => `file:/fake/packages/${pkg.replace("@lesto/", "")}`;
 
 // A real node:fs/promises-backed ScaffoldIO, the same shape bin.ts wires up.
 const realIO: ScaffoldIO = {
@@ -41,7 +41,7 @@ const realIO: ScaffoldIO = {
 let workspace: string;
 
 beforeEach(async () => {
-  workspace = await mkdtemp(join(tmpdir(), "create-volo-"));
+  workspace = await mkdtemp(join(tmpdir(), "create-lesto-"));
 });
 
 afterEach(async () => {
@@ -56,8 +56,8 @@ describe("scaffold", () => {
 
     const expected = [
       "package.json",
-      "volo.app.ts",
-      "volo.sites.ts",
+      "lesto.app.ts",
+      "lesto.sites.ts",
       "app/islands/counter.tsx",
       "worker.ts",
       "wrangler.jsonc",
@@ -79,17 +79,17 @@ describe("scaffold", () => {
     }
   });
 
-  it("scaffolds an app config and the @volo deps into real files", async () => {
+  it("scaffolds an app config and the @lesto deps into real files", async () => {
     const targetDir = join(workspace, "blogish");
 
     await scaffold({ name: "blogish", targetDir }, realIO);
 
-    const app = await readFile(join(targetDir, "volo.app.ts"), "utf8");
+    const app = await readFile(join(targetDir, "lesto.app.ts"), "utf8");
     const pkg = await readFile(join(targetDir, "package.json"), "utf8");
 
-    // volo.app.ts default-exports the VoloAppConfig and declares the parts.
+    // lesto.app.ts default-exports the LestoAppConfig and declares the parts.
     expect(app).toContain("export default config");
-    expect(app).toContain("const config: VoloAppConfig");
+    expect(app).toContain("const config: LestoAppConfig");
     expect(app).toContain('defineTable("posts"');
     expect(app).toContain("createTableSql(posts)");
     expect(app).toContain("buildApp(db)");
@@ -110,7 +110,7 @@ describe("scaffold", () => {
     expect(app).toContain('.page("/"');
     expect(app).toContain('import Counter from "./app/islands/counter"');
 
-    // package.json carries the project name, the @volo deps, and the run scripts.
+    // package.json carries the project name, the @lesto deps, and the run scripts.
     const manifest = JSON.parse(pkg) as {
       name: string;
       type: string;
@@ -120,22 +120,22 @@ describe("scaffold", () => {
 
     expect(manifest.name).toBe("blogish");
     expect(manifest.type).toBe("module");
-    expect(manifest.scripts["dev"]).toBe("volo dev");
-    expect(manifest.scripts["build"]).toBe("volo build");
+    expect(manifest.scripts["dev"]).toBe("lesto dev");
+    expect(manifest.scripts["build"]).toBe("lesto build");
 
     for (const dep of [
-      // The CLI (the `volo` binary) and the asset pipeline — their absence was
+      // The CLI (the `lesto` binary) and the asset pipeline — their absence was
       // blocker #9's silent break.
-      "@volo/cli",
-      "@volo/assets",
+      "@lesto/cli",
+      "@lesto/assets",
       // The edge adapter the deploy template's worker.ts fronts the app with.
-      "@volo/cloudflare",
-      "@volo/db",
-      "@volo/kernel",
-      "@volo/migrate",
-      "@volo/web",
-      "@volo/ui",
-      "@volo/runtime",
+      "@lesto/cloudflare",
+      "@lesto/db",
+      "@lesto/kernel",
+      "@lesto/migrate",
+      "@lesto/web",
+      "@lesto/ui",
+      "@lesto/runtime",
       "preact",
       "react",
       "react-dom",
@@ -145,28 +145,28 @@ describe("scaffold", () => {
       expect(manifest.dependencies[dep]).toBeDefined();
     }
 
-    // @volo/* deps default to published ^0.x ranges (the outsider path — `--local`
+    // @lesto/* deps default to published ^0.x ranges (the outsider path — `--local`
     // swaps to file: pins). This locks the default the scaffold actually emits.
-    for (const voloPkg of VOLO_PACKAGES) {
-      expect(manifest.dependencies[voloPkg]).toMatch(/^\^0\./);
+    for (const lestoPkg of LESTO_PACKAGES) {
+      expect(manifest.dependencies[lestoPkg]).toMatch(/^\^0\./);
     }
 
-    // The legacy @volo/orm dep is gone — scaffolded apps use @volo/db.
-    expect(manifest.dependencies["@volo/orm"]).toBeUndefined();
+    // The legacy @lesto/orm dep is gone — scaffolded apps use @lesto/db.
+    expect(manifest.dependencies["@lesto/orm"]).toBeUndefined();
 
-    // Routes live on the code-first volo() app now — no legacy @volo/router dep.
-    expect(manifest.dependencies["@volo/router"]).toBeUndefined();
+    // Routes live on the code-first lesto() app now — no legacy @lesto/router dep.
+    expect(manifest.dependencies["@lesto/router"]).toBeUndefined();
   });
 
-  it("scaffolds volo.sites.ts and the island module", async () => {
+  it("scaffolds lesto.sites.ts and the island module", async () => {
     const targetDir = join(workspace, "sited");
 
     await scaffold({ name: "sited", targetDir }, realIO);
 
-    const sites = await readFile(join(targetDir, "volo.sites.ts"), "utf8");
+    const sites = await readFile(join(targetDir, "lesto.sites.ts"), "utf8");
     const island = await readFile(join(targetDir, "app/islands/counter.tsx"), "utf8");
 
-    // volo.sites.ts default-exports a Site[] with one dynamic root zone.
+    // lesto.sites.ts default-exports a Site[] with one dynamic root zone.
     expect(sites).toContain("export default sites");
     expect(sites).toContain('render: "dynamic"');
     expect(sites).toContain('basePath: "/"');
@@ -186,14 +186,14 @@ describe("scaffold", () => {
     const workerTs = await readFile(join(targetDir, "worker.ts"), "utf8");
     const wrangler = await readFile(join(targetDir, "wrangler.jsonc"), "utf8");
 
-    // worker.ts is the thin @volo/cloudflare adapter: toFetchHandler over the edge
+    // worker.ts is the thin @lesto/cloudflare adapter: toFetchHandler over the edge
     // app, fronted by the ASSETS binding via withAssets.
-    expect(workerTs).toContain('from "@volo/cloudflare"');
+    expect(workerTs).toContain('from "@lesto/cloudflare"');
     expect(workerTs).toContain("toFetchHandler");
     expect(workerTs).toContain("withAssets(env.ASSETS, handler)");
     // It builds its own minimal edge twin (the island home page), never importing
-    // volo.app.ts — which opens a filesystem SQLite handle a Worker has no fs for.
-    expect(workerTs).not.toContain('from "./volo.app"');
+    // lesto.app.ts — which opens a filesystem SQLite handle a Worker has no fs for.
+    expect(workerTs).not.toContain('from "./lesto.app"');
     expect(workerTs).toContain('import Counter from "./app/islands/counter"');
 
     // wrangler.jsonc is valid JSONC (comments + trailing commas) wiring the
@@ -213,15 +213,15 @@ describe("scaffold", () => {
 
     const error = await scaffold({ name: "taken", targetDir }, realIO).catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(CreateVoloError);
-    expect((error as CreateVoloError).code).toBe("CREATE_VOLO_TARGET_EXISTS");
-    expect((error as CreateVoloError).details).toEqual({ targetDir });
+    expect(error).toBeInstanceOf(CreateLestoError);
+    expect((error as CreateLestoError).code).toBe("CREATE_LESTO_TARGET_EXISTS");
+    expect((error as CreateLestoError).details).toEqual({ targetDir });
 
     // details are frozen.
-    expect(Object.isFrozen((error as CreateVoloError).details)).toBe(true);
+    expect(Object.isFrozen((error as CreateLestoError).details)).toBe(true);
   });
 
-  it("reports CREATE_VOLO_TARGET_EXISTS through a fake io without touching disk", async () => {
+  it("reports CREATE_LESTO_TARGET_EXISTS through a fake io without touching disk", async () => {
     let wrote = false;
 
     const fakeIO: ScaffoldIO = {
@@ -237,7 +237,7 @@ describe("scaffold", () => {
       (e: unknown) => e,
     );
 
-    expect(error).toBeInstanceOf(CreateVoloError);
+    expect(error).toBeInstanceOf(CreateLestoError);
     expect(wrote).toBe(false);
   });
 });
@@ -256,28 +256,28 @@ describe("templates", () => {
     };
 
     // A generated app is private and ships no license of its own — the author
-    // picks one; it never inherits Volo's MIT.
+    // picks one; it never inherits Lesto's MIT.
     expect(parsed.private).toBe(true);
     expect(parsed.license).toBe("UNLICENSED");
   });
 
-  it("pins every @volo dep through the injected resolver, never the workspace protocol", () => {
+  it("pins every @lesto dep through the injected resolver, never the workspace protocol", () => {
     const parsed = JSON.parse(packageJson("acme", fakePin)) as {
       dependencies: Record<string, string>;
     };
 
-    const voloDeps = Object.entries(parsed.dependencies).filter(([name]) =>
-      name.startsWith("@volo/"),
+    const lestoDeps = Object.entries(parsed.dependencies).filter(([name]) =>
+      name.startsWith("@lesto/"),
     );
 
-    // Every package in VOLO_PACKAGES is present (guards against a vacuous pass).
-    expect(voloDeps.map(([name]) => name).toSorted()).toEqual([...VOLO_PACKAGES].toSorted());
+    // Every package in LESTO_PACKAGES is present (guards against a vacuous pass).
+    expect(lestoDeps.map(([name]) => name).toSorted()).toEqual([...LESTO_PACKAGES].toSorted());
 
-    for (const [name, specifier] of voloDeps) {
+    for (const [name, specifier] of lestoDeps) {
       // `workspace:*` resolves only inside this monorepo; a scaffolded app would
       // fail to install. The resolver pins each to a real, resolvable specifier.
       expect(specifier).not.toContain("workspace:");
-      expect(specifier).toBe(fakePin(name as (typeof VOLO_PACKAGES)[number]));
+      expect(specifier).toBe(fakePin(name as (typeof LESTO_PACKAGES)[number]));
     }
   });
 
@@ -291,10 +291,10 @@ describe("templates", () => {
     expect(parsed.dependencies["react-dom"]).toBeDefined();
   });
 
-  it("voloApp default-exports a VoloAppConfig with the preact dialect", () => {
-    expect(voloApp()).toContain("export default config");
-    expect(voloApp()).toContain("const config: VoloAppConfig");
-    expect(voloApp()).toContain('ui: { dialect: "preact" }');
+  it("lestoApp default-exports a LestoAppConfig with the preact dialect", () => {
+    expect(lestoApp()).toContain("export default config");
+    expect(lestoApp()).toContain("const config: LestoAppConfig");
+    expect(lestoApp()).toContain('ui: { dialect: "preact" }');
   });
 
   it("islandCounter is one defineIsland default-export", () => {
@@ -302,9 +302,9 @@ describe("templates", () => {
     expect(islandCounter()).toContain('name: "Counter"');
   });
 
-  it("voloSites default-exports a Site[] with a dynamic root zone", () => {
-    expect(voloSites()).toContain("export default sites");
-    expect(voloSites()).toContain('render: "dynamic"');
+  it("lestoSites default-exports a Site[] with a dynamic root zone", () => {
+    expect(lestoSites()).toContain("export default sites");
+    expect(lestoSites()).toContain('render: "dynamic"');
   });
 
   it("tsconfig is bundler-resolution, strict JSON that includes the island dir", () => {
@@ -333,18 +333,18 @@ describe("templates", () => {
     const out = readme("acme");
 
     expect(out).toContain("## Deploy to Cloudflare");
-    expect(out).toContain("volo deploy --cloudflare");
+    expect(out).toContain("lesto deploy --cloudflare");
   });
 
-  it("worker fronts the app with @volo/cloudflare's toFetchHandler + withAssets", () => {
+  it("worker fronts the app with @lesto/cloudflare's toFetchHandler + withAssets", () => {
     const out = worker();
 
-    expect(out).toContain('from "@volo/cloudflare"');
+    expect(out).toContain('from "@lesto/cloudflare"');
     expect(out).toContain("toFetchHandler");
     expect(out).toContain("withAssets(env.ASSETS, handler)");
     // The edge twin builds its own island home page rather than importing the
-    // SQLite-booting volo.app.ts.
-    expect(out).not.toContain('from "./volo.app"');
+    // SQLite-booting lesto.app.ts.
+    expect(out).not.toContain('from "./lesto.app"');
     expect(out).toContain('import Counter from "./app/islands/counter"');
   });
 
@@ -374,8 +374,8 @@ describe("templates", () => {
 });
 
 describe("dep resolvers", () => {
-  it("publishedRangePin (the default) pins every @volo dep at a published ^0.x range", () => {
-    for (const pkg of VOLO_PACKAGES) {
+  it("publishedRangePin (the default) pins every @lesto dep at a published ^0.x range", () => {
+    for (const pkg of LESTO_PACKAGES) {
       const specifier = publishedRangePin(pkg);
 
       // A registry-resolvable semver range — what an outsider installs. Never a
@@ -386,14 +386,14 @@ describe("dep resolvers", () => {
     }
   });
 
-  it("fileColonPin (the --local mode) pins every @volo dep at a file: path to the in-repo package", () => {
-    for (const pkg of VOLO_PACKAGES) {
+  it("fileColonPin (the --local mode) pins every @lesto dep at a file: path to the in-repo package", () => {
+    for (const pkg of LESTO_PACKAGES) {
       const specifier = fileColonPin(pkg);
 
       expect(specifier.startsWith("file:")).toBe(true);
-      // The path ends at the package's directory name, with the @volo/ scope stripped.
-      expect(specifier).toContain(pkg.replace("@volo/", ""));
-      expect(specifier).not.toContain("@volo/");
+      // The path ends at the package's directory name, with the @lesto/ scope stripped.
+      expect(specifier).toContain(pkg.replace("@lesto/", ""));
+      expect(specifier).not.toContain("@lesto/");
     }
   });
 });

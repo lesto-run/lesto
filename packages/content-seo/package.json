@@ -1,5 +1,5 @@
 {
-  "name": "@volo/content-seo",
+  "name": "@lesto/content-seo",
   "version": "0.1.0",
   "license": "MIT",
   "description": "PREVIEW (not part of the supported v1 content seam) — content-aware SEO analysis and entry-aware JSON-LD for Docks; experimental, coverage-gate-exempt.",
@@ -23,7 +23,7 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/content-shared": "workspace:*"
+    "@lesto/content-shared": "workspace:*"
   },
   "private": true
 }

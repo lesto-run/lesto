@@ -1,9 +1,9 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createDb, createTableSql, defineTable, integer, text, type Db } from "@volo/db";
-import type { MigrationEntry } from "@volo/migrate";
-import { volo } from "@volo/web";
+import { createDb, createTableSql, defineTable, integer, text, type Db } from "@lesto/db";
+import type { MigrationEntry } from "@lesto/migrate";
+import { lesto } from "@lesto/web";
 
 import { createApp } from "../src/index";
 
@@ -84,10 +84,10 @@ afterEach(() => {
 });
 
 describe("createApp", () => {
-  it("runs migrations on boot, then dispatches through the volo() router", async () => {
+  it("runs migrations on boot, then dispatches through the lesto() router", async () => {
     const app = await createApp({
       db,
-      app: volo().get("/posts/count", async (c) => {
+      app: lesto().get("/posts/count", async (c) => {
         const count = await queryDb.select().from(posts).count();
         return c.json({ count });
       }),
@@ -95,10 +95,10 @@ describe("createApp", () => {
     });
 
     // The migration ran before any request — the applied list proves the order,
-    // and the migrated table is real and queryable through @volo/db.
+    // and the migrated table is real and queryable through @lesto/db.
     expect(app.migrationsApplied).toEqual(["001_create_posts"]);
 
-    await queryDb.insert(posts).values({ title: "via volo()" }).run();
+    await queryDb.insert(posts).values({ title: "via lesto()" }).run();
 
     const response = await app.handle("GET", "/posts/count");
 
@@ -108,7 +108,7 @@ describe("createApp", () => {
   });
 
   it("applies no migrations when none are configured", async () => {
-    const app = await createApp({ db, app: volo().get("/ping", (c) => c.text("pong")) });
+    const app = await createApp({ db, app: lesto().get("/ping", (c) => c.text("pong")) });
 
     expect(app.migrationsApplied).toEqual([]);
     expect((await app.handle("GET", "/ping")).body).toBe("pong");
@@ -119,7 +119,7 @@ describe("createApp", () => {
     // against it WITHOUT running migrations itself.
     const app = await createApp({
       db,
-      app: volo().get("/ping", (c) => c.text("pong")),
+      app: lesto().get("/ping", (c) => c.text("pong")),
       migrations: "skip",
     });
 
@@ -127,7 +127,7 @@ describe("createApp", () => {
   });
 
   it("runs config.schemas installers in order after migrate, against the same db", async () => {
-    // The Finding #2 seam: a battery (e.g. @volo/queue for @volo/mail) declares its
+    // The Finding #2 seam: a battery (e.g. @lesto/queue for @lesto/mail) declares its
     // own table via `schemas`, run after migrations against the same handle. Prove
     // order (a later installer sees an earlier one's table) AND that the table the
     // installer created is real and queryable through the migrated handle.
@@ -135,7 +135,7 @@ describe("createApp", () => {
 
     const app = await createApp({
       db,
-      app: volo().get("/ping", (c) => c.text("pong")),
+      app: lesto().get("/ping", (c) => c.text("pong")),
       migrations: [createPosts],
       schemas: [
         async (database) => {
@@ -165,14 +165,14 @@ describe("createApp", () => {
     // app with no batteries declared must touch no extra tables.
     const app = await createApp({
       db,
-      app: volo().get("/ping", (c) => c.text("pong")),
+      app: lesto().get("/ping", (c) => c.text("pong")),
     });
 
     expect((await app.handle("GET", "/ping")).body).toBe("pong");
   });
 
   it("delegates an unmatched path to a plain 404", async () => {
-    const app = await createApp({ db, app: volo().get("/ping", (c) => c.text("pong")) });
+    const app = await createApp({ db, app: lesto().get("/ping", (c) => c.text("pong")) });
 
     const response = await app.handle("GET", "/nope");
 
@@ -235,7 +235,7 @@ describe("createApp", () => {
 
     const app = await createApp({
       db: pgish,
-      app: volo().get("/ping", (c) => c.text("pong")),
+      app: lesto().get("/ping", (c) => c.text("pong")),
       migrations: [],
       dialect: "postgres",
     });
@@ -247,12 +247,12 @@ describe("createApp", () => {
 
 describe("createApp — secure baseline (ADR 0016)", () => {
   const rateLimitRows = (): number =>
-    (raw.prepare("SELECT count(*) AS n FROM volo_rate_limits").get() as { n: number }).n;
+    (raw.prepare("SELECT count(*) AS n FROM lesto_rate_limits").get() as { n: number }).n;
 
   it("rate-limits by default (omitted secure), keyed through the durable SQL store", async () => {
     const app = await createApp({
       db,
-      app: volo().get("/ping", (c) => c.text("pong")),
+      app: lesto().get("/ping", (c) => c.text("pong")),
     });
 
     expect((await app.handle("GET", "/ping")).body).toBe("pong");
@@ -264,7 +264,7 @@ describe("createApp — secure baseline (ADR 0016)", () => {
   it("secure: false opts out entirely — no rate-limit middleware runs", async () => {
     const app = await createApp({
       db,
-      app: volo().get("/ping", (c) => c.text("pong")),
+      app: lesto().get("/ping", (c) => c.text("pong")),
       secure: false,
     });
 
@@ -276,7 +276,7 @@ describe("createApp — secure baseline (ADR 0016)", () => {
   it("secure: { rateLimit } applies the app's own limit (a tighter custom bucket)", async () => {
     const app = await createApp({
       db,
-      app: volo().get("/ping", (c) => c.text("pong")),
+      app: lesto().get("/ping", (c) => c.text("pong")),
       dialect: "sqlite",
       // capacity 1, no refill → the second request is deterministically shed.
       secure: { rateLimit: { capacity: 1, refillPerSecond: 0 } },
@@ -289,7 +289,7 @@ describe("createApp — secure baseline (ADR 0016)", () => {
   it("secure: { originCheck } refuses a cross-site state change but admits same-origin", async () => {
     const app = await createApp({
       db,
-      app: volo().post("/save", (c) => c.text("saved")),
+      app: lesto().post("/save", (c) => c.text("saved")),
       secure: { originCheck: {} },
     });
 
@@ -306,7 +306,7 @@ describe("createApp — secure baseline (ADR 0016)", () => {
     // rate limiter falls back to memory — the baseline still applies, table-free.
     const app = await createApp({
       db,
-      app: volo().get("/ping", (c) => c.text("pong")),
+      app: lesto().get("/ping", (c) => c.text("pong")),
       durable: false,
     });
 

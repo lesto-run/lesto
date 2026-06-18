@@ -1,8 +1,8 @@
 {
-  "name": "@volo/authz",
+  "name": "@lesto/authz",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's first-class authorization — a declarative role/permission policy and the guard middleware that enforces it.",
+  "description": "Lesto's first-class authorization — a declarative role/permission policy and the guard middleware that enforces it.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,7 +20,7 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*",
-    "@volo/web": "workspace:*"
+    "@lesto/errors": "workspace:*",
+    "@lesto/web": "workspace:*"
   }
 }

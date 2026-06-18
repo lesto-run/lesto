@@ -7,7 +7,7 @@
  * registry exposes.
  */
 
-import { Registry } from "@volo/ui";
+import { Registry } from "@lesto/ui";
 
 import { kitComponents } from "./components";
 

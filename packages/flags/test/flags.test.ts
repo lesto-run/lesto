@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { volo } from "@volo/web";
+import { lesto } from "@lesto/web";
 
 import { defineFlags } from "../src/index";
 
 describe("defineFlags.enabled", () => {
   it("reads a static default", async () => {
     const flags = defineFlags({ defaults: { a: true, b: false } });
-    const app = volo().get("/", (c) =>
+    const app = lesto().get("/", (c) =>
       c.json({ a: flags.enabled("a", c), b: flags.enabled("b", c) }),
     );
 
@@ -16,7 +16,7 @@ describe("defineFlags.enabled", () => {
 
   it("treats an unknown flag with no default as off", async () => {
     const flags = defineFlags();
-    const app = volo().get("/", (c) => c.json({ x: flags.enabled("x", c) }));
+    const app = lesto().get("/", (c) => c.json({ x: flags.enabled("x", c) }));
 
     expect(JSON.parse((await app.handle("GET", "/")).body)).toEqual({ x: false });
   });
@@ -25,7 +25,7 @@ describe("defineFlags.enabled", () => {
     // "toString"/"constructor"/"__proto__" resolve to truthy prototype members on
     // a plain object — off-by-default must not be defeated by an own-property miss.
     const flags = defineFlags();
-    const app = volo().get("/", (c) =>
+    const app = lesto().get("/", (c) =>
       c.json({
         toString: flags.enabled("toString", c),
         constructor: flags.enabled("constructor", c),
@@ -45,7 +45,7 @@ describe("defineFlags.enabled", () => {
       defaults: { preview: false },
       resolve: (_flag, c) => (c.query("preview") === "1" ? true : undefined),
     });
-    const app = volo().get("/", (c) => c.json({ on: flags.enabled("preview", c) }));
+    const app = lesto().get("/", (c) => c.json({ on: flags.enabled("preview", c) }));
 
     expect(JSON.parse((await app.handle("GET", "/", { query: { preview: "1" } })).body)).toEqual({
       on: true,
@@ -57,14 +57,14 @@ describe("defineFlags.enabled", () => {
 describe("defineFlags.gate middleware", () => {
   it("passes through when the flag is on", async () => {
     const flags = defineFlags({ defaults: { go: true } });
-    const app = volo().get("/x", flags.gate("go"), (c) => c.text("reached"));
+    const app = lesto().get("/x", flags.gate("go"), (c) => c.text("reached"));
 
     expect((await app.handle("GET", "/x")).body).toBe("reached");
   });
 
   it("404s when a flag is off", async () => {
     const flags = defineFlags({ defaults: { go: false } });
-    const app = volo().get("/x", flags.gate("go"), (c) => c.text("hidden"));
+    const app = lesto().get("/x", flags.gate("go"), (c) => c.text("hidden"));
 
     const response = await app.handle("GET", "/x");
 
@@ -74,17 +74,17 @@ describe("defineFlags.gate middleware", () => {
 
   it("requires every named flag to be on", async () => {
     const flags = defineFlags({ defaults: { a: true, b: false } });
-    const app = volo().get("/x", flags.gate("a", "b"), (c) => c.text("reached"));
+    const app = lesto().get("/x", flags.gate("a", "b"), (c) => c.text("reached"));
 
     expect((await app.handle("GET", "/x")).status).toBe(404);
   });
 
   it("gates a whole subtree via .use", async () => {
     const flags = defineFlags({ defaults: { beta: false } });
-    const beta = volo()
+    const beta = lesto()
       .use(flags.gate("beta"))
       .get("/feature", (c) => c.text("beta"));
-    const app = volo().route("/beta", beta);
+    const app = lesto().route("/beta", beta);
 
     expect((await app.handle("GET", "/beta/feature")).status).toBe(404);
   });
@@ -94,7 +94,7 @@ describe("defineFlags.gate middleware", () => {
       defaults: { go: false },
       onDisabled: (c) => c.redirect("/waitlist", 303),
     });
-    const app = volo().get("/x", flags.gate("go"), (c) => c.text("reached"));
+    const app = lesto().get("/x", flags.gate("go"), (c) => c.text("reached"));
 
     const response = await app.handle("GET", "/x");
 

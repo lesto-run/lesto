@@ -4,7 +4,7 @@
  *
  * The node leg (`tracing.integration.test.ts`) proved a served request produces a
  * span in a local collector on the NODE tier. This is its twin on the EDGE: a
- * Worker-shaped `Request` driven through `@volo/cloudflare`'s `toFetchHandler`,
+ * Worker-shaped `Request` driven through `@lesto/cloudflare`'s `toFetchHandler`,
  * wired the SAME env-driven way (`tracesFromEnv` + the platform `fetch` as the
  * exporter's HTTP seam, exactly as `examples/estate/worker.ts` constructs it), and
  * the spans read back out of the same in-process collector the node leg uses — one
@@ -21,14 +21,14 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { toFetchHandler } from "@volo/cloudflare";
-import type { EdgeDispatch, EdgeExecutionContext } from "@volo/cloudflare";
+import { toFetchHandler } from "@lesto/cloudflare";
+import type { EdgeDispatch, EdgeExecutionContext } from "@lesto/cloudflare";
 
-import { parseTraceparent, tracesFromEnv } from "@volo/observability";
-import type { CurrentSpan, Traces } from "@volo/observability";
+import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
+import type { CurrentSpan, Traces } from "@lesto/observability";
 
-import { currentRequestSpan } from "@volo/web";
-import type { AnyVoloResponse } from "@volo/web";
+import { currentRequestSpan } from "@lesto/web";
+import type { AnyLestoResponse } from "@lesto/web";
 
 import { startOtlpCollector } from "./otlp-collector";
 import type { OtlpCollector } from "./otlp-collector";
@@ -61,12 +61,12 @@ beforeAll(async () => {
   collector = await startOtlpCollector();
 
   // The tracer, constructed the canonical edge way — the SAME `tracesFromEnv` call
-  // `examples/estate/worker.ts` makes off the Worker `env` binding: `VOLO_OTLP_URL`
+  // `examples/estate/worker.ts` makes off the Worker `env` binding: `LESTO_OTLP_URL`
   // is the on switch (pointed at the live collector), the platform `fetch` is the
   // exporter's HTTP seam (no node:http on the edge path), and `currentSpan` reads
   // the request span the adapter publishes on the context so a seam parents on it.
   const built = tracesFromEnv(
-    { VOLO_OTLP_URL: collector.url, VOLO_OTLP_SERVICE: "edge-integration" },
+    { LESTO_OTLP_URL: collector.url, LESTO_OTLP_SERVICE: "edge-integration" },
     {
       currentSpan: currentRequestSpan as CurrentSpan,
       fetchFn: fetch,
@@ -104,7 +104,7 @@ async function waitForSpans(count: number): Promise<void> {
 
 /** A dispatcher that answers a fixed JSON body — the app behind the edge adapter. */
 const okDispatch: EdgeDispatch = () =>
-  Promise.resolve<AnyVoloResponse>({
+  Promise.resolve<AnyLestoResponse>({
     status: 200,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ok: true }),
@@ -186,13 +186,13 @@ describe("the edge request span is the parent of in-request seam spans", () => {
   it("a db.query seam fired during the request is a CHILD of the request span", async () => {
     const { ctx, settle } = recordingContext();
 
-    // The dispatcher fires a seam INSIDE the request — exactly as a @volo/db query
+    // The dispatcher fires a seam INSIDE the request — exactly as a @lesto/db query
     // run during a handler would — reading the request span off the context the
     // adapter published. Its span must parent on the request span.
     const dispatch: EdgeDispatch = () => {
       traces.seams.onQuery({ sql: "SELECT id FROM listings", durationMs: 3 });
 
-      return Promise.resolve<AnyVoloResponse>({
+      return Promise.resolve<AnyLestoResponse>({
         status: 200,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ok: true }),

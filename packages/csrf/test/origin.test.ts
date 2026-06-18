@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ORIGIN_DENIED_KIND, ORIGIN_STRICT_DENIED_KIND, originCheck } from "../src/index";
 
-import type { AnyVoloResponse, VoloRequest } from "@volo/web";
+import type { AnyLestoResponse, LestoRequest } from "@lesto/web";
 
-function requestWith(overrides: Partial<VoloRequest> = {}): VoloRequest {
+function requestWith(overrides: Partial<LestoRequest> = {}): LestoRequest {
   return {
     method: "POST",
     path: "/",
@@ -16,9 +16,9 @@ function requestWith(overrides: Partial<VoloRequest> = {}): VoloRequest {
   };
 }
 
-const okResponse: AnyVoloResponse = { status: 200, headers: {}, body: "ok" };
+const okResponse: AnyLestoResponse = { status: 200, headers: {}, body: "ok" };
 
-const next = async (): Promise<AnyVoloResponse> => okResponse;
+const next = async (): Promise<AnyLestoResponse> => okResponse;
 
 describe("originCheck middleware", () => {
   it("lets a safe (unguarded) method through without any origin evidence", async () => {

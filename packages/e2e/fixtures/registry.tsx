@@ -8,7 +8,7 @@
  * server-side test can make.
  */
 
-import { Registry } from "@volo/ui";
+import { Registry } from "@lesto/ui";
 
 import { Probe } from "./probe";
 

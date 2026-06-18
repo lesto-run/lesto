@@ -11,7 +11,7 @@
  *
  *   const NewPost = z.object({ title: z.string().trim().min(1) });
  *
- *   create(): VoloResponse {
+ *   create(): LestoResponse {
  *     const input = validateBody(NewPost, this.request); // typed { title: string }
  *     const post = insertPost(this.db, input);
  *     return this.json({ post }, 201);
@@ -29,7 +29,7 @@
 import type { ZodType } from "zod";
 
 import { WebError } from "./errors";
-import type { VoloRequest } from "./types";
+import type { LestoRequest } from "./types";
 
 /**
  * Validate `request.body` against `schema`, returning the parsed value.
@@ -38,7 +38,7 @@ import type { VoloRequest } from "./types";
  * boundary — when the body does not satisfy the schema. The Zod issues ride on
  * the error's `details.issues` for any caller that wants them.
  */
-export function validateBody<T>(schema: ZodType<T>, request: VoloRequest): T {
+export function validateBody<T>(schema: ZodType<T>, request: LestoRequest): T {
   const parsed = schema.safeParse(request.body);
 
   if (!parsed.success) {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { volo } from "@volo/web";
+import { lesto } from "@lesto/web";
 
 import { AUTHZ_DENIED_KIND, createGuard, definePolicy } from "../src/index";
 
@@ -13,7 +13,7 @@ describe("createGuard.can middleware", () => {
   it("lets a permitted subject through to the handler", async () => {
     const { can } = createGuard(policy);
 
-    const app = volo()
+    const app = lesto()
       .use((c, next) => {
         c.set("roles", ["admin"]);
         return next();
@@ -29,7 +29,7 @@ describe("createGuard.can middleware", () => {
   it("answers 403 when the subject lacks the permission", async () => {
     const { can } = createGuard(policy);
 
-    const app = volo()
+    const app = lesto()
       .use((c, next) => {
         c.set("roles", ["member"]);
         return next();
@@ -44,7 +44,7 @@ describe("createGuard.can middleware", () => {
 
   it("denies when no roles were set on the context", async () => {
     const { can } = createGuard(policy);
-    const app = volo().get("/admin", can("admin.access"), (c) => c.text("secret"));
+    const app = lesto().get("/admin", can("admin.access"), (c) => c.text("secret"));
 
     expect((await app.handle("GET", "/admin")).status).toBe(403);
   });
@@ -52,12 +52,12 @@ describe("createGuard.can middleware", () => {
   it("guards an entire subtree via .use", async () => {
     const { can } = createGuard(policy);
 
-    const admin = volo()
+    const admin = lesto()
       .use(can("admin.access"))
       .get("/users", (c) => c.text("users"))
       .page("/dash", { component: () => null });
 
-    const app = volo()
+    const app = lesto()
       .use((c, next) => {
         c.set("roles", ["member"]);
         return next();
@@ -75,7 +75,7 @@ describe("createGuard options", () => {
       rolesOf: (c) => c.get<{ roles: string[] }>("user")?.roles,
     });
 
-    const app = volo()
+    const app = lesto()
       .use((c, next) => {
         c.set("user", { roles: ["admin"] });
         return next();
@@ -90,7 +90,7 @@ describe("createGuard options", () => {
       onDeny: (c) => c.redirect("/login", 303),
     });
 
-    const app = volo().get("/a", can("admin.access"), (c) => c.text("ok"));
+    const app = lesto().get("/a", can("admin.access"), (c) => c.text("ok"));
 
     const response = await app.handle("GET", "/a");
 
@@ -102,7 +102,7 @@ describe("createGuard options", () => {
     const onDenied = vi.fn();
     const { can } = createGuard(policy, { onDenied });
 
-    const app = volo()
+    const app = lesto()
       .use((c, next) => {
         c.set("roles", ["member"]);
         return next();
@@ -117,7 +117,7 @@ describe("createGuard options", () => {
     expect(onDenied).toHaveBeenCalledTimes(1);
     expect(AUTHZ_DENIED_KIND).toBe("authz_forbidden");
 
-    // The seam is uniform with csrf/ratelimit: kind + the bare VoloRequest.
+    // The seam is uniform with csrf/ratelimit: kind + the bare LestoRequest.
     const [kind, req] = onDenied.mock.calls[0]!;
     expect(kind).toBe(AUTHZ_DENIED_KIND);
     expect(req).toMatchObject({ method: "GET", path: "/admin" });
@@ -131,7 +131,7 @@ describe("createGuard options", () => {
     const { can } = createGuard(policy, { onDenied });
 
     // Permitted: the handler runs and onDenied stays silent.
-    const allowed = volo()
+    const allowed = lesto()
       .use((c, next) => {
         c.set("roles", ["admin"]);
         return next();
@@ -142,7 +142,7 @@ describe("createGuard options", () => {
     expect(seen).toEqual([]);
 
     // Refused: the async hook is awaited before the 403 is returned.
-    const refused = volo().get("/admin", can("admin.access"), (c) => c.text("secret"));
+    const refused = lesto().get("/admin", can("admin.access"), (c) => c.text("secret"));
     expect((await refused.handle("GET", "/admin")).status).toBe(403);
     expect(seen).toEqual([AUTHZ_DENIED_KIND]);
   });
@@ -152,7 +152,7 @@ describe("createGuard.ensure (imperative)", () => {
   it("returns the policy decision for a row-level check", async () => {
     const { ensure } = createGuard(policy);
 
-    const app = volo()
+    const app = lesto()
       .use((c, next) => {
         c.set("roles", ["member"]);
         return next();

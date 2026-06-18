@@ -23,9 +23,9 @@
  * SCOPE (ADR 0011 Increment 2 — the path convergence): this whole `UiNode`/
  * Registry walk is the DEMOTED niche — the AI-/DB-driven content tree, where a
  * `type` is a JSON string a model emitted and an island is collected into one
- * page-wide `#volo-islands` manifest. The CANONICAL island path is `defineIsland`
+ * page-wide `#lesto-islands` manifest. The CANONICAL island path is `defineIsland`
  * in a hand-authored `.page` (co-located mount scripts, `hydrateDocumentIslands`,
- * the synthesized `@volo/assets` client) — that path does NOT come through here.
+ * the synthesized `@lesto/assets` client) — that path does NOT come through here.
  * Both emit the byte-identical {@link IslandMount} (the shared `islandMount`
  * author), so the one wire contract and the one set of island invariants serve
  * both; only the EMISSION (page-wide array vs. co-located per island) differs.
@@ -143,7 +143,7 @@ export interface Page {
  * Render a tree AND collect its island hydration manifest in one walk.
  *
  * This is `renderTree` plus the wire payload: every island in the tree yields an
- * `IslandMount { id, component, props }` whose `id` matches the `data-volo-island`
+ * `IslandMount { id, component, props }` whose `id` matches the `data-lesto-island`
  * attribute on its wrapper, so the client can pair DOM to data. Server-only and
  * additive — existing `renderTree` callers are untouched.
  */
@@ -187,7 +187,7 @@ export function renderPage(registry: Registry, tree: unknown): Page {
  * The `renderer` is the dialect seam. It DEFAULTS to {@link reactServerRenderer}
  * (real `react-dom/server`), so every existing caller — estate's `document.ts`,
  * the render/hydrate/stream tests — is byte-for-byte unchanged. A page whose
- * client bundle is Preact passes the Preact adapter (`@volo/ui/server`) so
+ * client bundle is Preact passes the Preact adapter (`@lesto/ui/server`) so
  * the server emits the same markup the Preact client will hydrate against; only
  * then is an `ssr: true` island safe under the `preact/compat` alias.
  */

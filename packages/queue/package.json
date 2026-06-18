@@ -1,8 +1,8 @@
 {
-  "name": "@volo/queue",
+  "name": "@lesto/queue",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's in-house durable job queue — at-least-once delivery on the SQL database, no Redis.",
+  "description": "Lesto's in-house durable job queue — at-least-once delivery on the SQL database, no Redis.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,7 +20,7 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/db": "workspace:*",
-    "@volo/errors": "workspace:*"
+    "@lesto/db": "workspace:*",
+    "@lesto/errors": "workspace:*"
   }
 }

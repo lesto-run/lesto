@@ -9,7 +9,7 @@
  * socket and sweeps it.
  *
  * The SQLite leg always runs (CI's integration step). The Postgres leg runs ONLY
- * when `VOLO_PG_URL` is set (the `db-parity-postgres` CI job, which has a Postgres
+ * when `LESTO_PG_URL` is set (the `db-parity-postgres` CI job, which has a Postgres
  * service) — so locally this is the SQLite leg alone. `dialect` is threaded into
  * every schema installer per driver, so the PG leg exercises the BIGINT epoch-ms
  * columns, the `GENERATED ALWAYS AS IDENTITY` queue key, AND the partial
@@ -18,21 +18,21 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { installCacheSchema, sqlStore } from "@volo/cache";
-import type { SqlCacheStore } from "@volo/cache";
-import { installSessionSchema, sqlSessionStore } from "@volo/auth";
-import { installRateLimitSchema, sqlRateLimitStore } from "@volo/ratelimit";
-import type { Dialect } from "@volo/ratelimit";
-import { installSchema as installQueueSchema, Queue, RetentionScheduler } from "@volo/queue";
-import type { SqlDatabase } from "@volo/queue";
-import { openSqlite } from "@volo/runtime";
+import { installCacheSchema, sqlStore } from "@lesto/cache";
+import type { SqlCacheStore } from "@lesto/cache";
+import { installSessionSchema, sqlSessionStore } from "@lesto/auth";
+import { installRateLimitSchema, sqlRateLimitStore } from "@lesto/ratelimit";
+import type { Dialect } from "@lesto/ratelimit";
+import { installSchema as installQueueSchema, Queue, RetentionScheduler } from "@lesto/queue";
+import type { SqlDatabase } from "@lesto/queue";
+import { openSqlite } from "@lesto/runtime";
 
 interface Driver {
   readonly name: Dialect;
   open(): Promise<{ db: SqlDatabase; close: () => unknown }>;
 }
 
-const PG_URL = process.env["VOLO_PG_URL"];
+const PG_URL = process.env["LESTO_PG_URL"];
 
 const drivers: Driver[] = [{ name: "sqlite", open: () => openSqlite() }];
 
@@ -40,7 +40,7 @@ if (PG_URL !== undefined) {
   drivers.push({
     name: "postgres",
     open: async () => {
-      const { openPostgres } = await import("@volo/pg");
+      const { openPostgres } = await import("@lesto/pg");
 
       return openPostgres({ connectionString: PG_URL });
     },
@@ -65,10 +65,10 @@ describe.each(drivers)("retention & sweeps: $name", (driver) => {
     close = opened.close;
 
     // Fresh schema each test — Postgres persists across tests in the CI service.
-    await handle.exec("DROP TABLE IF EXISTS volo_jobs");
-    await handle.exec("DROP TABLE IF EXISTS volo_cache");
-    await handle.exec("DROP TABLE IF EXISTS volo_sessions");
-    await handle.exec("DROP TABLE IF EXISTS volo_rate_limits");
+    await handle.exec("DROP TABLE IF EXISTS lesto_jobs");
+    await handle.exec("DROP TABLE IF EXISTS lesto_cache");
+    await handle.exec("DROP TABLE IF EXISTS lesto_sessions");
+    await handle.exec("DROP TABLE IF EXISTS lesto_rate_limits");
 
     await installQueueSchema(handle, driver.name);
     await installCacheSchema(handle, driver.name);

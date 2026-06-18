@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import { defineCollection, reference } from "@volo/content-core";
+import { defineCollection, reference } from "@lesto/content-core";
 
 // Define an authors collection
 const authors = defineCollection({

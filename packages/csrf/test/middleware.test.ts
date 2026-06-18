@@ -8,13 +8,13 @@ import {
   generateToken,
 } from "../src/index";
 
-import type { AnyVoloResponse, VoloRequest } from "@volo/web";
+import type { AnyLestoResponse, LestoRequest } from "@lesto/web";
 
 // >= 32 bytes: a real CSRF secret (the weak-secret guard rejects shorter).
 const SECRET = "test-secret-0123456789abcdefghijk";
 const SESSION = "session-42";
 
-function requestWith(overrides: Partial<VoloRequest> = {}): VoloRequest {
+function requestWith(overrides: Partial<LestoRequest> = {}): LestoRequest {
   return {
     method: "POST",
     path: "/",
@@ -26,7 +26,7 @@ function requestWith(overrides: Partial<VoloRequest> = {}): VoloRequest {
   };
 }
 
-const okResponse: AnyVoloResponse = { status: 200, headers: {}, body: "ok" };
+const okResponse: AnyLestoResponse = { status: 200, headers: {}, body: "ok" };
 
 const sessionFor = (): string => SESSION;
 

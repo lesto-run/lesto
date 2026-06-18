@@ -1,6 +1,6 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import type { ParserOption } from "@volo/content-umbra";
-import type { RenderOptions, RenderResult } from "@volo/content-markdown";
+import type { ParserOption } from "@lesto/content-umbra";
+import type { RenderOptions, RenderResult } from "@lesto/content-markdown";
 import type { AnyTaxonomy } from "./taxonomy";
 
 export interface CacheOptions {

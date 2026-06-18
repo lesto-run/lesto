@@ -1,5 +1,5 @@
 /**
- * @volo/identity end-to-end, over a real socket.
+ * @lesto/identity end-to-end, over a real socket.
  *
  * The unit tests pin every branch of `Identity` against an in-memory DB, but
  * none of them go through the wire — headers, cookies, the kernel boot order,
@@ -18,15 +18,15 @@
 import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createApp } from "@volo/kernel";
-import type { VoloAppConfig, KernelDatabase } from "@volo/kernel";
-import { installSessionSchema, sqlSessionStore } from "@volo/auth";
-import { createDb } from "@volo/db";
-import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@volo/ratelimit";
-import { serve } from "@volo/runtime";
-import type { Server } from "@volo/runtime";
-import { volo } from "@volo/web";
-import type { Context, VoloResponse } from "@volo/web";
+import { createApp } from "@lesto/kernel";
+import type { LestoAppConfig, KernelDatabase } from "@lesto/kernel";
+import { installSessionSchema, sqlSessionStore } from "@lesto/auth";
+import { createDb } from "@lesto/db";
+import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@lesto/ratelimit";
+import { serve } from "@lesto/runtime";
+import type { Server } from "@lesto/runtime";
+import { lesto } from "@lesto/web";
+import type { Context, LestoResponse } from "@lesto/web";
 
 import {
   clearSessionCookie,
@@ -35,8 +35,8 @@ import {
   readSessionToken,
   sessionCookie,
   usersMigration,
-} from "@volo/identity";
-import type { Identity, IdentityMailer } from "@volo/identity";
+} from "@lesto/identity";
+import type { Identity, IdentityMailer } from "@lesto/identity";
 
 // ---------------------------------------------------------------------------
 // Wiring
@@ -67,7 +67,7 @@ function authBody(c: Context): { email: string; password: string; token?: string
   return c.req.body as { email: string; password: string; token?: string };
 }
 
-function errorResponse(error: unknown): VoloResponse {
+function errorResponse(error: unknown): LestoResponse {
   if (error instanceof IdentityError) {
     let status = 400;
     if (
@@ -126,8 +126,8 @@ function adapt(raw: Database.Database): KernelDatabase {
   return adapted;
 }
 
-function buildConfig(database: Database.Database): VoloAppConfig {
-  const app = volo()
+function buildConfig(database: Database.Database): LestoAppConfig {
+  const app = lesto()
     .post("/auth/register", async (c) => {
       const { email, password } = authBody(c);
       try {
@@ -247,14 +247,14 @@ async function get(path: string, cookie?: string): Promise<{ status: number; jso
 /** The cookie *value* (just the token) parsed out of a Set-Cookie header. */
 function tokenFromSetCookie(header: string | null): string {
   expect(header).not.toBeNull();
-  const match = /__Host-volo_session=([^;]+)/.exec(header!);
+  const match = /__Host-lesto_session=([^;]+)/.exec(header!);
   expect(match).not.toBeNull();
 
   return match![1]!;
 }
 
 function cookieHeader(token: string): string {
-  return `__Host-volo_session=${token}`;
+  return `__Host-lesto_session=${token}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +267,7 @@ let server: Server;
 beforeAll(async () => {
   database = new Database(":memory:");
 
-  // The kernel adapter and @volo/db take the same `SqlDatabase` shape, so
+  // The kernel adapter and @lesto/db take the same `SqlDatabase` shape, so
   // one wrapper around the in-memory database satisfies both consumers.
   identity = createIdentity({
     db: createDb(adapt(database)),
@@ -321,7 +321,7 @@ describe("the identity journey, over the wire", () => {
       password: "correct horse staple",
     });
     expect(loggedIn.status).toBe(200);
-    expect(loggedIn.cookie).toContain("__Host-volo_session=");
+    expect(loggedIn.cookie).toContain("__Host-lesto_session=");
     expect(loggedIn.cookie).toContain("HttpOnly");
     expect(loggedIn.cookie).toContain("Secure");
     expect(loggedIn.cookie).toContain("SameSite=Lax");
@@ -405,7 +405,7 @@ describe("the identity journey, over the wire", () => {
 
     const loggedOut = await post("/auth/logout", {}, cookieHeader(token));
     expect(loggedOut.status).toBe(200);
-    expect(loggedOut.cookie).toContain("__Host-volo_session=;");
+    expect(loggedOut.cookie).toContain("__Host-lesto_session=;");
     expect(loggedOut.cookie).toContain("Max-Age=0");
 
     expect((await get("/me", cookieHeader(token))).status).toBe(401);
@@ -469,7 +469,7 @@ describe("the hardened identity journey, over the wire", () => {
   beforeAll(async () => {
     hardenedDb = new Database(":memory:");
 
-    // The kernel adapter, @volo/db, and both durable stores all take the same
+    // The kernel adapter, @lesto/db, and both durable stores all take the same
     // SqlDatabase shape, so one wrapper around the in-memory DB satisfies all of
     // them — and the session store therefore shares the kernel-installed tables.
     const handle = adapt(hardenedDb);
@@ -566,7 +566,7 @@ describe("the hardened identity journey, over the wire", () => {
 
     // What an attacker would lift from a DB dump: the stored primary-key value.
     // It is a SHA-256 digest, never the plaintext token the client presents.
-    const stored = hardenedDb.prepare("SELECT token FROM volo_sessions").all() as Array<{
+    const stored = hardenedDb.prepare("SELECT token FROM lesto_sessions").all() as Array<{
       token: string;
     }>;
     expect(stored).toHaveLength(1);

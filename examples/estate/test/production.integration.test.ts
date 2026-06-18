@@ -59,10 +59,10 @@ describe("the prerendered marketing zone", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("text/html");
-    expect(response.body).toContain("data-volo-island");
+    expect(response.body).toContain("data-lesto-island");
     // The co-located mount script `defineIsland` emits (replaces the old single
-    // `<script id="volo-islands">` manifest) — carrying the Account island's name.
-    expect(response.body).toContain("data-volo-island-mount");
+    // `<script id="lesto-islands">` manifest) — carrying the Account island's name.
+    expect(response.body).toContain("data-lesto-island-mount");
     expect(response.body).toContain('"component":"Account"');
     expect(response.body).toContain('src="/client.js"');
   });
@@ -94,10 +94,10 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
 
   it("answers the session source with 200 null when signed out (not a 401 — that logs a console error)", async () => {
     // The marketing Account island binds this source (ADR 0010); the framework
-    // auto-exposes it at /__volo/data/session, which dispatchSites routes to the
+    // auto-exposes it at /__lesto/data/session, which dispatchSites routes to the
     // live app even though the `/` catch-all zone's prefix would otherwise claim
     // it. The value is the user directly (or null), no `{ user }` wrapper.
-    const response = await dispatch("GET", "/__volo/data/session");
+    const response = await dispatch("GET", "/__lesto/data/session");
 
     expect(response.status).toBe(200);
     expect(JSON.parse(response.body)).toBeNull();
@@ -133,10 +133,10 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
     expect(signIn.status).toBe(303);
 
     const cookie = cookieFrom(signIn.headers["Set-Cookie"] ?? signIn.headers["set-cookie"]);
-    expect(cookie).toContain("volo_session");
+    expect(cookie).toContain("lesto_session");
 
     // 3. The session source the marketing island binds now resolves the user.
-    const session = await dispatch("GET", "/__volo/data/session", { headers: { cookie } });
+    const session = await dispatch("GET", "/__lesto/data/session", { headers: { cookie } });
     expect(session.status).toBe(200);
     expect(JSON.parse(session.body)).toEqual({
       id: DEFAULT_DEMO.email,
@@ -160,7 +160,7 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
     });
     const cookie = cookieFrom(signIn.headers["Set-Cookie"] ?? signIn.headers["set-cookie"]);
 
-    const before = await dispatch("GET", "/__volo/data/session", { headers: { cookie } });
+    const before = await dispatch("GET", "/__lesto/data/session", { headers: { cookie } });
     expect(JSON.parse(before.body)).toEqual({
       id: DEFAULT_DEMO.email,
       name: DEFAULT_DEMO.displayName,
@@ -175,7 +175,7 @@ describe("the dynamic /mls zone — the authenticated journey", () => {
 
     // The same cookie now resolves nobody — the row was deleted, not just the
     // cookie cleared. (Re-presenting the revoked token yields signed-out.)
-    const after = await dispatch("GET", "/__volo/data/session", { headers: { cookie } });
+    const after = await dispatch("GET", "/__lesto/data/session", { headers: { cookie } });
     expect(after.status).toBe(200);
     expect(JSON.parse(after.body)).toBeNull();
   });

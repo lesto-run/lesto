@@ -381,7 +381,7 @@ describe("remoteReleaseStore default disk read", () => {
   let outRoot: string;
 
   beforeEach(async () => {
-    outRoot = await mkdtemp(join(tmpdir(), "volo-remote-out-"));
+    outRoot = await mkdtemp(join(tmpdir(), "lesto-remote-out-"));
     await writeFile(join(outRoot, "index.html"), "<h1>disk</h1>", "utf8");
   });
 

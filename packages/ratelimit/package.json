@@ -1,8 +1,8 @@
 {
-  "name": "@volo/ratelimit",
+  "name": "@lesto/ratelimit",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's token-bucket rate limiter over a pluggable store and an injected clock.",
+  "description": "Lesto's token-bucket rate limiter over a pluggable store and an injected clock.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,8 +12,8 @@
     }
   },
   "dependencies": {
-    "@volo/errors": "workspace:*",
-    "@volo/web": "workspace:*"
+    "@lesto/errors": "workspace:*",
+    "@lesto/web": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

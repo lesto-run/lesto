@@ -4,7 +4,7 @@
  * A route's `:param` segments are not just runtime captures — the compiler can
  * read them straight off the pattern string. `ParamKeys<"/listings/:id">` is the
  * literal union `"id"`; `PathParams<…>` lifts that union into the record a
- * handler receives. This is the spine of Volo's end-to-end typing: a handler for
+ * handler receives. This is the spine of Lesto's end-to-end typing: a handler for
  * `"/posts/:postId/comments/:id"` knows, with no annotation and no codegen, that
  * `c.param("postId")` and `c.param("id")` are the only valid keys.
  *

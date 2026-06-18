@@ -1,8 +1,8 @@
 {
-  "name": "@volo/kernel",
+  "name": "@lesto/kernel",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's application kernel — assembles the database, migrations, router, and controllers into one bootable app.",
+  "description": "Lesto's application kernel — assembles the database, migrations, router, and controllers into one bootable app.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,14 +12,14 @@
     }
   },
   "dependencies": {
-    "@volo/auth": "workspace:*",
-    "@volo/cors": "workspace:*",
-    "@volo/csrf": "workspace:*",
-    "@volo/db": "workspace:*",
-    "@volo/migrate": "workspace:*",
-    "@volo/ratelimit": "workspace:*",
-    "@volo/router": "workspace:*",
-    "@volo/web": "workspace:*"
+    "@lesto/auth": "workspace:*",
+    "@lesto/cors": "workspace:*",
+    "@lesto/csrf": "workspace:*",
+    "@lesto/db": "workspace:*",
+    "@lesto/migrate": "workspace:*",
+    "@lesto/ratelimit": "workspace:*",
+    "@lesto/router": "workspace:*",
+    "@lesto/web": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

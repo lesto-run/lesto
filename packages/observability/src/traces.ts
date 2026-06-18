@@ -3,13 +3,13 @@
  *
  * The pieces below it (`Tracer`, `OtlpHttpExporter`, the W3C `traceparent`
  * primitive) are deliberately small and unopinionated. THIS is where they meet
- * the rest of Volo: it reads the two-env-var setup, builds the exporter and
+ * the rest of Lesto: it reads the two-env-var setup, builds the exporter and
  * tracer, drives the flush lifecycle (an interval for a long-lived node service,
  * an explicit `flush()` for an edge worker's `waitUntil` or a drain), and turns
  * every per-domain `on*` seam other packages exposed into a child span under the
  * request currently in flight.
  *
- * The contract this file defines is the one `@volo/cloudflare` (edge-deploy #3)
+ * The contract this file defines is the one `@lesto/cloudflare` (edge-deploy #3)
  * mirrors: the env-var names + semantics, the exporter/tracer construction, and
  * the `flush()` API `waitUntil` calls. The node tier wires it here; the edge
  * adapter wires the SAME shape with its own `waitUntil` arity.
@@ -29,25 +29,25 @@ import type { Span, SpanData } from "./types";
  *
  * THE CONTRACT (mirrored by the edge adapter):
  *
- *   - `VOLO_OTLP_URL`     — the collector's trace endpoint, e.g.
+ *   - `LESTO_OTLP_URL`     — the collector's trace endpoint, e.g.
  *                           `http://localhost:4318/v1/traces`. ABSENT disables
  *                           tracing entirely (no exporter, no spans, zero cost) —
  *                           the safe default, so an app with no collector pays
  *                           nothing and an operator opts in by setting one var.
- *   - `VOLO_OTLP_SERVICE` — the `service.name` resource attribute. Defaults to
- *                           `"volo"`.
- *   - `VOLO_OTLP_HEADERS` — extra request headers as a comma-separated
+ *   - `LESTO_OTLP_SERVICE` — the `service.name` resource attribute. Defaults to
+ *                           `"lesto"`.
+ *   - `LESTO_OTLP_HEADERS` — extra request headers as a comma-separated
  *                           `key=value` list (an auth token, a tenant id), e.g.
  *                           `authorization=Bearer t,x-tenant=acme`. Absent = none.
  */
 export interface TracesEnv {
-  readonly VOLO_OTLP_URL?: string | undefined;
-  readonly VOLO_OTLP_SERVICE?: string | undefined;
-  readonly VOLO_OTLP_HEADERS?: string | undefined;
+  readonly LESTO_OTLP_URL?: string | undefined;
+  readonly LESTO_OTLP_SERVICE?: string | undefined;
+  readonly LESTO_OTLP_HEADERS?: string | undefined;
 }
 
 /**
- * Parse the `VOLO_OTLP_HEADERS` comma-separated `key=value` list into a header
+ * Parse the `LESTO_OTLP_HEADERS` comma-separated `key=value` list into a header
  * map. A blank entry is skipped; an entry with no `=` is skipped (we never
  * invent a value); whitespace around the key and around the value is trimmed.
  * Pure and exported so the skip/trim branches are unit-testable.
@@ -79,7 +79,7 @@ export function parseOtlpHeaders(raw: string | undefined): Record<string, string
  * Reads the request span for the request currently in flight, so a seam hook can
  * parent its child span on it.
  *
- * Injected (rather than importing `@volo/web`'s `currentContext` here) so this
+ * Injected (rather than importing `@lesto/web`'s `currentContext` here) so this
  * tracing core stays dependency-free and the wiring site supplies the binding.
  * Returns `undefined` outside a request (a background job, startup) — the hook
  * then roots a standalone span instead of crashing.
@@ -172,10 +172,10 @@ export interface Traces {
  * there is not (a background worker, a startup task).
  */
 export interface TraceSeams {
-  /** `@volo/db`'s `onQuery` — each executed query becomes a `db.query` child span. */
+  /** `@lesto/db`'s `onQuery` — each executed query becomes a `db.query` child span. */
   onQuery(event: { readonly sql: string; readonly durationMs: number }): void;
 
-  /** `@volo/queue`'s `onJob` — each finished job becomes a `queue.job` span. */
+  /** `@lesto/queue`'s `onJob` — each finished job becomes a `queue.job` span. */
   onJob(event: {
     readonly queue: string;
     readonly id: number;
@@ -185,17 +185,17 @@ export interface TraceSeams {
     readonly durationMs: number;
   }): void;
 
-  /** `@volo/identity`'s `onEvent` — each lifecycle event becomes an `identity.<type>` span. */
+  /** `@lesto/identity`'s `onEvent` — each lifecycle event becomes an `identity.<type>` span. */
   onEvent(event: { readonly type: string; readonly userId?: string; readonly at: number }): void;
 
-  /** `@volo/mail`'s `onDelivered` — a `mail.delivered` span per accepted email. */
+  /** `@lesto/mail`'s `onDelivered` — a `mail.delivered` span per accepted email. */
   onDelivered(event: {
     readonly mailerName: string;
     readonly jobId: number;
     readonly attempt: number;
   }): void;
 
-  /** `@volo/mail`'s `onFailed` — a `mail.failed` (error-status) span per failed attempt. */
+  /** `@lesto/mail`'s `onFailed` — a `mail.failed` (error-status) span per failed attempt. */
   onFailed(event: {
     readonly mailerName: string;
     readonly jobId: number;
@@ -206,7 +206,7 @@ export interface TraceSeams {
   /** The `runWorker` `onError` sink — a `worker.poll_failed` error span per poll fault. */
   onWorkerError(error: { readonly code: string; readonly message: string }): void;
 
-  /** `@volo/web`'s `clientErrors` sink — a `client.island_error` span per browser beacon. */
+  /** `@lesto/web`'s `clientErrors` sink — a `client.island_error` span per browser beacon. */
   onClientError(event: {
     readonly failed: readonly string[];
     readonly missing: readonly string[];
@@ -215,7 +215,7 @@ export interface TraceSeams {
   }): void;
 
   /**
-   * `@volo/web`'s browser-spans receiver sink — one EXPORTED span per browser RUM
+   * `@lesto/web`'s browser-spans receiver sink — one EXPORTED span per browser RUM
    * span, joined to the server trace.
    *
    * Unlike every other seam (each turns a server-side EVENT into a freshly-minted
@@ -396,13 +396,13 @@ export function createTraces(options: TracesOptions): Traces {
 /**
  * Build a {@link Traces} from the environment, or `undefined` when tracing is off.
  *
- * `VOLO_OTLP_URL` is the on switch: absent, we return `undefined` and the app
+ * `LESTO_OTLP_URL` is the on switch: absent, we return `undefined` and the app
  * runs with NO tracer (zero spans, zero overhead). Present, we construct an
  * `OtlpHttpExporter` over the parsed headers + service name, a `Tracer` over it,
  * and the live handle. `currentSpan` and `fetchFn` are injected so the runtime
  * wires the request-span seam and a worker passes its own `fetch`.
  *
- * This is the construction the CLI calls for `volo serve`/`dev`; the edge adapter
+ * This is the construction the CLI calls for `lesto serve`/`dev`; the edge adapter
  * mirrors it with the worker `env` and `ctx.waitUntil(traces.flush())`.
  */
 export function tracesFromEnv(
@@ -413,15 +413,15 @@ export function tracesFromEnv(
     readonly onError?: (error: unknown) => void;
   } = {},
 ): Traces | undefined {
-  const url = env.VOLO_OTLP_URL;
+  const url = env.LESTO_OTLP_URL;
 
   // The on switch: no collector configured means no tracing at all.
   if (url === undefined || url === "") return undefined;
 
   const exporterOptions: OtlpHttpExporterOptions = {
     url,
-    headers: parseOtlpHeaders(env.VOLO_OTLP_HEADERS),
-    serviceName: env.VOLO_OTLP_SERVICE ?? "volo",
+    headers: parseOtlpHeaders(env.LESTO_OTLP_HEADERS),
+    serviceName: env.LESTO_OTLP_SERVICE ?? "lesto",
     ...(options.fetchFn === undefined ? {} : { fetchFn: options.fetchFn }),
     ...(options.onError === undefined ? {} : { onError: options.onError }),
   };

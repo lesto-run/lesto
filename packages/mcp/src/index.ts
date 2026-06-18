@@ -1,7 +1,7 @@
 /**
- * @volo/mcp — the Volo MCP control plane.
+ * @lesto/mcp — the Lesto MCP control plane.
  *
- * Exposes Volo operations to AI agents as MCP tools over `@modelcontextprotocol/sdk`.
+ * Exposes Lesto operations to AI agents as MCP tools over `@modelcontextprotocol/sdk`.
  *
  *   const tools = buildTools({ app, router, generateUi });
  *
@@ -17,8 +17,8 @@
 export { buildTools, dispatch } from "./tools";
 export type {
   DispatchOptions,
-  VoloMcpContext,
-  VoloTool,
+  LestoMcpContext,
+  LestoTool,
   McpAuditRecord,
   McpAuditSink,
   McpMode,

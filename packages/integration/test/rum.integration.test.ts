@@ -6,27 +6,27 @@
  * Every other tracing leg proves the SERVER tier (a request span, a db.query child
  * span). This one proves the BROWSER→server join: a page load's browser spans
  * (navigation, resource, web-vital) — each carrying the trace id the page adopted
- * from the SSR-injected `volo-traceparent` meta — must land in the SAME local
+ * from the SSR-injected `lesto-traceparent` meta — must land in the SAME local
  * collector as the server `http.request` span, parented on it, under ONE traceId.
  *
- * It boots `@volo/runtime`'s `serve` with the env-driven tracer (exactly as
- * `volo serve` / estate construct it), renders a real page (so the server stamps
+ * It boots `@lesto/runtime`'s `serve` with the env-driven tracer (exactly as
+ * `lesto serve` / estate construct it), renders a real page (so the server stamps
  * the request span's traceparent into the head), reads that meta back out of the
  * streamed HTML the way a browser would, then POSTs the browser's spans to the
- * built-in `/__volo/browser-spans` receiver — wired to `traces.seams.onBrowserSpan`,
+ * built-in `/__lesto/browser-spans` receiver — wired to `traces.seams.onBrowserSpan`,
  * the production wiring estate uses. Finally it reads the spans back out of the
  * in-process collector and asserts the join.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { serve } from "@volo/runtime";
-import type { Server } from "@volo/runtime";
+import { serve } from "@lesto/runtime";
+import type { Server } from "@lesto/runtime";
 import { createElement } from "react";
 
-import { BROWSER_SPANS_ROUTE, currentRequestSpan, volo, runWithContext } from "@volo/web";
-import { formatTraceparent, parseTraceparent, tracesFromEnv } from "@volo/observability";
-import type { BrowserSpan, CurrentSpan, Traces } from "@volo/observability";
+import { BROWSER_SPANS_ROUTE, currentRequestSpan, lesto, runWithContext } from "@lesto/web";
+import { formatTraceparent, parseTraceparent, tracesFromEnv } from "@lesto/observability";
+import type { BrowserSpan, CurrentSpan, Traces } from "@lesto/observability";
 
 import { startOtlpCollector } from "./otlp-collector";
 import type { OtlpCollector } from "./otlp-collector";
@@ -43,7 +43,7 @@ beforeAll(async () => {
   // and estate make. `currentSpan` reads the request span the runtime publishes on
   // the context, so the page handler can stamp its traceparent into the head.
   const built = tracesFromEnv(
-    { VOLO_OTLP_URL: collector.url, VOLO_OTLP_SERVICE: "integration-rum" },
+    { LESTO_OTLP_URL: collector.url, LESTO_OTLP_SERVICE: "integration-rum" },
     { currentSpan: currentRequestSpan as CurrentSpan },
   );
 
@@ -55,7 +55,7 @@ beforeAll(async () => {
   // the built-in browser-spans receiver wired to the tracer's seam — the exact
   // production wiring estate's `app.ts` uses. The browser's spans land in the same
   // exporter as the server spans, joined by trace id.
-  const app = volo()
+  const app = lesto()
     .page("/page", { component: () => createElement("main", null, "rum") })
     .browserSpans((span) => traces.seams.onBrowserSpan(span));
 
@@ -110,9 +110,9 @@ async function drain(body: ReadableStream<Uint8Array>): Promise<string> {
   return out + decoder.decode();
 }
 
-/** Read the `volo-traceparent` meta content out of an HTML document, as a browser would. */
+/** Read the `lesto-traceparent` meta content out of an HTML document, as a browser would. */
 function readTraceparentFromHtml(html: string): string | undefined {
-  const match = html.match(/<meta name="volo-traceparent" content="([^"]+)"\s*\/?>/);
+  const match = html.match(/<meta name="lesto-traceparent" content="([^"]+)"\s*\/?>/);
 
   return match?.[1];
 }
@@ -210,7 +210,7 @@ describe("browser spans stitch to the server trace (ARCHITECTURE.md §7)", () =>
 
     const expected = formatTraceparent(requestSpan.data.traceId, requestSpan.data.spanId);
 
-    const app = volo().page("/p", { component: () => createElement("main", null, "x") });
+    const app = lesto().page("/p", { component: () => createElement("main", null, "x") });
 
     const html = await runWithContext({ requestId: "r", span: requestSpan }, async () => {
       const res = await app.handle("GET", "/p");

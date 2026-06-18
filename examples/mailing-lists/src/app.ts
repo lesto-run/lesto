@@ -1,16 +1,16 @@
 /**
  * Assemble the mailing-list app from its parts.
  *
- * One composable `volo()` app exposes the whole double-opt-in journey as real
- * HTTP routes over the `@volo/mailing-lists` service:
+ * One composable `lesto()` app exposes the whole double-opt-in journey as real
+ * HTTP routes over the `@lesto/mailing-lists` service:
  *
  *   POST /lists/:listId/subscribe    begin double opt-in (RATE-LIMITED)
  *   GET  /confirm/:token             complete double opt-in
  *   GET  /unsubscribe/:token         one-click opt out
  *   POST /lists/:listId/broadcast    fan an issue out to subscribed recipients
  *
- * The service is transport-agnostic: it hands delivery jobs to a `@volo/mail`
- * Mailer, which enqueues them on `@volo/queue`. Nothing is sent inline — a
+ * The service is transport-agnostic: it hands delivery jobs to a `@lesto/mail`
+ * Mailer, which enqueues them on `@lesto/queue`. Nothing is sent inline — a
  * worker (serve.ts) or a drain loop (run.ts / the test) processes the queue.
  *
  * `buildMailingListsApp` is the pure routes-over-a-service factory (the unit a
@@ -19,23 +19,23 @@
  * over their dependencies — no module-scoped globals.
  */
 
-import { createDb } from "@volo/db";
-import type { Db } from "@volo/db";
-import { createApp } from "@volo/kernel";
-import type { App, KernelDatabase } from "@volo/kernel";
-import { Mailer } from "@volo/mail";
-import type { MailTransport } from "@volo/mail";
+import { createDb } from "@lesto/db";
+import type { Db } from "@lesto/db";
+import { createApp } from "@lesto/kernel";
+import type { App, KernelDatabase } from "@lesto/kernel";
+import { Mailer } from "@lesto/mail";
+import type { MailTransport } from "@lesto/mail";
 import {
   createMailingLists,
   insertList,
   MailingListError,
   mailingListsMigration,
-} from "@volo/mailing-lists";
-import type { List, MailingLists } from "@volo/mailing-lists";
-import { installSchema, Queue } from "@volo/queue";
-import { rateLimit } from "@volo/ratelimit";
-import { fromRequestMiddleware, volo } from "@volo/web";
-import type { Volo, Middleware } from "@volo/web";
+} from "@lesto/mailing-lists";
+import type { List, MailingLists } from "@lesto/mailing-lists";
+import { installSchema, Queue } from "@lesto/queue";
+import { rateLimit } from "@lesto/ratelimit";
+import { fromRequestMiddleware, lesto } from "@lesto/web";
+import type { Lesto, Middleware } from "@lesto/web";
 
 import { defineMailers } from "./mailers";
 
@@ -49,7 +49,7 @@ function escapeHtml(value: string): string {
 }
 
 /**
- * The routes, closing over the `@volo/mailing-lists` service they front and the
+ * The routes, closing over the `@lesto/mailing-lists` service they front and the
  * middleware that rate-limits the public `subscribe` endpoint.
  *
  * `subscribe` is fronted by `fromRequestMiddleware(subscribeLimiter)` because the
@@ -61,16 +61,16 @@ function escapeHtml(value: string): string {
 export function buildMailingListsApp(deps: {
   lists: MailingLists;
   subscribeLimiter: Middleware;
-}): Volo {
+}): Lesto {
   const { lists, subscribeLimiter } = deps;
 
-  return volo()
+  return lesto()
     .post("/lists/:listId/subscribe", fromRequestMiddleware(subscribeLimiter), async (c) => {
       const listId = Number(c.param("listId"));
       if (!Number.isInteger(listId)) return c.json({ error: "Unknown list." }, 404);
 
       // The body is untrusted. We validate here rather than via `c.valid`, whose
-      // WebError would escape uncaught — Volo has no request error boundary yet (a
+      // WebError would escape uncaught — Lesto has no request error boundary yet (a
       // known framework gap, see README). Presence/type only; the service owns the
       // canonical email-shape rule and raises its own coded error.
       const email = (c.req.body as { email?: unknown } | null)?.email;
@@ -145,7 +145,7 @@ export interface Booted {
 }
 
 export interface BuildOptions {
-  /** The kernel database handle (from `@volo/runtime`'s `openSqlite`). */
+  /** The kernel database handle (from `@lesto/runtime`'s `openSqlite`). */
   handle: KernelDatabase;
 
   /** Where rendered mail is delivered — a real SMTP/provider transport, or a capture in tests. */
@@ -171,10 +171,10 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
   const { handle, transport, baseUrl } = options;
   const db = createDb(handle);
 
-  // The mailer rides @volo/queue. The Queue object is just a handle here — it
+  // The mailer rides @lesto/queue. The Queue object is just a handle here — it
   // touches no table until a job is enqueued/run, so we build it before migrate.
-  // One unified `SqlDatabase` flows from the kernel handle into both @volo/db and
-  // @volo/queue, so there is no cast.
+  // One unified `SqlDatabase` flows from the kernel handle into both @lesto/db and
+  // @lesto/queue, so there is no cast.
   const queue = new Queue({ db: handle });
 
   const mailer = new Mailer({ queue, transport });
@@ -195,7 +195,7 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
 
   // The kernel migrates the mailing-list schema, installs the durable-store
   // schema, then runs each `schemas` installer — so the mail battery declares its
-  // @volo/queue schema once and the kernel creates the queue tables before
+  // @lesto/queue schema once and the kernel creates the queue tables before
   // dispatch is live. No separate post-boot install, no cast.
   const app = await createApp({
     db: handle,

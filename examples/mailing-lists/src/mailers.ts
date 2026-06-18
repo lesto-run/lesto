@@ -1,8 +1,8 @@
 /**
  * The two mailer templates this app sends, registered on a {@link Mailer}.
  *
- * `@volo/mailing-lists` never renders email itself — it hands a job to a NAMED
- * mailer template and lets `@volo/mail` render + deliver it. So the names here
+ * `@lesto/mailing-lists` never renders email itself — it hands a job to a NAMED
+ * mailer template and lets `@lesto/mail` render + deliver it. So the names here
  * are a contract with the service wiring in `app.ts`:
  *
  *   - `"confirm"` is the `confirmationMailer.name` — the service enqueues it on
@@ -16,11 +16,11 @@
  *     is the documented contract that carries one-click unsubscribe through.
  *
  * Both templates supply `html` AND `text`: a multipart alternative is the
- * deliverability default (and exercises @volo/mail's CRLF-normalized multipart
+ * deliverability default (and exercises @lesto/mail's CRLF-normalized multipart
  * body path), and the plain-text part is what a terminal mail client renders.
  */
 
-import type { Mailer } from "@volo/mail";
+import type { Mailer } from "@lesto/mail";
 
 /** Register this app's templates on the mailer. Called once at boot. */
 export function defineMailers(mailer: Mailer): void {

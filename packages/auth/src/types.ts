@@ -1,5 +1,5 @@
 /**
- * The shared vocabulary of @volo/auth.
+ * The shared vocabulary of @lesto/auth.
  *
  * Sessions depend on these interfaces, never on a concrete store or the system
  * clock, so the substrate (memory today, SQL tomorrow) can swap without
@@ -41,7 +41,7 @@ export interface SessionStore {
 /**
  * The minimal SQL surface `sqlSessionStore` consumes from a driver.
  *
- * Declared *locally*, type-only — `@volo/auth` takes no `@volo/db` dependency
+ * Declared *locally*, type-only — `@lesto/auth` takes no `@lesto/db` dependency
  * (the established cache precedent, `packages/cache/src/types.ts`). Per ADR 0006
  * the I/O terminals are Promise-returning while `prepare()` stays synchronous, so
  * the session store can prepare its statements eagerly at construction.

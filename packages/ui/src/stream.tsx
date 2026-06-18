@@ -20,7 +20,7 @@
  *     island hydrate with no special casing: the markers are always present.
  *   - The island manifest is unchanged. The caller serializes `page.islands`
  *     into the document exactly as the buffered path does (the estate example's
- *     `<script id="volo-islands">`), and `bootstrapScriptContent`/`bootstrapModules`
+ *     `<script id="lesto-islands">`), and `bootstrapScriptContent`/`bootstrapModules`
  *     options let the shell carry the manifest + client bundle so hydration runs.
  *
  * Two exits, one render:
@@ -137,7 +137,7 @@ const reactRenderToReadableStream = renderToReadableStream as unknown as RenderT
 
 /** Default sink: surface a streamed render error on the console, never swallow it. */
 const consoleStreamError: StreamErrorSink = (error) => {
-  console.error("[volo/ui] streamed render error", error);
+  console.error("[lesto/ui] streamed render error", error);
 };
 
 /** A render's effective abort signal, plus `clear` to disarm its deadline timer. */

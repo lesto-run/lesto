@@ -8,14 +8,14 @@
  * Tier-0 win: the browser learns about the LCP image, fonts, and island bundles
  * before it has finished parsing the body, with no streaming and no new transport.
  *
- * This module is a thin, Volo-flavored seam over those primitives. Two reasons it
+ * This module is a thin, Lesto-flavored seam over those primitives. Two reasons it
  * exists rather than telling callers to import `react-dom` directly:
  *   - the `react-dom` resource functions are imperative side effects that only
  *     register a hint while a render is in flight; wrapping them keeps the import
  *     surface small and lets us inject a fake registrar in tests (no real render
  *     needed to prove we called the right thing with the right options);
  *   - the LCP-image and island-bundle conventions (`fetchpriority="high"`,
- *     `<link rel="modulepreload">`) are Volo decisions, not React ones, and belong
+ *     `<link rel="modulepreload">`) are Lesto decisions, not React ones, and belong
  *     in one named place.
  *
  * The element-returning helpers (`lcpImage`, `modulePreload`) emit React elements

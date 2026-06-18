@@ -10,7 +10,7 @@ describe("STOP_WORDS", () => {
   });
 
   it("does not contain content-bearing words", () => {
-    expect(STOP_WORDS.has("volo")).toBe(false);
+    expect(STOP_WORDS.has("lesto")).toBe(false);
     expect(STOP_WORDS.has("search")).toBe(false);
   });
 
@@ -24,7 +24,7 @@ describe("STOP_WORDS", () => {
 describe("extractKeywords", () => {
   it("lowercases, drops stop words and short words", () => {
     // "the" and "is" are stop words; "a" is below the length threshold too.
-    expect(extractKeywords("The Volo Framework is Fast")).toEqual(["volo", "framework", "fast"]);
+    expect(extractKeywords("The Lesto Framework is Fast")).toEqual(["lesto", "framework", "fast"]);
   });
 
   it("strips punctuation to whitespace", () => {

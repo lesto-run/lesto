@@ -1,13 +1,13 @@
 /**
  * Admin failures, coded.
  *
- * As everywhere in Volo, callers branch on `code` — never on the message.
+ * As everywhere in Lesto, callers branch on `code` — never on the message.
  * The admin UI maps "unknown resource" to a 404 page, "record not found"
  * to a row-level not-found, and "validation failed" to per-field form
  * errors, all off the stable code.
  */
 
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
 export type AdminErrorCode =
   | "ADMIN_UNKNOWN_RESOURCE"
@@ -17,7 +17,7 @@ export type AdminErrorCode =
   | "ADMIN_EMPTY_UPDATE";
 
 /** Anything the admin layer can refuse to do. */
-export class AdminError extends VoloError<AdminErrorCode> {
+export class AdminError extends LestoError<AdminErrorCode> {
   constructor(code: AdminErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

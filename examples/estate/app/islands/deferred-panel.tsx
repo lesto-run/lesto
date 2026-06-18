@@ -9,7 +9,7 @@
  * in `hydrateDocumentIslands`), keeping its JS off the critical path. The server
  * paints the static fallback until then.
  *
- * Default-exported (one island per file) so `@volo/assets` synthesizes its
+ * Default-exported (one island per file) so `@lesto/assets` synthesizes its
  * registration — and, because it is the lone `hydrate: "visible"` island, the
  * synthesizer emits it as its OWN dynamic-import chunk (its bytes split off the
  * main entry, ADR 0009 mechanized).
@@ -18,7 +18,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 
-import { defineIsland } from "@volo/ui";
+import { defineIsland } from "@lesto/ui";
 
 function DeferredPanelView(): ReactNode {
   const [clicks, setClicks] = useState(0);

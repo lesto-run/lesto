@@ -1,19 +1,19 @@
 /**
  * Errors carry codes, not just prose.
  *
- * Every failure in Volo surfaces a stable, machine-readable `code`. Logs,
+ * Every failure in Lesto surfaces a stable, machine-readable `code`. Logs,
  * tests, API responses, and the MCP surface branch on the code — never on a
  * message string, which is free to change for humans without breaking machines.
  */
 
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
-export { VoloError };
+export { LestoError };
 
 export type WorkflowErrorCode = "WORKFLOW_UNKNOWN";
 
 /** Anything the workflow engine can refuse to do. */
-export class WorkflowError extends VoloError<WorkflowErrorCode> {
+export class WorkflowError extends LestoError<WorkflowErrorCode> {
   constructor(code: WorkflowErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

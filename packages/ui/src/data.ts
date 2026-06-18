@@ -3,7 +3,7 @@
  *
  * An island gets its per-request data through a typed, implementation-free
  * TOKEN shared between server and client. The server binds an implementation to
- * the token (`volo().data(source, loader)`); an island binds a prop to the
+ * the token (`lesto().data(source, loader)`); an island binds a prop to the
  * token (`defineClient({ data: { session: sessionSource } })`); the component
  * receives the value as a prop and is a pure function of it. There is no
  * `fetch`-in-effect for the author to write, and therefore no waterfall to
@@ -59,7 +59,7 @@ export interface DataSource<T = unknown> {
 
 /**
  * A source name must be a single safe URL/identifier segment: it becomes a path
- * segment (`/__volo/data/<name>`) AND is embedded in the executable primer
+ * segment (`/__lesto/data/<name>`) AND is embedded in the executable primer
  * script, so anything outside this charset could break out of the route or the
  * string literal. Locking the charset is what keeps the primer injection-safe
  * without escaping gymnastics (the primer carries names + hrefs, never data).
@@ -67,9 +67,9 @@ export interface DataSource<T = unknown> {
 const VALID_SOURCE_NAME = /^[a-zA-Z0-9_-]+$/;
 
 /** The route prefix the framework auto-exposes every registered source under. */
-export const DATA_ROUTE_PREFIX = "/__volo/data/";
+export const DATA_ROUTE_PREFIX = "/__lesto/data/";
 
-/** The endpoint a source's client fallback fetch hits — `/__volo/data/<name>`. */
+/** The endpoint a source's client fallback fetch hits — `/__lesto/data/<name>`. */
 export function dataSourceHref(name: string): string {
   return `${DATA_ROUTE_PREFIX}${name}`;
 }
@@ -144,7 +144,7 @@ function distinctSources(manifest: readonly IslandMount[]): Map<string, string> 
  * (the caller wraps it in `<script>`); an empty string when the page has no
  * unresolved binds, so a page without data emits no primer at all.
  *
- * The promise per source lands on `window.__voloData[<name>]`, exactly what the
+ * The promise per source lands on `window.__lestoData[<name>]`, exactly what the
  * hydration runtime awaits before mounting a bound island. The script embeds
  * only framework-controlled, charset-validated names and hrefs (never data),
  * so the JSON-encoded literals cannot break out of the `<script>`.
@@ -173,11 +173,11 @@ export function dataPrimerScript(manifest: readonly IslandMount[]): string {
 
       return (
         `${w}=${w}||fetch(${JSON.stringify(href)},{credentials:"same-origin"})` +
-        `.then(function(r){if(!r.ok)throw new Error("volo data "+r.status);return r.json()});` +
+        `.then(function(r){if(!r.ok)throw new Error("lesto data "+r.status);return r.json()});` +
         `${w}.catch(function(){})`
       );
     })
     .join(";");
 
-  return `(function(){var w=window.__voloData=window.__voloData||{};${assignments};})()`;
+  return `(function(){var w=window.__lestoData=window.__lestoData||{};${assignments};})()`;
 }

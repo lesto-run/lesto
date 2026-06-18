@@ -1,4 +1,4 @@
-import { sanitizeHtml } from "@volo/content-shared/sanitize";
+import { sanitizeHtml } from "@lesto/content-shared/sanitize";
 
 export interface HtmlContentProps {
   html: string;

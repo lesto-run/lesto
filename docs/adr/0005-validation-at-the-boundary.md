@@ -17,7 +17,7 @@ class Post extends Model {
 Post.create({ title: "" });  // returns false, populates errors
 ```
 
-That mechanism is no longer available — `@volo/db`'s rows are plain
+That mechanism is no longer available — `@lesto/db`'s rows are plain
 objects with no `.save()` step to gate. Phase C's identity, mailing-lists,
 and blog migrations all collapsed their validation to *inline* checks:
 
@@ -60,7 +60,7 @@ export const NewPostInput = z.object({
 export type NewPostInput = z.infer<typeof NewPostInput>;
 
 // controller — the boundary
-async create(): Promise<VoloResponse> {
+async create(): Promise<LestoResponse> {
   const parsed = NewPostInput.safeParse(this.request.body);
 
   if (!parsed.success) {
@@ -79,7 +79,7 @@ The same `NewPostInput` flows wherever an untrusted body enters: an HTTP
 controller, an MCP tool's `inputSchema`, an admin form's field set, a CLI
 arg parser.
 
-### Why Zod (and not "@volo/validate" or another library)
+### Why Zod (and not "@lesto/validate" or another library)
 
 Three real options were on the table:
 
@@ -87,7 +87,7 @@ Three real options were on the table:
 |---|---|---|
 | **Zod** | De-facto TS standard; tRPC, Next, Hono, Drizzle-Zod, MCP-SDK all speak it; massive ecosystem; mature error shape | ~50KB minified; one more external dep |
 | **Valibot** | ~6KB tree-shaken; modular; faster runtime | Smaller adoption; integration story still maturing; Zod's gravity makes it the convention |
-| **Hand-roll `@volo/validate`** | Matches "we own our batteries" framing; no external dep | Zero leverage to be gained — validation is *solved* territory; we'd reinvent every edge case (refinements, transforms, async, error shapes) Zod already nailed; and we'd lose the Drizzle-Zod / MCP-SDK / tRPC interop the JS ecosystem already wired around Zod |
+| **Hand-roll `@lesto/validate`** | Matches "we own our batteries" framing; no external dep | Zero leverage to be gained — validation is *solved* territory; we'd reinvent every edge case (refinements, transforms, async, error shapes) Zod already nailed; and we'd lose the Drizzle-Zod / MCP-SDK / tRPC interop the JS ecosystem already wired around Zod |
 
 The brand-level "batteries-included" stance is preserved by *picking the
 right battery and shipping it pre-wired*, not by reinventing every
@@ -114,18 +114,18 @@ The line: validation is the *first* thing untrusted input meets, and the
 
 ### What stays out
 
-- **No schema-attached validators on `@volo/db` tables.** The table value
+- **No schema-attached validators on `@lesto/db` tables.** The table value
   describes shape and constraints (`NOT NULL`, `UNIQUE`); semantic
   validation (length, format, business rules) is the input schema's job.
   Two values, two concerns, deliberately uncoupled.
 - **No automatic table→Zod derivation.** `drizzle-zod` ships this; for
-  Volo it's tempting but premature — derived schemas almost always need
+  Lesto it's tempting but premature — derived schemas almost always need
   hand-customization (`NewPostInput` has `.trim().min(1)`; the column
   is just `notNull()`). When/if we want it, it's an adapter package,
-  not a change to `@volo/db` or this ADR.
+  not a change to `@lesto/db` or this ADR.
 - **No `Result` wrapper as a convention.** Zod's own `safeParse` returns
   `{ success: true, data } | { success: false, error }`; that *is* the
-  Volo result shape at the validation boundary. Callers branch on
+  Lesto result shape at the validation boundary. Callers branch on
   `parsed.success`. No extra layer.
 
 ## Admin's specific shape (the immediate motivator)
@@ -158,7 +158,7 @@ already trust their callers:
 
 1. **Add `zod` as a workspace dep** at the root (~50KB). Single version
    across all packages.
-2. **`@volo/web`: add `validateBody<S>(schema, request)`** helper that
+2. **`@lesto/web`: add `validateBody<S>(schema, request)`** helper that
    wraps `schema.safeParse(request.body)` and returns the parsed value
    or throws a `WebError("WEB_VALIDATION_FAILED", ...)` the per-request
    error boundary maps to 422.
@@ -169,7 +169,7 @@ already trust their callers:
    stay** — they're at internal boundaries, no untrusted input reaches
    them. We do not retroactively wrap them in Zod just to be consistent;
    the rule is "validate untrusted input," not "validate everything."
-5. **Templates (`packages/create-volo`)** get one example controller
+5. **Templates (`packages/create-lesto`)** get one example controller
    that uses `validateBody` + a Zod schema, so the convention is the
    path of least resistance for new apps.
 
@@ -181,7 +181,7 @@ already trust their callers:
   `adr-0003-auth-implemented`) is the right answer for uniqueness
   specifically. No new framework here.
 - **Form generation.** Generating HTML forms from Zod is a real thing
-  (`zod-form`, custom) but it's an admin concern, not a Volo-wide one.
+  (`zod-form`, custom) but it's an admin concern, not a Lesto-wide one.
   Comes with admin's refactor; doesn't need an ADR.
 - **Replacing Zod later.** Should a clearly-better library land, the
   swap is per-package (Valibot in 2027 looks plausible). The decision is
@@ -197,7 +197,7 @@ already trust their callers:
 - Error shapes are machine-readable everywhere (Zod's `flatten()` /
   `format()` are stable). Frontend + admin + API consumers parse one
   shape.
-- Admin moves. Without it, admin stays on `@volo/orm` and Phase D
+- Admin moves. Without it, admin stays on `@lesto/orm` and Phase D
   cannot delete that package.
 - One ~50KB external dep enters the tree. Acceptable cost; verified
   against the alternative of rebuilding it and getting it wrong.

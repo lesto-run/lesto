@@ -3,7 +3,7 @@
  *
  * Where the old app composed a `UiNode` tree against a registry and SSR'd it
  * with `renderTree`, a page is now an ordinary React component. The `.page`
- * renderer (see `@volo/web`) runs the loader, wraps the component in the app's
+ * renderer (see `@lesto/web`) runs the loader, wraps the component in the app's
  * layouts, and streams the whole `<html>` document shell-first — the registry
  * path is reserved for DB-driven content, not a hand-authored view like this.
  */
@@ -24,7 +24,7 @@ import type { Post } from "./post";
 export function BlogPage({ posts }: { posts: Post[] }): ReactElement {
   return (
     <main>
-      <h1>The Volo Blog</h1>
+      <h1>The Lesto Blog</h1>
 
       <ReactionsIsland />
 

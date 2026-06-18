@@ -136,7 +136,7 @@ describe("signRequest", () => {
 
 describe("encodeRfc3986 (shared signer export)", () => {
   it("is re-exported from the package entry point for cross-package consumers", () => {
-    // The remote ReleaseStore in @volo/deploy signs and sends object keys, so it
+    // The remote ReleaseStore in @lesto/deploy signs and sends object keys, so it
     // must encode them with the SAME strict encoder the signer canonicalizes
     // under. Pin that the entry point exposes it and that it escapes what
     // encodeURIComponent leaves literal (`!*'()`) plus a space, but never a slash.

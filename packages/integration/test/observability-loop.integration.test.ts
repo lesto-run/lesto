@@ -4,15 +4,15 @@
  *
  * A request leaves two traces of itself — a span in the collector, and a line in
  * the access log — and the whole point is that they are joinable. This pins that
- * loop end to end over a real socket: boot `@volo/runtime`'s `serve` with BOTH
- * the env-driven OTLP tracer (`tracesFromEnv`, exactly as `volo serve`
+ * loop end to end over a real socket: boot `@lesto/runtime`'s `serve` with BOTH
+ * the env-driven OTLP tracer (`tracesFromEnv`, exactly as `lesto serve`
  * constructs it) and the `logRequest` access-log seam, send ONE request, and
  * assert it produced:
  *
  *   1. an `http.request` SPAN in a local OTLP collector, and
  *   2. an access-log ENTRY,
  *
- * and — the loop — that the span's `volo.request_id` attribute equals the access
+ * and — the loop — that the span's `lesto.request_id` attribute equals the access
  * entry's `requestId`. That shared id is the join: the trace tells you the shape,
  * the access log tells you the outcome, and the id lines them up. v1 ships traces
  * + structured access logs and no metrics pipeline; this is the test that proves
@@ -24,13 +24,13 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createApp } from "@volo/kernel";
-import type { VoloAppConfig, KernelDatabase } from "@volo/kernel";
-import { serve } from "@volo/runtime";
-import type { AccessEntry, Server } from "@volo/runtime";
-import { currentRequestSpan, volo } from "@volo/web";
-import { parseTraceparent, tracesFromEnv } from "@volo/observability";
-import type { CurrentSpan, Traces } from "@volo/observability";
+import { createApp } from "@lesto/kernel";
+import type { LestoAppConfig, KernelDatabase } from "@lesto/kernel";
+import { serve } from "@lesto/runtime";
+import type { AccessEntry, Server } from "@lesto/runtime";
+import { currentRequestSpan, lesto } from "@lesto/web";
+import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
+import type { CurrentSpan, Traces } from "@lesto/observability";
 
 import { startOtlpCollector } from "./otlp-collector";
 import type { OtlpCollector } from "./otlp-collector";
@@ -59,10 +59,10 @@ const accessLog: AccessEntry[] = [];
 beforeAll(async () => {
   collector = await startOtlpCollector();
 
-  // The canonical env-driven tracer — the SAME construction `volo serve` makes.
-  // `VOLO_OTLP_URL` is the on switch, pointed at the live collector.
+  // The canonical env-driven tracer — the SAME construction `lesto serve` makes.
+  // `LESTO_OTLP_URL` is the on switch, pointed at the live collector.
   const built = tracesFromEnv(
-    { VOLO_OTLP_URL: collector.url, VOLO_OTLP_SERVICE: "observability-loop" },
+    { LESTO_OTLP_URL: collector.url, LESTO_OTLP_SERVICE: "observability-loop" },
     { currentSpan: currentRequestSpan as CurrentSpan },
   );
 
@@ -70,13 +70,13 @@ beforeAll(async () => {
 
   traces = built;
 
-  const app = volo().get("/ping", (c) => c.json({ ok: true }));
+  const app = lesto().get("/ping", (c) => c.json({ ok: true }));
 
-  const config: VoloAppConfig = { db: stubDb, app };
+  const config: LestoAppConfig = { db: stubDb, app };
 
   // Wire BOTH seams onto the one server: the request tracer (every request mints a
   // span, published on the context) AND the access-log sink (every request appends
-  // one entry). This is the production pairing — `volo serve` wires the tracer; the
+  // one entry). This is the production pairing — `lesto serve` wires the tracer; the
   // runtime's access log is always on.
   server = await serve(await createApp(config), {
     port: 0,
@@ -142,10 +142,10 @@ describe("the observability loop: one request yields a span AND an access entry,
     expect(entry?.status).toBe(200);
     expect(typeof entry?.ms).toBe("number");
 
-    // THE LOOP: the span's `volo.request_id` attribute, the access entry's
+    // THE LOOP: the span's `lesto.request_id` attribute, the access entry's
     // `requestId`, and the `X-Request-Id` header are one and the same value — the
     // join that correlates the trace with the access log.
-    expect(span?.attributes["volo.request_id"]).toBe(entry?.requestId);
+    expect(span?.attributes["lesto.request_id"]).toBe(entry?.requestId);
     expect(entry?.requestId).toBe(headerRequestId);
   });
 });

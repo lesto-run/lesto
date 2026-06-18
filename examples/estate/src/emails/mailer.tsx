@@ -5,14 +5,14 @@
  * records every rendered message in an in-memory `outbox` (and logs a one-line
  * preview). The RENDER path is the production one: `@react-email/render` turns
  * the `.tsx` templates into cross-client HTML exactly as a deployed app would.
- * Swapping this recorder for a `@volo/mail` transport (SMTP or fetch-provider) is
+ * Swapping this recorder for a `@lesto/mail` transport (SMTP or fetch-provider) is
  * all that stands between the demo and really sending — the templates and the
  * render call do not change.
  */
 
 import { render } from "@react-email/render";
 
-import type { IdentityMailer } from "@volo/identity";
+import type { IdentityMailer } from "@lesto/identity";
 import type { ReactElement } from "react";
 
 import { ResetPasswordEmail, VerifyEmail } from "./templates";

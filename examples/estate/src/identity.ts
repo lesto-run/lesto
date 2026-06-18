@@ -1,8 +1,8 @@
 /**
- * The estate's identity layer — `@volo/identity` over an in-memory SQLite.
+ * The estate's identity layer — `@lesto/identity` over an in-memory SQLite.
  *
  * This replaces the old `?as=<id>` impersonation demo (which had no
- * credential check at all) with the real Volo auth flow: a sign-in posts an
+ * credential check at all) with the real Lesto auth flow: a sign-in posts an
  * email and a password, `Identity.login` runs scrypt-hashed credential
  * verification, and mints a real session.
  *
@@ -25,18 +25,18 @@
  * tier and is deliberately untouched (ADR 0013 §8).
  */
 
-import { hashPassword, installSessionSchema, sqlSessionStore } from "@volo/auth";
-import { createDb } from "@volo/db";
-import type { Db, SqlDatabase } from "@volo/db";
-import { Migrator } from "@volo/migrate";
-import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@volo/ratelimit";
-import { openSqlite } from "@volo/runtime";
+import { hashPassword, installSessionSchema, sqlSessionStore } from "@lesto/auth";
+import { createDb } from "@lesto/db";
+import type { Db, SqlDatabase } from "@lesto/db";
+import { Migrator } from "@lesto/migrate";
+import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@lesto/ratelimit";
+import { openSqlite } from "@lesto/runtime";
 
-import { createIdentity, insertUser, usersMigration } from "@volo/identity";
-import { findUserByEmail } from "@volo/identity";
-import type { Identity } from "@volo/identity";
+import { createIdentity, insertUser, usersMigration } from "@lesto/identity";
+import { findUserByEmail } from "@lesto/identity";
+import type { Identity } from "@lesto/identity";
 
-import type { TraceSeams } from "@volo/observability";
+import type { TraceSeams } from "@lesto/observability";
 
 import { isDemoMode } from "./edge";
 import { createDemoMailer } from "./emails/mailer";
@@ -47,15 +47,15 @@ import type { SentEmail } from "./emails/mailer";
  *
  * >= 32 bytes so the secret-strength guard (`createIdentity`) accepts it. It is
  * public by design; a real deploy never reaches it (it is fenced behind
- * `VOLO_DEMO=1`, the same gate the edge secret uses).
+ * `LESTO_DEMO=1`, the same gate the edge secret uses).
  */
 const DEMO_IDENTITY_SECRET = "estate-demo-identity-secret-0123456789";
 
 /**
  * The identity signing secret — FAIL CLOSED, mirroring `edgeSecret`.
  *
- * `VOLO_AUTH_SECRET` is preferred; absent it, the committed demo fallback is
- * reachable ONLY under `VOLO_DEMO=1`. Outside demo mode an unset secret THROWS
+ * `LESTO_AUTH_SECRET` is preferred; absent it, the committed demo fallback is
+ * reachable ONLY under `LESTO_DEMO=1`. Outside demo mode an unset secret THROWS
  * rather than signing verification/reset tokens with a public key.
  *
  * This is the *serve* path's resolution. The static prerender (`build.ts`) signs
@@ -63,15 +63,15 @@ const DEMO_IDENTITY_SECRET = "estate-demo-identity-secret-0123456789";
  * never reaches this fail-closed branch — a CI build needs no runtime secret.
  */
 function identitySecret(): string {
-  const secret = process.env["VOLO_AUTH_SECRET"];
+  const secret = process.env["LESTO_AUTH_SECRET"];
 
   if (secret !== undefined) return secret;
 
   if (isDemoMode()) return DEMO_IDENTITY_SECRET;
 
   throw new Error(
-    "VOLO_AUTH_SECRET is not set and VOLO_DEMO is not enabled. Refusing to build identity: set " +
-      "VOLO_AUTH_SECRET, or set VOLO_DEMO=1 to run the demo with its committed fallback secret.",
+    "LESTO_AUTH_SECRET is not set and LESTO_DEMO is not enabled. Refusing to build identity: set " +
+      "LESTO_AUTH_SECRET, or set LESTO_DEMO=1 to run the demo with its committed fallback secret.",
   );
 }
 
@@ -88,7 +88,7 @@ export interface DemoAccount {
  *
  * Plainly-advertised demo credentials — there are no secrets here, just the
  * fixture data the demo runs on. They sit out of band of any real deploy
- * (an app embedding `@volo/identity` would seed its own users instead).
+ * (an app embedding `@lesto/identity` would seed its own users instead).
  */
 export const DEMO_ACCOUNTS: readonly DemoAccount[] = [
   {
@@ -132,8 +132,8 @@ async function seedDemoAccounts(db: Db): Promise<void> {
  * owns its own migration + seed here (run before the service is built), so the
  * kernel has no migrations of its own to run.
  *
- * The DB is opened through `@volo/runtime`'s `openSqlite` (better-sqlite3 under
- * Node, `bun:sqlite` under Bun) — which is what lets `volo.app.ts` boot under
+ * The DB is opened through `@lesto/runtime`'s `openSqlite` (better-sqlite3 under
+ * Node, `bun:sqlite` under Bun) — which is what lets `lesto.app.ts` boot under
  * either runtime. That async open is why this function is async.
  */
 export async function buildIdentity(
@@ -197,7 +197,7 @@ export async function buildIdentity(
     }),
     // An explicit secret (the static prerender passes a throwaway one — it signs
     // no tokens) overrides the fail-closed runtime resolution. Absent it, the
-    // serve/Worker paths still demand a real `VOLO_AUTH_SECRET` (or `VOLO_DEMO=1`).
+    // serve/Worker paths still demand a real `LESTO_AUTH_SECRET` (or `LESTO_DEMO=1`).
     secret: secret ?? identitySecret(),
     mailer,
     verificationUrl: (token) => `/mls/api/verify?token=${token}`,

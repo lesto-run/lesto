@@ -1,9 +1,9 @@
 /**
- * @volo/content-search - Browser-safe search client
+ * @lesto/content-search - Browser-safe search client
  *
  * This entry point provides a Pagefind-style API for searching pre-built
  * indexes. It does NOT include embedding generation (which requires
- * @huggingface/transformers) - use @volo/content-embeddings for that.
+ * @huggingface/transformers) - use @lesto/content-embeddings for that.
  */
 
 import type { SearchIndex, SearchResult, SearchClientOptions, SearchClient } from "./types";

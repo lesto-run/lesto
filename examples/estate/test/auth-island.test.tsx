@@ -9,16 +9,16 @@
  * source), drop that document's body into the page, then hydrate — and watch the
  * framework resolve the session and rewrite the island per-user. There is no
  * client `fetch`-in-effect (ADR 0010): the data arrives either from the
- * parse-time primer promise (`window.__voloData`) or, as the fallback, a fetch of
+ * parse-time primer promise (`window.__lestoData`) or, as the fallback, a fetch of
  * the source's route — both stubbed here, so this is deterministic.
  */
 
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Registry } from "@volo/ui";
-import { hydrateDocumentIslands } from "@volo/ui/client";
-import { volo } from "@volo/web";
+import { Registry } from "@lesto/ui";
+import { hydrateDocumentIslands } from "@lesto/ui/client";
+import { lesto } from "@lesto/web";
 
 import { AccountIsland } from "../src/ui/account-island";
 import { sessionSource } from "../src/session-source";
@@ -34,7 +34,7 @@ const registry = new Registry().defineClient(AccountIsland.island);
  * resolve — exactly the prerendered, cacheable marketing page.
  */
 async function installStaticPage(): Promise<void> {
-  const app = volo()
+  const app = lesto()
     .client("/client.js")
     // The build-time loader value is irrelevant on a static page (no resolver runs).
     .data(sessionSource, () => null)
@@ -65,7 +65,7 @@ async function settle(): Promise<void> {
 
 afterEach(() => {
   document.body.innerHTML = "";
-  delete window.__voloData;
+  delete window.__lestoData;
   vi.unstubAllGlobals();
 });
 
@@ -79,21 +79,21 @@ describe("the Account island", () => {
 
     // …and the co-located mount script carries the unresolved session bind for the
     // client to resolve (via the parse-time primer or its fallback fetch).
-    const mount = document.querySelector("[data-volo-island-mount]");
+    const mount = document.querySelector("[data-lesto-island-mount]");
     expect(mount).not.toBeNull();
 
     const parsed = JSON.parse(mount?.textContent ?? "{}") as {
       bind?: Record<string, unknown>;
     };
     expect(parsed.bind).toEqual({
-      session: { source: "session", href: "/__volo/data/session" },
+      session: { source: "session", href: "/__lesto/data/session" },
     });
   });
 
   it("hydrates to a per-user greeting from the primed session promise", async () => {
     const user: SessionUser = { id: "jade", name: "Jade Mills" };
     // The primer (dataPrimerScript) already kicked the fetch before any JS ran.
-    window.__voloData = { session: Promise.resolve(user) };
+    window.__lestoData = { session: Promise.resolve(user) };
 
     await installStaticPage();
 
@@ -121,12 +121,12 @@ describe("the Account island", () => {
     });
     await settle();
 
-    expect(fetchMock).toHaveBeenCalledWith("/__volo/data/session", { credentials: "same-origin" });
+    expect(fetchMock).toHaveBeenCalledWith("/__lesto/data/session", { credentials: "same-origin" });
     expect(document.body.textContent).toContain("Hi, Ada");
   });
 
   it("stays signed-out when the session resolves to null", async () => {
-    window.__voloData = { session: Promise.resolve(null) };
+    window.__lestoData = { session: Promise.resolve(null) };
 
     await installStaticPage();
 

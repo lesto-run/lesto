@@ -1,5 +1,5 @@
 /**
- * @volo/content-mcp - MCP (Model Context Protocol) server for Docks content engine
+ * @lesto/content-mcp - MCP (Model Context Protocol) server for Docks content engine
  *
  * This package provides MCP servers for integrating Docks with Claude Desktop
  * and other MCP-compatible tools.
@@ -20,11 +20,11 @@
  * @example
  * ```typescript
  * // Start standalone MCP server
- * import { startMcpServer } from "@volo/content-mcp";
+ * import { startMcpServer } from "@lesto/content-mcp";
  * await startMcpServer({ cwd: process.cwd() });
  *
  * // Start HTTP MCP server (requires Studio running)
- * import { startMcpHttpServer } from "@volo/content-mcp";
+ * import { startMcpHttpServer } from "@lesto/content-mcp";
  * await startMcpHttpServer({ studioUrl: "http://localhost:4400" });
  * ```
  */

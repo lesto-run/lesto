@@ -4,9 +4,9 @@ import { z } from "zod";
 import { runWithContext } from "../src/context";
 import { Context } from "../src/handler-context";
 import { WebError } from "../src/errors";
-import type { VoloRequest } from "../src/types";
+import type { LestoRequest } from "../src/types";
 
-const requestOf = (over: Partial<VoloRequest> = {}): VoloRequest => ({
+const requestOf = (over: Partial<LestoRequest> = {}): LestoRequest => ({
   method: "GET",
   path: "/",
   params: {},

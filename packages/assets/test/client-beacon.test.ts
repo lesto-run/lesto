@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
 import {
   BEACON_PATH,
@@ -26,8 +26,8 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("errorClass", () => {
-  it("prefers a VoloError's stable code (the deploy-skew signal)", () => {
-    const error = new VoloError("UI_ISLAND_UNKNOWN_COMPONENT", "Account is gone");
+  it("prefers a LestoError's stable code (the deploy-skew signal)", () => {
+    const error = new LestoError("UI_ISLAND_UNKNOWN_COMPONENT", "Account is gone");
 
     expect(errorClass(error)).toBe("UI_ISLAND_UNKNOWN_COMPONENT");
   });
@@ -117,7 +117,7 @@ describe("defaultSend", () => {
     defaultSend(BEACON_PATH, payload);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/__volo/client-errors",
+      "/__lesto/client-errors",
       expect.objectContaining({
         method: "POST",
         keepalive: true,
@@ -159,13 +159,13 @@ describe("defaultOverlay", () => {
 
     defaultOverlay(payload);
 
-    const box = document.querySelector("[data-volo-error-overlay]");
+    const box = document.querySelector("[data-lesto-error-overlay]");
     expect(box).not.toBeNull();
 
     const text = box?.textContent ?? "";
-    expect(text).toContain("[volo] mount-error Account: TypeError");
-    expect(text).toContain("[volo] hydrate (failed 1, missing 2)");
-    expect(text).toContain("[volo] recoverable-error: MISMATCH");
+    expect(text).toContain("[lesto] mount-error Account: TypeError");
+    expect(text).toContain("[lesto] hydrate (failed 1, missing 2)");
+    expect(text).toContain("[lesto] recoverable-error: MISMATCH");
   });
 
   it("renders an event missing its optional fields without leaking 'undefined'", () => {
@@ -174,18 +174,18 @@ describe("defaultOverlay", () => {
 
     defaultOverlay(payload);
 
-    const text = document.querySelector("[data-volo-error-overlay]")?.textContent ?? "";
-    expect(text).toBe("[volo] hydrate (failed 0, missing 0)");
+    const text = document.querySelector("[data-lesto-error-overlay]")?.textContent ?? "";
+    expect(text).toBe("[lesto] hydrate (failed 0, missing 0)");
     expect(text).not.toContain("undefined");
   });
 
   it("dismisses itself on click", () => {
     defaultOverlay({ v: 1, events: [{ kind: "recoverable-error" }] });
 
-    const box = document.querySelector<HTMLElement>("[data-volo-error-overlay]");
+    const box = document.querySelector<HTMLElement>("[data-lesto-error-overlay]");
     box?.click();
 
-    expect(document.querySelector("[data-volo-error-overlay]")).toBeNull();
+    expect(document.querySelector("[data-lesto-error-overlay]")).toBeNull();
   });
 });
 
@@ -225,7 +225,7 @@ describe("reportClientErrors", () => {
   it("POSTs a recoverable-error event carrying only the error class", () => {
     const { reporter, sent } = recordingReporter();
 
-    reporter.onRecoverableError(new VoloError("UI_HYDRATION_MISMATCH", "secret"));
+    reporter.onRecoverableError(new LestoError("UI_HYDRATION_MISMATCH", "secret"));
 
     expect(sent[0]?.payload.events).toEqual<BeaconEvent[]>([
       { kind: "recoverable-error", errorClass: "UI_HYDRATION_MISMATCH" },
@@ -325,7 +325,7 @@ describe("reportClientErrors", () => {
 
     reporter.onMountError(new Error("x"), { component: "Profile" });
 
-    const box = document.querySelector("[data-volo-error-overlay]");
+    const box = document.querySelector("[data-lesto-error-overlay]");
     expect(box?.textContent).toContain("Profile");
   });
 });

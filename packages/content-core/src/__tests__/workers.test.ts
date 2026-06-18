@@ -6,7 +6,7 @@ import os from "node:os";
 import { parse } from "../parser";
 import type { CollectedFile } from "../collector";
 import type { CollectionSchema } from "../types";
-import type { ParserOption } from "@volo/content-umbra";
+import type { ParserOption } from "@lesto/content-umbra";
 import { z } from "zod";
 
 const createCollectedFile = (

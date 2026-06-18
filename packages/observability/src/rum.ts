@@ -5,11 +5,11 @@
  * thing no JS meta-framework ships." This module is the browser half of that
  * promise: a `PerformanceObserver`-driven client that turns the browser's own
  * timing records (navigation phases, resource fetches, Core Web Vitals) into
- * Volo spans, and — crucially — ADOPTS the server request's `traceId` so a page
+ * Lesto spans, and — crucially — ADOPTS the server request's `traceId` so a page
  * load lands UNDER the same `http.request` span the server already emitted. One
  * trace, UI → API → DB.
  *
- * The join is a `<meta name="volo-traceparent" content="00-<traceId>-<spanId>-01">`
+ * The join is a `<meta name="lesto-traceparent" content="00-<traceId>-<spanId>-01">`
  * the SSR layer injects: the server stamps the request span's ids into the
  * document, the browser reads them ({@link readTraceparentMeta}), and every span
  * minted here uses that `traceId` and parents on that `spanId`. Absent the meta
@@ -31,17 +31,17 @@
  * This file is BROWSER code: it touches `performance`, `PerformanceObserver`,
  * `document`, and `fetch`, all feature-detected so it is a silent no-op where
  * they are absent (SSR, an old browser, a test without jsdom). It takes no node
- * dependency, so `@volo/assets` can inline it into the synthesized client entry.
+ * dependency, so `@lesto/assets` can inline it into the synthesized client entry.
  */
 
 import { formatTraceparent, parseTraceparent } from "./traceparent";
 import type { Traceparent } from "./traceparent";
 
-/** Where finished browser spans POST — the receiver lives in `@volo/web`. */
-export const BROWSER_SPANS_PATH = "/__volo/browser-spans";
+/** Where finished browser spans POST — the receiver lives in `@lesto/web`. */
+export const BROWSER_SPANS_PATH = "/__lesto/browser-spans";
 
 /** The SSR-injected meta tag the browser reads its inbound traceparent from. */
-export const TRACEPARENT_META_NAME = "volo-traceparent";
+export const TRACEPARENT_META_NAME = "lesto-traceparent";
 
 /**
  * The default sampling rate: 10% of sessions emit browser spans.
@@ -55,7 +55,7 @@ export const DEFAULT_RUM_SAMPLE_RATE = 0.1;
 
 /**
  * One browser span, in the flat shape the receiver normalizes and the exporter
- * ships. A structural subset of `@volo/observability`'s `SpanData` — the fields
+ * ships. A structural subset of `@lesto/observability`'s `SpanData` — the fields
  * a browser can author honestly: ids, name, the two epoch-ms timestamps, a small
  * PII-free attribute bag, and an OTLP status code (0 unset / 1 ok / 2 error).
  *
@@ -146,7 +146,7 @@ interface LayoutShiftLike extends PerfEntryLike {
  * and {@link startBrowserRum} degrades to a silent no-op rather than throwing.
  */
 export interface RumEnvironment {
-  /** Reads the inbound traceparent meta — the SSR-injected `<meta name="volo-traceparent">`. */
+  /** Reads the inbound traceparent meta — the SSR-injected `<meta name="lesto-traceparent">`. */
   readonly readTraceparent: () => Traceparent | undefined;
 
   /** The high-res clock origin (`performance.timeOrigin`) — added to entry times for epoch ms. */
@@ -213,7 +213,7 @@ export function shouldSampleRum(rate: number, random: () => number): boolean {
 /**
  * Read the inbound traceparent the SSR layer injected as a meta tag.
  *
- * Looks up `<meta name="volo-traceparent" content="00-…">` in the live document
+ * Looks up `<meta name="lesto-traceparent" content="00-…">` in the live document
  * and parses its content through the SAME strict `parseTraceparent` the server
  * uses — a malformed or absent meta yields `undefined`, and the browser roots its
  * own trace. Guarded for `document` so it is a safe no-op outside a browser.

@@ -2,7 +2,7 @@
  * AWS Signature Version 4 — a self-contained signer over Web Crypto.
  *
  * This module knows nothing about storage. It is the single signing
- * implementation Volo intends to share between consumers (the S3/R2 storage
+ * implementation Lesto intends to share between consumers (the S3/R2 storage
  * backend signs requests here; a future remote `ReleaseStore` will presign URLs
  * with the same code). Keep it dependency-free and edge-shaped: it uses only
  * `crypto.subtle` and `fetch`-native types, never `node:crypto` or `Buffer`,

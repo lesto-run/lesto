@@ -1,8 +1,8 @@
 {
-  "name": "@volo/ui-generate",
+  "name": "@lesto/ui-generate",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "AI generation of validated @volo/ui trees — build the registry schema as a forced tool, ask a model, validate the result.",
+  "description": "AI generation of validated @lesto/ui trees — build the registry schema as a forced tool, ask a model, validate the result.",
   "type": "module",
   "private": true,
   "exports": {
@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.102.0",
-    "@volo/errors": "workspace:*",
-    "@volo/ui": "workspace:*"
+    "@lesto/errors": "workspace:*",
+    "@lesto/ui": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

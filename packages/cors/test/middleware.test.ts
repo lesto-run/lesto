@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { cors } from "../src/index";
 
-import type { AnyVoloResponse, VoloRequest } from "@volo/web";
+import type { AnyLestoResponse, LestoRequest } from "@lesto/web";
 
-function requestWith(overrides: Partial<VoloRequest> = {}): VoloRequest {
+function requestWith(overrides: Partial<LestoRequest> = {}): LestoRequest {
   return {
     method: "GET",
     path: "/",
@@ -16,7 +16,7 @@ function requestWith(overrides: Partial<VoloRequest> = {}): VoloRequest {
   };
 }
 
-const okResponse: AnyVoloResponse = {
+const okResponse: AnyLestoResponse = {
   status: 200,
   headers: { "content-type": "application/json" },
   body: "{}",

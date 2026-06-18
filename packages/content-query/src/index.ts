@@ -1,12 +1,12 @@
 /**
- * @volo/content-query
+ * @lesto/content-query
  *
  * Tiny fluent query API for typed collections (~500 bytes minified).
  * Works on any array, not coupled to @usedocks.
  *
  * @example
  * ```typescript
- * import { query } from '@volo/content-query';
+ * import { query } from '@lesto/content-query';
  *
  * query(posts)
  *   .where({ featured: true })
@@ -20,7 +20,7 @@
  * ```
  */
 
-import { validateRange } from "@volo/content-shared/validation";
+import { validateRange } from "@lesto/content-shared/validation";
 
 /** Predicate for filtering items */
 export type Predicate<T> = Partial<T> | ((item: T) => boolean);

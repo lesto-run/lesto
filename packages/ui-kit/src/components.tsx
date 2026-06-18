@@ -1,6 +1,6 @@
 /**
  * The vetted starter kit: ~ten components, each a `ComponentDef` the AI can
- * compose into a UI tree. The engine (@volo/ui) validates and renders these;
+ * compose into a UI tree. The engine (@lesto/ui) validates and renders these;
  * this file owns only the vocabulary and the look.
  *
  * Every component draws exclusively from the shared design `tokens`, uses inline
@@ -11,7 +11,7 @@
  * as pure prop-to-markup transforms with no defensive noise.
  */
 
-import type { ComponentDef } from "@volo/ui";
+import type { ComponentDef } from "@lesto/ui";
 import type { CSSProperties } from "react";
 
 import { tokens } from "./tokens";

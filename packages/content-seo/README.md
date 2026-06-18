@@ -1,29 +1,29 @@
-# @volo/content-seo
+# @lesto/content-seo
 
-Content-aware SEO for Volo: analysis (score, keyword density, recommendations)
+Content-aware SEO for Lesto: analysis (score, keyword density, recommendations)
 and **entry-aware** JSON-LD generation that reads a content record and emits the
 right Schema.org type.
 
-## Relationship to `@volo/seo`
+## Relationship to `@lesto/seo`
 
 These two are deliberately separate, at different layers — keep both:
 
-- [`@volo/seo`](../seo) is the **zero-dependency primitive layer**: `metaTags`,
+- [`@lesto/seo`](../seo) is the **zero-dependency primitive layer**: `metaTags`,
   `sitemap`, `robots`, `escape`, and a low-level `jsonLd(type, data)` that wraps
   an object you build yourself. Use it anywhere, content system or not.
-- `@volo/content-seo` is the **content-aware layer** (depends on
-  `@volo/content-shared`): it analyzes markdown and turns a content *entry* into
+- `@lesto/content-seo` is the **content-aware layer** (depends on
+  `@lesto/content-shared`): it analyzes markdown and turns a content *entry* into
   structured data via `jsonLd.article(entry)`, `jsonLd.blogPost(entry)`, `.graph(...)`,
-  etc. Its `jsonLd.create(type, data)` is the equivalent of `@volo/seo`'s
+  etc. Its `jsonLd.create(type, data)` is the equivalent of `@lesto/seo`'s
   low-level `jsonLd` when you need to hand-build a type.
 
-Rule of thumb: building primitives by hand → `@volo/seo`; turning content
-records into SEO → `@volo/content-seo`. They do not duplicate each other.
+Rule of thumb: building primitives by hand → `@lesto/seo`; turning content
+records into SEO → `@lesto/content-seo`. They do not duplicate each other.
 
 ## Quick Start
 
 ```typescript
-import { analyzeSEO, jsonLd } from "@volo/content-seo";
+import { analyzeSEO, jsonLd } from "@lesto/content-seo";
 
 // Analyze content SEO
 const analysis = analyzeSEO({

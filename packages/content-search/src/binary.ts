@@ -3,10 +3,10 @@
  *
  * Fast search using binary-quantized embeddings and Hamming distance.
  * This module contains RUNTIME functions for parsing and searching binary indexes.
- * BUILD-TIME functions (quantization, serialization) are in @volo/content-embeddings.
+ * BUILD-TIME functions (quantization, serialization) are in @lesto/content-embeddings.
  */
 
-import { hammingDistance } from "@volo/content-shared/encoding";
+import { hammingDistance } from "@lesto/content-shared/encoding";
 import type { SearchResult, SearchOptions, BinarySearchIndex } from "./types";
 import { cosineSimilarity } from "./similarity";
 
@@ -43,7 +43,7 @@ export function binaryQuantize(embedding: number[]): Uint8Array {
 // Hamming Distance
 // ============================================================================
 
-// hammingDistance lives in @volo/content-shared/encoding (byte-identical
+// hammingDistance lives in @lesto/content-shared/encoding (byte-identical
 // algorithm). Re-exported here so existing importers of this module keep
 // working unchanged.
 export { hammingDistance };

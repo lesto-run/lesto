@@ -10,10 +10,10 @@
  * `/mls/*` (node) by longest-prefix match.
  */
 
-import { sitePath } from "@volo/sites";
+import { sitePath } from "@lesto/sites";
 import { contentTypeFor } from "./content-type";
 import { DeployError } from "./errors";
-import type { Site, SiteManifest } from "@volo/sites";
+import type { Site, SiteManifest } from "@lesto/sites";
 
 /** Which tier serves a path: prerendered files on a CDN, or the live app. */
 export type RoutingMode = "static" | "dynamic";
@@ -100,16 +100,16 @@ export interface DeployPlan {
 
 /**
  * How to plan a deploy. The one real knob is the command a dynamic zone boots
- * with: `volo serve` is the Volo web tier's entrypoint and the default, but a
+ * with: `lesto serve` is the Lesto web tier's entrypoint and the default, but a
  * deploy target with a different runtime wrapper can name its own.
  */
 export interface PlanDeployOptions {
-  /** The command that boots a dynamic zone's tier. Defaults to `volo serve`. */
+  /** The command that boots a dynamic zone's tier. Defaults to `lesto serve`. */
   readonly serveCommand?: string;
 }
 
-/** The command a dynamic Volo zone is served with — the web tier's entrypoint. */
-const DEFAULT_SERVE_COMMAND = "volo serve";
+/** The command a dynamic Lesto zone is served with — the web tier's entrypoint. */
+const DEFAULT_SERVE_COMMAND = "lesto serve";
 
 /** Index a static build manifest by site name for O(1) per-site lookup. */
 function manifestsByName(manifests: readonly SiteManifest[]): Map<string, SiteManifest> {

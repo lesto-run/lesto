@@ -7,18 +7,18 @@ import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
- * The `volo` bin, end to end as a REAL spawned process (operability-dx #6).
+ * The `lesto` bin, end to end as a REAL spawned process (operability-dx #6).
  *
  * `run.ts` is unit-covered to 100%, but the bin itself is excluded from coverage:
  * it is the wiring — the shebang, `process.argv`, the dynamic `import()` of the
- * project's `volo.app.ts` / `volo.sites.ts`, the SIGTERM/SIGINT shutdown handlers,
+ * project's `lesto.app.ts` / `lesto.sites.ts`, the SIGTERM/SIGINT shutdown handlers,
  * and the `process.exit(code)`. That wiring is exactly where a working loop breaks
  * silently: a dynamic import that throws, a signal handler that never drains, an
  * exit code that lies. A unit test cannot see any of it because none of it runs
  * in-process. So this suite SPAWNS the bin under Bun against the fixture project
  * and drives every command at least once over a real process boundary:
  *
- *   - `routes`            — loads `volo.app.ts`, prints routes, exits 0
+ *   - `routes`            — loads `lesto.app.ts`, prints routes, exits 0
  *   - `serve`            — boots over HTTP, answers a request, exits 0 on SIGTERM
  *   - `dev`              — boots every site live, answers a request, exits 0 on SIGTERM
  *   - `deploy --release` — prerenders + ships a versioned release, exits 0
@@ -57,7 +57,7 @@ function collect(child: ChildProcess): Promise<SpawnResult> {
 
 /**
  * Spawn the real bin under Bun against the fixture project and run it to
- * completion. The fixture root carries a `volo.app.ts` (+ a `volo.sites.ts`),
+ * completion. The fixture root carries a `lesto.app.ts` (+ a `lesto.sites.ts`),
  * loaded by the bin's dynamic import — exactly as a real project root would.
  */
 function runBin(args: readonly string[]): Promise<SpawnResult> {
@@ -115,7 +115,7 @@ let workspace: string;
 beforeAll(async () => {
   // A private temp root for every build artifact, so a spawned `deploy`/`build`
   // writes its `out/` and `dist/` here, never into the repo's fixture dir.
-  workspace = await mkdtemp(join(tmpdir(), "volo-cli-e2e-"));
+  workspace = await mkdtemp(join(tmpdir(), "lesto-cli-e2e-"));
 });
 
 afterAll(async () => {
@@ -123,12 +123,12 @@ afterAll(async () => {
 });
 
 describe("bin e2e", () => {
-  it("routes: loads the project's volo.app.ts and prints its routes, exiting 0", async () => {
+  it("routes: loads the project's lesto.app.ts and prints its routes, exiting 0", async () => {
     const result = await runBin(["routes"]);
 
     expect(result.code, result.stderr).toBe(0);
 
-    // The fixture's `volo()` app declares these routes; `routes` prints the
+    // The fixture's `lesto()` app declares these routes; `routes` prints the
     // code-first `method\tpattern` shape (no controller#action target).
     expect(result.stdout).toContain("GET\t/posts");
     expect(result.stdout).toContain("POST\t/posts");

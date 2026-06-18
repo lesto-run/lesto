@@ -9,32 +9,32 @@
  * installs and `secureStack({ db })` / `durableStores(db)` wire do.
  *
  * The SQLite leg always runs (CI's integration step); the Postgres leg runs only
- * when `VOLO_PG_URL` is set, threading `dialect` so the PG `FOR UPDATE` path is
+ * when `LESTO_PG_URL` is set, threading `dialect` so the PG `FOR UPDATE` path is
  * exercised. `:memory:` is unshareable across two opens, so both legs share ONE
  * opened handle between the two apps — the fleet shape, one socket.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { hashPassword } from "@volo/auth";
-import { createDb } from "@volo/db";
-import type { SqlDatabase } from "@volo/db";
-import { Migrator } from "@volo/migrate";
-import { openSqlite } from "@volo/runtime";
+import { hashPassword } from "@lesto/auth";
+import { createDb } from "@lesto/db";
+import type { SqlDatabase } from "@lesto/db";
+import { Migrator } from "@lesto/migrate";
+import { openSqlite } from "@lesto/runtime";
 
-import { createApp, durableStores, installDurableSchema, secureStack } from "@volo/kernel";
-import type { Dialect } from "@volo/ratelimit";
-import { createIdentity, insertUser, usersMigration } from "@volo/identity";
-import type { Identity } from "@volo/identity";
-import { currentContext, fromRequestMiddleware, volo, runWithContext } from "@volo/web";
-import type { VoloResponse } from "@volo/web";
+import { createApp, durableStores, installDurableSchema, secureStack } from "@lesto/kernel";
+import type { Dialect } from "@lesto/ratelimit";
+import { createIdentity, insertUser, usersMigration } from "@lesto/identity";
+import type { Identity } from "@lesto/identity";
+import { currentContext, fromRequestMiddleware, lesto, runWithContext } from "@lesto/web";
+import type { LestoResponse } from "@lesto/web";
 
 interface Driver {
   readonly name: Dialect;
   open(): Promise<{ db: SqlDatabase; close: () => unknown }>;
 }
 
-const PG_URL = process.env["VOLO_PG_URL"];
+const PG_URL = process.env["LESTO_PG_URL"];
 
 const drivers: Driver[] = [{ name: "sqlite", open: () => openSqlite() }];
 
@@ -42,7 +42,7 @@ if (PG_URL !== undefined) {
   drivers.push({
     name: "postgres",
     open: async () => {
-      const { openPostgres } = await import("@volo/pg");
+      const { openPostgres } = await import("@lesto/pg");
 
       return openPostgres({ connectionString: PG_URL });
     },
@@ -55,7 +55,7 @@ const SECRET = "kernel-stores-secret-0123456789abc";
 // does, so every hit in a burst keys to the same SQL bucket; return the status.
 const hit = (app: Awaited<ReturnType<typeof createApp>>): Promise<number> =>
   runWithContext({ requestId: "r", ip: "1.2.3.4" }, () => app.handle("GET", "/ping")).then(
-    (r: VoloResponse) => r.status,
+    (r: LestoResponse) => r.status,
   );
 
 describe.each(drivers)("createApp({ db }) durable by default: $name", (driver) => {
@@ -68,8 +68,8 @@ describe.each(drivers)("createApp({ db }) durable by default: $name", (driver) =
     close = opened.close;
 
     // Fresh schema each test (Postgres persists across tests).
-    await handle.exec("DROP TABLE IF EXISTS volo_sessions");
-    await handle.exec("DROP TABLE IF EXISTS volo_rate_limits");
+    await handle.exec("DROP TABLE IF EXISTS lesto_sessions");
+    await handle.exec("DROP TABLE IF EXISTS lesto_rate_limits");
     await handle.exec("DROP TABLE IF EXISTS users");
     await handle.exec("DROP TABLE IF EXISTS schema_migrations");
   });
@@ -92,7 +92,7 @@ describe.each(drivers)("createApp({ db }) durable by default: $name", (driver) =
         // test), so opt out of the kernel's default rate-limit baseline — otherwise
         // two limiters would fight over the same bucket (ADR 0016).
         secure: false,
-        app: volo()
+        app: lesto()
           .use(
             ...secureStack({ db: handle, dialect: driver.name, rateLimit: policy }).map(
               fromRequestMiddleware,
@@ -159,7 +159,7 @@ describe.each(drivers)("createApp({ db }) durable by default: $name", (driver) =
     await createApp({
       db: handle,
       dialect: driver.name,
-      app: volo().get("/ping", (c) => c.text("pong")),
+      app: lesto().get("/ping", (c) => c.text("pong")),
     });
 
     // Both ADR-0013 tables exist and accept a write — the zero-config default.

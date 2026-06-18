@@ -12,12 +12,12 @@
     "app",
     "src",
     "test",
-    "volo.app.ts",
+    "lesto.app.ts",
     "serve.ts",
     "dev.ts",
     "build.ts",
     "worker.ts",
     "client.tsx",
-    "volo.sites.ts"
+    "lesto.sites.ts"
   ]
 }

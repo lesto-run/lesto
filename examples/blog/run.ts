@@ -1,26 +1,26 @@
 /**
- * A runnable end-to-end demo of the real Volo stack.
+ * A runnable end-to-end demo of the real Lesto stack.
  *
  *   bun run examples/blog/run.ts
  *
  * It boots the app on an in-memory SQLite database (migrations run on boot),
- * seeds a few posts through the typed @volo/db handle, then dispatches two
+ * seeds a few posts through the typed @lesto/db handle, then dispatches two
  * real requests through the kernel — the HTML page and the JSON API — and
  * prints what comes back.
  *
- * This exercises every package at once: @volo/db (typed schema + queries),
- * @volo/migrate (the posts table), @volo/web (the volo() app, its .page
+ * This exercises every package at once: @lesto/db (typed schema + queries),
+ * @lesto/migrate (the posts table), @lesto/web (the lesto() app, its .page
  * streaming a plain-React component, and the JSON route), all assembled
- * by @volo/kernel.
+ * by @lesto/kernel.
  */
 
-import { openSqlite } from "@volo/runtime";
+import { openSqlite } from "@lesto/runtime";
 
 import { buildApp } from "./src/app";
 import { countPosts, insertPost } from "./src/post";
 
 const seeds = [
-  { title: "Hello, Volo", body: "A batteries-included, AI-native TypeScript framework." },
+  { title: "Hello, Lesto", body: "A batteries-included, AI-native TypeScript framework." },
   { title: "One substrate", body: "The SQL database is the platform; batteries on top." },
   { title: "Agent-native", body: "MCP, CLI, and UI are three surfaces over one core." },
 ];
@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   const { db: handle, close } = await openSqlite();
 
   // Boot: the kernel runs migrations and stands up dispatch; buildApp also
-  // wraps the same handle as a typed @volo/db, which controllers + seeds
+  // wraps the same handle as a typed @lesto/db, which controllers + seeds
   // share.
   const { app, db } = await buildApp(handle);
 

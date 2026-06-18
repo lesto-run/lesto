@@ -1,9 +1,9 @@
 /**
- * @volo/content-embeddings
+ * @lesto/content-embeddings
  *
  * Build-time embedding generation for semantic search.
  * This package is used at build time to generate search indexes.
- * For runtime search functionality, use @volo/content-search.
+ * For runtime search functionality, use @lesto/content-search.
  */
 
 // Embedding generation
@@ -90,5 +90,5 @@ export type {
   ZeroCopyInputEntry,
 } from "./types";
 
-// NOTE: Search quality benchmarking has moved to @volo/content-search
-// import { runBenchmark, checkQualityGates } from "@volo/content-search"
+// NOTE: Search quality benchmarking has moved to @lesto/content-search
+// import { runBenchmark, checkQualityGates } from "@lesto/content-search"

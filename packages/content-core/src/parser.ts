@@ -3,7 +3,7 @@ import path from "node:path";
 import type { CollectedFile } from "./collector";
 import type { Document, DocumentMeta, CollectionSchema } from "./types";
 import { ValidationError } from "./types";
-import { resolveParser, isValidPreset } from "@volo/content-umbra";
+import { resolveParser, isValidPreset } from "@lesto/content-umbra";
 import type { CacheManager } from "./cache";
 import { createSyncHasher } from "./cache";
 import { createWorkerPool, type WorkerPool } from "./workers";

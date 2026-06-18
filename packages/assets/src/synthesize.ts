@@ -105,7 +105,7 @@ export interface BeaconConfig {
   readonly sampleRate?: number;
 
   /**
-   * `true` under `volo dev`: the synthesized entry paints the ADR-0011 overlay
+   * `true` under `lesto dev`: the synthesized entry paints the ADR-0011 overlay
    * instead of POSTing. Defaults to `false` (production beacon).
    */
   readonly dev?: boolean;
@@ -113,9 +113,9 @@ export interface BeaconConfig {
 
 /**
  * The beacon runtime, inlined into the entry so the browser bundle carries no
- * `@volo/assets` import (a scaffolded app depends on `@volo/ui` alone).
+ * `@lesto/assets` import (a scaffolded app depends on `@lesto/ui` alone).
  *
- * Each piece is serialized from its REAL `@volo/assets` source via `.toString()`,
+ * Each piece is serialized from its REAL `@lesto/assets` source via `.toString()`,
  * so the code that ships is byte-for-byte the code this package's tests exercise —
  * there is no second, untested transcription to drift. The functions reference one
  * another (and the two constants) by name, so the IIFE declares them all in one
@@ -151,8 +151,8 @@ function beaconRuntime(): string {
  * and the synchronous result drives the hydrate-summary.
  *
  * Finally, the entry starts browser RUM (ARCHITECTURE.md §7): it imports
- * `startBrowserRum` from `@volo/observability/rum` and calls it, so the browser
- * reads the SSR-injected `volo-traceparent` meta, adopts the server trace id, and
+ * `startBrowserRum` from `@lesto/observability/rum` and calls it, so the browser
+ * reads the SSR-injected `lesto-traceparent` meta, adopts the server trace id, and
  * POSTs navigation/resource/web-vital spans under it — UI → API → DB, one trace.
  * RUM is started AFTER hydration so its `PerformanceObserver` (with `buffered:
  * true`) still sees the load-time entries while the page's interactive work is
@@ -164,8 +164,8 @@ export function synthesizeEntry(
   rum: RumConfig = {},
 ): string {
   const imports: string[] = [
-    `import { Registry } from "@volo/ui";`,
-    `import { hydrateDocumentIslands } from "@volo/ui/client";`,
+    `import { Registry } from "@lesto/ui";`,
+    `import { hydrateDocumentIslands } from "@lesto/ui/client";`,
     rumImport(),
   ];
 
@@ -220,7 +220,7 @@ export function synthesizeEntry(
     "",
     `beacon.report(result);`,
     "",
-    // Browser RUM: read the SSR `volo-traceparent` meta, adopt the server trace id,
+    // Browser RUM: read the SSR `lesto-traceparent` meta, adopt the server trace id,
     // and POST navigation/resource/web-vital spans under it (ARCHITECTURE.md §7).
     rumStartCall(rum),
     "",

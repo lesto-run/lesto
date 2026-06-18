@@ -1,8 +1,8 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { getCollection, getEntry, type RuntimeEntry } from "@volo/content-core";
-import { Migrator, type SqlDatabase } from "@volo/migrate";
+import { getCollection, getEntry, type RuntimeEntry } from "@lesto/content-core";
+import { Migrator, type SqlDatabase } from "@lesto/migrate";
 
 import {
   CONTENT_ENTRIES_TABLE,
@@ -19,7 +19,7 @@ import {
 } from "../src/index";
 
 // A ~6-line adapter wrapping better-sqlite3 in the minimal SqlDatabase shape —
-// the same seam every Volo data package is built on.
+// the same seam every Lesto data package is built on.
 let raw: Database.Database;
 let db: SqlDatabase;
 

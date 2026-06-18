@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { validateTree } from "@volo/ui";
-import { renderTree } from "@volo/ui/server";
+import { validateTree } from "@lesto/ui";
+import { renderTree } from "@lesto/ui/server";
 
 import {
   createFormRegistry,
@@ -181,7 +181,7 @@ describe("Form action scheme guard", () => {
   });
 
   it("keeps a safe action (https/http/relative)", () => {
-    for (const action of ["https://volo.dev/submit", "http://example.com", "/relative", "?q=1"]) {
+    for (const action of ["https://lesto.dev/submit", "http://example.com", "/relative", "?q=1"]) {
       const html = renderToStaticMarkup(Form.render({ action, method: "post" }, null));
       expect(html).toContain(`action="${action}"`);
     }

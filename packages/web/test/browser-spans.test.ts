@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { BrowserSpan } from "@volo/observability";
+import type { BrowserSpan } from "@lesto/observability";
 
 import {
   BROWSER_SPANS_ROUTE,
@@ -12,7 +12,7 @@ import {
   normalizeBrowserSpans,
 } from "../src/browser-spans";
 import { Context } from "../src/handler-context";
-import type { AnyVoloResponse, VoloRequest } from "../src/types";
+import type { AnyLestoResponse, LestoRequest } from "../src/types";
 
 // A valid browser span body the browser would POST (string-keyed, as it arrives JSON).
 const VALID = {
@@ -28,7 +28,7 @@ const VALID = {
 
 /** Build a Context around a POST body, the way a route handler receives it. */
 function postContext(body: unknown): Context {
-  const request: VoloRequest = {
+  const request: LestoRequest = {
     method: "POST",
     path: BROWSER_SPANS_ROUTE,
     params: {},
@@ -41,10 +41,10 @@ function postContext(body: unknown): Context {
 }
 
 /** Invoke the terminal handler (its `next` must never run). */
-function call(handler: ReturnType<typeof browserSpansHandler>, body: unknown): AnyVoloResponse {
+function call(handler: ReturnType<typeof browserSpansHandler>, body: unknown): AnyLestoResponse {
   return handler(postContext(body), () => {
     throw new Error("next must not be called");
-  }) as AnyVoloResponse;
+  }) as AnyLestoResponse;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +258,7 @@ describe("browserSpansHandler", () => {
     const response = call(handler, huge);
 
     expect(response.status).toBe(413);
-    expect(response.headers["x-volo-error"]).toBe("WEB_BROWSER_SPANS_BODY_TOO_LARGE");
+    expect(response.headers["x-lesto-error"]).toBe("WEB_BROWSER_SPANS_BODY_TOO_LARGE");
     expect(seen).toEqual([]);
   });
 

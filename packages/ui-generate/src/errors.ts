@@ -6,13 +6,13 @@
  * without breaking machines.
  */
 
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
 /** Anything UI generation can refuse to produce. */
 export type GenerateErrorCode = "GENERATE_NO_OUTPUT";
 
 /** A failure while generating a UI tree from a model. */
-export class GenerateError extends VoloError<GenerateErrorCode> {
+export class GenerateError extends LestoError<GenerateErrorCode> {
   constructor(code: GenerateErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

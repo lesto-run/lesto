@@ -1,8 +1,8 @@
 {
-  "name": "@volo/mcp",
+  "name": "@lesto/mcp",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's MCP control plane — exposes Volo operations to AI agents as MCP tools over @modelcontextprotocol/sdk.",
+  "description": "Lesto's MCP control plane — exposes Lesto operations to AI agents as MCP tools over @modelcontextprotocol/sdk.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,13 +12,13 @@
     }
   },
   "dependencies": {
-    "@volo/content-core": "workspace:*",
-    "@volo/content-store": "workspace:*",
-    "@volo/db": "workspace:*",
-    "@volo/errors": "workspace:*",
-    "@volo/kernel": "workspace:*",
-    "@volo/migrate": "workspace:*",
-    "@volo/web": "workspace:*",
+    "@lesto/content-core": "workspace:*",
+    "@lesto/content-store": "workspace:*",
+    "@lesto/db": "workspace:*",
+    "@lesto/errors": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/migrate": "workspace:*",
+    "@lesto/web": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "scripts": {

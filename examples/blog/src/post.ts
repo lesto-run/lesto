@@ -1,5 +1,5 @@
 /**
- * The `posts` table as a `@volo/db` schema value, plus the helper functions
+ * The `posts` table as a `@lesto/db` schema value, plus the helper functions
  * the controller + seed scripts call.
  *
  * `Post` is `InferRow<typeof posts>` — a plain row, no `extends Model`. The
@@ -17,8 +17,8 @@ import {
   text,
   type Db,
   type InferRow,
-} from "@volo/db";
-import type { Migration, MigrationEntry } from "@volo/migrate";
+} from "@lesto/db";
+import type { Migration, MigrationEntry } from "@lesto/migrate";
 
 export const posts = defineTable("posts", {
   id: integer("id").primaryKey({ autoIncrement: true }),

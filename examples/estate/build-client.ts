@@ -37,7 +37,7 @@ import type { BunPlugin } from "bun";
 /**
  * The React specifiers we redirect when `--preact` is set. Most go straight to
  * Preact's compat layer; `react-dom` goes to a local shim that adds the React 19
- * resource hints (`preload`, `preinit`, …) Preact omits but `@volo/ui`'s barrel
+ * resource hints (`preload`, `preinit`, …) Preact omits but `@lesto/ui`'s barrel
  * imports — see `preact-react-dom-shim.ts` for why those are inert on the client.
  */
 const PREACT_ALIAS: Readonly<Record<string, string>> = {
@@ -46,7 +46,7 @@ const PREACT_ALIAS: Readonly<Record<string, string>> = {
   // `react-dom/client` exposes `createRoot`/`hydrateRoot`; Preact mirrors them
   // under `preact/compat/client`, the only specifier that is not just compat.
   "react-dom/client": "preact/compat/client",
-  // `react-dom/server` is dragged in by `@volo/ui`'s barrel but never runs on the
+  // `react-dom/server` is dragged in by `@lesto/ui`'s barrel but never runs on the
   // client; the real module's top-level bootstrap throws once React is aliased
   // away, so we point it at an inert stub (see the server shim for why).
   "react-dom/server": "./preact-react-dom-server-shim.ts",

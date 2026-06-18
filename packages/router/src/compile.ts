@@ -7,7 +7,7 @@
  * at declaration time so matching at request time is a single `exec`.
  *
  * Shared by the legacy `Router` (`controller#action` targets) and the new
- * generic {@link RouteTable} that the `volo()` builder dispatches over, so both
+ * generic {@link RouteTable} that the `lesto()` builder dispatches over, so both
  * inherit the same ReDoS-safe compilation and never drift.
  */
 

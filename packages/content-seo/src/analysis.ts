@@ -5,7 +5,7 @@
  * Browser-safe - no Node.js dependencies.
  */
 
-import { sanitizeObject } from "@volo/content-shared/sanitize";
+import { sanitizeObject } from "@lesto/content-shared/sanitize";
 import type {
   SEOMetrics,
   SEORecommendation,

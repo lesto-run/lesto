@@ -1,4 +1,4 @@
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
 import { assertHeaders, assertNoInjection, type MailTransport, type RenderedEmail } from "./mailer";
 
@@ -21,7 +21,7 @@ export type SmtpErrorCode =
   | "MAIL_TRANSPORT_SMTP_AUTH"
   | "MAIL_TRANSPORT_SMTP_CONNECTION";
 
-export class SmtpTransportError extends VoloError<SmtpErrorCode> {
+export class SmtpTransportError extends LestoError<SmtpErrorCode> {
   constructor(code: SmtpErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 
@@ -239,7 +239,7 @@ function buildMessage(email: RenderedEmail, from: string): string {
   let body: string;
 
   if (email.text !== undefined) {
-    const boundary = `volo-${email.messageId}`;
+    const boundary = `lesto-${email.messageId}`;
     headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
     body = [
       `--${boundary}`,

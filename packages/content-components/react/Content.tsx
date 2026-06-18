@@ -3,7 +3,7 @@ import { HtmlContent } from "./HtmlContent";
 import { MDXContent, type MDXContentProps } from "./MDXContent";
 
 /**
- * Minimal type for content entries - no @volo/content-core dependency needed.
+ * Minimal type for content entries - no @lesto/content-core dependency needed.
  * This keeps the components package browser-safe and self-contained.
  */
 export interface ContentEntry {
@@ -69,7 +69,7 @@ export interface ContentProps extends Omit<MDXContentProps, "code"> {
 }
 
 /**
- * Check if entry has MDX code (inline check, no @volo/content-core needed)
+ * Check if entry has MDX code (inline check, no @lesto/content-core needed)
  */
 function isMDXEntry(entry: ContentEntry): entry is ContentEntry & { mdx: { code: string } } {
   return entry.mdx !== undefined && typeof entry.mdx.code === "string";

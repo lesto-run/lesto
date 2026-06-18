@@ -1,8 +1,8 @@
 {
-  "name": "@volo/auth",
+  "name": "@lesto/auth",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's in-house authentication primitives on node:crypto — password hashing, tokens, and sessions.",
+  "description": "Lesto's in-house authentication primitives on node:crypto — password hashing, tokens, and sessions.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*"
+    "@lesto/errors": "workspace:*"
   }
 }

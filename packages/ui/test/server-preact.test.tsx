@@ -10,11 +10,11 @@
  * demonstrate that dialect-matching is the fix.
  *
  * Why the island is built with each dialect's own `createElement` rather than
- * driven through `@volo/ui`'s engine: the engine becomes the Preact dialect by
+ * driven through `@lesto/ui`'s engine: the engine becomes the Preact dialect by
  * build-time aliasing `react`→`preact/compat` for the WHOLE module graph (estate's
  * `build-client.ts`), not per-call. Aliasing the engine inside one vitest file
- * would force every other `@volo/ui` test onto Preact too. So this test
- * reconstructs the EXACT shell the engine emits — a `<div data-volo-island="…">`
+ * would force every other `@lesto/ui` test onto Preact too. So this test
+ * reconstructs the EXACT shell the engine emits — a `<div data-lesto-island="…">`
  * wrapping the lazily-built component element (see `render.tsx`'s `buildIsland`) —
  * in each dialect, the precise shape the aliased engine produces, and feeds it
  * through the REAL {@link renderPageMarkup} and the REAL {@link preactServerRenderer}

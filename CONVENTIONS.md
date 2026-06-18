@@ -1,4 +1,4 @@
-# Volo Engineering Conventions
+# Lesto Engineering Conventions
 
 The bar, written down. `packages/queue` is the reference implementation — every other
 module migrates to match it.
@@ -10,7 +10,7 @@ we actually test against. **Every feature or refactor MUST keep estate current i
 SAME change — never as a follow-up:**
 
 - Add or change a battery / API / seam → wire it into estate so it's exercised, and keep
-  estate **building** (`cd examples/estate && VOLO_DEMO=1 bun run build`) with its tests +
+  estate **building** (`cd examples/estate && LESTO_DEMO=1 bun run build`) with its tests +
   the scaffold/e2e green.
 - Delete or migrate surface → migrate estate off it in the same change; estate must never
   depend on something you removed.
@@ -47,7 +47,7 @@ Module resolution is `Bundler`, so imports are extensionless.
 
 ## Errors carry codes
 
-Every failure is a `VoloError` subclass with a stable, machine-readable `code` and a frozen
+Every failure is a `LestoError` subclass with a stable, machine-readable `code` and a frozen
 `details` bag. Logs, tests, API responses, and the MCP surface branch on `code` — **never** on a
 message string. Messages are for humans and may change freely.
 
@@ -93,14 +93,14 @@ throw new QueueError("QUEUE_HANDLER_NOT_FOUND", `No handler for job "${name}".`,
 
 | Module | State |
 |---|---|
-| `@volo/queue` | ✅ reference: TS · ESM · 100% coverage · oxfmt-clean |
-| `@volo/orm` | ❌ DELETED — superseded by `@volo/db` (schema-as-value + async query layer); see ADR 0004 |
-| `@volo/mail` | ✅ `defineMailer`, queued delivery on `@volo/queue`, 100% coverage |
-| `@volo/webhooks` | ✅ signed delivery + inbound verify on `@volo/queue`, 100% coverage |
-| `@volo/cache` | ✅ TTL cache, memory + SQL stores, injected clock, 100% coverage |
-| `@volo/hooks` · `@volo/config` · `@volo/rbac` | ❌ removed from the v1 surface — `hooks`/`config` were orphan prototypes (zero importers); `rbac` folded into `@volo/authz`'s `definePolicy` (one authorization story). The plugin/extensibility model is a designed post-1.0 bet (ADR 0014). |
-| `@volo/migrate` | ✅ Tracks-style migrator over `@volo/db` value-DDL on a `SqlDatabase` interface, 100% coverage |
-| `@volo/router` | ✅ RESTful router (`resources`, named routes), 100% coverage |
+| `@lesto/queue` | ✅ reference: TS · ESM · 100% coverage · oxfmt-clean |
+| `@lesto/orm` | ❌ DELETED — superseded by `@lesto/db` (schema-as-value + async query layer); see ADR 0004 |
+| `@lesto/mail` | ✅ `defineMailer`, queued delivery on `@lesto/queue`, 100% coverage |
+| `@lesto/webhooks` | ✅ signed delivery + inbound verify on `@lesto/queue`, 100% coverage |
+| `@lesto/cache` | ✅ TTL cache, memory + SQL stores, injected clock, 100% coverage |
+| `@lesto/hooks` · `@lesto/config` · `@lesto/rbac` | ❌ removed from the v1 surface — `hooks`/`config` were orphan prototypes (zero importers); `rbac` folded into `@lesto/authz`'s `definePolicy` (one authorization story). The plugin/extensibility model is a designed post-1.0 bet (ADR 0014). |
+| `@lesto/migrate` | ✅ Tracks-style migrator over `@lesto/db` value-DDL on a `SqlDatabase` interface, 100% coverage |
+| `@lesto/router` | ✅ RESTful router (`resources`, named routes), 100% coverage |
 | Tracks server (`lib/*` router/controller/migrations, CJS) | ⏳ remaining to port → `packages/*` |
 | Loom (`loom/*`, JS) | ⏳ to port → `packages/*` |
 | Docks (`@usedocks/*`) | already TS/ESM/oxlint/vitest — folds into the same workspace |

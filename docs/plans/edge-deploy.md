@@ -1,7 +1,7 @@
 # Edge, Deploy & Sites — v1 plan
 
 Derived from `docs/reviews/edge-deploy.md`, reconciled with `docs/ROADMAP-V1.md` (which rules).
-Packages: `@volo/cloudflare`, `@volo/deploy`, `@volo/sites` (+ the estate worker, the deployed
+Packages: `@lesto/cloudflare`, `@lesto/deploy`, `@lesto/sites` (+ the estate worker, the deployed
 launch artifact). The prior "CF adapter bypasses all hardening" P0 is **fixed and test-locked**
 — referenced as done. This plan **owns launch blocker #1** (the edge auth fence); auth-security
 references it. Roadmap ruling (§6): the blessed v1 Cloudflare deploy stays `wrangler deploy`;
@@ -14,11 +14,11 @@ comments; one conventional commit on `main`.
 ## Increments (ordered)
 
 1. **Fail closed on the edge secret** — `[Wave 0 | P0 | blocker #1, part 1]`
-   Files: `examples/estate/src/edge.ts:238-240` — throw at first request when `env.SESSION_SECRET` is absent; the committed literal survives only under an explicit `VOLO_DEMO=1` binding. Document this as the framework's pattern for every secret-bearing Worker.
+   Files: `examples/estate/src/edge.ts:238-240` — throw at first request when `env.SESSION_SECRET` is absent; the committed literal survives only under an explicit `LESTO_DEMO=1` binding. Document this as the framework's pattern for every secret-bearing Worker.
    Acceptance: an e2e proving an unset secret refuses to serve; demo mode requires the explicit binding; the secret-strength guard (auth-security item 1) applies in the same pass.
 
 2. **Bring the edge twin to node-twin posture** — `[Wave 0 | P0 | blocker #1, part 2]`
-   Files: `examples/estate/src/edge.ts` — mount `fromRequestMiddleware(secureStack({ originCheck: {} }))` + per-isolate rate limiting in `buildEdgeApp`; replace the passwordless `?as=` sign-in with `@volo/identity` (already shipped) or hard-gate it behind the demo binding; delete the duplicated `readCookie`/`SESSION_COOKIE` in favor of `@volo/identity`'s cookie module.
+   Files: `examples/estate/src/edge.ts` — mount `fromRequestMiddleware(secureStack({ originCheck: {} }))` + per-isolate rate limiting in `buildEdgeApp`; replace the passwordless `?as=` sign-in with `@lesto/identity` (already shipped) or hard-gate it behind the demo binding; delete the duplicated `readCookie`/`SESSION_COOKIE` in favor of `@lesto/identity`'s cookie module.
    Acceptance: a cross-origin POST is refused on the edge (e2e); `?as=` unreachable without the demo flag; sign-in throttled.
 
 3. **Plumb `ExecutionContext` + `waitUntil` tracing** — `[Wave 4 | P1]` (the edge half of blocker #11; operability-dx item 3 owns the tracer/env contract)
@@ -31,7 +31,7 @@ comments; one conventional commit on `main`.
 
 5. **One real remote `ReleaseStore` (R2 / Workers Assets)** — `[Wave 3 | P1]`
    Files: new store in `packages/deploy` implementing `ReleaseStore` over fetch + SigV4 (share the core with data-persistence item 7's S3 backend — one signing implementation, two consumers); stage → health-gate → atomic pointer flip semantics preserved.
-   Acceptance: `volo deploy --release` + `rollback` against an R2-shaped fake (and a recorded live smoke); the carefully-ordered release machinery is reachable on the headline target.
+   Acceptance: `lesto deploy --release` + `rollback` against an R2-shaped fake (and a recorded live smoke); the carefully-ordered release machinery is reachable on the headline target.
 
 6. **Make `wranglerConfig` honest** — `[Wave 5 | P1]`
    Files: `packages/cloudflare/src/wrangler.ts` — grow `WranglerOptions` to cover what the real deploy needs (`alias`, `vars`, placement); add a round-trip test that regenerates `examples/estate/wrangler.jsonc` byte-identically, so drift (a compatibility_date bump, a binding rename) fails CI.
@@ -52,4 +52,4 @@ comments; one conventional commit on `main`.
 - A `worker`/`edge` target kind in the deploy plan model + routing-manifest-driven `withAssets` (today's assets-first probe is a documented portability shim) — lands with the Bet II assets substrate.
 - `PublishFile` cache-policy field + `Cache-Control: immutable` story — same wave as content-hashed bundle filenames (Bet II).
 - Release pruning (`prune(keep: n)` refusing `current`).
-- The full incremental S3-compatible uploader + CDN invalidation (`volo deploy` Bet II headline) — post-1.0; v1's deploy story is `wrangler deploy` (edge) + `shipRelease` over R2/local (node/static).
+- The full incremental S3-compatible uploader + CDN invalidation (`lesto deploy` Bet II headline) — post-1.0; v1's deploy story is `wrangler deploy` (edge) + `shipRelease` over R2/local (node/static).

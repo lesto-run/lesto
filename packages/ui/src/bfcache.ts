@@ -5,7 +5,7 @@
  * user navigates away, so Back/Forward is instant. A page is DISQUALIFIED the
  * moment it registers an `unload` or `beforeunload` listener — those handlers
  * were the historical way to "clean up on leave," and they are exactly what this
- * module refuses to let a Volo client runtime use.
+ * module refuses to let a Lesto client runtime use.
  *
  * The bfcache-friendly lifecycle is:
  *   - `pagehide` — the page is being hidden, possibly to enter the bfcache; check
@@ -23,7 +23,7 @@
  * under jsdom against a fake event target — no real navigation needed.
  */
 
-/** The lifecycle moments a Volo client runtime may react to. All bfcache-safe. */
+/** The lifecycle moments a Lesto client runtime may react to. All bfcache-safe. */
 export interface PageLifecycleHandlers {
   /** The page is being hidden. `persisted` is true iff it is entering the bfcache. */
   onPageHide?: (persisted: boolean) => void;

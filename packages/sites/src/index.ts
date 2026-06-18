@@ -1,5 +1,5 @@
 /**
- * @volo/sites — one project, many sites, one substrate.
+ * @lesto/sites — one project, many sites, one substrate.
  *
  * Declare a set of sites over the same app (`defineSites`), each mounted at a
  * path and rendered static or dynamic. Static sites are prerendered from the
@@ -38,7 +38,7 @@ export type {
   PagesSource,
   PageHandler,
   RenderResponse,
-  VoloResponseBody,
+  LestoResponseBody,
   RenderedPage,
   OutputSink,
 } from "./types";

@@ -1,7 +1,7 @@
 /**
- * `volo mcp` — serve the Volo MCP control plane over stdio.
+ * `lesto mcp` — serve the Lesto MCP control plane over stdio.
  *
- * An AI agent speaks the Model Context Protocol to a Volo app: it lists routes,
+ * An AI agent speaks the Model Context Protocol to a Lesto app: it lists routes,
  * reads content, and — in operator mode — writes content and drives the live
  * app. This is the command that stands that server up.
  *
@@ -20,23 +20,23 @@
  * the startup banner go to **stderr** — they must never corrupt the wire.
  */
 
-import { startMcpServer } from "@volo/mcp";
-import type { VoloMcpContext, McpAuditRecord, McpMode } from "@volo/mcp";
+import { startMcpServer } from "@lesto/mcp";
+import type { LestoMcpContext, McpAuditRecord, McpMode } from "@lesto/mcp";
 
-import type { App, VoloAppConfig } from "@volo/kernel";
+import type { App, LestoAppConfig } from "@lesto/kernel";
 
 import { hasFlag } from "./flags";
 
-/** The seams `volo mcp` depends on — all injected, never imported live. */
+/** The seams `lesto mcp` depends on — all injected, never imported live. */
 export interface McpDeps {
-  /** Load the project's app config (the bin reads `volo.app.ts`; tests fake it). */
-  loadApp: () => Promise<VoloAppConfig>;
+  /** Load the project's app config (the bin reads `lesto.app.ts`; tests fake it). */
+  loadApp: () => Promise<LestoAppConfig>;
 
-  /** Boot the app so the control plane can drive its `handle` (the bin passes `@volo/kernel`'s). */
-  createApp: (config: VoloAppConfig) => Promise<App>;
+  /** Boot the app so the control plane can drive its `handle` (the bin passes `@lesto/kernel`'s). */
+  createApp: (config: LestoAppConfig) => Promise<App>;
 
-  /** Stand up the MCP server over stdio (the bin passes `@volo/mcp`'s `startMcpServer`). */
-  startMcpServer: (context: VoloMcpContext) => Promise<void>;
+  /** Stand up the MCP server over stdio (the bin passes `@lesto/mcp`'s `startMcpServer`). */
+  startMcpServer: (context: LestoMcpContext) => Promise<void>;
 
   /**
    * Where an audit line goes. The bin wires this to `console.error` (stderr), so
@@ -60,9 +60,9 @@ function auditLine(record: McpAuditRecord): string {
 }
 
 /**
- * Serve the Volo MCP control plane.
+ * Serve the Lesto MCP control plane.
  *
- * Boots the app, assembles a {@link VoloMcpContext} — its routes, the content
+ * Boots the app, assembles a {@link LestoMcpContext} — its routes, the content
  * database (the app's own SQL handle, so the content write tools have a store),
  * the mode from `--operator`, and a mandatory audit sink — then hands it to
  * `startMcpServer`. Resolves only when the transport closes; the bin keeps the
@@ -81,7 +81,7 @@ export async function runMcp(args: readonly string[], deps: McpDeps): Promise<nu
   // floor — so a forgotten flag fails closed to the safe surface.
   const mode: McpMode = hasFlag(args, "operator") ? "operator" : "read-only";
 
-  const context: VoloMcpContext = {
+  const context: LestoMcpContext = {
     app,
     routes: config.app.routes(),
 
@@ -96,7 +96,7 @@ export async function runMcp(args: readonly string[], deps: McpDeps): Promise<nu
     contentDb: config.db,
   };
 
-  deps.log(`volo mcp: serving over stdio in ${mode} mode`);
+  deps.log(`lesto mcp: serving over stdio in ${mode} mode`);
 
   await deps.startMcpServer(context);
 

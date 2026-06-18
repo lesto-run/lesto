@@ -1,8 +1,8 @@
 {
-  "name": "@volo/example-blog",
+  "name": "@lesto/example-blog",
   "version": "0.0.0",
   "private": true,
-  "description": "A runnable end-to-end Volo app: typed schema + migration + a code-first volo() app with a streamed .page and a JSON route, booted by the kernel.",
+  "description": "A runnable end-to-end Lesto app: typed schema + migration + a code-first lesto() app with a streamed .page and a JSON route, booted by the kernel.",
   "type": "module",
   "scripts": {
     "start": "bun run run.ts",
@@ -10,12 +10,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@volo/db": "workspace:*",
-    "@volo/kernel": "workspace:*",
-    "@volo/migrate": "workspace:*",
-    "@volo/runtime": "workspace:*",
-    "@volo/ui": "workspace:*",
-    "@volo/web": "workspace:*",
+    "@lesto/db": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/migrate": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/ui": "workspace:*",
+    "@lesto/web": "workspace:*",
     "better-sqlite3": "^11.10.0",
     "react": "^19",
     "react-dom": "^19"

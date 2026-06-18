@@ -3,7 +3,7 @@
  *
  *   wrangler deploy
  *
- * Volo's dispatcher is pure, so the Worker is a thin adapter (ADR 0002):
+ * Lesto's dispatcher is pure, so the Worker is a thin adapter (ADR 0002):
  * `toFetchHandler` turns the app's `handle` into `fetch(Request) => Response`,
  * and `withAssets` serves the prerendered marketing files from the Static Assets
  * binding first, falling through to the live app for `/mls`. The session is a
@@ -14,7 +14,7 @@
  *
  * This is also the canonical OTLP-on-Workers reference (edge-deploy #3). Tracing
  * is constructed the SAME env-driven way the node entry (`serve.ts`) uses —
- * `tracesFromEnv`, off unless `VOLO_OTLP_URL` is set — but off the Worker `env`
+ * `tracesFromEnv`, off unless `LESTO_OTLP_URL` is set — but off the Worker `env`
  * binding, not `process.env`, and with the platform `fetch` injected. The edge
  * has no steady process to flush spans on an interval, so each request schedules
  * the exporter's `flush()` through `ctx.waitUntil` (see `fetch` below): the spans
@@ -22,32 +22,32 @@
  * when the isolate would otherwise freeze at `return`.
  */
 
-import { toFetchHandler, withAssets } from "@volo/cloudflare";
-import type { AssetExecutionContext, AssetFetcher } from "@volo/cloudflare";
+import { toFetchHandler, withAssets } from "@lesto/cloudflare";
+import type { AssetExecutionContext, AssetFetcher } from "@lesto/cloudflare";
 
-import { parseTraceparent, tracesFromEnv } from "@volo/observability";
-import type { CurrentSpan, Traces } from "@volo/observability";
+import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
+import type { CurrentSpan, Traces } from "@lesto/observability";
 
-import { currentRequestSpan } from "@volo/web";
+import { currentRequestSpan } from "@lesto/web";
 
 // The Preact server dialect. This import is only honest because wrangler bundles
 // this worker with the react→preact/compat alias block (wrangler.jsonc): inside
-// that bundle, every element @volo/ui builds is a Preact vnode, which is exactly
+// that bundle, every element @lesto/ui builds is a Preact vnode, which is exactly
 // what preact-render-to-string consumes. The matched pair — Preact server markup
 // + the Preact client bundle `build.ts` ships — is ADR 0008's invariant.
-import { preactServerRenderer } from "@volo/ui/server";
+import { preactServerRenderer } from "@lesto/ui/server";
 
 import { buildEdgeApp, edgeSecret, isDemoMode } from "./src/edge";
 import { d1ContentStore, hyperdriveContentStore } from "./src/content";
 import type { ContentStore } from "./src/content";
-import type { D1Database, Hyperdrive, HyperdriveConnection } from "@volo/cloudflare";
+import type { D1Database, Hyperdrive, HyperdriveConnection } from "@lesto/cloudflare";
 import postgres from "postgres";
 
 /** The bindings this Worker is configured with (see wrangler.jsonc). */
 interface Env {
   readonly ASSETS: AssetFetcher;
   readonly SESSION_SECRET?: string;
-  readonly VOLO_DEMO?: string;
+  readonly LESTO_DEMO?: string;
   /** The Cloudflare D1 database backing the DB-driven `/lab/content` page. */
   readonly DB?: D1Database;
 
@@ -64,13 +64,13 @@ interface Env {
 
   /**
    * OTLP tracing knobs, off the Worker `env` binding (NOT `process.env` — there
-   * is none on the edge). `VOLO_OTLP_URL` is the on switch: absent, tracing is
+   * is none on the edge). `LESTO_OTLP_URL` is the on switch: absent, tracing is
    * off and the Worker pays nothing. The same two-env-var setup the node entry
    * reads, so one deployment configures both tiers identically.
    */
-  readonly VOLO_OTLP_URL?: string;
-  readonly VOLO_OTLP_SERVICE?: string;
-  readonly VOLO_OTLP_HEADERS?: string;
+  readonly LESTO_OTLP_URL?: string;
+  readonly LESTO_OTLP_SERVICE?: string;
+  readonly LESTO_OTLP_HEADERS?: string;
 }
 
 /** A Cloudflare Worker fetch handler — what both `toFetchHandler` and `withAssets` produce. */
@@ -78,7 +78,7 @@ type FetchHandler = (request: Request, ctx?: AssetExecutionContext) => Promise<R
 
 /**
  * The app/handler is built once per isolate and reused across requests, not
- * rebuilt on every `fetch`. Constructing the `volo()` app and its
+ * rebuilt on every `fetch`. Constructing the `lesto()` app and its
  * `SignedSessions` is pure CPU that depends on nothing but the signing secret,
  * so doing it per request burned cycles on the edge for an identical result
  * (research finding 11: keep work out of the per-request path). We memoize the
@@ -102,7 +102,7 @@ let cachedStore: ContentStore | undefined;
 /**
  * The tracing handle, built once per isolate off the `env` binding.
  *
- * `undefined` means tracing is off (no `VOLO_OTLP_URL`) OR not yet built. The
+ * `undefined` means tracing is off (no `LESTO_OTLP_URL`) OR not yet built. The
  * `built` flag distinguishes the two so we construct exactly once per isolate:
  * `tracesFromEnv` legitimately returns `undefined` when tracing is off, and we
  * must not re-run construction every request chasing a handle that will always
@@ -114,7 +114,7 @@ let tracesBuilt = false;
 /**
  * Build (once per isolate) the OTLP tracing handle from the Worker `env`.
  *
- * The SAME `tracesFromEnv` call the node entry makes — off unless `VOLO_OTLP_URL`
+ * The SAME `tracesFromEnv` call the node entry makes — off unless `LESTO_OTLP_URL`
  * is set — but reading the Worker `env` binding (there is no `process.env` on the
  * edge) and injecting the platform `fetch` as the exporter's HTTP seam. The
  * `currentSpan` seam reads the request span the adapter publishes on the context,
@@ -254,7 +254,7 @@ function handlerFor(
 
 export default {
   fetch(request: Request, env: Env, ctx: AssetExecutionContext): Promise<Response> {
-    // The tracer is built once per isolate off `env` (off unless VOLO_OTLP_URL).
+    // The tracer is built once per isolate off `env` (off unless LESTO_OTLP_URL).
     const traces = tracesFor(env);
 
     // edgeSecret FAILS CLOSED: an unset SESSION_SECRET outside demo mode throws

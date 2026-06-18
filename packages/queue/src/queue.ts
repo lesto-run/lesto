@@ -16,7 +16,7 @@ import type {
   SqlDatabase,
 } from "./types";
 
-const TABLE = "volo_jobs";
+const TABLE = "lesto_jobs";
 
 /**
  * The durable job queue.
@@ -356,7 +356,7 @@ export class Queue {
    *
    * Retention, not correctness: a `done`/`failed` row is inert — no worker will
    * ever claim it again — but it lingers forever as history, and an unbounded
-   * `volo_jobs` table eventually bloats the index every claim scans. `prune`
+   * `lesto_jobs` table eventually bloats the index every claim scans. `prune`
    * sheds that history on whatever cadence the caller chooses (the SQL stores'
    * `sweep` pattern — the framework starts no timer; see {@link retentionRecipe}).
    *

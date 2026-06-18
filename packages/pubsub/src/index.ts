@@ -1,5 +1,5 @@
 /**
- * @volo/pubsub — an in-process publish/subscribe hub.
+ * @lesto/pubsub — an in-process publish/subscribe hub.
  *
  *   const hub = new PubSub();
  *   const off = hub.subscribe("orders", (message, channel) => { ... });

@@ -1,7 +1,7 @@
 # Comms, SEO & Web Primitives — v1 plan
 
 Derived from `docs/reviews/web-primitives.md`, reconciled with `docs/ROADMAP-V1.md` (which rules).
-Packages: `@volo/mail`, `@volo/mailing-lists`, `@volo/feeds`, `@volo/seo`, `@volo/i18n`.
+Packages: `@lesto/mail`, `@lesto/mailing-lists`, `@lesto/feeds`, `@lesto/seo`, `@lesto/i18n`.
 This plan **owns launch blocker #10** (no MailTransport) — identity's verify/reset flows and
 mailing-lists' entire purpose dead-end at an interface until item 1 lands.
 
@@ -12,9 +12,9 @@ comments; one conventional commit on `main`.
 ## Increments (ordered)
 
 1. **Ship real transports** — `[Wave 3 | P0 | blocker #10]`
-   New: `@volo/mail-smtp` (Node — minimal SMTP client, STARTTLS, auth) and a fetch-based provider transport (Resend/SES-API-shaped) that runs on Workers. Closure-factory style, injected config, coded errors (`MAIL_TRANSPORT_*`).
+   New: `@lesto/mail-smtp` (Node — minimal SMTP client, STARTTLS, auth) and a fetch-based provider transport (Resend/SES-API-shaped) that runs on Workers. Closure-factory style, injected config, coded errors (`MAIL_TRANSPORT_*`).
    Acceptance: integration test delivering through a local SMTP sink (e.g. a test container in CI); the fetch transport pinned against recorded provider fixtures and proven Workers-compatible (no node builtins); identity's verify/reset journey sends a real email end-to-end in `packages/integration`.
-   **Status (2026-06-16):** transports shipped **inside `@volo/mail`** (`smtp.ts` + `provider.ts`, not a separate `@volo/mail-smtp` package — the plan's name drifted), unit-tested with mocked sockets/fetch at 100% (commit `23b0e19`; SMTP multipart blank-line fix `2db7e9d`). The **integration leg** (real SMTP-sink test + identity verify/reset journey in `packages/integration`) is still open → tracked as **#1b (`L-dc382664`)**.
+   **Status (2026-06-16):** transports shipped **inside `@lesto/mail`** (`smtp.ts` + `provider.ts`, not a separate `@lesto/mail-smtp` package — the plan's name drifted), unit-tested with mocked sockets/fetch at 100% (commit `23b0e19`; SMTP multipart blank-line fix `2db7e9d`). The **integration leg** (real SMTP-sink test + identity verify/reset journey in `packages/integration`) is still open → tracked as **#1b (`L-dc382664`)**.
 
 2. **Harden the Mailer contract** — `[Wave 3 | P1 | same wave, before any transport ships traffic]`
    Files: `packages/mail/src/mailer.ts` — reject `\r`/`\n` in `to`/`subject`/`from` (and all future header values) with coded `MAIL_INVALID_ADDRESS`/`MAIL_INVALID_HEADER` at both define-build and `deliver`; add `text?` and `headers?: Record<string, string>` to `Email`/`RenderedEmail`; pass a stable job-derived `messageId` so idempotent providers can dedupe; document at-least-once semantics on `MailTransport`; treat `MAIL_UNKNOWN_MAILER` as parked-not-retried (deploy-skew safety).
@@ -45,7 +45,7 @@ comments; one conventional commit on `main`.
 
 - **react-email rendering support** — `[Wave 3 | done 2026-06-16 | commits a31cd54, daee9c9]`. The
   email story was "react-email templates" in positioning only; the framework now backs it for real —
-  deliberately **without** a new package or a React dep in `@volo/mail` core:
+  deliberately **without** a new package or a React dep in `@lesto/mail` core:
   - **Render hook → plain text.** `EmailRenderer` may return `{ html, text }`; a react-email renderer
     supplies the plain-text alternative (`render(el, { plainText: true })`) and the mailer fills
     `RenderedEmail.text` → SMTP `multipart/alternative`. An explicit `email.text` wins.
@@ -55,16 +55,16 @@ comments; one conventional commit on `main`.
     on this deploy, so it cannot be type-checked.
   - **Shared base layout + dogfood.** Reusable `EmailLayout`/`EmailHeading`/`EmailText`/`EmailAction`
     and the verify/reset templates live in `examples/estate` (real multipart html+text); the
-    bring-your-own-render hook is documented in `@volo/mail`'s module doc.
+    bring-your-own-render hook is documented in `@lesto/mail`'s module doc.
   - **Design call:** react-email components need a React/react-email dep, so they stay in the example
-    (the copy-paste reference), keeping `@volo/mail` dependency-light. A `@volo/mail-react` adapter is
+    (the copy-paste reference), keeping `@lesto/mail` dependency-light. A `@lesto/mail-react` adapter is
     the home for *importable* base components if multiple apps ever need them — deferred, not built.
 
 ## Owned elsewhere (do not duplicate)
 
 - Identity's use of the mailer (verify/reset wiring, estate dogfood) → **auth-security** items 2–4 reference item 1 here.
 - Queue retry/backoff semantics the mailer rides → **data-persistence** item 2 (PG-safe claim) — broadcasts inherit exactly-once-per-claim from that fix.
-- `@volo/seo` ↔ `content-seo` JSON-LD reconciliation → **content-cms** deferred item 1.
+- `@lesto/seo` ↔ `content-seo` JSON-LD reconciliation → **content-cms** deferred item 1.
 
 ## Deferred post-1.0 (deliberate)
 

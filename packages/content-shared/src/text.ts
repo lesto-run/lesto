@@ -2,8 +2,8 @@
  * Text primitives shared across the search/embeddings stack.
  *
  * Keyword extraction must be byte-identical between the build-time index
- * generator (@volo/content-embeddings) and the runtime keyword search
- * (@volo/content-search): the keywords stored in a Tier 0 index are matched
+ * generator (@lesto/content-embeddings) and the runtime keyword search
+ * (@lesto/content-search): the keywords stored in a Tier 0 index are matched
  * against keywords extracted from the live query, so any drift in stop words
  * or tokenization would silently degrade recall. Keeping a single definition
  * here removes that risk.

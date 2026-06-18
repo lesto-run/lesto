@@ -16,12 +16,12 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createApp } from "@volo/kernel";
-import type { VoloAppConfig, KernelDatabase } from "@volo/kernel";
-import { dispatchSites, nodeStaticReader, serve } from "@volo/runtime";
-import type { Server } from "@volo/runtime";
-import { defineSites } from "@volo/sites";
-import { volo } from "@volo/web";
+import { createApp } from "@lesto/kernel";
+import type { LestoAppConfig, KernelDatabase } from "@lesto/kernel";
+import { dispatchSites, nodeStaticReader, serve } from "@lesto/runtime";
+import type { Server } from "@lesto/runtime";
+import { defineSites } from "@lesto/sites";
+import { lesto } from "@lesto/web";
 
 function adapt(raw: Database.Database): KernelDatabase {
   const adapted: KernelDatabase = {
@@ -61,8 +61,8 @@ function adapt(raw: Database.Database): KernelDatabase {
 }
 
 // The dynamic zone: a live app mounted under /app that reflects what it gets.
-function buildDynamicApp(database: Database.Database): VoloAppConfig {
-  const app = volo()
+function buildDynamicApp(database: Database.Database): LestoAppConfig {
+  const app = lesto()
     .get("/app", (c) => c.json({ zone: "app" }))
     .get("/app/echo", (c) => c.json({ cookie: c.header("cookie") ?? null }));
 
@@ -81,7 +81,7 @@ let base: string;
 
 beforeAll(async () => {
   // The prerendered static zone on disk, plus the island bundle beside it.
-  outDir = await mkdtemp(join(tmpdir(), "volo-sites-int-"));
+  outDir = await mkdtemp(join(tmpdir(), "lesto-sites-int-"));
   await mkdir(join(outDir, "marketing", "about"), { recursive: true });
   await writeFile(join(outDir, "marketing", "index.html"), "<h1>Static Home</h1>", "utf8");
   await writeFile(join(outDir, "marketing", "about", "index.html"), "<h1>About</h1>", "utf8");

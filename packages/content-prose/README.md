@@ -1,17 +1,17 @@
-# @volo/content-prose
+# @lesto/content-prose
 
 Writing style analysis and prose linting for content.
 
 ## Installation
 
 ```bash
-npm install @volo/content-prose
+npm install @lesto/content-prose
 ```
 
 ## Quick Start
 
 ```typescript
-import { analyze } from "@volo/content-prose";
+import { analyze } from "@lesto/content-prose";
 
 const result = analyze("The CEO will leverage synergies.");
 
@@ -33,7 +33,7 @@ console.log(result.issues);
 ## Configuration
 
 ```typescript
-import { configure } from "@volo/content-prose/config";
+import { configure } from "@lesto/content-prose/config";
 
 const analyzer = configure({
   severity: "warning",

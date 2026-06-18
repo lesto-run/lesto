@@ -3,7 +3,7 @@
  *
  * Every other suite tests the dispatcher as a pure function — `app.handle` with
  * a fabricated request. This one boots an actual `node:http` server with
- * `@volo/runtime`'s `serve`, then hits it with the platform's real `fetch`. That
+ * `@lesto/runtime`'s `serve`, then hits it with the platform's real `fetch`. That
  * exercises the layer the pure tests *mock*: the socket read, body decoding,
  * header flattening, the response write, and the per-request error boundary.
  *
@@ -15,11 +15,11 @@
 import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createApp } from "@volo/kernel";
-import type { VoloAppConfig, KernelDatabase } from "@volo/kernel";
-import { serve } from "@volo/runtime";
-import type { Server } from "@volo/runtime";
-import { volo } from "@volo/web";
+import { createApp } from "@lesto/kernel";
+import type { LestoAppConfig, KernelDatabase } from "@lesto/kernel";
+import { serve } from "@lesto/runtime";
+import type { Server } from "@lesto/runtime";
+import { lesto } from "@lesto/web";
 
 // ---- A real-enough app: handlers that report back what they received. ----
 
@@ -60,8 +60,8 @@ function adapt(raw: Database.Database): KernelDatabase {
   return adapted;
 }
 
-function buildConfig(database: Database.Database): VoloAppConfig {
-  const app = volo()
+function buildConfig(database: Database.Database): LestoAppConfig {
+  const app = lesto()
     // Render an HTML page.
     .get("/", (c) => c.html("<h1>Home</h1>"))
     // Reflect the request's cookie header — proves headers reach the handler.

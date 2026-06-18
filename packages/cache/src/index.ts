@@ -1,5 +1,5 @@
 /**
- * @volo/cache — a TTL cache with pluggable stores and an injected clock.
+ * @lesto/cache — a TTL cache with pluggable stores and an injected clock.
  *
  *   const cache = new Cache({ store: new MemoryStore() });
  *   const user = await cache.fetch("user:1", () => loadUser(1), { ttlMs: 60_000 });

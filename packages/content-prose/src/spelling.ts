@@ -11,7 +11,7 @@
  */
 
 import Typo from "typo-js";
-import { createSingletonLoader } from "@volo/content-shared/mutex";
+import { createSingletonLoader } from "@lesto/content-shared/mutex";
 
 /**
  * Spell checker instance wrapping typo-js.

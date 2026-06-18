@@ -8,13 +8,13 @@
   "scripts": {
     "lint": "oxlint packages",
     "format:check": "oxfmt --check packages",
-    "ws:test": "bun run --filter '@volo/*' test",
+    "ws:test": "bun run --filter '@lesto/*' test",
     "ws:test:cov": "bun run scripts/coverage-gate.ts",
-    "examples:test": "bun run --filter '@volo/example-*' test",
+    "examples:test": "bun run --filter '@lesto/example-*' test",
     "bundle-size": "bun run --cwd packages/assets bundle-size",
-    "ws:lint": "bun run --filter '@volo/*' lint",
-    "ws:format:check": "bun run --filter '@volo/*' format:check",
-    "ws:typecheck": "bun run --filter '@volo/*' typecheck",
+    "ws:lint": "bun run --filter '@lesto/*' lint",
+    "ws:format:check": "bun run --filter '@lesto/*' format:check",
+    "ws:typecheck": "bun run --filter '@lesto/*' typecheck",
     "changeset": "changeset",
     "version": "changeset version",
     "release": "changeset publish"

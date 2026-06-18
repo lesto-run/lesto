@@ -8,14 +8,14 @@ The primitives are genuinely good — better than typical for a young framework.
 
 | package | maturity | one-line reality (verified) |
 |---|---|---|
-| `@volo/auth` | built | scrypt hash/verify, `Sessions` over async `SessionStore` (memory + SQL per ADR 0013), `SignedSessions` HMAC edge tier, 256-bit `generateToken`; 41 tests green |
-| `@volo/identity` | built | register/verifyEmail/login/reset/logout/currentUser on `@volo/db`, enumeration + timing defenses, `__Host-` cookie helpers; 48 tests green; integration journey in `packages/integration/test/identity.integration.test.ts` |
-| `@volo/csrf` | built | HMAC session-bound token (`token.ts`) + `csrf` middleware + Fetch-Metadata `originCheck`; 35 tests green; token *delivery* (cookie/form plumbing) is left entirely to the app |
-| `@volo/cors` | built | pure `corsHeaders` + middleware; wildcard+credentials throws `CORS_WILDCARD_WITH_CREDENTIALS`; 20 tests green |
-| `@volo/ratelimit` | built | token bucket over atomic `store.update` (ADR 0013), memory + SQL stores, 429 middleware with warn-once unknown-client fallback; 34 tests green |
-| `@volo/authz` | built | `definePolicy` (deny-by-default, unknown-role throws at declaration) + `createGuard` middleware; 18 tests green |
-| `@volo/rbac` | built / **overlapping** | wildcard permissions + cycle-safe inheritance, pure logic; 14 tests green; wired into nothing — competes with `@volo/authz` |
-| `@volo/flags` | built | dynamic-then-static resolution, own-property guard, gate-as-404; 9 tests green |
+| `@lesto/auth` | built | scrypt hash/verify, `Sessions` over async `SessionStore` (memory + SQL per ADR 0013), `SignedSessions` HMAC edge tier, 256-bit `generateToken`; 41 tests green |
+| `@lesto/identity` | built | register/verifyEmail/login/reset/logout/currentUser on `@lesto/db`, enumeration + timing defenses, `__Host-` cookie helpers; 48 tests green; integration journey in `packages/integration/test/identity.integration.test.ts` |
+| `@lesto/csrf` | built | HMAC session-bound token (`token.ts`) + `csrf` middleware + Fetch-Metadata `originCheck`; 35 tests green; token *delivery* (cookie/form plumbing) is left entirely to the app |
+| `@lesto/cors` | built | pure `corsHeaders` + middleware; wildcard+credentials throws `CORS_WILDCARD_WITH_CREDENTIALS`; 20 tests green |
+| `@lesto/ratelimit` | built | token bucket over atomic `store.update` (ADR 0013), memory + SQL stores, 429 middleware with warn-once unknown-client fallback; 34 tests green |
+| `@lesto/authz` | built | `definePolicy` (deny-by-default, unknown-role throws at declaration) + `createGuard` middleware; 18 tests green |
+| `@lesto/rbac` | built / **overlapping** | wildcard permissions + cycle-safe inheritance, pure logic; 14 tests green; wired into nothing — competes with `@lesto/authz` |
+| `@lesto/flags` | built | dynamic-then-static resolution, own-property guard, gate-as-404; 9 tests green |
 
 Wiring reality: `packages/kernel/src/secure-stack.ts` composes cors → rateLimit → originCheck → csrf, everything opt-in. Estate (Node) mounts only `originCheck` (`examples/estate/src/app.ts:39`); estate (edge) mounts nothing from this domain.
 
@@ -42,9 +42,9 @@ Verified clean before findings: timing-safe compares with length pre-guards (`pa
 
 ## Simplicity
 
-- **P1 — two competing authorization packages.** `@volo/authz` (policy + guard, wired to `@volo/web`) and `@volo/rbac` (wildcards + inheritance, pure, wired to nothing) overlap almost completely; rbac has no middleware and no consumer. A user cannot tell which is canonical. Fold rbac's wildcard/inheritance matching into `definePolicy` (or mark `@volo/rbac` legacy) before 1.0 freezes both APIs.
+- **P1 — two competing authorization packages.** `@lesto/authz` (policy + guard, wired to `@lesto/web`) and `@lesto/rbac` (wildcards + inheritance, pure, wired to nothing) overlap almost completely; rbac has no middleware and no consumer. A user cannot tell which is canonical. Fold rbac's wildcard/inheritance matching into `definePolicy` (or mark `@lesto/rbac` legacy) before 1.0 freezes both APIs.
 - **P2 — the CSRF token battery has no delivery half.** `generateToken`/`verifyToken` and the middleware exist, but nothing mints a token into a cookie or template helper — every app must invent the plumbing (estate ducked it entirely by using `originCheck`). Either ship the issuance helper (a `csrfToken(c)` that sets the companion cookie) or stop describing it as double-submit: as built it is an HMAC session-bound token, which is fine, but the docs say "cookie + form field" (`packages/csrf/src/index.ts:4`) and no cookie path exists.
-- **P2 — `examples/estate/src/edge.ts:42-58` re-implements `SESSION_COOKIE` and `readCookie`** instead of importing `@volo/identity`'s cookie module; the contract ("readers and writers travel through this module so the contract cannot drift", `cookies.ts:7-8`) is already drifting in the framework's own example.
+- **P2 — `examples/estate/src/edge.ts:42-58` re-implements `SESSION_COOKIE` and `readCookie`** instead of importing `@lesto/identity`'s cookie module; the contract ("readers and writers travel through this module so the contract cannot drift", `cookies.ts:7-8`) is already drifting in the framework's own example.
 - **P2 — the local `SqlDatabase`/`SqlStatement` seam is now declared in 10 packages** (`packages/auth/src/types.ts:60-75`, `packages/ratelimit/src/types.ts:55-75`, …). ADR 0013 explicitly accepts this; agreeing — but it belongs on the pre-1.0 consolidation list it names.
 
 ## Durability
@@ -52,7 +52,7 @@ Verified clean before findings: timing-safe compares with length pre-guards (`pa
 ADR 0013 verified against code: both store interfaces are strictly async (`packages/auth/src/types.ts:40-46`, `packages/ratelimit/src/types.ts:27-37`); the rate-limit store is one atomic `update` verb with `FOR UPDATE` on Postgres, plain-INSERT birth race with exactly-one retry and a coded second-conflict refusal (`packages/ratelimit/src/sql-store.ts:165-190`); timestamps are `BIGINT` with `Number()` read coercion for node-postgres (`sql-session-store.ts:97`, `sql-store.ts:130-134`); estate's Node path dogfoods `sqlSessionStore` (`examples/estate/src/identity.ts:127`); `packages/integration/test/durable-stores.integration.test.ts` exists. The ADR's claims hold.
 
 - **P1 — durable stores shipped, but nothing defaults to them.** `createIdentity` defaults to `MemorySessionStore` (`packages/identity/src/identity.ts:228`) and `rateLimit` defaults to `MemoryRateLimitStore` (`packages/ratelimit/src/middleware.ts:137-143`) — so the out-of-the-box production posture is still "every deploy logs everyone out, every node multiplies the rate limit." For a batteries-included framework the pit of success (ADR 0011's own framing) demands the kernel wire `sqlSessionStore`/`sqlRateLimitStore` when a `db` is present, or at minimum a loud production-boot warning mirroring `RATELIMIT_UNKNOWN_CLIENT`.
-- **P2 — sweeps exist but nothing runs them.** `deleteExpired` (`sql-session-store.ts:107-111`) and `sweep` (`sql-store.ts:192-198`) are caller-cadence by design, but no recipe, cron battery, or kernel hook invokes them — never-again-presented rows accumulate forever. Pair with `@volo/queue`/scheduler when one lands; until then document the cadence in the identity README.
+- **P2 — sweeps exist but nothing runs them.** `deleteExpired` (`sql-session-store.ts:107-111`) and `sweep` (`sql-store.ts:192-198`) are caller-cadence by design, but no recipe, cron battery, or kernel hook invokes them — never-again-presented rows accumulate forever. Pair with `@lesto/queue`/scheduler when one lands; until then document the cadence in the identity README.
 - **P2 — credential format is unversioned** (same root cause as the scrypt-params finding): `scrypt$salt$hash` carries no algorithm version, so an argon2id migration (or any param change) has no place to stand. The format fix above resolves both.
 
 ## Observability
@@ -77,5 +77,5 @@ That is the only P0. The package layer itself has no launch-blocking hole — it
 6. **Default durable stores via the kernel**: when `createApp` has a `db`, wire `sqlSessionStore` + `sqlRateLimitStore` (+ schema install after migrate) automatically; warn loudly in production when falling back to memory.
 7. **Login throttling recipe**: per-account (`login:<email>`) limiter inside identity over the SQL store; document the IP-keyed `secureStack` limiter as the outer layer, not the defense.
 8. **Identity event seam** (`onEvent`) emitting coded `login_succeeded`/`login_failed`/`password_reset`/`email_verified` events; wire estate to the OTLP tracing that landed 06-11 as the dogfood.
-9. **Consolidate authz/rbac**: fold wildcard + inheritance into `definePolicy` or mark `@volo/rbac` legacy; one authorization story before the API freezes.
+9. **Consolidate authz/rbac**: fold wildcard + inheritance into `definePolicy` or mark `@lesto/rbac` legacy; one authorization story before the API freezes.
 10. **CSRF delivery helper + CORS preflight/Vary fixes + `originCheck` strict mode** — batch of small correctness items (P2s above) that close the remaining gaps without API churn.

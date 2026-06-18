@@ -51,8 +51,8 @@ describe("defineDataSource", () => {
 
 describe("dataSourceHref", () => {
   it("is the auto-exposed route for the source", () => {
-    expect(dataSourceHref("session")).toBe("/__volo/data/session");
-    expect(DATA_ROUTE_PREFIX).toBe("/__volo/data/");
+    expect(dataSourceHref("session")).toBe("/__lesto/data/session");
+    expect(DATA_ROUTE_PREFIX).toBe("/__lesto/data/");
   });
 });
 
@@ -66,11 +66,11 @@ function visibleBound(id: string, bind: NonNullable<IslandMount["bind"]>): Islan
   return { id, component: "Account", props: { static: 1 }, ssr: false, strategy: "visible", bind };
 }
 
-const sessionBind = { session: { source: "session", href: "/__volo/data/session" } } as const;
-const cartBind = { cart: { source: "cart", href: "/__volo/data/cart" } } as const;
+const sessionBind = { session: { source: "session", href: "/__lesto/data/session" } } as const;
+const cartBind = { cart: { source: "cart", href: "/__lesto/data/cart" } } as const;
 
 afterEach(() => {
-  delete window.__voloData;
+  delete window.__lestoData;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -85,9 +85,9 @@ describe("dataPrimerScript", () => {
     const script = dataPrimerScript([bound("$.a", sessionBind)]);
 
     expect(script).toBe(
-      "(function(){var w=window.__voloData=window.__voloData||{};" +
-        'w["session"]=w["session"]||fetch("/__volo/data/session",{credentials:"same-origin"})' +
-        '.then(function(r){if(!r.ok)throw new Error("volo data "+r.status);return r.json()});' +
+      "(function(){var w=window.__lestoData=window.__lestoData||{};" +
+        'w["session"]=w["session"]||fetch("/__lesto/data/session",{credentials:"same-origin"})' +
+        '.then(function(r){if(!r.ok)throw new Error("lesto data "+r.status);return r.json()});' +
         'w["session"].catch(function(){});})()',
     );
   });
@@ -157,7 +157,7 @@ describe("dataPrimerScript — runtime behavior", () => {
 
     runPrimer(dataPrimerScript([bound("$.a", sessionBind)]));
 
-    await expect(window.__voloData?.session).rejects.toThrow("volo data 401");
+    await expect(window.__lestoData?.session).rejects.toThrow("lesto data 401");
     // The error JSON body was never read into a value.
     expect(json).not.toHaveBeenCalled();
   });
@@ -174,7 +174,7 @@ describe("dataPrimerScript — runtime behavior", () => {
     window.addEventListener("unhandledrejection", onUnhandled);
 
     try {
-      // Nobody awaits window.__voloData.session here — the detached .catch must
+      // Nobody awaits window.__lestoData.session here — the detached .catch must
       // mark the rejection handled so no unhandledrejection escapes.
       runPrimer(dataPrimerScript([bound("$.a", sessionBind)]));
 
@@ -192,6 +192,6 @@ describe("dataPrimerScript — runtime behavior", () => {
 
     runPrimer(dataPrimerScript([bound("$.a", sessionBind)]));
 
-    await expect(window.__voloData?.session).resolves.toBe("Ada");
+    await expect(window.__lestoData?.session).resolves.toBe("Ada");
   });
 });

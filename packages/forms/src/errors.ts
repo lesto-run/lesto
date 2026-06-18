@@ -6,14 +6,14 @@
  * without breaking machines.
  */
 
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
-export { VoloError };
+export { LestoError };
 
 export type FormErrorCode = "FORM_INVALID";
 
 /** A submission the form refuses to accept. */
-export class FormError extends VoloError<FormErrorCode> {
+export class FormError extends LestoError<FormErrorCode> {
   constructor(code: FormErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

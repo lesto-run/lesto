@@ -56,7 +56,7 @@ prove "hosted UX" as a Node `serve.ts` runbook rather than a Worker.
 - [ ] `src/app.ts` touches only the package's exported public API — no deep imports.
 - [ ] The guardrails the package *mandates* are present and pleasant to wire (e.g.
       mailing-lists' "the HTTP boundary that fronts `subscribe` MUST rate-limit it"
-      → does fronting it with `@volo/ratelimit` feel natural, or sharp?).
+      → does fronting it with `@lesto/ratelimit` feel natural, or sharp?).
 - [ ] The journey test passes and runs under root `examples:test` in CI.
 - [ ] Any friction (a missing verb, an awkward factory, a guardrail you had to
       hand-roll) is filed back to the owning domain plan as a finding.
@@ -89,9 +89,9 @@ prove "hosted UX" as a Node `serve.ts` runbook rather than a Worker.
 
 1. **`examples/mailing-lists`** — `[Wave 3 backlog | template-setter]`
    The richest local-DX + hosted-UX surface of the batch, so it becomes the template
-   every later example copies. Wires `createMailingLists` (`@volo/mailing-lists`)
+   every later example copies. Wires `createMailingLists` (`@lesto/mailing-lists`)
    behind real `subscribe` / `confirm` / `unsubscribe` routes, **rate-limited per the
-   package's own mandate**, with `@volo/mail` (SMTP transport) beneath. Closes the
+   package's own mandate**, with `@lesto/mail` (SMTP transport) beneath. Closes the
    still-open hosted leg of web-primitives #1b: the confirmation email is verified in
    a **real inbox** (CRLF fix `47aece1` visible), not just an SMTP sink.
    Acceptance — local: subscribe → pending → confirm rotates token → broadcast →
@@ -117,13 +117,13 @@ prove "hosted UX" as a Node `serve.ts` runbook rather than a Worker.
    **All three addressed (2026-06-16) by 3 parallel worktree agents, integrated +
    re-verified serially on `main`:** (1) PARTLY — `rateLimit`'s `keyFor` now receives
    the request (`768ba0d`); the in-process no-IP-context half remains a
-   `@volo/web`/runtime follow-up. (2) FIXED — `createApp` gained a `schemas` install
+   `@lesto/web`/runtime follow-up. (2) FIXED — `createApp` gained a `schemas` install
    seam (`aed3893`). (3) FIXED — `SqlDatabase` unified across db/kernel/queue, casts
    gone (`aed3893`). Example workarounds dropped in `0d8fdc3`. All gated packages
    stayed 100%; `ws:typecheck` + `examples:test` green.
 
 2. **`examples/admin`** — `[Wave 3 backlog]`
-   A clickable admin panel (`@volo/admin`, data #6) over a seeded table: paginated +
+   A clickable admin panel (`@lesto/admin`, data #6) over a seeded table: paginated +
    projected list, with the `onMutation` audit hook logging every write.
    Acceptance — local: pagination/projection exercised over HTTP; audit hook fires on
    create/update/delete. Hosted: the panel browsed; the audit trail observed.
@@ -137,9 +137,9 @@ prove "hosted UX" as a Node `serve.ts` runbook rather than a Worker.
    input):** (a) `onMutation` is sync `(e) => void` but real audit sinks are async →
    fire-and-forget can fail silently/out-of-order; an awaited `Promise<void>` hook
    would make auditing transactional. (b) `AuditEvent` carries `patch` but no
-   `before` snapshot → diff auditing must re-read the row. (c) `@volo/admin` is
+   `before` snapshot → diff auditing must re-read the row. (c) `@lesto/admin` is
    programmatic-only → every host re-hand-rolls the same 6-route HTTP shell + code→
-   status table; a shippable opt-in `volo()` admin sub-router would remove it. (d) no
+   status table; a shippable opt-in `lesto()` admin sub-router would remove it. (d) no
    request error boundary, so `c.valid`'s `WebError` is uncatchable at a route. →
    triage to `data-persistence` (admin) / `core-runtime` (error boundary).
 
@@ -172,4 +172,4 @@ findings fixed in the framework (`768ba0d`, `aed3893`) and its workarounds dropp
 (`0d8fdc3`); `examples/admin` (`2527fe7`). The loop is working: each example both
 proves a battery and feeds findings back. Next executable step is increment 3
 (`examples/release-rollback`), then the increment 4 estate hosted-QA pass — plus
-triaging the four `@volo/admin` findings above into their owning plans.
+triaging the four `@lesto/admin` findings above into their owning plans.

@@ -46,7 +46,7 @@ export function parsePort(args: readonly string[], fallback: number): PortFlag {
  * whatever default the command wants.
  *
  * A following token that is itself a flag (it starts with `--`) is NOT consumed
- * as the value: `volo build --out --target blog` means `--out` was given no
+ * as the value: `lesto build --out --target blog` means `--out` was given no
  * value and `--target blog` is the next flag, not `--out --target`. Without this
  * guard a fat-fingered, value-less flag would silently swallow the next flag as
  * its value — `--out` would become `"--target"` and a real directory would never
@@ -70,7 +70,7 @@ export function parseStringFlag(args: readonly string[], name: string): string |
 /**
  * True iff a boolean flag (`--<name>`) is present, order-independent.
  *
- * A bare switch with no value: its presence is the signal. `volo mcp --operator`
+ * A bare switch with no value: its presence is the signal. `lesto mcp --operator`
  * opts into operator mode; absent leaves the safe read-only default.
  */
 export function hasFlag(args: readonly string[], name: string): boolean {

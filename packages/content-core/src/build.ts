@@ -1,14 +1,14 @@
 /**
- * @volo/content-core/build - Build tools for content generation
+ * @lesto/content-core/build - Build tools for content generation
  *
  * This entry point exports Node.js-only APIs for generating content.
  * Use this for CLI tools, build scripts, and server-side generation.
  *
  * For runtime APIs (browser-safe), use:
- *   import { query } from "@volo/content-core"
+ *   import { query } from "@lesto/content-core"
  */
 
-// Re-export types only (not runtime functions that depend on @volo/content-content)
+// Re-export types only (not runtime functions that depend on @lesto/content-content)
 export type {
   AnyCollection,
   Collection,
@@ -127,12 +127,12 @@ export {
   JsonParseError,
   YamlParseError,
   FrontmatterParseError,
-} from "@volo/content-umbra";
+} from "@lesto/content-umbra";
 
-export type { Parser, ParserOption, ParserPreset } from "@volo/content-umbra";
+export type { Parser, ParserOption, ParserPreset } from "@lesto/content-umbra";
 
 // Markdown rendering
-export { createRenderer } from "@volo/content-markdown";
+export { createRenderer } from "@lesto/content-markdown";
 
 // Voice profile and training
 export {
@@ -223,5 +223,5 @@ export type { ResolvedAssetsConfig } from "./assets";
 
 // NOTE: Embedding generation and search APIs are NOT re-exported here.
 // Import directly from the dedicated packages:
-//   - @volo/content-embeddings: Build-time embedding generation
-//   - @volo/content-search: Runtime vector similarity search
+//   - @lesto/content-embeddings: Build-time embedding generation
+//   - @lesto/content-search: Runtime vector similarity search

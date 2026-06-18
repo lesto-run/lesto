@@ -1,8 +1,8 @@
 {
-  "name": "@volo/sites",
+  "name": "@lesto/sites",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo sites & targets — declare many sites over one app, and prerender static ones from the app's own request handler.",
+  "description": "Lesto sites & targets — declare many sites over one app, and prerender static ones from the app's own request handler.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*"
+    "@lesto/errors": "workspace:*"
   }
 }

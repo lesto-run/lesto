@@ -11,10 +11,10 @@ import {
   type ResolvedConfig,
   type Engine,
   type RuntimeEntry,
-} from "@volo/content-core/build";
-import { stringify } from "@volo/content-umbra";
-import { AsyncMutex } from "@volo/content-shared/mutex";
-import { ValidationError } from "@volo/content-shared/errors";
+} from "@lesto/content-core/build";
+import { stringify } from "@lesto/content-umbra";
+import { AsyncMutex } from "@lesto/content-shared/mutex";
+import { ValidationError } from "@lesto/content-shared/errors";
 import { ToolBuilder, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT } from "./tools.js";
 
 // Mutex to prevent race conditions during write operations

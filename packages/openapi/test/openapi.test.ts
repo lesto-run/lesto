@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { type RouteEntry, toJson, toOpenApi } from "../src/index";
 
 // A small but representative route list: the seven RESTful routes for `posts`
-// (the shape `volo().routes()` yields), plus a route with two `:param` segments.
+// (the shape `lesto().routes()` yields), plus a route with two `:param` segments.
 const routes: readonly RouteEntry[] = [
   { method: "GET", pattern: "/posts" },
   { method: "GET", pattern: "/posts/new" },

@@ -1,5 +1,5 @@
 /**
- * @volo/admin — an admin operations layer over @volo/db tables.
+ * @lesto/admin — an admin operations layer over @lesto/db tables.
  *
  *   const admin = createAdmin(db, [
  *     {
@@ -16,7 +16,7 @@
  *   admin.create("posts", { title: "Hello", body: "..." });
  *
  * The generic CRUD backbone a WordPress-style admin UI sits on. CRUD goes
- * through `@volo/db`; input validation goes through Zod schemas (per ADR
+ * through `@lesto/db`; input validation goes through Zod schemas (per ADR
  * 0005); projection honors the per-resource `fields` allow-list.
  */
 

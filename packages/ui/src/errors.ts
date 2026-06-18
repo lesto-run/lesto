@@ -6,9 +6,9 @@
  * without breaking machines.
  */
 
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
-export { VoloError };
+export { LestoError };
 
 export type UiErrorCode =
   | "UI_CLIENT_COMPONENT_MISSING"
@@ -24,7 +24,7 @@ export type UiErrorCode =
   | "UI_STREAM_TIMEOUT";
 
 /** Anything the UI engine can refuse to do while building a schema. */
-export class UiError extends VoloError<UiErrorCode> {
+export class UiError extends LestoError<UiErrorCode> {
   constructor(code: UiErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

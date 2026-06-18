@@ -1,18 +1,18 @@
-# @volo/content-query
+# @lesto/content-query
 
 Tiny fluent query API for typed collections (~520 bytes).
 
 ## Installation
 
 ```bash
-npm install @volo/content-query
+npm install @lesto/content-query
 ```
 
 ## Quick Start
 
 ```typescript
-import { query } from "@volo/content-query";
-import { getCollection } from "@volo/content-content";
+import { query } from "@lesto/content-query";
+import { getCollection } from "@lesto/content-content";
 
 const posts = getCollection("posts");
 

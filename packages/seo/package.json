@@ -1,8 +1,8 @@
 {
-  "name": "@volo/seo",
+  "name": "@lesto/seo",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's SEO primitives — pure string builders for meta tags, sitemaps, robots.txt, and JSON-LD.",
+  "description": "Lesto's SEO primitives — pure string builders for meta tags, sitemaps, robots.txt, and JSON-LD.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*"
+    "@lesto/errors": "workspace:*"
   }
 }

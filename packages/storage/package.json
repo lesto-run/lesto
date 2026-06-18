@@ -1,8 +1,8 @@
 {
-  "name": "@volo/storage",
+  "name": "@lesto/storage",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's object storage — a pluggable backend (S3/R2 for production; in-memory and local filesystem for dev).",
+  "description": "Lesto's object storage — a pluggable backend (S3/R2 for production; in-memory and local filesystem for dev).",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*"
+    "@lesto/errors": "workspace:*"
   }
 }

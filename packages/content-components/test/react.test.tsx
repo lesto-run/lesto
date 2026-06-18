@@ -19,7 +19,7 @@ import { useMDXComponents, type ComponentRegistry } from "../react/useMDXCompone
 //
 // MDXContent compiles its `code` prop with `new Function(...scope, code)` and
 // expects the returned object to expose a `default` component (see
-// @volo/content-mdx). We hand-write the smallest such bundles rather than pull
+// @lesto/content-mdx). We hand-write the smallest such bundles rather than pull
 // in the full MDX compiler — the unit under test is the *wiring*, not MDX.
 // ---------------------------------------------------------------------------
 

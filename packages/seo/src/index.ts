@@ -1,5 +1,5 @@
 /**
- * @volo/seo — SEO primitives as pure string builders, no dependencies.
+ * @lesto/seo — SEO primitives as pure string builders, no dependencies.
  *
  *   metaTags({ title: "Home", description: "Welcome" });
  *   sitemap([{ loc: "/about" }], { baseUrl: "https://example.com" });
@@ -20,5 +20,5 @@ export { jsonLd } from "./json-ld";
 
 export { escape } from "./escape";
 
-export { VoloError, SeoError } from "./errors";
+export { LestoError, SeoError } from "./errors";
 export type { SeoErrorCode } from "./errors";

@@ -1,8 +1,8 @@
 {
-  "name": "@volo/feeds",
+  "name": "@lesto/feeds",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's RSS 2.0 and Atom 1.0 feed generation — pure XML string builders, no deps.",
+  "description": "Lesto's RSS 2.0 and Atom 1.0 feed generation — pure XML string builders, no deps.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*"
+    "@lesto/errors": "workspace:*"
   }
 }

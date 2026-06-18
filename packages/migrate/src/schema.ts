@@ -3,7 +3,7 @@ import type { ColumnOptions, Dialect, IndexOptions, SqlDatabase } from "./types"
 /**
  * The schema editor handed to a migration's `up`/`down`.
  *
- * Tables are defined as a `@volo/db` schema value and rendered with
+ * Tables are defined as a `@lesto/db` schema value and rendered with
  * `schema.execute(createTableSql(table, schema.dialect))` — ONE DDL system,
  * shared with the query layer (ADR 0004 Phase 7.6). `Schema` owns the rest of a
  * migration's vocabulary that the value layer does not: indexes, column adds,

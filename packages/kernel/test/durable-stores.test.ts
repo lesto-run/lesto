@@ -1,8 +1,8 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fromRequestMiddleware, volo, runWithContext } from "@volo/web";
-import type { Volo } from "@volo/web";
+import { fromRequestMiddleware, lesto, runWithContext } from "@lesto/web";
+import type { Lesto } from "@lesto/web";
 
 import {
   createApp,
@@ -55,10 +55,10 @@ function adapt(raw: Database.Database): KernelDatabase {
   return adapted;
 }
 
-// A volo() app whose only route reads the context; the secure stack is mounted
+// A lesto() app whose only route reads the context; the secure stack is mounted
 // as the outermost middleware, exactly as production wires it.
-function buildApp(options: SecureStackOptions): Volo {
-  return volo()
+function buildApp(options: SecureStackOptions): Lesto {
+  return lesto()
     .use(...secureStack(options).map(fromRequestMiddleware))
     .get("/api/whoami", (c) => c.json({ ok: true }));
 }
@@ -88,7 +88,7 @@ const burst = (app: App): Promise<number> =>
 
 describe("createApp — durable schema install after migrate", () => {
   it("installs the session + rate-limit tables by default, after migrate", async () => {
-    await createApp({ db, app: volo().get("/ping", (c) => c.text("pong")) });
+    await createApp({ db, app: lesto().get("/ping", (c) => c.text("pong")) });
 
     // The two ADR-0013 tables exist — the pit-of-success default put them there
     // with zero config.
@@ -97,20 +97,20 @@ describe("createApp — durable schema install after migrate", () => {
       .all() as { name: string }[];
     const names = tables.map((t) => t.name);
 
-    expect(names).toContain("volo_sessions");
-    expect(names).toContain("volo_rate_limits");
+    expect(names).toContain("lesto_sessions");
+    expect(names).toContain("lesto_rate_limits");
   });
 
   it("skips the schema install when durable is false", async () => {
-    await createApp({ db, app: volo().get("/ping", (c) => c.text("pong")), durable: false });
+    await createApp({ db, app: lesto().get("/ping", (c) => c.text("pong")), durable: false });
 
     const tables = raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
       name: string;
     }[];
     const names = tables.map((t) => t.name);
 
-    expect(names).not.toContain("volo_sessions");
-    expect(names).not.toContain("volo_rate_limits");
+    expect(names).not.toContain("lesto_sessions");
+    expect(names).not.toContain("lesto_rate_limits");
   });
 });
 
@@ -203,7 +203,7 @@ describe("secureStack — production-without-db memory warning (warn-once latch)
 
   it("never warns when the caller brings its own limiter (explicit operator choice)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { RateLimiter, MemoryRateLimitStore } = await import("@volo/ratelimit");
+    const { RateLimiter, MemoryRateLimitStore } = await import("@lesto/ratelimit");
 
     secureStack({
       production: true,

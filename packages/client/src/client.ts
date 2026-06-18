@@ -1,8 +1,8 @@
 /**
- * `createApi` — a typed, browser-safe fetch client for a Volo app's data routes.
+ * `createApi` — a typed, browser-safe fetch client for a Lesto app's data routes.
  *
  *   // The contract: the wire types, declared ONCE and shared by import (no
- *   // codegen, no GraphQL). In a real app these reference the same `@volo/db`
+ *   // codegen, no GraphQL). In a real app these reference the same `@lesto/db`
  *   // row/insert types the server handlers use, so client and server can't drift.
  *   interface SavedResponse { user: { id: string; name: string }; saved: Listing[] }
  *
@@ -19,13 +19,13 @@
  *
  * The path is constrained to the routes the contract declares for that method,
  * the response type is inferred from the contract, and a path's `:params` are
- * required and typed via `@volo/router`'s `PathParams` — all by inference over
+ * required and typed via `@lesto/router`'s `PathParams` — all by inference over
  * `typeof contract`, the Hono `hc` model. Native `fetch`, no runtime dependency,
  * wires `AbortSignal`, and surfaces a non-2xx as a coded {@link ClientError}.
  */
 
-import { wrapFetch } from "@volo/observability";
-import type { PathParams } from "@volo/router";
+import { wrapFetch } from "@lesto/observability";
+import type { PathParams } from "@lesto/router";
 
 import { ClientError } from "./errors";
 
@@ -139,8 +139,8 @@ export interface Api<C extends object> {
  * data fetch joins the page's trace (ARCHITECTURE.md §7's UI→API→DB join).
  *
  * `traceId` is the trace the page adopted from the SSR-injected
- * `volo-traceparent` meta (read via `@volo/observability`'s `readTraceparentMeta`).
- * Given it, `createApi` wraps its `fetch` with `@volo/observability`'s
+ * `lesto-traceparent` meta (read via `@lesto/observability`'s `readTraceparentMeta`).
+ * Given it, `createApi` wraps its `fetch` with `@lesto/observability`'s
  * {@link wrapFetch}, which adds an outbound W3C `traceparent` (a fresh child span
  * per request) on same-origin calls only — never cross-origin, so the trace id
  * cannot leak to a third party. `origin` and `randomSpanId` are injected for tests
@@ -282,7 +282,7 @@ export function createApi<C extends object>(options: ApiOptions = {}): Api<C> {
 
   // When a trace context is configured, wrap `fetch` so a same-origin request
   // carries an outbound `traceparent` continuing the page's trace (the UI→API
-  // join). The wrapper is `@volo/observability`'s `wrapFetch`, so client and the
+  // join). The wrapper is `@lesto/observability`'s `wrapFetch`, so client and the
   // browser RUM runtime propagate identically. Absent → the bare configured fetch.
   const fetchImpl =
     options.trace === undefined

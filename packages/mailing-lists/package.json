@@ -1,8 +1,8 @@
 {
-  "name": "@volo/mailing-lists",
+  "name": "@lesto/mailing-lists",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Ghost-style subscriber lists — double opt-in and broadcasts, composed on @volo/db, @volo/mail, and @volo/queue.",
+  "description": "Ghost-style subscriber lists — double opt-in and broadcasts, composed on @lesto/db, @lesto/mail, and @lesto/queue.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,11 +12,11 @@
     }
   },
   "dependencies": {
-    "@volo/db": "workspace:*",
-    "@volo/errors": "workspace:*",
-    "@volo/mail": "workspace:*",
-    "@volo/migrate": "workspace:*",
-    "@volo/queue": "workspace:*"
+    "@lesto/db": "workspace:*",
+    "@lesto/errors": "workspace:*",
+    "@lesto/mail": "workspace:*",
+    "@lesto/migrate": "workspace:*",
+    "@lesto/queue": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

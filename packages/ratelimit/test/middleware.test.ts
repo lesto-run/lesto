@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { runWithContext } from "@volo/web";
+import { runWithContext } from "@lesto/web";
 
 import {
   MemoryRateLimitStore,
@@ -11,7 +11,7 @@ import {
   UNKNOWN_CLIENT_KEY,
 } from "../src/index";
 
-import type { AnyVoloResponse, VoloRequest } from "@volo/web";
+import type { AnyLestoResponse, LestoRequest } from "@lesto/web";
 import type { BucketState } from "../src/index";
 
 /**
@@ -30,7 +30,7 @@ async function bucketAt(
   return seen;
 }
 
-const request: VoloRequest = {
+const request: LestoRequest = {
   method: "GET",
   path: "/",
   params: {},
@@ -39,7 +39,7 @@ const request: VoloRequest = {
   body: undefined,
 };
 
-const okResponse: AnyVoloResponse = { status: 200, headers: {}, body: "ok" };
+const okResponse: AnyLestoResponse = { status: 200, headers: {}, body: "ok" };
 
 /** A limiter over a fixed clock so deny/allow are deterministic. */
 function fixedLimiter(capacity: number, refillPerSecond: number, now = 1000): RateLimiter {
@@ -160,7 +160,7 @@ describe("rateLimit middleware", () => {
       keyFor: (req) => `api-key:${req.headers["x-api-key"] ?? "anon"}`,
     });
 
-    const withKey = (apiKey: string): VoloRequest => ({
+    const withKey = (apiKey: string): LestoRequest => ({
       ...request,
       headers: { "x-api-key": apiKey },
     });

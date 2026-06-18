@@ -1,5 +1,5 @@
 /**
- * @volo/content-seo - SEO Analysis and Schema.org Generation
+ * @lesto/content-seo - SEO Analysis and Schema.org Generation
  *
  * A browser-safe package for SEO analysis, keyword density tracking,
  * and Schema.org JSON-LD generation.
@@ -12,7 +12,7 @@
  *   jsonLd,
  *   generateSchemaOrg,
  *   analyzeKeywordDensity,
- * } from "@volo/content-seo";
+ * } from "@lesto/content-seo";
  *
  * // Analyze content for SEO
  * const { metrics, recommendations } = lintSEO(markdownContent);

@@ -5,7 +5,7 @@
 
 ## Context
 
-Volo's security batteries (`@volo/cors`, `@volo/ratelimit`, `@volo/csrf`) were
+Lesto's security batteries (`@lesto/cors`, `@lesto/ratelimit`, `@lesto/csrf`) were
 real and well-tested, but `createApp` injected **none** of them — security was
 purely app-composed via `.use(...secureStack(...).map(fromRequestMiddleware))`. An
 app that forgot that line shipped with **zero** CSRF, CORS, *and* rate-limiting
@@ -15,7 +15,7 @@ forgetful app should be safe, not exposed.
 
 The obvious move — default the whole `secureStack` on — is **wrong**, and the
 research said so concretely (read `Sec-Fetch-Site` / token semantics in
-`@volo/csrf`):
+`@lesto/csrf`):
 
 - **`csrf()` (token)** rejects every state-changing request without a valid
   session-bound token — it would 403 every token-less API client and even a
@@ -41,7 +41,7 @@ checks opt-in) is largely correct; the real gap is that rate-limit wasn't actual
 
 ## Decision
 
-`VoloAppConfig` gains `secure?: SecureStackOptions | false`, and `createApp` wraps
+`LestoAppConfig` gains `secure?: SecureStackOptions | false`, and `createApp` wraps
 every dispatch in the resolved stack via `runPipeline` at the `handle()` boundary
 (order-immune; covers built-ins and 404s; reads the same ALS context the
 transport set, so per-IP rate-limit keying is correct):
@@ -57,7 +57,7 @@ transport set, so per-IP rate-limit keying is correct):
   net. The kernel threads `db` + `dialect` in. CSRF is now one field away:
   `secure: { originCheck: {} }`.
 - **`secure: false`** — opt out entirely, for an app that composes `secureStack`
-  on its own `volo()` chain (estate) — it must not get the layer twice.
+  on its own `lesto()` chain (estate) — it must not get the layer twice.
 
 The scaffolded app declares `secure: { originCheck: {} }` (gets originCheck **plus**
 the default rate-limit), modelling the one-place declarative idiom instead of the
@@ -74,5 +74,5 @@ the default rate-limit), modelling the one-place declarative idiom instead of th
   deployment-specific (browser vs. API), so they stay opt-in but discoverable.
 - **Not changed here:** `csrf()` token plumbing, a deployment-shape flag that would
   let `originCheck` default-on safely for browser-only apps, and steering
-  `@volo/identity` to the SQL session store the kernel already provisions — all
+  `@lesto/identity` to the SQL session store the kernel already provisions — all
   follow-ups.

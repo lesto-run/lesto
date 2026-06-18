@@ -1,6 +1,6 @@
 /**
- * The one app behind both zones, assembled the canonical way: a `volo.app.ts`
- * `VoloAppConfig` booted by `@volo/kernel`'s `createApp`.
+ * The one app behind both zones, assembled the canonical way: a `lesto.app.ts`
+ * `LestoAppConfig` booted by `@lesto/kernel`'s `createApp`.
  *
  * The dispatch core sits over a fresh `Identity` (built once per config, closed
  * over by the route handlers), whose in-memory SQLite is seeded with the demo
@@ -11,13 +11,13 @@
  * CSRF is the framework's, not the app's: `secureStack({ originCheck: {} })`
  * refuses a cross-site state-changing request by reading the browser's
  * `Sec-Fetch-Site` — no per-form token to mint, thread, and verify (ADR 0005).
- * The request-shaped batteries drop onto the `volo()` chain via
+ * The request-shaped batteries drop onto the `lesto()` chain via
  * `fromRequestMiddleware`, applied with `.use` before the routes so every route
  * (and every unmatched path — a CORS preflight, say) runs inside them.
  *
  * Durable by default (ADR 0013): the same `handle` is threaded into BOTH
  * `secureStack({ db })` — so the node rate limiter keys against the shared
- * `volo_rate_limits` table instead of a per-process `Map` — AND `createApp`'s
+ * `lesto_rate_limits` table instead of a per-process `Map` — AND `createApp`'s
  * `db` slot, where the kernel installs the session + rate-limit schemas after
  * migrate. Sessions are already SQL-backed in `buildIdentity` (its own
  * `sqlSessionStore`), so a `createApp({ db })` boot shares sessions and limits
@@ -26,11 +26,11 @@
  * deploy copies for real fleet-correctness.
  */
 
-import { createApp, secureStack } from "@volo/kernel";
-import type { App, VoloAppConfig } from "@volo/kernel";
-import { fromRequestMiddleware, volo } from "@volo/web";
+import { createApp, secureStack } from "@lesto/kernel";
+import type { App, LestoAppConfig } from "@lesto/kernel";
+import { fromRequestMiddleware, lesto } from "@lesto/web";
 
-import type { TraceSeams } from "@volo/observability";
+import type { TraceSeams } from "@lesto/observability";
 
 import { buildEstateRoutes } from "./controllers";
 import { buildIdentity } from "./identity";
@@ -45,25 +45,25 @@ import { buildIdentity } from "./identity";
 const NODE_RATE_LIMIT = { capacity: 60, refillPerSecond: 10 } as const;
 
 /**
- * A fresh `VoloAppConfig` — fresh identity, fresh seeded DB — each call.
+ * A fresh `LestoAppConfig` — fresh identity, fresh seeded DB — each call.
  *
- * This is what `volo.app.ts` default-exports for the CLI, and what `buildApp`
+ * This is what `lesto.app.ts` default-exports for the CLI, and what `buildApp`
  * boots. Returning a factory (not a singleton) is what keeps every test world
  * isolated.
  */
-export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promise<VoloAppConfig> {
+export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promise<LestoAppConfig> {
   const { identity, handle } = await buildIdentity(secret, seams);
 
   // Zero-token, header-based CSRF on every state-changing request, plus a
   // DURABLE per-client rate limit over the shared SQL handle (ADR 0013):
   // `secureStack({ db })` auto-wires `sqlRateLimitStore`, so the limiter keys
-  // against `volo_rate_limits` rather than per-process memory — fleet-correct
+  // against `lesto_rate_limits` rather than per-process memory — fleet-correct
   // with zero config. Applied before the routes so it wraps the whole app
   // (matched routes and 404s alike). `.client(...)` is declared on the ROOT: it
   // emits the `<script type="module">` hydration tag in every page's <head>, and
   // `.route()` composes a sub-app's routes/layouts/data but NOT its client-module
   // config, so it must live here.
-  const app = volo()
+  const app = lesto()
     .use(
       ...secureStack({
         originCheck: {},
@@ -75,7 +75,7 @@ export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promi
     .route(buildEstateRoutes(identity));
 
   // The client-error beacon sink (operability-dx item 3): a hydration failure in
-  // a real browser POSTs to `/__volo/client-errors`, and this wires that beacon to
+  // a real browser POSTs to `/__lesto/client-errors`, and this wires that beacon to
   // the tracer as a `client.island_error` span — paired with the server traces.
   // Absent seams leave the default structured-log sink in place.
   if (seams !== undefined) {
@@ -83,8 +83,8 @@ export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promi
 
     // The browser-RUM receiver (ARCHITECTURE.md §7): the browser POSTs the spans
     // it built from `PerformanceObserver` — navigation, resource, web-vital — to
-    // `/__volo/browser-spans`, each carrying the SERVER trace id it adopted from
-    // the SSR-injected `volo-traceparent` meta. Wiring the sink to
+    // `/__lesto/browser-spans`, each carrying the SERVER trace id it adopted from
+    // the SSR-injected `lesto-traceparent` meta. Wiring the sink to
     // `seams.onBrowserSpan` lands them in the SAME OTLP collector as the server
     // spans, joined by trace id — making the UI→API→DB trace real, not aspirational.
     app.browserSpans((span) => seams.onBrowserSpan(span));

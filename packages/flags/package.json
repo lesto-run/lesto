@@ -1,8 +1,8 @@
 {
-  "name": "@volo/flags",
+  "name": "@lesto/flags",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's first-class feature flags — declare a flag on a route or page and the gate hides it when off.",
+  "description": "Lesto's first-class feature flags — declare a flag on a route or page and the gate hides it when off.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/web": "workspace:*"
+    "@lesto/web": "workspace:*"
   }
 }

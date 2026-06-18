@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { runPipeline } from "../src/index";
 
-import type { AnyVoloResponse, VoloRequest, Middleware, Next } from "../src/index";
+import type { AnyLestoResponse, LestoRequest, Middleware, Next } from "../src/index";
 
-const request: VoloRequest = {
+const request: LestoRequest = {
   method: "GET",
   path: "/",
   params: {},
@@ -13,7 +13,7 @@ const request: VoloRequest = {
   body: undefined,
 };
 
-const dispatch = async (): Promise<AnyVoloResponse> => ({
+const dispatch = async (): Promise<AnyLestoResponse> => ({
   status: 200,
   headers: { "content-type": "text/plain" },
   body: "ok",

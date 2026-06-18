@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { WebError } from "../src/errors";
-import type { VoloRequest } from "../src/types";
+import type { LestoRequest } from "../src/types";
 import { validateBody } from "../src/validate";
 
 const NewPost = z.object({
@@ -19,7 +19,7 @@ const NewPost = z.object({
 });
 
 /** A minimal request carrying just the body the helper reads. */
-function requestWithBody(body: unknown): VoloRequest {
+function requestWithBody(body: unknown): LestoRequest {
   return { method: "POST", path: "/posts", params: {}, query: {}, headers: {}, body };
 }
 

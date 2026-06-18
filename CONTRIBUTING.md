@@ -1,6 +1,6 @@
-# Contributing to Volo
+# Contributing to Lesto
 
-Thanks for your interest in Volo. This document is the practical companion to
+Thanks for your interest in Lesto. This document is the practical companion to
 [CONVENTIONS.md](./CONVENTIONS.md) — that file *is* the engineering bar; this one
 tells you how to set up, run the gate, and open a change that meets it.
 
@@ -8,7 +8,7 @@ tells you how to set up, run the gate, and open a change that meets it.
 
 - **[Bun](https://bun.sh) 1.3.5** — the runtime and package manager (the version
   is pinned in `package.json`'s `packageManager`).
-- **Node ≥ 22** — Volo targets Node 22+ for runtime compatibility.
+- **Node ≥ 22** — Lesto targets Node 22+ for runtime compatibility.
 
 Packages run their TypeScript directly under Bun + vitest — there is no build
 step for the source itself. Their `exports` point at `./src/index.ts`.
@@ -16,8 +16,8 @@ step for the source itself. Their `exports` point at `./src/index.ts`.
 ## Getting started
 
 ```sh
-git clone <repo-url> volo
-cd volo
+git clone <repo-url> lesto
+cd lesto
 bun install
 ```
 
@@ -40,7 +40,7 @@ load-bearing rules:
 - **100% vitest coverage** — lines, branches, functions, statements — on every
   touched, non-preview package. A line you cannot cover is a line you should not
   have written.
-- **Errors carry codes.** Every failure is a `VoloError` subclass with a stable,
+- **Errors carry codes.** Every failure is a `LestoError` subclass with a stable,
   machine-readable `code` and a frozen `details` bag. Callers branch on `code`,
   never on a message string.
 - **Inject what varies.** Time is a `Clock`, the database is an interface, a poll
@@ -60,7 +60,7 @@ Run the full gate from the repository root before you open or update a PR. It is
 exactly what CI runs:
 
 ```sh
-bun run ws:typecheck       # strict tsc across every @volo/* package
+bun run ws:typecheck       # strict tsc across every @lesto/* package
 bun run ws:lint            # oxlint
 bun run ws:format:check    # oxfmt --check (the formatter owns whitespace)
 bun scripts/coverage-gate.ts   # serial 100%-coverage gate
@@ -75,7 +75,7 @@ CI runner.
 To fix formatting, **let the formatter own it** — never hand-fight whitespace:
 
 ```sh
-bun run --filter '@volo/*' format   # writes oxfmt's formatting
+bun run --filter '@lesto/*' format   # writes oxfmt's formatting
 ```
 
 Per-package, while iterating on one module:
@@ -105,7 +105,7 @@ pitch *true by default*. Small, focused PRs get reviewed fastest.
 - **Bugs** — open an issue with the bug template: a minimal reproduction, what
   you expected, and what happened. A failing test is the best bug report.
 - **Features** — open an issue with the feature template first so we can align on
-  the design before code. Volo is opinionated and batteries-included; a feature
+  the design before code. Lesto is opinionated and batteries-included; a feature
   that fits the substrate-first, interface-driven model lands faster.
 - **Security** — do **not** open a public issue. Follow
   [SECURITY.md](./SECURITY.md).

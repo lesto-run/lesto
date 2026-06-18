@@ -1,4 +1,4 @@
-# Volo — The 2026 Attack Plan
+# Lesto — The 2026 Attack Plan
 
 > Companion to `docs/REVIEW-2026-06-09.md`. Where the review said *what's broken*, this says
 > *how we win*. Grounded in a verified mid-2026 read of the tooling, competitor, and
@@ -8,7 +8,7 @@
 
 ## 0. The one-sentence bet
 
-**Volo is the framework that makes a server-rendered, database-backed site feel like a
+**Lesto is the framework that makes a server-rendered, database-backed site feel like a
 hand-tuned SPA, ship its assets to a CDN with zero glue, and be operated by an agent — by
 *riding the 2026 platform* instead of re-implementing it in JavaScript.**
 
@@ -46,7 +46,7 @@ Every incumbent has the **same soft underbelly the moment you leave their manage
 
 Cloudflare **acquired VoidZero** — Vite, Vitest, Rolldown, OXC, and Vite+. Vite stays MIT and
 vendor-neutral, but the company that owns the toolchain is now also selling **agents + edge +
-D1/Durable Objects as a database-substrate**. That is *Volo's exact thesis*, funded and
+D1/Durable Objects as a database-substrate**. That is *Lesto's exact thesis*, funded and
 distributed by a hyperscaler.
 
 Two consequences, and we lean into both:
@@ -88,7 +88,7 @@ flex.** The 2026 platform hands MPAs SPA-class UX for free:
 - **bfcache + Early Hints (103)** — instant back/forward on *all* engines; turn server
   think-time (the DB query) into preloading on edges that support it.
 
-**What we ship:** a `@volo/platform` layer that, by default, emits `@view-transition`, injects a
+**What we ship:** a `@lesto/platform` layer that, by default, emits `@view-transition`, injects a
 *safe* speculation-rules block (eagerness `moderate`, same-origin only, **auto-excludes
 logout/mutation links, respects `Save-Data`**), auto-injects `<link rel="expect"
 blocking="render">` on declared transition roots so we beat Chrome's ~4s transition timeout, keeps
@@ -96,7 +96,7 @@ pages bfcache-eligible, and gates analytics/side-effects behind `document.preren
 `view-transition-name` becomes a **first-class authoring primitive** reused across both
 same-document island swaps (cross-engine) and cross-document navigations.
 
-> Result: a plain Volo page navigates **faster *and* smoother than most React SPAs**, with no
+> Result: a plain Lesto page navigates **faster *and* smoother than most React SPAs**, with no
 > router bundle, no hydration, no client data layer. This is the leapfrog — and the honest
 > progressive-enhancement story (works with JS off) is itself a differentiator.
 
@@ -104,7 +104,7 @@ same-document island swaps (cross-engine) and cross-document navigations.
 
 This is the direct answer to *"you literally can't serve an image"* and *"an off-the-shelf
 S3-during-CD solution would be nice."* The deploy `uploader` seam and the async `Storage`
-interface already exist — we fill them into a real pipeline. **New package: `@volo/assets`.**
+interface already exist — we fill them into a real pipeline. **New package: `@lesto/assets`.**
 
 **The DX (first-class, beats `public/`):**
 - A `public/` (static, copied) **and** import-graph assets (`import hero from "./hero.jpg"`) via
@@ -119,9 +119,9 @@ interface already exist — we fill them into a real pipeline. **New package: `@
 - **Dynamic/user-uploaded** images → a **decoupled edge/worker optimizer**, never in-process.
 - An **asset manifest** (logical path → fingerprinted URL) and a configurable **CDN origin**; the
   renderer rewrites every asset URL to the CDN at build/serve.
-- `@volo/storage` gains an **S3/R2 backend** and a **`url()`** (public + presigned) method — the
+- `@lesto/storage` gains an **S3/R2 backend** and a **`url()`** (public + presigned) method — the
   two gaps the review found.
-- `volo deploy` **uploads automatically**: incremental, changed-files-only, to any S3-compatible
+- `lesto deploy` **uploads automatically**: incremental, changed-files-only, to any S3-compatible
   target (S3 / R2 / Spaces / Backblaze / MinIO), sets `immutable, max-age=31536000` at upload, and
   invalidates the CDN for the mutable HTML. **You write zero upload scripts.**
 
@@ -147,10 +147,10 @@ content. That's two pipelines, no HMR, no dev/prod parity. We consolidate:
 
 ### Bet IV — The agent-native control plane (the moat)
 
-The differentiator nobody else has — but today it's unwired (no `volo mcp` command, three
+The differentiator nobody else has — but today it's unwired (no `lesto mcp` command, three
 divergent MCP impls, `generate_ui` inert). We make it a five-minute demo:
 
-- A real **`volo mcp`** binary/command; **collapse the three MCP implementations into one**
+- A real **`lesto mcp`** binary/command; **collapse the three MCP implementations into one**
   (delete ~1,700 lines of fold-in debt).
 - **Wire `generate_ui` end-to-end** in an example — the registry→JSON-Schema→forced-tool→
   `validateTree`→graceful-render loop is our best original idea; *exercise it*.
@@ -166,13 +166,13 @@ divergent MCP impls, `generate_ui` inert). We make it a five-minute demo:
 
 | Package | Change |
 |---|---|
-| **`@volo/assets`** (new) | `public/` + import-graph fingerprinting, manifest, `<Image>`/`<Asset>`, build-time variant generation, CDN-URL rewriting. |
-| **`@volo/platform`** (new, or fold into runtime/loom) | `@view-transition` + speculation-rules emission, `view-transition-name` authoring, `rel=expect` injection, bfcache/prerender-safety helpers, default Service Worker recipe (precache assets + Navigation Preload for dynamic HTML + `Vary` correctness). |
-| **`@volo/storage`** | Add **S3/R2 backend** + **`url()`** (public/presigned). |
-| **`@volo/deploy`** | Fill the `uploader` seam: incremental S3-compatible uploader, immutable headers, CDN invalidation; a **first-class Cloudflare adapter** (R2 + Workers + 103 Early Hints) as flagship; align targets with Vite Environments. |
-| **`@volo/web` / `@volo/runtime`** | **Binary/stream response bodies** (kill string-only `body`); full MIME table in `contentTypeOf`; emit `Cache-Control`/`immutable`; `fetchpriority`/`modulepreload` hints; Early Hints hook. |
+| **`@lesto/assets`** (new) | `public/` + import-graph fingerprinting, manifest, `<Image>`/`<Asset>`, build-time variant generation, CDN-URL rewriting. |
+| **`@lesto/platform`** (new, or fold into runtime/loom) | `@view-transition` + speculation-rules emission, `view-transition-name` authoring, `rel=expect` injection, bfcache/prerender-safety helpers, default Service Worker recipe (precache assets + Navigation Preload for dynamic HTML + `Vary` correctness). |
+| **`@lesto/storage`** | Add **S3/R2 backend** + **`url()`** (public/presigned). |
+| **`@lesto/deploy`** | Fill the `uploader` seam: incremental S3-compatible uploader, immutable headers, CDN invalidation; a **first-class Cloudflare adapter** (R2 + Workers + 103 Early Hints) as flagship; align targets with Vite Environments. |
+| **`@lesto/web` / `@lesto/runtime`** | **Binary/stream response bodies** (kill string-only `body`); full MIME table in `contentTypeOf`; emit `Cache-Control`/`immutable`; `fetchpriority`/`modulepreload` hints; Early Hints hook. |
 | **build tier** | Vite 8/Rolldown replaces `bun build`; Environments + ModuleRunner; content plugin unchanged. |
-| **`@volo/mcp` + content MCP** | One implementation; `volo mcp` bin; `generate_ui` wired; ops surface expanded. |
+| **`@lesto/mcp` + content MCP** | One implementation; `lesto mcp` bin; `generate_ui` wired; ops surface expanded. |
 | **DB seam** (orm/queue) | **Make `SqlDatabase`/`SqlStatement` async** (the still-pending blocker — every edge/Cloudflare/Postgres path is async; do it while the surface is small). |
 
 ---
@@ -192,22 +192,22 @@ confirmed High findings; CI green; no input crashes the process.*
 *Exit: the framework serves an image with correct type + immutable header; the same app boots on
 SQLite local and Postgres prod unchanged.*
 
-**Phase 2 — The asset pipeline, Bet II (≈3–4 wks).** `@volo/assets`: `public/` + import
-fingerprinting, manifest, `<Image>` with the full perf stack, build-time variants. `@volo/storage`
-S3/R2 backend + `url()`. `@volo/deploy` auto-uploader + immutable headers + invalidation. *Exit:
-`volo deploy` fingerprints every asset, uploads changed-only to R2/S3, serves via CDN, and the Node
+**Phase 2 — The asset pipeline, Bet II (≈3–4 wks).** `@lesto/assets`: `public/` + import
+fingerprinting, manifest, `<Image>` with the full perf stack, build-time variants. `@lesto/storage`
+S3/R2 backend + `url()`. `@lesto/deploy` auto-uploader + immutable headers + invalidation. *Exit:
+`lesto deploy` fingerprints every asset, uploads changed-only to R2/S3, serves via CDN, and the Node
 tier never streams an asset byte — with zero user-written upload script.*
 
-**Phase 3 — The platform router, Bet I (≈2–3 wks).** `@volo/platform`: view transitions +
+**Phase 3 — The platform router, Bet I (≈2–3 wks).** `@lesto/platform`: view transitions +
 speculation rules + `rel=expect` + bfcache/prerender-safety + default SW recipe + `view-transition-name`
-authoring. *Exit: a stock Volo app gets animated transitions (Chromium+Safari) and prerendered
+authoring. *Exit: a stock Lesto app gets animated transitions (Chromium+Safari) and prerendered
 instant nav (Chromium), degrades cleanly on Firefox, ships **0 bytes** of router JS.*
 
 **Phase 4 — Toolchain consolidation, Bet III (≈3–4 wks).** Vite 8/Rolldown replaces `bun build`;
 Environments + ModuleRunner; flagship Cloudflare adapter. *Exit: one build pipeline with HMR;
-`volo deploy --target cloudflare` puts assets on R2 + app on Workers + Early Hints.*
+`lesto deploy --target cloudflare` puts assets on R2 + app on Workers + Early Hints.*
 
-**Phase 5 — Agent control plane, Bet IV (≈2–3 wks).** `volo mcp`; one MCP impl; `generate_ui`
+**Phase 5 — Agent control plane, Bet IV (≈2–3 wks).** `lesto mcp`; one MCP impl; `generate_ui`
 wired; ops surface expanded. *Exit: the five-minute Claude-Desktop demo runs end-to-end.*
 
 **Phase 6 — Wire the batteries + trust (ongoing).** Middleware pipeline so csrf/cors/ratelimit/
@@ -224,11 +224,11 @@ The line count overstates what's built; cutting raises every score at once.
 
 - **The legacy CommonJS root** (`lib/`, `bin/tracks.js`, `test/`, root pkg `"tracks"`) — duplicates
   ported packages; root `npm test` runs the legacy suite. Delete or quarantine.
-- **MCP triplication** (~1,700 lines across `@volo/mcp`, `content-core/mcp*.ts`, `content-mcp`) —
+- **MCP triplication** (~1,700 lines across `@lesto/mcp`, `content-core/mcp*.ts`, `content-mcp`) —
   one impl.
 - **`bun build` client pipeline** — replaced by Rolldown.
 - **Dead code**: the 14-event build taxonomy (`events.ts`), the unreachable workflow auto-filter
-  path, duplicated content-search/embeddings primitives (`@volo/content-shared` already exports
+  path, duplicated content-search/embeddings primitives (`@lesto/content-shared` already exports
   them). Merge or cut the ~27 zero-consumer packages.
 - **Any temptation to write a client-side router or a JS popover/tooltip/floating-ui layer** —
   the platform (Popover API + Anchor Positioning + container queries + `:has()`) does it for free.
@@ -237,14 +237,14 @@ The line count overstates what's built; cutting raises every score at once.
 
 ## 6. The demo that wins (2026 mom test)
 
-1. `bunx create-volo shop && cd shop && volo dev` — boots in <2s (Rolldown HMR).
+1. `bunx create-lesto shop && cd shop && lesto dev` — boots in <2s (Rolldown HMR).
 2. Drop a 4MB photo in `public/`, reference `<Image src="/hero.jpg">`. Dev serves it; build emits
    AVIF/WebP/srcset, `fetchpriority=high` on the LCP image.
 3. Click between pages — **instant, animated** (prerender + view transition), **DevTools Network
    shows zero router JS**.
 4. From **Claude Desktop**: "add a `Product` type, generate a product-card UI, migrate, and deploy
    to R2." It happens on the running site.
-5. `volo deploy --target cloudflare` — assets fingerprinted to R2 behind the CDN, app on Workers,
+5. `lesto deploy --target cloudflare` — assets fingerprinted to R2 behind the CDN, app on Workers,
    **you never wrote an upload script.**
 
 If steps 3 and 4 land, the eyes widen. That's the whole game.

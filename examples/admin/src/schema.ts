@@ -1,20 +1,20 @@
 /**
- * The two tables this example stands up, as `@volo/db` schema values, plus the
+ * The two tables this example stands up, as `@lesto/db` schema values, plus the
  * migrations the kernel runs on boot and the helpers `run.ts` / the test call.
  *
- * `products` is the resource the admin panel manages — the table `@volo/admin`
+ * `products` is the resource the admin panel manages — the table `@lesto/admin`
  * lists, projects, and mutates. It carries a deliberately sensitive `cost`
  * column the projection allow-list must HIDE: the admin resource declares
  * `fields: ["name", "price", "stock"]`, so `cost` never leaves a row through
  * `list` / `get`, proving projection is real and not cosmetic.
  *
- * `auditLog` is where the `onMutation` hook lands. `@volo/admin` does not own a
+ * `auditLog` is where the `onMutation` hook lands. `@lesto/admin` does not own a
  * sink — it hands you an {@link AuditEvent} after each committed write and lets
  * the host decide where it goes. Here it goes into a real table, so the audit
  * trail is queryable over HTTP (`GET /admin/audit`) and the test can assert the
  * exact `{ action, resource, id, actor }` the hook fired with.
  *
- * Both tables are plain `@volo/db` schema values (no `extends Model`), migrated
+ * Both tables are plain `@lesto/db` schema values (no `extends Model`), migrated
  * through `createApp({ migrations })` — the same shape `examples/blog` uses.
  */
 
@@ -26,8 +26,8 @@ import {
   text,
   type Db,
   type InferRow,
-} from "@volo/db";
-import type { MigrationEntry } from "@volo/migrate";
+} from "@lesto/db";
+import type { MigrationEntry } from "@lesto/migrate";
 import { z } from "zod";
 
 /**
@@ -108,14 +108,14 @@ export const SEED_PRODUCTS: readonly {
   stock: number;
   cost: number;
 }[] = [
-  { name: "Volo Tee", price: 2500, stock: 120, cost: 800 },
+  { name: "Lesto Tee", price: 2500, stock: 120, cost: 800 },
   { name: "Hull Sticker Pack", price: 500, stock: 1000, cost: 90 },
   { name: "Rudder Mug", price: 1500, stock: 64, cost: 600 },
   { name: "Mast Hoodie", price: 6000, stock: 40, cost: 2200 },
   { name: "Deck Cap", price: 2000, stock: 0, cost: 700 },
 ];
 
-/** Insert the seed catalog directly through `@volo/db` (bypassing the admin's hook). */
+/** Insert the seed catalog directly through `@lesto/db` (bypassing the admin's hook). */
 export async function seedProducts(db: Db): Promise<number> {
   for (const product of SEED_PRODUCTS) {
     await db.insert(products).values(product).run();

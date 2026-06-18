@@ -1,5 +1,5 @@
 /**
- * @volo/flags — first-class feature flags.
+ * @lesto/flags — first-class feature flags.
  *
  *   const flags = defineFlags({
  *     defaults: { "new-listing-ui": false },

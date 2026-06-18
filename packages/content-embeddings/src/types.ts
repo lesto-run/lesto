@@ -1,5 +1,5 @@
 /**
- * Type definitions for @volo/content-embeddings (build-time only)
+ * Type definitions for @lesto/content-embeddings (build-time only)
  */
 
 // ============================================================================
@@ -8,7 +8,7 @@
 
 /**
  * Minimal entry interface for embedding operations.
- * Compatible with @volo/content-core RuntimeEntry.
+ * Compatible with @lesto/content-core RuntimeEntry.
  */
 export interface SearchableEntry {
   /** Unique entry ID */

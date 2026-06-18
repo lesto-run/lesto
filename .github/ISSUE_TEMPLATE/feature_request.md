@@ -1,11 +1,11 @@
 ---
 name: Feature request
-about: Propose a capability or change to a @volo/* package
+about: Propose a capability or change to a @lesto/* package
 title: "feat: "
 labels: enhancement
 ---
 
-<!-- Open this BEFORE writing code so we can align on the design. Volo is
+<!-- Open this BEFORE writing code so we can align on the design. Lesto is
 opinionated and batteries-included; a feature that fits the substrate-first,
 interface-driven model lands faster. -->
 
@@ -15,7 +15,7 @@ What can't you do today, or what's painful?
 
 ## Proposed solution
 
-What you'd like Volo to do. Which package(s) would own it?
+What you'd like Lesto to do. Which package(s) would own it?
 
 ## Fit with the model
 

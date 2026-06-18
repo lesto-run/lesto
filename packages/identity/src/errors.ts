@@ -6,9 +6,9 @@
  * message string, which is free to change for humans without breaking machines.
  */
 
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
-export { VoloError };
+export { LestoError };
 
 export type IdentityErrorCode =
   | "IDENTITY_EMAIL_TAKEN"
@@ -21,7 +21,7 @@ export type IdentityErrorCode =
   | "IDENTITY_INVALID_TOKEN";
 
 /** Anything the identity layer can refuse to do. */
-export class IdentityError extends VoloError<IdentityErrorCode> {
+export class IdentityError extends LestoError<IdentityErrorCode> {
   constructor(code: IdentityErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

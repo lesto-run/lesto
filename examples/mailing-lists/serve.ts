@@ -4,8 +4,8 @@
  *   bun run examples/mailing-lists/serve.ts
  *
  * Where run.ts dispatches the journey in-process and captures mail in memory,
- * this boots the same app behind a real node:http server (`@volo/runtime`'s
- * `serve`), starts a `@volo/queue` worker to deliver enqueued mail, and stays up
+ * this boots the same app behind a real node:http server (`@lesto/runtime`'s
+ * `serve`), starts a `@lesto/queue` worker to deliver enqueued mail, and stays up
  * so you can drive the journey by hand and watch the email arrive in a real inbox.
  *
  * Mail transport:
@@ -21,9 +21,9 @@
  *   curl -X POST localhost:3000/lists/1/broadcast  -H 'content-type: application/json' -d '{"issue":42}'
  */
 
-import { createSmtpTransport, nodeConnect, nodeUpgrade } from "@volo/mail";
-import type { MailTransport, RenderedEmail } from "@volo/mail";
-import { openSqlite, serve } from "@volo/runtime";
+import { createSmtpTransport, nodeConnect, nodeUpgrade } from "@lesto/mail";
+import type { MailTransport, RenderedEmail } from "@lesto/mail";
+import { openSqlite, serve } from "@lesto/runtime";
 
 import { buildApp } from "./src/app";
 

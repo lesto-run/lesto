@@ -1,5 +1,5 @@
 /**
- * @volo/ui-generate — AI generation of validated @volo/ui trees.
+ * @lesto/ui-generate — AI generation of validated @lesto/ui trees.
  *
  *   const registry = new Registry().define(...);
  *

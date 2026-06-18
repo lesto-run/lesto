@@ -3,7 +3,7 @@
  *
  *   const identity = createIdentity({
  *     db,
- *     secret: env.VOLO_AUTH_SECRET,
+ *     secret: env.LESTO_AUTH_SECRET,
  *     mailer: { sendVerificationEmail, sendPasswordResetEmail },
  *     verificationUrl: (token) => `https://app.com/verify?token=${token}`,
  *     resetUrl:        (token) => `https://app.com/reset?token=${token}`,
@@ -18,9 +18,9 @@
  * captured in lexical scope. The `db` handle is *explicit*: identity never
  * reaches for a global, and tests pass their own scoped handle.
  *
- * Composes `@volo/auth` (hashing, sessions, signed tokens) + `@volo/db` (the
+ * Composes `@lesto/auth` (hashing, sessions, signed tokens) + `@lesto/db` (the
  * `users` schema, queries, and DDL) + an injected mailer interface (so a
- * test can capture the outgoing link without booting `@volo/mail`).
+ * test can capture the outgoing link without booting `@lesto/mail`).
  *
  * Edge cases worth flagging up front, because they shape the whole API:
  *
@@ -48,10 +48,10 @@ import {
   needsRehash,
   Sessions,
   verifyPassword,
-} from "@volo/auth";
-import type { Clock, Session, SessionStore } from "@volo/auth";
-import type { Db } from "@volo/db";
-import type { RateLimiter } from "@volo/ratelimit";
+} from "@lesto/auth";
+import type { Clock, Session, SessionStore } from "@lesto/auth";
+import type { Db } from "@lesto/db";
+import type { RateLimiter } from "@lesto/ratelimit";
 
 import { assertStrongSecret, IdentityError } from "./errors";
 import { packResetToken, resetSigner, unpackResetToken, verifySigner } from "./tokens";
@@ -100,7 +100,7 @@ const DEFAULT_RESET_TTL_MS = 60 * 60 * 1000;
  * first-callers share one derive) — NOT at module load: `hashPassword` calls
  * `randomBytes`, and a Cloudflare Worker forbids generating random values
  * in global scope (module evaluation), so an eager module-level constant made
- * `@volo/identity` impossible to even *import* in a Worker. Deferring it keeps
+ * `@lesto/identity` impossible to even *import* in a Worker. Deferring it keeps
  * the package import-safe on the edge; the one-time cost lands on the first
  * failed login, inside a request handler where randomness is allowed.
  *
@@ -114,7 +114,7 @@ const DEFAULT_RESET_TTL_MS = 60 * 60 * 1000;
 let dummyHashCache: Promise<string> | undefined;
 
 const dummyHash = (): Promise<string> =>
-  (dummyHashCache ??= hashPassword("__volo_identity_timing_decoy__"));
+  (dummyHashCache ??= hashPassword("__lesto_identity_timing_decoy__"));
 
 const invalidToken = (kind: "verification" | "reset"): IdentityError =>
   new IdentityError("IDENTITY_INVALID_TOKEN", `The ${kind} link is invalid or has expired.`);
@@ -161,7 +161,7 @@ const assertValidPassword = (password: string): void => {
 /**
  * The outbound-email seam.
  *
- * Identity does *not* import `@volo/mail` directly. A caller that uses it
+ * Identity does *not* import `@lesto/mail` directly. A caller that uses it
  * wires a two-line adapter (`mailer.send("identity.verify", { to, url })`);
  * a test provides a record-capturing fake. That keeps Identity decoupled
  * from queue + mail boot order, and makes the verification-email assertion

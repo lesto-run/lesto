@@ -102,8 +102,8 @@ export function handleCompilationError(error: unknown, location: string): never 
 /**
  * Compile MDX content to bundled JavaScript.
  *
- * Unlike @volo/content-markdown, this does NOT add copy buttons via transformers.
- * Use the CodeBlock component from @volo/content-mdx/components for copy functionality.
+ * Unlike @lesto/content-markdown, this does NOT add copy buttons via transformers.
+ * Use the CodeBlock component from @lesto/content-mdx/components for copy functionality.
  */
 export async function compileMDX(options: MDXCompileOptions): Promise<MDXCompileResult> {
   const {

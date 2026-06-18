@@ -1,8 +1,8 @@
 {
-  "name": "@volo/web",
+  "name": "@lesto/web",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's MVC request-handling core — a Rails-style controller layer that weds @volo/router and @volo/ui.",
+  "description": "Lesto's MVC request-handling core — a Rails-style controller layer that weds @lesto/router and @lesto/ui.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,10 +12,10 @@
     }
   },
   "dependencies": {
-    "@volo/errors": "workspace:*",
-    "@volo/observability": "workspace:*",
-    "@volo/router": "workspace:*",
-    "@volo/ui": "workspace:*",
+    "@lesto/errors": "workspace:*",
+    "@lesto/observability": "workspace:*",
+    "@lesto/router": "workspace:*",
+    "@lesto/ui": "workspace:*",
     "react": "^19",
     "react-dom": "^19",
     "zod": "^4.0.0"

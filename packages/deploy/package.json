@@ -1,8 +1,8 @@
 {
-  "name": "@volo/deploy",
+  "name": "@lesto/deploy",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo deploy adapters — turn a built site set into a concrete deploy plan and ship its static targets through an injected uploader.",
+  "description": "Lesto deploy adapters — turn a built site set into a concrete deploy plan and ship its static targets through an injected uploader.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,8 +20,8 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*",
-    "@volo/sites": "workspace:*",
-    "@volo/storage": "workspace:*"
+    "@lesto/errors": "workspace:*",
+    "@lesto/sites": "workspace:*",
+    "@lesto/storage": "workspace:*"
   }
 }

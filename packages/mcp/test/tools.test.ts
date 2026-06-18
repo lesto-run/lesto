@@ -1,21 +1,21 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { volo } from "@volo/web";
-import { createDb, createTableSql, defineTable, integer, text, type Db } from "@volo/db";
-import { createApp } from "@volo/kernel";
-import { Migrator } from "@volo/migrate";
-import type { MigrationEntry } from "@volo/migrate";
-import type { App, KernelDatabase } from "@volo/kernel";
+import { lesto } from "@lesto/web";
+import { createDb, createTableSql, defineTable, integer, text, type Db } from "@lesto/db";
+import { createApp } from "@lesto/kernel";
+import { Migrator } from "@lesto/migrate";
+import type { MigrationEntry } from "@lesto/migrate";
+import type { App, KernelDatabase } from "@lesto/kernel";
 
-import { setData } from "@volo/content-core";
-import type { RuntimeEntry } from "@volo/content-core";
-import { contentEntriesMigration } from "@volo/content-store";
+import { setData } from "@lesto/content-core";
+import type { RuntimeEntry } from "@lesto/content-core";
+import { contentEntriesMigration } from "@lesto/content-store";
 
 import { buildTools, dispatch } from "../src/tools";
 import { McpError } from "../src/errors";
 
-import type { VoloMcpContext, McpAuditRecord } from "../src/tools";
+import type { LestoMcpContext, McpAuditRecord } from "../src/tools";
 
 // The DI boundary: the kernel speaks "array of positional params"; this adapter
 // maps that onto better-sqlite3's variadic bind. The terminals are async (ADR
@@ -60,7 +60,7 @@ function adapt(raw: Database.Database): KernelDatabase {
   return adapted;
 }
 
-// A table the migration below creates, queried by the controller via @volo/db.
+// A table the migration below creates, queried by the controller via @lesto/db.
 const posts = defineTable("posts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   title: text("title").notNull(),
@@ -86,7 +86,7 @@ let audited: McpAuditRecord[];
 
 // A context with the mandatory audit sink wired to the capturing array. Each
 // test starts a fresh sink; `mode` defaults to read-only unless overridden.
-function context(overrides: Partial<VoloMcpContext> = {}): VoloMcpContext {
+function context(overrides: Partial<LestoMcpContext> = {}): LestoMcpContext {
   return { app, routes, audit: (record) => void audited.push(record), ...overrides };
 }
 
@@ -96,13 +96,13 @@ beforeEach(async () => {
   queryDb = createDb(db);
   audited = [];
 
-  const voloApp = volo().get("/posts", async (c) =>
+  const lestoApp = lesto().get("/posts", async (c) =>
     c.json({ posts: await queryDb.select().from(posts).orderBy(posts.id, "asc").all() }),
   );
 
-  routes = voloApp.routes();
+  routes = lestoApp.routes();
 
-  app = await createApp({ db, app: voloApp, migrations: [createPosts] });
+  app = await createApp({ db, app: lestoApp, migrations: [createPosts] });
 });
 
 afterEach(() => {
@@ -110,7 +110,7 @@ afterEach(() => {
 });
 
 describe("buildTools", () => {
-  it("returns the Volo tools with stable names, descriptions, and input schemas", () => {
+  it("returns the Lesto tools with stable names, descriptions, and input schemas", () => {
     const tools = buildTools(context());
 
     expect(tools.map((tool) => tool.name)).toEqual([
@@ -198,7 +198,7 @@ function entry(collection: string, slug: string, data: Record<string, unknown>):
 
 describe("content tools", () => {
   beforeEach(() => {
-    // Hydrate content-core's runtime store as `@volo/content-store` would at boot.
+    // Hydrate content-core's runtime store as `@lesto/content-store` would at boot.
     setData({
       posts: [
         entry("posts", "hello", { title: "Hello" }),
@@ -273,7 +273,7 @@ describe("content write tools", () => {
   // The write tools mutate a content-store database; give the context one,
   // migrated to hold the content_entries table, AND operator mode so the gate
   // lets them through.
-  async function withContentDb(): Promise<VoloMcpContext> {
+  async function withContentDb(): Promise<LestoMcpContext> {
     const contentDb = adapt(raw);
 
     await new Migrator(contentDb, [contentEntriesMigration]).migrate();

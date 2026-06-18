@@ -1,4 +1,4 @@
-export const IMPORT_MARKER = Symbol.for("@volo/content-core/import");
+export const IMPORT_MARKER = Symbol.for("@lesto/content-core/import");
 
 export interface ImportReference {
   [IMPORT_MARKER]: true;

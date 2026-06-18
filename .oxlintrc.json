@@ -13,11 +13,11 @@
     "no-console": "off",
     "no-unused-vars": "error",
 
-    // `__voloData` is the framework's injected hydration-data global (ADR 0010),
+    // `__lestoData` is the framework's injected hydration-data global (ADR 0010),
     // namespaced with the `__` prefix by the same convention as `__NEXT_DATA__` /
     // `__remixContext` / `__NUXT__` — deliberate collision-avoidance, allowlisted
     // rather than renamed away.
-    "no-underscore-dangle": ["error", { "allow": ["__voloData"] }],
+    "no-underscore-dangle": ["error", { "allow": ["__lestoData"] }],
 
     "eqeqeq": ["error", "smart"],
     "typescript/no-explicit-any": "error",

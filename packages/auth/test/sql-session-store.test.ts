@@ -6,7 +6,7 @@
  * drive a tiny SQL-keyed fake `SqlDatabase` — a Map of rows plus a dispatch that
  * recognizes the exact statements the store prepares. That proves the store's
  * own logic (parameter shapes, upsert, the string→number coercion, the two
- * sweeps). The real-engine, two-driver proof is `@volo/integration` (item 7).
+ * sweeps). The real-engine, two-driver proof is `@lesto/integration` (item 7).
  */
 
 import { describe, expect, it } from "vitest";
@@ -45,7 +45,7 @@ function makeFakeDb(options: { expiresAsString?: boolean } = {}): {
     options.expiresAsString ? String(value) : value;
 
   const prepare = (sql: string): SqlStatement => {
-    if (sql.includes("INSERT INTO volo_sessions")) {
+    if (sql.includes("INSERT INTO lesto_sessions")) {
       return {
         run: async (params = []) => {
           const [token, userId, expiresAt] = params as [string, string, number];
@@ -137,11 +137,11 @@ describe("installSessionSchema", () => {
     expect(execed).toHaveLength(6);
 
     const [create, userIndex, expiresIndex] = execed;
-    expect(create).toContain("CREATE TABLE IF NOT EXISTS volo_sessions");
+    expect(create).toContain("CREATE TABLE IF NOT EXISTS lesto_sessions");
     // BIGINT, not INTEGER — epoch-ms overflows PG int4.
     expect(create).toContain("expires_at BIGINT NOT NULL");
-    expect(userIndex).toContain("CREATE INDEX IF NOT EXISTS volo_sessions_user_id");
-    expect(expiresIndex).toContain("CREATE INDEX IF NOT EXISTS volo_sessions_expires_at");
+    expect(userIndex).toContain("CREATE INDEX IF NOT EXISTS lesto_sessions_user_id");
+    expect(expiresIndex).toContain("CREATE INDEX IF NOT EXISTS lesto_sessions_expires_at");
   });
 });
 

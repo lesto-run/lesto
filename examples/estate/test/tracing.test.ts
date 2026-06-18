@@ -2,8 +2,8 @@
  * Estate's tracing dogfood (operability-dx item 3).
  *
  * Estate is the canonical OTLP reference: it wires the SAME seam hooks a
- * production Volo app uses — `db.onQuery`, `identity.onEvent`, `mail.onDelivered`,
- * and `volo().clientErrors(...)` — into the tracer. This proves that, when a
+ * production Lesto app uses — `db.onQuery`, `identity.onEvent`, `mail.onDelivered`,
+ * and `lesto().clientErrors(...)` — into the tracer. This proves that, when a
  * `Traces` is constructed and threaded through `buildAppConfig`, a request
  * through the real app produces child spans on the request span: a db query
  * traces, an auth event traces, a client-error beacon traces.
@@ -16,10 +16,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import { createApp } from "@volo/kernel";
-import { runWithContext } from "@volo/web";
-import { createTraces, InMemoryExporter, Tracer } from "@volo/observability";
-import type { Span, SpanData } from "@volo/observability";
+import { createApp } from "@lesto/kernel";
+import { runWithContext } from "@lesto/web";
+import { createTraces, InMemoryExporter, Tracer } from "@lesto/observability";
+import type { Span, SpanData } from "@lesto/observability";
 
 import { buildAppConfig } from "../src/app";
 import { DEFAULT_DEMO } from "../src/identity";
@@ -54,7 +54,7 @@ describe("estate tracing dogfood", () => {
     // A request that runs a query (the session source reads the user). We run it
     // inside the request context carrying the span, as the server does.
     await runWithContext({ requestId: "r-1", span: root }, () =>
-      app.handle("GET", "/__volo/data/session"),
+      app.handle("GET", "/__lesto/data/session"),
     );
 
     const queries = exporter.spans.filter((s) => s.name === "db.query");
@@ -99,7 +99,7 @@ describe("estate tracing dogfood", () => {
 
     const app = await createApp(await buildAppConfig("c".repeat(32), traces.seams));
 
-    await app.handle("POST", "/__volo/client-errors", {
+    await app.handle("POST", "/__lesto/client-errors", {
       // The beacon is a state-changing POST, so estate's `originCheck` needs the
       // same-origin Fetch-Metadata signal — the browser sends it automatically.
       headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },

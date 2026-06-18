@@ -9,10 +9,10 @@
  * runtime → `preact/jsx-runtime`.
  *
  * There is deliberately NO `react-dom` or `react-dom/server` entry. Before the
- * `@volo/ui` barrel split (Wave 2), the isomorphic barrel re-exported the page
+ * `@lesto/ui` barrel split (Wave 2), the isomorphic barrel re-exported the page
  * renderers, dragging `react-dom/server` (and the bare-`react-dom` resource
  * hints) into every client graph — so inert shims had to alias them away. Now the
- * server-render surface lives behind `@volo/ui/server`, which the client bundle
+ * server-render surface lives behind `@lesto/ui/server`, which the client bundle
  * never imports, so neither specifier reaches the browser graph at all and no
  * shim is needed. A stray `react-dom` import in app code is therefore a real
  * unresolved-module build error, not a silently-shimmed no-op — the honest signal.

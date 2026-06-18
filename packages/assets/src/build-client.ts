@@ -46,7 +46,7 @@ export interface BuildClientOptions {
    * build fails with `ASSETS_BUDGET_EXCEEDED`. The regression guard the
    * standalone `bundle-size` script asserts in CI (react ≤ 65 KB, preact ≤ 15 KB,
    * ADR 0007/0011), now enforceable INSIDE the build so a configured app fails its
-   * own `volo build` on a blown budget. Omitted = measure-and-report only, never
+   * own `lesto build` on a blown budget. Omitted = measure-and-report only, never
    * fail (the size still rides into {@link BuildClientResult} and the report).
    */
   readonly budgetBytes?: number;
@@ -141,7 +141,7 @@ const DEFAULT_ENTRY = "client.js";
  * generation to retain (everything older is swept). Hidden so it is never mistaken
  * for an asset and never served.
  */
-const GENERATION_MARKER = ".volo-chunks.json";
+const GENERATION_MARKER = ".lesto-chunks.json";
 
 /** Parse the generation marker's chunk-name list; tolerate a missing/corrupt marker. */
 function parseGeneration(contents: string | undefined): readonly string[] {
@@ -347,7 +347,7 @@ function narrateSizes(
   options: BuildClientOptions,
   report: BuildReport,
 ): void {
-  report(`volo: client (${options.dialect}, ${options.mode}) — ${sizes.length} artifact(s):`);
+  report(`lesto: client (${options.dialect}, ${options.mode}) — ${sizes.length} artifact(s):`);
 
   for (const size of sizes) {
     const over =

@@ -1,8 +1,8 @@
 {
-  "name": "@volo/csrf",
+  "name": "@lesto/csrf",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's stateless double-submit CSRF tokens — HMAC-signed nonces, no server-side state.",
+  "description": "Lesto's stateless double-submit CSRF tokens — HMAC-signed nonces, no server-side state.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,8 +12,8 @@
     }
   },
   "dependencies": {
-    "@volo/errors": "workspace:*",
-    "@volo/web": "workspace:*"
+    "@lesto/errors": "workspace:*",
+    "@lesto/web": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

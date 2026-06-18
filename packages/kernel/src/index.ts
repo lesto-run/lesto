@@ -1,9 +1,9 @@
 /**
- * @volo/kernel — the application kernel that assembles a Volo app from its parts.
+ * @lesto/kernel — the application kernel that assembles a Lesto app from its parts.
  *
- *   // Tables are `@volo/db` schema values, rendered for the dialect (ADR 0004).
- *   import { createTableSql, defineTable, integer, text } from "@volo/db";
- *   import { volo } from "@volo/web";
+ *   // Tables are `@lesto/db` schema values, rendered for the dialect (ADR 0004).
+ *   import { createTableSql, defineTable, integer, text } from "@lesto/db";
+ *   import { lesto } from "@lesto/web";
  *
  *   const posts = defineTable("posts", {
  *     id: integer("id").primaryKey({ autoIncrement: true }),
@@ -12,7 +12,7 @@
  *
  *   const app = await createApp({
  *     db,
- *     app: volo().get("/posts", (c) => c.json({ posts: [] })),
+ *     app: lesto().get("/posts", (c) => c.json({ posts: [] })),
  *     migrations: [
  *       {
  *         version: "001_create_posts",
@@ -22,11 +22,11 @@
  *   });
  *
  *   app.migrationsApplied;                 // ["001_create_posts"]
- *   await app.handle("GET", "/posts");     // the volo() route's response
+ *   await app.handle("GET", "/posts");     // the lesto() route's response
  */
 
 export { createApp, KERNEL_DEFAULT_RATE_LIMIT } from "./kernel";
-export type { App, VoloAppConfig, KernelDatabase } from "./kernel";
+export type { App, LestoAppConfig, KernelDatabase } from "./kernel";
 
 export {
   durableStores,

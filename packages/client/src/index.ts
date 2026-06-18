@@ -1,7 +1,7 @@
 /**
- * @volo/client — a typed, browser-safe fetch client for a Volo app's routes.
+ * @lesto/client — a typed, browser-safe fetch client for a Lesto app's routes.
  *
- *   import { createApi } from "@volo/client";
+ *   import { createApi } from "@lesto/client";
  *
  *   interface Api {
  *     "GET /mls/saved": { response: { saved: Listing[] } };
@@ -17,5 +17,5 @@
 export { createApi } from "./client";
 export type { Api, ApiContract, ApiMethod, ApiOptions, RouteSpec, TraceContext } from "./client";
 
-export { ClientError, VoloError } from "./errors";
+export { ClientError, LestoError } from "./errors";
 export type { ClientErrorCode } from "./errors";

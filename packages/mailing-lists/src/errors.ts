@@ -1,11 +1,11 @@
 /**
  * Mailing-list failures, coded.
  *
- * As everywhere in Volo, callers branch on `code` — never on the message,
+ * As everywhere in Lesto, callers branch on `code` — never on the message,
  * which is free to change for humans without breaking machines.
  */
 
-import { VoloError } from "@volo/errors";
+import { LestoError } from "@lesto/errors";
 
 export type MailingListErrorCode =
   /** No subscriber matched a presented confirm/unsubscribe token. */
@@ -15,7 +15,7 @@ export type MailingListErrorCode =
   /** A resumed broadcast referenced an id with no broadcast row. */
   | "MAILING_LIST_UNKNOWN_BROADCAST";
 
-export class MailingListError extends VoloError<MailingListErrorCode> {
+export class MailingListError extends LestoError<MailingListErrorCode> {
   constructor(code: MailingListErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

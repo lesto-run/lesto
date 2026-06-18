@@ -6,9 +6,9 @@
     "types": ["node"],
 
     // This package now ALSO ships a browser runtime — the RUM client (`rum.ts`)
-    // inlined into `@volo/assets`' synthesized entry — so the DOM lib joins ES2023:
+    // inlined into `@lesto/assets`' synthesized entry — so the DOM lib joins ES2023:
     // `document`, `fetch`, `PerformanceObserver`, `location`, and `crypto` are real
-    // here, exactly as `@volo/assets` (the island error beacon) and `@volo/ui` (the
+    // here, exactly as `@lesto/assets` (the island error beacon) and `@lesto/ui` (the
     // hydration runtime) already do for their own browser code.
     "lib": ["ES2023", "DOM"]
   },

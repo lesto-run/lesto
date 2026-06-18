@@ -2,7 +2,7 @@
  * Zero-Copy Binary Index Format (Runtime)
  *
  * Memory-mapped binary format requiring zero parsing and zero copying.
- * BUILD-TIME functions (creation) are in @volo/content-embeddings.
+ * BUILD-TIME functions (creation) are in @lesto/content-embeddings.
  */
 
 // ============================================================================

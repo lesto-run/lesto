@@ -1,8 +1,8 @@
 {
-  "name": "@volo/assets",
+  "name": "@lesto/assets",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Volo's client-asset pipeline — synthesize the island hydration entry from an app/islands convention and bundle it (Bun.build, splitting, the opt-in preact dialect), so an app ships an optimized /client.js with no bespoke build script.",
+  "description": "Lesto's client-asset pipeline — synthesize the island hydration entry from an app/islands convention and bundle it (Bun.build, splitting, the opt-in preact dialect), so an app ships an optimized /client.js with no bespoke build script.",
   "type": "module",
   "private": true,
   "exports": {
@@ -21,8 +21,8 @@
     "format:check": "oxfmt --check src test scripts"
   },
   "dependencies": {
-    "@volo/errors": "workspace:*",
-    "@volo/observability": "workspace:*",
+    "@lesto/errors": "workspace:*",
+    "@lesto/observability": "workspace:*",
     "preact": "^10.29.2"
   },
   "devDependencies": {

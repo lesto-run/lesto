@@ -15,23 +15,23 @@
  *   curl -i http://127.0.0.1:3000/                         # static marketing HTML (+ island manifest)
  *   curl -i http://127.0.0.1:3000/mls/api/session          # 401, nobody signed in
  *   curl -i -X POST http://127.0.0.1:3000/mls/api/sign-in  # 303 + Set-Cookie (survives the path mount)
- *   curl -i -b "volo_session=<token>" .../mls/api/session  # 200 { user } — same-origin session
+ *   curl -i -b "lesto_session=<token>" .../mls/api/session  # 200 { user } — same-origin session
  */
 
 import { fileURLToPath } from "node:url";
 
-import { serve } from "@volo/runtime";
-import { parseTraceparent, tracesFromEnv } from "@volo/observability";
-import { currentRequestSpan } from "@volo/web";
-import type { CurrentSpan } from "@volo/observability";
+import { serve } from "@lesto/runtime";
+import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
+import { currentRequestSpan } from "@lesto/web";
+import type { CurrentSpan } from "@lesto/observability";
 
 import { buildProductionSite } from "./src/production";
 
 // Running the estate example locally IS the public demo, so default it into demo
 // mode (committed fallback secrets + passwordless sign-in) unless the operator
-// set their own VOLO_AUTH_SECRET. The deployed Worker (`worker.ts`) never does
+// set their own LESTO_AUTH_SECRET. The deployed Worker (`worker.ts`) never does
 // this, so production stays fail-closed on a missing secret.
-process.env["VOLO_DEMO"] ??= "1";
+process.env["LESTO_DEMO"] ??= "1";
 
 const PORT = Number(process.env["PORT"] ?? 3000);
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
@@ -42,20 +42,20 @@ const TRACE_FLUSH_INTERVAL_MS = 5_000;
 
 async function main(): Promise<void> {
   // The OTLP tracer, constructed the canonical way (operability-dx item 3): off
-  // unless `VOLO_OTLP_URL` is set (the two-env-var setup, see README). The
+  // unless `LESTO_OTLP_URL` is set (the two-env-var setup, see README). The
   // `currentSpan` seam reads the request span the runtime publishes, so a db
   // query / auth event / mail delivery fired during a request parents on it.
   //
-  //   VOLO_OTLP_URL=http://localhost:4318/v1/traces  bun run serve.ts
+  //   LESTO_OTLP_URL=http://localhost:4318/v1/traces  bun run serve.ts
   //
   // This is estate-as-the-OTLP-reference: the SAME `tracesFromEnv` + seam wiring
-  // a production Volo app uses, dogfooded on a real app.
+  // a production Lesto app uses, dogfooded on a real app.
   const traces = tracesFromEnv(process.env, {
     currentSpan: currentRequestSpan as CurrentSpan,
   });
 
   if (traces !== undefined) {
-    console.log("OTLP tracing on → spans flush to VOLO_OTLP_URL");
+    console.log("OTLP tracing on → spans flush to LESTO_OTLP_URL");
   }
 
   // Prerender + bundle the client + build the front-door dispatch — the same

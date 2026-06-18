@@ -1,18 +1,18 @@
-# @volo/content-mdx
+# @lesto/content-mdx
 
 MDX compilation and React components for Docks.
 
 ## Installation
 
 ```bash
-npm install @volo/content-mdx react react-dom
+npm install @lesto/content-mdx react react-dom
 ```
 
 ## Quick Start
 
 ```typescript
-import { MDXContent } from "@volo/content-mdx/components";
-import { getEntry } from "@volo/content-content";
+import { MDXContent } from "@lesto/content-mdx/components";
+import { getEntry } from "@lesto/content-content";
 
 const doc = getEntry("docs", "introduction");
 

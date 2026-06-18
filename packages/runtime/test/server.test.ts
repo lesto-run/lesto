@@ -30,7 +30,7 @@ import { etagFor } from "../src/index";
 import { RuntimeError } from "../src/errors";
 import { gunzipSync } from "node:zlib";
 
-import type { AnyVoloResponse } from "@volo/web";
+import type { AnyLestoResponse } from "@lesto/web";
 
 import type {
   AbortableResponse,
@@ -41,10 +41,10 @@ import type {
 } from "../src/server";
 
 import type { AccessEntry, Server } from "../src/index";
-import type { App } from "@volo/kernel";
-import { currentContext } from "@volo/web";
-import type { VoloResponse } from "@volo/web";
-import { parseTraceparent } from "@volo/observability";
+import type { App } from "@lesto/kernel";
+import { currentContext } from "@lesto/web";
+import type { LestoResponse } from "@lesto/web";
+import { parseTraceparent } from "@lesto/observability";
 
 // Track the live server so each test tears its socket down, even on failure.
 let server: Server | undefined;
@@ -149,7 +149,7 @@ function makeRequestRaw(
 describe("serve", () => {
   it("answers a real GET request through the socket, echoing path and query", async () => {
     // A stub App typed as the real interface — enough to exercise the full
-    // socket -> toVoloRequest -> handle -> applyResponse path live.
+    // socket -> toLestoRequest -> handle -> applyResponse path live.
     const app: App = {
       migrationsApplied: [],
 
@@ -733,7 +733,7 @@ describe("serve", () => {
               controller.error(new Error("producer blew up"));
             },
           }),
-        }) as unknown as VoloResponse,
+        }) as unknown as LestoResponse,
     };
 
     server = await serve(app, {
@@ -780,7 +780,7 @@ describe("serve", () => {
               controller.error(new Error("producer blew up"));
             },
           }),
-        }) as unknown as VoloResponse,
+        }) as unknown as LestoResponse,
     };
 
     // No logRequest injected: the default JSON sink runs, so its truncated branch
@@ -795,7 +795,7 @@ describe("serve", () => {
     await makeRequest(server.port, { method: "GET", path: "/stream" }).catch(() => {});
 
     // The span carries the truncation attribute.
-    expect(spans[0]?.attributes["volo.response.truncated"]).toBe(true);
+    expect(spans[0]?.attributes["lesto.response.truncated"]).toBe(true);
 
     // The default structured line carries `truncated: true`.
     const line = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
@@ -832,7 +832,7 @@ describe("serve", () => {
 
   it("mints one span per request when a tracer is wired — the trace twin of the access line", async () => {
     // A recording tracer satisfying the structural RequestTracer seam, standing
-    // in for @volo/observability's Tracer.
+    // in for @lesto/observability's Tracer.
     const spans: Array<{
       name: string;
       attributes: Record<string, unknown>;
@@ -881,7 +881,7 @@ describe("serve", () => {
           "http.method": "POST",
           "http.path": "/posts",
           "http.status_code": 201,
-          "volo.request_id": "req-9",
+          "lesto.request_id": "req-9",
         },
         status: "ok",
         ended: true,
@@ -892,7 +892,7 @@ describe("serve", () => {
           "http.method": "GET",
           "http.path": "/boom",
           "http.status_code": 500,
-          "volo.request_id": "req-9",
+          "lesto.request_id": "req-9",
         },
         status: "error",
         ended: true,
@@ -1573,7 +1573,7 @@ describe("withEtag", () => {
 
   it("recognizes HTML when the content-type is a (degenerate) list value", () => {
     // The widened header map allows a list value; the HTML check joins it first.
-    const response: AnyVoloResponse = {
+    const response: AnyLestoResponse = {
       status: 200,
       headers: { "content-type": ["text/html"] },
       body: "<h1>List</h1>",
@@ -1885,7 +1885,7 @@ function headerOf(
 }
 
 /** A buffered HTML 200 — the compressible input for the compression tests. */
-function htmlBody(body: string): AnyVoloResponse {
+function htmlBody(body: string): AnyLestoResponse {
   return { status: 200, headers: { "content-type": "text/html" }, body };
 }
 
@@ -1912,7 +1912,7 @@ describe("compressResponse", () => {
   });
 
   it("sets Content-Length on a non-compressible buffered body (identity)", () => {
-    const response: AnyVoloResponse = {
+    const response: AnyLestoResponse = {
       status: 200,
       headers: { "content-type": "image/png" },
       body: new Uint8Array([1, 2, 3, 4]),
@@ -1926,7 +1926,7 @@ describe("compressResponse", () => {
   });
 
   it("returns a stream encoding for a compressible stream the client accepts", () => {
-    const response: AnyVoloResponse = {
+    const response: AnyLestoResponse = {
       status: 200,
       headers: { "content-type": "text/html" },
       body: new ReadableStream(),
@@ -1941,7 +1941,7 @@ describe("compressResponse", () => {
   });
 
   it("leaves a stream untouched when its type is not compressible", () => {
-    const response: AnyVoloResponse = {
+    const response: AnyLestoResponse = {
       status: 200,
       headers: { "content-type": "application/octet-stream" },
       body: new ReadableStream(),
@@ -1954,7 +1954,7 @@ describe("compressResponse", () => {
   });
 
   it("leaves a compressible stream untouched when the client accepts no coding", () => {
-    const response: AnyVoloResponse = {
+    const response: AnyLestoResponse = {
       status: 200,
       headers: { "content-type": "text/html" },
       body: new ReadableStream(),
@@ -2083,7 +2083,7 @@ describe("serve — Set-Cookie multimap + compression (live socket)", () => {
               controller.close();
             },
           }),
-        }) as unknown as VoloResponse,
+        }) as unknown as LestoResponse,
     };
 
     server = await serve(app, { port: 0 });

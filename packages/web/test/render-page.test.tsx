@@ -3,25 +3,25 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { defineDataSource, defineIsland } from "@volo/ui";
-import { preactServerRenderer, reactServerRenderer } from "@volo/ui/server";
-import * as uiServer from "@volo/ui/server";
+import { defineDataSource, defineIsland } from "@lesto/ui";
+import { preactServerRenderer, reactServerRenderer } from "@lesto/ui/server";
+import * as uiServer from "@lesto/ui/server";
 
 import { DEFAULT_RENDER_DEADLINE_MS } from "../src/render-page";
 
 import { runWithContext } from "../src/context";
-import { applyUiDialect, volo } from "../src/volo";
+import { applyUiDialect, lesto } from "../src/lesto";
 import { Context as RequestCtx } from "../src/handler-context";
 import { renderPageResponse } from "../src/render-page";
 import type { Context } from "../src/handler-context";
-import type { VoloResponse } from "../src/types";
+import type { LestoResponse } from "../src/types";
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 /** Drain a streamed response body to a single string for assertions. */
-async function drain(response: VoloResponse): Promise<string> {
+async function drain(response: LestoResponse): Promise<string> {
   const stream = response.body as unknown as ReadableStream<Uint8Array>;
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -54,7 +54,7 @@ const Parent = ({ children }: { children: ReactNode }) =>
 
 describe("page rendering", () => {
   it("streams a full HTML document with a doctype", async () => {
-    const app = volo().page("/", { component: () => createElement("main", null, "home") });
+    const app = lesto().page("/", { component: () => createElement("main", null, "home") });
 
     const response = await app.handle("GET", "/");
 
@@ -70,7 +70,7 @@ describe("page rendering", () => {
   });
 
   it("feeds the component props from load", async () => {
-    const app = volo().page("/hi", {
+    const app = lesto().page("/hi", {
       load: () => ({ name: "Ada" }),
       component: Hello,
     });
@@ -81,14 +81,14 @@ describe("page rendering", () => {
   });
 
   it("renders a page with no load using empty props", async () => {
-    const app = volo().page("/x", { component: () => createElement("p", null, "no-load") });
+    const app = lesto().page("/x", { component: () => createElement("p", null, "no-load") });
 
     expect(await drain(await app.handle("GET", "/x"))).toContain("<p>no-load</p>");
   });
 
   it("derives head metadata from the loaded props", async () => {
-    const app = volo().page("/post", {
-      load: () => ({ heading: "Volo ships" }),
+    const app = lesto().page("/post", {
+      load: () => ({ heading: "Lesto ships" }),
       metadata: (loaded) => ({
         title: loaded["heading"] as string,
         description: "the framework",
@@ -98,12 +98,12 @@ describe("page rendering", () => {
 
     const html = await drain(await app.handle("GET", "/post"));
 
-    expect(html).toContain("<title>Volo ships</title>");
+    expect(html).toContain("<title>Lesto ships</title>");
     expect(html).toContain('<meta name="description" content="the framework"');
   });
 
   it("renders extra meta and link tags from the metadata", async () => {
-    const app = volo().page("/og", {
+    const app = lesto().page("/og", {
       metadata: () => ({
         meta: [{ property: "og:title", content: "Estates" }],
         links: [{ rel: "canonical", href: "https://example.com/og" }],
@@ -120,7 +120,7 @@ describe("page rendering", () => {
 
 describe("page layouts", () => {
   it("wraps the component in router layouts, outermost first", async () => {
-    const app = volo()
+    const app = lesto()
       .layout(Outer)
       .layout(Inner)
       .page("/p", { component: () => createElement("span", null, "leaf") });
@@ -132,8 +132,8 @@ describe("page layouts", () => {
   });
 
   it("composes a parent layout around a mounted sub-router's page", async () => {
-    const sub = volo().page("/inner", { component: () => createElement("span", null, "x") });
-    const app = volo().layout(Parent).route("/sub", sub);
+    const sub = lesto().page("/inner", { component: () => createElement("span", null, "x") });
+    const app = lesto().layout(Parent).route("/sub", sub);
 
     const html = await drain(await app.handle("GET", "/sub/inner"));
 
@@ -145,7 +145,7 @@ describe("page params (query validation)", () => {
   const Schema = z.object({ q: z.string() });
 
   it("validates the query and stashes the parsed value for load", async () => {
-    const app = volo().page("/search", {
+    const app = lesto().page("/search", {
       params: Schema,
       load: (c) => ({ term: c.get<{ q: string }>("params")?.q }),
       component: (props) => createElement("p", null, String(props["term"])),
@@ -157,7 +157,7 @@ describe("page params (query validation)", () => {
   });
 
   it("answers 400 when the query fails validation", async () => {
-    const app = volo().page("/search", {
+    const app = lesto().page("/search", {
       params: Schema,
       component: () => createElement("p", null, "never"),
     });
@@ -170,7 +170,7 @@ describe("page params (query validation)", () => {
   });
 
   it("returns a fresh 400 each time, not a shared singleton (blocker #2)", async () => {
-    const app = volo().page("/search", {
+    const app = lesto().page("/search", {
       params: Schema,
       component: () => createElement("p", null, "never"),
     });
@@ -190,7 +190,7 @@ describe("page params (query validation)", () => {
 describe("page abort signal", () => {
   it("renders while forwarding the request's abort signal", async () => {
     const controller = new AbortController();
-    const app = volo().page("/s", { component: () => createElement("p", null, "signal") });
+    const app = lesto().page("/s", { component: () => createElement("p", null, "signal") });
 
     const html = await runWithContext({ requestId: "r", signal: controller.signal }, () =>
       app.handle("GET", "/s").then(drain),
@@ -204,9 +204,9 @@ describe("page abort signal", () => {
 // ADR 0011/0012: the head module tag (.client) + the render-time data resolver.
 // ---------------------------------------------------------------------------
 
-describe("volo().client() — head module tag", () => {
+describe("lesto().client() — head module tag", () => {
   it("emits the client module tag in the head of every page when set", async () => {
-    const app = volo()
+    const app = lesto()
       .client("/client.js")
       .page("/", { component: () => createElement("main", null, "home") });
 
@@ -218,7 +218,7 @@ describe("volo().client() — head module tag", () => {
   });
 
   it("emits no module tag when .client() was never called", async () => {
-    const app = volo().page("/", { component: () => createElement("main", null, "home") });
+    const app = lesto().page("/", { component: () => createElement("main", null, "home") });
 
     expect(await drain(await app.handle("GET", "/"))).not.toContain('type="module"');
   });
@@ -235,9 +235,9 @@ const Reactions = defineIsland({
   data: { likes: reactions },
 });
 
-describe("volo().data() + a defineIsland on a page (the canonical island)", () => {
+describe("lesto().data() + a defineIsland on a page (the canonical island)", () => {
   it("streams the island's real markup with inline data, a mount script, and no primer", async () => {
-    const app = volo()
+    const app = lesto()
       .client("/client.js")
       .data(reactions, () => ({ likes: 7 }))
       .page("/posts", {
@@ -253,7 +253,7 @@ describe("volo().data() + a defineIsland on a page (the canonical island)", () =
     expect(html).toContain('"likes":{"likes":7}');
     expect(html).not.toContain('"bind"');
     // …no primer (data crossed the wire inline)…
-    expect(html).not.toContain("__voloData");
+    expect(html).not.toContain("__lestoData");
     // …and the head module tag is present.
     expect(html).toContain('<script type="module" src="/client.js"></script>');
   });
@@ -270,7 +270,7 @@ describe("volo().data() + a defineIsland on a page (the canonical island)", () =
       data: { likes: reactions },
     });
 
-    const app = volo()
+    const app = lesto()
       .data(reactions, (c: Context) => {
         runs += 1;
         sawHeader = c.header("x-probe");
@@ -303,7 +303,7 @@ describe("volo().data() + a defineIsland on a page (the canonical island)", () =
     // fallback) and routes the error to the stream's onError sink (console).
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    const app = volo().page("/posts", {
+    const app = lesto().page("/posts", {
       component: () =>
         createElement(
           "main",
@@ -351,7 +351,7 @@ const AccountIsh = defineIsland({
 
 describe("PageDef.static — auth-aware static (no render-time resolver)", () => {
   it("a static page BINDS its island's data (client fetch), never inlines a build-time value", async () => {
-    const app = volo()
+    const app = lesto()
       .client("/client.js")
       // At prerender time nobody is signed in — this `null` must NOT be baked in.
       .data(sessionSrc, () => null)
@@ -365,12 +365,12 @@ describe("PageDef.static — auth-aware static (no render-time resolver)", () =>
     // The island emits a BIND + parse-time primer so the CLIENT fetches per-user
     // data — the build-time value is not inlined into the cacheable document.
     expect(html).toContain('"bind"');
-    expect(html).toContain("/__volo/data/session");
-    expect(html).toContain("__voloData");
+    expect(html).toContain("/__lesto/data/session");
+    expect(html).toContain("__lestoData");
   });
 
   it("leaves a static page CACHEABLE (no no-store) even when the app has a private source", async () => {
-    const app = volo()
+    const app = lesto()
       .data(sessionSrc, () => null)
       .page("/", { static: true, component: () => createElement(AccountIsh, {}) });
 
@@ -381,7 +381,7 @@ describe("PageDef.static — auth-aware static (no render-time resolver)", () =>
   });
 
   it("a DYNAMIC page (the default) INLINES the same island's data and is stamped no-store", async () => {
-    const app = volo()
+    const app = lesto()
       .data(sessionSrc, () => ({ name: "Jade" }))
       .page("/", { component: () => createElement(AccountIsh, {}) });
 
@@ -391,7 +391,7 @@ describe("PageDef.static — auth-aware static (no render-time resolver)", () =>
     // Inlined into the mount (no bind, no primer), and the per-user document is no-store.
     expect(html).toContain('"session":{"name":"Jade"}');
     expect(html).not.toContain('"bind"');
-    expect(html).not.toContain("__voloData");
+    expect(html).not.toContain("__lestoData");
     expect(response.headers["cache-control"]).toBe("private, no-store");
   });
 });
@@ -409,7 +409,7 @@ describe("private data → no-store page (review 2d)", () => {
   });
 
   it("stamps Cache-Control: private, no-store on a page that could inline a private source", async () => {
-    const app = volo()
+    const app = lesto()
       .data(sessionSrc, () => ({ name: "Ada" }))
       .page("/me", {
         component: () => createElement("main", null, createElement(Greeting, {})),
@@ -420,7 +420,7 @@ describe("private data → no-store page (review 2d)", () => {
 
   it("leaves a shared-only app's page cacheable (no cache-control header)", async () => {
     // `reactions` is scope: "shared" — no private source registered.
-    const app = volo()
+    const app = lesto()
       .data(reactions, () => ({ likes: 1 }))
       .page("/posts", {
         component: () => createElement("main", null, createElement(Reactions, {})),
@@ -430,9 +430,9 @@ describe("private data → no-store page (review 2d)", () => {
   });
 
   it("a sub-app's private source makes the parent's pages no-store too (.route merge)", async () => {
-    const sub = volo().data(sessionSrc, () => ({ name: "Bo" }));
+    const sub = lesto().data(sessionSrc, () => ({ name: "Bo" }));
 
-    const app = volo()
+    const app = lesto()
       .route(sub)
       .page("/p", { component: () => createElement("main", null, "x") });
 
@@ -442,7 +442,7 @@ describe("private data → no-store page (review 2d)", () => {
   // The per-route opt-out of the app-wide `private` cache cliff (ui-client item 8):
   // an island-free marketing page on a private-data app should stay cacheable.
   it("cache: public keeps a private-free page CACHEABLE on a private-data app (the opt-out)", async () => {
-    const app = volo()
+    const app = lesto()
       // A private source is registered → the app-wide flag flips on…
       .data(sessionSrc, () => ({ name: "Ada" }))
       // …but THIS page binds nothing private and opts out, so it stays cacheable.
@@ -456,7 +456,7 @@ describe("private data → no-store page (review 2d)", () => {
 
   it("without the opt-out, the same private-data app still stamps the page no-store", async () => {
     // Same app shape, no `cache` override → the conservative app-wide rule holds.
-    const app = volo()
+    const app = lesto()
       .data(sessionSrc, () => ({ name: "Ada" }))
       .page("/marketing", { component: () => createElement("main", null, "Welcome") });
 
@@ -466,7 +466,7 @@ describe("private data → no-store page (review 2d)", () => {
   });
 
   it("cache: auto is explicit shorthand for the default — still no-store on a private-data app", async () => {
-    const app = volo()
+    const app = lesto()
       .data(sessionSrc, () => ({ name: "Ada" }))
       .page("/me", {
         cache: "auto",
@@ -494,7 +494,7 @@ describe("renderPageResponse — default (no resolver, no client module)", () =>
       [],
     );
 
-    const html = await drain(response as VoloResponse);
+    const html = await drain(response as LestoResponse);
 
     expect(html).toContain("<main>plain</main>");
     // No IslandDataProvider wrap and no head module tag.
@@ -545,7 +545,7 @@ describe("render deadline (configurable)", () => {
   it("threads .renderDeadline() from the app through to every page render", async () => {
     const streamSpy = vi.spyOn(uiServer, "renderPageStream");
 
-    const app = volo()
+    const app = lesto()
       .renderDeadline(2500)
       .page("/", { component: () => createElement("main", null, "home") });
 
@@ -555,15 +555,15 @@ describe("render deadline (configurable)", () => {
   });
 });
 
-describe("volo().route() — data loader merge", () => {
+describe("lesto().route() — data loader merge", () => {
   it("resolves a sub-app's loader on a parent-mounted page", async () => {
-    const sub = volo()
+    const sub = lesto()
       .data(reactions, () => ({ likes: 11 }))
       .page("/posts", {
         component: () => createElement("main", null, createElement(Reactions, {})),
       });
 
-    const app = volo().route(sub);
+    const app = lesto().route(sub);
 
     const html = await drain(await app.handle("GET", "/posts"));
 
@@ -585,7 +585,7 @@ describe("the server-render dialect (the matched pair)", () => {
   };
 
   it("renders BUFFERED to a string under a preact-dialect renderer, not a stream", async () => {
-    const app = volo()
+    const app = lesto()
       .renderer(bufferingPreactRenderer)
       .page("/p", { component: () => createElement("main", null, "preact") });
 
@@ -599,7 +599,7 @@ describe("the server-render dialect (the matched pair)", () => {
   });
 
   it("still STREAMS under the react dialect (a react renderer is the default path)", async () => {
-    const app = volo()
+    const app = lesto()
       .renderer(reactServerRenderer)
       .page("/p", { component: () => createElement("main", null, "react") });
 
@@ -611,32 +611,32 @@ describe("the server-render dialect (the matched pair)", () => {
   });
 
   it("applyUiDialect returns the wired dialect for the client build", () => {
-    const app = volo();
+    const app = lesto();
 
     expect(applyUiDialect(app, "preact")).toBe("preact");
     expect(app.serverDialect).toBe("preact");
   });
 
   it("a react app reports a react server dialect", () => {
-    const app = volo();
+    const app = lesto();
 
     expect(applyUiDialect(app, "react")).toBe("react");
     expect(app.serverDialect).toBe("react");
   });
 
   it("an unconfigured app has no server dialect", () => {
-    expect(volo().serverDialect).toBeUndefined();
+    expect(lesto().serverDialect).toBeUndefined();
   });
 
   it("re-selecting the SAME dialect is idempotent", () => {
-    const app = volo().renderer(preactServerRenderer);
+    const app = lesto().renderer(preactServerRenderer);
 
     expect(() => app.renderer(preactServerRenderer)).not.toThrow();
     expect(app.serverDialect).toBe("preact");
   });
 
   it("refuses a mismatched pair (client preact + server react) with a coded error", () => {
-    const app = volo().renderer(reactServerRenderer);
+    const app = lesto().renderer(reactServerRenderer);
 
     try {
       applyUiDialect(app, "preact");

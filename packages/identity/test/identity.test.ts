@@ -3,11 +3,11 @@ import { randomBytes, scryptSync } from "node:crypto";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { installSessionSchema, sqlSessionStore } from "@volo/auth";
-import { createDb } from "@volo/db";
-import type { Db, SqlDatabase } from "@volo/db";
-import { Migrator } from "@volo/migrate";
-import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@volo/ratelimit";
+import { installSessionSchema, sqlSessionStore } from "@lesto/auth";
+import { createDb } from "@lesto/db";
+import type { Db, SqlDatabase } from "@lesto/db";
+import { Migrator } from "@lesto/migrate";
+import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@lesto/ratelimit";
 
 import {
   clearSessionCookie,
@@ -29,9 +29,9 @@ import type { Identity, IdentityEvent, IdentityMailer, IdentityOptions } from ".
 // ---------------------------------------------------------------------------
 // Test rig
 //
-// One in-memory SQLite per test, wrapped in @volo/db's `SqlDatabase` shape —
-// the same handle satisfies both the ORM-shaped surface @volo/db consumes
-// and the exec+prepare shape @volo/migrate runs DDL through. A clock we can
+// One in-memory SQLite per test, wrapped in @lesto/db's `SqlDatabase` shape —
+// the same handle satisfies both the ORM-shaped surface @lesto/db consumes
+// and the exec+prepare shape @lesto/migrate runs DDL through. A clock we can
 // step lets every TTL test be deterministic.
 // ---------------------------------------------------------------------------
 
@@ -733,13 +733,13 @@ describe("user model + migration", () => {
 
 describe("cookie helpers", () => {
   it("the cookie name carries the __Host- prefix", () => {
-    expect(SESSION_COOKIE).toBe("__Host-volo_session");
+    expect(SESSION_COOKIE).toBe("__Host-lesto_session");
   });
 
   it("sessionCookie produces a __Host-compatible Set-Cookie string", () => {
     const header = sessionCookie("abc123");
 
-    expect(header).toContain("__Host-volo_session=abc123");
+    expect(header).toContain("__Host-lesto_session=abc123");
     expect(header).toContain("Path=/");
     expect(header).toContain("Secure");
     expect(header).toContain("HttpOnly");
@@ -749,21 +749,21 @@ describe("cookie helpers", () => {
 
   it("clearSessionCookie expires the cookie with Max-Age=0", () => {
     expect(clearSessionCookie()).toBe(
-      "__Host-volo_session=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0",
+      "__Host-lesto_session=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0",
     );
   });
 
   it("readCookie pulls one named cookie out of a Cookie header", () => {
-    const header = "foo=bar; __Host-volo_session=tok; other=baz";
+    const header = "foo=bar; __Host-lesto_session=tok; other=baz";
 
-    expect(readCookie(header, "__Host-volo_session")).toBe("tok");
+    expect(readCookie(header, "__Host-lesto_session")).toBe("tok");
     expect(readCookie(header, "foo")).toBe("bar");
     expect(readCookie(header, "missing")).toBeUndefined();
     expect(readCookie(undefined, "anything")).toBeUndefined();
   });
 
   it("readSessionToken finds the session cookie by name", () => {
-    expect(readSessionToken("__Host-volo_session=abc; x=y")).toBe("abc");
+    expect(readSessionToken("__Host-lesto_session=abc; x=y")).toBe("abc");
     expect(readSessionToken(undefined)).toBeUndefined();
   });
 });

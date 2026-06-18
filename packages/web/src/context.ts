@@ -5,7 +5,7 @@
  * Backed by `node:async_hooks` `AsyncLocalStorage`, a cross-runtime primitive
  * (node, bun, and workers all ship it) that belongs in this transport-free core
  * so BOTH ends can reach it without a circular dependency: the transport tier
- * (`@volo/runtime`, which already depends on `@volo/web`) *establishes* a fresh
+ * (`@lesto/runtime`, which already depends on `@lesto/web`) *establishes* a fresh
  * context per request, and a controller or any app code *reads* it — neither
  * importing the other.
  *
@@ -25,7 +25,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 /**
  * The slice of a tracing span the request context publishes — just what a seam
  * needs to parent a child span on the in-flight request and to read its trace
- * ids. Structurally satisfied by `@volo/observability`'s `Span`, so this
+ * ids. Structurally satisfied by `@lesto/observability`'s `Span`, so this
  * transport-free core stays dependency-free.
  */
 export interface RequestContextSpan {
@@ -43,7 +43,7 @@ export interface RequestContextSpan {
  *
  * `requestId` is always present — the transport mints one per request so every
  * log line and downstream call can be stitched into one trace. `ip` and
- * `protocol` are the trust-proxy-resolved client identity (see `@volo/runtime`):
+ * `protocol` are the trust-proxy-resolved client identity (see `@lesto/runtime`):
  * present once the transport has decided whom to believe, absent in a bare
  * `runWithContext` call (a test, a background task) that never set them.
  *
@@ -75,14 +75,14 @@ export interface RequestContext {
 
   /**
    * The request's root tracing span, published by the transport when a tracer is
-   * wired. A seam fired DURING the request (a `@volo/db` query, a `@volo/queue`
+   * wired. A seam fired DURING the request (a `@lesto/db` query, a `@lesto/queue`
    * job drained inline) parents its child span on this, so a query/job shows up
    * under the request that caused it — and the span's `data.traceId`/`data.spanId`
    * are the ids an outbound `traceparent` continues. Absent when no tracer is
    * configured (the zero-overhead default) or outside a served request.
    *
    * Typed structurally — just the slice a consumer reads — so this transport-free
-   * core takes no dependency on `@volo/observability`; the runtime publishes a
+   * core takes no dependency on `@lesto/observability`; the runtime publishes a
    * value the tracing package's `Span` satisfies.
    */
   span?: RequestContextSpan;
@@ -132,7 +132,7 @@ export function currentContext(): RequestContext | undefined {
  * one (or when no tracer is wired).
  *
  * The shared seam the observability wiring reads: a battery's `on*` hook (a
- * `@volo/db` query, a `@volo/queue` job drained inline, a `@volo/identity` event)
+ * `@lesto/db` query, a `@lesto/queue` job drained inline, a `@lesto/identity` event)
  * parents its child span on this, so the work shows up under the request that
  * caused it. Both the CLI's `serve`/`dev` wiring and an app's bespoke wiring
  * (estate) pass this as the tracer's `currentSpan` — one definition, so they can

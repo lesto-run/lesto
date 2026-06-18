@@ -66,7 +66,7 @@ describe("FileBackend", () => {
   });
 
   const makeBackend = async (): Promise<FileBackend> => {
-    root = await mkdtemp(join(tmpdir(), "volo-storage-"));
+    root = await mkdtemp(join(tmpdir(), "lesto-storage-"));
     return new FileBackend(root);
   };
 
@@ -101,7 +101,7 @@ describe("FileBackend", () => {
   });
 
   it("lists an empty list when the root directory does not yet exist", async () => {
-    root = join(tmpdir(), "volo-storage-absent-do-not-create");
+    root = join(tmpdir(), "lesto-storage-absent-do-not-create");
     const backend = new FileBackend(root);
 
     expect(await backend.list()).toEqual([]);

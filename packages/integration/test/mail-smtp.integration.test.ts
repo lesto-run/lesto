@@ -1,5 +1,5 @@
 /**
- * @volo/mail's SMTP transport, end-to-end over a real socket.
+ * @lesto/mail's SMTP transport, end-to-end over a real socket.
  *
  * The unit tests drive `createSmtpTransport` against a *mocked* socket — they
  * prove the protocol bytes are correct but never leave the process. This suite
@@ -17,8 +17,8 @@
 import { render } from "@react-email/render";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createSmtpTransport, messageIdFor, SmtpTransportError } from "@volo/mail";
-import type { RenderedEmail } from "@volo/mail";
+import { createSmtpTransport, messageIdFor, SmtpTransportError } from "@lesto/mail";
+import type { RenderedEmail } from "@lesto/mail";
 
 import { SmtpSink } from "./smtp-sink";
 import { VerifyEmail } from "./email-templates";
@@ -57,7 +57,7 @@ describe("createSmtpTransport over a real SMTP sink", () => {
       // STARTTLS + AUTH paths are exercised by the mocked-socket unit tests; here
       // we prove the real plaintext delivery dialogue end-to-end.
       secure: false,
-      ehloName: "volo.test",
+      ehloName: "lesto.test",
     });
 
     const email: RenderedEmail = {
@@ -75,7 +75,7 @@ describe("createSmtpTransport over a real SMTP sink", () => {
     const message = await sink.waitForMessage();
 
     // ---- the handshake actually happened ----
-    expect(message.commands.some((c) => c === "EHLO volo.test")).toBe(true);
+    expect(message.commands.some((c) => c === "EHLO lesto.test")).toBe(true);
     expect(message.commands.some((c) => c.startsWith("MAIL FROM:<no-reply@estate.test>"))).toBe(
       true,
     );

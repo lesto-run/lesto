@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ParseError } from "@volo/content-shared/errors";
+import { ParseError } from "@lesto/content-shared/errors";
 
 import { jsonLd } from "../src/json-ld";
 

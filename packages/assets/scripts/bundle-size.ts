@@ -4,7 +4,7 @@
  * Preact-by-default island bundle, ADR 0007/0011).
  *
  * It builds the framework's island client TWICE through the real
- * `@volo/assets` pipeline (`buildClient` + the Bun bundler deps) — once for the
+ * `@lesto/assets` pipeline (`buildClient` + the Bun bundler deps) — once for the
  * `react` dialect, once for `preact` — against a minimal self-contained island
  * fixture, minified exactly as a production build, and measures the gzipped
  * `client.js`. Then it asserts the two budgets the roadmap fixes in CI:
@@ -37,12 +37,12 @@ const BUDGET_GZIP_BYTES: Record<Dialect, number> = {
 /** Where the fixture island the bundle is measured against lives. */
 const FIXTURE_ISLANDS = join(import.meta.dir, "fixture-islands");
 
-/** The repo root, where `@volo/ui`, `react`, and `preact` all resolve from. */
+/** The repo root, where `@lesto/ui`, `react`, and `preact` all resolve from. */
 const APP_ROOT = join(import.meta.dir, "..", "..", "..");
 
 /** Build one dialect's production client and return its gzipped entry size in bytes. */
 async function measure(dialect: Dialect): Promise<number> {
-  const outDir = await mkdtemp(join(tmpdir(), `volo-bundle-${dialect}-`));
+  const outDir = await mkdtemp(join(tmpdir(), `lesto-bundle-${dialect}-`));
 
   try {
     const { entry } = await buildClient(

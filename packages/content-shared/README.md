@@ -1,16 +1,16 @@
-# @volo/content-shared
+# @lesto/content-shared
 
 Shared utilities for the Docks monorepo. Provides common functionality for error handling, caching, security, validation, and more.
 
 ## Installation
 
 ```bash
-pnpm add @volo/content-shared
+pnpm add @lesto/content-shared
 ```
 
 ## Modules
 
-### Errors (`@volo/content-shared/errors`)
+### Errors (`@lesto/content-shared/errors`)
 
 Structured error classes with context for debugging and logging.
 
@@ -29,7 +29,7 @@ import {
   isErr,
   unwrap,
   unwrapOr,
-} from "@volo/content-shared/errors";
+} from "@lesto/content-shared/errors";
 
 // Throw typed errors with context
 throw new ValidationError("Invalid email format", { field: "email", value });
@@ -51,7 +51,7 @@ if (isOk(result)) {
 }
 ```
 
-### Sanitize (`@volo/content-shared/sanitize`)
+### Sanitize (`@lesto/content-shared/sanitize`)
 
 Security utilities for preventing XSS, prototype pollution, and path traversal.
 
@@ -63,7 +63,7 @@ import {
   sanitizeObject,
   sanitizePath,
   isDangerousHtml,
-} from "@volo/content-shared/sanitize";
+} from "@lesto/content-shared/sanitize";
 
 // Sanitize user-generated HTML
 const safeHtml = sanitizeHtml('<script>alert("xss")</script><p>Hello</p>');
@@ -81,7 +81,7 @@ const safePath = sanitizePath("../../../etc/passwd", "/app/content");
 // => Throws SecurityError
 ```
 
-### Cache (`@volo/content-shared/cache`)
+### Cache (`@lesto/content-shared/cache`)
 
 LRU caching with configurable limits, TTL, and memory management.
 
@@ -93,7 +93,7 @@ import {
   deepClone,
   CACHE_LIMITS,
   CACHE_TTL,
-} from "@volo/content-shared/cache";
+} from "@lesto/content-shared/cache";
 
 // Create a basic LRU cache
 const cache = createCache<User>({
@@ -114,7 +114,7 @@ const yamlCache = createImmutableCache<Record<string, unknown>>(
 const weakCache = createWeakCache<LargeObject>();
 ```
 
-### Mutex (`@volo/content-shared/mutex`)
+### Mutex (`@lesto/content-shared/mutex`)
 
 Async synchronization primitives for preventing race conditions.
 
@@ -124,7 +124,7 @@ import {
   ReadWriteLock,
   createSingletonLoader,
   createDebouncedAsync,
-} from "@volo/content-shared/mutex";
+} from "@lesto/content-shared/mutex";
 
 // Protect critical sections
 const mutex = new AsyncMutex();
@@ -150,7 +150,7 @@ debouncedSave.cancel(); // Cancel pending call
 await debouncedSave.flush(); // Execute immediately
 ```
 
-### Validation (`@volo/content-shared/validation`)
+### Validation (`@lesto/content-shared/validation`)
 
 Input validation with Zod schemas and type-safe validators.
 
@@ -165,7 +165,7 @@ import {
   paginationSchema,
   slugSchema,
   entrySchema,
-} from "@volo/content-shared/validation";
+} from "@lesto/content-shared/validation";
 
 // Validate URLs
 const url = validateUrl("https://example.com", "API endpoint");
@@ -181,7 +181,7 @@ const validateUser = createValidator(userSchema, "user");
 const user = validateUser(input);
 ```
 
-### Encoding (`@volo/content-shared/encoding`)
+### Encoding (`@lesto/content-shared/encoding`)
 
 Base64 encoding and binary utilities for embeddings and search.
 
@@ -193,7 +193,7 @@ import {
   decodeFloat32Array,
   popcount,
   hammingDistance,
-} from "@volo/content-shared/encoding";
+} from "@lesto/content-shared/encoding";
 
 // Encode/decode base64 (works in Node.js and browser)
 const base64 = encodeBase64(bytes);
@@ -208,7 +208,7 @@ const restored = decodeFloat32Array(encoded);
 const distance = hammingDistance(hash1, hash2);
 ```
 
-### Slugify (`@volo/content-shared/slugify`)
+### Slugify (`@lesto/content-shared/slugify`)
 
 GitHub-compatible slug generation for headings and URLs.
 
@@ -218,7 +218,7 @@ import {
   slugifyOnce,
   createSlugger,
   resetSlugger,
-} from "@volo/content-shared/slugify";
+} from "@lesto/content-shared/slugify";
 
 // Generate a slug
 const slug = slugifyOnce("Hello World"); // => "hello-world"
@@ -230,7 +230,7 @@ slugger.slug("Introduction"); // => "introduction-1"
 resetSlugger(slugger);
 ```
 
-### XML (`@volo/content-shared/xml`)
+### XML (`@lesto/content-shared/xml`)
 
 XML and RSS utilities for feeds and sitemaps.
 
@@ -242,7 +242,7 @@ import {
   wrapCdata,
   formatXmlDate,
   formatRssDate,
-} from "@volo/content-shared/xml";
+} from "@lesto/content-shared/xml";
 
 // Escape XML content
 const safe = escapeXml("<script>"); // => "&lt;script&gt;"
@@ -255,7 +255,7 @@ const isoDate = formatXmlDate(new Date()); // ISO 8601
 const rssDate = formatRssDate(new Date()); // RFC 822
 ```
 
-### Shutdown (`@volo/content-shared/shutdown`)
+### Shutdown (`@lesto/content-shared/shutdown`)
 
 Graceful shutdown management for long-running processes.
 
@@ -264,7 +264,7 @@ import {
   GracefulShutdown,
   onProcessExit,
   createShutdownTimeout,
-} from "@volo/content-shared/shutdown";
+} from "@lesto/content-shared/shutdown";
 
 // Full shutdown management
 const shutdown = new GracefulShutdown({ timeout: 10000 });
@@ -285,7 +285,7 @@ onProcessExit(async () => {
 });
 ```
 
-### Markdown (`@volo/content-shared/markdown`)
+### Markdown (`@lesto/content-shared/markdown`)
 
 Markdown parsing utilities (requires optional peer dependencies).
 
@@ -296,7 +296,7 @@ import {
   stripFrontmatter,
   hasFrontmatter,
   calculateReadingTime,
-} from "@volo/content-shared/markdown";
+} from "@lesto/content-shared/markdown";
 
 // Extract plain text from markdown
 const text = await extractPlainText("# Hello **world**");

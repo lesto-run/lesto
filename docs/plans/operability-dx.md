@@ -1,8 +1,8 @@
 # Operability, API Surface & DX — v1 plan
 
 Derived from `docs/reviews/operability-dx.md`, reconciled with `docs/ROADMAP-V1.md` (which rules).
-Packages: `@volo/observability`, `@volo/mcp`, `@volo/openapi`, `@volo/webhooks`, `@volo/cli`,
-`create-volo`, `@volo/integration`, `@volo/e2e`.
+Packages: `@lesto/observability`, `@lesto/mcp`, `@lesto/openapi`, `@lesto/webhooks`, `@lesto/cli`,
+`create-lesto`, `@lesto/integration`, `@lesto/e2e`.
 This plan owns **four launch blockers** (#3 webhook SSRF, #9 scaffold loop, #11 zero spans,
 #12 MCP unlaunchable) and is the single owner of **observability wiring** repo-wide — every other
 plan's `on*` seams terminate here.
@@ -14,22 +14,22 @@ comments; one conventional commit on `main`.
 ## Increments (ordered)
 
 1. **Close the webhook SSRF bypass + replay window** — `[Wave 0 | P0 | blocker #3]`
-   Files: `packages/webhooks/src/webhooks.ts` — `redirect: "manual"` in the deliverer, 3xx = `WEBHOOK_DELIVERY_FAILED`; widen `FetchLike` to carry the redirect option; sign `${timestamp}.${body}` with an `x-volo-timestamp` header and give `verify` a `toleranceMs`; pin the guard-resolved IP for the fetch (Host header preserved) to close the DNS-rebinding TOCTOU — or, if pinning proves unportable, document the residual risk loudly and re-guard each hop.
+   Files: `packages/webhooks/src/webhooks.ts` — `redirect: "manual"` in the deliverer, 3xx = `WEBHOOK_DELIVERY_FAILED`; widen `FetchLike` to carry the redirect option; sign `${timestamp}.${body}` with an `x-lesto-timestamp` header and give `verify` a `toleranceMs`; pin the guard-resolved IP for the fetch (Host header preserved) to close the DNS-rebinding TOCTOU — or, if pinning proves unportable, document the residual risk loudly and re-guard each hop.
    Acceptance: a 302-to-metadata-endpoint fixture is refused; a replayed capture outside tolerance fails `verify`; the 20+ existing guard tests stay green.
 
 2. **Fix the scaffold→run loop** — `[Wave 2 | P0 | blocker #9]`
-   Files: `packages/create-volo/src/templates.ts` (add `@volo/cli` to deps; replace `@volo/*@latest` with the decided pin story — tarball/`file:` pins until the `0.x` publish at launch, then real versions), `packages/cli/src/run.ts`/`bin.ts` (tolerate a missing `volo.sites.ts` — empty sites, app-only dispatch), plus the scaffold flip to `dialect: "preact"` (coordinate with ui-client item 3 — same wave, the scaffold lands once).
-   Acceptance: **a CI job that scaffolds into a temp dir, runs `bun install` against workspace-linked packages, boots `volo dev`, curls a route, and asserts an island hydrates.** This e2e is the gate that makes the three silent breaks impossible to re-ship.
+   Files: `packages/create-lesto/src/templates.ts` (add `@lesto/cli` to deps; replace `@lesto/*@latest` with the decided pin story — tarball/`file:` pins until the `0.x` publish at launch, then real versions), `packages/cli/src/run.ts`/`bin.ts` (tolerate a missing `lesto.sites.ts` — empty sites, app-only dispatch), plus the scaffold flip to `dialect: "preact"` (coordinate with ui-client item 3 — same wave, the scaffold lands once).
+   Acceptance: **a CI job that scaffolds into a temp dir, runs `bun install` against workspace-linked packages, boots `lesto dev`, curls a route, and asserts an island hydrates.** This e2e is the gate that makes the three silent breaks impossible to re-ship.
 
 3. **Wire tracing end-to-end** — `[Wave 4 | P0 | blocker #11 — the single owner of OTLP wiring]`
-   Files: `packages/cli/src/run.ts` (`volo serve`/`dev` read `VOLO_OTLP_URL` + headers/service-name, construct `Tracer` + `OtlpHttpExporter`, flush on interval and on drain), `packages/runtime/src/server.ts` (`onDrain` flush hook), `packages/observability/src/otlp.ts` (cap the unbounded buffer, drop-oldest + error count), `packages/cloudflare` via edge-deploy item 3 (`waitUntil` flush). Then propagation: parse W3C `traceparent` into the root span, expose the request span on the request context, emit `traceparent` outbound from the webhook deliverer; first child spans from the seams other plans built (`@volo/db.onQuery`, queue `onJob`, identity `onEvent`, mail `onDelivered`).
+   Files: `packages/cli/src/run.ts` (`lesto serve`/`dev` read `LESTO_OTLP_URL` + headers/service-name, construct `Tracer` + `OtlpHttpExporter`, flush on interval and on drain), `packages/runtime/src/server.ts` (`onDrain` flush hook), `packages/observability/src/otlp.ts` (cap the unbounded buffer, drop-oldest + error count), `packages/cloudflare` via edge-deploy item 3 (`waitUntil` flush). Then propagation: parse W3C `traceparent` into the root span, expose the request span on the request context, emit `traceparent` outbound from the webhook deliverer; first child spans from the seams other plans built (`@lesto/db.onQuery`, queue `onJob`, identity `onEvent`, mail `onDelivered`).
    Acceptance: an integration test proving a served request produces a span in a local collector on **both** tiers; a db query appears as a child span; `examples/blog` documents the two-env-var setup.
 
-4. **Ship `volo mcp` — governed** — `[Wave 4 | P0 | blocker #12]`
-   Files: `packages/cli` (new `mcp` command: load `volo.app.ts`, build `VoloMcpContext` — routes, content db when present — `startMcpServer` on stdio), `packages/mcp` (`mode: "read-only" | "operator"` on the context gating `create/update/delete_content_entry` and `handle_request`; per-tool `destructive` metadata; a **mandatory audit sink** on `dispatch` — tool, input hash, outcome, duration; `handle_request` gains an explicit allowlisted `headers` input so agent requests can carry identity instead of being middleware-hostile).
+4. **Ship `lesto mcp` — governed** — `[Wave 4 | P0 | blocker #12]`
+   Files: `packages/cli` (new `mcp` command: load `lesto.app.ts`, build `LestoMcpContext` — routes, content db when present — `startMcpServer` on stdio), `packages/mcp` (`mode: "read-only" | "operator"` on the context gating `create/update/delete_content_entry` and `handle_request`; per-tool `destructive` metadata; a **mandatory audit sink** on `dispatch` — tool, input hash, outcome, duration; `handle_request` gains an explicit allowlisted `headers` input so agent requests can carry identity instead of being middleware-hostile).
    Acceptance: read-only is the default; write tools refuse without operator mode with a coded error; every dispatch lands in the audit sink (test-pinned); the five-minute demo (list routes → read content → operator-mode create → generate_ui) runs from a real MCP client.
 
-5. **Make the API surface reachable: `volo openapi`** — `[Wave 4 | P1]`
+5. **Make the API surface reachable: `lesto openapi`** — `[Wave 4 | P1]`
    Files: `packages/cli` (new `openapi [--out openapi.json]` command over the existing generator), `packages/openapi` (per-route `internal`/exclude filter before any serving story exists).
    Acceptance: blog's routes export valid 3.1; internal routes excludable; documented limitation: no request/response schemas yet (Zod extraction is the post-1.0 follow-on).
 
@@ -38,7 +38,7 @@ comments; one conventional commit on `main`.
    Acceptance: every CLI command exercised end-to-end at least once in CI.
 
 7. **DX polish batch** — `[Wave 5 | P2]` (one PR)
-   `parseStringFlag` rejects `--`-prefixed values; MCP content writes batch/incremental `hydrateRuntime` instead of O(n²) full rehydration; document the traces-only observability cut (no metrics in v1 — say it out loud) and the `volo.request_id`-to-trace join; adopt the decision that propagation is W3C `traceparent` verbatim, never an invented format (NIH boundary line).
+   `parseStringFlag` rejects `--`-prefixed values; MCP content writes batch/incremental `hydrateRuntime` instead of O(n²) full rehydration; document the traces-only observability cut (no metrics in v1 — say it out loud) and the `lesto.request_id`-to-trace join; adopt the decision that propagation is W3C `traceparent` verbatim, never an invented format (NIH boundary line).
 
 ## Owned elsewhere (do not duplicate)
 
@@ -49,7 +49,7 @@ comments; one conventional commit on `main`.
 
 ## Deferred post-1.0 (deliberate)
 
-- OpenAPI request/response schema extraction from the Zod boundary validators (ADR 0005) — natural follow-on once `volo openapi` exists.
+- OpenAPI request/response schema extraction from the Zod boundary validators (ADR 0005) — natural follow-on once `lesto openapi` exists.
 - Metrics and logs pipelines (counters, latency histograms) — v1 is traces + structured access logs, stated explicitly in the docs.
 - MCP-over-HTTP transport — stdio only in v1; the mode/audit governance from item 4 is the prerequisite it was built to be.
 - Publishing automation/release tooling beyond the launch `0.x` publish.

@@ -1,17 +1,17 @@
-import { createTableSql, defineTable, integer, text } from "@volo/db";
-import type { MigrationEntry } from "@volo/migrate";
+import { createTableSql, defineTable, integer, text } from "@lesto/db";
+import type { MigrationEntry } from "@lesto/migrate";
 
 /** The single table that holds every content entry, for every collection. */
 export const CONTENT_ENTRIES_TABLE = "content_entries";
 
 /**
- * The content-entries table as a `@volo/db` schema value — the one source of
+ * The content-entries table as a `@lesto/db` schema value — the one source of
  * truth for its DDL. One row per entry. The open-ended shape of a content
  * document — arbitrary frontmatter, rendered HTML, computed fields — lives
  * losslessly in the `document` JSON column. A handful of fields are lifted out
  * alongside it (`collection`, `slug`, `status`, `published_at`) precisely because
  * they are the ones worth indexing and querying on. `published_at` and the
- * timestamps are ISO strings (TEXT), matching the rest of Volo's time columns.
+ * timestamps are ISO strings (TEXT), matching the rest of Lesto's time columns.
  */
 const contentEntries = defineTable(CONTENT_ENTRIES_TABLE, {
   id: integer("id").primaryKey({ autoIncrement: true }),

@@ -1,7 +1,7 @@
 /**
  * The vocabulary of the migrator.
  *
- * Like every Volo module, this one depends on a *minimal SQL surface* — not on
+ * Like every Lesto module, this one depends on a *minimal SQL surface* — not on
  * any one driver. better-sqlite3 satisfies it structurally today; a Postgres
  * driver will satisfy the same shape tomorrow, and the migrator never knows the
  * difference.
@@ -12,9 +12,9 @@
  *
  * The migrator threads this to every `Schema` it builds, so the auto-increment
  * surrogate key the builder seeds (`AUTOINCREMENT` on SQLite, identity column on
- * Postgres) — and any `@volo/db` `createTableSql(table, schema.dialect)` a
+ * Postgres) — and any `@lesto/db` `createTableSql(table, schema.dialect)` a
  * value-DDL migration renders — match the engine the migration is running
- * against. Mirrors `@volo/db`'s `Dialect`.
+ * against. Mirrors `@lesto/db`'s `Dialect`.
  */
 export type Dialect = "sqlite" | "postgres";
 

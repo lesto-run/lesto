@@ -38,7 +38,7 @@
 - `packages/ui/src/data.ts` — `dataPrimerScript` per-source emission becomes (names/hrefs still `JSON.stringify`-embedded; the charset validation in `defineDataSource` is what keeps this injection-safe — do not relax it):
 
   ```js
-  w[<name>]=w[<name>]||fetch(<href>,{credentials:"same-origin"}).then(function(r){if(!r.ok)throw new Error("volo data "+r.status);return r.json()});w[<name>].catch(function(){})
+  w[<name>]=w[<name>]||fetch(<href>,{credentials:"same-origin"}).then(function(r){if(!r.ok)throw new Error("lesto data "+r.status);return r.json()});w[<name>].catch(function(){})
   ```
 
   - The `||` guard makes the primer idempotent (ADR 0011 Seam 1 §3 specified this; the implementation violated its own spec).
@@ -55,13 +55,13 @@
 
 ---
 
-## Item 3 — F3: cache headers on `/__volo/data/<name>` + `scope` on `defineDataSource`
+## Item 3 — F3: cache headers on `/__lesto/data/<name>` + `scope` on `defineDataSource`
 
-**Why (verified):** `Volo.data()` (packages/web/src/volo.ts:216–218) returns `c.json(...)`, and `Context.json` (packages/web/src/handler-context.ts:108–114) sets only `content-type` — per-user JSON on a GET with no cache header is heuristically shared-cacheable. Rule now lives in ADR 0010 §3a.
+**Why (verified):** `Lesto.data()` (packages/web/src/lesto.ts:216–218) returns `c.json(...)`, and `Context.json` (packages/web/src/handler-context.ts:108–114) sets only `content-type` — per-user JSON on a GET with no cache header is heuristically shared-cacheable. Rule now lives in ADR 0010 §3a.
 
 **Change:**
 - `packages/ui/src/data.ts`: `defineDataSource<T>(name: string, options?: { scope?: "private" | "shared" })`; `DataSource<T>` gains `readonly scope: "private" | "shared"`, defaulting to `"private"`. Update the module header (the token now carries name + scope + phantom type — still zero implementation).
-- `packages/web/src/volo.ts` — `data()`:
+- `packages/web/src/lesto.ts` — `data()`:
 
   ```ts
   const cacheControl =
@@ -74,13 +74,13 @@
 
   Update `data()`'s doc comment to state the rule and why (`Vary: Cookie` is not honored by Cloudflare's cache — "do not store" is the only defense for per-user JSON).
 
-**Tests:** `packages/web/test/volo.test.ts`: default source → `cache-control: private, no-store` on the response; `scope:"shared"` source → `public, max-age=0, must-revalidate`; body/content-type unchanged. `packages/ui/test/data.test.ts`: scope defaults private; explicit shared carried; name validation unaffected. estate is correct with no change (session stays private by default) — but eyeball `examples/estate/test/security.test.ts` for a place to add one assertion that `/__volo/data/session` is `no-store` (do add it; this is the live launch-hardening surface).
+**Tests:** `packages/web/test/lesto.test.ts`: default source → `cache-control: private, no-store` on the response; `scope:"shared"` source → `public, max-age=0, must-revalidate`; body/content-type unchanged. `packages/ui/test/data.test.ts`: scope defaults private; explicit shared carried; name validation unaffected. estate is correct with no change (session stays private by default) — but eyeball `examples/estate/test/security.test.ts` for a place to add one assertion that `/__lesto/data/session` is `no-store` (do add it; this is the live launch-hardening surface).
 
 ---
 
 ## Item 4 — F6: deploy-skew resilience — unknown components skip-and-report, never throw
 
-**Why (verified):** `hydrateIslands` (packages/ui/src/hydrate.tsx:376–381) throws `UI_ISLAND_UNKNOWN_COMPONENT` uncaught mid-loop. Both manifest forms reach the client inside a **possibly CDN-cached document** (estate's `#volo-islands` script and the scanned `data-volo-island-mount` scripts alike), so the premise in the doc comment — "a manifest/registry mismatch is a build-time bug" — is wrong in production: rename an island, deploy, and every cached page darks **all** islands after the renamed one. The page-resilience contract ("one broken region cannot take the page down") must cover this.
+**Why (verified):** `hydrateIslands` (packages/ui/src/hydrate.tsx:376–381) throws `UI_ISLAND_UNKNOWN_COMPONENT` uncaught mid-loop. Both manifest forms reach the client inside a **possibly CDN-cached document** (estate's `#lesto-islands` script and the scanned `data-lesto-island-mount` scripts alike), so the premise in the doc comment — "a manifest/registry mismatch is a build-time bug" — is wrong in production: rename an island, deploy, and every cached page darks **all** islands after the renamed one. The page-resilience contract ("one broken region cannot take the page down") must cover this.
 
 **Change:** `packages/ui/src/hydrate.tsx` — in the manifest loop, replace the throw:
 
@@ -103,7 +103,7 @@ The error code stays (callers branch on it at the sink); only the delivery chang
 
 ## Item 5 — bind-resolution deadline
 
-**Why:** a hung `/__volo/data/<name>` (or a primed promise that never settles) leaves its island in `deferred` forever — the client has no analogue of the server's 10s `RENDER_DEADLINE_MS` (packages/web/src/render-page.tsx:95).
+**Why:** a hung `/__lesto/data/<name>` (or a primed promise that never settles) leaves its island in `deferred` forever — the client has no analogue of the server's 10s `RENDER_DEADLINE_MS` (packages/web/src/render-page.tsx:95).
 
 **Change:** `packages/ui/src/hydrate.tsx`:
 - `const BIND_DEADLINE_MS = 10_000;` (mirror the server constant's rationale in a comment).
@@ -119,13 +119,13 @@ The error code stays (callers branch on it at the sink); only the delivery chang
 
 **Why (verified):** `examples/estate/src/document.ts:98–106` emits the primer and the `client.js` module tag at end-of-body. The primer's entire purpose is to start the data fetch at parse time — at end-of-body it starts after the whole document has parsed. ADR 0011 Seam 1 already rules: head module tag, primer beside it.
 
-**Change:** `examples/estate/src/document.ts` — move into `<head>`, in this order: the existing `<style>`, then `<script>${primer}</script>` (when non-empty), then `<script type="module" src="/client.js"></script>`. A `type="module"` script is deferred by spec — it downloads immediately, executes after the parse, so the `#volo-islands` manifest (which **stays at end-of-body**; it is inert payload the runtime reads post-parse, and keeping it after the content keeps first-paint bytes first) is always present when the runtime runs. Update the module header and inline comments to match.
+**Change:** `examples/estate/src/document.ts` — move into `<head>`, in this order: the existing `<style>`, then `<script>${primer}</script>` (when non-empty), then `<script type="module" src="/client.js"></script>`. A `type="module"` script is deferred by spec — it downloads immediately, executes after the parse, so the `#lesto-islands` manifest (which **stays at end-of-body**; it is inert payload the runtime reads post-parse, and keeping it after the content keeps first-paint bytes first) is always present when the runtime runs. Update the module header and inline comments to match.
 
 **Tests:** `examples/estate/test/document.test.tsx`: primer appears in head and **before** the module tag; module tag in head; manifest still in body; a page with no bound islands emits no primer (existing assertion holds). Estate's Lighthouse posture is the regression canary — `production.integration.test.ts` must stay green.
 
 ---
 
-## Item 7 — ADR 0012 core: the render-time source resolver in `@volo/ui`
+## Item 7 — ADR 0012 core: the render-time source resolver in `@lesto/ui`
 
 **This is the inversion's machinery. Read ADR 0012 §Mechanism first.**
 
@@ -155,18 +155,18 @@ The error code stays (callers branch on it at the sink); only the delivery chang
 
 ---
 
-## Item 8 — wire `volo()` to the resolver + the head module tag (`@volo/web`)
+## Item 8 — wire `lesto()` to the resolver + the head module tag (`@lesto/web`)
 
-**Change:** `packages/web/src/volo.ts` and `packages/web/src/render-page.tsx`:
-- `Volo` gains `private readonly dataLoaders = new Map<string, (c: Context) => MaybePromise<unknown>>()`. `.data()` records the loader (last registration wins, mirroring `Registry`'s rule) in addition to registering the route. `.route()` merges `sub.dataLoaders` into the parent (parent's existing entry wins on collision? **No — last wins, i.e. the sub's, consistent with `.data()` itself; document it**). **Known limitation, document in `.route()`'s doc comment:** a prefixed mount prefixes the data *route* but `bind.href` still points at root — register sources on the root app (ADR 0010 corrections #8).
-- `Volo` gains `.client(src: string): this` recording `clientModuleSrc` (e.g. `"/client.js"`). Doc comment: why config-driven rather than island-gated (streaming flushes the head first — see ADR 0011's 2026-06-11 amendment).
+**Change:** `packages/web/src/lesto.ts` and `packages/web/src/render-page.tsx`:
+- `Lesto` gains `private readonly dataLoaders = new Map<string, (c: Context) => MaybePromise<unknown>>()`. `.data()` records the loader (last registration wins, mirroring `Registry`'s rule) in addition to registering the route. `.route()` merges `sub.dataLoaders` into the parent (parent's existing entry wins on collision? **No — last wins, i.e. the sub's, consistent with `.data()` itself; document it**). **Known limitation, document in `.route()`'s doc comment:** a prefixed mount prefixes the data *route* but `bind.href` still points at root — register sources on the root app (ADR 0010 corrections #8).
+- `Lesto` gains `.client(src: string): this` recording `clientModuleSrc` (e.g. `"/client.js"`). Doc comment: why config-driven rather than island-gated (streaming flushes the head first — see ADR 0011's 2026-06-11 amendment).
 - `pageHandler` becomes a closure with access to the app: per request it builds `createSourceResolver((name) => { const loader = this.dataLoaders.get(name); if (loader === undefined) throw new WebError(<new code> "WEB_UNKNOWN_DATA_SOURCE", …); return loader(c); })` and calls `renderPageResponse(def, c, layouts, { clientModule, resolver })`. Add the code to `packages/web/src/errors.ts` (an island binding a never-registered source is a wiring bug — fail the island loudly through the render error path, not silently `undefined`).
 - `renderPageResponse(def, c, layouts, options?: { clientModule?: string; resolver?: SourceResolver })`:
   - when `options.resolver` is set, wrap `content` in `IslandDataProvider`;
   - when `options.clientModule` is set, append `createElement("script", { type: "module", src: options.clientModule })` to the head children (after the metadata elements). This closes ADR 0011's "render-page head module tag" gap.
   - Fix the module-header lie: "The island manifest is empty here on purpose … islands slot into the same stream when that lands" → islands now ride `defineIsland`'s co-located emission and the data resolver; say so.
 
-**Tests:** `packages/web/test/volo.test.ts` / `render-page.test.tsx`:
+**Tests:** `packages/web/test/lesto.test.ts` / `render-page.test.tsx`:
 - `.client("/client.js")` → head contains the module tag on every page; absent without it.
 - a `.page` whose tree contains an ssr+data `defineIsland` + `.data(source, loader)` → streamed HTML carries the real markup with data, an inlined mount script, no primer; loader observed **once** with the request's context across two islands binding the source.
 - `.route()` merge: sub-app's loader resolves on a parent-mounted page.
@@ -180,7 +180,7 @@ The error code stays (callers branch on it at the sink); only the delivery chang
 
 **Decision:** type the **`defineIsland` path now** (the canonical path). `Registry.defineClient` typing is **deferred** to estate's `.page` convergence (ADR 0011 Increment 2) — its storage is erased `Map<string, ClientComponentDef>` and its consumers (the UiNode walk) are stringly by design, so generics there are cosmetic until that path migrates or retires; record this rationale in the `island.ts` doc.
 
-**Change:** `packages/ui/src/define-island.tsx` gains a typed public signature over the same runtime (one erasure boundary, the `PageDef` precedent in volo.ts `page()`):
+**Change:** `packages/ui/src/define-island.tsx` gains a typed public signature over the same runtime (one erasure boundary, the `PageDef` precedent in lesto.ts `page()`):
 
 ```ts
 export function defineIsland<
@@ -206,15 +206,15 @@ export function defineIsland<
 
 ---
 
-## Item 10 — CLI invokes `@volo/assets` (`volo dev` / `volo build`)
+## Item 10 — CLI invokes `@lesto/assets` (`lesto dev` / `lesto build`)
 
-**Why:** ADR 0011 Seam 3 — `@volo/assets` (`buildClient`, `synthesizeEntry`, packages/assets/src) is shipped and unit-tested but nothing calls it; `packages/cli/src/run.ts` already has the `clientAsset` injection seam for serving `/client.js` in dev.
+**Why:** ADR 0011 Seam 3 — `@lesto/assets` (`buildClient`, `synthesizeEntry`, packages/assets/src) is shipped and unit-tested but nothing calls it; `packages/cli/src/run.ts` already has the `clientAsset` injection seam for serving `/client.js` in dev.
 
 **Change** (follow the CLI's existing injected-deps pattern — real implementations bind in `bin.ts`, `run.ts` stays pure):
 - Convention: a project with an **`app/islands/`** directory (one island module per file, default-exporting a `defineIsland` component — ADR 0011's convention, exactly) gets a client build. No directory → no build, zero change for island-less apps.
 - `RunDeps` gains `buildClientAssets?: (options: { projectRoot: string; outDir: string; mode: "dev" | "production" }) => Promise<void>` — `bin.ts` wires it to `synthesizeEntry(join(projectRoot, "app/islands"))` + `buildClient(...)` with `bunBuildClientDeps`. Dialect: `"react"` for now; the `ui.dialect` config key is Increment 2/3 scope — leave a pointed TODO referencing ADR 0011 Seam 2.
-- `volo build`: when `app/islands/` exists, run the prod client build into the static out dir before/alongside `buildStaticSites` so `/client.js` + chunks land in the artifact.
-- `volo dev`: when `app/islands/` exists, run an unminified build on boot, then a debounced (`~100ms`) `fs.watch` on `app/islands/` rebuilding on change; serve the result through the existing `clientAsset` seam. Keep the watcher trivial — correctness over cleverness.
+- `lesto build`: when `app/islands/` exists, run the prod client build into the static out dir before/alongside `buildStaticSites` so `/client.js` + chunks land in the artifact.
+- `lesto dev`: when `app/islands/` exists, run an unminified build on boot, then a debounced (`~100ms`) `fs.watch` on `app/islands/` rebuilding on change; serve the result through the existing `clientAsset` seam. Keep the watcher trivial — correctness over cleverness.
 
 **Tests:** `packages/cli` test suite with injected fakes: `build` invokes `buildClientAssets` iff the islands dir exists (fake fs probe via deps — add an injectable `hasIslandsDir`/fs seam rather than touching the real filesystem); `dev` builds on boot; failure of the client build fails the command with a coded CLI error (add to packages/cli/src/errors.ts). 100% coverage including the watcher debounce (fake timers).
 
@@ -222,24 +222,24 @@ export function defineIsland<
 
 ## Item 11 — the blog proof (ADR 0011 Increment 1 exit, demonstrating ADR 0012)
 
-**Why:** `examples/blog` is the canonical `volo()+.page` app and has **no island** — the wire has never been proven end-to-end. Per ADR 0012 it must prove the **canonical** island: ssr + inline data on a dynamic page.
+**Why:** `examples/blog` is the canonical `lesto()+.page` app and has **no island** — the wire has never been proven end-to-end. Per ADR 0012 it must prove the **canonical** island: ssr + inline data on a dynamic page.
 
 **Change** (`examples/blog`):
 - `src/reactions-source.ts`: `export const reactionsSource = defineDataSource<Record<string, number>>("reactions", { scope: "shared" })` — post-slug → count; shared on purpose (same for every visitor) so the proof exercises the non-default scope and its cache header.
 - `app/islands/reactions.tsx`: a pure `Reactions({ counts })` component (renders a count badge per post; an interactive bit — e.g. a local-state "👍" toggle — so hydration is observable), `export default defineIsland({ name: "Reactions", component: Reactions, ssr: true, data: { counts: reactionsSource } })`. Typed via item 9 — **no casts**.
 - `src/page.tsx`: render `<ReactionsIsland />` in `BlogPage`.
 - `src/app.ts`: `.data(reactionsSource, async () => countReactions(db))` (an in-memory or db-backed count — keep it honest but small) and `.client("/client.js")`.
-- `examples/blog/test/` (new, mirroring estate's test layout): assert the streamed `/posts` document contains (a) the island's **real server markup including the counts** (not a fallback), (b) a co-located mount script with inlined props and **no `bind`**, (c) **no primer**, (d) the head module tag; assert `/__volo/data/reactions` answers with `cache-control: public, max-age=0, must-revalidate`; a jsdom `hydrateDocumentIslands` pass over the document mounts the island with zero `failed`.
-- Run `volo dev` against blog manually once and record the result in the commit message (client builds, island hydrates, no console errors) — the automated assertions above are the gate, the manual run is the smoke.
+- `examples/blog/test/` (new, mirroring estate's test layout): assert the streamed `/posts` document contains (a) the island's **real server markup including the counts** (not a fallback), (b) a co-located mount script with inlined props and **no `bind`**, (c) **no primer**, (d) the head module tag; assert `/__lesto/data/reactions` answers with `cache-control: public, max-age=0, must-revalidate`; a jsdom `hydrateDocumentIslands` pass over the document mounts the island with zero `failed`.
+- Run `lesto dev` against blog manually once and record the result in the commit message (client builds, island hydrates, no console errors) — the automated assertions above are the gate, the manual run is the smoke.
 
-**Exit criterion (ADR 0011 Increment 1, restated):** blog's `/posts` ships a live data-bound island with **inline** (0-RTT) data and a small client, written as `volo()+.page` + one island file — zero bespoke scripts.
+**Exit criterion (ADR 0011 Increment 1, restated):** blog's `/posts` ships a live data-bound island with **inline** (0-RTT) data and a small client, written as `lesto()+.page` + one island file — zero bespoke scripts.
 
 ---
 
 ## Explicitly out of scope (decided, with owners)
 
 - **estate convergence** onto `.page`/`defineIsland` and the Registry-path resolver seam — ADR 0011 Increment 2.
-- **`create-volo` scaffold flip** to the canonical island — ADR 0011 Increment 3.
+- **`create-lesto` scaffold flip** to the canonical island — ADR 0011 Increment 3.
 - **Dev double-render mismatch diff**, then any reconsideration of defaulting `ssr` — ADR 0012 Phase C.
 - **CSP nonce seam** for inline scripts (primer + mount scripts) — no served path enforces a CSP today; design when one does (ADR 0010 corrections #9).
 - **`TriggerFn`** generalization of `ObserveFn` / richer hydrate vocabulary (`"idle"`, `"media"`) — future ADR.

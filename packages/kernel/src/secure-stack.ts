@@ -1,7 +1,7 @@
 /**
- * `secureStack` — the one composition that turns Volo's security batteries on.
+ * `secureStack` — the one composition that turns Lesto's security batteries on.
  *
- * Before the pipeline existed, `@volo/cors`, `@volo/ratelimit`, and `@volo/csrf`
+ * Before the pipeline existed, `@lesto/cors`, `@lesto/ratelimit`, and `@lesto/csrf`
  * were dead code: built, tested, and unmountable. This bundles them into an
  * ordered middleware list an app drops into `createApp({ middleware })`.
  *
@@ -31,27 +31,27 @@
  * one shared `sqlRateLimitStore` instead of a per-process `Map`. Omit the `db`
  * in production and the stack warns ONCE (the {@link KERNEL_MEMORY_STORES_CODE}
  * latch) that the limiter is per-process memory — the silent degradation made
- * loud, mirroring `@volo/ratelimit`'s `RATELIMIT_UNKNOWN_CLIENT` idiom.
+ * loud, mirroring `@lesto/ratelimit`'s `RATELIMIT_UNKNOWN_CLIENT` idiom.
  */
 
-import type { Dialect } from "@volo/db";
+import type { Dialect } from "@lesto/db";
 
-import { cors } from "@volo/cors";
-import type { CorsOptions } from "@volo/cors";
+import { cors } from "@lesto/cors";
+import type { CorsOptions } from "@lesto/cors";
 
-import type { SqlSessionStore } from "@volo/auth";
+import type { SqlSessionStore } from "@lesto/auth";
 
-import { RateLimiter, rateLimit, sqlRateLimitStore } from "@volo/ratelimit";
+import { RateLimiter, rateLimit, sqlRateLimitStore } from "@lesto/ratelimit";
 import type {
   RateLimitOptions,
   SqlDatabase as RateLimitSql,
   SqlRateLimitStore,
-} from "@volo/ratelimit";
+} from "@lesto/ratelimit";
 
-import { csrf, originCheck } from "@volo/csrf";
-import type { CsrfOptions, OriginCheckOptions } from "@volo/csrf";
+import { csrf, originCheck } from "@lesto/csrf";
+import type { CsrfOptions, OriginCheckOptions } from "@lesto/csrf";
 
-import type { Middleware } from "@volo/web";
+import type { Middleware } from "@lesto/web";
 
 import type { KernelDatabase } from "./kernel";
 
@@ -59,7 +59,7 @@ import type { KernelDatabase } from "./kernel";
  * The stable code the production memory-stores warning carries.
  *
  * Logs and ops tooling branch on this code, never the prose — the house pattern
- * (`@volo/ratelimit`'s `RATELIMIT_UNKNOWN_CLIENT_CODE`). A `secureStack` built
+ * (`@lesto/ratelimit`'s `RATELIMIT_UNKNOWN_CLIENT_CODE`). A `secureStack` built
  * with `production: true` and no `db` cannot share sessions or rate limits across
  * a fleet: each process holds its own buckets, so a flood throttled on one node
  * sails through the next. This code names that hazard so an operator can find it.
@@ -193,7 +193,7 @@ export interface DurableStores {
  * that gap: construct both stores over the same `db` here, hand `sessionStore`
  * to your identity layer and let `secureStack({ db })` wire the rate-limit half.
  *
- * Lazily imports `@volo/auth` so the kernel's hot path (no durable stores) never
+ * Lazily imports `@lesto/auth` so the kernel's hot path (no durable stores) never
  * pulls auth's crypto in. The schema must already exist — `createApp` installs
  * it after migrate, or call {@link installDurableSchema} yourself.
  */
@@ -201,7 +201,7 @@ export async function durableStores(
   db: KernelDatabase,
   options: { dialect?: Dialect } = {},
 ): Promise<DurableStores> {
-  const { sqlSessionStore } = await import("@volo/auth");
+  const { sqlSessionStore } = await import("@lesto/auth");
 
   return {
     sessionStore: sqlSessionStore(db),
@@ -219,8 +219,8 @@ export async function durableStores(
  */
 export async function installDurableSchema(db: KernelDatabase): Promise<void> {
   const [{ installSessionSchema }, { installRateLimitSchema }] = await Promise.all([
-    import("@volo/auth"),
-    import("@volo/ratelimit"),
+    import("@lesto/auth"),
+    import("@lesto/ratelimit"),
   ]);
 
   await installSessionSchema(db);

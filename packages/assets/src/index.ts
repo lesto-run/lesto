@@ -1,5 +1,5 @@
 /**
- * @volo/assets — the framework-owned client-asset pipeline (ADR 0011, Seam 2).
+ * @lesto/assets — the framework-owned client-asset pipeline (ADR 0011, Seam 2).
  *
  *   const deps = bunBuildClientDeps(projectRoot);
  *   await buildClient({ islandsDir, outDir, mode: "production", dialect: "preact" }, deps);
@@ -31,7 +31,7 @@ export { islandFileFromModule, synthesizeEntry } from "./synthesize";
 export type { BeaconConfig, IslandFile } from "./synthesize";
 
 // The browser-RUM wiring the synthesized entry emits (ARCHITECTURE.md §7): the
-// `@volo/observability/rum` import + the `startBrowserRum()` call.
+// `@lesto/observability/rum` import + the `startBrowserRum()` call.
 export { RUM_MODULE, rumImport, rumStartCall } from "./rum-client";
 export type { RumConfig } from "./rum-client";
 
@@ -51,5 +51,5 @@ export { PREACT_ALIAS } from "./preact-alias";
 
 export { bunBuildClientDeps } from "./bun";
 
-export { AssetsError, VoloError } from "./errors";
+export { AssetsError, LestoError } from "./errors";
 export type { AssetsErrorCode } from "./errors";

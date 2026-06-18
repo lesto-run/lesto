@@ -1,8 +1,8 @@
 {
-  "name": "@volo/example-mailing-lists",
+  "name": "@lesto/example-mailing-lists",
   "version": "0.0.0",
   "private": true,
-  "description": "A runnable end-to-end Volo app: the @volo/mailing-lists double-opt-in + broadcast journey wired behind real HTTP routes — subscribe (rate-limited), confirm, broadcast, unsubscribe — with @volo/mail riding @volo/queue for delivery.",
+  "description": "A runnable end-to-end Lesto app: the @lesto/mailing-lists double-opt-in + broadcast journey wired behind real HTTP routes — subscribe (rate-limited), confirm, broadcast, unsubscribe — with @lesto/mail riding @lesto/queue for delivery.",
   "type": "module",
   "scripts": {
     "start": "bun run run.ts",
@@ -11,14 +11,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@volo/db": "workspace:*",
-    "@volo/kernel": "workspace:*",
-    "@volo/mail": "workspace:*",
-    "@volo/mailing-lists": "workspace:*",
-    "@volo/queue": "workspace:*",
-    "@volo/ratelimit": "workspace:*",
-    "@volo/runtime": "workspace:*",
-    "@volo/web": "workspace:*",
+    "@lesto/db": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/mail": "workspace:*",
+    "@lesto/mailing-lists": "workspace:*",
+    "@lesto/queue": "workspace:*",
+    "@lesto/ratelimit": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*",
     "better-sqlite3": "^11.10.0"
   }
 }

@@ -4,8 +4,8 @@
  * This is the Wave-4 acceptance leg: a served request must produce a span in a
  * local OTLP collector, and a db query run during that request must appear as a
  * CHILD span of the request span. Every other tracing test mocks the exporter or
- * the socket; this one boots `@volo/runtime`'s `serve` with the env-driven tracer
- * (`tracesFromEnv`, exactly as `volo serve` / estate construct it), hits it with
+ * the socket; this one boots `@lesto/runtime`'s `serve` with the env-driven tracer
+ * (`tracesFromEnv`, exactly as `lesto serve` / estate construct it), hits it with
  * the platform's real `fetch`, and reads the spans back out of an in-process
  * collector that speaks the OTLP/HTTP JSON wire format.
  *
@@ -19,21 +19,21 @@
 import Database from "better-sqlite3";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { createApp } from "@volo/kernel";
-import type { VoloAppConfig, KernelDatabase } from "@volo/kernel";
-import { serve } from "@volo/runtime";
-import type { Server } from "@volo/runtime";
-import { currentRequestSpan, volo, runWithContext } from "@volo/web";
-import { parseTraceparent, tracesFromEnv } from "@volo/observability";
-import type { CurrentSpan, Traces } from "@volo/observability";
+import { createApp } from "@lesto/kernel";
+import type { LestoAppConfig, KernelDatabase } from "@lesto/kernel";
+import { serve } from "@lesto/runtime";
+import type { Server } from "@lesto/runtime";
+import { currentRequestSpan, lesto, runWithContext } from "@lesto/web";
+import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
+import type { CurrentSpan, Traces } from "@lesto/observability";
 
-import { createDb } from "@volo/db";
-import type { Db } from "@volo/db";
+import { createDb } from "@lesto/db";
+import type { Db } from "@lesto/db";
 
 import { startOtlpCollector } from "./otlp-collector";
 import type { OtlpCollector } from "./otlp-collector";
 
-// ---- A better-sqlite3 handle adapted to the async @volo/db SQL surface. ----
+// ---- A better-sqlite3 handle adapted to the async @lesto/db SQL surface. ----
 
 function adapt(raw: Database.Database): KernelDatabase {
   const adapted: KernelDatabase = {
@@ -88,11 +88,11 @@ beforeAll(async () => {
   const handle = adapt(database);
 
   // The tracer, constructed the canonical env-driven way — the SAME call the CLI
-  // and estate make. `VOLO_OTLP_URL` is the on switch; we point it at the live
+  // and estate make. `LESTO_OTLP_URL` is the on switch; we point it at the live
   // collector. `currentSpan` reads the request span the runtime publishes on the
-  // context (`@volo/web`'s `currentRequestSpan`), so a query parents on it.
+  // context (`@lesto/web`'s `currentRequestSpan`), so a query parents on it.
   const built = tracesFromEnv(
-    { VOLO_OTLP_URL: collector.url, VOLO_OTLP_SERVICE: "integration" },
+    { LESTO_OTLP_URL: collector.url, LESTO_OTLP_SERVICE: "integration" },
     {
       currentSpan: currentRequestSpan as CurrentSpan,
     },
@@ -107,7 +107,7 @@ beforeAll(async () => {
   // request span off the context the runtime publishes — the production wiring.
   const db: Db = createDb(handle, { onQuery: traces.seams.onQuery });
 
-  const app = volo()
+  const app = lesto()
     // A route that runs a real query, so its `db.query` span must be a child of
     // the request span.
     .get("/posts", async (c) => {
@@ -118,7 +118,7 @@ beforeAll(async () => {
     // A route that runs no query — its request span stands alone.
     .get("/ping", (c) => c.json({ ok: true }));
 
-  const config: VoloAppConfig = { db: handle, app };
+  const config: LestoAppConfig = { db: handle, app };
 
   // Wire the request tracer + the traceparent parser, exactly as the CLI does:
   // every request mints a span (published on the context), and an inbound

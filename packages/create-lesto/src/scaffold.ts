@@ -9,44 +9,44 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { CreateVoloError } from "./errors";
+import { CreateLestoError } from "./errors";
 import {
   gitignore,
   islandCounter,
-  voloApp,
-  voloSites,
+  lestoApp,
+  lestoSites,
   packageJson,
   readme,
   tsconfig,
   worker,
   wranglerConfig,
 } from "./templates";
-import type { VoloDepResolver } from "./templates";
+import type { LestoDepResolver } from "./templates";
 
 /**
- * The two ways a scaffolded app pins its `@volo/*` dependencies.
+ * The two ways a scaffolded app pins its `@lesto/*` dependencies.
  *
  * `publishedRangePin` (the DEFAULT) pins each to a published `^0.x` range — what
- * an outsider gets from `npm create volo-app`, resolvable from the registry once
+ * an outsider gets from `npm create lesto-app`, resolvable from the registry once
  * the `0.x` publish lands (see `RELEASING.md`). `fileColonPin` pins each to a
  * `file:` path at the in-repo package — the in-monorepo dev/e2e mode, selected by
- * `create-volo --local`, so `bun install` resolves against the workspace packages
+ * `create-lesto --local`, so `bun install` resolves against the workspace packages
  * before anything is published.
  *
- * The resolver is injectable (`ScaffoldOptions.voloDep`), so a test can pin to a
+ * The resolver is injectable (`ScaffoldOptions.lestoDep`), so a test can pin to a
  * fake specifier and the publish line lives in exactly one place.
  */
 const PACKAGES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** The published range a scaffolded app pins each `@volo/*` dep at by default. */
-const VOLO_DEP_RANGE = "^0.1.0";
+/** The published range a scaffolded app pins each `@lesto/*` dep at by default. */
+const LESTO_DEP_RANGE = "^0.1.0";
 
 /** Default pin: the published `^0.x` range (resolves from the registry post-publish). */
-export const publishedRangePin: VoloDepResolver = () => VOLO_DEP_RANGE;
+export const publishedRangePin: LestoDepResolver = () => LESTO_DEP_RANGE;
 
 /** `--local` pin: a `file:` path at the in-repo package (in-monorepo dev). */
-export const fileColonPin: VoloDepResolver = (pkg) =>
-  `file:${join(PACKAGES_DIR, pkg.replace("@volo/", ""))}`;
+export const fileColonPin: LestoDepResolver = (pkg) =>
+  `file:${join(PACKAGES_DIR, pkg.replace("@lesto/", ""))}`;
 
 /** The filesystem operations `scaffold` needs — injected so tests can fake them. */
 export interface ScaffoldIO {
@@ -64,16 +64,16 @@ export interface ScaffoldOptions {
   targetDir: string;
 
   /**
-   * How each `@volo/*` dependency is pinned. Defaults to `publishedRangePin` (a
-   * `^0.x` range an outsider installs from the registry); `create-volo --local`
+   * How each `@lesto/*` dependency is pinned. Defaults to `publishedRangePin` (a
+   * `^0.x` range an outsider installs from the registry); `create-lesto --local`
    * passes `fileColonPin` for in-monorepo dev. Injected so a test can pin to a
    * fake specifier without depending on the repo layout.
    */
-  voloDep?: VoloDepResolver;
+  lestoDep?: LestoDepResolver;
 }
 
 /**
- * Write a minimal but runnable Volo starter into `targetDir`.
+ * Write a minimal but runnable Lesto starter into `targetDir`.
  *
  * Refuses to clobber: if the target already exists it throws rather than write
  * over a user's directory. Otherwise it creates the directory and every starter
@@ -82,12 +82,12 @@ export interface ScaffoldOptions {
  */
 export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promise<string[]> {
   const { name, targetDir } = options;
-  const voloDep = options.voloDep ?? publishedRangePin;
+  const lestoDep = options.lestoDep ?? publishedRangePin;
 
   // Never clobber an existing directory.
   if (await io.exists(targetDir)) {
-    throw new CreateVoloError(
-      "CREATE_VOLO_TARGET_EXISTS",
+    throw new CreateLestoError(
+      "CREATE_LESTO_TARGET_EXISTS",
       `Cannot scaffold into "${targetDir}": it already exists.`,
       { targetDir },
     );
@@ -96,15 +96,15 @@ export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promis
   await io.mkdir(targetDir);
 
   // The starter, declared as (relative name -> contents). One source of truth for
-  // both what gets written and what manifest comes back. `volo.sites.ts` is what
-  // makes `volo build`/`dev` whole (its absence used to crash); the island under
-  // `app/islands/` is what `volo build` bundles into `/client.js`. `worker.ts` +
-  // `wrangler.jsonc` are the scaffold→deploy path: `volo deploy --cloudflare`
+  // both what gets written and what manifest comes back. `lesto.sites.ts` is what
+  // makes `lesto build`/`dev` whole (its absence used to crash); the island under
+  // `app/islands/` is what `lesto build` bundles into `/client.js`. `worker.ts` +
+  // `wrangler.jsonc` are the scaffold→deploy path: `lesto deploy --cloudflare`
   // builds `out/` and `wrangler deploy`s the Worker that fronts the app.
   const files: ReadonlyArray<readonly [string, string]> = [
-    ["package.json", packageJson(name, voloDep)],
-    ["volo.app.ts", voloApp()],
-    ["volo.sites.ts", voloSites()],
+    ["package.json", packageJson(name, lestoDep)],
+    ["lesto.app.ts", lestoApp()],
+    ["lesto.sites.ts", lestoSites()],
     ["app/islands/counter.tsx", islandCounter()],
     ["worker.ts", worker()],
     ["wrangler.jsonc", wranglerConfig(name)],

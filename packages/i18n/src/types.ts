@@ -1,5 +1,5 @@
 /**
- * Shared shapes for @volo/i18n.
+ * Shared shapes for @lesto/i18n.
  */
 
 /**

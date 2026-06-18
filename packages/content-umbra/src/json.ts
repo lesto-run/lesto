@@ -1,9 +1,9 @@
-import { ParseError } from "@volo/content-shared/errors";
-import { sanitizeObject } from "@volo/content-shared/sanitize";
+import { ParseError } from "@lesto/content-shared/errors";
+import { sanitizeObject } from "@lesto/content-shared/sanitize";
 import type { Parser, ParseOutput } from "./types";
 
 /**
- * @deprecated Use ParseError from @volo/content-shared/errors instead.
+ * @deprecated Use ParseError from @lesto/content-shared/errors instead.
  * Kept for backwards compatibility.
  */
 export class JsonParseError extends ParseError {

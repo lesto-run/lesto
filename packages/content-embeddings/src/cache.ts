@@ -8,7 +8,7 @@
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { DocksError } from "@volo/content-shared/errors";
+import { DocksError } from "@lesto/content-shared/errors";
 import type {
   SearchableEntry,
   EmbeddingResult,

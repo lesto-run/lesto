@@ -1,11 +1,11 @@
-# @volo/content-components
+# @lesto/content-components
 
 HTML rendering components for Docks content collections.
 
 ## Installation
 
 ```bash
-npm install @volo/content-components
+npm install @lesto/content-components
 ```
 
 ## Quick Start
@@ -13,7 +13,7 @@ npm install @volo/content-components
 ### React
 
 ```tsx
-import { Content } from "@volo/content-components/react";
+import { Content } from "@lesto/content-components/react";
 
 function Post({ post }) {
   return <Content html={post.rendered.html} />;
@@ -24,7 +24,7 @@ function Post({ post }) {
 
 ```vue
 <script setup>
-import { Content } from "@volo/content-components/vue";
+import { Content } from "@lesto/content-components/vue";
 </script>
 
 <template>
@@ -36,7 +36,7 @@ import { Content } from "@volo/content-components/vue";
 
 ```svelte
 <script>
-import { Content } from "@volo/content-components/svelte";
+import { Content } from "@lesto/content-components/svelte";
 </script>
 
 <Content html={post.rendered.html} />

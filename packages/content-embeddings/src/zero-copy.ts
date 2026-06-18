@@ -5,7 +5,7 @@
  * The index is usable the instant bytes arrive.
  *
  * This module contains BUILD-TIME functions for creating zero-copy indexes.
- * RUNTIME functions (ZeroCopyIndex class) are in @volo/content-search.
+ * RUNTIME functions (ZeroCopyIndex class) are in @lesto/content-search.
  */
 
 import type { ZeroCopyInputEntry } from "./types";

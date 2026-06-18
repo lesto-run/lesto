@@ -1,4 +1,4 @@
-# ADR 0018 — A relational data layer for `@volo/db` (foreign keys, joins, richer types)
+# ADR 0018 — A relational data layer for `@lesto/db` (foreign keys, joins, richer types)
 
 - **Status:** Proposed
 - **Date:** 2026-06-17
@@ -8,7 +8,7 @@
 
 ## Context
 
-`@volo/db` is a Drizzle-shaped schema-as-value query layer: `defineTable` is the
+`@lesto/db` is a Drizzle-shaped schema-as-value query layer: `defineTable` is the
 single source of truth for both DDL and TS row types, `db` is threaded explicitly,
 rows are plain objects, every terminal is async (ADR 0004, ADR 0006). It is correct
 and well-liked. It is also **single-table and scalar-only**, and that is now the
@@ -31,7 +31,7 @@ loudest honest gap against Rails 8 / Laravel 12 / AdonisJS 6 / Prisma / Drizzle:
   actually know what these columns *are*.
 
 This ADR closes that gap. The hard part is not the SQL; it is doing it **without
-rebuilding `@volo/orm`**, which we deleted on purpose (commit `d16feb7`) because its
+rebuilding `@lesto/orm`**, which we deleted on purpose (commit `d16feb7`) because its
 ActiveRecord shape — inheritance, a global connection, string-keyed attributes, a
 `references("category") → categorys` pluralization inflector, and a *synchronous*
 seam incompatible with a networked Postgres pool (ADR 0006) — leaked at every
@@ -76,7 +76,7 @@ teaching a column its table. That becomes **Increment 0**.
 
 ## Decision
 
-Ship the relational layer as **four increments on `@volo/db`** (no new package), in
+Ship the relational layer as **four increments on `@lesto/db`** (no new package), in
 strict dependency order, each landing behind the parity gate, each non-breaking to
 estate. **Foreign keys and joins are the headline; the relational eager-loader is
 explicitly out of scope for this ADR** (see "Deferred"). The two load-bearing
@@ -253,7 +253,7 @@ and built against 2–3 real call-sites in its own ADR.
 
 ## What this is explicitly NOT
 
-- **Not `@volo/orm` v2.** No inheritance, no row methods, no global connection, no
+- **Not `@lesto/orm` v2.** No inheritance, no row methods, no global connection, no
   lazy proxies, no identity map, no migration-by-magic, no inflector. Re-read
   ADR 0004's "Context" — every bullet there is a thing this design refuses.
 - **Not a Drizzle dependency.** The adversarial review re-litigated build-vs-buy and

@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { installSchema, Queue } from "@volo/queue";
+import { installSchema, Queue } from "@lesto/queue";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -16,7 +16,7 @@ import {
   Webhooks,
 } from "../src/index";
 
-import type { SqlDatabase } from "@volo/queue";
+import type { SqlDatabase } from "@lesto/queue";
 import type { FetchLike, Resolver, SecretSource, WebhookResponse } from "../src/index";
 
 interface Call {
@@ -57,7 +57,7 @@ function secretsFrom(map: Record<string, string>): SecretSource {
 
 // Read the raw, persisted payload TEXT straight from the queue table.
 function rawPayload(id: number): string {
-  const row = raw.prepare("SELECT payload FROM volo_jobs WHERE id = ?").get(id) as {
+  const row = raw.prepare("SELECT payload FROM lesto_jobs WHERE id = ?").get(id) as {
     payload: string;
   };
 
@@ -131,7 +131,7 @@ describe("Webhooks delivery", () => {
     expect(call?.init.headers[EVENT_HEADER]).toBe("order.paid");
     expect(call?.init.redirect).toBe("manual"); // SSRF: never follow a redirect past the guard
 
-    // The signature binds the shipped x-volo-timestamp (replay defense): it is the
+    // The signature binds the shipped x-lesto-timestamp (replay defense): it is the
     // HMAC of `${timestamp}.${body}`, and verify() accepts it under that timestamp.
     const timestamp = Number(call?.init.headers[TIMESTAMP_HEADER]);
     expect(Number.isFinite(timestamp)).toBe(true);
