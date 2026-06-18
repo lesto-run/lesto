@@ -1,13 +1,14 @@
-# ADR 0018 — A relational data layer for `@keel/db` (relations, joins, foreign keys, richer types)
+# ADR 0018 — A relational data layer for `@volo/db` (foreign keys, joins, richer types)
 
 - **Status:** Proposed
 - **Date:** 2026-06-17
 - **Deciders:** tech lead + owner
 - **Supersedes nothing; extends ADR 0004 (data-layer style), ADR 0006 (async seam), ADR 0005 (validation at the boundary).**
+- **Revised 2026-06-17** after an adversarial 3-lens review (correctness / simplicity / sequencing). The revision: a prerequisite **Increment 0 (column identity)** the first draft hand-waved; **deferred the relational eager-loader** (`relations()` + `db.load().with()`) to a follow-on ADR because it is a convenience layer with no second consumer and unresolved semantics; replaced the `createSchemaSql` topo-sort with a cycle-detecting validator; deferred `json<T>`. The honest scope of v-next is **FKs + joins + boolean/timestamp**, on top of a column that finally knows its table.
 
 ## Context
 
-`@keel/db` is a Drizzle-shaped schema-as-value query layer: `defineTable` is the
+`@volo/db` is a Drizzle-shaped schema-as-value query layer: `defineTable` is the
 single source of truth for both DDL and TS row types, `db` is threaded explicitly,
 rows are plain objects, every terminal is async (ADR 0004, ADR 0006). It is correct
 and well-liked. It is also **single-table and scalar-only**, and that is now the
@@ -24,74 +25,111 @@ loudest honest gap against Rails 8 / Laravel 12 / AdonisJS 6 / Prisma / Drizzle:
   (`packages/db/src/conditions.ts:38`). Multi-table queries today drop to the
   `db.raw()` / `db.prepare()` escape hatch (the queue's claim SQL is the canonical
   example).
-- **No relation loading.** Fetching a user and their posts is two hand-written
-  queries and a manual stitch, every time.
 - **Three column types.** `TEXT | INTEGER | REAL` (`packages/db/src/columns.ts:23`).
-  A boolean is an integer-by-convention; a timestamp is a string-by-convention; a
-  JSON blob is a `TEXT` the caller `JSON.parse`s by hand. The schema value — which
-  exists precisely to be the single source of truth — doesn't actually know what
-  these columns *are*.
+  A boolean is an integer-by-convention; a timestamp is a string-by-convention. The
+  schema value — which exists precisely to be the single source of truth — doesn't
+  actually know what these columns *are*.
 
 This ADR closes that gap. The hard part is not the SQL; it is doing it **without
-rebuilding `@keel/orm`**, which we deleted on purpose (commit `d16feb7`) because its
+rebuilding `@volo/orm`**, which we deleted on purpose (commit `d16feb7`) because its
 ActiveRecord shape — inheritance, a global connection, string-keyed attributes, a
 `references("category") → categorys` pluralization inflector, and a *synchronous*
 seam incompatible with a networked Postgres pool (ADR 0006) — leaked at every
 call-site. Relations are exactly where an ORM's bad ideas hide. So the design below
 is constrained as much by what it must *not* become as by what it adds.
 
+### The hidden prerequisite: a column does not know its table
+
+The first draft of this ADR asserted that "a column reference already carries its
+owning table." **It does not.** A `Column` wraps a `ColumnSpec` whose fields are
+`name / sqlType / nullable / unique / primaryKey / autoIncrement / hasDefault /
+defaultValue` (`packages/db/src/columns.ts:29-38`) — *no table identity.* Columns
+are built standalone by `text("email")` / `integer("id")` *before* they are placed
+into a table; `defineTable` maps them by key and name but never tells a column which
+table it landed in (`packages/db/src/table.ts:78-82`). Both load-bearing features
+here depend on a column knowing its table: the FK thunk must read the *owning table*
+off the target column to render `REFERENCES "users"(…)`, and join rendering must
+qualify `"users"."email"`. So the real first step is not the easy one — it is
+teaching a column its table. That becomes **Increment 0**.
+
 ### Non-negotiable constraints inherited from 0004 / 0005 / 0006
 
 1. **Schema-as-value, no strings.** A relationship targets a *column value*
    (`users.id`), never a table name string. The pluralization footgun that died
    with the `TableBuilder` does not come back.
-2. **Explicit `db`, no global, no inheritance.** Rows stay plain. There are no
-   `.save()`/`.load()` methods on a row, no lazy-loading proxy, no identity map, no
-   `useDatabase()`. Loading is an explicit verb on `db`.
+2. **Explicit `db`, no global, no inheritance.** Rows stay plain — no `.save()` /
+   `.load()` methods on a row, no lazy-loading proxy, no identity map, no
+   `useDatabase()`.
 3. **Async-only, no sync escape hatch.** Every new terminal returns a `Promise`
-   (ADR 0006). Relation loading must be backable by a `pg.Pool` over a socket
-   without `deasync`/`Atomics.wait`.
+   (ADR 0006); everything must be backable by a `pg.Pool` over a socket.
 4. **Dialect parity is a CI gate, not a hope.** Every new bit of SQL — FK DDL, join
-   rendering, the eager-load queries — runs in `db-parity-postgres` against real
-   `postgres:16`, identical results on both engines (`packages/integration/test/db-parity.integration.test.ts`).
+   rendering — runs in `db-parity-postgres` against real `postgres:16`, identical
+   results on both engines (`packages/integration/test/db-parity.integration.test.ts`).
 5. **Validation stays at the boundary (ADR 0005).** The data layer does not
    semantically validate a foreign key ("does this `categoryId` exist?"); the
    *database* enforces referential integrity via the FK constraint, and a violation
    surfaces as a coded `DbError`. App-level existence checks live in the boundary's
    Zod schema, as today.
 6. **First-class `transaction()` (ADR 0006).** Multi-table writes that must be
-   atomic use `db.transaction`, never loose `exec("BEGIN")` calls.
+   atomic use `db.transaction` (already implemented, dialect-agnostic), never loose
+   `exec("BEGIN")` calls.
 
 ## Decision
 
-Ship the relational layer as **four independent increments on `@keel/db`** (no new
-package), each landing behind the parity gate, each dogfooded in `examples/estate`
-in the same change. The two load-bearing design calls — *FK targets are typed
-column thunks* and *collection loading stitches batched queries rather than
-fanning out a cartesian join* — are what keep this from being an ORM.
+Ship the relational layer as **four increments on `@volo/db`** (no new package), in
+strict dependency order, each landing behind the parity gate, each non-breaking to
+estate. **Foreign keys and joins are the headline; the relational eager-loader is
+explicitly out of scope for this ADR** (see "Deferred"). The two load-bearing
+anti-ORM decisions are *FK targets are typed column thunks* and *a column carries
+its table identity* — both keep this from becoming an ORM by keeping every reference
+a typed value the compiler checks.
 
-### 1 · Richer column types (the smallest, independent first step)
+### 0 · Column identity (the unlisted prerequisite, do first)
 
-Add column builders whose **storage type stays one of the existing three** but
-whose **TS type and hydration are honest**. No new SQL storage primitives means no
-new parity surface in the storage engine — only in hydration.
+`ColumnSpec` gains a `tableName?: string`, populated by `defineTable` when it seals
+the table value — the one place that knows both the column and its table. The
+column builders (`text`/`integer`/`real`) still construct table-agnostic specs; the
+table name is stamped on at `defineTable` time. No SQL, no parity surface, no
+behavior change to any existing query — `conditions.ts` keeps rendering bare names
+for single-table queries. The only observable is a new invariant: after
+`defineTable`, `users.id.spec.tableName === "users"`. This is the foundation FK
+rendering and column qualification both stand on; nothing downstream is honest until
+it lands.
+
+*Acceptance:* a column reports its table after `defineTable`; every existing test is
+green and unchanged.
+
+### 1 · Richer column types — `boolean` and `timestamp`
+
+Add two column builders whose **storage type stays one of the existing three** but
+whose **TS type and hydration are honest**:
 
 | Builder | Storage (sqlite / pg) | TS type | Hydration |
 |---|---|---|---|
 | `boolean(name)` | `INTEGER` / `BIGINT` | `boolean` | `0/1 ⇄ false/true` |
-| `timestamp(name)` | `INTEGER` / `BIGINT` (epoch-ms) | `Date` | `number ⇄ Date` |
-| `json<T>(name)` | `TEXT` | `T` | `JSON.parse` / `JSON.stringify` |
+| `timestamp(name)` | `INTEGER` / `BIGINT` (epoch-ms) | `Date` | `epoch-ms number ⇄ Date` |
 
-`timestamp` standardizes on **epoch-ms `BIGINT`**, matching the convention the
-durable stores already chose (ADR 0013) and dodging the timezone/`TIMESTAMPTZ`
-parity swamp. `json` is generic so `InferRow` carries the parsed shape. These are
-purely additive — `text/integer/real` are untouched — and each is a row in the
-hydration parity test. (UUID is deliberately deferred: it wants a `gen_random_uuid()`
-default that forks hard across dialects; not worth it for v-next.)
+This is *additive to existing columns* (`text/integer/real` are untouched) but it is
+**not free machinery**: `ColumnSpec` needs a `kind: "text" | "integer" | "real" |
+"boolean" | "timestamp"` discriminator, `hydrate()` (`queries.ts:56-69`, today
+numeric-coercion only) must dispatch on it (0/1→bool, number→`Date`), and the
+type-level `CellType` must widen (`timestamp` → `Date`, `boolean` → `boolean`). Each
+is one row in the hydration parity test on both drivers — including the Postgres
+quirk that `BIGINT` returns as a *string*, which the boolean/timestamp coercion must
+survive.
 
-### 2 · Foreign keys — typed column thunks, dialect-aware DDL, ordered creation
+`timestamp` standardizes on **epoch-ms `BIGINT`**, matching the durable stores
+(ADR 0013) and dodging the `TIMESTAMPTZ`/timezone parity swamp.
 
-A new column modifier:
+**Deferred from this increment:** `json<T>(name)`. It has zero in-tree consumers
+today (it is `text()` + a hand-rolled `JSON.parse` at the call-site, with no parity
+risk), and the generic `<T>` adds type plumbing for no current payoff. Add it when
+the first real consumer needs it.
+
+### 2 · Foreign keys — typed column thunks, dialect-aware DDL, enforced on both drivers
+
+A new column modifier (now implementable because Increment 0 gave the target column
+its table identity):
 
 ```ts
 export const posts = defineTable("posts", {
@@ -103,50 +141,59 @@ export const posts = defineTable("posts", {
 });
 ```
 
-The three decisions inside `references()`:
-
 - **The target is a thunk returning a column value**, `() => users.id`, not
   `"users"`/`"id"` strings. The thunk defers evaluation so `posts` and `users` can
   reference each other across a circular import; calling it yields a `Column`, off
-  which we read `spec.name` and the owning table name. This is the single most
-  important anti-ORM decision in the ADR: **a wrong reference is a TypeScript error
-  at the column, not a pluralized string that explodes at runtime.** The column's
-  storage type must match its target's (a `references(() => users.id)` on a `text`
-  column is a compile error), which also kills the silent type-mismatch class.
-- **DDL is dialect-aware but standard.** Both engines accept
-  `REFERENCES "users"("id") ON DELETE CASCADE` inline in `createTableSql`; the fork
-  is only the integer-width one we already have (`BIGINT` on pg). `onDelete` /
-  `onUpdate` accept `cascade | restrict | set null | no action`.
+  which we read `spec.name` **and `spec.tableName` (Increment 0)**. This is the
+  single most important anti-ORM decision: **a wrong reference is a TypeScript error
+  at the column, not a pluralized string that explodes at runtime.** The referencing
+  column's storage type must match its target's (`references(() => users.id)` on a
+  `text` column is a compile error), killing the silent type-mismatch class too.
+- **DDL is dialect-aware but standard.** `createTableSql` learns to emit
+  `REFERENCES "users"("id") ON DELETE CASCADE` inline (a new branch in
+  `columnDeclaration`, `ddl.ts:87`); the only fork is the integer-width one we
+  already have (`BIGINT` on pg). `onDelete`/`onUpdate` accept
+  `cascade | restrict | set null | no action`.
 - **SQLite enforces FKs only with `PRAGMA foreign_keys = ON`** — *off by default,
-  per-connection.* The SQLite adapter (`openSqlite`) issues it on open so the two
-  engines behave identically. This is the kind of dialect gotcha the parity gate
-  exists to catch, and it gets an explicit test: an orphan insert is rejected on
-  *both* drivers.
+  per-connection.* **Issuing this pragma in the `openSqlite` adapter
+  (`packages/runtime/src/sqlite.ts`, which does not today) is part of this
+  increment, and the increment is gated on a parity test that an orphan insert is
+  rejected on *both* drivers** — so a missing pragma fails the gate rather than
+  silently letting SQLite pass a test it should fail.
+- **A referential violation maps to a coded error.** There is no error-mapping seam
+  today — both adapters re-throw driver errors raw. This increment adds one: the
+  adapter's statement-execution path catches the driver's FK error (Postgres
+  `SQLSTATE 23503`, SQLite `SQLITE_CONSTRAINT_FOREIGNKEY`) and rethrows
+  `DbError("DB_FK_VIOLATION", …)`, extending the `DbErrorCode` union
+  (`packages/db/src/errors.ts:14`). Naming the seam is part of the increment, not an
+  afterthought.
 
-**Creation/drop ordering becomes the schema's job, not the human's.** FKs impose a
-topological order the migrator does not model today (it runs migrations in version
-order and trusts the human to declare tables in dependency order —
-`packages/migrate/src/migrator.ts:64`). Add a pure helper:
+**Creation order stays the human's call, with a guardrail — not a topo-sort.** FKs
+impose a creation/drop order. Rather than a `createSchemaSql` that topologically
+sorts tables (≈150 LOC that *also* splits ordering across two mechanisms, since
+migrations are hand-written and run in version order — `migrator.ts:64`), keep the
+industry-standard convention the migrator already uses: **declare the referenced
+table's migration before the referencing one** (Rails/Laravel do exactly this). Add
+one small helper, `assertAcyclicReferences(tables)`, that detects a genuine FK cycle
+(`a → b → a`) and throws a *teaching* error ("cycle posts → users → posts; split the
+constraint into a follow-up `ALTER TABLE ADD CONSTRAINT`, or use a
+nullable-then-backfill column"). Cycles are rare; SQLite can't `ALTER … ADD
+CONSTRAINT` at all, so the nullable-then-backfill pattern is the documented escape.
+Validation, not automation.
 
-```ts
-createSchemaSql(tables: Table[], dialect): string[]   // topo-sorted CREATE, FK edges respected
-dropSchemaSql(tables: Table[], dialect): string[]     // reverse order
-```
-
-It sorts by `references()` edges; a genuine cycle (mutual FKs) is split into
-`CREATE` + a deferred `ALTER TABLE … ADD CONSTRAINT` pass (and flagged loudly,
-since it's rare and SQLite can't `ALTER … ADD CONSTRAINT` — those tables must use a
-nullable-then-backfill pattern, documented). A referential-integrity violation from
-either driver is mapped at the adapter seam to a coded `DbError("DB_FK_VIOLATION")`,
-extending the `DbErrorCode` union (`packages/db/src/errors.ts:14`).
+*Estate dogfood (non-breaking):* `posts.authorId` becomes a real
+`references(() => users.id)` FK. This is a **schema-only** change — existing
+hand-written user/post queries keep working unchanged; nothing in estate is left
+half-migrated, because no app code is forced to adopt a new read API in this
+increment.
 
 ### 3 · Joins in the query builder — qualified columns, namespaced rows
 
-The prerequisite is **table-qualified column rendering**. Today a `Condition`
-renders `quoteIdentifier(column.spec.name)` → `"email"`. A column reference already
-carries its owning table (via the FK work above we can reach it), so qualification
-is rendering `"users"."email"` when a query involves more than one table. Single-table
-queries keep emitting bare columns (no churn, no risk to existing call-sites).
+With Increment 0 in place, **table-qualified column rendering** is now possible: a
+`Condition` can render `"users"."email"` (from `column.spec.tableName` +
+`spec.name`) when a query involves more than one table. Single-table queries keep
+emitting bare columns (`conditions.ts:38` path unchanged) — zero churn, zero risk to
+existing call-sites.
 
 ```ts
 const rows = await db
@@ -162,120 +209,118 @@ const rows = await db
   makes the right side's row `Post | null` at the type level.
 - **Rows are namespaced by table** (`{ posts, users }`), Drizzle-core style — never
   flattened, so two `id` columns can't collide. Hydration de-prefixes the flat
-  result set back into the per-table objects.
-- **Self-joins and reused tables require an alias** — `alias(users, "author")` —
-  which carries its own qualifier. This is the only ergonomic tax, and it's
-  explicit.
+  result set into the per-table objects.
+- **Self-joins / reused tables require an alias** — `alias(users, "author")` —
+  carrying its own qualifier. This is the one ergonomic tax, and it's explicit.
 
-This layer is SQL-faithful: it's the primitive the queue's hand-rolled join SQL
-would target, and it does not pretend collections away.
+This is the SQL-faithful primitive the queue's hand-rolled join SQL would target,
+and — importantly — it is sufficient for every multi-table read in the tree today
+(and the headline "relations/JOINs/FKs" gap is fully closed by Increments 0–3).
 
-### 4 · Declarative relations + eager loading — *stitched*, not cartesian
+### Deferred to a follow-on ADR — declarative relations + eager loading
 
-The ergonomic headline. Declare relations as values (separate from the table, so the
-table stays a pure column map):
+The first draft included a fourth increment: declared `relations()` plus a
+`db.load(t, { with: { posts: true } })` relational reader that stitches batched
+`IN (…)` queries. **It is removed from this ADR** and deferred to a follow-on
+(ADR 0019), for three converging reasons surfaced by the adversarial review:
 
-```ts
-export const usersRelations = relations(users, ({ many }) => ({
-  posts: many(posts),
-}));
-export const postsRelations = relations(posts, ({ one }) => ({
-  author: one(users, { fields: [posts.authorId], references: [users.id] }),
-}));
-```
+1. **It is a convenience layer with no second consumer.** Its only reader is the
+   loader itself; `relations()` would be a public export nobody else introspects —
+   premature abstraction. Raw joins (Increment 3) already cover every real
+   multi-table read today.
+2. **Its semantics are genuinely unresolved and need real call-sites to settle**,
+   not estate's toy users/posts:
+   - **No per-parent child bound.** One `WHERE author_id IN (…)` cannot express
+     "the 5 most recent posts *per* user" — a global `LIMIT` is wrong. This needs a
+     lateral/window strategy, a real design question.
+   - **Child ordering** within each parent's array must be specified (the IN query
+     orders globally; the stitcher re-partitions).
+   - **Root-only filtering.** A `where` on the root cannot express "users who *have*
+     a published post" — that needs an `EXISTS`/join the relational reader doesn't
+     model. (Today the answer is Increment 3's join + `DISTINCT`, or `db.raw`.)
+   - **Isolation honesty.** A multi-query read is *not* a consistent snapshot under
+     either driver's default isolation (SQLite `DEFERRED`, Postgres `READ
+     COMMITTED`): a concurrent commit between the root and child queries is visible.
+     The follow-on ADR must either accept read-committed semantics explicitly or
+     opt into a higher isolation level — not claim a "snapshot" it doesn't deliver.
+3. **Deferring drops nothing from the stated gap.** "No relations/JOINs/FKs" is
+   satisfied by Increments 0–3; ergonomic eager-loading is sugar on top.
 
-Then a relational read verb, distinct from `.select()` so the two layers never blur:
-
-```ts
-const list = await db.load(users, {
-  with: { posts: true },
-  where: eq(users.emailVerifiedAt, /*…*/),
-  limit: 20,
-}).all();
-//  list: (User & { posts: Post[] })[]
-```
-
-**The load strategy is the decisive correctness call: collection relations (`many`)
-load as separate, batched queries stitched in memory — never a single fan-out
-join.** Load the roots (one query), collect their keys, load all children with one
-`WHERE author_id IN (…)` query, stitch by key. Rationale:
-
-- A `JOIN` that eager-loads a `hasMany` **multiplies rows** — a user with 50 posts
-  comes back 50 times, every scalar user column duplicated 50×. With two
-  collections it's a cartesian product. Stitching is O(roots + children) rows over
-  the wire instead.
-- Two simple `IN` queries are **trivially dialect-portable**; a correlated/lateral
-  eager join is where dialect SQL diverges hardest. Stitching keeps the parity gate
-  cheap.
-- It is the same conclusion Drizzle's relational-queries API reached, for the same
-  reasons.
-
-`one`/`belongsTo` relations (at most one child) may use either a join or a batched
-`IN`; we default to the **same batched-IN stitch** for one uniform, predictable code
-path. Everything runs inside one `db.transaction` so the multi-query read is a
-consistent snapshot. **There is no lazy loading** — `user.posts` is populated iff you
-asked for it in `with`; accessing an unloaded relation is `undefined`, not a silent
-query. That single rule is the line between this and an ORM: loading is always an
-explicit, visible verb, never a property-access side effect.
+The stitched-batched-query approach (one query per relation, `IN (…)`, stitch in
+memory — *never* a cartesian eager-join that multiplies rows) remains the intended
+strategy; it is recorded here so the design intent isn't lost, but it is designed
+and built against 2–3 real call-sites in its own ADR.
 
 ## What this is explicitly NOT
 
-- **Not `@keel/orm` v2.** No inheritance, no row methods, no global connection, no
+- **Not `@volo/orm` v2.** No inheritance, no row methods, no global connection, no
   lazy proxies, no identity map, no migration-by-magic, no inflector. Re-read
   ADR 0004's "Context" — every bullet there is a thing this design refuses.
-- **Not a schema-diff migration generator.** Migrations are still hand-written and
-  *import* the schema value (ADR 0004); `createSchemaSql` only orders what you
-  already declared. A Drizzle-Kit-style diff/codegen is a separate future ADR.
+- **Not a Drizzle dependency.** The adversarial review re-litigated build-vs-buy and
+  confirmed ADR 0004's reasons still hold for this scope: richer types, FKs, and
+  qualified-column joins are ~500 LOC hand-rolled, smaller and more controllable
+  than pulling Drizzle's relational stack; the agent-native introspection angle
+  still argues for owning the schema value.
+- **Not a schema-diff migration generator.** Migrations stay hand-written and
+  *import* the schema value (ADR 0004); there is no auto-topo-sort and no codegen.
 - **Not query-builder maximalism.** No window functions, no recursive CTEs, no
-  `GROUP BY`/`HAVING` aggregation surface in this increment. The `db.raw()` escape
-  hatch stays the pressure valve for SQL beyond the DSL (the queue keeps its raw
-  `FOR UPDATE SKIP LOCKED` claim — relations do not try to subsume locking).
-- **Not UUID/`TIMESTAMPTZ`/array/enum column types** — deferred; each forks dialect
-  defaults harder than its payoff for v-next.
+  `GROUP BY`/`HAVING` aggregation in this ADR. `db.raw()` stays the pressure valve
+  (the queue keeps its raw `FOR UPDATE SKIP LOCKED` claim — relations do not subsume
+  locking).
+- **Not the relational eager-loader** (`relations()` / `db.load().with()`) — and
+  **not `json<T>`, UUID, `TIMESTAMPTZ`, arrays, enums, or composite keys** — all
+  deferred; single-column keys cover every in-tree call-site today.
 
 ## Sequencing
 
-The four increments are independently shippable and independently valuable, in this
-order (each gated green, each wired into estate):
+Strict dependency order; each step is independently shippable, parity-gated, and
+non-breaking on `main`:
 
-1. **Richer types** — additive, lowest risk, unblocks honest `timestamp`/`boolean`
-   columns everywhere else. *(~½ the work; no new SQL storage surface.)*
-2. **Foreign keys** — `references()` + dialect FK DDL + `PRAGMA` + `createSchemaSql`
-   topo-sort + `DB_FK_VIOLATION`. The integrity foundation.
-3. **Joins** — qualified-column rendering (the prerequisite refactor) + `innerJoin`/
-   `leftJoin` + namespaced rows + `alias`.
-4. **Relations + `load(…).with(…)`** — declared relations + the stitched batched
-   eager-load. Built on 2 and 3.
+0. **Column identity** — `ColumnSpec.tableName`, stamped by `defineTable`. The
+   prerequisite the headline features stand on. No SQL surface.
+1. **Richer types** — `boolean` + `timestamp` (a `ColumnSpec.kind` discriminator +
+   `hydrate()` dispatch + `CellType` widening). Orthogonal to the FK→join chain; can
+   land anytime after 0. *(json deferred.)*
+2. **Foreign keys** — `references()` thunk (reads `tableName` from 0) + dialect FK
+   DDL + the `openSqlite` `PRAGMA foreign_keys = ON` (gated by an
+   orphan-rejected-on-both-drivers test) + the `DB_FK_VIOLATION` adapter-seam
+   mapping + the `assertAcyclicReferences` guardrail. Estate gets a real `authorId`
+   FK (schema-only, non-breaking).
+3. **Joins** — qualified-column rendering (from 0) + `innerJoin`/`leftJoin` +
+   namespaced rows + `alias`.
 
-estate is the dogfood at every step: it already has a users table; increment 2 gives
-posts a real `authorId` FK, increment 4 renders an author's posts via one
-`load(users, { with: { posts: true } })` — replacing a hand-stitched pair of
-queries, which is the friction-finding the gallery-as-QA loop is for.
+The dependency chain is **0 → 2 → 3** (FK rendering and qualified columns both need
+the table identity from 0); **1 forks off 0** and is sequenced first only because
+it's small and self-contained, *not* because anything downstream needs it — the ADR
+no longer pretends richer-types-first signals progress on the hard chain.
 
 ## Consequences
 
-- The schema value finally tells the whole truth: a column knows it's a boolean, a
-  timestamp, a JSON `T`, or a reference to another table — so DDL, FK enforcement,
-  query types, and (later) MCP schema introspection all read it from one place.
-- Multi-table reads stop dropping to raw SQL; the type system follows a foreign key.
-- The parity surface grows: FK DDL, the SQLite `PRAGMA`, join rendering, and the
-  eager-load queries are all new rows in `db-parity-postgres`. That cost is the
-  point — it's how "SQLite local → Postgres prod, same APIs" stays literally true
-  for relations, not just scalars.
-- The migrator gains a notion of table dependency order it lacked; cyclic schemas
-  pay an explicit, documented tax rather than failing mysteriously.
-- Cost: this is the largest single addition to `@keel/db` since it shipped, and the
-  qualified-column refactor touches the hot path of every existing query. It is
-  phased precisely so each phase is revertible at its boundary and provable on both
-  drivers before the next begins.
+- A column finally knows its table — so DDL, FK enforcement, qualified-join queries,
+  and (later) MCP schema introspection all read identity from one place.
+- Multi-table reads stop dropping to raw SQL; the type system follows a foreign key;
+  referential integrity is enforced and coded identically on SQLite and Postgres.
+- The parity surface grows by exactly what's enforceable: FK DDL, the SQLite pragma,
+  the FK-violation mapping, and join rendering — each a new row in
+  `db-parity-postgres`. That cost is the point: it's how "SQLite local → Postgres
+  prod, same APIs" stays literally true for relations, not just scalars.
+- Scope is honest: this ADR ships the *gap* (relations/JOINs/FKs + the two missing
+  scalar types). The ergonomic relational reader — the part that needed real
+  call-sites and had unresolved semantics — is named, scoped, and handed to its own
+  ADR rather than over-designed against a toy example here.
+- Cost: Increment 0 touches the `Column`/`ColumnSpec` type that every query depends
+  on, and qualified-column rendering touches the hot path — both are phased to land
+  behind the parity gate, revertible at each boundary, proven on both drivers before
+  the next begins.
 
-## Open questions (resolve during the increment-1 spike)
+## Open questions (resolve during the Increment 0/1 spike)
 
-- **Naming:** `db.load(t, { with })` vs a `db.query(t)` relational builder vs
-  extending `.select().with()`. Provisional: `db.load` — a distinct verb keeps the
-  two layers unmistakable. Settle it against real estate call-sites.
 - **`timestamp` representation:** epoch-ms `BIGINT` (proposed, matches ADR 0013) vs
   ISO-8601 `TEXT`. The former wins on parity and arithmetic; confirm no consumer
-  needs sub-ms or tz.
-- **Composite foreign keys / composite primary keys:** out of scope for v-next?
-  Likely yes — single-column keys cover every in-tree call-site today.
+  needs sub-ms or tz before committing.
+- **`ColumnSpec.kind` vs. keeping `sqlType` + a parallel logical tag:** one
+  discriminator that drives both DDL storage type and hydration, or two fields?
+  Settle in the Increment 1 spike.
+- **Alias ergonomics:** is `alias(users, "author")` the right spelling, or should a
+  self-referential FK (`employees.managerId → employees.id`) get sugar? Decide
+  against the first real self-join.
