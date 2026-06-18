@@ -12,6 +12,7 @@
  *
  *   bun run --filter @lesto/bench bench
  *   bun run --filter @lesto/bench bench -- --iterations 1000 --concurrency 8
+ *   bun run --filter @lesto/bench bench -- --gate   # opt in to a non-zero exit on regression
  */
 
 import { readFile, writeFile } from "node:fs/promises";
@@ -46,6 +47,11 @@ function stringFlag(argv: readonly string[], flag: string): string | undefined {
   }
 
   return argv[index + 1];
+}
+
+/** True iff any of the bare boolean `flags` is present in argv. */
+function boolFlag(argv: readonly string[], ...flags: readonly string[]): boolean {
+  return flags.some((flag) => argv.includes(flag));
 }
 
 const io: ReportIo = {
@@ -103,7 +109,10 @@ const artifacts = await runReport(io, options);
 
 console.log(`\nWrote ${RESULTS_MD} and ${RESULTS_JSON}.`);
 
-// A regression exits non-zero so the harness can gate CI when wired to one.
-if (artifacts.regressed) {
+// Regressions are INFORMATIONAL by default. These are volatile in-process
+// micro-benchmarks (self-vs-self noise runs tens of percent), so the ±5%
+// compare would flap a CI gate on every run. Gating is opt-in: only `--gate`
+// (alias `--strict`) turns a recorded regression into a non-zero exit.
+if (artifacts.regressed && boolFlag(argv, "--gate", "--strict")) {
   process.exitCode = 1;
 }

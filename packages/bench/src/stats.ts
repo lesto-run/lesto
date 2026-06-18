@@ -72,50 +72,6 @@ export function percentile(samples: readonly LatencyMs[], p: number): LatencyMs 
 }
 
 /**
- * A fixed-bucket latency histogram — the shape of the distribution, not just its
- * percentiles. Each bucket counts samples whose latency falls in `[lt_prev, lt)`,
- * with a final open-ended `Infinity` bucket catching everything above the last
- * boundary. Buckets are returned in ascending order; their counts sum to
- * `samples.length`.
- *
- * `boundaries` are the upper edges, in milliseconds. They are sorted and
- * de-duplicated defensively so a caller passing them out of order still gets a
- * coherent, monotonic histogram.
- */
-export interface HistogramBucket {
-  /** The exclusive upper edge of this bucket, in ms (`Infinity` for the tail). */
-  readonly ltMs: number;
-  /** How many samples fell into this bucket. */
-  readonly count: number;
-}
-
-export function histogram(
-  samples: readonly LatencyMs[],
-  boundaries: readonly number[],
-): HistogramBucket[] {
-  // De-dupe + sort the edges so an unordered or repeated boundary list still
-  // yields a monotonic histogram; append the open-ended tail bucket.
-  const edges = [...new Set(boundaries)].toSorted((a, b) => a - b);
-  const buckets: HistogramBucket[] = [...edges, Number.POSITIVE_INFINITY].map((ltMs) => ({
-    ltMs,
-    count: 0,
-  }));
-
-  for (const sample of samples) {
-    // The first bucket whose upper edge the sample is strictly below. There is
-    // always one — the final `Infinity` edge catches every finite (and infinite)
-    // latency — so `find` never returns `undefined` here.
-    const bucket = buckets.find((candidate) => sample < candidate.ltMs) as {
-      ltMs: number;
-      count: number;
-    };
-    bucket.count += 1;
-  }
-
-  return buckets;
-}
-
-/**
  * Reduce a run's raw latency samples + its wall-clock duration into a {@link Stats}
  * verdict. `elapsedMs` is the measured wall-clock span of the whole run (NOT the
  * sum of sample latencies — under concurrency those overlap), so `throughput` is

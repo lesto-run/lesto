@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { BenchError, histogram, percentile, summarize } from "../src/index";
+import { BenchError, percentile, summarize } from "../src/index";
 
 describe("percentile", () => {
   it("returns a value that actually occurred (nearest-rank, no interpolation)", () => {
@@ -55,39 +55,6 @@ describe("percentile", () => {
     } catch (error) {
       expect((error as BenchError).code).toBe("BENCH_PERCENTILE_OUT_OF_RANGE");
     }
-  });
-});
-
-describe("histogram", () => {
-  it("buckets samples into ascending [prev, edge) ranges plus an Infinity tail", () => {
-    const buckets = histogram([1, 5, 5, 12, 100], [10, 50]);
-
-    expect(buckets).toEqual([
-      { ltMs: 10, count: 3 }, // 1, 5, 5
-      { ltMs: 50, count: 1 }, // 12
-      { ltMs: Number.POSITIVE_INFINITY, count: 1 }, // 100
-    ]);
-  });
-
-  it("sorts and de-duplicates the boundaries before bucketing", () => {
-    const buckets = histogram([2, 8, 8], [50, 10, 10]);
-
-    expect(buckets.map((bucket) => bucket.ltMs)).toEqual([10, 50, Number.POSITIVE_INFINITY]);
-    expect(buckets[0]?.count).toBe(3);
-  });
-
-  it("counts sum to the sample length, even with no samples", () => {
-    const buckets = histogram([], [10]);
-
-    expect(buckets.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(0);
-  });
-
-  it("routes an exact boundary value up into the next bucket (strict <)", () => {
-    const buckets = histogram([10], [10]);
-
-    // 10 is NOT < 10, so it falls into the Infinity tail, not the [.., 10) bucket.
-    expect(buckets[0]?.count).toBe(0);
-    expect(buckets[1]?.count).toBe(1);
   });
 });
 

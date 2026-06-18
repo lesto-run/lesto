@@ -1,14 +1,14 @@
 /**
  * The three real workloads, each expressed as a {@link SampleSource} the runner
  * can time. This is the thin glue between the pure runner and the live
- * subsystems — `@lesto/queue`, the SSR renderer, an HTTP handler. Each factory
- * builds its fixture once and returns a `() => Promise<void>` that does exactly
- * one unit of work, so the runner owns all timing and the workload owns none.
+ * subsystems — `@lesto/queue`, the SSR renderer, an in-process HTTP handler. Each
+ * factory builds its fixture once and returns a `() => Promise<void>` that does
+ * exactly one unit of work, so the runner owns all timing and the workload owns
+ * none.
  *
- * Kept deliberately small and dependency-injected at the edges (the HTTP handler
- * and the SSR renderer are parameters) so the whole module is exercised by fast
- * in-process tests — no real socket, no spawned process — yet the production
- * `bench` run drives the genuine code paths.
+ * Kept deliberately small and in-process — no real socket, no spawned process —
+ * so the whole module is exercised by fast tests yet the production `bench` run
+ * drives the genuine code paths.
  */
 
 import { createElement } from "react";
@@ -23,11 +23,12 @@ import type { ComponentDef } from "@lesto/ui";
 import type { SampleSource } from "./runner";
 
 /**
- * An HTTP handler under test: `Request → Response`. The harness measures how fast
- * Lesto can turn a request into a response, with a bare echo handler as the
- * apples-to-apples baseline to compare against. Injected, not imported, so the
- * benchmark times a handler IN-PROCESS — the load loop's own overhead is held
- * constant and only the handler varies.
+ * An HTTP handler under test: `Request → Response`. This measures the cost of
+ * constructing a `Request`, running a handler, and reading the response body
+ * back — entirely IN-PROCESS, with NO socket and NO Lesto server. It is a floor
+ * on the web-API round-trip the runtime pays per request, not a measurement of
+ * the framework's router/middleware (Lesto's request handler is not a plain
+ * `(Request) => Response` and is not benchmarked here).
  */
 export type HttpHandler = (request: Request) => Response | Promise<Response>;
 
@@ -47,12 +48,11 @@ export function httpWorkload(handler: HttpHandler, url = "http://bench.local/"):
 }
 
 /**
- * The bare-runtime HTTP baseline — the comparison point every Lesto req/s number
- * is read against. It does the least a handler can: echo a fixed body. A Lesto
- * handler measured beside this one shows the framework's own overhead, not the
- * machine's raw ceiling.
+ * The bare in-process HTTP handler the `http-inproc` row measures: it does the
+ * least a handler can — echo a fixed body — so the number reflects the web-API
+ * `Request`/`Response` round-trip cost, not any framework logic.
  */
-export const baselineHttpHandler: HttpHandler = () => new Response("ok");
+export const inprocHttpHandler: HttpHandler = () => new Response("ok");
 
 /** A live queue plus the SQLite handle backing it, and a `close` to release the connection. */
 export interface QueueFixture {

@@ -1,0 +1,5 @@
+# The recorded baseline is a single LOCAL run's output — machine-specific and
+# volatile. Committing it would make every future CI run (different machine, a
+# different `--iterations`) diff against a stranger and report spurious
+# regressions. The bin writes it locally each run; it is never tracked.
+results.json

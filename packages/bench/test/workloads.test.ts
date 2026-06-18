@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  baselineHttpHandler,
   createQueueWorkload,
   createSsrWorkload,
   httpWorkload,
+  inprocHttpHandler,
   runBench,
 } from "../src/index";
 
@@ -38,14 +38,14 @@ describe("httpWorkload", () => {
     expect(calls).toBe(1);
   });
 
-  it("baselineHttpHandler returns a 200 'ok'", async () => {
-    const response = await baselineHttpHandler(new Request("http://x/"));
+  it("inprocHttpHandler returns a 200 'ok'", async () => {
+    const response = await inprocHttpHandler(new Request("http://x/"));
 
     expect(await response.text()).toBe("ok");
   });
 
   it("drives a measurable run through the runner", async () => {
-    const result = await runBench(httpWorkload(baselineHttpHandler), {
+    const result = await runBench(httpWorkload(inprocHttpHandler), {
       name: "http",
       iterations: 5,
     });

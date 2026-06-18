@@ -10,14 +10,13 @@ import { compareRuns } from "./compare";
 import { parseBaseline, renderJson, renderMarkdown } from "./report";
 import { runBench } from "./runner";
 import {
-  baselineHttpHandler,
   createQueueWorkload,
   createSsrWorkload,
   httpWorkload,
+  inprocHttpHandler,
 } from "./workloads";
 
 import type { ResultsByName } from "./compare";
-import type { HttpHandler } from "./workloads";
 import type { Report } from "./report";
 import type { RunResult } from "./runner";
 
@@ -35,7 +34,7 @@ export interface ReportIo {
 }
 
 export interface ReportOptions {
-  /** Operations per workload. Smaller for a smoke run, larger for a stable number. */
+  /** Operations per workload. Smaller for a smoke run, larger for a steadier number. */
   readonly iterations?: number;
   /** Concurrent workers for the queue (and any contended) workload. */
   readonly concurrency?: number;
@@ -43,12 +42,6 @@ export interface ReportOptions {
   readonly warmup?: number;
   /** The ref (git sha / release tag) this run measured, recorded into the report. */
   readonly ref?: string;
-  /**
-   * Override the Lesto HTTP handler under test. Defaults to the bare baseline so a
-   * dependency-free `bench` still emits an HTTP req/s number; a caller with the
-   * real app handler passes it here to measure the framework.
-   */
-  readonly httpHandler?: HttpHandler;
 }
 
 /** What a report run produces: the assembled report and the rendered artifacts. */
@@ -56,7 +49,11 @@ export interface ReportArtifacts {
   readonly report: Report;
   readonly markdown: string;
   readonly json: string;
-  /** True iff a workload regressed against the baseline — the CI gate signal. */
+  /**
+   * True iff a workload regressed against the recorded baseline. Informational by
+   * default — these are volatile in-process micro-benchmarks, so the bin only
+   * gates CI on this when an explicit `--gate` flag is passed.
+   */
   readonly regressed: boolean;
 }
 
@@ -67,9 +64,9 @@ const DEFAULT_WARMUP = 20;
 /**
  * Run the full benchmark suite and assemble the tracked report.
  *
- * The suite is fixed and ordered: an HTTP baseline + the Lesto handler (the
- * comparison point for req/s), the queue claim throughput under `concurrency`
- * workers, and the SSR render path. Each is a `runBench` over a real
+ * The suite is fixed and ordered: the in-process HTTP `Request→Response`
+ * round-trip (req/s + p99), the queue claim throughput under `concurrency`
+ * concurrent claims, and the SSR render path. Each is a `runBench` over a real
  * `SampleSource` from `workloads.ts`. After the runs, the recorded baseline (if
  * any) is diffed in so the artifacts carry the trend.
  *
@@ -83,25 +80,18 @@ export async function runReport(
   const iterations = options.iterations ?? DEFAULT_ITERATIONS;
   const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
   const warmup = options.warmup ?? DEFAULT_WARMUP;
-  const httpHandler = options.httpHandler ?? baselineHttpHandler;
 
   io.log(`Running benchmark suite: ${iterations} ops/workload, concurrency ${concurrency}.`);
 
-  // ---- HTTP: a bare baseline next to the handler under test ----
-  const httpBaseline = await runBench(httpWorkload(baselineHttpHandler), {
-    name: "http-baseline",
-    iterations,
-    concurrency,
-    warmup,
-  });
-  const httpLesto = await runBench(httpWorkload(httpHandler), {
-    name: "http-lesto",
+  // ---- HTTP: the in-process Request→Response round-trip (no socket) ----
+  const httpInproc = await runBench(httpWorkload(inprocHttpHandler), {
+    name: "http-inproc",
     iterations,
     concurrency,
     warmup,
   });
 
-  // ---- Queue: real claims/sec under N concurrent workers ----
+  // ---- Queue: real claims/sec under N concurrent claims ----
   // Seed enough jobs that the queue never drains inside the measured window
   // (warmup + the full run), so every claim hits a real row.
   const queueFixture = await createQueueWorkload(iterations + warmup);
@@ -125,7 +115,7 @@ export async function runReport(
     warmup,
   });
 
-  const results: ResultsByName = indexByName([httpBaseline, httpLesto, queueRun, ssrRun]);
+  const results: ResultsByName = indexByName([httpInproc, queueRun, ssrRun]);
   for (const run of Object.values(results)) {
     io.log(
       `  ${run.name}: ${run.stats.throughput.toFixed(0)} ops/s, ` +

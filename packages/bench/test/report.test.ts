@@ -26,6 +26,17 @@ function results(...runs: RunResult[]): ResultsByName {
 const recordedAt = "2026-06-18T00:00:00.000Z";
 
 describe("renderMarkdown", () => {
+  it("renders sub-millisecond latencies with precision, not a misleading 0", () => {
+    // p50 = 0.0027ms is common in-process; at two decimals it would round to "0".
+    // The latency columns use four decimals so the real median is visible.
+    const report: Report = { recordedAt, results: results(run("a", 1000, 0.0834, 0.0027)) };
+
+    const markdown = renderMarkdown(report);
+
+    expect(markdown).toContain("0.0027");
+    expect(markdown).toContain("0.0834");
+  });
+
   it("renders a stable, sorted snapshot table without a comparison", () => {
     const report: Report = {
       recordedAt,

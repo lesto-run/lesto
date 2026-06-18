@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { runReport } from "../src/index";
 
@@ -37,10 +37,9 @@ describe("runReport", () => {
 
     const artifacts = await runReport(io, fast);
 
-    // All four workloads ran and are present in the report.
+    // All three workloads ran and are present in the report.
     expect(Object.keys(artifacts.report.results).toSorted()).toEqual([
-      "http-baseline",
-      "http-lesto",
+      "http-inproc",
       "queue-claim",
       "ssr-render",
     ]);
@@ -105,15 +104,6 @@ describe("runReport", () => {
     expect(artifacts.markdown).toContain("regressed beyond the threshold");
   });
 
-  it("calls a provided HTTP handler for the http-lesto workload", async () => {
-    const { io } = fakeIo(null);
-    const handler = vi.fn(() => new Response("from-app"));
-
-    await runReport(io, { ...fast, httpHandler: handler });
-
-    expect(handler).toHaveBeenCalled();
-  });
-
   it("uses the defaults when no options are supplied", async () => {
     // The default suite is large (200 ops/workload), so this is the slow path —
     // kept as a single assertion that the defaults wire through without error.
@@ -121,7 +111,7 @@ describe("runReport", () => {
 
     const artifacts = await runReport(io);
 
-    expect(artifacts.report.results["http-baseline"]?.iterations).toBe(200);
-    expect(artifacts.report.results["http-baseline"]?.concurrency).toBe(4);
+    expect(artifacts.report.results["http-inproc"]?.iterations).toBe(200);
+    expect(artifacts.report.results["http-inproc"]?.concurrency).toBe(4);
   }, 60_000);
 });

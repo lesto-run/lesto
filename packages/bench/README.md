@@ -2,13 +2,16 @@
 
 The benchmark harness. Perf is central to the Lesto pitch, so the claims need
 numbers behind them — this package measures three things and records the results
-to tracked files so trends are visible across runs:
+locally so trends are visible across runs on the same machine:
 
-- **HTTP req/s + p99** — a Lesto request handler measured against a bare
-  baseline handler, so the number is the framework's own overhead, not the
-  machine's raw ceiling.
+- **HTTP req/s + p99** — the in-process `Request → Response` round-trip cost
+  (construct a `Request`, run a bare handler, read the body back). This is a
+  floor on the web-API round-trip the runtime pays per request, **not** a
+  measurement of Lesto's router/middleware — Lesto's request handler is not a
+  plain `(Request) => Response`, runs in-process with no socket, and is not
+  benchmarked here.
 - **Queue claims/sec** — a real `@lesto/queue` on an in-memory SQLite database,
-  claimed under _N_ concurrent workers (the hot path workers contend on).
+  claimed under _N_ concurrent claims on one event loop (the hot path).
 - **SSR render throughput** — the genuine `renderPage` → `renderPageMarkup`
   path, rendering a representative component tree to a string in a tight loop.
 
@@ -17,21 +20,30 @@ bun run --filter @lesto/bench bench
 bun run --filter @lesto/bench bench -- --iterations 1000 --concurrency 8 --ref "$(git rev-parse --short HEAD)"
 ```
 
-Results are written to two tracked artifacts beside this package:
+> **These are volatile in-process micro-benchmarks.** Measured self-vs-self
+> noise routinely runs tens of percent run to run, so the absolute numbers are a
+> rough signal at best — read the trend, and never compare across machines.
+
+Results are written to two artifacts beside this package:
 
 - `RESULTS.md` — the human report, with trend columns (Δ req/s, Δ p99) against
-  the last recorded run.
-- `results.json` — the machine baseline the next run diffs against.
+  the last recorded run. The committed copy is **illustrative** — a single local
+  run, regenerated whenever you run `bench`.
+- `results.json` — the machine baseline the next run diffs against. **Not
+  tracked** (gitignored): it is one machine's one run, so committing it would
+  make every other run diff against a stranger and report spurious regressions.
 
 A run that regresses a workload beyond the threshold (±5% by default, worse-vote
-wins between throughput and p99) exits non-zero, so the harness can gate CI.
+wins between throughput and p99) is reported **informationally**. Because the
+noise floor is well above ±5%, the gate is **off by default**; pass `--gate`
+(alias `--strict`) to make a recorded regression exit non-zero for CI.
 
 ## Design
 
 The package separates a **pure, fully-tested measurement core** from the thin
 glue that drives the real subsystems:
 
-- `stats.ts` — percentile/p99 math, the latency histogram, req/s aggregation.
+- `stats.ts` — percentile/p99 math and req/s aggregation.
 - `runner.ts` — the load loop over an **injected** `SampleSource` + clock, so the
   whole loop is unit-tested with fakes (no real server, no real wall clock).
 - `compare.ts` — the regression compare against a recorded baseline.
