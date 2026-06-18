@@ -44,9 +44,9 @@ function registry(): Registry {
   return new Registry().define(Box).defineClient(Account).defineClient(Ping);
 }
 
-/** Pull the `data-keel-island` ids out of rendered HTML, in order. */
+/** Pull the `data-volo-island` ids out of rendered HTML, in order. */
 function islandIdsIn(html: string): string[] {
-  return [...html.matchAll(/data-keel-island="([^"]*)"/g)].map((m) => m[1] as string);
+  return [...html.matchAll(/data-volo-island="([^"]*)"/g)].map((m) => m[1] as string);
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +180,7 @@ describe("Registry client components", () => {
     new Registry().define(Box).defineClient({ ...Ping, name: "Box" });
 
     expect(spy).toHaveBeenCalledOnce();
-    expect(spy.mock.calls[0]?.[0]).toContain("[keel/ui]");
+    expect(spy.mock.calls[0]?.[0]).toContain("[volo/ui]");
 
     spy.mockRestore();
   });
@@ -269,7 +269,7 @@ describe("renderPage — data binds", () => {
         component: "Account",
         props: {},
         ssr: false,
-        bind: { session: { source: "session", href: "/__keel/data/session" } },
+        bind: { session: { source: "session", href: "/__volo/data/session" } },
       },
     ]);
   });
@@ -323,7 +323,7 @@ describe("renderPage", () => {
     const html = renderToStaticMarkup(page.element);
 
     expect(html).toBe(
-      '<div class="box">hi <div data-keel-island="$.children[1]">' +
+      '<div class="box">hi <div data-volo-island="$.children[1]">' +
         "<span>loading pro</span></div></div>",
     );
 
@@ -335,7 +335,7 @@ describe("renderPage", () => {
   it("renders an island with no props and no fallback as an empty shell", () => {
     const page = renderPage(registry(), island("Ping"));
 
-    expect(renderToStaticMarkup(page.element)).toBe('<div data-keel-island="$"></div>');
+    expect(renderToStaticMarkup(page.element)).toBe('<div data-volo-island="$"></div>');
     expect(page.islands).toEqual([{ id: "$", component: "Ping", props: {}, ssr: false }]);
   });
 
@@ -428,7 +428,7 @@ describe("renderPage", () => {
     const html = renderToStaticMarkup(page.element);
 
     expect(html).toBe(
-      '<div class="box"><div data-keel-island="$.children[0]"><strong>live</strong></div></div>',
+      '<div class="box"><div data-volo-island="$.children[0]"><strong>live</strong></div></div>',
     );
     expect(html).not.toContain("FALLBACK");
 

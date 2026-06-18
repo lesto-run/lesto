@@ -1,5 +1,5 @@
 /**
- * @keel/storage — object storage with a pluggable backend.
+ * @volo/storage — object storage with a pluggable backend.
  *
  *   const storage = new Storage(new MemoryBackend());
  *   await storage.putText("greeting.txt", "hello");
@@ -40,7 +40,7 @@ export type { S3BackendOptions } from "./s3";
 export { encodeRfc3986, hashHex, presignUrl, signRequest, UNSIGNED_PAYLOAD } from "./sigv4";
 export type { SigV4Credentials, SigV4Request } from "./sigv4";
 
-export { KeelError, StorageError } from "./errors";
+export { VoloError, StorageError } from "./errors";
 export type { StorageErrorCode } from "./errors";
 
 export type { StorageBackend, UrlOptions } from "./types";

@@ -1,6 +1,6 @@
 import { defineConfig } from "vitest/config";
 
-// Coverage is enforced via thresholds. Keel's bar is 100%; this package reaches
+// Coverage is enforced via thresholds. Volo's bar is 100%; this package reaches
 // 100% functions and ~98.6% statements/lines. The remaining gap is a small set
 // of genuinely defensive / structurally-unreachable branches that we will not
 // game with istanbul-ignore:

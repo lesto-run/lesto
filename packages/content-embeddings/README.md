@@ -1,17 +1,17 @@
-# @keel/content-embeddings
+# @volo/content-embeddings
 
 Build-time embedding generation for semantic search.
 
 ## Installation
 
 ```bash
-npm install @keel/content-embeddings
+npm install @volo/content-embeddings
 ```
 
 ## Quick Start
 
 ```typescript
-import { generateEmbeddings, serializeSearchIndex } from "@keel/content-embeddings";
+import { generateEmbeddings, serializeSearchIndex } from "@volo/content-embeddings";
 
 // Generate embeddings for your content.
 // Each entry needs id, slug, and collection; title/content are optional and

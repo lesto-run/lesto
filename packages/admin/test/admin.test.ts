@@ -10,7 +10,7 @@ import {
   text,
   type Db,
   type SqlDatabase,
-} from "@keel/db";
+} from "@volo/db";
 
 import { AdminError, createAdmin } from "../src/index";
 
@@ -19,8 +19,8 @@ import type { Admin, AdminErrorCode, AdminResource, AuditEvent } from "../src/in
 // ---------------------------------------------------------------------------
 // Test rig
 //
-// One in-memory SQLite per test, wrapped in @keel/db. A small fixture table
-// `posts` with a "secret" column the allow-list must hide. The @keel/db
+// One in-memory SQLite per test, wrapped in @volo/db. A small fixture table
+// `posts` with a "secret" column the allow-list must hide. The @volo/db
 // terminals are async (ADR 0006): the synchronous better-sqlite3 engine is
 // wrapped so each terminal resolves a Promise (zero latency); prepare() stays
 // sync, and `transaction()` brackets BEGIN/COMMIT over the single connection.
@@ -263,9 +263,9 @@ describe("createAdmin", () => {
       await expectCode(() => admin.update("posts", 1, { title: "" }), "ADMIN_VALIDATION_FAILED");
     });
 
-    it("maps @keel/db's DB_EMPTY_UPDATE to ADMIN_EMPTY_UPDATE for an empty patch", async () => {
+    it("maps @volo/db's DB_EMPTY_UPDATE to ADMIN_EMPTY_UPDATE for an empty patch", async () => {
       // The update schema makes every field optional, so `{}` passes
-      // validation; @keel/db then refuses the no-column UPDATE with
+      // validation; @volo/db then refuses the no-column UPDATE with
       // DB_EMPTY_UPDATE, which the admin re-codes to its own stable code.
       await admin.create("posts", { title: "Real", body: "ok" });
 

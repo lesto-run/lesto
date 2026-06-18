@@ -1,5 +1,5 @@
 {
-  "name": "@keel/content-vite",
+  "name": "@volo/content-vite",
   "version": "0.1.0",
   "description": "PREVIEW (not part of the supported v1 content seam) — Vite plugin for Docks content collections. Experimental, coverage-gate-exempt.",
   "type": "module",
@@ -36,7 +36,7 @@
     "directory": "packages/vite-plugin"
   },
   "dependencies": {
-    "@keel/content-core": "workspace:*"
+    "@volo/content-core": "workspace:*"
   },
   "devDependencies": {
     "tsdown": "^0.17.3",

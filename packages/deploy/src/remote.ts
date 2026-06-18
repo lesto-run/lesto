@@ -1,14 +1,14 @@
 /**
  * A remote {@link ReleaseStore} over an S3-compatible object store (R2 / S3).
  *
- * This is the headline-target store: it makes Keel's versioned release machinery
+ * This is the headline-target store: it makes Volo's versioned release machinery
  * — stage every file under an immutable `releases/<version>/` prefix, run the
  * health gate, then atomically flip a pointer — reach a real CDN instead of only
  * local disk. The release *logic* lives in {@link shipRelease} / {@link rollback}
  * unchanged; this module is purely the five-function backend they drive.
  *
  * It speaks the S3 REST API directly over `fetch`, signed with AWS Signature
- * Version 4 from `@keel/storage` (the one signing implementation — there is no
+ * Version 4 from `@volo/storage` (the one signing implementation — there is no
  * second copy of the signing math; we import `signRequest`/`hashHex` and the
  * `encodeRfc3986` wire-encoder). No AWS SDK and no Node built-ins on the request
  * path: every R2 operation (`put`, `setCurrent`, `getCurrent`, `listReleases`)
@@ -26,7 +26,7 @@
  * release.
  */
 
-import { encodeRfc3986, hashHex, signRequest } from "@keel/storage";
+import { encodeRfc3986, hashHex, signRequest } from "@volo/storage";
 
 import { DeployError } from "./errors";
 import type { ReleaseStore } from "./release";

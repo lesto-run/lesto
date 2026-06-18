@@ -13,7 +13,7 @@
  *     real browser against the same-origin `/mls` session.
  *   - A watcher on `src/` and `client.tsx` re-runs the bundle on edit, and a
  *     tiny dev-only wrapper around the dispatcher makes the browser notice:
- *     served HTML gains a script that polls `/__keel/version` and reloads when
+ *     served HTML gains a script that polls `/__volo/version` and reloads when
  *     the number moves. No HMR engine — a counter, a poll, a reload.
  *
  * Open http://127.0.0.1:3000 in a browser: the header shows "Sign in"; visit
@@ -26,15 +26,15 @@ import { watch } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { dispatchSitesDev, nodeStaticReader, serve } from "@keel/runtime";
+import { dispatchSitesDev, nodeStaticReader, serve } from "@volo/runtime";
 
 import { buildApp } from "./src/app";
-import sites from "./keel.sites";
+import sites from "./volo.sites";
 
 // Local dev runs the public demo, so default into demo mode (committed fallback
-// secrets) unless the operator set KEEL_AUTH_SECRET. The deployed Worker never
+// secrets) unless the operator set VOLO_AUTH_SECRET. The deployed Worker never
 // does this; production stays fail-closed on a missing secret.
-process.env["KEEL_DEMO"] ??= "1";
+process.env["VOLO_DEMO"] ??= "1";
 
 const PORT = Number(process.env["PORT"] ?? 3000);
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
@@ -51,14 +51,14 @@ let version = 1;
  * keeps the previous bundle on disk and keeps watching — fix the syntax error
  * and save again.
  *
- * `KEEL_PREACT=1` opts the CLIENT bundle into Preact's compat layer (see
+ * `VOLO_PREACT=1` opts the CLIENT bundle into Preact's compat layer (see
  * `build-client.ts`) — handy for testing the smaller bundle locally; the default
  * keeps real React, unchanged.
  */
 function bundleClient(): void {
   const started = Date.now();
 
-  const preact = process.env["KEEL_PREACT"] === "1" ? ["--preact"] : [];
+  const preact = process.env["VOLO_PREACT"] === "1" ? ["--preact"] : [];
 
   try {
     execFileSync("bun", ["build-client.ts", "--outfile", "out/client.js", ...preact], {
@@ -90,8 +90,8 @@ function watchSource(onChange: () => void): void {
 }
 
 /**
- * The inline script injected into dev HTML: poll `/__keel/version` and reload
- * the page when the number changes. Polling, deliberately — `KeelResponse.body`
+ * The inline script injected into dev HTML: poll `/__volo/version` and reload
+ * the page when the number changes. Polling, deliberately — `VoloResponse.body`
  * is a complete string, so there is no stream to push events down.
  */
 const POLL_SCRIPT = `<script>(() => {
@@ -99,7 +99,7 @@ const POLL_SCRIPT = `<script>(() => {
 
   setInterval(async () => {
     try {
-      const { version } = await (await fetch("/__keel/version")).json();
+      const { version } = await (await fetch("/__volo/version")).json();
 
       if (seen !== undefined && version !== seen) location.reload();
 
@@ -113,13 +113,13 @@ const POLL_SCRIPT = `<script>(() => {
 type Dispatch = ReturnType<typeof dispatchSitesDev>;
 
 /**
- * Wrap the dispatcher with the dev reload loop: answer `/__keel/version` with
+ * Wrap the dispatcher with the dev reload loop: answer `/__volo/version` with
  * the current counter, and append the poll script to any HTML page served.
  * Pure composition — the dispatcher (and the framework) never know.
  */
 function withDevReload(dispatch: Dispatch): Dispatch {
   return async (method, path, options) => {
-    if (method === "GET" && path === "/__keel/version") {
+    if (method === "GET" && path === "/__volo/version") {
       return {
         status: 200,
         headers: { "content-type": "application/json" },

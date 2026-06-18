@@ -1,8 +1,8 @@
 {
-  "name": "@keel/flags",
+  "name": "@volo/flags",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's first-class feature flags — declare a flag on a route or page and the gate hides it when off.",
+  "description": "Volo's first-class feature flags — declare a flag on a route or page and the gate hides it when off.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/web": "workspace:*"
+    "@volo/web": "workspace:*"
   }
 }

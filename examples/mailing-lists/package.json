@@ -1,8 +1,8 @@
 {
-  "name": "@keel/example-mailing-lists",
+  "name": "@volo/example-mailing-lists",
   "version": "0.0.0",
   "private": true,
-  "description": "A runnable end-to-end Keel app: the @keel/mailing-lists double-opt-in + broadcast journey wired behind real HTTP routes — subscribe (rate-limited), confirm, broadcast, unsubscribe — with @keel/mail riding @keel/queue for delivery.",
+  "description": "A runnable end-to-end Volo app: the @volo/mailing-lists double-opt-in + broadcast journey wired behind real HTTP routes — subscribe (rate-limited), confirm, broadcast, unsubscribe — with @volo/mail riding @volo/queue for delivery.",
   "type": "module",
   "scripts": {
     "start": "bun run run.ts",
@@ -11,14 +11,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@keel/db": "workspace:*",
-    "@keel/kernel": "workspace:*",
-    "@keel/mail": "workspace:*",
-    "@keel/mailing-lists": "workspace:*",
-    "@keel/queue": "workspace:*",
-    "@keel/ratelimit": "workspace:*",
-    "@keel/runtime": "workspace:*",
-    "@keel/web": "workspace:*",
+    "@volo/db": "workspace:*",
+    "@volo/kernel": "workspace:*",
+    "@volo/mail": "workspace:*",
+    "@volo/mailing-lists": "workspace:*",
+    "@volo/queue": "workspace:*",
+    "@volo/ratelimit": "workspace:*",
+    "@volo/runtime": "workspace:*",
+    "@volo/web": "workspace:*",
     "better-sqlite3": "^11.10.0"
   }
 }

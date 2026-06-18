@@ -1,11 +1,11 @@
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
-import type { JobContext, JsonValue, Queue } from "@keel/queue";
+import type { JobContext, JsonValue, Queue } from "@volo/queue";
 
 /**
  * Mailers — define an email as a function of its params; send it by name.
  *
- * Delivery rides on @keel/queue: `send` enqueues a job, and a worker renders the
+ * Delivery rides on @volo/queue: `send` enqueues a job, and a worker renders the
  * template and hands it to the transport. So retries, backoff, and deploy-safe
  * reclaim come for free, and the request path never blocks on SMTP.
  *
@@ -36,7 +36,7 @@ import type { JobContext, JsonValue, Queue } from "@keel/queue";
  * delivery or trigger a spurious retry); see {@link Mailer.deliver}.
  */
 
-const DELIVER_JOB = "keel.mail.deliver";
+const DELIVER_JOB = "volo.mail.deliver";
 
 export type MailErrorCode =
   | "MAIL_UNKNOWN_MAILER"
@@ -45,7 +45,7 @@ export type MailErrorCode =
   | "MAIL_INVALID_ADDRESS"
   | "MAIL_INVALID_HEADER";
 
-export class MailError extends KeelError<MailErrorCode> {
+export class MailError extends VoloError<MailErrorCode> {
   constructor(code: MailErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 
@@ -97,7 +97,7 @@ export interface RenderedEmail {
  *
  * ## Contract: delivery is at-least-once
  *
- * The mailer rides @keel/queue, which guarantees *at-least-once* execution: a
+ * The mailer rides @volo/queue, which guarantees *at-least-once* execution: a
  * crash between a successful `send` and the job being marked done re-runs the
  * handler, so `send` may be called more than once for the same logical email.
  * Every {@link RenderedEmail} carries a stable, job-derived `messageId` that is
@@ -127,7 +127,7 @@ export interface DeliveryEvent {
   /** The registered mailer name (e.g. `"verify"`). Not the recipient. */
   readonly mailerName: string;
 
-  /** The @keel/queue job id carrying this delivery. */
+  /** The @volo/queue job id carrying this delivery. */
   readonly jobId: number;
 
   /** 1-based attempt number; > 1 means an at-least-once retry. */
@@ -469,7 +469,7 @@ export class Mailer {
 
 /** Derive the stable, retry-invariant message id from a delivery job's id. */
 export function messageIdFor(jobId: number): string {
-  return `keel-mail-${jobId}`;
+  return `volo-mail-${jobId}`;
 }
 
 /**

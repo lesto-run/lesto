@@ -1,8 +1,8 @@
 {
-  "name": "@keel/mail",
+  "name": "@volo/mail",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel mailers — react-email templates, queued delivery on @keel/queue, pluggable transport.",
+  "description": "Volo mailers — react-email templates, queued delivery on @volo/queue, pluggable transport.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,8 +12,8 @@
     }
   },
   "dependencies": {
-    "@keel/errors": "workspace:*",
-    "@keel/queue": "workspace:*"
+    "@volo/errors": "workspace:*",
+    "@volo/queue": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

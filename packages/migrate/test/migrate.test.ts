@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createTableSql, defineTable, integer, text } from "@keel/db";
+import { createTableSql, defineTable, integer, text } from "@volo/db";
 
 import { MigrateError, Migrator, Schema } from "../src/index";
 
@@ -9,7 +9,7 @@ import type { Migration, MigrationEntry, SqlDatabase, SqlStatement } from "../sr
 
 // Schema-as-value test tables (the one DDL system). `createTableSql(t, dialect)`
 // renders these; the value layer's own rendering is exhaustively tested in
-// @keel/db, so here we only prove the migrator runs and orders the DDL.
+// @volo/db, so here we only prove the migrator runs and orders the DDL.
 const posts = defineTable("posts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   title: text("title").notNull(),
@@ -94,7 +94,7 @@ afterEach(() => {
 function makePgFake(lockLog: string[]): SqlDatabase {
   const passthrough = makeDb();
 
-  // Mirror the real `@keel/pg` adapter's transaction nesting: the TOP-LEVEL db
+  // Mirror the real `@volo/pg` adapter's transaction nesting: the TOP-LEVEL db
   // brackets BEGIN/COMMIT, but a transaction-scoped handle runs a nested
   // `transaction` FLAT (Postgres has no nested BEGIN). The SQLite fake would
   // otherwise throw "cannot start a transaction within a transaction" when the
@@ -114,7 +114,7 @@ function makePgFake(lockLog: string[]): SqlDatabase {
 
   const prepare = (sql: string): SqlStatement => advisory(sql) ?? passthrough.prepare(sql);
 
-  // Mirror real `@keel/pg`: the migrator pins ONE connection (the advisory-lock
+  // Mirror real `@volo/pg`: the migrator pins ONE connection (the advisory-lock
   // span) and runs every migration FLAT on it (`transaction: inner => inner(tx)`),
   // so the whole run is one transaction. We model that here: only the OUTERMOST
   // transaction issues a real BEGIN/COMMIT (via the passthrough); deeper ones run
@@ -470,7 +470,7 @@ describe("Migrator", () => {
         return passthrough.prepare(sql);
       },
       // A nested transaction runs FLAT on the same handle (Postgres has no nested
-      // BEGIN) and passes `self` as `tx` — mirroring `@keel/pg`'s
+      // BEGIN) and passes `self` as `tx` — mirroring `@volo/pg`'s
       // `transaction: inner => inner(tx)`. Only the OUTERMOST call is a real
       // checkout.
       transaction: async (fn) => {

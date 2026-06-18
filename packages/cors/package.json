@@ -1,8 +1,8 @@
 {
-  "name": "@keel/cors",
+  "name": "@volo/cors",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's CORS header computation — pure, dependency-free Access-Control-* resolution.",
+  "description": "Volo's CORS header computation — pure, dependency-free Access-Control-* resolution.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,8 +12,8 @@
     }
   },
   "dependencies": {
-    "@keel/errors": "workspace:*",
-    "@keel/web": "workspace:*"
+    "@volo/errors": "workspace:*",
+    "@volo/web": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

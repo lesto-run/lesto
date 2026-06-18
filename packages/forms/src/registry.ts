@@ -1,9 +1,9 @@
 /**
- * A @keel/ui Registry preloaded with the form components, so a form tree
+ * A @volo/ui Registry preloaded with the form components, so a form tree
  * validates and renders against a vetted vocabulary with no extra wiring.
  */
 
-import { Registry } from "@keel/ui";
+import { Registry } from "@volo/ui";
 
 import { formComponents } from "./components";
 

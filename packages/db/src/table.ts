@@ -16,7 +16,7 @@
  *
  * The `users` value is *also* the column-reference table — `users.email` is
  * the typed column the query layer binds against. Every other module
- * (`@keel/db`'s queries + DDL, downstream consumers like `@keel/identity`)
+ * (`@volo/db`'s queries + DDL, downstream consumers like `@volo/identity`)
  * imports this one value and reads everything from it.
  */
 

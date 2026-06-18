@@ -1,8 +1,8 @@
 {
-  "name": "@keel/deploy",
+  "name": "@volo/deploy",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel deploy adapters — turn a built site set into a concrete deploy plan and ship its static targets through an injected uploader.",
+  "description": "Volo deploy adapters — turn a built site set into a concrete deploy plan and ship its static targets through an injected uploader.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,8 +20,8 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/errors": "workspace:*",
-    "@keel/sites": "workspace:*",
-    "@keel/storage": "workspace:*"
+    "@volo/errors": "workspace:*",
+    "@volo/sites": "workspace:*",
+    "@volo/storage": "workspace:*"
   }
 }

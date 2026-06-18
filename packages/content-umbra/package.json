@@ -1,5 +1,5 @@
 {
-  "name": "@keel/content-umbra",
+  "name": "@volo/content-umbra",
   "version": "0.1.0",
   "description": "Fast frontmatter parsing for markdown files",
   "type": "module",
@@ -43,7 +43,7 @@
   },
   "homepage": "https://github.com/usedocks/docks/tree/main/packages/umbra#readme",
   "dependencies": {
-    "@keel/content-shared": "workspace:*",
+    "@volo/content-shared": "workspace:*",
     "js-yaml": "^4.1.0"
   },
   "devDependencies": {

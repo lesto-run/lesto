@@ -1,17 +1,17 @@
-# @keel/content-core
+# @volo/content-core
 
 Schema-driven content engine for markdown in TypeScript applications.
 
 ## Installation
 
 ```bash
-npm install @keel/content-core zod
+npm install @volo/content-core zod
 ```
 
 ## Quick Start
 
 ```typescript
-import { defineConfig, defineCollection } from "@keel/content-core";
+import { defineConfig, defineCollection } from "@volo/content-core";
 import { z } from "zod";
 
 const posts = defineCollection({

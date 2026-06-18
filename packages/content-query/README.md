@@ -1,18 +1,18 @@
-# @keel/content-query
+# @volo/content-query
 
 Tiny fluent query API for typed collections (~520 bytes).
 
 ## Installation
 
 ```bash
-npm install @keel/content-query
+npm install @volo/content-query
 ```
 
 ## Quick Start
 
 ```typescript
-import { query } from "@keel/content-query";
-import { getCollection } from "@keel/content-content";
+import { query } from "@volo/content-query";
+import { getCollection } from "@volo/content-content";
 
 const posts = getCollection("posts");
 

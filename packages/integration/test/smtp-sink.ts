@@ -2,7 +2,7 @@
  * A throwaway, in-process SMTP catcher for integration tests.
  *
  * Speaks just enough of RFC 5321 to receive one message from a real SMTP
- * client (here, `@keel/mail`'s {@link createSmtpTransport}): greeting → `EHLO`
+ * client (here, `@volo/mail`'s {@link createSmtpTransport}): greeting → `EHLO`
  * → `MAIL FROM` → `RCPT TO` → `DATA` … `.` → `QUIT`. It binds a localhost TCP
  * socket via `node:net`, records the full dialogue, and resolves a promise with
  * the captured envelope + raw message the moment a `.`-terminated `DATA` block
@@ -141,7 +141,7 @@ export class SmtpSink {
     };
 
     // 220 greeting the moment the client connects.
-    write("220 keel-smtp-sink ready");
+    write("220 volo-smtp-sink ready");
 
     socket.on("data", (chunk: string) => {
       buffer += chunk;
@@ -215,7 +215,7 @@ export class SmtpSink {
       case "EHLO":
       case "HELO":
         // Multi-line 250 reply; SMTP marks the final line with a space (not `-`).
-        write("250-keel-smtp-sink greets you");
+        write("250-volo-smtp-sink greets you");
         write("250 SIZE 10485760");
 
         return;

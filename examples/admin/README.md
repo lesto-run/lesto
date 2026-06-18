@@ -1,13 +1,13 @@
-# `@keel/admin` — paginated list + `onMutation` audit hook
+# `@volo/admin` — paginated list + `onMutation` audit hook
 
 The generic CRUD backbone a WordPress-style admin UI sits on, wired into a
-runnable Keel app and proven end to end. This is the gallery's per-feature QA
-gate for `@keel/admin` (see `docs/plans/examples-gallery.md`): it exercises
+runnable Volo app and proven end to end. This is the gallery's per-feature QA
+gate for `@volo/admin` (see `docs/plans/examples-gallery.md`): it exercises
 **only** that battery's real public API, over real HTTP routes, on both axes a
 unit test can't reach — **local DX** (wire it, run it) and **hosted UX** (serve
 it, drive it).
 
-It focuses on the two capabilities `@keel/admin` shipped for data #6:
+It focuses on the two capabilities `@volo/admin` shipped for data #6:
 
 - **A paginated + projected list.** `list("products", { limit, offset })` pages by
   the primary key and projects each row to `{ id, ...fields }` — the per-resource
@@ -33,12 +33,12 @@ A generic CRUD admin over the `createAdmin` service as HTTP routes:
 | `DELETE /admin/products/:id`         | Destroy a product. **Fires the audit hook.**                                                                |
 | `GET /admin/audit`                   | The audit trail those writes produced, newest first.                                                        |
 
-`@keel/admin` is a **programmatic** CRUD layer, not an HTTP surface — it hands you
-`list / get / create / update / destroy` over a `@keel/db` Table and leaves
+`@volo/admin` is a **programmatic** CRUD layer, not an HTTP surface — it hands you
+`list / get / create / update / destroy` over a `@volo/db` Table and leaves
 transport to the host. `src/app.ts` is that host: it maps each verb to a route,
 translates the package's stable `AdminError` codes into HTTP status (404 / 422),
-and wires the `onMutation` hook to a `@keel/db` table. The kernel
-(`@keel/kernel`) runs the table migrations on boot; `@keel/runtime` serves it.
+and wires the `onMutation` hook to a `@volo/db` table. The kernel
+(`@volo/kernel`) runs the table migrations on boot; `@volo/runtime` serves it.
 
 Pass `-H 'x-admin-actor: you@example.com'` on a write and that actor is recorded
 in the audit row — the admin layer _attributes_ (it carries the actor straight
@@ -59,7 +59,7 @@ bun run --cwd examples/admin test
 
 ## How to deploy / hosted-UX QA
 
-`serve.ts` is a plain `node:http` server (`@keel/runtime`'s `serve`). Boot it and
+`serve.ts` is a plain `node:http` server (`@volo/runtime`'s `serve`). Boot it and
 drive the journey by hand:
 
 ```bash
@@ -71,12 +71,12 @@ curl 'localhost:3000/admin/products?limit=2&offset=2'
 
 # 2. Create / update / destroy — each fires the audit hook. Attribute it with a header.
 curl -X POST localhost:3000/admin/products \
-  -H 'content-type: application/json' -H 'x-admin-actor: ada@keel.dev' \
+  -H 'content-type: application/json' -H 'x-admin-actor: ada@volo.dev' \
   -d '{"name":"Galley Apron","price":3000,"stock":25,"cost":1100}'
 curl -X PATCH localhost:3000/admin/products/6 \
-  -H 'content-type: application/json' -H 'x-admin-actor: ada@keel.dev' \
+  -H 'content-type: application/json' -H 'x-admin-actor: ada@volo.dev' \
   -d '{"price":2700}'
-curl -X DELETE localhost:3000/admin/products/6 -H 'x-admin-actor: ada@keel.dev'
+curl -X DELETE localhost:3000/admin/products/6 -H 'x-admin-actor: ada@volo.dev'
 
 # 3. Read the audit trail those three writes produced.
 curl localhost:3000/admin/audit
@@ -97,7 +97,7 @@ writes land three `audit_log` rows with the right `action` / `resource` /
 **Hosted UX — pass.** Booted `serve.ts` on a real `node:http` server. Over the
 wire: `GET …?limit=2&offset=0` and `…&offset=2` returned the two stable pages
 with **no `cost` field**; a create→`201`, update→`200`, delete→`200` each fired
-the hook; `GET /admin/audit` showed all three with `actor: grace@keel.dev` carried
+the hook; `GET /admin/audit` showed all three with `actor: grace@volo.dev` carried
 from the `x-admin-actor` header; a missing id returned **404**
 (`ADMIN_RECORD_NOT_FOUND`) and a blank-name body returned **422**
 (`ADMIN_VALIDATION_FAILED` with the flattened Zod field errors). Clean SIGTERM
@@ -106,10 +106,10 @@ shutdown.
 ## DX findings (filed back to the owning plans)
 
 The point of the gallery is to surface friction wiring the real API. Wiring
-`@keel/admin` this time found:
+`@volo/admin` this time found:
 
 1. **The `onMutation` hook is synchronous (`(e) => void`), but a real audit sink
-   is async.** Persisting an audit event to a `@keel/db` table (or any I/O sink)
+   is async.** Persisting an audit event to a `@volo/db` table (or any I/O sink)
    is a `Promise`, yet the hook can't `await` and the admin fires it _after_ the
    write has already committed. So the host has to fire-and-forget the insert and
    swallow its rejection (a throw would surface to the caller of a _succeeded_
@@ -118,7 +118,7 @@ The point of the gallery is to surface friction wiring the real API. Wiring
    exactly-once / ordered auditing without its own queue. A `Promise<void>`-
    returning hook (awaited inside the mutation, before it resolves) would let the
    audit row commit transactionally with the write. → _owner: `data-persistence`
-   (the `@keel/admin` audit seam)._
+   (the `@volo/admin` audit seam)._
 
 2. **`AuditEvent` carries the validated `patch` but not the prior state.** The
    event gives `{ action, actor, resource, id, patch }` — the _new_ attributes —
@@ -127,22 +127,22 @@ The point of the gallery is to surface friction wiring the real API. Wiring
    row itself before the mutation, duplicating the `get` the admin already does
    internally on `update` / `destroy`. Threading a `before` onto the event (it's
    already fetched for the not-found pre-check) would make change-tracking free.
-   → _owner: `data-persistence` (the `@keel/admin` audit seam)._
+   → _owner: `data-persistence` (the `@volo/admin` audit seam)._
 
-3. **`@keel/admin` is programmatic-only — every host re-hand-rolls the HTTP
+3. **`@volo/admin` is programmatic-only — every host re-hand-rolls the HTTP
    shell.** The package gives `list / get / create / update / destroy` and a
    coded `AdminError`, but no route layer: this example hand-wrote six routes, the
    `AdminError`-code → HTTP-status table, the `?limit=&offset=` query parsing, and
    the JSON error body. That shell is identical for every resource and every app
    that mounts the admin, so it's boilerplate the battery could ship as an opt-in
-   `keel()` sub-router (`adminRoutes(admin)` mounting standard REST paths) while
-   keeping the programmatic core. Until then "wire `@keel/admin`" means "write a
+   `volo()` sub-router (`adminRoutes(admin)` mounting standard REST paths) while
+   keeping the programmatic core. Until then "wire `@volo/admin`" means "write a
    controller," which is exactly the WordPress-style admin the package set out to
    spare you. → _owner: `data-persistence` / `web-primitives` (an admin HTTP seam)._
 
 4. **No request error boundary, so the web layer's own `c.valid` is unusable for
    a body a route wants to reject gracefully.** `Context.valid(schema)` throws a
-   `WebError` on a bad body, but `keel().handle` / the kernel have no surrounding
+   `WebError` on a bad body, but `volo().handle` / the kernel have no surrounding
    catch (the known "no request error boundary" gap), so that throw escapes
    `app.handle` unhandled rather than becoming a 422. This example sidesteps it by
    letting the admin own validation (its `ADMIN_VALIDATION_FAILED` _is_

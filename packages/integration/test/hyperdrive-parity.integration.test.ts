@@ -1,7 +1,7 @@
 /**
  * Edge-Postgres parity: the Cloudflare Hyperdrive adapter (`hyperdriveToSqlDatabase`,
- * `@keel/cloudflare`) must speak the SAME `@keel/db` `SqlDatabase` contract — over a
- * REAL Postgres socket — that the node `@keel/pg` driver does. Hyperdrive is the
+ * `@volo/cloudflare`) must speak the SAME `@volo/db` `SqlDatabase` contract — over a
+ * REAL Postgres socket — that the node `@volo/pg` driver does. Hyperdrive is the
  * flagship-tier Postgres path: a Worker has no node sockets, so Hyperdrive fronts a
  * real Postgres and hands the Worker a `connectionString` a postgres client speaks
  * over. This suite wraps a real `pg` connection EXACTLY as Hyperdrive would expose
@@ -11,7 +11,7 @@
  * reused position, snake→camel hydration + null binding, and transaction
  * commit-visible / rollback-invisible.
  *
- * It runs ONLY when `KEEL_HYPERDRIVE_URL` is set (its own CI job with a postgres:16
+ * It runs ONLY when `VOLO_HYPERDRIVE_URL` is set (its own CI job with a postgres:16
  * service) — so the coverage gate never depends on a container. The unit suite
  * (`packages/cloudflare/test/hyperdrive.test.ts`) covers the adapter's branches
  * against a fake; THIS proves the same code drives a real Postgres byte-for-byte
@@ -27,10 +27,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
 
-import { createDb, createTableSql, defineTable, eq, integer, text } from "@keel/db";
-import type { Db, SqlDatabase } from "@keel/db";
-import { hyperdriveToSqlDatabase } from "@keel/cloudflare";
-import type { HyperdriveConnection, HyperdriveQueryResult } from "@keel/cloudflare";
+import { createDb, createTableSql, defineTable, eq, integer, text } from "@volo/db";
+import type { Db, SqlDatabase } from "@volo/db";
+import { hyperdriveToSqlDatabase } from "@volo/cloudflare";
+import type { HyperdriveConnection, HyperdriveQueryResult } from "@volo/cloudflare";
 
 // The schema-as-value drives every query AND the CREATE TABLE — one source of
 // truth rendered for Postgres by `createTableSql(items, "postgres")`.
@@ -41,7 +41,7 @@ const items = defineTable("items", {
   note: text("note"),
 });
 
-const HYPERDRIVE_URL = process.env["KEEL_HYPERDRIVE_URL"];
+const HYPERDRIVE_URL = process.env["VOLO_HYPERDRIVE_URL"];
 
 /** A real `pg.Client`, structurally typed to the slice this test uses. */
 interface PgClient {
@@ -54,7 +54,7 @@ interface PgClient {
  * Open ONE real Postgres connection over the Hyperdrive URL and wrap it in the
  * `HyperdriveConnection` shape the adapter consumes — exactly how a Worker wires a
  * postgres client to `env.HYPERDRIVE.connectionString`. `pg` is loaded dynamically
- * (a peer the CI job installs), mirroring `@keel/pg`'s `realPool`.
+ * (a peer the CI job installs), mirroring `@volo/pg`'s `realPool`.
  */
 async function openHyperdrive(): Promise<{ db: SqlDatabase; close: () => Promise<void> }> {
   const require = createRequire(import.meta.url);

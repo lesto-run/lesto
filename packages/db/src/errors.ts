@@ -7,9 +7,9 @@
  * machines.
  */
 
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
-export { KeelError };
+export { VoloError };
 
 export type DbErrorCode =
   | "DB_NO_TABLE"
@@ -18,7 +18,7 @@ export type DbErrorCode =
   | "DB_EMPTY_UPDATE";
 
 /** Anything the query/DDL layer can refuse to do. */
-export class DbError extends KeelError<DbErrorCode> {
+export class DbError extends VoloError<DbErrorCode> {
   constructor(code: DbErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

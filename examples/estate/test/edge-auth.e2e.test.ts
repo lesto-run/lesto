@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { toFetchHandler } from "@keel/cloudflare";
+import { toFetchHandler } from "@volo/cloudflare";
 
 import { buildEdgeApp } from "../src/edge";
 
@@ -28,7 +28,7 @@ const SAME_ORIGIN = { "sec-fetch-site": "same-origin" };
 
 /**
  * The Worker's fetch handler, built over the edge app with `secret`. Demo mode
- * is on (the setup file sets KEEL_DEMO=1), so the passwordless `?as=` sign-in
+ * is on (the setup file sets VOLO_DEMO=1), so the passwordless `?as=` sign-in
  * the auth flow uses is reachable.
  */
 function handlerFor(secret: string): (request: Request) => Promise<Response> {
@@ -61,7 +61,7 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
     expect(signIn.status).toBe(303);
 
     const setCookie = signIn.headers.get("set-cookie");
-    expect(setCookie).toContain("__Host-keel_session=");
+    expect(setCookie).toContain("__Host-volo_session=");
     expect(setCookie).toContain("Secure");
     expect(setCookie).toContain("HttpOnly");
 
@@ -79,11 +79,11 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
     const handler = handlerFor(SECRET);
 
     // The Account island binds this source (ADR 0010); the worker auto-exposes
-    // it at /__keel/data/session (a miss on the assets binding falls through to
+    // it at /__volo/data/session (a miss on the assets binding falls through to
     // the app). Signed out is a normal answer: 200 with the value `null`, not a
     // 401 (a 401 would log a browser console error on every public view). The
     // value is the user directly — no `{ user }` wrapper.
-    const anon = await handler(new Request(`${origin}/__keel/data/session`));
+    const anon = await handler(new Request(`${origin}/__volo/data/session`));
     expect(anon.status).toBe(200);
     expect(await anon.json()).toBeNull();
 
@@ -93,7 +93,7 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
     const cookie = sessionCookiePair(signIn.headers.get("set-cookie") ?? "");
 
     const session = await handler(
-      new Request(`${origin}/__keel/data/session`, { headers: { cookie } }),
+      new Request(`${origin}/__volo/data/session`, { headers: { cookie } }),
     );
     expect(session.status).toBe(200);
     expect(((await session.json()) as { name: string }).name).toBe("Guest Buyer");
@@ -145,7 +145,7 @@ describe("estate on the edge — signed-session auth through toFetchHandler", ()
 
     expect(response.status).toBe(200);
     const html = await response.text();
-    expect(html).toContain("data-keel-island");
+    expect(html).toContain("data-volo-island");
     expect(html).toContain("Jade Mills Estates");
   });
 });

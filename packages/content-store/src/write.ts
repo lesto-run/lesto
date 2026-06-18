@@ -1,5 +1,5 @@
-import type { RuntimeEntry } from "@keel/content-core";
-import type { SqlDatabase } from "@keel/migrate";
+import type { RuntimeEntry } from "@volo/content-core";
+import type { SqlDatabase } from "@volo/migrate";
 
 import { ContentStoreError } from "./errors";
 import { loadEntry } from "./load";

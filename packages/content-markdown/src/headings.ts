@@ -1,5 +1,5 @@
-import { createSlugger, slugify } from "@keel/content-shared/slugify";
-import { stripFrontmatter } from "@keel/content-shared/markdown";
+import { createSlugger, slugify } from "@volo/content-shared/slugify";
+import { stripFrontmatter } from "@volo/content-shared/markdown";
 import type { Heading } from "./types";
 
 const HEADING_REGEX = /^(#{1,6})\s+(.+)$/gm;

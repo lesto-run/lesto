@@ -6,7 +6,7 @@
  * UI and wire to their preferred AI provider.
  */
 
-import { escapeXml, escapeXmlAttr } from "@keel/content-shared/xml";
+import { escapeXml, escapeXmlAttr } from "@volo/content-shared/xml";
 import type { RuntimeEntry } from "./types";
 
 // --- Types ---

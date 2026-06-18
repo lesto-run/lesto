@@ -1,5 +1,5 @@
 import { visit } from "unist-util-visit";
-import { createSlugger } from "@keel/content-shared/slugify";
+import { createSlugger } from "@volo/content-shared/slugify";
 import type { Root, PhrasingContent } from "mdast";
 import type { VFile } from "vfile";
 import type { Heading, ReadingTime } from "./types";

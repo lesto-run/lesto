@@ -1,7 +1,7 @@
 import yaml from "js-yaml";
-import { createImmutableCache, CACHE_LIMITS, deepClone } from "@keel/content-shared/cache";
-import { ParseError } from "@keel/content-shared/errors";
-import { sanitizeObject } from "@keel/content-shared/sanitize";
+import { createImmutableCache, CACHE_LIMITS, deepClone } from "@volo/content-shared/cache";
+import { ParseError } from "@volo/content-shared/errors";
+import { sanitizeObject } from "@volo/content-shared/sanitize";
 import type { Parser, ParseOutput } from "./types";
 
 // ============================================================================
@@ -70,7 +70,7 @@ const engines: Record<FrontmatterLanguage, LanguageEngine> = {
 // ============================================================================
 
 /**
- * @deprecated Use ParseError from @keel/content-shared/errors instead.
+ * @deprecated Use ParseError from @volo/content-shared/errors instead.
  * Kept for backwards compatibility.
  */
 export class FrontmatterParseError extends ParseError {
@@ -212,7 +212,7 @@ function createFrontmatterResult(
 
 /**
  * Parse YAML with caching. Isolated try-catch for V8 optimization.
- * Uses immutable cache from @keel/content-shared to prevent mutation issues.
+ * Uses immutable cache from @volo/content-shared to prevent mutation issues.
  */
 function parseYamlCached(matter: string, filePath: string): Record<string, unknown> {
   // Check cache first (returns a clone to prevent mutation)

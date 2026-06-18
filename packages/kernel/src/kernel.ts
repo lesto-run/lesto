@@ -1,13 +1,13 @@
 /**
- * The application kernel: it assembles a Keel app from its parts.
+ * The application kernel: it assembles a Volo app from its parts.
  *
- * Everything a Keel app is made of meets here — the database, the migrations
- * that shape it, and the composed `keel()` app that maps and answers requests.
+ * Everything a Volo app is made of meets here — the database, the migrations
+ * that shape it, and the composed `volo()` app that maps and answers requests.
  * The kernel wires them together into one bootable `App` and owns the assembly
  * order: run pending migrations against the supplied database, then delegate
  * dispatch to the app.
  *
- * Handlers query the database through `@keel/db` (see ADR 0004) — they close
+ * Handlers query the database through `@volo/db` (see ADR 0004) — they close
  * over a typed `Db` from the app's factory rather than reaching for a global.
  * The kernel itself never touches the data layer beyond handing `config.db` to
  * the migrator.
@@ -18,13 +18,13 @@
  * delegation.
  */
 
-import type { Dialect, SqlDatabase } from "@keel/db";
+import type { Dialect, SqlDatabase } from "@volo/db";
 
-import { Migrator } from "@keel/migrate";
-import type { MigrationEntry } from "@keel/migrate";
+import { Migrator } from "@volo/migrate";
+import type { MigrationEntry } from "@volo/migrate";
 
-import { runPipeline } from "@keel/web";
-import type { Keel, KeelRequest, KeelResponse, Middleware, UiDialect } from "@keel/web";
+import { runPipeline } from "@volo/web";
+import type { Volo, VoloRequest, VoloResponse, Middleware, UiDialect } from "@volo/web";
 
 import { installDurableSchema, secureStack } from "./secure-stack";
 import type { SecureStackOptions } from "./secure-stack";
@@ -59,7 +59,7 @@ export const KERNEL_DEFAULT_RATE_LIMIT = { capacity: 100, refillPerSecond: 50 } 
  * installed (`durable !== false`, the default); a `durable: false` deploy gets
  * per-process memory buckets, matching its opt-out of the SQL stores.
  */
-function resolveSecure(config: KeelAppConfig): readonly Middleware[] {
+function resolveSecure(config: VoloAppConfig): readonly Middleware[] {
   if (config.secure === false) return [];
 
   const durableWiring: Pick<SecureStackOptions, "db" | "dialect"> =
@@ -80,39 +80,39 @@ function resolveSecure(config: KeelAppConfig): readonly Middleware[] {
 
 /**
  * The one database handle the kernel threads through the migrator — the canonical
- * `@keel/db` SQL surface, re-exported here under the kernel's own name.
+ * `@volo/db` SQL surface, re-exported here under the kernel's own name.
  *
- * `@keel/migrate` consumes `exec` (for DDL) + `prepare` (for the bookkeeping
- * table); `@keel/db` consumes the same shape for the runtime query layer. A
+ * `@volo/migrate` consumes `exec` (for DDL) + `prepare` (for the bookkeeping
+ * table); `@volo/db` consumes the same shape for the runtime query layer. A
  * single better-sqlite3 (or future Postgres) adapter satisfies both
  * structurally, so the kernel hands the same handle to the migrator and the app
  * wraps it in `createDb(handle)` for its controllers.
  *
  * It used to be a *separate* interface with the identical shape, which made the
- * kernel's handle and `@keel/queue`'s `SqlDatabase` nominally distinct: feeding
+ * kernel's handle and `@volo/queue`'s `SqlDatabase` nominally distinct: feeding
  * one `openSqlite` handle into both `createApp` and `new Queue({ db })` forced a
  * `handle as unknown as SqlDatabase` cast even though the methods matched. It is
- * now an alias of `@keel/db`'s `SqlDatabase` (which `@keel/queue` re-exports too),
+ * now an alias of `@volo/db`'s `SqlDatabase` (which `@volo/queue` re-exports too),
  * so the same handle flows into `createDb`, `createApp`, `new Queue({ db })`, and
  * every `installSchema` with NO cast. The kernel's `schemas` seam closes over the
- * same type — see {@link KeelAppConfig.schemas}. The alias is retained (rather
+ * same type — see {@link VoloAppConfig.schemas}. The alias is retained (rather
  * than dropped for a bare re-export) so existing imports of `KernelDatabase`
  * keep resolving.
  */
 export type KernelDatabase = SqlDatabase;
 
 /**
- * Everything needed to assemble an app: a composed `keel()` app, its database,
+ * Everything needed to assemble an app: a composed `volo()` app, its database,
  * and migrations.
  *
  * Routes, pages, and middleware all live on the `app` — there is no separate
  * `router`/`controllers`/`middleware` to thread (ADR 0004). The kernel runs
  * migrations, then delegates dispatch straight to `app.handle`.
  */
-export interface KeelAppConfig {
+export interface VoloAppConfig {
   db: KernelDatabase;
 
-  app: Keel;
+  app: Volo;
 
   /**
    * Schema migrations to bring the database up to date on boot. Absent means
@@ -135,7 +135,7 @@ export interface KeelAppConfig {
   /**
    * The UI client/server dialect (ADR 0007/0008's matched pair). The single key
    * that drives BOTH the island client bundle's `react`→`preact/compat` alias
-   * (read by the CLI for `keel dev`/`build`) AND the page server renderer
+   * (read by the CLI for `volo dev`/`build`) AND the page server renderer
    * (applied to `app` here, on boot). `{ dialect: "preact" }` shrinks the island
    * runtime to ~10 KB gzip; absent (or `"react"`) keeps React streaming, the
    * default. `createApp` wires the server half; the CLI wires the client half
@@ -164,19 +164,19 @@ export interface KeelAppConfig {
    * the same `db`, right after migrations (and the durable-store install).
    *
    * This is the kernel seam for first-class batteries that ride a SQL table of
-   * their own but are NOT part of the app's `migrations`. `@keel/queue` is the
-   * motivating case: `@keel/mail` enqueues delivery jobs onto the queue, so a
-   * mail app needs the `keel_jobs` table before the first `mailer.send`. Without
-   * this seam the app had to *remember* to call `@keel/queue`'s `installSchema`
+   * their own but are NOT part of the app's `migrations`. `@volo/queue` is the
+   * motivating case: `@volo/mail` enqueues delivery jobs onto the queue, so a
+   * mail app needs the `volo_jobs` table before the first `mailer.send`. Without
+   * this seam the app had to *remember* to call `@volo/queue`'s `installSchema`
    * separately, or the first send hit a missing table. Now it declares the
    * dependency once:
    *
-   *   import { installSchema } from "@keel/queue";
+   *   import { installSchema } from "@volo/queue";
    *   await createApp({ db, app, migrations, schemas: [installSchema] });
    *
    * Each installer takes the same {@link KernelDatabase} handle `createApp` runs
    * everything else against — so one `openSqlite` handle feeds `createDb`,
-   * `createApp`, and `new Queue({ db })` with no cast (the unified `@keel/db` SQL
+   * `createApp`, and `new Queue({ db })` with no cast (the unified `@volo/db` SQL
    * surface). Installers are expected to be idempotent (`IF NOT EXISTS`), like
    * the durable-store install, so they are safe at every boot. They run AFTER
    * `installDurableSchema` and in array order, awaited serially, so a later
@@ -203,7 +203,7 @@ export interface KeelAppConfig {
    * `originCheck` (CSRF) / `cors` / the signed-token `csrf`, or retune `rateLimit`.
    * The rate-limit net stays on unless you override it, and the kernel threads its
    * `db` + `dialect` in so you need not repeat them. `false` — opt out entirely,
-   * for an app that composes `secureStack` on its own `keel()` chain (and must not
+   * for an app that composes `secureStack` on its own `volo()` chain (and must not
    * get it twice).
    */
   secure?: SecureStackOptions | false;
@@ -216,7 +216,7 @@ export interface App {
     method: string,
     path: string,
     options?: { query?: Record<string, string>; headers?: Record<string, string>; body?: unknown },
-  ): Promise<KeelResponse>;
+  ): Promise<VoloResponse>;
 
   /** The migration versions applied during boot, in the order they ran. */
   readonly migrationsApplied: readonly string[];
@@ -229,7 +229,7 @@ export interface App {
  * dispatch over the now-ready database — so a handler's first query hits a
  * migrated schema, not an empty one.
  */
-export async function createApp(config: KeelAppConfig): Promise<App> {
+export async function createApp(config: VoloAppConfig): Promise<App> {
   // Run pending migrations up front so the schema is ready before any
   // request. No migrations configured means nothing ran — empty applied list.
   // Migrations are async now (ADR 0006): await them so the schema is fully
@@ -254,7 +254,7 @@ export async function createApp(config: KeelAppConfig): Promise<App> {
   await (config.durable === false ? Promise.resolve() : installDurableSchema(config.db));
 
   // Then the battery-declared installers (Finding #2): a mail app passes
-  // `schemas: [installSchema]` so `@keel/queue`'s `keel_jobs` table exists before
+  // `schemas: [installSchema]` so `@volo/queue`'s `volo_jobs` table exists before
   // the first `mailer.send` enqueues. Run serially, in array order, against the
   // same handle — a later installer may build on an earlier one's tables, and the
   // serial await keeps the boot order deterministic. `?? []` so the absent case is
@@ -263,7 +263,7 @@ export async function createApp(config: KeelAppConfig): Promise<App> {
     await installSchema(config.db);
   }
 
-  // The keel() app owns dispatch (routes, pages, and middleware all live on it),
+  // The volo() app owns dispatch (routes, pages, and middleware all live on it),
   // so the kernel just delegates to app.handle once the schema is ready.
   //
   // The matched pair's SERVER half (ADR 0008) is wired elsewhere: under the CLI's
@@ -294,8 +294,8 @@ export async function createApp(config: KeelAppConfig): Promise<App> {
       // rate-limit reads the ambient request context's resolved IP, established by
       // the transport around this call), then delegates to the app. The pipeline's
       // coded refusals (429/403) are string-bodied, so the narrow back to
-      // `KeelResponse` holds.
-      const request: KeelRequest = {
+      // `VoloResponse` holds.
+      const request: VoloRequest = {
         method,
         path,
         params: {},
@@ -306,7 +306,7 @@ export async function createApp(config: KeelAppConfig): Promise<App> {
 
       return runPipeline(secure, request, () =>
         config.app.handle(method, path, options),
-      ) as Promise<KeelResponse>;
+      ) as Promise<VoloResponse>;
     },
   };
 }

@@ -59,7 +59,7 @@ export type StepObserver = (event: StepEvent) => void;
  * no auto-increment key, no epoch-ms integer — so its DDL is byte-identical on
  * both engines; the parameter exists for installer-signature parity with the
  * rest of the repo and to document that the table was checked against Postgres.
- * Mirrors `@keel/db`'s `Dialect`.
+ * Mirrors `@volo/db`'s `Dialect`.
  */
 export type Dialect = "sqlite" | "postgres";
 

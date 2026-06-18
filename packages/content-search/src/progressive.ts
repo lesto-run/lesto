@@ -2,7 +2,7 @@
  * Progressive Search Index (Runtime)
  *
  * Functions for parsing and searching with 2-tier progressive indexes.
- * BUILD-TIME functions (generation, serialization) are in @keel/content-embeddings.
+ * BUILD-TIME functions (generation, serialization) are in @volo/content-embeddings.
  */
 
 import type {
@@ -13,7 +13,7 @@ import type {
   SearchResult,
   SearchOptions,
 } from "./types";
-import { extractKeywords } from "@keel/content-shared/text";
+import { extractKeywords } from "@volo/content-shared/text";
 import { binaryQuantize, hammingDistance, hammingToSimilarity, thresholdToHamming } from "./binary";
 
 // ============================================================================
@@ -109,7 +109,7 @@ export async function loadTier1Index(url: string): Promise<Tier1Index> {
 // Keyword Search (Tier 0)
 // ============================================================================
 
-// extractKeywords (and its STOP_WORDS) now live in @keel/content-shared/text,
+// extractKeywords (and its STOP_WORDS) now live in @volo/content-shared/text,
 // shared with the build-time index generator so the keywords stored in a Tier 0
 // index always match those extracted from a live query. Re-exported here for
 // existing importers of this module.

@@ -63,7 +63,7 @@ function isIslandModule(name: string): boolean {
 async function bundle(request: BundleRequest, appRoot: string): Promise<readonly BundleArtifact[]> {
   // Bun.build takes entry FILES, so the synthesized source is staged beside the
   // output and removed after; island imports are absolute, so its location is moot.
-  const entryFile = join(appRoot, ".keel-client-entry.tsx");
+  const entryFile = join(appRoot, ".volo-client-entry.tsx");
 
   await writeFile(entryFile, request.entrySource, "utf8");
 
@@ -139,7 +139,7 @@ export function bunBuildClientDeps(appRoot: string): BuildClientDeps {
     remove: (path) => rm(path),
 
     // Ensure the out dir exists before writing the entry/chunks — on a fresh app
-    // (a just-scaffolded project) it does not yet, so the first `keel build`/`dev`
+    // (a just-scaffolded project) it does not yet, so the first `volo build`/`dev`
     // must create it rather than fail with ENOENT.
     write: async (path, contents) => {
       await mkdir(dirname(path), { recursive: true });

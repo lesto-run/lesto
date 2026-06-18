@@ -1,8 +1,8 @@
 {
-  "name": "@keel/ui-kit",
+  "name": "@volo/ui-kit",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's vetted starter component library for @keel/ui — the default design system the app and the AI compose with.",
+  "description": "Volo's vetted starter component library for @volo/ui — the default design system the app and the AI compose with.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,7 +12,7 @@
     }
   },
   "dependencies": {
-    "@keel/ui": "workspace:*",
+    "@volo/ui": "workspace:*",
     "react": "^19",
     "react-dom": "^19"
   },

@@ -1,6 +1,6 @@
 name: CI
 
-# The first CI gate for Keel. Every job is blocking: typecheck, lint, the
+# The first CI gate for Volo. Every job is blocking: typecheck, lint, the
 # 100%-coverage test gate, and formatting (the content-* formatting debt that
 # once kept the format step informational has been paid down — all 58 packages
 # check clean, so a format regression now fails the build).
@@ -39,7 +39,7 @@ jobs:
       # under v8 coverage and must meet its 100% lines/branches/functions/
       # statements threshold. Runs serially (see scripts/coverage-gate.ts) so the
       # gate is deterministic on a busy runner. Excludes the frozen content-*
-      # baselines (no thresholds yet) and @keel/integration/e2e (no test:cov),
+      # baselines (no thresholds yet) and @volo/integration/e2e (no test:cov),
       # which run as their own steps below.
       - name: Test (coverage-gated)
         run: bun run ws:test:cov
@@ -48,9 +48,9 @@ jobs:
       # (see CONTENT_COVERAGE.md) and are not gated yet — run them without the
       # coverage threshold so their tests still execute on every PR.
       - name: Test (content packages, ungated)
-        run: bun run --filter '@keel/content-*' test
+        run: bun run --filter '@volo/content-*' test
 
-      # @keel/integration is a cross-package journey suite with no src of its own
+      # @volo/integration is a cross-package journey suite with no src of its own
       # to cover, so it declares no thresholds and is excluded from the gate.
       - name: Test (integration)
         working-directory: packages/integration
@@ -67,7 +67,7 @@ jobs:
         run: bun run ws:format:check
 
   # Bundle-size assertion: builds the island client through the real
-  # `@keel/assets` pipeline for both dialects and fails if the gzipped entry
+  # `@volo/assets` pipeline for both dialects and fails if the gzipped entry
   # exceeds its budget (react ≤ 65 KB, preact ≤ 15 KB). Its own job because
   # `Bun.build` is a Bun-only edge that cannot run under the vitest coverage gate
   # — this is what stops the 118 KB react-dom-server-dragging bundle (blocker #8)
@@ -90,7 +90,7 @@ jobs:
 
   # Browser E2E (Playwright) is a separate job: it needs a browser binary and
   # boots a real server, so it runs apart from the workspace unit/integration
-  # tests. `keel-e2e` is named outside `@keel/*`, so `ws:test` above skips it.
+  # tests. `volo-e2e` is named outside `@volo/*`, so `ws:test` above skips it.
   e2e:
     runs-on: ubuntu-latest
     steps:
@@ -113,10 +113,10 @@ jobs:
         run: bun run test:e2e
 
   # The scaffold→run loop, end to end (blocker #9): scaffold a fresh app with
-  # `create-keel`, link the workspace packages, `keel build`, boot `keel dev`,
+  # `create-volo`, link the workspace packages, `volo build`, boot `volo dev`,
   # curl the route, and assert the island HYDRATES in a real browser on the Preact
   # bundle. Its own job (like `db-parity-postgres`) so the three silent scaffold
-  # breaks — missing @keel/cli dep, unresolvable @keel/*@latest, the keel.sites.ts
+  # breaks — missing @volo/cli dep, unresolvable @volo/*@latest, the volo.sites.ts
   # crash — are caught on every PR. Needs a browser binary, so it boots apart.
   scaffold-loop:
     runs-on: ubuntu-latest
@@ -170,21 +170,21 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install the pg driver (peer of @keel/pg)
+      - name: Install the pg driver (peer of @volo/pg)
         working-directory: packages/integration
         run: bun add pg
 
       - name: Cross-driver parity (SQLite + Postgres)
         working-directory: packages/integration
         env:
-          KEEL_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+          VOLO_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: bun run test
 
   # Browser→server RUM tracing (ARCHITECTURE.md §7's headline differentiator):
   # boots a served page over a real socket + a local OTLP collector, reads the
-  # SSR-injected `keel-traceparent` meta the way a browser would, POSTs the
+  # SSR-injected `volo-traceparent` meta the way a browser would, POSTs the
   # browser's navigation/resource/web-vital spans to the built-in
-  # `/__keel/browser-spans` receiver, and asserts they land UNDER the server
+  # `/__volo/browser-spans` receiver, and asserts they land UNDER the server
   # `http.request` span — one traceId. Its own job (like `db-parity-postgres`) so
   # this cross-tier join is proven on every PR, not silently regressed.
   browser-rum-trace:
@@ -205,8 +205,8 @@ jobs:
         run: bun run test test/rum.integration.test.ts
 
   # Edge-Postgres parity: the Cloudflare Hyperdrive adapter (hyperdriveToSqlDatabase,
-  # @keel/cloudflare) must speak the SAME @keel/db SqlDatabase contract over a REAL
-  # Postgres socket that the node @keel/pg driver does — Hyperdrive is the
+  # @volo/cloudflare) must speak the SAME @volo/db SqlDatabase contract over a REAL
+  # Postgres socket that the node @volo/pg driver does — Hyperdrive is the
   # flagship-tier Postgres path. Wrapping a real pg connection exactly as Hyperdrive
   # exposes it (one pinned connection), the gated integration suite runs the same
   # conformance body against postgres:16. Its own job (like db-parity-postgres) so
@@ -243,18 +243,18 @@ jobs:
       - name: Edge-Postgres parity (Hyperdrive adapter over a real Postgres)
         working-directory: packages/integration
         env:
-          KEEL_HYPERDRIVE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          VOLO_HYPERDRIVE_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: bun run test
 
   # The scaffold→Cloudflare-deploy loop, hermetically (task B4): scaffold a fresh
-  # app with `create-keel --local`, `keel build`, then prove the shipped
+  # app with `create-volo --local`, `volo build`, then prove the shipped
   # `wrangler.jsonc` + `worker.ts` actually deploy with `wrangler deploy --dry-run`
   # (which bundles the Worker and reads the assets dir but never contacts the
   # Cloudflare API — so no secrets, no account). Its own job (like `scaffold-loop`
   # and `db-parity-postgres`) because it needs Node 22 on PATH for wrangler, which
   # the Bun-only jobs do not carry. A green dry-run is the standing guarantee that a
   # fresh scaffold's shipped Worker bundles and its wrangler config validates on every
-  # PR; the `keel deploy --cloudflare` flag-parsing + health-gate are covered by CLI
+  # PR; the `volo deploy --cloudflare` flag-parsing + health-gate are covered by CLI
   # unit tests.
   deploy-cloudflare-dry:
     runs-on: ubuntu-latest
@@ -276,16 +276,16 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Scaffold a fresh app (create-keel --local)
-        run: bun packages/create-keel/src/bin.ts cf-dry-app --local
+      - name: Scaffold a fresh app (create-volo --local)
+        run: bun packages/create-volo/src/bin.ts cf-dry-app --local
 
       # Link the scaffolded app's node_modules at the repo's installed workspace
-      # node_modules — the publish-equivalent of `bun install` while the @keel/*
+      # node_modules — the publish-equivalent of `bun install` while the @volo/*
       # packages are unpublished (the same trick packages/e2e's scaffold-loop uses).
       - name: Link workspace node_modules into the scaffolded app
         run: ln -s "$GITHUB_WORKSPACE/node_modules" cf-dry-app/node_modules
 
-      - name: Build the static site + island client (keel build)
+      - name: Build the static site + island client (volo build)
         working-directory: cf-dry-app
         run: bun "$GITHUB_WORKSPACE/packages/cli/src/bin.ts" build
 

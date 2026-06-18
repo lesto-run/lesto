@@ -8,7 +8,7 @@
  * is the only public consumer.
  */
 
-import { createCache, CACHE_LIMITS, CACHE_TTL } from "@keel/content-shared/cache";
+import { createCache, CACHE_LIMITS, CACHE_TTL } from "@volo/content-shared/cache";
 import { binaryQuantize } from "./binary";
 
 // ============================================================================

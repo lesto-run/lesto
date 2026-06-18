@@ -1,11 +1,11 @@
 {
-  "name": "@keel/cli",
+  "name": "@volo/cli",
   "version": "0.0.0",
   "license": "MIT",
   "private": true,
-  "description": "Keel's `keel` command-line tool — load a project's keel.app.ts and run, serve, migrate, or inspect routes.",
+  "description": "Volo's `volo` command-line tool — load a project's volo.app.ts and run, serve, migrate, or inspect routes.",
   "bin": {
-    "keel": "./src/bin.ts"
+    "volo": "./src/bin.ts"
   },
   "type": "module",
   "exports": {
@@ -23,19 +23,19 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/assets": "workspace:*",
-    "@keel/content-core": "workspace:*",
-    "@keel/content-store": "workspace:*",
-    "@keel/deploy": "workspace:*",
-    "@keel/errors": "workspace:*",
-    "@keel/kernel": "workspace:*",
-    "@keel/mcp": "workspace:*",
-    "@keel/migrate": "workspace:*",
-    "@keel/observability": "workspace:*",
-    "@keel/openapi": "workspace:*",
-    "@keel/router": "workspace:*",
-    "@keel/runtime": "workspace:*",
-    "@keel/sites": "workspace:*",
-    "@keel/web": "workspace:*"
+    "@volo/assets": "workspace:*",
+    "@volo/content-core": "workspace:*",
+    "@volo/content-store": "workspace:*",
+    "@volo/deploy": "workspace:*",
+    "@volo/errors": "workspace:*",
+    "@volo/kernel": "workspace:*",
+    "@volo/mcp": "workspace:*",
+    "@volo/migrate": "workspace:*",
+    "@volo/observability": "workspace:*",
+    "@volo/openapi": "workspace:*",
+    "@volo/router": "workspace:*",
+    "@volo/runtime": "workspace:*",
+    "@volo/sites": "workspace:*",
+    "@volo/web": "workspace:*"
   }
 }

@@ -9,44 +9,44 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { CreateKeelError } from "./errors";
+import { CreateVoloError } from "./errors";
 import {
   gitignore,
   islandCounter,
-  keelApp,
-  keelSites,
+  voloApp,
+  voloSites,
   packageJson,
   readme,
   tsconfig,
   worker,
   wranglerConfig,
 } from "./templates";
-import type { KeelDepResolver } from "./templates";
+import type { VoloDepResolver } from "./templates";
 
 /**
- * The two ways a scaffolded app pins its `@keel/*` dependencies.
+ * The two ways a scaffolded app pins its `@volo/*` dependencies.
  *
  * `publishedRangePin` (the DEFAULT) pins each to a published `^0.x` range — what
- * an outsider gets from `npm create keel-app`, resolvable from the registry once
+ * an outsider gets from `npm create volo-app`, resolvable from the registry once
  * the `0.x` publish lands (see `RELEASING.md`). `fileColonPin` pins each to a
  * `file:` path at the in-repo package — the in-monorepo dev/e2e mode, selected by
- * `create-keel --local`, so `bun install` resolves against the workspace packages
+ * `create-volo --local`, so `bun install` resolves against the workspace packages
  * before anything is published.
  *
- * The resolver is injectable (`ScaffoldOptions.keelDep`), so a test can pin to a
+ * The resolver is injectable (`ScaffoldOptions.voloDep`), so a test can pin to a
  * fake specifier and the publish line lives in exactly one place.
  */
 const PACKAGES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** The published range a scaffolded app pins each `@keel/*` dep at by default. */
-const KEEL_DEP_RANGE = "^0.1.0";
+/** The published range a scaffolded app pins each `@volo/*` dep at by default. */
+const VOLO_DEP_RANGE = "^0.1.0";
 
 /** Default pin: the published `^0.x` range (resolves from the registry post-publish). */
-export const publishedRangePin: KeelDepResolver = () => KEEL_DEP_RANGE;
+export const publishedRangePin: VoloDepResolver = () => VOLO_DEP_RANGE;
 
 /** `--local` pin: a `file:` path at the in-repo package (in-monorepo dev). */
-export const fileColonPin: KeelDepResolver = (pkg) =>
-  `file:${join(PACKAGES_DIR, pkg.replace("@keel/", ""))}`;
+export const fileColonPin: VoloDepResolver = (pkg) =>
+  `file:${join(PACKAGES_DIR, pkg.replace("@volo/", ""))}`;
 
 /** The filesystem operations `scaffold` needs — injected so tests can fake them. */
 export interface ScaffoldIO {
@@ -64,16 +64,16 @@ export interface ScaffoldOptions {
   targetDir: string;
 
   /**
-   * How each `@keel/*` dependency is pinned. Defaults to `publishedRangePin` (a
-   * `^0.x` range an outsider installs from the registry); `create-keel --local`
+   * How each `@volo/*` dependency is pinned. Defaults to `publishedRangePin` (a
+   * `^0.x` range an outsider installs from the registry); `create-volo --local`
    * passes `fileColonPin` for in-monorepo dev. Injected so a test can pin to a
    * fake specifier without depending on the repo layout.
    */
-  keelDep?: KeelDepResolver;
+  voloDep?: VoloDepResolver;
 }
 
 /**
- * Write a minimal but runnable Keel starter into `targetDir`.
+ * Write a minimal but runnable Volo starter into `targetDir`.
  *
  * Refuses to clobber: if the target already exists it throws rather than write
  * over a user's directory. Otherwise it creates the directory and every starter
@@ -82,12 +82,12 @@ export interface ScaffoldOptions {
  */
 export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promise<string[]> {
   const { name, targetDir } = options;
-  const keelDep = options.keelDep ?? publishedRangePin;
+  const voloDep = options.voloDep ?? publishedRangePin;
 
   // Never clobber an existing directory.
   if (await io.exists(targetDir)) {
-    throw new CreateKeelError(
-      "CREATE_KEEL_TARGET_EXISTS",
+    throw new CreateVoloError(
+      "CREATE_VOLO_TARGET_EXISTS",
       `Cannot scaffold into "${targetDir}": it already exists.`,
       { targetDir },
     );
@@ -96,15 +96,15 @@ export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promis
   await io.mkdir(targetDir);
 
   // The starter, declared as (relative name -> contents). One source of truth for
-  // both what gets written and what manifest comes back. `keel.sites.ts` is what
-  // makes `keel build`/`dev` whole (its absence used to crash); the island under
-  // `app/islands/` is what `keel build` bundles into `/client.js`. `worker.ts` +
-  // `wrangler.jsonc` are the scaffold→deploy path: `keel deploy --cloudflare`
+  // both what gets written and what manifest comes back. `volo.sites.ts` is what
+  // makes `volo build`/`dev` whole (its absence used to crash); the island under
+  // `app/islands/` is what `volo build` bundles into `/client.js`. `worker.ts` +
+  // `wrangler.jsonc` are the scaffold→deploy path: `volo deploy --cloudflare`
   // builds `out/` and `wrangler deploy`s the Worker that fronts the app.
   const files: ReadonlyArray<readonly [string, string]> = [
-    ["package.json", packageJson(name, keelDep)],
-    ["keel.app.ts", keelApp()],
-    ["keel.sites.ts", keelSites()],
+    ["package.json", packageJson(name, voloDep)],
+    ["volo.app.ts", voloApp()],
+    ["volo.sites.ts", voloSites()],
     ["app/islands/counter.tsx", islandCounter()],
     ["worker.ts", worker()],
     ["wrangler.jsonc", wranglerConfig(name)],

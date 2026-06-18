@@ -1,8 +1,8 @@
 {
-  "name": "@keel/seo",
+  "name": "@volo/seo",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's SEO primitives — pure string builders for meta tags, sitemaps, robots.txt, and JSON-LD.",
+  "description": "Volo's SEO primitives — pure string builders for meta tags, sitemaps, robots.txt, and JSON-LD.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/errors": "workspace:*"
+    "@volo/errors": "workspace:*"
   }
 }

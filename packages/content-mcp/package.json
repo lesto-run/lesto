@@ -1,5 +1,5 @@
 {
-  "name": "@keel/content-mcp",
+  "name": "@volo/content-mcp",
   "version": "0.1.0",
   "description": "MCP (Model Context Protocol) server for Docks content engine",
   "type": "module",
@@ -35,10 +35,10 @@
   "author": "Docks Contributors",
   "license": "MIT",
   "dependencies": {
-    "@keel/content-core": "workspace:*",
-    "@keel/content-shared": "workspace:*",
+    "@volo/content-core": "workspace:*",
+    "@volo/content-shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.4",
-    "@keel/content-umbra": "workspace:*",
+    "@volo/content-umbra": "workspace:*",
     "zod": "^4.2.1",
     "zod-to-json-schema": "^3.24.1"
   },

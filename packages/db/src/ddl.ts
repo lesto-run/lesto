@@ -22,7 +22,7 @@ import type { Table } from "./table";
  * sized. Everything else (identifiers, defaults, constraints) is identical on
  * both engines. The default is `"sqlite"` so every existing caller is unchanged.
  *
- * This mirrors the `Dialect` seam `@keel/ratelimit` already proves; it is the
+ * This mirrors the `Dialect` seam `@volo/ratelimit` already proves; it is the
  * single source of the dialect vocabulary the queue/cache/workflow installers
  * and the migrator thread through.
  */
@@ -46,7 +46,7 @@ function renderDefault(value: ColumnSpec["defaultValue"]): string {
  *
  * `INTEGER` widens to `BIGINT` on Postgres: an epoch-ms timestamp (~1.8e12) and
  * any large counter overflow Postgres's 32-bit `int4`, whereas SQLite's INTEGER
- * is already 64-bit. (`@keel/ratelimit` makes the same call in its hand-written
+ * is already 64-bit. (`@volo/ratelimit` makes the same call in its hand-written
  * DDL.) `TEXT` / `REAL` are spelled identically on both engines.
  */
 function sqlType(spec: ColumnSpec, dialect: Dialect): string {

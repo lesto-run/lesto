@@ -13,8 +13,8 @@
  *
  * Scope: every package that declares a `test:cov` script, EXCEPT the folded-in
  * `content-*` suites — frozen Docks baselines that declare no thresholds and are
- * ratcheted up separately (see CONTENT_COVERAGE.md). `@keel/integration` and
- * `@keel/e2e` declare no `test:cov` and are skipped automatically; they run as
+ * ratcheted up separately (see CONTENT_COVERAGE.md). `@volo/integration` and
+ * `@volo/e2e` declare no `test:cov` and are skipped automatically; they run as
  * their own (non-gated) CI steps.
  */
 import { readdirSync, readFileSync } from "node:fs";

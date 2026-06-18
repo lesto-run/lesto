@@ -1,4 +1,4 @@
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
 /**
  * Every failure this package raises carries one of these stable codes. Branch on
@@ -15,4 +15,4 @@ export type ContentStoreErrorCode =
   | "CONTENT_STORE_ENTRY_NOT_FOUND";
 
 /** The error type for the content store, codes drawn from the union above. */
-export class ContentStoreError extends KeelError<ContentStoreErrorCode> {}
+export class ContentStoreError extends VoloError<ContentStoreErrorCode> {}

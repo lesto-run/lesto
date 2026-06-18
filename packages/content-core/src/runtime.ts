@@ -20,7 +20,7 @@ interface DataStore {
   workflowConfigs: CollectionWorkflowConfig | null;
 }
 
-const STORE_KEY = Symbol.for("@keel/content-core/runtime");
+const STORE_KEY = Symbol.for("@volo/content-core/runtime");
 
 function getStore(): DataStore {
   const g = globalThis as unknown as Record<symbol, DataStore | undefined>;
@@ -37,7 +37,7 @@ function loadData(): Record<string, RuntimeEntry[]> {
 
   throw new Error(
     "Docks: Content data not initialized. " +
-      "Ensure you have imported '@keel/content-content' (or your configured content alias) " +
+      "Ensure you have imported '@volo/content-content' (or your configured content alias) " +
       "before calling getCollection/getEntry. The generated content module will " +
       "automatically initialize the runtime data when imported.",
   );

@@ -9,11 +9,11 @@ import {
 } from "../src/client-errors";
 import type { ClientErrorEvent } from "../src/client-errors";
 import { Context } from "../src/handler-context";
-import type { AnyKeelResponse, KeelRequest } from "../src/types";
+import type { AnyVoloResponse, VoloRequest } from "../src/types";
 
 /** Build a Context around a POST body, the way a route handler receives it. */
 function postContext(body: unknown): Context {
-  const request: KeelRequest = {
+  const request: VoloRequest = {
     method: "POST",
     path: CLIENT_ERRORS_ROUTE,
     params: {},
@@ -29,12 +29,12 @@ function postContext(body: unknown): Context {
  * Invoke the handler with no middleware `next` — a terminal handler ignores it.
  *
  * The handler is synchronous and always answers, so the result is a concrete
- * {@link AnyKeelResponse}; we narrow the wide `Handler` return for the assertions.
+ * {@link AnyVoloResponse}; we narrow the wide `Handler` return for the assertions.
  */
-function call(handler: ReturnType<typeof clientErrorsHandler>, body: unknown): AnyKeelResponse {
+function call(handler: ReturnType<typeof clientErrorsHandler>, body: unknown): AnyVoloResponse {
   return handler(postContext(body), () => {
     throw new Error("next must not be called");
-  }) as AnyKeelResponse;
+  }) as AnyVoloResponse;
 }
 
 describe("normalizeClientError", () => {
@@ -150,7 +150,7 @@ describe("clientErrorsHandler", () => {
     const response = call(handler, huge);
 
     expect(response.status).toBe(413);
-    expect(response.headers["x-keel-error"]).toBe("WEB_CLIENT_ERROR_BODY_TOO_LARGE");
+    expect(response.headers["x-volo-error"]).toBe("WEB_CLIENT_ERROR_BODY_TOO_LARGE");
     expect(seen).toEqual([]);
   });
 

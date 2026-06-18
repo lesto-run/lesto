@@ -1,9 +1,9 @@
 /**
- * `@keel/ui/client` — the browser-only runtime.
+ * `@volo/ui/client` — the browser-only runtime.
  *
  * This barrel gathers everything that touches the DOM (`document`, `window`,
  * React's client renderer) behind one subpath, so a server importer of
- * `@keel/ui` never pulls DOM code into a build that lacks the DOM lib. Mirrors
+ * `@volo/ui` never pulls DOM code into a build that lacks the DOM lib. Mirrors
  * react-dom's server/client split.
  *
  * It re-exports the island hydration runtime and the bfcache-safe page-lifecycle

@@ -6,7 +6,7 @@
  * string, which is free to change for humans without breaking machines.
  */
 
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
 export type McpErrorCode =
   | "MCP_UNKNOWN_TOOL"
@@ -15,7 +15,7 @@ export type McpErrorCode =
   | "MCP_OPERATOR_REQUIRED";
 
 /** Anything the MCP control plane can refuse to do. */
-export class McpError extends KeelError<McpErrorCode> {
+export class McpError extends VoloError<McpErrorCode> {
   constructor(code: McpErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

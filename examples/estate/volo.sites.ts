@@ -4,11 +4,11 @@
  *   marketing — static, at `/`. Prerendered to files, served from a CDN.
  *   mls       — dynamic, at `/mls`. The live, authed app.
  *
- * `keel build` reads this default export to know what to prerender; the serve
+ * `volo build` reads this default export to know what to prerender; the serve
  * front door reads it to know what to path-mount where.
  */
 
-import { defineSites } from "@keel/sites";
+import { defineSites } from "@volo/sites";
 
 export default defineSites([
   { name: "marketing", render: "static", basePath: "/", pages: ["/", "/about", "/styleguide"] },

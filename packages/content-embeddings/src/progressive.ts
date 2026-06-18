@@ -12,10 +12,10 @@
  * - ~48 bytes per entry embedding
  *
  * This module contains BUILD-TIME functions for generating and serializing indexes.
- * RUNTIME functions (parsing, searching) are in @keel/content-search.
+ * RUNTIME functions (parsing, searching) are in @volo/content-search.
  */
 
-import { encodeBase64 } from "@keel/content-shared/encoding";
+import { encodeBase64 } from "@volo/content-shared/encoding";
 import type {
   EmbeddingResult,
   Tier0Index,
@@ -25,7 +25,7 @@ import type {
   CompactTier0Index,
   CompactTier1Index,
 } from "./types";
-import { extractKeywords } from "@keel/content-shared/text";
+import { extractKeywords } from "@volo/content-shared/text";
 import { binaryQuantize } from "./binary";
 import { MODEL_NAME, EMBEDDING_DIMENSIONS } from "./constants";
 
@@ -33,7 +33,7 @@ import { MODEL_NAME, EMBEDDING_DIMENSIONS } from "./constants";
 // Keyword Extraction
 // ============================================================================
 
-// extractKeywords (and its STOP_WORDS) now live in @keel/content-shared/text,
+// extractKeywords (and its STOP_WORDS) now live in @volo/content-shared/text,
 // shared with the runtime keyword search so build-time and query-time keyword
 // extraction stay byte-identical. Its default cap (50) matches the former
 // DEFAULT_MAX_KEYWORDS. Re-exported here for existing importers of this module.

@@ -16,7 +16,7 @@ Two questions forced this ADR:
 
 1. **"Why markdown files at all — why not store content in the DB and edit it in
    Studio?"** We already support both: git-markdown flows in through
-   `keel content:build`, and Studio/agents write straight to the DB through the
+   `volo content:build`, and Studio/agents write straight to the DB through the
    content-store CRUD + MCP tools. The DB is the substrate; markdown is one
    *source*. We keep both deliberately (see Decision → Content sources).
 2. **"Could one project emit a docs/blog static site *alongside* the fullstack
@@ -37,15 +37,15 @@ front-door); see Decision.
 ### What already exists (the pieces are mostly here)
 
 - `createApp(config)` → `App` whose **`app.handle(method, path, opts)` is a pure
-  function from request to `KeelResponse`** — already returns SSR'd HTML (the
+  function from request to `VoloResponse`** — already returns SSR'd HTML (the
   `examples/blog` controller renders via `renderTree` and `curl` gets HTML).
-- `@keel/ui` — `renderTree(tree, registry)` renders a validated UI tree to HTML
+- `@volo/ui` — `renderTree(tree, registry)` renders a validated UI tree to HTML
   against a component **`Registry`**. This is the theming surface.
-- `@keel/router` — declares routes, resolves `method + path → controller#action`.
-- `@keel/content-core` + `@keel/content-store` — the content engine and its
+- `@volo/router` — declares routes, resolves `method + path → controller#action`.
+- `@volo/content-core` + `@volo/content-store` — the content engine and its
   projection onto the SQL substrate; `getCollection`/`getEntry`/`query` at runtime.
-- `@keel/auth` — sessions and tokens; `@keel/cors` — credentialed origins.
-- `@keel/runtime` — `serve(app, opts)` (the dynamic web tier) and `runWorker`.
+- `@volo/auth` — sessions and tokens; `@volo/cors` — credentialed origins.
+- `@volo/runtime` — `serve(app, opts)` (the dynamic web tier) and `runWorker`.
 - DEPLOY.md — the deployment model is already "one durable substrate (the DB),
   everything else stateless."
 
@@ -58,9 +58,9 @@ static requires.
 
 ## Decision
 
-Introduce **Sites & Targets**: a Keel project declares one or more **sites**,
+Introduce **Sites & Targets**: a Volo project declares one or more **sites**,
 each a named view over the shared substrate with its own routes, theme, content,
-and **render mode**. A site renders either **dynamically** (the `keel serve`
+and **render mode**. A site renders either **dynamically** (the `volo serve`
 process we have) or **statically** (a prerendered shell + hydrating islands).
 
 The keystone is small and already true:
@@ -78,7 +78,7 @@ client. That is exactly what makes auth-aware static work.
 ### Site target shape
 
 ```ts
-// keel.sites.ts
+// volo.sites.ts
 export default defineSites([
   {
     name: "app",          // the dynamic application (what we have today)
@@ -117,7 +117,7 @@ degenerate case: one site, `render: "dynamic"`. **Nothing breaks** —
 
 | Mode | Shell renders | Per-user parts | Needs DB at runtime? | Deploy |
 |---|---|---|---|---|
-| `dynamic` | per request, via `serve` | inline (server has the session) | yes | node process (`keel serve`) |
+| `dynamic` | per request, via `serve` | inline (server has the session) | yes | node process (`volo serve`) |
 | `static` | once at build, via offline `app.handle` | **islands**, hydrated on the client | **no** for the shell; islands call the app API | static files → CDN (+ the app API for authed data) |
 | `edge` *(later)* | per request at the CDN edge | inline (edge verifies the session) | token verify only | static + edge function |
 
@@ -135,13 +135,13 @@ islands**:
   cacheable).
 - Auth-dependent regions are **islands** — they ship a small client bundle and
   hydrate at load against the user's session.
-- The **session is owned by the dynamic app** (`@keel/auth`). In the primary
+- The **session is owned by the dynamic app** (`@volo/auth`). In the primary
   layout — **two zones on one origin** (`/` and `/mls` on jademillsestates.com) —
   the session cookie is **same-origin**: it is set by `/mls` and sent to the
   static `/` pages automatically. The "My Account" island reads it (or calls
   `/mls/api/session`) **same-origin — no CORS, no cross-domain cookie setup**.
   *(If you instead split sites across subdomains, fall back to a parent-domain
-  cookie + credentialed CORS via `@keel/cors`. The same-origin path layout — what
+  cookie + credentialed CORS via `@volo/cors`. The same-origin path layout — what
   the target uses — avoids all of that.)*
 
 **Security boundary (non-negotiable):** **gated content is never baked into the
@@ -152,16 +152,16 @@ data from the app, stitched on the client.
 
 What this needs in v1:
 
-- **Islands in `@keel/ui`** — a node type that renders a server placeholder and
+- **Islands in `@volo/ui`** — a node type that renders a server placeholder and
   records a client component + its props, plus a hydration manifest the exporter
   emits beside the HTML.
 - **An auth island + session resolver** — a client that reads the shared
-  `@keel/auth` session and exposes `user` / `signedIn` to islands, and a helper
+  `@volo/auth` session and exposes `user` / `signedIn` to islands, and a helper
   to fetch gated data from the app API.
 - **Credentialed CORS** — the app marks each static site's origin as an allowed
-  credentialed origin (`@keel/cors`, already in-tree) so islands can call it.
+  credentialed origin (`@volo/cors`, already in-tree) so islands can call it.
 
-Deferred (not day one): an **edge adapter** that verifies the `@keel/auth` token
+Deferred (not day one): an **edge adapter** that verifies the `@volo/auth` token
 at the CDN edge and SSRs the auth-aware shell server-side — for no-JS clients and
 faster authed first paint. The client-island model is the universal day-one path
 that works on any plain CDN; the edge adapter is an optimization on top.
@@ -169,7 +169,7 @@ that works on any plain CDN; the edge adapter is an optimization on top.
 ### Content sources — the markdown/DB question, settled
 
 ```
-  git markdown ──(keel content:build)──┐
+  git markdown ──(volo content:build)──┐
                                         ├──▶  content_entries (SQL substrate)  ──▶  sites read via runtime query
   Studio / agents ──(content-store)─────┘
 ```
@@ -186,7 +186,7 @@ that works on any plain CDN; the edge adapter is an optimization on top.
 ### Theming
 
 A theme is a Loom `Registry` (component set) plus a page layout. Sites share a
-base design system (`@keel/ui-kit`) and override per site. The same registry that
+base design system (`@volo/ui-kit`) and override per site. The same registry that
 renders dynamically renders statically — the export path is identical, and
 island components come from the same registry.
 
@@ -195,7 +195,7 @@ island components come from the same registry.
 Two zones share one origin, so something routes `/` → the static marketing shell
 and `/mls/*` → the dynamic app. Two flavors:
 
-- **Single node, path-mounted (v1, simplest).** One `keel serve` process mounts
+- **Single node, path-mounted (v1, simplest).** One `volo serve` process mounts
   every site at its `basePath`: it serves the prerendered files for static zones
   and handles dynamic zones live. One process, one origin — same-origin auth and
   same-origin form posts work with zero extra setup. Ideal to start with and to
@@ -221,17 +221,17 @@ dynamic seam, one origin.
 
 - `static` — emit `out/<site>/<route>/index.html`, hashed assets, and island
   bundles; deploy to any static host (CDN, Pages, S3). No runtime.
-- `node` — the existing `keel serve` process; serves dynamic zones live and can
+- `node` — the existing `volo serve` process; serves dynamic zones live and can
   path-mount static zones (the v1 front door).
 - (later) `edge` — verify session + SSR the shell at the edge.
 
 ### CLI surface
 
 ```
-keel build  --target docs           # prerender one static site (shell + islands) to out/docs
-keel build  --target all            # build every static site
-keel serve  --target app            # run a dynamic site (today's `keel serve`)
-keel deploy --target docs           # build + ship via the site's deploy adapter
+volo build  --target docs           # prerender one static site (shell + islands) to out/docs
+volo build  --target all            # build every static site
+volo serve  --target app            # run a dynamic site (today's `volo serve`)
+volo deploy --target docs           # build + ship via the site's deploy adapter
 ```
 
 `content:build` (source → substrate) and `build --target` (substrate → site
@@ -241,34 +241,34 @@ output) are distinct, composable steps.
 
 | Piece | Status |
 |---|---|
-| Pure `app.handle` render path | **exists** (`@keel/kernel`, `@keel/web`, `@keel/ui`) |
+| Pure `app.handle` render path | **exists** (`@volo/kernel`, `@volo/web`, `@volo/ui`) |
 | Content substrate + sources | **exists** (`content-core`, `content-store`, CLI, MCP) |
-| Dynamic serve | **exists** (`@keel/runtime serve`) |
-| Sessions + credentialed CORS | **exists** (`@keel/auth`, `@keel/cors`) — wire per site |
+| Dynamic serve | **exists** (`@volo/runtime serve`) |
+| Sessions + credentialed CORS | **exists** (`@volo/auth`, `@volo/cors`) — wire per site |
 | `defineSites` + site config | new (small) |
-| **Static exporter** — enumerate a site's pages, call `app.handle` per page, write HTML + assets | new — `@keel/sites` |
-| **Islands** — `@keel/ui` node type: server placeholder + client hydration manifest | new (in `@keel/ui`) |
-| **Auth island + session resolver** — client reads the shared session, gates regions, fetches authed data from the app API | new (`@keel/sites` client) |
-| Per-site routing (basePath, content→routes) | new (thin over `@keel/router`) |
-| Deploy adapters (`static`, `node`) | new — `@keel/deploy` (thin) |
-| `keel build/deploy --target` | new (CLI commands) |
+| **Static exporter** — enumerate a site's pages, call `app.handle` per page, write HTML + assets | new — `@volo/sites` |
+| **Islands** — `@volo/ui` node type: server placeholder + client hydration manifest | new (in `@volo/ui`) |
+| **Auth island + session resolver** — client reads the shared session, gates regions, fetches authed data from the app API | new (`@volo/sites` client) |
+| Per-site routing (basePath, content→routes) | new (thin over `@volo/router`) |
+| Deploy adapters (`static`, `node`) | new — `@volo/deploy` (thin) |
+| `volo build/deploy --target` | new (CLI commands) |
 
-The exporter and the island boundary in `@keel/ui` are the substantial new work;
+The exporter and the island boundary in `@volo/ui` are the substantial new work;
 everything else is thin or already built.
 
 ## Phasing
 
-1. **`@keel/sites`: exporter + islands + auth island + path-mount serving.**
-   `defineSites`; `keel build --target <s>` prerenders the shell via `app.handle`
+1. **`@volo/sites`: exporter + islands + auth island + path-mount serving.**
+   `defineSites`; `volo build --target <s>` prerenders the shell via `app.handle`
    **and** emits island bundles + a manifest; a first-class **auth island**
-   resolves the same-origin `@keel/auth` session and renders signed-in/out UI;
-   `keel serve` path-mounts the site set (static files + dynamic zones) so `/` and
+   resolves the same-origin `@volo/auth` session and renders signed-in/out UI;
+   `volo serve` path-mounts the site set (static files + dynamic zones) so `/` and
    `/mls` run on one origin. Ship a runnable **`examples/estate`** modeled on the
    target: a static marketing site at `/` with a "My Account" island and a
    contact form, plus a small dynamic authed `/mls` zone with a per-user Saved
    list. *(Islands, client auth, and the path front-door are all day-one for the
    auth-aware-static target.)*
-2. **Deploy adapters + `keel deploy --target`.** Static adapter first (HTML +
+2. **Deploy adapters + `volo deploy --target`.** Static adapter first (HTML +
    assets + island bundles + manifest), then node (wraps today's serve).
 3. **Edge adapter + ISR.** Verify the session and SSR the shell at the edge
    (no-JS auth, faster authed paint); per-request incremental revalidation.
@@ -277,12 +277,12 @@ everything else is thin or already built.
 
 - **Session verification trust.** v1 islands trust the app's session endpoint as
   authoritative (one credentialed fetch); the edge adapter (phase 3) verifies the
-  `@keel/auth` token directly. Both keep the app as the auth authority.
+  `@volo/auth` token directly. Both keep the app as the auth authority.
 - **Same-origin vs. subdomains.** The target is same-origin path zones, where
   the session just works (one origin, one cookie). Subdomain layouts need a
   parent-domain cookie + credentialed CORS and a documented DNS/cookie setup —
   supported, but not the default.
-- **Island/asset pipeline.** Lean on Vite (`@keel/content-vite` already in-tree)
+- **Island/asset pipeline.** Lean on Vite (`@volo/content-vite` already in-tree)
   to build + hash island bundles rather than hand-rolling.
 - **Page enumeration.** Derive a site's pages from its content collections +
   declared routes (deterministic), not by crawling links.
@@ -308,5 +308,5 @@ everything else is thin or already built.
 - **No divergent renderer**: static and dynamic are the same `app.handle` path;
   a site changes mode by config. Islands are the one new rendering concept, and
   they are shared by both modes.
-- Adds two small packages (`@keel/sites`, `@keel/deploy`) and an island boundary
-  in `@keel/ui`; the heavy lifting (render, content, substrate, sessions) exists.
+- Adds two small packages (`@volo/sites`, `@volo/deploy`) and an island boundary
+  in `@volo/ui`; the heavy lifting (render, content, substrate, sessions) exists.

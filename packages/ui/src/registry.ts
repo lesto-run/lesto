@@ -18,7 +18,7 @@ import type { ComponentDef } from "./types";
  */
 export type ShadowWarn = (message: string) => void;
 
-const consoleShadowWarn: ShadowWarn = (message) => console.warn(`[keel/ui] ${message}`);
+const consoleShadowWarn: ShadowWarn = (message) => console.warn(`[volo/ui] ${message}`);
 
 /**
  * A mutable, fluent catalog of the components the engine is allowed to render.

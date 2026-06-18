@@ -42,9 +42,9 @@ export interface DynamicSite extends BaseSite {
 export type Site = StaticSite | DynamicSite;
 
 /**
- * A response body the prerenderer can capture, mirroring `@keel/web`'s `KeelBody`.
+ * A response body the prerenderer can capture, mirroring `@volo/web`'s `VoloBody`.
  *
- * We restate the union here rather than depend on `@keel/web`: `RenderResponse`
+ * We restate the union here rather than depend on `@volo/web`: `RenderResponse`
  * is deliberately structural, so the app's own `handle` is a `PageHandler` with
  * no adapter and no package coupling. The arms, in order of how common they are:
  *
@@ -57,22 +57,22 @@ export type Site = StaticSite | DynamicSite;
  * Widening, never narrowing: a `string` is still a valid body, so every existing
  * handler and test keeps working unchanged.
  */
-export type KeelResponseBody = string | Uint8Array | ReadableStream<Uint8Array> | undefined;
+export type VoloResponseBody = string | Uint8Array | ReadableStream<Uint8Array> | undefined;
 
 /**
  * The slice of a response the prerenderer needs.
  *
- * `@keel/web`'s `KeelResponse` satisfies this structurally, so the app's own
+ * `@volo/web`'s `VoloResponse` satisfies this structurally, so the app's own
  * `handle` is a `PageHandler` with no adapter — and tests can pass a fake.
  */
 export interface RenderResponse {
   readonly status: number;
 
   /**
-   * The response body, in any arm `@keel/web` may produce. `prerenderSite`
+   * The response body, in any arm `@volo/web` may produce. `prerenderSite`
    * drains it to a `string` before it becomes a {@link RenderedPage}'s `html`.
    */
-  readonly body: KeelResponseBody;
+  readonly body: VoloResponseBody;
 }
 
 /** Renders one path to a response. Pass the app's `handle`. */

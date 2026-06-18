@@ -5,14 +5,14 @@
  * registry path is reserved for DB-driven content). Its optional `load` runs on
  * the server to produce props; `metadata` turns those props into `<head>` tags;
  * the component is wrapped in the router's layouts (outermost first) and the whole
- * document is streamed through `@keel/ui`'s `renderPageStream`, so the shell paints
+ * document is streamed through `@volo/ui`'s `renderPageStream`, so the shell paints
  * before a slow `<Suspense>` boundary resolves.
  *
  * Islands ride `defineIsland`'s co-located emission (ADR 0011): a `<…Island/>` in
  * the tree self-emits its shell + mount script in the same stream. When the app
- * declared a client module (`keel().client(...)`) the document gains the head
+ * declared a client module (`volo().client(...)`) the document gains the head
  * module tag that runs the hydration runtime; when a data resolver is in scope
- * (`keel().data(...)`) the page tree is wrapped in `IslandDataProvider`, so an
+ * (`volo().data(...)`) the page tree is wrapped in `IslandDataProvider`, so an
  * `ssr: true` island resolves its data at render and inlines it (ADR 0012 — the
  * canonical island). A data-free, client-less page is exactly the plain document
  * it always was.
@@ -21,14 +21,14 @@
 import { createElement } from "react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
 
-import { IslandDataProvider, renderMetadata } from "@keel/ui";
-import type { LinkSpec, MetadataEntry, MetaSpec, SourceResolver } from "@keel/ui";
-import { renderPageStream } from "@keel/ui/server";
-import type { ServerRenderer } from "@keel/ui/server";
+import { IslandDataProvider, renderMetadata } from "@volo/ui";
+import type { LinkSpec, MetadataEntry, MetaSpec, SourceResolver } from "@volo/ui";
+import { renderPageStream } from "@volo/ui/server";
+import type { ServerRenderer } from "@volo/ui/server";
 import type { ZodType } from "zod";
 
 import type { Context } from "./handler-context";
-import type { AnyKeelResponse } from "./types";
+import type { AnyVoloResponse } from "./types";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -94,7 +94,7 @@ export interface PageDef<Path extends string = string, Loaded = unknown> {
    * This page's cache posture — the per-route opt-out of the app-wide `private`
    * cache cliff (ADR 0010 §3a).
    *
-   * `private`-scoped data is tracked at the APP level (`keel().data(src, …)` with
+   * `private`-scoped data is tracked at the APP level (`volo().data(src, …)` with
    * any private source flips a single flag), because a streamed page can't report
    * which sources it inlined before its headers flush, and `Vary: Cookie` is not
    * honored by shared caches — "do not store" is the only safe default. The
@@ -115,7 +115,7 @@ export interface PageDef<Path extends string = string, Loaded = unknown> {
    *   keep the default (cacheable) policy even on a private-data app. Use it for
    *   the island-free (or shared-only) marketing page the app-wide flag would
    *   otherwise make uncacheable. It only SUPPRESSES the page-document stamp; the
-   *   data endpoints (`/__keel/data/<name>`) keep their own per-source headers.
+   *   data endpoints (`/__volo/data/<name>`) keep their own per-source headers.
    *
    * A `static` page is already cacheable (no resolver runs), so `cache` is moot
    * there and ignored.
@@ -145,11 +145,11 @@ export type PageProps<Load> = Load extends (...args: never[]) => infer Result
  * A fresh 400 response.
  *
  * A FACTORY, not a shared constant, for the same reason as `notFound()` in
- * `keel.ts`: a single shared object whose `headers` record is mutated by
+ * `volo.ts`: a single shared object whose `headers` record is mutated by
  * downstream middleware would leak one request's headers into the next malformed
  * request's 400. Each rejected request gets its own object.
  */
-const badRequest = (): AnyKeelResponse => ({
+const badRequest = (): AnyVoloResponse => ({
   status: 400,
   headers: { "content-type": "text/plain" },
   body: "Bad Request",
@@ -165,7 +165,7 @@ const badRequest = (): AnyKeelResponse => ({
  * for a still-connected client. The request's own abort signal is chained in for
  * the client-disconnect case, whichever fires first.
  *
- * An app may override it per-app through `keel().renderDeadline(ms)`, which flows
+ * An app may override it per-app through `volo().renderDeadline(ms)`, which flows
  * here as {@link RenderPageOptions.renderDeadlineMs}; this constant is the value
  * when none was configured.
  */
@@ -241,7 +241,7 @@ export interface RenderPageOptions {
   /**
    * The hard deadline (ms) for this page's streamed render — the app-level
    * override of {@link DEFAULT_RENDER_DEADLINE_MS}, set through
-   * `keel().renderDeadline(ms)`. Chained with the request's own abort signal
+   * `volo().renderDeadline(ms)`. Chained with the request's own abort signal
    * (whichever fires first aborts the render), so an app on a slow data tier can
    * lengthen the bound, or a latency-sensitive one tighten it, without forking
    * the renderer. Absent → the default. Only the React streaming path observes a
@@ -251,10 +251,10 @@ export interface RenderPageOptions {
 
   /**
    * The W3C `traceparent` for THIS request's server span, injected into the head
-   * as `<meta name="keel-traceparent" content="00-…">` (ARCHITECTURE.md §7).
+   * as `<meta name="volo-traceparent" content="00-…">` (ARCHITECTURE.md §7).
    *
    * This is the browser→server join: the browser RUM runtime
-   * (`@keel/observability`'s `startBrowserRum`) reads this meta and adopts its
+   * (`@volo/observability`'s `startBrowserRum`) reads this meta and adopts its
    * trace id, so every span the browser emits — navigation, resource, web-vital —
    * lands UNDER the same `http.request` span the server already recorded. One
    * trace, UI → API → DB. Absent (tracing off, or a static page rendered before any
@@ -287,7 +287,7 @@ export async function renderPageResponse(
   c: Context,
   layouts: readonly Layout[],
   options: RenderPageOptions = {},
-): Promise<AnyKeelResponse> {
+): Promise<AnyVoloResponse> {
   if (def.params !== undefined) {
     const parsed = def.params.safeParse(c.req.query);
 
@@ -318,7 +318,7 @@ export async function renderPageResponse(
   // its spans parent on the server request span. Emitted BEFORE the client module
   // so the meta is already in the document when the hydration entry reads it.
   if (options.traceparent !== undefined) {
-    head.push(createElement("meta", { name: "keel-traceparent", content: options.traceparent }));
+    head.push(createElement("meta", { name: "volo-traceparent", content: options.traceparent }));
   }
 
   // The client module boots hydration: a deferred head `type="module"` script,
@@ -342,7 +342,7 @@ export async function renderPageResponse(
   // Preact's server renderer has no streaming twin carrying the same
   // onError/abort surface, so v1 takes the simpler-correct buffered path. Both
   // produce the same document content; only React gets progressive flush.
-  const body: AnyKeelResponse["body"] =
+  const body: AnyVoloResponse["body"] =
     options.serverRenderer !== undefined && options.serverRenderer.dialect === "preact"
       ? options.serverRenderer.renderToString(documentElement)
       : await renderPageStream(

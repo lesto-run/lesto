@@ -1,5 +1,5 @@
 import { defineComponent, h, computed, type PropType } from "vue";
-import { sanitizeHtml } from "@keel/content-shared/sanitize";
+import { sanitizeHtml } from "@volo/content-shared/sanitize";
 
 export interface HtmlContentProps {
   html: string;

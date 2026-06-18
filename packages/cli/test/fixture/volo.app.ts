@@ -1,18 +1,18 @@
 /**
- * The fixture project's app — what `keel` loads at a project root.
+ * The fixture project's app — what `volo` loads at a project root.
  *
- * Default-exports a KeelAppConfig (the { db, app, migrations } object accepted
+ * Default-exports a VoloAppConfig (the { db, app, migrations } object accepted
  * by createApp). Spawned by the e2e test to prove the real bin loads a project
- * and runs a command end-to-end against a code-first `keel()` app.
+ * and runs a command end-to-end against a code-first `volo()` app.
  */
 
-import { createTableSql, defineTable, dropTableSql, integer, text } from "@keel/db";
-import { keel } from "@keel/web";
-import type { KeelAppConfig } from "@keel/kernel";
-import type { MigrationEntry } from "@keel/migrate";
-import { openSqlite } from "@keel/runtime";
+import { createTableSql, defineTable, dropTableSql, integer, text } from "@volo/db";
+import { volo } from "@volo/web";
+import type { VoloAppConfig } from "@volo/kernel";
+import type { MigrationEntry } from "@volo/migrate";
+import { openSqlite } from "@volo/runtime";
 
-const app = keel()
+const app = volo()
   .get("/posts", (c) => c.json({ posts: [] }))
   .post("/posts", (c) => c.json({ created: true }, 201))
   .get("/posts/:id", (c) => c.json({ id: c.param("id") }));
@@ -43,7 +43,7 @@ const migrations: MigrationEntry[] = [
 
 const { db } = await openSqlite();
 
-const config: KeelAppConfig = {
+const config: VoloAppConfig = {
   db,
   app,
   migrations,

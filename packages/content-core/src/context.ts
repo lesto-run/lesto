@@ -1,5 +1,5 @@
 import type { AnyCollection, InferEntry, RuntimeEntry, TransformContext } from "./types";
-import { createCache, CACHE_LIMITS, CACHE_TTL } from "@keel/content-shared/cache";
+import { createCache, CACHE_LIMITS, CACHE_TTL } from "@volo/content-shared/cache";
 
 export class SkipDocumentError extends Error {
   constructor() {

@@ -3,7 +3,7 @@
  * of those bytes, shared by the two server paths that emit islands:
  *
  *   - `buildIsland` (render.tsx) — the Registry/`UiNode` tree path, one page-wide
- *     `#keel-islands` manifest array;
+ *     `#volo-islands` manifest array;
  *   - `defineIsland` (define-island.ts) — the `.page` path (ADR 0011), one
  *     co-located mount script per island.
  *

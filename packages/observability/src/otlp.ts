@@ -53,7 +53,7 @@ const SPAN_KIND_SERVER = 2;
  * Build the OTLP/HTTP JSON trace-export request body for a batch of spans.
  *
  * One resource (named by `serviceName`), one scope (this package), the spans.
- * Keel's span ids are 32 hex chars (16 random bytes); OTLP's spanId field is
+ * Volo's span ids are 32 hex chars (16 random bytes); OTLP's spanId field is
  * exactly 16 hex chars, so span ids are truncated to spec — still 8 random
  * bytes of identity, while the full-width traceId is carried verbatim.
  */
@@ -66,7 +66,7 @@ export function otlpTraceRequest(spans: readonly SpanData[], serviceName: string
         },
         scopeSpans: [
           {
-            scope: { name: "@keel/observability" },
+            scope: { name: "@volo/observability" },
             spans: spans.map((span) => ({
               traceId: span.traceId,
               spanId: span.spanId.slice(0, 16),
@@ -109,7 +109,7 @@ export interface OtlpHttpExporterOptions {
   /** Extra request headers (an auth token, a tenant id). */
   readonly headers?: Record<string, string>;
 
-  /** The `service.name` resource attribute. Defaults to `"keel"`. */
+  /** The `service.name` resource attribute. Defaults to `"volo"`. */
   readonly serviceName?: string;
 
   /** The HTTP seam; defaults to the global `fetch`. */
@@ -166,10 +166,10 @@ export class OtlpHttpExporter implements SpanExporter {
   constructor(options: OtlpHttpExporterOptions) {
     this.url = options.url;
     this.headers = options.headers ?? {};
-    this.serviceName = options.serviceName ?? "keel";
+    this.serviceName = options.serviceName ?? "volo";
     this.fetchFn = options.fetchFn ?? fetch;
     this.maxBufferedSpans = options.maxBufferedSpans ?? DEFAULT_MAX_BUFFERED_SPANS;
-    this.onError = options.onError ?? ((error) => console.error("[keel/observability]", error));
+    this.onError = options.onError ?? ((error) => console.error("[volo/observability]", error));
   }
 
   export(span: SpanData): void {

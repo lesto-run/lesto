@@ -1,5 +1,5 @@
 /**
- * @keel/ui-generate — AI generation of validated @keel/ui trees.
+ * @volo/ui-generate — AI generation of validated @volo/ui trees.
  *
  *   const registry = new Registry().define(...);
  *

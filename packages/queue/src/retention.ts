@@ -5,7 +5,7 @@ import { QueueError } from "./errors";
  * import("./types").Clock}. The sweeps this recipe drives (`cache.sweep`,
  * `session.deleteExpired`, `ratelimit.sweep`) all compare epoch-ms deadlines, so
  * the `now` handed to each task must be the millisecond number they expect — the
- * same `Clock` shape `@keel/cache` and the SQL stores use. Declared locally so
+ * same `Clock` shape `@volo/cache` and the SQL stores use. Declared locally so
  * the recipe takes no extra import and the type difference is explicit.
  */
 export type RetentionClock = () => number;
@@ -13,11 +13,11 @@ export type RetentionClock = () => number;
 /**
  * The retention recipe: run periodic SWEEPS on their own cadences.
  *
- * Keel's durable stores all expose a cheap delete-the-dead verb — the queue's
+ * Volo's durable stores all expose a cheap delete-the-dead verb — the queue's
  * {@link import("./queue").Queue.prune} (terminal jobs) and {@link
- * import("./queue").Queue.reclaim} (stalled jobs), `@keel/cache`'s
- * `sqlStore(db).sweep(now)`, `@keel/auth`'s `sqlSessionStore(db).deleteExpired(now)`,
- * `@keel/ratelimit`'s `sqlRateLimitStore(db).sweep(before)` — but each deliberately
+ * import("./queue").Queue.reclaim} (stalled jobs), `@volo/cache`'s
+ * `sqlStore(db).sweep(now)`, `@volo/auth`'s `sqlSessionStore(db).deleteExpired(now)`,
+ * `@volo/ratelimit`'s `sqlRateLimitStore(db).sweep(before)` — but each deliberately
  * starts NO timer (the store stays a passive value; the caller owns the clock).
  * This recipe is where an app wires those verbs to a cadence, in ONE place,
  * without the queue taking a dependency on any of those packages — each task is
@@ -98,7 +98,7 @@ interface TaskState {
 /**
  * Drives a set of {@link RetentionTask}s, each on its own `everyMs` cadence.
  *
- * The {@link RetentionClock} is the epoch-ms shape `@keel/cache` and the SQL
+ * The {@link RetentionClock} is the epoch-ms shape `@volo/cache` and the SQL
  * stores use (NOT the queue's `Date` clock — these sweeps compare epoch-ms
  * deadlines), so the `now` handed to each `run` is exactly what
  * `sweep`/`deleteExpired` expect.

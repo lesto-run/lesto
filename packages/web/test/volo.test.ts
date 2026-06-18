@@ -1,15 +1,15 @@
 import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { defineDataSource } from "@keel/ui";
-import type { BrowserSpan } from "@keel/observability";
+import { defineDataSource } from "@volo/ui";
+import type { BrowserSpan } from "@volo/observability";
 
 import { BROWSER_SPANS_ROUTE } from "../src/browser-spans";
 import { CLIENT_ERRORS_ROUTE } from "../src/client-errors";
 import type { ClientErrorEvent } from "../src/client-errors";
 import { runWithContext } from "../src/context";
-import { fromRequestMiddleware, keel } from "../src/keel";
-import type { Handler } from "../src/keel";
+import { fromRequestMiddleware, volo } from "../src/volo";
+import type { Handler } from "../src/volo";
 import type { Middleware } from "../src/middleware";
 
 /** A live-span stub the runtime would publish on the request context. */
@@ -59,9 +59,9 @@ const sloppy: Handler = async (_c, next) => {
   await next();
 };
 
-describe("keel verbs + dispatch", () => {
+describe("volo verbs + dispatch", () => {
   it("dispatches each verb to its handler", async () => {
-    const app = keel()
+    const app = volo()
       .get("/things", (c) => c.json({ verb: "get" }))
       .post("/things", (c) => c.json({ verb: "post" }))
       .put("/things/:id", (c) => c.json({ verb: "put" }))
@@ -76,13 +76,13 @@ describe("keel verbs + dispatch", () => {
   });
 
   it("captures path params into the context", async () => {
-    const app = keel().get("/listings/:id", (c) => c.json({ id: c.param("id") }));
+    const app = volo().get("/listings/:id", (c) => c.json({ id: c.param("id") }));
 
     expect(JSON.parse((await app.handle("GET", "/listings/42")).body)).toEqual({ id: "42" });
   });
 
   it("threads query, headers, and body from the handle options", async () => {
-    const app = keel().post("/echo", (c) =>
+    const app = volo().post("/echo", (c) =>
       c.json({ q: c.query("a"), h: c.header("x-test"), body: c.req.body }),
     );
 
@@ -96,7 +96,7 @@ describe("keel verbs + dispatch", () => {
   });
 
   it("returns 404 when no route matches", async () => {
-    const app = keel().get("/a", (c) => c.text("a"));
+    const app = volo().get("/a", (c) => c.text("a"));
 
     expect(await app.handle("GET", "/missing")).toEqual({
       status: 404,
@@ -121,7 +121,7 @@ describe("keel verbs + dispatch", () => {
       return response;
     };
 
-    const app = keel()
+    const app = volo()
       .use(taintOnce)
       .get("/a", (c) => c.text("a"));
 
@@ -140,13 +140,13 @@ describe("keel verbs + dispatch", () => {
 
   it("returns the handler's wide body (bytes) through the dispatch contract", async () => {
     const bytes = new Uint8Array([1, 2, 3]);
-    const app = keel().get("/img", (c) => c.bytes(bytes, "image/png"));
+    const app = volo().get("/img", (c) => c.bytes(bytes, "image/png"));
 
     expect((await app.handle("GET", "/img")).body).toBe(bytes);
   });
 });
 
-describe("keel middleware (.use) + per-route chain", () => {
+describe("volo middleware (.use) + per-route chain", () => {
   it("wraps routes registered after .use, outermost first", async () => {
     const order: string[] = [];
 
@@ -159,7 +159,7 @@ describe("keel middleware (.use) + per-route chain", () => {
         return response;
       };
 
-    const app = keel()
+    const app = volo()
       .use(tag("a"))
       .use(tag("b"))
       .get("/x", (c) => {
@@ -180,7 +180,7 @@ describe("keel middleware (.use) + per-route chain", () => {
       return next();
     };
 
-    const app = keel()
+    const app = volo()
       .get("/early", (c) => c.text("early"))
       .use(mark);
 
@@ -190,7 +190,7 @@ describe("keel middleware (.use) + per-route chain", () => {
   });
 
   it("runs inline route middleware in order before the handler", async () => {
-    const app = keel().get("/g", guard, (c) => c.text("passed"));
+    const app = volo().get("/g", guard, (c) => c.text("passed"));
 
     expect((await app.handle("GET", "/g", { query: { ok: "1" } })).body).toBe("passed");
     expect((await app.handle("GET", "/g")).status).toBe(403);
@@ -199,7 +199,7 @@ describe("keel middleware (.use) + per-route chain", () => {
   it("lets a middleware short-circuit without calling next", async () => {
     let reached = false;
 
-    const app = keel().get("/b", block, (c) => {
+    const app = volo().get("/b", block, (c) => {
       reached = true;
       return c.text("never");
     });
@@ -215,7 +215,7 @@ describe("keel middleware (.use) + per-route chain", () => {
       // returns void, never calls next — the runner advances for it
     };
 
-    const app = keel().get("/o", observe, (c) => c.text("after"));
+    const app = volo().get("/o", observe, (c) => c.text("after"));
 
     expect((await app.handle("GET", "/o")).body).toBe("after");
     expect(seen).toEqual(["observed"]);
@@ -224,7 +224,7 @@ describe("keel middleware (.use) + per-route chain", () => {
   it("runs the inner chain once even if a middleware both awaits next and falls through", async () => {
     let inner = 0;
 
-    const app = keel().get("/s", sloppy, (c) => {
+    const app = volo().get("/s", sloppy, (c) => {
       inner += 1;
       return c.text("inner");
     });
@@ -235,7 +235,7 @@ describe("keel middleware (.use) + per-route chain", () => {
   });
 
   it("yields 404 when a matched route's chain answers nothing", async () => {
-    const app = keel().get("/quiet", (_c) => {
+    const app = volo().get("/quiet", (_c) => {
       // returns void, no further handler
     });
 
@@ -248,7 +248,7 @@ describe("keel middleware (.use) + per-route chain", () => {
     // a throw before the chain. The coded error then propagates for the transport
     // to map to a 400.
     let seen = false;
-    const app = keel()
+    const app = volo()
       .use((_c, next) => {
         seen = true;
 
@@ -274,7 +274,7 @@ const corsLike: Middleware = async (request, next) => {
 
 describe("fromRequestMiddleware", () => {
   it("runs a request-shaped middleware in the handler chain", async () => {
-    const app = keel()
+    const app = volo()
       .use(fromRequestMiddleware(corsLike))
       .get("/r", (c) => c.text("ok"));
 
@@ -286,17 +286,17 @@ describe("fromRequestMiddleware", () => {
   });
 });
 
-describe("keel.route composition", () => {
+describe("volo.route composition", () => {
   it("mounts a sub-router under a prefix", async () => {
-    const admin = keel().get("/users", (c) => c.text("users"));
-    const app = keel().route("/admin", admin);
+    const admin = volo().get("/users", (c) => c.text("users"));
+    const app = volo().route("/admin", admin);
 
     expect((await app.handle("GET", "/admin/users")).body).toBe("users");
   });
 
   it("mounts a sub-router with no prefix", async () => {
-    const slice = keel().get("/health", (c) => c.text("ok"));
-    const app = keel().route(slice);
+    const slice = volo().get("/health", (c) => c.text("ok"));
+    const app = volo().route(slice);
 
     expect((await app.handle("GET", "/health")).body).toBe("ok");
   });
@@ -312,10 +312,10 @@ describe("keel.route composition", () => {
       return next();
     };
 
-    const sub = keel()
+    const sub = volo()
       .use(childMw)
       .get("/x", (c) => c.text("x"));
-    const app = keel().use(parentMw).route("/api", sub);
+    const app = volo().use(parentMw).route("/api", sub);
 
     await app.handle("GET", "/api/x");
 
@@ -323,10 +323,10 @@ describe("keel.route composition", () => {
   });
 });
 
-describe("keel.routes inspection", () => {
+describe("volo.routes inspection", () => {
   it("lists every registered route's verb + pattern in order", () => {
-    const sub = keel().get("/c", (c) => c.text("c"));
-    const app = keel()
+    const sub = volo().get("/c", (c) => c.text("c"));
+    const app = volo()
       .get("/a", (c) => c.text("a"))
       .post("/b", (c) => c.text("b"))
       .route("/nested", sub);
@@ -339,18 +339,18 @@ describe("keel.routes inspection", () => {
   });
 });
 
-describe("keel().data() — island data sources (ADR 0010)", () => {
+describe("volo().data() — island data sources (ADR 0010)", () => {
   const sessionSource = defineDataSource<{ id: string; name: string } | null>("session");
 
-  it("auto-exposes a source at GET /__keel/data/<name>, running the loader with context", async () => {
-    const app = keel().data(sessionSource, (c) =>
+  it("auto-exposes a source at GET /__volo/data/<name>, running the loader with context", async () => {
+    const app = volo().data(sessionSource, (c) =>
       c.header("cookie") === "sid=jade" ? { id: "jade", name: "Jade" } : null,
     );
 
     // The route the parse-time primer / client fallback fetches.
-    expect(app.routes()).toContainEqual({ method: "GET", pattern: "/__keel/data/session" });
+    expect(app.routes()).toContainEqual({ method: "GET", pattern: "/__volo/data/session" });
 
-    const signedIn = await app.handle("GET", "/__keel/data/session", {
+    const signedIn = await app.handle("GET", "/__volo/data/session", {
       headers: { cookie: "sid=jade" },
     });
     expect(signedIn.status).toBe(200);
@@ -358,14 +358,14 @@ describe("keel().data() — island data sources (ADR 0010)", () => {
     expect(JSON.parse(signedIn.body)).toEqual({ id: "jade", name: "Jade" });
 
     // "Nobody is signed in" is a normal answer — 200 with null, not a 401.
-    const signedOut = await app.handle("GET", "/__keel/data/session");
+    const signedOut = await app.handle("GET", "/__volo/data/session");
     expect(JSON.parse(signedOut.body)).toBeNull();
   });
 
   it("marks a default (private) source no-store — per-user JSON never shared-cacheable", async () => {
-    const app = keel().data(sessionSource, () => ({ id: "ada", name: "Ada" }));
+    const app = volo().data(sessionSource, () => ({ id: "ada", name: "Ada" }));
 
-    const response = await app.handle("GET", "/__keel/data/session");
+    const response = await app.handle("GET", "/__volo/data/session");
 
     expect(response.headers["cache-control"]).toBe("private, no-store");
     // Body + content-type are untouched by the header rule.
@@ -378,18 +378,18 @@ describe("keel().data() — island data sources (ADR 0010)", () => {
       scope: "shared",
     });
 
-    const app = keel().data(reactionsSource, () => ({ "post-1": 3 }));
+    const app = volo().data(reactionsSource, () => ({ "post-1": 3 }));
 
-    const response = await app.handle("GET", "/__keel/data/reactions");
+    const response = await app.handle("GET", "/__volo/data/reactions");
 
     expect(response.headers["cache-control"]).toBe("public, max-age=0, must-revalidate");
     expect(JSON.parse(response.body)).toEqual({ "post-1": 3 });
   });
 
   it("awaits an async loader", async () => {
-    const app = keel().data(sessionSource, () => Promise.resolve({ id: "ada", name: "Ada" }));
+    const app = volo().data(sessionSource, () => Promise.resolve({ id: "ada", name: "Ada" }));
 
-    expect(JSON.parse((await app.handle("GET", "/__keel/data/session")).body)).toEqual({
+    expect(JSON.parse((await app.handle("GET", "/__volo/data/session")).body)).toEqual({
       id: "ada",
       name: "Ada",
     });
@@ -397,23 +397,23 @@ describe("keel().data() — island data sources (ADR 0010)", () => {
 
   it("runs the .use middleware declared before it, like any route", async () => {
     // secureStack-style guard mounted first must also wrap the data route.
-    const app = keel()
+    const app = volo()
       .use((c, next) => (c.header("x-allow") === "1" ? next() : c.text("denied", 403)))
       .data(sessionSource, () => ({ id: "x", name: "X" }));
 
-    expect((await app.handle("GET", "/__keel/data/session")).status).toBe(403);
+    expect((await app.handle("GET", "/__volo/data/session")).status).toBe(403);
     expect(
-      (await app.handle("GET", "/__keel/data/session", { headers: { "x-allow": "1" } })).status,
+      (await app.handle("GET", "/__volo/data/session", { headers: { "x-allow": "1" } })).status,
     ).toBe(200);
   });
 });
 
-describe("keel() client-error beacon (built-in route)", () => {
-  it("accepts a beacon at POST /__keel/client-errors out of the box, answering 204", async () => {
+describe("volo() client-error beacon (built-in route)", () => {
+  it("accepts a beacon at POST /__volo/client-errors out of the box, answering 204", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     // No .clientErrors() wiring: the built-in route + default sink are present.
-    const app = keel();
+    const app = volo();
 
     const response = await app.handle("POST", CLIENT_ERRORS_ROUTE, {
       body: { failed: ["Cart"], missing: [] },
@@ -432,7 +432,7 @@ describe("keel() client-error beacon (built-in route)", () => {
   });
 
   it("keeps the built-in route OUT of routes() — it is an internal endpoint", () => {
-    const app = keel().get("/a", (c) => c.text("a"));
+    const app = volo().get("/a", (c) => c.text("a"));
 
     // openapi/mcp enumerate routes(); the internal beacon receiver must not leak.
     expect(app.routes()).toEqual([{ method: "GET", pattern: "/a" }]);
@@ -441,7 +441,7 @@ describe("keel() client-error beacon (built-in route)", () => {
   it("forwards beacons to an injected sink via .clientErrors()", async () => {
     const seen: ClientErrorEvent[] = [];
 
-    const app = keel().clientErrors((event) => seen.push(event));
+    const app = volo().clientErrors((event) => seen.push(event));
 
     const response = await app.handle("POST", CLIENT_ERRORS_ROUTE, {
       body: { failed: ["Nav"], missing: ["Footer"], failedCount: 1, missingCount: 1 },
@@ -454,7 +454,7 @@ describe("keel() client-error beacon (built-in route)", () => {
   });
 
   it("lets a user route at the same path override the built-in", async () => {
-    const app = keel().post(CLIENT_ERRORS_ROUTE, (c) => c.text("mine", 201));
+    const app = volo().post(CLIENT_ERRORS_ROUTE, (c) => c.text("mine", 201));
 
     const response = await app.handle("POST", CLIENT_ERRORS_ROUTE, { body: {} });
 
@@ -465,7 +465,7 @@ describe("keel() client-error beacon (built-in route)", () => {
   it("wraps the built-in route in the app's top-level middleware", async () => {
     const seen: ClientErrorEvent[] = [];
 
-    const app = keel()
+    const app = volo()
       .use((c, next) => (c.header("x-allow") === "1" ? next() : c.text("denied", 403)))
       .clientErrors((event) => seen.push(event));
 
@@ -483,7 +483,7 @@ describe("keel() client-error beacon (built-in route)", () => {
   });
 });
 
-describe("keel() browser-RUM span receiver (built-in route)", () => {
+describe("volo() browser-RUM span receiver (built-in route)", () => {
   const SPAN = {
     traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
     spanId: "00f067aa0ba902b7",
@@ -495,11 +495,11 @@ describe("keel() browser-RUM span receiver (built-in route)", () => {
     status: 1,
   };
 
-  it("accepts a batch at POST /__keel/browser-spans out of the box, answering 204", async () => {
+  it("accepts a batch at POST /__volo/browser-spans out of the box, answering 204", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
 
     // No .browserSpans() wiring: the built-in route + default sink are present.
-    const app = keel();
+    const app = volo();
 
     const response = await app.handle("POST", BROWSER_SPANS_ROUTE, {
       body: { v: 1, traceId: SPAN.traceId, spans: [SPAN] },
@@ -517,7 +517,7 @@ describe("keel() browser-RUM span receiver (built-in route)", () => {
   });
 
   it("keeps the built-in route OUT of routes() — it is an internal endpoint", () => {
-    const app = keel().get("/a", (c) => c.text("a"));
+    const app = volo().get("/a", (c) => c.text("a"));
 
     expect(app.routes()).toEqual([{ method: "GET", pattern: "/a" }]);
   });
@@ -525,7 +525,7 @@ describe("keel() browser-RUM span receiver (built-in route)", () => {
   it("forwards spans to an injected sink via .browserSpans()", async () => {
     const seen: BrowserSpan[] = [];
 
-    const app = keel().browserSpans((span) => seen.push(span));
+    const app = volo().browserSpans((span) => seen.push(span));
 
     const response = await app.handle("POST", BROWSER_SPANS_ROUTE, {
       body: { spans: [SPAN] },
@@ -537,7 +537,7 @@ describe("keel() browser-RUM span receiver (built-in route)", () => {
   });
 
   it("is chainable and returns the same app", () => {
-    const app = keel();
+    const app = volo();
 
     expect(app.browserSpans(() => {})).toBe(app);
   });
@@ -545,7 +545,7 @@ describe("keel() browser-RUM span receiver (built-in route)", () => {
   it("wraps the built-in route in the app's top-level middleware", async () => {
     const seen: BrowserSpan[] = [];
 
-    const app = keel()
+    const app = volo()
       .use((c, next) => (c.header("x-allow") === "1" ? next() : c.text("denied", 403)))
       .browserSpans((span) => seen.push(span));
 
@@ -562,9 +562,9 @@ describe("keel() browser-RUM span receiver (built-in route)", () => {
   });
 });
 
-describe("keel() — the browser→server trace join meta (ARCHITECTURE.md §7)", () => {
+describe("volo() — the browser→server trace join meta (ARCHITECTURE.md §7)", () => {
   it("stamps the request span's traceparent into a dynamic page's head", async () => {
-    const app = keel().page("/", { component: () => createElement("main", null, "home") });
+    const app = volo().page("/", { component: () => createElement("main", null, "home") });
 
     const span = fakeRequestSpan(
       "4bf92f3577b34da6a3ce929d0e0e4736",
@@ -577,21 +577,21 @@ describe("keel() — the browser→server trace join meta (ARCHITECTURE.md §7)"
 
     // The traceparent meta carries the trace id and the 16-hex-truncated span id.
     expect(html).toContain(
-      '<meta name="keel-traceparent" content="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"/>',
+      '<meta name="volo-traceparent" content="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"/>',
     );
   });
 
   it("emits no traceparent meta when no request span is in flight (tracing off)", async () => {
-    const app = keel().page("/", { component: () => createElement("main", null, "home") });
+    const app = volo().page("/", { component: () => createElement("main", null, "home") });
 
     // No span on the context → no meta.
     const html = await drainBody((await app.handle("GET", "/")).body);
 
-    expect(html).not.toContain("keel-traceparent");
+    expect(html).not.toContain("volo-traceparent");
   });
 
   it("emits no traceparent meta on a STATIC page (no live request span to bake in)", async () => {
-    const app = keel().page("/s", {
+    const app = volo().page("/s", {
       static: true,
       component: () => createElement("main", null, "static"),
     });
@@ -602,25 +602,25 @@ describe("keel() — the browser→server trace join meta (ARCHITECTURE.md §7)"
       (await runWithContext({ requestId: "r", span }, () => app.handle("GET", "/s"))).body,
     );
 
-    expect(html).not.toContain("keel-traceparent");
+    expect(html).not.toContain("volo-traceparent");
   });
 });
 
-describe("keel().renderDeadline()", () => {
+describe("volo().renderDeadline()", () => {
   it("is chainable and returns the same app", () => {
-    const app = keel();
+    const app = volo();
 
     expect(app.renderDeadline(5000)).toBe(app);
   });
 
   it("refuses a non-positive or non-finite deadline with a coded error", () => {
-    expect(() => keel().renderDeadline(0)).toThrowError(
+    expect(() => volo().renderDeadline(0)).toThrowError(
       expect.objectContaining({ code: "WEB_BAD_RENDER_DEADLINE" }),
     );
-    expect(() => keel().renderDeadline(-1)).toThrowError(
+    expect(() => volo().renderDeadline(-1)).toThrowError(
       expect.objectContaining({ code: "WEB_BAD_RENDER_DEADLINE" }),
     );
-    expect(() => keel().renderDeadline(Number.POSITIVE_INFINITY)).toThrowError(
+    expect(() => volo().renderDeadline(Number.POSITIVE_INFINITY)).toThrowError(
       expect.objectContaining({ code: "WEB_BAD_RENDER_DEADLINE" }),
     );
   });

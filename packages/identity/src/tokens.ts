@@ -1,7 +1,7 @@
 /**
  * Single-use signed tokens for email verification and password reset.
  *
- * Both build on `SignedSessions` from `@keel/auth` — same claim shape
+ * Both build on `SignedSessions` from `@volo/auth` — same claim shape
  * (`userId`, `expiresAt`), same constant-time verification, same total
  * semantics (an invalid token is `undefined`, never an exception an attacker
  * can probe).
@@ -25,8 +25,8 @@
  *     unauthenticated id matches the authenticated `claim.userId`.
  */
 
-import { SignedSessions } from "@keel/auth";
-import type { Clock, SignedClaim } from "@keel/auth";
+import { SignedSessions } from "@volo/auth";
+import type { Clock, SignedClaim } from "@volo/auth";
 
 /** A `SignedSessions` for the shared verify-email purpose. */
 export function verifySigner(masterSecret: string, clock?: Clock): SignedSessions {

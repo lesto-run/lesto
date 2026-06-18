@@ -1,8 +1,8 @@
 {
-  "name": "@keel/cloudflare",
+  "name": "@volo/cloudflare",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel on Cloudflare Workers — adapt the pure dispatcher to a Worker fetch handler, serve static assets, and generate wrangler config from a deploy plan.",
+  "description": "Volo on Cloudflare Workers — adapt the pure dispatcher to a Worker fetch handler, serve static assets, and generate wrangler config from a deploy plan.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,10 +20,10 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/db": "workspace:*",
-    "@keel/deploy": "workspace:*",
-    "@keel/errors": "workspace:*",
-    "@keel/pg": "workspace:*",
-    "@keel/web": "workspace:*"
+    "@volo/db": "workspace:*",
+    "@volo/deploy": "workspace:*",
+    "@volo/errors": "workspace:*",
+    "@volo/pg": "workspace:*",
+    "@volo/web": "workspace:*"
   }
 }

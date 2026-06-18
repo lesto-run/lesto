@@ -2,15 +2,15 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
 
-import { KeelError } from "@keel/errors";
-import { permanentFailure } from "@keel/queue";
-import type { JsonValue, Queue } from "@keel/queue";
+import { VoloError } from "@volo/errors";
+import { permanentFailure } from "@volo/queue";
+import type { JsonValue, Queue } from "@volo/queue";
 
 /**
  * Webhooks — outbound delivery that can't be lost, inbound checks that can't be forged.
  *
  * Every send is a queue job: signed with HMAC-SHA256, POSTed, and — because it
- * rides @keel/queue — retried with backoff until the receiver returns 2xx. A
+ * rides @volo/queue — retried with backoff until the receiver returns 2xx. A
  * non-2xx response throws, which the queue treats as a failed attempt.
  *
  * `verify` is the mirror image for receiving: recompute the signature and
@@ -30,7 +30,7 @@ import type { JsonValue, Queue } from "@keel/queue";
  *      guard ran — a 3xx is a delivery failure, never a followed hop.
  *
  *   3. Signatures bind a timestamp: we sign `${timestamp}.${body}` and ship the
- *      timestamp in an `x-keel-timestamp` header. `verify` checks the signature
+ *      timestamp in an `x-volo-timestamp` header. `verify` checks the signature
  *      AND that the timestamp is within a caller-set tolerance, so a captured
  *      request replayed later fails — the replay window is the tolerance, not
  *      forever.
@@ -47,17 +47,17 @@ import type { JsonValue, Queue } from "@keel/queue";
  * hop. A host that needs hard TOCTOU closure must inject a pinning `FetchLike`.
  */
 
-const DELIVER_JOB = "keel.webhook.deliver";
+const DELIVER_JOB = "volo.webhook.deliver";
 
-export const EVENT_HEADER = "x-keel-event";
-export const SIGNATURE_HEADER = "x-keel-signature";
-export const TIMESTAMP_HEADER = "x-keel-timestamp";
+export const EVENT_HEADER = "x-volo-event";
+export const SIGNATURE_HEADER = "x-volo-signature";
+export const TIMESTAMP_HEADER = "x-volo-timestamp";
 
 /**
  * The W3C trace-context header. A webhook is a hop to another service, so it
  * carries `traceparent` outbound — the receiver's tracing joins the SAME trace
  * the request that enqueued the delivery belonged to. Verbatim W3C, never an
- * invented format (`@keel/observability` owns the parse/format; this package
+ * invented format (`@volo/observability` owns the parse/format; this package
  * only forwards the captured value, so it takes no tracing dependency).
  */
 export const TRACEPARENT_HEADER = "traceparent";
@@ -74,7 +74,7 @@ export type WebhookErrorCode =
   | "WEBHOOK_SECRET_NOT_FOUND"
   | "WEBHOOK_URL_BLOCKED";
 
-export class WebhookError extends KeelError<WebhookErrorCode> {
+export class WebhookError extends VoloError<WebhookErrorCode> {
   constructor(code: WebhookErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 
@@ -95,7 +95,7 @@ function signedPayload(timestamp: number, body: string): string {
 /** Options for a timestamp-bound {@link verify} that also defends against replay. */
 export interface VerifyOptions {
   /**
-   * The `x-keel-timestamp` value the sender shipped (epoch ms). When set, the
+   * The `x-volo-timestamp` value the sender shipped (epoch ms). When set, the
    * signature is checked over `${timestamp}.${body}` AND the timestamp must be
    * within {@link VerifyOptions.toleranceMs} of {@link VerifyOptions.now} — a
    * captured request replayed past the window fails.
@@ -190,7 +190,7 @@ export const systemResolver: Resolver = async (hostname) => {
  * the unrelated worker poll that ships it later. Returns `undefined` when there
  * is no active trace (no request, no tracer). Injected so this package takes no
  * tracing dependency; the wiring site passes a closure over
- * `@keel/observability`'s `formatTraceparent` and the request context's span.
+ * `@volo/observability`'s `formatTraceparent` and the request context's span.
  */
 export type TraceparentSource = () => string | undefined;
 
@@ -448,7 +448,7 @@ export class Webhooks {
 
     // Forward the trace captured at send time so the receiver's tracing joins the
     // enqueuing request's trace. Verbatim W3C — the captured string is whatever
-    // `@keel/observability`'s `formatTraceparent` produced; this package never
+    // `@volo/observability`'s `formatTraceparent` produced; this package never
     // synthesizes the format itself.
     if (payload.traceparent !== undefined) {
       headers[TRACEPARENT_HEADER] = payload.traceparent;

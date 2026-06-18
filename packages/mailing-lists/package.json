@@ -1,8 +1,8 @@
 {
-  "name": "@keel/mailing-lists",
+  "name": "@volo/mailing-lists",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Ghost-style subscriber lists — double opt-in and broadcasts, composed on @keel/db, @keel/mail, and @keel/queue.",
+  "description": "Ghost-style subscriber lists — double opt-in and broadcasts, composed on @volo/db, @volo/mail, and @volo/queue.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,11 +12,11 @@
     }
   },
   "dependencies": {
-    "@keel/db": "workspace:*",
-    "@keel/errors": "workspace:*",
-    "@keel/mail": "workspace:*",
-    "@keel/migrate": "workspace:*",
-    "@keel/queue": "workspace:*"
+    "@volo/db": "workspace:*",
+    "@volo/errors": "workspace:*",
+    "@volo/mail": "workspace:*",
+    "@volo/migrate": "workspace:*",
+    "@volo/queue": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

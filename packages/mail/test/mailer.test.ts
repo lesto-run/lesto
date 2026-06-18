@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { installSchema, Queue } from "@keel/queue";
+import { installSchema, Queue } from "@volo/queue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -11,7 +11,7 @@ import {
   messageIdFor,
 } from "../src/index";
 
-import type { SqlDatabase } from "@keel/queue";
+import type { SqlDatabase } from "@volo/queue";
 import type { DeliveryEvent, DeliveryFailure, RenderedEmail } from "../src/index";
 
 let raw: Database.Database;
@@ -294,7 +294,7 @@ describe("header guard helpers", () => {
   });
 
   it("messageIdFor derives a stable id from a job id", () => {
-    expect(messageIdFor(42)).toBe("keel-mail-42");
+    expect(messageIdFor(42)).toBe("volo-mail-42");
   });
 
   it("failureCode surfaces a MailError's code and collapses anything else", () => {

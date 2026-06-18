@@ -1,10 +1,10 @@
 import yaml from "js-yaml";
-import { ParseError } from "@keel/content-shared/errors";
-import { sanitizeObject } from "@keel/content-shared/sanitize";
+import { ParseError } from "@volo/content-shared/errors";
+import { sanitizeObject } from "@volo/content-shared/sanitize";
 import type { Parser, ParseOutput } from "./types";
 
 /**
- * @deprecated Use ParseError from @keel/content-shared/errors instead.
+ * @deprecated Use ParseError from @volo/content-shared/errors instead.
  * Kept for backwards compatibility.
  */
 export class YamlParseError extends ParseError {

@@ -1,5 +1,5 @@
 /**
- * The form components: the vetted vocabulary @keel/forms ships to @keel/ui.
+ * The form components: the vetted vocabulary @volo/forms ships to @volo/ui.
  *
  * Three components compose every form:
  *   Form    — the <form> wrapper, carries `action` and `method`
@@ -8,13 +8,13 @@
  *
  * Each is a plain `ComponentDef`: a prop schema, a child policy, and a `render`
  * that turns validated props into real React elements. The package depends only
- * on @keel/ui's types — never on @keel/ui-kit — so it ships its own controls.
+ * on @volo/ui's types — never on @volo/ui-kit — so it ships its own controls.
  */
 
 import { createElement } from "react";
 import type { ReactElement, ReactNode } from "react";
 
-import type { ComponentDef } from "@keel/ui";
+import type { ComponentDef } from "@volo/ui";
 
 /** The field kinds the registry advertises, kept in lockstep with `FieldType`. */
 const FIELD_TYPES = ["text", "email", "number", "checkbox", "textarea", "select"] as const;

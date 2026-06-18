@@ -1,19 +1,19 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { keel } from "@keel/web";
-import type { KeelAppConfig, KernelDatabase } from "@keel/kernel";
+import { volo } from "@volo/web";
+import type { VoloAppConfig, KernelDatabase } from "@volo/kernel";
 
 import { runOpenApi } from "../src/openapi";
 import type { OpenApiDeps } from "../src/openapi";
 
 // The CLI core never touches the db — it reads the declared route list off the
-// `keel()` app — so a sentinel stands in for it.
+// `volo()` app — so a sentinel stands in for it.
 const sentinelDb = {} as unknown as KernelDatabase;
 
 // A representative app: public posts routes plus a health probe and an admin
 // zone, so the exclude filter has something to drop.
-function buildConfig(): KeelAppConfig {
-  const app = keel()
+function buildConfig(): VoloAppConfig {
+  const app = volo()
     .get("/posts", (c) => c.json({ posts: [] }))
     .post("/posts", (c) => c.json({ created: true }, 201))
     .get("/posts/:id", (c) => c.json({ id: c.param("id") }))
@@ -59,7 +59,7 @@ describe("runOpenApi", () => {
     const spec = writtenSpec();
 
     expect(spec["openapi"]).toBe("3.1.0");
-    expect(spec["info"]).toEqual({ title: "Keel API", version: "0.0.0" });
+    expect(spec["info"]).toEqual({ title: "Volo API", version: "0.0.0" });
 
     const paths = spec["paths"] as Record<string, unknown>;
 

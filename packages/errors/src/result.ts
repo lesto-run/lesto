@@ -6,9 +6,9 @@
  * two arms are discriminated by `ok`, narrowable with `isOk` / `isErr`.
  */
 
-import { KeelError } from "./errors";
+import { VoloError } from "./errors";
 
-export type Result<T, E = KeelError> = { ok: true; value: T } | { ok: false; error: E };
+export type Result<T, E = VoloError> = { ok: true; value: T } | { ok: false; error: E };
 
 /** Wrap a value as a successful result. */
 export function ok<T>(value: T): Result<T, never> {
@@ -34,7 +34,7 @@ export function isErr<T, E>(result: Result<T, E>): result is { ok: false; error:
  * Pull the value out of a result, throwing on failure.
  *
  * If the error is already an `Error`, it is thrown as-is so its stack and type
- * survive. Otherwise it is wrapped in a `KeelError` so callers always catch an
+ * survive. Otherwise it is wrapped in a `VoloError` so callers always catch an
  * `Error`, never a bare string or object.
  */
 export function unwrap<T, E>(result: Result<T, E>): T {
@@ -48,5 +48,5 @@ export function unwrap<T, E>(result: Result<T, E>): T {
     throw error;
   }
 
-  throw new KeelError("UNWRAP_NON_ERROR", "Tried to unwrap a failed result.", { error });
+  throw new VoloError("UNWRAP_NON_ERROR", "Tried to unwrap a failed result.", { error });
 }

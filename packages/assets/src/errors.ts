@@ -2,9 +2,9 @@
  * Errors carry codes, not just prose — callers branch on the code.
  */
 
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
-export { KeelError };
+export { VoloError };
 
 export type AssetsErrorCode =
   /** The bundler produced no entry-point artifact. */
@@ -36,7 +36,7 @@ export type AssetsErrorCode =
   | "ASSETS_BUDGET_EXCEEDED";
 
 /** Anything the client-asset pipeline can refuse to do. */
-export class AssetsError extends KeelError<AssetsErrorCode> {
+export class AssetsError extends VoloError<AssetsErrorCode> {
   constructor(code: AssetsErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

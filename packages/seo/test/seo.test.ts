@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { escape } from "../src/escape";
-import { KeelError, SeoError } from "../src/errors";
+import { VoloError, SeoError } from "../src/errors";
 import { jsonLd } from "../src/json-ld";
 import { metaTags } from "../src/meta-tags";
 import { robots } from "../src/robots";
@@ -173,7 +173,7 @@ describe("robots", () => {
       expect.unreachable("robots should have refused the injected newline");
     } catch (error) {
       expect(error).toBeInstanceOf(SeoError);
-      expect(error).toBeInstanceOf(KeelError);
+      expect(error).toBeInstanceOf(VoloError);
       expect((error as SeoError).code).toBe("SEO_INJECTED_NEWLINE");
       expect((error as SeoError).details.field).toBe("Disallow path");
     }

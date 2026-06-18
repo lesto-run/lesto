@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { keel } from "@keel/web";
-import type { App, KeelAppConfig, KernelDatabase } from "@keel/kernel";
-import type { KeelMcpContext, McpAuditRecord } from "@keel/mcp";
+import { volo } from "@volo/web";
+import type { App, VoloAppConfig, KernelDatabase } from "@volo/kernel";
+import type { VoloMcpContext, McpAuditRecord } from "@volo/mcp";
 
 import { runMcp } from "../src/mcp";
 import type { McpDeps } from "../src/mcp";
@@ -18,8 +18,8 @@ const bootedApp: App = {
 // content store is wired from `config.db`.
 const sentinelDb = { sentinel: "db" } as unknown as KernelDatabase;
 
-function buildConfig(): KeelAppConfig {
-  const app = keel()
+function buildConfig(): VoloAppConfig {
+  const app = volo()
     .get("/posts", (c) => c.json({ posts: [] }))
     .post("/posts", (c) => c.json({ created: true }, 201));
 
@@ -27,7 +27,7 @@ function buildConfig(): KeelAppConfig {
 }
 
 // Capture what `startMcpServer` was handed, plus the audit and banner streams.
-let captured: KeelMcpContext | undefined;
+let captured: VoloMcpContext | undefined;
 let audit: string[];
 let log: string[];
 
@@ -58,14 +58,14 @@ describe("runMcp", () => {
 
     expect(code).toBe(0);
     expect(captured?.mode).toBe("read-only");
-    expect(log).toEqual(["keel mcp: serving over stdio in read-only mode"]);
+    expect(log).toEqual(["volo mcp: serving over stdio in read-only mode"]);
   });
 
   it("escalates to operator mode with --operator", async () => {
     await runMcp(["--operator"], depsWith());
 
     expect(captured?.mode).toBe("operator");
-    expect(log).toEqual(["keel mcp: serving over stdio in operator mode"]);
+    expect(log).toEqual(["volo mcp: serving over stdio in operator mode"]);
   });
 
   it("surfaces the app's routes and wires the content store from config.db", async () => {
@@ -104,7 +104,7 @@ describe("runMcp", () => {
       return Promise.resolve(bootedApp);
     });
 
-    const startMcpServer = vi.fn((context: KeelMcpContext) => {
+    const startMcpServer = vi.fn((context: VoloMcpContext) => {
       order.push("startMcpServer");
       captured = context;
 

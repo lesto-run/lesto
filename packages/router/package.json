@@ -1,8 +1,8 @@
 {
-  "name": "@keel/router",
+  "name": "@volo/router",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's RESTful router — declare routes and named paths, resolve method+path to a controller#action.",
+  "description": "Volo's RESTful router — declare routes and named paths, resolve method+path to a controller#action.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/errors": "workspace:*"
+    "@volo/errors": "workspace:*"
   }
 }

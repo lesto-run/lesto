@@ -1,7 +1,7 @@
 /**
  * The guard — the bridge from a {@link Policy} to a route's handler chain.
  *
- * `createGuard(policy)` yields `can(permission)`, a Keel middleware: it reads the
+ * `createGuard(policy)` yields `can(permission)`, a Volo middleware: it reads the
  * current subject's roles from the context, asks the policy, and either falls
  * through (`next`) or answers 403. Drop it into any route or sub-router —
  * `.use(can("admin.access"))` guards an entire admin subtree (its API routes and
@@ -11,12 +11,12 @@
  *
  * How the subject's roles reach the guard is injectable (`rolesOf`), defaulting
  * to the `"roles"` context var an upstream auth middleware sets. So this package
- * stays decoupled from any particular user model — `@keel/identity`'s `User` has
+ * stays decoupled from any particular user model — `@volo/identity`'s `User` has
  * no roles column, and it does not need one: the app maps its user to a role
  * list however it likes and stashes it with `c.set("roles", …)`.
  */
 
-import type { AnyKeelResponse, Context, Handler, KeelRequest } from "@keel/web";
+import type { AnyVoloResponse, Context, Handler, VoloRequest } from "@volo/web";
 
 import type { Policy } from "./policy";
 
@@ -29,22 +29,22 @@ export interface GuardOptions {
   rolesOf?: (c: Context) => Iterable<string> | undefined;
 
   /** Build the refusal response. Defaults to a plain 403. */
-  onDeny?: (c: Context, permission: string) => AnyKeelResponse;
+  onDeny?: (c: Context, permission: string) => AnyVoloResponse;
 
   /**
    * Optional observability hook fired the moment the guard refuses — the uniform
-   * `onDenied(kind, c)` seam shared across `@keel/csrf`, `@keel/authz`, and
-   * `@keel/ratelimit` (owned by auth-security item 6, consumed by OTLP wiring in
+   * `onDenied(kind, c)` seam shared across `@volo/csrf`, `@volo/authz`, and
+   * `@volo/ratelimit` (owned by auth-security item 6, consumed by OTLP wiring in
    * operability-dx item 3).
    *
    * `kind` is the coded reason (here always {@link AUTHZ_DENIED_KIND}); `c` is the
-   * refused {@link KeelRequest} (the guard's `Context.req`, so the seam matches the
+   * refused {@link VoloRequest} (the guard's `Context.req`, so the seam matches the
    * other two middleware byte-for-byte). Purely observational and distinct from
    * {@link onDeny}: `onDeny` *builds the response*, `onDenied` only *watches* —
    * the refusal is identical whether or not it is wired. A returned promise is
    * awaited so an async sink is not dropped mid-write.
    */
-  onDenied?: (kind: string, c: KeelRequest) => void | Promise<void>;
+  onDenied?: (kind: string, c: VoloRequest) => void | Promise<void>;
 }
 
 /** A policy bound to a way of reading the request's subject — the enforcement surface. */
@@ -62,7 +62,7 @@ const ROLES_VAR = "roles";
 const defaultRolesOf = (c: Context): Iterable<string> | undefined =>
   c.get<readonly string[]>(ROLES_VAR);
 
-const forbidden = (): AnyKeelResponse => ({
+const forbidden = (): AnyVoloResponse => ({
   status: 403,
   headers: { "content-type": "text/plain" },
   body: "Forbidden",

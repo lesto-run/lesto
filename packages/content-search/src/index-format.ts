@@ -2,10 +2,10 @@
  * JSON Search Index Format (Runtime)
  *
  * Functions for parsing and loading pre-built search indexes.
- * BUILD-TIME functions (serialization) are in @keel/content-embeddings.
+ * BUILD-TIME functions (serialization) are in @volo/content-embeddings.
  */
 
-import { decodeFloat32Array } from "@keel/content-shared/encoding";
+import { decodeFloat32Array } from "@volo/content-shared/encoding";
 import type { SearchIndex } from "./types";
 
 // ============================================================================

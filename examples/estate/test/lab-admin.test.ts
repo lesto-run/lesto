@@ -1,5 +1,5 @@
 /**
- * The /lab/admin/api/* zone — the @keel/admin dogfood.
+ * The /lab/admin/api/* zone — the @volo/admin dogfood.
  *
  * Proves the Wave-3 admin hardening end to end on the estate playground:
  *
@@ -18,16 +18,16 @@ import { describe, expect, it } from "vitest";
 
 import { buildLabRoutes } from "../src/lab";
 import { nodeContentStore } from "../src/content-node";
-import type { Keel } from "@keel/web";
+import type { Volo } from "@volo/web";
 
 /** A fresh lab sub-app over a fresh in-memory store — isolated per test. */
-function freshLab(): Keel {
+function freshLab(): Volo {
   return buildLabRoutes(nodeContentStore());
 }
 
 /** Create one note through the admin, returning the parsed JSON projection. */
 async function createNote(
-  app: Keel,
+  app: Volo,
   note: { title: string; body: string },
   role = "admin",
 ): Promise<Record<string, unknown>> {

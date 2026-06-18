@@ -1,14 +1,14 @@
 /**
- * @keel/cloudflare — run a Keel app on Cloudflare Workers.
+ * @volo/cloudflare — run a Volo app on Cloudflare Workers.
  *
- * A Keel app's `handle` is already a pure `(method, path, options) => KeelResponse`
+ * A Volo app's `handle` is already a pure `(method, path, options) => VoloResponse`
  * with no node:http and no filesystem, so the edge is a thin adapter:
  * `toFetchHandler` turns that `handle` into a Worker `fetch(Request) => Response`,
  * and `withAssets` serves the prerendered static files from the platform's Static
  * Assets binding first, falling through to the live app for the dynamic zone.
  *
- *   import { toFetchHandler, withAssets } from "@keel/cloudflare";
- *   import type { AssetFetcher } from "@keel/cloudflare";
+ *   import { toFetchHandler, withAssets } from "@volo/cloudflare";
+ *   import type { AssetFetcher } from "@volo/cloudflare";
  *
  *   interface Env { readonly ASSETS: AssetFetcher; readonly SESSION_SECRET?: string }
  *
@@ -24,7 +24,7 @@
  *
  * That is the pattern `examples/estate/worker.ts` actually deploys (the app is
  * memoized at module scope per isolate, not rebuilt per request). Note it does NOT
- * import `@keel/runtime`'s `dispatchSites`: that helper reads the filesystem
+ * import `@volo/runtime`'s `dispatchSites`: that helper reads the filesystem
  * through node's `fs`, which a Worker has none of — the edge serves static bytes
  * through the `ASSETS` binding (`withAssets`) instead, and runs only the dynamic
  * app's `handle`.

@@ -1,7 +1,7 @@
-# `@keel/mailing-lists` — double opt-in + broadcasts
+# `@volo/mailing-lists` — double opt-in + broadcasts
 
-The Ghost-style subscriber-list battery, wired into a runnable Keel app and proven
-end to end. This is the gallery's per-feature QA gate for `@keel/mailing-lists`
+The Ghost-style subscriber-list battery, wired into a runnable Volo app and proven
+end to end. This is the gallery's per-feature QA gate for `@volo/mailing-lists`
 (see `docs/plans/examples-gallery.md`): it exercises **only** that battery's real
 public API, over real HTTP routes, on both axes a unit test can't reach — **local
 DX** (wire it, run it) and **hosted UX** (deploy it, click it).
@@ -17,10 +17,10 @@ The full double opt-in journey as HTTP routes over the `createMailingLists` serv
 | `POST /lists/:listId/broadcast` | Fan an issue out to every **confirmed** recipient; each email carries `List-Unsubscribe`.           |
 | `GET /unsubscribe/:token`       | One-click opt out.                                                                                  |
 
-It composes four batteries the way a real app does: `@keel/mailing-lists` (the
-service), `@keel/mail` (delivery), `@keel/queue` (durable enqueue under the mailer),
-and `@keel/ratelimit` (the guard in front of `subscribe`), assembled by
-`@keel/kernel` and served by `@keel/runtime`. Nothing is sent inline — a worker
+It composes four batteries the way a real app does: `@volo/mailing-lists` (the
+service), `@volo/mail` (delivery), `@volo/queue` (durable enqueue under the mailer),
+and `@volo/ratelimit` (the guard in front of `subscribe`), assembled by
+`@volo/kernel` and served by `@volo/runtime`. Nothing is sent inline — a worker
 (`serve.ts`) or a drain loop (`run.ts`, the test) processes the mail queue.
 
 ## How to run
@@ -59,7 +59,7 @@ curl -X POST localhost:3000/lists/1/broadcast \
 ```
 
 For a Workers deploy, swap the SMTP transport for `createFetchProviderTransport`
-(`@keel/mail`) — a fetch-based provider (Resend/SES-shaped) that runs on an edge
+(`@volo/mail`) — a fetch-based provider (Resend/SES-shaped) that runs on an edge
 isolate with no Node built-ins.
 
 ## QA result (2026-06-16)
@@ -82,23 +82,23 @@ The point of the gallery is to surface friction wiring the real API. This exampl
 found three, and the loop closed them:
 
 1. **`keyFor` couldn't see the request — PARTLY FIXED** (`feat(ratelimit)!`,
-   commit `768ba0d`). `rateLimit`'s `keyFor` now receives the `KeelRequest`, so a
+   commit `768ba0d`). `rateLimit`'s `keyFor` now receives the `VoloRequest`, so a
    caller can bucket by request data (an API key, a client header, a route param)
    instead of being forced through the ambient `currentContext()`. The rate-limit
    test above now proves real _per-client_ limiting in-process by keying on a
    client header. **Still open:** the deeper half — in-process `app.handle()`
    establishes no client-IP context, so the _default_ IP key still degrades to a
-   shared bucket there. That's a `@keel/web`/runtime concern (let `app.handle`
+   shared bucket there. That's a `@volo/web`/runtime concern (let `app.handle`
    establish a client context), tracked separately.
 
 2. **`createApp` didn't install the queue schema — FIXED** (`feat(kernel)`, commit
-   `aed3893`). `KeelAppConfig` gained a `schemas` seam: the mail battery now
+   `aed3893`). `VoloAppConfig` gained a `schemas` seam: the mail battery now
    declares its queue schema once (`createApp({ …, schemas: [installSchema] })`)
    and the kernel creates the queue tables right after migrate. No separate
    post-boot install — see `buildApp` in `src/app.ts`.
 
 3. **Three structurally-identical `SqlDatabase` types forced a cast — FIXED**
-   (same commit `aed3893`). `@keel/db`'s `SqlDatabase` is now canonical;
-   `@keel/queue` and `@keel/kernel` re-export/alias it. One `openSqlite` handle
+   (same commit `aed3893`). `@volo/db`'s `SqlDatabase` is now canonical;
+   `@volo/queue` and `@volo/kernel` re-export/alias it. One `openSqlite` handle
    flows into `createDb`, `createApp`, and `new Queue({ db })` with **no cast** —
    the `as unknown as QueueDatabase` is gone from this example.

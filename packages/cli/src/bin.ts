@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /**
- * The `keel` executable — pure wiring, no logic.
+ * The `volo` executable — pure wiring, no logic.
  *
- * It builds the real dependencies (load the project's `keel.app.ts`, the real
+ * It builds the real dependencies (load the project's `volo.app.ts`, the real
  * runtime `serve`, `console.log`) and hands them to the covered `run` core.
  * `serve`/`dev` resolve once listening; the process stays alive on its own
  * open socket, so we only exit non-`serve` commands.
@@ -13,24 +13,24 @@ import { access } from "node:fs/promises";
 import { watch } from "node:fs";
 import { join } from "node:path";
 
-import { nodeStaticReader, serve } from "@keel/runtime";
-import type { KeelAppConfig } from "@keel/kernel";
-import type { UiDialect } from "@keel/web";
+import { nodeStaticReader, serve } from "@volo/runtime";
+import type { VoloAppConfig } from "@volo/kernel";
+import type { UiDialect } from "@volo/web";
 
-import { createNewEntry, runPipeline } from "@keel/content-core/build";
-import type { RuntimeEntry } from "@keel/content-core";
+import { createNewEntry, runPipeline } from "@volo/content-core/build";
+import type { RuntimeEntry } from "@volo/content-core";
 
-import { nodeSink } from "@keel/sites";
-import type { Site } from "@keel/sites";
+import { nodeSink } from "@volo/sites";
+import type { Site } from "@volo/sites";
 
-import { nodeReleaseStore, nodeUploader, remoteReleaseStore } from "@keel/deploy";
-import type { ReleaseStore } from "@keel/deploy";
+import { nodeReleaseStore, nodeUploader, remoteReleaseStore } from "@volo/deploy";
+import type { ReleaseStore } from "@volo/deploy";
 
-import { buildClient, bunBuildClientDeps } from "@keel/assets";
+import { buildClient, bunBuildClientDeps } from "@volo/assets";
 
 import { writeFile } from "node:fs/promises";
 
-import { createApp } from "@keel/kernel";
+import { createApp } from "@volo/kernel";
 
 import { run } from "./run";
 import type { CloudflareDeployer, ReleaseTarget } from "./run";
@@ -81,7 +81,7 @@ const wranglerDeployer: CloudflareDeployer = {
   },
 
   rollback: async () => {
-    await runWrangler(["rollback", "--message", "keel deploy: post-deploy health check failed"]);
+    await runWrangler(["rollback", "--message", "volo deploy: post-deploy health check failed"]);
   },
 };
 
@@ -122,16 +122,16 @@ function requireEnv(name: string): string {
  * irreducible credential edge, so it lives in the coverage-excluded wiring; the
  * CLI core only ever sees the seam.
  *
- * Credentials resolve as a FAMILY, not field by field: the `KEEL_DEPLOY_` family
+ * Credentials resolve as a FAMILY, not field by field: the `VOLO_DEPLOY_` family
  * is preferred (its access key is the marker), else the conventional `AWS_` names
  * CI already injects. Picking a prefix once — rather than falling back per field —
- * means a `KEEL_DEPLOY_` access key can never be paired with an `AWS_` secret into
+ * means a `VOLO_DEPLOY_` access key can never be paired with an `AWS_` secret into
  * a mismatched keypair when only half of one family is set.
  */
 function releaseStore(target: ReleaseTarget): ReleaseStore {
   if (target.kind === "local") return nodeReleaseStore(target.distDir);
 
-  const prefix = readEnv("KEEL_DEPLOY_ACCESS_KEY_ID") !== undefined ? "KEEL_DEPLOY_" : "AWS_";
+  const prefix = readEnv("VOLO_DEPLOY_ACCESS_KEY_ID") !== undefined ? "VOLO_DEPLOY_" : "AWS_";
   const sessionToken = readEnv(`${prefix}SESSION_TOKEN`);
 
   return remoteReleaseStore({
@@ -147,7 +147,7 @@ function releaseStore(target: ReleaseTarget): ReleaseStore {
   });
 }
 
-/** Where `keel dev` looks for built client assets (e.g. a bundled `/client.js`). */
+/** Where `volo dev` looks for built client assets (e.g. a bundled `/client.js`). */
 const DEV_ASSET_DIR = "out";
 
 /** The project's island-convention directory (ADR 0011) — its presence enables the client build. */
@@ -162,9 +162,9 @@ const projectRoot = process.cwd();
 
 const islandsDir = join(projectRoot, ISLANDS_DIR);
 
-const loadApp = async (): Promise<KeelAppConfig> => {
-  const module = (await import(join(process.cwd(), "keel.app.ts"))) as {
-    default: KeelAppConfig;
+const loadApp = async (): Promise<VoloAppConfig> => {
+  const module = (await import(join(process.cwd(), "volo.app.ts"))) as {
+    default: VoloAppConfig;
   };
 
   return module.default;
@@ -182,7 +182,7 @@ const hasIslandsDir = async (): Promise<boolean> => {
   }
 };
 
-// Build the island client bundle with @keel/assets. The CLI core's "dev" mode
+// Build the island client bundle with @volo/assets. The CLI core's "dev" mode
 // maps to an unminified build; "production" to the minified one. The `dialect`
 // is the matched pair's client half (ADR 0008): the CLI core reads the project's
 // single `ui.dialect` key and passes it here, while `createApp` wires the server
@@ -223,7 +223,7 @@ const watchIslands = (onChange: () => void): (() => void) => {
   };
 };
 
-// Run the pipeline for its entries; the project's keel.app.ts owns the cwd and
+// Run the pipeline for its entries; the project's volo.app.ts owns the cwd and
 // the collections, so the bin needs no arguments here.
 const buildContent = async (): Promise<readonly RuntimeEntry[]> =>
   (await runPipeline({ skipWrite: true })).entries;
@@ -231,13 +231,13 @@ const buildContent = async (): Promise<readonly RuntimeEntry[]> =>
 const createEntry = (collection: string, title: string): Promise<void> =>
   createNewEntry(process.cwd(), collection, title);
 
-// The project declares its sites in `keel.sites.ts`, mirroring `keel.app.ts`;
+// The project declares its sites in `volo.sites.ts`, mirroring `volo.app.ts`;
 // the build reads its default export. A MISSING file is tolerated, not fatal: it
 // resolves to no sites, and the CLI core falls back to app-only dispatch (a fresh
 // scaffold boots before its author writes a sites file — blocker #9). Any OTHER
 // import error (a syntax error in an existing file) is rethrown, so a real bug in
 // the sites file is not silently swallowed as "no sites".
-const SITES_PATH = join(process.cwd(), "keel.sites.ts");
+const SITES_PATH = join(process.cwd(), "volo.sites.ts");
 
 const loadSites = async (): Promise<readonly Site[]> => {
   try {
@@ -249,7 +249,7 @@ const loadSites = async (): Promise<readonly Site[]> => {
       // Distinguish "the sites file is absent" from "a module it imports is
       // missing": only the former — the sites file itself not existing — is the
       // tolerated empty-sites case. A missing transitive import is a real error.
-      if ((error as { message: string }).message.includes("keel.sites.ts")) return [];
+      if ((error as { message: string }).message.includes("volo.sites.ts")) return [];
     }
 
     throw error;
@@ -260,7 +260,7 @@ const [command, ...commandArgs] = argv;
 
 // `mcp` and `openapi` live in their own command files (operability-dx #4/#5);
 // the bin dispatches them here, before the shared `run` core, because they bring
-// dependencies (`@keel/mcp`, `@keel/openapi`) the rest of the CLI does not. The
+// dependencies (`@volo/mcp`, `@volo/openapi`) the rest of the CLI does not. The
 // MCP protocol owns stdout (it is the transport), so its logs and audit trail go
 // to stderr.
 if (command === "mcp") {

@@ -1,84 +1,84 @@
-# Keel
+# Volo
 
-**Keel is a batteries-included, AI-native, fullstack TypeScript framework** — the best of Rails (conventions, ActiveRecord ORM, migrations, RESTful routing), Laravel (in-house batteries: queues, mail, cache, events), WordPress (content, an admin surface, and an actions/filters extensibility model that lets anyone build onto the platform), and Next.js (React, server-side rendering, DX), with one twist the others predate: it is designed to be driven by an agent. Every capability is an in-house API on **one substrate — the SQL database** (SQLite for zero-config local, Postgres for scale), so there is no zoo of external services to glue together; thin drivers live only at the irreducible edges (mail transport, object storage, OAuth). The north star: change your site's content, UI, schema, and data — and ship it — from code, the CLI, or an MCP client inside Claude or ChatGPT.
+**Volo is a batteries-included, AI-native, fullstack TypeScript framework** — the best of Rails (conventions, ActiveRecord ORM, migrations, RESTful routing), Laravel (in-house batteries: queues, mail, cache, events), WordPress (content, an admin surface, and an actions/filters extensibility model that lets anyone build onto the platform), and Next.js (React, server-side rendering, DX), with one twist the others predate: it is designed to be driven by an agent. Every capability is an in-house API on **one substrate — the SQL database** (SQLite for zero-config local, Postgres for scale), so there is no zoo of external services to glue together; thin drivers live only at the irreducible edges (mail transport, object storage, OAuth). The north star: change your site's content, UI, schema, and data — and ship it — from code, the CLI, or an MCP client inside Claude or ChatGPT.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the product vision and the build order, and [CONVENTIONS.md](./CONVENTIONS.md) for the engineering bar.
 
 ## Package catalog
 
-Fifty `@keel/*` packages and counting. The highlights below are grouped by domain; each is in-house, depends on interfaces rather than drivers, and is built to the same standard below.
+Fifty `@volo/*` packages and counting. The highlights below are grouped by domain; each is in-house, depends on interfaces rather than drivers, and is built to the same standard below.
 
 ### Data
 
 | Package | What it does |
 |---|---|
-| [`@keel/migrate`](./packages/migrate) | Tracks-style migrator — version-stamped, idempotent migrations over `@keel/db` schema-as-value DDL on an injected SQL database. |
-| [`@keel/pg`](./packages/pg) | The Node Postgres driver — adapts a node-postgres `Pool` to the same async `SqlDatabase` seam SQLite satisfies (`openPostgres`), so an app moves from SQLite to Postgres with no change above the driver. |
-| [`@keel/cloudflare`](./packages/cloudflare) | Run a Keel app on Cloudflare Workers — the `fetch`-handler + static-assets adapter, plus the edge's two SQL drivers for the same `SqlDatabase` surface: `d1ToSqlDatabase` (D1, the edge's SQLite) and `hyperdriveToSqlDatabase` (Cloudflare Hyperdrive fronting a real Postgres). Both bundle for Workers with no `node:*` builtins. |
-| [`@keel/storage`](./packages/storage) | Object storage behind one API — pluggable backends (in-memory, local filesystem; S3 to come). |
+| [`@volo/migrate`](./packages/migrate) | Tracks-style migrator — version-stamped, idempotent migrations over `@volo/db` schema-as-value DDL on an injected SQL database. |
+| [`@volo/pg`](./packages/pg) | The Node Postgres driver — adapts a node-postgres `Pool` to the same async `SqlDatabase` seam SQLite satisfies (`openPostgres`), so an app moves from SQLite to Postgres with no change above the driver. |
+| [`@volo/cloudflare`](./packages/cloudflare) | Run a Volo app on Cloudflare Workers — the `fetch`-handler + static-assets adapter, plus the edge's two SQL drivers for the same `SqlDatabase` surface: `d1ToSqlDatabase` (D1, the edge's SQLite) and `hyperdriveToSqlDatabase` (Cloudflare Hyperdrive fronting a real Postgres). Both bundle for Workers with no `node:*` builtins. |
+| [`@volo/storage`](./packages/storage) | Object storage behind one API — pluggable backends (in-memory, local filesystem; S3 to come). |
 
 ### Async
 
 | Package | What it does |
 |---|---|
-| [`@keel/queue`](./packages/queue) | Durable job queue — at-least-once delivery with visibility-timeout reclaim, on the SQL database, no Redis. |
-| [`@keel/workflows`](./packages/workflows) | Resumable step memoization on the SQL database — completed steps replay when `run()` is re-invoked with the same `runId` (caller-driven resume; not crash-safe durable execution — a run journal + resume driver is post-1.0). |
-| [`@keel/cache`](./packages/cache) | TTL cache — pluggable stores (in-memory or SQL-backed) over an injected clock. |
-| [`@keel/pubsub`](./packages/pubsub) | In-process publish/subscribe hub — synchronous registration, awaited delivery. |
+| [`@volo/queue`](./packages/queue) | Durable job queue — at-least-once delivery with visibility-timeout reclaim, on the SQL database, no Redis. |
+| [`@volo/workflows`](./packages/workflows) | Resumable step memoization on the SQL database — completed steps replay when `run()` is re-invoked with the same `runId` (caller-driven resume; not crash-safe durable execution — a run journal + resume driver is post-1.0). |
+| [`@volo/cache`](./packages/cache) | TTL cache — pluggable stores (in-memory or SQL-backed) over an injected clock. |
+| [`@volo/pubsub`](./packages/pubsub) | In-process publish/subscribe hub — synchronous registration, awaited delivery. |
 
 ### Comms
 
 | Package | What it does |
 |---|---|
-| [`@keel/mail`](./packages/mail) | Mailers — react-email templates with queued delivery on `@keel/queue` and a pluggable transport. |
-| [`@keel/mailing-lists`](./packages/mailing-lists) | Ghost-style subscriber lists — double opt-in and broadcasts, composed on `@keel/db`, `@keel/mail`, and `@keel/queue`. |
-| [`@keel/webhooks`](./packages/webhooks) | Webhooks — HMAC-signed outbound delivery (retried on `@keel/queue`) and inbound signature verification. |
+| [`@volo/mail`](./packages/mail) | Mailers — react-email templates with queued delivery on `@volo/queue` and a pluggable transport. |
+| [`@volo/mailing-lists`](./packages/mailing-lists) | Ghost-style subscriber lists — double opt-in and broadcasts, composed on `@volo/db`, `@volo/mail`, and `@volo/queue`. |
+| [`@volo/webhooks`](./packages/webhooks) | Webhooks — HMAC-signed outbound delivery (retried on `@volo/queue`) and inbound signature verification. |
 
 ### Content
 
-The WordPress-class content engine — folded in from Docks (`@usedocks/*`), rebuilt on the substrate. Fifteen `@keel/content-*` packages; the load-bearing ones:
+The WordPress-class content engine — folded in from Docks (`@usedocks/*`), rebuilt on the substrate. Fifteen `@volo/content-*` packages; the load-bearing ones:
 
-> **Supported in v1 vs. preview.** The **supported** content surface is the store/engine/CLI/MCP seam: `@keel/content-store`, `@keel/content-core`, the `keel content:build` CLI, the `@keel/mcp` content tools, and `HtmlContent` from `@keel/content-components`. Everything else — search, embeddings, prose, lint, seo, query, vite, and content components beyond `HtmlContent` — ships **PREVIEW**: experimental, coverage-gate-exempt, and may change. Two preview limits worth knowing: `@keel/content-search` is brute-force O(n) and practical only up to **~10k documents**; `@keel/content-embeddings` downloads the `all-MiniLM-L6-v2` model (~25MB, via `@huggingface/transformers`) on a fresh build environment's first run (cache the model directory in CI).
+> **Supported in v1 vs. preview.** The **supported** content surface is the store/engine/CLI/MCP seam: `@volo/content-store`, `@volo/content-core`, the `volo content:build` CLI, the `@volo/mcp` content tools, and `HtmlContent` from `@volo/content-components`. Everything else — search, embeddings, prose, lint, seo, query, vite, and content components beyond `HtmlContent` — ships **PREVIEW**: experimental, coverage-gate-exempt, and may change. Two preview limits worth knowing: `@volo/content-search` is brute-force O(n) and practical only up to **~10k documents**; `@volo/content-embeddings` downloads the `all-MiniLM-L6-v2` model (~25MB, via `@huggingface/transformers`) on a fresh build environment's first run (cache the model directory in CI).
 
 | Package | What it does |
 |---|---|
-| [`@keel/content-core`](./packages/content-core) | Schema-driven content engine — collections, validated frontmatter, computed fields, taxonomies, and the markdown/MDX pipeline. |
-| [`@keel/content-store`](./packages/content-store) | Content on the SQL substrate — persists pipeline entries to the database and hydrates the runtime from it. CRUD on `content_entries`. |
-| [`@keel/content-mdx`](./packages/content-mdx) · [`@keel/content-markdown`](./packages/content-markdown) | MDX compilation and markdown rendering for content. |
-| [`@keel/content-search`](./packages/content-search) · [`@keel/content-embeddings`](./packages/content-embeddings) | Client-safe vector search and build-time embedding generation. |
-| [`@keel/content-seo`](./packages/content-seo) | Content-aware SEO analysis and entry-aware JSON-LD (complements zero-dep `@keel/seo`). |
-| [`@keel/content-prose`](./packages/content-prose) · [`@keel/content-lint`](./packages/content-lint) | Prose-quality and writing linters. |
-| [`@keel/content-vite`](./packages/content-vite) | Vite plugin — generates content on build, serves raw markdown in dev, guards client bundle size. |
-| [`@keel/content-mcp`](./packages/content-mcp) | Standalone content MCP server — schema introspection, search, file/Studio-oriented CRUD (distinct from the DB-backed content tools `@keel/mcp` exposes on the control plane). |
+| [`@volo/content-core`](./packages/content-core) | Schema-driven content engine — collections, validated frontmatter, computed fields, taxonomies, and the markdown/MDX pipeline. |
+| [`@volo/content-store`](./packages/content-store) | Content on the SQL substrate — persists pipeline entries to the database and hydrates the runtime from it. CRUD on `content_entries`. |
+| [`@volo/content-mdx`](./packages/content-mdx) · [`@volo/content-markdown`](./packages/content-markdown) | MDX compilation and markdown rendering for content. |
+| [`@volo/content-search`](./packages/content-search) · [`@volo/content-embeddings`](./packages/content-embeddings) | Client-safe vector search and build-time embedding generation. |
+| [`@volo/content-seo`](./packages/content-seo) | Content-aware SEO analysis and entry-aware JSON-LD (complements zero-dep `@volo/seo`). |
+| [`@volo/content-prose`](./packages/content-prose) · [`@volo/content-lint`](./packages/content-lint) | Prose-quality and writing linters. |
+| [`@volo/content-vite`](./packages/content-vite) | Vite plugin — generates content on build, serves raw markdown in dev, guards client bundle size. |
+| [`@volo/content-mcp`](./packages/content-mcp) | Standalone content MCP server — schema introspection, search, file/Studio-oriented CRUD (distinct from the DB-backed content tools `@volo/mcp` exposes on the control plane). |
 
-Content is reachable from every surface: author with `keel content:new`, compile to the database with `keel content:build` (`--prune` to mirror the source exactly), delete with `keel content:delete`, and read or write it from agents through the MCP content tools (`list_content_collections`, `get_content_entry`, `query_content`, `create_content_entry`, `update_content_entry`, `delete_content_entry`).
+Content is reachable from every surface: author with `volo content:new`, compile to the database with `volo content:build` (`--prune` to mirror the source exactly), delete with `volo content:delete`, and read or write it from agents through the MCP content tools (`list_content_collections`, `get_content_entry`, `query_content`, `create_content_entry`, `update_content_entry`, `delete_content_entry`).
 
 ### Identity
 
 | Package | What it does |
 |---|---|
-| [`@keel/auth`](./packages/auth) | Authentication primitives on `node:crypto` — password hashing, tokens, and sessions. |
-| [`@keel/authz`](./packages/authz) | First-class authorization — a declarative role/permission policy (wildcard grants, cycle-safe role inheritance) and the guard middleware that enforces it. |
+| [`@volo/auth`](./packages/auth) | Authentication primitives on `node:crypto` — password hashing, tokens, and sessions. |
+| [`@volo/authz`](./packages/authz) | First-class authorization — a declarative role/permission policy (wildcard grants, cycle-safe role inheritance) and the guard middleware that enforces it. |
 
 ### Platform
 
 | Package | What it does |
 |---|---|
-| [`@keel/observability`](./packages/observability) | In-house distributed-tracing core — OpenTelemetry-shaped, with no OpenTelemetry dependency. |
+| [`@volo/observability`](./packages/observability) | In-house distributed-tracing core — OpenTelemetry-shaped, with no OpenTelemetry dependency. |
 
 ### UI / Web
 
 | Package | What it does |
 |---|---|
-| [`@keel/ui`](./packages/ui) | AI-native UI rendering engine — validate a JSON UI tree and render it to React against a vetted component registry. |
-| [`@keel/web`](./packages/web) | MVC request-handling core — a Rails-style controller layer that weds `@keel/router` and `@keel/ui`. |
-| [`@keel/router`](./packages/router) | RESTful router — declare routes and named paths, resolve method + path to a `controller#action`. |
+| [`@volo/ui`](./packages/ui) | AI-native UI rendering engine — validate a JSON UI tree and render it to React against a vetted component registry. |
+| [`@volo/web`](./packages/web) | MVC request-handling core — a Rails-style controller layer that weds `@volo/router` and `@volo/ui`. |
+| [`@volo/router`](./packages/router) | RESTful router — declare routes and named paths, resolve method + path to a `controller#action`. |
 
 ### Runtime
 
 | Package | What it does |
 |---|---|
-| [`@keel/kernel`](./packages/kernel) | Application kernel — assembles the database, migrations, router, and controllers into one bootable app. |
+| [`@volo/kernel`](./packages/kernel) | Application kernel — assembles the database, migrations, router, and controllers into one bootable app. |
 
 ## Engineering standard
 
@@ -89,11 +89,11 @@ The bar, enforced per package (`packages/queue` is the reference implementation)
 - **Bun** — the runtime; packages run their TypeScript directly (`exports` point at `./src/index.ts`). Targets Node ≥ 22 for compatibility.
 - **oxlint + oxfmt** — the linter and the formatter; the formatter owns whitespace.
 - **vitest with enforced 100% coverage** — lines, functions, branches, and statements, thresholds set in each package's `vitest.config.ts`. A line we cannot cover is a line we should not have written.
-- **Errors carry codes** — every failure is a `KeelError` subclass with a stable, machine-readable `code`; callers branch on `code`, never on a message.
+- **Errors carry codes** — every failure is a `VoloError` subclass with a stable, machine-readable `code`; callers branch on `code`, never on a message.
 
 ## Quickstart
 
-The runnable end-to-end example lives in [`examples/blog`](./examples/blog) — a small blog that wires the whole stack together: a `Post` ORM model, a migration that creates the `posts` table, an app-defined `@keel/ui` registry (`Page` + `PostCard`), a `PostsController` that renders an HTML page via `renderTree` and serves a JSON API, RESTful routes via `resources("posts")`, all booted by `@keel/kernel` over a SQLite database.
+The runnable end-to-end example lives in [`examples/blog`](./examples/blog) — a small blog that wires the whole stack together: a `Post` ORM model, a migration that creates the `posts` table, an app-defined `@volo/ui` registry (`Page` + `PostCard`), a `PostsController` that renders an HTML page via `renderTree` and serves a JSON API, RESTful routes via `resources("posts")`, all booted by `@volo/kernel` over a SQLite database.
 
 ```sh
 bun install
@@ -107,17 +107,17 @@ migrations applied: [ "001_create_posts" ]
 posts seeded: 3
 
 GET /posts -> 200 text/html
-<main><h1>The Keel Blog</h1><section><article><h2>Hello, Keel</h2>...</section></main>
+<main><h1>The Volo Blog</h1><section><article><h2>Hello, Volo</h2>...</section></main>
 
 GET /api/posts -> 200 application/json
-{"posts":[{"id":1,"title":"Hello, Keel",...}]}
+{"posts":[{"id":1,"title":"Hello, Volo",...}]}
 ```
 
-The canonical Keel driver is **better-sqlite3** (what the kernel's own end-to-end test boots). Because Bun cannot yet load better-sqlite3's native addon, the example's adapter transparently falls back to Bun's built-in `bun:sqlite` when run with `bun run` — both satisfy the same `KernelDatabase` interface, so the app code is identical either way.
+The canonical Volo driver is **better-sqlite3** (what the kernel's own end-to-end test boots). Because Bun cannot yet load better-sqlite3's native addon, the example's adapter transparently falls back to Bun's built-in `bun:sqlite` when run with `bun run` — both satisfy the same `KernelDatabase` interface, so the app code is identical either way.
 
 ### Run the server
 
-The same app can be served over live HTTP via [`@keel/runtime`](./packages/runtime)'s `serve()`, which stands a real `node:http` server in front of the kernel. [`examples/blog/serve.ts`](./examples/blog/serve.ts) boots the app, seeds it, and listens on port `3000` (override with `PORT`):
+The same app can be served over live HTTP via [`@volo/runtime`](./packages/runtime)'s `serve()`, which stands a real `node:http` server in front of the kernel. [`examples/blog/serve.ts`](./examples/blog/serve.ts) boots the app, seeds it, and listens on port `3000` (override with `PORT`):
 
 ```sh
 bun run examples/blog/serve.ts
@@ -139,7 +139,7 @@ curl http://127.0.0.1:3000/api/posts  # JSON API
 
 ```
 $ curl http://127.0.0.1:3000/api/posts
-{"posts":[{"id":1,"title":"Hello, Keel","body":"A batteries-included, AI-native TypeScript framework.",...}]}
+{"posts":[{"id":1,"title":"Hello, Volo","body":"A batteries-included, AI-native TypeScript framework.",...}]}
 ```
 
 ## Further reading
@@ -155,6 +155,6 @@ $ curl http://127.0.0.1:3000/api/posts
 
 ## License
 
-Keel is open source under the [MIT License](./LICENSE). Every published `@keel/*`
+Volo is open source under the [MIT License](./LICENSE). Every published `@volo/*`
 package carries the same `"license": "MIT"`; an app you scaffold with
-`create-keel` ships as `UNLICENSED` so you choose its license.
+`create-volo` ships as `UNLICENSED` so you choose its license.

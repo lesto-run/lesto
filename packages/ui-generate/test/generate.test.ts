@@ -1,4 +1,4 @@
-import { Registry } from "@keel/ui";
+import { Registry } from "@volo/ui";
 import { describe, expect, it } from "vitest";
 
 import { GenerateError } from "../src/errors";

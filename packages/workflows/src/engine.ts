@@ -10,7 +10,7 @@ import type {
   WorkflowFn,
 } from "./types";
 
-const TABLE = "keel_workflow_steps";
+const TABLE = "volo_workflow_steps";
 
 /**
  * Create the step-journal table. Idempotent; call it from a migration or once at boot.

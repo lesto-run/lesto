@@ -9,22 +9,22 @@
  *   - SSR data fetching + a typed `:id` param      (`/lab/listings/:id`)
  *   - shell-first streaming with `<Suspense>`       (`/lab/streaming`)
  *   - CSR data fetching through the typed client    (`/lab` — the LiveListing island)
- *   - feature flags (`@keel/flags`, off → 404)      (`/lab/flags`)
- *   - authorization (`@keel/authz`, deny-by-default)(`/lab/admin`)
+ *   - feature flags (`@volo/flags`, off → 404)      (`/lab/flags`)
+ *   - authorization (`@volo/authz`, deny-by-default)(`/lab/admin`)
  *   - the data route the CSR island calls           (`GET /lab/api/listings/:id`)
- *   - admin CRUD + an audit trail (`@keel/admin`)    (`/lab/admin/api/*`)
+ *   - admin CRUD + an audit trail (`@volo/admin`)    (`/lab/admin/api/*`)
  */
 
 import type { ReactNode } from "react";
 
-import { keel } from "@keel/web";
-import type { Context, Handler, KeelResponse, Keel } from "@keel/web";
-import { defineFlags } from "@keel/flags";
-import { createGuard, definePolicy } from "@keel/authz";
-import { createTableSql, defineTable, integer, text } from "@keel/db";
-import type { Db } from "@keel/db";
-import { AdminError, createAdmin } from "@keel/admin";
-import type { Admin, AuditEvent } from "@keel/admin";
+import { volo } from "@volo/web";
+import type { Context, Handler, VoloResponse, Volo } from "@volo/web";
+import { defineFlags } from "@volo/flags";
+import { createGuard, definePolicy } from "@volo/authz";
+import { createTableSql, defineTable, integer, text } from "@volo/db";
+import type { Db } from "@volo/db";
+import { AdminError, createAdmin } from "@volo/admin";
+import type { Admin, AuditEvent } from "@volo/admin";
 import { z } from "zod";
 
 import { Button, Hero, ListingCard, Main, Section, SiteHeader } from "./ui/components";
@@ -87,7 +87,7 @@ function LabIndex(): ReactNode {
 
         <Section title="CSR data fetching (the LiveListing island)">
           <p className="copy">
-            This card is fetched in the BROWSER, after hydration, through the typed @keel/client —
+            This card is fetched in the BROWSER, after hydration, through the typed @volo/client —
             the client-side twin of the server-resolved Account island.
           </p>
 
@@ -214,9 +214,9 @@ function AdminPage(): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// The @keel/admin dogfood — `/lab/admin/api/*`
+// The @volo/admin dogfood — `/lab/admin/api/*`
 //
-// `@keel/admin` is the generic CRUD backbone a WordPress-style admin UI sits
+// `@volo/admin` is the generic CRUD backbone a WordPress-style admin UI sits
 // on. This wires it over the SAME injected store the DB-driven content page
 // uses (`ContentStore = () => Promise<Db>`), so the admin runs unchanged on
 // Node SQLite (server) and Cloudflare D1 (edge) — no driver in this module the
@@ -258,7 +258,7 @@ function statusForAdminError(code: string): number {
 }
 
 /** Run an admin call, turning any `AdminError` into a coded JSON error response. */
-async function adminJson(c: Context, run: () => Promise<unknown>): Promise<KeelResponse> {
+async function adminJson(c: Context, run: () => Promise<unknown>): Promise<VoloResponse> {
   try {
     return c.json(await run());
   } catch (error) {
@@ -341,9 +341,9 @@ function intQuery(c: Context, name: string): number | undefined {
  * store is configured (a Worker without a D1 binding) the routes answer 503 —
  * the same honest "not configured" signal the content page renders.
  */
-function buildAdminRoutes(store?: ContentStore): Keel {
+function buildAdminRoutes(store?: ContentStore): Volo {
   if (store === undefined) {
-    return keel().get("/lab/admin/api/*rest", (c) =>
+    return volo().get("/lab/admin/api/*rest", (c) =>
       c.json({ error: "admin store not configured" }, 503),
     );
   }
@@ -351,7 +351,7 @@ function buildAdminRoutes(store?: ContentStore): Keel {
   const wiring = makeAdminWiring(store);
 
   return (
-    keel()
+    volo()
       // List notes — paginated + projected (id + declared fields only).
       .get("/lab/admin/api/notes", async (c) => {
         const { admin } = await wiring();
@@ -404,20 +404,20 @@ function buildAdminRoutes(store?: ContentStore): Keel {
  * SQLite store on the server, the D1 store on the edge, or `undefined` when no
  * store is configured (the content page then renders a "configure D1" view).
  */
-export function buildLabRoutes(contentStore?: ContentStore): Keel {
+export function buildLabRoutes(contentStore?: ContentStore): Volo {
   // The flag- and authz-gated pages live in their own sub-routers so the gate
   // wraps ONLY that page, not the whole lab zone.
-  const flagGated = keel()
+  const flagGated = volo()
     .use(flags.gate("lab-preview"))
     .page("/lab/flags", { component: FlagPage });
 
-  const adminGated = keel()
+  const adminGated = volo()
     .use(withDemoRole)
     .use(can("lab.admin"))
     .page("/lab/admin", { component: AdminPage });
 
   return (
-    keel()
+    volo()
       .page("/lab", { component: LabIndex })
       .page("/lab/listings/:id", {
         load: (c) => {
@@ -435,7 +435,7 @@ export function buildLabRoutes(contentStore?: ContentStore): Keel {
       .route(adminGated)
       // DB-driven (WordPress-style) pages: a block tree loaded by slug.
       .route(buildContentRoutes(contentStore))
-      // The @keel/admin dogfood: paginated CRUD + the onMutation audit trail.
+      // The @volo/admin dogfood: paginated CRUD + the onMutation audit trail.
       .route(buildAdminRoutes(contentStore))
       // The data route the LiveListing island fetches (typed by `LabApi`).
       .get("/lab/api/listings/:id", (c) => {

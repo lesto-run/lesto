@@ -1,17 +1,17 @@
-# @keel/content-umbra
+# @volo/content-umbra
 
 Fast frontmatter parsing for markdown files.
 
 ## Installation
 
 ```bash
-npm install @keel/content-umbra
+npm install @volo/content-umbra
 ```
 
 ## Quick Start
 
 ```typescript
-import { parseFrontmatter } from "@keel/content-umbra";
+import { parseFrontmatter } from "@volo/content-umbra";
 
 const content = `---
 title: Hello World

@@ -1,10 +1,10 @@
 /**
- * @keel/db — a Drizzle-shaped, typed query DSL over the minimal SQL surface.
+ * @volo/db — a Drizzle-shaped, typed query DSL over the minimal SQL surface.
  *
  *   // 1. Define the schema. The value is the source of truth for both
  *   //    on-disk DDL and the TS types every query gets back.
  *
- *   import { defineTable, integer, text } from "@keel/db";
+ *   import { defineTable, integer, text } from "@volo/db";
  *
  *   export const users = defineTable("users", {
  *     id: integer("id").primaryKey({ autoIncrement: true }),
@@ -18,7 +18,7 @@
  *
  *   // 2. Build a Db over your driver — explicit, no global.
  *
- *   import { createDb, eq } from "@keel/db";
+ *   import { createDb, eq } from "@volo/db";
  *   const db = createDb(sqlAdapter);
  *
  *   // 3. Query through the schema value. `users.email` is the typed column
@@ -30,11 +30,11 @@
  *
  *   // 4. The same value backs the migration's DDL — no duplicate column lists.
  *
- *   import { createTableSql } from "@keel/db";
+ *   import { createTableSql } from "@volo/db";
  *   migrator.add({ up: (s) => s.execute(createTableSql(users)) });
  *
  * The shape is deliberately Drizzle-flavored — schema-as-value, typed
- * columns, explicit db, no inheritance — but the implementation is Keel's
+ * columns, explicit db, no inheritance — but the implementation is Volo's
  * (small, no Drizzle Kit dependency, no driver lock-in). See
  * `docs/adr/0004-data-layer-style.md` for the why.
  */
@@ -63,5 +63,5 @@ export type { Db, DbOptions, QueryEvent, SelectQuery } from "./queries";
 
 export type { SqlDatabase, SqlStatement } from "./sql";
 
-export { DbError, KeelError } from "./errors";
+export { DbError, VoloError } from "./errors";
 export type { DbErrorCode } from "./errors";

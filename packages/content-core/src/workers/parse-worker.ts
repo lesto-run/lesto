@@ -4,8 +4,8 @@ import {
   FrontmatterParseError,
   YamlParseError,
   JsonParseError,
-} from "@keel/content-umbra";
-import type { ParserPreset } from "@keel/content-umbra";
+} from "@volo/content-umbra";
+import type { ParserPreset } from "@volo/content-umbra";
 
 interface WorkerMessage {
   id: number;

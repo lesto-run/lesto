@@ -51,7 +51,7 @@ function statusHandler(status: number): PageHandler {
   return (_method, path) => Promise.resolve({ status, body: `<html>${path}</html>` });
 }
 
-// A handler that yields a fixed body, to drive each `KeelResponseBody` arm.
+// A handler that yields a fixed body, to drive each `VoloResponseBody` arm.
 function bodyHandler(body: RenderResponse["body"]): PageHandler {
   return () => Promise.resolve({ status: 200, body });
 }
@@ -319,7 +319,7 @@ describe("nodeSink", () => {
   });
 
   it("writes a page to disk, creating its directories (string convenience arm)", async () => {
-    root = await mkdtemp(join(tmpdir(), "keel-sites-"));
+    root = await mkdtemp(join(tmpdir(), "volo-sites-"));
 
     const sink = nodeSink(root);
     await sink("marketing/about/index.html", "<html>about</html>");
@@ -329,7 +329,7 @@ describe("nodeSink", () => {
   });
 
   it("writes binary bytes to disk bit-exact (the canonical byte arm)", async () => {
-    root = await mkdtemp(join(tmpdir(), "keel-sites-"));
+    root = await mkdtemp(join(tmpdir(), "volo-sites-"));
 
     const sink = nodeSink(root);
     // Bytes a UTF-8 string seam would corrupt: a PNG signature, a lone 0xFF, a NUL.
@@ -341,7 +341,7 @@ describe("nodeSink", () => {
   });
 
   it("refuses to write outside the output root", async () => {
-    root = await mkdtemp(join(tmpdir(), "keel-sites-"));
+    root = await mkdtemp(join(tmpdir(), "volo-sites-"));
 
     const sink = nodeSink(root);
 

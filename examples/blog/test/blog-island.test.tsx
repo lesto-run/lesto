@@ -3,14 +3,14 @@
 /**
  * The blog proof (ADR 0011 Increment 1 exit, demonstrating ADR 0012).
  *
- * `examples/blog` is the canonical `keel()+.page` app. This proves the CANONICAL
+ * `examples/blog` is the canonical `volo()+.page` app. This proves the CANONICAL
  * island end to end: an `ssr: true` island with INLINE data on the dynamically
  * rendered `/posts` page — server markup carrying the real counts, a co-located
  * mount script with the data inlined and no `bind`, no primer, the head module
  * tag — and a jsdom `hydrateDocumentIslands` pass that mounts it with zero
  * `failed`. The data route's `shared` cache header is asserted too.
  *
- * No bespoke scripts: the page is `keel()+.page` + one island file (review F8 —
+ * No bespoke scripts: the page is `volo()+.page` + one island file (review F8 —
  * no casts). The automated assertions here are the gate; a real browser run is
  * the smoke (recorded in the commit, not runnable headlessly).
  */
@@ -18,18 +18,18 @@
 import { act } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Registry } from "@keel/ui";
-import { hydrateDocumentIslands } from "@keel/ui/client";
-import { openSqlite } from "@keel/runtime";
-import type { App } from "@keel/kernel";
-import type { Db } from "@keel/db";
+import { Registry } from "@volo/ui";
+import { hydrateDocumentIslands } from "@volo/ui/client";
+import { openSqlite } from "@volo/runtime";
+import type { App } from "@volo/kernel";
+import type { Db } from "@volo/db";
 
 import ReactionsIsland from "../app/islands/reactions";
 import { buildApp } from "../src/app";
 import { insertPost } from "../src/post";
 
 const SEEDS = [
-  { title: "Hello, Keel", body: "First post body." },
+  { title: "Hello, Volo", body: "First post body." },
   { title: "One substrate", body: "Second post body, a bit longer." },
 ];
 
@@ -78,13 +78,13 @@ describe("blog /posts — the canonical island", () => {
       expect(html).toContain("aria-pressed");
 
       // (b) a co-located mount script with the data inlined and NO bind.
-      expect(html).toContain("data-keel-island-mount");
+      expect(html).toContain("data-volo-island-mount");
       expect(html).toContain('"ssr":true');
       expect(html).toContain('"counts":{"post-1":16,"post-2":31}');
       expect(html).not.toContain('"bind"');
 
       // (c) no primer — the data crossed the wire inline.
-      expect(html).not.toContain("__keelData");
+      expect(html).not.toContain("__voloData");
 
       // (d) the head module tag that boots hydration.
       expect(html).toContain('<script type="module" src="/client.js"></script>');
@@ -94,11 +94,11 @@ describe("blog /posts — the canonical island", () => {
     }
   });
 
-  it("answers /__keel/data/reactions with the shared cache header", async () => {
+  it("answers /__volo/data/reactions with the shared cache header", async () => {
     const { app, close } = await bootBlog();
 
     try {
-      const response = await app.handle("GET", "/__keel/data/reactions");
+      const response = await app.handle("GET", "/__volo/data/reactions");
 
       expect(response.status).toBe(200);
       expect(response.headers["cache-control"]).toBe("public, max-age=0, must-revalidate");

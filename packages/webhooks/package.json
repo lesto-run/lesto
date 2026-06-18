@@ -1,8 +1,8 @@
 {
-  "name": "@keel/webhooks",
+  "name": "@volo/webhooks",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel webhooks — HMAC-signed outbound delivery (retried on @keel/queue) and inbound signature verification.",
+  "description": "Volo webhooks — HMAC-signed outbound delivery (retried on @volo/queue) and inbound signature verification.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,8 +12,8 @@
     }
   },
   "dependencies": {
-    "@keel/errors": "workspace:*",
-    "@keel/queue": "workspace:*"
+    "@volo/errors": "workspace:*",
+    "@volo/queue": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

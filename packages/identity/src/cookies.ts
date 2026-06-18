@@ -13,12 +13,12 @@
  * sees HTTPS. What is NOT fine is local dev over `http://localhost`: the
  * browser silently drops a `__Host-` cookie because the response is not
  * `Secure`. If you need a dev-mode escape hatch, rename the cookie
- * (`keel_session_dev`) and drop `Secure` only in that mode — do not lie
+ * (`volo_session_dev`) and drop `Secure` only in that mode — do not lie
  * about `Secure` on a real deployment.
  */
 
 /** The session cookie name. The `__Host-` prefix is part of the contract. */
-export const SESSION_COOKIE = "__Host-keel_session";
+export const SESSION_COOKIE = "__Host-volo_session";
 
 /**
  * Serialize a `Set-Cookie` value for the session.

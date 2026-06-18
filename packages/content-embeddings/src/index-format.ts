@@ -5,10 +5,10 @@
  * Designed for static hosting - no server-side processing required.
  *
  * This module contains BUILD-TIME functions for serializing indexes.
- * RUNTIME functions (parsing, loading) are in @keel/content-search.
+ * RUNTIME functions (parsing, loading) are in @volo/content-search.
  */
 
-import { encodeBase64 } from "@keel/content-shared/encoding";
+import { encodeBase64 } from "@volo/content-shared/encoding";
 import type { EmbeddingResult, SearchIndex, GenerateSearchIndexOptions } from "./types";
 import { MODEL_NAME, EMBEDDING_DIMENSIONS } from "./constants";
 

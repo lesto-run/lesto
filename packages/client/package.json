@@ -1,8 +1,8 @@
 {
-  "name": "@keel/client",
+  "name": "@volo/client",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's typed, browser-safe fetch client — call your routes over native fetch with end-to-end types, no codegen.",
+  "description": "Volo's typed, browser-safe fetch client — call your routes over native fetch with end-to-end types, no codegen.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,8 +20,8 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/errors": "workspace:*",
-    "@keel/observability": "workspace:*",
-    "@keel/router": "workspace:*"
+    "@volo/errors": "workspace:*",
+    "@volo/observability": "workspace:*",
+    "@volo/router": "workspace:*"
   }
 }

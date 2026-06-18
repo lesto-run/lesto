@@ -1,4 +1,4 @@
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
 import { assertHeaders, assertNoInjection, type MailTransport, type RenderedEmail } from "./mailer";
 
@@ -21,7 +21,7 @@ export type FetchProviderErrorCode =
   | "MAIL_TRANSPORT_PROVIDER_REJECTED"
   | "MAIL_TRANSPORT_PROVIDER_UNREACHABLE";
 
-export class FetchProviderError extends KeelError<FetchProviderErrorCode> {
+export class FetchProviderError extends VoloError<FetchProviderErrorCode> {
   constructor(code: FetchProviderErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

@@ -1,7 +1,7 @@
 /**
  * Local-dev serving: one origin, every zone rendered live.
  *
- * The insight that makes `keel dev` instant: in development a "static" zone
+ * The insight that makes `volo dev` instant: in development a "static" zone
  * needs no prebuild. A static site is just the dynamic app rendered offline —
  * so in dev we render it *online*, byte-identical, straight through
  * `app.handle`. An edit shows on the next refresh with no build step, because
@@ -24,9 +24,9 @@
 import { contentTypeOf, selectSite } from "./sites";
 import type { AppHandler, RequestOptions, StaticReader } from "./sites";
 
-import type { Site } from "@keel/sites";
+import type { Site } from "@volo/sites";
 
-import type { KeelResponse } from "@keel/web";
+import type { VoloResponse } from "@volo/web";
 
 /** Everything the dev dispatcher needs, injected so the core stays pure. */
 export interface DispatchSitesDevDeps {
@@ -50,7 +50,7 @@ export interface DispatchSitesDevDeps {
 const ASSET_EXTENSIONS: readonly string[] = [".js", ".css", ".map"];
 
 /** A bare-bones response with no body — for the 404. */
-function notFound(): KeelResponse {
+function notFound(): VoloResponse {
   return { status: 404, headers: {}, body: "" };
 }
 
@@ -76,7 +76,7 @@ function looksLikeAsset(path: string): boolean {
 async function serveAsset(
   path: string,
   readAsset: StaticReader,
-): Promise<KeelResponse | undefined> {
+): Promise<VoloResponse | undefined> {
   // The reader resolves paths *relative to its root* (the same contract
   // `outputPath` produces for production). A request path is rooted (`/client.js`),
   // and a leading slash reads as absolute — escaping the root — so strip it to a
@@ -109,7 +109,7 @@ async function serveAsset(
  */
 export function dispatchSitesDev(
   deps: DispatchSitesDevDeps,
-): (method: string, path: string, options?: RequestOptions) => Promise<KeelResponse> {
+): (method: string, path: string, options?: RequestOptions) => Promise<VoloResponse> {
   const { sites, handle, readAsset } = deps;
 
   return async (method, path, options) => {

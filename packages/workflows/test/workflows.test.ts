@@ -105,7 +105,7 @@ describe("Engine", () => {
 
     // The completed void step persisted a durable row whose result is JSON null.
     const row = database
-      .prepare("SELECT result FROM keel_workflow_steps WHERE run_id = ? AND step_key = ?")
+      .prepare("SELECT result FROM volo_workflow_steps WHERE run_id = ? AND step_key = ?")
       .get("run-1", "send-email") as { result: string } | undefined;
 
     expect(row).toEqual({ result: "null" });
@@ -154,7 +154,7 @@ describe("Engine", () => {
       prepare: (sql) => {
         const stmt = db.prepare(sql);
 
-        if (sql.includes("INSERT INTO keel_workflow_steps") && !raced) {
+        if (sql.includes("INSERT INTO volo_workflow_steps") && !raced) {
           return {
             get: (params) => stmt.get(params),
             run: async (params) => {
@@ -163,7 +163,7 @@ describe("Engine", () => {
               // The concurrent pass commits its row FIRST, before our INSERT lands.
               await db
                 .prepare(
-                  "INSERT INTO keel_workflow_steps (run_id, step_key, result) VALUES (?, ?, ?)",
+                  "INSERT INTO volo_workflow_steps (run_id, step_key, result) VALUES (?, ?, ?)",
                 )
                 .run(["race-1", "compute", '"from-winner"']);
 
@@ -193,7 +193,7 @@ describe("Engine", () => {
 
     // The journal holds exactly the winner's row — our INSERT was a no-op.
     const row = database
-      .prepare("SELECT result FROM keel_workflow_steps WHERE run_id = ? AND step_key = ?")
+      .prepare("SELECT result FROM volo_workflow_steps WHERE run_id = ? AND step_key = ?")
       .get("race-1", "compute") as { result: string };
 
     expect(row.result).toBe('"from-winner"');
@@ -276,12 +276,12 @@ describe("the async seam", () => {
   it("commits work done inside transaction(fn) and exposes it via the async get terminal", async () => {
     await db.transaction(async (tx) => {
       await tx
-        .prepare("INSERT INTO keel_workflow_steps (run_id, step_key, result) VALUES (?, ?, ?)")
+        .prepare("INSERT INTO volo_workflow_steps (run_id, step_key, result) VALUES (?, ?, ?)")
         .run(["tx-run", "tx-step", '"committed"']);
     });
 
     const row = await db
-      .prepare("SELECT result FROM keel_workflow_steps WHERE run_id = ? AND step_key = ?")
+      .prepare("SELECT result FROM volo_workflow_steps WHERE run_id = ? AND step_key = ?")
       .get(["tx-run", "tx-step"]);
 
     expect(row).toEqual({ result: '"committed"' });
@@ -293,7 +293,7 @@ describe("the async seam", () => {
     await expect(
       db.transaction(async (tx) => {
         await tx
-          .prepare("INSERT INTO keel_workflow_steps (run_id, step_key, result) VALUES (?, ?, ?)")
+          .prepare("INSERT INTO volo_workflow_steps (run_id, step_key, result) VALUES (?, ?, ?)")
           .run(["tx-run", "tx-step", '"doomed"']);
 
         throw boom;
@@ -301,7 +301,7 @@ describe("the async seam", () => {
     ).rejects.toBe(boom);
 
     const row = await db
-      .prepare("SELECT result FROM keel_workflow_steps WHERE run_id = ? AND step_key = ?")
+      .prepare("SELECT result FROM volo_workflow_steps WHERE run_id = ? AND step_key = ?")
       .get(["tx-run", "tx-step"]);
 
     expect(row).toBeUndefined();

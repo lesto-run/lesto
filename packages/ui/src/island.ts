@@ -65,10 +65,10 @@ import type { PropSpec, UiNode } from "./types";
  *     `hydrateIslands` runs, the behavior every existing island already has.
  *   - **`"visible"`** — lazy: the island does not mount until its region first
  *     scrolls into view (an `IntersectionObserver`), Astro's `client:visible`
- *     analogue. For Keel's deferred Account island this also defers its on-mount
+ *     analogue. For Volo's deferred Account island this also defers its on-mount
  *     `/mls/api/session` fetch until the region is actually seen.
  *
- * Honest scope: Keel ships ONE client bundle, so `"visible"` defers the island's
+ * Honest scope: Volo ships ONE client bundle, so `"visible"` defers the island's
  * MOUNT WORK (its render, effects, and fetches). Whether it also defers the
  * island's BYTES depends on the declaration form below: an eager `component`
  * already shipped in the main bundle, while a lazy `load` arrives as its own
@@ -110,7 +110,7 @@ interface ClientComponentBase {
    * 0010). The framework resolves each source and hands the value to the
    * component as that prop — so the component is a pure function of props with
    * no `fetch`-in-effect, and a waterfall has no author-side site to exist at.
-   * The source's implementation is bound on the server (`keel().data(...)`);
+   * The source's implementation is bound on the server (`volo().data(...)`);
    * this only names the binding, so the client bundle pulls in no server code.
    *
    * Typed loosely here (`DataSource`, value type erased) ON PURPOSE. The
@@ -185,21 +185,21 @@ export interface IslandMount {
    * rendered page inlines the values into `props` and omits `bind` entirely, so
    * a data-free or server-resolved island's wire entry is byte-for-byte what it
    * always was. The client awaits each source (the parse-time primer promise on
-   * `window.__keelData`, else a fetch of `href`) and merges it into props.
+   * `window.__voloData`, else a fetch of `href`) and merges it into props.
    */
   bind?: Record<string, IslandBind>;
 }
 
 /** The attribute that marks an island's wrapper element for hydration. */
-export const ISLAND_ATTR = "data-keel-island";
+export const ISLAND_ATTR = "data-volo-island";
 
 /**
  * The attribute marking an island's co-located mount script (ADR 0011): a
- * `<script type="application/json" data-keel-island-mount>` carrying one
+ * `<script type="application/json" data-volo-island-mount>` carrying one
  * {@link IslandMount}, emitted next to its shell by `defineIsland` and scanned
  * by `hydrateDocumentIslands`.
  */
-export const ISLAND_MOUNT_ATTR = "data-keel-island-mount";
+export const ISLAND_MOUNT_ATTR = "data-volo-island-mount";
 
 /**
  * Author an island NODE by hand-free sugar: `island("Account", { plan: "pro" })`.

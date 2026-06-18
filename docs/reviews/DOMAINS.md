@@ -1,4 +1,4 @@
-# Keel — Domain Map (for the v1 launch review)
+# Volo — Domain Map (for the v1 launch review)
 
 The codebase split into eight review domains. Each domain gets one Fable
 chief-architect review (`docs/reviews/<slug>.md`) across five lenses —
@@ -15,7 +15,7 @@ synthesized plan (`docs/plans/<slug>.md`). The CTO roadmap
 | 5 | Content / Docks CMS | `content-cms` | content-core, content-store, content-query, content-search, content-embeddings, content-markdown, content-mdx, content-components, content-prose, content-umbra, content-lint, content-seo, content-mcp, content-vite, content-shared |
 | 6 | Edge, Deploy & Sites | `edge-deploy` | cloudflare, deploy, sites |
 | 7 | Comms, SEO & Web Primitives | `web-primitives` | mail, mailing-lists, feeds, seo, i18n |
-| 8 | Operability, API Surface & DX | `operability-dx` | observability, mcp, openapi, webhooks, cli, create-keel, integration, e2e |
+| 8 | Operability, API Surface & DX | `operability-dx` | observability, mcp, openapi, webhooks, cli, create-volo, integration, e2e |
 
 ## Cross-cutting anchors (read before reviewing any domain)
 

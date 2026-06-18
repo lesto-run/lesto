@@ -217,7 +217,7 @@ describe("otlpTraceRequest", () => {
           },
           scopeSpans: [
             {
-              scope: { name: "@keel/observability" },
+              scope: { name: "@volo/observability" },
               spans: [
                 {
                   traceId: "a".repeat(32),
@@ -255,7 +255,7 @@ describe("otlpTraceRequest", () => {
       status: "error",
     };
 
-    const mapped = otlpTraceRequest([root, { ...root, status: "unset" }], "keel") as {
+    const mapped = otlpTraceRequest([root, { ...root, status: "unset" }], "volo") as {
       resourceSpans: Array<{ scopeSpans: Array<{ spans: Array<Record<string, unknown>> }> }>;
     };
 
@@ -397,7 +397,7 @@ describe("OtlpHttpExporter", () => {
 
     await otlp.flush();
 
-    expect(spy).toHaveBeenCalledWith("[keel/observability]", expect.any(Error));
+    expect(spy).toHaveBeenCalledWith("[volo/observability]", expect.any(Error));
 
     spy.mockRestore();
   });

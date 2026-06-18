@@ -5,15 +5,15 @@
  * `next` it may call (and `await`) to run the inner layers, then shapes the
  * response on the way back out. Composed, they form the classic onion model —
  * the first-listed middleware is the outermost layer, seeing the request first
- * and the response last. This is the interception point Keel lacked, the one
- * that finally lets `@keel/cors`, `@keel/ratelimit`, `@keel/csrf` mount.
+ * and the response last. This is the interception point Volo lacked, the one
+ * that finally lets `@volo/cors`, `@volo/ratelimit`, `@volo/csrf` mount.
  *
  * The load-bearing backward-compatibility property: an *empty* middleware list
  * runs the controller dispatch and nothing else, so an app that configures no
  * middleware behaves exactly as it did before this pipeline existed.
  */
 
-import type { AnyKeelResponse, KeelRequest } from "./types";
+import type { AnyVoloResponse, VoloRequest } from "./types";
 
 /**
  * The terminal step a middleware calls to run the inner layers — ultimately the
@@ -21,14 +21,14 @@ import type { AnyKeelResponse, KeelRequest } from "./types";
  * (a rate-limit 429, a CSRF 403, a CORS preflight answer), and one that calls it
  * may inspect or replace the response it returns.
  */
-export type Next = () => Promise<AnyKeelResponse>;
+export type Next = () => Promise<AnyVoloResponse>;
 
 /**
  * One layer of the onion: given the request and the `next` step, produce a
  * response. It may answer outright (skip `next`), delegate (`await next()`),
  * or delegate and then adjust the result (add headers, swap the body).
  */
-export type Middleware = (request: KeelRequest, next: Next) => Promise<AnyKeelResponse>;
+export type Middleware = (request: VoloRequest, next: Next) => Promise<AnyVoloResponse>;
 
 /**
  * Fold an ordered middleware list around a terminal dispatch.
@@ -44,9 +44,9 @@ export type Middleware = (request: KeelRequest, next: Next) => Promise<AnyKeelRe
  */
 export function runPipeline(
   middleware: readonly Middleware[],
-  request: KeelRequest,
+  request: VoloRequest,
   dispatch: Next,
-): Promise<AnyKeelResponse> {
+): Promise<AnyVoloResponse> {
   // reduceRight wraps from the inside out: the accumulator is the `next` the
   // current layer will call, seeded with the terminal dispatch.
   const chain = middleware.reduceRight<Next>((next, layer) => () => layer(request, next), dispatch);

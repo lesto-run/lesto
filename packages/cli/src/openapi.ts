@@ -1,5 +1,5 @@
 /**
- * `keel openapi` — export the app's route surface as an OpenAPI 3.1 document.
+ * `volo openapi` — export the app's route surface as an OpenAPI 3.1 document.
  *
  * The MCP control plane drives the app for agents; this makes the same surface
  * legible to *humans and tools* — a spec a generated client, a Swagger UI, or a
@@ -12,29 +12,29 @@
  *
  * Internal routes are excludable: pass `--exclude <prefix>` (repeatable) to drop
  * anything whose path starts with that prefix — a health probe, an admin zone —
- * from the exported surface, layered on top of the `@keel/openapi` filter.
+ * from the exported surface, layered on top of the `@volo/openapi` filter.
  *
  * Like `run`, the core is pure and fully injected: a test hands it a fake
  * `loadApp` and a spy `write` and asserts on the document and the path it wrote.
  */
 
-import { toJson, toOpenApi } from "@keel/openapi";
-import type { OpenApiOptions, RouteEntry } from "@keel/openapi";
+import { toJson, toOpenApi } from "@volo/openapi";
+import type { OpenApiOptions, RouteEntry } from "@volo/openapi";
 
-import type { KeelAppConfig } from "@keel/kernel";
+import type { VoloAppConfig } from "@volo/kernel";
 
 import { parseStringFlag } from "./flags";
 
-/** Where `keel openapi` writes when no `--out` flag is given. */
+/** Where `volo openapi` writes when no `--out` flag is given. */
 const DEFAULT_OUT = "openapi.json";
 
 /** The document's `info` block when the app declares no `meta` of its own. */
-const DEFAULT_INFO = { title: "Keel API", version: "0.0.0" } as const;
+const DEFAULT_INFO = { title: "Volo API", version: "0.0.0" } as const;
 
-/** The seams `keel openapi` depends on — all injected, never imported live. */
+/** The seams `volo openapi` depends on — all injected, never imported live. */
 export interface OpenApiDeps {
-  /** Load the project's app config (the bin reads `keel.app.ts`; tests fake it). */
-  loadApp: () => Promise<KeelAppConfig>;
+  /** Load the project's app config (the bin reads `volo.app.ts`; tests fake it). */
+  loadApp: () => Promise<VoloAppConfig>;
 
   /** Write the serialized document to a path (the bin passes an fs writer; tests spy). */
   write: (path: string, contents: string) => Promise<void>;
@@ -83,7 +83,7 @@ function internalFilter(prefixes: readonly string[]): OpenApiOptions {
 /**
  * Export the app's routes as an OpenAPI 3.1 document on disk.
  *
- * Loads the app (no boot needed — the route list is declared on the `keel()`
+ * Loads the app (no boot needed — the route list is declared on the `volo()`
  * app, not produced by migrating), builds the spec with internal routes
  * filtered out, and writes it to `--out` (default `openapi.json`). Prints the
  * path and route count, then the standing limitation so the schema gap is never

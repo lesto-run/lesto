@@ -6,9 +6,9 @@
  * without breaking machines.
  */
 
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
-export { KeelError };
+export { VoloError };
 
 export type UiErrorCode =
   | "UI_CLIENT_COMPONENT_MISSING"
@@ -24,7 +24,7 @@ export type UiErrorCode =
   | "UI_STREAM_TIMEOUT";
 
 /** Anything the UI engine can refuse to do while building a schema. */
-export class UiError extends KeelError<UiErrorCode> {
+export class UiError extends VoloError<UiErrorCode> {
   constructor(code: UiErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ParserOption } from "@keel/content-umbra";
+import type { ParserOption } from "@volo/content-umbra";
 import type {
   AnyCollection,
   CollectionSchema,

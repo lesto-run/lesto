@@ -12,12 +12,12 @@
     "app",
     "src",
     "test",
-    "keel.app.ts",
+    "volo.app.ts",
     "serve.ts",
     "dev.ts",
     "build.ts",
     "worker.ts",
     "client.tsx",
-    "keel.sites.ts"
+    "volo.sites.ts"
   ]
 }

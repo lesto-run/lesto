@@ -1,5 +1,5 @@
 /**
- * @keel/ratelimit — token-bucket rate limiting over a pluggable store.
+ * @volo/ratelimit — token-bucket rate limiting over a pluggable store.
  *
  *   const limiter = new RateLimiter({
  *     store: new MemoryRateLimitStore(),

@@ -1,26 +1,26 @@
 /**
- * A runnable end-to-end demo of the real Keel stack.
+ * A runnable end-to-end demo of the real Volo stack.
  *
  *   bun run examples/blog/run.ts
  *
  * It boots the app on an in-memory SQLite database (migrations run on boot),
- * seeds a few posts through the typed @keel/db handle, then dispatches two
+ * seeds a few posts through the typed @volo/db handle, then dispatches two
  * real requests through the kernel — the HTML page and the JSON API — and
  * prints what comes back.
  *
- * This exercises every package at once: @keel/db (typed schema + queries),
- * @keel/migrate (the posts table), @keel/web (the keel() app, its .page
+ * This exercises every package at once: @volo/db (typed schema + queries),
+ * @volo/migrate (the posts table), @volo/web (the volo() app, its .page
  * streaming a plain-React component, and the JSON route), all assembled
- * by @keel/kernel.
+ * by @volo/kernel.
  */
 
-import { openSqlite } from "@keel/runtime";
+import { openSqlite } from "@volo/runtime";
 
 import { buildApp } from "./src/app";
 import { countPosts, insertPost } from "./src/post";
 
 const seeds = [
-  { title: "Hello, Keel", body: "A batteries-included, AI-native TypeScript framework." },
+  { title: "Hello, Volo", body: "A batteries-included, AI-native TypeScript framework." },
   { title: "One substrate", body: "The SQL database is the platform; batteries on top." },
   { title: "Agent-native", body: "MCP, CLI, and UI are three surfaces over one core." },
 ];
@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   const { db: handle, close } = await openSqlite();
 
   // Boot: the kernel runs migrations and stands up dispatch; buildApp also
-  // wraps the same handle as a typed @keel/db, which controllers + seeds
+  // wraps the same handle as a typed @volo/db, which controllers + seeds
   // share.
   const { app, db } = await buildApp(handle);
 

@@ -7,8 +7,8 @@
  * free of this import; only the Node app (`controllers.ts`) reaches for it.
  */
 
-import { createDb } from "@keel/db";
-import { openSqlite } from "@keel/runtime";
+import { createDb } from "@volo/db";
+import { openSqlite } from "@volo/runtime";
 
 import { makeContentStore } from "./content";
 import type { ContentStore } from "./content";

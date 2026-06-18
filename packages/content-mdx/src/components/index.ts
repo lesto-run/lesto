@@ -3,7 +3,7 @@
  *
  * @example
  * ```tsx
- * import { MDXContent, CodeBlock, CopyIcon, CheckIcon } from '@keel/content-mdx/components';
+ * import { MDXContent, CodeBlock, CopyIcon, CheckIcon } from '@volo/content-mdx/components';
  * ```
  */
 

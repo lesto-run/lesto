@@ -1,5 +1,5 @@
 import { outputPath, sitePath } from "./paths";
-import type { KeelResponseBody, PageHandler, RenderedPage, StaticSite } from "./types";
+import type { VoloResponseBody, PageHandler, RenderedPage, StaticSite } from "./types";
 
 /** Resolve a static site's pages, whether they were a list or a function. */
 async function resolvePages(site: StaticSite): Promise<readonly string[]> {
@@ -23,7 +23,7 @@ async function resolvePages(site: StaticSite): Promise<readonly string[]> {
  *   - `ReadableStream<Uint8Array>` → read chunk by chunk to exhaustion and
  *     concatenated, so the bytes land in arrival order with no transcoding.
  */
-async function bodyToBytes(body: KeelResponseBody): Promise<Uint8Array> {
+async function bodyToBytes(body: VoloResponseBody): Promise<Uint8Array> {
   if (body === undefined) return new Uint8Array(0);
   if (typeof body === "string") return new TextEncoder().encode(body);
   if (body instanceof Uint8Array) return body;

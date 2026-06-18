@@ -106,7 +106,7 @@ function paint(tree: unknown): ReturnType<typeof renderPage>["islands"] {
 
 afterEach(() => {
   document.body.innerHTML = "";
-  delete window.__keelData;
+  delete window.__voloData;
   vi.restoreAllMocks();
 });
 
@@ -795,7 +795,7 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
     component: "Profile",
     props: {},
     ssr: false,
-    bind: { who: { source: "who", href: "/__keel/data/who" } },
+    bind: { who: { source: "who", href: "/__volo/data/who" } },
   };
 
   it("resolves a bind from the parse-time primer promise, then mounts with it", async () => {
@@ -803,7 +803,7 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
 
     // The primer (dataPrimerScript) already kicked the fetch before any JS ran;
     // the runtime must AWAIT that promise, not start its own request.
-    window.__keelData = { who: Promise.resolve("Ada") };
+    window.__voloData = { who: Promise.resolve("Ada") };
 
     let result!: ReturnType<typeof hydrateIslands>;
 
@@ -841,7 +841,7 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
     });
 
     // Credentialed same-origin fetch of the source's href, exactly once.
-    expect(fetchMock).toHaveBeenCalledWith("/__keel/data/who", { credentials: "same-origin" });
+    expect(fetchMock).toHaveBeenCalledWith("/__volo/data/who", { credentials: "same-origin" });
     expect(document.body.querySelector(".profile")?.textContent).toBe("who: Bob");
     expect(result.mounted).toEqual(["$"]);
   });
@@ -880,7 +880,7 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
   it("merges resolved data over the island's static props (data wins)", async () => {
     document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
 
-    window.__keelData = { who: Promise.resolve("FromData") };
+    window.__voloData = { who: Promise.resolve("FromData") };
 
     await act(async () => {
       hydrateIslands(registry(), [{ ...profileBind, props: { who: "FromStaticProp" } }]);
@@ -896,7 +896,7 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
     document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div><div ${ISLAND_ATTR}="ok"></div>`;
 
     const sunk = new Error("data endpoint 500");
-    window.__keelData = { who: Promise.reject(sunk) };
+    window.__voloData = { who: Promise.reject(sunk) };
 
     const errors: Array<{ id: string; component: string }> = [];
 
@@ -931,7 +931,7 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
       document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
 
       // A primed promise that never settles — the hung-source case.
-      window.__keelData = { who: new Promise<unknown>(() => undefined) };
+      window.__voloData = { who: new Promise<unknown>(() => undefined) };
 
       const errors: UiError[] = [];
 
@@ -969,7 +969,7 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
       document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
 
       // Resolve at 9.9s — inside the 10s deadline.
-      window.__keelData = {
+      window.__voloData = {
         who: new Promise<unknown>((resolve) => setTimeout(() => resolve("Ada"), 9_900)),
       };
 
@@ -999,7 +999,7 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
     try {
       document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
 
-      window.__keelData = { who: new Promise<unknown>(() => undefined) };
+      window.__voloData = { who: new Promise<unknown>(() => undefined) };
 
       const errors: UiError[] = [];
 
@@ -1038,7 +1038,7 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
     };
 
     document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
-    window.__keelData = { who: Promise.resolve("Cleo") };
+    window.__voloData = { who: Promise.resolve("Cleo") };
 
     let result!: ReturnType<typeof hydrateIslands>;
 
@@ -1049,7 +1049,7 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
           component: "LazyProfile",
           props: {},
           ssr: false,
-          bind: { who: { source: "who", href: "/__keel/data/who" } },
+          bind: { who: { source: "who", href: "/__volo/data/who" } },
         },
       ]);
     });

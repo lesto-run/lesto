@@ -3,7 +3,7 @@ import { cpus } from "node:os";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { ParserPreset } from "@keel/content-umbra";
+import type { ParserPreset } from "@volo/content-umbra";
 
 const currentFilename = fileURLToPath(import.meta.url);
 const currentDirname = path.dirname(currentFilename);

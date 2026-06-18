@@ -56,8 +56,8 @@ function getMDXComponent(code: string, globals?: Record<string, unknown>) {
  *
  * @example
  * ```tsx
- * import { compileMDX } from '@keel/content-mdx';
- * import { MDXContent } from '@keel/content-mdx/components';
+ * import { compileMDX } from '@volo/content-mdx';
+ * import { MDXContent } from '@volo/content-mdx/components';
  *
  * const result = await compileMDX({ source: mdxString });
  *

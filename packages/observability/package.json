@@ -1,8 +1,8 @@
 {
-  "name": "@keel/observability",
+  "name": "@volo/observability",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's in-house distributed-tracing core — OpenTelemetry-shaped, with no OpenTelemetry dependency.",
+  "description": "Volo's in-house distributed-tracing core — OpenTelemetry-shaped, with no OpenTelemetry dependency.",
   "type": "module",
   "private": true,
   "exports": {

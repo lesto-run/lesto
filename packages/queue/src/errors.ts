@@ -1,14 +1,14 @@
 /**
  * Errors carry codes, not just prose.
  *
- * Every failure in Keel surfaces a stable, machine-readable `code`. Logs,
+ * Every failure in Volo surfaces a stable, machine-readable `code`. Logs,
  * tests, API responses, and the MCP surface branch on the code — never on a
  * message string, which is free to change for humans without breaking machines.
  */
 
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
-export { KeelError };
+export { VoloError };
 
 export type QueueErrorCode =
   | "QUEUE_HANDLER_NOT_A_FUNCTION"
@@ -20,7 +20,7 @@ export type QueueErrorCode =
   | "RETENTION_TASK_FAILED";
 
 /** Anything the queue can refuse to do. */
-export class QueueError extends KeelError<QueueErrorCode> {
+export class QueueError extends VoloError<QueueErrorCode> {
   constructor(code: QueueErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 
@@ -38,11 +38,11 @@ export class QueueError extends KeelError<QueueErrorCode> {
  * It is a single boolean property — `true` — rather than an `instanceof` check so
  * ANY error a handler throws can opt in: wrap a thrown error with
  * {@link permanentFailure}, or set the flag on a coded error class of your own
- * (e.g. `@keel/webhooks`'s `WEBHOOK_URL_BLOCKED`). The queue never inspects the
+ * (e.g. `@volo/webhooks`'s `WEBHOOK_URL_BLOCKED`). The queue never inspects the
  * error's identity, only this flag, so the signal crosses package boundaries
  * without either side importing the other's error type.
  */
-export const PERMANENT_FAILURE = "keelQueuePermanentFailure" as const;
+export const PERMANENT_FAILURE = "voloQueuePermanentFailure" as const;
 
 /** An error a handler can throw to mark its failure non-retryable. */
 export interface PermanentFailure {
@@ -74,7 +74,7 @@ export function isPermanentFailure(error: unknown): error is PermanentFailure {
  * remaining `maxAttempts` on a retry that is doomed to fail identically.
  *
  * If `error` is already an object it is stamped in place and returned (its code,
- * message, and `instanceof` identity are preserved — a coded `KeelError` stays
+ * message, and `instanceof` identity are preserved — a coded `VoloError` stays
  * branchable). A non-object is wrapped in a coded `QUEUE_PERMANENT_FAILURE`
  * `QueueError` carrying its string form, so the thrown value is always an `Error`.
  */

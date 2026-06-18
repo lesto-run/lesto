@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 
-import type { Db } from "@keel/db";
-import type { Mailer } from "@keel/mail";
-import type { JsonValue } from "@keel/queue";
+import type { Db } from "@volo/db";
+import type { Mailer } from "@volo/mail";
+import type { JsonValue } from "@volo/queue";
 
 import { MailingListError } from "./errors";
 import {
@@ -57,12 +57,12 @@ import {
  * `subscribe` is unauthenticated by nature (anyone may join a list) and it both
  * writes a row and enqueues an email. That makes it a spam/abuse amplifier if
  * exposed raw. This package does NOT rate-limit — it has no request context — so
- * the HTTP handler that fronts `subscribe` MUST apply `@keel/ratelimit` (keyed by
+ * the HTTP handler that fronts `subscribe` MUST apply `@volo/ratelimit` (keyed by
  * IP and/or email) before calling it. The double opt-in itself blunts list-bombing
  * (an unconfirmed address never receives a broadcast), but the confirmation email
  * is still a send the caller is on the hook to throttle.
  *
- * Built as a closure factory (matches `@keel/identity`'s shape): no `this`,
+ * Built as a closure factory (matches `@volo/identity`'s shape): no `this`,
  * no inheritance; `db`, `mailer`, the token generator, and the optional
  * deliverability config are captured in lexical scope. The package does not open
  * a database — it operates on the {@link Db} the caller hands it, and on the

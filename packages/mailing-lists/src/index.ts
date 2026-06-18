@@ -1,5 +1,5 @@
 /**
- * @keel/mailing-lists — Ghost-style subscriber lists with double opt-in and
+ * @volo/mailing-lists — Ghost-style subscriber lists with double opt-in and
  * resumable broadcasts.
  *
  *   const db = createDb(sqlAdapter);
@@ -19,9 +19,9 @@
  *   await lists.unsubscribe(sub.unsubscribeToken!);                 // → unsubscribed
  *
  * Composes:
- *   - `@keel/db`    — the lists/subscribers/broadcasts schemas, queries, and DDL
- *   - `@keel/mail`  — delivery (confirmation + per-recipient broadcast emails)
- *   - `@keel/queue` — durable enqueue beneath the mailer
+ *   - `@volo/db`    — the lists/subscribers/broadcasts schemas, queries, and DDL
+ *   - `@volo/mail`  — delivery (confirmation + per-recipient broadcast emails)
+ *   - `@volo/queue` — durable enqueue beneath the mailer
  *
  * The package opens no database and holds no request context; the caller hands
  * it a {@link Db} and a {@link Mailer}, and `createMailingLists` returns the

@@ -1,5 +1,5 @@
 /**
- * The Keel MCP tool set — the operations the control plane exposes to agents.
+ * The Volo MCP tool set — the operations the control plane exposes to agents.
  *
  * Each tool is a plain, pure description: a name, a human-readable purpose, a
  * JSON Schema for its input, and an async `handler`. The handlers are the whole
@@ -9,13 +9,13 @@
 
 import { createHash } from "node:crypto";
 
-import type { App } from "@keel/kernel";
-import type { SqlDatabase } from "@keel/migrate";
+import type { App } from "@volo/kernel";
+import type { SqlDatabase } from "@volo/migrate";
 
-import { getCollections, getEntry, query, setData } from "@keel/content-core";
-import type { RuntimeEntry } from "@keel/content-core";
-import { createEntry, deleteEntry, loadEntries, updateEntry } from "@keel/content-store";
-import type { WriteEntryInput } from "@keel/content-store";
+import { getCollections, getEntry, query, setData } from "@volo/content-core";
+import type { RuntimeEntry } from "@volo/content-core";
+import { createEntry, deleteEntry, loadEntries, updateEntry } from "@volo/content-store";
+import type { WriteEntryInput } from "@volo/content-store";
 
 import { McpError } from "./errors";
 
@@ -54,10 +54,10 @@ export interface McpAuditRecord {
 export type McpAuditSink = (record: McpAuditRecord) => void | Promise<void>;
 
 /** Everything a tool handler needs: the running app, its routes, and optional UI generation. */
-export interface KeelMcpContext {
+export interface VoloMcpContext {
   app: App;
 
-  /** The app's routes (verb + pattern), as `keel().routes()` yields — surfaced by `list_routes`. */
+  /** The app's routes (verb + pattern), as `volo().routes()` yields — surfaced by `list_routes`. */
   routes: readonly { method: string; pattern: string }[];
 
   /**
@@ -76,7 +76,7 @@ export interface KeelMcpContext {
    */
   audit: McpAuditSink;
 
-  /** Injected by the caller (wired to `@keel/ui-generate`); absent disables `generate_ui`. */
+  /** Injected by the caller (wired to `@volo/ui-generate`); absent disables `generate_ui`. */
   generateUi?: (prompt: string) => Promise<unknown>;
 
   /**
@@ -88,7 +88,7 @@ export interface KeelMcpContext {
 }
 
 /** One MCP tool: its identity, its input contract, and the handler that runs it. */
-export interface KeelTool {
+export interface VoloTool {
   name: string;
 
   description: string;
@@ -107,7 +107,7 @@ export interface KeelTool {
 }
 
 /** The content-store database, or a clear refusal when none was wired in. */
-function requireContentDb(context: KeelMcpContext): SqlDatabase {
+function requireContentDb(context: VoloMcpContext): SqlDatabase {
   if (context.contentDb === undefined) {
     throw new McpError(
       "MCP_CONTENT_STORE_UNAVAILABLE",
@@ -119,7 +119,7 @@ function requireContentDb(context: KeelMcpContext): SqlDatabase {
 }
 
 /** The server's mode, defaulting to the safe `read-only` floor when unset. */
-function modeOf(context: KeelMcpContext): McpMode {
+function modeOf(context: VoloMcpContext): McpMode {
   return context.mode ?? "read-only";
 }
 
@@ -185,7 +185,7 @@ function createContentRuntime(): ContentRuntime {
  * which capability it lacks. Read-only is the default, so a server that never
  * sets `mode` can never reach a write.
  */
-function requireOperator(context: KeelMcpContext, tool: string): void {
+function requireOperator(context: VoloMcpContext, tool: string): void {
   if (modeOf(context) === "operator") return;
 
   throw new McpError(
@@ -261,21 +261,21 @@ const WRITE_ENTRY_SCHEMA = {
 };
 
 /**
- * Build the Keel tool set bound to a context.
+ * Build the Volo tool set bound to a context.
  *
  * The handlers close over `context`, so the same tool definitions drive any app
  * the caller assembles. Order is stable: routes and request, then the content
  * read tools, then the content write tools.
  */
-export function buildTools(context: KeelMcpContext): KeelTool[] {
+export function buildTools(context: VoloMcpContext): VoloTool[] {
   // One incremental runtime view per tool set: the content writes refresh through
   // it so each write re-reads only the collection it changed, never the whole
   // store (see {@link createContentRuntime}).
   const runtime = createContentRuntime();
 
-  const listRoutes: KeelTool = {
+  const listRoutes: VoloTool = {
     name: "list_routes",
-    description: "List every route the running Keel app answers, in resolution order.",
+    description: "List every route the running Volo app answers, in resolution order.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -284,9 +284,9 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
     handler: async () => context.routes,
   };
 
-  const handleRequest: KeelTool = {
+  const handleRequest: VoloTool = {
     name: "handle_request",
-    description: "Drive the running Keel app: dispatch a request and return its response.",
+    description: "Drive the running Volo app: dispatch a request and return its response.",
     inputSchema: {
       type: "object",
       properties: {
@@ -328,9 +328,9 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
     },
   };
 
-  const generateUi: KeelTool = {
+  const generateUi: VoloTool = {
     name: "generate_ui",
-    description: "Generate a Keel UI from a natural-language prompt.",
+    description: "Generate a Volo UI from a natural-language prompt.",
     inputSchema: {
       type: "object",
       properties: {
@@ -349,7 +349,7 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
     },
   };
 
-  const listContentCollections: KeelTool = {
+  const listContentCollections: VoloTool = {
     name: "list_content_collections",
     description: "List the content collections in the runtime, each with its entry count.",
     inputSchema: {
@@ -364,7 +364,7 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
       })),
   };
 
-  const getContentEntry: KeelTool = {
+  const getContentEntry: VoloTool = {
     name: "get_content_entry",
     description: "Read a single content entry by collection and slug; null when absent.",
     inputSchema: {
@@ -379,7 +379,7 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
     handler: async (input) => getEntry(String(input.collection), String(input.slug)) ?? null,
   };
 
-  const queryContent: KeelTool = {
+  const queryContent: VoloTool = {
     name: "query_content",
     description: "List a collection's entries, optionally capped by a limit.",
     inputSchema: {
@@ -399,7 +399,7 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
     },
   };
 
-  const createContentEntry: KeelTool = {
+  const createContentEntry: VoloTool = {
     name: "create_content_entry",
     description: "Create a new content entry in the store; errors if one already exists.",
     inputSchema: WRITE_ENTRY_SCHEMA,
@@ -421,7 +421,7 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
     },
   };
 
-  const updateContentEntry: KeelTool = {
+  const updateContentEntry: VoloTool = {
     name: "update_content_entry",
     description: "Update an existing content entry, merging data and replacing the body.",
     inputSchema: WRITE_ENTRY_SCHEMA,
@@ -441,7 +441,7 @@ export function buildTools(context: KeelMcpContext): KeelTool[] {
     },
   };
 
-  const deleteContentEntry: KeelTool = {
+  const deleteContentEntry: VoloTool = {
     name: "delete_content_entry",
     description: "Delete a content entry by collection and slug; reports how many rows went.",
     inputSchema: {
@@ -525,8 +525,8 @@ export interface DispatchOptions {
  * a stale client never silently no-ops — and that refusal is audited too.
  */
 export async function dispatch(
-  context: KeelMcpContext,
-  tools: KeelTool[],
+  context: VoloMcpContext,
+  tools: VoloTool[],
   name: string,
   input: Record<string, unknown>,
   options: DispatchOptions = {},

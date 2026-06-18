@@ -2,28 +2,28 @@
  * The handler context — the single `c` a route handler receives.
  *
  * Where the old `Controller` was a class you subclassed, `Context` is a value
- * passed in: it wraps the immutable {@link KeelRequest}, exposes typed readers
- * for params / query / headers, and builds a {@link KeelResponse} through small
+ * passed in: it wraps the immutable {@link VoloRequest}, exposes typed readers
+ * for params / query / headers, and builds a {@link VoloResponse} through small
  * helpers that each name a content type so a response is correct by construction.
  * A handler returns the response it builds — there is no mutable `res` to forget
  * to send — which keeps the dispatch core pure and the streaming/edge paths clean.
  *
  * Generic in the route's path so `c.param(name)` only accepts the `:param` names
- * the pattern actually declares (see `@keel/router`'s `PathParams`). That is the
- * front of Keel's end-to-end typing: the compiler knows the keys, with no codegen.
+ * the pattern actually declares (see `@volo/router`'s `PathParams`). That is the
+ * front of Volo's end-to-end typing: the compiler knows the keys, with no codegen.
  */
 
-import type { ParamKeys } from "@keel/router";
+import type { ParamKeys } from "@volo/router";
 import type { ZodType } from "zod";
 
 import { currentContext } from "./context";
-import type { AnyKeelResponse, KeelBody, KeelRequest, KeelResponse } from "./types";
+import type { AnyVoloResponse, VoloBody, VoloRequest, VoloResponse } from "./types";
 import { validateBody } from "./validate";
 
 export class Context<Path extends string = string> {
   // The request is immutable for the lifetime of the context; a handler reads it
   // but never reassigns it, so it stays private behind a getter.
-  private readonly currentRequest: KeelRequest;
+  private readonly currentRequest: VoloRequest;
 
   // The request-scoped variable bag — what `c.set`/`c.get` read and write. A
   // plain Map, distinct from the ambient `RequestContext` (which carries the
@@ -32,12 +32,12 @@ export class Context<Path extends string = string> {
   // handler downstream of it.
   private readonly vars = new Map<string, unknown>();
 
-  constructor(request: KeelRequest) {
+  constructor(request: VoloRequest) {
     this.currentRequest = request;
   }
 
   /** The request this context is handling. */
-  get req(): KeelRequest {
+  get req(): VoloRequest {
     return this.currentRequest;
   }
 
@@ -105,7 +105,7 @@ export class Context<Path extends string = string> {
   }
 
   /** A JSON response — `data` is serialized and tagged `application/json`. */
-  json(data: unknown, status = 200): KeelResponse {
+  json(data: unknown, status = 200): VoloResponse {
     return {
       status,
       headers: { "content-type": "application/json" },
@@ -114,7 +114,7 @@ export class Context<Path extends string = string> {
   }
 
   /** A plain-text response. */
-  text(body: string, status = 200): KeelResponse {
+  text(body: string, status = 200): VoloResponse {
     return {
       status,
       headers: { "content-type": "text/plain" },
@@ -123,7 +123,7 @@ export class Context<Path extends string = string> {
   }
 
   /** An HTML response from a pre-rendered markup string. */
-  html(body: string, status = 200): KeelResponse {
+  html(body: string, status = 200): VoloResponse {
     return {
       status,
       headers: { "content-type": "text/html" },
@@ -132,7 +132,7 @@ export class Context<Path extends string = string> {
   }
 
   /** A redirect — defaults to 302, carrying the target in `Location`. */
-  redirect(location: string, status = 302): KeelResponse {
+  redirect(location: string, status = 302): VoloResponse {
     return {
       status,
       headers: { Location: location },
@@ -145,7 +145,7 @@ export class Context<Path extends string = string> {
    * a PDF). The runtime writes the `Uint8Array` to the socket verbatim, tagged
    * with the caller's `contentType`.
    */
-  bytes(data: Uint8Array, contentType: string, status = 200): AnyKeelResponse {
+  bytes(data: Uint8Array, contentType: string, status = 200): AnyVoloResponse {
     return {
       status,
       headers: { "content-type": contentType },
@@ -158,11 +158,11 @@ export class Context<Path extends string = string> {
    * socket as it produces bytes. The foundation the `.page` renderer flushes a
    * shell through; `contentType` defaults to HTML, the dominant streamed case.
    */
-  stream(body: ReadableStream, contentType = "text/html", status = 200): AnyKeelResponse {
+  stream(body: ReadableStream, contentType = "text/html", status = 200): AnyVoloResponse {
     return {
       status,
       headers: { "content-type": contentType },
-      body: body as KeelBody,
+      body: body as VoloBody,
     };
   }
 }

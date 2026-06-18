@@ -1,5 +1,5 @@
 /**
- * @keel/ui-kit — the vetted starter component library for @keel/ui.
+ * @volo/ui-kit — the vetted starter component library for @volo/ui.
  *
  * The engine ships zero components by design; this is the default design system
  * the app and the AI compose with.

@@ -1,9 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { validateTree } from "@keel/ui";
-import { renderTree } from "@keel/ui/server";
-import type { UiNode } from "@keel/ui";
+import { validateTree } from "@volo/ui";
+import { renderTree } from "@volo/ui/server";
+import type { UiNode } from "@volo/ui";
 
 import {
   Badge,
@@ -245,11 +245,11 @@ describe("Button variants", () => {
   it("renders an anchor when given an href", () => {
     const markup = html({
       type: "Button",
-      props: { label: "Visit", href: "https://keel.dev" },
+      props: { label: "Visit", href: "https://volo.dev" },
     });
 
     expect(markup).toContain("<a");
-    expect(markup).toContain('href="https://keel.dev"');
+    expect(markup).toContain('href="https://volo.dev"');
     expect(markup).toContain("Visit");
   });
 });
@@ -261,9 +261,9 @@ describe("Button href scheme guard (XSS in the AI tree)", () => {
 
   it("allows safe schemes and relative URLs as anchors", () => {
     for (const href of [
-      "https://keel.dev",
+      "https://volo.dev",
       "http://example.com",
-      "mailto:hi@keel.dev",
+      "mailto:hi@volo.dev",
       "/relative/path",
       "#anchor",
       "?q=1",

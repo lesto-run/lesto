@@ -5,7 +5,7 @@
  * The acceptance for blocker #11 is "a served request produces a span in a local
  * OTLP collector." Rather than stand up a real OpenTelemetry collector (a heavy,
  * flaky external dependency in CI), this is a tiny `node:http` server that speaks
- * exactly the slice of the OTLP/HTTP JSON protocol Keel's `OtlpHttpExporter`
+ * exactly the slice of the OTLP/HTTP JSON protocol Volo's `OtlpHttpExporter`
  * emits: it accepts `POST /v1/traces`, parses the `resourceSpans` envelope back
  * into flat span records, and records them for assertions.
  *
@@ -22,7 +22,7 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 
 /**
  * One span, flattened back out of the OTLP envelope into the fields a test reads.
- * Mirrors `@keel/observability`'s `SpanData` plus the resource's `service.name`,
+ * Mirrors `@volo/observability`'s `SpanData` plus the resource's `service.name`,
  * so an assertion can match by name, parent, status, and attribute without
  * re-walking the protocol's nested arrays.
  */
@@ -38,7 +38,7 @@ export interface CollectedSpan {
 
 /** A running collector: its `/v1/traces` URL, the spans it has received, and a stop. */
 export interface OtlpCollector {
-  /** The endpoint to set as `KEEL_OTLP_URL`, e.g. `http://127.0.0.1:54321/v1/traces`. */
+  /** The endpoint to set as `VOLO_OTLP_URL`, e.g. `http://127.0.0.1:54321/v1/traces`. */
   readonly url: string;
 
   /** Every span received so far, in arrival order. */
@@ -153,7 +153,7 @@ function readBody(req: IncomingMessage): Promise<string> {
  * Start the in-process collector on an ephemeral port.
  *
  * Resolves once listening, carrying the `/v1/traces` URL to hand to the tracer as
- * `KEEL_OTLP_URL`. Every `POST /v1/traces` is decoded and appended to `spans`;
+ * `VOLO_OTLP_URL`. Every `POST /v1/traces` is decoded and appended to `spans`;
  * any other request is a 404 (the collector speaks only the trace endpoint).
  */
 export async function startOtlpCollector(): Promise<OtlpCollector> {

@@ -4,19 +4,19 @@
  *   bun run examples/admin/serve.ts
  *
  * Where run.ts dispatches the journey in-process, this boots the same app behind
- * a real node:http server (`@keel/runtime`'s `serve`) and stays up so you can
+ * a real node:http server (`@volo/runtime`'s `serve`) and stays up so you can
  * drive the admin by hand — paginate the catalog, create / update / delete a
  * product, and watch each write land in the audit trail at `GET /admin/audit`.
  *
  * Drive it (see README):
  *   curl 'localhost:3000/admin/products?limit=2&offset=0'
  *   curl -X POST localhost:3000/admin/products \
- *     -H 'content-type: application/json' -H 'x-admin-actor: ada@keel.dev' \
+ *     -H 'content-type: application/json' -H 'x-admin-actor: ada@volo.dev' \
  *     -d '{"name":"Galley Apron","price":3000,"stock":25,"cost":1100}'
  *   curl localhost:3000/admin/audit
  */
 
-import { openSqlite, serve } from "@keel/runtime";
+import { openSqlite, serve } from "@volo/runtime";
 
 import { buildApp } from "./src/app";
 

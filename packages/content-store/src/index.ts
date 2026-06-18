@@ -1,9 +1,9 @@
 /**
- * @keel/content-store — content on the one substrate.
+ * @volo/content-store — content on the one substrate.
  *
- * The content engine (@keel/content-core) reads markdown and produces entries.
+ * The content engine (@volo/content-core) reads markdown and produces entries.
  * This package writes those entries to the SQL database and reads them back into
- * the runtime, so content lives on the same DB as everything else in Keel —
+ * the runtime, so content lives on the same DB as everything else in Volo —
  * SQLite locally, Postgres at scale — rather than in generated files.
  *
  *   new Migrator(db, [contentEntriesMigration]).migrate();

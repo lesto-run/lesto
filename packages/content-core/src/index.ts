@@ -96,8 +96,8 @@ export type {
   FormatOptions,
 } from "./rag";
 
-// NOTE: Schema.org / JSON-LD generation has moved to @keel/content-seo
-// import { jsonLd, generateSchemaOrg } from "@keel/content-seo";
+// NOTE: Schema.org / JSON-LD generation has moved to @volo/content-seo
+// import { jsonLd, generateSchemaOrg } from "@volo/content-seo";
 
 export { wordCount, readingTime, excerpt } from "./computed";
 export {
@@ -118,13 +118,13 @@ export type {
   CollectedImport,
 } from "./imports";
 
-export { parseFrontmatter, hasFrontmatter, stringify, extractExcerpt } from "@keel/content-umbra";
+export { parseFrontmatter, hasFrontmatter, stringify, extractExcerpt } from "@volo/content-umbra";
 
 export type {
   ParseOutput,
   ParseResult as FrontmatterParseResult,
   FrontmatterLanguage,
-} from "@keel/content-umbra";
+} from "@volo/content-umbra";
 
 export type {
   RenderOptions,
@@ -132,10 +132,10 @@ export type {
   Heading,
   ReadingTime,
   Renderer,
-} from "@keel/content-markdown";
+} from "@volo/content-markdown";
 
 // NOTE: Voice, AI, and build functions require Node.js and are available via:
-//   import { generate, sampleEntries, resolveAIConfig } from "@keel/content-core/build"
+//   import { generate, sampleEntries, resolveAIConfig } from "@volo/content-core/build"
 
 // Voice types (types only - no runtime imports)
 export type {
@@ -186,4 +186,4 @@ export type {
 
 // NOTE: AI Semantic Search APIs are NOT re-exported here.
 // Import directly from the dedicated package:
-//   import { search, cosineSimilarity, loadSearchIndex } from "@keel/content-search"
+//   import { search, cosineSimilarity, loadSearchIndex } from "@volo/content-search"

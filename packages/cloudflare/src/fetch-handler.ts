@@ -1,17 +1,17 @@
 /**
- * Run a Keel app inside a Cloudflare Worker.
+ * Run a Volo app inside a Cloudflare Worker.
  *
- * A Worker is a single function: `fetch(Request) => Response`. Keel's dispatcher
- * is already a pure `(method, path, options) => KeelResponse` — no node:http, no
- * sockets — so putting Keel on the edge is *adapting the shapes*: a Web `Request`
+ * A Worker is a single function: `fetch(Request) => Response`. Volo's dispatcher
+ * is already a pure `(method, path, options) => VoloResponse` — no node:http, no
+ * sockets — so putting Volo on the edge is *adapting the shapes*: a Web `Request`
  * in, a Web `Response` out, the same dispatch in between.
  *
  * But "the same dispatch" is not "the same request handling". The node server
- * (`@keel/runtime`) wraps every request in a per-request context, default security
+ * (`@volo/runtime`) wraps every request in a per-request context, default security
  * headers, and an error boundary; an edge adapter that skipped them would be a
  * second, weaker front door to the same app — exactly the kind of adapter gap the
  * field's SSR CVEs keep landing in. So this handler runs the SAME transport-neutral
- * hardening the node server does (from `@keel/web`): it establishes a per-request
+ * hardening the node server does (from `@volo/web`): it establishes a per-request
  * context (id, client identity, an abort signal that fires on client disconnect),
  * catches any dispatch throw and maps it to a safe coded status, and merges the
  * default security headers under every response.
@@ -29,8 +29,8 @@ import {
   securityDefaults,
   statusForError,
   withSecurityHeaders,
-} from "@keel/web";
-import type { AnyKeelResponse, KeelBody, RequestContext, RequestContextSpan } from "@keel/web";
+} from "@volo/web";
+import type { AnyVoloResponse, VoloBody, RequestContext, RequestContextSpan } from "@volo/web";
 
 import { CloudflareError } from "./errors";
 
@@ -46,7 +46,7 @@ export interface EdgeRequestOptions {
 /**
  * The pure dispatcher a Worker fronts — `dispatchSites` / `app.handle` satisfy it.
  *
- * Its response carries any {@link KeelBody} arm (string, bytes, or stream): the
+ * Its response carries any {@link VoloBody} arm (string, bytes, or stream): the
  * site dispatcher can serve a binary file as bytes, and the edge `Response` takes
  * each natively. A string-bodied `app.handle` satisfies it, since a string body
  * is one arm of the wider type.
@@ -55,7 +55,7 @@ export type EdgeDispatch = (
   method: string,
   path: string,
   options: EdgeRequestOptions,
-) => Promise<AnyKeelResponse>;
+) => Promise<AnyVoloResponse>;
 
 /** One served edge request, as the access log records it (mirrors the node `AccessEntry`). */
 export interface EdgeAccessEntry {
@@ -74,12 +74,12 @@ export interface EdgeAccessEntry {
 /**
  * One span over one served edge request — the same narrow tracing surface the
  * node server mints through, so a deployment wires one `Tracer` to both tiers.
- * Structurally satisfied by `@keel/observability`'s `Span`; no dependency.
+ * Structurally satisfied by `@volo/observability`'s `Span`; no dependency.
  *
  * `data` carries the trace + span ids the runtime publishes on the request
- * context: it makes this assignable to `@keel/web`'s {@link RequestContextSpan},
- * so a seam fired DURING the edge request (a `@keel/db` query, an inline
- * `@keel/queue` job) parents its child span on the request span exactly as the
+ * context: it makes this assignable to `@volo/web`'s {@link RequestContextSpan},
+ * so a seam fired DURING the edge request (a `@volo/db` query, an inline
+ * `@volo/queue` job) parents its child span on the request span exactly as the
  * node tier does — completing op#3's "same tracing contract, both tiers".
  */
 export interface EdgeRequestSpan {
@@ -94,7 +94,7 @@ export interface EdgeRequestSpan {
 
 /**
  * An inbound W3C trace context the edge request joins — the ids parsed off the
- * `traceparent` header. Structurally what `@keel/observability`'s
+ * `traceparent` header. Structurally what `@volo/observability`'s
  * `parseTraceparent` returns (and what its `RequestTracer.startSpan` accepts), so
  * a Worker passes the SAME parser the node server does and one request crossing
  * services stays one trace. No dependency on the tracing package.
@@ -106,7 +106,7 @@ export interface EdgeInboundTrace {
 }
 
 /**
- * Mints {@link EdgeRequestSpan}s — `@keel/observability`'s request tracer,
+ * Mints {@link EdgeRequestSpan}s — `@volo/observability`'s request tracer,
  * structurally. `startSpan(name, inbound?)` adopts an inbound `traceparent` join
  * when one was parsed (the cross-process continuation), exactly as the node
  * server's `RequestTracer` does; absent, it roots a fresh trace.
@@ -117,7 +117,7 @@ export interface EdgeRequestTracer {
 
 /**
  * Parses a W3C `traceparent` header into the inbound trace the request span
- * continues — `@keel/observability`'s `parseTraceparent`, structurally. Injected
+ * continues — `@volo/observability`'s `parseTraceparent`, structurally. Injected
  * so the adapter takes no dependency on the tracing package; a Worker passes the
  * SAME parser the node server gets, so the propagation format never diverges.
  */
@@ -202,7 +202,7 @@ export interface EdgeOptions {
   /**
    * Parses an inbound `traceparent` header into the trace the request span
    * joins, so a request crossing services stays one trace. Pass
-   * `@keel/observability`'s `parseTraceparent` (it satisfies this structurally).
+   * `@volo/observability`'s `parseTraceparent` (it satisfies this structurally).
    * Absent — or a malformed/missing header — roots a fresh trace, the safe
    * default. Only consulted when a {@link tracer} is also set.
    */
@@ -375,21 +375,21 @@ async function decodeBody(
 }
 
 /**
- * Adapt a Keel body to the Web `Response`'s `BodyInit`.
+ * Adapt a Volo body to the Web `Response`'s `BodyInit`.
  *
- * A Web `Response` natively accepts all three Keel body arms — a string, raw
+ * A Web `Response` natively accepts all three Volo body arms — a string, raw
  * bytes (a `BufferSource`), and a `ReadableStream`. The cast is only a *types*
  * bridge between the DOM lib and `@types/node`; at runtime they are the same
- * bytes / the same stream, so a widened Keel body flows to the edge untouched.
+ * bytes / the same stream, so a widened Volo body flows to the edge untouched.
  */
-function toBodyInit(body: KeelBody): BodyInit {
+function toBodyInit(body: VoloBody): BodyInit {
   return body as BodyInit;
 }
 
 /**
- * Build a Web `Headers` from a Keel header map, emitting one line per value.
+ * Build a Web `Headers` from a Volo header map, emitting one line per value.
  *
- * A `KeelResponse` header map carries a single string OR a list of values, and
+ * A `VoloResponse` header map carries a single string OR a list of values, and
  * the list is load-bearing for `Set-Cookie`: per RFC 6265 each cookie is its own
  * `Set-Cookie` line and they cannot be comma-joined (a cookie's `Expires` date
  * contains a comma). Workers' `Headers` models this exactly — `append` adds a
@@ -450,7 +450,7 @@ function stripWeak(etag: string): string {
  * comma-split so a client offering several cached tags still matches, `W/"x"` and
  * `"x"` compare equal (a 304 only promises semantic equivalence), and a literal
  * `*` matches any current representation. Self-contained because the edge package
- * does not depend on `@keel/runtime` where the node copy lives.
+ * does not depend on `@volo/runtime` where the node copy lives.
  */
 function ifNoneMatchMatches(ifNoneMatch: string | null, etag: string): boolean {
   if (ifNoneMatch === null) return false;
@@ -495,8 +495,8 @@ function hasHeader(headers: Record<string, string | string[]>, name: string): bo
  * added. Async because {@link edgeEtag} is.
  */
 async function withEdgeEtag(
-  response: AnyKeelResponse,
-): Promise<{ response: AnyKeelResponse; etag: string | undefined }> {
+  response: AnyVoloResponse,
+): Promise<{ response: AnyVoloResponse; etag: string | undefined }> {
   if (response.status !== 200) return { response, etag: undefined };
 
   if (hasHeader(response.headers, "etag")) return { response, etag: undefined };
@@ -528,11 +528,11 @@ async function withEdgeEtag(
  * pending.
  */
 function raceTimeout(
-  work: Promise<AnyKeelResponse>,
+  work: Promise<AnyVoloResponse>,
   timeoutMs: number,
   onTimeout: () => void,
-): Promise<AnyKeelResponse> {
-  return new Promise<AnyKeelResponse>((resolve, reject) => {
+): Promise<AnyVoloResponse> {
+  return new Promise<AnyVoloResponse>((resolve, reject) => {
     const timer = setTimeout(() => {
       onTimeout();
 
@@ -644,7 +644,7 @@ async function dispatchHardened(
   maxBodyBytes: number,
   timeoutMs: number | undefined,
   abortTimeout: () => void,
-): Promise<AnyKeelResponse> {
+): Promise<AnyVoloResponse> {
   const decoded = await decodeBody(request, headers["content-type"], maxBodyBytes);
 
   if (!decoded.ok) {
@@ -683,7 +683,7 @@ async function dispatchHardened(
 }
 
 /**
- * Adapt a Keel dispatcher into a hardened Worker `fetch` handler.
+ * Adapt a Volo dispatcher into a hardened Worker `fetch` handler.
  *
  * Establishes a per-request context (so `currentContext()` works on the edge as
  * on the node server), runs the dispatcher inside it under an error boundary, and
@@ -758,7 +758,7 @@ export function toFetchHandler(
     const context = edgeContext(url, headers, requestId, cancellation.signal);
 
     // Publish the span on the request context so a seam fired DURING the request
-    // (a `@keel/db` query, an inline `@keel/queue` job) parents its child span on
+    // (a `@volo/db` query, an inline `@volo/queue` job) parents its child span on
     // it — a query shows up under the request that ran it, the same as the node
     // tier. `EdgeRequestSpan.data` is exactly the slice `RequestContextSpan`
     // reads, so this is the structural assignment, not a cast.
@@ -808,7 +808,7 @@ export function toFetchHandler(
           span.setAttribute("http.method", request.method);
           span.setAttribute("http.path", url.pathname);
           span.setAttribute("http.status_code", status);
-          span.setAttribute("keel.request_id", requestId);
+          span.setAttribute("volo.request_id", requestId);
           // A 5xx is the server's failure; everything else was answered as designed.
           span.setStatus(status >= 500 ? "error" : "ok");
           span.end();

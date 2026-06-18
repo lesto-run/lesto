@@ -1,8 +1,8 @@
 {
-  "name": "@keel/kernel",
+  "name": "@volo/kernel",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's application kernel — assembles the database, migrations, router, and controllers into one bootable app.",
+  "description": "Volo's application kernel — assembles the database, migrations, router, and controllers into one bootable app.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,14 +12,14 @@
     }
   },
   "dependencies": {
-    "@keel/auth": "workspace:*",
-    "@keel/cors": "workspace:*",
-    "@keel/csrf": "workspace:*",
-    "@keel/db": "workspace:*",
-    "@keel/migrate": "workspace:*",
-    "@keel/ratelimit": "workspace:*",
-    "@keel/router": "workspace:*",
-    "@keel/web": "workspace:*"
+    "@volo/auth": "workspace:*",
+    "@volo/cors": "workspace:*",
+    "@volo/csrf": "workspace:*",
+    "@volo/db": "workspace:*",
+    "@volo/migrate": "workspace:*",
+    "@volo/ratelimit": "workspace:*",
+    "@volo/router": "workspace:*",
+    "@volo/web": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

@@ -1,5 +1,5 @@
 /**
- * Origin / Fetch-Metadata CSRF defense — the zero-token half of `@keel/csrf`.
+ * Origin / Fetch-Metadata CSRF defense — the zero-token half of `@volo/csrf`.
  *
  * The signed double-submit token ({@link csrf}) is the strong check, but it costs
  * the app real plumbing: mint a token, thread it into every form and fetch. This
@@ -38,7 +38,7 @@
  * allow-listed origin (the allow-list IS the same-origin set in strict mode).
  */
 
-import type { KeelRequest, Middleware } from "@keel/web";
+import type { VoloRequest, Middleware } from "@volo/web";
 
 const FORBIDDEN = 403;
 
@@ -106,15 +106,15 @@ export interface OriginCheckOptions {
 
   /**
    * Optional observability hook fired the moment a request is refused — the
-   * uniform `onDenied(kind, c)` seam shared across `@keel/csrf`, `@keel/authz`,
-   * and `@keel/ratelimit`.
+   * uniform `onDenied(kind, c)` seam shared across `@volo/csrf`, `@volo/authz`,
+   * and `@volo/ratelimit`.
    *
    * `kind` is the coded reason ({@link ORIGIN_DENIED_KIND} or
-   * {@link ORIGIN_STRICT_DENIED_KIND}); `c` is the refused {@link KeelRequest}.
+   * {@link ORIGIN_STRICT_DENIED_KIND}); `c` is the refused {@link VoloRequest}.
    * Purely observational — the `403` is identical whether or not a hook is wired.
    * A returned promise is awaited so an async sink is not dropped mid-write.
    */
-  readonly onDenied?: (kind: string, c: KeelRequest) => void | Promise<void>;
+  readonly onDenied?: (kind: string, c: VoloRequest) => void | Promise<void>;
 }
 
 /** The 403 an origin-check failure answers with — the same shape `csrf` uses. */

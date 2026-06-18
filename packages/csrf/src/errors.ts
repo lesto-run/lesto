@@ -1,19 +1,19 @@
 /**
  * Errors carry codes, not just prose.
  *
- * Every failure in Keel surfaces a stable, machine-readable `code`. Logs, tests,
+ * Every failure in Volo surfaces a stable, machine-readable `code`. Logs, tests,
  * API responses, and the MCP surface branch on the code — never on a message
  * string, which is free to change for humans without breaking machines.
  */
 
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
-export { KeelError };
+export { VoloError };
 
 export type CsrfErrorCode = "CSRF_WEAK_SECRET";
 
 /** Anything the CSRF layer can refuse to do. */
-export class CsrfError extends KeelError<CsrfErrorCode> {
+export class CsrfError extends VoloError<CsrfErrorCode> {
   constructor(code: CsrfErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

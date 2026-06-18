@@ -1,7 +1,7 @@
 /**
  * The demo's content: a handful of luxury listings.
  *
- * In a real app these come from `@keel/content-store` (markdown built into the
+ * In a real app these come from `@volo/content-store` (markdown built into the
  * DB) or the ORM. Here they are an in-memory constant — the example is about
  * the *site shape* (static `/` + dynamic `/mls`, one origin, one session), not
  * the data layer.

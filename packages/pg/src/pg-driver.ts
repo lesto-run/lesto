@@ -1,7 +1,7 @@
 /**
  * The real node-postgres pool — the irreducible engine wiring.
  *
- * Excluded from coverage (like `@keel/runtime`'s `sqlite-drivers.ts`): it needs
+ * Excluded from coverage (like `@volo/runtime`'s `sqlite-drivers.ts`): it needs
  * `pg` installed and, to exercise meaningfully, a live Postgres. The adapter's
  * decisions — translation, the SqlDatabase mapping, pooled transactions — live
  * in the covered `adapter.ts`, tested against a fake pool.

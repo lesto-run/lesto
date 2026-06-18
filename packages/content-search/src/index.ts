@@ -1,9 +1,9 @@
 /**
- * @keel/content-search
+ * @volo/content-search
  *
  * Client-safe vector search for semantic content discovery.
  * This package is designed for browser/runtime use.
- * For build-time embedding generation, use @keel/content-embeddings.
+ * For build-time embedding generation, use @volo/content-embeddings.
  */
 
 // ============================================================================

@@ -4,8 +4,8 @@
  * This is the Wave-4 acceptance leg: a served request must produce a span in a
  * local OTLP collector, and a db query run during that request must appear as a
  * CHILD span of the request span. Every other tracing test mocks the exporter or
- * the socket; this one boots `@keel/runtime`'s `serve` with the env-driven tracer
- * (`tracesFromEnv`, exactly as `keel serve` / estate construct it), hits it with
+ * the socket; this one boots `@volo/runtime`'s `serve` with the env-driven tracer
+ * (`tracesFromEnv`, exactly as `volo serve` / estate construct it), hits it with
  * the platform's real `fetch`, and reads the spans back out of an in-process
  * collector that speaks the OTLP/HTTP JSON wire format.
  *
@@ -19,21 +19,21 @@
 import Database from "better-sqlite3";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { createApp } from "@keel/kernel";
-import type { KeelAppConfig, KernelDatabase } from "@keel/kernel";
-import { serve } from "@keel/runtime";
-import type { Server } from "@keel/runtime";
-import { currentRequestSpan, keel, runWithContext } from "@keel/web";
-import { parseTraceparent, tracesFromEnv } from "@keel/observability";
-import type { CurrentSpan, Traces } from "@keel/observability";
+import { createApp } from "@volo/kernel";
+import type { VoloAppConfig, KernelDatabase } from "@volo/kernel";
+import { serve } from "@volo/runtime";
+import type { Server } from "@volo/runtime";
+import { currentRequestSpan, volo, runWithContext } from "@volo/web";
+import { parseTraceparent, tracesFromEnv } from "@volo/observability";
+import type { CurrentSpan, Traces } from "@volo/observability";
 
-import { createDb } from "@keel/db";
-import type { Db } from "@keel/db";
+import { createDb } from "@volo/db";
+import type { Db } from "@volo/db";
 
 import { startOtlpCollector } from "./otlp-collector";
 import type { OtlpCollector } from "./otlp-collector";
 
-// ---- A better-sqlite3 handle adapted to the async @keel/db SQL surface. ----
+// ---- A better-sqlite3 handle adapted to the async @volo/db SQL surface. ----
 
 function adapt(raw: Database.Database): KernelDatabase {
   const adapted: KernelDatabase = {
@@ -88,11 +88,11 @@ beforeAll(async () => {
   const handle = adapt(database);
 
   // The tracer, constructed the canonical env-driven way — the SAME call the CLI
-  // and estate make. `KEEL_OTLP_URL` is the on switch; we point it at the live
+  // and estate make. `VOLO_OTLP_URL` is the on switch; we point it at the live
   // collector. `currentSpan` reads the request span the runtime publishes on the
-  // context (`@keel/web`'s `currentRequestSpan`), so a query parents on it.
+  // context (`@volo/web`'s `currentRequestSpan`), so a query parents on it.
   const built = tracesFromEnv(
-    { KEEL_OTLP_URL: collector.url, KEEL_OTLP_SERVICE: "integration" },
+    { VOLO_OTLP_URL: collector.url, VOLO_OTLP_SERVICE: "integration" },
     {
       currentSpan: currentRequestSpan as CurrentSpan,
     },
@@ -107,7 +107,7 @@ beforeAll(async () => {
   // request span off the context the runtime publishes — the production wiring.
   const db: Db = createDb(handle, { onQuery: traces.seams.onQuery });
 
-  const app = keel()
+  const app = volo()
     // A route that runs a real query, so its `db.query` span must be a child of
     // the request span.
     .get("/posts", async (c) => {
@@ -118,7 +118,7 @@ beforeAll(async () => {
     // A route that runs no query — its request span stands alone.
     .get("/ping", (c) => c.json({ ok: true }));
 
-  const config: KeelAppConfig = { db: handle, app };
+  const config: VoloAppConfig = { db: handle, app };
 
   // Wire the request tracer + the traceparent parser, exactly as the CLI does:
   // every request mints a span (published on the context), and an inbound

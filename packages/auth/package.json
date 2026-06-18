@@ -1,8 +1,8 @@
 {
-  "name": "@keel/auth",
+  "name": "@volo/auth",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's in-house authentication primitives on node:crypto — password hashing, tokens, and sessions.",
+  "description": "Volo's in-house authentication primitives on node:crypto — password hashing, tokens, and sessions.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,6 +20,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/errors": "workspace:*"
+    "@volo/errors": "workspace:*"
   }
 }

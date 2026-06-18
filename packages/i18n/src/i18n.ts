@@ -1,5 +1,5 @@
 /**
- * @keel/i18n — message catalogs with interpolation and pluralization.
+ * @volo/i18n — message catalogs with interpolation and pluralization.
  *
  *   const i18n = new I18n({
  *     defaultLocale: "en",

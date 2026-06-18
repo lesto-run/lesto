@@ -3,7 +3,7 @@
  *
  * Preact's `preact/compat` covers React's component API, but NOT React 19's
  * server resource-hint exports (`preload`, `preinit`, `preinitModule`,
- * `preconnect`, `prefetchDNS`). `@keel/ui`'s barrel pulls `resources.ts`, which
+ * `preconnect`, `prefetchDNS`). `@volo/ui`'s barrel pulls `resources.ts`, which
  * imports those names from `react-dom`, into the client graph — so a bare
  * `react-dom` -> `preact/compat` alias fails the bundle with "no matching export"
  * before any tree-shaking runs.

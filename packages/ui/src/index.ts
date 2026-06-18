@@ -1,5 +1,5 @@
 /**
- * @keel/ui — the AI-native UI rendering engine's ISOMORPHIC core.
+ * @volo/ui — the AI-native UI rendering engine's ISOMORPHIC core.
  *
  *   const registry = new Registry()
  *     .define({ name: "Box", props: {}, children: true, render: (_p, kids) => <div>{kids}</div> });
@@ -12,12 +12,12 @@
  *   const { valid, errors } = validateTree(registry, tree);   // pure, React-free
  *
  * This barrel is deliberately isomorphic: NOTHING here imports `react-dom/server`,
- * so a client bundle that pulls `@keel/ui` (for `Registry`, `defineIsland`, the
+ * so a client bundle that pulls `@volo/ui` (for `Registry`, `defineIsland`, the
  * island/data tokens) never drags React's ~60 KB server renderer into the
  * browser. The server-render surface — `renderPage`/`renderPageMarkup`/`renderTree`,
  * the streaming renderers, and the React/Preact server dialects — lives behind the
- * `@keel/ui/server` subpath; the browser-only hydration runtime behind
- * `@keel/ui/client`. Mirrors `react-dom`'s own server/client split (ADR 0008).
+ * `@volo/ui/server` subpath; the browser-only hydration runtime behind
+ * `@volo/ui/client`. Mirrors `react-dom`'s own server/client split (ADR 0008).
  */
 
 export { Registry } from "./registry";
@@ -32,7 +32,7 @@ export type { TreeError } from "./validate";
 // The server-render surface (`renderPage`/`renderPageMarkup`/`renderTree`, the
 // streaming renderers, the React/Preact `ServerRenderer` dialects) is NOT
 // re-exported here — it imports `react-dom/server` and so lives behind the
-// `@keel/ui/server` subpath, keeping this barrel client-safe.
+// `@volo/ui/server` subpath, keeping this barrel client-safe.
 
 export { assertClientDef, island, ISLAND_ATTR, ISLAND_MOUNT_ATTR } from "./island";
 export type { ClientComponentDef, HydrationStrategy, IslandMount } from "./island";
@@ -40,8 +40,8 @@ export type { ClientComponentDef, HydrationStrategy, IslandMount } from "./islan
 // Self-describing islands for the `.page` path (ADR 0011) — THE CANONICAL island
 // authoring path. A component that emits its own shell + co-located mount script
 // + data primer, so islands need no page-wide manifest walk. Every `.page`/
-// `keel()` app (estate, blog) authors islands this way; its client half is
-// `hydrateDocumentIslands` (the `@keel/ui/client` subpath), and `@keel/assets`
+// `volo()` app (estate, blog) authors islands this way; its client half is
+// `hydrateDocumentIslands` (the `@volo/ui/client` subpath), and `@volo/assets`
 // synthesizes the client entry from a one-`defineIsland`-per-file `app/islands/`
 // convention. The Registry/`island()`/`renderPage`/`hydrateIslands` array form
 // below is now the DEMOTED niche (ADR 0011 Increment 2): it serves the AI-/DB-
@@ -55,7 +55,7 @@ export { islandMount } from "./mount";
 // Island data sources (ADR 0010): declared data, framework-owned delivery.
 // `defineDataSource` is the isomorphic token; `dataSourceHref`/`DATA_ROUTE_PREFIX`
 // + `dataPrimerScript` are the STATIC-tier server delivery seams (the client half
-// lives in `@keel/ui/client`'s hydration runtime).
+// lives in `@volo/ui/client`'s hydration runtime).
 export { DATA_ROUTE_PREFIX, dataPrimerScript, dataSourceHref, defineDataSource } from "./data";
 export type { DataSource, DataSourceScope, IslandBind } from "./data";
 
@@ -73,7 +73,7 @@ export type { SourceResolver } from "./data-resolve";
 // by `defineIsland`'s co-located mount script); `serializeManifest` is the
 // page-wide ARRAY form, now scoped to the DEMOTED Registry/`UiNode` content path
 // (ADR 0011 Increment 2) where `renderPage` collects every island into one
-// `#keel-islands` manifest.
+// `#volo-islands` manifest.
 export { serializeManifest, serializeScriptJson } from "./serialize";
 
 // Resource hints + LCP/modulepreload conventions over React 19's native APIs.
@@ -110,11 +110,11 @@ export type {
 } from "./metadata";
 
 // The hydration runtime and bfcache-safe lifecycle are browser-only (they touch
-// `document`/`window`), so they live behind the `@keel/ui/client` subpath —
-// server-side importers of `@keel/ui` never pull DOM code into a build without
+// `document`/`window`), so they live behind the `@volo/ui/client` subpath —
+// server-side importers of `@volo/ui` never pull DOM code into a build without
 // the DOM lib. Mirrors react-dom's server/client split.
 
-export { KeelError, UiError } from "./errors";
+export { VoloError, UiError } from "./errors";
 export type { UiErrorCode } from "./errors";
 
 export type { ChildrenPolicy, ComponentDef, PropSpec, PropType, UiNode } from "./types";

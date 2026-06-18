@@ -5,13 +5,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  CreateKeelError,
+  CreateVoloError,
   fileColonPin,
   gitignore,
   islandCounter,
-  keelApp,
-  keelSites,
-  KEEL_PACKAGES,
+  voloApp,
+  voloSites,
+  VOLO_PACKAGES,
   packageJson,
   publishedRangePin,
   readme,
@@ -21,11 +21,11 @@ import {
   wranglerConfig,
 } from "../src/index";
 
-import type { KeelDepResolver, ScaffoldIO } from "../src/index";
+import type { VoloDepResolver, ScaffoldIO } from "../src/index";
 
-// A deterministic dep resolver for the pure-template tests: pin every @keel/*
+// A deterministic dep resolver for the pure-template tests: pin every @volo/*
 // package to a fake `file:` path, so a test never depends on the repo layout.
-const fakePin: KeelDepResolver = (pkg) => `file:/fake/packages/${pkg.replace("@keel/", "")}`;
+const fakePin: VoloDepResolver = (pkg) => `file:/fake/packages/${pkg.replace("@volo/", "")}`;
 
 // A real node:fs/promises-backed ScaffoldIO, the same shape bin.ts wires up.
 const realIO: ScaffoldIO = {
@@ -41,7 +41,7 @@ const realIO: ScaffoldIO = {
 let workspace: string;
 
 beforeEach(async () => {
-  workspace = await mkdtemp(join(tmpdir(), "create-keel-"));
+  workspace = await mkdtemp(join(tmpdir(), "create-volo-"));
 });
 
 afterEach(async () => {
@@ -56,8 +56,8 @@ describe("scaffold", () => {
 
     const expected = [
       "package.json",
-      "keel.app.ts",
-      "keel.sites.ts",
+      "volo.app.ts",
+      "volo.sites.ts",
       "app/islands/counter.tsx",
       "worker.ts",
       "wrangler.jsonc",
@@ -79,17 +79,17 @@ describe("scaffold", () => {
     }
   });
 
-  it("scaffolds an app config and the @keel deps into real files", async () => {
+  it("scaffolds an app config and the @volo deps into real files", async () => {
     const targetDir = join(workspace, "blogish");
 
     await scaffold({ name: "blogish", targetDir }, realIO);
 
-    const app = await readFile(join(targetDir, "keel.app.ts"), "utf8");
+    const app = await readFile(join(targetDir, "volo.app.ts"), "utf8");
     const pkg = await readFile(join(targetDir, "package.json"), "utf8");
 
-    // keel.app.ts default-exports the KeelAppConfig and declares the parts.
+    // volo.app.ts default-exports the VoloAppConfig and declares the parts.
     expect(app).toContain("export default config");
-    expect(app).toContain("const config: KeelAppConfig");
+    expect(app).toContain("const config: VoloAppConfig");
     expect(app).toContain('defineTable("posts"');
     expect(app).toContain("createTableSql(posts)");
     expect(app).toContain("buildApp(db)");
@@ -110,7 +110,7 @@ describe("scaffold", () => {
     expect(app).toContain('.page("/"');
     expect(app).toContain('import Counter from "./app/islands/counter"');
 
-    // package.json carries the project name, the @keel deps, and the run scripts.
+    // package.json carries the project name, the @volo deps, and the run scripts.
     const manifest = JSON.parse(pkg) as {
       name: string;
       type: string;
@@ -120,22 +120,22 @@ describe("scaffold", () => {
 
     expect(manifest.name).toBe("blogish");
     expect(manifest.type).toBe("module");
-    expect(manifest.scripts["dev"]).toBe("keel dev");
-    expect(manifest.scripts["build"]).toBe("keel build");
+    expect(manifest.scripts["dev"]).toBe("volo dev");
+    expect(manifest.scripts["build"]).toBe("volo build");
 
     for (const dep of [
-      // The CLI (the `keel` binary) and the asset pipeline — their absence was
+      // The CLI (the `volo` binary) and the asset pipeline — their absence was
       // blocker #9's silent break.
-      "@keel/cli",
-      "@keel/assets",
+      "@volo/cli",
+      "@volo/assets",
       // The edge adapter the deploy template's worker.ts fronts the app with.
-      "@keel/cloudflare",
-      "@keel/db",
-      "@keel/kernel",
-      "@keel/migrate",
-      "@keel/web",
-      "@keel/ui",
-      "@keel/runtime",
+      "@volo/cloudflare",
+      "@volo/db",
+      "@volo/kernel",
+      "@volo/migrate",
+      "@volo/web",
+      "@volo/ui",
+      "@volo/runtime",
       "preact",
       "react",
       "react-dom",
@@ -145,28 +145,28 @@ describe("scaffold", () => {
       expect(manifest.dependencies[dep]).toBeDefined();
     }
 
-    // @keel/* deps default to published ^0.x ranges (the outsider path — `--local`
+    // @volo/* deps default to published ^0.x ranges (the outsider path — `--local`
     // swaps to file: pins). This locks the default the scaffold actually emits.
-    for (const keelPkg of KEEL_PACKAGES) {
-      expect(manifest.dependencies[keelPkg]).toMatch(/^\^0\./);
+    for (const voloPkg of VOLO_PACKAGES) {
+      expect(manifest.dependencies[voloPkg]).toMatch(/^\^0\./);
     }
 
-    // The legacy @keel/orm dep is gone — scaffolded apps use @keel/db.
-    expect(manifest.dependencies["@keel/orm"]).toBeUndefined();
+    // The legacy @volo/orm dep is gone — scaffolded apps use @volo/db.
+    expect(manifest.dependencies["@volo/orm"]).toBeUndefined();
 
-    // Routes live on the code-first keel() app now — no legacy @keel/router dep.
-    expect(manifest.dependencies["@keel/router"]).toBeUndefined();
+    // Routes live on the code-first volo() app now — no legacy @volo/router dep.
+    expect(manifest.dependencies["@volo/router"]).toBeUndefined();
   });
 
-  it("scaffolds keel.sites.ts and the island module", async () => {
+  it("scaffolds volo.sites.ts and the island module", async () => {
     const targetDir = join(workspace, "sited");
 
     await scaffold({ name: "sited", targetDir }, realIO);
 
-    const sites = await readFile(join(targetDir, "keel.sites.ts"), "utf8");
+    const sites = await readFile(join(targetDir, "volo.sites.ts"), "utf8");
     const island = await readFile(join(targetDir, "app/islands/counter.tsx"), "utf8");
 
-    // keel.sites.ts default-exports a Site[] with one dynamic root zone.
+    // volo.sites.ts default-exports a Site[] with one dynamic root zone.
     expect(sites).toContain("export default sites");
     expect(sites).toContain('render: "dynamic"');
     expect(sites).toContain('basePath: "/"');
@@ -186,14 +186,14 @@ describe("scaffold", () => {
     const workerTs = await readFile(join(targetDir, "worker.ts"), "utf8");
     const wrangler = await readFile(join(targetDir, "wrangler.jsonc"), "utf8");
 
-    // worker.ts is the thin @keel/cloudflare adapter: toFetchHandler over the edge
+    // worker.ts is the thin @volo/cloudflare adapter: toFetchHandler over the edge
     // app, fronted by the ASSETS binding via withAssets.
-    expect(workerTs).toContain('from "@keel/cloudflare"');
+    expect(workerTs).toContain('from "@volo/cloudflare"');
     expect(workerTs).toContain("toFetchHandler");
     expect(workerTs).toContain("withAssets(env.ASSETS, handler)");
     // It builds its own minimal edge twin (the island home page), never importing
-    // keel.app.ts — which opens a filesystem SQLite handle a Worker has no fs for.
-    expect(workerTs).not.toContain('from "./keel.app"');
+    // volo.app.ts — which opens a filesystem SQLite handle a Worker has no fs for.
+    expect(workerTs).not.toContain('from "./volo.app"');
     expect(workerTs).toContain('import Counter from "./app/islands/counter"');
 
     // wrangler.jsonc is valid JSONC (comments + trailing commas) wiring the
@@ -213,15 +213,15 @@ describe("scaffold", () => {
 
     const error = await scaffold({ name: "taken", targetDir }, realIO).catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(CreateKeelError);
-    expect((error as CreateKeelError).code).toBe("CREATE_KEEL_TARGET_EXISTS");
-    expect((error as CreateKeelError).details).toEqual({ targetDir });
+    expect(error).toBeInstanceOf(CreateVoloError);
+    expect((error as CreateVoloError).code).toBe("CREATE_VOLO_TARGET_EXISTS");
+    expect((error as CreateVoloError).details).toEqual({ targetDir });
 
     // details are frozen.
-    expect(Object.isFrozen((error as CreateKeelError).details)).toBe(true);
+    expect(Object.isFrozen((error as CreateVoloError).details)).toBe(true);
   });
 
-  it("reports CREATE_KEEL_TARGET_EXISTS through a fake io without touching disk", async () => {
+  it("reports CREATE_VOLO_TARGET_EXISTS through a fake io without touching disk", async () => {
     let wrote = false;
 
     const fakeIO: ScaffoldIO = {
@@ -237,7 +237,7 @@ describe("scaffold", () => {
       (e: unknown) => e,
     );
 
-    expect(error).toBeInstanceOf(CreateKeelError);
+    expect(error).toBeInstanceOf(CreateVoloError);
     expect(wrote).toBe(false);
   });
 });
@@ -256,28 +256,28 @@ describe("templates", () => {
     };
 
     // A generated app is private and ships no license of its own — the author
-    // picks one; it never inherits Keel's MIT.
+    // picks one; it never inherits Volo's MIT.
     expect(parsed.private).toBe(true);
     expect(parsed.license).toBe("UNLICENSED");
   });
 
-  it("pins every @keel dep through the injected resolver, never the workspace protocol", () => {
+  it("pins every @volo dep through the injected resolver, never the workspace protocol", () => {
     const parsed = JSON.parse(packageJson("acme", fakePin)) as {
       dependencies: Record<string, string>;
     };
 
-    const keelDeps = Object.entries(parsed.dependencies).filter(([name]) =>
-      name.startsWith("@keel/"),
+    const voloDeps = Object.entries(parsed.dependencies).filter(([name]) =>
+      name.startsWith("@volo/"),
     );
 
-    // Every package in KEEL_PACKAGES is present (guards against a vacuous pass).
-    expect(keelDeps.map(([name]) => name).toSorted()).toEqual([...KEEL_PACKAGES].toSorted());
+    // Every package in VOLO_PACKAGES is present (guards against a vacuous pass).
+    expect(voloDeps.map(([name]) => name).toSorted()).toEqual([...VOLO_PACKAGES].toSorted());
 
-    for (const [name, specifier] of keelDeps) {
+    for (const [name, specifier] of voloDeps) {
       // `workspace:*` resolves only inside this monorepo; a scaffolded app would
       // fail to install. The resolver pins each to a real, resolvable specifier.
       expect(specifier).not.toContain("workspace:");
-      expect(specifier).toBe(fakePin(name as (typeof KEEL_PACKAGES)[number]));
+      expect(specifier).toBe(fakePin(name as (typeof VOLO_PACKAGES)[number]));
     }
   });
 
@@ -291,10 +291,10 @@ describe("templates", () => {
     expect(parsed.dependencies["react-dom"]).toBeDefined();
   });
 
-  it("keelApp default-exports a KeelAppConfig with the preact dialect", () => {
-    expect(keelApp()).toContain("export default config");
-    expect(keelApp()).toContain("const config: KeelAppConfig");
-    expect(keelApp()).toContain('ui: { dialect: "preact" }');
+  it("voloApp default-exports a VoloAppConfig with the preact dialect", () => {
+    expect(voloApp()).toContain("export default config");
+    expect(voloApp()).toContain("const config: VoloAppConfig");
+    expect(voloApp()).toContain('ui: { dialect: "preact" }');
   });
 
   it("islandCounter is one defineIsland default-export", () => {
@@ -302,9 +302,9 @@ describe("templates", () => {
     expect(islandCounter()).toContain('name: "Counter"');
   });
 
-  it("keelSites default-exports a Site[] with a dynamic root zone", () => {
-    expect(keelSites()).toContain("export default sites");
-    expect(keelSites()).toContain('render: "dynamic"');
+  it("voloSites default-exports a Site[] with a dynamic root zone", () => {
+    expect(voloSites()).toContain("export default sites");
+    expect(voloSites()).toContain('render: "dynamic"');
   });
 
   it("tsconfig is bundler-resolution, strict JSON that includes the island dir", () => {
@@ -333,18 +333,18 @@ describe("templates", () => {
     const out = readme("acme");
 
     expect(out).toContain("## Deploy to Cloudflare");
-    expect(out).toContain("keel deploy --cloudflare");
+    expect(out).toContain("volo deploy --cloudflare");
   });
 
-  it("worker fronts the app with @keel/cloudflare's toFetchHandler + withAssets", () => {
+  it("worker fronts the app with @volo/cloudflare's toFetchHandler + withAssets", () => {
     const out = worker();
 
-    expect(out).toContain('from "@keel/cloudflare"');
+    expect(out).toContain('from "@volo/cloudflare"');
     expect(out).toContain("toFetchHandler");
     expect(out).toContain("withAssets(env.ASSETS, handler)");
     // The edge twin builds its own island home page rather than importing the
-    // SQLite-booting keel.app.ts.
-    expect(out).not.toContain('from "./keel.app"');
+    // SQLite-booting volo.app.ts.
+    expect(out).not.toContain('from "./volo.app"');
     expect(out).toContain('import Counter from "./app/islands/counter"');
   });
 
@@ -374,8 +374,8 @@ describe("templates", () => {
 });
 
 describe("dep resolvers", () => {
-  it("publishedRangePin (the default) pins every @keel dep at a published ^0.x range", () => {
-    for (const pkg of KEEL_PACKAGES) {
+  it("publishedRangePin (the default) pins every @volo dep at a published ^0.x range", () => {
+    for (const pkg of VOLO_PACKAGES) {
       const specifier = publishedRangePin(pkg);
 
       // A registry-resolvable semver range — what an outsider installs. Never a
@@ -386,14 +386,14 @@ describe("dep resolvers", () => {
     }
   });
 
-  it("fileColonPin (the --local mode) pins every @keel dep at a file: path to the in-repo package", () => {
-    for (const pkg of KEEL_PACKAGES) {
+  it("fileColonPin (the --local mode) pins every @volo dep at a file: path to the in-repo package", () => {
+    for (const pkg of VOLO_PACKAGES) {
       const specifier = fileColonPin(pkg);
 
       expect(specifier.startsWith("file:")).toBe(true);
-      // The path ends at the package's directory name, with the @keel/ scope stripped.
-      expect(specifier).toContain(pkg.replace("@keel/", ""));
-      expect(specifier).not.toContain("@keel/");
+      // The path ends at the package's directory name, with the @volo/ scope stripped.
+      expect(specifier).toContain(pkg.replace("@volo/", ""));
+      expect(specifier).not.toContain("@volo/");
     }
   });
 });

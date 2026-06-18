@@ -1,4 +1,4 @@
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
 /** Stable codes for every failure declaring a site set can raise. */
 export type SitesErrorCode =
@@ -16,4 +16,4 @@ export type SitesErrorCode =
   | "SITES_PAGE_FAILED";
 
 /** The error type for the sites layer, codes drawn from the union above. */
-export class SitesError extends KeelError<SitesErrorCode> {}
+export class SitesError extends VoloError<SitesErrorCode> {}

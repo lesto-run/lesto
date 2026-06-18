@@ -4,7 +4,7 @@
  * boots `sqlSessionStore` and `sqlRateLimitStore` over a real engine.
  *
  * The SQLite leg always runs (in CI's integration step). The Postgres leg runs
- * ONLY when `KEEL_PG_URL` is set (the `db-parity-postgres` CI job, which has a
+ * ONLY when `VOLO_PG_URL` is set (the `db-parity-postgres` CI job, which has a
  * Postgres service) — so locally this is the SQLite leg alone, and the PG leg is
  * a no-op until a real socket is wired. `dialect` is threaded into
  * `sqlRateLimitStore` per driver so the PG leg exercises `FOR UPDATE`.
@@ -18,25 +18,25 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { installSessionSchema, Sessions, sqlSessionStore, hashPassword } from "@keel/auth";
-import type { SqlDatabase as AuthSql } from "@keel/auth";
-import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@keel/ratelimit";
-import type { Dialect, SqlDatabase as RateLimitSql } from "@keel/ratelimit";
-import { createIdentity, findUserByEmail, insertUser, usersMigration } from "@keel/identity";
-import type { Identity } from "@keel/identity";
-import { createDb, createTableSql, defineTable, integer, text } from "@keel/db";
-import type { Db, SqlDatabase } from "@keel/db";
-import { Migrator } from "@keel/migrate";
-import type { MigrationEntry } from "@keel/migrate";
-import { installSchema as installQueueSchema, Queue } from "@keel/queue";
-import { openSqlite } from "@keel/runtime";
+import { installSessionSchema, Sessions, sqlSessionStore, hashPassword } from "@volo/auth";
+import type { SqlDatabase as AuthSql } from "@volo/auth";
+import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@volo/ratelimit";
+import type { Dialect, SqlDatabase as RateLimitSql } from "@volo/ratelimit";
+import { createIdentity, findUserByEmail, insertUser, usersMigration } from "@volo/identity";
+import type { Identity } from "@volo/identity";
+import { createDb, createTableSql, defineTable, integer, text } from "@volo/db";
+import type { Db, SqlDatabase } from "@volo/db";
+import { Migrator } from "@volo/migrate";
+import type { MigrationEntry } from "@volo/migrate";
+import { installSchema as installQueueSchema, Queue } from "@volo/queue";
+import { openSqlite } from "@volo/runtime";
 
 interface Driver {
   readonly name: Dialect;
   open(): Promise<{ db: SqlDatabase; close: () => unknown }>;
 }
 
-const PG_URL = process.env["KEEL_PG_URL"];
+const PG_URL = process.env["VOLO_PG_URL"];
 
 const drivers: Driver[] = [{ name: "sqlite", open: () => openSqlite() }];
 
@@ -44,7 +44,7 @@ if (PG_URL !== undefined) {
   drivers.push({
     name: "postgres",
     open: async () => {
-      const { openPostgres } = await import("@keel/pg");
+      const { openPostgres } = await import("@volo/pg");
 
       return openPostgres({ connectionString: PG_URL });
     },
@@ -60,8 +60,8 @@ describe.each(drivers)("durable stores: $name", (driver) => {
     handle = opened.db;
     close = opened.close;
 
-    await handle.exec("DROP TABLE IF EXISTS keel_sessions");
-    await handle.exec("DROP TABLE IF EXISTS keel_rate_limits");
+    await handle.exec("DROP TABLE IF EXISTS volo_sessions");
+    await handle.exec("DROP TABLE IF EXISTS volo_rate_limits");
     await handle.exec("DROP TABLE IF EXISTS users");
     // The migrator's bookkeeping table — dropped too so the migration re-runs
     // against a fresh schema on Postgres (which persists across tests).
@@ -244,7 +244,7 @@ describe.each(drivers)("queue concurrency: $name", (driver) => {
     handle = opened.db;
     close = opened.close;
 
-    await handle.exec("DROP TABLE IF EXISTS keel_jobs");
+    await handle.exec("DROP TABLE IF EXISTS volo_jobs");
     await installQueueSchema(handle, driver.name);
   });
 
@@ -348,7 +348,7 @@ describe.runIf(PG_URL !== undefined)("migrator: max:1 pool does not self-deadloc
   };
 
   it("runs two migrations to completion on a single-connection pool", async () => {
-    const { openPostgres } = await import("@keel/pg");
+    const { openPostgres } = await import("@volo/pg");
 
     // A pool with exactly ONE connection and a short connect timeout: if the fix
     // regressed, the per-migration checkout could not be satisfied and would

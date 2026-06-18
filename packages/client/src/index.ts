@@ -1,7 +1,7 @@
 /**
- * @keel/client — a typed, browser-safe fetch client for a Keel app's routes.
+ * @volo/client — a typed, browser-safe fetch client for a Volo app's routes.
  *
- *   import { createApi } from "@keel/client";
+ *   import { createApi } from "@volo/client";
  *
  *   interface Api {
  *     "GET /mls/saved": { response: { saved: Listing[] } };
@@ -17,5 +17,5 @@
 export { createApi } from "./client";
 export type { Api, ApiContract, ApiMethod, ApiOptions, RouteSpec, TraceContext } from "./client";
 
-export { ClientError, KeelError } from "./errors";
+export { ClientError, VoloError } from "./errors";
 export type { ClientErrorCode } from "./errors";

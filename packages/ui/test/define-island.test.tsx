@@ -52,7 +52,7 @@ function registry(): Registry {
 
 afterEach(() => {
   document.body.innerHTML = "";
-  delete window.__keelData;
+  delete window.__voloData;
   vi.restoreAllMocks();
 });
 
@@ -83,11 +83,11 @@ describe("defineIsland — server emission", () => {
     // …a co-located application/json mount script carries this island's own mount…
     expect(html).toContain(`${ISLAND_MOUNT_ATTR}=""`);
     expect(html).toContain('"component":"Account"');
-    expect(html).toContain('"bind":{"session":{"source":"session","href":"/__keel/data/session"}}');
+    expect(html).toContain('"bind":{"session":{"source":"session","href":"/__volo/data/session"}}');
 
     // …and a primer kicks the bound source's fetch.
-    expect(html).toContain("window.__keelData");
-    expect(html).toContain('"/__keel/data/session"');
+    expect(html).toContain("window.__voloData");
+    expect(html).toContain('"/__volo/data/session"');
 
     // The mount script is a SIBLING of the shell, not a child (else hydration
     // would adopt the script and mismatch): the script tag comes after the
@@ -159,7 +159,7 @@ describe("defineIsland — render-time resolver (ADR 0012)", () => {
     expect(html).not.toContain('"bind"');
     expect(html).toContain('"ssr":true');
     // …and there is no primer (the data already crossed the wire inline).
-    expect(html).not.toContain("__keelData");
+    expect(html).not.toContain("__voloData");
     expect(loaded).toEqual(["counts"]);
   });
 
@@ -174,7 +174,7 @@ describe("defineIsland — render-time resolver (ADR 0012)", () => {
     expect(html).toContain("Sign in");
     expect(html).toContain('"session":{"name":"Ada"}');
     expect(html).not.toContain('"bind"');
-    expect(html).not.toContain("__keelData");
+    expect(html).not.toContain("__voloData");
   });
 
   it("a visible + data island under a resolver KEEPS its bind and never loads its source", () => {
@@ -193,7 +193,7 @@ describe("defineIsland — render-time resolver (ADR 0012)", () => {
     );
 
     // Deferred with the mount: bind kept, no inline value, loader never called.
-    expect(html).toContain('"bind":{"session":{"source":"session","href":"/__keel/data/session"}}');
+    expect(html).toContain('"bind":{"session":{"source":"session","href":"/__volo/data/session"}}');
     expect(html).toContain('"strategy":"visible"');
     expect(loaded).toEqual([]);
   });
@@ -304,8 +304,8 @@ describe("defineIsland — no resolver in scope", () => {
     // No provider → the static tier: the same bind + primer the island always had.
     const html = renderToStaticMarkup(createElement(Account, {}));
 
-    expect(html).toContain('"bind":{"session":{"source":"session","href":"/__keel/data/session"}}');
-    expect(html).toContain("window.__keelData");
+    expect(html).toContain('"bind":{"session":{"source":"session","href":"/__volo/data/session"}}');
+    expect(html).toContain("window.__voloData");
     expect(html).not.toContain('"session":{"name"');
   });
 });
@@ -392,7 +392,7 @@ describe("defineIsland — shell variants", () => {
     expect(html).toContain(`<div ${ISLAND_ATTR}="`);
     expect(html).toContain(`${ISLAND_MOUNT_ATTR}=""`);
     // No primer (no data binding).
-    expect(html).not.toContain("__keelData");
+    expect(html).not.toContain("__voloData");
   });
 });
 
@@ -402,7 +402,7 @@ describe("hydrateDocumentIslands — client scan + mount", () => {
 
     // Server painted the fallback; the primer kicked the fetch (here pre-primed).
     expect(document.body.querySelector(".fallback")).not.toBeNull();
-    window.__keelData = { session: Promise.resolve({ name: "Ada" }) };
+    window.__voloData = { session: Promise.resolve({ name: "Ada" }) };
 
     let result!: ReturnType<typeof hydrateDocumentIslands>;
     act(() => {

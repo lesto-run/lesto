@@ -1,8 +1,8 @@
 # Core Runtime & HTTP — v1 plan
 
 Derived from `docs/reviews/core-runtime.md`, reconciled with `docs/ROADMAP-V1.md` (which rules).
-Packages: `@keel/kernel`, `@keel/runtime`, `@keel/web`, `@keel/router`, `@keel/errors`
-(+ the `@keel/config`/`@keel/hooks` orphan decision).
+Packages: `@volo/kernel`, `@volo/runtime`, `@volo/web`, `@volo/router`, `@volo/errors`
+(+ the `@volo/config`/`@volo/hooks` orphan decision).
 
 **The bar, every increment:** TS/ESM/Bun; oxlint/oxfmt clean; 100% vitest coverage on touched
 packages; `bun run ws:typecheck` + the serial coverage gate green; every refusal a coded error;
@@ -11,7 +11,7 @@ module-header prose truthful after the change; one conventional commit on `main`
 ## Increments (ordered)
 
 1. **Kill the response singletons** — `[Wave 0 | P0 | blocker #2]`
-   Files: `packages/web/src/keel.ts` (`NOT_FOUND` → `notFound()` factory), `packages/web/src/render-page.tsx` (`BAD_REQUEST` → factory); `Object.freeze` any remaining constant responses as a dev tripwire.
+   Files: `packages/web/src/volo.ts` (`NOT_FOUND` → `notFound()` factory), `packages/web/src/render-page.tsx` (`BAD_REQUEST` → factory); `Object.freeze` any remaining constant responses as a dev tripwire.
    Acceptance: a regression test that mutates a 404's headers through app middleware and asserts the next request's 404 is clean; existing dispatch tests green.
 
 2. **Fix `trustProxy: true`/predicate semantics** — `[Wave 0 | P0 | blocker #4]`
@@ -19,7 +19,7 @@ module-header prose truthful after the change; one conventional commit on `main`
    Acceptance: a test asserting the prepended-XFF spoof (`X-Forwarded-For: 1.2.3.4` + LB-appended real IP) resolves to the real IP; numeric hop mode byte-unchanged. (auth-security plan references this item; it is owned here.)
 
 3. **Timeout cancellation** — `[Wave 4 | P1]`
-   Files: `packages/runtime/src/server.ts` (race an internal `AbortController` with `handlerTimeoutMs`; abort `context.signal` on overrun), `packages/web/src/render-page.tsx` (make `RENDER_DEADLINE_MS` configurable via `keel()`/`ServeOptions`, chained to the same signal).
+   Files: `packages/runtime/src/server.ts` (race an internal `AbortController` with `handlerTimeoutMs`; abort `context.signal` on overrun), `packages/web/src/render-page.tsx` (make `RENDER_DEADLINE_MS` configurable via `volo()`/`ServeOptions`, chained to the same signal).
    Acceptance: a wedged handler is observably aborted after the 503; render deadline configurable per app; no zombie-handler accumulation in a stress test.
 
 4. **Runtime observability batch** — `[Wave 4 | P1]` (one coherent PR; pairs with operability-dx item 3, which owns the tracer wiring)
@@ -40,10 +40,10 @@ module-header prose truthful after the change; one conventional commit on `main`
    Acceptance: tests for `%2F` (no separator smuggling), `%2e%2e`, malformed `%`, unicode slugs; `pathFor` round-trips.
 
 7. **ADR 0004 Phase 7.6 — delete the legacy dispatch stack** — `[Wave 5 | P1]`
-   Files: remove `packages/web/src/application.ts`, `controller.ts`, `packages/router/src/router.ts` (legacy `Router`, and `singularize` with it); collapse `packages/kernel/src/kernel.ts` `createApp` to `KeelAppConfig` only; migrate kernel/CLI/MCP tests off `new Router()`.
-   Acceptance: one router vocabulary exported from `@keel/web`; `ws:typecheck` green across examples; ADR 0004 status updated.
+   Files: remove `packages/web/src/application.ts`, `controller.ts`, `packages/router/src/router.ts` (legacy `Router`, and `singularize` with it); collapse `packages/kernel/src/kernel.ts` `createApp` to `VoloAppConfig` only; migrate kernel/CLI/MCP tests off `new Router()`.
+   Acceptance: one router vocabulary exported from `@volo/web`; `ws:typecheck` green across examples; ADR 0004 status updated.
 
-8. **Resolve the orphans: delete `@keel/hooks` + `@keel/config` from the v1 surface** — `[Wave 5 | P1]`
+8. **Resolve the orphans: delete `@volo/hooks` + `@volo/config` from the v1 surface** — `[Wave 5 | P1]`
    Per the roadmap call (§6): no wiring under launch pressure. Remove the packages (or move to an `attic/`), excise the "hooks/plugins/themes built in" claim from ARCHITECTURE.md, and file the post-1.0 plugin-system ADR stub.
    Acceptance: zero dead public packages in the workspace; coverage gate runtime shrinks; docs claim only what exists.
 
@@ -54,7 +54,7 @@ module-header prose truthful after the change; one conventional commit on `main`
 ## Owned elsewhere (do not duplicate)
 
 - Migration advisory lock + `migrations:"skip"` boot mode → **data-persistence** item 3 (kernel touch coordinated there).
-- Tracer construction/flush in `keel serve`/`dev` → **operability-dx** item 3.
+- Tracer construction/flush in `volo serve`/`dev` → **operability-dx** item 3.
 - Kernel wiring of durable session/rate-limit stores → **auth-security** item 5.
 - Edge `ExecutionContext`/`waitUntil` → **edge-deploy** item 3.
 

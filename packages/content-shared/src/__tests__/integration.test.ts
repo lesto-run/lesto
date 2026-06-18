@@ -1,5 +1,5 @@
 /**
- * Integration tests for @keel/content-shared
+ * Integration tests for @volo/content-shared
  *
  * These tests verify that modules work correctly together in real-world scenarios,
  * testing cross-module interactions and end-to-end workflows.

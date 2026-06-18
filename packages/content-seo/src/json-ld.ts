@@ -6,7 +6,7 @@
  *
  * @example
  * ```ts
- * import { jsonLd } from "@keel/content-seo";
+ * import { jsonLd } from "@volo/content-seo";
  *
  * // Entry-based (auto-extracts fields from content entries)
  * jsonLd.article(entry, options)
@@ -33,7 +33,7 @@
  * ```
  */
 
-import { ParseError } from "@keel/content-shared/errors";
+import { ParseError } from "@volo/content-shared/errors";
 import type { SchemaEntry, SchemaOrgOptions, FAQItem, HowToStep, BreadcrumbItem } from "./types.js";
 import {
   generateSchemaOrg,
@@ -144,7 +144,7 @@ export const jsonLd = {
    * ```ts
    * jsonLd.faq([
    *   { question: "What is Docks?", answer: "A content layer for modern frameworks." },
-   *   { question: "How do I install it?", answer: "npm install @keel/content-core" },
+   *   { question: "How do I install it?", answer: "npm install @volo/content-core" },
    * ])
    * ```
    */

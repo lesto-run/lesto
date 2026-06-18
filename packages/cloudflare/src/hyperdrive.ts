@@ -1,13 +1,13 @@
 /**
- * A first-party Cloudflare Hyperdrive adapter for `@keel/db`.
+ * A first-party Cloudflare Hyperdrive adapter for `@volo/db`.
  *
  * Hyperdrive is the ONLY Postgres a Worker can reach. A Worker has no node sockets
- * and `@keel/pg`'s `new Pool` is node-only (`createRequire("pg")`), so "SQLite local
+ * and `@volo/pg`'s `new Pool` is node-only (`createRequire("pg")`), so "SQLite local
  * → Postgres at scale, same APIs" stops at the node tier without this. Hyperdrive
  * fronts a real Postgres with edge-side pooling + connection caching and exposes a
  * `connectionString` a postgres-protocol client speaks over inside the Worker.
  * `hyperdriveToSqlDatabase` wraps such a connection in the same `SqlDatabase` surface
- * `@keel/db`'s `createDb` consumes, so a DB-driven page runs the IDENTICAL query path
+ * `@volo/db`'s `createDb` consumes, so a DB-driven page runs the IDENTICAL query path
  * on Workers (over Hyperdrive→Postgres) as it does on Node (over `pg`) — only the
  * driver differs. It mirrors the D1 adapter (`d1ToSqlDatabase`) one tier up: D1 is
  * the edge's SQLite, Hyperdrive is the edge's Postgres.
@@ -21,14 +21,14 @@
  * NO `node:*` builtins, so this module bundles clean for Workers (proven by the
  * dry-run worker under `test/` + the CI hyperdrive-parity job).
  *
- * The `?` → `$1..$n` placeholder translation `@keel/db` emits for every bound value
- * is the SAME one `@keel/pg` performs — imported from `@keel/pg/translate` (a leaf
+ * The `?` → `$1..$n` placeholder translation `@volo/db` emits for every bound value
+ * is the SAME one `@volo/pg` performs — imported from `@volo/pg/translate` (a leaf
  * module with zero `pg`/`node:*` imports), so there is one source of truth for the
  * dialect across both Postgres tiers.
  */
 
-import type { SqlDatabase } from "@keel/db";
-import { translate } from "@keel/pg/translate";
+import type { SqlDatabase } from "@volo/db";
+import { translate } from "@volo/pg/translate";
 
 /** What a postgres-protocol query hands back — the two fields the adapter reads. */
 export interface HyperdriveQueryResult {
@@ -58,9 +58,9 @@ export interface Hyperdrive {
 
 /**
  * Adapt a postgres connection opened over a Cloudflare Hyperdrive binding to the
- * async `SqlDatabase` surface `@keel/db` consumes.
+ * async `SqlDatabase` surface `@volo/db` consumes.
  *
- * Unlike the node `@keel/pg` driver — which checks a client out of a POOL per
+ * Unlike the node `@volo/pg` driver — which checks a client out of a POOL per
  * transaction — a Worker holds ONE Hyperdrive-backed connection for the request, so
  * the transaction brackets `BEGIN`/`COMMIT` (with a best-effort `ROLLBACK` on throw
  * that never masks the original error) directly on that single connection. A nested

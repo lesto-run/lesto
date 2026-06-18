@@ -2,9 +2,9 @@ import Database from "better-sqlite3";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { installSchema, Queue, QueueError } from "@keel/queue";
+import { installSchema, Queue, QueueError } from "@volo/queue";
 
-import type { SqlDatabase } from "@keel/queue";
+import type { SqlDatabase } from "@volo/queue";
 
 import { defaultWorkerErrorSink, runWorker } from "../src/index";
 

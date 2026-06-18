@@ -1,7 +1,7 @@
 /**
  * The `react-dom/server` shim for the OPT-IN `--preact` client bundle.
  *
- * `@keel/ui`'s barrel pulls its render/stream modules (`renderToStaticMarkup`,
+ * `@volo/ui`'s barrel pulls its render/stream modules (`renderToStaticMarkup`,
  * `renderToString`, `renderToReadableStream`) into the client graph, and React's
  * real `react-dom/server` runs top-level bootstrap (`ReactDOMSharedInternals.d`)
  * that throws once `react` is aliased away to Preact. Server rendering is never

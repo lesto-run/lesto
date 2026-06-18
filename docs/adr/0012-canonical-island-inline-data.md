@@ -7,7 +7,7 @@
 
 ## The decision: invert, phased — invert the canon and the machinery now; keep the `ssr` boolean explicit
 
-We **adopt the inversion**. The canonical Keel island — what the docs teach, what the blog proof demonstrates, what `create-keel` will scaffold — becomes:
+We **adopt the inversion**. The canonical Volo island — what the docs teach, what the blog proof demonstrates, what `create-volo` will scaffold — becomes:
 
 ```tsx
 // app/islands/reactions.tsx — the canonical island
@@ -19,7 +19,7 @@ export default defineIsland({
 });
 ```
 
-On a dynamically rendered page (`keel().page(...)`, any per-request render), the framework:
+On a dynamically rendered page (`volo().page(...)`, any per-request render), the framework:
 
 1. runs each bound source's registered loader **during the render** (one run per distinct source per request, memoized — the parallel-batch/no-chaining semantics of ADR 0010 §2 are preserved exactly);
 2. renders the island's real component **with the resolved values merged into its props** — the server markup is the per-user truth, no fallback flash;
@@ -40,7 +40,7 @@ So the inversion is delivered as: **the machinery lands now and removes the tax;
 
 ## Phases
 
-- **Phase A (now — `docs/plans/island-data-hardening.md` items 7–11):** the render-time resolver; `ssr + data` becomes the supported canonical combination on dynamic pages; emission-time guard everywhere else; blog ships the proof; `keel().client()` head module tag; CLI→`@keel/assets` wiring.
+- **Phase A (now — `docs/plans/island-data-hardening.md` items 7–11):** the render-time resolver; `ssr + data` becomes the supported canonical combination on dynamic pages; emission-time guard everywhere else; blog ships the proof; `volo().client()` head module tag; CLI→`@volo/assets` wiring.
 - **Phase B (estate convergence — ADR 0011 Increment 2):** estate's `.page` migration adopts the canonical island where its topology is dynamic; the marketing zone **stays on the primer on purpose** (see "What this does to estate").
 - **Phase C (future, explicitly deferred):** the dev double-render mismatch diff (render the island twice in dev, diff the markup, overlay the divergence). Only after it exists do we *consider* defaulting `ssr: true` for eager + `data` islands, and only as a scaffold/config default — never an ambient flip for existing apps. Also deferred: the `TriggerFn` generalization of the hydration-strategy vocabulary, and the CSP-nonce seam for inline scripts.
 
@@ -49,7 +49,7 @@ So the inversion is delivered as: **the machinery lands now and removes the tax;
 `resolveIslandData(manifest, resolve)` — ADR 0010's 0-RTT tier — mutated the manifest *after* the render walk. That shape can inline props for a *deferred* island (the client mounts fresh with full props), but it arrives **too late to feed an `ssr: true` island's server markup**, which is rendered during the walk. It structurally cannot serve the canonical island, and it shipped with no caller. It is **deleted** (pre-1.0; no consumer exists) in favor of:
 
 ```tsx
-// @keel/ui (server): packages/ui/src/data-resolve.tsx (new)
+// @volo/ui (server): packages/ui/src/data-resolve.tsx (new)
 export interface SourceResolver {
   /** Resolve a source by name; memoized — one loader run per source per request. */
   resolve(source: string): Promise<unknown>;
@@ -61,7 +61,7 @@ export const IslandDataProvider: FC<{ resolver: SourceResolver; children: ReactN
 ```
 
 - `defineIsland`'s component reads the context. **Resolver present** (dynamic render): each bound source is resolved via React's `use()` (the render suspends; `renderPageStream`'s Suspense plumbing and 10s deadline already own that), values merge into the mount's props, `bind` is omitted, and an `ssr: true` island renders its real component **with** the data. **Resolver absent** (static emission): today's behavior — `bind` + primer — for deferred islands, and a **loud refusal** (`UI_ISLAND_SSR_DATA_UNRESOLVED`) for `ssr: true` + `data`, because that configuration on a shared-cacheable document is per-user bytes in a shared cache: impossible, not inconvenient. A static build containing it fails the build; it does not ship a guaranteed mismatch.
-- `keel().data(source, loader)` keeps registering the `/__keel/data/<name>` route (the primer/fallback tier and `visible` islands still need it) **and** records the loader in a name→loader map. `renderPageResponse` builds a per-request memoized resolver over that map and wraps the page tree in `IslandDataProvider`. `.route()` merges a sub-app's loader map (sources must be registered effectively at the root — ADR 0010 corrections #8).
+- `volo().data(source, loader)` keeps registering the `/__volo/data/<name>` route (the primer/fallback tier and `visible` islands still need it) **and** records the loader in a name→loader map. `renderPageResponse` builds a per-request memoized resolver over that map and wraps the page tree in `IslandDataProvider`. `.route()` merges a sub-app's loader map (sources must be registered effectively at the root — ADR 0010 corrections #8).
 - Loader semantics are unchanged: a loader receives only the request context, never another source's value — chaining still has no API to exist through. Memoization replaces the "one parallel batch" with "one run per source, started on first use, shared by every island" — the same dedupe guarantee, now compatible with streaming.
 
 ## What this does to estate
@@ -76,4 +76,4 @@ export const IslandDataProvider: FC<{ resolver: SourceResolver; children: ReactN
 - `examples/blog` becomes the canonical proof (plan item 11): a data-bound `ssr: true` island on `/posts` with inline data, a ~10 KB client, zero bespoke scripts — ADR 0011 Increment 1's exit criterion, now demonstrating the *inverted* default.
 - F1's interim define-time refusal (`UI_CLIENT_SSR_DATA_UNSUPPORTED`) is shipped first as a bug fix and **removed** when the resolver lands; the permanent invariant is emission-time (`UI_ISLAND_SSR_DATA_UNRESOLVED`), where topology is actually known.
 - `defineIsland` gains real prop typing (review F8): generic over the component's props, with `data` typed as `{ [K in keyof P]?: DataSource<P[K]> }` and the returned island component accepting the non-bound remainder — the token's phantom type finally reaches the component. `Registry.defineClient` typing is deferred to estate's convergence (its storage is erased `Map`s; generics there are cosmetic until the registry path is migrated or retired).
-- Risks accepted: render-time loaders put data latency inside the streamed render (bounded by the existing 10s deadline, surfaced per-island by Suspense rather than blocking TTFB); `use()` ties the resolver to React 19 semantics (already Keel's floor); deleting `resolveIslandData` breaks no one (zero callers, pre-1.0).
+- Risks accepted: render-time loaders put data latency inside the streamed render (bounded by the existing 10s deadline, surfaced per-island by Suspense rather than blocking TTFB); `use()` ties the resolver to React 19 semantics (already Volo's floor); deleting `resolveIslandData` breaks no one (zero callers, pre-1.0).

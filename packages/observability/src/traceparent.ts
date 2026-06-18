@@ -19,7 +19,7 @@
  *   - trace-flags: 2 hex; bit 0 is "sampled". We carry it through unread (we
  *                  always export) but format it honestly.
  *
- * Keel's own ids are 32-hex traceIds and 32-hex spanIds; OTLP already truncates
+ * Volo's own ids are 32-hex traceIds and 32-hex spanIds; OTLP already truncates
  * a spanId to 16 hex on export (see `otlp.ts`), and traceparent's parent-id is
  * the same 16-hex span field — so {@link formatTraceparent} truncates a 32-hex
  * spanId to its first 16 hex, matching what the collector sees.
@@ -93,7 +93,7 @@ export function parseTraceparent(header: string | undefined): Traceparent | unde
 /**
  * Format a `traceparent` header for an outbound hop from a trace + span id.
  *
- * `spanId` is the CURRENT span — it becomes the next hop's parent-id. A Keel
+ * `spanId` is the CURRENT span — it becomes the next hop's parent-id. A Volo
  * spanId is 32 hex; the traceparent parent-id field is 16 hex (the same field
  * OTLP truncates a spanId to), so we take its first 16 hex to match what the
  * collector records. `flags` defaults to `01` (sampled) — we always export. The

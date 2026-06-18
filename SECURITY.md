@@ -1,13 +1,13 @@
 # Security Policy
 
-Keel takes security seriously. The framework ships hardening on by default — a
+Volo takes security seriously. The framework ships hardening on by default — a
 never-throw per-request boundary, scrypt password hashing that fails closed, dual
 CSRF protection immune to the content-type-bypass CVE class, and an SSRF guard on
 outbound webhooks — and we hold the reporting process to the same bar.
 
 ## Supported versions
 
-Keel is pre-1.0. Until 1.0, security fixes land on the latest published `0.x`
+Volo is pre-1.0. Until 1.0, security fixes land on the latest published `0.x`
 minor only; there are no long-term-support branches yet.
 
 | Version | Supported          |
@@ -29,13 +29,13 @@ Instead, report privately through one of:
 - **GitHub private vulnerability reporting** — on the repository's **Security**
   tab, choose **Report a vulnerability**. This opens a private advisory visible
   only to you and the maintainers. This is the preferred channel.
-- **Email** — `security@keel.dev` with the details below. If you do not receive
+- **Email** — `security@volo.dev` with the details below. If you do not receive
   an acknowledgement within 3 business days, follow up through GitHub private
   reporting.
 
 Include, as far as you can:
 
-- the affected package(s) and version(s) (e.g. `@keel/auth@0.2.1`),
+- the affected package(s) and version(s) (e.g. `@volo/auth@0.2.1`),
 - a description of the vulnerability and its impact,
 - a minimal reproduction or proof-of-concept,
 - any known mitigations or workarounds.
@@ -53,8 +53,8 @@ Include, as far as you can:
 
 ## Scope
 
-In scope: any `@keel/*` package in this repository and the `create-keel`
+In scope: any `@volo/*` package in this repository and the `create-volo`
 scaffolder. The `examples/*` apps are demonstration code — report a security bug
 in an example only if it reflects a flaw in the underlying framework package.
 
-Thank you for helping keep Keel and its users safe.
+Thank you for helping keep Volo and its users safe.

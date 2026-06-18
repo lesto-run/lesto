@@ -33,7 +33,7 @@ function runBin(args: string[], cwd: string): Promise<RunResult> {
 let workspace: string;
 
 beforeEach(async () => {
-  workspace = await mkdtemp(join(tmpdir(), "create-keel-e2e-"));
+  workspace = await mkdtemp(join(tmpdir(), "create-volo-e2e-"));
 });
 
 afterEach(async () => {
@@ -49,7 +49,7 @@ describe("bin (e2e)", () => {
 
     const appDir = join(workspace, "tmp-app-name");
 
-    await expect(access(join(appDir, "keel.app.ts"))).resolves.toBeUndefined();
+    await expect(access(join(appDir, "volo.app.ts"))).resolves.toBeUndefined();
     await expect(access(join(appDir, "package.json"))).resolves.toBeUndefined();
   }, 30_000);
 
@@ -59,6 +59,6 @@ describe("bin (e2e)", () => {
     const second = await runBin(["dupe"], workspace);
 
     expect(second.code).toBe(1);
-    expect(second.stderr).toContain("CREATE_KEEL_TARGET_EXISTS");
+    expect(second.stderr).toContain("CREATE_VOLO_TARGET_EXISTS");
   }, 30_000);
 });

@@ -1,8 +1,8 @@
 {
-  "name": "@keel/content-store",
+  "name": "@volo/content-store",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "SUPPORTED (v1 content seam) — Keel content on the SQL substrate — persists @keel/content-core entries to the database and hydrates the runtime from it.",
+  "description": "SUPPORTED (v1 content seam) — Volo content on the SQL substrate — persists @volo/content-core entries to the database and hydrates the runtime from it.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,10 +20,10 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/content-core": "workspace:*",
-    "@keel/db": "workspace:*",
-    "@keel/errors": "workspace:*",
-    "@keel/migrate": "workspace:*"
+    "@volo/content-core": "workspace:*",
+    "@volo/db": "workspace:*",
+    "@volo/errors": "workspace:*",
+    "@volo/migrate": "workspace:*"
   },
   "devDependencies": {
     "better-sqlite3": "^11.10.0"

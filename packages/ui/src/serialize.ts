@@ -96,7 +96,7 @@ export function assertSerializable(
  * Increment 2). The canonical `.page` path uses {@link serializeScriptJson} on
  * one mount object per island (co-located, streaming-safe); this array form is
  * the niche where `renderPage` walks an AI-/DB-driven tree into one
- * `#keel-islands` manifest. Same audited escape, applied to the whole array.
+ * `#volo-islands` manifest. Same audited escape, applied to the whole array.
  *
  * `JSON.stringify` alone is NOT safe to drop into HTML. A string value carrying
  * `</script>` (or `<!--`, or the JS line terminators U+2028 / U+2029) terminates
@@ -115,8 +115,8 @@ export function assertSerializable(
  * it in with `String.prototype.replace`, whose `$&`/`$'` tokens are themselves an
  * injection vector.
  *
- * Mirrors the script-context escape that `@keel/seo` and `@keel/content-shared`
- * already apply to inline JSON-LD; kept local so `@keel/ui`'s render hot path
+ * Mirrors the script-context escape that `@volo/seo` and `@volo/content-shared`
+ * already apply to inline JSON-LD; kept local so `@volo/ui`'s render hot path
  * pulls in no extra dependency for it.
  */
 export function serializeManifest(manifest: readonly IslandMount[]): string {

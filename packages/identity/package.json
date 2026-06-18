@@ -1,8 +1,8 @@
 {
-  "name": "@keel/identity",
+  "name": "@volo/identity",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's batteries-included auth: users on the SQL DB, register/verify/login/reset flows composed from @keel/auth + @keel/db + @keel/migrate + @keel/mail + @keel/csrf.",
+  "description": "Volo's batteries-included auth: users on the SQL DB, register/verify/login/reset flows composed from @volo/auth + @volo/db + @volo/migrate + @volo/mail + @volo/csrf.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,11 +20,11 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/auth": "workspace:*",
-    "@keel/db": "workspace:*",
-    "@keel/errors": "workspace:*",
-    "@keel/mail": "workspace:*",
-    "@keel/migrate": "workspace:*",
-    "@keel/ratelimit": "workspace:*"
+    "@volo/auth": "workspace:*",
+    "@volo/db": "workspace:*",
+    "@volo/errors": "workspace:*",
+    "@volo/mail": "workspace:*",
+    "@volo/migrate": "workspace:*",
+    "@volo/ratelimit": "workspace:*"
   }
 }

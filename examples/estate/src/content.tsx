@@ -3,8 +3,8 @@
  *
  * Where `pages.tsx` is hand-written React, these pages are DATA: a serialized
  * UiNode block tree stored in a `pages` table, loaded by slug at request time and
- * rendered through a `Registry` of block components (`@keel/ui`'s `renderTree`).
- * The same `keel()` router serves both — a hand-authored `/lab/streaming` beside a
+ * rendered through a `Registry` of block components (`@volo/ui`'s `renderTree`).
+ * The same `volo()` router serves both — a hand-authored `/lab/streaming` beside a
  * DB-driven `/lab/content/:slug` — one app, two content models.
  *
  * The STORE is injected, so the page runs on either runtime with the identical
@@ -14,17 +14,17 @@
  * on every cold start.
  */
 
-import { createDb, createTableSql, defineTable, eq, integer, text } from "@keel/db";
-import type { Db, Dialect, SqlDatabase } from "@keel/db";
-import { keel, type Keel } from "@keel/web";
-import { Registry } from "@keel/ui";
-import { renderTree } from "@keel/ui/server";
-import type { UiNode } from "@keel/ui";
+import { createDb, createTableSql, defineTable, eq, integer, text } from "@volo/db";
+import type { Db, Dialect, SqlDatabase } from "@volo/db";
+import { volo, type Volo } from "@volo/web";
+import { Registry } from "@volo/ui";
+import { renderTree } from "@volo/ui/server";
+import type { UiNode } from "@volo/ui";
 import type { ReactNode } from "react";
 
 import { Hero, Main, SiteHeader } from "./ui/components";
-import { d1ToSqlDatabase, hyperdriveToSqlDatabase } from "@keel/cloudflare";
-import type { D1Database, HyperdriveConnection } from "@keel/cloudflare";
+import { d1ToSqlDatabase, hyperdriveToSqlDatabase } from "@volo/cloudflare";
+import type { D1Database, HyperdriveConnection } from "@volo/cloudflare";
 
 /** The block-page table: a slug, a title, and the serialized UiNode tree. */
 const pages = defineTable("pages", {
@@ -152,7 +152,7 @@ export function makeContentStore(
     })());
 }
 
-/** The Cloudflare edge content store — a D1 binding adapted to `@keel/db`. */
+/** The Cloudflare edge content store — a D1 binding adapted to `@volo/db`. */
 export function d1ContentStore(d1: D1Database): ContentStore {
   return makeContentStore(async () => {
     const handle = d1ToSqlDatabase(d1);
@@ -165,7 +165,7 @@ export function d1ContentStore(d1: D1Database): ContentStore {
  * The Cloudflare edge content store over Hyperdrive-fronted Postgres — the
  * flagship-tier twin of {@link d1ContentStore}. `connection` is a postgres client
  * the Worker has connected to `env.HYPERDRIVE.connectionString`; it is adapted to
- * `@keel/db` by `hyperdriveToSqlDatabase`, so the IDENTICAL query + render path
+ * `@volo/db` by `hyperdriveToSqlDatabase`, so the IDENTICAL query + render path
  * runs over Postgres at scale instead of D1's edge SQLite. The dialect is
  * `"postgres"` so the table installs and binds (`?`→`$n`) the Postgres way.
  */
@@ -252,8 +252,8 @@ function ContentPage({
  * `undefined` means no store is configured (e.g. a Worker deployed without a D1
  * binding): the page renders a clear "configure D1" view instead of crashing.
  */
-export function buildContentRoutes(store?: ContentStore): Keel {
-  return keel().page("/lab/content/:slug", {
+export function buildContentRoutes(store?: ContentStore): Volo {
+  return volo().page("/lab/content/:slug", {
     load: async (
       c,
     ): Promise<{ slug: string; title?: string; tree?: UiNode; configured: boolean }> => {

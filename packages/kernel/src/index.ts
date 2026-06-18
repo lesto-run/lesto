@@ -1,9 +1,9 @@
 /**
- * @keel/kernel — the application kernel that assembles a Keel app from its parts.
+ * @volo/kernel — the application kernel that assembles a Volo app from its parts.
  *
- *   // Tables are `@keel/db` schema values, rendered for the dialect (ADR 0004).
- *   import { createTableSql, defineTable, integer, text } from "@keel/db";
- *   import { keel } from "@keel/web";
+ *   // Tables are `@volo/db` schema values, rendered for the dialect (ADR 0004).
+ *   import { createTableSql, defineTable, integer, text } from "@volo/db";
+ *   import { volo } from "@volo/web";
  *
  *   const posts = defineTable("posts", {
  *     id: integer("id").primaryKey({ autoIncrement: true }),
@@ -12,7 +12,7 @@
  *
  *   const app = await createApp({
  *     db,
- *     app: keel().get("/posts", (c) => c.json({ posts: [] })),
+ *     app: volo().get("/posts", (c) => c.json({ posts: [] })),
  *     migrations: [
  *       {
  *         version: "001_create_posts",
@@ -22,11 +22,11 @@
  *   });
  *
  *   app.migrationsApplied;                 // ["001_create_posts"]
- *   await app.handle("GET", "/posts");     // the keel() route's response
+ *   await app.handle("GET", "/posts");     // the volo() route's response
  */
 
 export { createApp, KERNEL_DEFAULT_RATE_LIMIT } from "./kernel";
-export type { App, KeelAppConfig, KernelDatabase } from "./kernel";
+export type { App, VoloAppConfig, KernelDatabase } from "./kernel";
 
 export {
   durableStores,

@@ -1,13 +1,13 @@
 /**
  * Transport-neutral response hardening — the security layer BOTH runtimes share.
  *
- * The node server (`@keel/runtime`) and the Cloudflare edge (`@keel/cloudflare`)
+ * The node server (`@volo/runtime`) and the Cloudflare edge (`@volo/cloudflare`)
  * are two front doors to the *same* dispatcher, and a security posture that lives
  * in only one of them is a gap: the field's SSR CVEs again and again landed in an
  * adapter (a `Host` header trusted in the Express adapter, headers not stripped on
  * one path) rather than the shared core. So the pure pieces — default security
  * headers, the opt-in CSP/COEP knobs, and the error→status/body mapping — live
- * here in `@keel/web`, which both transports already depend on, and neither
+ * here in `@volo/web`, which both transports already depend on, and neither
  * reimplements them. The node-specific bits (socket reads, timeouts, ETag hashing
  * over `node:crypto`, the access log) stay in the runtime; everything a Worker can
  * and must also do is here.
@@ -16,9 +16,9 @@
  * so every branch is unit-testable without a socket or a `fetch` runtime.
  */
 
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
-import type { AnyKeelResponse, HeaderMap } from "./types";
+import type { AnyVoloResponse, HeaderMap } from "./types";
 
 /**
  * A restrictive default `Permissions-Policy`: powerful features off until asked.
@@ -54,7 +54,7 @@ export const DEFAULT_SECURITY_HEADERS: Record<string, string> = {
  *
  * Documentation-in-code: a sane starting policy once an app has eliminated inline
  * `<script>` blocks (or moved island bootstrap behind a nonce / a
- * `type="application/json"` payload). NOT a default precisely because Keel's
+ * `type="application/json"` payload). NOT a default precisely because Volo's
  * island bootstrap currently inlines JSON, which `script-src 'self'` would block.
  */
 export const RECOMMENDED_CSP =
@@ -131,9 +131,9 @@ function asList(value: string | string[]): string[] {
 
 /** Merge the default headers under a response; the response's own headers win. */
 export function withSecurityHeaders(
-  response: AnyKeelResponse,
+  response: AnyVoloResponse,
   defaults: Record<string, string> | false,
-): AnyKeelResponse {
+): AnyVoloResponse {
   if (defaults === false) return response;
 
   return { ...response, headers: mergeHeaders(defaults, response.headers) };
@@ -184,20 +184,20 @@ export function securityDefaults(
 /**
  * Map a thrown value to its HTTP status.
  *
- * Branches on the stable `code` of a {@link KeelError} (a `RuntimeError` is one),
- * never on a message or a concrete subclass — so this lives in `@keel/web` without
+ * Branches on the stable `code` of a {@link VoloError} (a `RuntimeError` is one),
+ * never on a message or a concrete subclass — so this lives in `@volo/web` without
  * importing the transport that raised it, and recognizes the same coded refusals
  * on either runtime. Anything else is a 500: an unexpected throw is ours to own
  * with a generic body, never a leak.
  */
 export function statusForError(error: unknown): number {
-  if (error instanceof KeelError) {
+  if (error instanceof VoloError) {
     if (error.code === "RUNTIME_INVALID_JSON") return 400;
     if (error.code === "ROUTER_MALFORMED_PARAM") return 400;
     if (error.code === "WEB_VALIDATION_FAILED") return 422;
     if (error.code === "RUNTIME_BODY_TOO_LARGE") return 413;
     if (error.code === "RUNTIME_HANDLER_TIMEOUT") return 503;
-    // The edge dispatch deadline (`@keel/cloudflare`'s `timeoutMs`) is the edge
+    // The edge dispatch deadline (`@volo/cloudflare`'s `timeoutMs`) is the edge
     // twin of `RUNTIME_HANDLER_TIMEOUT` — an overrun the server owns, freed with
     // a 503 — so it maps to the same status in this shared registry.
     if (error.code === "CLOUDFLARE_DISPATCH_TIMEOUT") return 503;

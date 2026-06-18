@@ -1,10 +1,10 @@
 /**
  * Regression: serializeBinaryOnlyIndex must emit a format the runtime parser
- * (@keel/content-search parseBinaryIndex) can read.
+ * (@volo/content-search parseBinaryIndex) can read.
  *
  * The writer emits `v: 3` with binary-only entries (no full embedding field).
  * This test pins that wire shape; the matching reader fix lives in
- * @keel/content-search/src/binary.ts (which now accepts v2 and v3).
+ * @volo/content-search/src/binary.ts (which now accepts v2 and v3).
  */
 
 import { describe, expect, it } from "vitest";

@@ -1,8 +1,8 @@
 {
-  "name": "@keel/pubsub",
+  "name": "@volo/pubsub",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's in-process publish/subscribe hub — synchronous registration, awaited delivery.",
+  "description": "Volo's in-process publish/subscribe hub — synchronous registration, awaited delivery.",
   "type": "module",
   "private": true,
   "exports": {

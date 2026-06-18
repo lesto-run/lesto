@@ -1,8 +1,8 @@
 {
-  "name": "@keel/i18n",
+  "name": "@volo/i18n",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's internationalization core — message catalogs, interpolation, pluralization. Pure, no deps.",
+  "description": "Volo's internationalization core — message catalogs, interpolation, pluralization. Pure, no deps.",
   "type": "module",
   "private": true,
   "exports": {

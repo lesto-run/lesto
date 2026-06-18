@@ -9,8 +9,8 @@
  * what `wrangler.jsonc` binds as the Worker's Static Assets, so after this the
  * deploy is just `wrangler deploy`.
  *
- * estate runs in-process (no `keel.app.ts` CLI convention), so this is its build
- * entry — there is no global `keel` command to invoke.
+ * estate runs in-process (no `volo.app.ts` CLI convention), so this is its build
+ * entry — there is no global `volo` command to invoke.
  */
 
 import { randomBytes } from "node:crypto";
@@ -23,10 +23,10 @@ const OUT = fileURLToPath(new URL("./out", import.meta.url));
 
 // The prerender constructs the dynamic app only to render the static marketing
 // zone — which mints no tokens — so it needs *a* valid identity secret but the
-// value never reaches the output. Honor a real `KEEL_AUTH_SECRET` if the builder
+// value never reaches the output. Honor a real `VOLO_AUTH_SECRET` if the builder
 // set one; otherwise use a throwaway. The deployed Worker reads its own
 // `SESSION_SECRET` from the runtime env, so a CI build needs no secret of its own.
-const buildSecret = process.env["KEEL_AUTH_SECRET"] ?? randomBytes(32).toString("hex");
+const buildSecret = process.env["VOLO_AUTH_SECRET"] ?? randomBytes(32).toString("hex");
 
 // The deploy pair is Preact by default: the Worker SSRs through
 // `preactServerRenderer` (worker.ts + the wrangler.jsonc alias), so the client

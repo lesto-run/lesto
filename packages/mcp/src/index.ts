@@ -1,7 +1,7 @@
 /**
- * @keel/mcp — the Keel MCP control plane.
+ * @volo/mcp — the Volo MCP control plane.
  *
- * Exposes Keel operations to AI agents as MCP tools over `@modelcontextprotocol/sdk`.
+ * Exposes Volo operations to AI agents as MCP tools over `@modelcontextprotocol/sdk`.
  *
  *   const tools = buildTools({ app, router, generateUi });
  *
@@ -17,8 +17,8 @@
 export { buildTools, dispatch } from "./tools";
 export type {
   DispatchOptions,
-  KeelMcpContext,
-  KeelTool,
+  VoloMcpContext,
+  VoloTool,
   McpAuditRecord,
   McpAuditSink,
   McpMode,

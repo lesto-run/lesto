@@ -1,5 +1,5 @@
 /**
- * Type definitions for @keel/content-embeddings (build-time only)
+ * Type definitions for @volo/content-embeddings (build-time only)
  */
 
 // ============================================================================
@@ -8,7 +8,7 @@
 
 /**
  * Minimal entry interface for embedding operations.
- * Compatible with @keel/content-core RuntimeEntry.
+ * Compatible with @volo/content-core RuntimeEntry.
  */
 export interface SearchableEntry {
   /** Unique entry ID */

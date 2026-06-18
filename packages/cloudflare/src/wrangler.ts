@@ -2,7 +2,7 @@
  * Generate a wrangler config from a deploy plan — and serialize it to the exact
  * `wrangler.jsonc` bytes that ship in the repo.
  *
- * The Cloudflare deployment of a Keel site set is one Worker plus a Static
+ * The Cloudflare deployment of a Volo site set is one Worker plus a Static
  * Assets binding: the Worker runs the dynamic zone(s), and the prerendered
  * static zone(s) are served from the assets directory (tried first — see
  * `withAssets`). This reads the {@link DeployPlan} to confirm there is a dynamic
@@ -22,7 +22,7 @@
  * config must be reproducible.
  */
 
-import type { DeployPlan } from "@keel/deploy";
+import type { DeployPlan } from "@volo/deploy";
 
 import { CloudflareError } from "./errors";
 

@@ -1,6 +1,6 @@
 import { defineConfig } from "vitest/config";
 
-// New Keel code — held to the full bar from its first commit.
+// New Volo code — held to the full bar from its first commit.
 export default defineConfig({
   test: {
     coverage: {

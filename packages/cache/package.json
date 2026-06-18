@@ -1,8 +1,8 @@
 {
-  "name": "@keel/cache",
+  "name": "@volo/cache",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's TTL cache — pluggable stores, an injected clock, in-memory or SQL-backed.",
+  "description": "Volo's TTL cache — pluggable stores, an injected clock, in-memory or SQL-backed.",
   "type": "module",
   "private": true,
   "exports": {

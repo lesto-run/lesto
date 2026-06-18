@@ -1,5 +1,5 @@
 /**
- * @keel/openapi — generate an OpenAPI 3.1 document from a Keel app's route list.
+ * @volo/openapi — generate an OpenAPI 3.1 document from a Volo app's route list.
  *
  * Pure transformation: every entry in the app's `routes()` (a `{ method, pattern }`
  * list) becomes one method entry under its path. The router's `:param` segments
@@ -11,7 +11,7 @@
  * list rather than a router object, so it is decoupled from any one router type.
  */
 
-/** One route to document: its verb and its path pattern (the shape `keel().routes()` yields). */
+/** One route to document: its verb and its path pattern (the shape `volo().routes()` yields). */
 export interface RouteEntry {
   method: string;
 

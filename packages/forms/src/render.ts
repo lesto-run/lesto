@@ -1,5 +1,5 @@
 /**
- * Spec -> @keel/ui tree.
+ * Spec -> @volo/ui tree.
  *
  * `renderForm` is pure data assembly: it turns a `FormSpec` into a plain
  * `UiNode` Form tree — one Field node per spec field, then a single Submit —
@@ -7,7 +7,7 @@
  * AI-shaped JSON the engine consumes.
  */
 
-import type { UiNode } from "@keel/ui";
+import type { UiNode } from "@volo/ui";
 
 import type { FormField, FormSpec } from "./types";
 

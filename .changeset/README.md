@@ -1,8 +1,8 @@
 # Changesets
 
 This directory holds [Changesets](https://github.com/changesets/changesets) — the
-release tooling for the Keel monorepo. Every change that affects a published
-`@keel/*` package should add a changeset describing the bump:
+release tooling for the Volo monorepo. Every change that affects a published
+`@volo/*` package should add a changeset describing the bump:
 
 ```sh
 bun changeset          # interactively record what changed and the semver bump

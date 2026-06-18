@@ -1,7 +1,7 @@
 /**
  * Identity's verify/reset journey, DELIVERING through a real mail transport.
  *
- * `@keel/identity`'s unit + over-the-wire tests use a fake `IdentityMailer` that
+ * `@volo/identity`'s unit + over-the-wire tests use a fake `IdentityMailer` that
  * just captures the link. This suite wires the *real* delivery stack instead:
  *
  *   identity.register
@@ -21,15 +21,15 @@ import Database from "better-sqlite3";
 import { render } from "@react-email/render";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createDb } from "@keel/db";
-import { createFetchProviderTransport, Mailer } from "@keel/mail";
-import type { EmailRenderer, ProviderRequestBody } from "@keel/mail";
-import { Schema } from "@keel/migrate";
-import { installSchema, Queue } from "@keel/queue";
-import type { SqlDatabase } from "@keel/queue";
+import { createDb } from "@volo/db";
+import { createFetchProviderTransport, Mailer } from "@volo/mail";
+import type { EmailRenderer, ProviderRequestBody } from "@volo/mail";
+import { Schema } from "@volo/migrate";
+import { installSchema, Queue } from "@volo/queue";
+import type { SqlDatabase } from "@volo/queue";
 
-import { createIdentity, usersMigration } from "@keel/identity";
-import type { Identity, IdentityMailer } from "@keel/identity";
+import { createIdentity, usersMigration } from "@volo/identity";
+import type { Identity, IdentityMailer } from "@volo/identity";
 
 import { ResetPasswordEmail, VerifyEmail } from "./email-templates";
 
@@ -213,7 +213,7 @@ describe("identity verify journey delivers a real email end-to-end", () => {
     expect(email.to).toBe("ada@example.com");
     expect(email.from).toBe("Estate <no-reply@estate.test>");
     expect(email.subject).toBe("Confirm your email");
-    expect(email.messageId).toMatch(/^keel-mail-\d+$/);
+    expect(email.messageId).toMatch(/^volo-mail-\d+$/);
 
     // ---- the rendered react-email body landed (html + plain-text alt) ----
     // The html keeps the heading's case; the plain-text render uppercases it and

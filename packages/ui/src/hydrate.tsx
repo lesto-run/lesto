@@ -1,7 +1,7 @@
 /**
  * The client runtime: turn a static page's islands live.
  *
- * After the server ships HTML with `<div data-keel-island="id">…</div>` shells
+ * After the server ships HTML with `<div data-volo-island="id">…</div>` shells
  * and a manifest of `IslandMount`s, the browser calls `hydrateIslands`. For each
  * mount it finds the matching shell by id and brings it to life with the
  * manifest's props — the moment a prerendered page becomes auth-aware,
@@ -33,7 +33,7 @@
  *   - **`"load"` (default / absent) → mount now.** Today's only path, untouched.
  *   - **`"visible"` → mount on first intersection.** We do NOT mount the island
  *     yet; we observe its container and mount it (then stop observing) the first
- *     time it scrolls into view — Astro's `client:visible` analogue. For Keel's
+ *     time it scrolls into view — Astro's `client:visible` analogue. For Volo's
  *     deferred Account island this also defers its on-mount `/mls/api/session`
  *     fetch until the region is actually seen, so an above-the-fold prerender
  *     does not fan out a request for every below-the-fold island on load.
@@ -78,13 +78,13 @@ declare global {
      * these before mounting a bound island, so the data fetch runs parallel
      * with `client.js` rather than after it (ADR 0010).
      */
-    __keelData?: Record<string, Promise<unknown>>;
+    __voloData?: Record<string, Promise<unknown>>;
   }
 }
 
 /**
  * The client analogue of the server's 10s `RENDER_DEADLINE_MS` (render-page.tsx):
- * a hung `/__keel/data/<name>` — or a primed promise that never settles — would
+ * a hung `/__volo/data/<name>` — or a primed promise that never settles — would
  * otherwise leave its island in `deferred` forever. Bind resolution races this
  * deadline and routes a timeout to `onMountError`/`failed`, exactly like a
  * rejected fetch.
@@ -97,7 +97,7 @@ const BIND_DEADLINE_MS = 10_000;
  * island in `deferred`.
  *
  * Each bound source is taken from the parse-time primer promise
- * (`window.__keelData[source]`, started before any JS ran — see
+ * (`window.__voloData[source]`, started before any JS ran — see
  * `dataPrimerScript`) when present, else fetched directly as the fallback. A
  * rejection (a non-ok fetch, or the timeout) propagates to the caller's catch,
  * which fails just that one island. The timer is CLEARED when the data wins — a
@@ -109,7 +109,7 @@ async function resolveBinds(
 ): Promise<Record<string, unknown>> {
   if (entry.bind === undefined) return {};
 
-  const primed = window.__keelData;
+  const primed = window.__voloData;
 
   const resolved: Record<string, unknown> = {};
 
@@ -275,12 +275,12 @@ const reactMount: MountFn = (container, element, context) => {
 
 /** Default sink: surface a recoverable hydration error on the console, don't hide it. */
 const consoleRecoverableError: RecoverableErrorSink = (error) => {
-  console.error("[keel/ui] recoverable hydration error", error);
+  console.error("[volo/ui] recoverable hydration error", error);
 };
 
 /** Default sink: surface a fatal per-island mount error, naming the dead island. */
 const consoleMountError: MountErrorSink = (error, info) => {
-  console.error(`[keel/ui] island "${info.id}" (${info.component}) failed to mount`, error);
+  console.error(`[volo/ui] island "${info.id}" (${info.component}) failed to mount`, error);
 };
 
 /**
@@ -314,7 +314,7 @@ const intersectionObserve: ObserveFn = (container, onVisible) => {
  * to its shell — the shared mount engine BOTH island paths run on.
  *
  * Public callers reach it through the page-wide-array niche (the DEMOTED Registry/
- * `UiNode` content path: a `#keel-islands` manifest the server emitted from
+ * `UiNode` content path: a `#volo-islands` manifest the server emitted from
  * `renderPage`, read and passed here, as the e2e fixture and AI-content apps do).
  * The CANONICAL `.page` path calls {@link hydrateDocumentIslands} instead, which
  * scans the co-located mount scripts and feeds them HERE — so the two emission
@@ -511,9 +511,9 @@ export function hydrateIslands(
  * default entry point.
  *
  * Where {@link hydrateIslands} takes a manifest array (the Registry path's single
- * `#keel-islands` script), this scans the document for the co-located mount
+ * `#volo-islands` script), this scans the document for the co-located mount
  * scripts `defineIsland` emits — one `<script type="application/json"
- * data-keel-island-mount>` per island — parses each into an {@link IslandMount},
+ * data-volo-island-mount>` per island — parses each into an {@link IslandMount},
  * and feeds the very same machinery (binds, strategies, mount resilience). The
  * scan + parse is the only new step; everything downstream is unchanged, so a
  * page-described island and a manifest-described island hydrate identically.
@@ -553,7 +553,7 @@ export function hydrateDocumentIslands(
  * Escape an id for the *quoted* value of an attribute selector.
  *
  * Ids are tree paths like `$.children[0]`. Inside the double quotes of
- * `[data-keel-island="…"]`, the special grammar (`[`, `]`, `.`) is inert — only
+ * `[data-volo-island="…"]`, the special grammar (`[`, `]`, `.`) is inert — only
  * a literal `"` or `\` would break out of the string, so those alone are
  * escaped. We do it by hand rather than reach for `CSS.escape`, which is not
  * present in every runtime this code must run under (notably bare jsdom).

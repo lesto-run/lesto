@@ -1,37 +1,37 @@
 /**
  * The CLI's pure command core.
  *
- * `run` is the whole brain of the `keel` tool, with every real-world dependency
+ * `run` is the whole brain of the `volo` tool, with every real-world dependency
  * injected: how to load the project's app, how to serve it, and where output
  * goes. That seam is what makes the core fully testable — a test hands `run` a
  * fake `loadApp`, a spy `serve`, and a capturing `out`, and asserts on exactly
  * what was printed and called, with no filesystem, no sockets, and no process.
  *
  * The thin `bin.ts` builds the real dependencies (a dynamic import of the
- * project's `keel.app.ts`, the real `@keel/runtime` serve, `console.log`) and
+ * project's `volo.app.ts`, the real `@volo/runtime` serve, `console.log`) and
  * keeps the process alive for long-running commands. Everything decided here is
  * covered; only that wiring is excluded.
  */
 
-import { createApp } from "@keel/kernel";
-import type { KeelAppConfig, KernelDatabase } from "@keel/kernel";
-import { currentRequestSpan } from "@keel/web";
-import type { UiDialect } from "@keel/web";
+import { createApp } from "@volo/kernel";
+import type { VoloAppConfig, KernelDatabase } from "@volo/kernel";
+import { currentRequestSpan } from "@volo/web";
+import type { UiDialect } from "@volo/web";
 
-import { parseTraceparent, tracesFromEnv } from "@keel/observability";
-import type { CurrentSpan, Traces, TracesEnv } from "@keel/observability";
+import { parseTraceparent, tracesFromEnv } from "@volo/observability";
+import type { CurrentSpan, Traces, TracesEnv } from "@volo/observability";
 
-import { deleteEntry, persistEntries, pruneEntries } from "@keel/content-store";
-import type { RuntimeEntry } from "@keel/content-core";
+import { deleteEntry, persistEntries, pruneEntries } from "@volo/content-store";
+import type { RuntimeEntry } from "@volo/content-core";
 
-import { buildStaticSites } from "@keel/sites";
-import type { OutputSink, Site } from "@keel/sites";
+import { buildStaticSites } from "@volo/sites";
+import type { OutputSink, Site } from "@volo/sites";
 
-import { dispatchSitesDev } from "@keel/runtime";
-import type { serve, StaticReader } from "@keel/runtime";
+import { dispatchSitesDev } from "@volo/runtime";
+import type { serve, StaticReader } from "@volo/runtime";
 
-import { planDeploy, rollback, shipRelease, shipStatic } from "@keel/deploy";
-import type { ReleaseStore, ShipDeps } from "@keel/deploy";
+import { planDeploy, rollback, shipRelease, shipStatic } from "@volo/deploy";
+import type { ReleaseStore, ShipDeps } from "@volo/deploy";
 
 import { CliError } from "./errors";
 import { parsePort, parseStringFlag } from "./flags";
@@ -79,18 +79,18 @@ const TRACE_FLUSH_INTERVAL_MS = 5_000;
 
 /**
  * The synthetic single site `dev` falls back to when a project declares none (a
- * missing `keel.sites.ts`): one dynamic zone at the root, so every path is
+ * missing `volo.sites.ts`): one dynamic zone at the root, so every path is
  * dispatched live to the app. The whole-app, no-zones default — the scaffold's
  * first-boot shape — instead of a hard crash or a 404 on every route (blocker #9).
  */
 const APP_ONLY_SITE: Site = { name: "app", render: "dynamic", basePath: "/" };
 
 /**
- * The Cloudflare deploy driver — the swappable edge `keel deploy --cloudflare`
+ * The Cloudflare deploy driver — the swappable edge `volo deploy --cloudflare`
  * pushes a Worker (and its bound Static Assets) through.
  *
  * Deploying to a specific platform is an irreducible edge — the platform owns the
- * upload protocol and it moves — so Keel drives a thin driver here rather than
+ * upload protocol and it moves — so Volo drives a thin driver here rather than
  * reimplementing it (ADR 0015). The bin wires this to the official `wrangler`
  * CLI today; because the CLI core only ever sees this interface, a future
  * direct-Cloudflare-API client (no spawned binary — for the agent control plane)
@@ -111,20 +111,20 @@ export interface CloudflareDeployer {
 /** The seams the command core depends on — all injected, never imported live. */
 export interface CliDeps {
   /**
-   * Load the project's app config (the bin reads `keel.app.ts`; tests fake it).
+   * Load the project's app config (the bin reads `volo.app.ts`; tests fake it).
    *
-   * The code-first `keel()` app shape ({@link KeelAppConfig}) — the only shape
+   * The code-first `volo()` app shape ({@link VoloAppConfig}) — the only shape
    * `createApp` accepts now that the legacy `{ router, controllers }` surface is
    * gone (ADR 0004 Phase 7.6).
    */
-  loadApp: () => Promise<KeelAppConfig>;
+  loadApp: () => Promise<VoloAppConfig>;
 
-  /** Stand a real server in front of the app (the bin passes `@keel/runtime`'s). */
+  /** Stand a real server in front of the app (the bin passes `@volo/runtime`'s). */
   serve: typeof serve;
 
   /**
    * Run the content pipeline and return its entries (the bin passes
-   * `@keel/content-core`'s `runPipeline`; tests fake it). The content commands
+   * `@volo/content-core`'s `runPipeline`; tests fake it). The content commands
    * persist whatever this yields, so the filesystem-reading pipeline stays out
    * of the covered core.
    */
@@ -133,7 +133,7 @@ export interface CliDeps {
   /** Scaffold a new entry into a collection (the bin passes `createNewEntry`). */
   createEntry: (collection: string, title: string) => Promise<void>;
 
-  /** Load the project's declared sites (the bin imports `keel.sites.ts`'s default). */
+  /** Load the project's declared sites (the bin imports `volo.sites.ts`'s default). */
   loadSites: () => Promise<readonly Site[]>;
 
   /** Build a sink rooted at `outDir` for the static build (the bin passes `nodeSink`). */
@@ -142,7 +142,7 @@ export interface CliDeps {
   /**
    * Read a client build asset (e.g. `/client.js`) for the dev server, or absent
    * to disable asset serving. The bin passes `nodeStaticReader` over the asset
-   * dir; without it, `keel dev` still live-renders every zone — islands just show
+   * dir; without it, `volo dev` still live-renders every zone — islands just show
    * their server fallback until a bundle is present.
    */
   readAsset?: StaticReader;
@@ -157,7 +157,7 @@ export interface CliDeps {
   hasIslandsDir?: () => Promise<boolean>;
 
   /**
-   * Build the project's island client bundle (`@keel/assets`, ADR 0011 Seam 3).
+   * Build the project's island client bundle (`@volo/assets`, ADR 0011 Seam 3).
    * The bin wires this to `buildClient(...)` with `bunBuildClientDeps` over the
    * project's `app/islands/`; the CLI core only decides WHEN to call it (a prod
    * build for `build`, an unminified one on `dev` boot + on watch) and with which
@@ -199,7 +199,7 @@ export interface CliDeps {
   now: () => number;
 
   /**
-   * The Cloudflare deploy driver `keel deploy --cloudflare` pushes the Worker
+   * The Cloudflare deploy driver `volo deploy --cloudflare` pushes the Worker
    * through (the bin wires the `wrangler` CLI; tests inject a fake). See
    * {@link CloudflareDeployer}.
    */
@@ -223,9 +223,9 @@ export interface CliDeps {
 
   /**
    * The environment the OTLP tracer reads its two-var setup from
-   * (`KEEL_OTLP_URL` + service-name/headers — see {@link TracesEnv}). Defaults to
+   * (`VOLO_OTLP_URL` + service-name/headers — see {@link TracesEnv}). Defaults to
    * `process.env`, so the bin needs no extra wiring; a test injects a literal.
-   * `KEEL_OTLP_URL` absent means tracing is off (no tracer, zero overhead) — the
+   * `VOLO_OTLP_URL` absent means tracing is off (no tracer, zero overhead) — the
    * safe default.
    */
   env?: TracesEnv;
@@ -236,9 +236,9 @@ export interface CliDeps {
 
 /** The usage text printed for `help`, an empty command, or an unknown command. */
 const USAGE = [
-  "keel — the Keel command-line tool",
+  "volo — the Volo command-line tool",
   "",
-  "Usage: keel <command> [options]",
+  "Usage: volo <command> [options]",
   "",
   "Commands:",
   "  routes            List the application's routes",
@@ -247,7 +247,7 @@ const USAGE = [
   "  dev               Run every site live on one origin for local development (--port)",
   "  build             Prerender static sites to disk (--target <name>, --out <dir>, default out)",
   "  deploy            Build and ship the app. --cloudflare is the one-command edge deploy:",
-  "                    `keel deploy --cloudflare` pushes the Worker + its Static Assets via wrangler",
+  "                    `volo deploy --cloudflare` pushes the Worker + its Static Assets via wrangler",
   "                    (health-gated with --health-url <url>). Otherwise it ships static sites and prints",
   "                    the routing plan (--target, --out, --dist; --release for a versioned,",
   "                    atomically-flipped release, --version <v> to name it; publish a release to S3/R2",
@@ -265,7 +265,7 @@ const USAGE = [
 async function runRoutes(deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
 
-  // The code-first `keel()` app exposes its routes as `{ method, pattern }` — the
+  // The code-first `volo()` app exposes its routes as `{ method, pattern }` — the
   // only route surface now that the legacy `Router` is gone (ADR 0004 Phase 7.6).
   for (const route of config.app.routes()) {
     deps.out(`${route.method}\t${route.pattern}`);
@@ -312,7 +312,7 @@ function databaseReady(db: KernelDatabase): () => Promise<boolean> {
 /**
  * The in-flight request span, as the tracer's `currentSpan` seam.
  *
- * `@keel/web`'s `currentRequestSpan` (tested there) reads the span the runtime
+ * `@volo/web`'s `currentRequestSpan` (tested there) reads the span the runtime
  * published on the request context; a tracer seam (a db query, an inline job)
  * parents its child span on it. `RequestContextSpan` is structurally the tracing
  * `Span` — both carry `data.{traceId,spanId}` and the fluent setters — so the
@@ -323,7 +323,7 @@ const requestSpan = currentRequestSpan as CurrentSpan;
 
 /**
  * The tracing wired onto a long-lived `serve`/`dev` server, or `undefined` when
- * tracing is off (`KEEL_OTLP_URL` unset).
+ * tracing is off (`VOLO_OTLP_URL` unset).
  *
  * `serveOptions` is the slice handed to `deps.serve` — the request tracer (so
  * every request mints a span), the `traceparent` parser (so a cross-service
@@ -345,7 +345,7 @@ interface ServeTracing {
  * Construct the OTLP tracer from the environment and the flush lifecycle a
  * long-lived server runs.
  *
- * `tracesFromEnv` reads the two-var setup (`KEEL_OTLP_URL` is the on switch) and
+ * `tracesFromEnv` reads the two-var setup (`VOLO_OTLP_URL` is the on switch) and
  * builds the `Tracer` + `OtlpHttpExporter`; absent a URL it returns `undefined`
  * and so do we — the server runs untraced, zero overhead. With tracing on we
  * start the steady flush interval and hand back the serve-options slice
@@ -353,8 +353,8 @@ interface ServeTracing {
  * span seam reads `context.span`, so a db query or inline job fired during a
  * request parents on the request span.
  *
- * THE CONTRACT (mirrored by `@keel/cloudflare`, edge-deploy #3): the env vars
- * are `KEEL_OTLP_URL` / `KEEL_OTLP_SERVICE` / `KEEL_OTLP_HEADERS`; the flush API
+ * THE CONTRACT (mirrored by `@volo/cloudflare`, edge-deploy #3): the env vars
+ * are `VOLO_OTLP_URL` / `VOLO_OTLP_SERVICE` / `VOLO_OTLP_HEADERS`; the flush API
  * is `traces.flush()` (an edge worker calls it from `ctx.waitUntil`); here the
  * node tier flushes on an interval AND on drain.
  */
@@ -384,7 +384,7 @@ function buildServeTracing(deps: CliDeps): ServeTracing | undefined {
  * bin is what keeps the process alive after this returns. `/readyz` is wired to
  * a real database ping so it reports the node's true readiness, not a constant.
  *
- * When `KEEL_OTLP_URL` is set, an OTLP tracer is constructed and wired: every
+ * When `VOLO_OTLP_URL` is set, an OTLP tracer is constructed and wired: every
  * request mints a span, an inbound `traceparent` joins one trace, spans flush on
  * an interval, and a final flush runs on graceful drain.
  */
@@ -395,7 +395,7 @@ async function runServe(args: readonly string[], deps: CliDeps): Promise<number>
 
   const { port } = parsePort(args, DEFAULT_PORT);
 
-  // Construct the OTLP tracer from the env (off unless `KEEL_OTLP_URL` is set).
+  // Construct the OTLP tracer from the env (off unless `VOLO_OTLP_URL` is set).
   // When on, its serve-options slice (request tracer + `traceparent` parser +
   // drain flush) rides into `serve` and the steady flush interval is running.
   const tracing = buildServeTracing(deps);
@@ -463,7 +463,7 @@ async function runContentNew(args: readonly string[], deps: CliDeps): Promise<nu
   if (!collection || !title) {
     throw new CliError(
       "CLI_CONTENT_MISSING_ARGS",
-      "content:new needs a collection and a title: keel content:new <collection> <title>",
+      "content:new needs a collection and a title: volo content:new <collection> <title>",
       { collection, title },
     );
   }
@@ -482,7 +482,7 @@ async function runContentDelete(args: readonly string[], deps: CliDeps): Promise
   if (!collection || !slug) {
     throw new CliError(
       "CLI_CONTENT_MISSING_ARGS",
-      "content:delete needs a collection and a slug: keel content:delete <collection> <slug>",
+      "content:delete needs a collection and a slug: volo content:delete <collection> <slug>",
       { collection, slug },
     );
   }
@@ -537,7 +537,7 @@ function selectTarget(sites: readonly Site[], target: string | undefined): reado
  * A project without the directory is a no-op (an island-less app is unchanged).
  *
  * The probe (`hasIslandsDir`) and the builder (`buildClientAssets`) are seams the
- * bin wires to the real filesystem + `@keel/assets`; absent, the CLI never builds
+ * bin wires to the real filesystem + `@volo/assets`; absent, the CLI never builds
  * client assets.
  */
 async function buildClientIfPresent(
@@ -568,7 +568,7 @@ async function buildClientIfPresent(
  * to the client build, while `createApp` wires the server renderer from the same
  * key — so the client alias and the server renderer are always the same dialect.
  */
-function dialectOf(config: KeelAppConfig): UiDialect {
+function dialectOf(config: VoloAppConfig): UiDialect {
   return config.ui !== undefined ? config.ui.dialect : "react";
 }
 
@@ -664,7 +664,7 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
     });
   }
 
-  // Tolerate an app with no declared sites (a missing `keel.sites.ts`, which the
+  // Tolerate an app with no declared sites (a missing `volo.sites.ts`, which the
   // bin's loader resolves to `[]`): dispatch every path straight to the app, so a
   // freshly scaffolded app boots and serves before its author writes a sites file.
   // A declared site set routes as before.
@@ -676,7 +676,7 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
 
   const { port } = parsePort(args, DEFAULT_PORT);
 
-  // Tracing is wired on `dev` exactly as on `serve` (off unless `KEEL_OTLP_URL`
+  // Tracing is wired on `dev` exactly as on `serve` (off unless `VOLO_OTLP_URL`
   // is set), so a developer sees the same spans locally that production emits.
   const tracing = buildServeTracing(deps);
 
@@ -757,14 +757,14 @@ function versionStamp(now: () => number): string {
  * Build the static sites, then ship them and print the deploy plan.
  *
  * Prerenders (failing on a broken page, via `buildStaticSites`), plans the
- * deploy (static targets for the CDN, a `keel serve` node target for the live
+ * deploy (static targets for the CDN, a `volo serve` node target for the live
  * tier), ships each static target, and prints the routing manifest — the single
  * source that splits `/` (static) from `/mls/*` (node) at the edge.
  *
  * The default ship is the legacy in-place copy. `--release` upgrades it to a
  * versioned release: every file lands under an immutable `releases/<version>/`
  * tree first and the `current` pointer flips atomically after — so traffic
- * never sees a partial deploy, and `keel rollback --to <version>` can flip
+ * never sees a partial deploy, and `volo rollback --to <version>` can flip
  * back in one step. `--version <v>` names the release; absent, a timestamp
  * stamp is derived from the injected clock.
  */
@@ -773,7 +773,7 @@ function versionStamp(now: () => number): string {
  *
  * `wrangler deploy` (the driver behind {@link CloudflareDeployer}) ships the
  * Worker and the assets it binds in one atomic, Cloudflare-versioned step — so
- * unlike the static-release path there is no Keel-owned pointer to flip. What Keel
+ * unlike the static-release path there is no Volo-owned pointer to flip. What Volo
  * adds is the gate: probe the live URL after the push and, if it answers
  * unhealthy, roll the Worker back to its previous deployment rather than leave a
  * broken release live (a coded `CLI_DEPLOY_UNHEALTHY`).
@@ -864,7 +864,7 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
 
   // Track whether any STATIC target actually shipped. An all-dynamic plan (the
   // freshly scaffolded app — one dynamic zone at `/`) ships nothing on this path,
-  // so without a closing word `keel deploy` would print only "run `keel serve`"
+  // so without a closing word `volo deploy` would print only "run `volo serve`"
   // and look like a no-op. We name the live-tier paths out loud below instead.
   let shippedStatic = false;
 
@@ -901,14 +901,14 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
   }
 
   // Nothing static shipped: this default path has no remote tier of its own, so
-  // say where the live app goes rather than exit silently. `keel deploy
+  // say where the live app goes rather than exit silently. `volo deploy
   // --cloudflare` is the one-command edge deploy (Worker + assets via wrangler);
-  // `keel serve` is the self-hosted node tier. (A `--release`/remote run DID ship
+  // `volo serve` is the self-hosted node tier. (A `--release`/remote run DID ship
   // — its own lines already reported it — so this hint is for the bare default.)
   if (!shippedStatic && shipper.kind === "copy") {
     deps.out(
-      "no static routes to ship — deploy the live app with `keel deploy --cloudflare` " +
-        "(Worker + assets via wrangler) or self-host it with `keel serve`",
+      "no static routes to ship — deploy the live app with `volo deploy --cloudflare` " +
+        "(Worker + assets via wrangler) or self-host it with `volo serve`",
     );
   }
 
@@ -931,7 +931,7 @@ async function runRollback(args: readonly string[], deps: CliDeps): Promise<numb
   if (version === undefined) {
     throw new CliError(
       "CLI_ROLLBACK_MISSING_VERSION",
-      "rollback needs the release to flip to: keel rollback --to <version>",
+      "rollback needs the release to flip to: volo rollback --to <version>",
       {},
     );
   }

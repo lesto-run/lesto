@@ -1,7 +1,7 @@
 import type { CacheStore, Dialect, SqlDatabase, StoredEntry } from "./types";
 
 /** The single table every SQL-backed cache reads and writes. */
-const TABLE = "keel_cache";
+const TABLE = "volo_cache";
 
 /**
  * A SQL cache store plus the sweep the SQL backing makes cheap.
@@ -12,7 +12,7 @@ const TABLE = "keel_cache";
  * situation, and `sweep` is its `deleteExpired` twin. `sweep(now)` deletes every
  * row whose `expires_at` deadline has passed; a never-expiring entry
  * (`expires_at IS NULL`) is left untouched. The CALLER owns the cadence (the
- * retention recipe in `@keel/queue`); the store starts no timer.
+ * retention recipe in `@volo/queue`); the store starts no timer.
  */
 export interface SqlCacheStore extends CacheStore {
   sweep(now: number): Promise<number>;

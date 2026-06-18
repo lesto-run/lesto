@@ -1,14 +1,14 @@
 /// <reference lib="dom" />
 
 /**
- * @keel/content-search/react - React hook for client-side search
+ * @volo/content-search/react - React hook for client-side search
  *
  * Zero-config search hook with sensible defaults.
  * Combines semantic search with keyword matching for best results.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { createCache, CACHE_LIMITS, CACHE_TTL } from "@keel/content-shared/cache";
+import { createCache, CACHE_LIMITS, CACHE_TTL } from "@volo/content-shared/cache";
 import { binaryQuantize, hammingDistance, hammingToSimilarity } from "./binary";
 import { createQueryProcessor, type QueryProcessor } from "./query-intelligence";
 import { shouldFallbackToRAG, RAGClient, mergeResults } from "./rag-fallback";

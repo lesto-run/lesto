@@ -1,8 +1,8 @@
 {
-  "name": "@keel/example-admin",
+  "name": "@volo/example-admin",
   "version": "0.0.0",
   "private": true,
-  "description": "A runnable end-to-end Keel app: the @keel/admin CRUD backbone wired behind real HTTP routes — a paginated + projected product list and an onMutation audit hook that records every create/update/delete to a queryable audit trail.",
+  "description": "A runnable end-to-end Volo app: the @volo/admin CRUD backbone wired behind real HTTP routes — a paginated + projected product list and an onMutation audit hook that records every create/update/delete to a queryable audit trail.",
   "type": "module",
   "scripts": {
     "start": "bun run run.ts",
@@ -11,12 +11,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@keel/admin": "workspace:*",
-    "@keel/db": "workspace:*",
-    "@keel/kernel": "workspace:*",
-    "@keel/migrate": "workspace:*",
-    "@keel/runtime": "workspace:*",
-    "@keel/web": "workspace:*",
+    "@volo/admin": "workspace:*",
+    "@volo/db": "workspace:*",
+    "@volo/kernel": "workspace:*",
+    "@volo/migrate": "workspace:*",
+    "@volo/runtime": "workspace:*",
+    "@volo/web": "workspace:*",
     "better-sqlite3": "^11.10.0",
     "zod": "^4.0.0"
   }

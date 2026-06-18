@@ -1,17 +1,17 @@
-# @keel/content-markdown
+# @volo/content-markdown
 
 Markdown rendering for Docks content collections.
 
 ## Installation
 
 ```bash
-npm install @keel/content-markdown
+npm install @volo/content-markdown
 ```
 
 ## Quick Start
 
 ```typescript
-import { render } from "@keel/content-markdown";
+import { render } from "@volo/content-markdown";
 
 const result = await render("# Hello World");
 console.log(result.html);

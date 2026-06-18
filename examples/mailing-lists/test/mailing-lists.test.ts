@@ -12,11 +12,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { openSqlite } from "@keel/runtime";
-import { rateLimit } from "@keel/ratelimit";
-import { subscribedRecipients } from "@keel/mailing-lists";
-import type { Middleware } from "@keel/web";
-import type { RenderedEmail } from "@keel/mail";
+import { openSqlite } from "@volo/runtime";
+import { rateLimit } from "@volo/ratelimit";
+import { subscribedRecipients } from "@volo/mailing-lists";
+import type { Middleware } from "@volo/web";
+import type { RenderedEmail } from "@volo/mail";
 
 import { buildApp } from "../src/app";
 
@@ -77,7 +77,7 @@ async function boot(subscribeLimiter?: Middleware) {
   return { ...booted, outbox, drain, subscribeAndConfirm, close };
 }
 
-describe("@keel/mailing-lists example — the journey over HTTP", () => {
+describe("@volo/mailing-lists example — the journey over HTTP", () => {
   it("drives subscribe → confirm → broadcast → unsubscribe end to end", async () => {
     const { app, db, list, outbox, drain, close } = await boot();
 
@@ -183,7 +183,7 @@ describe("@keel/mailing-lists example — the journey over HTTP", () => {
     const { app, list, close } = await boot();
 
     try {
-      // Keel has no request error boundary yet, so the routes validate the body
+      // Volo has no request error boundary yet, so the routes validate the body
       // themselves — a missing/wrong-typed field must be a clean 422, never an
       // uncaught throw that would 500 the endpoint.
       const noEmail = await app.handle("POST", `/lists/${list.id}/subscribe`, { body: {} });

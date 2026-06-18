@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { createEngine, type AnyCollection, type ResolvedConfig } from "@keel/content-core/build";
+import { createEngine, type AnyCollection, type ResolvedConfig } from "@volo/content-core/build";
 import { createTempDir, type TempDirContext } from "./test-utils";
 import { handleCreateEntry, handleUpdateEntry } from "../server";
 

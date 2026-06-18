@@ -113,11 +113,11 @@ async function updatePackageJson(cwd: string, packageJson: PackageJson | undefin
   const pkgPath = path.join(cwd, "package.json");
   const pkg: PackageJson = packageJson ?? {};
 
-  // Add @keel/content-core to dependencies if not present
+  // Add @volo/content-core to dependencies if not present
   pkg.dependencies = pkg.dependencies ?? {};
-  if (!pkg.dependencies["@keel/content-core"]) {
-    pkg.dependencies["@keel/content-core"] = "^0.0.1";
-    console.log("  Added @keel/content-core to dependencies");
+  if (!pkg.dependencies["@volo/content-core"]) {
+    pkg.dependencies["@volo/content-core"] = "^0.0.1";
+    console.log("  Added @volo/content-core to dependencies");
   }
 
   // Add generate script if not present
@@ -141,7 +141,7 @@ async function updateViteConfig(cwd: string, viteConfigFile: string): Promise<vo
   const content = await readFile(configPath, "utf-8");
 
   // Check if docks plugin is already imported
-  if (content.includes("@keel/content-vite-plugin") || content.includes("docks(")) {
+  if (content.includes("@volo/content-vite-plugin") || content.includes("docks(")) {
     console.log("  Vite config already includes Docks plugin");
     return;
   }
@@ -151,7 +151,7 @@ async function updateViteConfig(cwd: string, viteConfigFile: string): Promise<vo
     // Add import at the top
     .replace(
       /(import .* from ['"]vite['"];?)/,
-      '$1\nimport docks from "@keel/content-vite-plugin";',
+      '$1\nimport docks from "@volo/content-vite-plugin";',
     )
     // Add plugin to plugins array
     .replace(/plugins:\s*\[/, "plugins: [docks(), ");
@@ -161,7 +161,7 @@ async function updateViteConfig(cwd: string, viteConfigFile: string): Promise<vo
     console.log(`  Updated ${viteConfigFile} with Docks plugin`);
   } else {
     console.log(`  Could not auto-update ${viteConfigFile}. Please add the Docks plugin manually:`);
-    console.log('    import docks from "@keel/content-vite-plugin";');
+    console.log('    import docks from "@volo/content-vite-plugin";');
     console.log("    // Add docks() to your plugins array");
   }
 }
@@ -171,7 +171,7 @@ async function updateNextConfig(cwd: string, nextConfigFile: string): Promise<vo
   const content = await readFile(configPath, "utf-8");
 
   // Check if docks is already configured
-  if (content.includes("@keel/content-next") || content.includes("withDocks")) {
+  if (content.includes("@volo/content-next") || content.includes("withDocks")) {
     console.log("  Next.js config already includes Docks");
     return;
   }
@@ -179,7 +179,7 @@ async function updateNextConfig(cwd: string, nextConfigFile: string): Promise<vo
   console.log(
     `  Could not auto-update ${nextConfigFile}. Please add the Docks configuration manually:`,
   );
-  console.log('    import { withDocks } from "@keel/content-next";');
+  console.log('    import { withDocks } from "@volo/content-next";');
   console.log("    export default withDocks(nextConfig);");
 }
 
@@ -232,7 +232,7 @@ export async function runInit(cwd: string, options: InitOptions = {}): Promise<v
   console.log(`\nCreated directory: ${contentDir}`);
 
   // Generate docks.config.ts
-  const configContent = `import { defineConfig, defineCollection } from "@keel/content-core";
+  const configContent = `import { defineConfig, defineCollection } from "@volo/content-core";
 import { z } from "zod";
 
 const ${collectionName}Schema = z.object({

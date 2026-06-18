@@ -8,7 +8,7 @@
  * a preflight outright or fold the headers onto the real response on the way out.
  */
 
-import type { Middleware } from "@keel/web";
+import type { Middleware } from "@volo/web";
 
 import { corsHeaders } from "./cors";
 import type { CorsOptions } from "./cors";

@@ -3,10 +3,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { KeelError } from "@keel/errors";
-import { currentContext, currentRequestSpan } from "@keel/web";
+import { VoloError } from "@volo/errors";
+import { currentContext, currentRequestSpan } from "@volo/web";
 
-import type { DeployPlan } from "@keel/deploy";
+import type { DeployPlan } from "@volo/deploy";
 
 import {
   CloudflareError,
@@ -89,7 +89,7 @@ interface RecordedSpan {
 
 /**
  * A recording tracer satisfying the structural `EdgeRequestTracer` seam, standing
- * in for `@keel/observability`'s request tracer. Each minted span carries `data`
+ * in for `@volo/observability`'s request tracer. Each minted span carries `data`
  * ids (so it is assignable to the request context's span slice) and records the
  * inbound trace it was joined to, so a test can assert the traceparent join.
  */
@@ -135,7 +135,7 @@ const EXAMPLE_INBOUND: EdgeInboundTrace = {
 };
 
 /**
- * A parser standing in for `@keel/observability`'s `parseTraceparent`: it returns
+ * A parser standing in for `@volo/observability`'s `parseTraceparent`: it returns
  * the join for the spec's example header, and `undefined` for anything else.
  */
 const exampleTraceparentParser: EdgeTraceparentParser = (header) =>
@@ -169,7 +169,7 @@ describe("toFetchHandler", () => {
     const { dispatch } = recordingDispatch({
       status: 302,
       body: "",
-      headers: { "set-cookie": "__Host-keel_session=abc; Secure", location: "/mls" },
+      headers: { "set-cookie": "__Host-volo_session=abc; Secure", location: "/mls" },
     });
 
     const response = await toFetchHandler(dispatch)(
@@ -177,7 +177,7 @@ describe("toFetchHandler", () => {
     );
 
     expect(response.status).toBe(302);
-    expect(response.headers.get("set-cookie")).toBe("__Host-keel_session=abc; Secure");
+    expect(response.headers.get("set-cookie")).toBe("__Host-volo_session=abc; Secure");
     expect(response.headers.get("location")).toBe("/mls");
   });
 
@@ -282,7 +282,7 @@ describe("toFetchHandler", () => {
           "http.method": "GET",
           "http.path": "/mls/saved",
           "http.status_code": 500,
-          "keel.request_id": "edge-1",
+          "volo.request_id": "edge-1",
         },
         status: "error",
         ended: true,
@@ -394,7 +394,7 @@ describe("toFetchHandler", () => {
     const { tracer, spans } = recordingTracer();
 
     // The dispatcher reads the span the runtime published on the context — exactly
-    // how a @keel/db onQuery seam would find the request span to parent its child.
+    // how a @volo/db onQuery seam would find the request span to parent its child.
     let seenSpanData: { traceId: string; spanId: string } | undefined;
 
     const dispatch: EdgeDispatch = () => {
@@ -678,7 +678,7 @@ describe("toFetchHandler — hardening (edge parity)", () => {
     const logged: unknown[] = [];
 
     const response = await toFetchHandler(
-      throwingDispatch(new KeelError("RUNTIME_BODY_TOO_LARGE", "too big")),
+      throwingDispatch(new VoloError("RUNTIME_BODY_TOO_LARGE", "too big")),
       { logError: (_message, error) => logged.push(error) },
     )(new Request("https://example.com/x", { method: "POST" }));
 
@@ -936,7 +936,7 @@ describe("toFetchHandler — timeoutMs", () => {
     // reject arm forwards it, and the error boundary maps it to a coded status
     // (here 413). An async rejection, NOT a sync throw, so it flows through the race.
     const response = await toFetchHandler(
-      rejectingDispatch(new KeelError("RUNTIME_BODY_TOO_LARGE", "too big")),
+      rejectingDispatch(new VoloError("RUNTIME_BODY_TOO_LARGE", "too big")),
       {
         timeoutMs: 1000,
         logRequest: () => undefined,
@@ -1141,7 +1141,7 @@ describe("wranglerConfig", () => {
         site: "mls",
         basePath: "/mls",
         routing: { basePath: "/mls", mode: "dynamic" },
-        run: "keel serve",
+        run: "volo serve",
         needsDatabase: true,
       },
     ],
@@ -1206,7 +1206,7 @@ describe("wranglerConfig", () => {
       assetsDir: "out",
       alias: { react: "preact/compat" },
       d1Databases: [{ binding: "DB", databaseName: "estate", databaseId: "abc-123" }],
-      vars: { KEEL_DEMO: "1" },
+      vars: { VOLO_DEMO: "1" },
       placement: { mode: "smart" },
     });
 
@@ -1214,7 +1214,7 @@ describe("wranglerConfig", () => {
     expect(config.d1_databases).toEqual([
       { binding: "DB", database_name: "estate", database_id: "abc-123" },
     ]);
-    expect(config.vars).toEqual({ KEEL_DEMO: "1" });
+    expect(config.vars).toEqual({ VOLO_DEMO: "1" });
     expect(config.placement).toEqual({ mode: "smart" });
   });
 
@@ -1322,13 +1322,13 @@ describe("serializeWranglerConfig", () => {
       assets: { directory: "./out", binding: "ASSETS" },
       d1_databases: [{ binding: "DB", database_name: "estate", database_id: "id" }],
       alias: { react: "preact/compat" },
-      vars: { KEEL_DEMO: "1" },
+      vars: { VOLO_DEMO: "1" },
       placement: { mode: "smart" },
     });
 
     expect(text).toContain('\t"d1_databases": [\n\t\t{\n\t\t\t"binding": "DB",');
     expect(text).toContain('\t"alias": {\n\t\t"react": "preact/compat",\n\t},');
-    expect(text).toContain('\t"vars": {\n\t\t"KEEL_DEMO": "1",\n\t},');
+    expect(text).toContain('\t"vars": {\n\t\t"VOLO_DEMO": "1",\n\t},');
     expect(text).toContain('\t"placement": {\n\t\t"mode": "smart",\n\t},');
   });
 
@@ -1351,7 +1351,7 @@ describe("serializeWranglerConfig", () => {
           site: "mls",
           basePath: "/mls",
           routing: { basePath: "/mls", mode: "dynamic" },
-          run: "keel serve",
+          run: "volo serve",
           needsDatabase: true,
         },
       ],
@@ -1362,7 +1362,7 @@ describe("serializeWranglerConfig", () => {
     };
 
     const config = wranglerConfig(estatePlan, {
-      name: "keel-estate",
+      name: "volo-estate",
       main: "worker.ts",
       compatibilityDate: "2026-06-01",
       assetsDir: "./out/marketing",
@@ -1386,12 +1386,12 @@ describe("serializeWranglerConfig", () => {
     const text = serializeWranglerConfig(config, {
       fields: {
         name: [
-          "Generated by `wranglerConfig` (@keel/cloudflare) from the deploy plan, then",
+          "Generated by `wranglerConfig` (@volo/cloudflare) from the deploy plan, then",
           'committed. See ADR 0002 and the README\'s "Deploy to Cloudflare" runbook.',
         ],
         compatibility_flags: ["node:crypto for the signed-session HMAC and password hashing."],
         assets: [
-          "The prerendered static marketing site (`keel build` → out/marketing).",
+          "The prerendered static marketing site (`volo build` → out/marketing).",
           "Served first; a miss falls through to the Worker (the /mls app).",
         ],
         d1_databases: [
@@ -1413,7 +1413,7 @@ describe("serializeWranglerConfig", () => {
           "`build-client.ts --preact` applies to the client bundle, so the SSR'd markup",
           "and the shipped client speak one dialect. `worker.ts` completes the pair by",
           "rendering through `preactServerRenderer`. The shims satisfy the react-dom",
-          "imports `@keel/ui`'s barrel carries but the worker never invokes.",
+          "imports `@volo/ui`'s barrel carries but the worker never invokes.",
         ],
       },
     });

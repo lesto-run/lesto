@@ -1,8 +1,8 @@
 {
-  "name": "@keel/web",
+  "name": "@volo/web",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's MVC request-handling core — a Rails-style controller layer that weds @keel/router and @keel/ui.",
+  "description": "Volo's MVC request-handling core — a Rails-style controller layer that weds @volo/router and @volo/ui.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,10 +12,10 @@
     }
   },
   "dependencies": {
-    "@keel/errors": "workspace:*",
-    "@keel/observability": "workspace:*",
-    "@keel/router": "workspace:*",
-    "@keel/ui": "workspace:*",
+    "@volo/errors": "workspace:*",
+    "@volo/observability": "workspace:*",
+    "@volo/router": "workspace:*",
+    "@volo/ui": "workspace:*",
     "react": "^19",
     "react-dom": "^19",
     "zod": "^4.0.0"

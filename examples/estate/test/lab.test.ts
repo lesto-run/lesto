@@ -9,10 +9,10 @@
 import { describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app";
-import type { KeelResponse } from "@keel/web";
+import type { VoloResponse } from "@volo/web";
 
 /** Drain a page's streamed body (or pass a string body through) for assertions. */
-async function body(response: KeelResponse): Promise<string> {
+async function body(response: VoloResponse): Promise<string> {
   if (typeof response.body === "string") return response.body;
 
   const reader = (response.body as unknown as ReadableStream<Uint8Array>).getReader();
@@ -67,7 +67,7 @@ describe("/lab/streaming — async server data", () => {
   });
 });
 
-describe("/lab/flags — the feature-flag gate (@keel/flags)", () => {
+describe("/lab/flags — the feature-flag gate (@volo/flags)", () => {
   it("404s when the flag is off (the default)", async () => {
     const app = await buildApp();
 
@@ -84,7 +84,7 @@ describe("/lab/flags — the feature-flag gate (@keel/flags)", () => {
   });
 });
 
-describe("/lab/admin — the authorization gate (@keel/authz, deny-by-default)", () => {
+describe("/lab/admin — the authorization gate (@volo/authz, deny-by-default)", () => {
   it("denies the guest role (403)", async () => {
     const app = await buildApp();
 

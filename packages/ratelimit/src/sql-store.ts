@@ -3,7 +3,7 @@ import { RateLimitError } from "./errors";
 import type { BucketState, RateLimitStore, SqlDatabase } from "./types";
 
 /** The single table every SQL-backed rate-limit store reads and writes. */
-const TABLE = "keel_rate_limits";
+const TABLE = "volo_rate_limits";
 
 /** Which dialect we are speaking — the one fork in this increment (`FOR UPDATE`). */
 export type Dialect = "sqlite" | "postgres";

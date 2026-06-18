@@ -3,7 +3,7 @@ import { sha256 } from "./hash";
 import type { Session, SessionStore, SqlDatabase } from "./types";
 
 /** The single table every SQL-backed session store reads and writes. */
-const TABLE = "keel_sessions";
+const TABLE = "volo_sessions";
 
 /**
  * A SQL session store, plus the two by-row affordances the SQL backing makes

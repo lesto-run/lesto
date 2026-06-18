@@ -1,5 +1,5 @@
 /**
- * @keel/flags — first-class feature flags.
+ * @volo/flags — first-class feature flags.
  *
  *   const flags = defineFlags({
  *     defaults: { "new-listing-ui": false },

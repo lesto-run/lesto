@@ -1,5 +1,5 @@
-import type { RuntimeEntry } from "@keel/content-core";
-import type { SqlDatabase } from "@keel/migrate";
+import type { RuntimeEntry } from "@volo/content-core";
+import type { SqlDatabase } from "@volo/migrate";
 
 import { ContentStoreError } from "./errors";
 import { CONTENT_ENTRIES_TABLE } from "./migration";
@@ -14,7 +14,7 @@ interface ContentRow {
  * Read content entries back out of the database, grouped by collection.
  *
  * With no `collection`, every collection is returned — the exact shape
- * {@link https://npmjs.com/package/@keel/content-core | content-core}'s
+ * {@link https://npmjs.com/package/@volo/content-core | content-core}'s
  * `setData` expects. Pass a collection to read just that one.
  */
 export async function loadEntries(

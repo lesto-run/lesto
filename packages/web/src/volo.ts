@@ -1,8 +1,8 @@
 /**
- * `keel()` — the code-first router that registers API routes AND pages on one
+ * `volo()` — the code-first router that registers API routes AND pages on one
  * composable surface.
  *
- *   const app = keel()
+ *   const app = volo()
  *     .use(requestId())
  *     .get("/api/listings/:id", (c) => c.json(getListing(+c.param("id"))))
  *     .post("/api/listings", (c) => c.json(create(c.valid(NewListing)), 201))
@@ -24,13 +24,13 @@
  * the edge adapter both feed.
  */
 
-import { formatTraceparent } from "@keel/observability";
-import { RouteTable } from "@keel/router";
-import type { Match } from "@keel/router";
-import { createSourceResolver, dataSourceHref } from "@keel/ui";
-import type { DataSource } from "@keel/ui";
-import { preactServerRenderer, reactServerRenderer } from "@keel/ui/server";
-import type { ServerRenderer } from "@keel/ui/server";
+import { formatTraceparent } from "@volo/observability";
+import { RouteTable } from "@volo/router";
+import type { Match } from "@volo/router";
+import { createSourceResolver, dataSourceHref } from "@volo/ui";
+import type { DataSource } from "@volo/ui";
+import { preactServerRenderer, reactServerRenderer } from "@volo/ui/server";
+import type { ServerRenderer } from "@volo/ui/server";
 
 import { BROWSER_SPANS_ROUTE, browserSpansHandler, defaultBrowserSpanSink } from "./browser-spans";
 import type { BrowserSpanSink } from "./browser-spans";
@@ -42,7 +42,7 @@ import { Context } from "./handler-context";
 import type { Middleware, Next } from "./middleware";
 import { renderPageResponse } from "./render-page";
 import type { Layout, PageDef, RenderPageOptions } from "./render-page";
-import type { AnyKeelResponse, HandleOptions, KeelRequest, KeelResponse } from "./types";
+import type { AnyVoloResponse, HandleOptions, VoloRequest, VoloResponse } from "./types";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -55,12 +55,12 @@ type MaybePromise<T> = T | Promise<T>;
 export type Handler<Path extends string = string> = (
   c: Context<Path>,
   next: Next,
-) => MaybePromise<AnyKeelResponse | void>;
+) => MaybePromise<AnyVoloResponse | void>;
 
 /**
  * Adapt a request-shaped {@link Middleware} into a {@link Handler}.
  *
- * The security batteries (`@keel/cors`, `@keel/ratelimit`, `@keel/csrf`, and the
+ * The security batteries (`@volo/cors`, `@volo/ratelimit`, `@volo/csrf`, and the
  * `secureStack` that bundles them) are written against the request-and-next
  * contract — they read the request's headers/method and either answer or delegate.
  * That is exactly a handler minus the context wrapper, so the bridge is to hand
@@ -106,7 +106,7 @@ const isPage = (own: readonly Handler[] | PagePayload): own is PagePayload => !A
  * request gets its own object, with its own `headers` record, so a mutation
  * cannot outlive the request that made it.
  */
-const notFound = (): KeelResponse => ({
+const notFound = (): VoloResponse => ({
   status: 404,
   headers: { "content-type": "text/plain" },
   body: "Not Found",
@@ -119,7 +119,7 @@ const notFoundHandler: Handler = () => notFound();
  * A terminal that re-raises `error` — used when a path is unroutable because a
  * param failed to decode (a malformed percent-encoding). It runs LAST, after the
  * app's global middleware, so a CORS preflight and a rate-limit still see the
- * request (the {@link Keel.handle} invariant); the coded error then propagates to
+ * request (the {@link Volo.handle} invariant); the coded error then propagates to
  * the transport, which maps it to a 400 — exactly as it does for an error thrown
  * deeper in the chain.
  */
@@ -139,13 +139,13 @@ const raisingHandler =
  * twice. An exhausted chain — every layer fell through without answering — yields
  * a 404, the honest "matched a route but nothing handled it" outcome.
  */
-function runChain(chain: readonly Handler[], c: Context): Promise<AnyKeelResponse> {
-  const run = async (index: number): Promise<AnyKeelResponse> => {
+function runChain(chain: readonly Handler[], c: Context): Promise<AnyVoloResponse> {
+  const run = async (index: number): Promise<AnyVoloResponse> => {
     const handler = chain[index];
 
     if (handler === undefined) return notFound();
 
-    let advanced: Promise<AnyKeelResponse> | undefined;
+    let advanced: Promise<AnyVoloResponse> | undefined;
     const next: Next = () => (advanced ??= run(index + 1));
 
     const response = await handler(c, next);
@@ -156,7 +156,7 @@ function runChain(chain: readonly Handler[], c: Context): Promise<AnyKeelRespons
   return run(0);
 }
 
-export class Keel {
+export class Volo {
   // Insertion order is resolution order; the matcher is built lazily from this.
   private readonly collected: CollectedRoute[] = [];
 
@@ -195,14 +195,14 @@ export class Keel {
   // one tighten it, without forking the renderer.
   private renderDeadlineMs: number | undefined;
 
-  // Where the client-error beacon (`POST /__keel/client-errors`, registered as a
+  // Where the client-error beacon (`POST /__volo/client-errors`, registered as a
   // built-in below) forwards its normalized events. Defaults to the structured-log
   // sink; `.clientErrors(sink)` swaps it (the observability wave wires OTLP here).
   // The route reads this field at request time, so an override set after
   // construction still takes effect.
   private clientErrorSink: ClientErrorSink = defaultClientErrorSink;
 
-  // Where the browser-RUM receiver (`POST /__keel/browser-spans`, registered as a
+  // Where the browser-RUM receiver (`POST /__volo/browser-spans`, registered as a
   // built-in below) forwards each normalized browser span. Defaults to the
   // structured-log sink; `.browserSpans(sink)` swaps it to `traces.seams.onBrowserSpan`
   // so a navigation/resource/vital span lands in the SAME collector as the server
@@ -268,7 +268,7 @@ export class Keel {
   }
 
   /**
-   * Register a data source's loader and auto-expose it at `GET /__keel/data/<name>`
+   * Register a data source's loader and auto-expose it at `GET /__volo/data/<name>`
    * (ADR 0010 — island data sources).
    *
    * The loader runs with the request context; its return is the DTO an island
@@ -328,7 +328,7 @@ export class Keel {
   /**
    * Select the server-render dialect (ADR 0008's matched pair).
    *
-   * Pass the Preact `ServerRenderer` (`@keel/ui/server`'s `preactServerRenderer`)
+   * Pass the Preact `ServerRenderer` (`@volo/ui/server`'s `preactServerRenderer`)
    * when this app's client bundle is built under the `react`→`preact/compat`
    * alias, so an `ssr: true` island's SERVER markup is the dialect its client
    * hydrates against — mismatch the two and every `ssr: true` island re-renders
@@ -391,7 +391,7 @@ export class Keel {
   }
 
   /**
-   * Override where the client-error beacon (`POST /__keel/client-errors`) forwards
+   * Override where the client-error beacon (`POST /__volo/client-errors`) forwards
    * its events.
    *
    * The route is a built-in — registered for every app — so this only swaps its
@@ -408,14 +408,14 @@ export class Keel {
   }
 
   /**
-   * Override where the browser-RUM receiver (`POST /__keel/browser-spans`)
+   * Override where the browser-RUM receiver (`POST /__volo/browser-spans`)
    * forwards its normalized spans.
    *
    * The route is a built-in — registered for every app — so this only swaps its
    * SINK; the default is a structured-log sink. The canonical wiring points it at
    * `traces.seams.onBrowserSpan`, so a browser navigation/resource/web-vital span
    * lands in the SAME OTLP collector as the server `http.request` span, joined by
-   * the trace id the page adopted from the SSR-injected `keel-traceparent` meta —
+   * the trace id the page adopted from the SSR-injected `volo-traceparent` meta —
    * the UI→API→DB trace ARCHITECTURE.md §7 promises. The route stays PII-free
    * regardless of the sink: only same-origin paths, timing numbers, and vital
    * values ever reach it.
@@ -445,14 +445,14 @@ export class Keel {
    *
    * KNOWN LIMITATION (ADR 0010 corrections #8): a prefixed mount prefixes the data
    * *route* but a bound island's `bind.href` still points at root
-   * (`/__keel/data/<name>`). Register data sources on the ROOT app. A prefix-aware
+   * (`/__volo/data/<name>`). Register data sources on the ROOT app. A prefix-aware
    * href is future work.
    */
-  route(sub: Keel): this;
-  route(prefix: string, sub: Keel): this;
-  route(prefixOrSub: string | Keel, maybeSub?: Keel): this {
+  route(sub: Volo): this;
+  route(prefix: string, sub: Volo): this;
+  route(prefixOrSub: string | Volo, maybeSub?: Volo): this {
     const prefix = typeof prefixOrSub === "string" ? prefixOrSub : "";
-    const sub = typeof prefixOrSub === "string" ? (maybeSub as Keel) : prefixOrSub;
+    const sub = typeof prefixOrSub === "string" ? (maybeSub as Volo) : prefixOrSub;
 
     for (const route of sub.collected) {
       this.collected.push({
@@ -497,12 +497,12 @@ export class Keel {
    * `ROUTER_MALFORMED_PARAM`) is treated the same way: the global middleware runs
    * around a terminal that re-raises the coded error, so it still reaches the
    * transport as a 400 without slipping past CORS/rate-limit. The declared return
-   * is the string-bodied {@link KeelResponse} dispatch contract;
+   * is the string-bodied {@link VoloResponse} dispatch contract;
    * a handler may produce a wider body (bytes, a stream — a page streams its
    * HTML), which the transport, not this contract, writes — so it is narrowed
    * back here.
    */
-  async handle(method: string, path: string, options?: HandleOptions): Promise<KeelResponse> {
+  async handle(method: string, path: string, options?: HandleOptions): Promise<VoloResponse> {
     const matcher = this.matcher();
 
     let match: Match<readonly Handler[]> | undefined;
@@ -518,7 +518,7 @@ export class Keel {
       malformed = error;
     }
 
-    const request: KeelRequest = {
+    const request: VoloRequest = {
       method,
       path,
       params: match?.params ?? {},
@@ -537,7 +537,7 @@ export class Keel {
 
     const response = await runChain(chain, new Context(request));
 
-    return response as KeelResponse;
+    return response as VoloResponse;
   }
 
   /**
@@ -663,8 +663,8 @@ export class Keel {
 }
 
 /** Start a new code-first router. */
-export function keel(): Keel {
-  return new Keel();
+export function volo(): Volo {
+  return new Volo();
 }
 
 /**
@@ -681,7 +681,7 @@ const RENDERER_FOR_DIALECT: Record<UiDialect, ServerRenderer> = {
 };
 
 /**
- * Wire a single `ui.dialect` key onto a `keel()` app as ADR 0008's matched pair,
+ * Wire a single `ui.dialect` key onto a `volo()` app as ADR 0008's matched pair,
  * returning the dialect the caller must ALSO build the client bundle for.
  *
  * This is the one place the two halves are chosen together: it sets the app's
@@ -695,7 +695,7 @@ const RENDERER_FOR_DIALECT: Record<UiDialect, ServerRenderer> = {
  * `app.renderer` refuses with a coded `WEB_DIALECT_MISMATCH` — the matched pair
  * cannot be ambiguous. Returns the wired dialect for the client build.
  */
-export function applyUiDialect(app: Keel, dialect: UiDialect): UiDialect {
+export function applyUiDialect(app: Volo, dialect: UiDialect): UiDialect {
   app.renderer(RENDERER_FOR_DIALECT[dialect]);
 
   return dialect;

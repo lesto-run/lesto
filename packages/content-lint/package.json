@@ -1,5 +1,5 @@
 {
-  "name": "@keel/content-lint",
+  "name": "@volo/content-lint",
   "version": "0.1.0",
   "license": "MIT",
   "description": "PREVIEW (not part of the supported v1 content seam) — writing/style linter for Docks content; experimental, coverage-gate-exempt.",

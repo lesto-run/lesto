@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { toFetchHandler } from "@keel/cloudflare";
+import { toFetchHandler } from "@volo/cloudflare";
 
 import { buildEdgeApp, edgeSecret, isDemoMode } from "../src/edge";
 
@@ -30,50 +30,50 @@ function handlerFor(secret: string, demo: boolean): (request: Request) => Promis
 
 describe("edgeSecret — fail closed (blocker #1)", () => {
   // The global setup enables demo mode; these cases need the production posture,
-  // so they manage KEEL_DEMO / SESSION_SECRET themselves and restore after.
+  // so they manage VOLO_DEMO / SESSION_SECRET themselves and restore after.
   let savedDemo: string | undefined;
   let savedSecret: string | undefined;
 
   beforeEach(() => {
-    savedDemo = process.env["KEEL_DEMO"];
+    savedDemo = process.env["VOLO_DEMO"];
     savedSecret = process.env["SESSION_SECRET"];
   });
 
   afterEach(() => {
-    if (savedDemo === undefined) delete process.env["KEEL_DEMO"];
-    else process.env["KEEL_DEMO"] = savedDemo;
+    if (savedDemo === undefined) delete process.env["VOLO_DEMO"];
+    else process.env["VOLO_DEMO"] = savedDemo;
 
     if (savedSecret === undefined) delete process.env["SESSION_SECRET"];
     else process.env["SESSION_SECRET"] = savedSecret;
   });
 
   it("THROWS when SESSION_SECRET is absent and demo mode is off (refuses to serve)", () => {
-    delete process.env["KEEL_DEMO"];
+    delete process.env["VOLO_DEMO"];
     delete process.env["SESSION_SECRET"];
 
     expect(() => edgeSecret({})).toThrow(/SESSION_SECRET is not set/);
     expect(() => edgeSecret()).toThrow(/SESSION_SECRET is not set/);
   });
 
-  it("uses the committed demo fallback ONLY under an explicit KEEL_DEMO=1 binding", () => {
-    delete process.env["KEEL_DEMO"];
+  it("uses the committed demo fallback ONLY under an explicit VOLO_DEMO=1 binding", () => {
+    delete process.env["VOLO_DEMO"];
     delete process.env["SESSION_SECRET"];
 
-    expect(isDemoMode({ KEEL_DEMO: "1" })).toBe(true);
-    expect(edgeSecret({ KEEL_DEMO: "1" })).toMatch(/^estate-demo-edge-secret/);
+    expect(isDemoMode({ VOLO_DEMO: "1" })).toBe(true);
+    expect(edgeSecret({ VOLO_DEMO: "1" })).toMatch(/^estate-demo-edge-secret/);
 
     // A non-"1" value is NOT demo mode.
-    expect(isDemoMode({ KEEL_DEMO: "true" })).toBe(false);
-    expect(() => edgeSecret({ KEEL_DEMO: "true" })).toThrow();
+    expect(isDemoMode({ VOLO_DEMO: "true" })).toBe(false);
+    expect(() => edgeSecret({ VOLO_DEMO: "true" })).toThrow();
   });
 
   it("prefers a real SESSION_SECRET over the demo fallback, in any mode", () => {
     expect(edgeSecret({ SESSION_SECRET: SECRET })).toBe(SECRET);
   });
 
-  it("reads KEEL_DEMO from process.env when no env binding carries it", () => {
+  it("reads VOLO_DEMO from process.env when no env binding carries it", () => {
     delete process.env["SESSION_SECRET"];
-    process.env["KEEL_DEMO"] = "1";
+    process.env["VOLO_DEMO"] = "1";
 
     expect(isDemoMode()).toBe(true);
     expect(edgeSecret()).toMatch(/^estate-demo-edge-secret/);

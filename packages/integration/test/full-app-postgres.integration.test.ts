@@ -1,10 +1,10 @@
 /**
- * The full Keel app journey on a REAL database, asserting cross-process sharing.
+ * The full Volo app journey on a REAL database, asserting cross-process sharing.
  *
  * `db-parity` proves the query layer + schema installers on a networked Postgres,
  * and `kernel-stores` proves two in-process handles share sessions / rate limits.
  * Neither boots the whole app over the wire end-to-end. This suite does: it
- * `serve()`s a real Keel app on `KEEL_PG_URL`, drives the canonical journey
+ * `serve()`s a real Volo app on `VOLO_PG_URL`, drives the canonical journey
  * through HTTP — register → verify (via the captured token) → login → a gated
  * route → a rate-limit check → enqueue a job → drain the worker to completion —
  * then stands up a SECOND, independently-built app over the SAME database and
@@ -17,7 +17,7 @@
  * anywhere in the identity / queue / cache / rate-limit wiring surfaces here.
  *
  * The SQLite leg always runs (the normal gate); the Postgres leg runs only when
- * `KEEL_PG_URL` is set — the `db-parity-postgres` CI job runs the whole integration
+ * `VOLO_PG_URL` is set — the `db-parity-postgres` CI job runs the whole integration
  * suite against a real Postgres, like the `durable-stores`/`kernel-stores` siblings.
  * It threads `dialect: "postgres"` so the PG `FOR UPDATE`/`FOR UPDATE SKIP LOCKED` paths are
  * exercised. `:memory:` is unshareable across two opens, so — like
@@ -27,33 +27,33 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { installCacheSchema, sqlStore } from "@keel/cache";
-import type { SqlDatabase } from "@keel/db";
-import { createDb } from "@keel/db";
-import { createApp, durableStores, installDurableSchema } from "@keel/kernel";
-import type { App, KernelDatabase } from "@keel/kernel";
+import { installCacheSchema, sqlStore } from "@volo/cache";
+import type { SqlDatabase } from "@volo/db";
+import { createDb } from "@volo/db";
+import { createApp, durableStores, installDurableSchema } from "@volo/kernel";
+import type { App, KernelDatabase } from "@volo/kernel";
 import {
   createIdentity,
   IdentityError,
   readSessionToken,
   sessionCookie,
   usersMigration,
-} from "@keel/identity";
-import type { Identity, IdentityMailer } from "@keel/identity";
-import { installSchema as installQueueSchema, Queue } from "@keel/queue";
-import { RateLimiter, sqlRateLimitStore } from "@keel/ratelimit";
-import type { Dialect } from "@keel/ratelimit";
-import { openSqlite, serve } from "@keel/runtime";
-import type { Server } from "@keel/runtime";
-import { keel } from "@keel/web";
-import type { Context, KeelResponse } from "@keel/web";
+} from "@volo/identity";
+import type { Identity, IdentityMailer } from "@volo/identity";
+import { installSchema as installQueueSchema, Queue } from "@volo/queue";
+import { RateLimiter, sqlRateLimitStore } from "@volo/ratelimit";
+import type { Dialect } from "@volo/ratelimit";
+import { openSqlite, serve } from "@volo/runtime";
+import type { Server } from "@volo/runtime";
+import { volo } from "@volo/web";
+import type { Context, VoloResponse } from "@volo/web";
 
 interface Driver {
   readonly name: Dialect;
   open(): Promise<{ db: SqlDatabase; close: () => unknown }>;
 }
 
-const PG_URL = process.env["KEEL_PG_URL"];
+const PG_URL = process.env["VOLO_PG_URL"];
 
 const drivers: Driver[] = [{ name: "sqlite", open: () => openSqlite() }];
 
@@ -61,7 +61,7 @@ if (PG_URL !== undefined) {
   drivers.push({
     name: "postgres",
     open: async () => {
-      const { openPostgres } = await import("@keel/pg");
+      const { openPostgres } = await import("@volo/pg");
 
       return openPostgres({ connectionString: PG_URL });
     },
@@ -80,7 +80,7 @@ function authBody(c: Context): { email: string; password: string; token?: string
   return c.req.body as { email: string; password: string; token?: string };
 }
 
-function errorResponse(error: unknown): KeelResponse {
+function errorResponse(error: unknown): VoloResponse {
   if (error instanceof IdentityError) {
     const status =
       error.code === "IDENTITY_EMAIL_NOT_VERIFIED" || error.code === "IDENTITY_INVALID_CREDENTIALS"
@@ -162,7 +162,7 @@ async function bootApp(handle: KernelDatabase, dialect: Dialect): Promise<AppPro
     processed.push(payload.n);
   });
 
-  const app = keel()
+  const app = volo()
     .post("/auth/register", async (c) => {
       const { email, password } = authBody(c);
       try {
@@ -240,7 +240,7 @@ async function bootApp(handle: KernelDatabase, dialect: Dialect): Promise<AppPro
     app,
     migrations: [usersMigration],
     // The queue + cache batteries ride SQL tables of their own; declare their
-    // installers so `keel_jobs` / `keel_cache` exist before the first enqueue/set.
+    // installers so `volo_jobs` / `volo_cache` exist before the first enqueue/set.
     // (The durable session + rate-limit schemas install by default.)
     schemas: [(db) => installQueueSchema(db, dialect), (db) => installCacheSchema(db, dialect)],
   });
@@ -287,14 +287,14 @@ async function get(
 /** The cookie token parsed out of a Set-Cookie header. */
 function tokenFromSetCookie(header: string | null): string {
   expect(header).not.toBeNull();
-  const match = /__Host-keel_session=([^;]+)/.exec(header!);
+  const match = /__Host-volo_session=([^;]+)/.exec(header!);
   expect(match).not.toBeNull();
 
   return match![1]!;
 }
 
 function cookieHeader(token: string): string {
-  return `__Host-keel_session=${token}`;
+  return `__Host-volo_session=${token}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,10 +315,10 @@ describe.each(drivers)("full-app journey + cross-process sharing: $name", (drive
     // Fresh schema (Postgres persists across runs); the two app boots below then
     // install everything against the clean database.
     for (const table of [
-      "keel_sessions",
-      "keel_rate_limits",
-      "keel_jobs",
-      "keel_cache",
+      "volo_sessions",
+      "volo_rate_limits",
+      "volo_jobs",
+      "volo_cache",
       "users",
       "schema_migrations",
     ]) {
@@ -362,7 +362,7 @@ describe.each(drivers)("full-app journey + cross-process sharing: $name", (drive
     // ---- login: a durable __Host- session cookie comes back ----
     const loggedIn = await post(appA.base, "/auth/login", { email, password });
     expect(loggedIn.status).toBe(200);
-    expect(loggedIn.cookie).toContain("__Host-keel_session=");
+    expect(loggedIn.cookie).toContain("__Host-volo_session=");
     expect(loggedIn.cookie).toContain("HttpOnly");
     const token = tokenFromSetCookie(loggedIn.cookie);
 

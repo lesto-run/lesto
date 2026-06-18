@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { runWithContext } from "@keel/web";
+import { runWithContext } from "@volo/web";
 
 import {
   MemoryRateLimitStore,
@@ -11,7 +11,7 @@ import {
   UNKNOWN_CLIENT_KEY,
 } from "../src/index";
 
-import type { AnyKeelResponse, KeelRequest } from "@keel/web";
+import type { AnyVoloResponse, VoloRequest } from "@volo/web";
 import type { BucketState } from "../src/index";
 
 /**
@@ -30,7 +30,7 @@ async function bucketAt(
   return seen;
 }
 
-const request: KeelRequest = {
+const request: VoloRequest = {
   method: "GET",
   path: "/",
   params: {},
@@ -39,7 +39,7 @@ const request: KeelRequest = {
   body: undefined,
 };
 
-const okResponse: AnyKeelResponse = { status: 200, headers: {}, body: "ok" };
+const okResponse: AnyVoloResponse = { status: 200, headers: {}, body: "ok" };
 
 /** A limiter over a fixed clock so deny/allow are deterministic. */
 function fixedLimiter(capacity: number, refillPerSecond: number, now = 1000): RateLimiter {
@@ -160,7 +160,7 @@ describe("rateLimit middleware", () => {
       keyFor: (req) => `api-key:${req.headers["x-api-key"] ?? "anon"}`,
     });
 
-    const withKey = (apiKey: string): KeelRequest => ({
+    const withKey = (apiKey: string): VoloRequest => ({
       ...request,
       headers: { "x-api-key": apiKey },
     });

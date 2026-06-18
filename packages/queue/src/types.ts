@@ -114,21 +114,21 @@ export type Clock = () => Date;
 /**
  * Which SQL dialect the queue speaks. Defaults to `"sqlite"`. It selects the
  * surrogate-key DDL ({@link installSchema}) and the row-locking clause in the
- * atomic claim (`FOR UPDATE SKIP LOCKED` on Postgres). Mirrors `@keel/db`'s
+ * atomic claim (`FOR UPDATE SKIP LOCKED` on Postgres). Mirrors `@volo/db`'s
  * `Dialect`.
  */
 export type Dialect = "sqlite" | "postgres";
 
 // ---- the minimal SQL surface (driver-agnostic) ----
 //
-// This surface is OWNED by `@keel/db`, not redeclared here. The queue once
-// carried its own structurally-identical copy, which made `@keel/db`'s
+// This surface is OWNED by `@volo/db`, not redeclared here. The queue once
+// carried its own structurally-identical copy, which made `@volo/db`'s
 // `SqlDatabase` and the queue's two *nominally distinct* types: sharing one
 // `openSqlite` handle across `createDb` and `new Queue({ db })` forced a
 // `handle as unknown as SqlDatabase` cast even though the shapes matched to the
-// method. Re-exporting the canonical `@keel/db` types instead means a single
+// method. Re-exporting the canonical `@volo/db` types instead means a single
 // handle flows into `createDb`, `new Queue({ db })`, and `installSchema` with NO
 // cast (ADR 0006's async terminals, positional params, and sync `prepare` are
-// all defined there). `@keel/queue` adding `@keel/db` to its dependencies is the
+// all defined there). `@volo/queue` adding `@volo/db` to its dependencies is the
 // only cost; the queue still speaks the same minimal surface, just by reference.
-export type { SqlDatabase, SqlStatement } from "@keel/db";
+export type { SqlDatabase, SqlStatement } from "@volo/db";

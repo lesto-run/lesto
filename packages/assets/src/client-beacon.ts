@@ -16,17 +16,17 @@
  *     injected so the rate is provable in a test rather than flaky.
  *   - **No PII, ever.** The payload carries only *shapes the framework itself
  *     authored* — an island's registered name (a code identifier), an error's
- *     CLASS or coded `KeelError.code`, and COUNTS. Never `error.message` (it can
+ *     CLASS or coded `VoloError.code`, and COUNTS. Never `error.message` (it can
  *     interpolate user data), never a component stack, never a data bind value.
  *
  * The runtime is a single self-contained function ({@link reportClientErrors})
  * so the synthesized entry can inline it via `.toString()` — the browser bundle
- * carries no `@keel/assets` import, yet the code that ships is the exact code
+ * carries no `@volo/assets` import, yet the code that ships is the exact code
  * this file's tests exercise (no string-vs-source drift).
  */
 
-/** Where the beacon POSTs — the receiving route lives in `@keel/web` (core-runtime). */
-export const BEACON_PATH = "/__keel/client-errors";
+/** Where the beacon POSTs — the receiving route lives in `@volo/web` (core-runtime). */
+export const BEACON_PATH = "/__volo/client-errors";
 
 /**
  * The default sampling rate: 10% of reporting sessions actually POST.
@@ -60,7 +60,7 @@ export interface BeaconEvent {
   /** The island's registered name (a code identifier), when the event is about one island. */
   readonly component?: string;
 
-  /** The error's coded `KeelError.code` or its constructor name — never its message. */
+  /** The error's coded `VoloError.code` or its constructor name — never its message. */
   readonly errorClass?: string;
 
   /** Count of islands whose mount failed (hydrate-summary events only). */
@@ -78,7 +78,7 @@ export interface BeaconPayload {
   readonly events: readonly BeaconEvent[];
 }
 
-/** The `HydrationResult` shape the beacon reads (a structural subset of `@keel/ui`'s). */
+/** The `HydrationResult` shape the beacon reads (a structural subset of `@volo/ui`'s). */
 interface HydrationOutcome {
   readonly failed: readonly string[];
   readonly missing: readonly string[];
@@ -89,7 +89,7 @@ export interface BeaconOptions {
   /** Fraction of sessions that POST, in `[0, 1]`. Defaults to {@link DEFAULT_SAMPLE_RATE}. */
   readonly sampleRate?: number;
 
-  /** `true` in `keel dev`: paint the overlay, POST nothing. Defaults to `false`. */
+  /** `true` in `volo dev`: paint the overlay, POST nothing. Defaults to `false`. */
   readonly dev?: boolean;
 
   /** Sampling source, injected for tests. Defaults to `Math.random`. */
@@ -105,7 +105,7 @@ export interface BeaconOptions {
 /**
  * Distill any thrown value to a PII-free class string.
  *
- * A `KeelError` carries a stable `code` we prefer (`UI_ISLAND_UNKNOWN_COMPONENT`
+ * A `VoloError` carries a stable `code` we prefer (`UI_ISLAND_UNKNOWN_COMPONENT`
  * tells an operator "deploy skew" at a glance). Anything else collapses to its
  * constructor name (`TypeError`, `RangeError`). We NEVER read `.message` — that
  * is where interpolated user data hides.
@@ -114,7 +114,7 @@ export function errorClass(error: unknown): string {
   if (error !== null && typeof error === "object") {
     const code = (error as { code?: unknown }).code;
 
-    // A `KeelError`-style code is a SCREAMING_SNAKE identifier — never user data.
+    // A `VoloError`-style code is a SCREAMING_SNAKE identifier — never user data.
     if (typeof code === "string" && code.length > 0) return code;
 
     const ctor = (error as { constructor?: { name?: unknown } }).constructor;
@@ -188,11 +188,11 @@ export function defaultOverlay(payload: BeaconPayload): void {
         ? ` (failed ${event.failed ?? 0}, missing ${event.missing ?? 0})`
         : "";
 
-    return `[keel] ${event.kind}${where}${why}${counts}`;
+    return `[volo] ${event.kind}${where}${why}${counts}`;
   });
 
   const box = document.createElement("div");
-  box.setAttribute("data-keel-error-overlay", "");
+  box.setAttribute("data-volo-error-overlay", "");
   box.style.cssText =
     "position:fixed;bottom:8px;right:8px;z-index:2147483647;max-width:32rem;" +
     "padding:8px 12px;background:#7f1d1d;color:#fff;font:12px/1.5 ui-monospace,monospace;" +

@@ -14,7 +14,7 @@
  * default is off — the safe default, same spirit as the policy's deny-by-default.
  */
 
-import type { AnyKeelResponse, Context, Handler } from "@keel/web";
+import type { AnyVoloResponse, Context, Handler } from "@volo/web";
 
 /** How flags are declared and resolved. */
 export interface FlagsConfig {
@@ -29,7 +29,7 @@ export interface FlagsConfig {
   resolve?: (flag: string, c: Context) => boolean | undefined;
 
   /** Build the response for a gated-off flag. Defaults to a plain 404. */
-  onDisabled?: (c: Context, flag: string) => AnyKeelResponse;
+  onDisabled?: (c: Context, flag: string) => AnyVoloResponse;
 }
 
 /** A flag set bound to its evaluation strategy — the enforcement surface. */
@@ -41,7 +41,7 @@ export interface Flags {
   gate(...flags: string[]): Handler;
 }
 
-const notFound = (): AnyKeelResponse => ({
+const notFound = (): AnyVoloResponse => ({
   status: 404,
   headers: { "content-type": "text/plain" },
   body: "Not Found",

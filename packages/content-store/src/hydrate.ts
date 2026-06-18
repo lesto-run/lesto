@@ -1,5 +1,5 @@
-import { setData } from "@keel/content-core";
-import type { SqlDatabase } from "@keel/migrate";
+import { setData } from "@volo/content-core";
+import type { SqlDatabase } from "@volo/migrate";
 
 import { loadEntries } from "./load";
 

@@ -1,17 +1,17 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createTableSql, defineTable, dropTableSql, integer, text } from "@keel/db";
-import { currentContext, currentRequestSpan, keel, runWithContext } from "@keel/web";
-import { Migrator } from "@keel/migrate";
-import { contentEntriesMigration } from "@keel/content-store";
-import type { App, KeelAppConfig, KernelDatabase } from "@keel/kernel";
-import type { MigrationEntry } from "@keel/migrate";
-import type { RuntimeEntry } from "@keel/content-core";
-import type { Server, ServeOptions } from "@keel/runtime";
+import { createTableSql, defineTable, dropTableSql, integer, text } from "@volo/db";
+import { currentContext, currentRequestSpan, volo, runWithContext } from "@volo/web";
+import { Migrator } from "@volo/migrate";
+import { contentEntriesMigration } from "@volo/content-store";
+import type { App, VoloAppConfig, KernelDatabase } from "@volo/kernel";
+import type { MigrationEntry } from "@volo/migrate";
+import type { RuntimeEntry } from "@volo/content-core";
+import type { Server, ServeOptions } from "@volo/runtime";
 
-import type { OutputSink, Site } from "@keel/sites";
-import type { ReleaseStore } from "@keel/deploy";
+import type { OutputSink, Site } from "@volo/sites";
+import type { ReleaseStore } from "@volo/deploy";
 
 import { CliError, parsePort, parseStringFlag, run } from "../src/index";
 import type { CliDeps, ReleaseTarget } from "../src/index";
@@ -87,11 +87,11 @@ function adapt(raw: Database.Database): KernelDatabase {
 
 let database: Database.Database;
 
-// The default app every command test runs against: a code-first `keel()` app
-// (KeelAppConfig). `GET /posts` answers 200 with `{ posts: [] }` and anything
+// The default app every command test runs against: a code-first `volo()` app
+// (VoloAppConfig). `GET /posts` answers 200 with `{ posts: [] }` and anything
 // unmatched 404s — so the build/deploy/dev tests render over a real app.
-function buildConfig(): KeelAppConfig {
-  const app = keel()
+function buildConfig(): VoloAppConfig {
+  const app = volo()
     .get("/posts", (c) => c.json({ posts: [] }))
     .post("/posts", (c) => c.json({ created: true }, 201))
     .get("/posts/:id", (c) => c.json({ id: c.param("id") }));
@@ -188,7 +188,7 @@ afterEach(() => {
 });
 
 describe("run routes", () => {
-  it("prints every route from the keel() app as method\\tpattern and returns 0", async () => {
+  it("prints every route from the volo() app as method\\tpattern and returns 0", async () => {
     const code = await run(["routes"], depsWith());
 
     expect(code).toBe(0);
@@ -260,7 +260,7 @@ describe("run serve / dev", () => {
     expect(lines).toEqual(["listening on http://127.0.0.1:3000"]);
   });
 
-  it("wires no tracer on serve when KEEL_OTLP_URL is unset", async () => {
+  it("wires no tracer on serve when VOLO_OTLP_URL is unset", async () => {
     const serve = fakeServe(3000);
 
     await run(["serve"], depsWith({ serve, env: {} }));
@@ -271,7 +271,7 @@ describe("run serve / dev", () => {
     expect(options?.onDrain).toBeUndefined();
   });
 
-  it("wires the OTLP tracer on serve when KEEL_OTLP_URL is set, and stops the interval on shutdown", async () => {
+  it("wires the OTLP tracer on serve when VOLO_OTLP_URL is set, and stops the interval on shutdown", async () => {
     const close = vi.fn(() => Promise.resolve());
     const serve = vi.fn(
       (_app: App, _options?: ServeOptions): Promise<Server> =>
@@ -284,7 +284,7 @@ describe("run serve / dev", () => {
       depsWith({
         serve,
         installShutdown,
-        env: { KEEL_OTLP_URL: "http://collector:4318/v1/traces" },
+        env: { VOLO_OTLP_URL: "http://collector:4318/v1/traces" },
       }),
     );
 
@@ -312,9 +312,9 @@ describe("run serve / dev", () => {
   it("reports not-ready when the database ping throws (a down/failing DB)", async () => {
     const serve = fakeServe(3000);
 
-    // A keel() app over a database whose query rejects — and no migrations, so
+    // A volo() app over a database whose query rejects — and no migrations, so
     // boot never touches it; only the readiness probe does.
-    const downConfig: KeelAppConfig = {
+    const downConfig: VoloAppConfig = {
       db: {
         exec: () => Promise.resolve(),
         prepare: () => ({
@@ -324,7 +324,7 @@ describe("run serve / dev", () => {
         }),
         transaction: (fn) => fn(downConfig.db),
       },
-      app: keel().get("/", (c) => c.text("ok")),
+      app: volo().get("/", (c) => c.text("ok")),
     };
 
     await run(["serve"], depsWith({ serve, loadApp: () => Promise.resolve(downConfig) }));
@@ -401,7 +401,7 @@ describe("run dev", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("wires no tracer on dev when KEEL_OTLP_URL is unset (tracing off by default)", async () => {
+  it("wires no tracer on dev when VOLO_OTLP_URL is unset (tracing off by default)", async () => {
     const serve = fakeServe(5173);
 
     await run(["dev"], depsWith({ serve, env: {}, loadSites: () => Promise.resolve(sites) }));
@@ -412,7 +412,7 @@ describe("run dev", () => {
     expect(options?.onDrain).toBeUndefined();
   });
 
-  it("wires the OTLP tracer on dev when KEEL_OTLP_URL is set, flushing on drain", async () => {
+  it("wires the OTLP tracer on dev when VOLO_OTLP_URL is set, flushing on drain", async () => {
     const calls: string[] = [];
 
     const fetchFn = ((url: string) => {
@@ -446,7 +446,7 @@ describe("run dev", () => {
         depsWith({
           serve,
           installShutdown,
-          env: { KEEL_OTLP_URL: "http://collector:4318/v1/traces", KEEL_OTLP_SERVICE: "estate" },
+          env: { VOLO_OTLP_URL: "http://collector:4318/v1/traces", VOLO_OTLP_SERVICE: "estate" },
           loadSites: () => Promise.resolve(sites),
         }),
       );
@@ -627,7 +627,7 @@ describe("run build", () => {
 });
 
 // ---------------------------------------------------------------------------
-// ADR 0011 Seam 3: the CLI runs the @keel/assets client build when the project
+// ADR 0011 Seam 3: the CLI runs the @volo/assets client build when the project
 // has an `app/islands/` directory. The probe + builder + watcher are seams.
 // ---------------------------------------------------------------------------
 
@@ -738,7 +738,7 @@ describe("run dev — island client assets", () => {
   it("falls back to app-only dispatch when the project declares no sites", async () => {
     const serve = fakeServe(3000);
 
-    // No `keel.sites.ts` → the bin's loader resolves to `[]`; dev must still serve
+    // No `volo.sites.ts` → the bin's loader resolves to `[]`; dev must still serve
     // the app (blocker #9), not 404 every route.
     await run(["dev"], depsWith({ serve, loadSites: () => Promise.resolve([]) }));
 
@@ -756,7 +756,7 @@ describe("run dev — island client assets", () => {
     await run(
       ["dev"],
       depsWith({
-        // A keel() app config that opts into the Preact dialect — the single key
+        // A volo() app config that opts into the Preact dialect — the single key
         // that the CLI hands to the client build (the matched pair's client half).
         loadApp: () => Promise.resolve({ ...buildConfig(), ui: { dialect: "preact" as const } }),
         serve: fakeServe(3000),
@@ -981,8 +981,8 @@ describe("run deploy", () => {
     { name: "mls", render: "dynamic", basePath: "/mls" },
   ];
 
-  function twoRouteConfig(): KeelAppConfig {
-    const app = keel()
+  function twoRouteConfig(): VoloAppConfig {
+    const app = volo()
       .get("/posts", (c) => c.json({ posts: [] }))
       .get("/more", (c) => c.json({ posts: [] }));
 
@@ -993,7 +993,7 @@ describe("run deploy", () => {
     };
   }
 
-  const loadApp = (): Promise<KeelAppConfig> => Promise.resolve(twoRouteConfig());
+  const loadApp = (): Promise<VoloAppConfig> => Promise.resolve(twoRouteConfig());
 
   it("builds, ships the static target into --dist, and prints the routing plan", async () => {
     const { sink } = recordingSink();
@@ -1015,7 +1015,7 @@ describe("run deploy", () => {
     // node, else the CDN.
     expect(lines).toEqual([
       "shipped marketing: 2 routes",
-      "mls: run `keel serve` (dynamic)",
+      "mls: run `volo serve` (dynamic)",
       "route /mls → dynamic",
       "route / → static",
     ]);
@@ -1053,7 +1053,7 @@ describe("run deploy", () => {
 
     // The freshly scaffolded shape: one dynamic zone at the root, no static sites.
     // The default deploy has nothing to upload, so it must NAME the live-tier paths
-    // rather than print only "run `keel serve`" and look like it did nothing.
+    // rather than print only "run `volo serve`" and look like it did nothing.
     const dynamicOnly: readonly Site[] = [{ name: "app", render: "dynamic", basePath: "/" }];
 
     const code = await run(
@@ -1065,10 +1065,10 @@ describe("run deploy", () => {
     // Nothing was uploaded by the copy shipper.
     expect(shipped.size).toBe(0);
     expect(lines).toEqual([
-      "app: run `keel serve` (dynamic)",
+      "app: run `volo serve` (dynamic)",
       "route / → dynamic",
-      "no static routes to ship — deploy the live app with `keel deploy --cloudflare` " +
-        "(Worker + assets via wrangler) or self-host it with `keel serve`",
+      "no static routes to ship — deploy the live app with `volo deploy --cloudflare` " +
+        "(Worker + assets via wrangler) or self-host it with `volo serve`",
     ]);
   });
 
@@ -1102,7 +1102,7 @@ describe("run deploy", () => {
 
     expect(lines).toEqual([
       "released marketing: 2 routes (version v7)",
-      "mls: run `keel serve` (dynamic)",
+      "mls: run `volo serve` (dynamic)",
       "current → v7",
       "route /mls → dynamic",
       "route / → static",
@@ -1520,7 +1520,7 @@ describe("run help", () => {
 
     expect(code).toBe(0);
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("keel — the Keel command-line tool");
+    expect(lines[0]).toContain("volo — the Volo command-line tool");
     expect(lines[0]).toContain("routes");
     expect(lines[0]).toContain("deploy");
   });
@@ -1529,14 +1529,14 @@ describe("run help", () => {
     const code = await run([], depsWith());
 
     expect(code).toBe(0);
-    expect(lines[0]).toContain("Usage: keel <command>");
+    expect(lines[0]).toContain("Usage: volo <command>");
   });
 
   it("prints usage for an empty-string command", async () => {
     const code = await run([""], depsWith());
 
     expect(code).toBe(0);
-    expect(lines[0]).toContain("Usage: keel <command>");
+    expect(lines[0]).toContain("Usage: volo <command>");
   });
 });
 
@@ -1720,7 +1720,7 @@ describe("parseStringFlag", () => {
   });
 
   it("does NOT consume a following flag as the value", () => {
-    // `keel build --out --target blog` means `--out` was given no value; the
+    // `volo build --out --target blog` means `--out` was given no value; the
     // parser must not swallow the next flag (`--target`) as `--out`'s value, or a
     // value-less `--out` would silently become `"--target"` and never write a dir.
     expect(parseStringFlag(["--out", "--target", "blog"], "out")).toBeUndefined();

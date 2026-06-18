@@ -1,11 +1,11 @@
 /**
- * @keel/migrate — the migrator: ordering, bookkeeping, and the schema editor for
- * everything the `@keel/db` value layer does not cover (indexes, drops, raw DDL),
- * on an injected SQL database. Tables are defined ONCE as a `@keel/db` schema
+ * @volo/migrate — the migrator: ordering, bookkeeping, and the schema editor for
+ * everything the `@volo/db` value layer does not cover (indexes, drops, raw DDL),
+ * on an injected SQL database. Tables are defined ONCE as a `@volo/db` schema
  * value and rendered for the dialect — there is no separate string-builder
  * column DSL (ADR 0004 Phase 7.6).
  *
- *   import { createTableSql, defineTable, integer, text } from "@keel/db";
+ *   import { createTableSql, defineTable, integer, text } from "@volo/db";
  *
  *   const posts = defineTable("posts", {
  *     id: integer("id").primaryKey({ autoIncrement: true }),

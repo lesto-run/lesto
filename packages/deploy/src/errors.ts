@@ -1,12 +1,12 @@
 /**
  * Errors carry codes, not just prose.
  *
- * Every failure in Keel surfaces a stable, machine-readable `code`. Logs,
+ * Every failure in Volo surfaces a stable, machine-readable `code`. Logs,
  * tests, API responses, and the MCP surface branch on the code — never on a
  * message string, which is free to change for humans without breaking machines.
  */
 
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
 /** Stable codes for every failure the deploy planner and shipper can raise. */
 export type DeployErrorCode =
@@ -24,7 +24,7 @@ export type DeployErrorCode =
   | "DEPLOY_REMOTE_ERROR";
 
 /** Anything the deploy layer can refuse to do, coded for machines. */
-export class DeployError extends KeelError<DeployErrorCode> {
+export class DeployError extends VoloError<DeployErrorCode> {
   constructor(code: DeployErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

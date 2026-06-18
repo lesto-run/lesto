@@ -4,7 +4,7 @@ import { currentContext, currentRequestSpan, runWithContext } from "../src/index
 
 import type { RequestContext, RequestContextSpan } from "../src/index";
 
-/** A minimal span standing in for `@keel/observability`'s `Span`, structurally. */
+/** A minimal span standing in for `@volo/observability`'s `Span`, structurally. */
 function fakeSpan(): RequestContextSpan {
   return {
     data: { traceId: "t".repeat(32), spanId: "s".repeat(32) },

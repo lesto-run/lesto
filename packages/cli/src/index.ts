@@ -1,8 +1,8 @@
 /**
- * @keel/cli — the `keel` command-line tool.
+ * @volo/cli — the `volo` command-line tool.
  *
  *   const code = await run(["routes"], {
- *     loadApp: () => import("./keel.app").then((m) => m.default),
+ *     loadApp: () => import("./volo.app").then((m) => m.default),
  *     serve,
  *     out: console.log,
  *   });
@@ -24,5 +24,5 @@ export type { OpenApiDeps } from "./openapi";
 export { hasFlag, parsePort, parseStringFlag } from "./flags";
 export type { PortFlag } from "./flags";
 
-export { CliError, KeelError } from "./errors";
+export { CliError, VoloError } from "./errors";
 export type { CliErrorCode } from "./errors";

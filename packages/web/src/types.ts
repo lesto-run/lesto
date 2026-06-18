@@ -20,7 +20,7 @@ export interface HandleOptions {
 }
 
 /** A normalized inbound request: what the router matched, plus query and body. */
-export interface KeelRequest {
+export interface VoloRequest {
   method: string;
 
   path: string;
@@ -55,10 +55,10 @@ export interface KeelRequest {
  *     The runtime pipes it to the socket; because a stream cannot be hashed
  *     without consuming it, the conditional-GET ETag path skips a stream body.
  *
- * Widening, never narrowing: a `string` is still a valid `KeelBody`, so every
+ * Widening, never narrowing: a `string` is still a valid `VoloBody`, so every
  * existing response and consumer keeps working unchanged.
  */
-export type KeelBody = string | Uint8Array | ReadableStream;
+export type VoloBody = string | Uint8Array | ReadableStream;
 
 /**
  * A response header map: a name to a single value, OR to a *list* of values.
@@ -84,17 +84,17 @@ export type HeaderMap = Record<string, string | string[]>;
 /**
  * A response the runtime can write back verbatim.
  *
- * Generic in its body kind, defaulting to `string` — so the bare `KeelResponse`
+ * Generic in its body kind, defaulting to `string` — so the bare `VoloResponse`
  * is exactly the string-bodied shape it has always been. That default is the
  * load-bearing backward-compatibility move: every existing reference
- * (`Promise<KeelResponse>` on the kernel's `App.handle`, the prerenderer's
+ * (`Promise<VoloResponse>` on the kernel's `App.handle`, the prerenderer's
  * structural `RenderResponse`, a test that does `JSON.parse(response.body)`)
  * keeps seeing `body: string` and compiles unchanged.
  *
  * The transport tier widens it where it must accept any arm: `applyResponse`,
- * the site dispatcher, and the edge adapter take a `KeelResponse<KeelBody>`, and
- * a string-bodied `KeelResponse` is assignable to that (a property's type is
- * checked covariantly, and `string` ⊆ `KeelBody`). So binary and streamed
+ * the site dispatcher, and the edge adapter take a `VoloResponse<VoloBody>`, and
+ * a string-bodied `VoloResponse` is assignable to that (a property's type is
+ * checked covariantly, and `string` ⊆ `VoloBody`). So binary and streamed
  * responses flow through the transport without forcing every dispatch-core
  * consumer to widen with them.
  *
@@ -103,20 +103,20 @@ export type HeaderMap = Record<string, string | string[]>;
  * cookies are two `Set-Cookie` lines, never one comma-joined line a browser
  * would mangle (see {@link HeaderMap}).
  */
-export interface KeelResponse<B extends KeelBody = string> {
+export interface VoloResponse<B extends VoloBody = string> {
   status: number;
 
   headers: HeaderMap;
 
-  /** The response body. Defaults to a `string`; a transport may carry any {@link KeelBody}. */
+  /** The response body. Defaults to a `string`; a transport may carry any {@link VoloBody}. */
   body: B;
 }
 
 /**
- * A {@link KeelResponse} that may carry any body arm — string, bytes, or stream.
+ * A {@link VoloResponse} that may carry any body arm — string, bytes, or stream.
  *
- * The explicit name for `KeelResponse<KeelBody>`, used by the transport seams
+ * The explicit name for `VoloResponse<VoloBody>`, used by the transport seams
  * (`applyResponse`, the dispatcher, the edge adapter) and by the bytes helper,
  * so a reader sees "this accepts any body" without decoding the generic.
  */
-export type AnyKeelResponse = KeelResponse<KeelBody>;
+export type AnyVoloResponse = VoloResponse<VoloBody>;

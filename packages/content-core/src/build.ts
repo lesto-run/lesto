@@ -1,14 +1,14 @@
 /**
- * @keel/content-core/build - Build tools for content generation
+ * @volo/content-core/build - Build tools for content generation
  *
  * This entry point exports Node.js-only APIs for generating content.
  * Use this for CLI tools, build scripts, and server-side generation.
  *
  * For runtime APIs (browser-safe), use:
- *   import { query } from "@keel/content-core"
+ *   import { query } from "@volo/content-core"
  */
 
-// Re-export types only (not runtime functions that depend on @keel/content-content)
+// Re-export types only (not runtime functions that depend on @volo/content-content)
 export type {
   AnyCollection,
   Collection,
@@ -127,12 +127,12 @@ export {
   JsonParseError,
   YamlParseError,
   FrontmatterParseError,
-} from "@keel/content-umbra";
+} from "@volo/content-umbra";
 
-export type { Parser, ParserOption, ParserPreset } from "@keel/content-umbra";
+export type { Parser, ParserOption, ParserPreset } from "@volo/content-umbra";
 
 // Markdown rendering
-export { createRenderer } from "@keel/content-markdown";
+export { createRenderer } from "@volo/content-markdown";
 
 // Voice profile and training
 export {
@@ -223,5 +223,5 @@ export type { ResolvedAssetsConfig } from "./assets";
 
 // NOTE: Embedding generation and search APIs are NOT re-exported here.
 // Import directly from the dedicated packages:
-//   - @keel/content-embeddings: Build-time embedding generation
-//   - @keel/content-search: Runtime vector similarity search
+//   - @volo/content-embeddings: Build-time embedding generation
+//   - @volo/content-search: Runtime vector similarity search

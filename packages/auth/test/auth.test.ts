@@ -4,7 +4,7 @@ import {
   AuthError,
   generateToken,
   hashPassword,
-  KeelError,
+  VoloError,
   MemorySessionStore,
   needsRehash,
   Sessions,
@@ -210,7 +210,7 @@ describe("sha256", () => {
   });
 
   it("is deterministic — the same input always yields the same digest", () => {
-    expect(sha256("keel")).toBe(sha256("keel"));
+    expect(sha256("volo")).toBe(sha256("volo"));
   });
 
   it("distinguishes different inputs", () => {
@@ -288,7 +288,7 @@ describe("AuthError", () => {
   it("carries a stable code and frozen details", () => {
     const error = new AuthError("AUTH_INVALID_HASH", "bad hash", { stored: "x" });
 
-    expect(error).toBeInstanceOf(KeelError);
+    expect(error).toBeInstanceOf(VoloError);
     expect(error.code).toBe("AUTH_INVALID_HASH");
     expect(error.name).toBe("AuthError");
     expect(error.details).toEqual({ stored: "x" });

@@ -342,7 +342,7 @@ describe("renderPageStream — ssr island hydration markers", () => {
     // The markers a fresh renderToStaticMarkup would strip are present in the
     // streamed output — so an ssr:true island hydrates against streamed markup.
     expect(html).toContain("Hi, <!-- -->Ada<!-- -->!");
-    expect(html).toContain('data-keel-island="$.children[0]"');
+    expect(html).toContain('data-volo-island="$.children[0]"');
     expect(html).not.toBe(renderToStaticMarkup(page.element as ReactElement));
   });
 });
@@ -357,13 +357,13 @@ describe("renderPageStream — bootstrap options", () => {
 
     const stream = await renderPageStream(page, {
       bootstrapModules: ["/client.js"],
-      bootstrapScriptContent: 'window.__keel = "ok"',
+      bootstrapScriptContent: 'window.__volo = "ok"',
     });
 
     const html = await readAll(stream);
 
     expect(html).toContain("/client.js");
-    expect(html).toContain('window.__keel = "ok"');
+    expect(html).toContain('window.__volo = "ok"');
   });
 
   it("forwards the same bootstrap options through the buffered exit", async () => {
@@ -371,11 +371,11 @@ describe("renderPageStream — bootstrap options", () => {
 
     const html = await renderPageStreamToString(page, {
       bootstrapModules: ["/client.js"],
-      bootstrapScriptContent: 'window.__keel = "ok"',
+      bootstrapScriptContent: 'window.__volo = "ok"',
     });
 
     expect(html).toContain("/client.js");
-    expect(html).toContain('window.__keel = "ok"');
+    expect(html).toContain('window.__volo = "ok"');
   });
 });
 
@@ -409,7 +409,7 @@ describe("renderPageStream — onError sink", () => {
 
     await readAll(stream);
 
-    expect(spy).toHaveBeenCalledWith("[keel/ui] streamed render error", expect.any(Error));
+    expect(spy).toHaveBeenCalledWith("[volo/ui] streamed render error", expect.any(Error));
 
     spy.mockRestore();
   });
@@ -421,7 +421,7 @@ describe("renderPageStream — onError sink", () => {
     // default console sink still fires on the way through.
     await expect(renderPageStreamToString(pageOf(boomElement()))).rejects.toBeInstanceOf(UiError);
 
-    expect(spy).toHaveBeenCalledWith("[keel/ui] streamed render error", expect.any(Error));
+    expect(spy).toHaveBeenCalledWith("[volo/ui] streamed render error", expect.any(Error));
 
     spy.mockRestore();
   });

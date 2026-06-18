@@ -1,18 +1,18 @@
 # ADR 0013 — Durable SQL-backed session + rate-limit stores (async store interfaces)
 
-- **Status:** Implemented (2026-06-11): both store interfaces are async, `sqlSessionStore`/`sqlRateLimitStore` ship on the SQL seam, the SQLite adapter serializes transactions FIFO, estate dogfoods the durable session path, and `@keel/integration`'s `durable-stores.integration.test.ts` proves session/identity/rate-limit durability cross-driver (SQLite always; Postgres in `db-parity-postgres`). The implementation plan is `docs/plans/durable-stores.md`.
+- **Status:** Implemented (2026-06-11): both store interfaces are async, `sqlSessionStore`/`sqlRateLimitStore` ship on the SQL seam, the SQLite adapter serializes transactions FIFO, estate dogfoods the durable session path, and `@volo/integration`'s `durable-stores.integration.test.ts` proves session/identity/rate-limit durability cross-driver (SQLite always; Postgres in `db-parity-postgres`). The implementation plan is `docs/plans/durable-stores.md`.
 - **Date:** 2026-06-11
-- **Builds on:** ADR 0006 (the async `SqlDatabase` seam — implemented; this is its first *product* consumer beyond the query layer), ADR 0003 (`@keel/identity`), ADR 0004 (data-layer style: closure factories, explicit `db`)
+- **Builds on:** ADR 0006 (the async `SqlDatabase` seam — implemented; this is its first *product* consumer beyond the query layer), ADR 0003 (`@volo/identity`), ADR 0004 (data-layer style: closure factories, explicit `db`)
 - **Relates to:** ADR 0002 (edge target), `packages/auth/src/signed-sessions.ts` (the stateless edge tier this ADR deliberately does **not** absorb)
 
 ## Context
 
-ADR 0006 is done: the driver seam is async, `@keel/pg` backs it over a real socket, and CI proves cross-driver parity (`db-parity-postgres`). But the two stateful production primitives that sit *on top* of the substrate never moved onto it:
+ADR 0006 is done: the driver seam is async, `@volo/pg` backs it over a real socket, and CI proves cross-driver parity (`db-parity-postgres`). But the two stateful production primitives that sit *on top* of the substrate never moved onto it:
 
 - **Sessions** — `packages/auth/src/sessions.ts` has exactly one `SessionStore`: the in-memory `MemorySessionStore`. The interface (`packages/auth/src/types.ts`) is **synchronous**: `save(session): void`, `find(token): Session | undefined`, `delete(token): void`.
 - **Rate limits** — `packages/ratelimit/src/store.ts` has exactly one `RateLimitStore`: the in-memory `MemoryRateLimitStore`. The interface (`packages/ratelimit/src/types.ts`) is **synchronous**: `get(key): BucketState | undefined`, `set(key, state): void`.
 
-Consequences today: every session dies on restart; every node in a fleet (or every Worker isolate) has its own session set and its own rate-limit buckets, so "logged in" is per-process and a client can multiply its rate limit by the number of nodes. For the multi-isolate Cloudflare/Node deploys Keel targets, that is fatal. A synchronous interface can never be backed by the async SQL seam — so the interfaces must flip first, and the flip ripples (this ADR names every ripple).
+Consequences today: every session dies on restart; every node in a fleet (or every Worker isolate) has its own session set and its own rate-limit buckets, so "logged in" is per-process and a client can multiply its rate limit by the number of nodes. For the multi-isolate Cloudflare/Node deploys Volo targets, that is fatal. A synchronous interface can never be backed by the async SQL seam — so the interfaces must flip first, and the flip ripples (this ADR names every ripple).
 
 A subtlety the rate limiter adds that sessions do not: `RateLimiter.check` (`packages/ratelimit/src/limiter.ts`) is a **read-modify-write** — `store.get(key)` → compute refill/spend → `store.set(key, next)`. In-process with a sync Map that is atomic by construction. Across two awaits against a shared database it is a classic lost-update race: two nodes read `tokens: 1`, both admit, both write `tokens: 0` — the limit silently leaks. ADR 0006's §Consequences flagged exactly this class ("anything needing atomicity must use `db.transaction()`, not a sequence of awaits"). So the rate-limit store cannot just become "async get + async set": **the interface shape must change so one store call owns the whole read-modify-write.**
 
@@ -62,42 +62,42 @@ Rejected alternative — pushing capacity/refill into the store (`store.take(key
 
 The durable stores make `db.transaction()` a **per-request, steady-state** operation for the first time (one per rate-limit check). `openSqlite`'s `transaction()` (`packages/runtime/src/sqlite.ts:93–111`) issues `raw.exec("BEGIN")` with no queue on a single shared connection; two concurrent transactions interleave at the `await` points and the second `BEGIN` throws `cannot start a transaction within a transaction`. Today only the (serial) migrator transacts, so it never fires; under concurrent requests it will, on the default dev driver.
 
-Decision: fix the substrate once, not each consumer. `openSqlite`'s `transaction()` gains a FIFO queue (an internal promise chain): each transaction waits for the previous to settle before `BEGIN`; a rolled-back transaction must not poison the chain. Inside the span, `fn` receives a tx-scoped handle whose own `transaction` runs the inner callback **flat** on the same span — exactly the shape `createPgDatabase` already implements (`packages/pg/src/adapter.ts:107–110`) — so a nested call composes instead of deadlocking against the queue. The `@keel/pg` adapter needs no change: each transaction checks out its own pooled client.
+Decision: fix the substrate once, not each consumer. `openSqlite`'s `transaction()` gains a FIFO queue (an internal promise chain): each transaction waits for the previous to settle before `BEGIN`; a rolled-back transaction must not poison the chain. Inside the span, `fn` receives a tx-scoped handle whose own `transaction` runs the inner callback **flat** on the same span — exactly the shape `createPgDatabase` already implements (`packages/pg/src/adapter.ts:107–110`) — so a nested call composes instead of deadlocking against the queue. The `@volo/pg` adapter needs no change: each transaction checks out its own pooled client.
 
 (Cross-*process* SQLite writers remain out of scope — SQLite is the single-node dev default; fleets run Postgres.)
 
 ### 4. SQL-backed stores: where they live, what they create
 
-Closure factories (ADR 0004 style), colocated with their interfaces, exactly like `@keel/cache`'s `sqlStore`:
+Closure factories (ADR 0004 style), colocated with their interfaces, exactly like `@volo/cache`'s `sqlStore`:
 
 - `packages/auth/src/sql-session-store.ts` → `installSessionSchema(db)`, `sqlSessionStore(db): SqlSessionStore`
 - `packages/ratelimit/src/sql-store.ts` → `installRateLimitSchema(db)`, `sqlRateLimitStore(db, options?): SqlRateLimitStore`
 
-Each package declares the minimal structural `SqlStatement`/`SqlDatabase` seam it consumes **locally** in its `types.ts` (type-only, no `@keel/db` workspace dep) — the established cache precedent. Yes, this grows the seam re-declaration count from 8 to 10; consolidating the declarations into one shared types package is an explicit **non-goal** here (follow-up candidate; it touches ten packages for zero behavior).
+Each package declares the minimal structural `SqlStatement`/`SqlDatabase` seam it consumes **locally** in its `types.ts` (type-only, no `@volo/db` workspace dep) — the established cache precedent. Yes, this grows the seam re-declaration count from 8 to 10; consolidating the declarations into one shared types package is an explicit **non-goal** here (follow-up candidate; it touches ten packages for zero behavior).
 
 Schema — hand-written, dialect-portable DDL (deliberately avoiding `createTableSql`, whose `AUTOINCREMENT` output PG rejects — the known ADR 0006 dialect-drift edge). Install functions issue one awaited `exec` per statement, `IF NOT EXISTS`, idempotent:
 
 ```sql
-CREATE TABLE IF NOT EXISTS keel_sessions (
+CREATE TABLE IF NOT EXISTS volo_sessions (
   token      TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL,
   expires_at BIGINT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS keel_sessions_user_id ON keel_sessions (user_id);
-CREATE INDEX IF NOT EXISTS keel_sessions_expires_at ON keel_sessions (expires_at);
+CREATE INDEX IF NOT EXISTS volo_sessions_user_id ON volo_sessions (user_id);
+CREATE INDEX IF NOT EXISTS volo_sessions_expires_at ON volo_sessions (expires_at);
 
-CREATE TABLE IF NOT EXISTS keel_rate_limits (
+CREATE TABLE IF NOT EXISTS volo_rate_limits (
   key        TEXT PRIMARY KEY,
   tokens     DOUBLE PRECISION NOT NULL,
   updated_at BIGINT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS keel_rate_limits_updated_at ON keel_rate_limits (updated_at);
+CREATE INDEX IF NOT EXISTS volo_rate_limits_updated_at ON volo_rate_limits (updated_at);
 ```
 
 Two type traps, decided here so the engineer does not rediscover them:
 
 - **Epoch-ms does not fit `INTEGER` on Postgres** (int4 caps at ~2.1e9; epoch-ms is ~1.8e12). `expires_at`/`updated_at` are `BIGINT` — SQLite gives it INTEGER affinity (64-bit), PG gets int8. `tokens` is `DOUBLE PRECISION` (fractional accrual), REAL affinity on SQLite.
-- **node-postgres returns `BIGINT` as a string** (no int8 parser is registered — `packages/pg/src/pg-driver.ts` is a bare pool). Both stores `Number(...)`-coerce every numeric column on read, so `clock() >= session.expiresAt` compares numbers on both drivers. Registering a global int8 parser in `@keel/pg` is a follow-up under PG hardening, not done here (it mutates pg's global type registry; the local coercion is total and testable).
+- **node-postgres returns `BIGINT` as a string** (no int8 parser is registered — `packages/pg/src/pg-driver.ts` is a bare pool). Both stores `Number(...)`-coerce every numeric column on read, so `clock() >= session.expiresAt` compares numbers on both drivers. Registering a global int8 parser in `@volo/pg` is a follow-up under PG hardening, not done here (it mutates pg's global type registry; the local coercion is total and testable).
 
 ### 5. The atomic rate-limit check — single transaction, locked read, bounded retry
 
@@ -106,11 +106,11 @@ Two type traps, decided here so the engineer does not rediscover them:
 ```
 attempt(n):
   db.transaction(tx):
-    row  = tx.prepare("SELECT tokens, updated_at FROM keel_rate_limits WHERE key = ?"
+    row  = tx.prepare("SELECT tokens, updated_at FROM volo_rate_limits WHERE key = ?"
                       + (dialect === "postgres" ? " FOR UPDATE" : "")).get([key])
     next = mutate(row ? { tokens: Number(row.tokens), updatedAt: Number(row.updated_at) } : undefined)
-    row ? tx.prepare("UPDATE keel_rate_limits SET tokens = ?, updated_at = ? WHERE key = ?").run([...])
-        : tx.prepare("INSERT INTO keel_rate_limits (key, tokens, updated_at) VALUES (?, ?, ?)").run([...])
+    row ? tx.prepare("UPDATE volo_rate_limits SET tokens = ?, updated_at = ? WHERE key = ?").run([...])
+        : tx.prepare("INSERT INTO volo_rate_limits (key, tokens, updated_at) VALUES (?, ?, ?)").run([...])
     return next
   catch unique-violation when n === 0 → attempt(1)
   catch unique-violation when n === 1 → throw RateLimitError("RATELIMIT_STORE_CONFLICT", …)
@@ -135,13 +135,13 @@ The coverage gate runs vitest with no `tsc`, but CI's `ws:typecheck` step *does*
 
 | Surface | Change |
 | --- | --- |
-| `@keel/auth` `Sessions` | `create`/`verify`/`revoke` → `async`, awaiting the store. `MemorySessionStore` methods become async-shaped. Same commit as the identity ripple (typecheck couples them). |
-| `@keel/identity` `Identity` | `login` already async — `sessions.create` gains an `await`. `currentUser` awaits `sessions.verify`. **`logout(token): void` becomes `logout(token): Promise<void>`** — a public interface break, the only one in this increment. |
-| `@keel/ratelimit` `RateLimiter` | `check` → `async check(...): Promise<RateLimitResult>`; math unchanged, expressed as the `mutate` closure. |
-| `@keel/ratelimit` middleware | `packages/ratelimit/src/middleware.ts:150` — `const result = await limiter.check(keyFor())`. The middleware is already async; no signature change. Keying, `UNKNOWN_CLIENT_KEY`, warn-once: untouched. |
-| `@keel/kernel` secure-stack | No code change — it passes `RateLimitOptions` through (`packages/kernel/src/secure-stack.ts:92–93`); behavior identical. Tests re-run as-is. |
+| `@volo/auth` `Sessions` | `create`/`verify`/`revoke` → `async`, awaiting the store. `MemorySessionStore` methods become async-shaped. Same commit as the identity ripple (typecheck couples them). |
+| `@volo/identity` `Identity` | `login` already async — `sessions.create` gains an `await`. `currentUser` awaits `sessions.verify`. **`logout(token): void` becomes `logout(token): Promise<void>`** — a public interface break, the only one in this increment. |
+| `@volo/ratelimit` `RateLimiter` | `check` → `async check(...): Promise<RateLimitResult>`; math unchanged, expressed as the `mutate` closure. |
+| `@volo/ratelimit` middleware | `packages/ratelimit/src/middleware.ts:150` — `const result = await limiter.check(keyFor())`. The middleware is already async; no signature change. Keying, `UNKNOWN_CLIENT_KEY`, warn-once: untouched. |
+| `@volo/kernel` secure-stack | No code change — it passes `RateLimitOptions` through (`packages/kernel/src/secure-stack.ts:92–93`); behavior identical. Tests re-run as-is. |
 | `examples/estate` | `controllers.ts:264` (`identity.logout(sessionToken)`) — the sign-out handler becomes `async` and awaits. The node path (`buildIdentity` in `examples/estate/src/identity.ts`) then dogfoods `sqlSessionStore` over its existing SQLite handle. |
-| `create-keel` templates | Audit only — they configure `rateLimit` via options and never call `check`/`logout` directly; update any template that does. |
+| `create-volo` templates | Audit only — they configure `rateLimit` via options and never call `check`/`logout` directly; update any template that does. |
 
 ### 7. Memory vs SQL: who runs what
 
@@ -150,14 +150,14 @@ The coverage gate runs vitest with no `tsc`, but CI's `ws:typecheck` step *does*
 
 ### 8. `SignedSessions` — a deliberate separate tier, not a convergence target
 
-Estate's edge path (`examples/estate/src/edge.ts`) authenticates with `SignedSessions` — a stateless HMAC token verified with zero I/O, because a Worker isolate has no store and a DB round-trip per request defeats the edge. The durable store does **not** replace it; Keel now has an honest two-tier session architecture:
+Estate's edge path (`examples/estate/src/edge.ts`) authenticates with `SignedSessions` — a stateless HMAC token verified with zero I/O, because a Worker isolate has no store and a DB round-trip per request defeats the edge. The durable store does **not** replace it; Volo now has an honest two-tier session architecture:
 
 - **Origin tier (this ADR):** store-backed `Sessions` over `sqlSessionStore` — the source of truth; revocable the instant `revoke`/`deleteByUserId` runs; survives restarts; shared across nodes.
 - **Edge tier (unchanged):** `SignedSessions` — a short-TTL, non-revocable capability token. Its documented trade ("cannot be revoked before it expires; keep the TTL short") stays the contract.
 
-They share nothing but the `Clock` type, on purpose: blending them (e.g. a signed token that *also* checks a revocation list) requires an edge-readable durable KV, which is the named follow-up in the roadmap — not a thing to half-build inside `@keel/auth` now.
+They share nothing but the `Clock` type, on purpose: blending them (e.g. a signed token that *also* checks a revocation list) requires an edge-readable durable KV, which is the named follow-up in the roadmap — not a thing to half-build inside `@volo/auth` now.
 
-### 9. `@keel/orm` — stays out
+### 9. `@volo/orm` — stays out
 
 Still LEGACY (ADR 0004), still imported by no consumer, still self-contained with its own green gate. Deleting it has zero coupling to this increment and would only widen the review diff. It stays a separate, immediately-actionable housekeeping commit after this lands (see the roadmap verdict in `docs/plans/durable-stores.md`).
 
@@ -167,7 +167,7 @@ Still LEGACY (ADR 0004), still imported by no consumer, still self-contained wit
 - **No framework-started background sweeper.** `sweep`/`deleteExpired` are explicit calls; a timer the framework owns is lifecycle surface (shutdown, serverless) this increment does not need.
 - **No session rotation, sliding expiry, or session metadata (IP/user-agent) columns.** The `Session` shape is unchanged; those are auth features, not durability.
 - **No seam-declaration consolidation** (the 8→10 structural `SqlDatabase` copies). Follow-up candidate.
-- **No global int8 type parser in `@keel/pg`**; store-local `Number()` coercion instead (see §4).
+- **No global int8 type parser in `@volo/pg`**; store-local `Number()` coercion instead (see §4).
 - **No dialect layer for `createTableSql`**, no `LIMIT -1` fix, no AbortSignal threading — all remain ADR 0006's named follow-ups (PG hardening).
 - **No re-litigation of ADR 0006.** The seam is taken as built; its status line has been truth-flipped to Implemented with its two outstanding edges noted.
 

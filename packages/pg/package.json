@@ -1,9 +1,9 @@
 {
-  "name": "@keel/pg",
+  "name": "@volo/pg",
   "version": "0.0.0",
   "license": "MIT",
   "private": true,
-  "description": "Keel's Postgres driver — adapts a node-postgres Pool to the async @keel/db SqlDatabase seam (ADR 0006).",
+  "description": "Volo's Postgres driver — adapts a node-postgres Pool to the async @volo/db SqlDatabase seam (ADR 0006).",
   "type": "module",
   "exports": {
     ".": {
@@ -24,6 +24,6 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/db": "workspace:*"
+    "@volo/db": "workspace:*"
   }
 }

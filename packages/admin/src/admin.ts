@@ -21,9 +21,9 @@
  *   });
  *   admin.create("posts", attrs, { actor: currentUser });
  *
- * Resolves a resource name to its `@keel/db` {@link Table} and projects every
+ * Resolves a resource name to its `@volo/db` {@link Table} and projects every
  * row to `{ id, ...declared fields }` — the generic CRUD backbone a
- * WordPress-style admin UI sits on. CRUD reads/writes go through `@keel/db`;
+ * WordPress-style admin UI sits on. CRUD reads/writes go through `@volo/db`;
  * input validation goes through each resource's Zod schemas (ADR 0005); this
  * layer owns naming, projection (the per-resource allow-list), `list`
  * pagination, primary-key resolution, an optional post-write audit hook, and
@@ -33,8 +33,8 @@
  * no `this`, no inheritance, the `db` handle captured in lexical scope.
  */
 
-import { DbError, eq } from "@keel/db";
-import type { Column, ColumnSpec, Db, Table } from "@keel/db";
+import { DbError, eq } from "@volo/db";
+import type { Column, ColumnSpec, Db, Table } from "@volo/db";
 import type { ZodType } from "zod";
 
 import { AdminError } from "./errors";
@@ -107,7 +107,7 @@ export interface AdminResource<TInsert = unknown, TUpdate = unknown> {
   /** The name the admin URL + API addresses this resource by. */
   readonly name: string;
 
-  /** The `@keel/db` table this resource reads and writes. */
+  /** The `@volo/db` table this resource reads and writes. */
   readonly table: Table;
 
   /**
@@ -287,7 +287,7 @@ export function createAdmin(
       const offset = listOptions.offset ?? 0;
 
       // Order by the primary key so paging is stable across calls — without a
-      // deterministic order, `offset` would skip arbitrary rows. @keel/db
+      // deterministic order, `offset` would skip arbitrary rows. @volo/db
       // always selects `*`; the column allow-list is applied here in `project`.
       const rows = (await db
         .select()
@@ -341,9 +341,9 @@ export function createAdmin(
           .run();
       } catch (error) {
         // An update whose validated patch sets no known column reaches
-        // @keel/db as `DB_EMPTY_UPDATE`. Re-code it to the admin's own stable
+        // @volo/db as `DB_EMPTY_UPDATE`. Re-code it to the admin's own stable
         // code so callers (the admin UI, the API) branch on one vocabulary and
-        // never see a leaked @keel/db code; chain the original as the cause.
+        // never see a leaked @volo/db code; chain the original as the cause.
         if (error instanceof DbError && error.code === "DB_EMPTY_UPDATE") {
           throw new AdminError(
             "ADMIN_EMPTY_UPDATE",

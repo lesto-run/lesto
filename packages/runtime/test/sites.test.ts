@@ -4,9 +4,9 @@ import { contentTypeOf, dispatchSites, isBinaryType } from "../src/index";
 
 import type { AppHandler, RequestOptions, StaticReader } from "../src/index";
 
-import type { Site } from "@keel/sites";
+import type { Site } from "@volo/sites";
 
-import type { AnyKeelResponse } from "@keel/web";
+import type { AnyVoloResponse } from "@volo/web";
 
 /** A static reader over a fixed map; an absent key is a missing file. */
 function fakeReader(files: Record<string, string>): StaticReader {
@@ -164,7 +164,7 @@ describe("dispatchSites — dynamic sites", () => {
       readStatic: fakeReader({}),
     });
 
-    const response: AnyKeelResponse = await dispatch("POST", "/mls/session");
+    const response: AnyVoloResponse = await dispatch("POST", "/mls/session");
 
     expect(response.status).toBe(302);
     expect(response.body).toBe("redirecting");
@@ -181,7 +181,7 @@ describe("dispatchSites — dynamic sites", () => {
 
     const options: RequestOptions = {
       query: { as: "jade" },
-      headers: { cookie: "keel_session=abc" },
+      headers: { cookie: "volo_session=abc" },
       body: { saved: true },
     };
 
@@ -191,10 +191,10 @@ describe("dispatchSites — dynamic sites", () => {
   });
 });
 
-describe("dispatchSites — framework-reserved /__keel/ namespace", () => {
-  it("routes /__keel/* to the live app, even when the / catch-all zone would claim it", async () => {
+describe("dispatchSites — framework-reserved /__volo/ namespace", () => {
+  it("routes /__volo/* to the live app, even when the / catch-all zone would claim it", async () => {
     // estate's marketing zone is the `/` catch-all (static). A data-source route
-    // lives at /__keel/data/<name> and MUST reach the dynamic app, not be read as
+    // lives at /__volo/data/<name> and MUST reach the dynamic app, not be read as
     // a (missing) static file — so node serve matches the edge's app fallthrough.
     const { handle, calls } = recordingHandler({ status: 200, body: '{"user":null}' });
 
@@ -204,7 +204,7 @@ describe("dispatchSites — framework-reserved /__keel/ namespace", () => {
       readStatic: fakeReader({ "marketing/index.html": "<h1>Home</h1>" }),
     });
 
-    const response = await dispatch("GET", "/__keel/data/session", {
+    const response = await dispatch("GET", "/__volo/data/session", {
       headers: { cookie: "sid=jade" },
     });
 
@@ -212,7 +212,7 @@ describe("dispatchSites — framework-reserved /__keel/ namespace", () => {
     expect(response.body).toBe('{"user":null}');
     // Delegated to the app with the full path + options, never read as a file.
     expect(calls).toEqual([
-      { method: "GET", path: "/__keel/data/session", options: { headers: { cookie: "sid=jade" } } },
+      { method: "GET", path: "/__volo/data/session", options: { headers: { cookie: "sid=jade" } } },
     ]);
   });
 });
@@ -415,7 +415,7 @@ describe("dispatchSites — binary static files", () => {
 
     // The dispatch contract is string-bodied; a static file may legitimately be
     // bytes, so we read the response at its true (wider) type to inspect them.
-    const response: AnyKeelResponse = await dispatch("GET", "/logo.png");
+    const response: AnyVoloResponse = await dispatch("GET", "/logo.png");
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toBe("image/png");
@@ -433,7 +433,7 @@ describe("dispatchSites — binary static files", () => {
       readStatic: fakeBytesReader({ "marketing/icon.a1b2c3d4.woff2": pngBytes }),
     });
 
-    const response: AnyKeelResponse = await dispatch("GET", "/icon.a1b2c3d4.woff2");
+    const response: AnyVoloResponse = await dispatch("GET", "/icon.a1b2c3d4.woff2");
 
     expect(response.headers["content-type"]).toBe("font/woff2");
     expect(response.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
@@ -449,7 +449,7 @@ describe("dispatchSites — binary static files", () => {
       readStatic: fakeReader({ "marketing/logo.png": "rawpngtext" }),
     });
 
-    const response: AnyKeelResponse = await dispatch("GET", "/logo.png");
+    const response: AnyVoloResponse = await dispatch("GET", "/logo.png");
 
     expect(response.headers["content-type"]).toBe("image/png");
     expect(response.body).toBeInstanceOf(Uint8Array);

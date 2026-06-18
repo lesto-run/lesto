@@ -1,5 +1,5 @@
 /**
- * @keel/deploy — from a built site set to deployable targets.
+ * @volo/deploy — from a built site set to deployable targets.
  *
  * A thin planning layer: `planDeploy` reads the site set and the static build
  * manifest and produces, per site, a {@link StaticTarget} of files for a CDN or

@@ -1,6 +1,6 @@
-# Keel — The v1 Roadmap
+# Volo — The v1 Roadmap
 
-> **Keel v1 ships when the pitch is true by default: secure on every deployed path, one substrate that genuinely runs on Postgres, a ~10 KB island bundle, batteries that actually send email and emit traces, and a scaffold that boots — everything else waits.**
+> **Volo v1 ships when the pitch is true by default: secure on every deployed path, one substrate that genuinely runs on Postgres, a ~10 KB island bundle, batteries that actually send email and emit traces, and a scaffold that boots — everything else waits.**
 
 This document rules. The eight `docs/plans/<slug>.md` plans are its execution detail; the ADRs
 (`docs/adr/0001–0013`) remain the design rationale of record; `docs/ARCHITECTURE.md` is the
@@ -13,22 +13,22 @@ file:line evidence), the ADR line through 0013 (durable stores — implemented, 
 
 ---
 
-## 1. What Keel v1 IS — and explicitly IS NOT
+## 1. What Volo v1 IS — and explicitly IS NOT
 
 ### v1 IS
 
 | In scope | One-line justification |
 |---|---|
-| The `keel()` + `.page` + `defineIsland` app model (Node primary, Cloudflare Workers flagship edge) | The ADR 0004–0012 line; built, tested, and dogfooded by blog + estate. |
-| **SQLite dev → Postgres prod, same APIs** — for db, migrate, queue, cache, sessions, rate limit | This is the core pitch (ARCHITECTURE.md §1). Shipping v1 without PG parity falsifies the README; the fix is scoped (the `@keel/ratelimit` Dialect pattern already proves it). |
-| Auth battery: `@keel/identity` + durable SQL sessions/rate-limit stores (ADR 0013, done), hardened password format | Built and 100%-covered; v1 work is posture (defaults, format versioning), not construction. |
+| The `volo()` + `.page` + `defineIsland` app model (Node primary, Cloudflare Workers flagship edge) | The ADR 0004–0012 line; built, tested, and dogfooded by blog + estate. |
+| **SQLite dev → Postgres prod, same APIs** — for db, migrate, queue, cache, sessions, rate limit | This is the core pitch (ARCHITECTURE.md §1). Shipping v1 without PG parity falsifies the README; the fix is scoped (the `@volo/ratelimit` Dialect pattern already proves it). |
+| Auth battery: `@volo/identity` + durable SQL sessions/rate-limit stores (ADR 0013, done), hardened password format | Built and 100%-covered; v1 work is posture (defaults, format versioning), not construction. |
 | Islands UI pipeline with **Preact-by-default scaffold** (~10 KB gzip) via `ui.dialect` | The headline perf claim (ADR 0007/0011); currently unreachable through the CLI — Wave 2 makes it true. |
-| Transactional email: `@keel/mail` with **one real SMTP transport + one fetch-based provider transport** | Identity verify/reset emails dead-end at an interface today; "batteries-included" requires at least one battery that sends. |
-| `create-keel` → `keel dev` → `keel build` → deploy loop, e2e-tested in CI | The first five minutes of every user; currently broken three ways. |
+| Transactional email: `@volo/mail` with **one real SMTP transport + one fetch-based provider transport** | Identity verify/reset emails dead-end at an interface today; "batteries-included" requires at least one battery that sends. |
+| `create-volo` → `volo dev` → `volo build` → deploy loop, e2e-tested in CI | The first five minutes of every user; currently broken three ways. |
 | OTLP tracing **wired** (env-driven, flush lifecycle on both tiers) | The tracer exists and is tested; v1 work is wiring, not code. |
-| **`keel mcp`** — the agent control plane, stdio, read-only by default, audit-sinked | Bet IV of the attack plan; the moat. ~2 days of wiring per the review; it ships. |
-| `keel openapi` (route-skeleton 3.1 export) | An afternoon over an existing generator; makes the API surface reachable. |
-| Content engine **as the MCP/CLI seam**: `content-store`, `content:build`, `@keel/mcp` content tools | `@keel/mcp` and the CLI depend on it; the natively-built seam is 100%-covered and works. |
+| **`volo mcp`** — the agent control plane, stdio, read-only by default, audit-sinked | Bet IV of the attack plan; the moat. ~2 days of wiring per the review; it ships. |
+| `volo openapi` (route-skeleton 3.1 export) | An afternoon over an existing generator; makes the API surface reachable. |
+| Content engine **as the MCP/CLI seam**: `content-store`, `content:build`, `@volo/mcp` content tools | `@volo/mcp` and the CLI depend on it; the natively-built seam is 100%-covered and works. |
 | feeds / seo / i18n (with `Intl.PluralRules` fix) | Small, pure, built; launch-shaped after P1 correctness fixes. |
 | Webhooks (outbound, hardened SSRF guard, signed timestamps) | Built; needs the Wave 0 security fixes only. |
 
@@ -38,14 +38,14 @@ file:line evidence), the ADR line through 0013 (durable stores — implemented, 
 |---|---|
 | **Docks CMS as a polished public battery** | The 13 folded-in `content-*` packages ship tagged **experimental/preview**, coverage-gate-exempt; only the store/MCP seam is supported surface. Consolidation to ~7 packages is post-1.0. |
 | **Workflows "crash-safe resume"** | What exists is resumable step memoization — rename the claim pre-launch (cheap, honest); the run journal + queue-backed resume driver is post-1.0. |
-| **Cross-process pub/sub (LISTEN/NOTIFY)** | Rescope `@keel/pubsub` as in-process events in the docs pre-launch; build the PG transport post-1.0. |
-| **`@keel/orm`** | Zero consumers, sync seam incompatible with ADR 0006 — **deleted** in Wave 1. |
-| **`@keel/rbac` as a separate package** | One authorization story: fold wildcard/inheritance into `@keel/authz`'s `definePolicy` or mark rbac legacy (Wave 5). |
-| **`@keel/hooks` + `@keel/config` orphans** | Zero importers. Cut from the v1 public surface and excise the ARCHITECTURE.md "hooks/plugins/themes built in" claim; the plugin system is a designed post-1.0 bet, not a dangling export. |
+| **Cross-process pub/sub (LISTEN/NOTIFY)** | Rescope `@volo/pubsub` as in-process events in the docs pre-launch; build the PG transport post-1.0. |
+| **`@volo/orm`** | Zero consumers, sync seam incompatible with ADR 0006 — **deleted** in Wave 1. |
+| **`@volo/rbac` as a separate package** | One authorization story: fold wildcard/inheritance into `@volo/authz`'s `definePolicy` or mark rbac legacy (Wave 5). |
+| **`@volo/hooks` + `@volo/config` orphans** | Zero importers. Cut from the v1 public surface and excise the ARCHITECTURE.md "hooks/plugins/themes built in" claim; the plugin system is a designed post-1.0 bet, not a dangling export. |
 | **Multi-instance cron scheduler** | v1 documents single-scheduler-instance as a hard deployment constraint; persisted atomically-claimed firings are post-1.0. |
 | **The full assets substrate (Bet II)** — `<Image>`, build-time variants, CDN rewriting, auto-upload | Post-1.0. v1 ships the minimum credible piece: an S3/R2 storage backend (Wave 3) so the storage battery exists off one disk. |
-| **Bet I (`@keel/platform` view transitions/speculation rules) and Bet III (Vite/Rolldown consolidation)** | Strategic, not launch-gating. Post-1.0. |
-| **Studio visual UI, Keel Cloud, OAuth providers, Redis drivers, RSC** | Post-1.0, per ARCHITECTURE.md's own phasing. |
+| **Bet I (`@volo/platform` view transitions/speculation rules) and Bet III (Vite/Rolldown consolidation)** | Strategic, not launch-gating. Post-1.0. |
+| **Studio visual UI, Volo Cloud, OAuth providers, Redis drivers, RSC** | Post-1.0, per ARCHITECTURE.md's own phasing. |
 | **CSP-by-default / nonce plumbing** | The seam design exists (serializer is CSP-ready); enforcement waits until a served path needs it. Post-1.0. |
 
 ---
@@ -58,17 +58,17 @@ Every P0 across the eight reviews, merged where domains corroborated the same bu
 | # | Blocker | Domain(s) | The fix (one line) | Wave |
 |---|---|---|---|---|
 | 1 | Estate edge has decorative auth: committed fallback secret `"estate-demo-edge-secret"`, passwordless `?as=` sign-in, no originCheck/rate limit (`examples/estate/src/edge.ts:201,238`) | auth-security + edge-deploy | Fail boot without `SESSION_SECRET`; gate demo sign-in behind an explicit flag; mount `secureStack` on the edge app | 0 |
-| 2 | Shared mutable `NOT_FOUND`/`BAD_REQUEST` singletons leak headers/cookies across requests and users (`packages/web/src/keel.ts:90`) | core-runtime | Per-request `notFound()`/`badRequest()` factories + `Object.freeze` tripwire | 0 |
+| 2 | Shared mutable `NOT_FOUND`/`BAD_REQUEST` singletons leak headers/cookies across requests and users (`packages/web/src/volo.ts:90`) | core-runtime | Per-request `notFound()`/`badRequest()` factories + `Object.freeze` tripwire | 0 |
 | 3 | Webhook SSRF guard bypassed by a 302 redirect to metadata endpoints (`packages/webhooks/src/webhooks.ts:296`) | operability-dx | `redirect: "manual"`, 3xx = delivery failure; sign `timestamp.body` for replay defense in the same pass | 0 |
 | 4 | `trustProxy: true` trusts the client-forgeable left-most XFF entry → rate-limit-key spoofing (`packages/runtime/src/trust-proxy.ts:98`) | core-runtime + auth-security | `true` = one trusted hop (right-most); predicate peels right-to-left | 0 |
 | 5 | `sanitizeHtml()` silently returns unsanitized HTML on Workers; `jsdom` is a devDependency so npm consumers crash (`packages/content-shared/src/sanitize.ts:16`) | content-cms | `jsdom` → dependencies (or injected); throw a coded error when no DOM exists | 0 |
 | 6 | No Postgres dialect layer: db/migrate/queue/cache DDL is SQLite-only (`AUTOINCREMENT`, int4 epoch-ms) — migrations can't install on PG at all | data-persistence | `Dialect` parameter through `createTableSql` + every schema installer; run them all in the `db-parity-postgres` CI job | 1 |
 | 7 | Queue double-delivers under concurrent PG workers — no `FOR UPDATE SKIP LOCKED` (`packages/queue/src/queue.ts:237`) | data-persistence | Dialect-aware claim SQL + fenced `complete`/`fail`; 12-concurrent-workers proof in CI | 1 |
-| 8 | Default client bundle ships `react-dom/server` (118 KB vs 60 KB gzip) and the CLI hardcodes `dialect:"react"`, making the ~10 KB Preact path unreachable | ui-client | Split the `@keel/ui` barrel (`/server` subpath); land the `ui.dialect` config key as the matched pair | 2 |
-| 9 | Scaffold→run loop broken three ways: unpublished `@keel/*@latest` deps, no `@keel/cli` dep, guaranteed `keel.sites.ts` crash | operability-dx | Fix deps + tolerate missing sites file + pin story; CI e2e that installs and boots the output | 2 |
+| 8 | Default client bundle ships `react-dom/server` (118 KB vs 60 KB gzip) and the CLI hardcodes `dialect:"react"`, making the ~10 KB Preact path unreachable | ui-client | Split the `@volo/ui` barrel (`/server` subpath); land the `ui.dialect` config key as the matched pair | 2 |
+| 9 | Scaffold→run loop broken three ways: unpublished `@volo/*@latest` deps, no `@volo/cli` dep, guaranteed `volo.sites.ts` crash | operability-dx | Fix deps + tolerate missing sites file + pin story; CI e2e that installs and boots the output | 2 |
 | 10 | No `MailTransport` implementation exists — identity verify/reset emails cannot send | web-primitives | Ship SMTP (Node) + fetch-based provider (Workers) transports, integration-tested against an SMTP sink | 3 |
-| 11 | Zero spans on real requests: `@keel/observability` has no non-test consumer, no flush lifecycle on either tier | operability-dx (corroborated by data-persistence, edge-deploy) | Env-driven tracer in `keel serve`/`dev`, interval+drain flush, `waitUntil` on CF | 4 |
-| 12 | The MCP control plane is unlaunchable (no `keel mcp`) and ungoverned (no authz, no audit) | operability-dx | `keel mcp` command + `mode: read-only \| operator` gating + mandatory audit sink | 4 |
+| 11 | Zero spans on real requests: `@volo/observability` has no non-test consumer, no flush lifecycle on either tier | operability-dx (corroborated by data-persistence, edge-deploy) | Env-driven tracer in `volo serve`/`dev`, interval+drain flush, `waitUntil` on CF | 4 |
+| 12 | The MCP control plane is unlaunchable (no `volo mcp`) and ungoverned (no authz, no audit) | operability-dx | `volo mcp` command + `mode: read-only \| operator` gating + mandatory audit sink | 4 |
 
 ---
 
@@ -91,23 +91,23 @@ Draws from: **edge-deploy** (1–2), **core-runtime** (1–2), **operability-dx*
 ### Wave 1 — Postgres truth (~1–2 wks)
 Blockers #6–7. The "production = one Postgres" pitch becomes literally true.
 Draws from: **data-persistence** (1–4), **content-cms** (2).
-- Dialect layer in `@keel/db`; threaded through migrate/queue/cache/workflows installers; `LIMIT -1` fix; `db.raw(sql, params)` escape hatch + grown condition vocabulary.
+- Dialect layer in `@volo/db`; threaded through migrate/queue/cache/workflows installers; `LIMIT -1` fix; `db.raw(sql, params)` escape hatch + grown condition vocabulary.
 - PG-safe queue claim + fenced terminal transitions + poison-payload routing.
 - Migration advisory lock + `migrations:"skip"` boot mode (the rolling-deploy story `serve()` already promises).
-- Delete `@keel/orm`; fold `TableBuilder` into schema-as-value DDL.
+- Delete `@volo/orm`; fold `TableBuilder` into schema-as-value DDL.
 - `content-store`: transactional persist + slug pinning (the launch seam stays airtight on both drivers).
 
-**Done:** a Keel app boots, migrates, queues, and caches on a real Postgres; every schema installer runs in `db-parity-postgres` CI; the concurrent-claim test admits each job exactly once.
+**Done:** a Volo app boots, migrates, queues, and caches on a real Postgres; every schema installer runs in `db-parity-postgres` CI; the concurrent-claim test admits each job exactly once.
 
 ### Wave 2 — The bundle and the loop (~1–2 wks, parallelizable with Wave 1)
 Blockers #8–9. A stranger can scaffold, run, and get the optimized-by-default pipeline.
 Draws from: **ui-client** (1–3), **operability-dx** (1), **content-cms** (3, 5).
-- `@keel/ui` barrel split + `ui.dialect` key + streaming `ServerRenderer` seam + Preact scaffold default + bundle-size assertion tests (≤15 KB gzip preact, ≤65 KB react).
-- Write-then-sweep chunk builds (no 404ing islands mid-`keel dev`).
+- `@volo/ui` barrel split + `ui.dialect` key + streaming `ServerRenderer` seam + Preact scaffold default + bundle-size assertion tests (≤15 KB gzip preact, ≤65 KB react).
+- Write-then-sweep chunk builds (no 404ing islands mid-`volo dev`).
 - Scaffold fixes + install-and-boot CI e2e; the publish/pin decision (tarball/`file:` pins until a `0.x` publish at launch).
 - Content renderer parity (rehype-sanitize on the unified path; Svelte helper sanitizes or dies); delete `content-mcp` + stale REVIEW.md files.
 
-**Done:** `bunx create-keel app && bun install && keel dev` serves a page with a hydrated island on a Preact bundle, asserted in CI.
+**Done:** `bunx create-volo app && bun install && volo dev` serves a page with a hydrated island on a Preact bundle, asserted in CI.
 
 ### Wave 3 — Batteries become true (~2 wks)
 Blocker #10 plus the battery-posture P1s.
@@ -124,12 +124,12 @@ Draws from: **web-primitives** (1–4), **auth-security** (3–6), **data-persis
 ### Wave 4 — Operability and the agent plane (~1–2 wks)
 Blockers #11–12.
 Draws from: **operability-dx** (3–6), **core-runtime** (3–4), **auth-security** (7), **data-persistence** (7), **edge-deploy** (3), **ui-client** (5), **web-primitives** (5).
-- Tracing wired: `KEEL_OTLP_URL` in `keel serve`/`dev`, flush on interval + drain; `toFetchHandler(request, ctx)` + `waitUntil` flush; estate as the OTLP-on-Workers reference; `traceparent` in/out; first child spans (db query, queue job, webhook delivery, mail delivery).
+- Tracing wired: `VOLO_OTLP_URL` in `volo serve`/`dev`, flush on interval + drain; `toFetchHandler(request, ctx)` + `waitUntil` flush; estate as the OTLP-on-Workers reference; `traceparent` in/out; first child spans (db query, queue job, webhook delivery, mail delivery).
 - Event seams: identity `onEvent`, secure-stack `onDenied`, queue/workflow hooks, `runWorker` forwards `onError`, mail `onDelivered`/`onFailed`, client error beacon.
 - Runtime observability batch: `X-Request-Id` echo, structured JSON access logs (both tiers), stream-truncation reporting, request line before body read, bounded readiness probe, timeout cancellation (abort the handler's signal).
-- `keel mcp` (mode-gated, audit-sinked) + `keel openapi` (with internal-route filter).
+- `volo mcp` (mode-gated, audit-sinked) + `volo openapi` (with internal-route filter).
 
-**Done:** a served request produces a span in a local OTLP collector (integration-tested); the five-minute Claude Desktop demo runs against `keel mcp` in read-only mode.
+**Done:** a served request produces a span in a local OTLP collector (integration-tested); the five-minute Claude Desktop demo runs against `volo mcp` in read-only mode.
 
 ### Wave 5 — API freeze and truth-up (~1–2 wks; the 1.0 gate, not the launch gate)
 The breaking changes that get strictly more expensive after external consumers exist, plus doc honesty.
@@ -150,12 +150,12 @@ Launch = end of Wave 4 with Wave 0–4 exit criteria all green. 1.0 = end of Wav
 
 - [ ] All 12 consolidated blockers closed, each with a regression test naming the original finding.
 - [ ] `bun run ws:typecheck` + the serial coverage gate (`bun scripts/coverage-gate.ts`) green; CI green including `db-parity-postgres` running every schema installer and the concurrent-claim proof.
-- [ ] Scaffold loop e2e in CI: scaffold → `bun install` → `keel dev` → curl a route → island hydrates.
+- [ ] Scaffold loop e2e in CI: scaffold → `bun install` → `volo dev` → curl a route → island hydrates.
 - [ ] Estate deploys to a real Cloudflare account via the documented runbook with `SESSION_SECRET` set; an unset secret refuses to serve; a cross-origin POST is refused at the edge.
 - [ ] A real email delivered through a real transport in an integration test (local SMTP sink).
 - [ ] A served request produces a span in a local OTLP collector, on both tiers.
 - [ ] Bundle-size assertions hold: scaffold default (Preact) ≤ 15 KB gzip; react dialect ≤ 65 KB.
-- [ ] `keel mcp` demo runs end-to-end in read-only mode; write tools refuse without operator mode; every dispatch lands in the audit sink.
+- [ ] `volo mcp` demo runs end-to-end in read-only mode; write tools refuse without operator mode; every dispatch lands in the audit sink.
 - [ ] No committed secret, no silent memory-store fallback in production mode, no sanitizer no-op — verified by grep + tests, not by review.
 - [ ] README/ARCHITECTURE claims audited against this roadmap's scope table (§1).
 
@@ -172,12 +172,12 @@ Launch = end of Wave 4 with Wave 0–4 exit criteria all green. 1.0 = end of Wav
 
 ## 6. Conflicts resolved (CTO calls)
 
-- **Postgres in v1 vs "launch as SQLite-single-node."** data-persistence offered the honest-SQLite fallback. **Call: PG parity is v1** (Wave 1). The pitch is the substrate; the fix is scoped and the pattern (`@keel/ratelimit`'s Dialect) is already proven in-tree.
+- **Postgres in v1 vs "launch as SQLite-single-node."** data-persistence offered the honest-SQLite fallback. **Call: PG parity is v1** (Wave 1). The pitch is the substrate; the fix is scoped and the pattern (`@volo/ratelimit`'s Dialect) is already proven in-tree.
 - **`trustProxy` severity.** Both reviews rated it P1; it is cross-corroborated and silently defeats the rate-limit battery. **Promoted to launch blocker** (Wave 0) — the fix is a one-line semantic change plus tests.
-- **MCP gates launch?** operability-dx says the agent plane is unlaunchable; content-cms says its domain doesn't gate. **Call: `keel mcp` ships in v1** (Wave 4) because Bet IV is the moat and the cost is days; the Docks estate beyond the store/MCP seam ships as preview and does not gate.
+- **MCP gates launch?** operability-dx says the agent plane is unlaunchable; content-cms says its domain doesn't gate. **Call: `volo mcp` ships in v1** (Wave 4) because Bet IV is the moat and the cost is days; the Docks estate beyond the store/MCP seam ships as preview and does not gate.
 - **Workflows.** The run journal is real work; the dishonest claim is free to fix. **Call:** rename to "resumable step memoization" pre-launch; journal + resume driver post-1.0.
 - **Set-Cookie multimap + param decoding timing.** core-runtime wanted them "before any external consumer exists." There are no external consumers until launch; **Wave 5 is the deadline** and satisfies the constraint.
-- **`@keel/deploy` vs `wrangler deploy`.** The blessed v1 Cloudflare path stays `wrangler deploy`; one remote `ReleaseStore` ships in Wave 3 so versioned release/rollback is real for self-hosted Node and R2. The full Bet II uploader is post-1.0.
+- **`@volo/deploy` vs `wrangler deploy`.** The blessed v1 Cloudflare path stays `wrangler deploy`; one remote `ReleaseStore` ships in Wave 3 so versioned release/rollback is real for self-hosted Node and R2. The full Bet II uploader is post-1.0.
 - **Hooks/config orphans.** The review allowed wire-or-delete. **Call: delete from the v1 surface** — a plugin system designed under launch pressure would be the wrong one. The WordPress-lesson extensibility bet returns post-1.0 as its own ADR.
 - **Compression.** core-runtime P1. Kept pre-1.0 (Wave 5) but not pre-launch: every serious deploy fronts a compressing CDN/proxy; document that until it lands.
 - **CSP/nonce.** Multiple domains touch it; none can use it until the island inline scripts carry nonces. **Deferred post-1.0 as one coherent increment**, not piecemeal.
@@ -200,7 +200,7 @@ Why the prior "defer to post-1.0" logic dissolves: the fear was rewriting ~45 ap
 against a moving API. But when the example IS the QA, you maintain a handful that
 evolve *with* the API — the churn is the signal (a wiring that got harder is a
 finding), not waste. And the cost of *not* having it is exactly the gap Wave 3 hit:
-~929 lines of `@keel/mailing-lists` shipped with its entire user-facing journey
+~929 lines of `@volo/mailing-lists` shipped with its entire user-facing journey
 (subscribe → confirm → broadcast) proven only as service-method calls in a unit
 test — never wired into a route, never deployed, never clicked.
 

@@ -63,7 +63,7 @@ describe("formatTraceparent", () => {
     expect(formatTraceparent(TRACE, PARENT)).toBe(`00-${TRACE}-${PARENT}-01`);
   });
 
-  it("truncates a 32-hex Keel spanId to the 16-hex parent-id field", () => {
+  it("truncates a 32-hex Volo spanId to the 16-hex parent-id field", () => {
     const spanId = "b".repeat(32);
 
     expect(formatTraceparent(TRACE, spanId)).toBe(`00-${TRACE}-${"b".repeat(16)}-01`);

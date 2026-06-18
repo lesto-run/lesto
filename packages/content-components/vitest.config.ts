@@ -10,7 +10,7 @@ import { defineConfig } from "vitest/config";
 // as a React child") because the element shape differs across the major. The
 // package's peer range is `react >=18`, so we align the *test* runtime on the
 // hoisted react@19 — matching react-dom@19 and the rest of the monorepo
-// (e.g. @keel/ui) — via an exact-match alias. The alias is scoped to `react`
+// (e.g. @volo/ui) — via an exact-match alias. The alias is scoped to `react`
 // and its jsx runtimes; `react-dom` is left untouched.
 const reactRoot = fileURLToPath(new URL("../../node_modules/react", import.meta.url));
 

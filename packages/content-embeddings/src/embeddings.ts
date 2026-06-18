@@ -6,8 +6,8 @@
  */
 
 import { pipeline, type FeatureExtractionPipeline } from "@huggingface/transformers";
-import { createSingletonLoader } from "@keel/content-shared/mutex";
-import { DocksError } from "@keel/content-shared/errors";
+import { createSingletonLoader } from "@volo/content-shared/mutex";
+import { DocksError } from "@volo/content-shared/errors";
 import type { SearchableEntry, EmbeddingResult, GenerateEmbeddingsOptions } from "./types";
 import { MODEL_NAME, DEFAULT_MAX_TEXT_LENGTH, DEFAULT_SNIPPET_LENGTH } from "./constants";
 

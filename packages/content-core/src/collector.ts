@@ -3,7 +3,7 @@ import path from "node:path";
 import fg from "fast-glob";
 import type { AnyCollection } from "./types";
 import type { ResolvedConfig } from "./config";
-import { resolveParser, getDefaultIncludePatterns } from "@keel/content-umbra";
+import { resolveParser, getDefaultIncludePatterns } from "@volo/content-umbra";
 
 export interface CollectedFile {
   absolutePath: string;

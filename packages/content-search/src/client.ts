@@ -1,9 +1,9 @@
 /**
- * @keel/content-search - Browser-safe search client
+ * @volo/content-search - Browser-safe search client
  *
  * This entry point provides a Pagefind-style API for searching pre-built
  * indexes. It does NOT include embedding generation (which requires
- * @huggingface/transformers) - use @keel/content-embeddings for that.
+ * @huggingface/transformers) - use @volo/content-embeddings for that.
  */
 
 import type { SearchIndex, SearchResult, SearchClientOptions, SearchClient } from "./types";

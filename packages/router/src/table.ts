@@ -2,7 +2,7 @@
  * A generic route table: method + path pattern → a value of the caller's choice.
  *
  * Where the legacy {@link Router} hard-codes its value to a `"controller#action"`
- * string, `RouteTable<T>` is agnostic — the `keel()` builder stores whatever it
+ * string, `RouteTable<T>` is agnostic — the `volo()` builder stores whatever it
  * needs to run a route (a handler chain, a page definition) as the value, and the
  * table only owns matching: compile each pattern once, then resolve a request to
  * the first route whose verb and path both match, handing back the value and the

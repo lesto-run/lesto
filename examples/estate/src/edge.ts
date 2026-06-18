@@ -2,25 +2,25 @@
  * The estate app, wired for the edge.
  *
  * Same site, same pages — but the session is a **stateless signed token**
- * (`@keel/auth`'s `SignedSessions`), not a row in an in-memory store. That is the
+ * (`@volo/auth`'s `SignedSessions`), not a row in an in-memory store. That is the
  * one change a Cloudflare Worker demands: an isolate is ephemeral and per-PoP, so
  * a store is empty on the next request; a signed token carries its own proof and
  * verifies anywhere the secret is known. The node demo (`serve.ts`) keeps using
  * the store-backed identity; this is the edge twin.
  *
- * `buildEdgeApp(secret)` returns a composable `keel()` app whose `handle` is the
+ * `buildEdgeApp(secret)` returns a composable `volo()` app whose `handle` is the
  * pure function the Worker fronts — so the same app is exercised by an in-process
  * E2E test and by the deployed Worker, with no divergence. Pages are plain React
  * (`pages.tsx`) rendered by `.page`; the Worker passes `preactServerRenderer` so
  * the buffered SSR markup matches the Preact client bundle it ships (ADR 0008).
  */
 
-import { fromRequestMiddleware, keel } from "@keel/web";
-import type { Keel } from "@keel/web";
-import { SignedSessions } from "@keel/auth";
-import { secureStack } from "@keel/kernel";
-import { clearSessionCookie, readSessionToken, sessionCookie } from "@keel/identity";
-import type { ServerRenderer } from "@keel/ui/server";
+import { fromRequestMiddleware, volo } from "@volo/web";
+import type { Volo } from "@volo/web";
+import { SignedSessions } from "@volo/auth";
+import { secureStack } from "@volo/kernel";
+import { clearSessionCookie, readSessionToken, sessionCookie } from "@volo/identity";
+import type { ServerRenderer } from "@volo/ui/server";
 
 import { sessionSource } from "./session-source";
 import { EstateLayout } from "./ui/layout";
@@ -41,7 +41,7 @@ const USERS = new Map<string, User>([
   ["guest", { id: "guest", name: "Guest Buyer" }],
 ]);
 
-// The session cookie name and serializers live in `@keel/identity`'s cookie
+// The session cookie name and serializers live in `@volo/identity`'s cookie
 // module — the single source of the `__Host-` discipline. The edge twin reuses
 // them rather than re-deriving the contract.
 
@@ -71,7 +71,7 @@ export interface EdgeAppOptions {
    * The edge twin's sign-in mints a session for a user id with NO credential
    * check — fine for the public demo, a wide-open auth bypass for a real deploy.
    * It is therefore OFF by default and turned on only under an explicit demo
-   * binding (`KEEL_DEMO=1`, resolved by {@link isDemoMode}). With it off, the
+   * binding (`VOLO_DEMO=1`, resolved by {@link isDemoMode}). With it off, the
    * sign-in route is registered but refuses (403), so a forgotten flag fails
    * closed rather than silently exposing impersonation.
    */
@@ -97,7 +97,7 @@ export interface EdgeAppOptions {
  * PLUS per-isolate rate limiting the edge adds on top (a short-lived Worker
  * isolate cannot lean on long-lived infra for that, so it sheds floods itself).
  */
-export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel {
+export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Volo {
   const sessions = new SignedSessions({ secret });
 
   const renderer = options.serverRenderer;
@@ -114,7 +114,7 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel
     return claim === undefined ? undefined : USERS.get(claim.userId);
   };
 
-  const app = keel()
+  const app = volo()
     // The node twin's origin-check CSRF posture, PLUS per-isolate rate limiting
     // the edge adds on top — both wrap every route (and every 404), applied
     // before any route so a forged cross-site POST or a flood is refused ahead of
@@ -154,7 +154,7 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Keel
     /**
      * The session data source the marketing Account island binds to (ADR 0010).
      *
-     * Auto-exposed at `/__keel/data/session`; the framework delivers its value to
+     * Auto-exposed at `/__volo/data/session`; the framework delivers its value to
      * the island as a prop (primed parallel with client.js). An identity *probe*,
      * not a gated resource — "nobody is signed in" is a normal `null`/200, never a
      * 401. The signed-token user is already the `{ id, name }` DTO; the gated
@@ -218,19 +218,19 @@ const DEMO_EDGE_SECRET = "estate-demo-edge-secret-0123456789ab";
 /** The environment bindings the edge entry reads. */
 export interface EdgeEnv {
   readonly SESSION_SECRET?: string;
-  readonly KEEL_DEMO?: string;
+  readonly VOLO_DEMO?: string;
 }
 
 /**
  * Is the Worker running in demo mode?
  *
  * Demo mode is the OPT-IN escape hatch that allows the committed fallback secret
- * and the passwordless `?as=` sign-in. It requires an explicit `KEEL_DEMO=1`
+ * and the passwordless `?as=` sign-in. It requires an explicit `VOLO_DEMO=1`
  * binding (from the Worker `env` or `process.env`) — anything else, including an
  * absent binding, is NOT demo mode.
  */
 export function isDemoMode(env?: EdgeEnv): boolean {
-  return (env?.KEEL_DEMO ?? process.env["KEEL_DEMO"]) === "1";
+  return (env?.VOLO_DEMO ?? process.env["VOLO_DEMO"]) === "1";
 }
 
 /**
@@ -239,7 +239,7 @@ export function isDemoMode(env?: EdgeEnv): boolean {
  * In production (`isDemoMode` false) an absent `SESSION_SECRET` THROWS rather
  * than falling back to a committed literal: a Worker with no trust root must not
  * serve a single request signing sessions anyone can forge. The committed
- * {@link DEMO_EDGE_SECRET} is reachable ONLY under an explicit `KEEL_DEMO=1`
+ * {@link DEMO_EDGE_SECRET} is reachable ONLY under an explicit `VOLO_DEMO=1`
  * binding. This is the framework's pattern for every secret-bearing Worker.
  */
 export function edgeSecret(env?: EdgeEnv): string {
@@ -250,8 +250,8 @@ export function edgeSecret(env?: EdgeEnv): string {
   if (isDemoMode(env)) return DEMO_EDGE_SECRET;
 
   throw new Error(
-    "SESSION_SECRET is not set and KEEL_DEMO is not enabled. Refusing to serve: set the " +
-      "SESSION_SECRET wrangler secret (`wrangler secret put SESSION_SECRET`), or set KEEL_DEMO=1 " +
+    "SESSION_SECRET is not set and VOLO_DEMO is not enabled. Refusing to serve: set the " +
+      "SESSION_SECRET wrangler secret (`wrangler secret put SESSION_SECRET`), or set VOLO_DEMO=1 " +
       "to run the public demo with its committed fallback secret.",
   );
 }

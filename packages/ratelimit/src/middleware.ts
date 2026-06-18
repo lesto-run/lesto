@@ -13,8 +13,8 @@
  * `ip` the whole fleet would share one bucket.
  */
 
-import { currentContext } from "@keel/web";
-import type { KeelRequest, Middleware } from "@keel/web";
+import { currentContext } from "@volo/web";
+import type { VoloRequest, Middleware } from "@volo/web";
 
 import { RateLimiter } from "./limiter";
 import { MemoryRateLimitStore } from "./store";
@@ -56,7 +56,7 @@ export interface RateLimitOptions {
   readonly limiter?: RateLimiter;
 
   /**
-   * How a request maps to a bucket key. Receives the {@link KeelRequest} so the
+   * How a request maps to a bucket key. Receives the {@link VoloRequest} so the
    * key can come straight from the request — an `Authorization`/API-key header, a
    * route param, a body field, or a composite — *without* reaching through the
    * ambient {@link currentContext}. Defaults to the client IP from the request
@@ -64,7 +64,7 @@ export interface RateLimitOptions {
    * ignores its argument because the context, not the request shape, carries the
    * resolved IP.
    */
-  readonly keyFor?: (request: KeelRequest) => string;
+  readonly keyFor?: (request: VoloRequest) => string;
 
   /**
    * Called the first time the *default* key derivation runs inside a request
@@ -91,19 +91,19 @@ export interface RateLimitOptions {
 
   /**
    * Optional observability hook fired the moment a request is throttled — the
-   * uniform `onDenied(kind, c)` seam shared across `@keel/csrf`, `@keel/authz`,
-   * and `@keel/ratelimit` (owned by auth-security item 6, consumed by OTLP wiring
+   * uniform `onDenied(kind, c)` seam shared across `@volo/csrf`, `@volo/authz`,
+   * and `@volo/ratelimit` (owned by auth-security item 6, consumed by OTLP wiring
    * in operability-dx item 3).
    *
    * `kind` is the coded reason (here always {@link RATELIMIT_DENIED_KIND}); `c` is
-   * the throttled {@link KeelRequest}. Purely observational: it shapes nothing —
+   * the throttled {@link VoloRequest}. Purely observational: it shapes nothing —
    * the `429` (and its `Retry-After`) is identical whether or not a hook is wired
    * — so firing is safe on the deny path. Distinct from {@link onUnknownClient},
    * which warns about a *misconfiguration* (no resolvable client IP); this fires on
    * an ordinary, correct throttle. A returned promise is awaited so an async sink
    * is not dropped mid-write.
    */
-  readonly onDenied?: (kind: string, c: KeelRequest) => void | Promise<void>;
+  readonly onDenied?: (kind: string, c: VoloRequest) => void | Promise<void>;
 }
 
 /**
@@ -139,11 +139,11 @@ function warnUnknownClient(): void {
  * Warn-once is kept here, in the closure, so each middleware tracks its own
  * "already warned" latch.
  *
- * It takes the {@link KeelRequest} to match the public `keyFor` signature, but
+ * It takes the {@link VoloRequest} to match the public `keyFor` signature, but
  * ignores it: the resolved client IP rides the ambient context, not the request
  * shape. A caller who wants to key off the request supplies their own `keyFor`.
  */
-function defaultKeyFor(onUnknownClient: () => void): (request: KeelRequest) => string {
+function defaultKeyFor(onUnknownClient: () => void): (request: VoloRequest) => string {
   let warned = false;
 
   return () => {

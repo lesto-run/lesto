@@ -1,5 +1,5 @@
 /**
- * The Reactions island — the canonical Keel island (ADR 0012).
+ * The Reactions island — the canonical Volo island (ADR 0012).
  *
  *   ssr: true   → the server renders the REAL component into the shell;
  *   data        → its `counts` prop is resolved AT RENDER and inlined (0 RTT);
@@ -15,7 +15,7 @@
 import { useState } from "react";
 import type { ReactElement } from "react";
 
-import { defineIsland } from "@keel/ui";
+import { defineIsland } from "@volo/ui";
 
 import { reactionsSource } from "../../src/reactions-source";
 

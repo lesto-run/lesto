@@ -1,10 +1,10 @@
 /**
- * @keel/runtime — the transport tier.
+ * @volo/runtime — the transport tier.
  *
- * The pure, transport-free MVC core (`@keel/web`) and the assembled app
- * (`@keel/kernel`) know nothing of sockets. This package is the thin adapter
+ * The pure, transport-free MVC core (`@volo/web`) and the assembled app
+ * (`@volo/kernel`) know nothing of sockets. This package is the thin adapter
  * that stands a real node:http server in front of an `App`, plus the runner
- * that drives a `@keel/queue` worker — the two long-lived processes a Keel
+ * that drives a `@volo/queue` worker — the two long-lived processes a Volo
  * deployment runs.
  *
  *   const server = await serve(app, { port: 0 });
@@ -16,7 +16,7 @@
  *   await worker.stop();
  */
 
-export { toKeelRequest } from "./request";
+export { toVoloRequest } from "./request";
 export type { RawRequest } from "./request";
 
 export { applyResponse } from "./response";
@@ -61,5 +61,5 @@ export { nodeStaticReader } from "./static-reader";
 export { openSqlite } from "./sqlite";
 export type { OpenSqlite, SqliteEngines, SqliteHandle } from "./sqlite";
 
-export { KeelError, RuntimeError } from "./errors";
+export { VoloError, RuntimeError } from "./errors";
 export type { RuntimeErrorCode } from "./errors";

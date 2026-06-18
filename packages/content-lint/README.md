@@ -1,11 +1,11 @@
-# @keel/content-lint
+# @volo/content-lint
 
 Content linting rules for Docks.
 
 ## Installation
 
 ```bash
-npm install @keel/content-lint
+npm install @volo/content-lint
 ```
 
 ## Quick Start

@@ -1,4 +1,4 @@
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
 /** Stable codes for the Cloudflare adapter's refusals. */
 export type CloudflareErrorCode =
@@ -8,4 +8,4 @@ export type CloudflareErrorCode =
   | "CLOUDFLARE_DISPATCH_TIMEOUT";
 
 /** Anything the Cloudflare adapter can refuse to do. */
-export class CloudflareError extends KeelError<CloudflareErrorCode> {}
+export class CloudflareError extends VoloError<CloudflareErrorCode> {}

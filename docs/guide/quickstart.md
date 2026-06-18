@@ -1,4 +1,4 @@
-# Quickstart — your first Keel app
+# Quickstart — your first Volo app
 
 This walks the first five minutes: scaffold an app, run it, see a server-rendered
 page with a live (hydrated) island, and add a route. It mirrors the CI-gated
@@ -13,29 +13,29 @@ ones that are actually exercised on every change.
 ## 1. Scaffold
 
 ```sh
-npm create keel-app my-app
-# or, with Bun:  bun create keel my-app
+npm create volo-app my-app
+# or, with Bun:  bun create volo my-app
 cd my-app
 bun install
 ```
 
 > **Pre-publish note.** Until the first `0.x` publish (see [RELEASING.md](../../RELEASING.md)),
-> the public `@keel/*` packages are not on npm yet. To try Keel from a clone of this
+> the public `@volo/*` packages are not on npm yet. To try Volo from a clone of this
 > repo, scaffold with the in-monorepo flag, which pins the packages at local `file:`
 > paths instead of registry ranges:
 >
 > ```sh
-> bun packages/create-keel/src/bin.ts my-app --local
+> bun packages/create-volo/src/bin.ts my-app --local
 > ```
 
-The scaffold writes a small but real app: a `posts` table (a `@keel/db` value), a
-migration, a code-first `keel()` app with `/`, `GET /posts`, and `POST /posts`, and
+The scaffold writes a small but real app: a `posts` table (a `@volo/db` value), a
+migration, a code-first `volo()` app with `/`, `GET /posts`, and `POST /posts`, and
 one island (`app/islands/counter.tsx`).
 
 ## 2. Run it
 
 ```sh
-bun run dev          # keel dev — every site live on one origin (default :3000)
+bun run dev          # volo dev — every site live on one origin (default :3000)
 ```
 
 Open <http://localhost:3000>. The page is server-rendered; the **count** button is
@@ -53,12 +53,12 @@ curl -H "Sec-Fetch-Site: same-origin" http://localhost:3000/posts
 
 ## 3. The shape of the app
 
-`keel.app.ts` is the whole application — it default-exports the `KeelAppConfig` that
-`keel dev` boots:
+`volo.app.ts` is the whole application — it default-exports the `VoloAppConfig` that
+`volo dev` boots:
 
 - **`posts`** — a table defined as a value with `defineTable`; the same value backs
   the migration's DDL and the typed row every query returns.
-- **`buildApp(db)`** — a closure factory returning a `keel()` app. Routes read top to
+- **`buildApp(db)`** — a closure factory returning a `volo()` app. Routes read top to
   bottom: `.get`/`.post` for the API, `.page` for server-rendered pages, `.client`
   for the island bundle.
 - **Validation at the boundary** — `POST /posts` runs the body through a Zod schema
@@ -69,7 +69,7 @@ curl -H "Sec-Fetch-Site: same-origin" http://localhost:3000/posts
 In `buildApp`, chain another handler:
 
 ```ts
-// add `eq` to the existing `@keel/db` import at the top of keel.app.ts
+// add `eq` to the existing `@volo/db` import at the top of volo.app.ts
 .get("/posts/:id", async (c) => {
   const id = Number(c.param("id"));
   const post = await db.select().from(posts).where(eq(posts.id, id)).get();
@@ -77,7 +77,7 @@ In `buildApp`, chain another handler:
 })
 ```
 
-Restart `keel dev` and `curl http://localhost:3000/posts/1`.
+Restart `volo dev` and `curl http://localhost:3000/posts/1`.
 
 ## Next
 

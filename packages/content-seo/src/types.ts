@@ -8,7 +8,7 @@
 
 /**
  * Minimal entry metadata required for schema generation.
- * Compatible with @keel/content-core RuntimeEntry but doesn't require the dependency.
+ * Compatible with @volo/content-core RuntimeEntry but doesn't require the dependency.
  */
 export interface EntryMeta {
   readonly id: string;

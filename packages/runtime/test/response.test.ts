@@ -15,7 +15,7 @@ import {
   pipeStream,
 } from "../src/response";
 
-import type { AnyKeelResponse } from "@keel/web";
+import type { AnyVoloResponse } from "@volo/web";
 
 /**
  * A plain-object `WritableResponse` for the buffered arms (string, bytes).
@@ -462,7 +462,7 @@ describe("isCompressibleType", () => {
   });
 });
 
-const htmlResponse = (body: string | Uint8Array): AnyKeelResponse => ({
+const htmlResponse = (body: string | Uint8Array): AnyVoloResponse => ({
   status: 200,
   headers: { "content-type": "text/html" },
   body,
@@ -519,7 +519,7 @@ describe("encodeBuffered", () => {
   });
 
   it("appends Accept-Encoding to an existing Vary without clobbering it", () => {
-    const response: AnyKeelResponse = {
+    const response: AnyVoloResponse = {
       status: 200,
       headers: { "content-type": "text/html", Vary: "Cookie" },
       body: "x".repeat(100),
@@ -531,7 +531,7 @@ describe("encodeBuffered", () => {
   });
 
   it("does not duplicate Accept-Encoding when Vary already lists it", () => {
-    const response: AnyKeelResponse = {
+    const response: AnyVoloResponse = {
       status: 200,
       headers: { "content-type": "text/html", vary: "accept-encoding" },
       body: "y".repeat(100),

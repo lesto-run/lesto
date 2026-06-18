@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { runPipeline } from "../src/index";
 
-import type { AnyKeelResponse, KeelRequest, Middleware, Next } from "../src/index";
+import type { AnyVoloResponse, VoloRequest, Middleware, Next } from "../src/index";
 
-const request: KeelRequest = {
+const request: VoloRequest = {
   method: "GET",
   path: "/",
   params: {},
@@ -13,7 +13,7 @@ const request: KeelRequest = {
   body: undefined,
 };
 
-const dispatch = async (): Promise<AnyKeelResponse> => ({
+const dispatch = async (): Promise<AnyVoloResponse> => ({
   status: 200,
   headers: { "content-type": "text/plain" },
   body: "ok",

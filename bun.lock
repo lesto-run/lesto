@@ -30,56 +30,56 @@
       },
     },
     "examples/admin": {
-      "name": "@keel/example-admin",
+      "name": "@volo/example-admin",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/admin": "workspace:*",
-        "@keel/db": "workspace:*",
-        "@keel/kernel": "workspace:*",
-        "@keel/migrate": "workspace:*",
-        "@keel/runtime": "workspace:*",
-        "@keel/web": "workspace:*",
+        "@volo/admin": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/kernel": "workspace:*",
+        "@volo/migrate": "workspace:*",
+        "@volo/runtime": "workspace:*",
+        "@volo/web": "workspace:*",
         "better-sqlite3": "^11.10.0",
         "zod": "^4.0.0",
       },
     },
     "examples/blog": {
-      "name": "@keel/example-blog",
+      "name": "@volo/example-blog",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/db": "workspace:*",
-        "@keel/kernel": "workspace:*",
-        "@keel/migrate": "workspace:*",
-        "@keel/runtime": "workspace:*",
-        "@keel/ui": "workspace:*",
-        "@keel/web": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/kernel": "workspace:*",
+        "@volo/migrate": "workspace:*",
+        "@volo/runtime": "workspace:*",
+        "@volo/ui": "workspace:*",
+        "@volo/web": "workspace:*",
         "better-sqlite3": "^11.10.0",
         "react": "^19",
         "react-dom": "^19",
       },
     },
     "examples/estate": {
-      "name": "@keel/example-estate",
+      "name": "@volo/example-estate",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/admin": "workspace:*",
-        "@keel/auth": "workspace:*",
-        "@keel/authz": "workspace:*",
-        "@keel/client": "workspace:*",
-        "@keel/cloudflare": "workspace:*",
-        "@keel/csrf": "workspace:*",
-        "@keel/db": "workspace:*",
-        "@keel/flags": "workspace:*",
-        "@keel/identity": "workspace:*",
-        "@keel/migrate": "workspace:*",
-        "@keel/observability": "workspace:*",
-        "@keel/ratelimit": "workspace:*",
-        "@keel/runtime": "workspace:*",
-        "@keel/sites": "workspace:*",
-        "@keel/ui": "workspace:*",
-        "@keel/web": "workspace:*",
         "@react-email/components": "^1.0.12",
         "@react-email/render": "^2.0.8",
+        "@volo/admin": "workspace:*",
+        "@volo/auth": "workspace:*",
+        "@volo/authz": "workspace:*",
+        "@volo/client": "workspace:*",
+        "@volo/cloudflare": "workspace:*",
+        "@volo/csrf": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/flags": "workspace:*",
+        "@volo/identity": "workspace:*",
+        "@volo/migrate": "workspace:*",
+        "@volo/observability": "workspace:*",
+        "@volo/ratelimit": "workspace:*",
+        "@volo/runtime": "workspace:*",
+        "@volo/sites": "workspace:*",
+        "@volo/ui": "workspace:*",
+        "@volo/web": "workspace:*",
         "better-sqlite3": "^11.10.0",
         "postgres": "^3.4.9",
         "preact": "^10.29.2",
@@ -90,35 +90,35 @@
       },
     },
     "examples/mailing-lists": {
-      "name": "@keel/example-mailing-lists",
+      "name": "@volo/example-mailing-lists",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/db": "workspace:*",
-        "@keel/kernel": "workspace:*",
-        "@keel/mail": "workspace:*",
-        "@keel/mailing-lists": "workspace:*",
-        "@keel/queue": "workspace:*",
-        "@keel/ratelimit": "workspace:*",
-        "@keel/runtime": "workspace:*",
-        "@keel/web": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/kernel": "workspace:*",
+        "@volo/mail": "workspace:*",
+        "@volo/mailing-lists": "workspace:*",
+        "@volo/queue": "workspace:*",
+        "@volo/ratelimit": "workspace:*",
+        "@volo/runtime": "workspace:*",
+        "@volo/web": "workspace:*",
         "better-sqlite3": "^11.10.0",
       },
     },
     "packages/admin": {
-      "name": "@keel/admin",
+      "name": "@volo/admin",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/db": "workspace:*",
-        "@keel/errors": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/errors": "workspace:*",
         "zod": "^4.0.0",
       },
     },
     "packages/assets": {
-      "name": "@keel/assets",
+      "name": "@volo/assets",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/observability": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/observability": "workspace:*",
         "preact": "^10.29.2",
       },
       "devDependencies": {
@@ -126,72 +126,72 @@
       },
     },
     "packages/auth": {
-      "name": "@keel/auth",
+      "name": "@volo/auth",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
+        "@volo/errors": "workspace:*",
       },
     },
     "packages/authz": {
-      "name": "@keel/authz",
+      "name": "@volo/authz",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/web": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/web": "workspace:*",
       },
     },
     "packages/cache": {
-      "name": "@keel/cache",
+      "name": "@volo/cache",
       "version": "0.0.0",
     },
     "packages/cli": {
-      "name": "@keel/cli",
+      "name": "@volo/cli",
       "version": "0.0.0",
       "bin": {
-        "keel": "./src/bin.ts",
+        "volo": "./src/bin.ts",
       },
       "dependencies": {
-        "@keel/assets": "workspace:*",
-        "@keel/content-core": "workspace:*",
-        "@keel/content-store": "workspace:*",
-        "@keel/deploy": "workspace:*",
-        "@keel/errors": "workspace:*",
-        "@keel/kernel": "workspace:*",
-        "@keel/mcp": "workspace:*",
-        "@keel/migrate": "workspace:*",
-        "@keel/observability": "workspace:*",
-        "@keel/openapi": "workspace:*",
-        "@keel/router": "workspace:*",
-        "@keel/runtime": "workspace:*",
-        "@keel/sites": "workspace:*",
-        "@keel/web": "workspace:*",
+        "@volo/assets": "workspace:*",
+        "@volo/content-core": "workspace:*",
+        "@volo/content-store": "workspace:*",
+        "@volo/deploy": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/kernel": "workspace:*",
+        "@volo/mcp": "workspace:*",
+        "@volo/migrate": "workspace:*",
+        "@volo/observability": "workspace:*",
+        "@volo/openapi": "workspace:*",
+        "@volo/router": "workspace:*",
+        "@volo/runtime": "workspace:*",
+        "@volo/sites": "workspace:*",
+        "@volo/web": "workspace:*",
       },
     },
     "packages/client": {
-      "name": "@keel/client",
+      "name": "@volo/client",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/observability": "workspace:*",
-        "@keel/router": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/observability": "workspace:*",
+        "@volo/router": "workspace:*",
       },
     },
     "packages/cloudflare": {
-      "name": "@keel/cloudflare",
+      "name": "@volo/cloudflare",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/db": "workspace:*",
-        "@keel/deploy": "workspace:*",
-        "@keel/errors": "workspace:*",
-        "@keel/pg": "workspace:*",
-        "@keel/web": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/deploy": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/pg": "workspace:*",
+        "@volo/web": "workspace:*",
       },
     },
     "packages/content-components": {
-      "name": "@keel/content-components",
+      "name": "@volo/content-components",
       "version": "0.1.0",
       "dependencies": {
-        "@keel/content-shared": "workspace:*",
+        "@volo/content-shared": "workspace:*",
       },
       "devDependencies": {
         "@types/react": "^18.0.0",
@@ -201,14 +201,14 @@
         "vue": "^3.0.0",
       },
       "peerDependencies": {
-        "@keel/content-mdx": "workspace:*",
+        "@volo/content-mdx": "workspace:*",
         "react": ">=18",
         "react-dom": ">=18",
         "svelte": ">=4",
         "vue": ">=3",
       },
       "optionalPeers": [
-        "@keel/content-mdx",
+        "@volo/content-mdx",
         "react",
         "react-dom",
         "svelte",
@@ -216,15 +216,15 @@
       ],
     },
     "packages/content-core": {
-      "name": "@keel/content-core",
+      "name": "@volo/content-core",
       "version": "0.1.0",
       "dependencies": {
-        "@keel/content-embeddings": "workspace:*",
-        "@keel/content-markdown": "workspace:*",
-        "@keel/content-search": "workspace:*",
-        "@keel/content-shared": "workspace:*",
-        "@keel/content-umbra": "workspace:*",
         "@standard-schema/spec": "^1.0.0",
+        "@volo/content-embeddings": "workspace:*",
+        "@volo/content-markdown": "workspace:*",
+        "@volo/content-search": "workspace:*",
+        "@volo/content-shared": "workspace:*",
+        "@volo/content-umbra": "workspace:*",
         "chokidar": "^4.0.3",
         "fast-glob": "^3.3.3",
         "fast-json-stringify": "^6.1.1",
@@ -236,43 +236,43 @@
       },
       "devDependencies": {
         "@content-collections/core": "^0.9.0",
-        "@keel/content-mdx": "workspace:*",
         "@types/picomatch": "^3.0.2",
         "@types/serialize-javascript": "^5.0.4",
+        "@volo/content-mdx": "workspace:*",
         "tsdown": "^0.17.3",
         "valibot": "^1.2.0",
         "zod": "^4.1.13",
       },
       "peerDependencies": {
-        "@keel/content-mdx": "workspace:*",
+        "@volo/content-mdx": "workspace:*",
         "zod": "^4.0.0",
       },
       "optionalPeers": [
-        "@keel/content-mdx",
+        "@volo/content-mdx",
         "zod",
       ],
     },
     "packages/content-embeddings": {
-      "name": "@keel/content-embeddings",
+      "name": "@volo/content-embeddings",
       "version": "0.1.0",
       "dependencies": {
         "@huggingface/transformers": "^3.3.3",
-        "@keel/content-shared": "workspace:*",
+        "@volo/content-shared": "workspace:*",
       },
       "devDependencies": {
         "tsdown": "^0.17.3",
       },
     },
     "packages/content-lint": {
-      "name": "@keel/content-lint",
+      "name": "@volo/content-lint",
       "version": "0.1.0",
     },
     "packages/content-markdown": {
-      "name": "@keel/content-markdown",
+      "name": "@volo/content-markdown",
       "version": "0.1.0",
       "dependencies": {
-        "@keel/content-shared": "workspace:*",
         "@rehype-pretty/transformers": "^0.13.2",
+        "@volo/content-shared": "workspace:*",
         "rehype-parse": "^9.0.1",
         "rehype-pretty-code": "^0.14.1",
         "rehype-sanitize": "^6.0.0",
@@ -300,13 +300,13 @@
       },
     },
     "packages/content-mcp": {
-      "name": "@keel/content-mcp",
+      "name": "@volo/content-mcp",
       "version": "0.1.0",
       "dependencies": {
-        "@keel/content-core": "workspace:*",
-        "@keel/content-shared": "workspace:*",
-        "@keel/content-umbra": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.0.4",
+        "@volo/content-core": "workspace:*",
+        "@volo/content-shared": "workspace:*",
+        "@volo/content-umbra": "workspace:*",
         "zod": "^4.2.1",
         "zod-to-json-schema": "^3.24.1",
       },
@@ -315,10 +315,10 @@
       },
     },
     "packages/content-mdx": {
-      "name": "@keel/content-mdx",
+      "name": "@volo/content-mdx",
       "version": "0.1.0",
       "dependencies": {
-        "@keel/content-shared": "workspace:*",
+        "@volo/content-shared": "workspace:*",
         "mdx-bundler": "^10.0.0",
         "rehype-pretty-code": "^0.14.1",
         "rehype-slug": "^6.0.0",
@@ -345,10 +345,10 @@
       },
     },
     "packages/content-prose": {
-      "name": "@keel/content-prose",
+      "name": "@volo/content-prose",
       "version": "0.1.0",
       "dependencies": {
-        "@keel/content-shared": "workspace:*",
+        "@volo/content-shared": "workspace:*",
         "cuss": "^2.0.0",
         "fillers": "^2.0.0",
         "hedges": "^2.0.0",
@@ -361,20 +361,20 @@
       },
     },
     "packages/content-query": {
-      "name": "@keel/content-query",
+      "name": "@volo/content-query",
       "version": "0.1.0",
       "dependencies": {
-        "@keel/content-shared": "workspace:*",
+        "@volo/content-shared": "workspace:*",
       },
       "devDependencies": {
         "tsdown": "^0.17.3",
       },
     },
     "packages/content-search": {
-      "name": "@keel/content-search",
+      "name": "@volo/content-search",
       "version": "0.1.0",
       "dependencies": {
-        "@keel/content-shared": "workspace:*",
+        "@volo/content-shared": "workspace:*",
       },
       "devDependencies": {
         "@types/react": "^19.0.0",
@@ -389,14 +389,14 @@
       ],
     },
     "packages/content-seo": {
-      "name": "@keel/content-seo",
+      "name": "@volo/content-seo",
       "version": "0.1.0",
       "dependencies": {
-        "@keel/content-shared": "workspace:*",
+        "@volo/content-shared": "workspace:*",
       },
     },
     "packages/content-shared": {
-      "name": "@keel/content-shared",
+      "name": "@volo/content-shared",
       "version": "0.1.0",
       "dependencies": {
         "dompurify": "^3.0.0",
@@ -430,23 +430,23 @@
       ],
     },
     "packages/content-store": {
-      "name": "@keel/content-store",
+      "name": "@volo/content-store",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/content-core": "workspace:*",
-        "@keel/db": "workspace:*",
-        "@keel/errors": "workspace:*",
-        "@keel/migrate": "workspace:*",
+        "@volo/content-core": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/migrate": "workspace:*",
       },
       "devDependencies": {
         "better-sqlite3": "^11.10.0",
       },
     },
     "packages/content-umbra": {
-      "name": "@keel/content-umbra",
+      "name": "@volo/content-umbra",
       "version": "0.1.0",
       "dependencies": {
-        "@keel/content-shared": "workspace:*",
+        "@volo/content-shared": "workspace:*",
         "js-yaml": "^4.1.0",
       },
       "devDependencies": {
@@ -458,10 +458,10 @@
       },
     },
     "packages/content-vite": {
-      "name": "@keel/content-vite",
+      "name": "@volo/content-vite",
       "version": "0.1.0",
       "dependencies": {
-        "@keel/content-core": "workspace:*",
+        "@volo/content-core": "workspace:*",
       },
       "devDependencies": {
         "tsdown": "^0.17.3",
@@ -472,51 +472,51 @@
       },
     },
     "packages/cors": {
-      "name": "@keel/cors",
+      "name": "@volo/cors",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/web": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/web": "workspace:*",
       },
     },
-    "packages/create-keel": {
-      "name": "create-keel",
+    "packages/create-volo": {
+      "name": "create-volo",
       "version": "0.0.0",
       "bin": "./src/bin.ts",
       "dependencies": {
-        "@keel/errors": "workspace:*",
+        "@volo/errors": "workspace:*",
       },
     },
     "packages/csrf": {
-      "name": "@keel/csrf",
+      "name": "@volo/csrf",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/web": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/web": "workspace:*",
       },
     },
     "packages/db": {
-      "name": "@keel/db",
+      "name": "@volo/db",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
+        "@volo/errors": "workspace:*",
       },
     },
     "packages/deploy": {
-      "name": "@keel/deploy",
+      "name": "@volo/deploy",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/sites": "workspace:*",
-        "@keel/storage": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/sites": "workspace:*",
+        "@volo/storage": "workspace:*",
       },
     },
     "packages/e2e": {
-      "name": "keel-e2e",
+      "name": "volo-e2e",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/runtime": "workspace:*",
-        "@keel/ui": "workspace:*",
+        "@volo/runtime": "workspace:*",
+        "@volo/ui": "workspace:*",
         "react": "^19",
         "react-dom": "^19",
       },
@@ -525,215 +525,215 @@
       },
     },
     "packages/errors": {
-      "name": "@keel/errors",
+      "name": "@volo/errors",
       "version": "0.0.0",
     },
     "packages/feeds": {
-      "name": "@keel/feeds",
+      "name": "@volo/feeds",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
+        "@volo/errors": "workspace:*",
       },
     },
     "packages/flags": {
-      "name": "@keel/flags",
+      "name": "@volo/flags",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/web": "workspace:*",
+        "@volo/web": "workspace:*",
       },
     },
     "packages/forms": {
-      "name": "@keel/forms",
+      "name": "@volo/forms",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/ui": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/ui": "workspace:*",
         "react": "^19",
         "react-dom": "^19",
       },
     },
     "packages/i18n": {
-      "name": "@keel/i18n",
+      "name": "@volo/i18n",
       "version": "0.0.0",
     },
     "packages/identity": {
-      "name": "@keel/identity",
+      "name": "@volo/identity",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/auth": "workspace:*",
-        "@keel/db": "workspace:*",
-        "@keel/errors": "workspace:*",
-        "@keel/mail": "workspace:*",
-        "@keel/migrate": "workspace:*",
-        "@keel/ratelimit": "workspace:*",
+        "@volo/auth": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/mail": "workspace:*",
+        "@volo/migrate": "workspace:*",
+        "@volo/ratelimit": "workspace:*",
       },
     },
     "packages/integration": {
-      "name": "@keel/integration",
+      "name": "@volo/integration",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/auth": "workspace:*",
-        "@keel/cache": "workspace:*",
-        "@keel/cloudflare": "workspace:*",
-        "@keel/db": "workspace:*",
-        "@keel/identity": "workspace:*",
-        "@keel/kernel": "workspace:*",
-        "@keel/mail": "workspace:*",
-        "@keel/migrate": "workspace:*",
-        "@keel/observability": "workspace:*",
-        "@keel/pg": "workspace:*",
-        "@keel/queue": "workspace:*",
-        "@keel/ratelimit": "workspace:*",
-        "@keel/router": "workspace:*",
-        "@keel/runtime": "workspace:*",
-        "@keel/sites": "workspace:*",
-        "@keel/web": "workspace:*",
         "@react-email/components": "^1.0.12",
         "@react-email/render": "^2.0.8",
+        "@volo/auth": "workspace:*",
+        "@volo/cache": "workspace:*",
+        "@volo/cloudflare": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/identity": "workspace:*",
+        "@volo/kernel": "workspace:*",
+        "@volo/mail": "workspace:*",
+        "@volo/migrate": "workspace:*",
+        "@volo/observability": "workspace:*",
+        "@volo/pg": "workspace:*",
+        "@volo/queue": "workspace:*",
+        "@volo/ratelimit": "workspace:*",
+        "@volo/router": "workspace:*",
+        "@volo/runtime": "workspace:*",
+        "@volo/sites": "workspace:*",
+        "@volo/web": "workspace:*",
         "better-sqlite3": "^11.10.0",
         "react": "^19.2.7",
       },
     },
     "packages/kernel": {
-      "name": "@keel/kernel",
+      "name": "@volo/kernel",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/auth": "workspace:*",
-        "@keel/cors": "workspace:*",
-        "@keel/csrf": "workspace:*",
-        "@keel/db": "workspace:*",
-        "@keel/migrate": "workspace:*",
-        "@keel/ratelimit": "workspace:*",
-        "@keel/router": "workspace:*",
-        "@keel/web": "workspace:*",
+        "@volo/auth": "workspace:*",
+        "@volo/cors": "workspace:*",
+        "@volo/csrf": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/migrate": "workspace:*",
+        "@volo/ratelimit": "workspace:*",
+        "@volo/router": "workspace:*",
+        "@volo/web": "workspace:*",
       },
     },
     "packages/mail": {
-      "name": "@keel/mail",
+      "name": "@volo/mail",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/queue": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/queue": "workspace:*",
       },
     },
     "packages/mailing-lists": {
-      "name": "@keel/mailing-lists",
+      "name": "@volo/mailing-lists",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/db": "workspace:*",
-        "@keel/errors": "workspace:*",
-        "@keel/mail": "workspace:*",
-        "@keel/migrate": "workspace:*",
-        "@keel/queue": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/mail": "workspace:*",
+        "@volo/migrate": "workspace:*",
+        "@volo/queue": "workspace:*",
       },
     },
     "packages/mcp": {
-      "name": "@keel/mcp",
+      "name": "@volo/mcp",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/content-core": "workspace:*",
-        "@keel/content-store": "workspace:*",
-        "@keel/db": "workspace:*",
-        "@keel/errors": "workspace:*",
-        "@keel/kernel": "workspace:*",
-        "@keel/migrate": "workspace:*",
-        "@keel/web": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.29.0",
+        "@volo/content-core": "workspace:*",
+        "@volo/content-store": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/kernel": "workspace:*",
+        "@volo/migrate": "workspace:*",
+        "@volo/web": "workspace:*",
       },
     },
     "packages/migrate": {
-      "name": "@keel/migrate",
+      "name": "@volo/migrate",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
+        "@volo/errors": "workspace:*",
       },
       "devDependencies": {
-        "@keel/db": "workspace:*",
+        "@volo/db": "workspace:*",
         "better-sqlite3": "^11.10.0",
       },
     },
     "packages/observability": {
-      "name": "@keel/observability",
+      "name": "@volo/observability",
       "version": "0.0.0",
     },
     "packages/openapi": {
-      "name": "@keel/openapi",
+      "name": "@volo/openapi",
       "version": "0.0.0",
     },
     "packages/pg": {
-      "name": "@keel/pg",
+      "name": "@volo/pg",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/db": "workspace:*",
+        "@volo/db": "workspace:*",
       },
     },
     "packages/pubsub": {
-      "name": "@keel/pubsub",
+      "name": "@volo/pubsub",
       "version": "0.0.0",
     },
     "packages/queue": {
-      "name": "@keel/queue",
+      "name": "@volo/queue",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/db": "workspace:*",
-        "@keel/errors": "workspace:*",
+        "@volo/db": "workspace:*",
+        "@volo/errors": "workspace:*",
       },
     },
     "packages/ratelimit": {
-      "name": "@keel/ratelimit",
+      "name": "@volo/ratelimit",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/web": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/web": "workspace:*",
       },
     },
     "packages/router": {
-      "name": "@keel/router",
+      "name": "@volo/router",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
+        "@volo/errors": "workspace:*",
       },
     },
     "packages/runtime": {
-      "name": "@keel/runtime",
+      "name": "@volo/runtime",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/kernel": "workspace:*",
-        "@keel/queue": "workspace:*",
-        "@keel/sites": "workspace:*",
-        "@keel/web": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/kernel": "workspace:*",
+        "@volo/queue": "workspace:*",
+        "@volo/sites": "workspace:*",
+        "@volo/web": "workspace:*",
       },
       "devDependencies": {
-        "@keel/observability": "workspace:*",
+        "@volo/observability": "workspace:*",
       },
     },
     "packages/seo": {
-      "name": "@keel/seo",
+      "name": "@volo/seo",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
+        "@volo/errors": "workspace:*",
       },
     },
     "packages/sites": {
-      "name": "@keel/sites",
+      "name": "@volo/sites",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
+        "@volo/errors": "workspace:*",
       },
     },
     "packages/storage": {
-      "name": "@keel/storage",
+      "name": "@volo/storage",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
+        "@volo/errors": "workspace:*",
       },
     },
     "packages/ui": {
-      "name": "@keel/ui",
+      "name": "@volo/ui",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
+        "@volo/errors": "workspace:*",
         "react": "^19",
         "react-dom": "^19",
       },
@@ -745,49 +745,49 @@
       ],
     },
     "packages/ui-generate": {
-      "name": "@keel/ui-generate",
+      "name": "@volo/ui-generate",
       "version": "0.0.0",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.102.0",
-        "@keel/errors": "workspace:*",
-        "@keel/ui": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/ui": "workspace:*",
       },
     },
     "packages/ui-kit": {
-      "name": "@keel/ui-kit",
+      "name": "@volo/ui-kit",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/ui": "workspace:*",
+        "@volo/ui": "workspace:*",
         "react": "^19",
         "react-dom": "^19",
       },
     },
     "packages/web": {
-      "name": "@keel/web",
+      "name": "@volo/web",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/observability": "workspace:*",
-        "@keel/router": "workspace:*",
-        "@keel/ui": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/observability": "workspace:*",
+        "@volo/router": "workspace:*",
+        "@volo/ui": "workspace:*",
         "react": "^19",
         "react-dom": "^19",
         "zod": "^4.0.0",
       },
     },
     "packages/webhooks": {
-      "name": "@keel/webhooks",
+      "name": "@volo/webhooks",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
-        "@keel/queue": "workspace:*",
+        "@volo/errors": "workspace:*",
+        "@volo/queue": "workspace:*",
       },
     },
     "packages/workflows": {
-      "name": "@keel/workflows",
+      "name": "@volo/workflows",
       "version": "0.0.0",
       "dependencies": {
-        "@keel/errors": "workspace:*",
+        "@volo/errors": "workspace:*",
       },
     },
   },
@@ -993,126 +993,6 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
-
-    "@keel/admin": ["@keel/admin@workspace:packages/admin"],
-
-    "@keel/assets": ["@keel/assets@workspace:packages/assets"],
-
-    "@keel/auth": ["@keel/auth@workspace:packages/auth"],
-
-    "@keel/authz": ["@keel/authz@workspace:packages/authz"],
-
-    "@keel/cache": ["@keel/cache@workspace:packages/cache"],
-
-    "@keel/cli": ["@keel/cli@workspace:packages/cli"],
-
-    "@keel/client": ["@keel/client@workspace:packages/client"],
-
-    "@keel/cloudflare": ["@keel/cloudflare@workspace:packages/cloudflare"],
-
-    "@keel/content-components": ["@keel/content-components@workspace:packages/content-components"],
-
-    "@keel/content-core": ["@keel/content-core@workspace:packages/content-core"],
-
-    "@keel/content-embeddings": ["@keel/content-embeddings@workspace:packages/content-embeddings"],
-
-    "@keel/content-lint": ["@keel/content-lint@workspace:packages/content-lint"],
-
-    "@keel/content-markdown": ["@keel/content-markdown@workspace:packages/content-markdown"],
-
-    "@keel/content-mcp": ["@keel/content-mcp@workspace:packages/content-mcp"],
-
-    "@keel/content-mdx": ["@keel/content-mdx@workspace:packages/content-mdx"],
-
-    "@keel/content-prose": ["@keel/content-prose@workspace:packages/content-prose"],
-
-    "@keel/content-query": ["@keel/content-query@workspace:packages/content-query"],
-
-    "@keel/content-search": ["@keel/content-search@workspace:packages/content-search"],
-
-    "@keel/content-seo": ["@keel/content-seo@workspace:packages/content-seo"],
-
-    "@keel/content-shared": ["@keel/content-shared@workspace:packages/content-shared"],
-
-    "@keel/content-store": ["@keel/content-store@workspace:packages/content-store"],
-
-    "@keel/content-umbra": ["@keel/content-umbra@workspace:packages/content-umbra"],
-
-    "@keel/content-vite": ["@keel/content-vite@workspace:packages/content-vite"],
-
-    "@keel/cors": ["@keel/cors@workspace:packages/cors"],
-
-    "@keel/csrf": ["@keel/csrf@workspace:packages/csrf"],
-
-    "@keel/db": ["@keel/db@workspace:packages/db"],
-
-    "@keel/deploy": ["@keel/deploy@workspace:packages/deploy"],
-
-    "@keel/errors": ["@keel/errors@workspace:packages/errors"],
-
-    "@keel/example-admin": ["@keel/example-admin@workspace:examples/admin"],
-
-    "@keel/example-blog": ["@keel/example-blog@workspace:examples/blog"],
-
-    "@keel/example-estate": ["@keel/example-estate@workspace:examples/estate"],
-
-    "@keel/example-mailing-lists": ["@keel/example-mailing-lists@workspace:examples/mailing-lists"],
-
-    "@keel/feeds": ["@keel/feeds@workspace:packages/feeds"],
-
-    "@keel/flags": ["@keel/flags@workspace:packages/flags"],
-
-    "@keel/forms": ["@keel/forms@workspace:packages/forms"],
-
-    "@keel/i18n": ["@keel/i18n@workspace:packages/i18n"],
-
-    "@keel/identity": ["@keel/identity@workspace:packages/identity"],
-
-    "@keel/integration": ["@keel/integration@workspace:packages/integration"],
-
-    "@keel/kernel": ["@keel/kernel@workspace:packages/kernel"],
-
-    "@keel/mail": ["@keel/mail@workspace:packages/mail"],
-
-    "@keel/mailing-lists": ["@keel/mailing-lists@workspace:packages/mailing-lists"],
-
-    "@keel/mcp": ["@keel/mcp@workspace:packages/mcp"],
-
-    "@keel/migrate": ["@keel/migrate@workspace:packages/migrate"],
-
-    "@keel/observability": ["@keel/observability@workspace:packages/observability"],
-
-    "@keel/openapi": ["@keel/openapi@workspace:packages/openapi"],
-
-    "@keel/pg": ["@keel/pg@workspace:packages/pg"],
-
-    "@keel/pubsub": ["@keel/pubsub@workspace:packages/pubsub"],
-
-    "@keel/queue": ["@keel/queue@workspace:packages/queue"],
-
-    "@keel/ratelimit": ["@keel/ratelimit@workspace:packages/ratelimit"],
-
-    "@keel/router": ["@keel/router@workspace:packages/router"],
-
-    "@keel/runtime": ["@keel/runtime@workspace:packages/runtime"],
-
-    "@keel/seo": ["@keel/seo@workspace:packages/seo"],
-
-    "@keel/sites": ["@keel/sites@workspace:packages/sites"],
-
-    "@keel/storage": ["@keel/storage@workspace:packages/storage"],
-
-    "@keel/ui": ["@keel/ui@workspace:packages/ui"],
-
-    "@keel/ui-generate": ["@keel/ui-generate@workspace:packages/ui-generate"],
-
-    "@keel/ui-kit": ["@keel/ui-kit@workspace:packages/ui-kit"],
-
-    "@keel/web": ["@keel/web@workspace:packages/web"],
-
-    "@keel/webhooks": ["@keel/webhooks@workspace:packages/webhooks"],
-
-    "@keel/workflows": ["@keel/workflows@workspace:packages/workflows"],
 
     "@manypkg/find-root": ["@manypkg/find-root@1.1.0", "", { "dependencies": { "@babel/runtime": "^7.5.5", "@types/node": "^12.7.1", "find-up": "^4.1.0", "fs-extra": "^8.1.0" } }, "sha512-mki5uBvhHzO8kYYix/WRy2WX8S3B5wdVSc9D6KcU5lQNglP2yt58/VfLuAK49glRXChosY8ap2oJ1qgma3GUVA=="],
 
@@ -1484,6 +1364,126 @@
 
     "@vitest/utils": ["@vitest/utils@4.1.8", "", { "dependencies": { "@vitest/pretty-format": "4.1.8", "convert-source-map": "^2.0.0", "tinyrainbow": "^3.1.0" } }, "sha512-uOJamYALNhfJ6iolExyQM40yIQwDqYnkKtQ5VCiSe17E33H0aQ/u+1GlRuz4LZBk6Mm3sg90G9hEbmEt37C1Zg=="],
 
+    "@volo/admin": ["@volo/admin@workspace:packages/admin"],
+
+    "@volo/assets": ["@volo/assets@workspace:packages/assets"],
+
+    "@volo/auth": ["@volo/auth@workspace:packages/auth"],
+
+    "@volo/authz": ["@volo/authz@workspace:packages/authz"],
+
+    "@volo/cache": ["@volo/cache@workspace:packages/cache"],
+
+    "@volo/cli": ["@volo/cli@workspace:packages/cli"],
+
+    "@volo/client": ["@volo/client@workspace:packages/client"],
+
+    "@volo/cloudflare": ["@volo/cloudflare@workspace:packages/cloudflare"],
+
+    "@volo/content-components": ["@volo/content-components@workspace:packages/content-components"],
+
+    "@volo/content-core": ["@volo/content-core@workspace:packages/content-core"],
+
+    "@volo/content-embeddings": ["@volo/content-embeddings@workspace:packages/content-embeddings"],
+
+    "@volo/content-lint": ["@volo/content-lint@workspace:packages/content-lint"],
+
+    "@volo/content-markdown": ["@volo/content-markdown@workspace:packages/content-markdown"],
+
+    "@volo/content-mcp": ["@volo/content-mcp@workspace:packages/content-mcp"],
+
+    "@volo/content-mdx": ["@volo/content-mdx@workspace:packages/content-mdx"],
+
+    "@volo/content-prose": ["@volo/content-prose@workspace:packages/content-prose"],
+
+    "@volo/content-query": ["@volo/content-query@workspace:packages/content-query"],
+
+    "@volo/content-search": ["@volo/content-search@workspace:packages/content-search"],
+
+    "@volo/content-seo": ["@volo/content-seo@workspace:packages/content-seo"],
+
+    "@volo/content-shared": ["@volo/content-shared@workspace:packages/content-shared"],
+
+    "@volo/content-store": ["@volo/content-store@workspace:packages/content-store"],
+
+    "@volo/content-umbra": ["@volo/content-umbra@workspace:packages/content-umbra"],
+
+    "@volo/content-vite": ["@volo/content-vite@workspace:packages/content-vite"],
+
+    "@volo/cors": ["@volo/cors@workspace:packages/cors"],
+
+    "@volo/csrf": ["@volo/csrf@workspace:packages/csrf"],
+
+    "@volo/db": ["@volo/db@workspace:packages/db"],
+
+    "@volo/deploy": ["@volo/deploy@workspace:packages/deploy"],
+
+    "@volo/errors": ["@volo/errors@workspace:packages/errors"],
+
+    "@volo/example-admin": ["@volo/example-admin@workspace:examples/admin"],
+
+    "@volo/example-blog": ["@volo/example-blog@workspace:examples/blog"],
+
+    "@volo/example-estate": ["@volo/example-estate@workspace:examples/estate"],
+
+    "@volo/example-mailing-lists": ["@volo/example-mailing-lists@workspace:examples/mailing-lists"],
+
+    "@volo/feeds": ["@volo/feeds@workspace:packages/feeds"],
+
+    "@volo/flags": ["@volo/flags@workspace:packages/flags"],
+
+    "@volo/forms": ["@volo/forms@workspace:packages/forms"],
+
+    "@volo/i18n": ["@volo/i18n@workspace:packages/i18n"],
+
+    "@volo/identity": ["@volo/identity@workspace:packages/identity"],
+
+    "@volo/integration": ["@volo/integration@workspace:packages/integration"],
+
+    "@volo/kernel": ["@volo/kernel@workspace:packages/kernel"],
+
+    "@volo/mail": ["@volo/mail@workspace:packages/mail"],
+
+    "@volo/mailing-lists": ["@volo/mailing-lists@workspace:packages/mailing-lists"],
+
+    "@volo/mcp": ["@volo/mcp@workspace:packages/mcp"],
+
+    "@volo/migrate": ["@volo/migrate@workspace:packages/migrate"],
+
+    "@volo/observability": ["@volo/observability@workspace:packages/observability"],
+
+    "@volo/openapi": ["@volo/openapi@workspace:packages/openapi"],
+
+    "@volo/pg": ["@volo/pg@workspace:packages/pg"],
+
+    "@volo/pubsub": ["@volo/pubsub@workspace:packages/pubsub"],
+
+    "@volo/queue": ["@volo/queue@workspace:packages/queue"],
+
+    "@volo/ratelimit": ["@volo/ratelimit@workspace:packages/ratelimit"],
+
+    "@volo/router": ["@volo/router@workspace:packages/router"],
+
+    "@volo/runtime": ["@volo/runtime@workspace:packages/runtime"],
+
+    "@volo/seo": ["@volo/seo@workspace:packages/seo"],
+
+    "@volo/sites": ["@volo/sites@workspace:packages/sites"],
+
+    "@volo/storage": ["@volo/storage@workspace:packages/storage"],
+
+    "@volo/ui": ["@volo/ui@workspace:packages/ui"],
+
+    "@volo/ui-generate": ["@volo/ui-generate@workspace:packages/ui-generate"],
+
+    "@volo/ui-kit": ["@volo/ui-kit@workspace:packages/ui-kit"],
+
+    "@volo/web": ["@volo/web@workspace:packages/web"],
+
+    "@volo/webhooks": ["@volo/webhooks@workspace:packages/webhooks"],
+
+    "@volo/workflows": ["@volo/workflows@workspace:packages/workflows"],
+
     "@vue/compiler-core": ["@vue/compiler-core@3.5.35", "", { "dependencies": { "@babel/parser": "^7.29.3", "@vue/shared": "3.5.35", "entities": "^7.0.1", "estree-walker": "^2.0.2", "source-map-js": "^1.2.1" } }, "sha512-BUmHaR1J+O+CKZ9uJucdVTEr1LHsdyvv7vG3eNRhK3CczEHeMd/LtsHAuD7PbrxvI2envCY2v7HI1vC1aBRzKw=="],
 
     "@vue/compiler-dom": ["@vue/compiler-dom@3.5.35", "", { "dependencies": { "@vue/compiler-core": "3.5.35", "@vue/shared": "3.5.35" } }, "sha512-k+bprkXxuqhVajgTx5mUHuir7TwQzUKOWR40ng1ncAqQRPnrLngGGgqVEEhOnTMlc8btHYVKmrP8s5Qyg0hvYA=="],
@@ -1612,7 +1612,7 @@
 
     "cors": ["cors@2.8.6", "", { "dependencies": { "object-assign": "^4", "vary": "^1" } }, "sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw=="],
 
-    "create-keel": ["create-keel@workspace:packages/create-keel"],
+    "create-volo": ["create-volo@workspace:packages/create-volo"],
 
     "cross-spawn": ["cross-spawn@7.0.6", "", { "dependencies": { "path-key": "^3.1.0", "shebang-command": "^2.0.0", "which": "^2.0.1" } }, "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA=="],
 
@@ -1963,8 +1963,6 @@
     "json-stringify-safe": ["json-stringify-safe@5.0.1", "", {}, "sha512-ZClg6AaYvamvYEE82d3Iyd3vSSIjQ+odgjaTzRuO3s7toCdFKczob2i0zCh7JE8kWn17yvAWhUVxvqGwUalsRA=="],
 
     "jsonfile": ["jsonfile@4.0.0", "", { "optionalDependencies": { "graceful-fs": "^4.1.6" } }, "sha512-m6F1R3z8jjlf2imQHS2Qez5sjKWQzbuuhuJ/FKYFRZvPE3PuHcSMVZzfsLhGVOkfd20obL5SWEBew5ShlquNxg=="],
-
-    "keel-e2e": ["keel-e2e@workspace:packages/e2e"],
 
     "kind-of": ["kind-of@6.0.3", "", {}, "sha512-dcS1ul+9tmeD95T+x28/ehLgd9mENa3LsvDTtzm3vyBEO7RPptvAD+t44WVXaUjTBRcrpFeFlC8WCruUR456hw=="],
 
@@ -2590,6 +2588,8 @@
 
     "vitest": ["vitest@4.1.8", "", { "dependencies": { "@vitest/expect": "4.1.8", "@vitest/mocker": "4.1.8", "@vitest/pretty-format": "4.1.8", "@vitest/runner": "4.1.8", "@vitest/snapshot": "4.1.8", "@vitest/spy": "4.1.8", "@vitest/utils": "4.1.8", "es-module-lexer": "^2.0.0", "expect-type": "^1.3.0", "magic-string": "^0.30.21", "obug": "^2.1.1", "pathe": "^2.0.3", "picomatch": "^4.0.3", "std-env": "^4.0.0-rc.1", "tinybench": "^2.9.0", "tinyexec": "^1.0.2", "tinyglobby": "^0.2.15", "tinyrainbow": "^3.1.0", "vite": "^6.0.0 || ^7.0.0 || ^8.0.0", "why-is-node-running": "^2.3.0" }, "peerDependencies": { "@edge-runtime/vm": "*", "@opentelemetry/api": "^1.9.0", "@types/node": "^20.0.0 || ^22.0.0 || >=24.0.0", "@vitest/browser-playwright": "4.1.8", "@vitest/browser-preview": "4.1.8", "@vitest/browser-webdriverio": "4.1.8", "@vitest/coverage-istanbul": "4.1.8", "@vitest/coverage-v8": "4.1.8", "@vitest/ui": "4.1.8", "happy-dom": "*", "jsdom": "*" }, "optionalPeers": ["@edge-runtime/vm", "@opentelemetry/api", "@types/node", "@vitest/browser-playwright", "@vitest/browser-preview", "@vitest/browser-webdriverio", "@vitest/coverage-istanbul", "@vitest/coverage-v8", "@vitest/ui", "happy-dom", "jsdom"], "bin": { "vitest": "vitest.mjs" } }, "sha512-flY6ScbCIt9HThs+C5HS7jvGOB560DJtk/Z15IQROTA6zEy49Nh8T/dofWTQL+n3vswqn87sbJNiuqw1SDp5Ig=="],
 
+    "volo-e2e": ["volo-e2e@workspace:packages/e2e"],
+
     "vue": ["vue@3.5.35", "", { "dependencies": { "@vue/compiler-dom": "3.5.35", "@vue/compiler-sfc": "3.5.35", "@vue/runtime-dom": "3.5.35", "@vue/server-renderer": "3.5.35", "@vue/shared": "3.5.35" }, "peerDependencies": { "typescript": "*" }, "optionalPeers": ["typescript"] }, "sha512-cx89fnr+0kVGHiNFG6y6s0bdjypJRFNZn6x3WPstNdQR1bi1mbB7h4v5IBGTsPJU3nK1+0Iqj3Zf+hZWMieR4Q=="],
 
     "w3c-xmlserializer": ["w3c-xmlserializer@5.0.0", "", { "dependencies": { "xml-name-validator": "^5.0.0" } }, "sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA=="],
@@ -2642,14 +2642,6 @@
 
     "@content-collections/core/zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 
-    "@keel/content-components/@types/react": ["@types/react@18.3.31", "", { "dependencies": { "@types/prop-types": "*", "csstype": "^3.2.2" } }, "sha512-vfEqpXTvwT91yhmwdfouStN2hSKwTvyRs8qpLfADyrq/kxDw0hZM7Wk9Ug1FELj8hIby+S/+kQCSRFF32nv2Qw=="],
-
-    "@keel/content-components/react": ["react@18.3.1", "", { "dependencies": { "loose-envify": "^1.1.0" } }, "sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ=="],
-
-    "@keel/content-shared/serialize-javascript": ["serialize-javascript@6.0.2", "", { "dependencies": { "randombytes": "^2.1.0" } }, "sha512-Saa1xPByTTq2gdeFZYLLo+RFE35NHZkAbqZeWNd3BpzppeVisAqpDjcp8dyf6uIvEqJRd46jemmyA4iFIeVk8g=="],
-
-    "@keel/content-shared/zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
-
     "@manypkg/find-root/@types/node": ["@types/node@12.20.55", "", {}, "sha512-J8xLz7q2OFulZ2cyGTLE1TbbZcjpno7FaN6zdJNrgAdrJ+DZzh/uFR6YrTb4C+nXakvud8Q4+rbhoIWlYQbUFQ=="],
 
     "@manypkg/find-root/fs-extra": ["fs-extra@8.1.0", "", { "dependencies": { "graceful-fs": "^4.2.0", "jsonfile": "^4.0.0", "universalify": "^0.1.0" } }, "sha512-yhlQgA6mnOJUKOsRUFsgJdQCvkKhcz8tlZG5HBQfReYZy46OwLcY+Zia0mtdHsOo9y/hP+CxMN0TU9QxoOtG4g=="],
@@ -2663,6 +2655,14 @@
     "@react-email/components/@react-email/render": ["@react-email/render@2.0.6", "", { "dependencies": { "html-to-text": "^9.0.5", "prettier": "^3.5.3" }, "peerDependencies": { "react": "^18.0 || ^19.0 || ^19.0.0-rc", "react-dom": "^18.0 || ^19.0 || ^19.0.0-rc" } }, "sha512-xOzaYkH3jLZKqN5MqrTXYnmqBYUnZSVbkxdb5PGGmDcK6sKDVMliaDiSwfXajRC9JtSHTcGc2tmGLHWuCgVpog=="],
 
     "@react-email/markdown/marked": ["marked@15.0.12", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA=="],
+
+    "@volo/content-components/@types/react": ["@types/react@18.3.31", "", { "dependencies": { "@types/prop-types": "*", "csstype": "^3.2.2" } }, "sha512-vfEqpXTvwT91yhmwdfouStN2hSKwTvyRs8qpLfADyrq/kxDw0hZM7Wk9Ug1FELj8hIby+S/+kQCSRFF32nv2Qw=="],
+
+    "@volo/content-components/react": ["react@18.3.1", "", { "dependencies": { "loose-envify": "^1.1.0" } }, "sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ=="],
+
+    "@volo/content-shared/serialize-javascript": ["serialize-javascript@6.0.2", "", { "dependencies": { "randombytes": "^2.1.0" } }, "sha512-Saa1xPByTTq2gdeFZYLLo+RFE35NHZkAbqZeWNd3BpzppeVisAqpDjcp8dyf6uIvEqJRd46jemmyA4iFIeVk8g=="],
+
+    "@volo/content-shared/zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 
     "@vue/compiler-core/entities": ["entities@7.0.1", "", {}, "sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA=="],
 

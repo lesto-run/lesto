@@ -1,11 +1,11 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createDb } from "@keel/db";
-import type { Db, SqlDatabase } from "@keel/db";
-import { Migrator } from "@keel/migrate";
-import { installSchema, Queue } from "@keel/queue";
-import { Mailer } from "@keel/mail";
+import { createDb } from "@volo/db";
+import type { Db, SqlDatabase } from "@volo/db";
+import { Migrator } from "@volo/migrate";
+import { installSchema, Queue } from "@volo/queue";
+import { Mailer } from "@volo/mail";
 
 import {
   createMailingLists,
@@ -18,17 +18,17 @@ import {
 } from "../src/index";
 
 import type { MailingLists } from "../src/index";
-import type { RenderedEmail } from "@keel/mail";
+import type { RenderedEmail } from "@volo/mail";
 
 // ---------------------------------------------------------------------------
 // Test rig
 //
-// One in-memory SQLite per test, adapted to @keel/db's `SqlDatabase` shape.
+// One in-memory SQLite per test, adapted to @volo/db's `SqlDatabase` shape.
 // The terminals are async (ADR 0006): the synchronous better-sqlite3 engine is
 // wrapped so each terminal resolves a Promise (zero latency); prepare() stays
 // sync, and transaction() pins the single in-memory connection.
 //
-// Both @keel/db and @keel/queue now speak the same positional, async seam, so a
+// Both @volo/db and @volo/queue now speak the same positional, async seam, so a
 // single adapter handle serves both — matching production and the queue's own test.
 // ---------------------------------------------------------------------------
 
@@ -105,8 +105,8 @@ beforeEach(async () => {
   // in the test fixture.
   await new Migrator(sql, [mailingListsMigration]).migrate();
 
-  // The queue rides the SAME async adapter as @keel/db — one connection, one
-  // seam, and now one TYPE: `@keel/queue` re-exports `@keel/db`'s `SqlDatabase`,
+  // The queue rides the SAME async adapter as @volo/db — one connection, one
+  // seam, and now one TYPE: `@volo/queue` re-exports `@volo/db`'s `SqlDatabase`,
   // so the handle flows straight into `installSchema` and `new Queue` — no cast.
   await installSchema(sql);
 

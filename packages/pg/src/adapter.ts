@@ -1,5 +1,5 @@
 /**
- * Adapt a node-postgres `Pool` to `@keel/db`'s async `SqlDatabase` seam (ADR 0006).
+ * Adapt a node-postgres `Pool` to `@volo/db`'s async `SqlDatabase` seam (ADR 0006).
  *
  * The whole point of the async flip: a networked Postgres pool can now back the
  * exact same surface as in-process SQLite. The pieces this file owns:
@@ -20,7 +20,7 @@
  * no `pg` at type-check time. The real `new Pool()` lives in `./pg-driver`.
  */
 
-import type { SqlDatabase } from "@keel/db";
+import type { SqlDatabase } from "@volo/db";
 
 import { translate } from "./translate";
 

@@ -1,5 +1,5 @@
 /**
- * @keel/auth — in-house authentication primitives on node:crypto.
+ * @volo/auth — in-house authentication primitives on node:crypto.
  *
  *   const hash = await hashPassword("correct horse battery staple");
  *   await verifyPassword("correct horse battery staple", hash); // true
@@ -30,7 +30,7 @@ export type { SignedClaim, SignedSessionsOptions } from "./signed-sessions";
 
 export { systemClock } from "./time";
 
-export { AuthError, KeelError } from "./errors";
+export { AuthError, VoloError } from "./errors";
 export type { AuthErrorCode } from "./errors";
 
 export type { Clock, Session, SessionStore, SqlDatabase, SqlStatement } from "./types";

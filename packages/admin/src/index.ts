@@ -1,5 +1,5 @@
 /**
- * @keel/admin — an admin operations layer over @keel/db tables.
+ * @volo/admin — an admin operations layer over @volo/db tables.
  *
  *   const admin = createAdmin(db, [
  *     {
@@ -16,7 +16,7 @@
  *   admin.create("posts", { title: "Hello", body: "..." });
  *
  * The generic CRUD backbone a WordPress-style admin UI sits on. CRUD goes
- * through `@keel/db`; input validation goes through Zod schemas (per ADR
+ * through `@volo/db`; input validation goes through Zod schemas (per ADR
  * 0005); projection honors the per-resource `fields` allow-list.
  */
 

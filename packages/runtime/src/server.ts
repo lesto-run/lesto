@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import type { App } from "@keel/kernel";
+import type { App } from "@volo/kernel";
 import {
   bodyForStatus,
   DEFAULT_SECURITY_HEADERS,
@@ -12,16 +12,16 @@ import {
   securityDefaults,
   statusForError,
   withSecurityHeaders,
-} from "@keel/web";
+} from "@volo/web";
 import type {
-  AnyKeelResponse,
-  KeelResponse,
+  AnyVoloResponse,
+  VoloResponse,
   RequestContext,
   SecurityHeaderOptions,
-} from "@keel/web";
+} from "@volo/web";
 
-// The hardening pieces now live in @keel/web so the node server and the edge
-// adapter share one source (see `@keel/web/harden`). Re-exported here so the
+// The hardening pieces now live in @volo/web so the node server and the edge
+// adapter share one source (see `@volo/web/harden`). Re-exported here so the
 // runtime's public surface and its tests keep reaching them at the same names.
 export { DEFAULT_SECURITY_HEADERS, RECOMMENDED_CSP, securityDefaults, withSecurityHeaders };
 export type { SecurityHeaderOptions };
@@ -34,7 +34,7 @@ import {
   negotiateEncoding,
 } from "./response";
 import type { ContentEncoding } from "./response";
-import { toKeelRequest } from "./request";
+import { toVoloRequest } from "./request";
 import { RuntimeError } from "./errors";
 import { etagFor, etagMatches, respondNotModified } from "./http-cache";
 import { peerIsTrusted, resolveClient } from "./trust-proxy";
@@ -73,7 +73,7 @@ export interface HealthOptions {
  * One span over one served request — the narrow tracing surface the server
  * mints through.
  *
- * Structurally satisfied by `@keel/observability`'s `Span`/`Tracer`, so the
+ * Structurally satisfied by `@volo/observability`'s `Span`/`Tracer`, so the
  * runtime records real traces without depending on the tracing package: what
  * varies is injected, as everywhere else in this file. `data` exposes the span's
  * trace + span ids so the request context can carry the span as the parent for
@@ -89,7 +89,7 @@ export interface RequestSpan {
 
   /**
    * The span's flat record — at minimum its `traceId`/`spanId`, the ids a child
-   * span and the outbound `traceparent` read. `@keel/observability`'s `Span.data`
+   * span and the outbound `traceparent` read. `@volo/observability`'s `Span.data`
    * satisfies this; the runtime reads only what it needs.
    */
   readonly data: { readonly traceId: string; readonly spanId: string };
@@ -98,7 +98,7 @@ export interface RequestSpan {
 /**
  * The inbound trace context the server adopts from a W3C `traceparent` header, so
  * the request's root span JOINS the upstream trace rather than starting a fresh
- * one. Structurally what `@keel/observability`'s `parseTraceparent` returns.
+ * one. Structurally what `@volo/observability`'s `parseTraceparent` returns.
  */
 export interface InboundTrace {
   /** The 32-hex trace id this request belongs to — the root span adopts it. */
@@ -109,7 +109,7 @@ export interface InboundTrace {
 }
 
 /**
- * Mints {@link RequestSpan}s — `@keel/observability`'s `Tracer`, structurally.
+ * Mints {@link RequestSpan}s — `@volo/observability`'s `Tracer`, structurally.
  *
  * `startSpan` optionally takes an {@link InboundTrace}: when an inbound
  * `traceparent` was parsed, the runtime passes it so the request span continues
@@ -120,7 +120,7 @@ export interface RequestTracer {
   startSpan(name: string, inbound?: InboundTrace): RequestSpan;
 }
 
-/** Parses a W3C `traceparent` header — `@keel/observability`'s parser, structurally. */
+/** Parses a W3C `traceparent` header — `@volo/observability`'s parser, structurally. */
 export type TraceparentParser = (header: string | undefined) => InboundTrace | undefined;
 
 /** One served request, as the access log records it. */
@@ -147,7 +147,7 @@ export interface AccessEntry {
    * incomplete body. Present (`true`) only on a truncated streamed response;
    * absent on a clean response, which is the common case the log stays quiet
    * about. The runtime's tracer reads the same fact off the span attribute
-   * `keel.response.truncated`.
+   * `volo.response.truncated`.
    */
   readonly truncated?: boolean;
 }
@@ -224,7 +224,7 @@ export interface ServeOptions {
   /**
    * A Content-Security-Policy, off by default.
    *
-   * No enforcing CSP is sent unless one is configured: Keel's island bootstrap
+   * No enforcing CSP is sent unless one is configured: Volo's island bootstrap
    * inlines JSON via a `<script>`, which a strict default policy would break.
    * Set `mode: "enforce"` to block violations or `mode: "report-only"` to
    * observe them without enforcement (the safe way to roll a policy out — emits
@@ -302,7 +302,7 @@ export interface ServeOptions {
   /**
    * Mints one span per served request — the trace counterpart of the access
    * log. Off by default (no tracer, no spans, zero overhead); pass
-   * `@keel/observability`'s request tracer (it satisfies this structurally, so
+   * `@volo/observability`'s request tracer (it satisfies this structurally, so
    * the runtime takes no dependency) and every request records a `http.request`
    * span carrying method, path, status, and the request id, with `error`
    * status on a 5xx. The span is also published on the request context
@@ -315,7 +315,7 @@ export interface ServeOptions {
    * Parses a W3C `traceparent` request header into the inbound trace the root
    * span joins, so a cross-service request continues ONE trace rather than
    * starting a fresh one per hop. Injected (not imported) so the runtime stays
-   * free of the tracing package — pass `@keel/observability`'s `parseTraceparent`.
+   * free of the tracing package — pass `@volo/observability`'s `parseTraceparent`.
    * Absent (or no inbound header) roots a new trace, as before. Only consulted
    * when a {@link tracer} is also set.
    */
@@ -385,7 +385,7 @@ export function requestLineOf(req: Pick<IncomingMessage, "method" | "url">): {
  *
  * Computed from the request line BEFORE the body is read, so a 413 (body over the
  * limit, which rejects mid-`readBody`) is still attributed to the real path in
- * the access log rather than a default. Mirrors `toKeelRequest`'s pathname
+ * the access log rather than a default. Mirrors `toVoloRequest`'s pathname
  * extraction (same throwaway base, same `URL.pathname`) so the early-attributed
  * path is byte-identical to the one a successfully-parsed request would carry.
  */
@@ -585,7 +585,7 @@ export async function healthResponse(
   path: string,
   options: HealthOptions,
   readyTimeoutMs: number = DEFAULT_READY_TIMEOUT_MS,
-): Promise<KeelResponse | undefined> {
+): Promise<VoloResponse | undefined> {
   if (method !== "GET" && method !== "HEAD") return undefined;
 
   const headers = { "content-type": "text/plain; charset=utf-8" };
@@ -622,9 +622,9 @@ export type EtagConfig = false | { readonly weak?: boolean };
  * non-HTML, the happy strong/weak tag — is unit-testable without a socket.
  */
 export function withEtag(
-  response: AnyKeelResponse,
+  response: AnyVoloResponse,
   config: EtagConfig,
-): { response: AnyKeelResponse; etag: string | undefined } {
+): { response: AnyVoloResponse; etag: string | undefined } {
   if (config === false) {
     return { response, etag: undefined };
   }
@@ -699,10 +699,10 @@ function isHtml(headers: Record<string, string | string[]>): boolean {
  * the coding `applyResponse` compresses the stream with.
  */
 export function compressResponse(
-  response: AnyKeelResponse,
+  response: AnyVoloResponse,
   acceptEncoding: string | undefined,
   enabled: boolean,
-): { response: AnyKeelResponse; streamEncoding?: ContentEncoding } {
+): { response: AnyVoloResponse; streamEncoding?: ContentEncoding } {
   if (!enabled) return { response };
 
   const { body } = response;
@@ -817,9 +817,9 @@ export function drainServer(
 }
 
 /**
- * Boot a node:http server that serves a Keel {@link App}.
+ * Boot a node:http server that serves a Volo {@link App}.
  *
- * Each request is read in full, normalized into a transport-free `KeelRequest`,
+ * Each request is read in full, normalized into a transport-free `VoloRequest`,
  * dispatched through `app.handle`, and its response written back. The server is
  * stateless: all durable state lives in the app's database, so multiple
  * instances scale horizontally and deploys are rolling restarts.
@@ -1176,7 +1176,7 @@ async function handle(
     const span = deps.tracer?.startSpan("http.request", inbound);
 
     // Publish the span on the request context so a seam fired DURING the request
-    // (a `@keel/db` query, an inline `@keel/queue` job) parents its child span on
+    // (a `@volo/db` query, an inline `@volo/queue` job) parents its child span on
     // it — a query shows up under the request that ran it. Absent when no tracer
     // is wired (the zero-overhead default).
     if (span !== undefined) context.span = span;
@@ -1184,7 +1184,7 @@ async function handle(
     // Compute the request line BEFORE reading the body, so a 413 (body over the
     // limit) is still attributed to the right method+path rather than the GET /
     // default — an oversized POST to /upload logs as exactly that. The path is the
-    // URL's pathname (query stripped); `pathOf` mirrors `toKeelRequest`'s parsing
+    // URL's pathname (query stripped); `pathOf` mirrors `toVoloRequest`'s parsing
     // so the attributed path is the same one the matched request would carry.
     const line = requestLineOf(req);
 
@@ -1207,7 +1207,7 @@ async function handle(
     try {
       const body = await readBody(req, deps.maxBodyBytes);
 
-      const request = toKeelRequest({
+      const request = toVoloRequest({
         method: line.method,
         url: line.url,
         headers: req.headers,
@@ -1311,11 +1311,11 @@ async function handle(
         span.setAttribute("http.method", method);
         span.setAttribute("http.path", path);
         span.setAttribute("http.status_code", status);
-        span.setAttribute("keel.request_id", requestId);
+        span.setAttribute("volo.request_id", requestId);
 
         // The tracer reads this to mark a delivered-but-incomplete response; set
         // only when it happened, so a clean response carries no attribute.
-        if (truncated) span.setAttribute("keel.response.truncated", true);
+        if (truncated) span.setAttribute("volo.response.truncated", true);
 
         // A 5xx is the server's failure; everything else (4xx included) is a
         // request the server answered as designed.
@@ -1336,7 +1336,7 @@ async function handle(
  * casing is respected. Returns a fresh response object; the input is never
  * mutated (the per-request-object invariant the response factories protect).
  */
-export function withRequestId(response: AnyKeelResponse, requestId: string): AnyKeelResponse {
+export function withRequestId(response: AnyVoloResponse, requestId: string): AnyVoloResponse {
   const hasOwn = Object.keys(response.headers).some(
     (name) => name.toLowerCase() === "x-request-id",
   );

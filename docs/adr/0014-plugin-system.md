@@ -2,19 +2,19 @@
 
 - **Status:** Proposed / Deferred (post-1.0)
 - **Date:** 2026-06-16
-- **Supersedes:** the orphaned `@keel/hooks` and `@keel/config` packages, removed
+- **Supersedes:** the orphaned `@volo/hooks` and `@volo/config` packages, removed
   from the v1 surface (see "Context" and `docs/ROADMAP-V1.md` §1, §6).
 
 ## Context
 
-ARCHITECTURE.md sells extensibility as a Keel pillar — "an extensibility model
+ARCHITECTURE.md sells extensibility as a Volo pillar — "an extensibility model
 (hooks/plugins/themes) built in", echoing the WordPress actions/filters lesson and
 Laravel's events/listeners. Two packages were built toward it ahead of the rest of
 the system:
 
-- `@keel/hooks` — WordPress-style instance-based actions (side effects) and filters
+- `@volo/hooks` — WordPress-style instance-based actions (side effects) and filters
   (value transforms), built and 100%-tested.
-- `@keel/config` — a typed configuration loader, built and 100%-tested.
+- `@volo/config` — a typed configuration loader, built and 100%-tested.
 
 Both shipped as **orphans**: zero packages and zero examples imported either one
 (verified across every `package.json` and source tree in the monorepo). The kernel
@@ -34,7 +34,7 @@ Defer the extensibility system to **post-1.0** and design it then against real
 consumers, not in the abstract. When taken up, it should reconcile (at minimum):
 
 - **Lifecycle hooks** — named extension points the framework fires during boot and
-  request handling (the actions/filters shape `@keel/hooks` prototyped), wired into
+  request handling (the actions/filters shape `@volo/hooks` prototyped), wired into
   the kernel and request lifecycle so they are reachable, not dangling.
 - **Events & listeners** — domain events with async listeners that run as queued jobs
   (the Laravel half), distinct from synchronous hooks; clarify when each fires.
@@ -42,7 +42,7 @@ consumers, not in the abstract. When taken up, it should reconcile (at minimum):
   jobs, admin panels, MCP tools, and UI components — and crucially are reachable from
   **agents** through the MCP control plane, per the AI-native north star.
 - **Typed configuration** — whatever config surface plugins and the kernel actually
-  need (the `@keel/config` prototype returned an untyped `Record`; a real design
+  need (the `@volo/config` prototype returned an untyped `Record`; a real design
   earns its "typed" claim against concrete call sites).
 - **Themes/templates** — the Loom-as-theme-engine story, once there is a consumer.
 
@@ -63,7 +63,7 @@ consumers, not in the abstract. When taken up, it should reconcile (at minimum):
 
 | Item | State |
 |---|---|
-| `@keel/hooks` / `@keel/config` removed from v1 surface | Done (Wave 5) |
+| `@volo/hooks` / `@volo/config` removed from v1 surface | Done (Wave 5) |
 | Lifecycle hooks wired into kernel/request lifecycle | Deferred (post-1.0) |
 | Events & listeners (queued) | Deferred (post-1.0) |
 | Plugin registration (code + MCP/agent surface) | Deferred (post-1.0) |

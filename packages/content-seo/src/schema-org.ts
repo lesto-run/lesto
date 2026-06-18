@@ -5,8 +5,8 @@
  * Framework-agnostic - users serialize and inject into their templates.
  */
 
-import { serializeJsonLd } from "@keel/content-shared/sanitize";
-import { validateUrl } from "@keel/content-shared/validation";
+import { serializeJsonLd } from "@volo/content-shared/sanitize";
+import { validateUrl } from "@volo/content-shared/validation";
 import type {
   SchemaEntry,
   EntrySchemaType,

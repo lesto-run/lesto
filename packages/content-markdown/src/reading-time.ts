@@ -1,4 +1,4 @@
-import { stripFrontmatter } from "@keel/content-shared/markdown";
+import { stripFrontmatter } from "@volo/content-shared/markdown";
 import type { ReadingTime } from "./types";
 
 const CODE_BLOCK_REGEX = /```[\s\S]*?```/g;

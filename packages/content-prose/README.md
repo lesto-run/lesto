@@ -1,17 +1,17 @@
-# @keel/content-prose
+# @volo/content-prose
 
 Writing style analysis and prose linting for content.
 
 ## Installation
 
 ```bash
-npm install @keel/content-prose
+npm install @volo/content-prose
 ```
 
 ## Quick Start
 
 ```typescript
-import { analyze } from "@keel/content-prose";
+import { analyze } from "@volo/content-prose";
 
 const result = analyze("The CEO will leverage synergies.");
 
@@ -33,7 +33,7 @@ console.log(result.issues);
 ## Configuration
 
 ```typescript
-import { configure } from "@keel/content-prose/config";
+import { configure } from "@volo/content-prose/config";
 
 const analyzer = configure({
   severity: "warning",

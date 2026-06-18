@@ -23,7 +23,7 @@ interface VersionRow {
 const TABLE = "schema_migrations";
 
 /**
- * The fixed Postgres advisory-lock key for "the Keel migration lock". Any value
+ * The fixed Postgres advisory-lock key for "the Volo migration lock". Any value
  * works as long as every migrator uses the SAME one; this is an arbitrary,
  * stable bigint chosen to be unlikely to collide with an application's own
  * advisory locks. Sent as a bound parameter, never interpolated.
@@ -106,7 +106,7 @@ export class Migrator {
    * opened fresh `this.db.transaction(...)` spans, a pool with `max: 1` would
    * have its only connection already held by this span — the inner `connect()`
    * would wait forever for a connection that never frees (a self-deadlock).
-   * Because both the `@keel/pg` adapter and `openSqlite` run a NESTED
+   * Because both the `@volo/pg` adapter and `openSqlite` run a NESTED
    * `transaction` FLAT on the same handle, threading `tx` through makes each
    * per-migration span run on this connection: no second checkout, no deadlock,
    * and (via the xact lock) the whole run is one atomic, serialized unit.
@@ -122,7 +122,7 @@ export class Migrator {
       return fn(this.db);
     }
 
-    // `LOCK_KEY` is a fixed bigint identifying "the Keel migration lock". The
+    // `LOCK_KEY` is a fixed bigint identifying "the Volo migration lock". The
     // transaction-level lock is held for the whole span and released atomically
     // at COMMIT, so the waiting migrator never observes a half-applied state.
     return this.db.transaction(async (tx) => {

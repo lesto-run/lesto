@@ -1,8 +1,8 @@
 /**
  * Assemble the admin panel from its parts.
  *
- * One composable `keel()` app exposes a generic CRUD admin over the
- * `@keel/admin` service as real HTTP routes:
+ * One composable `volo()` app exposes a generic CRUD admin over the
+ * `@volo/admin` service as real HTTP routes:
  *
  *   GET    /admin/products            paginated + projected list (?limit=&offset=)
  *   GET    /admin/products/:id        one projected row
@@ -11,8 +11,8 @@
  *   DELETE /admin/products/:id        destroy (fires the onMutation audit hook)
  *   GET    /admin/audit               the audit trail those writes produced
  *
- * `@keel/admin` is a programmatic CRUD backbone, not an HTTP surface — it hands
- * you `list / get / create / update / destroy` over a `@keel/db` Table and
+ * `@volo/admin` is a programmatic CRUD backbone, not an HTTP surface — it hands
+ * you `list / get / create / update / destroy` over a `@volo/db` Table and
  * leaves transport to the host. This file is that host: it maps each verb to a
  * route, lets the admin own body validation against the resource's Zod schemas
  * (ADR 0005), and translates the package's stable `AdminError` codes into HTTP
@@ -35,14 +35,14 @@
  * so the handlers close over their dependencies — no module-scoped globals.
  */
 
-import { createAdmin, AdminError } from "@keel/admin";
-import type { Admin, AuditEvent } from "@keel/admin";
-import { createDb } from "@keel/db";
-import type { Db } from "@keel/db";
-import { createApp } from "@keel/kernel";
-import type { App, KernelDatabase } from "@keel/kernel";
-import { keel } from "@keel/web";
-import type { Context, Keel, KeelResponse } from "@keel/web";
+import { createAdmin, AdminError } from "@volo/admin";
+import type { Admin, AuditEvent } from "@volo/admin";
+import { createDb } from "@volo/db";
+import type { Db } from "@volo/db";
+import { createApp } from "@volo/kernel";
+import type { App, KernelDatabase } from "@volo/kernel";
+import { volo } from "@volo/web";
+import type { Context, Volo, VoloResponse } from "@volo/web";
 
 import {
   auditLog,
@@ -72,7 +72,7 @@ const RESOURCE = "products";
 
 /**
  * A non-negative integer from a query/path string, or `undefined` when absent or
- * malformed. Guards the seam to `@keel/admin`: a bad `?limit=abc` or `/products/x`
+ * malformed. Guards the seam to `@volo/admin`: a bad `?limit=abc` or `/products/x`
  * must not reach the query as `NaN` (`Number("abc")`), which SQLite rejects with
  * `no such column: NaN`. `undefined` lets `list` fall back to its default page;
  * a bad id resolves to a clean 404.
@@ -101,12 +101,12 @@ function statusForAdminError(error: AdminError): number {
 }
 
 /**
- * The routes, closing over the `@keel/admin` service they front. Every handler
+ * The routes, closing over the `@volo/admin` service they front. Every handler
  * that can raise an `AdminError` funnels through `respond`, which turns the
  * stable code into a status + a JSON error body — the one place the package's
  * vocabulary meets the transport.
  */
-export function buildAdminApp(deps: { admin: Admin; db: Db }): Keel {
+export function buildAdminApp(deps: { admin: Admin; db: Db }): Volo {
   const { admin, db } = deps;
 
   /** Run an admin op; on an `AdminError`, answer with its mapped status + details. */
@@ -114,7 +114,7 @@ export function buildAdminApp(deps: { admin: Admin; db: Db }): Keel {
     c: Context,
     op: () => Promise<unknown>,
     okStatus = 200,
-  ): Promise<KeelResponse> => {
+  ): Promise<VoloResponse> => {
     try {
       return c.json(await op(), okStatus);
     } catch (error) {
@@ -129,7 +129,7 @@ export function buildAdminApp(deps: { admin: Admin; db: Db }): Keel {
     }
   };
 
-  return keel()
+  return volo()
     .get("/admin/products", async (c) => {
       // Paging comes off the query string, parsed defensively: a malformed
       // `?limit=abc` becomes `undefined` → `list`'s default page, never `NaN`
@@ -200,7 +200,7 @@ export interface Booted {
 }
 
 export interface BuildOptions {
-  /** The kernel database handle (from `@keel/runtime`'s `openSqlite`). */
+  /** The kernel database handle (from `@volo/runtime`'s `openSqlite`). */
   handle: KernelDatabase;
 
   /** Seed the demo catalog after migrate. Defaults to `true`. */
@@ -210,7 +210,7 @@ export interface BuildOptions {
 /**
  * The `onMutation` audit hook, closed over the `db` it writes to.
  *
- * `@keel/admin` invokes this *after* each committed write with a structured
+ * `@volo/admin` invokes this *after* each committed write with a structured
  * {@link AuditEvent}. We persist one `audit_log` row per event — stamping `at`
  * (the admin layer reports the change, not the clock) and stringifying `id` +
  * `actor` (a PK may be an int or a slug; an actor is opaque to the admin). The
@@ -241,7 +241,7 @@ function makeAuditHook(db: Db): (event: AuditEvent) => void {
 
 /**
  * Boot the whole thing: wrap the handle as a typed `Db`, run migrations through
- * the kernel, build the `@keel/admin` service with the audit hook wired in, and
+ * the kernel, build the `@volo/admin` service with the audit hook wired in, and
  * seed the catalog so a fresh panel has rows to page through.
  */
 export async function buildApp(options: BuildOptions): Promise<Booted> {
@@ -279,6 +279,6 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
 }
 
 // Re-export the bits the entrypoints (`run.ts`) reach for, so they import from
-// one place — the example's own surface, never `@keel/admin`'s internals.
+// one place — the example's own surface, never `@volo/admin`'s internals.
 export { readAuditLog } from "./schema";
 export type { AuditRow, Product } from "./schema";

@@ -1,5 +1,5 @@
 /**
- * @keel/queue — a durable job queue on the SQL database.
+ * @volo/queue — a durable job queue on the SQL database.
  *
  *   const queue = new Queue({ db });
  *   queue.define("send_email", async ({ to }) => { ... });
@@ -29,7 +29,7 @@ export type {
 
 export {
   isPermanentFailure,
-  KeelError,
+  VoloError,
   permanentFailure,
   PERMANENT_FAILURE,
   QueueError,

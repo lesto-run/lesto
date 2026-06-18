@@ -64,7 +64,7 @@
           "evidence": "packages/runtime/src/server.ts:534-556 drainServer (close + closeIdleConnections + grace-timer closeAllConnections, default 10s); wired in cli/src/bin.ts:65-72 (SIGTERM+SIGINT -> drain().then(process.exit(0))) into run.ts:143 server.close(); also examples/*/serve.ts. Tests server.test.ts:1068-1088.",
           "isLowHangingFruit": false,
           "effort": "S",
-          "note": "Fully wired end-to-end for the production `keel serve` path, not just the example scripts."
+          "note": "Fully wired end-to-end for the production `volo serve` path, not just the example scripts."
         },
         {
           "name": "Client-disconnect AbortSignal on request context",
@@ -98,7 +98,7 @@
       "scoreBefore": 2,
       "scoreNow": 7,
       "whatChanged": "The hardening effort closed every specific security finding the BEFORE baseline (docs/REVIEW-2026-06-09.md, prod-readiness 2/10) flagged, and — more importantly — built the missing middleware pipeline so the primitives are no longer isolated libraries. New: packages/web/src/middleware.ts (runPipeline onion), packages/kernel/src/secure-stack.ts (cors -> rateLimit -> originCheck -> csrf composition), wired through kernel.ts:112 and application.ts:83. Both transports (runtime/server.ts, cloudflare/fetch-handler.ts) now apply shared response hardening (web/src/harden.ts) + an error boundary + body cap + per-request context by default, closing the prior CF-adapter-bypass and the malformed-JSON crash. Point fixes: CORS wildcard+credentials guard (cors.ts:118), CSRF session-bound tokens (csrf/token.ts:34), webhook secret-at-rest as secretId reference + full SSRF guard (webhooks.ts), auth fail-open (password.ts:59), __Host-/Secure cookies (identity/cookies.ts). examples/estate now actually mounts secureStack({originCheck}). All security-package tests green (cors/csrf/ratelimit/auth/webhooks/kernel/web).",
-      "summary": "The security primitives are now genuinely wired, not orphaned. A real middleware pipeline exists (runPipeline -> Application -> kernel.middleware), secureStack composes them in a safe outer-to-inner order, and examples/estate proves the wiring end-to-end. Transport-level hardening (security headers, error boundary, body cap, handler timeout, request context, edge cf-connecting-ip) is applied BY DEFAULT in both the node runtime and the Cloudflare worker, with the shared core in @keel/web so the two front doors cannot drift. Every primitive-level finding from the baseline is fixed and tested: CORS wildcard+credentials throws at config time, CSRF tokens are HMAC-bound to the session id, webhooks persist only a secretId reference and pass a thorough SSRF guard (IPv4/IPv6/mapped/canonicalized private ranges incl. cloud metadata), verifyPassword fails closed, and session cookies carry __Host-/Secure/HttpOnly/SameSite. The honest caveat that keeps this off a 9+: the request-level guards (CORS, CSRF, rate limit) are OPT-IN — a default createApp() with no middleware runs none of them; only headers + error boundary are on by default. And the only SessionStore implementation is MemorySessionStore — stateful sessions don't survive a restart or share across nodes, and there is no DB/Redis-backed session or rate-limit store shipped. So a default node deploy has strong transport hardening and excellent primitives, but CSRF/ratelimit and durable sessions require explicit app opt-in.",
+      "summary": "The security primitives are now genuinely wired, not orphaned. A real middleware pipeline exists (runPipeline -> Application -> kernel.middleware), secureStack composes them in a safe outer-to-inner order, and examples/estate proves the wiring end-to-end. Transport-level hardening (security headers, error boundary, body cap, handler timeout, request context, edge cf-connecting-ip) is applied BY DEFAULT in both the node runtime and the Cloudflare worker, with the shared core in @volo/web so the two front doors cannot drift. Every primitive-level finding from the baseline is fixed and tested: CORS wildcard+credentials throws at config time, CSRF tokens are HMAC-bound to the session id, webhooks persist only a secretId reference and pass a thorough SSRF guard (IPv4/IPv6/mapped/canonicalized private ranges incl. cloud metadata), verifyPassword fails closed, and session cookies carry __Host-/Secure/HttpOnly/SameSite. The honest caveat that keeps this off a 9+: the request-level guards (CORS, CSRF, rate limit) are OPT-IN — a default createApp() with no middleware runs none of them; only headers + error boundary are on by default. And the only SessionStore implementation is MemorySessionStore — stateful sessions don't survive a restart or share across nodes, and there is no DB/Redis-backed session or rate-limit store shipped. So a default node deploy has strong transport hardening and excellent primitives, but CSRF/ratelimit and durable sessions require explicit app opt-in.",
       "items": [
         {
           "name": "Middleware pipeline exists and invokes primitives",
@@ -143,7 +143,7 @@
         {
           "name": "Secure / __Host- session cookies",
           "status": "resolved",
-          "evidence": "packages/identity/src/cookies.ts:21 `__Host-keel_session`; :31 `Path=/; Secure; HttpOnly; SameSite=Lax`",
+          "evidence": "packages/identity/src/cookies.ts:21 `__Host-volo_session`; :31 `Path=/; Secure; HttpOnly; SameSite=Lax`",
           "isLowHangingFruit": false,
           "effort": "S",
           "note": "__Host- prefix is browser-enforced; reverse-proxy and localhost-dev gotchas documented."
@@ -162,7 +162,7 @@
           "evidence": "kernel.ts:67 'Absent (the default) is the backward-compatibility floor: no interception'; only examples/estate/src/app.ts:38 mounts `secureStack({ originCheck: {} })`; no example mounts csrf/cors/rateLimit",
           "isLowHangingFruit": false,
           "effort": "M",
-          "note": "A createApp() with no middleware runs no request-level CSRF/CORS/ratelimit. Defensible (avoids breaking token-less clients) but means a naive default deploy is unprotected against CSRF and floods unless the app opts in. Ship a recommended default profile + scaffold it in create-keel."
+          "note": "A createApp() with no middleware runs no request-level CSRF/CORS/ratelimit. Defensible (avoids breaking token-less clients) but means a naive default deploy is unprotected against CSRF and floods unless the app opts in. Ship a recommended default profile + scaffold it in create-volo."
         },
         {
           "name": "Only MemorySessionStore; no durable/shared session store",
@@ -170,7 +170,7 @@
           "evidence": "packages/auth/src/sessions.ts:7 sole `class MemorySessionStore implements SessionStore`; identity.ts:229 `store: options.sessionStore ?? new MemorySessionStore()`; grep finds no other impl",
           "isLowHangingFruit": true,
           "effort": "M",
-          "note": "Stateful sessions don't survive a restart or share across nodes. SignedSessions (HMAC, stateless) covers the edge but cannot be revoked. A @keel/db-backed SessionStore is a high-value, no-architecture-change add."
+          "note": "Stateful sessions don't survive a restart or share across nodes. SignedSessions (HMAC, stateless) covers the edge but cannot be revoked. A @volo/db-backed SessionStore is a high-value, no-architecture-change add."
         },
         {
           "name": "Rate-limit store is in-process memory only",
@@ -195,16 +195,16 @@
       "dimension": "data layer safety & scale",
       "scoreBefore": 3,
       "scoreNow": 7.5,
-      "whatChanged": "Major architectural shift since the baseline (ADR 0006 \"async data layer\", landed across uncommitted/recent work). The headline blocker from the memory (\"SqlDatabase/SqlStatement/Model still SYNCHRONOUS, Postgres unbuilt+blocked, caps the stateless-scale story\") is RESOLVED: the live seam is now fully async and a real Postgres adapter ships.\n\n- New package packages/db (@keel/db): async SqlDatabase/SqlStatement seam (packages/db/src/sql.ts:30-49) with run/get/all returning Promises and a first-class transaction(fn) that pins one connection. A Drizzle-shaped typed query DSL (queries.ts) replaces the old ActiveRecord ORM.\n- New package packages/pg (@keel/pg): a genuine node-postgres Pool adapter (packages/pg/src/adapter.ts) implementing the async seam — ?->$n placeholder translation, pooled transaction() with BEGIN/COMMIT/ROLLBACK on a single checked-out client + release(err) so broken clients are discarded. 100% coverage on adapter.ts/translate.ts (18 tests pass), real-pool wiring isolated in pg-driver.ts.\n- packages/migrate/src/types.ts and migrator.ts flipped async; each migration now runs in its own seam transaction() (migrator.ts:84-92), so partial-failure DDL rolls back atomically with its bookkeeping row.\n- packages/queue fully async (queue.ts), uses INSERT ... RETURNING id for cross-driver id, claim is atomic UPDATE...RETURNING.\n- KernelDatabase (kernel.ts:38-49) and the SQLite runtime adapter (runtime/src/sqlite.ts) both implement the async seam incl. transaction().\n- @keel/orm (the old synchronous types.ts/model.ts) is explicitly marked LEGACY with ZERO in-tree consumers — every package that used it migrated to @keel/db. The synchronous types still exist but no longer cap anything.\n- New cross-driver parity integration test (integration/test/db-parity.integration.test.ts) runs the SAME body against SQLite always and Postgres when KEEL_PG_URL is set.",
-      "summary": "The data layer crossed the line that was previously the hard scale cap. SqlDatabase/SqlStatement are now ASYNCHRONOUS (ADR 0006) on the live seam, a real node-postgres adapter exists with correct pooled transaction semantics, migrations are per-migration transactional, the queue worker has a hardened error boundary, and identifier handling is quote+allowlist safe with parameterized values throughout. The old synchronous @keel/orm is dead code with no consumers. The remaining gap to full production-readiness is the un-verified-against-live-Postgres status (the PG parity leg only runs behind KEEL_PG_URL and pg is not installed in-tree by design), DDL dialect drift (AUTOINCREMENT vs SERIAL handled per-call by the caller, not the layer), no connection-pool tuning/health surface, and the SQLite LIMIT -1 OFFSET idiom that the PG driver does not yet rewrite. None are blockers; they are finish work.",
+      "whatChanged": "Major architectural shift since the baseline (ADR 0006 \"async data layer\", landed across uncommitted/recent work). The headline blocker from the memory (\"SqlDatabase/SqlStatement/Model still SYNCHRONOUS, Postgres unbuilt+blocked, caps the stateless-scale story\") is RESOLVED: the live seam is now fully async and a real Postgres adapter ships.\n\n- New package packages/db (@volo/db): async SqlDatabase/SqlStatement seam (packages/db/src/sql.ts:30-49) with run/get/all returning Promises and a first-class transaction(fn) that pins one connection. A Drizzle-shaped typed query DSL (queries.ts) replaces the old ActiveRecord ORM.\n- New package packages/pg (@volo/pg): a genuine node-postgres Pool adapter (packages/pg/src/adapter.ts) implementing the async seam — ?->$n placeholder translation, pooled transaction() with BEGIN/COMMIT/ROLLBACK on a single checked-out client + release(err) so broken clients are discarded. 100% coverage on adapter.ts/translate.ts (18 tests pass), real-pool wiring isolated in pg-driver.ts.\n- packages/migrate/src/types.ts and migrator.ts flipped async; each migration now runs in its own seam transaction() (migrator.ts:84-92), so partial-failure DDL rolls back atomically with its bookkeeping row.\n- packages/queue fully async (queue.ts), uses INSERT ... RETURNING id for cross-driver id, claim is atomic UPDATE...RETURNING.\n- KernelDatabase (kernel.ts:38-49) and the SQLite runtime adapter (runtime/src/sqlite.ts) both implement the async seam incl. transaction().\n- @volo/orm (the old synchronous types.ts/model.ts) is explicitly marked LEGACY with ZERO in-tree consumers — every package that used it migrated to @volo/db. The synchronous types still exist but no longer cap anything.\n- New cross-driver parity integration test (integration/test/db-parity.integration.test.ts) runs the SAME body against SQLite always and Postgres when VOLO_PG_URL is set.",
+      "summary": "The data layer crossed the line that was previously the hard scale cap. SqlDatabase/SqlStatement are now ASYNCHRONOUS (ADR 0006) on the live seam, a real node-postgres adapter exists with correct pooled transaction semantics, migrations are per-migration transactional, the queue worker has a hardened error boundary, and identifier handling is quote+allowlist safe with parameterized values throughout. The old synchronous @volo/orm is dead code with no consumers. The remaining gap to full production-readiness is the un-verified-against-live-Postgres status (the PG parity leg only runs behind VOLO_PG_URL and pg is not installed in-tree by design), DDL dialect drift (AUTOINCREMENT vs SERIAL handled per-call by the caller, not the layer), no connection-pool tuning/health surface, and the SQLite LIMIT -1 OFFSET idiom that the PG driver does not yet rewrite. None are blockers; they are finish work.",
       "items": [
         {
           "name": "SqlDatabase/SqlStatement still synchronous (the scale cap)",
           "status": "resolved",
-          "evidence": "packages/db/src/sql.ts:30-33 run/get/all all return Promise<...>; sql.ts:35-49 SqlDatabase has exec():Promise, prepare() sync-only, transaction<T>(fn):Promise<T>. KernelDatabase mirrors it (packages/kernel/src/kernel.ts:39-48). The old sync shape survives ONLY in legacy packages/orm/src/types.ts:14-22, which has zero in-tree consumers (grep @keel/orm hits only orm's own files).",
+          "evidence": "packages/db/src/sql.ts:30-33 run/get/all all return Promise<...>; sql.ts:35-49 SqlDatabase has exec():Promise, prepare() sync-only, transaction<T>(fn):Promise<T>. KernelDatabase mirrors it (packages/kernel/src/kernel.ts:39-48). The old sync shape survives ONLY in legacy packages/orm/src/types.ts:14-22, which has zero in-tree consumers (grep @volo/orm hits only orm's own files).",
           "isLowHangingFruit": false,
           "effort": "L",
-          "note": "This was THE blocker per memory keel-maturity-reality; it is genuinely flipped on the live seam. Tests green: db 44, migrate 21, queue 30."
+          "note": "This was THE blocker per memory volo-maturity-reality; it is genuinely flipped on the live seam. Tests green: db 44, migrate 21, queue 30."
         },
         {
           "name": "Postgres adapter exists and is correct",
@@ -212,7 +212,7 @@
           "evidence": "packages/pg/src/adapter.ts:93-136 createPgDatabase adapts a pg.Pool; transaction() checks out ONE client, brackets BEGIN/COMMIT, ROLLBACK best-effort on throw, release(failure) so a broken client is discarded (adapter.ts:97-133). 100% coverage (test:cov: 41/41 stmts, 20/20 branches). pg loaded dynamically + typed structurally (pg-driver.ts:14-25), consumer provides pg like better-sqlite3.",
           "isLowHangingFruit": false,
           "effort": "L",
-          "note": "Adapter logic is tested against a fake pool; the live-Postgres leg of parity is opt-in via KEEL_PG_URL."
+          "note": "Adapter logic is tested against a fake pool; the live-Postgres leg of parity is opt-in via VOLO_PG_URL."
         },
         {
           "name": "ORM identifier injection (quoting + allowlist)",
@@ -241,10 +241,10 @@
         {
           "name": "Live Postgres verification gap",
           "status": "partial",
-          "evidence": "packages/integration/test/db-parity.integration.test.ts:47-60 PG leg runs ONLY when KEEL_PG_URL is set; default drivers array (line 49) is SQLite-only. pg is not in any node_modules (grep: 'pg NOT in root node_modules'). So in normal CI the Postgres path is type-checked + fake-pool-tested but never hits a real PG socket.",
+          "evidence": "packages/integration/test/db-parity.integration.test.ts:47-60 PG leg runs ONLY when VOLO_PG_URL is set; default drivers array (line 49) is SQLite-only. pg is not in any node_modules (grep: 'pg NOT in root node_modules'). So in normal CI the Postgres path is type-checked + fake-pool-tested but never hits a real PG socket.",
           "isLowHangingFruit": true,
           "effort": "M",
-          "note": "Stand up a Postgres service CI job that sets KEEL_PG_URL so the parity body actually runs against a real server — the test harness already exists, it just needs the container + env."
+          "note": "Stand up a Postgres service CI job that sets VOLO_PG_URL so the parity body actually runs against a real server — the test harness already exists, it just needs the container + env."
         },
         {
           "name": "DDL dialect drift (AUTOINCREMENT vs SERIAL, LIMIT -1 OFFSET)",
@@ -272,9 +272,9 @@
       "whatChanged": "Nothing moved in this dimension since the 2026-06-10 readiness run. The current in-flight uncommitted churn (bun.lock + db/identity/mcp/kernel test files per `git status`) does NOT touch packages/observability, packages/deploy, packages/runtime, or packages/cloudflare: `git diff --stat HEAD` on all four is empty and `git status --porcelain` shows zero untracked files there. The tracer idempotency fix from the prior cycle still holds (tracer.ts:60 `if (this.ended) return;`). No new tracing, metrics, deploy targets, readiness wiring, or edge access log were added. Operability is byte-for-byte the last commit.",
       "items": [
         {
-          "name": "@keel/observability imported by any other package",
+          "name": "@volo/observability imported by any other package",
           "status": "open",
-          "evidence": "`grep -rl @keel/observability packages | grep -v packages/observability/` returns nothing; `grep -rl @keel/observability packages/*/package.json` (minus its own) returns nothing. index.ts:1-30 is a standalone OTel-flavored tracer/span core; exporter.ts:7-13 InMemoryExporter only pushes to an in-memory array. Zero consumers in the monorepo.",
+          "evidence": "`grep -rl @volo/observability packages | grep -v packages/observability/` returns nothing; `grep -rl @volo/observability packages/*/package.json` (minus its own) returns nothing. index.ts:1-30 is a standalone OTel-flavored tracer/span core; exporter.ts:7-13 InMemoryExporter only pushes to an in-memory array. Zero consumers in the monorepo.",
           "isLowHangingFruit": false,
           "effort": "L",
           "note": "Well-built, fully-tested tracing core but completely orphaned. Nothing in the request path mints a span; no OTel/HTTP exporter ships. Dead capability until wired into runtime/kernel/db and given a real exporter."
@@ -320,9 +320,9 @@
           "note": "Endpoints exist on the Node tier and liveness is honest; readiness is hollow because the probe is unwired (see above). No equivalent on the edge."
         },
         {
-          "name": "keel deploy: real target vs file-copy + routing printer",
+          "name": "volo deploy: real target vs file-copy + routing printer",
           "status": "partial",
-          "evidence": "runDeploy (run.ts:344-379) builds static sites, planDeploy (plan.ts:217-232) emits per-site StaticTarget/NodeTarget + RoutingRules, shipStatic (ship.ts:55-71) loops files through an uploader. Default nodeUploader (ship.ts:82-105) is a filesystem copy into distDir. The dynamic/node target is NOT deployed — run.ts:370 just prints ``run `keel serve` (dynamic)``. Routing rules are printed to stdout (run.ts:374-375).",
+          "evidence": "runDeploy (run.ts:344-379) builds static sites, planDeploy (plan.ts:217-232) emits per-site StaticTarget/NodeTarget + RoutingRules, shipStatic (ship.ts:55-71) loops files through an uploader. Default nodeUploader (ship.ts:82-105) is a filesystem copy into distDir. The dynamic/node target is NOT deployed — run.ts:370 just prints ``run `volo serve` (dynamic)``. Routing rules are printed to stdout (run.ts:374-375).",
           "isLowHangingFruit": false,
           "effort": "XL",
           "note": "Honest 'ship to a local directory' default plus a clean injectable uploader seam (the shape a CDN/S3 backend would take) and a CF wrangler-config emitter (cloudflare/wrangler.ts), but no real cloud backend ships in-tree and the dynamic tier is never deployed — it prints a command. It's a planner + local file copy, not a deploy-to-cloud."
@@ -344,14 +344,14 @@
           "note": "Genuinely good: graceful shutdown with timeout + signal wiring + process-level safety net. The most production-shaped part of the dimension."
         }
       ],
-      "summary": "Operability is a tale of two halves, unchanged this cycle (no relevant code moved; in-flight churn is empty on observability/deploy/runtime/cloudflare). The Node runtime tier is surprisingly mature: per-request access logging with a correlation id (server.ts:902-905), liveness/readiness endpoints (server.ts:381-403), graceful SIGTERM/SIGINT drain with a timeout wired end-to-end (server.ts:534, bin.ts:64-71), and a process-level safety net. The baseline tracer double-export bug is fixed (tracer.ts:60). But the actual observability story is thin and the deploy story is a planner, not a deployer. @keel/observability is fully orphaned — zero importers, in-memory-only exporter, no OTel/HTTP adapter — so there are no traces or metrics in any request path; you get one log line per request and nothing graphable. The readiness probe is hollow: isReady defaults to () => true and no caller (bin.ts included) wires it to the DB, so /readyz lies. The real prod target — the Cloudflare edge handler — logs errors only, no access log. `keel deploy` builds static sites, copies files to a local dist dir through an injectable uploader, and prints routing rules; the dynamic tier is never deployed (it prints `keel serve`), and there is no atomic swap, health gate, canary, or rollback. Could you run this in prod and SEE it? Partially on the Node tier (request logs + health endpoints), but no metrics, no traces, a lying readiness probe, and no edge access logs. Could you deploy safely? No — a non-atomic file copy with no verification or rollback. Two low-hanging fruit stand out: wire isReady to a DB ping in bin.ts, and add an edge access log mirroring defaultLogRequest. Net: 4/10, flat."
+      "summary": "Operability is a tale of two halves, unchanged this cycle (no relevant code moved; in-flight churn is empty on observability/deploy/runtime/cloudflare). The Node runtime tier is surprisingly mature: per-request access logging with a correlation id (server.ts:902-905), liveness/readiness endpoints (server.ts:381-403), graceful SIGTERM/SIGINT drain with a timeout wired end-to-end (server.ts:534, bin.ts:64-71), and a process-level safety net. The baseline tracer double-export bug is fixed (tracer.ts:60). But the actual observability story is thin and the deploy story is a planner, not a deployer. @volo/observability is fully orphaned — zero importers, in-memory-only exporter, no OTel/HTTP adapter — so there are no traces or metrics in any request path; you get one log line per request and nothing graphable. The readiness probe is hollow: isReady defaults to () => true and no caller (bin.ts included) wires it to the DB, so /readyz lies. The real prod target — the Cloudflare edge handler — logs errors only, no access log. `volo deploy` builds static sites, copies files to a local dist dir through an injectable uploader, and prints routing rules; the dynamic tier is never deployed (it prints `volo serve`), and there is no atomic swap, health gate, canary, or rollback. Could you run this in prod and SEE it? Partially on the Node tier (request logs + health endpoints), but no metrics, no traces, a lying readiness probe, and no edge access logs. Could you deploy safely? No — a non-atomic file copy with no verification or rollback. Two low-hanging fruit stand out: wire isReady to a DB ping in bin.ts, and add an edge access log mirroring defaultLogRequest. Net: 4/10, flat."
     },
     {
       "key": "maturity-ci",
       "dimension": "Maturity, tests, CI, repo hygiene",
       "scoreBefore": 7,
       "scoreNow": 7,
-      "whatChanged": "Tree advanced to HEAD 2afc9ae (working tree effectively clean: only untracked .claude/ and docs/ATTACK-PLAN-2026.md; the `git status` in the prompt was a stale snapshot). `bun run ws:test` => 3072 tests passed / 0 failed across 59 packages (up from 2952 in the 2026-06-10 baseline, 2855 in run2). ws:typecheck exits 0 for every package; `bun run lint` (oxlint) exits 0. The coverage gate still holds: `bun run ws:test:cov` => \"Coverage gate passed.\" with 43 non-content framework packages declaring 100% lines/branches/functions/statements thresholds (58 vitest.config.ts files carry a 100 threshold). CI (.github/workflows/ci.yml) is well-architected and blocking on typecheck+lint+coverage-gated-test, with separate Playwright e2e and real-Postgres db-parity jobs. REGRESSION vs the baseline's \"ws:format:check now exits 0 with every package\": @keel/db now fails framework-level format check (src/queries.ts, test/db.test.ts), committed at HEAD. Stray non-bun lockfiles and bus-factor/release-automation gaps are unchanged. Legacy CommonJS root (lib/bin/test/, \"tracks\") stays deleted.",
+      "whatChanged": "Tree advanced to HEAD 2afc9ae (working tree effectively clean: only untracked .claude/ and docs/ATTACK-PLAN-2026.md; the `git status` in the prompt was a stale snapshot). `bun run ws:test` => 3072 tests passed / 0 failed across 59 packages (up from 2952 in the 2026-06-10 baseline, 2855 in run2). ws:typecheck exits 0 for every package; `bun run lint` (oxlint) exits 0. The coverage gate still holds: `bun run ws:test:cov` => \"Coverage gate passed.\" with 43 non-content framework packages declaring 100% lines/branches/functions/statements thresholds (58 vitest.config.ts files carry a 100 threshold). CI (.github/workflows/ci.yml) is well-architected and blocking on typecheck+lint+coverage-gated-test, with separate Playwright e2e and real-Postgres db-parity jobs. REGRESSION vs the baseline's \"ws:format:check now exits 0 with every package\": @volo/db now fails framework-level format check (src/queries.ts, test/db.test.ts), committed at HEAD. Stray non-bun lockfiles and bus-factor/release-automation gaps are unchanged. Legacy CommonJS root (lib/bin/test/, \"tracks\") stays deleted.",
       "items": [
         {
           "name": "ws:test full suite green",
@@ -378,20 +378,20 @@
           "note": "Deliberately SERIAL (coverage-gate.ts:1-19) to avoid v8+--filter CPU oversubscription flaking coverage %. The 100% bar is enforced on PRs, not aspirational."
         },
         {
-          "name": "Framework package format regressed (@keel/db fails ws:format:check)",
+          "name": "Framework package format regressed (@volo/db fails ws:format:check)",
           "status": "regressed",
-          "evidence": "`bun run ws:format:check` => '@keel/db format:check: Exited with code 1'; in packages/db: oxfmt --check reports 'src/queries.ts' and 'test/db.test.ts' — 'Format issues found in above 2 files.' Tree is clean, so this is committed at HEAD 2afc9ae. The 2026-06-10 baseline (json:391) claimed 'ws:format:check exit 0; every package ... All matched files use the correct format.'",
+          "evidence": "`bun run ws:format:check` => '@volo/db format:check: Exited with code 1'; in packages/db: oxfmt --check reports 'src/queries.ts' and 'test/db.test.ts' — 'Format issues found in above 2 files.' Tree is clean, so this is committed at HEAD 2afc9ae. The 2026-06-10 baseline (json:391) claimed 'ws:format:check exit 0; every package ... All matched files use the correct format.'",
           "isLowHangingFruit": true,
           "effort": "S",
-          "note": "Pure regression introduced by the ADR-0004 @keel/db work. `bun run --filter @keel/db format` (drop --check) fixes both files in seconds. Re-greens framework-wide format."
+          "note": "Pure regression introduced by the ADR-0004 @volo/db work. `bun run --filter @volo/db format` (drop --check) fixes both files in seconds. Re-greens framework-wide format."
         },
         {
           "name": "CI format step still continue-on-error (cannot flip to blocking while db fails)",
           "status": "open",
-          "evidence": ".github/workflows/ci.yml:62-64 'Format check (informational) ... continue-on-error: true'. Was the cheap fruit at baseline, but @keel/db now fails ws:format:check so flipping it blocking would red CI until db is reformatted.",
+          "evidence": ".github/workflows/ci.yml:62-64 'Format check (informational) ... continue-on-error: true'. Was the cheap fruit at baseline, but @volo/db now fails ws:format:check so flipping it blocking would red CI until db is reformatted.",
           "isLowHangingFruit": true,
           "effort": "S",
-          "note": "Now gated behind fixing the @keel/db format regression first; then delete continue-on-error to make framework format blocking (content-* still need their own ratchet)."
+          "note": "Now gated behind fixing the @volo/db format regression first; then delete continue-on-error to make framework format blocking (content-* still need their own ratchet)."
         },
         {
           "name": "Stray non-bun lockfiles tracked (toolchain hygiene)",
@@ -412,7 +412,7 @@
         {
           "name": "content-* suites run but excluded from the coverage gate",
           "status": "partial",
-          "evidence": "scripts/coverage-gate.ts:27 `if (dir.startsWith('content-')) continue;` skips all 15 content-* packages; ci.yml:51-52 runs them ungated via `bun run --filter '@keel/content-*' test` (CONTENT_COVERAGE.md ratchet policy).",
+          "evidence": "scripts/coverage-gate.ts:27 `if (dir.startsWith('content-')) continue;` skips all 15 content-* packages; ci.yml:51-52 runs them ungated via `bun run --filter '@volo/content-*' test` (CONTENT_COVERAGE.md ratchet policy).",
           "isLowHangingFruit": false,
           "effort": "M",
           "note": "Transparent and documented; tests execute on every PR (content-core 688, content-mcp 80) but %-coverage is not enforced for these 15 packages."
@@ -420,21 +420,21 @@
         {
           "name": "Bus factor / version maturity / release automation",
           "status": "open",
-          "evidence": "`git log` => 77 commits, single author 'Keel <tech-lead@keel.dev>'; first commit 2026-06-09 09:10, latest 2026-06-10 10:14 (~1.5-day-old repo); every package version is 0.0.0 (kernel/queue/db); no git tags; .github/ has only ci.yml — no .changeset, no dependabot.yml, no release workflow; nothing published.",
+          "evidence": "`git log` => 77 commits, single author 'Volo <tech-lead@volo.dev>'; first commit 2026-06-09 09:10, latest 2026-06-10 10:14 (~1.5-day-old repo); every package version is 0.0.0 (kernel/queue/db); no git tags; .github/ has only ci.yml — no .changeset, no dependabot.yml, no release workflow; nothing published.",
           "isLowHangingFruit": false,
           "effort": "XL",
           "note": "Structural ceiling. Single-author prototype; matures only with time + a second contributor + a publish/release pipeline (changesets, version bump, dependabot)."
         }
       ],
-      "summary": "Release-engineering maturity holds at ~7/10 — strong test/CI discipline for a repo this young, with one fresh regression dragging an otherwise-improving picture flat. The good: ws:test is 3072 green / 0 fail (up ~120 since the 2026-06-10 baseline), 59/60 packages carry real test suites (only @keel/e2e is testless by design, covered by a dedicated Playwright job), typecheck and oxlint both exit 0 everywhere, and the serial coverage gate (scripts/coverage-gate.ts, wired as the blocking ws:test:cov CI step) still enforces 100% lines/branches/functions/statements across 43 framework packages — it ran green. CI itself is well-architected: blocking typecheck+lint+coverage-test, plus separate Playwright e2e and real-Postgres parity jobs, with concurrency cancel-in-progress. The legacy CommonJS root stays deleted (no lib/bin/test/, no 'tracks' duplication). The bad: a committed format REGRESSION — @keel/db now fails ws:format:check (src/queries.ts, test/db.test.ts) from the ADR-0004 migration work, directly contradicting the baseline's 'format green in every framework package' claim, and it blocks the cheap fruit of flipping the CI format step to blocking. The 4 stray non-bun lockfiles (root package-lock.json + loom + 2 pnpm-lock.yaml) remain tracked against a bun-only toolchain, unmoved across three reviews. The structural ceiling is unchanged: single-author, ~1.5-day-old, untagged, unpublished prototype with every package at 0.0.0 and zero release automation (no changesets/dependabot/release workflow). Two genuinely cheap wins sit right there: reformat @keel/db (one `bun run --filter @keel/db format`), then git rm the 4 stray lockfiles — together they re-green framework-wide format and let the CI format step go blocking."
+      "summary": "Release-engineering maturity holds at ~7/10 — strong test/CI discipline for a repo this young, with one fresh regression dragging an otherwise-improving picture flat. The good: ws:test is 3072 green / 0 fail (up ~120 since the 2026-06-10 baseline), 59/60 packages carry real test suites (only @volo/e2e is testless by design, covered by a dedicated Playwright job), typecheck and oxlint both exit 0 everywhere, and the serial coverage gate (scripts/coverage-gate.ts, wired as the blocking ws:test:cov CI step) still enforces 100% lines/branches/functions/statements across 43 framework packages — it ran green. CI itself is well-architected: blocking typecheck+lint+coverage-test, plus separate Playwright e2e and real-Postgres parity jobs, with concurrency cancel-in-progress. The legacy CommonJS root stays deleted (no lib/bin/test/, no 'tracks' duplication). The bad: a committed format REGRESSION — @volo/db now fails ws:format:check (src/queries.ts, test/db.test.ts) from the ADR-0004 migration work, directly contradicting the baseline's 'format green in every framework package' claim, and it blocks the cheap fruit of flipping the CI format step to blocking. The 4 stray non-bun lockfiles (root package-lock.json + loom + 2 pnpm-lock.yaml) remain tracked against a bun-only toolchain, unmoved across three reviews. The structural ceiling is unchanged: single-author, ~1.5-day-old, untagged, unpublished prototype with every package at 0.0.0 and zero release automation (no changesets/dependabot/release workflow). Two genuinely cheap wins sit right there: reformat @volo/db (one `bun run --filter @volo/db format`), then git rm the 4 stray lockfiles — together they re-green framework-wide format and let the CI format step go blocking."
     },
     {
       "key": "framework-correctness",
       "dimension": "framework correctness",
       "scoreBefore": 6.5,
       "scoreNow": 8.5,
-      "whatChanged": "All seven flagged medium correctness issues are fixed in the current tree, each with an invariant comment. Targeted suites for ui/props, ui/schema, i18n, tracer, content-core/query, create-keel pass.",
-      "summary": "All seven medium correctness issues are resolved on disk with file-line evidence and tests passing. i18n uses Object.hasOwn; tracer end is idempotent; ui coercion guards non-finite; treeJsonSchema gates children and required props; paginate validates page and perPage; runtime getCollections routes through filtered getCollection; create-keel uses latest not the workspace protocol. No ui-kit CSS sink. The 12 failures in a broad parallel run are synchronizer file-watcher timeouts, a known flake, not regressions.",
+      "whatChanged": "All seven flagged medium correctness issues are fixed in the current tree, each with an invariant comment. Targeted suites for ui/props, ui/schema, i18n, tracer, content-core/query, create-volo pass.",
+      "summary": "All seven medium correctness issues are resolved on disk with file-line evidence and tests passing. i18n uses Object.hasOwn; tracer end is idempotent; ui coercion guards non-finite; treeJsonSchema gates children and required props; paginate validates page and perPage; runtime getCollections routes through filtered getCollection; create-volo uses latest not the workspace protocol. No ui-kit CSS sink. The 12 failures in a broad parallel run are synchronizer file-watcher timeouts, a known flake, not regressions.",
       "items": [
         {
           "name": "i18n prototype lookup",
@@ -493,9 +493,9 @@
           "note": "listings filtered; engine.ts:131 build-time path unfiltered by design"
         },
         {
-          "name": "create-keel workspace scaffold",
+          "name": "create-volo workspace scaffold",
           "status": "resolved",
-          "evidence": "packages/create-keel/src/templates.ts:24 keelDep latest, all @keel deps",
+          "evidence": "packages/create-volo/src/templates.ts:24 voloDep latest, all @volo deps",
           "isLowHangingFruit": false,
           "effort": "S",
           "note": "installs outside monorepo; tests pass"
@@ -505,26 +505,26 @@
   ],
   "judge": {
     "biggestRemainingBlockers": [
-      "Deploy is not a deployer: `keel deploy` copies static files in-place via an injectable uploader and prints `keel serve` for the dynamic tier — no atomic/versioned swap, no post-deploy health gate, no canary, no rollback (packages/deploy/src/ship.ts:55-105, run.ts:344-379). You cannot safely ship a release.",
-      "Observability is orphaned: @keel/observability has ZERO importers, an in-memory-only exporter, and no OTel/HTTP adapter — no traces or metrics in any request path. The readiness probe (/readyz) defaults to () => true and no caller wires it to the DB, so it lies. The real prod target (Cloudflare edge) has no access log. (packages/observability/*, server.ts:395, cloudflare/fetch-handler.ts)",
+      "Deploy is not a deployer: `volo deploy` copies static files in-place via an injectable uploader and prints `volo serve` for the dynamic tier — no atomic/versioned swap, no post-deploy health gate, no canary, no rollback (packages/deploy/src/ship.ts:55-105, run.ts:344-379). You cannot safely ship a release.",
+      "Observability is orphaned: @volo/observability has ZERO importers, an in-memory-only exporter, and no OTel/HTTP adapter — no traces or metrics in any request path. The readiness probe (/readyz) defaults to () => true and no caller wires it to the DB, so it lies. The real prod target (Cloudflare edge) has no access log. (packages/observability/*, server.ts:395, cloudflare/fetch-handler.ts)",
       "Security batteries are opt-in, not default: a plain createApp() runs CSRF/CORS/rate-limit only if the app explicitly mounts secureStack — only examples/estate does, and only originCheck. Combined with MemorySessionStore + MemoryRateLimitStore being the sole implementations, stateful sessions and rate limits do not survive a restart or share across nodes (kernel.ts:67, auth/sessions.ts:7, ratelimit/middleware.ts:139).",
-      "Postgres is built but unproven against a live socket: pg is not installed in-tree and the PG parity leg only runs behind KEEL_PG_URL, so the adapter is type-checked and fake-pool-tested but has never hit a real PG connection in CI. DDL dialect drift (AUTOINCREMENT vs SERIAL, SQLite `LIMIT -1 OFFSET` not rewritten by the pg translator) is unresolved (db-parity.integration.test.ts, pg/src/translate.ts).",
+      "Postgres is built but unproven against a live socket: pg is not installed in-tree and the PG parity leg only runs behind VOLO_PG_URL, so the adapter is type-checked and fake-pool-tested but has never hit a real PG connection in CI. DDL dialect drift (AUTOINCREMENT vs SERIAL, SQLite `LIMIT -1 OFFSET` not rewritten by the pg translator) is unresolved (db-parity.integration.test.ts, pg/src/translate.ts).",
       "Cloudflare edge — the stated real deploy target — lacks node parity: no app-level body cap and no handler timeout (verified: grep for maxBody/content-length/timeout in packages/cloudflare/src is empty). It leans entirely on CF platform limits.",
       "Structural maturity ceiling: single-author, ~1.5-day-old, untagged, unpublished prototype; every package at 0.0.0; no changesets/dependabot/release workflow. Bus factor of one."
     ],
     "lowHangingFruit": [
       {
-        "item": "Reformat @keel/db to clear the committed format regression",
+        "item": "Reformat @volo/db to clear the committed format regression",
         "impact": "high",
         "effort": "S",
-        "why": "ws:format:check fails framework-wide on src/queries.ts + test/db.test.ts (committed at HEAD). One `bun run --filter @keel/db format` re-greens framework format and unblocks flipping the CI format step to blocking. It is a regression, not new work.",
+        "why": "ws:format:check fails framework-wide on src/queries.ts + test/db.test.ts (committed at HEAD). One `bun run --filter @volo/db format` re-greens framework format and unblocks flipping the CI format step to blocking. It is a regression, not new work.",
         "location": "packages/db/src/queries.ts, packages/db/test/db.test.ts"
       },
       {
         "item": "Flip the CI format step from continue-on-error to blocking",
         "impact": "medium",
         "effort": "S",
-        "why": "Once @keel/db is reformatted, the only thing keeping format informational is gone; making it blocking ratchets the format invariant permanently. Cheap, immediate, and prevents the regression class recurring.",
+        "why": "Once @volo/db is reformatted, the only thing keeping format informational is gone; making it blocking ratchets the format invariant permanently. Cheap, immediate, and prevents the regression class recurring.",
         "location": ".github/workflows/ci.yml:62-64"
       },
       {
@@ -573,7 +573,7 @@
     "productionScoreBefore": 5.5,
     "productionScoreNow": 6.5,
     "scoreCeilingOfFruit": 7,
-    "keepGoingRecommendation": "Do a short fruit pre-pass (half day at most), then PIVOT to a structural phase. The fruit here is unusually high-value because three of the eight items are honesty/parity fixes on the heavily-weighted crash-safety and observability dimensions: reformat @keel/db (regression), wire isReady to a DB ping (stop /readyz lying), add the edge access log + edge body-cap/timeout (node parity on the real prod target). Knock those out — they're sub-day and lift the floor on the dimensions that matter most. But the score is now structurally capped at ~7: the two dimensions dragging the holistic number (observability/deploy at 4, and the opt-in/in-memory security posture) cannot be lifted by fruit. The next structural bet is deploy + observability as a pair: a real release mechanism (versioned/atomic swap + post-deploy health gate + rollback) and a wired tracing/metrics path (OTel exporter, importers in the request path), plus a durable session/rate-limit store and a CI job that actually exercises Postgres over a socket. Last cycle's recommended structural move (async data layer + Postgres adapter) landed and paid off — data-layer went 5.5->7.5 — which is exactly why the holistic ceiling rose enough to make the NEXT structural phase worthwhile rather than premature.",
-    "rationale": "Weighting crash-safety, security, and data-layer heavily (the three load-bearing dimensions), the current tree is genuinely strong on the things that get you breached or crashed: crash-safety 8 (per-request error boundary, body cap, handler timeout, slow-loris limits, graceful drain — 910 runtime tests green, all re-verified), security-wiring 7 (real middleware onion, injection/CSRF/SSRF/auth-fail-open/Secure-cookie fixes all on disk and tested), and data-layer 7.5 (the async seam + real node-postgres adapter landed — last cycle's hard scale cap is gone). Framework-correctness 8.5 and maturity-ci 7 are healthy for the repo's age. I verified the load-bearing claims directly: @keel/db format regression is real and committed (oxfmt --check exits 1 on 2 files), the CF adapter genuinely has no body cap or timeout (grep empty), isReady defaults to ()=>true with no caller, only estate mounts secureStack (originCheck only), and pg is not installed. So the assessments are accurate, not optimistic. Why 6.5 and not higher: this is NOT an average (a naive mean would be ~7.0). I pull it down because the two weakest areas are precisely the ones that decide whether you can OPERATE the thing in production — observability/deploy at 4 (orphaned tracing, lying readiness probe, no edge access log, and a 'deploy' that is a non-atomic file copy with no rollback) and the security posture's opt-in default + in-memory-only session/rate-limit stores. You can stand a node tier behind a trusted proxy and serve traffic safely; you cannot yet ship a release with confidence, see metrics, or survive a restart with sessions intact. That gap between 'safe to run' and 'safe to operate' is what separates 6.5 from 8. The +1.0 over the 5.5 baseline is earned almost entirely by the data-layer structural win plus the correctness sweep, not by new operability."
+    "keepGoingRecommendation": "Do a short fruit pre-pass (half day at most), then PIVOT to a structural phase. The fruit here is unusually high-value because three of the eight items are honesty/parity fixes on the heavily-weighted crash-safety and observability dimensions: reformat @volo/db (regression), wire isReady to a DB ping (stop /readyz lying), add the edge access log + edge body-cap/timeout (node parity on the real prod target). Knock those out — they're sub-day and lift the floor on the dimensions that matter most. But the score is now structurally capped at ~7: the two dimensions dragging the holistic number (observability/deploy at 4, and the opt-in/in-memory security posture) cannot be lifted by fruit. The next structural bet is deploy + observability as a pair: a real release mechanism (versioned/atomic swap + post-deploy health gate + rollback) and a wired tracing/metrics path (OTel exporter, importers in the request path), plus a durable session/rate-limit store and a CI job that actually exercises Postgres over a socket. Last cycle's recommended structural move (async data layer + Postgres adapter) landed and paid off — data-layer went 5.5->7.5 — which is exactly why the holistic ceiling rose enough to make the NEXT structural phase worthwhile rather than premature.",
+    "rationale": "Weighting crash-safety, security, and data-layer heavily (the three load-bearing dimensions), the current tree is genuinely strong on the things that get you breached or crashed: crash-safety 8 (per-request error boundary, body cap, handler timeout, slow-loris limits, graceful drain — 910 runtime tests green, all re-verified), security-wiring 7 (real middleware onion, injection/CSRF/SSRF/auth-fail-open/Secure-cookie fixes all on disk and tested), and data-layer 7.5 (the async seam + real node-postgres adapter landed — last cycle's hard scale cap is gone). Framework-correctness 8.5 and maturity-ci 7 are healthy for the repo's age. I verified the load-bearing claims directly: @volo/db format regression is real and committed (oxfmt --check exits 1 on 2 files), the CF adapter genuinely has no body cap or timeout (grep empty), isReady defaults to ()=>true with no caller, only estate mounts secureStack (originCheck only), and pg is not installed. So the assessments are accurate, not optimistic. Why 6.5 and not higher: this is NOT an average (a naive mean would be ~7.0). I pull it down because the two weakest areas are precisely the ones that decide whether you can OPERATE the thing in production — observability/deploy at 4 (orphaned tracing, lying readiness probe, no edge access log, and a 'deploy' that is a non-atomic file copy with no rollback) and the security posture's opt-in default + in-memory-only session/rate-limit stores. You can stand a node tier behind a trusted proxy and serve traffic safely; you cannot yet ship a release with confidence, see metrics, or survive a restart with sessions intact. That gap between 'safe to run' and 'safe to operate' is what separates 6.5 from 8. The +1.0 over the 5.5 baseline is earned almost entirely by the data-layer structural win plus the correctness sweep, not by new operability."
   }
 }

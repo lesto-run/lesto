@@ -2,7 +2,7 @@
  * `defineIsland` — a self-describing island usable directly in a `.page` (ADR 0011).
  *
  * Where the Registry/`UiNode` path collects every island into one page-wide
- * `#keel-islands` manifest emitted after the body, a `.page` is a plain React
+ * `#volo-islands` manifest emitted after the body, a `.page` is a plain React
  * tree with nothing to walk. So an island describes ITSELF at render time: the
  * component `defineIsland` returns emits, co-located in the stream, its marked
  * shell, its own mount script, and (for bound data) its primer — siblings, not
@@ -20,7 +20,7 @@
  * mount resilience all unchanged.
  *
  * The returned component carries its `.island` def so the build's client-entry
- * synthesizer (`@keel/assets`) and the client registry can read it from the
+ * synthesizer (`@volo/assets`) and the client registry can read it from the
  * island's module without a separate registration.
  *
  * ## Data resolution rule (ADR 0012, the canonical island)
@@ -84,11 +84,11 @@ export interface IslandComponent<Rest extends Record<string, unknown> = Record<s
  * `use` is read off the React namespace, NOT a named import: under the
  * preact-dialect client alias (`react → preact/compat`, ADR 0007) `preact/compat`
  * exports no `use`, and a named `import { use }` would fail the client bundle —
- * `define-island` rides the client graph via the `@keel/ui` barrel. It is only
+ * `define-island` rides the client graph via the `@volo/ui` barrel. It is only
  * ever *called* here, server-side (a resolver is in scope only under
  * `renderPageResponse`'s provider; the client mounts the registered component
  * directly and never renders this wrapper), where React is real and `use`
- * exists. The proper fix is splitting the `@keel/ui` barrel so server-only
+ * exists. The proper fix is splitting the `@volo/ui` barrel so server-only
  * machinery leaves the client graph entirely (chief-architect review 2a); this
  * namespace access is the contained unbreak until then.
  */
@@ -155,7 +155,7 @@ export interface IslandDef<
  * is typed as `{ [K in keyof P]?: DataSource<P[K]> }` and the returned island
  * component accepts the non-bound remainder `Omit<P, keyof D>`. Internally the
  * def is cast ONCE to the erased {@link ClientComponentDef} — the same
- * one-erasure-boundary precedent `keel().page()` uses, because a React component
+ * one-erasure-boundary precedent `volo().page()` uses, because a React component
  * is contravariant in its props, so a specific def is not directly assignable to
  * the open one. `Registry.defineClient` typing stays deferred (ADR 0011
  * Increment 2 / the `island.ts` doc): its storage is erased, its consumers

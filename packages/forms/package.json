@@ -1,8 +1,8 @@
 {
-  "name": "@keel/forms",
+  "name": "@volo/forms",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's schema-driven forms — a form spec, a render to a @keel/ui tree, and submission validation. Ships its own form components.",
+  "description": "Volo's schema-driven forms — a form spec, a render to a @volo/ui tree, and submission validation. Ships its own form components.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,8 +12,8 @@
     }
   },
   "dependencies": {
-    "@keel/errors": "workspace:*",
-    "@keel/ui": "workspace:*",
+    "@volo/errors": "workspace:*",
+    "@volo/ui": "workspace:*",
     "react": "^19",
     "react-dom": "^19"
   },

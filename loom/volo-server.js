@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createServer as createViteServer } from 'vite';
 
-// KEEL — the unified fullstack runtime (prototype).
+// VOLO — the unified fullstack runtime (prototype).
 //
 // One server that owns BOTH halves of the stack:
 //   • the Tracks ORM (Rails-like, CommonJS) — talks to SQLite
@@ -21,7 +21,7 @@ const Tracks = require('../lib/index.js'); // CJS backend, imported into the ESM
 const PORT = Number(process.env.PORT || 5200);
 
 // ---- Backend: boot the ORM, define a model, ensure schema + seed data --------
-Tracks.database.connect(__dirname, 'keel');
+Tracks.database.connect(__dirname, 'volo');
 const db = Tracks.database.db();
 db.exec(`CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,12 +46,12 @@ if (Post.count() === 0) {
 function postsPage(posts) {
   return {
     type: 'Page',
-    props: { title: 'Keel — Posts' },
+    props: { title: 'Volo — Posts' },
     children: [
       {
         type: 'Hero',
         props: {
-          eyebrow: 'KEEL · TRACKS ⋈ LOOM',
+          eyebrow: 'VOLO · TRACKS ⋈ LOOM',
           title: 'Posts',
           subtitle: `${posts.length} record(s) loaded from SQLite via the Tracks ORM, rendered as server-side React.`,
         },
@@ -125,7 +125,7 @@ async function main() {
   });
 
   server.listen(PORT, () => {
-    console.log(`\n  ⚓ Keel runtime  →  http://localhost:${PORT}`);
+    console.log(`\n  ⚓ Volo runtime  →  http://localhost:${PORT}`);
     console.log(`  Backend:  Tracks ORM + SQLite (${Post.count()} posts)`);
     console.log(`  Frontend: Loom SSR React + hydration`);
     console.log(`  Routes:   /posts (SSR page) · /api/posts (JSON)\n`);

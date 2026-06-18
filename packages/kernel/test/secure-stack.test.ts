@@ -1,9 +1,9 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { currentContext, fromRequestMiddleware, keel, runWithContext } from "@keel/web";
-import type { Keel } from "@keel/web";
-import { generateToken } from "@keel/csrf";
+import { currentContext, fromRequestMiddleware, volo, runWithContext } from "@volo/web";
+import type { Volo } from "@volo/web";
+import { generateToken } from "@volo/csrf";
 
 import { createApp, secureStack } from "../src/index";
 import type { SecureStackOptions } from "../src/index";
@@ -53,12 +53,12 @@ function adapt(raw: Database.Database): KernelDatabase {
 const SECRET = "kernel-secret-0123456789abcdefghi";
 const SESSION = "anon";
 
-// A keel() app exercising both a state-changing route and reading the context,
+// A volo() app exercising both a state-changing route and reading the context,
 // with the secure stack mounted as the app's outermost middleware. The security
 // batteries are request-and-next middleware, bridged into the handler chain by
-// `fromRequestMiddleware` — the production wiring (see create-keel's template).
-function buildApp(options: SecureStackOptions): Keel {
-  return keel()
+// `fromRequestMiddleware` — the production wiring (see create-volo's template).
+function buildApp(options: SecureStackOptions): Volo {
+  return volo()
     .use(...secureStack(options).map(fromRequestMiddleware))
     .post("/api/items", (c) => c.json({ created: true }, 201))
     .get("/api/whoami", (c) => c.json({ requestId: currentContext()?.requestId ?? null }));

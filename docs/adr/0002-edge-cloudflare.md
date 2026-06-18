@@ -1,4 +1,4 @@
-# ADR 0002 — Keel on Cloudflare Workers (edge SSR-auth)
+# ADR 0002 — Volo on Cloudflare Workers (edge SSR-auth)
 
 - **Status:** Accepted (MVP implemented)
 - **Date:** 2026-06-09
@@ -6,16 +6,16 @@
 
 ## Decision
 
-Run the **whole Keel dispatcher inside a Cloudflare Worker.** Keel's request
+Run the **whole Volo dispatcher inside a Cloudflare Worker.** Volo's request
 handling is already a pure function — `app.handle` / `dispatchSites` is
-`(method, path, options) => Promise<KeelResponse>` with no `node:http`, no
-sockets. A Worker is just `fetch(Request) => Response`. So putting Keel on the
+`(method, path, options) => Promise<VoloResponse>` with no `node:http`, no
+sockets. A Worker is just `fetch(Request) => Response`. So putting Volo on the
 edge is *adapting the shapes*, not porting an engine:
 
 ```ts
 // worker.ts
 const dispatch = dispatchSites({ sites, handle: app.handle, readStatic });
-const app = toFetchHandler(dispatch);            // @keel/cloudflare
+const app = toFetchHandler(dispatch);            // @volo/cloudflare
 export default { fetch: (req, env) => withAssets(env.ASSETS, app)(req) };
 ```
 
@@ -32,22 +32,22 @@ the auth-aware page at the edge, in the same code path the node server runs.
 
 2. **Stateless signed sessions — the edge auth model.** Worker isolates are
    ephemeral and per-PoP, so `MemorySessionStore` is empty on the next request
-   and a DB round-trip defeats the edge. `@keel/auth`'s **`SignedSessions`**
+   and a DB round-trip defeats the edge. `@volo/auth`'s **`SignedSessions`**
    carries the claim (`userId`, `expiresAt`) plus an HMAC-SHA256 signature under
    a server secret; any isolate holding the secret verifies a session it never
    issued, with no store. Trade-off: no pre-expiry revocation — keep TTLs short,
    and pair with store-backed `Sessions` when instant revocation matters.
 
-3. **`nodejs_compat` for `node:crypto`.** Keel's crypto (the signed-session
+3. **`nodejs_compat` for `node:crypto`.** Volo's crypto (the signed-session
    HMAC, password hashing) is synchronous `node:crypto`. Workers provide it under
    the `nodejs_compat` flag, so the sync house style holds at the edge —
    `wranglerConfig` always emits that flag.
 
 4. **`compatibility_date` is an input, never derived.** A generated config must
    be reproducible, so `wranglerConfig` takes the date as an option (never
-   `new Date()`), consistent with Keel's no-ambient-time rule.
+   `new Date()`), consistent with Volo's no-ambient-time rule.
 
-5. **D1 (async-only) is out of MVP scope.** Keel's `SqlDatabase` is synchronous
+5. **D1 (async-only) is out of MVP scope.** Volo's `SqlDatabase` is synchronous
    while Cloudflare D1 is async-only — bridging them is real work and the MVP
    target (the estate site) needs no database at the edge (content is
    prerendered; sessions are stateless). **Known follow-up:** an async
@@ -67,9 +67,9 @@ the auth-aware page at the edge, in the same code path the node server runs.
 
 ## Consequences
 
-- Keel runs unmodified on Cloudflare — same dispatcher, same controllers, same
+- Volo runs unmodified on Cloudflare — same dispatcher, same controllers, same
   islands; only the transport adapter and the session model change, both
-  additive (`@keel/cloudflare`, `SignedSessions`), nothing in the core touched.
+  additive (`@volo/cloudflare`, `SignedSessions`), nothing in the core touched.
 - The static marketing zone is a cached CDN asset; the app is one Worker; the
   session is one signed cookie across both — the auth-aware-static goal, on the
   edge.

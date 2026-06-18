@@ -14,9 +14,9 @@
  * We pass a fixed `keyFor` to keep this demo quiet — see the README's DX finding.
  */
 
-import { rateLimit } from "@keel/ratelimit";
-import { openSqlite } from "@keel/runtime";
-import type { RenderedEmail } from "@keel/mail";
+import { rateLimit } from "@volo/ratelimit";
+import { openSqlite } from "@volo/runtime";
+import type { RenderedEmail } from "@volo/mail";
 
 import { buildApp } from "./src/app";
 

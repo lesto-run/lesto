@@ -1,8 +1,8 @@
 {
-  "name": "@keel/ratelimit",
+  "name": "@volo/ratelimit",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's token-bucket rate limiter over a pluggable store and an injected clock.",
+  "description": "Volo's token-bucket rate limiter over a pluggable store and an injected clock.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,8 +12,8 @@
     }
   },
   "dependencies": {
-    "@keel/errors": "workspace:*",
-    "@keel/web": "workspace:*"
+    "@volo/errors": "workspace:*",
+    "@volo/web": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

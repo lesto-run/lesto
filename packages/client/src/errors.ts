@@ -1,6 +1,6 @@
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
-export { KeelError };
+export { VoloError };
 
 export type ClientErrorCode =
   /** The server answered with a non-2xx status (the parsed body is on `details.body`). */
@@ -9,7 +9,7 @@ export type ClientErrorCode =
   | "CLIENT_MISSING_PARAM";
 
 /** Anything the typed fetch client refuses, or surfaces from the server, with a stable code. */
-export class ClientError extends KeelError<ClientErrorCode> {
+export class ClientError extends VoloError<ClientErrorCode> {
   constructor(code: ClientErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
     this.name = "ClientError";

@@ -1,5 +1,5 @@
 /**
- * @keel/mail — queued, transport-agnostic email built on @keel/queue.
+ * @volo/mail — queued, transport-agnostic email built on @volo/queue.
  *
  *   const mailer = new Mailer({ queue, transport, render, defaultFrom: "hi@app.com" });
  *   const welcome = mailer.template("welcome", (p: { to: string; name: string }) =>
@@ -8,7 +8,7 @@
  *
  * ## The render hook (bring your own renderer — e.g. react-email)
  *
- * `@keel/mail` does NOT depend on React or react-email; it takes a `render`
+ * `@volo/mail` does NOT depend on React or react-email; it takes a `render`
  * function and stays dependency-light. Wire react-email in one line:
  *
  *   import { render } from "@react-email/render";

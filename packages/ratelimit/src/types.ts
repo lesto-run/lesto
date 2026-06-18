@@ -42,7 +42,7 @@ export interface RateLimitStore {
 /**
  * The minimal SQL surface `sqlRateLimitStore` consumes from a driver.
  *
- * Declared *locally*, type-only — `@keel/ratelimit` takes no `@keel/db`
+ * Declared *locally*, type-only — `@volo/ratelimit` takes no `@volo/db`
  * dependency (the established cache precedent). Per ADR 0006 the I/O terminals
  * are Promise-returning while `prepare()` stays synchronous.
  *

@@ -1,16 +1,16 @@
-# ADR 0017 — `keel deploy --release` reaches a generic S3/R2 static target
+# ADR 0017 — `volo deploy --release` reaches a generic S3/R2 static target
 
 - **Status:** Accepted
 - **Date:** 2026-06-17
 
 ## Context
 
-`@keel/deploy` shipped a complete, fully-tested `remoteReleaseStore` — the same
+`@volo/deploy` shipped a complete, fully-tested `remoteReleaseStore` — the same
 versioned-release machinery (`shipRelease`/`rollback`: stage every file under an
 immutable `releases/<version>/` prefix, then flip a `current` pointer atomically)
 over a generic S3-compatible object store, speaking the S3 REST API over `fetch`
-with in-house SigV4 (`@keel/storage`), Workers-clean. But **nothing wired it into
-the CLI**: `keel deploy --release` and `keel rollback` could only ever reach the
+with in-house SigV4 (`@volo/storage`), Workers-clean. But **nothing wired it into
+the CLI**: `volo deploy --release` and `volo rollback` could only ever reach the
 local on-disk `nodeReleaseStore`, because the `releaseStore` seam was
 `(distDir: string) => ReleaseStore` — disk-shaped by construction. The headline
 remote target was reachable from a library call and a test, never from the tool.
@@ -18,7 +18,7 @@ ADR 0015 named this exact gap as a deferred follow-up.
 
 The wiring has one real hazard: **credentials**. A deploy needs SigV4 access keys,
 and the cardinal rule is that a secret must never ride a CLI flag (shell history),
-a log line, or — Keel's stable-error-code contract — an error's `details`.
+a log line, or — Volo's stable-error-code contract — an error's `details`.
 
 ## Decision
 
@@ -44,32 +44,32 @@ flags, and read credentials from the environment in the wiring:
 - **Credentials live in the environment, read only in the coverage-excluded bin.**
   `releaseStore` maps a `local` target to `nodeReleaseStore` and a `remote` one to
   `remoteReleaseStore`, sourcing `accessKeyId`/`secretAccessKey`/`sessionToken`
-  from the environment as a **family** — the `KEEL_DEPLOY_*` set when its access key
+  from the environment as a **family** — the `VOLO_DEPLOY_*` set when its access key
   is present, else the conventional `AWS_*` names CI already injects. Picking the
-  prefix once (not per field) means a `KEEL_DEPLOY_` key can never be paired with an
+  prefix once (not per field) means a `VOLO_DEPLOY_` key can never be paired with an
   `AWS_` secret into a mismatched keypair. A missing key fails with a clear,
   secret-free message. The CLI core never handles a secret — it only ever builds the
   addressing-only `ReleaseTarget`, which is exactly what the tests assert on.
 
 ```
 # Publish the prerendered static zone to Cloudflare R2, versioned + atomic:
-export KEEL_DEPLOY_ACCESS_KEY_ID=…  KEEL_DEPLOY_SECRET_ACCESS_KEY=…
-keel deploy --release --target marketing \
+export VOLO_DEPLOY_ACCESS_KEY_ID=…  VOLO_DEPLOY_SECRET_ACCESS_KEY=…
+volo deploy --release --target marketing \
   --bucket my-site --endpoint https://<account>.r2.cloudflarestorage.com
 # Roll the live pointer back in one step (same bucket addressing):
-keel rollback --to <version> --bucket my-site --endpoint https://<account>.r2.cloudflarestorage.com
+volo rollback --to <version> --bucket my-site --endpoint https://<account>.r2.cloudflarestorage.com
 ```
 
 ## Consequences
 
-- `keel deploy --release` / `keel rollback` now target a generic S3/R2 bucket, so
+- `volo deploy --release` / `volo rollback` now target a generic S3/R2 bucket, so
   the framework's versioned-release machinery is load-bearing on a real CDN, not
   only local disk — finishing the static half of ADR 0015's deploy blocker.
 - The credential edge (env read + real `remoteReleaseStore` construction) lives in
   the coverage-excluded wiring, exactly like the `wrangler` driver; the CLI core's
   orchestration (resolve target → ship/flip) stays at 100% coverage with the seam
   faked. The `remoteReleaseStore` end-to-end behaviour is already proven in
-  `@keel/deploy`'s `remote.test.ts` against an R2-shaped `fetch` fake.
+  `@volo/deploy`'s `remote.test.ts` against an R2-shaped `fetch` fake.
 - Like the `--cloudflare` Worker path (ADR 0015), a **live** remote deploy is not
   exercised in CI — it needs a real bucket and credentials this repo's CI lacks.
   The tested contract is the flag→target resolution and the unchanged release/flip

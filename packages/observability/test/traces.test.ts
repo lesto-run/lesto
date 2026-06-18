@@ -401,12 +401,12 @@ function fakeFetch(): { fetchFn: typeof fetch; calls: Array<{ url: string; init:
 }
 
 describe("tracesFromEnv", () => {
-  it("returns undefined when KEEL_OTLP_URL is unset — tracing off, zero overhead", () => {
+  it("returns undefined when VOLO_OTLP_URL is unset — tracing off, zero overhead", () => {
     expect(tracesFromEnv({})).toBeUndefined();
   });
 
-  it("returns undefined when KEEL_OTLP_URL is the empty string", () => {
-    expect(tracesFromEnv({ KEEL_OTLP_URL: "" })).toBeUndefined();
+  it("returns undefined when VOLO_OTLP_URL is the empty string", () => {
+    expect(tracesFromEnv({ VOLO_OTLP_URL: "" })).toBeUndefined();
   });
 
   it("builds a live Traces from the env and flushes spans to the configured collector", async () => {
@@ -414,9 +414,9 @@ describe("tracesFromEnv", () => {
 
     const traces = tracesFromEnv(
       {
-        KEEL_OTLP_URL: "http://collector:4318/v1/traces",
-        KEEL_OTLP_SERVICE: "my-app",
-        KEEL_OTLP_HEADERS: "authorization=Bearer t",
+        VOLO_OTLP_URL: "http://collector:4318/v1/traces",
+        VOLO_OTLP_SERVICE: "my-app",
+        VOLO_OTLP_HEADERS: "authorization=Bearer t",
       },
       { fetchFn },
     );
@@ -439,10 +439,10 @@ describe("tracesFromEnv", () => {
     expect(body.resourceSpans[0]?.resource.attributes[0]?.value.stringValue).toBe("my-app");
   });
 
-  it("defaults service.name to keel when KEEL_OTLP_SERVICE is unset", async () => {
+  it("defaults service.name to volo when VOLO_OTLP_SERVICE is unset", async () => {
     const { fetchFn, calls } = fakeFetch();
 
-    const traces = tracesFromEnv({ KEEL_OTLP_URL: "http://c/v1/traces" }, { fetchFn });
+    const traces = tracesFromEnv({ VOLO_OTLP_URL: "http://c/v1/traces" }, { fetchFn });
 
     traces!.seams.onQuery({ sql: "SELECT 1", durationMs: 1 });
 
@@ -452,7 +452,7 @@ describe("tracesFromEnv", () => {
       resourceSpans: Array<{ resource: { attributes: Array<{ value: { stringValue: string } }> } }>;
     };
 
-    expect(body.resourceSpans[0]?.resource.attributes[0]?.value.stringValue).toBe("keel");
+    expect(body.resourceSpans[0]?.resource.attributes[0]?.value.stringValue).toBe("volo");
   });
 
   it("wires the injected currentSpan so a seam span parents on the request span", () => {
@@ -465,7 +465,7 @@ describe("tracesFromEnv", () => {
     const request: Span = tracer.startSpan("http.request");
 
     const traces = tracesFromEnv(
-      { KEEL_OTLP_URL: "http://c/v1/traces" },
+      { VOLO_OTLP_URL: "http://c/v1/traces" },
       { currentSpan: () => request },
     );
 
@@ -479,7 +479,7 @@ describe("tracesFromEnv", () => {
     const errors: unknown[] = [];
 
     const traces = tracesFromEnv(
-      { KEEL_OTLP_URL: "http://c/v1/traces" },
+      { VOLO_OTLP_URL: "http://c/v1/traces" },
       {
         fetchFn: (() => Promise.reject(new Error("down"))) as unknown as typeof fetch,
         onError: (error) => errors.push(error),
@@ -496,7 +496,7 @@ describe("tracesFromEnv", () => {
   it("wires exportSpan so a browser span flushes to the collector under its own ids", async () => {
     const { fetchFn, calls } = fakeFetch();
 
-    const traces = tracesFromEnv({ KEEL_OTLP_URL: "http://c/v1/traces" }, { fetchFn });
+    const traces = tracesFromEnv({ VOLO_OTLP_URL: "http://c/v1/traces" }, { fetchFn });
 
     // A browser RUM span arrives with the SERVER trace id already adopted — the
     // exportSpan wiring writes it straight to the same exporter the server seams use.

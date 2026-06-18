@@ -1,7 +1,7 @@
 /**
  * Path-mount serving: one origin, many sites, dispatched by path prefix.
  *
- * A Keel deployment serves a *set* of sites from a single origin — a marketing
+ * A Volo deployment serves a *set* of sites from a single origin — a marketing
  * site at `/`, an authed app at `/mls` — so they share an origin and therefore a
  * same-origin session. This dispatcher is the front door: it picks the site that
  * owns the request path, then serves it. Dynamic sites delegate to the live app;
@@ -13,10 +13,10 @@
  * is a thin, separately-tested adapter over that same shape.
  */
 
-import { outputPath } from "@keel/sites";
-import type { Site } from "@keel/sites";
+import { outputPath } from "@volo/sites";
+import type { Site } from "@volo/sites";
 
-import type { AnyKeelResponse, KeelResponse } from "@keel/web";
+import type { AnyVoloResponse, VoloResponse } from "@volo/web";
 
 import { cacheControl, hasContentHash } from "./http-cache";
 
@@ -45,18 +45,18 @@ export interface RequestOptions {
  * The live app's request handler, for dynamic sites.
  *
  * It takes the request options (query, headers, body) and returns the *full*
- * {@link KeelResponse} — status, headers, and body — which the dispatcher passes
+ * {@link VoloResponse} — status, headers, and body — which the dispatcher passes
  * through verbatim in both directions. That is load-bearing: a dynamic zone
  * reads the session cookie from the request `headers` and sets it via the
  * response `Set-Cookie`, so neither may be dropped. `App.handle` from
- * `@keel/kernel` satisfies this exactly, which is why the dispatcher this builds
+ * `@volo/kernel` satisfies this exactly, which is why the dispatcher this builds
  * stays assignable to the same string-bodied handler contract `serve` fronts.
  */
 export type AppHandler = (
   method: string,
   path: string,
   options?: RequestOptions,
-) => Promise<KeelResponse>;
+) => Promise<VoloResponse>;
 
 /** Everything the site dispatcher needs, injected so the core stays pure. */
 export interface DispatchSitesDeps {
@@ -84,7 +84,7 @@ export interface DispatchSitesDeps {
 const STATIC_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD"]);
 
 /** The framework's reserved path namespace, always served by the live app (ADR 0010). */
-const FRAMEWORK_RESERVED_PREFIX = "/__keel/";
+const FRAMEWORK_RESERVED_PREFIX = "/__volo/";
 
 /**
  * One row of the content-type table: the MIME type, and whether it is binary.
@@ -249,7 +249,7 @@ function routeWithin(basePath: string, path: string): string {
 }
 
 /** A bare-bones response with no body — for the error statuses. */
-function emptyResponse(status: number): KeelResponse {
+function emptyResponse(status: number): VoloResponse {
   return { status, headers: {}, body: "" };
 }
 
@@ -257,17 +257,17 @@ function emptyResponse(status: number): KeelResponse {
  * Present a (possibly-binary) static response under the string-bodied handler
  * contract the rest of the stack shares.
  *
- * The dispatch contract (`KeelResponse`, the kernel's `App.handle`, what `serve`
- * fronts) is string-bodied — and we cannot widen it without editing `@keel/web`'s
+ * The dispatch contract (`VoloResponse`, the kernel's `App.handle`, what `serve`
+ * fronts) is string-bodied — and we cannot widen it without editing `@volo/web`'s
  * consumers in the kernel. But a static file may legitimately be *bytes* (an
- * image), so `serveStatic` produces an {@link AnyKeelResponse}. This is the one
+ * image), so `serveStatic` produces an {@link AnyVoloResponse}. This is the one
  * seam where the two meet: the cast is true at runtime because every body
  * consumer downstream — `applyResponse`, `withEtag`, the edge adapter — inspects
  * the body *kind* at runtime (`typeof` / `instanceof`) and writes bytes as bytes.
  * The type merely under-describes the body; the value is handled correctly.
  */
-function asHandlerResponse(response: AnyKeelResponse): KeelResponse {
-  return response as KeelResponse;
+function asHandlerResponse(response: AnyVoloResponse): VoloResponse {
+  return response as VoloResponse;
 }
 
 /**
@@ -321,13 +321,13 @@ async function serveStatic(
   path: string,
   readStatic: StaticReader,
   serveSourceMaps: boolean,
-): Promise<AnyKeelResponse> {
+): Promise<AnyVoloResponse> {
   if (!STATIC_METHODS.has(method)) return emptyResponse(405);
 
   const route = routeWithin(site.basePath, path);
 
   // Build and serve must agree on where a route's file lives, so both call
-  // `outputPath` from @keel/sites — the single source of that mapping.
+  // `outputPath` from @volo/sites — the single source of that mapping.
   const file = outputPath(site.name, route);
 
   // A source map is build debug output; serving it in production leaks source.
@@ -362,12 +362,12 @@ async function serveStatic(
  */
 export function dispatchSites(
   deps: DispatchSitesDeps,
-): (method: string, path: string, options?: RequestOptions) => Promise<KeelResponse> {
+): (method: string, path: string, options?: RequestOptions) => Promise<VoloResponse> {
   const { sites, handle, readStatic } = deps;
   const serveSourceMaps = deps.serveSourceMaps ?? false;
 
   return async (method, path, options) => {
-    // `/__keel/*` is the framework's reserved namespace (island data sources —
+    // `/__volo/*` is the framework's reserved namespace (island data sources —
     // ADR 0010 — and any future framework route). It is always served by the
     // live app, never matched against a zone: a data endpoint must resolve the
     // same under node serve as under the edge's asset-then-app fallthrough, even

@@ -1,8 +1,8 @@
 {
-  "name": "@keel/authz",
+  "name": "@volo/authz",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's first-class authorization — a declarative role/permission policy and the guard middleware that enforces it.",
+  "description": "Volo's first-class authorization — a declarative role/permission policy and the guard middleware that enforces it.",
   "type": "module",
   "private": true,
   "exports": {
@@ -20,7 +20,7 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@keel/errors": "workspace:*",
-    "@keel/web": "workspace:*"
+    "@volo/errors": "workspace:*",
+    "@volo/web": "workspace:*"
   }
 }

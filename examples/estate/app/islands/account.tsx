@@ -3,7 +3,7 @@
  * `app/islands/` module (ADR 0011 Increment 2: estate's island convergence).
  *
  * One `defineIsland` default-export per file under `app/islands/` is THE
- * convention `@keel/assets` synthesizes the client entry from (the same shape
+ * convention `@volo/assets` synthesizes the client entry from (the same shape
  * `examples/blog` proves): the framework reads `module.default.island`, classifies
  * it eager/lazy, and emits the registration — so estate no longer hand-writes a
  * `client.tsx` that lists its islands. The page imports the default and drops it
@@ -18,7 +18,7 @@
  * (the deferred panel is that case). See ADR 0009.
  */
 
-import { defineIsland } from "@keel/ui";
+import { defineIsland } from "@volo/ui";
 
 import { Account, AccountFallback } from "../../src/account";
 import { sessionSource } from "../../src/session-source";

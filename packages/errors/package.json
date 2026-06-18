@@ -1,8 +1,8 @@
 {
-  "name": "@keel/errors",
+  "name": "@volo/errors",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's shared error foundation — the KeelError base every package error extends, plus a Result type.",
+  "description": "Volo's shared error foundation — the VoloError base every package error extends, plus a Result type.",
   "type": "module",
   "private": true,
   "exports": {

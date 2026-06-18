@@ -1,5 +1,5 @@
 /**
- * Type definitions for @keel/content-search (runtime, browser-safe)
+ * Type definitions for @volo/content-search (runtime, browser-safe)
  */
 
 // ============================================================================

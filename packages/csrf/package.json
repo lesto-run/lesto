@@ -1,8 +1,8 @@
 {
-  "name": "@keel/csrf",
+  "name": "@volo/csrf",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Keel's stateless double-submit CSRF tokens — HMAC-signed nonces, no server-side state.",
+  "description": "Volo's stateless double-submit CSRF tokens — HMAC-signed nonces, no server-side state.",
   "type": "module",
   "private": true,
   "exports": {
@@ -12,8 +12,8 @@
     }
   },
   "dependencies": {
-    "@keel/errors": "workspace:*",
-    "@keel/web": "workspace:*"
+    "@volo/errors": "workspace:*",
+    "@volo/web": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

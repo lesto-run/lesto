@@ -1,10 +1,10 @@
 /**
- * A first-party Cloudflare D1 adapter for `@keel/db`.
+ * A first-party Cloudflare D1 adapter for `@volo/db`.
  *
  * D1 is Cloudflare's SQLite — the only SQL database a Worker can reach (a Worker
  * has no filesystem, so `openSqlite`/better-sqlite3/`bun:sqlite` are off the table
  * on the edge). `d1ToSqlDatabase` wraps a `D1Database` binding in the same
- * `SqlDatabase` surface `@keel/db`'s `createDb` consumes, so a DB-driven page runs
+ * `SqlDatabase` surface `@volo/db`'s `createDb` consumes, so a DB-driven page runs
  * the IDENTICAL query path on Workers as it does on Node — only the driver differs.
  *
  * A minimal `D1Database` shape is declared here rather than depending on
@@ -14,11 +14,11 @@
  *
  * D1 has no interactive transactions (its atomic primitive is `batch()`), so
  * `transaction` degrades to running `fn` directly on the same handle — sound for the
- * read + one-shot-seed workloads `@keel/db` drives on the edge. A writer that needs
+ * read + one-shot-seed workloads `@volo/db` drives on the edge. A writer that needs
  * cross-statement atomicity should reach for `d1.batch` directly.
  */
 
-import type { SqlDatabase } from "@keel/db";
+import type { SqlDatabase } from "@volo/db";
 
 /** The slice of D1's prepared-statement API this adapter uses. */
 export interface D1PreparedStatement {
@@ -36,7 +36,7 @@ export interface D1Database {
   prepare(sql: string): D1PreparedStatement;
 }
 
-/** Adapt a Cloudflare D1 binding to the async `SqlDatabase` surface `@keel/db` consumes. */
+/** Adapt a Cloudflare D1 binding to the async `SqlDatabase` surface `@volo/db` consumes. */
 export function d1ToSqlDatabase(d1: D1Database): SqlDatabase {
   const adapted: SqlDatabase = {
     // DDL: a single prepared statement (NOT `d1.exec`, which splits on newlines

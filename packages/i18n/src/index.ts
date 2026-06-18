@@ -1,5 +1,5 @@
 /**
- * @keel/i18n — internationalization core: message catalogs, interpolation,
+ * @volo/i18n — internationalization core: message catalogs, interpolation,
  * pluralization. Pure, no dependencies.
  *
  *   const i18n = new I18n({ defaultLocale: "en", locales: { en, fr } });

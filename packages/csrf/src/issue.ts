@@ -13,7 +13,7 @@
  * matching value on channel 2. The server checks the two agree (here, via the
  * HMAC binding {@link verifyToken} already enforces), and the forgery fails.
  *
- * `@keel/csrf` had the token primitive and the verifying middleware but no helper
+ * `@volo/csrf` had the token primitive and the verifying middleware but no helper
  * that actually SET the companion cookie — leaving every app to re-derive the
  * cookie attributes, the half a "double-submit" battery exists to provide. This
  * is that helper: mint a token bound to the session and serialize the cookie that
@@ -64,7 +64,7 @@ export interface IssuedCsrfToken {
  * Mint a double-submit CSRF token bound to `sessionId` and the `Set-Cookie` that
  * delivers its companion cookie.
  *
- * This is the issuance half of `@keel/csrf`: {@link generateToken} signs the
+ * This is the issuance half of `@volo/csrf`: {@link generateToken} signs the
  * token, {@link csrf} verifies it, and this plants the companion cookie that
  * makes the "double-submit" name true. The token and the cookie carry the SAME
  * value — that is the double submit: the page reads it from the cookie and

@@ -1,12 +1,12 @@
 /**
- * @keel/content-prose - Prose Linting SDK
+ * @volo/content-prose - Prose Linting SDK
  *
  * This module exports pure functions for linting markdown/prose content.
  * No file I/O or Node.js-specific dependencies - works in any JavaScript environment.
  *
- * For SEO analysis, use @keel/content-seo
- * For accessibility linting, use @keel/content-lint
- * For CLI operations, use @keel/content-cli
+ * For SEO analysis, use @volo/content-seo
+ * For accessibility linting, use @volo/content-lint
+ * For CLI operations, use @volo/content-cli
  */
 
 import { extract } from "./extract.js";
@@ -193,7 +193,7 @@ export interface LintOptions {
  * Primary API for integrations (editors, CI, etc.)
  *
  * Note: This function only runs prose rules. For accessibility linting,
- * use @keel/content-lint. For SEO analysis, use @keel/content-seo.
+ * use @volo/content-lint. For SEO analysis, use @volo/content-seo.
  *
  * @param content - The markdown/prose content to lint
  * @param file - Optional file path for diagnostic messages (defaults to empty string)
@@ -222,7 +222,7 @@ export interface LintSpansOptions extends LintOptions {
  * Use this when you've already parsed the content (e.g., for web workers that can't use remark-parse).
  *
  * Note: This function only runs prose rules. For accessibility linting,
- * use @keel/content-lint. For SEO analysis, use @keel/content-seo.
+ * use @volo/content-lint. For SEO analysis, use @volo/content-seo.
  *
  * @param content - The original content (needed for line index and disable comments)
  * @param spans - Pre-extracted text spans from extract()
@@ -278,7 +278,7 @@ export interface AsyncLintOptions extends LintOptions {
  * to dynamically import external modules.
  *
  * Note: This function only runs prose rules. For accessibility linting,
- * use @keel/content-lint. For SEO analysis, use @keel/content-seo.
+ * use @volo/content-lint. For SEO analysis, use @volo/content-seo.
  *
  * @param content - The markdown/prose content to lint
  * @param file - Optional file path for diagnostic messages (defaults to empty string)

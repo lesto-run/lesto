@@ -5,7 +5,7 @@
  * can })` value — not scattered as `if (user.isAdmin)` checks across the
  * codebase. That centralization is the whole point: with the policy in one
  * place, the entire authorization surface can be read, reviewed, and audited at
- * once (see the `keel routes` audit), and the guard middleware (see `guard.ts`)
+ * once (see the `volo routes` audit), and the guard middleware (see `guard.ts`)
  * enforces it uniformly.
  *
  * Deny-by-default is structural: a permission no role is granted, or a subject
@@ -14,7 +14,7 @@
  * than silently granting nothing.
  *
  * Two richer authorization moves are folded in (the consolidation that retired
- * the standalone `@keel/rbac`):
+ * the standalone `@volo/rbac`):
  *
  * - **Wildcard grants.** A `can` grant may name a wildcard instead of an exact
  *   permission: `"posts:*"` grants every action in the `posts` resource, and the

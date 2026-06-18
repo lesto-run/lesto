@@ -1,14 +1,14 @@
 /**
  * Errors carry codes, not just prose.
  *
- * Every failure in Keel surfaces a stable, machine-readable `code`. Logs,
+ * Every failure in Volo surfaces a stable, machine-readable `code`. Logs,
  * tests, API responses, and the MCP surface branch on the code — never on a
  * message string, which is free to change for humans without breaking machines.
  */
 
-import { KeelError } from "@keel/errors";
+import { VoloError } from "@volo/errors";
 
-export { KeelError };
+export { VoloError };
 
 export type StorageErrorCode =
   | "STORAGE_NOT_FOUND"
@@ -17,7 +17,7 @@ export type StorageErrorCode =
   | "STORAGE_URL_UNSUPPORTED";
 
 /** Anything object storage can refuse to do. */
-export class StorageError extends KeelError<StorageErrorCode> {
+export class StorageError extends VoloError<StorageErrorCode> {
   constructor(code: StorageErrorCode, message: string, details?: Record<string, unknown>) {
     super(code, message, details);
 

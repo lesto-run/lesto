@@ -1,5 +1,5 @@
 /**
- * @keel/sites — one project, many sites, one substrate.
+ * @volo/sites — one project, many sites, one substrate.
  *
  * Declare a set of sites over the same app (`defineSites`), each mounted at a
  * path and rendered static or dynamic. Static sites are prerendered from the
@@ -38,7 +38,7 @@ export type {
   PagesSource,
   PageHandler,
   RenderResponse,
-  KeelResponseBody,
+  VoloResponseBody,
   RenderedPage,
   OutputSink,
 } from "./types";

@@ -1,7 +1,7 @@
 /**
- * The client-error beacon receiver — `POST /__keel/client-errors`.
+ * The client-error beacon receiver — `POST /__volo/client-errors`.
  *
- * The browser-side island runtime (`@keel/assets`'s synthesized client entry)
+ * The browser-side island runtime (`@volo/assets`'s synthesized client entry)
  * POSTs a small, PII-FREE JSON beacon when hydration goes wrong: a component that
  * failed to mount, an island whose module was missing (the classic deploy-skew
  * symptom — the HTML references a chunk a newer build no longer ships), and the
@@ -29,11 +29,11 @@
 
 import type { Context } from "./handler-context";
 import { WebError } from "./errors";
-import type { Handler } from "./keel";
-import type { KeelResponse } from "./types";
+import type { Handler } from "./volo";
+import type { VoloResponse } from "./types";
 
 /** The built-in path the client beacon POSTs to. */
-export const CLIENT_ERRORS_ROUTE = "/__keel/client-errors";
+export const CLIENT_ERRORS_ROUTE = "/__volo/client-errors";
 
 /**
  * The largest client-error beacon we accept, in bytes of its JSON form.
@@ -162,7 +162,7 @@ function jsonByteLength(body: unknown): number | undefined {
 }
 
 /**
- * Build the `POST /__keel/client-errors` handler over a {@link ClientErrorSink}.
+ * Build the `POST /__volo/client-errors` handler over a {@link ClientErrorSink}.
  *
  * Bounds the body (a coded 413 over {@link MAX_CLIENT_ERROR_BYTES}), refuses a
  * non-object body (a 400 — the one strict check), and otherwise normalizes the
@@ -171,7 +171,7 @@ function jsonByteLength(body: unknown): number | undefined {
  * built-in and unit-tested directly.
  */
 export function clientErrorsHandler(sink: ClientErrorSink): Handler {
-  return (c: Context): KeelResponse => {
+  return (c: Context): VoloResponse => {
     const body = c.req.body;
 
     const size = jsonByteLength(body);
@@ -187,7 +187,7 @@ export function clientErrorsHandler(sink: ClientErrorSink): Handler {
 
       return {
         status: 413,
-        headers: { "content-type": "text/plain", "x-keel-error": error.code },
+        headers: { "content-type": "text/plain", "x-volo-error": error.code },
         body: "Payload Too Large",
       };
     }

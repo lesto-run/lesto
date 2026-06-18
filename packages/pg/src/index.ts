@@ -1,19 +1,19 @@
 /**
- * @keel/pg — the Postgres driver for Keel's async data layer (ADR 0006).
+ * @volo/pg — the Postgres driver for Volo's async data layer (ADR 0006).
  *
- *   import { openPostgres } from "@keel/pg";
- *   import { createApp } from "@keel/kernel";
+ *   import { openPostgres } from "@volo/pg";
+ *   import { createApp } from "@volo/kernel";
  *
  *   const { db, close } = await openPostgres({ connectionString: process.env.DATABASE_URL });
  *   const app = await createApp({ db, router, controllers, migrations });
  *
  * Adapts a node-postgres `Pool` to the same `SqlDatabase` seam in-process SQLite
- * satisfies (`@keel/runtime`'s `openSqlite`) — so an app moves from SQLite to a
+ * satisfies (`@volo/runtime`'s `openSqlite`) — so an app moves from SQLite to a
  * networked Postgres pool with no change above the driver. Provide `pg` yourself
  * (it is loaded dynamically, like `better-sqlite3` for `openSqlite`).
  */
 
-import type { SqlDatabase } from "@keel/db";
+import type { SqlDatabase } from "@volo/db";
 
 import { openPostgres as openPostgresWith } from "./adapter";
 import type { PgConfig } from "./adapter";

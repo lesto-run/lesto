@@ -1,4 +1,4 @@
-import { escapeXml, formatRssDate as formatRssDateSafe } from "@keel/content-shared/xml";
+import { escapeXml, formatRssDate as formatRssDateSafe } from "@volo/content-shared/xml";
 
 /**
  * Minimal entry type for feed generation.

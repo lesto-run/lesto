@@ -1,16 +1,16 @@
 /**
- * @keel/web — the code-first request-handling core.
+ * @volo/web — the code-first request-handling core.
  *
- *   const app = keel()
+ *   const app = volo()
  *     .get("/posts/:id", (c) => c.json({ id: c.param("id") }))
  *     .page("/posts/:id", { load, component: PostScene });
  *
  *   await app.handle("GET", "/posts/3");   // { status: 200, body: '{"id":"3"}', ... }
  */
 
-// The code-first router + handler context — Keel's request-handling surface.
-export { applyUiDialect, fromRequestMiddleware, keel, Keel } from "./keel";
-export type { Handler, UiDialect } from "./keel";
+// The code-first router + handler context — Volo's request-handling surface.
+export { applyUiDialect, fromRequestMiddleware, volo, Volo } from "./volo";
+export type { Handler, UiDialect } from "./volo";
 export { Context } from "./handler-context";
 
 // Page rendering: the lean route contract (load / params / metadata / access /
@@ -26,7 +26,7 @@ export type {
   RenderPageOptions,
 } from "./render-page";
 
-// The client-error beacon receiver — a built-in route on every `keel()` app, plus
+// The client-error beacon receiver — a built-in route on every `volo()` app, plus
 // the sink seam the observability wave wires to OTLP. The event is PII-free by
 // construction (component names + counts only).
 export {
@@ -37,7 +37,7 @@ export {
 } from "./client-errors";
 export type { ClientErrorEvent, ClientErrorSink } from "./client-errors";
 
-// The browser-RUM span receiver — a built-in route on every `keel()` app, plus the
+// The browser-RUM span receiver — a built-in route on every `volo()` app, plus the
 // sink seam the observability wiring points at `traces.seams.onBrowserSpan`. Each
 // span carries the SSR-injected server trace id, so a browser span lands in the
 // same collector as the server `http.request` span (ARCHITECTURE.md §7). PII-free
@@ -55,8 +55,8 @@ export type { BrowserSpanSink } from "./browser-spans";
 export type { HandleOptions } from "./types";
 
 // Re-exported so a caller can type the streaming options a page render forwards
-// (the `onError` sink, bootstrap modules) without reaching across to `@keel/ui`.
-export type { StreamErrorSink, StreamOptions } from "@keel/ui/server";
+// (the `onError` sink, bootstrap modules) without reaching across to `@volo/ui`.
+export type { StreamErrorSink, StreamOptions } from "@volo/ui/server";
 
 export { currentContext, currentRequestSpan, runWithContext } from "./context";
 export type { RequestContext, RequestContextSpan } from "./context";
@@ -77,9 +77,9 @@ export {
 } from "./harden";
 export type { SecurityHeaderOptions } from "./harden";
 
-export { KeelError, WebError } from "./errors";
+export { VoloError, WebError } from "./errors";
 export type { WebErrorCode } from "./errors";
 
 export { validateBody } from "./validate";
 
-export type { AnyKeelResponse, KeelBody, KeelRequest, KeelResponse } from "./types";
+export type { AnyVoloResponse, VoloBody, VoloRequest, VoloResponse } from "./types";

@@ -8,7 +8,7 @@
     // This package now also ships a browser client runtime — the island error
     // beacon (`client-beacon.ts`) inlined into the synthesized entry — so the DOM
     // lib joins ES2023: `document`, `fetch`, and friends are real here, exactly as
-    // in `@keel/ui` which ships the hydration runtime.
+    // in `@volo/ui` which ships the hydration runtime.
     "lib": ["ES2023", "DOM"]
   },
 

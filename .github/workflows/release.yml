@@ -1,4 +1,4 @@
-# Release: version + publish the public @keel/* surface via Changesets.
+# Release: version + publish the public @volo/* surface via Changesets.
 #
 # When armed, a push to main opens (or updates) a "Version Packages" PR that
 # applies the queued changesets; merging that PR publishes the bumped packages to

@@ -1,5 +1,5 @@
 /**
- * The Preact server-render dialect — re-exported from the `@keel/ui/server`
+ * The Preact server-render dialect — re-exported from the `@volo/ui/server`
  * subpath as `preactServerRenderer`.
  *
  * This is the adapter half of the {@link ServerRenderer} seam (declared in
@@ -18,17 +18,17 @@
  * defeating `ssr: true`. Rendering the server side with THIS adapter removes the
  * mismatch at the source: both sides speak Preact, so the markup lines up.
  *
- * Why it lives behind `@keel/ui/server` (not the core barrel): keeping `@keel/ui`
+ * Why it lives behind `@volo/ui/server` (not the core barrel): keeping `@volo/ui`
  * dialect-agnostic means its core never hard-depends on `preact-render-to-string`.
- * A server importer of `@keel/ui` (the default React path, estate's `document.ts`)
+ * A server importer of `@volo/ui` (the default React path, estate's `document.ts`)
  * must never drag Preact's renderer into its build. So `preact-render-to-string` is
  * an OPTIONAL peer dependency — present only when an adopter chooses the Preact
  * client alias — and this module is the only place that imports it. Reach for it
- * explicitly (`import { preactServerRenderer } from "@keel/ui/server"`) and pass it
+ * explicitly (`import { preactServerRenderer } from "@volo/ui/server"`) and pass it
  * to {@link renderPageMarkup}; the default React path never loads this file.
  *
  * The `as` cast at the call boundary is the honest cost of bridging two element
- * factories: `@keel/ui` builds its tree with React's `createElement`, and under
+ * factories: `@volo/ui` builds its tree with React's `createElement`, and under
  * the `preact/compat` alias those calls resolve to Preact-shaped vnodes that
  * `preact-render-to-string` renders natively. The adapter's job is purely to map
  * the engine's `ReactElement`-typed node onto that renderer's `VNode` parameter;

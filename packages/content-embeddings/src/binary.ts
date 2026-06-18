@@ -5,10 +5,10 @@
  * with <5% recall loss. Uses Hamming distance for 50x faster similarity computation.
  *
  * This module contains BUILD-TIME functions for creating and serializing binary indexes.
- * RUNTIME functions (Hamming search, parsing) are in @keel/content-search.
+ * RUNTIME functions (Hamming search, parsing) are in @volo/content-search.
  */
 
-import { encodeBase64 } from "@keel/content-shared/encoding";
+import { encodeBase64 } from "@volo/content-shared/encoding";
 import type { EmbeddingResult, BinaryEmbeddingResult, BinarySearchIndex } from "./types";
 import { MODEL_NAME, EMBEDDING_DIMENSIONS } from "./constants";
 
