@@ -21,6 +21,9 @@ export type { McpDeps } from "./mcp";
 export { runOpenApi } from "./openapi";
 export type { OpenApiDeps } from "./openapi";
 
+export { parseField, resourceName, runGenerate } from "./generate";
+export type { GenerateDeps, GenerateIO, GeneratedFile, ResourceName } from "./generate";
+
 export { hasFlag, parsePort, parseStringFlag } from "./flags";
 export type { PortFlag } from "./flags";
 

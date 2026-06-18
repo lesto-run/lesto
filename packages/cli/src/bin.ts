@@ -11,7 +11,7 @@
 import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 import { watch } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { nodeStaticReader, serve } from "@lesto/runtime";
 import type { LestoAppConfig } from "@lesto/kernel";
@@ -32,10 +32,13 @@ import { writeFile } from "node:fs/promises";
 
 import { createApp } from "@lesto/kernel";
 
+import { mkdir } from "node:fs/promises";
+
 import { run } from "./run";
 import type { CloudflareDeployer, ReleaseTarget } from "./run";
 import { runMcp, startMcpServer } from "./mcp";
 import { runOpenApi } from "./openapi";
+import { runGenerate } from "./generate";
 
 /**
  * Run a `wrangler` subcommand, streaming its output and resolving with the
@@ -280,6 +283,34 @@ if (command === "openapi") {
   const exit = await runOpenApi(commandArgs, {
     loadApp,
     write: (path, contents) => writeFile(path, contents, "utf8"),
+    out: console.log,
+  });
+
+  process.exit(exit);
+}
+
+// `generate` (alias `g`) scaffolds a resource (ADR 0019). It lives here, before
+// the shared `run` core, because it brings its own filesystem seam: an `exists`
+// probe (for idempotency) and a parent-dir-creating `write`. Both are absolute
+// against the project root, so the files land in the project regardless of cwd.
+if (command === "generate" || command === "g") {
+  const exit = await runGenerate(commandArgs, {
+    exists: async (path) => {
+      try {
+        await access(join(projectRoot, path));
+
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    write: async (path, contents) => {
+      const absolute = join(projectRoot, path);
+
+      await mkdir(dirname(absolute), { recursive: true });
+      await writeFile(absolute, contents, "utf8");
+    },
+    now: Date.now,
     out: console.log,
   });
 

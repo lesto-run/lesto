@@ -241,6 +241,8 @@ const USAGE = [
   "Usage: lesto <command> [options]",
   "",
   "Commands:",
+  "  g, generate       Scaffold a resource: generate <model|migration|island> <Name> [field:type …]",
+  "                    e.g. `lesto g model Post title:string published:boolean` (--dry-run to preview)",
   "  routes            List the application's routes",
   "  migrate           Run pending migrations and print the applied versions",
   "  serve             Boot the app over HTTP (--port, default 3000)",
