@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  alias,
   and,
   boolean,
   createDb,
@@ -256,6 +257,10 @@ describe("rich column types (boolean, timestamp)", () => {
     const recent = await edb.select().from(events).where(gte(events.occurredAt, late)).all();
     expect(recent.map((r) => r.occurredAt.getTime())).toEqual([late.getTime()]);
 
+    // a Date passed to eq is an object that is NOT a column, so it binds as a value
+    const exact = await edb.select().from(events).where(eq(events.occurredAt, late)).all();
+    expect(exact.map((r) => r.occurredAt.getTime())).toEqual([late.getTime()]);
+
     // a boolean operand marshals to 1/0
     const active = await edb.select().from(events).where(eq(events.active, true)).all();
     expect(active.map((r) => r.occurredAt.getTime())).toEqual([early.getTime()]);
@@ -377,6 +382,247 @@ describe("foreign keys", () => {
     }
     expect(thrown).toBeInstanceOf(DbError);
     expect((thrown as DbError).code).toBe("DB_UNRESOLVED_REFERENCE");
+  });
+});
+
+describe("joins", () => {
+  const authors = defineTable("authors", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+  });
+  const posts = defineTable("posts", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    authorId: integer("author_id").references(() => authors.id), // nullable
+    title: text("title").notNull(),
+  });
+  const comments = defineTable("comments", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    postId: integer("post_id")
+      .notNull()
+      .references(() => posts.id),
+    body: text("body").notNull(),
+  });
+
+  let jdb: Db;
+  let jraw: Database.Database;
+  let adaId: number;
+  let enginesPost: number;
+
+  beforeEach(async () => {
+    jraw = new Database(":memory:");
+    jdb = createDb(adapt(jraw));
+    for (const table of [authors, posts, comments]) await jdb.exec(createTableSql(table));
+
+    const ada = await jdb.insert(authors).values({ name: "Ada" }).returning().get();
+    await jdb.insert(authors).values({ name: "Grace" }).returning().get(); // no posts
+    adaId = ada.id;
+
+    const p1 = await jdb
+      .insert(posts)
+      .values({ authorId: ada.id, title: "On Engines" })
+      .returning()
+      .get();
+    await jdb.insert(posts).values({ authorId: ada.id, title: "On Looms" }).run();
+    await jdb.insert(posts).values({ title: "Orphan" }).run(); // authorId null → no match
+    enginesPost = p1.id;
+    await jdb.insert(comments).values({ postId: p1.id, body: "yes" }).run();
+  });
+
+  afterEach(() => {
+    jraw.close();
+  });
+
+  it("innerJoin namespaces rows by table; same-named `id` columns never collide", async () => {
+    const rows = await jdb
+      .select()
+      .from(posts)
+      .innerJoin(authors, eq(posts.authorId, authors.id))
+      .orderBy(posts.title)
+      .all();
+
+    // only Ada's two posts match (the orphan's null authorId matches no author)
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.posts.title)).toEqual(["On Engines", "On Looms"]);
+    expect(rows.every((r) => r.authors.name === "Ada")).toBe(true);
+    // distinct namespaces: the post's id and its author's id are both present and
+    // each correct, even when the auto-increment sequences happen to coincide (the
+    // first post and the first author both get id 1 — a flat row would clobber one).
+    expect(rows[0]?.authors.id).toBe(adaId);
+    expect(rows[0]?.posts.id).toBe(enginesPost);
+  });
+
+  it("leftJoin yields null for the unmatched side", async () => {
+    const rows = await jdb
+      .select()
+      .from(authors)
+      .leftJoin(posts, eq(posts.authorId, authors.id))
+      .all();
+
+    const grace = rows.filter((r) => r.authors.name === "Grace");
+    expect(grace).toHaveLength(1);
+    expect(grace[0]?.posts).toBeNull(); // no post → the whole namespace is null, not {id:null,…}
+
+    const ada = rows.filter((r) => r.authors.name === "Ada");
+    expect(ada).toHaveLength(2);
+    expect(ada.every((r) => r.posts !== null)).toBe(true);
+  });
+
+  it("projects qualified-aliased columns and a qualified ON", async () => {
+    let captured = "";
+    const spy = createDb(adapt(jraw), {
+      onQuery: (event) => {
+        captured = event.sql;
+      },
+    });
+    await spy.select().from(posts).innerJoin(authors, eq(posts.authorId, authors.id)).all();
+
+    expect(captured).toContain('"posts"."id" AS "posts.id"');
+    expect(captured).toContain('"authors"."name" AS "authors.name"');
+    expect(captured).toContain(
+      'FROM "posts" INNER JOIN "authors" ON "posts"."author_id" = "authors"."id"',
+    );
+  });
+
+  it("filters a join with a where across both tables", async () => {
+    const rows = await jdb
+      .select()
+      .from(posts)
+      .innerJoin(authors, eq(posts.authorId, authors.id))
+      .where(eq(authors.name, "Ada"))
+      .all();
+    expect(rows).toHaveLength(2);
+  });
+
+  it("orders, limits, and offsets a join", async () => {
+    const page = await jdb
+      .select()
+      .from(posts)
+      .innerJoin(authors, eq(posts.authorId, authors.id))
+      .orderBy(posts.title, "desc")
+      .limit(1)
+      .all();
+    expect(page.map((r) => r.posts.title)).toEqual(["On Looms"]);
+
+    const tail = await jdb
+      .select()
+      .from(posts)
+      .innerJoin(authors, eq(posts.authorId, authors.id))
+      .orderBy(posts.title)
+      .offset(1)
+      .all();
+    expect(tail.map((r) => r.posts.title)).toEqual(["On Looms"]);
+  });
+
+  it("get returns one namespaced row, or undefined for no match", async () => {
+    const hit = await jdb
+      .select()
+      .from(posts)
+      .innerJoin(authors, eq(posts.authorId, authors.id))
+      .where(eq(posts.title, "On Engines"))
+      .get();
+    expect(hit?.authors.name).toBe("Ada");
+
+    const miss = await jdb
+      .select()
+      .from(posts)
+      .innerJoin(authors, eq(posts.authorId, authors.id))
+      .where(eq(posts.title, "nope"))
+      .get();
+    expect(miss).toBeUndefined();
+  });
+
+  it("chains a third table — innerJoin then leftJoin off the join", async () => {
+    const rows = await jdb
+      .select()
+      .from(comments)
+      .innerJoin(posts, eq(comments.postId, posts.id)) // SelectQuery.innerJoin
+      .leftJoin(authors, eq(posts.authorId, authors.id)) // JoinQuery.leftJoin
+      .all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.comments.body).toBe("yes");
+    expect(rows[0]?.posts.id).toBe(enginesPost);
+    expect(rows[0]?.authors?.name).toBe("Ada");
+  });
+
+  it("chains via leftJoin then innerJoin off the join", async () => {
+    const rows = await jdb
+      .select()
+      .from(authors)
+      .leftJoin(posts, eq(posts.authorId, authors.id)) // SelectQuery.leftJoin
+      .innerJoin(comments, eq(comments.postId, posts.id)) // JoinQuery.innerJoin — drops null-post rows
+      .all();
+    // only the (Ada → On Engines → "yes") chain survives the inner comments join
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.comments.body).toBe("yes");
+  });
+
+  it("joins a table to itself through alias()", async () => {
+    const employees = defineTable("employees", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      name: text("name").notNull(),
+      managerId: integer("manager_id"),
+    });
+    await jdb.exec(createTableSql(employees));
+    const ceo = await jdb.insert(employees).values({ name: "CEO" }).returning().get();
+    await jdb.insert(employees).values({ name: "Alice", managerId: ceo.id }).run();
+
+    const manager = alias(employees, "manager");
+    const rows = await jdb
+      .select()
+      .from(employees)
+      .innerJoin(manager, eq(employees.managerId, manager.id))
+      .all();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.employees.name).toBe("Alice");
+    expect(rows[0]?.manager.name).toBe("CEO");
+  });
+
+  it("a column whose SQL name contains a dot round-trips intact (no key mis-split)", async () => {
+    // The hardest hydration case: a column whose SQL name itself contains a dot.
+    // The projection aliases it `"weird"."a.b" AS "weird.a.b"` — so a hydrator that
+    // split a result key on the LAST dot (or naively on every dot) would read the
+    // namespace as `weird.a` and lose the column. hydrateJoin reconstructs the EXACT
+    // alias (`namespace + "." + name`) and reads by it, so a dotted name can never be
+    // mis-parsed. Pin the wire row to prove it without a driver-quoting detour.
+    const weird = defineTable("weird", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      dotted: text("a.b").notNull(),
+    });
+    const sidecar = defineTable("sidecar", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      weirdId: integer("weird_id").notNull(),
+    });
+
+    // Keys are exactly the aliases the projection writes.
+    const wireRow = {
+      "weird.id": 1,
+      "weird.a.b": "kept",
+      "sidecar.id": 5,
+      "sidecar.weird_id": 1,
+    };
+    const fake: SqlDatabase = {
+      exec: async () => undefined,
+      prepare: () => ({
+        run: async () => ({ changes: 0 }),
+        get: async () => wireRow,
+        all: async () => [wireRow],
+      }),
+      transaction: async (fn) => fn(fake),
+    };
+
+    const [row] = await createDb(fake)
+      .select()
+      .from(weird)
+      .innerJoin(sidecar, eq(sidecar.weirdId, weird.id))
+      .all();
+
+    // The dotted-name column kept its value under the right namespace; the sidecar
+    // namespace is distinct and intact.
+    expect(row?.weird.dotted).toBe("kept");
+    expect(row?.weird.id).toBe(1);
+    expect(row?.sidecar.id).toBe(5);
+    expect(row?.sidecar.weirdId).toBe(1);
   });
 });
 

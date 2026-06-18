@@ -20,6 +20,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  alias,
   boolean,
   createDb,
   createTableSql,
@@ -35,6 +36,7 @@ import {
   text,
   timestamp,
 } from "@lesto/db";
+import type { Column } from "@lesto/db";
 import type { Db, Dialect, SqlDatabase } from "@lesto/db";
 import { Migrator } from "@lesto/migrate";
 import { openSqlite } from "@lesto/runtime";
@@ -272,6 +274,76 @@ describe.each(drivers)("data-layer parity: $name", (driver) => {
 
     await handle.exec("DROP TABLE fk_children");
     await handle.exec("DROP TABLE fk_parents");
+  });
+
+  // ADR 0018 §3: joins render namespaced rows + a left-join's unmatched side collapses
+  // to null — identically on both drivers. The qualified-and-aliased projection
+  // (`"users"."id" AS "users.id"`), the `INNER`/`LEFT JOIN` keywords, and an aliased
+  // self-join's `FROM "x" AS "y"` are all ANSI-standard, so the SAME body must agree
+  // on SQLite and a real Postgres socket.
+  it("inner/left joins + a self-join via alias agree on both drivers", async () => {
+    const joinAuthors = defineTable("join_authors", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      name: text("name").notNull(),
+      managerId: integer("manager_id").references((): Column<number> => joinAuthors.id),
+    });
+    const joinPosts = defineTable("join_posts", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      authorId: integer("author_id").references(() => joinAuthors.id), // nullable
+      title: text("title").notNull(),
+    });
+
+    await handle.exec("DROP TABLE IF EXISTS join_posts");
+    await handle.exec("DROP TABLE IF EXISTS join_authors");
+    await handle.exec(createTableSql(joinAuthors, driver.name));
+    await handle.exec(createTableSql(joinPosts, driver.name));
+
+    const ada = await db.insert(joinAuthors).values({ name: "Ada" }).returning().get();
+    // Grace reports to Ada (a self-reference, exercised by the alias self-join).
+    const grace = await db
+      .insert(joinAuthors)
+      .values({ name: "Grace", managerId: ada.id })
+      .returning()
+      .get();
+    await db.insert(joinPosts).values({ authorId: ada.id, title: "On Looms" }).run();
+
+    // INNER JOIN: only the post with a real author matches, rows namespaced by table.
+    const inner = await db
+      .select()
+      .from(joinPosts)
+      .innerJoin(joinAuthors, eq(joinPosts.authorId, joinAuthors.id))
+      .all();
+    expect(inner).toHaveLength(1);
+    expect(inner[0]?.join_posts.title).toBe("On Looms");
+    expect(inner[0]?.join_authors.name).toBe("Ada");
+
+    // LEFT JOIN: Grace has no post, so the post namespace collapses to null (not an
+    // object of null cells) — the load-bearing invariant, proven on a real socket.
+    const left = await db
+      .select()
+      .from(joinAuthors)
+      .leftJoin(joinPosts, eq(joinPosts.authorId, joinAuthors.id))
+      .orderBy(joinAuthors.name)
+      .all();
+    const byAuthor = new Map(left.map((r) => [r.join_authors.name, r.join_posts]));
+    expect(byAuthor.get("Ada")).toMatchObject({ title: "On Looms" });
+    expect(byAuthor.get("Grace")).toBeNull();
+
+    // Self-join via alias: render `FROM "join_authors" AS "manager"` and read each
+    // author with their manager. Only Grace has one.
+    const manager = alias(joinAuthors, "manager");
+    const reports = await db
+      .select()
+      .from(joinAuthors)
+      .innerJoin(manager, eq(joinAuthors.managerId, manager.id))
+      .all();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.join_authors.name).toBe("Grace");
+    expect(reports[0]?.manager.name).toBe("Ada");
+    expect(reports[0]?.manager.id).toBe(grace.managerId);
+
+    await handle.exec("DROP TABLE join_posts");
+    await handle.exec("DROP TABLE join_authors");
   });
 });
 

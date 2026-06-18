@@ -25,6 +25,7 @@
 
 import type { Column, ColumnKind } from "./columns";
 import type { Condition } from "./conditions";
+import { qualified } from "./conditions";
 import type { Dialect } from "./ddl";
 import { DbError } from "./errors";
 import { quoteIdentifier } from "./identifier";
@@ -135,6 +136,15 @@ export interface SelectQuery<T extends Table> {
    * (LIMIT-ed counts are almost always a bug).
    */
   count(): Promise<number>;
+
+  /**
+   * Join another table on a condition. The result stops being a flat row and
+   * becomes a {@link JoinQuery} keyed by table — `{ users: User; posts: Post }` —
+   * so two columns of the same name never collide. `leftJoin` makes the joined
+   * side `… | null` for rows with no match.
+   */
+  innerJoin<T2 extends Table>(table: T2, on: Condition): JoinQuery<Joined<Base<T>, T2, false>>;
+  leftJoin<T2 extends Table>(table: T2, on: Condition): JoinQuery<Joined<Base<T>, T2, true>>;
 }
 
 interface SelectBuilder {
@@ -167,19 +177,33 @@ function renderSelect<T extends Table>(
     // offset applies: SQLite spells that `LIMIT -1`, which Postgres rejects —
     // Postgres takes a bare `OFFSET` (or the equivalent `LIMIT ALL`). This is
     // the second dialect fork, decided here at render time from `dialect`.
-    if (state.limit !== undefined) {
-      parts.push(`LIMIT ${state.limit}`);
-      if (state.offset !== undefined) parts.push(`OFFSET ${state.offset}`);
-    } else if (state.offset !== undefined) {
-      parts.push(
-        options.dialect === "postgres"
-          ? `OFFSET ${state.offset}`
-          : `LIMIT -1 OFFSET ${state.offset}`,
-      );
-    }
+    const tail = limitOffsetSql(state.limit, state.offset, options.dialect);
+    if (tail) parts.push(tail);
   }
 
   return { sql: parts.join(" "), params };
+}
+
+/**
+ * The `LIMIT`/`OFFSET` tail (empty when neither is set). SQLite needs a `LIMIT` for
+ * an `OFFSET` to take effect, so an offset-without-limit spells `LIMIT -1 OFFSET n`,
+ * which Postgres rejects (it takes a bare `OFFSET`). The one dialect fork — shared by
+ * the single-table and the join renderers so they can never disagree on it.
+ */
+function limitOffsetSql(
+  limit: number | undefined,
+  offset: number | undefined,
+  dialect: Dialect,
+): string {
+  if (limit !== undefined) {
+    return offset === undefined ? `LIMIT ${limit}` : `LIMIT ${limit} OFFSET ${offset}`;
+  }
+
+  if (offset !== undefined) {
+    return dialect === "postgres" ? `OFFSET ${offset}` : `LIMIT -1 OFFSET ${offset}`;
+  }
+
+  return "";
 }
 
 interface CountRow {
@@ -200,6 +224,19 @@ function makeQuery<T extends Table>(
       next({ orderBy: { column: column.spec.name, direction } }),
     limit: (count) => next({ limit: count }),
     offset: (count) => next({ offset: count }),
+
+    innerJoin: <T2 extends Table>(joined: T2, on: Condition) =>
+      joinFrom<Joined<Base<T>, T2, false>>(sql, dialect, state.table, {
+        table: joined,
+        on,
+        nullable: false,
+      }),
+    leftJoin: <T2 extends Table>(joined: T2, on: Condition) =>
+      joinFrom<Joined<Base<T>, T2, true>>(sql, dialect, state.table, {
+        table: joined,
+        on,
+        nullable: true,
+      }),
 
     async get(): Promise<InferRow<T> | undefined> {
       // `.get()` is `LIMIT 1` regardless of what the user set — the most
@@ -255,6 +292,217 @@ function makeSelect(sql: SqlDatabase, dialect: Dialect): SelectBuilder {
       });
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// JOIN
+//
+// A join promotes a flat SelectQuery into a JoinQuery whose rows are NAMESPACED by
+// table — `{ users: User; posts: Post }` — so two same-named columns never collide.
+// The SQL projects every column qualified-and-aliased (`"users"."id" AS "users.id"`);
+// hydration reads each cell back by that EXACT alias (so a dotted column name is
+// never mis-parsed), coerces it by the column's kind (Increment 1), and a left-joined
+// table with no match becomes `null` rather than an object of null cells.
+// ---------------------------------------------------------------------------
+
+/** The literal name a table carries — the key it namespaces a joined row under. */
+type NameOf<T extends Table> = T extends { tableName: infer N extends string } ? N : string;
+
+/** One joined table: the table value + whether a left join made its row nullable. */
+interface JoinMember {
+  readonly table: Table;
+  readonly nullable: boolean;
+}
+
+/** A joined query's shape — namespace → member. */
+type Shape = Record<string, JoinMember>;
+
+/** The single-member shape a `.from(t)` carries before any join. */
+type Base<T extends Table> = Record<NameOf<T>, { table: T; nullable: false }>;
+
+/** `S` with one more table folded in under its namespace. */
+type Joined<S extends Shape, T extends Table, Nullable extends boolean> = S &
+  Record<NameOf<T>, { table: T; nullable: Nullable }>;
+
+/** The row a joined query yields: each namespace → its row, `| null` when left-joined. */
+type RowOfShape<S extends Shape> = {
+  [K in keyof S]: S[K]["nullable"] extends true
+    ? InferRow<S[K]["table"]> | null
+    : InferRow<S[K]["table"]>;
+};
+
+/** A typed JOIN chain — like {@link SelectQuery}, but its rows are namespaced by table. */
+export interface JoinQuery<S extends Shape> {
+  /** Add or replace the `WHERE` clause. */
+  where(condition: Condition): JoinQuery<S>;
+
+  /** Add or replace the `ORDER BY` clause (qualified by the column's table). */
+  orderBy(column: Column<unknown, boolean, boolean>, direction?: "asc" | "desc"): JoinQuery<S>;
+
+  /** Cap the row count. */
+  limit(count: number): JoinQuery<S>;
+
+  /** Skip `count` rows before yielding the first. */
+  offset(count: number): JoinQuery<S>;
+
+  /** Fold another table in, by inner join. */
+  innerJoin<T2 extends Table>(table: T2, on: Condition): JoinQuery<Joined<S, T2, false>>;
+
+  /** Fold another table in, by left join (its namespace is `… | null` on no match). */
+  leftJoin<T2 extends Table>(table: T2, on: Condition): JoinQuery<Joined<S, T2, true>>;
+
+  /** First matching namespaced row (always `LIMIT 1`), or `undefined`. */
+  get(): Promise<RowOfShape<S> | undefined>;
+
+  /** Every matching namespaced row. */
+  all(): Promise<RowOfShape<S>[]>;
+}
+
+interface JoinState {
+  readonly base: Table;
+  readonly joins: readonly {
+    readonly table: Table;
+    readonly on: Condition;
+    readonly nullable: boolean;
+  }[];
+  readonly where: Condition | undefined;
+  readonly orderBy: string | undefined;
+  readonly limit: number | undefined;
+  readonly offset: number | undefined;
+}
+
+/** The base table (never nullable) followed by each joined table, in order. */
+function membersOf(state: JoinState): JoinMember[] {
+  return [
+    { table: state.base, nullable: false },
+    ...state.joins.map((join) => ({ table: join.table, nullable: join.nullable })),
+  ];
+}
+
+/** `"table"` — or `"real" AS "alias"` for an aliased table (so a self-join is legal). */
+function fromClause(table: Table): string {
+  return table.sourceTableName === undefined
+    ? quoteIdentifier(table.tableName)
+    : `${quoteIdentifier(table.sourceTableName)} AS ${quoteIdentifier(table.tableName)}`;
+}
+
+function renderJoin(state: JoinState, dialect: Dialect): { sql: string; params: unknown[] } {
+  const projection = membersOf(state)
+    .flatMap((member) =>
+      member.table.columnList.map(
+        (column) =>
+          `${qualified(column)} AS ${quoteIdentifier(`${member.table.tableName}.${column.spec.name}`)}`,
+      ),
+    )
+    .join(", ");
+
+  const parts = [`SELECT ${projection} FROM ${fromClause(state.base)}`];
+  const params: unknown[] = [];
+
+  for (const join of state.joins) {
+    parts.push(
+      `${join.nullable ? "LEFT" : "INNER"} JOIN ${fromClause(join.table)} ON ${join.on.sql}`,
+    );
+    params.push(...join.on.params);
+  }
+
+  if (state.where) {
+    parts.push(`WHERE ${state.where.sql}`);
+    params.push(...state.where.params);
+  }
+
+  if (state.orderBy) parts.push(`ORDER BY ${state.orderBy}`);
+
+  const tail = limitOffsetSql(state.limit, state.offset, dialect);
+  if (tail) parts.push(tail);
+
+  return { sql: parts.join(" "), params };
+}
+
+/**
+ * Split a flat result row into `{ namespace: row }`. Each cell is read by the exact
+ * alias the projection wrote (`row["users.id"]`) — never parsed — and coerced by its
+ * column's kind. A left-joined table whose every cell is `null` had no match, so its
+ * namespace is `null` (not an object of null cells, which would make `… | null` a lie).
+ */
+function hydrateJoin(state: JoinState, raw: unknown): Record<string, unknown> {
+  const row = raw as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+
+  for (const member of membersOf(state)) {
+    const namespace = member.table.tableName;
+    const obj: Record<string, unknown> = {};
+    let allNull = true;
+
+    for (const [key, spec] of Object.entries(member.table.byKey)) {
+      const value = row[`${namespace}.${spec.name}`];
+      if (value !== null) allNull = false;
+      obj[key] = coerceCell(spec.kind, value);
+    }
+
+    out[namespace] = member.nullable && allNull ? null : obj;
+  }
+
+  return out;
+}
+
+function makeJoinQuery<S extends Shape>(
+  sql: SqlDatabase,
+  dialect: Dialect,
+  state: JoinState,
+): JoinQuery<S> {
+  const next = (patch: Partial<JoinState>): JoinQuery<S> =>
+    makeJoinQuery<S>(sql, dialect, { ...state, ...patch });
+
+  return {
+    where: (condition) => next({ where: condition }),
+    orderBy: (column, direction = "asc") =>
+      next({ orderBy: `${qualified(column)} ${direction.toUpperCase()}` }),
+    limit: (count) => next({ limit: count }),
+    offset: (count) => next({ offset: count }),
+
+    innerJoin: <T2 extends Table>(table: T2, on: Condition) =>
+      makeJoinQuery<Joined<S, T2, false>>(sql, dialect, {
+        ...state,
+        joins: [...state.joins, { table, on, nullable: false }],
+      }),
+    leftJoin: <T2 extends Table>(table: T2, on: Condition) =>
+      makeJoinQuery<Joined<S, T2, true>>(sql, dialect, {
+        ...state,
+        joins: [...state.joins, { table, on, nullable: true }],
+      }),
+
+    async get(): Promise<RowOfShape<S> | undefined> {
+      const { sql: stmt, params } = renderJoin({ ...state, limit: 1 }, dialect);
+      const row = await sql.prepare(stmt).get(params);
+
+      return row == null ? undefined : (hydrateJoin(state, row) as RowOfShape<S>);
+    },
+
+    async all(): Promise<RowOfShape<S>[]> {
+      const { sql: stmt, params } = renderJoin(state, dialect);
+      const rows = await sql.prepare(stmt).all(params);
+
+      return rows.map((row) => hydrateJoin(state, row) as RowOfShape<S>);
+    },
+  };
+}
+
+/** Promote a flat {@link SelectQuery} to a {@link JoinQuery} on its first join. */
+function joinFrom<S extends Shape>(
+  sql: SqlDatabase,
+  dialect: Dialect,
+  base: Table,
+  join: { table: Table; on: Condition; nullable: boolean },
+): JoinQuery<S> {
+  return makeJoinQuery<S>(sql, dialect, {
+    base,
+    joins: [join],
+    where: undefined,
+    orderBy: undefined,
+    limit: undefined,
+    offset: undefined,
+  });
 }
 
 // ---------------------------------------------------------------------------

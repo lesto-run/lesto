@@ -52,7 +52,7 @@ export type {
   SqlType,
 } from "./columns";
 
-export { defineTable } from "./table";
+export { alias, defineTable } from "./table";
 export type { ColumnMap, InferInsert, InferRow, InferUpdate, Table } from "./table";
 
 export { createTableSql, dropTableSql } from "./ddl";
@@ -62,7 +62,7 @@ export { and, eq, gt, gte, inList, isNotNull, isNull, like, lt, lte, ne, or } fr
 export type { Condition } from "./conditions";
 
 export { createDb } from "./queries";
-export type { Db, DbOptions, QueryEvent, SelectQuery } from "./queries";
+export type { Db, DbOptions, JoinQuery, QueryEvent, SelectQuery } from "./queries";
 
 export type { SqlDatabase, SqlStatement } from "./sql";
 

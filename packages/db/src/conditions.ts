@@ -31,7 +31,7 @@ export interface Condition {
  * `tableName` is stamped by `defineTable` (Increment 0); a free-standing column that
  * was never placed in a table has none, and falls back to a bare identifier.
  */
-function qualified(column: Column<unknown, boolean, boolean>): string {
+export function qualified(column: Column<unknown, boolean, boolean>): string {
   const { tableName, name } = column.spec;
 
   return tableName === undefined
@@ -39,11 +39,20 @@ function qualified(column: Column<unknown, boolean, boolean>): string {
     : `${quoteIdentifier(tableName)}.${quoteIdentifier(name)}`;
 }
 
-/** `column = value` — the workhorse condition. */
+/**
+ * `column = value` — the workhorse condition — OR `column = otherColumn`, the form a
+ * join's `ON` needs (`eq(posts.authorId, authors.id)`). A column on the right renders
+ * `"a"."x" = "b"."y"` with no bound value; anything else is compared on a `?`
+ * placeholder. The right column's type must match the left's.
+ */
 export function eq<C extends Column<unknown, boolean, boolean>>(
   column: C,
-  value: NonNullable<CellType<C>>,
+  value: NonNullable<CellType<C>> | Column<NonNullable<CellType<C>>, boolean, boolean>,
 ): Condition {
+  if (typeof value === "object" && "spec" in value) {
+    return { sql: `${qualified(column)} = ${qualified(value)}`, params: [] };
+  }
+
   return {
     sql: `${qualified(column)} = ?`,
     params: [bind(value)],
