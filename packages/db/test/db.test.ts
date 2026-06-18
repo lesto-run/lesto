@@ -236,6 +236,63 @@ describe("rich column types (boolean, timestamp)", () => {
     expect(created.deletedAt).toBeNull();
     expect(created.occurredAt.getTime()).toBe(0);
   });
+
+  it("a Date / boolean binds the same inside a WHERE condition as on insert", async () => {
+    const early = new Date("2026-01-01T00:00:00.000Z");
+    const late = new Date("2026-12-31T00:00:00.000Z");
+    await edb.insert(events).values({ active: true, occurredAt: early }).run();
+    await edb.insert(events).values({ active: false, occurredAt: late }).run();
+
+    // a Date operand must marshal to epoch-ms in WHERE, exactly as it does on insert
+    // (a regression here threw "SQLite3 can only bind numbers, strings, …").
+    const recent = await edb.select().from(events).where(gte(events.occurredAt, late)).all();
+    expect(recent.map((r) => r.occurredAt.getTime())).toEqual([late.getTime()]);
+
+    // a boolean operand marshals to 1/0
+    const active = await edb.select().from(events).where(eq(events.active, true)).all();
+    expect(active.map((r) => r.occurredAt.getTime())).toEqual([early.getTime()]);
+  });
+
+  it("hydrates string-valued cells the same as numbers (node-postgres BIGINT path)", async () => {
+    // node-postgres hands INTEGER/BIGINT columns back as *strings*; a fake driver
+    // pins that wire shape so the pg coercion is proven here, not only in CI.
+    const wireRow = {
+      id: "1",
+      active: "1",
+      archived: "0",
+      occurred_at: "1750000000000",
+      deleted_at: null,
+    };
+    const fake: SqlDatabase = {
+      exec: async () => undefined,
+      prepare: () => ({
+        run: async () => ({ changes: 0 }),
+        get: async () => wireRow,
+        all: async () => [wireRow],
+      }),
+      transaction: async (fn) => fn(fake),
+    };
+
+    const row = await createDb(fake, { dialect: "postgres" }).select().from(events).get();
+    if (!row) throw new Error("expected a row");
+
+    expect(row.active).toBe(true);
+    expect(row.archived).toBe(false);
+    expect(row.occurredAt).toBeInstanceOf(Date);
+    expect(row.occurredAt.getTime()).toBe(1_750_000_000_000);
+    expect(row.deletedAt).toBeNull();
+  });
+
+  it("a timestamp default stores epoch-ms, so its DDL is a valid integer literal", () => {
+    const stamped = timestamp("created_at").default(new Date(123_456));
+    expect(stamped.spec.defaultValue).toBe(123_456);
+
+    const withDefault = defineTable("with_default", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+      createdAt: timestamp("created_at").notNull().default(new Date(123_456)),
+    });
+    expect(createTableSql(withDefault)).toContain("DEFAULT 123456");
+  });
 });
 
 describe("inferred types (compile-time)", () => {

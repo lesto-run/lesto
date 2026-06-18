@@ -142,14 +142,16 @@ function builder<T, N extends boolean, D extends boolean>(
         hasDefault: spec.hasDefault || options?.autoIncrement === true,
       }),
     default: (value) =>
-      // The cast covers two cases at once: `value` is JS-side `T` (the column's
-      // cell type), but `defaultValue` is stored as the SQL literal union the
-      // DDL renderer accepts. Both shapes overlap in practice for the column
-      // types we support (text/integer/real → string/number/boolean/null).
+      // `defaultValue` is the SQL literal the DDL renderer accepts. A `Date`
+      // (a `timestamp` column's `T`) is stored as its epoch-ms integer — the same
+      // shape `bind` writes — so the rendered `DEFAULT` is a valid integer literal,
+      // not a `String(date)`. The cast covers the remaining text/integer/real/
+      // boolean cases, whose `T` already overlaps the literal union.
       builder({
         ...spec,
         hasDefault: true,
-        defaultValue: value as string | number | boolean | null,
+        defaultValue:
+          value instanceof Date ? value.getTime() : (value as string | number | boolean | null),
       }),
   };
 

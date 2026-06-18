@@ -30,19 +30,7 @@ import { DbError } from "./errors";
 import { quoteIdentifier } from "./identifier";
 import type { SqlDatabase } from "./sql";
 import type { InferInsert, InferRow, InferUpdate, Table } from "./table";
-
-/** Coerce a JS value to the form the SQL driver expects. */
-function bind(value: unknown): unknown {
-  if (value === undefined) return null;
-
-  if (typeof value === "boolean") return value ? 1 : 0;
-
-  // A `timestamp` column's JS value is a `Date`; it stores as its epoch-ms
-  // integer (the same number `hydrate` reads back). Drivers reject a Date object.
-  if (value instanceof Date) return value.getTime();
-
-  return value;
-}
+import { bind } from "./values";
 
 /**
  * Coerce one raw cell to its `InferRow` JS type, dispatched on the column's

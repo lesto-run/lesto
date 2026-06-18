@@ -15,18 +15,12 @@
 
 import type { CellType, Column } from "./columns";
 import { quoteIdentifier } from "./identifier";
+import { bind } from "./values";
 
 /** A compiled condition — what the query compiler appends after `WHERE`. */
 export interface Condition {
   readonly sql: string;
   readonly params: readonly unknown[];
-}
-
-/** Coerce a JS value to the form the SQL driver expects. */
-function bind(value: unknown): unknown {
-  if (typeof value === "boolean") return value ? 1 : 0;
-
-  return value;
 }
 
 /** `column = value` — the workhorse condition. */
