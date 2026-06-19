@@ -13,7 +13,9 @@ export { LestoError };
 export type RouterErrorCode =
   | "ROUTER_AMBIGUOUS_SEGMENT"
   | "ROUTER_MALFORMED_PARAM"
-  | "ROUTER_MISSING_PARAM";
+  | "ROUTER_MISSING_PARAM"
+  | "ROUTER_FILE_BAD_SEGMENT"
+  | "ROUTER_FILE_DUPLICATE_ROUTE";
 
 /** Anything the router can refuse to do. */
 export class RouterError extends LestoError<RouterErrorCode> {

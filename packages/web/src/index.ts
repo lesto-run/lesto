@@ -77,6 +77,19 @@ export {
 } from "./harden";
 export type { SecurityHeaderOptions } from "./harden";
 
+// File-based routing: apply the convention `@lesto/router` scans + compiles onto a
+// `lesto()` app, so a `app/listings/[id]/page.tsx` registers the same typed route
+// `.page("/listings/:id", …)` would (ADR 0023). The pure scan/compile lives in
+// `@lesto/router`; this applies the descriptors over already-loaded modules.
+export { applyFileRoutes, routeKey } from "./file-routes";
+export type { LoadedFileRoutes, LoadedRouteModule } from "./file-routes";
+
+// Re-export the scan's descriptor type from `@lesto/router`, so an app that calls
+// `applyFileRoutes` gets the `DiscoveredFile` shape it must pass from the SAME
+// barrel — it never needs to reach past `@lesto/web` into the router for the one
+// type the applier consumes.
+export type { DiscoveredFile } from "@lesto/router";
+
 export { LestoError, WebError } from "./errors";
 export type { WebErrorCode } from "./errors";
 

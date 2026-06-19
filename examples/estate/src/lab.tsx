@@ -35,6 +35,7 @@ import { SaveNote } from "./ui/save-note";
 import { DeferredPanel } from "./ui/deferred-panel";
 import { buildContentRoutes } from "./content";
 import type { ContentStore } from "./content";
+import { buildGalleryRoutes } from "./file-routes-demo";
 import { LISTINGS, findListing, formatPrice } from "./listings";
 import type { Listing } from "./listings";
 
@@ -515,6 +516,11 @@ export function buildLabRoutes(contentStore?: ContentStore): Lesto {
       })
       .route(flagGated)
       .route(adminGated)
+      // The file-based-routing demo (ADR 0023): `/lab/gallery` and
+      // `/lab/gallery/:id` are registered purely by the files under `app/routes/`,
+      // composed onto this same router by `applyFileRoutes` — co-existing with
+      // every hand-written `.page` above.
+      .route(buildGalleryRoutes())
       // DB-driven (WordPress-style) pages: a block tree loaded by slug.
       .route(buildContentRoutes(contentStore))
       // The @lesto/admin dogfood: paginated CRUD + the onMutation audit trail.

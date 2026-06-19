@@ -23,5 +23,14 @@ export { compile, escapeRegExp, PARAM_SEGMENT } from "./compile";
 export type { CompiledPattern } from "./compile";
 export type { ParamKeys, PathParams } from "./params";
 
+// The file-based routing convention: scan a conventional dir (`app/`) into ordered
+// route descriptors that compile to the same `:param` patterns above, so a
+// file-route and a hand-written route share one router (the applier lives in
+// `@lesto/web`'s `applyFileRoutes`, over these descriptors).
+export { compileFileRoutes, ROUTE_FILE_NAMES } from "./file-routes";
+export type { DiscoveredFile, FileRoute, FileRouteKind } from "./file-routes";
+export { scanRoutes } from "./scan";
+export type { DirEntry, DirReader } from "./scan";
+
 export { LestoError, RouterError } from "./errors";
 export type { RouterErrorCode } from "./errors";
