@@ -28,10 +28,36 @@
  *   curl   http://127.0.0.1:3000/queue/batches/1
  */
 
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { openSqlite, serve } from "@lesto/runtime";
 
 import { buildApp, makeRunObserver } from "./src/app";
 import { FLAKY, INGEST, NOTIFY, THUMBNAIL } from "./src/operator";
+
+/**
+ * Bundle the island hydration entry (`client.tsx`) to a single browser file so the
+ * board's status tabs actually hydrate. The board island is `ssr:true`, so the
+ * client must hydrate the React-emitted markup the node serve renders — i.e. REAL
+ * React, no Preact alias. That needs no resolver plugin, so the plain `bun build`
+ * CLI suffices; we SPAWN it (rather than the Bun-only `Bun.build` API) so this file
+ * stays node-typed and could be imported under vitest. Returns the bundle source.
+ */
+function buildClient(): string {
+  const here = fileURLToPath(new URL(".", import.meta.url));
+  const outfile = join(here, "out", "client.js");
+
+  execFileSync(
+    "bun",
+    ["build", join(here, "client.tsx"), "--outfile", outfile, "--target", "browser", "--minify"],
+    { cwd: here, stdio: "inherit" },
+  );
+
+  return readFileSync(outfile, "utf8");
+}
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -85,7 +111,10 @@ function serveLimitsFromEnv(env: NodeJS.ProcessEnv): {
 async function main(): Promise<void> {
   const { db: handle, close } = await openSqlite();
 
-  const { app, db, queue } = await buildApp({ handle });
+  // Build the island client up front so `/client.js` is live the moment we listen.
+  const clientJs = buildClient();
+
+  const { app, db, queue } = await buildApp({ handle, clientJs });
 
   console.log("migrations applied:", app.migrationsApplied);
 

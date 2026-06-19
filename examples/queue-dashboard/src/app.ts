@@ -80,107 +80,123 @@ function statusForAdminError(code: string): number {
 }
 
 /** The HTTP-facing routes, closing over the queue + admin services they front. */
-export function buildDashboardApp(deps: { queue: Queue; admin: Admin; db: Db }): Lesto {
-  const { queue, admin, db } = deps;
+export function buildDashboardApp(deps: {
+  queue: Queue;
+  admin: Admin;
+  db: Db;
+  clientJs?: string;
+}): Lesto {
+  const { queue, admin, db, clientJs } = deps;
 
-  return (
-    lesto()
-      .client("/client.js")
+  const app = lesto()
+    .client("/client.js")
 
-      // The board island's data: the live snapshot, resolved at render (inlined
-      // into the ssr island) and auto-exposed at /__lesto/data/queue for polling.
-      .data(dashboardSource, () => buildSnapshot(queue, db))
+    // The board island's data: the live snapshot, resolved at render (inlined
+    // into the ssr island) and auto-exposed at /__lesto/data/queue for polling.
+    .data(dashboardSource, () => buildSnapshot(queue, db))
 
-      // The dashboard page — the SSR'd operator board.
-      .page("/", {
-        component: DashboardPage,
-        metadata: () => ({ title: "Queue operator dashboard" }),
-      })
+    // The dashboard page — the SSR'd operator board.
+    .page("/", {
+      component: DashboardPage,
+      metadata: () => ({ title: "Queue operator dashboard" }),
+    })
 
-      // ---- the queue operator surface (queue verbs, straight to @lesto/queue) ----
-      //
-      // PREVIEW: the mutation routes below (`POST …/retry`, `DELETE …/:id`) are
-      // UNAUTHENTICATED and CSRF-FREE — see the file-header banner. A real deploy
-      // gates them with auth + `@lesto/csrf` (`originCheck()` or `csrf()`) via
-      // `.use(...)`; this preview is driven only by curl/tests.
+    // ---- the queue operator surface (queue verbs, straight to @lesto/queue) ----
+    //
+    // PREVIEW: the mutation routes below (`POST …/retry`, `DELETE …/:id`) are
+    // UNAUTHENTICATED and CSRF-FREE — see the file-header banner. A real deploy
+    // gates them with auth + `@lesto/csrf` (`originCheck()` or `csrf()`) via
+    // `.use(...)`; this preview is driven only by curl/tests.
 
-      .get("/queue/jobs", async (c) => {
-        // Build the list options from only the filters that are present —
-        // `exactOptionalPropertyTypes` rejects an explicit `undefined`.
-        const status = c.query("status");
-        const queueName = c.query("queue");
-        const limit = toInt(c.query("limit"));
-        const offset = toInt(c.query("offset"));
+    .get("/queue/jobs", async (c) => {
+      // Build the list options from only the filters that are present —
+      // `exactOptionalPropertyTypes` rejects an explicit `undefined`.
+      const status = c.query("status");
+      const queueName = c.query("queue");
+      const limit = toInt(c.query("limit"));
+      const offset = toInt(c.query("offset"));
 
-        // Assemble a MUTABLE options bag, then hand it to `list` (whose
-        // `ListJobsOptions` is read-only); only set a key when present, so
-        // `exactOptionalPropertyTypes` never sees an explicit `undefined`.
-        const options: {
-          status?: JobStatus;
-          queue?: string;
-          limit?: number;
-          offset?: number;
-        } = {};
-        if (status !== undefined) options.status = status as JobStatus;
-        if (queueName !== undefined) options.queue = queueName;
-        if (limit !== undefined) options.limit = limit;
-        if (offset !== undefined) options.offset = offset;
+      // Assemble a MUTABLE options bag, then hand it to `list` (whose
+      // `ListJobsOptions` is read-only); only set a key when present, so
+      // `exactOptionalPropertyTypes` never sees an explicit `undefined`.
+      const options: {
+        status?: JobStatus;
+        queue?: string;
+        limit?: number;
+        offset?: number;
+      } = {};
+      if (status !== undefined) options.status = status as JobStatus;
+      if (queueName !== undefined) options.queue = queueName;
+      if (limit !== undefined) options.limit = limit;
+      if (offset !== undefined) options.offset = offset;
 
-        return c.json({ jobs: await queue.list(options) });
-      })
+      return c.json({ jobs: await queue.list(options) });
+    })
 
-      .get("/queue/jobs/:id", async (c) => {
-        const id = toInt(c.param("id"));
-        if (id === undefined) return c.json({ error: "QUEUE_JOB_NOT_FOUND" }, 404);
+    .get("/queue/jobs/:id", async (c) => {
+      const id = toInt(c.param("id"));
+      if (id === undefined) return c.json({ error: "QUEUE_JOB_NOT_FOUND" }, 404);
 
-        const job = await queue.find(id);
+      const job = await queue.find(id);
 
-        return job === null ? c.json({ error: "QUEUE_JOB_NOT_FOUND" }, 404) : c.json({ job });
-      })
+      return job === null ? c.json({ error: "QUEUE_JOB_NOT_FOUND" }, 404) : c.json({ job });
+    })
 
-      .post("/queue/jobs/:id/retry", async (c) => {
-        const id = toInt(c.param("id"));
-        if (id === undefined) return c.json({ error: "QUEUE_JOB_NOT_FOUND" }, 404);
+    .post("/queue/jobs/:id/retry", async (c) => {
+      const id = toInt(c.param("id"));
+      if (id === undefined) return c.json({ error: "QUEUE_JOB_NOT_FOUND" }, 404);
 
-        const requeued = await queue.retry(id);
+      const requeued = await queue.retry(id);
 
-        // `false` means the job was not in a retryable (`failed`) state — a stale
-        // view or a double-click. 409 Conflict says "not in a state I can retry."
-        return requeued ? c.json({ retried: id }) : c.json({ error: "QUEUE_NOT_RETRYABLE" }, 409);
-      })
+      // `false` means the job was not in a retryable (`failed`) state — a stale
+      // view or a double-click. 409 Conflict says "not in a state I can retry."
+      return requeued ? c.json({ retried: id }) : c.json({ error: "QUEUE_NOT_RETRYABLE" }, 409);
+    })
 
-      .delete("/queue/jobs/:id", async (c) => {
-        const id = toInt(c.param("id"));
-        if (id === undefined) return c.json({ error: "QUEUE_JOB_NOT_FOUND" }, 404);
+    .delete("/queue/jobs/:id", async (c) => {
+      const id = toInt(c.param("id"));
+      if (id === undefined) return c.json({ error: "QUEUE_JOB_NOT_FOUND" }, 404);
 
-        const discarded = await queue.discard(id);
+      const discarded = await queue.discard(id);
 
-        // `false` means unknown or running — a running job is held by a worker.
-        return discarded
-          ? c.json({ discarded: id })
-          : c.json({ error: "QUEUE_NOT_DISCARDABLE" }, 409);
-      })
+      // `false` means unknown or running — a running job is held by a worker.
+      return discarded
+        ? c.json({ discarded: id })
+        : c.json({ error: "QUEUE_NOT_DISCARDABLE" }, 409);
+    })
 
-      .get("/queue/batches/:id", (c) => {
-        const id = toInt(c.param("id"));
-        if (id === undefined) return c.json({ error: "QUEUE_BATCH_NOT_FOUND" }, 404);
+    .get("/queue/batches/:id", (c) => {
+      const id = toInt(c.param("id"));
+      if (id === undefined) return c.json({ error: "QUEUE_BATCH_NOT_FOUND" }, 404);
 
-        return respondQueue(c, async () => ({ batch: await queue.batch(id) }));
-      })
+      return respondQueue(c, async () => ({ batch: await queue.batch(id) }));
+    })
 
-      // ---- the inspect surface (run ledger, through @lesto/admin) ----
+    // ---- the inspect surface (run ledger, through @lesto/admin) ----
 
-      .get("/admin/runs", async (c) => {
-        const limit = toInt(c.query("limit"));
-        const offset = toInt(c.query("offset"));
+    .get("/admin/runs", async (c) => {
+      const limit = toInt(c.query("limit"));
+      const offset = toInt(c.query("offset"));
 
-        const options: { limit?: number; offset?: number } = {};
-        if (limit !== undefined) options.limit = limit;
-        if (offset !== undefined) options.offset = offset;
+      const options: { limit?: number; offset?: number } = {};
+      if (limit !== undefined) options.limit = limit;
+      if (offset !== undefined) options.offset = offset;
 
-        return respondAdmin(c, async () => ({ runs: await admin.list("runs", options) }));
-      })
-  );
+      return respondAdmin(c, async () => ({ runs: await admin.list("runs", options) }));
+    });
+
+  // Serve the bundled island client when `serve.ts` built one, so the board's
+  // status tabs hydrate and go interactive. Tests and `run.ts` omit it — the
+  // `ssr:true` board renders fully without it; only the tabs need the bundle.
+  if (clientJs !== undefined) {
+    return app.get("/client.js", () => ({
+      status: 200,
+      headers: { "content-type": "text/javascript; charset=utf-8" },
+      body: clientJs,
+    }));
+  }
+
+  return app;
 }
 
 /** Run a queue op; map a `QUEUE_BATCH_NOT_FOUND` to 404, anything else re-raises. */
@@ -220,6 +236,13 @@ export interface Booted {
 export interface BuildOptions {
   /** The kernel database handle (from `@lesto/runtime`'s `openSqlite`). */
   handle: KernelDatabase;
+  /**
+   * The bundled island client (`client.tsx` → JS). When present it is served at
+   * `/client.js`, so the board's status tabs hydrate and go interactive; omit it
+   * (tests, `run.ts`) and the `ssr:true` board still renders fully — it just stays
+   * a static view.
+   */
+  clientJs?: string;
 }
 
 /**
@@ -229,7 +252,7 @@ export interface BuildOptions {
  * `schemas: [installSchema]`) and the `job_runs` migration before dispatch.
  */
 export async function buildApp(options: BuildOptions): Promise<Booted> {
-  const { handle } = options;
+  const { handle, clientJs } = options;
   const db = createDb(handle);
 
   const queue = buildQueue(handle);
@@ -248,7 +271,7 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
 
   const app = await createApp({
     db: handle,
-    app: buildDashboardApp({ queue, admin, db }),
+    app: buildDashboardApp({ queue, admin, db, ...(clientJs !== undefined ? { clientJs } : {}) }),
     migrations,
     // The queue owns its tables; declare the dependency so the kernel installs
     // `lesto_jobs` + the batch/dep tables on boot (idempotent, IF NOT EXISTS).

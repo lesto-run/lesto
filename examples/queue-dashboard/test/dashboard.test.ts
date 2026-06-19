@@ -88,6 +88,27 @@ describe("@lesto/example-queue-dashboard — the operator journey over HTTP", ()
     }
   });
 
+  it("serves the island client at /client.js only when a bundle is supplied", async () => {
+    // The gap a live run caught: green route tests don't prove the client BUNDLE is
+    // served. Without one (test/run default) the route is absent and the ssr board
+    // stays static; with one (the serve.ts path) it is served as JS and the tabs hydrate.
+    const { db: handle, close } = await openSqlite();
+
+    try {
+      const bare = await buildApp({ handle });
+      expect((await bare.app.handle("GET", "/client.js")).status).toBe(404);
+
+      const wired = await buildApp({ handle, clientJs: "/*bundle*/globalThis.__hydrated=1;" });
+      const res = await wired.app.handle("GET", "/client.js");
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toContain("javascript");
+      expect(await text(res)).toContain("__hydrated");
+    } finally {
+      close();
+    }
+  });
+
   it("reports a live snapshot: counts, the failed DLQ sample, and throughput", async () => {
     const { app, queue, onJob, close } = await boot();
 
