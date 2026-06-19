@@ -71,8 +71,9 @@ module) are injected seams:
    each page's layout chain (the depths of every `layout` above it, shallowest
    first), refuses two pages at one pattern (`ROUTER_FILE_DUPLICATE_ROUTE`) and a
    malformed segment (`ROUTER_FILE_BAD_SEGMENT`), and returns pages **most-specific
-   first** so a literal route shadows a dynamic sibling under first-match resolution
-   (`/listings/new` before `/listings/:id`) with no hand-ordering.
+   first** so a literal route shadows a dynamic sibling at the first differing
+   segment under first-match resolution (`/listings/new` before `/listings/:id`,
+   `/files/new` before `/:category/new`) with no hand-ordering.
 
 2. **`@lesto/web` — impure over modules.** `applyFileRoutes(app, files, modules)`
    compiles the descriptors and registers each page onto the `lesto()` app, wrapped

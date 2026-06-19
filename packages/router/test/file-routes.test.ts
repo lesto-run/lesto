@@ -5,6 +5,7 @@ import {
   type DiscoveredFile,
   type FileRoute,
   ROUTE_FILE_NAMES,
+  RouteTable,
   RouterError,
 } from "../src/index";
 
@@ -112,6 +113,29 @@ describe("compileFileRoutes — duplicate routes refuse by code", () => {
   });
 });
 
+describe("compileFileRoutes — duplicate param names refuse by code", () => {
+  it("refuses a page that repeats a param across segments", () => {
+    // `[id]/[id]/page.tsx` → `/:id/:id`: the deeper capture would silently clobber
+    // the shallower, so it is refused at compile time, not minted as a collision.
+    try {
+      compileFileRoutes([page("[id]", "[id]")]);
+
+      expect.unreachable("a duplicate param name should throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RouterError);
+      expect((error as RouterError).code).toBe("ROUTER_FILE_DUPLICATE_PARAM");
+      expect((error as RouterError).details).toEqual({ pattern: "/:id/:id", param: "id" });
+    }
+  });
+
+  it("allows two DIFFERENT param names across segments", () => {
+    // `[postId]/[id]` is fine — distinct names, no collision.
+    const route = pagesOf([page("[postId]", "[id]")])[0];
+
+    expect(route?.pattern).toBe("/:postId/:id");
+  });
+});
+
 describe("compileFileRoutes — layout nesting", () => {
   it("gives a page the depths of every layout above it, shallowest first", () => {
     const files = [layout(), layout("listings"), page("listings", "[id]")];
@@ -166,6 +190,30 @@ describe("compileFileRoutes — resolution order (most specific first)", () => {
     );
 
     expect(order).toEqual(["/listings/new", "/listings/:id"]);
+  });
+
+  it("prefers a literal first segment over a dynamic one when both have a dynamic slot too", () => {
+    // `/files/:id` and `/:category/new` tie on depth (2) and dynamic-count (1); the
+    // literal-prefix route must still win because its FIRST segment is static. A
+    // count- or string-only comparator would mis-order these.
+    const order = pagesOf([page("files", "[id]"), page("[category]", "new")]).map(
+      (route) => route.pattern,
+    );
+
+    expect(order).toEqual(["/files/:id", "/:category/new"]);
+  });
+
+  it("routes /files/new to the literal-prefix route, not the dynamic one", () => {
+    // The end-to-end consequence of the order above: registered into a first-match
+    // table in resolution order, /files/new resolves to /files/:id (binding the
+    // literal `files` segment), never to /:category/new.
+    const table = new RouteTable<string>();
+
+    for (const route of pagesOf([page("files", "[id]"), page("[category]", "new")])) {
+      table.add("GET", route.pattern, route.pattern);
+    }
+
+    expect(table.match("GET", "/files/new")?.value).toBe("/files/:id");
   });
 
   it("breaks a full tie deterministically on the pattern string", () => {

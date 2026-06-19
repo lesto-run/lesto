@@ -174,6 +174,37 @@ function patternFor(segments: ReadonlyArray<string>): string {
 const dirKey = (segments: ReadonlyArray<string>): string => segments.join("/");
 
 /**
+ * Refuse a page whose `[name]` directories repeat a param name across segments.
+ *
+ * `[id]/[id]/page.tsx` compiles to `/:id/:id`; at match time the deeper `:id`
+ * overwrites the shallower one in the params record, a silent collision a typed
+ * convention must not allow (it already rejects two params in one segment via
+ * `ROUTER_AMBIGUOUS_SEGMENT`). We scan the page's own segments and throw a coded
+ * `ROUTER_FILE_DUPLICATE_PARAM` on the first repeat, naming the offending param.
+ */
+function assertNoDuplicateParam(segments: ReadonlyArray<string>, pattern: string): void {
+  const seen = new Set<string>();
+
+  for (const segment of segments) {
+    const dynamic = DYNAMIC_SEGMENT.exec(segment);
+
+    if (dynamic === null) continue;
+
+    const name = dynamic[1] as string;
+
+    if (seen.has(name)) {
+      throw new RouterError(
+        "ROUTER_FILE_DUPLICATE_PARAM",
+        `File-route "${pattern}" uses the param ":${name}" twice — the deeper segment would silently shadow the shallower; rename one directory.`,
+        { pattern, param: name },
+      );
+    }
+
+    seen.add(name);
+  }
+}
+
+/**
  * Compile a flat list of {@link DiscoveredFile}s into ordered {@link FileRoute}s
  * ready for the applier to register, oldest-convention rules enforced here once.
  *
@@ -188,23 +219,33 @@ const dirKey = (segments: ReadonlyArray<string>): string => segments.join("/");
  *     passes through that directory; because the directory tree is a prefix tree,
  *     "wraps" is exactly "the page's segments start with the layout's segments."
  *
- *   - **Collision refusal.** Two `page` files compiling to the SAME pattern (e.g.
- *     a literal `about/` directory and a `[slug]/` that both yield `/about` for
- *     some value — or, more simply, a duplicated discovery) is a convention
- *     ambiguity the author must resolve; we refuse it with a coded
+ *   - **Collision refusal.** Two `page` files compiling to the SAME pattern (a
+ *     duplicated discovery, or two directories that compile identically) is a
+ *     convention ambiguity the author must resolve; we refuse it with a coded
  *     `ROUTER_FILE_DUPLICATE_ROUTE` rather than let insertion order silently pick
- *     a winner.
+ *     a winner. A literal `about/` and a `[slug]/` are NOT duplicates — they
+ *     compile to distinct patterns (`/about` vs `/:slug`) resolved by precedence,
+ *     not refused here. A page that repeats a param across segments (`[id]/[id]`)
+ *     is refused too, by `ROUTER_FILE_DUPLICATE_PARAM`.
  *
  *   - **Resolution order.** Pages are returned MOST-SPECIFIC FIRST: a deeper /
  *     more-static path before a shallower / more-dynamic one, so a literal route
- *     shadows a dynamic sibling at the same depth (`/listings/new` before
- *     `/listings/:id`) and the first-match-wins `RouteTable` resolves the way an
+ *     shadows a dynamic sibling whose first differing segment sits at the same
+ *     position (`/listings/new` before `/listings/:id`, `/files/new` before
+ *     `/:category/new`) and the first-match-wins `RouteTable` resolves the way an
  *     author expects without hand-ordering files.
  */
 export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): ReadonlyArray<FileRoute> {
   // Guard against two pages at one URL: compile each page's pattern and refuse a
   // duplicate by code rather than let the later one silently shadow the earlier.
   const seenPattern = new Set<string>();
+
+  // The directory of every `layout` file, computed once: a page's layout chain is
+  // the subset of these that prefix its path, so the lookup is built ahead of the
+  // loop rather than rebuilt per page.
+  const layoutKeys = new Set(
+    files.filter((file) => file.kind === "layout").map((file) => dirKey(file.segments)),
+  );
 
   const pages: FileRoute[] = [];
   const layouts: FileRoute[] = [];
@@ -229,20 +270,26 @@ export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): Readonl
       );
     }
 
+    // A `[id]` in two different segments (`[id]/[id]/page.tsx`) compiles to
+    // `/:id/:id`, where the deeper capture silently clobbers the shallower at match
+    // time. A typed-param convention must not mint that collision — refuse by code,
+    // mirroring the single-segment ambiguity `compile` already rejects.
+    assertNoDuplicateParam(file.segments, pattern);
+
     seenPattern.add(pattern);
 
     pages.push({
       kind: "page",
       pattern,
       segments: file.segments,
-      layoutDepth: layoutDepthsFor(file.segments, files),
+      layoutDepth: layoutDepthsFor(file.segments, layoutKeys),
     });
   }
 
   // Most-specific first: a deeper path before a shallower one, and at equal depth
-  // a more-static path (fewer dynamic segments) before a more-dynamic one. The
-  // first-match-wins table then resolves a literal route ahead of a dynamic
-  // sibling without the author hand-ordering anything.
+  // the path whose first differing segment is static (not `:param`) before the
+  // dynamic one. The first-match-wins table then resolves a literal route ahead of
+  // a dynamic sibling without the author hand-ordering anything.
   pages.sort(comparePageSpecificity);
 
   // Layouts trail the pages; the applier registers each layout (in shallowest-
@@ -266,12 +313,8 @@ export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): Readonl
  */
 function layoutDepthsFor(
   pageSegments: ReadonlyArray<string>,
-  files: ReadonlyArray<DiscoveredFile>,
+  layoutKeys: ReadonlySet<string>,
 ): ReadonlyArray<number> {
-  const layoutKeys = new Set(
-    files.filter((file) => file.kind === "layout").map((file) => dirKey(file.segments)),
-  );
-
   const depths: number[] = [];
 
   // Each prefix length 0..pageSegments.length names a directory on the path from
@@ -287,19 +330,17 @@ function layoutDepthsFor(
   return depths;
 }
 
-/** How many segments of a pattern are dynamic (`:param`) — the specificity penalty. */
-function dynamicCount(segments: ReadonlyArray<string>): number {
-  return segments.filter((segment) => DYNAMIC_SEGMENT.test(segment)).length;
-}
-
 /**
  * Order two pages most-specific first.
  *
- * Deeper paths win (more segments = more specific), then — at equal depth — the
- * one with FEWER dynamic segments wins, so `/listings/new` (zero dynamic) sorts
- * ahead of `/listings/:id` (one dynamic) and the literal route shadows the param
- * route under first-match resolution. A final tie breaks on the pattern string so
- * the sort is stable and deterministic across reader orderings.
+ * Deeper paths win (more segments = more specific). At equal depth the comparison
+ * is POSITION-AWARE: walk the two segment arrays slot-by-slot and, at the first
+ * position where one segment is static and the other dynamic, the STATIC one wins
+ * — so `/files/new` (static-then-static) sorts ahead of `/:category/new`, and
+ * `/listings/new` ahead of `/listings/:id`, the literal route shadowing a dynamic
+ * sibling AT THAT POSITION under first-match resolution. A whole-path
+ * static-vs-static (or otherwise identical-shape) pair falls back to the pattern
+ * string so the sort is stable and deterministic across reader orderings.
  *
  * The two pages compared here always have DISTINCT patterns — an exact-pattern
  * duplicate is refused upstream with `ROUTER_FILE_DUPLICATE_ROUTE` before the sort
@@ -311,9 +352,14 @@ function comparePageSpecificity(a: FileRoute, b: FileRoute): number {
     return b.segments.length - a.segments.length;
   }
 
-  const dynamicDelta = dynamicCount(a.segments) - dynamicCount(b.segments);
+  // Equal depth: at the first slot where one side is static and the other dynamic,
+  // the static segment is more specific and sorts earlier.
+  for (let i = 0; i < a.segments.length; i += 1) {
+    const aDynamic = DYNAMIC_SEGMENT.test(a.segments[i] as string);
+    const bDynamic = DYNAMIC_SEGMENT.test(b.segments[i] as string);
 
-  if (dynamicDelta !== 0) return dynamicDelta;
+    if (aDynamic !== bDynamic) return aDynamic ? 1 : -1;
+  }
 
   return a.pattern < b.pattern ? -1 : 1;
 }

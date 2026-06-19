@@ -15,7 +15,8 @@ export type RouterErrorCode =
   | "ROUTER_MALFORMED_PARAM"
   | "ROUTER_MISSING_PARAM"
   | "ROUTER_FILE_BAD_SEGMENT"
-  | "ROUTER_FILE_DUPLICATE_ROUTE";
+  | "ROUTER_FILE_DUPLICATE_ROUTE"
+  | "ROUTER_FILE_DUPLICATE_PARAM";
 
 /** Anything the router can refuse to do. */
 export class RouterError extends LestoError<RouterErrorCode> {
