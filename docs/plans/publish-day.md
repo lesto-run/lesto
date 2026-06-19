@@ -81,27 +81,39 @@ below) — this blocks filling correct provenance/repo metadata.
 - `create-lesto` resolves `@lesto/*` via an injected pin: published `^0.1.0` default,
   `file:` pins under `--local` (so `LESTO_DEP_RANGE` must satisfy the published minor).
 
-## Execution checklist (the publish-day batch — gated on the decisions below)
+## Execution checklist (the publish-day batch)
 
-1. [ ] Re-run the closure name-availability check (all `E404`).
-2. [ ] Set `repository` / `homepage` / `bugs` from the chosen GitHub URL on every closure pkg.
-3. [ ] For each of the 28 closure packages: drop `private`, set `version: 0.1.0`, add
-       `publishConfig.access: public`, add `files: ["src"]`.
-4. [ ] Reconcile content-\* metadata (gap B): remove the Docks repo/homepage/author + the
-       `dist` `main`/`module`/`types`.
-5. [ ] Decide preview trim: a hello-world app currently drags in `content-*` packages tagged
+1. [ ] Re-run the closure name-availability check (all `E404`) — **on the morning of publish**.
+2. [x] Set `repository` / `homepage` / `bugs` → `github.com/lesto-run/lesto` on every pkg. _(982a62d, 85ad687)_
+3. [x] For all **29** publishable packages (28 closure **+ `create-lesto`**, the entrypoint):
+       drop `private`, set `version: 0.1.0`, add `publishConfig.access: public`, add
+       `files: ["src"]`. _(982a62d, 85ad687)_
+4. [x] Reconcile content-\* metadata (gap B): removed the Docks repo/homepage/author + the
+       `dist` `main`/`module`/`types`. _(982a62d)_
+5. [ ] **Decide preview trim** (open): a hello-world app drags in `content-*` packages tagged
        PREVIEW in ARCHITECTURE.md (dependency-shape change, tracked separately).
-6. [ ] Confirm `LESTO_DEP_RANGE` (`^0.1.0`) satisfies the published `0.1.0`.
-7. [ ] Add the `bun pm pack` → scaffold-from-tarball → boot CI job (RELEASING.md §Verifying,
-       "next increment").
-8. [ ] `bun run version` (consume changesets) → commit.
+6. [x] `LESTO_DEP_RANGE` is `^0.1.0` — satisfies the published `0.1.0` (`^0.1.0` resolves
+       `0.1.x`). No change needed; bump in lockstep if the surface's minor moves.
+7. [ ] Add the `bun pm pack` → scaffold-from-tarball → boot CI job (RELEASING.md §Verifying).
+       **This must also settle the open caveat below** before any publish.
+8. [ ] `bun run version` — for the FIRST release this is a no-op (versions set directly in
+       step 3, no queued changesets); it begins mattering for the next bump.
 9. [ ] Set `RELEASE_ENABLED=true` + add `NPM_TOKEN` secret → `bun run release` publishes with
        provenance. **(Irreversible — the explicit go.)**
 
-## Decisions needed before the batch
+## OPEN CAVEAT — does a `.ts`-direct package run under `npm`/node?
 
-- **GitHub repo URL** for `repository`/`homepage`/`bugs` (no remote is configured).
-- **Go/no-go on running steps 2–4 now** (reversible — nothing publishes until step 9) vs
-  staging them behind the explicit publish-day go.
-- **Preview trim** (step 5): ship the preview `content-*` in the 1.0 closure, or narrow the
-  supported surface first.
+Lesto ships `.ts` and relies on Bun (exports → `./src/*.ts`; `create-lesto`'s `bin` is
+`./src/bin.ts`). `bun create lesto` runs it fine, but `npm create lesto` invokes the bin under
+**node**, which cannot execute TypeScript without a loader. The package descriptions promise
+both. This is framework-wide (every package ships `.ts`), so it is NOT a metadata fix — it is
+the thing the pack-and-boot CI job (step 7) must prove or expose **before** flipping
+`RELEASE_ENABLED`. Options when we get there: a published build step, a `.ts`-loader shebang on
+the bin, or scoping the supported runner to Bun in the docs.
+
+## Decisions
+
+- ✅ **GitHub repo URL** — `github.com/lesto-run/lesto` (used for repository/homepage/bugs).
+- ✅ **Go on the de-privatization batch** — done now (reversible; nothing publishes until
+  `RELEASE_ENABLED` + the explicit step-9 go).
+- ⏳ **Preview trim** (step 5) — still open.
