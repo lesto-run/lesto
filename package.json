@@ -16,6 +16,7 @@
     "ws:format:check": "bun run --filter '@lesto/*' format:check",
     "ws:typecheck": "bun run --filter '@lesto/*' typecheck",
     "test:types": "tsc -p type-tests/tsconfig.json",
+    "test:pack-boot": "node scripts/pack-and-boot.mjs",
     "changeset": "changeset",
     "version": "changeset version",
     "release": "changeset publish"
