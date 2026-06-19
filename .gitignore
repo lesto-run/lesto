@@ -17,3 +17,9 @@ playwright-report/
 
 # Wrangler local dev cache
 .wrangler/
+
+# Sandbox out-of-repo write redirect (e.g. packages/runtime/var/)
+var/
+
+# Leftover scratch tests from interactive debugging
+**/*_scratch.test.ts
