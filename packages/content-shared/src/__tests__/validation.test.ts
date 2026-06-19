@@ -349,6 +349,19 @@ describe("validateRange", () => {
     );
   });
 
+  it("throws ValidationError for NaN instead of degrading to an empty slice", () => {
+    expect(() => validateRange(Number.NaN, 1, 100, "page")).toThrow(ValidationError);
+    expect(() => validateRange(Number.NaN, 1, 100, "page")).toThrow(
+      "page must be a finite number, got NaN",
+    );
+  });
+
+  it("throws ValidationError for a non-finite value (Infinity)", () => {
+    expect(() => validateRange(Number.POSITIVE_INFINITY, 1, 100, "perPage")).toThrow(
+      "perPage must be a finite number, got Infinity",
+    );
+  });
+
   it("includes context in error", () => {
     try {
       validateRange(150, 0, 100, "percentage");

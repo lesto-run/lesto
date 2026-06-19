@@ -102,6 +102,17 @@ export function createValidator<T>(schema: z.ZodType<T>, context: string): (data
  * Validate that a number is within a range.
  */
 export function validateRange(value: number, min: number, max: number, name: string): number {
+  // NaN/Infinity slip past `< min`/`> max` (every comparison with NaN is false),
+  // so a NaN page would degrade to an empty slice instead of erroring. Reject
+  // non-finite values up front with the same coded ValidationError.
+  if (!Number.isFinite(value)) {
+    throw new ValidationError(`${name} must be a finite number, got ${value}`, {
+      value,
+      min,
+      max,
+      name,
+    });
+  }
   if (value < min || value > max) {
     throw new ValidationError(`${name} must be between ${min} and ${max}, got ${value}`, {
       value,
