@@ -1,0 +1,292 @@
+/**
+ * The Anthropic Messages API, behind the `LanguageModel` interface.
+ *
+ * This is the ONLY file that knows the Anthropic wire format. It is deliberately
+ * a screen of `fetch`-shaped code rather than a vendored `@anthropic-ai/sdk` —
+ * the same call `@lesto/auth` makes doing TOTP over `node:crypto` (ADR 0020).
+ * The transport is injected (defaults to global `fetch`) so request building,
+ * response parsing, and SSE stream parsing are all unit-testable without a
+ * network and the package stays edge-portable (no Node-only SDK globals).
+ *
+ * The current Claude models (ADR 0021): Opus 4.8 `claude-opus-4-8`, Sonnet 4.6
+ * `claude-sonnet-4-6`, Haiku 4.5 `claude-haiku-4-5-20251001`, Fable 5
+ * `claude-fable-5`. The default below is Opus 4.8.
+ */
+
+import { AiError } from "./errors";
+
+import type {
+  GenerateOptions,
+  GenerateResult,
+  LanguageModel,
+  StopReason,
+  StreamDelta,
+  ToolCall,
+  Transport,
+  Usage,
+} from "./types";
+
+const MESSAGES_URL = "https://api.anthropic.com/v1/messages";
+
+const ANTHROPIC_VERSION = "2023-06-01";
+
+/** The default model: current Claude Opus (ADR 0021). */
+export const DEFAULT_MODEL_ID = "claude-opus-4-8";
+
+/** A sensible output ceiling when a call does not name one. */
+const DEFAULT_MAX_TOKENS = 1024;
+
+export interface AnthropicConfig {
+  /** The Anthropic API key. */
+  readonly apiKey: string;
+  /** Override the default model id (`claude-opus-4-8`). */
+  readonly defaultModelId?: string;
+  /** The HTTP transport. Defaults to global `fetch`; inject a fake in tests. */
+  readonly transport?: Transport;
+}
+
+/**
+ * Build a normalized `LanguageModel` over the Anthropic Messages API.
+ *
+ *   const model = createAnthropic({ apiKey: env.ANTHROPIC_API_KEY });
+ *
+ * Pass `transport` to drive the pure core off canned responses with no network.
+ */
+export function createAnthropic(config: AnthropicConfig): LanguageModel {
+  const transport = config.transport ?? ((request) => fetch(request));
+  const defaultModelId = config.defaultModelId ?? DEFAULT_MODEL_ID;
+
+  const headers = (): Record<string, string> => ({
+    "content-type": "application/json",
+    "x-api-key": config.apiKey,
+    "anthropic-version": ANTHROPIC_VERSION,
+  });
+
+  // The request body is identical for streamed and non-streamed calls except for
+  // the `stream` flag — assembling it once keeps the two builders honest.
+  const body = (options: GenerateOptions, stream: boolean): string => {
+    const payload: Record<string, unknown> = {
+      model: options.modelId ?? defaultModelId,
+      max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
+      messages: options.messages.map((m) => ({ role: m.role, content: m.content })),
+      stream,
+    };
+
+    if (options.system !== undefined) {
+      payload["system"] = options.system;
+    }
+
+    if (options.tools !== undefined) {
+      payload["tools"] = Object.entries(options.tools).map(([name, tool]) => ({
+        name,
+        description: tool.description,
+        input_schema: tool.inputSchema,
+      }));
+    }
+
+    return JSON.stringify(payload);
+  };
+
+  return {
+    defaultModelId,
+    transport,
+
+    buildRequest(options) {
+      return new Request(MESSAGES_URL, {
+        method: "POST",
+        headers: headers(),
+        body: body(options, false),
+      });
+    },
+
+    buildStreamRequest(options) {
+      return new Request(MESSAGES_URL, {
+        method: "POST",
+        headers: headers(),
+        body: body(options, true),
+      });
+    },
+
+    parseResponse,
+    parseStream,
+  };
+}
+
+/**
+ * Parse a non-streamed Messages response into a normalized {@link GenerateResult}.
+ *
+ * A non-2xx is the loud failure: `AI_HTTP_ERROR` with the status in `details`, so
+ * the boundary branches on the code and the status, never on the message string.
+ */
+export async function parseResponse(response: Response): Promise<GenerateResult> {
+  if (!response.ok) {
+    throw new AiError("AI_HTTP_ERROR", `Anthropic responded ${response.status}.`, {
+      status: response.status,
+    });
+  }
+
+  const json = (await response.json()) as AnthropicMessage;
+
+  const text = json.content
+    .filter((block): block is TextBlock => block.type === "text")
+    .map((block) => block.text)
+    .join("");
+
+  const toolCalls: ToolCall[] = json.content
+    .filter((block): block is ToolUseBlock => block.type === "tool_use")
+    .map((block) => ({ id: block.id, name: block.name, input: block.input }));
+
+  return {
+    text,
+    toolCalls,
+    stopReason: normalizeStopReason(json.stop_reason),
+    usage: normalizeUsage(json.usage),
+  };
+}
+
+/**
+ * Parse the Messages SSE stream into normalized text deltas.
+ *
+ * The stream is a sequence of `event: <type>\n data: <json>\n\n` frames; we care
+ * about `content_block_delta` frames carrying a `text_delta`. The parser is a
+ * pure async transform over the response's `ReadableStream<Uint8Array>` — fed a
+ * canned stream in tests, asserting the exact deltas, with no network.
+ *
+ * A non-2xx fails loud as `AI_HTTP_ERROR`; a frame whose `data:` is not JSON
+ * fails as `AI_STREAM_MALFORMED` rather than silently dropping tokens.
+ */
+export async function* parseStream(response: Response): AsyncIterable<StreamDelta> {
+  if (!response.ok) {
+    throw new AiError("AI_HTTP_ERROR", `Anthropic responded ${response.status}.`, {
+      status: response.status,
+    });
+  }
+
+  if (response.body === null) {
+    throw new AiError("AI_STREAM_MALFORMED", "Streaming response had no body.");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const reader = response.body.getReader();
+
+  // Read chunks, accumulate, and emit one delta per complete `\n\n`-terminated
+  // frame. A partial frame stays in the buffer until the next chunk completes it,
+  // so a token split across two network reads is never lost or double-counted.
+  for (;;) {
+    const { done, value } = await reader.read();
+
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary = buffer.indexOf("\n\n");
+
+    while (boundary !== -1) {
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+
+      const delta = parseFrame(frame);
+
+      if (delta !== undefined) {
+        yield delta;
+      }
+
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
+}
+
+/**
+ * Turn one SSE frame into a delta, or `undefined` for a frame we ignore
+ * (`message_start`, `content_block_start`, `ping`, `message_stop`, …).
+ *
+ * A `data:` line that is present but not valid JSON is malformed — refused
+ * loudly. The terminal `data: [DONE]` sentinel some providers send is ignored.
+ */
+function parseFrame(frame: string): StreamDelta | undefined {
+  const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
+
+  if (dataLine === undefined) {
+    return undefined;
+  }
+
+  const raw = dataLine.slice("data:".length).trim();
+
+  if (raw === "" || raw === "[DONE]") {
+    return undefined;
+  }
+
+  let event: AnthropicStreamEvent;
+
+  try {
+    event = JSON.parse(raw) as AnthropicStreamEvent;
+  } catch {
+    throw new AiError("AI_STREAM_MALFORMED", "Stream frame data was not valid JSON.", { frame });
+  }
+
+  if (
+    event.type === "content_block_delta" &&
+    event.delta?.type === "text_delta" &&
+    event.delta.text !== undefined
+  ) {
+    return { text: event.delta.text };
+  }
+
+  return undefined;
+}
+
+/** Map the provider's stop reason onto our union, defaulting unknowns to `end_turn`. */
+function normalizeStopReason(reason: string | null): StopReason {
+  switch (reason) {
+    case "tool_use":
+      return "tool_use";
+    case "max_tokens":
+      return "max_tokens";
+    case "stop_sequence":
+      return "stop_sequence";
+    default:
+      return "end_turn";
+  }
+}
+
+/** Normalize the provider's usage block, tolerating missing counts as zero. */
+function normalizeUsage(usage: AnthropicUsage | undefined): Usage {
+  return {
+    inputTokens: usage?.input_tokens ?? 0,
+    outputTokens: usage?.output_tokens ?? 0,
+  };
+}
+
+// ── Anthropic wire shapes (the only place they appear) ──────────────────────
+
+interface TextBlock {
+  readonly type: "text";
+  readonly text: string;
+}
+
+interface ToolUseBlock {
+  readonly type: "tool_use";
+  readonly id: string;
+  readonly name: string;
+  readonly input: Record<string, unknown>;
+}
+
+type ContentBlock = TextBlock | ToolUseBlock | { readonly type: string };
+
+interface AnthropicUsage {
+  readonly input_tokens?: number;
+  readonly output_tokens?: number;
+}
+
+interface AnthropicMessage {
+  readonly content: readonly ContentBlock[];
+  readonly stop_reason: string | null;
+  readonly usage?: AnthropicUsage;
+}
+
+interface AnthropicStreamEvent {
+  readonly type: string;
+  readonly delta?: { readonly type?: string; readonly text?: string };
+}

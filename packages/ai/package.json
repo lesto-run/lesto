@@ -1,0 +1,35 @@
+{
+  "name": "@lesto/ai",
+  "version": "0.0.0",
+  "description": "PREVIEW (not part of the supported v1 surface) — app-builder AI primitives: a provider-agnostic, dependency-free model layer (generateText/streamText), a bounded tool/agent loop, a VectorStore retrieval seam, and an evals/guardrails hook. Anthropic Messages API over an INJECTED fetch transport so the pure core is testable without network. Experimental, coverage-gate-exempt (declares no test:cov). See ADR 0021.",
+  "type": "module",
+  "private": true,
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "keywords": [
+    "lesto",
+    "ai",
+    "llm",
+    "anthropic",
+    "claude",
+    "agent",
+    "rag",
+    "preview"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@lesto/errors": "workspace:*"
+  }
+}

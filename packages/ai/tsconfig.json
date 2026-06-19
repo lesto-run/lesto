@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+
+  "compilerOptions": {
+    "rootDir": ".",
+    "types": ["node"],
+
+    // streamText parses an SSE ReadableStream<Uint8Array>; the WHATWG stream +
+    // TextDecoder + fetch Request/Response types come from the DOM lib, the same
+    // platform surface a Worker runtime exposes natively.
+    "lib": ["ES2023", "DOM"]
+  },
+
+  "include": ["src", "test"]
+}
