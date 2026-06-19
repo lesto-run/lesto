@@ -11,6 +11,9 @@ import { LestoError } from "@lesto/errors";
 export { LestoError };
 
 export type QueueErrorCode =
+  | "QUEUE_BATCH_EMPTY"
+  | "QUEUE_BATCH_FORWARD_DEPENDENCY"
+  | "QUEUE_BATCH_NOT_FOUND"
   | "QUEUE_HANDLER_NOT_A_FUNCTION"
   | "QUEUE_HANDLER_NOT_FOUND"
   | "QUEUE_INVALID_CRON_EXPRESSION"

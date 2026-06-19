@@ -9,6 +9,13 @@
  *   const schedule = new Scheduler({ queue });
  *   schedule.cron("0 9 * * *", "daily_digest");
  *   schedule.start();
+ *
+ *   // A batch with a dependency edge: "thumbnail" waits for "ingest" to finish.
+ *   const { id } = await queue.enqueueBatch("import_photo", [
+ *     { name: "ingest", payload: { url } },                 // step 0 — starts ready
+ *     { name: "thumbnail", payload: { size: 256 }, dependsOn: [0] }, // step 1 — starts blocked
+ *   ]);
+ *   await queue.batch(id); // { total: 2, counts, state: "pending" | "completed" | "failed" }
  */
 
 export { Queue, installSchema } from "./queue";
@@ -39,6 +46,10 @@ export type { PermanentFailure, QueueErrorCode } from "./errors";
 export { systemClock } from "./time";
 
 export type {
+  BatchHandle,
+  BatchState,
+  BatchStep,
+  BatchSummary,
   Clock,
   Dialect,
   EnqueueOptions,
@@ -50,6 +61,7 @@ export type {
   JobStatus,
   JsonObject,
   JsonValue,
+  ListJobsOptions,
   QueueStats,
   RunOutcome,
   RunResult,

@@ -1,0 +1,26 @@
+{
+  "name": "@lesto/example-queue-dashboard",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A runnable end-to-end Lesto app: an operator dashboard over @lesto/queue — jobs in-flight/failed/scheduled, retry/discard, DLQ inspection, throughput — dogfooding @lesto/ui islands and the @lesto/admin inspect surface, plus a batch with a dependency edge that completes in order.",
+  "type": "module",
+  "scripts": {
+    "start": "bun run run.ts",
+    "serve": "bun run serve.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/admin": "workspace:*",
+    "@lesto/db": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/queue": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/ui": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "better-sqlite3": "^11.10.0",
+    "react": "^19",
+    "react-dom": "^19",
+    "zod": "^4.0.0"
+  }
+}

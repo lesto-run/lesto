@@ -2,6 +2,10 @@ import { isPermanentFailure, QueueError } from "./errors";
 import { isoAfter, nowIso, systemClock } from "./time";
 
 import type {
+  BatchHandle,
+  BatchState,
+  BatchStep,
+  BatchSummary,
   Clock,
   Dialect,
   EnqueueOptions,
@@ -10,6 +14,7 @@ import type {
   JobObserver,
   JobStatus,
   JsonValue,
+  ListJobsOptions,
   QueueStats,
   RunOutcome,
   RunResult,
@@ -17,6 +22,12 @@ import type {
 } from "./types";
 
 const TABLE = "lesto_jobs";
+
+/** The batch-metadata table: one row per {@link Queue.enqueueBatch} call. */
+const BATCHES_TABLE = "lesto_job_batches";
+
+/** The dependency-edge table: one row per `(job, depends-on)` pair. */
+const DEPS_TABLE = "lesto_job_deps";
 
 /**
  * The durable job queue.
@@ -61,7 +72,19 @@ export async function installSchema(db: SqlDatabase, dialect: Dialect = "sqlite"
       ? "BIGINT  PRIMARY KEY GENERATED ALWAYS AS IDENTITY"
       : "INTEGER PRIMARY KEY AUTOINCREMENT";
 
+  const batchIdColumn =
+    dialect === "postgres"
+      ? "BIGINT  PRIMARY KEY GENERATED ALWAYS AS IDENTITY"
+      : "INTEGER PRIMARY KEY AUTOINCREMENT";
+
   await db.exec(`
+    CREATE TABLE IF NOT EXISTS ${BATCHES_TABLE} (
+      id            ${batchIdColumn},
+      name          TEXT    NOT NULL,
+      total         INTEGER NOT NULL,
+      created_at    TEXT    NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS ${TABLE} (
       id            ${idColumn},
       queue         TEXT    NOT NULL DEFAULT 'default',
@@ -74,6 +97,7 @@ export async function installSchema(db: SqlDatabase, dialect: Dialect = "sqlite"
       run_at        TEXT    NOT NULL,
       locked_until  TEXT,
       last_error    TEXT,
+      batch_id      INTEGER,
       created_at    TEXT    NOT NULL,
       updated_at    TEXT    NOT NULL,
       finished_at   TEXT
@@ -81,6 +105,22 @@ export async function installSchema(db: SqlDatabase, dialect: Dialect = "sqlite"
 
     CREATE INDEX IF NOT EXISTS idx_${TABLE}_claim
       ON ${TABLE} (status, queue, run_at);
+
+    CREATE INDEX IF NOT EXISTS idx_${TABLE}_batch
+      ON ${TABLE} (batch_id);
+
+    -- The dependency edges. (job_id, depends_on_id) is the natural key; a job
+    -- with N prerequisites has N rows. Indexed BOTH ways: by job (read a job's
+    -- unmet deps when deciding whether to release it) and by prerequisite (find
+    -- the dependents of a just-finished job in the release sweep).
+    CREATE TABLE IF NOT EXISTS ${DEPS_TABLE} (
+      job_id         INTEGER NOT NULL,
+      depends_on_id  INTEGER NOT NULL,
+      PRIMARY KEY (job_id, depends_on_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_${DEPS_TABLE}_depends_on
+      ON ${DEPS_TABLE} (depends_on_id);
   `);
 
   // A PARTIAL index over only the rows the claim subselect ever scans —
@@ -115,6 +155,7 @@ interface Row {
   run_at: string;
   locked_until: string | null;
   last_error: string | null;
+  batch_id: number | null;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -144,6 +185,10 @@ function hydrateMeta(row: Row): Job {
     runAt: row.run_at,
     lockedUntil: row.locked_until,
     lastError: row.last_error,
+    // `batch_id` is a nullable BIGINT on Postgres (string when present, null
+    // when absent); coerce the present case to `number` and pass the null
+    // through, so `Job.batchId` is always `number | null` as its type promises.
+    batchId: row.batch_id === null ? null : Number(row.batch_id),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     finishedAt: row.finished_at,
@@ -175,6 +220,26 @@ function hydrate(row: Row): Job {
   }
 
   return { ...meta, payload };
+}
+
+/**
+ * Roll a batch's per-status job counts up to its lifecycle {@link BatchState}.
+ *
+ * `failed` WINS over `completed`/`pending`: one failed job means the batch can
+ * never complete (a job that depended on the failed one stays `blocked`
+ * forever), so an operator should see `failed` even while other jobs are still
+ * running. With no failure, `completed` iff every job is `done`; otherwise
+ * `pending`. A count is read defensively (`?? 0`) because an absent status is
+ * simply zero of it.
+ */
+function batchState(counts: Partial<Record<JobStatus, number>>): BatchState {
+  if ((counts.failed ?? 0) > 0) {
+    return "failed";
+  }
+
+  const total = (Object.values(counts) as number[]).reduce((sum, n) => sum + n, 0);
+
+  return (counts.done ?? 0) === total ? "completed" : "pending";
 }
 
 export interface QueueOptions {
@@ -330,6 +395,186 @@ export class Queue {
       ])) as { id: number };
 
     return Number(row.id);
+  }
+
+  /**
+   * Enqueue a set of jobs as one BATCH, with optional dependency edges between
+   * them, atomically. Returns the batch id and every job id it created.
+   *
+   * Each {@link BatchStep} may declare `dependsOn` — zero-based indices of
+   * *earlier* steps in the same call. A step with unmet dependencies is enqueued
+   * `blocked` and is never claimed; one with none is enqueued `ready` and is
+   * claimable immediately. As each prerequisite reaches `done`, the dependency
+   * release (run from `complete`) re-checks the dependents and flips a job to
+   * `ready` once ALL of its prerequisites are done — so a batch with a
+   * dependency completes IN ORDER: B never runs before A.
+   *
+   * The whole write — the batch row, every job row, every edge — runs in ONE
+   * {@link SqlDatabase.transaction}, so a batch is all-or-nothing: a fault
+   * mid-insert rolls the batch back rather than leaving a half-wired DAG that
+   * could deadlock (a `blocked` job whose missing prerequisite was never
+   * inserted would wait forever).
+   *
+   * `dependsOn` must point BACKWARDS (a smaller index). A forward or self edge
+   * is rejected eagerly with `QUEUE_BATCH_FORWARD_DEPENDENCY` — it could only
+   * describe a job depending on one not yet inserted, or a cycle, neither of
+   * which can ever complete. An empty `steps` is rejected with
+   * `QUEUE_BATCH_EMPTY`: a batch of nothing is a caller bug, not a no-op.
+   */
+  async enqueueBatch(name: string, steps: readonly BatchStep[]): Promise<BatchHandle> {
+    if (steps.length === 0) {
+      throw new QueueError("QUEUE_BATCH_EMPTY", `Batch "${name}" has no steps.`, { name });
+    }
+
+    // Validate the edges BEFORE opening the transaction — a malformed DAG is a
+    // caller bug, caught synchronously, never a rolled-back partial write.
+    steps.forEach((step, index) => {
+      for (const dep of step.dependsOn ?? []) {
+        if (dep >= index) {
+          throw new QueueError(
+            "QUEUE_BATCH_FORWARD_DEPENDENCY",
+            `Batch "${name}" step ${index} depends on step ${dep}, which is not an earlier step.`,
+            { name, step: index, dependsOn: dep },
+          );
+        }
+      }
+    });
+
+    const now = nowIso(this.clock);
+
+    return this.db.transaction(async (tx) => {
+      const batchRow = (await tx
+        .prepare(
+          `INSERT INTO ${BATCHES_TABLE} (name, total, created_at)
+           VALUES (?, ?, ?)
+           RETURNING id`,
+        )
+        .get([name, steps.length, now])) as { id: number };
+
+      const batchId = Number(batchRow.id);
+
+      // Insert each step in order. A step with any dependency starts `blocked`
+      // (invisible to the claim until released); one with none starts `ready`.
+      // The job ids are collected in `steps` order so a later step's edges can
+      // reference an earlier step's real id.
+      const jobIds: number[] = [];
+
+      for (const step of steps) {
+        const options = step.options ?? {};
+        const blocked = (step.dependsOn ?? []).length > 0;
+
+        const jobRow = (await tx
+          .prepare(
+            `INSERT INTO ${TABLE}
+               (queue, name, payload, status, priority, max_attempts, run_at, batch_id, created_at, updated_at)
+             VALUES
+               (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             RETURNING id`,
+          )
+          .get([
+            options.queue ?? this.defaultQueue,
+            step.name,
+            JSON.stringify(step.payload ?? {}),
+            blocked ? "blocked" : "ready",
+            options.priority ?? 0,
+            options.maxAttempts ?? 5,
+            this.eligibleAt(options),
+            batchId,
+            now,
+            now,
+          ])) as { id: number };
+
+        const jobId = Number(jobRow.id);
+        jobIds.push(jobId);
+
+        for (const dep of step.dependsOn ?? []) {
+          // `dep < index` was validated above, so `jobIds[dep]` is already set.
+          await tx
+            .prepare(`INSERT INTO ${DEPS_TABLE} (job_id, depends_on_id) VALUES (?, ?)`)
+            .run([jobId, jobIds[dep]]);
+        }
+      }
+
+      return { id: batchId, jobIds };
+    });
+  }
+
+  /**
+   * Release any `blocked` job whose prerequisites are now ALL done.
+   *
+   * Run from {@link Queue.complete} the instant a job reaches `done`: find the
+   * jobs that depend on it, and for each, flip it `blocked → ready` IFF it has no
+   * remaining dependency on a job that is not yet `done`. A dependent with other,
+   * still-unfinished prerequisites is left `blocked` — it is released only by the
+   * completion of its LAST prerequisite, so a job behind a fan-in waits for all
+   * of its inputs.
+   *
+   * The flip is itself fenced on `status = 'blocked'`: a dependent already
+   * released (by a concurrent completion of its last prerequisite) matches zero
+   * rows and is a no-op, so the at-least-once `complete` — which can run twice if
+   * a worker is reclaimed — never double-releases or resurrects a job.
+   */
+  private async releaseDependents(jobId: number): Promise<void> {
+    const now = nowIso(this.clock);
+
+    // `EXISTS (… an unfinished prerequisite …)` reads "this dependent still has
+    // a dep on a job that isn't done yet." We release exactly the blocked
+    // dependents for which NO such row exists — every prerequisite is `done`.
+    await this.db
+      .prepare(
+        `UPDATE ${TABLE}
+            SET status = 'ready', updated_at = ?
+          WHERE status = 'blocked'
+            AND id IN (SELECT job_id FROM ${DEPS_TABLE} WHERE depends_on_id = ?)
+            AND NOT EXISTS (
+              SELECT 1
+                FROM ${DEPS_TABLE} d
+                JOIN ${TABLE} p ON p.id = d.depends_on_id
+               WHERE d.job_id = ${TABLE}.id
+                 AND p.status <> 'done'
+            )`,
+      )
+      .run([now, jobId]);
+  }
+
+  /**
+   * A batch's health: per-status counts over its jobs plus a derived `state`
+   * (`pending` / `completed` / `failed`) — for the operator dashboard and tests.
+   *
+   * Refuses an unknown id with `QUEUE_BATCH_NOT_FOUND` rather than reporting a
+   * hollow zero-job batch, so a typo or a pruned batch is a loud, coded error.
+   */
+  async batch(id: number): Promise<BatchSummary> {
+    const meta = (await this.db
+      .prepare(`SELECT id, name, total, created_at FROM ${BATCHES_TABLE} WHERE id = ?`)
+      .get([id])) as
+      | { id: number; name: string; total: string | number; created_at: string }
+      | undefined;
+
+    if (!meta) {
+      throw new QueueError("QUEUE_BATCH_NOT_FOUND", `No batch with id ${id}.`, { id });
+    }
+
+    // Per-status counts over the batch's jobs. `COUNT(*)` is a string on
+    // Postgres → coerced via `Number()`, the same as `stats`.
+    const rows = (await this.db
+      .prepare(`SELECT status, COUNT(*) AS n FROM ${TABLE} WHERE batch_id = ? GROUP BY status`)
+      .all([id])) as Array<{ status: JobStatus; n: string | number }>;
+
+    const counts = rows.reduce<Partial<Record<JobStatus, number>>>((acc, row) => {
+      acc[row.status] = Number(row.n);
+
+      return acc;
+    }, {});
+
+    return {
+      id: Number(meta.id),
+      name: meta.name,
+      total: Number(meta.total),
+      counts,
+      state: batchState(counts),
+      createdAt: meta.created_at,
+    };
   }
 
   /** Return any job stranded past its visibility deadline to `ready`. */
@@ -678,6 +923,111 @@ export class Queue {
     return row ? hydrate(row) : null;
   }
 
+  // ---- the operator surface: what a dashboard reads + acts on ----
+  //
+  // `list` is the dashboard's read (jobs by status, paged); `retry` and
+  // `discard` are its two management verbs. They are deliberately OUTSIDE the
+  // claim/fence lifecycle — an operator acting from a UI is not a worker holding
+  // a visibility lock, so these transitions are unfenced and idempotent by their
+  // WHERE clause (retry only a `failed` job, discard only a non-`running` one).
+
+  /**
+   * List jobs for a dashboard: filtered by `status` and/or `queue`, paged,
+   * newest-updated first.
+   *
+   * Ordered by `updated_at DESC, id DESC` so the most recently-touched jobs (a
+   * just-failed job, a just-finished one) surface at the top — what an operator
+   * watching a queue wants to see first — with `id` breaking ties for a stable
+   * page. A poison (unparseable) payload row is tolerated: it hydrates through
+   * the same coded `QUEUE_POISON_PAYLOAD` path as `find`, so one corrupt row is a
+   * loud, branchable error rather than a silent `SyntaxError` mid-list.
+   */
+  async list(options: ListJobsOptions = {}): Promise<Job[]> {
+    const limit = options.limit ?? 50;
+    const offset = options.offset ?? 0;
+
+    // Build the WHERE from only the filters that are present, so an absent
+    // `status`/`queue` widens rather than matches `NULL`. Params track the
+    // clauses positionally.
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+
+    if (options.status !== undefined) {
+      clauses.push("status = ?");
+      params.push(options.status);
+    }
+
+    if (options.queue !== undefined) {
+      clauses.push("queue = ?");
+      params.push(options.queue);
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+
+    const rows = (await this.db
+      .prepare(
+        `SELECT * FROM ${TABLE} ${where}
+          ORDER BY updated_at DESC, id DESC
+          LIMIT ? OFFSET ?`,
+      )
+      .all([...params, limit, offset])) as Row[];
+
+    return rows.map(hydrate);
+  }
+
+  /**
+   * Retry a `failed` job NOW — the dashboard's "retry" button.
+   *
+   * Resets the job to `ready` with its attempt counter cleared and `run_at` set
+   * to now, so a worker claims it on the next poll. Fenced on `status = 'failed'`:
+   * retrying a `done` or in-flight job is a no-op (returns `false`), so a
+   * double-click or a stale dashboard view can never resurrect a running job.
+   * Returns whether a row was actually re-queued.
+   */
+  async retry(id: number): Promise<boolean> {
+    const now = nowIso(this.clock);
+
+    const result = await this.db
+      .prepare(
+        `UPDATE ${TABLE}
+            SET status = 'ready', attempts = 0, last_error = NULL,
+                locked_until = NULL, finished_at = NULL, run_at = ?, updated_at = ?
+          WHERE id = ? AND status = 'failed'`,
+      )
+      .run([now, now, id]);
+
+    return result.changes > 0;
+  }
+
+  /**
+   * Discard a job — the dashboard's "discard"/"delete" button.
+   *
+   * Deletes the row outright (and any dependency edges naming it). Refuses a
+   * `running` job: discarding a row a worker holds would let that worker's
+   * terminal write race a delete, so an operator must wait for it to finish or
+   * for its visibility to lapse. Returns whether a row was removed (`false` for
+   * an unknown id or a running job).
+   */
+  async discard(id: number): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const result = await tx
+        .prepare(`DELETE FROM ${TABLE} WHERE id = ? AND status <> 'running'`)
+        .run([id]);
+
+      if (result.changes === 0) {
+        return false;
+      }
+
+      // Sweep the edges that named this job on either side, so a discarded job
+      // leaves no dangling dependency that could block a sibling forever.
+      await tx
+        .prepare(`DELETE FROM ${DEPS_TABLE} WHERE job_id = ? OR depends_on_id = ?`)
+        .run([id, id]);
+
+      return true;
+    });
+  }
+
   // ---- private: the three terminal transitions ----
   //
   // Each is FENCED by the claim lock as a token: `status = 'running' AND
@@ -691,13 +1041,26 @@ export class Queue {
     const now = nowIso(this.clock);
 
     // `?` order: now (finished_at), now (updated_at), id, locked_until (fence).
-    await this.db
+    const result = await this.db
       .prepare(
         `UPDATE ${TABLE}
             SET status = 'done', locked_until = NULL, finished_at = ?, updated_at = ?
           WHERE id = ? AND status = 'running' AND locked_until = ?`,
       )
       .run([now, now, job.id, job.lockedUntil]);
+
+    // Release dependents ONLY if THIS worker actually landed the `done`
+    // transition (the fence matched its row). A stale worker whose visibility
+    // lapsed matches zero rows here — it no longer owns the job, so it must not
+    // release the job's dependents on a completion it did not perform. Gating on
+    // `changes` keeps the at-least-once `complete` from double-advancing a DAG.
+    //
+    // A batchless job has no rows in `lesto_job_deps`, so the release `UPDATE`
+    // matches nothing and is a cheap no-op — the common path pays one indexed
+    // statement and the dependency machinery stays invisible to non-batch work.
+    if (result.changes > 0) {
+      await this.releaseDependents(job.id);
+    }
   }
 
   private async fail(job: Job, error: unknown): Promise<"retry" | "failed"> {

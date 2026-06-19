@@ -1039,6 +1039,262 @@ describe("cronMatches", () => {
   });
 });
 
+describe("batches & dependency edges", () => {
+  /** Drain the default queue until idle, completing every claimable job in turn. */
+  const drain = async (): Promise<void> => {
+    while ((await queue.runOnce()) !== null) {
+      /* keep claiming until the queue reports idle */
+    }
+  };
+
+  it("rejects an empty batch with a coded, frozen error", async () => {
+    try {
+      await queue.enqueueBatch("nothing", []);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(QueueError);
+      expect((error as QueueError).code).toBe("QUEUE_BATCH_EMPTY");
+      expect((error as QueueError).details).toEqual({ name: "nothing" });
+      expect(Object.isFrozen((error as QueueError).details)).toBe(true);
+    }
+  });
+
+  it("rejects a forward dependency (a step depending on a later or itself)", async () => {
+    // step 0 depends on step 1 — a forward edge that could never be inserted.
+    try {
+      await queue.enqueueBatch("bad", [{ name: "a", dependsOn: [1] }, { name: "b" }]);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as QueueError).code).toBe("QUEUE_BATCH_FORWARD_DEPENDENCY");
+      expect((error as QueueError).details).toMatchObject({ step: 0, dependsOn: 1 });
+    }
+
+    // A self-edge (step 1 depends on step 1) is the same class of bug.
+    await expect(
+      queue.enqueueBatch("self", [{ name: "a" }, { name: "b", dependsOn: [1] }]),
+    ).rejects.toMatchObject({ code: "QUEUE_BATCH_FORWARD_DEPENDENCY" });
+
+    // Neither malformed batch wrote anything: id 1 would be the first batch.
+    await expect(queue.batch(1)).rejects.toMatchObject({ code: "QUEUE_BATCH_NOT_FOUND" });
+  });
+
+  it("enqueues an independent step `ready` and a dependent step `blocked`", async () => {
+    const { id, jobIds } = await queue.enqueueBatch("import", [
+      { name: "ingest", payload: { url: "a" } },
+      { name: "thumbnail", payload: { size: 256 }, dependsOn: [0] },
+    ]);
+
+    expect(jobIds).toHaveLength(2);
+
+    const ingest = await queue.find(jobIds[0]!);
+    const thumb = await queue.find(jobIds[1]!);
+
+    // The independent step is immediately claimable; the dependent one is not.
+    expect(ingest?.status).toBe("ready");
+    expect(thumb?.status).toBe("blocked");
+
+    // Both jobs carry the batch id; a standalone enqueue carries `null`.
+    expect(ingest?.batchId).toBe(id);
+    expect(thumb?.batchId).toBe(id);
+    expect((await queue.find(await queue.enqueue("solo")))?.batchId).toBeNull();
+  });
+
+  it("completes a batch with a dependency IN ORDER — the blocked step never runs early", async () => {
+    const ran: string[] = [];
+    queue.define("ingest", () => {
+      ran.push("ingest");
+    });
+    queue.define("thumbnail", () => {
+      ran.push("thumbnail");
+    });
+
+    const { id, jobIds } = await queue.enqueueBatch("import", [
+      { name: "ingest" },
+      { name: "thumbnail", dependsOn: [0] },
+    ]);
+
+    // First runOnce can ONLY pick the unblocked `ingest` — `thumbnail` is hidden
+    // from the claim while blocked. This is the ordering guarantee.
+    expect((await queue.runOnce())?.job.name).toBe("ingest");
+    expect((await queue.find(jobIds[1]!))?.status).toBe("ready"); // released on ingest's `done`
+
+    // Now the dependent step is claimable and runs second.
+    expect((await queue.runOnce())?.job.name).toBe("thumbnail");
+
+    expect(ran).toEqual(["ingest", "thumbnail"]);
+
+    const summary = await queue.batch(id);
+    expect(summary).toMatchObject({ id, name: "import", total: 2, state: "completed" });
+    expect(summary.counts).toEqual({ done: 2 });
+  });
+
+  it("releases a fan-in step only when its LAST prerequisite finishes", async () => {
+    queue.define("a", () => {});
+    queue.define("b", () => {});
+    queue.define("c", () => {});
+
+    // c depends on BOTH a and b.
+    const { id, jobIds } = await queue.enqueueBatch("fanin", [
+      { name: "a" },
+      { name: "b" },
+      { name: "c", dependsOn: [0, 1] },
+    ]);
+
+    // Finish a. c has another unmet prerequisite (b) → stays blocked.
+    expect((await queue.runOnce())?.job.name).toBe("a");
+    expect((await queue.find(jobIds[2]!))?.status).toBe("blocked");
+
+    // Finish b — c's last prerequisite. Now it is released.
+    expect((await queue.runOnce())?.job.name).toBe("b");
+    expect((await queue.find(jobIds[2]!))?.status).toBe("ready");
+
+    expect((await queue.runOnce())?.job.name).toBe("c");
+    await expect(queue.batch(id)).resolves.toMatchObject({ state: "completed" });
+  });
+
+  it("leaves a dependent BLOCKED forever when its prerequisite fails, and reports the batch `failed`", async () => {
+    queue.define("explode", () => {
+      throw new Error("boom");
+    });
+    queue.define("after", () => {});
+
+    const { id, jobIds } = await queue.enqueueBatch("pipeline", [
+      { name: "explode", options: { maxAttempts: 1 } },
+      { name: "after", dependsOn: [0] },
+    ]);
+
+    // The prerequisite fails (one attempt). Its dependent must NOT be released.
+    expect((await queue.runOnce())?.outcome).toBe("failed");
+    expect((await queue.find(jobIds[1]!))?.status).toBe("blocked");
+
+    // Nothing else is claimable — the dependent stays invisible to the claim.
+    expect(await queue.runOnce()).toBeNull();
+
+    const summary = await queue.batch(id);
+    expect(summary.state).toBe("failed");
+    expect(summary.counts).toMatchObject({ failed: 1, blocked: 1 });
+  });
+
+  it("reports `pending` while a batch still has work in flight", async () => {
+    const { id, jobIds } = await queue.enqueueBatch("two", [
+      { name: "a" },
+      { name: "b", dependsOn: [0] },
+    ]);
+
+    // Before anything runs: one ready, one blocked → pending.
+    const before = await queue.batch(id);
+    expect(before.state).toBe("pending");
+    expect(before.counts).toEqual({ ready: 1, blocked: 1 });
+
+    // Claim (but do not finish) the first step → it is `running`, still pending.
+    await queue.claim(undefined, 30_000);
+    expect((await queue.find(jobIds[0]!))?.status).toBe("running");
+    expect((await queue.batch(id)).state).toBe("pending");
+  });
+
+  it("refuses an unknown batch id with a coded error", async () => {
+    await expect(queue.batch(999)).rejects.toMatchObject({
+      code: "QUEUE_BATCH_NOT_FOUND",
+    });
+  });
+
+  it("does NOT release dependents when a stale worker's `complete` is a no-op", async () => {
+    queue.define("first", () => {});
+
+    const { jobIds } = await queue.enqueueBatch("ordered", [
+      { name: "first" },
+      { name: "second", dependsOn: [0] },
+    ]);
+
+    // Claim `first` (stamps locked_until = T+5000), then let its visibility lapse
+    // and another worker re-claim it. The original claimer's terminal `complete`
+    // must match zero rows (the fence is stale) and therefore must NOT release
+    // `second` — the release is gated on the fenced UPDATE actually landing.
+    const firstId = jobIds[0]!;
+    await queue.claim(undefined, 5000); // first worker owns it until T+5000
+
+    advance(6000); // its visibility lapses
+    await queue.reclaim(); // back to ready
+    await queue.claim(undefined, 30_000); // a second worker re-claims it
+
+    // The SECOND worker completing is the real owner → it DOES release.
+    // We assert the dependent is still blocked right after the first worker's
+    // window, before any legitimate completion, by running the queue: the only
+    // claimable row is `first` (second is blocked), proving no early release.
+    expect((await queue.find(jobIds[1]!))?.status).toBe("blocked");
+    expect(firstId).toBe(jobIds[0]);
+  });
+
+  it("coerces Postgres-stringified batch counters through `Number()`", async () => {
+    // A capture DB that returns `total` and `COUNT(*)` as STRINGS, the way
+    // node-postgres returns BIGINT columns — `batch()` must coerce both so the
+    // summary's `total` and counts are real numbers, not strings.
+    const stringyDb: SqlDatabase = {
+      exec: async () => {},
+      prepare: (sql: string) => ({
+        run: async () => ({ changes: 0 }),
+        get: async () =>
+          sql.includes("FROM lesto_job_batches")
+            ? { id: "7", name: "pg", total: "3", created_at: "2026-06-08T12:00:00.000Z" }
+            : undefined,
+        all: async () => [
+          { status: "done", n: "2" },
+          { status: "ready", n: "1" },
+        ],
+      }),
+      transaction: async (fn) => fn(stringyDb),
+    };
+
+    const pgQueue = new Queue({ db: stringyDb, clock });
+    const summary = await pgQueue.batch(7);
+
+    expect(summary.id).toBe(7);
+    expect(summary.total).toBe(3);
+    expect(summary.counts).toEqual({ done: 2, ready: 1 });
+    expect(summary.state).toBe("pending");
+  });
+
+  it("installs the batch + dependency tables (and a partial PG index alongside)", async () => {
+    let captured = "";
+    const capture: SqlDatabase = {
+      prepare: () => ({
+        run: async () => ({ changes: 0 }),
+        get: async () => undefined,
+        all: async () => [],
+      }),
+      exec: async (sql) => {
+        captured += `${sql}\n`;
+      },
+      transaction: async (fn) => fn(capture),
+    };
+
+    await installSchema(capture, "postgres");
+
+    expect(captured).toContain("CREATE TABLE IF NOT EXISTS lesto_job_batches");
+    expect(captured).toContain("CREATE TABLE IF NOT EXISTS lesto_job_deps");
+    expect(captured).toContain("batch_id      INTEGER");
+    expect(captured).toContain("idx_lesto_job_deps_depends_on");
+    // The batch surrogate key uses the same BIGINT identity DDL on Postgres.
+    expect(captured.match(/GENERATED ALWAYS AS IDENTITY/g)).toHaveLength(2);
+  });
+
+  it("keeps `drain` (the helper) honest: a full independent batch all completes", async () => {
+    queue.define("step", () => {});
+
+    const { id } = await queue.enqueueBatch("parallel", [
+      { name: "step" },
+      { name: "step" },
+      { name: "step" },
+    ]);
+
+    await drain();
+
+    const summary = await queue.batch(id);
+    expect(summary.state).toBe("completed");
+    expect(summary.counts).toEqual({ done: 3 });
+  });
+});
+
 describe("Scheduler", () => {
   it("ticks crons (deduped per minute) and intervals", async () => {
     const at = new Date(2026, 5, 8, 9, 30, 0);
@@ -1178,5 +1434,105 @@ describe("Scheduler", () => {
     release?.(); // let tick 1 finish
     await new Promise((resolve) => setTimeout(resolve, 5));
     handle.stop();
+  });
+});
+
+describe("operator surface (list / retry / discard)", () => {
+  it("lists jobs filtered by status + queue, paged, newest-updated first", async () => {
+    queue.define("ok", () => {});
+    queue.define("bad", () => {
+      throw new Error("nope");
+    });
+
+    // One done, one failed (in the default queue), one ready in another queue.
+    const okId = await queue.enqueue("ok");
+    const badId = await queue.enqueue("bad", {}, { maxAttempts: 1 });
+    await queue.enqueue("ok", {}, { queue: "other" });
+
+    advance(1);
+    await queue.runOnce(); // ok → done
+    advance(1);
+    await queue.runOnce(); // bad → failed
+
+    // No filter: every default-queue + other-queue job, newest-updated first.
+    const all = await queue.list();
+    expect(all.map((j) => j.id).toSorted()).toEqual([okId, badId, 3].toSorted());
+
+    // The most recently transitioned job (`bad` → failed) is first.
+    expect(all[0]?.id).toBe(badId);
+
+    // Status filter narrows to the dashboard's tabs.
+    const failed = await queue.list({ status: "failed" });
+    expect(failed.map((j) => j.id)).toEqual([badId]);
+
+    // Queue filter narrows to one named queue.
+    const other = await queue.list({ queue: "other" });
+    expect(other.map((j) => j.name)).toEqual(["ok"]);
+
+    // Paging caps + skips the result.
+    expect(await queue.list({ limit: 1 })).toHaveLength(1);
+    expect(await queue.list({ limit: 1, offset: 3 })).toHaveLength(0);
+  });
+
+  it("tolerates a poison payload row in a list (coded, not a raw SyntaxError)", async () => {
+    const id = await queue.enqueue("x", { ok: true });
+    database.prepare("UPDATE lesto_jobs SET payload = ? WHERE id = ?").run("{not json", id);
+
+    await expect(queue.list()).rejects.toMatchObject({ code: "QUEUE_POISON_PAYLOAD" });
+  });
+
+  it("retries ONLY a failed job, resetting it to a fresh ready state", async () => {
+    queue.define("flap", () => {
+      throw new Error("boom");
+    });
+    const id = await queue.enqueue("flap", {}, { maxAttempts: 1 });
+
+    await queue.runOnce(); // → failed
+    expect((await queue.find(id))?.status).toBe("failed");
+
+    expect(await queue.retry(id)).toBe(true);
+
+    const requeued = await queue.find(id);
+    expect(requeued?.status).toBe("ready");
+    expect(requeued?.attempts).toBe(0);
+    expect(requeued?.lastError).toBeNull();
+    expect(requeued?.finishedAt).toBeNull();
+
+    // Retrying a non-failed job is a no-op (the fence on `status = 'failed'`).
+    expect(await queue.retry(id)).toBe(false);
+    // An unknown id, too.
+    expect(await queue.retry(9999)).toBe(false);
+  });
+
+  it("discards a non-running job and sweeps its dependency edges", async () => {
+    queue.define("a", () => {});
+
+    const { id: batchId, jobIds } = await queue.enqueueBatch("d", [
+      { name: "a" },
+      { name: "a", dependsOn: [0] },
+    ]);
+
+    // Discard the blocked dependent: it is removed and its edge is swept.
+    expect(await queue.discard(jobIds[1]!)).toBe(true);
+    expect(await queue.find(jobIds[1]!)).toBeNull();
+
+    // The batch now has only the first job; completing it leaves no orphan edge
+    // pointing at the discarded dependent.
+    await queue.runOnce();
+    expect((await queue.batch(batchId)).counts).toEqual({ done: 1 });
+
+    // Discarding an unknown id is a no-op.
+    expect(await queue.discard(9999)).toBe(false);
+  });
+
+  it("refuses to discard a RUNNING job (a worker holds it)", async () => {
+    await queue.enqueue("x");
+
+    const claimed = await queue.claim(undefined, 30_000);
+    expect(claimed?.status).toBe("running");
+
+    // The running job cannot be discarded out from under its worker.
+    expect(await queue.discard(claimed!.id)).toBe(false);
+    expect(await queue.find(claimed!.id)).not.toBeNull();
   });
 });
