@@ -12,6 +12,38 @@ the dated JSON beside this file.
 | 2026-06-10 (run 2, post async-merge) | 6.5/10 | +1.0 (from 5.5) | deploy is a non-atomic file copy + observability orphaned (no traces/metrics, `/readyz` lies) — structural | Reformat `@lesto/db` (committed `oxfmt` regression) (S) |
 | 2026-06-16 (post Waves 0–5) | 6.8/10 | +0.3 (from 6.5) | `lesto deploy` is still a file copy (never invokes `wrangler deploy`; `remoteReleaseStore` unwired) + secure defaults opt-in, not kernel-enforced — structural | Add `server.maxConnections` cap (`server.ts`, S) |
 | 2026-06-18 (§C in-flight) | 7.3/10 | +0.5 (from 6.8) | Bus-factor-1 + unpublished 0.x (~10-day history) — structural; AND local 100%-gate non-reproducible (better-sqlite3 ABI 115-vs-127 → 71/71 db tests red off-CI) | Pin/rebuild native sqlite ABI so `ws:test` is green locally (`sqlite-drivers.ts` + root postinstall, S) |
+| 2026-06-19 (§C W3 landed) | 8.3/10 | +1.0 (from 7.3) | Adoption-blocked: all 60 pkgs `private:true@0.0.0`, unpublished, bus-factor-1, ~10-day history — structural (publish-day) | Delete empty `packages/rbac` shell + `config`/`hooks` placeholder dirs (S) |
+
+## 2026-06-19 — 8.3/10 (§C Wave 3 landed; prev 7.3)
+
+Calibrated, not averaged (dimension mean ≈8.5). 7-agent run on the **clean** tree at `d78225c` (file-based
+routing `0bb14a2`, client soft-nav `bdc3bdb`, queue dashboard `a5a215f`, type-regression suite `d78225c`).
+The judge **verified all three structural caps at source, not on trust**: (1) Postgres is genuinely built —
+`packages/pg/src/adapter.ts` is a complete async `SqlDatabase` over a structural `pg.Pool` with a correctly
+bracketed pooled-client transaction (only the dynamic-`require` engine in `pg-driver.ts` is coverage-excluded);
+(2) `lesto deploy` is a real deploy tool — `bin.ts` spawns `wrangler deploy`, recovers the workers.dev URL,
+health-gates `/readyz` (10s timeout), `wrangler rollback`s on failure; (3) batteries are wired —
+`kernel.ts:307` wraps EVERY `app.handle` in `runPipeline(secure, …)`, `secureStack` composes
+cors→rateLimit→originCheck→csrf, rate-limit ON by default. Dimension now-scores: crash-safety **9**,
+framework-correctness **9**, data-layer **9**, observability/deploy **8.5**, security-wiring **8**, maturity/CI **7.5**.
+
+Why +1.0 to 8.3 (and not higher): the entire crash-safety/security/data/correctness backlog is resolved and
+regression-pinned, so the dimensions are genuinely 8–9. The judge docked ~1.7 from a naive read for
+**adoption-maturity, not engineering**: all 60 packages are `private:true@0.0.0` and unpublished (so the
+`create-lesto` scaffold's `^0.1.0` deps can't resolve and no external consumer can prove it), live-PG is
+exercised only in CI (not this local tree), there is no metrics/log-shipping pipeline, bus-factor is 1 on a
+10-day history, and the documented residuals stand (webhook DNS-rebinding TOCTOU, CSRF enforcement opt-in by
+design, handler-timeout can't bound event-loop-blocking sync work). Calibration note: a first `ws:test` showed
+80 queue failures — pure environment artifact (bun can't load the Node-ABI better-sqlite3 binding); re-run under
+Node 22 (the CI runtime) it's 91/91, and kernel/cors/csrf/webhooks/runtime/deploy are all green.
+
+Fruit ceiling: **~8.7**. Judge's call: **PIVOT to the publish-and-prove phase — do NOT keep picking fruit.**
+What's left (env-tunable socket timeouts, delete the empty `rbac` shell, the content-mcp parallel-coverage
+flake, the webhook TOCTOU, a CONTRIBUTING file) sums to ~1 day and lifts the score only ~0.4–0.5. The ceiling
+is no longer structure-capped (Postgres built, deploy real, batteries wired — all verified). It's capped by the
+ONE deliberately-deferred structural phase: **publish-day** (un-private the 60 packages → ship 0.x to npm so
+the scaffold resolves → stand up live-PG soak) plus the last unbuilt §C differentiator (realtime, blocked on
+PG LISTEN/NOTIFY). Same-day warm-up fruit is fine, but the needle-mover from here is publish + prove-with-a-real-consumer.
 
 ## 2026-06-18 — 7.3/10 (§C differentiators in-flight; prev 6.8)
 
