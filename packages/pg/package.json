@@ -1,8 +1,7 @@
 {
   "name": "@lesto/pg",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
-  "private": true,
   "description": "Lesto's Postgres driver — adapts a node-postgres Pool to the async @lesto/db SqlDatabase seam (ADR 0006).",
   "type": "module",
   "exports": {
@@ -25,5 +24,20 @@
   },
   "dependencies": {
     "@lesto/db": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/pg"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }
