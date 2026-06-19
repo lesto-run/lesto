@@ -267,6 +267,13 @@ const LIVE_REGION_ID = "lesto-route-announcer";
  * a body swap is silent, so we mirror that by writing the new title into a polite
  * `aria-live` region (lazily created, visually hidden) — the same technique every
  * peer client router uses to keep soft nav from regressing screen-reader UX.
+ *
+ * The region is appended to `<html>` (`documentElement`), a SIBLING of `<body>`, not
+ * inside the body — because the default swap does `body.replaceChildren(...)`, which
+ * would delete a body-resident region on the very next navigation. Screen readers
+ * only announce a region whose text changes while it is ALREADY in the DOM, so it
+ * must persist across swaps: by living on `<html>` it survives every body swap, is
+ * found again on the next navigation, and only its `textContent` updates.
  */
 function announceRoute(message: string, doc: Document): void {
   let region = doc.getElementById(LIVE_REGION_ID);
@@ -279,7 +286,7 @@ function announceRoute(message: string, doc: Document): void {
     region.setAttribute("role", "status");
     region.style.cssText =
       "position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap";
-    doc.body.append(region);
+    doc.documentElement.append(region);
   }
 
   region.textContent = message;
@@ -459,6 +466,15 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
     // Cross-origin links are real navigations — the one eligibility rule that
     // needs the page origin, so it lives here, not in the pure `eligibleAnchor`.
     if (new URL(anchor.href).origin !== origin) return;
+
+    // A same-document link (one that differs only by `#hash`, or is identical to
+    // the current URL) is the browser's to handle: hijacking it would refetch the
+    // page, swap the body, scroll to top, and churn history — destroying the native
+    // in-page anchor jump. So if the destination's pathname + search match the live
+    // URL, let it fall through untouched (no preventDefault, no navigate).
+    const here = new URL(doc.URL);
+    const there = new URL(anchor.href);
+    if (there.pathname === here.pathname && there.search === here.search) return;
 
     // We are taking over: stop the browser's full navigation, remember this
     // entry's scroll, and swap to the destination.

@@ -102,10 +102,14 @@ function harness(extra: SoftNavOptions = {}): Harness {
     get body() {
       return real.body;
     },
+    get documentElement() {
+      return real.documentElement;
+    },
     title: "",
     createElement: (tag: string) => real.createElement(tag),
     getElementById: (id: string) => real.getElementById(id),
     querySelector: (sel: string) => real.querySelector(sel),
+    importNode: (node: Node, deep: boolean) => real.importNode(node, deep),
     addEventListener: (type: string, listener: (event: Event) => void) => {
       if (type === "click") clickListener = listener;
     },
@@ -317,6 +321,33 @@ describe("enableSoftNav — a click it must not steal", () => {
     h.fireRawClick({ target: bare });
 
     expect(h.navigated).toEqual([]);
+  });
+
+  it("ignores a same-document hash link — the browser owns the in-page jump", () => {
+    // The page is at `https://app.test/`; clicking `/#section` differs only by hash,
+    // so soft nav must NOT take it over (no preventDefault, no fetch, no pushState) —
+    // letting the browser do its native in-page scroll.
+    const h = harness();
+    const preventDefault = vi.fn();
+
+    h.fireClick({ href: "https://app.test/#section", preventDefault });
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(h.navigated).toEqual([]);
+    expect(h.hist.pushed).toEqual([]);
+  });
+
+  it("still soft-navigates a normal cross-path link (regression guard)", async () => {
+    // A link to a DIFFERENT pathname is a genuine navigation soft nav owns — proving
+    // the same-document gate above is scoped to pathname+search, not blanket.
+    const h = harness();
+    const preventDefault = vi.fn();
+
+    h.fireClick({ href: "https://app.test/elsewhere", preventDefault });
+    await vi.waitFor(() => expect(h.navigated).toContain("https://app.test/elsewhere"));
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(h.hist.pushed).toHaveLength(1);
   });
 });
 
@@ -563,10 +594,14 @@ describe("enableSoftNav — a11y: focus + route announcement on swap", () => {
     h.fireClick({});
     await vi.waitFor(() => expect(h.navigated.length).toBe(1));
 
-    // A polite live region carries the new title so screen readers announce it.
-    const announcer = h.body.querySelector("#lesto-route-announcer");
+    // A polite live region carries the new title so screen readers announce it. It
+    // lives on `<html>` (not in the body, which a real swap would wipe), so it is
+    // found via the document, not a body query.
+    const announcer = (h.options.document as Document).getElementById("lesto-route-announcer");
     expect(announcer?.getAttribute("aria-live")).toBe("polite");
+    expect(announcer?.getAttribute("role")).toBe("status");
     expect(announcer?.textContent).toBe("Next");
+    expect(h.body.contains(announcer)).toBe(false);
 
     // Focus moved off any detached node to the new page's main landmark, which got
     // a transient tabindex so a non-interactive element can hold focus.
@@ -574,16 +609,43 @@ describe("enableSoftNav — a11y: focus + route announcement on swap", () => {
     expect(main?.getAttribute("tabindex")).toBe("-1");
   });
 
-  it("reuses the single live region across successive navigations", async () => {
-    const h = harness();
+  it("the announcer survives a REAL body swap and the same node is reused", async () => {
+    // A swap that mirrors the real `defaultSwap`: it `replaceChildren`s the body, so
+    // a body-resident announcer would be DELETED on the next nav. The announcer must
+    // instead live on `<html>` (a sibling of `<body>`) — so it survives the swap, the
+    // SAME node is reused across two navigations, its text updates, and it is never a
+    // child of the (wiped) body.
+    const onNavigate = vi.fn();
+    const h = harness({
+      onNavigate,
+      swap: (html, swapDoc) => {
+        swapDoc.body.replaceChildren(swapDoc.createElement("main"));
+        return html.includes("Two") ? "Two" : "One";
+      },
+      fetchPage: async (url) => ({
+        html: url.endsWith("/two") ? "<title>Two</title>" : "<title>One</title>",
+        url,
+      }),
+    });
 
-    h.fireClick({});
-    await vi.waitFor(() => expect(h.navigated.length).toBe(1));
-    h.fireClick({});
-    await vi.waitFor(() => expect(h.navigated.length).toBe(2));
+    h.fireClick({ href: "https://app.test/one" });
+    await vi.waitFor(() => expect(onNavigate).toHaveBeenCalledTimes(1));
 
-    // Only one announcer node is ever created.
-    expect(h.body.querySelectorAll("#lesto-route-announcer")).toHaveLength(1);
+    const doc = h.options.document as Document;
+    const firstNode = doc.getElementById("lesto-route-announcer");
+    expect(firstNode).not.toBeNull();
+    expect(firstNode?.textContent).toBe("One");
+    // It lives on <html>, NOT in the body the swap wiped.
+    expect(h.body.contains(firstNode)).toBe(false);
+
+    h.fireClick({ href: "https://app.test/two" });
+    await vi.waitFor(() => expect(onNavigate).toHaveBeenCalledTimes(2));
+
+    const secondNode = doc.getElementById("lesto-route-announcer");
+    // The body swap did not remove or recreate it: same node, updated text.
+    expect(secondNode).toBe(firstNode);
+    expect(secondNode?.textContent).toBe("Two");
+    expect(h.body.contains(secondNode)).toBe(false);
   });
 });
 
