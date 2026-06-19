@@ -54,18 +54,3 @@ export type Expect<T extends true> = T;
  * the assertion stays exact.
  */
 export type Resolve<T> = T extends infer O ? { [K in keyof O]: O[K] } : never;
-
-/**
- * `true` iff `A` is assignable to `B` (one-directional). For the looser
- * invariants where exact identity is too strict — e.g. "this value is *at least*
- * assignable to the public interface".
- */
-export type Assignable<A, B> = A extends B ? true : false;
-
-/**
- * Negation, for pinning that two types are NOT equal — used to lock a
- * *discrimination* (e.g. the insert type must differ from the row type because a
- * key became optional). Without this a fixture could accidentally assert equality
- * against a wrong-but-stable expectation and never notice.
- */
-export type Not<T extends boolean> = T extends true ? false : true;
