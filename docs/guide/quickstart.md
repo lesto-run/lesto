@@ -50,6 +50,11 @@ curl -H "Sec-Fetch-Site: same-origin" http://localhost:3000/posts
 > Security is on by default (ADR 0016). The starter sets `secure: { originCheck: {} }`,
 > so a state-changing request without a same-origin `Sec-Fetch-Site` header is refused —
 > hence the header above when testing `POST`/JSON routes with `curl`.
+>
+> Only per-IP rate-limiting is on by default; **CSRF/origin enforcement is opt-in** (a forced
+> check would 403 legitimate non-browser API clients). Any app that serves a **browser UI**
+> should keep — or add — `secure: { originCheck: {} }`. Without it the only cross-site defense
+> is the session cookie's `SameSite=Lax`.
 
 ## 3. The shape of the app
 

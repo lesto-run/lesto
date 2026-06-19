@@ -47,7 +47,9 @@ export const KERNEL_DEFAULT_RATE_LIMIT = { capacity: 100, refillPerSecond: 50 } 
  * The CSRF/CORS layers are deliberately NOT defaulted: a forced origin/token check
  * 403s legitimate non-browser API clients, and their safe policy is
  * deployment-specific, so they stay one field away (`secure: { originCheck: {} }`)
- * rather than implicit (ADR 0016).
+ * rather than implicit (ADR 0016). An app that serves a BROWSER UI should set
+ * `secure: { originCheck: {} }` — without it the only cross-site defense is the
+ * session cookie's `SameSite=Lax`.
  *
  *   - `secure: false` — opt out entirely (an app composing its own `secureStack`).
  *   - `secure` omitted — the rate-limit baseline above.
