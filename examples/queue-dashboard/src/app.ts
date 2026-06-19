@@ -1,4 +1,20 @@
 /**
+ * ╔══════════════════════════════════════════════════════════════════════════╗
+ * ║  PREVIEW — UNAUTHENTICATED. DO NOT DEPLOY AS-IS.                          ║
+ * ║                                                                          ║
+ * ║  The destructive operator verbs below — `POST /queue/jobs/:id/retry` and ║
+ * ║  `DELETE /queue/jobs/:id` — ship with NO auth and NO CSRF protection.    ║
+ * ║  That is fine for a local dogfood you drive with `curl`/tests, but it is ║
+ * ║  an INSECURE pattern to copy verbatim: anyone who can reach the port can ║
+ * ║  retry or discard any job, and a cross-site page could drive the DELETE  ║
+ * ║  via an ambient-cookie request if you put it behind cookie auth.         ║
+ * ║                                                                          ║
+ * ║  Before exposing this anywhere real, gate the mutation routes — mount    ║
+ * ║  `@lesto/csrf`'s `originCheck()` (the zero-config default for a          ║
+ * ║  cookie-authed app) or the signed double-submit `csrf()` middleware via  ║
+ * ║  `.use(...)`, behind your own auth — exactly as `examples/estate` does.  ║
+ * ╚══════════════════════════════════════════════════════════════════════════╝
+ *
  * Assemble the queue-dashboard app from its parts.
  *
  * One composable `lesto()` app exposes the operator dashboard over the live
@@ -82,6 +98,11 @@ export function buildDashboardApp(deps: { queue: Queue; admin: Admin; db: Db }):
       })
 
       // ---- the queue operator surface (queue verbs, straight to @lesto/queue) ----
+      //
+      // PREVIEW: the mutation routes below (`POST …/retry`, `DELETE …/:id`) are
+      // UNAUTHENTICATED and CSRF-FREE — see the file-header banner. A real deploy
+      // gates them with auth + `@lesto/csrf` (`originCheck()` or `csrf()`) via
+      // `.use(...)`; this preview is driven only by curl/tests.
 
       .get("/queue/jobs", async (c) => {
         // Build the list options from only the filters that are present —

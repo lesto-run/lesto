@@ -1,4 +1,15 @@
 /**
+ * ╔══════════════════════════════════════════════════════════════════════════╗
+ * ║  PREVIEW — UNAUTHENTICATED. DO NOT DEPLOY AS-IS.                          ║
+ * ║                                                                          ║
+ * ║  This boots the dashboard — including the destructive `POST …/retry` and ║
+ * ║  `DELETE …/:id` verbs — over a REAL HTTP port with NO auth and NO CSRF.  ║
+ * ║  It is a local dogfood (drive it with the `curl` lines below), not a     ║
+ * ║  deployable surface: anyone who can reach the port can retry/discard any ║
+ * ║  job. Gate the mutation routes with auth + `@lesto/csrf` (see the banner ║
+ * ║  in `src/app.ts`) before exposing this anywhere real.                    ║
+ * ╚══════════════════════════════════════════════════════════════════════════╝
+ *
  * Serve the queue dashboard over LIVE HTTP.
  *
  *   bun run examples/queue-dashboard/serve.ts
@@ -24,6 +35,53 @@ import { FLAKY, INGEST, NOTIFY, THUMBNAIL } from "./src/operator";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
+/**
+ * Parse one `LESTO_*` env limit into a positive integer, or `undefined` to fall
+ * through to `serve`'s secure default — the exact semantics `lesto serve`/`dev`
+ * use (commit 70fed7d): unset, non-numeric, and any value `<= 0` all defer to the
+ * default; only a clean positive integer overrides it. We never hand `serve` a
+ * zero/negative limit, which would weaken a defense the default already set safely.
+ */
+function parseLimit(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+
+  return Math.trunc(value);
+}
+
+/**
+ * The operator-tunable DoS limits, built from the environment exactly as the
+ * `lesto serve`/`dev` CLI does — so this hand-rolled example serves under the same
+ * standardized knobs (`LESTO_MAX_BODY_BYTES`, `LESTO_HANDLER_TIMEOUT_MS`,
+ * `LESTO_REQUEST_TIMEOUT_MS`, `LESTO_MAX_HEADER_BYTES`, `LESTO_DRAIN_TIMEOUT_MS`)
+ * rather than silently dropping them. Only the keys an operator set to a valid
+ * positive value are present, so `serve`'s secure default holds for every omitted
+ * one (`exactOptionalPropertyTypes` forbids an explicit `undefined`).
+ */
+function serveLimitsFromEnv(env: NodeJS.ProcessEnv): {
+  maxBodyBytes?: number;
+  handlerTimeoutMs?: number;
+  requestTimeoutMs?: number;
+  maxHeaderBytes?: number;
+  drainTimeoutMs?: number;
+} {
+  const maxBodyBytes = parseLimit(env.LESTO_MAX_BODY_BYTES);
+  const handlerTimeoutMs = parseLimit(env.LESTO_HANDLER_TIMEOUT_MS);
+  const requestTimeoutMs = parseLimit(env.LESTO_REQUEST_TIMEOUT_MS);
+  const maxHeaderBytes = parseLimit(env.LESTO_MAX_HEADER_BYTES);
+  const drainTimeoutMs = parseLimit(env.LESTO_DRAIN_TIMEOUT_MS);
+
+  return {
+    ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
+    ...(handlerTimeoutMs !== undefined ? { handlerTimeoutMs } : {}),
+    ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+    ...(maxHeaderBytes !== undefined ? { maxHeaderBytes } : {}),
+    ...(drainTimeoutMs !== undefined ? { drainTimeoutMs } : {}),
+  };
+}
+
 async function main(): Promise<void> {
   const { db: handle, close } = await openSqlite();
 
@@ -41,8 +99,14 @@ async function main(): Promise<void> {
   // stalled jobs on its own cadence and drains gracefully on stop().
   const worker = queue.work({ onJob: makeRunObserver(db) });
 
-  const server = await serve(app, { port: PORT });
+  const server = await serve(app, { port: PORT, ...serveLimitsFromEnv(process.env) });
   const url = `http://127.0.0.1:${server.port}`;
+
+  console.warn(
+    "\n⚠  PREVIEW — UNAUTHENTICATED: the retry/discard routes have no auth or CSRF.\n" +
+      "   Do NOT expose this port to an untrusted network. See src/app.ts for how a\n" +
+      "   real deploy gates the mutation routes with @lesto/csrf.",
+  );
 
   console.log(`\nlistening on ${url}`);
   console.log(`  GET    ${url}/                              the operator board`);

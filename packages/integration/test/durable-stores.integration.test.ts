@@ -313,6 +313,53 @@ describe.each(drivers)("queue concurrency: $name", (driver) => {
     await queue["complete"](b!);
     expect((await queue.find(id))?.status).toBe("done");
   });
+
+  it("a batch dependency releases on the prerequisite's completion — over a real socket", async () => {
+    // The dependency-release `UPDATE` (run from `complete`) and the `blocked → ready`
+    // flip only ever ran against the SQLite fake before; this proves the same
+    // `NOT EXISTS (an unfinished prerequisite)` SQL flips a fan-in dependent on a
+    // real Postgres connection too (where BIGINT ids arrive as strings, and the
+    // claim path partitions over pooled connections).
+    const queue = new Queue({ db: handle, dialect: driver.name });
+
+    const { id, jobIds } = await queue.enqueueBatch("import", [
+      { name: "ingest" },
+      { name: "thumbnail", dependsOn: [0] },
+    ]);
+
+    // The dependent starts blocked — invisible to the claim.
+    expect((await queue.find(jobIds[1]!))?.status).toBe("blocked");
+
+    // Claim + complete the prerequisite; its `done` releases the dependent.
+    const ingest = await queue.claim();
+    expect(ingest?.id).toBe(jobIds[0]);
+    await queue["complete"](ingest!);
+
+    expect((await queue.find(jobIds[1]!))?.status).toBe("ready");
+    await expect(queue.batch(id)).resolves.toMatchObject({ total: 2, state: "pending" });
+  });
+
+  it("discarding a prerequisite releases its dependent and the batch stays truthful — over a real socket", async () => {
+    // The discard-release path runs delete + releaseReadyDependents + edge-sweep in
+    // ONE transaction, with the release on the transaction's PINNED connection. On a
+    // pooled Postgres driver a release off a fresh connection would escape the span;
+    // this proves the dependent is released (not stranded `blocked` forever) and the
+    // all-discarded batch reports `pending`, not a false `completed`, on a real socket.
+    const queue = new Queue({ db: handle, dialect: driver.name });
+
+    const { id, jobIds } = await queue.enqueueBatch("import", [
+      { name: "ingest" },
+      { name: "thumbnail", dependsOn: [0] },
+    ]);
+
+    // Discard the prerequisite → its dependent is released, not stranded.
+    expect(await queue.discard(jobIds[0]!)).toBe(true);
+    expect((await queue.find(jobIds[1]!))?.status).toBe("ready");
+
+    // Discard the survivor too → an all-discarded batch is truthfully `pending`.
+    expect(await queue.discard(jobIds[1]!)).toBe(true);
+    await expect(queue.batch(id)).resolves.toMatchObject({ total: 2, state: "pending" });
+  });
 });
 
 // ---------------------------------------------------------------------------

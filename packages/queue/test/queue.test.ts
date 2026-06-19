@@ -912,6 +912,62 @@ describe("prune", () => {
     expect(await queue.prune(-5000)).toBe(0);
     expect((await queue.find(ready))?.status).toBe("running");
   });
+
+  it("also sheds the batch + dependency-edge rows a pruned batch leaves behind", async () => {
+    // Direct table reads — prune's whole point here is the satellite tables, and
+    // the public surface intentionally hides edge/batch rows.
+    const batchRows = (): number =>
+      (database.prepare("SELECT COUNT(*) AS n FROM lesto_job_batches").get() as { n: number }).n;
+    const depRows = (): number =>
+      (database.prepare("SELECT COUNT(*) AS n FROM lesto_job_deps").get() as { n: number }).n;
+
+    queue.define("step", () => {});
+
+    // A batch with a dependency edge: one batch row, one dep row, two job rows.
+    const { id: batchId } = await queue.enqueueBatch("import", [
+      { name: "step" },
+      { name: "step", dependsOn: [0] },
+    ]);
+    expect(batchRows()).toBe(1);
+    expect(depRows()).toBe(1);
+
+    // Drain the whole batch to terminal `done` (the dependent releases on the
+    // prerequisite's completion), so every job row is prune-eligible.
+    while ((await queue.runOnce()) !== null) {
+      /* keep claiming until idle */
+    }
+    advance(60_000);
+
+    // Prune everything finished more than 10s ago: both job rows go — AND so do
+    // the now-orphaned batch row and dependency edge, instead of leaking forever.
+    expect(await queue.prune(10_000)).toBe(2);
+    expect(batchRows()).toBe(0);
+    expect(depRows()).toBe(0);
+    await expect(queue.batch(batchId)).rejects.toMatchObject({ code: "QUEUE_BATCH_NOT_FOUND" });
+  });
+
+  it("keeps a still-live batch's rows when only SOME of its jobs are pruned", async () => {
+    const batchRows = (): number =>
+      (database.prepare("SELECT COUNT(*) AS n FROM lesto_job_batches").get() as { n: number }).n;
+
+    queue.define("step", () => {});
+
+    // Two independent jobs in one batch. Finish + age only the first.
+    const { id: batchId, jobIds } = await queue.enqueueBatch("mixed", [
+      { name: "step" },
+      { name: "step" },
+    ]);
+
+    await queue.runOnce(); // first → done now
+    advance(60_000);
+
+    // Prune the aged `done` row only; the second job is still `ready`, so the
+    // batch is NOT orphaned and its row must survive.
+    expect(await queue.prune(10_000)).toBe(1);
+    expect(batchRows()).toBe(1);
+    expect((await queue.find(jobIds[1]!))?.status).toBe("ready");
+    await expect(queue.batch(batchId)).resolves.toMatchObject({ total: 2 });
+  });
 });
 
 describe("permanent (non-retryable) failures", () => {
@@ -1292,6 +1348,92 @@ describe("batches & dependency edges", () => {
     const summary = await queue.batch(id);
     expect(summary.state).toBe("completed");
     expect(summary.counts).toEqual({ done: 3 });
+  });
+
+  it("RELEASES a blocked dependent when its (only) prerequisite is DISCARDED", async () => {
+    // The bug this guards: discard sweeps a prerequisite's edges but only
+    // `complete` ever fired the release, so a discarded prerequisite — which never
+    // completes — stranded its dependent `blocked` forever. Discarding the
+    // prerequisite must now release a dependent whose remaining deps are all clear.
+    queue.define("after", () => {});
+
+    const { id, jobIds } = await queue.enqueueBatch("pipeline", [
+      { name: "prereq" },
+      { name: "after", dependsOn: [0] },
+    ]);
+
+    expect((await queue.find(jobIds[1]!))?.status).toBe("blocked");
+
+    // Discard the (blocked-on) prerequisite. Its dependent's last unsettled
+    // prerequisite is now gone → it is RELEASED to `ready`, not stranded.
+    expect(await queue.discard(jobIds[0]!)).toBe(true);
+    expect((await queue.find(jobIds[1]!))?.status).toBe("ready");
+
+    // It is genuinely claimable now (the release was real, not cosmetic).
+    expect((await queue.runOnce())?.job.name).toBe("after");
+    expect((await queue.find(jobIds[1]!))?.status).toBe("done");
+
+    // The batch is no longer permanently pending: its one surviving job is done.
+    const summary = await queue.batch(id);
+    expect(summary.counts).toEqual({ done: 1 });
+  });
+
+  it("releases a fan-in dependent only when its LAST prerequisite is discarded", async () => {
+    // c depends on a AND b. Discarding a alone must NOT release c (b is still
+    // pending); discarding b too — c's last remaining prerequisite — releases it.
+    queue.define("c", () => {});
+
+    const { jobIds } = await queue.enqueueBatch("fanin", [
+      { name: "a" },
+      { name: "b" },
+      { name: "c", dependsOn: [0, 1] },
+    ]);
+
+    // Discard a: c still has an unsettled prerequisite (b) → stays blocked.
+    expect(await queue.discard(jobIds[0]!)).toBe(true);
+    expect((await queue.find(jobIds[2]!))?.status).toBe("blocked");
+
+    // Discard b — c's last prerequisite. Now c is released.
+    expect(await queue.discard(jobIds[1]!)).toBe(true);
+    expect((await queue.find(jobIds[2]!))?.status).toBe("ready");
+  });
+
+  it("reports an all-discarded batch as `pending`, never a false `completed`", async () => {
+    // Every job discarded → no surviving rows, so the per-status counts are empty.
+    // Summing empty counts is 0 and `done(0) === 0` WOULD read `completed`, but
+    // nothing completed; reconciled against the batch's original `total`, it is
+    // truthfully `pending`.
+    const { id, jobIds } = await queue.enqueueBatch("doomed", [
+      { name: "a" },
+      { name: "b", dependsOn: [0] },
+    ]);
+
+    expect(await queue.discard(jobIds[1]!)).toBe(true);
+    expect(await queue.discard(jobIds[0]!)).toBe(true);
+
+    const summary = await queue.batch(id);
+    expect(summary.total).toBe(2);
+    expect(summary.counts).toEqual({}); // no surviving job rows
+    expect(summary.state).toBe("pending"); // NOT "completed"
+  });
+
+  it("does not report `completed` until every ORIGINAL job is done (a discarded one keeps it pending)", async () => {
+    // A batch of two where one job is discarded and the other completes: the
+    // survivor is `done`, but the batch is NOT `completed` — it lost a job, so
+    // reconciling `done` against the original `total` keeps it `pending`.
+    queue.define("keep", () => {});
+
+    const { id, jobIds } = await queue.enqueueBatch("partial", [
+      { name: "keep" },
+      { name: "drop" },
+    ]);
+
+    expect(await queue.discard(jobIds[1]!)).toBe(true);
+    await queue.runOnce(); // run `keep` → done
+
+    const summary = await queue.batch(id);
+    expect(summary.counts).toEqual({ done: 1 });
+    expect(summary.state).toBe("pending"); // 1 done ≠ original total of 2
   });
 });
 

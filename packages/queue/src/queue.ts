@@ -223,21 +223,29 @@ function hydrate(row: Row): Job {
 }
 
 /**
- * Roll a batch's per-status job counts up to its lifecycle {@link BatchState}.
+ * Roll a batch's per-status job counts up to its lifecycle {@link BatchState},
+ * reconciled against the batch row's original `total`.
  *
  * `failed` WINS over `completed`/`pending`: one failed job means the batch can
  * never complete (a job that depended on the failed one stays `blocked`
  * forever), so an operator should see `failed` even while other jobs are still
- * running. With no failure, `completed` iff every job is `done`; otherwise
- * `pending`. A count is read defensively (`?? 0`) because an absent status is
- * simply zero of it.
+ * running. With no failure, `completed` iff EVERY ORIGINAL job is `done` — the
+ * `done` count must equal the batch's original `total`, not merely the count of
+ * whatever rows survive. A count is read defensively (`?? 0`) because an absent
+ * status is simply zero of it.
+ *
+ * Reconciling against `total` (rather than the sum of present counts) is what
+ * keeps an ALL-DISCARDED batch honest: discard DELETES job rows, so a batch whose
+ * every job was discarded has empty counts. Summing those gives 0, and `done(0)
+ * === 0` would falsely report `completed` — yet nothing completed. Against the
+ * original `total > 0`, `done(0) !== total`, so it is truthfully `pending`. (A
+ * partially-discarded batch is likewise `pending` until its surviving jobs all
+ * reach `done` AND that equals the original count — i.e. nothing was lost.)
  */
-function batchState(counts: Partial<Record<JobStatus, number>>): BatchState {
+function batchState(counts: Partial<Record<JobStatus, number>>, total: number): BatchState {
   if ((counts.failed ?? 0) > 0) {
     return "failed";
   }
-
-  const total = (Object.values(counts) as number[]).reduce((sum, n) => sum + n, 0);
 
   return (counts.done ?? 0) === total ? "completed" : "pending";
 }
@@ -500,27 +508,47 @@ export class Queue {
   }
 
   /**
-   * Release any `blocked` job whose prerequisites are now ALL done.
+   * Release any `blocked` job whose prerequisites are now ALL settled.
    *
-   * Run from {@link Queue.complete} the instant a job reaches `done`: find the
-   * jobs that depend on it, and for each, flip it `blocked → ready` IFF it has no
-   * remaining dependency on a job that is not yet `done`. A dependent with other,
-   * still-unfinished prerequisites is left `blocked` — it is released only by the
-   * completion of its LAST prerequisite, so a job behind a fan-in waits for all
-   * of its inputs.
+   * The ONE place a dependent is re-evaluated, shared by the two events that
+   * settle a prerequisite:
+   *
+   * - {@link Queue.complete} runs it the instant a job reaches `done` — the
+   *   prerequisite is now a `done` row.
+   * - {@link Queue.discard} runs it the instant a prerequisite is DELETED — its
+   *   row is gone, and {@link Queue.discard} runs this BEFORE sweeping the edges
+   *   that named it, so the dependents are still discoverable here.
+   *
+   * For each dependent, flip it `blocked → ready` IFF no remaining edge points at
+   * a prerequisite that is not yet `done`. The `NOT EXISTS` JOINs each edge to its
+   * prerequisite ROW: a `done` prerequisite is satisfied, and a DISCARDED
+   * prerequisite (its row deleted) produces no joined row at all, so it too is
+   * treated as satisfied — a discarded prerequisite no longer strands its
+   * dependent. A dependent with other, still-unfinished prerequisites is left
+   * `blocked`; it is released only when its LAST prerequisite settles, so a job
+   * behind a fan-in waits for all of its inputs.
    *
    * The flip is itself fenced on `status = 'blocked'`: a dependent already
-   * released (by a concurrent completion of its last prerequisite) matches zero
-   * rows and is a no-op, so the at-least-once `complete` — which can run twice if
-   * a worker is reclaimed — never double-releases or resurrects a job.
+   * released (by a concurrent completion/discard of its last prerequisite)
+   * matches zero rows and is a no-op, so the at-least-once `complete` — which can
+   * run twice if a worker is reclaimed — never double-releases or resurrects a job.
+   *
+   * Both call sites run this with the SAME transaction/claim discipline as the
+   * rest of the lifecycle: `complete` is already fenced on the worker's claim and
+   * runs the release on `this.db` (no surrounding transaction); `discard` runs the
+   * delete + this release + the edge sweep in ONE transaction, so it passes its
+   * `tx` here — on a pooled driver the release MUST land on the transaction's
+   * pinned connection, not a fresh one off `this.db`, or it would escape the
+   * atomic span (see {@link SqlDatabase.transaction}).
    */
-  private async releaseDependents(jobId: number): Promise<void> {
+  private async releaseReadyDependents(jobId: number, sql: SqlDatabase = this.db): Promise<void> {
     const now = nowIso(this.clock);
 
-    // `EXISTS (… an unfinished prerequisite …)` reads "this dependent still has
-    // a dep on a job that isn't done yet." We release exactly the blocked
-    // dependents for which NO such row exists — every prerequisite is `done`.
-    await this.db
+    // `EXISTS (… an unsettled prerequisite …)` reads "this dependent still has an
+    // edge to a job that exists and isn't done yet." We release exactly the
+    // blocked dependents for which NO such row exists — every prerequisite is
+    // either `done` or gone (discarded).
+    await sql
       .prepare(
         `UPDATE ${TABLE}
             SET status = 'ready', updated_at = ?
@@ -567,12 +595,16 @@ export class Queue {
       return acc;
     }, {});
 
+    const total = Number(meta.total);
+
     return {
       id: Number(meta.id),
       name: meta.name,
-      total: Number(meta.total),
+      total,
       counts,
-      state: batchState(counts),
+      // Reconcile against the batch's ORIGINAL `total`, so an all-discarded batch
+      // (empty counts) is `pending`, not a false `completed` (see `batchState`).
+      state: batchState(counts, total),
       createdAt: meta.created_at,
     };
   }
@@ -597,7 +629,7 @@ export class Queue {
 
   /**
    * Delete terminal jobs that finished more than `olderThanMs` ago. Returns how
-   * many rows were removed.
+   * many JOB rows were removed.
    *
    * Retention, not correctness: a `done`/`failed` row is inert — no worker will
    * ever claim it again — but it lingers forever as history, and an unbounded
@@ -611,25 +643,55 @@ export class Queue {
    * clock, so it is deterministic under a frozen clock in tests. `olderThanMs`
    * is clamped at 0: a negative value would prune jobs "finished in the future"
    * and is meaningless, so it degrades to "everything already finished."
+   *
+   * The same transaction ALSO sheds the two satellite tables, so pruning jobs
+   * does not leak their rows (and bloat the dep index `releaseReadyDependents`
+   * scans): a `lesto_job_deps` edge whose `job_id` OR `depends_on_id` no longer
+   * names a live job is orphaned, and a `lesto_job_batches` row with no surviving
+   * jobs is orphaned. Both are deleted by `WHERE NOT EXISTS`, mirroring the
+   * retention philosophy `retention.ts` states — delete the dead, leave the live.
+   * All three deletes run in ONE transaction so a fault can never half-prune a
+   * batch (drop its jobs but keep its batch/edge rows, or vice versa).
    */
   async prune(olderThanMs: number): Promise<number> {
     const cutoff = isoAfter(this.clock, -Math.max(0, olderThanMs));
 
-    // `finished_at < cutoff` — ISO-8601 sorts chronologically, so a string
-    // comparison is the age comparison (the same trick the claim/reclaim paths
-    // use). The status guard is redundant with `finished_at IS NOT NULL` (only
-    // terminal rows carry it) but states the intent and lets the planner use the
-    // status index.
-    const result = await this.db
-      .prepare(
-        `DELETE FROM ${TABLE}
-          WHERE status IN ('done', 'failed')
-            AND finished_at IS NOT NULL
-            AND finished_at < ?`,
-      )
-      .run([cutoff]);
+    return this.db.transaction(async (tx) => {
+      // `finished_at < cutoff` — ISO-8601 sorts chronologically, so a string
+      // comparison is the age comparison (the same trick the claim/reclaim paths
+      // use). The status guard is redundant with `finished_at IS NOT NULL` (only
+      // terminal rows carry it) but states the intent and lets the planner use the
+      // status index.
+      const result = await tx
+        .prepare(
+          `DELETE FROM ${TABLE}
+            WHERE status IN ('done', 'failed')
+              AND finished_at IS NOT NULL
+              AND finished_at < ?`,
+        )
+        .run([cutoff]);
 
-    return result.changes;
+      // Sweep dependency edges that no longer name a live job on EITHER side, so a
+      // pruned job leaves no orphan edge bloating the dep index.
+      await tx
+        .prepare(
+          `DELETE FROM ${DEPS_TABLE}
+            WHERE NOT EXISTS (SELECT 1 FROM ${TABLE} j WHERE j.id = ${DEPS_TABLE}.job_id)
+               OR NOT EXISTS (SELECT 1 FROM ${TABLE} j WHERE j.id = ${DEPS_TABLE}.depends_on_id)`,
+        )
+        .run([]);
+
+      // Drop batch rows whose every job was pruned away — a batch with no
+      // surviving jobs is dead history, the same as a terminal job row.
+      await tx
+        .prepare(
+          `DELETE FROM ${BATCHES_TABLE}
+            WHERE NOT EXISTS (SELECT 1 FROM ${TABLE} j WHERE j.batch_id = ${BATCHES_TABLE}.id)`,
+        )
+        .run([]);
+
+      return result.changes;
+    });
   }
 
   /** Atomically claim the next eligible row, or `undefined` if the queue is idle. */
@@ -1007,6 +1069,16 @@ export class Queue {
    * terminal write race a delete, so an operator must wait for it to finish or
    * for its visibility to lapse. Returns whether a row was removed (`false` for
    * an unknown id or a running job).
+   *
+   * Discarding a PREREQUISITE re-evaluates its dependents, so a discarded
+   * prerequisite never strands a `blocked` dependent forever: the dependent is
+   * treated as if that prerequisite had settled (the queue's chosen semantics —
+   * discarding a prerequisite UNBLOCKS its dependents, releasing any whose every
+   * other remaining prerequisite is already `done`). The order inside the
+   * transaction is load-bearing: delete the row, THEN
+   * {@link Queue.releaseReadyDependents} (the dependents are still discoverable
+   * via the `depends_on_id` edges, and the JOIN no longer finds the deleted
+   * prerequisite, so it counts as satisfied), THEN sweep the edges.
    */
   async discard(id: number): Promise<boolean> {
     return this.db.transaction(async (tx) => {
@@ -1017,6 +1089,15 @@ export class Queue {
       if (result.changes === 0) {
         return false;
       }
+
+      // Re-evaluate this job's dependents BEFORE sweeping the edges that name it:
+      // the release reads the dependents through the `depends_on_id = id` edges,
+      // and the just-deleted prerequisite row no longer joins, so a dependent
+      // whose only remaining unsettled prerequisite was this one is released
+      // rather than stranded `blocked` forever. (`complete` only ever fires the
+      // release, and a discarded prerequisite never completes — this is the
+      // missing trigger.) Run it on `tx` so it stays inside this transaction.
+      await this.releaseReadyDependents(id, tx);
 
       // Sweep the edges that named this job on either side, so a discarded job
       // leaves no dangling dependency that could block a sibling forever.
@@ -1059,7 +1140,7 @@ export class Queue {
     // matches nothing and is a cheap no-op — the common path pays one indexed
     // statement and the dependency machinery stays invisible to non-batch work.
     if (result.changes > 0) {
-      await this.releaseDependents(job.id);
+      await this.releaseReadyDependents(job.id);
     }
   }
 

@@ -85,8 +85,13 @@ job with no edges (the common path) matches nothing and pays a cheap no-op. The
 `status = 'blocked'` fence makes a double-`complete` a no-op: it never double-releases.
 
 **`batch(id)`** rolls the per-status job counts up to a `BatchState`: `failed` wins
-(one failed job means the batch can never complete), else `completed` iff every job is
-`done`, else `pending`. An unknown id is `QUEUE_BATCH_NOT_FOUND`.
+(one failed job means the batch can never complete), else `completed` iff every ORIGINAL
+job is `done` — the `done` count reconciled against the batch row's stored `total`, not
+the sum of whatever rows survive — else `pending`. Reconciling against `total` keeps an
+all-discarded batch honest: `discard` deletes job rows, so a batch whose every job was
+discarded has empty counts, and `done(0) === 0` would falsely read `completed`; against
+the original `total > 0` it is truthfully `pending`. An unknown id is
+`QUEUE_BATCH_NOT_FOUND`.
 
 ### 2. The operator surface: `list` / `retry` / `discard`
 
@@ -102,10 +107,17 @@ idempotent by their `WHERE` clause:
 - **`retry(id)`** — resets a `failed` job to a fresh `ready` (attempts cleared,
   `run_at = now`). Fenced on `status = 'failed'`, so a double-click or stale view can
   never resurrect a running or done job; returns whether a row was re-queued.
-- **`discard(id)`** — deletes a non-`running` job and sweeps its dependency edges (so a
-  discarded job leaves no dangling edge blocking a sibling forever). Refuses a
-  `running` job — discarding a row a worker holds would race that worker's terminal
-  write.
+- **`discard(id)`** — deletes a non-`running` job, then RE-EVALUATES its dependents and
+  sweeps its dependency edges. Discarding a prerequisite **unblocks** its dependents:
+  the deleted prerequisite is treated as settled, so any dependent whose every other
+  remaining prerequisite is already `done` is released to `ready` rather than stranded
+  `blocked` forever (the trigger lives in one shared `releaseReadyDependents` helper, run
+  from BOTH `complete` and `discard` — `complete` alone is not enough, because a
+  discarded prerequisite never completes). The order inside the transaction is
+  load-bearing: delete the row, THEN release dependents (still discoverable via the
+  `depends_on_id` edges, and the deleted prerequisite no longer joins, so it counts as
+  satisfied), THEN sweep the edges. Refuses a `running` job — discarding a row a worker
+  holds would race that worker's terminal write.
 
 ### 3. The dashboard — dogfooding islands + the admin surface
 
@@ -131,6 +143,18 @@ proof. It is one `lesto()` app:
 The example seeds a mix of jobs (successes, one DLQ failure) and a
 **batch-with-a-dependency** (`ingest` → `thumbnail`), drains it, and proves the
 thumbnail can only run *after* ingest.
+
+> **Preview caveat — the example's mutation routes are unauthenticated and CSRF-free.**
+> `POST /queue/jobs/:id/retry` and `DELETE /queue/jobs/:id` ship with NO auth and NO
+> CSRF guard. That is acceptable for a local dogfood driven by `curl`/tests, but it is
+> an insecure pattern to copy verbatim, so `serve.ts` and `src/app.ts` carry a loud
+> "PREVIEW — unauthenticated, do not deploy as-is" banner (and `serve.ts` warns at
+> boot). A real deploy gates those routes behind its own auth and mounts `@lesto/csrf`
+> — `originCheck()` (the zero-config Fetch-Metadata default for a cookie-authed app) or
+> the signed double-submit `csrf()` middleware — via `.use(...)`, exactly as
+> `examples/estate` does. Full CSRF token-threading was left out of the preview
+> deliberately: the example has no session/auth story to bind a double-submit token to,
+> and inventing one would balloon a focused queue demo.
 
 ## Why a new `blocked` state, not a `run_at` far in the future or a separate "pending" table
 

@@ -173,8 +173,11 @@ export type BatchState = "pending" | "completed" | "failed";
  *
  * - `failed` — at least one job is `failed`. The batch cannot complete: a job
  *   that depended on the failed one stays `blocked` forever, by design.
- * - `completed` — every job is `done`.
- * - `pending` — neither of the above: work is still ready/blocked/running.
+ * - `completed` — every ORIGINAL job is `done` (the `done` count equals the
+ *   batch's stored `total`). A batch whose jobs were discarded away has fewer
+ *   surviving rows than `total`, so it is `pending`, never a false `completed`.
+ * - `pending` — none of the above: work is still ready/blocked/running, or some
+ *   jobs were discarded so the batch can no longer fully complete.
  */
 export interface BatchSummary {
   readonly id: number;
