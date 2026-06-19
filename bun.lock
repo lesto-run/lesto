@@ -189,8 +189,6 @@
       },
       "dependencies": {
         "@lesto/assets": "workspace:*",
-        "@lesto/content-core": "workspace:*",
-        "@lesto/content-store": "workspace:*",
         "@lesto/deploy": "workspace:*",
         "@lesto/errors": "workspace:*",
         "@lesto/kernel": "workspace:*",
@@ -204,6 +202,14 @@
         "@lesto/web": "workspace:*",
         "jiti": "^2.7.0",
       },
+      "peerDependencies": {
+        "@lesto/content-core": "workspace:*",
+        "@lesto/content-store": "workspace:*",
+      },
+      "optionalPeers": [
+        "@lesto/content-core",
+        "@lesto/content-store",
+      ],
     },
     "packages/client": {
       "name": "@lesto/client",
@@ -216,7 +222,7 @@
     },
     "packages/cloudflare": {
       "name": "@lesto/cloudflare",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@lesto/db": "workspace:*",
         "@lesto/deploy": "workspace:*",
@@ -703,7 +709,7 @@
     },
     "packages/pg": {
       "name": "@lesto/pg",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@lesto/db": "workspace:*",
       },
