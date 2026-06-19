@@ -8,8 +8,8 @@
   "scripts": {
     "lint": "oxlint packages",
     "format:check": "bun run --filter '@lesto/*' format:check",
-    "ws:test": "bun run --filter '@lesto/*' test",
-    "ws:test:cov": "bun run scripts/coverage-gate.ts",
+    "ws:test": "node scripts/require-node.mjs && bun run --filter '@lesto/*' test",
+    "ws:test:cov": "node scripts/require-node.mjs && bun run scripts/coverage-gate.ts",
     "examples:test": "bun run --filter '@lesto/example-*' test",
     "bundle-size": "bun run --cwd packages/assets bundle-size",
     "ws:lint": "bun run --filter '@lesto/*' lint",
