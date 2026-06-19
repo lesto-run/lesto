@@ -33,6 +33,7 @@ import { createApp } from "@lesto/kernel";
 
 import { run } from "./run";
 import type { CloudflareDeployer, ReleaseTarget } from "./run";
+import { WRANGLER_DEPLOY_ARGS, WRANGLER_ROLLBACK_MESSAGE, wranglerRollbackArgs } from "./wrangler";
 import { runMcp, startMcpServer } from "./mcp";
 import { runOpenApi } from "./openapi";
 import { runGenerate } from "./generate";
@@ -71,7 +72,7 @@ function runWrangler(subcommand: readonly string[]): Promise<string> {
 /** The real Cloudflare driver: the official `wrangler` CLI (see {@link CloudflareDeployer}). */
 const wranglerDeployer: CloudflareDeployer = {
   deploy: async () => {
-    const output = await runWrangler(["deploy"]);
+    const output = await runWrangler(WRANGLER_DEPLOY_ARGS);
 
     // wrangler prints the live URL on a successful deploy; recover it so the
     // result can be health-gated. Absent a match, the gate is skipped (out loud).
@@ -81,7 +82,7 @@ const wranglerDeployer: CloudflareDeployer = {
   },
 
   rollback: async () => {
-    await runWrangler(["rollback", "--message", "lesto deploy: post-deploy health check failed"]);
+    await runWrangler(wranglerRollbackArgs(WRANGLER_ROLLBACK_MESSAGE));
   },
 };
 

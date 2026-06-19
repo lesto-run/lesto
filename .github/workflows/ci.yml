@@ -266,7 +266,10 @@ jobs:
   # the Bun-only jobs do not carry. A green dry-run is the standing guarantee that a
   # fresh scaffold's shipped Worker bundles and its wrangler config validates on every
   # PR; the `lesto deploy --cloudflare` flag-parsing + health-gate are covered by CLI
-  # unit tests.
+  # unit tests. The EXACT wrangler subcommands the driver spawns (`wrangler deploy`,
+  # `wrangler rollback --message …`) are pinned in `packages/cli/test/wrangler.test.ts`,
+  # so flag drift fails the cli gate on a PR rather than a live deploy — this dry-run
+  # proves the bundle; that test proves the flags.
   deploy-cloudflare-dry:
     runs-on: ubuntu-latest
     steps:
