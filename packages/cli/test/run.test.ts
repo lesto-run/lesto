@@ -1952,6 +1952,8 @@ describe("run serve threads the DoS limits from the environment", () => {
           LESTO_KEEP_ALIVE_TIMEOUT_MS: "3000",
           LESTO_MAX_HEADER_BYTES: "8192",
           LESTO_DRAIN_TIMEOUT_MS: "15000",
+          LESTO_MAX_CONNECTIONS: "5000",
+          LESTO_MAX_IN_FLIGHT_REQUESTS: "500",
         },
       }),
     );
@@ -1965,6 +1967,8 @@ describe("run serve threads the DoS limits from the environment", () => {
     expect(options?.keepAliveTimeoutMs).toBe(3000);
     expect(options?.maxHeaderBytes).toBe(8192);
     expect(options?.drainTimeoutMs).toBe(15000);
+    expect(options?.maxConnections).toBe(5000);
+    expect(options?.maxInFlightRequests).toBe(500);
   });
 
   it("leaves every limit unset (serve's secure defaults apply) when the env is empty", async () => {
@@ -1983,6 +1987,8 @@ describe("run serve threads the DoS limits from the environment", () => {
     expect(options?.keepAliveTimeoutMs).toBeUndefined();
     expect(options?.maxHeaderBytes).toBeUndefined();
     expect(options?.drainTimeoutMs).toBeUndefined();
+    expect(options?.maxConnections).toBeUndefined();
+    expect(options?.maxInFlightRequests).toBeUndefined();
   });
 
   it("ignores an invalid limit (≤0 or non-numeric) and keeps the secure default for it", async () => {

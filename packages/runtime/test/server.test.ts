@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { serve } from "../src/index";
 import {
   adoptRequestId,
+  applyConnectionLimit,
   applyServerLimits,
   closeWithDrain,
+  concurrencyLimiter,
   compressResponse,
   drainServer,
   establishContext,
@@ -530,6 +532,48 @@ describe("serve", () => {
     const ok = await makeRequest(server.port, { method: "GET", path: "/" });
     expect(ok.status).toBe(200);
     expect(resolved).toBe(true);
+  });
+
+  it("sheds a 503 when requests in flight exceed maxInFlightRequests, then recovers", async () => {
+    // Definite assignment: the Promise executors below run synchronously.
+    let releaseHeld!: () => void;
+    let markStarted!: () => void;
+
+    const released = new Promise<void>((resolve) => {
+      releaseHeld = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async (_method, path) => {
+        if (path === "/hold") {
+          markStarted(); // signal that the only slot is now occupied
+          await released; // block until the test frees it
+        }
+
+        return { status: 200, headers: {}, body: "ok" };
+      },
+    };
+
+    server = await serve(app, { port: 0, maxInFlightRequests: 1 });
+
+    const held = makeRequest(server.port, { method: "GET", path: "/hold" });
+    await started;
+
+    // The one slot is taken, so a concurrent request is shed without running.
+    const shed = await makeRequest(server.port, { method: "GET", path: "/" });
+    expect(shed.status).toBe(503);
+    expect(shed.body).toBe("Service Unavailable");
+
+    releaseHeld();
+    expect((await held).status).toBe(200);
+
+    // The slot was freed in `finally`, so the node serves again.
+    const recovered = await makeRequest(server.port, { method: "GET", path: "/" });
+    expect(recovered.status).toBe(200);
   });
 
   it("aborts the wedged handler's context signal after answering 503", async () => {
@@ -1692,6 +1736,39 @@ describe("applyServerLimits", () => {
       headersTimeout: 15_000,
       keepAliveTimeout: 5_000,
     });
+  });
+});
+
+describe("applyConnectionLimit", () => {
+  it("writes maxConnections onto the server", () => {
+    const target = { maxConnections: 0 };
+
+    applyConnectionLimit(target, 10_000);
+
+    expect(target.maxConnections).toBe(10_000);
+  });
+});
+
+describe("concurrencyLimiter", () => {
+  it("admits up to max, sheds past it, and frees a slot on release", () => {
+    const limiter = concurrencyLimiter(2);
+
+    expect(limiter.tryAcquire()).toBe(true);
+    expect(limiter.tryAcquire()).toBe(true);
+    expect(limiter.tryAcquire()).toBe(false); // at capacity
+
+    limiter.release();
+
+    expect(limiter.tryAcquire()).toBe(true); // the freed slot is reusable
+  });
+
+  it("release never underflows below zero", () => {
+    const limiter = concurrencyLimiter(1);
+
+    limiter.release(); // no prior acquire — the underflow guard makes this a no-op
+
+    expect(limiter.tryAcquire()).toBe(true);
+    expect(limiter.tryAcquire()).toBe(false);
   });
 });
 

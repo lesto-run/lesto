@@ -208,6 +208,16 @@ export interface ServeOptions {
   readonly drainTimeoutMs?: number;
 
   /**
+   * Backstop on connection/request VOLUME (the layer the per-request limits don't
+   * cover). `maxConnections` caps live TCP connections (node refuses past it);
+   * `maxInFlightRequests` sheds a graceful 503 once that many requests are in
+   * flight. Defaults 10000 / 1000 — generous backstops, not edge flood control.
+   */
+  readonly maxConnections?: number;
+
+  readonly maxInFlightRequests?: number;
+
+  /**
    * Liveness/readiness endpoints, on by default at `/health` and `/readyz`.
    * Pass `false` to disable them (e.g. when an upstream owns those paths), or an
    * object to override the paths and supply a real readiness probe.
@@ -359,6 +369,20 @@ const DEFAULT_HEADERS_TIMEOUT_MS = 15_000;
 const DEFAULT_KEEP_ALIVE_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_HEADER_BYTES = 16 * 1024;
 const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
+
+/**
+ * Backstop caps on connection and in-flight-request VOLUME — the layer the
+ * per-request limits don't cover. The body cap and handler timeout stop one
+ * request from crashing or hanging the process, but a cheap unauthenticated
+ * flood of *many* connections/requests can still exhaust sockets and memory
+ * beneath them. `maxConnections` refuses TCP past the cap (node-native); the
+ * in-flight semaphore sheds a graceful 503 once that many requests are in flight.
+ * Both are generous enough not to touch normal traffic and tune UP via
+ * `LESTO_MAX_CONNECTIONS` / `LESTO_MAX_IN_FLIGHT_REQUESTS`. Heavy edge flood
+ * protection is still the CF/LB's job; this is the node's own backstop.
+ */
+const DEFAULT_MAX_CONNECTIONS = 10_000;
+const DEFAULT_MAX_IN_FLIGHT_REQUESTS = 1_000;
 
 const DEFAULT_LIVE_PATH = "/health";
 const DEFAULT_READY_PATH = "/readyz";
@@ -754,6 +778,54 @@ export function applyServerLimits(
   server.keepAliveTimeout = limits.keepAliveTimeoutMs;
 }
 
+/**
+ * Cap the connections a server will hold open. node:http refuses (and closes) a
+ * new connection once `maxConnections` are live, bounding a connection-volume
+ * flood at the socket layer. Pulled out like {@link applyServerLimits} so the
+ * wiring is unit-testable without a live socket.
+ */
+export function applyConnectionLimit(server: { maxConnections: number }, max: number): void {
+  server.maxConnections = max;
+}
+
+/**
+ * Bounds the number of requests in flight at once, shedding a 503 past the cap.
+ *
+ * Where the body cap and handler timeout protect against ONE bad request, this
+ * protects against MANY cheap ones piling up: a request-volume flood is sloughed
+ * off as a fast 503 before it can grow the node's per-request state without
+ * bound. A counting semaphore — `tryAcquire` admits and counts, `release` frees a
+ * slot when the request settles.
+ */
+export interface ConcurrencyLimiter {
+  /** Admit a request and count it, or return `false` (caller sheds 503) at capacity. */
+  tryAcquire(): boolean;
+
+  /** Free a slot once a request settles. */
+  release(): void;
+}
+
+/** A {@link ConcurrencyLimiter} bounded at `max` in-flight requests. */
+export function concurrencyLimiter(max: number): ConcurrencyLimiter {
+  let inFlight = 0;
+
+  return {
+    tryAcquire(): boolean {
+      if (inFlight >= max) return false;
+
+      inFlight += 1;
+
+      return true;
+    },
+
+    release(): void {
+      // Guard against underflow: `release` is only ever called after a successful
+      // `tryAcquire` (the handler's `finally`), so this never trips in normal flow.
+      if (inFlight > 0) inFlight -= 1;
+    },
+  };
+}
+
 /** The slice of a node server {@link drainServer} drives — fakeable in a test. */
 export interface ClosableServer {
   close(callback: () => void): void;
@@ -849,6 +921,7 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
     logRequest: options.logRequest ?? defaultLogRequest,
     logError,
     now: options.now ?? Date.now,
+    concurrency: concurrencyLimiter(options.maxInFlightRequests ?? DEFAULT_MAX_IN_FLIGHT_REQUESTS),
     ...(options.tracer === undefined ? {} : { tracer: options.tracer }),
     ...(options.parseTraceparent === undefined
       ? {}
@@ -871,6 +944,8 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
     headersTimeoutMs: options.headersTimeoutMs ?? DEFAULT_HEADERS_TIMEOUT_MS,
     keepAliveTimeoutMs: options.keepAliveTimeoutMs ?? DEFAULT_KEEP_ALIVE_TIMEOUT_MS,
   });
+
+  applyConnectionLimit(server, options.maxConnections ?? DEFAULT_MAX_CONNECTIONS);
 
   return new Promise((resolve) => {
     server.listen(port, host, () => {
@@ -943,6 +1018,9 @@ interface HandleDeps {
   readonly logError: (message: string, error: unknown) => void;
 
   readonly now: () => number;
+
+  /** Bounds requests in flight at once; sheds a 503 past the cap. */
+  readonly concurrency: ConcurrencyLimiter;
 
   /** Mints one span per request, or absent for the zero-overhead default. */
   readonly tracer?: RequestTracer;
@@ -1131,6 +1209,32 @@ export function requestAbortSignal(res: AbortableResponse): AbortSignal {
  * down or hold a socket open past the handler deadline.
  */
 async function handle(
+  app: App,
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: HandleDeps,
+): Promise<void> {
+  // Shed before doing any work when too many requests are already in flight: a
+  // request-volume flood is answered with the cheapest possible 503 — no context,
+  // no body read — so it cannot push the node past its in-flight budget. Not
+  // logged per-shed: a flood would amplify into a logging DoS, and the 503s are
+  // already visible to the load balancer / metrics. A successful acquire is freed
+  // in the `finally` below, so every admitted request returns its slot.
+  if (!deps.concurrency.tryAcquire()) {
+    respondWithError(res, 503, deps.securityHeaders, deps.newRequestId());
+
+    return;
+  }
+
+  try {
+    return await handleAdmitted(app, req, res, deps);
+  } finally {
+    deps.concurrency.release();
+  }
+}
+
+/** The request path proper, run only after a concurrency slot is acquired. */
+async function handleAdmitted(
   app: App,
   req: IncomingMessage,
   res: ServerResponse,

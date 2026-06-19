@@ -426,6 +426,10 @@ function buildServeTracing(deps: CliDeps): ServeTracing | undefined {
  *                                  defense). Default 16 KiB.
  *   - `LESTO_DRAIN_TIMEOUT_MS`    — how long a graceful shutdown waits for in-flight
  *                                  requests before forcing sockets closed. Default 10s.
+ *   - `LESTO_MAX_CONNECTIONS`     — live TCP connections the node holds before refusing
+ *                                  new ones (connection-flood backstop). Default 10000.
+ *   - `LESTO_MAX_IN_FLIGHT_REQUESTS` — requests in flight before a graceful 503 shed
+ *                                  (request-flood backstop). Default 1000.
  *
  * An UNSET, non-numeric, or ≤0 value is ignored — the var falls through to
  * `serve`'s secure default rather than weakening it (a `0` would disable the
@@ -440,6 +444,8 @@ export interface ServeLimitsEnv {
   readonly LESTO_KEEP_ALIVE_TIMEOUT_MS?: string | undefined;
   readonly LESTO_MAX_HEADER_BYTES?: string | undefined;
   readonly LESTO_DRAIN_TIMEOUT_MS?: string | undefined;
+  readonly LESTO_MAX_CONNECTIONS?: string | undefined;
+  readonly LESTO_MAX_IN_FLIGHT_REQUESTS?: string | undefined;
 }
 
 /**
@@ -482,6 +488,8 @@ function serveLimitsFromEnv(env: ServeLimitsEnv): {
   keepAliveTimeoutMs?: number;
   maxHeaderBytes?: number;
   drainTimeoutMs?: number;
+  maxConnections?: number;
+  maxInFlightRequests?: number;
 } {
   const maxBodyBytes = parseServeLimit(env.LESTO_MAX_BODY_BYTES);
   const handlerTimeoutMs = parseServeLimit(env.LESTO_HANDLER_TIMEOUT_MS);
@@ -490,6 +498,8 @@ function serveLimitsFromEnv(env: ServeLimitsEnv): {
   const keepAliveTimeoutMs = parseServeLimit(env.LESTO_KEEP_ALIVE_TIMEOUT_MS);
   const maxHeaderBytes = parseServeLimit(env.LESTO_MAX_HEADER_BYTES);
   const drainTimeoutMs = parseServeLimit(env.LESTO_DRAIN_TIMEOUT_MS);
+  const maxConnections = parseServeLimit(env.LESTO_MAX_CONNECTIONS);
+  const maxInFlightRequests = parseServeLimit(env.LESTO_MAX_IN_FLIGHT_REQUESTS);
 
   return {
     ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
@@ -499,6 +509,8 @@ function serveLimitsFromEnv(env: ServeLimitsEnv): {
     ...(keepAliveTimeoutMs !== undefined ? { keepAliveTimeoutMs } : {}),
     ...(maxHeaderBytes !== undefined ? { maxHeaderBytes } : {}),
     ...(drainTimeoutMs !== undefined ? { drainTimeoutMs } : {}),
+    ...(maxConnections !== undefined ? { maxConnections } : {}),
+    ...(maxInFlightRequests !== undefined ? { maxInFlightRequests } : {}),
   };
 }
 
