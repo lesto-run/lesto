@@ -1240,7 +1240,26 @@ async function handle(
   deps: HandleDeps,
 ): Promise<void> {
   const line = requestLineOf(req);
-  const path = pathOf(line.url);
+
+  // A malformed request target (`GET //`, `GET /\`) cannot be parsed into a path —
+  // `new URL(...)` throws. Answer 400 here, at the very top: this runs in handle's
+  // pre-gate preamble, OUTSIDE the request boundary's try/catch, so an unhandled
+  // throw would escape into `void handle(...)` and leave the socket unanswered
+  // until the request timeout (a cheap unauthenticated socket-hold). A clean 400 is
+  // logged like any other request. Past this point `pathOf`/`toLestoRequest` share
+  // the same parse, so the URL is known-good.
+  let path: string;
+
+  try {
+    path = pathOf(line.url);
+  } catch {
+    const requestId = deps.newRequestId();
+
+    respondWithError(res, 400, deps.securityHeaders, requestId);
+    deps.logRequest({ method: line.method, path: line.url, status: 400, ms: 0, requestId });
+
+    return;
+  }
 
   // Liveness/readiness probes BYPASS the concurrency gate: an orchestrator polling
   // `/readyz` must get the node's true readiness even while it sheds load — a 503

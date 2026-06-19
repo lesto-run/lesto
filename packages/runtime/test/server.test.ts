@@ -1,4 +1,5 @@
 import { request as httpRequest } from "node:http";
+import { connect } from "node:net";
 import { EventEmitter } from "node:events";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -146,6 +147,19 @@ function makeRequestRaw(
     req.on("error", reject);
 
     req.end();
+  });
+}
+
+/** Send a RAW request (for a malformed target `http.request` would reject/normalize). */
+function rawRequest(port: number, raw: string): Promise<{ statusLine: string }> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1", () => socket.write(raw));
+
+    let buf = "";
+
+    socket.on("data", (chunk: Buffer) => (buf += chunk.toString("utf8")));
+    socket.on("error", reject);
+    socket.on("close", () => resolve({ statusLine: buf.split("\r\n")[0] ?? "" }));
   });
 }
 
@@ -600,6 +614,15 @@ describe("serve", () => {
 
     // The one slot is taken, so a concurrent request is shed without running.
     const shed = await makeRequest(server.port, { method: "GET", path: "/shed-me" });
+
+    // Free the held request BEFORE asserting, so a failing assertion fails fast
+    // rather than stalling teardown's drain on the still-in-flight request.
+    releaseHeld();
+    const heldResult = await held;
+
+    // The slot was freed in `finally`, so the node serves again.
+    const recovered = await makeRequest(server.port, { method: "GET", path: "/" });
+
     expect(shed.status).toBe(503);
     expect(shed.body).toBe("Service Unavailable");
 
@@ -609,11 +632,7 @@ describe("serve", () => {
     expect(shedEntry).toMatchObject({ method: "GET", status: 503, ms: 0 });
     expect(shedEntry?.requestId).toEqual(expect.any(String));
 
-    releaseHeld();
-    expect((await held).status).toBe(200);
-
-    // The slot was freed in `finally`, so the node serves again.
-    const recovered = await makeRequest(server.port, { method: "GET", path: "/" });
+    expect(heldResult.status).toBe(200);
     expect(recovered.status).toBe(200);
   });
 
@@ -648,15 +667,39 @@ describe("serve", () => {
     // The only slot is occupied, yet the probe bypasses the gate and answers true
     // readiness — a 503 here would make an orchestrator pull a merely-busy node.
     const ready = await makeRequest(server.port, { method: "GET", path: "/readyz" });
-    expect(ready.status).toBe(200);
-    expect(ready.body).toBe("ready");
 
     // A non-probe at the same path (a POST) is still gated → shed.
     const posted = await makeRequest(server.port, { method: "POST", path: "/readyz", body: "x" });
-    expect(posted.status).toBe(503);
 
+    // Free the held request before asserting (fail fast, no teardown drain stall).
     releaseHeld();
-    expect((await held).status).toBe(200);
+    const heldResult = await held;
+
+    expect(ready.status).toBe(200);
+    expect(ready.body).toBe("ready");
+    expect(posted.status).toBe(503);
+    expect(heldResult.status).toBe(200);
+  });
+
+  it("answers a malformed request target with 400 instead of leaving the socket unanswered", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: {}, body: "unreached" }),
+    };
+
+    const logged: AccessEntry[] = [];
+
+    server = await serve(app, { port: 0, logRequest: (entry) => logged.push(entry) });
+
+    // `GET //` — node delivers req.url "//", which `new URL("//", base)` rejects.
+    // Without the early guard the throw escapes and the socket hangs to timeout.
+    const response = await rawRequest(
+      server.port,
+      "GET // HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+
+    expect(response.statusLine).toContain("400");
+    expect(logged.find((entry) => entry.status === 400)).toMatchObject({ method: "GET", ms: 0 });
   });
 
   it("aborts the wedged handler's context signal after answering 503", async () => {
