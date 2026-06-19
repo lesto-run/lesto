@@ -49,9 +49,11 @@ export function eq<C extends Column<unknown, boolean, boolean>>(
   column: C,
   value: NonNullable<CellType<C>> | Column<NonNullable<CellType<C>>, boolean, boolean>,
 ): Condition {
-  // A column carries a `spec`; every value type does NOT — `Date`, arrays, and the
-  // scalar types all lack it. (If a `json` column value is ever an object that itself
-  // carries a `spec` key, this must brand columns instead — revisit when `json` lands.)
+  // A column carries a `spec`; no value type does — `Date`, arrays, and the scalars
+  // all lack it. A `null` forced past the `NonNullable` signature (only reachable via
+  // `as any`) throws here on `"spec" in null` — the right loud failure for a contract
+  // violation; `isNull(column)` is the real `IS NULL` test. (Revisit if a `json` value
+  // can ever carry a `spec` key — it would have to brand columns instead.)
   if (typeof value === "object" && "spec" in value) {
     return { sql: `${qualified(column)} = ${qualified(value)}`, params: [] };
   }

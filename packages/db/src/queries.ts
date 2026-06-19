@@ -424,6 +424,11 @@ function renderJoin(state: JoinState, dialect: Dialect): { sql: string; params: 
  * alias the projection wrote (`row["users.id"]`) — never parsed — and coerced by its
  * column's kind. A left-joined table whose every cell is `null` had no match, so its
  * namespace is `null` (not an object of null cells, which would make `… | null` a lie).
+ *
+ * Known limit: a matched left-joined row whose columns are *all* genuinely NULL is
+ * indistinguishable from no-match and collapses to `null`. In practice every table
+ * has a NOT NULL column (a primary key) that keeps a real match non-null, so this
+ * only bites a left-joined table with zero non-null columns — give it a PK.
  */
 function hydrateJoin(state: JoinState, raw: unknown): Record<string, unknown> {
   const row = raw as Record<string, unknown>;
@@ -453,6 +458,20 @@ function makeJoinQuery<S extends Shape>(
   dialect: Dialect,
   state: JoinState,
 ): JoinQuery<S> {
+  // Two tables sharing a namespace would write duplicate `"x".* AS "x.*"` projections
+  // (broken SQL) and overwrite each other in `hydrateJoin`. The only way to collide is
+  // to `alias(t, name)` onto a name another table already uses — fail loud and coded
+  // rather than emit SQL the driver rejects with a cryptic "ambiguous column".
+  const names = membersOf(state).map((member) => member.table.tableName);
+  const duplicate = names.find((name, index) => names.indexOf(name) !== index);
+  if (duplicate !== undefined) {
+    throw new DbError(
+      "DB_DUPLICATE_JOIN_NAMESPACE",
+      `Two tables in this join share the namespace "${duplicate}". Give one an alias(table, "name") with a distinct name.`,
+      { namespace: duplicate },
+    );
+  }
+
   const next = (patch: Partial<JoinState>): JoinQuery<S> =>
     makeJoinQuery<S>(sql, dialect, { ...state, ...patch });
 

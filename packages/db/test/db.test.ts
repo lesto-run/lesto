@@ -631,6 +631,47 @@ describe("joins", () => {
     expect(row?.sidecar.id).toBe(5);
     expect(row?.sidecar.weirdId).toBe(1);
   });
+
+  it("aliasing onto a name another table already uses fails loud and coded", () => {
+    // alias(posts, "authors") collides with the base `authors` namespace: both would
+    // project `"authors".* AS "authors.*"` and overwrite each other. Refuse it.
+    expect(() =>
+      jdb.select().from(authors).innerJoin(alias(posts, "authors"), eq(posts.authorId, authors.id)),
+    ).toThrow(DbError);
+  });
+
+  it("a left-joined row of all-NULL columns collapses to null (documented limit)", async () => {
+    // Pin the known limitation: a matched left-joined row whose every projected cell
+    // is null is indistinguishable from no-match. `nullable_only` has no NOT NULL
+    // column, so a real match of (null, null) collapses to `null`.
+    const anchor = defineTable("anchor", {
+      id: integer("id").primaryKey({ autoIncrement: true }),
+    });
+    const nullableOnly = defineTable("nullable_only", {
+      a: integer("a"),
+      b: text("b"),
+    });
+
+    const wireRow = { "anchor.id": 1, "nullable_only.a": null, "nullable_only.b": null };
+    const fake: SqlDatabase = {
+      exec: async () => undefined,
+      prepare: () => ({
+        run: async () => ({ changes: 0 }),
+        get: async () => wireRow,
+        all: async () => [wireRow],
+      }),
+      transaction: async (fn) => fn(fake),
+    };
+
+    const [row] = await createDb(fake)
+      .select()
+      .from(anchor)
+      .leftJoin(nullableOnly, eq(anchor.id, anchor.id))
+      .all();
+
+    expect(row?.anchor.id).toBe(1);
+    expect(row?.nullable_only).toBeNull(); // the documented lossy edge
+  });
 });
 
 describe("inferred types (compile-time)", () => {

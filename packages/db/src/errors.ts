@@ -16,7 +16,8 @@ export type DbErrorCode =
   | "DB_NO_CONDITIONS"
   | "DB_EMPTY_INSERT"
   | "DB_EMPTY_UPDATE"
-  | "DB_UNRESOLVED_REFERENCE";
+  | "DB_UNRESOLVED_REFERENCE"
+  | "DB_DUPLICATE_JOIN_NAMESPACE";
 
 /** Anything the query/DDL layer can refuse to do. */
 export class DbError extends LestoError<DbErrorCode> {
