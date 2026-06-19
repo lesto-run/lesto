@@ -17,6 +17,7 @@ export {
   DEFAULT_TOLERANCE_MS,
   defaultUrlGuard,
   EVENT_HEADER,
+  isPrivateAddress,
   sign,
   SIGNATURE_HEADER,
   systemResolver,
@@ -37,3 +38,10 @@ export type {
   WebhookResponse,
   WebhooksOptions,
 } from "./webhooks";
+export { nodePinningFetch, pinnedLookup } from "./pinning-fetch";
+export type {
+  HttpRequester,
+  NodePinningFetchOptions,
+  PinnedClientRequest,
+  PinnedResponse,
+} from "./pinning-fetch";

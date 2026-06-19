@@ -35,16 +35,22 @@ import type { JsonValue, Queue } from "@lesto/queue";
  *      request replayed later fails — the replay window is the tolerance, not
  *      forever.
  *
- * RESIDUAL RISK — DNS-rebinding TOCTOU (documented, not closed): the guard
- * resolves the host and `fetch` resolves it again, so a hostile DNS server could
- * answer "public" to the guard and "private" to the fetch in the gap between.
- * IP-pinning the resolved address into the fetch (Host header preserved) would
- * close it, but that is not expressible through the injected {@link FetchLike} /
- * the Workers `fetch` we run on — neither lets a caller pin the connect IP while
- * keeping the Host. The mitigations we DO have: the guard blocks on *any*
- * resolved private address (so a name that resolves to both public and private
- * is refused outright), and `redirect: "manual"` removes the post-guard redirect
- * hop. A host that needs hard TOCTOU closure must inject a pinning `FetchLike`.
+ * DNS-rebinding TOCTOU — closeable by opt-in: the default guard resolves the host
+ * and the default `fetch` resolves it AGAIN, so a hostile DNS server could answer
+ * "public" to the guard and "private" to the fetch in the gap between. The default
+ * mitigations narrow it (the guard blocks on *any* resolved private address, so a
+ * name that resolves to both public and private is refused outright; `redirect:
+ * "manual"` removes the post-guard redirect hop), but they do not fully close it.
+ *
+ * `@lesto/webhooks` ships the pinning `FetchLike` the gap calls for:
+ * {@link nodePinningFetch} (`pinning-fetch.ts`) resolves the host ONCE inside the
+ * socket's own connect-time `lookup`, validates every resolved address with the
+ * same {@link isPrivateAddress} rules, and lets the socket connect only to that
+ * validated set — there is no second independent resolution to rebind, and TLS
+ * still verifies against the hostname (SNI is unchanged; only the connect address
+ * is pinned). Opt in on Node with `new Webhooks({ queue, fetch: nodePinningFetch() })`.
+ * The default stays the portable global `fetch` so the Workers edge build is
+ * unaffected.
  */
 
 const DELIVER_JOB = "lesto.webhook.deliver";
@@ -306,8 +312,14 @@ function isPrivateIPv6(address: string): boolean {
   return false;
 }
 
-/** True iff `address` (a literal IP) is in a range we refuse to connect to. */
-function isPrivateAddress(address: string): boolean {
+/**
+ * True iff `address` (a literal IP) is in a range we refuse to connect to.
+ *
+ * Exported so the IP-pinning {@link FetchLike} (`pinning-fetch.ts`) validates the
+ * connect-time address against the SAME allow/deny rules as {@link defaultUrlGuard}
+ * — one source of truth for "is this address public".
+ */
+export function isPrivateAddress(address: string): boolean {
   const family = isIP(address);
 
   if (family === 4) return isPrivateIPv4(address);
