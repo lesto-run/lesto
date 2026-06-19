@@ -1,8 +1,7 @@
 {
   "name": "@lesto/runtime",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
-  "private": true,
   "description": "Lesto's transport tier — the node:http server that serves a Lesto app, plus a queue-worker runner.",
   "type": "module",
   "exports": {
@@ -30,5 +29,20 @@
   },
   "devDependencies": {
     "@lesto/observability": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/runtime"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }

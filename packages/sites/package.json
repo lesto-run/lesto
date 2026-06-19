@@ -1,10 +1,9 @@
 {
   "name": "@lesto/sites",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
   "description": "Lesto sites & targets — declare many sites over one app, and prerender static ones from the app's own request handler.",
   "type": "module",
-  "private": true,
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -21,5 +20,20 @@
   },
   "dependencies": {
     "@lesto/errors": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/sites"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }

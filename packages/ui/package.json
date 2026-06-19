@@ -1,10 +1,9 @@
 {
   "name": "@lesto/ui",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
   "description": "Lesto's AI-native UI rendering engine core — validate a JSON UI tree and render it to React against a vetted component registry.",
   "type": "module",
-  "private": true,
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -39,5 +38,20 @@
     "lint": "oxlint src test",
     "format": "oxfmt src test",
     "format:check": "oxfmt --check src test"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/ui"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }

@@ -1,10 +1,9 @@
 {
   "name": "@lesto/storage",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
   "description": "Lesto's object storage — a pluggable backend (S3/R2 for production; in-memory and local filesystem for dev).",
   "type": "module",
-  "private": true,
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -21,5 +20,20 @@
   },
   "dependencies": {
     "@lesto/errors": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/storage"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }

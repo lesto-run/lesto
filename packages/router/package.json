@@ -1,10 +1,9 @@
 {
   "name": "@lesto/router",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
   "description": "Lesto's RESTful router — declare routes and named paths, resolve method+path to a controller#action.",
   "type": "module",
-  "private": true,
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -21,5 +20,20 @@
   },
   "dependencies": {
     "@lesto/errors": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/router"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }

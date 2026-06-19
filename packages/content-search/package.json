@@ -17,9 +17,6 @@
       "import": "./src/react.tsx"
     }
   },
-  "main": "./dist/index.mjs",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.mts",
   "scripts": {
     "test": "vitest run",
     "test:cov": "vitest run --coverage",
@@ -35,17 +32,16 @@
     "vector-search",
     "browser"
   ],
-  "author": "Docks Contributors",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/usedocks/docks.git",
-    "directory": "packages/search"
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/content-search"
   },
   "bugs": {
-    "url": "https://github.com/usedocks/docks/issues"
+    "url": "https://github.com/lesto-run/lesto/issues"
   },
-  "homepage": "https://usedocks.dev",
+  "homepage": "https://lesto.run",
   "dependencies": {
     "@lesto/content-shared": "workspace:*"
   },
@@ -65,5 +61,7 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "private": true
+  "files": [
+    "src"
+  ]
 }

@@ -1,10 +1,9 @@
 {
   "name": "@lesto/openapi",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
   "description": "Lesto's OpenAPI generator — turn a Lesto app's route list into an OpenAPI 3.1 document.",
   "type": "module",
-  "private": true,
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -19,5 +18,20 @@
     "format": "oxfmt src test",
     "format:check": "oxfmt --check src test"
   },
-  "dependencies": {}
+  "dependencies": {},
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/openapi"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
+  }
 }

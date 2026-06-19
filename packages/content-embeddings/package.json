@@ -13,9 +13,6 @@
       "import": "./src/index.ts"
     }
   },
-  "main": "./dist/index.mjs",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.mts",
   "scripts": {
     "test": "vitest run",
     "test:cov": "vitest run --coverage",
@@ -31,7 +28,6 @@
     "ai",
     "build-time"
   ],
-  "author": "Docks Contributors",
   "license": "MIT",
   "dependencies": {
     "@huggingface/transformers": "^3.3.3",
@@ -43,5 +39,16 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "private": true
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/content-embeddings"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
+  }
 }

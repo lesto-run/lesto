@@ -1,10 +1,9 @@
 {
   "name": "@lesto/assets",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
   "description": "Lesto's client-asset pipeline — synthesize the island hydration entry from an app/islands convention and bundle it (Bun.build, splitting, the opt-in preact dialect), so an app ships an optimized /client.js with no bespoke build script.",
   "type": "module",
-  "private": true,
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -27,5 +26,20 @@
   },
   "devDependencies": {
     "@types/bun": "latest"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/assets"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }

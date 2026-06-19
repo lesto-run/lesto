@@ -1,8 +1,7 @@
 {
   "name": "@lesto/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "license": "MIT",
-  "private": true,
   "description": "Lesto's `lesto` command-line tool — load a project's lesto.app.ts and run, serve, migrate, or inspect routes.",
   "bin": {
     "lesto": "./src/bin.ts"
@@ -37,5 +36,20 @@
     "@lesto/runtime": "workspace:*",
     "@lesto/sites": "workspace:*",
     "@lesto/web": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }
