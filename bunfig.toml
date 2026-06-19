@@ -1,0 +1,11 @@
+# Bun runtime config.
+#
+# [test] scopes Bun's NATIVE `bun test` runner only — it does NOT affect vitest,
+# which does its own discovery via each package's vitest.config.ts. Lesto's suites
+# run under vitest (`bun run test` / `bun run ws:test`); a bare `bun test` would
+# otherwise auto-discover those vitest `*.test.ts` files and run them under Bun's
+# runtime, where vitest-only APIs (e.g. `vi.stubGlobal`) are missing and surface
+# as false reds. Pointing the test root at an empty directory makes `bun test`
+# find nothing and exit 0 instead of masquerading as the project's test command.
+[test]
+root = "tools/no-bun-native-tests"
