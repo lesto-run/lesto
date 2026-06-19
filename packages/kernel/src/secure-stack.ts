@@ -130,6 +130,18 @@ export interface SecureStackOptions {
   readonly originCheck?: OriginCheckOptions;
 
   /**
+   * The browser-safe preset: `true` turns on the recommended cross-site defense
+   * (`originCheck` with default options) without the per-deployment ceremony, so
+   * a browser-UI app is cross-site-safe by setting ONE field instead of leaning
+   * on the `SameSite=Lax` cookie alone. It is shorthand for `originCheck: {}` —
+   * an explicit {@link originCheck} always wins, and it deliberately does NOT turn
+   * on the signed-token {@link csrf} (that needs token plumbing and would 403
+   * token-less requests). API-only services leave it off to keep non-browser
+   * clients un-403'd.
+   */
+  readonly browser?: boolean;
+
+  /**
    * CSRF policy. Present → a `csrf` middleware enforces tokens on state-changing
    * methods. Absent (the default) → NO CSRF enforcement, so a token-less request
    * is untouched. This is the opt-in switch; it is never flipped implicitly.
@@ -294,9 +306,12 @@ export function secureStack(options: SecureStackOptions): readonly Middleware[] 
 
   // The two CSRF defenses sit innermost, both conditional. The cheap header-based
   // origin check runs first (it sheds a forged cross-site request before the
-  // token crypto), then the signed-token check.
-  if (options.originCheck !== undefined) {
-    middleware.push(originCheck(options.originCheck));
+  // token crypto), then the signed-token check. `browser: true` is shorthand for
+  // a default origin check; an explicit `originCheck` always wins.
+  const effectiveOriginCheck = options.originCheck ?? (options.browser === true ? {} : undefined);
+
+  if (effectiveOriginCheck !== undefined) {
+    middleware.push(originCheck(effectiveOriginCheck));
   }
 
   // CSRF token is last and conditional: enforcement only when explicitly configured.

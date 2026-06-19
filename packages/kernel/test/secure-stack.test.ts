@@ -203,6 +203,14 @@ describe("secureStack composition", () => {
     // cors + rateLimit + originCheck + csrf — all four present.
     expect(stack).toHaveLength(4);
   });
+
+  it("treats browser:true as a single default origin-check layer", () => {
+    expect(secureStack({ browser: true })).toHaveLength(1);
+  });
+
+  it("lets an explicit originCheck win over browser:true (no double layer)", () => {
+    expect(secureStack({ browser: true, originCheck: {} })).toHaveLength(1);
+  });
 });
 
 describe("secureStack — origin check (zero-config CSRF default)", () => {
@@ -226,5 +234,21 @@ describe("secureStack — origin check (zero-config CSRF default)", () => {
     });
 
     expect(response.status).toBe(201);
+  });
+
+  it("browser:true turns on the same origin defense with one flag", async () => {
+    const app = await createApp({ db, app: buildApp({ browser: true }) });
+
+    const crossSite = await app.handle("POST", "/api/items", {
+      headers: { "sec-fetch-site": "cross-site" },
+      body: "name=widget",
+    });
+    expect(crossSite.status).toBe(403);
+
+    const sameOrigin = await app.handle("POST", "/api/items", {
+      headers: { "sec-fetch-site": "same-origin" },
+      body: "name=widget",
+    });
+    expect(sameOrigin.status).toBe(201);
   });
 });

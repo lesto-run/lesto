@@ -48,8 +48,9 @@ export const KERNEL_DEFAULT_RATE_LIMIT = { capacity: 100, refillPerSecond: 50 } 
  * 403s legitimate non-browser API clients, and their safe policy is
  * deployment-specific, so they stay one field away (`secure: { originCheck: {} }`)
  * rather than implicit (ADR 0016). An app that serves a BROWSER UI should set
- * `secure: { originCheck: {} }` — without it the only cross-site defense is the
- * session cookie's `SameSite=Lax`.
+ * `secure: { browser: true }` (the shorthand that turns on the recommended
+ * origin-check defense) — without it the only cross-site defense is the session
+ * cookie's `SameSite=Lax`.
  *
  *   - `secure: false` — opt out entirely (an app composing its own `secureStack`).
  *   - `secure` omitted — the rate-limit baseline above.
@@ -199,10 +200,10 @@ export interface LestoAppConfig {
    * installs. CSRF/CORS stay OFF by default — a forced origin/token check refuses
    * legitimate non-browser API clients, and their safe policy is
    * deployment-specific — so a browser app turns them on explicitly, one field
-   * away: `secure: { originCheck: {} }`.
+   * away: `secure: { browser: true }` (shorthand for the recommended origin check).
    *
    * `{ ...SecureStackOptions }` — layer your own policy OVER the baseline: add
-   * `originCheck` (CSRF) / `cors` / the signed-token `csrf`, or retune `rateLimit`.
+   * `browser: true` / `originCheck` (CSRF) / `cors` / the signed-token `csrf`, or retune `rateLimit`.
    * The rate-limit net stays on unless you override it, and the kernel threads its
    * `db` + `dialect` in so you need not repeat them. `false` — opt out entirely,
    * for an app that composes `secureStack` on its own `lesto()` chain (and must not
