@@ -94,22 +94,29 @@ below) — this blocks filling correct provenance/repo metadata.
        PREVIEW in ARCHITECTURE.md (dependency-shape change, tracked separately).
 6. [x] `LESTO_DEP_RANGE` is `^0.1.0` — satisfies the published `0.1.0` (`^0.1.0` resolves
        `0.1.x`). No change needed; bump in lockstep if the surface's minor moves.
-7. [ ] Add the `bun pm pack` → scaffold-from-tarball → boot CI job (RELEASING.md §Verifying).
-       **This must also settle the open caveat below** before any publish.
+7. [ ] Add the `bun pm pack` → scaffold-from-tarball → boot CI job (RELEASING.md §Verifying)
+       — now to LOCK IN the node-runnable bins (the caveat below is resolved) by proving
+       `npx create-lesto` / `lesto` in a clean node sandbox on every push.
 8. [ ] `bun run version` — for the FIRST release this is a no-op (versions set directly in
        step 3, no queued changesets); it begins mattering for the next bump.
 9. [ ] Set `RELEASE_ENABLED=true` + add `NPM_TOKEN` secret → `bun run release` publishes with
        provenance. **(Irreversible — the explicit go.)**
 
-## OPEN CAVEAT — does a `.ts`-direct package run under `npm`/node?
+## RESOLVED — the `.ts` bin now runs under node ✅ (2026-06-19)
 
-Lesto ships `.ts` and relies on Bun (exports → `./src/*.ts`; `create-lesto`'s `bin` is
-`./src/bin.ts`). `bun create lesto` runs it fine, but `npm create lesto` invokes the bin under
-**node**, which cannot execute TypeScript without a loader. The package descriptions promise
-both. This is framework-wide (every package ships `.ts`), so it is NOT a metadata fix — it is
-the thing the pack-and-boot CI job (step 7) must prove or expose **before** flipping
-`RELEASE_ENABLED`. Options when we get there: a published build step, a `.ts`-loader shebang on
-the bin, or scoping the supported runner to Bun in the docs.
+Lesto ships `.ts` (exports → `./src/*.ts`), so `npm create lesto` / `npx` / `lesto` under
+**node** could not execute the bin without a loader. Fixed (`302286f`): each bin is now a
+self-resolving JS shim (`bin/<name>.mjs`, `#!/usr/bin/env node`) that loads the `.ts` entry
+through **jiti** — resolved relative to the shim so jiti is found in the installed package
+regardless of the user's cwd. The `lesto` shim passes jiti the framework's jsx config
+(`automatic`/`react`) so the `@lesto/ui`/`@lesto/web` `.tsx` graph transpiles; `react/jsx-runtime`
+is an installed dep. **Proven under plain node 22 (no bun):** `create-lesto` scaffolds a 9-file
+app; `lesto generate model` and `lesto openapi` run the full CLI TS+TSX graph. `jiti` is now a
+direct dependency of both `@lesto/cli` and `create-lesto`.
+
+Residual (not a blocker): `lesto dev`'s island bundling still calls Bun's bundler
+(`bunBuildClientDeps`) — that one command needs bun; `serve`/`generate`/`mcp`/`openapi`/`deploy`/
+`routes` run under node. Lock the node path in via the pack-and-boot CI job (step 7).
 
 ## Decisions
 
