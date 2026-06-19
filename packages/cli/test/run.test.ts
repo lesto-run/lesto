@@ -2002,4 +2002,21 @@ describe("run serve threads the DoS limits from the environment", () => {
     expect(options?.maxHeaderBytes).toBeUndefined();
     expect(options?.handlerTimeoutMs).toBe(60000);
   });
+
+  it("threads the same limits through `dev` too (parity with serve)", async () => {
+    const serve = fakeServe(5173);
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve,
+        env: { LESTO_MAX_BODY_BYTES: "2097152", LESTO_HANDLER_TIMEOUT_MS: "45000" },
+      }),
+    );
+
+    const [, options] = serve.mock.calls[0]!;
+
+    expect(options?.maxBodyBytes).toBe(2097152);
+    expect(options?.handlerTimeoutMs).toBe(45000);
+  });
 });

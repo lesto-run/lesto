@@ -810,7 +810,14 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // Wrap the dev dispatcher as the app the server fronts; migrations already ran.
   const server = await deps.serve(
     { handle: dispatch, migrationsApplied: app.migrationsApplied },
-    { port, ...(tracing === undefined ? {} : tracing.serveOptions) },
+    {
+      port,
+      // The same operator-tunable DoS limits `serve` honors (`LESTO_MAX_BODY_BYTES`
+      // etc.): a developer testing a large-upload or slow-handler route locally
+      // tunes them here too, and every unset var falls through to the secure default.
+      ...serveLimitsFromEnv(deps.env ?? {}),
+      ...(tracing === undefined ? {} : tracing.serveOptions),
+    },
   );
 
   deps.installShutdown?.(async () => {
