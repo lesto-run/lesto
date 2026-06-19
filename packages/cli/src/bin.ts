@@ -32,6 +32,7 @@ import { createApp } from "@lesto/kernel";
 
 import { run } from "./run";
 import type { CliDeps, CloudflareDeployer, ReleaseTarget } from "./run";
+import { CliError } from "./errors";
 import { WRANGLER_DEPLOY_ARGS, WRANGLER_ROLLBACK_MESSAGE, wranglerRollbackArgs } from "./wrangler";
 import { runMcp, startMcpServer } from "./mcp";
 import { runOpenApi } from "./openapi";
@@ -249,15 +250,20 @@ const CONTENT_PACKAGES_HINT =
 // Convert ONLY "the content peer itself isn't installed" into the hint; rethrow anything
 // else — a real error INSIDE an installed content package (e.g. its own undeclared
 // transitive dep) must NOT be masked as "go install it", which would send the operator
-// down the wrong path. Mirrors `loadSites`'s missing-file-vs-real-error distinction below.
+// down the wrong path. Node's `ERR_MODULE_NOT_FOUND` message embeds the IMPORTER's path
+// (`Cannot find package '<missing>' imported from '<importer>'`), so we classify on the
+// extracted MISSING specifier — not the whole message, which would also match the importer
+// path of a missing transitive dep. Mirrors `loadSites` anchoring on its exact filename.
 function rethrowUnlessMissingContentPeer(error: unknown): never {
-  const missingPeer =
-    error instanceof Error &&
-    "code" in error &&
-    error.code === "ERR_MODULE_NOT_FOUND" &&
-    error.message.includes("@lesto/content-");
+  if (error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
+    const missing = /Cannot find (?:package|module) '([^']+)'/.exec(error.message)?.[1];
 
-  throw missingPeer ? new Error(CONTENT_PACKAGES_HINT) : error;
+    if (missing?.startsWith("@lesto/content-")) {
+      throw new CliError("CLI_CONTENT_PACKAGES_MISSING", CONTENT_PACKAGES_HINT);
+    }
+  }
+
+  throw error;
 }
 
 // The literal import specifiers stay (a variable specifier would infer `any`), so the
