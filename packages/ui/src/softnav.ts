@@ -14,7 +14,7 @@
  * browser-native niceties ON TOP of a navigation): this is the navigation itself,
  * the fetch-and-swap every peer framework's client router owns (Next's app-router
  * Link, RR7, SvelteKit, Nuxt, TanStack, Astro's `<ClientRouter>`). Bet I's
- * view-transition wrapper is a natural future caller of {@link SoftNavOptions.onSwap}.
+ * view-transition wrapper is a natural future caller of {@link SoftNavOptions.swap}.
  *
  * ## Progressive enhancement is the contract, not a mode
  *
@@ -107,13 +107,18 @@ export interface FetchedPage {
   url: string;
 }
 
-/** The page fetcher — defaults to a same-origin `fetch` of the destination's HTML. */
-export type PageFetcher = (url: string) => Promise<FetchedPage>;
+/**
+ * The page fetcher — defaults to a same-origin `fetch` of the destination's HTML.
+ * Always receives the navigation's `AbortSignal` so a superseded in-flight fetch
+ * can be cancelled (the default passes it straight to `fetch`); an override that
+ * does not care about cancellation simply omits the parameter.
+ */
+export type PageFetcher = (url: string, signal: AbortSignal) => Promise<FetchedPage>;
 
 /**
  * Swap the fetched document's body into the live one and return the new title.
  *
- * The default {@link domSwap} parses the HTML, replaces `document.body`'s contents
+ * The default {@link defaultSwap} parses the HTML, replaces `document.body`'s contents
  * with the fetched body's, and returns the fetched `<title>`. A caller can inject
  * a finer swap (a single content region, a view-transition wrapper for Bet I)
  * without this module knowing how the page is structured.
@@ -214,10 +219,11 @@ function resolveAnchor(target: EventTarget | null): SoftNavAnchor | undefined {
  * resolved `response.url` rides back so a redirect lands the history entry on the
  * real destination, not the link's pre-redirect href.
  */
-const defaultFetchPage: PageFetcher = async (url) => {
+const defaultFetchPage: PageFetcher = async (url, signal) => {
   const response = await fetch(url, {
     credentials: "same-origin",
     headers: { accept: "text/html" },
+    signal,
   });
 
   // A non-ok page is still a page (a 404 has a body to show); we swap it like any
@@ -252,6 +258,47 @@ const defaultSwap: PageSwapper = (html, doc) => {
 
   return title === "" ? undefined : title;
 };
+
+/** The id of the framework-owned `aria-live` region soft nav announces routes through. */
+const LIVE_REGION_ID = "lesto-route-announcer";
+
+/**
+ * Announce the new route to assistive tech. A real navigation re-reads the page;
+ * a body swap is silent, so we mirror that by writing the new title into a polite
+ * `aria-live` region (lazily created, visually hidden) — the same technique every
+ * peer client router uses to keep soft nav from regressing screen-reader UX.
+ */
+function announceRoute(message: string, doc: Document): void {
+  let region = doc.getElementById(LIVE_REGION_ID);
+
+  if (region === null) {
+    region = doc.createElement("div");
+    region.id = LIVE_REGION_ID;
+    region.setAttribute("aria-live", "polite");
+    region.setAttribute("aria-atomic", "true");
+    region.setAttribute("role", "status");
+    region.style.cssText =
+      "position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap";
+    doc.body.append(region);
+  }
+
+  region.textContent = message;
+}
+
+/**
+ * Move focus to the new page's top, like a real navigation does. We target the
+ * main landmark, else the first `<h1>`, else the body — giving a non-interactive
+ * target a transient `tabindex="-1"` so it can take focus — so the next Tab (and
+ * the AT reading cursor) starts at the new content, not a detached old node.
+ */
+function focusMain(doc: Document): void {
+  const target =
+    doc.querySelector<HTMLElement>("main") ?? doc.querySelector<HTMLElement>("h1") ?? doc.body;
+
+  if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+
+  target.focus();
+}
 
 /**
  * Enable client-side soft navigation: upgrade eligible same-origin link clicks to
@@ -295,6 +342,14 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
       doc.location.assign(url);
     });
 
+  // Last-CLICK-wins, not last-fetch-wins: every navigation grabs a monotonic token
+  // and aborts the prior in-flight fetch, and each `await` resume bails if a newer
+  // navigation (a forward click OR a Back/Forward pop) has since started — so two
+  // overlapping navigations can never resolve out of click order and corrupt the
+  // live body, the URL, or history.
+  let currentToken = 0;
+  let inFlight: AbortController | undefined;
+
   // Perform the fetch → swap → re-hydrate → scroll for one navigation. `kind`
   // distinguishes a forward push (record where we came from, scroll to top) from a
   // Back/Forward pop (restore the saved scroll, do not push a new entry).
@@ -303,8 +358,25 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
     kind: SoftNavKind,
     restore?: ScrollPosition,
   ): Promise<void> => {
+    const mine = ++currentToken;
+    inFlight?.abort();
+    const controller = new AbortController();
+    inFlight = controller;
+
     try {
-      const { html, url: landed } = await fetchPage(url);
+      const { html, url: landed } = await fetchPage(url, controller.signal);
+
+      // A newer click/pop superseded us while the fetch was in flight — drop this
+      // stale result so it cannot clobber the newer navigation's swap or history.
+      if (mine !== currentToken) return;
+
+      // The same-origin gate again, now on the LANDED url: a same-origin link that
+      // 302-redirected cross-origin must NOT have its foreign body swapped into our
+      // live DOM — fall back to a real navigation, the link's own floor.
+      if (new URL(landed).origin !== origin) {
+        doc.location.assign(landed);
+        return;
+      }
 
       const title = swap(html, doc);
 
@@ -329,8 +401,20 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
         win.scrollTo(0, 0);
       }
 
+      // Match a real navigation's a11y: announce the new title through a polite
+      // live region so screen readers hear the change, and move focus to the new
+      // page's top landmark so the next Tab / AT cursor starts there, not on a now
+      // detached node left over from the old body.
+      announceRoute(doc.title, doc);
+      focusMain(doc);
+
       options.onNavigate?.({ kind, url: landed, hydration });
     } catch (error) {
+      // A fetch aborted by a newer navigation is expected, not a failure — that
+      // newer navigation owns the page now, so swallow it rather than fall back to
+      // a real reload that would fight it.
+      if (mine !== currentToken) return;
+
       onError(error, url);
     }
   };

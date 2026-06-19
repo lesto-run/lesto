@@ -52,6 +52,7 @@ interface Harness {
   win: SoftNavWindow & { scrolledTo: Array<[number, number]> };
   rehydrateCalls: Array<{ root: unknown }>;
   navigated: string[];
+  body: HTMLElement;
   disable: () => void;
 }
 
@@ -89,8 +90,22 @@ function harness(extra: SoftNavOptions = {}): Harness {
   let clickListener: ((event: Event) => void) | undefined;
   let popListener: ((event: Event) => void) | undefined;
 
+  // A real jsdom document backs the DOM-builder surface (body / createElement /
+  // getElementById / querySelector / focus) the post-swap a11y step touches, while
+  // the listener capture + history/location stay stubbed — so the focus + live
+  // region work runs against real nodes with no real page navigation.
+  const real = document.implementation.createHTMLDocument("");
+  real.body.innerHTML = "<main><h1>Page</h1></main>";
+
   const doc = {
     URL: "https://app.test/",
+    get body() {
+      return real.body;
+    },
+    title: "",
+    createElement: (tag: string) => real.createElement(tag),
+    getElementById: (id: string) => real.getElementById(id),
+    querySelector: (sel: string) => real.querySelector(sel),
     addEventListener: (type: string, listener: (event: Event) => void) => {
       if (type === "click") clickListener = listener;
     },
@@ -172,6 +187,7 @@ function harness(extra: SoftNavOptions = {}): Harness {
     win,
     rehydrateCalls,
     navigated,
+    body: real.body,
     disable,
   };
 }
@@ -332,9 +348,18 @@ describe("enableSoftNav — recordScroll merges existing state", () => {
       },
     };
 
+    const real = document.implementation.createHTMLDocument("");
+
     let clickListener: ((event: Event) => void) | undefined;
     const doc = {
       URL: "https://app.test/",
+      get body() {
+        return real.body;
+      },
+      title: "",
+      createElement: (tag: string) => real.createElement(tag),
+      getElementById: (id: string) => real.getElementById(id),
+      querySelector: (sel: string) => real.querySelector(sel),
       addEventListener: (type: string, l: (event: Event) => void) => {
         if (type === "click") clickListener = l;
       },
@@ -395,6 +420,170 @@ describe("enableSoftNav — Back/Forward (popstate)", () => {
     h.firePopState({ some: "other" });
 
     expect(h.navigated).toEqual([]);
+  });
+});
+
+describe("enableSoftNav — last-click-wins (stale-response race)", () => {
+  it("a slow first nav that resolves LAST does not clobber the faster newer one", async () => {
+    // Two clicks overlap: A is slow, B is fast. We resolve B first (it swaps +
+    // pushes), THEN resolve A. A captured an older generation token, so its late
+    // resolution must bail — leaving the body/URL/history on B, with no spurious
+    // intermediate "/a" entry. This is last-CLICK-wins, not last-fetch-wins.
+    const deferreds = new Map<string, (page: FetchedPage) => void>();
+    const aborted: string[] = [];
+
+    const h = harness({
+      fetchPage: (url, signal) =>
+        new Promise<FetchedPage>((resolve) => {
+          signal.addEventListener("abort", () => aborted.push(url));
+          deferreds.set(url, resolve);
+        }),
+      swap: () => undefined,
+    });
+
+    h.fireClick({ href: "https://app.test/a" });
+    h.fireClick({ href: "https://app.test/b" });
+
+    // Starting B aborted A's in-flight fetch.
+    expect(aborted).toEqual(["https://app.test/a"]);
+
+    // B resolves first and lands.
+    deferreds.get("https://app.test/b")?.({ html: "", url: "https://app.test/b" });
+    await vi.waitFor(() => expect(h.hist.pushed.length).toBe(1));
+
+    // Now the slow A resolves LAST — it must be dropped, not clobber B.
+    deferreds.get("https://app.test/a")?.({ html: "", url: "https://app.test/a" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Exactly one push, to B — A left no body swap, no history entry, no scroll.
+    expect(h.hist.pushed).toEqual([
+      { state: { lestoSoftNav: true, scroll: { x: 0, y: 0 } }, url: "https://app.test/b" },
+    ]);
+    expect(h.rehydrateCalls).toHaveLength(1);
+  });
+
+  it("swallows a superseded fetch's REJECTION instead of firing onError", async () => {
+    // A is superseded by B, then A's fetch REJECTS (an aborted fetch rejects with
+    // an AbortError). Because A is no longer the current generation, that rejection
+    // must be swallowed — NOT routed to onError, which would do a spurious full
+    // navigation that fights B's swap.
+    const rejects = new Map<string, (error: unknown) => void>();
+    const onError = vi.fn();
+
+    const h = harness({
+      fetchPage: (url) =>
+        url === "https://app.test/b"
+          ? Promise.resolve({ html: "", url })
+          : new Promise<FetchedPage>((_resolve, reject) => rejects.set(url, reject)),
+      onError,
+      swap: () => undefined,
+    });
+
+    h.fireClick({ href: "https://app.test/a" });
+    h.fireClick({ href: "https://app.test/b" });
+
+    // B lands.
+    await vi.waitFor(() => expect(h.hist.pushed.length).toBe(1));
+
+    // The superseded A now rejects (as an aborted fetch would) — swallowed.
+    rejects.get("https://app.test/a")?.(new Error("aborted"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onError).not.toHaveBeenCalled();
+    expect((h.options.document as Document).location.assign).not.toHaveBeenCalled();
+  });
+
+  it("a Back/Forward pop supersedes an in-flight forward nav", async () => {
+    const deferreds = new Map<string, (page: FetchedPage) => void>();
+    const aborted: string[] = [];
+
+    const h = harness({
+      fetchPage: (url, signal) =>
+        new Promise<FetchedPage>((resolve) => {
+          signal.addEventListener("abort", () => aborted.push(url));
+          deferreds.set(url, resolve);
+        }),
+      swap: () => undefined,
+    });
+
+    // A forward click starts, then a pop arrives before the fetch resolves.
+    h.fireClick({ href: "https://app.test/forward" });
+    h.firePopState({ lestoSoftNav: true, scroll: { x: 0, y: 7 } });
+
+    // The pop aborted the in-flight forward fetch.
+    expect(aborted).toEqual(["https://app.test/forward"]);
+
+    // The pop resolves and replays (restoring its scroll, no push).
+    deferreds.get("https://app.test/")?.({ html: "", url: "https://app.test/" });
+    await vi.waitFor(() => expect(h.win.scrolledTo).toContainEqual([0, 7]));
+
+    // The stale forward then resolves LAST — dropped, so no forward push survives.
+    deferreds.get("https://app.test/forward")?.({ html: "", url: "https://app.test/forward" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(h.hist.pushed).toEqual([]);
+  });
+});
+
+describe("enableSoftNav — cross-origin redirect falls back to a full navigation", () => {
+  it("does NOT swap a foreign body when a same-origin link redirects cross-origin", async () => {
+    // The clicked link is same-origin (so the click is taken over), but the fetch
+    // LANDS on another origin after a redirect. Swapping that foreign HTML into our
+    // live DOM would be a same-origin-DOM injection — so we must fall back to a real
+    // navigation instead, swapping nothing.
+    const h = harness({
+      fetchPage: async (): Promise<FetchedPage> => ({
+        html: "<title>Evil</title><p>evil</p>",
+        url: "https://evil.test/landed",
+      }),
+    });
+
+    h.fireClick({ href: "https://app.test/redirector" });
+
+    await vi.waitFor(() =>
+      expect((h.options.document as Document).location.assign).toHaveBeenCalledWith(
+        "https://evil.test/landed",
+      ),
+    );
+
+    // No swap, no history push, no re-hydrate — the cross-origin body never touched
+    // our DOM.
+    expect(h.hist.pushed).toEqual([]);
+    expect(h.rehydrateCalls).toEqual([]);
+  });
+});
+
+describe("enableSoftNav — a11y: focus + route announcement on swap", () => {
+  it("announces the new title in a live region and moves focus to the main landmark", async () => {
+    const h = harness();
+
+    h.fireClick({});
+    await vi.waitFor(() => expect(h.navigated.length).toBe(1));
+
+    // A polite live region carries the new title so screen readers announce it.
+    const announcer = h.body.querySelector("#lesto-route-announcer");
+    expect(announcer?.getAttribute("aria-live")).toBe("polite");
+    expect(announcer?.textContent).toBe("Next");
+
+    // Focus moved off any detached node to the new page's main landmark, which got
+    // a transient tabindex so a non-interactive element can hold focus.
+    const main = h.body.querySelector("main");
+    expect(main?.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("reuses the single live region across successive navigations", async () => {
+    const h = harness();
+
+    h.fireClick({});
+    await vi.waitFor(() => expect(h.navigated.length).toBe(1));
+    h.fireClick({});
+    await vi.waitFor(() => expect(h.navigated.length).toBe(2));
+
+    // Only one announcer node is ever created.
+    expect(h.body.querySelectorAll("#lesto-route-announcer")).toHaveLength(1);
   });
 });
 
@@ -514,7 +703,12 @@ describe("enableSoftNav — default seams (jsdom)", () => {
     expect(fetchMock).toHaveBeenCalledWith("http://localhost:3000/loaded", {
       credentials: "same-origin",
       headers: { accept: "text/html" },
+      signal: expect.any(AbortSignal),
     });
+    // The real default a11y step announces the new title and focuses the page top
+    // (no <main>/<h1> in the swapped-in markup → the body fallback, focused).
+    expect(document.getElementById("lesto-route-announcer")?.textContent).toBe("Loaded");
+    expect(document.activeElement).toBe(document.body);
 
     disable();
   });

@@ -114,12 +114,52 @@ a plain object, so every decline branch is unit-tested with no DOM.
   Back replay) through the real app under jsdom, with `fetchPage` wired to
   `app.handle`.
 
+### Security — what the swap does and does not add
+
+The swap inserts **same-origin, server-rendered (trusted) HTML** into the live DOM.
+Two properties bound the surface precisely — no more, no less than a full navigation
+would:
+
+- **Parsed `<script>` tags do NOT re-execute.** The default swap parses the fetched
+  HTML with `DOMParser` and moves the resulting nodes in; per the HTML spec, a
+  `<script>` inserted by the parser of a `DOMParser`-created document is already
+  "already started" and never runs. So soft nav does not turn a stored `<script>`
+  into a fresh execution it would not have had.
+- **Inline event-handler attributes behave exactly as a full navigation.** An
+  `onerror`/`onload`/`onclick` attribute on swapped-in markup executes when the
+  element loads or fires — identical to what the same server-rendered page would do
+  on a real navigation. Soft nav therefore adds **no script-execution surface beyond
+  the full-navigation baseline for same-origin targets**: anything that would run on
+  the swapped page already runs when the browser loads that page directly.
+
+The one path that *would* have widened the surface — a same-origin link that
+302-redirects **cross-origin** — is closed by the runtime: after the fetch resolves,
+the runtime re-checks the **landed** URL's origin (not just the clicked link's) and,
+if it differs from the page origin, swaps nothing and falls back to a real
+navigation (`location.assign`). Foreign HTML never enters our origin's live DOM. (The
+fetch is `credentials: "same-origin"`, so a cross-origin hop also carries no
+ambient-authority cookies.)
+
+Net: for same-origin targets the swap is no more dangerous than the full navigation
+it replaces, and the cross-origin-redirect guard removes the only case where it
+could have been worse. This is **not** a sanitizer — it relies on the server
+rendering trusted markup, exactly as the full-navigation path already does.
+
 ### Deliberately out of scope (for now)
 
 - **View transitions / speculation-rules prefetch** — Bet I (`@lesto/platform`),
   layered on this module's `onNavigate`/`swap` seams, not built here.
 - **Partial / nested-region swaps** — the default swap replaces the whole `<body>`;
   a finer region swap is an injectable `swap` an app can supply, not a built-in.
-- **Pending/optimistic UI + in-flight cancellation** — a forward click that lands
-  before a prior one resolves is left to the natural last-write-wins of the swap;
-  richer transition state is a future addition.
+- **Head/body metadata reconciliation** — the body-only swap carries over the
+  `<title>` (and announces it for a11y) but does NOT reconcile `<html lang>`, body
+  attributes, or other non-title head metadata (`<meta>`, `<link rel>`,
+  `lang`/`class` on `<html>`/`<body>`) across navigations. A page whose `lang` or
+  body class must change per route should declare such a link `reload` (full nav) or
+  inject a `swap` that handles it; widening the default swap to reconcile head/body
+  is intentionally left out here.
+- **Pending/optimistic UI** — richer in-flight transition state (a loading bar,
+  optimistic content) is a future addition. In-flight *cancellation* IS handled: a
+  newer click or Back/Forward pop captures a fresh generation token and aborts the
+  prior fetch, so overlapping navigations resolve **last-click-wins**, never
+  last-fetch-wins (no stale swap, no spurious intermediate history entry).
