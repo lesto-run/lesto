@@ -195,7 +195,8 @@ export interface BatchSummary {
  *
  * `status` narrows to one lifecycle state (the dashboard's "in-flight / failed /
  * scheduled" tabs map to `running` / `failed` / `ready`); absent → every status.
- * `queue` narrows to one named queue; absent → the queue's default. `limit` /
+ * `queue` narrows to one named queue; absent → every queue (the dashboard's
+ * cross-queue overview). `limit` /
  * `offset` page the result, newest-updated first, so the dashboard never loads an
  * unbounded table.
  */

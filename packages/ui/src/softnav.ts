@@ -295,8 +295,9 @@ function announceRoute(message: string, doc: Document): void {
 /**
  * Move focus to the new page's top, like a real navigation does. We target the
  * main landmark, else the first `<h1>`, else the body — giving a non-interactive
- * target a transient `tabindex="-1"` so it can take focus — so the next Tab (and
- * the AT reading cursor) starts at the new content, not a detached old node.
+ * target a `tabindex="-1"` (harmless: `-1` takes focus programmatically without
+ * entering the tab order) so the next Tab and the AT reading cursor start at the
+ * new content, not a detached old node.
  */
 function focusMain(doc: Document): void {
   const target =
