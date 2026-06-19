@@ -6,7 +6,10 @@
  * surface, including the `params = []` defaults from both sides. The fallback
  * path injects async-wrapped sync fakes: better-sqlite3 "unavailable" (returns
  * `undefined`) so `bun:sqlite` is reached — the branch no Node test could
- * otherwise cover without loading `bun:sqlite`. The transaction verb is covered
+ * otherwise cover without loading `bun:sqlite`. When BOTH engines fail (the live
+ * Node-without-Bun configuration), the fallback raises a coded
+ * `RUNTIME_SQLITE_ENGINE_UNAVAILABLE` naming the real cause instead of leaking the
+ * raw import error. The transaction verb is covered
  * on both its commit and rollback (including failed-rollback) branches, plus the
  * FIFO queue (concurrent transactions serialize; a rolled-back span does not
  * poison the chain) and flat nesting (an inner `tx.transaction` runs on the same
@@ -15,6 +18,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
+import { RuntimeError } from "../src/errors";
 import { openSqlite } from "../src/sqlite";
 import type { SqliteEngines, SqliteHandle } from "../src/sqlite";
 
@@ -165,6 +169,29 @@ describe("openSqlite", () => {
 
     close();
     expect(closed).toHaveBeenCalledOnce();
+  });
+
+  it("throws a coded RUNTIME_SQLITE_ENGINE_UNAVAILABLE when neither engine is usable", async () => {
+    // The live Node-without-Bun failure: better-sqlite3's native addon didn't load
+    // (→ undefined) AND bun:sqlite isn't resolvable (→ the import rejects). The
+    // fallback must translate the cryptic import error into a clear, coded cause.
+    const importBoom = new Error("Cannot find package 'bun:sqlite'");
+
+    const engines: SqliteEngines = {
+      betterSqlite: () => undefined, // native addon unavailable
+      bunSqlite: () => Promise.reject(importBoom), // and we're not under Bun
+    };
+
+    const error = await openSqlite("ignored.db", engines).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(RuntimeError);
+    expect((error as RuntimeError).code).toBe("RUNTIME_SQLITE_ENGINE_UNAVAILABLE");
+    // The message names the real culprit + remedy, not the leaked import error.
+    expect((error as RuntimeError).message).toContain("better-sqlite3");
+    expect((error as RuntimeError).message).toContain("npm rebuild better-sqlite3");
+    expect((error as RuntimeError).message).toContain("bun:sqlite");
+    // The raw import error rides along on details.cause for the curious.
+    expect((error as RuntimeError).details).toEqual({ cause: importBoom });
   });
 
   it("serializes two concurrent transactions instead of colliding on BEGIN", async () => {

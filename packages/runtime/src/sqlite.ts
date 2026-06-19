@@ -34,6 +34,7 @@
 
 import type { KernelDatabase } from "@lesto/kernel";
 
+import { RuntimeError } from "./errors";
 import { realSqliteEngines } from "./sqlite-drivers";
 
 /** The minimal driver shape both SQLite engines expose, once constructed. */
@@ -76,7 +77,7 @@ export async function openSqlite(
   filename = ":memory:",
   engines: SqliteEngines = realSqliteEngines,
 ): Promise<OpenSqlite> {
-  const raw = engines.betterSqlite(filename) ?? (await engines.bunSqlite(filename));
+  const raw = engines.betterSqlite(filename) ?? (await openBunFallback(engines, filename));
 
   // Enforce foreign keys for the connection's whole life. better-sqlite3 already
   // defaults this ON, but bun:sqlite (the fallback) defaults it OFF — and the flag is
@@ -171,4 +172,29 @@ export async function openSqlite(
   };
 
   return { db, close: () => raw.close() };
+}
+
+/**
+ * The fallback leg, reached only when better-sqlite3 returned `undefined` (its
+ * native addon failed to load). Try `bun:sqlite`; if THAT also fails we're under
+ * Node with no usable engine — the single configuration where a contributor most
+ * needs a clear cause, not a raw `Cannot find package 'bun:sqlite'`.
+ *
+ * So we translate the import failure into a coded {@link RuntimeError} that names
+ * the real culprit (better-sqlite3's native addon, commonly a Node ABI mismatch)
+ * and its remedy, carrying the underlying error on `details.cause` for the curious.
+ * Under Bun the import succeeds and this is a transparent pass-through.
+ */
+async function openBunFallback(engines: SqliteEngines, filename: string): Promise<SqliteHandle> {
+  try {
+    return await engines.bunSqlite(filename);
+  } catch (cause) {
+    throw new RuntimeError(
+      "RUNTIME_SQLITE_ENGINE_UNAVAILABLE",
+      "No SQLite engine available: better-sqlite3's native addon failed to load " +
+        "(commonly a Node ABI mismatch — run `npm rebuild better-sqlite3`, or use " +
+        "Node >= 22) and bun:sqlite is only available under the Bun runtime.",
+      { cause },
+    );
+  }
 }

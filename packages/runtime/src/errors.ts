@@ -19,7 +19,13 @@ export type RuntimeErrorCode =
   /** A request handler ran past its time budget; the socket is freed with a 503. */
   | "RUNTIME_HANDLER_TIMEOUT"
   /** The client hung up before the response finished — the abort-signal reason. */
-  | "RUNTIME_CLIENT_DISCONNECTED";
+  | "RUNTIME_CLIENT_DISCONNECTED"
+  /**
+   * No SQLite engine could be constructed: better-sqlite3's native addon failed
+   * to load (commonly a Node ABI mismatch) AND `bun:sqlite` isn't available
+   * because we're not under Bun. Thrown by {@link openSqlite}'s fallback path.
+   */
+  | "RUNTIME_SQLITE_ENGINE_UNAVAILABLE";
 
 /** Anything the transport tier can refuse to do. */
 export class RuntimeError extends LestoError<RuntimeErrorCode> {
