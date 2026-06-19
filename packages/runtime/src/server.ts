@@ -1246,8 +1246,10 @@ async function handle(
   // `/readyz` must get the node's true readiness even while it sheds load — a 503
   // here would pull a merely-busy node out of rotation and amplify a spike into an
   // outage. The probe is the cheapest path anyway (no app dispatch), so admitting
-  // it unconditionally is safe. (`line`/`path` are computed once here and threaded
-  // in, so the admitted path does not re-parse the URL.)
+  // it unconditionally is safe. The bypass is intentionally UN-accounted (a probe
+  // takes no slot); a probe is still bounded per-call by `readyTimeoutMs`, and a
+  // probe flood is the edge/LB's job to shed, not this backstop's. (`line`/`path`
+  // are computed once here and threaded in, so the admitted path does not re-parse.)
   if (deps.health !== undefined && isHealthProbe(line.method, path, deps.health)) {
     return handleAdmitted(app, req, res, deps, line, path);
   }
