@@ -22,7 +22,7 @@ export type { CsrfTokenOptions, IssuedCsrfToken } from "./issue";
 export { CSRF_DENIED_KIND, csrf, defaultExtractToken } from "./middleware";
 export type { CsrfOptions } from "./middleware";
 
-export { CsrfError, LestoError } from "./errors";
+export { assertStrongSecret, CsrfError, LestoError } from "./errors";
 export type { CsrfErrorCode } from "./errors";
 
 // The token-free companion: an Origin / Fetch-Metadata check that needs no

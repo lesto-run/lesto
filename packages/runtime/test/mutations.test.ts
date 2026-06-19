@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 
-import { generateToken } from "@lesto/csrf";
+import { CsrfError, generateToken } from "@lesto/csrf";
 import type { LestoRequest } from "@lesto/web";
 
 import { MutationError } from "../src/errors";
@@ -87,6 +87,24 @@ describe("mutationRoutes — the boundary (no CSRF configured)", () => {
       ok: false,
       error: { code: "MUTATION_NOT_FOUND", message: 'No mutation named "nope".' },
     });
+  });
+
+  it("404s a prototype-chain `:name` (__proto__/constructor/toString) — no inherited member slips the guard", async () => {
+    const app = mutationRoutes(map);
+
+    // Without an own-property guard, `map["__proto__"]` resolves Object.prototype and
+    // throws on `.input` — an unauthenticated 500 before the CSRF gate. Each must 404.
+    for (const name of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      const response = await app.handle("POST", `${MUTATION_ROUTE_PREFIX}/${name}`, {
+        headers: { "content-type": "application/json" },
+        body: {},
+      });
+
+      expect(response.status).toBe(404);
+      expect(parse<{ error: { code: string } }>(response.body).error.code).toBe(
+        "MUTATION_NOT_FOUND",
+      );
+    }
   });
 
   it("422s an input that fails the Zod schema (the handler never runs)", async () => {
@@ -266,6 +284,14 @@ describe("mutationRoutes — the CSRF boundary (reusing @lesto/csrf)", () => {
     });
 
     expect(response.status).toBe(403);
+  });
+
+  it("refuses a weak CSRF secret at wire time (CSRF_WEAK_SECRET), like the csrf() middleware", () => {
+    // `verifyToken` is total (never asserts), so a weak/empty secret would otherwise
+    // validate forged tokens as if healthy — refuse it where the secret enters.
+    expect(() =>
+      mutationRoutes(map, { csrf: { secret: "too-short", sessionFor: () => SESSION } }),
+    ).toThrow(CsrfError);
   });
 });
 

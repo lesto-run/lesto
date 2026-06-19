@@ -22,7 +22,7 @@
  * error path is a value, never a throw. Every gate is fail-closed.
  */
 
-import { verifyToken } from "@lesto/csrf";
+import { assertStrongSecret, verifyToken } from "@lesto/csrf";
 import { lesto } from "@lesto/web";
 import type { Context, Lesto, LestoRequest, LestoResponse } from "@lesto/web";
 import type { ZodType } from "zod";
@@ -198,9 +198,18 @@ function statusOf(error: MutationError): number {
  * layouts wrap it like any sub-app).
  */
 export function mutationRoutes(map: MutationMap, options: MutationRoutesOptions = {}): Lesto {
+  // A forgeable secret defeats the whole CSRF guard. Refuse it loud at wire time
+  // (CSRF_WEAK_SECRET), exactly as the `csrf()` middleware does — `verifyToken` is
+  // total and would otherwise validate against a weak secret as if healthy.
+  if (options.csrf !== undefined) assertStrongSecret(options.csrf.secret);
+
   return lesto().post(`${MUTATION_ROUTE_PREFIX}/:name`, async (c) => {
     const name = c.param("name");
-    const mutation = map[name];
+    // Own-property lookup only: a bare `map[name]` walks the prototype chain, so a
+    // `:name` of `__proto__`/`constructor`/`toString` would resolve a truthy inherited
+    // member, slip past the not-found guard, and throw on `.input` — an unauthenticated
+    // 500 before the CSRF gate. `Object.hasOwn` confines resolution to real mutations.
+    const mutation = Object.hasOwn(map, name) ? map[name] : undefined;
 
     // 1 · Resolve by name. An unknown name is a normal not-found, answered before
     // any CSRF or side effect — a typed error body, never a stack.
