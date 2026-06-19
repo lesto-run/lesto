@@ -72,14 +72,9 @@ export async function installSchema(db: SqlDatabase, dialect: Dialect = "sqlite"
       ? "BIGINT  PRIMARY KEY GENERATED ALWAYS AS IDENTITY"
       : "INTEGER PRIMARY KEY AUTOINCREMENT";
 
-  const batchIdColumn =
-    dialect === "postgres"
-      ? "BIGINT  PRIMARY KEY GENERATED ALWAYS AS IDENTITY"
-      : "INTEGER PRIMARY KEY AUTOINCREMENT";
-
   await db.exec(`
     CREATE TABLE IF NOT EXISTS ${BATCHES_TABLE} (
-      id            ${batchIdColumn},
+      id            ${idColumn},
       name          TEXT    NOT NULL,
       total         INTEGER NOT NULL,
       created_at    TEXT    NOT NULL
