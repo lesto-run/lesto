@@ -331,6 +331,34 @@ describe("serve", () => {
     expect(response.body).toBe("Payload Too Large");
   });
 
+  it("holds a JSON body to the tighter maxJsonBodyBytes, but a non-JSON body to maxBodyBytes", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: {}, body: "ok" }),
+    };
+
+    // JSON capped at 10 bytes; the general body cap stays the default 1 MiB.
+    server = await serve(app, { port: 0, maxJsonBodyBytes: 10 });
+
+    // A 19-byte application/json body exceeds the JSON cap → 413.
+    const json = await makeRequest(server.port, {
+      method: "POST",
+      path: "/api",
+      contentType: "application/json",
+      body: '{"x":"0123456789"}',
+    });
+    expect(json.status).toBe(413);
+
+    // The same-size body under a non-JSON type rides the general cap → served.
+    const text = await makeRequest(server.port, {
+      method: "POST",
+      path: "/api",
+      contentType: "text/plain",
+      body: "0123456789012345678",
+    });
+    expect(text.status).toBe(200);
+  });
+
   it("still parses a valid JSON body within the limit", async () => {
     const app: App = {
       migrationsApplied: [],

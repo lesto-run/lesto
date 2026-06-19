@@ -1946,6 +1946,7 @@ describe("run serve threads the DoS limits from the environment", () => {
         serve,
         env: {
           LESTO_MAX_BODY_BYTES: "2097152",
+          LESTO_MAX_JSON_BODY_BYTES: "262144",
           LESTO_HANDLER_TIMEOUT_MS: "45000",
           LESTO_REQUEST_TIMEOUT_MS: "20000",
           LESTO_HEADERS_TIMEOUT_MS: "10000",
@@ -1961,6 +1962,7 @@ describe("run serve threads the DoS limits from the environment", () => {
     const [, options] = serve.mock.calls[0]!;
 
     expect(options?.maxBodyBytes).toBe(2097152);
+    expect(options?.maxJsonBodyBytes).toBe(262144);
     expect(options?.handlerTimeoutMs).toBe(45000);
     expect(options?.requestTimeoutMs).toBe(20000);
     expect(options?.headersTimeoutMs).toBe(10000);
@@ -1981,6 +1983,7 @@ describe("run serve threads the DoS limits from the environment", () => {
     // Absent from the options entirely — so `serve` falls through to its own
     // secure defaults (1 MiB body, 30s handler, etc.) rather than a weakened one.
     expect(options?.maxBodyBytes).toBeUndefined();
+    expect(options?.maxJsonBodyBytes).toBeUndefined();
     expect(options?.handlerTimeoutMs).toBeUndefined();
     expect(options?.requestTimeoutMs).toBeUndefined();
     expect(options?.headersTimeoutMs).toBeUndefined();

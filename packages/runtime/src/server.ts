@@ -167,6 +167,15 @@ export interface ServeOptions {
   readonly maxBodyBytes?: number;
 
   /**
+   * A tighter cap for `application/json` bodies — the JSON limit is the smaller
+   * of this and {@link maxBodyBytes}. Lets a deploy accept large uploads (raise
+   * `maxBodyBytes`) while keeping JSON payloads — and thus `JSON.parse` blast
+   * radius — bounded independently. Defaults to 1 MiB (so it changes nothing until
+   * either knob moves); tune it down for an endpoint taking untrusted JSON.
+   */
+  readonly maxJsonBodyBytes?: number;
+
+  /**
    * The longest a single handler may run before we answer 503 and free the
    * socket. On overrun the request's own `context.signal` is ABORTED (with a
    * coded `RUNTIME_HANDLER_TIMEOUT` reason), so a cooperative handler — a
@@ -361,6 +370,18 @@ export interface ServeOptions {
 
 /** A body we refuse to read past 1 MiB unless the caller raises the bar. */
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+
+/**
+ * A SEPARATE, tighter-by-intent cap for `application/json` bodies — the effective
+ * JSON limit is `min(maxBodyBytes, maxJsonBodyBytes)`. The body cap already bounds
+ * how much we read, so a giant sync `JSON.parse` is already blunted at 1 MiB; the
+ * value here is that JSON stays bounded INDEPENDENTLY of the general cap. Raise
+ * `maxBodyBytes` to accept large file uploads and a request's JSON payload is
+ * still capped at 1 MiB (parse-stall blast radius does not grow with the upload
+ * limit). Tune it DOWN for an endpoint taking untrusted JSON. Default 1 MiB, so a
+ * deploy that never touches either knob behaves exactly as before.
+ */
+const DEFAULT_MAX_JSON_BODY_BYTES = 1024 * 1024;
 
 /** Handler/socket budgets, tightened below Node's defaults for a public tier. */
 const DEFAULT_HANDLER_TIMEOUT_MS = 30_000;
@@ -908,6 +929,7 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
 
   const deps: HandleDeps = {
     maxBodyBytes: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
+    maxJsonBodyBytes: options.maxJsonBodyBytes ?? DEFAULT_MAX_JSON_BODY_BYTES,
     handlerTimeoutMs: options.handlerTimeoutMs ?? DEFAULT_HANDLER_TIMEOUT_MS,
     health: options.health === false ? undefined : (options.health ?? {}),
     securityHeaders: securityDefaults(options.securityHeaders ?? DEFAULT_SECURITY_HEADERS, {
@@ -993,6 +1015,9 @@ export async function closeWithDrain(
 
 interface HandleDeps {
   readonly maxBodyBytes: number;
+
+  /** Tighter cap for `application/json` bodies; the JSON limit is the min of the two. */
+  readonly maxJsonBodyBytes: number;
 
   readonly handlerTimeoutMs: number;
 
@@ -1309,7 +1334,17 @@ async function handleAdmitted(
     };
 
     try {
-      const body = await readBody(req, deps.maxBodyBytes);
+      // A JSON body is held to the tighter of the two caps, so its `JSON.parse`
+      // blast radius stays bounded even when the general body cap is raised for
+      // uploads. Other content types use the general cap unchanged.
+      const contentType = firstHeader(req.headers["content-type"]);
+
+      const bodyCap =
+        contentType !== undefined && contentType.startsWith("application/json")
+          ? Math.min(deps.maxBodyBytes, deps.maxJsonBodyBytes)
+          : deps.maxBodyBytes;
+
+      const body = await readBody(req, bodyCap);
 
       const request = toLestoRequest({
         method: line.method,

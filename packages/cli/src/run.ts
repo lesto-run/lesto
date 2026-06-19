@@ -414,6 +414,8 @@ function buildServeTracing(deps: CliDeps): ServeTracing | undefined {
  *
  *   - `LESTO_MAX_BODY_BYTES`      — largest request body read off a socket (413 above
  *                                  it). Default 1 MiB.
+ *   - `LESTO_MAX_JSON_BODY_BYTES` — tighter cap for `application/json` bodies (caps
+ *                                  `JSON.parse` blast radius). Default 1 MiB.
  *   - `LESTO_HANDLER_TIMEOUT_MS`  — longest a single handler may run (503 on overrun).
  *                                  Default 30s.
  *   - `LESTO_REQUEST_TIMEOUT_MS`  — node:http per-request socket deadline (slow-loris
@@ -438,6 +440,7 @@ function buildServeTracing(deps: CliDeps): ServeTracing | undefined {
  */
 export interface ServeLimitsEnv {
   readonly LESTO_MAX_BODY_BYTES?: string | undefined;
+  readonly LESTO_MAX_JSON_BODY_BYTES?: string | undefined;
   readonly LESTO_HANDLER_TIMEOUT_MS?: string | undefined;
   readonly LESTO_REQUEST_TIMEOUT_MS?: string | undefined;
   readonly LESTO_HEADERS_TIMEOUT_MS?: string | undefined;
@@ -482,6 +485,7 @@ export function parseServeLimit(raw: string | undefined): number | undefined {
  */
 function serveLimitsFromEnv(env: ServeLimitsEnv): {
   maxBodyBytes?: number;
+  maxJsonBodyBytes?: number;
   handlerTimeoutMs?: number;
   requestTimeoutMs?: number;
   headersTimeoutMs?: number;
@@ -492,6 +496,7 @@ function serveLimitsFromEnv(env: ServeLimitsEnv): {
   maxInFlightRequests?: number;
 } {
   const maxBodyBytes = parseServeLimit(env.LESTO_MAX_BODY_BYTES);
+  const maxJsonBodyBytes = parseServeLimit(env.LESTO_MAX_JSON_BODY_BYTES);
   const handlerTimeoutMs = parseServeLimit(env.LESTO_HANDLER_TIMEOUT_MS);
   const requestTimeoutMs = parseServeLimit(env.LESTO_REQUEST_TIMEOUT_MS);
   const headersTimeoutMs = parseServeLimit(env.LESTO_HEADERS_TIMEOUT_MS);
@@ -503,6 +508,7 @@ function serveLimitsFromEnv(env: ServeLimitsEnv): {
 
   return {
     ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
+    ...(maxJsonBodyBytes !== undefined ? { maxJsonBodyBytes } : {}),
     ...(handlerTimeoutMs !== undefined ? { handlerTimeoutMs } : {}),
     ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
     ...(headersTimeoutMs !== undefined ? { headersTimeoutMs } : {}),
