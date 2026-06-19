@@ -418,6 +418,10 @@ function buildServeTracing(deps: CliDeps): ServeTracing | undefined {
  *                                  Default 30s.
  *   - `LESTO_REQUEST_TIMEOUT_MS`  — node:http per-request socket deadline (slow-loris
  *                                  defense). Default 30s.
+ *   - `LESTO_HEADERS_TIMEOUT_MS`  — longest a client may take to send the full header
+ *                                  block (slow-header / slow-loris defense). Default 15s.
+ *   - `LESTO_KEEP_ALIVE_TIMEOUT_MS` — how long an idle keep-alive socket is held before
+ *                                  close (idle-socket exhaustion defense). Default 5s.
  *   - `LESTO_MAX_HEADER_BYTES`    — largest header block accepted (oversized-header
  *                                  defense). Default 16 KiB.
  *   - `LESTO_DRAIN_TIMEOUT_MS`    — how long a graceful shutdown waits for in-flight
@@ -432,6 +436,8 @@ export interface ServeLimitsEnv {
   readonly LESTO_MAX_BODY_BYTES?: string | undefined;
   readonly LESTO_HANDLER_TIMEOUT_MS?: string | undefined;
   readonly LESTO_REQUEST_TIMEOUT_MS?: string | undefined;
+  readonly LESTO_HEADERS_TIMEOUT_MS?: string | undefined;
+  readonly LESTO_KEEP_ALIVE_TIMEOUT_MS?: string | undefined;
   readonly LESTO_MAX_HEADER_BYTES?: string | undefined;
   readonly LESTO_DRAIN_TIMEOUT_MS?: string | undefined;
 }
@@ -472,12 +478,16 @@ function serveLimitsFromEnv(env: ServeLimitsEnv): {
   maxBodyBytes?: number;
   handlerTimeoutMs?: number;
   requestTimeoutMs?: number;
+  headersTimeoutMs?: number;
+  keepAliveTimeoutMs?: number;
   maxHeaderBytes?: number;
   drainTimeoutMs?: number;
 } {
   const maxBodyBytes = parseServeLimit(env.LESTO_MAX_BODY_BYTES);
   const handlerTimeoutMs = parseServeLimit(env.LESTO_HANDLER_TIMEOUT_MS);
   const requestTimeoutMs = parseServeLimit(env.LESTO_REQUEST_TIMEOUT_MS);
+  const headersTimeoutMs = parseServeLimit(env.LESTO_HEADERS_TIMEOUT_MS);
+  const keepAliveTimeoutMs = parseServeLimit(env.LESTO_KEEP_ALIVE_TIMEOUT_MS);
   const maxHeaderBytes = parseServeLimit(env.LESTO_MAX_HEADER_BYTES);
   const drainTimeoutMs = parseServeLimit(env.LESTO_DRAIN_TIMEOUT_MS);
 
@@ -485,6 +495,8 @@ function serveLimitsFromEnv(env: ServeLimitsEnv): {
     ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
     ...(handlerTimeoutMs !== undefined ? { handlerTimeoutMs } : {}),
     ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+    ...(headersTimeoutMs !== undefined ? { headersTimeoutMs } : {}),
+    ...(keepAliveTimeoutMs !== undefined ? { keepAliveTimeoutMs } : {}),
     ...(maxHeaderBytes !== undefined ? { maxHeaderBytes } : {}),
     ...(drainTimeoutMs !== undefined ? { drainTimeoutMs } : {}),
   };

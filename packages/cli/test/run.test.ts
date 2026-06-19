@@ -1948,6 +1948,8 @@ describe("run serve threads the DoS limits from the environment", () => {
           LESTO_MAX_BODY_BYTES: "2097152",
           LESTO_HANDLER_TIMEOUT_MS: "45000",
           LESTO_REQUEST_TIMEOUT_MS: "20000",
+          LESTO_HEADERS_TIMEOUT_MS: "10000",
+          LESTO_KEEP_ALIVE_TIMEOUT_MS: "3000",
           LESTO_MAX_HEADER_BYTES: "8192",
           LESTO_DRAIN_TIMEOUT_MS: "15000",
         },
@@ -1959,6 +1961,8 @@ describe("run serve threads the DoS limits from the environment", () => {
     expect(options?.maxBodyBytes).toBe(2097152);
     expect(options?.handlerTimeoutMs).toBe(45000);
     expect(options?.requestTimeoutMs).toBe(20000);
+    expect(options?.headersTimeoutMs).toBe(10000);
+    expect(options?.keepAliveTimeoutMs).toBe(3000);
     expect(options?.maxHeaderBytes).toBe(8192);
     expect(options?.drainTimeoutMs).toBe(15000);
   });
@@ -1975,6 +1979,8 @@ describe("run serve threads the DoS limits from the environment", () => {
     expect(options?.maxBodyBytes).toBeUndefined();
     expect(options?.handlerTimeoutMs).toBeUndefined();
     expect(options?.requestTimeoutMs).toBeUndefined();
+    expect(options?.headersTimeoutMs).toBeUndefined();
+    expect(options?.keepAliveTimeoutMs).toBeUndefined();
     expect(options?.maxHeaderBytes).toBeUndefined();
     expect(options?.drainTimeoutMs).toBeUndefined();
   });
