@@ -23,8 +23,6 @@
   },
   "dependencies": {
     "@lesto/assets": "workspace:*",
-    "@lesto/content-core": "workspace:*",
-    "@lesto/content-store": "workspace:*",
     "@lesto/deploy": "workspace:*",
     "@lesto/errors": "workspace:*",
     "@lesto/kernel": "workspace:*",
@@ -37,6 +35,18 @@
     "@lesto/sites": "workspace:*",
     "@lesto/web": "workspace:*",
     "jiti": "^2.7.0"
+  },
+  "peerDependencies": {
+    "@lesto/content-core": "workspace:*",
+    "@lesto/content-store": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@lesto/content-core": {
+      "optional": true
+    },
+    "@lesto/content-store": {
+      "optional": true
+    }
   },
   "publishConfig": {
     "access": "public"

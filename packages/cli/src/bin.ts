@@ -18,7 +18,6 @@ import type { LestoAppConfig } from "@lesto/kernel";
 import type { UiDialect } from "@lesto/web";
 import type { TraceSeams } from "@lesto/observability";
 
-import { createNewEntry, runPipeline } from "@lesto/content-core/build";
 import type { RuntimeEntry } from "@lesto/content-core";
 
 import { nodeSink } from "@lesto/sites";
@@ -32,7 +31,7 @@ import { buildClient, bunBuildClientDeps } from "@lesto/assets";
 import { createApp } from "@lesto/kernel";
 
 import { run } from "./run";
-import type { CloudflareDeployer, ReleaseTarget } from "./run";
+import type { CliDeps, CloudflareDeployer, ReleaseTarget } from "./run";
 import { WRANGLER_DEPLOY_ARGS, WRANGLER_ROLLBACK_MESSAGE, wranglerRollbackArgs } from "./wrangler";
 import { runMcp, startMcpServer } from "./mcp";
 import { runOpenApi } from "./openapi";
@@ -237,13 +236,53 @@ const watchIslands = (onChange: () => void): (() => void) => {
   };
 };
 
-// Run the pipeline for its entries; the project's lesto.app.ts owns the cwd and
-// the collections, so the bin needs no arguments here.
-const buildContent = async (): Promise<readonly RuntimeEntry[]> =>
-  (await runPipeline({ skipWrite: true })).entries;
+// The content (CMS) packages are OPTIONAL PEERS: a default scaffold uses only
+// `dev`/`build`/`serve`/`routes`, so it never installs `@lesto/content-core` or
+// `@lesto/content-store` and they must not be pulled in at module init. The
+// `content:*` commands dynamic-import them ON CALL, and a missing peer surfaces
+// as a friendly, coded message — `npm i @lesto/content-core @lesto/content-store`
+// — rather than a raw `MODULE_NOT_FOUND`.
+const CONTENT_PACKAGES_HINT =
+  "The `content:*` commands need the content packages — run " +
+  "`npm i @lesto/content-core @lesto/content-store`.";
 
-const createEntry = (collection: string, title: string): Promise<void> =>
-  createNewEntry(process.cwd(), collection, title);
+// Return type is inferred from the dynamic import (the resolved module's shape),
+// so the lazy `runPipeline`/`createNewEntry` calls below stay fully typed.
+const loadContentCore = async () => {
+  try {
+    return await import("@lesto/content-core/build");
+  } catch {
+    throw new Error(CONTENT_PACKAGES_HINT);
+  }
+};
+
+const loadContentStore = async () => {
+  try {
+    return await import("@lesto/content-store");
+  } catch {
+    throw new Error(CONTENT_PACKAGES_HINT);
+  }
+};
+
+// Run the pipeline for its entries; the project's lesto.app.ts owns the cwd and
+// the collections, so the bin needs no arguments here. Content-core loads
+// lazily, only when a `content:*` command actually runs.
+const buildContent = async (): Promise<readonly RuntimeEntry[]> =>
+  (await (await loadContentCore()).runPipeline({ skipWrite: true })).entries;
+
+const createEntry = async (collection: string, title: string): Promise<void> =>
+  (await loadContentCore()).createNewEntry(process.cwd(), collection, title);
+
+// The content-store writers, each dynamic-importing `@lesto/content-store` on
+// call so the optional peer stays out of a default install's boot graph.
+const persistEntries: CliDeps["persistEntries"] = async (db, entries) =>
+  (await loadContentStore()).persistEntries(db, entries);
+
+const pruneEntries: CliDeps["pruneEntries"] = async (db, keep) =>
+  (await loadContentStore()).pruneEntries(db, keep);
+
+const deleteEntry: CliDeps["deleteEntry"] = async (db, collection, id) =>
+  (await loadContentStore()).deleteEntry(db, collection, id);
 
 // The project declares its sites in `lesto.sites.ts`, mirroring `lesto.app.ts`;
 // the build reads its default export. A MISSING file is tolerated, not fatal: it
@@ -333,6 +372,9 @@ const code = await run(argv, {
   loadApp,
   serve,
   buildContent,
+  persistEntries,
+  pruneEntries,
+  deleteEntry,
   createEntry,
   loadSites,
   sink: nodeSink,

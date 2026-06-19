@@ -3,8 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDb, createTableSql, defineTable, dropTableSql, integer, text } from "@lesto/db";
 import { currentContext, currentRequestSpan, lesto, runWithContext } from "@lesto/web";
-import { Migrator } from "@lesto/migrate";
-import { contentEntriesMigration } from "@lesto/content-store";
 import type { App, LestoAppConfig, KernelDatabase } from "@lesto/kernel";
 import type { MigrationEntry } from "@lesto/migrate";
 import type { RuntimeEntry } from "@lesto/content-core";
@@ -112,6 +110,9 @@ function depsWith(overrides: Partial<CliDeps> = {}): CliDeps {
     loadApp: () => Promise.resolve(buildConfig()),
     serve: vi.fn(),
     buildContent: () => Promise.resolve([]),
+    persistEntries: (_db, entries) => Promise.resolve({ persisted: entries.length }),
+    pruneEntries: (_db, _entries) => Promise.resolve({ deleted: 0 }),
+    deleteEntry: vi.fn(() => Promise.resolve({ deleted: 1 })),
     createEntry: vi.fn(() => Promise.resolve()),
     loadSites: () => Promise.resolve([]),
     sink: () => () => Promise.resolve(),
@@ -1725,36 +1726,41 @@ describe("run unknown", () => {
 
 describe("run content:build", () => {
   it("persists the pipeline's entries into the content store and reports the count", async () => {
-    // The app's migrations create the content_entries table on boot; mirror
-    // that here by migrating the same in-memory database the config wraps.
-    await new Migrator(adapt(database), [contentEntriesMigration]).migrate();
-
+    // `persistEntries` is an injected seam now (the optional content-store peer is
+    // dynamic-imported by the bin). Hand the build its entries and a fake persister
+    // that echoes the count, and assert the command reports what it persisted.
     const entries = [
       entry("posts", "hello", { title: "Hello" }),
       entry("posts", "world", { title: "World" }),
     ];
 
+    const persisted: RuntimeEntry[][] = [];
+
     const code = await run(
       ["content:build"],
-      depsWith({ buildContent: () => Promise.resolve(entries) }),
+      depsWith({
+        buildContent: () => Promise.resolve(entries),
+        persistEntries: (_db, given) => {
+          persisted.push([...given]);
+
+          return Promise.resolve({ persisted: given.length });
+        },
+      }),
     );
 
     expect(code).toBe(0);
     expect(lines).toEqual(["built 2 entries into the content store"]);
 
-    const count = database.prepare("SELECT COUNT(*) AS n FROM content_entries").get() as {
-      n: number;
-    };
-    expect(count.n).toBe(2);
+    // The build handed the pipeline's entries straight to the persister.
+    expect(persisted).toEqual([entries]);
   });
 
   it("says 'entry' (singular) for a single built entry", async () => {
-    await new Migrator(adapt(database), [contentEntriesMigration]).migrate();
-
     const code = await run(
       ["content:build"],
       depsWith({
         buildContent: () => Promise.resolve([entry("posts", "solo", { title: "Solo" })]),
+        persistEntries: (_db, given) => Promise.resolve({ persisted: given.length }),
       }),
     );
 
@@ -1763,26 +1769,36 @@ describe("run content:build", () => {
   });
 
   it("with --prune, drops entries the build no longer produces", async () => {
-    await new Migrator(adapt(database), [contentEntriesMigration]).migrate();
-
-    // A first build writes two entries.
-    const both = [entry("posts", "keep", {}), entry("posts", "stale", {})];
-    await run(["content:build"], depsWith({ buildContent: () => Promise.resolve(both) }));
-    lines = [];
-
-    // The next build only produces "keep"; --prune removes the orphaned "stale".
+    // The build produces one entry; --prune reports the stale rows the injected
+    // pruner removed. The pruner is faked to return one deletion, exercising the
+    // singular "stale entry" noun and the prune line.
     const code = await run(
       ["content:build", "--prune"],
-      depsWith({ buildContent: () => Promise.resolve([entry("posts", "keep", {})]) }),
+      depsWith({
+        buildContent: () => Promise.resolve([entry("posts", "keep", {})]),
+        persistEntries: (_db, given) => Promise.resolve({ persisted: given.length }),
+        pruneEntries: (_db, _keep) => Promise.resolve({ deleted: 1 }),
+      }),
     );
 
     expect(code).toBe(0);
     expect(lines).toEqual(["built 1 entry into the content store", "pruned 1 stale entry"]);
+  });
 
-    const count = database.prepare("SELECT COUNT(*) AS n FROM content_entries").get() as {
-      n: number;
-    };
-    expect(count.n).toBe(1);
+  it("does not prune without the --prune flag", async () => {
+    const pruneEntries = vi.fn(() => Promise.resolve({ deleted: 0 }));
+
+    const code = await run(
+      ["content:build"],
+      depsWith({
+        buildContent: () => Promise.resolve([entry("posts", "keep", {})]),
+        pruneEntries,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(pruneEntries).not.toHaveBeenCalled();
+    expect(lines).toEqual(["built 1 entry into the content store"]);
   });
 });
 
@@ -1819,25 +1835,24 @@ describe("run content:new", () => {
 
 describe("run content:delete", () => {
   it("deletes an existing entry and reports it", async () => {
-    await new Migrator(adapt(database), [contentEntriesMigration]).migrate();
-    await run(
-      ["content:build"],
-      depsWith({
-        buildContent: () => Promise.resolve([entry("posts", "doomed", { title: "Doomed" })]),
-      }),
-    );
-    lines = [];
+    // `deleteEntry` is injected: a fake that reports one row removed stands in for
+    // the content-store call (a hit), so the command prints the "deleted" line.
+    const deleteEntry = vi.fn(() => Promise.resolve({ deleted: 1 }));
 
-    const code = await run(["content:delete", "posts", "doomed"], depsWith());
+    const code = await run(["content:delete", "posts", "doomed"], depsWith({ deleteEntry }));
 
     expect(code).toBe(0);
+    expect(deleteEntry).toHaveBeenCalledWith(expect.anything(), "posts", "doomed");
     expect(lines).toEqual(["deleted posts entry: doomed"]);
   });
 
   it("reports when there was nothing to delete", async () => {
-    await new Migrator(adapt(database), [contentEntriesMigration]).migrate();
-
-    const code = await run(["content:delete", "posts", "ghost"], depsWith());
+    // A miss: the injected deleter reports zero rows removed, so the command takes
+    // the "no entry" branch.
+    const code = await run(
+      ["content:delete", "posts", "ghost"],
+      depsWith({ deleteEntry: vi.fn(() => Promise.resolve({ deleted: 0 })) }),
+    );
 
     expect(code).toBe(0);
     expect(lines).toEqual(["no posts entry: ghost"]);

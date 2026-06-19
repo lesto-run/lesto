@@ -21,7 +21,7 @@ import type { UiDialect } from "@lesto/web";
 import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
 import type { CurrentSpan, TraceSeams, Traces, TracesEnv } from "@lesto/observability";
 
-import { deleteEntry, persistEntries, pruneEntries } from "@lesto/content-store";
+import type { deleteEntry, persistEntries, pruneEntries } from "@lesto/content-store";
 import type { RuntimeEntry } from "@lesto/content-core";
 
 import { buildStaticSites } from "@lesto/sites";
@@ -140,6 +140,15 @@ export interface CliDeps {
    * of the covered core.
    */
   buildContent: () => Promise<readonly RuntimeEntry[]>;
+
+  /** Upsert the built entries into the content store (the bin passes `@lesto/content-store`'s `persistEntries`; tests fake it). */
+  persistEntries: typeof persistEntries;
+
+  /** Drop store rows the build no longer produces, for `--prune` (the bin passes `@lesto/content-store`'s `pruneEntries`; tests fake it). */
+  pruneEntries: typeof pruneEntries;
+
+  /** Remove one entry by its identity (the bin passes `@lesto/content-store`'s `deleteEntry`; tests fake it). */
+  deleteEntry: typeof deleteEntry;
 
   /** Scaffold a new entry into a collection (the bin passes `createNewEntry`). */
   createEntry: (collection: string, title: string) => Promise<void>;
@@ -593,7 +602,7 @@ async function runContentBuild(args: readonly string[], deps: CliDeps): Promise<
 
   const entries = await deps.buildContent();
 
-  const { persisted } = await persistEntries(config.db, entries);
+  const { persisted } = await deps.persistEntries(config.db, entries);
 
   deps.out(`built ${persisted} ${entryNoun(persisted)} into the content store`);
 
@@ -601,7 +610,7 @@ async function runContentBuild(args: readonly string[], deps: CliDeps): Promise<
   // exists are dropped. Opt-in, because a misconfigured build would otherwise
   // wipe content.
   if (args.includes("--prune")) {
-    const { deleted } = await pruneEntries(config.db, entries);
+    const { deleted } = await deps.pruneEntries(config.db, entries);
 
     deps.out(`pruned ${deleted} stale ${entryNoun(deleted)}`);
   }
@@ -645,7 +654,7 @@ async function runContentDelete(args: readonly string[], deps: CliDeps): Promise
 
   await createApp(config);
 
-  const { deleted } = await deleteEntry(config.db, collection, slug);
+  const { deleted } = await deps.deleteEntry(config.db, collection, slug);
 
   deps.out(
     deleted === 0 ? `no ${collection} entry: ${slug}` : `deleted ${collection} entry: ${slug}`,
