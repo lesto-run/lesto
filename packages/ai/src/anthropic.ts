@@ -216,11 +216,21 @@ export async function* parseStream(response: Response): AsyncIterable<StreamDelt
     }
   }
 
-  // Flush a final frame the stream closed WITHOUT a trailing blank line. The loop
-  // above drained every `\n\n`-terminated frame, so the remainder is at most one last
-  // frame; without this, a terminal `text_delta` with no trailing newline is dropped.
+  // Flush a final frame the stream closed WITHOUT a trailing blank line — recovering a
+  // complete-but-unterminated last delta the loop's `\n\n` scan would otherwise drop.
+  // Unlike a mid-stream frame, this trailing remainder can also be a TORN frame from an
+  // aborted/dropped connection (incomplete JSON): tolerate that quietly — the stream just
+  // ended early, so end with the deltas already yielded rather than raising
+  // AI_STREAM_MALFORMED on a truncation. A malformed frame mid-stream still throws (above).
   buffer += decoder.decode();
-  const last = parseFrame(buffer);
+
+  let last: StreamDelta | undefined;
+  try {
+    last = parseFrame(buffer);
+  } catch {
+    last = undefined;
+  }
+
   if (last !== undefined) yield last;
 }
 

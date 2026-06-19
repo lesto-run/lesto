@@ -41,6 +41,40 @@ describe("createAnthropic — request assembly", () => {
     expect(body["tools"]).toBeUndefined();
   });
 
+  it("serializes a content-block turn (text + tool_use + tool_result) to the Anthropic wire shape", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    const request = model.buildRequest({
+      model,
+      messages: [
+        { role: "user", content: "Weather in Rome?" }, // string content rides through
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Let me check." },
+            { type: "tool_use", id: "call-1", name: "getWeather", input: { city: "Rome" } },
+          ],
+        },
+        { role: "user", content: [{ type: "tool_result", toolUseId: "call-1", content: "sunny" }] },
+      ],
+    });
+
+    const body = (await request.json()) as { messages: unknown[] };
+
+    // `toolUseId` is rewritten to the wire's `tool_use_id`; text/tool_use pass through.
+    expect(body.messages).toEqual([
+      { role: "user", content: "Weather in Rome?" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me check." },
+          { type: "tool_use", id: "call-1", name: "getWeather", input: { city: "Rome" } },
+        ],
+      },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call-1", content: "sunny" }] },
+    ]);
+  });
+
   it("honors an overridden model id, system prompt, max tokens, and tool set", async () => {
     const model = createAnthropic({ apiKey: "sk-test", defaultModelId: "claude-fable-5" });
 
@@ -196,6 +230,26 @@ describe("parseStream", () => {
     }
 
     expect(deltas).toEqual(["first", "last"]);
+  });
+
+  it("tolerates a torn final frame from a dropped stream — yields what arrived, no throw", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    // First frame complete; the connection then drops MID-frame: a `data:` line with
+    // truncated JSON and no `\n\n`. The flush must end quietly with "partial", not raise
+    // AI_STREAM_MALFORMED (which is reserved for a malformed frame mid-stream).
+    const frames = [
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_de',
+    ];
+
+    const deltas: string[] = [];
+
+    for await (const delta of model.parseStream(sseResponse(frames))) {
+      deltas.push(delta.text);
+    }
+
+    expect(deltas).toEqual(["partial"]);
   });
 
   it("ignores a [DONE] sentinel and a non-text delta", async () => {
