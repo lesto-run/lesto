@@ -185,7 +185,7 @@
       "name": "@lesto/cli",
       "version": "0.1.0",
       "bin": {
-        "lesto": "./src/bin.ts",
+        "lesto": "./bin/lesto.mjs",
       },
       "dependencies": {
         "@lesto/assets": "workspace:*",
@@ -202,6 +202,7 @@
         "@lesto/runtime": "workspace:*",
         "@lesto/sites": "workspace:*",
         "@lesto/web": "workspace:*",
+        "jiti": "^2.7.0",
       },
     },
     "packages/client": {
@@ -519,9 +520,12 @@
     "packages/create-lesto": {
       "name": "create-lesto",
       "version": "0.1.0",
-      "bin": "./src/bin.ts",
+      "bin": {
+        "create-lesto": "./bin/create-lesto.mjs",
+      },
       "dependencies": {
         "@lesto/errors": "workspace:*",
+        "jiti": "^2.7.0",
       },
     },
     "packages/csrf": {

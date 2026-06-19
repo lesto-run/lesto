@@ -4,7 +4,7 @@
   "license": "MIT",
   "description": "Lesto's `lesto` command-line tool — load a project's lesto.app.ts and run, serve, migrate, or inspect routes.",
   "bin": {
-    "lesto": "./src/bin.ts"
+    "lesto": "./bin/lesto.mjs"
   },
   "type": "module",
   "exports": {
@@ -35,13 +35,15 @@
     "@lesto/router": "workspace:*",
     "@lesto/runtime": "workspace:*",
     "@lesto/sites": "workspace:*",
-    "@lesto/web": "workspace:*"
+    "@lesto/web": "workspace:*",
+    "jiti": "^2.7.0"
   },
   "publishConfig": {
     "access": "public"
   },
   "files": [
-    "src"
+    "src",
+    "bin"
   ],
   "repository": {
     "type": "git",

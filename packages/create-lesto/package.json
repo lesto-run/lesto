@@ -4,7 +4,9 @@
   "license": "MIT",
   "description": "The Lesto project scaffolder — `bun create lesto <name>` / `npm create lesto <name>`.",
   "type": "module",
-  "bin": "./src/bin.ts",
+  "bin": {
+    "create-lesto": "./bin/create-lesto.mjs"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -20,13 +22,15 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@lesto/errors": "workspace:*"
+    "@lesto/errors": "workspace:*",
+    "jiti": "^2.7.0"
   },
   "publishConfig": {
     "access": "public"
   },
   "files": [
-    "src"
+    "src",
+    "bin"
   ],
   "repository": {
     "type": "git",
