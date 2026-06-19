@@ -459,6 +459,27 @@ describe("treeJsonSchema", () => {
       expect(Object.isFrozen((error as UiError).details)).toBe(true);
     }
   });
+
+  it("refuses a component named `node` — the reserved union key — instead of corrupting the schema", () => {
+    // `node` is the $defs key for the union root; a component of that exact name
+    // would clobber the union via the spread and leave the root `$ref` resolving
+    // to one component. The schema build must reject it loudly.
+    const r = new Registry().define({
+      name: "node",
+      props: {},
+      children: false,
+      render: () => createElement("span"),
+    });
+
+    try {
+      treeJsonSchema(r);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(UiError);
+      expect((error as UiError).code).toBe("UI_RESERVED_COMPONENT_NAME");
+      expect((error as UiError).details).toEqual({ name: "node" });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

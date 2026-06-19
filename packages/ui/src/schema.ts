@@ -104,6 +104,13 @@ function componentRef(name: string): { $ref: string } {
 }
 
 /**
+ * The reserved `$defs` key for the node union (the schema root). A registered
+ * component may not share this name — `treeJsonSchema` refuses it, since it would
+ * otherwise clobber the union.
+ */
+const RESERVED_NODE_DEF = "node";
+
+/**
  * The `items` schema for a children-accepting component, mirroring `allowsChild`.
  *
  *   - `policy === true`  → the full node union (any string leaf or component).
@@ -123,7 +130,7 @@ function childItemsSchema(policy: ChildrenPolicy, registered: ReadonlySet<string
   // `true`: any node. Keep the full union ref so the tree nests arbitrarily.
   // (Only ever called for children-accepting policies, so `false` never lands
   // here — but a list is the only other shape, so we narrow on that.)
-  if (!Array.isArray(policy)) return { $ref: "#/$defs/node" };
+  if (!Array.isArray(policy)) return { $ref: `#/$defs/${RESERVED_NODE_DEF}` };
 
   const allowed = policy.filter((name) => registered.has(name)).map(componentRef);
 
@@ -172,6 +179,20 @@ function componentVariant(def: ComponentDef, registered: ReadonlySet<string>): o
 export function treeJsonSchema(registry: Registry): object {
   const defs = registry.all();
 
+  // `node` is the reserved $defs key for the node union (the schema root). A
+  // component sharing that exact name would, via the `...componentDefs` spread
+  // below, clobber the union — leaving the root `$ref` resolving to one component
+  // and silently rejecting every other tree. Refuse it loudly rather than emit a
+  // corrupt schema.
+  const reserved = defs.find((def) => def.name === RESERVED_NODE_DEF);
+  if (reserved !== undefined) {
+    throw new UiError(
+      "UI_RESERVED_COMPONENT_NAME",
+      `a component may not be named "${RESERVED_NODE_DEF}": it is the reserved JSON Schema node-union key`,
+      { name: reserved.name },
+    );
+  }
+
   const registered = new Set(defs.map((def) => def.name));
 
   // One `$def` per component so an allow-list `oneOf` can reference individual
@@ -184,9 +205,9 @@ export function treeJsonSchema(registry: Registry): object {
 
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
-    $ref: "#/$defs/node",
+    $ref: `#/$defs/${RESERVED_NODE_DEF}`,
     $defs: {
-      node: { oneOf: [stringLeaf, ...defs.map((def) => componentRef(def.name))] },
+      [RESERVED_NODE_DEF]: { oneOf: [stringLeaf, ...defs.map((def) => componentRef(def.name))] },
       ...componentDefs,
     },
   };
