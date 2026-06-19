@@ -16,6 +16,7 @@ import {
   healthResponse,
   ifNoneMatch,
   installProcessSafetyNet,
+  isHealthProbe,
   probeReady,
   readBody,
   requestAbortSignal,
@@ -586,15 +587,27 @@ describe("serve", () => {
       },
     };
 
-    server = await serve(app, { port: 0, maxInFlightRequests: 1 });
+    const logged: AccessEntry[] = [];
+
+    server = await serve(app, {
+      port: 0,
+      maxInFlightRequests: 1,
+      logRequest: (entry) => logged.push(entry),
+    });
 
     const held = makeRequest(server.port, { method: "GET", path: "/hold" });
     await started;
 
     // The one slot is taken, so a concurrent request is shed without running.
-    const shed = await makeRequest(server.port, { method: "GET", path: "/" });
+    const shed = await makeRequest(server.port, { method: "GET", path: "/shed-me" });
     expect(shed.status).toBe(503);
     expect(shed.body).toBe("Service Unavailable");
+
+    // The shed is recorded on the access log (visible backstop): status 503, ms 0
+    // because no handler ran — distinct from a handler that ran and timed out.
+    const shedEntry = logged.find((entry) => entry.path === "/shed-me");
+    expect(shedEntry).toMatchObject({ method: "GET", status: 503, ms: 0 });
+    expect(shedEntry?.requestId).toEqual(expect.any(String));
 
     releaseHeld();
     expect((await held).status).toBe(200);
@@ -602,6 +615,48 @@ describe("serve", () => {
     // The slot was freed in `finally`, so the node serves again.
     const recovered = await makeRequest(server.port, { method: "GET", path: "/" });
     expect(recovered.status).toBe(200);
+  });
+
+  it("never sheds a /readyz probe under saturation (an orchestrator must see true readiness)", async () => {
+    let releaseHeld!: () => void;
+    let markStarted!: () => void;
+
+    const released = new Promise<void>((resolve) => {
+      releaseHeld = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async (_method, path) => {
+        if (path === "/hold") {
+          markStarted();
+          await released;
+        }
+
+        return { status: 200, headers: {}, body: "ok" };
+      },
+    };
+
+    server = await serve(app, { port: 0, maxInFlightRequests: 1 });
+
+    const held = makeRequest(server.port, { method: "GET", path: "/hold" });
+    await started;
+
+    // The only slot is occupied, yet the probe bypasses the gate and answers true
+    // readiness — a 503 here would make an orchestrator pull a merely-busy node.
+    const ready = await makeRequest(server.port, { method: "GET", path: "/readyz" });
+    expect(ready.status).toBe(200);
+    expect(ready.body).toBe("ready");
+
+    // A non-probe at the same path (a POST) is still gated → shed.
+    const posted = await makeRequest(server.port, { method: "POST", path: "/readyz", body: "x" });
+    expect(posted.status).toBe(503);
+
+    releaseHeld();
+    expect((await held).status).toBe(200);
   });
 
   it("aborts the wedged handler's context signal after answering 503", async () => {
@@ -1797,6 +1852,26 @@ describe("concurrencyLimiter", () => {
 
     expect(limiter.tryAcquire()).toBe(true);
     expect(limiter.tryAcquire()).toBe(false);
+  });
+});
+
+describe("isHealthProbe", () => {
+  it("matches exactly the GET/HEAD probes healthResponse answers", () => {
+    const health = {}; // default live /health, ready /readyz
+
+    expect(isHealthProbe("GET", "/health", health)).toBe(true);
+    expect(isHealthProbe("GET", "/readyz", health)).toBe(true);
+    expect(isHealthProbe("HEAD", "/health", health)).toBe(true);
+
+    // A non-probe method at a probe path is NOT a probe (stays gated).
+    expect(isHealthProbe("POST", "/readyz", health)).toBe(false);
+    // A non-probe path is not a probe.
+    expect(isHealthProbe("GET", "/api", health)).toBe(false);
+  });
+
+  it("honors custom live/ready paths", () => {
+    expect(isHealthProbe("GET", "/livez", { livePath: "/livez" })).toBe(true);
+    expect(isHealthProbe("GET", "/ready", { readyPath: "/ready" })).toBe(true);
   });
 });
 

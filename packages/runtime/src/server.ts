@@ -1239,31 +1239,66 @@ async function handle(
   res: ServerResponse,
   deps: HandleDeps,
 ): Promise<void> {
-  // Shed before doing any work when too many requests are already in flight: a
+  const line = requestLineOf(req);
+  const path = pathOf(line.url);
+
+  // Liveness/readiness probes BYPASS the concurrency gate: an orchestrator polling
+  // `/readyz` must get the node's true readiness even while it sheds load — a 503
+  // here would pull a merely-busy node out of rotation and amplify a spike into an
+  // outage. The probe is the cheapest path anyway (no app dispatch), so admitting
+  // it unconditionally is safe. (`line`/`path` are computed once here and threaded
+  // in, so the admitted path does not re-parse the URL.)
+  if (deps.health !== undefined && isHealthProbe(line.method, path, deps.health)) {
+    return handleAdmitted(app, req, res, deps, line, path);
+  }
+
+  // Shed before any work when too many requests are already in flight: a
   // request-volume flood is answered with the cheapest possible 503 — no context,
-  // no body read — so it cannot push the node past its in-flight budget. Not
-  // logged per-shed: a flood would amplify into a logging DoS, and the 503s are
-  // already visible to the load balancer / metrics. A successful acquire is freed
-  // in the `finally` below, so every admitted request returns its slot.
+  // no body read — so it cannot push the node past its in-flight budget. The shed
+  // is still recorded on the access log (one structured line per request, like
+  // every other), so the backstop firing is VISIBLE — it shows as status 503 with
+  // ms 0, distinct from a handler that ran and timed out. A successful acquire is
+  // freed in the `finally` below, so every admitted request returns its slot.
   if (!deps.concurrency.tryAcquire()) {
-    respondWithError(res, 503, deps.securityHeaders, deps.newRequestId());
+    const requestId = deps.newRequestId();
+
+    respondWithError(res, 503, deps.securityHeaders, requestId);
+    deps.logRequest({ method: line.method, path, status: 503, ms: 0, requestId });
 
     return;
   }
 
   try {
-    return await handleAdmitted(app, req, res, deps);
+    return await handleAdmitted(app, req, res, deps, line, path);
   } finally {
     deps.concurrency.release();
   }
 }
 
-/** The request path proper, run only after a concurrency slot is acquired. */
+/**
+ * True iff this is a liveness/readiness probe — exactly the GET/HEAD requests
+ * {@link healthResponse} answers. Probes bypass the concurrency gate so an
+ * orchestrator's `/readyz` poll reflects the node's real readiness under load
+ * instead of a load-shed 503; a non-probe at the same path (a POST, or a real
+ * route) is gated as normal.
+ */
+export function isHealthProbe(method: string, path: string, health: HealthOptions): boolean {
+  if (method !== "GET" && method !== "HEAD") return false;
+
+  return (
+    path === (health.livePath ?? DEFAULT_LIVE_PATH) ||
+    path === (health.readyPath ?? DEFAULT_READY_PATH)
+  );
+}
+
+/** The request path proper, run only after a concurrency slot is acquired (or a probe). */
 async function handleAdmitted(
   app: App,
   req: IncomingMessage,
   res: ServerResponse,
   deps: HandleDeps,
+  line: { method: string; url: string },
+  path: string,
 ): Promise<void> {
   // Establish the per-request context up front and run the whole request inside
   // it. `runWithContext` uses `AsyncLocalStorage.run`, so everything the handler
@@ -1310,15 +1345,11 @@ async function handleAdmitted(
     // is wired (the zero-overhead default).
     if (span !== undefined) context.span = span;
 
-    // Compute the request line BEFORE reading the body, so a 413 (body over the
-    // limit) is still attributed to the right method+path rather than the GET /
-    // default — an oversized POST to /upload logs as exactly that. The path is the
-    // URL's pathname (query stripped); `pathOf` mirrors `toLestoRequest`'s parsing
-    // so the attributed path is the same one the matched request would carry.
-    const line = requestLineOf(req);
-
+    // `line`/`path` were computed once in `handle` (before the gate) and threaded
+    // in, so a 413 (body over the limit) is still attributed to the right
+    // method+path rather than the `GET /` default — an oversized POST to /upload
+    // logs as exactly that.
     const method = line.method;
-    const path = pathOf(line.url);
     let status = 500;
 
     // Set true when a streamed body tears down mid-flight; rides the access entry
