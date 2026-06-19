@@ -68,11 +68,17 @@ function registry(): Registry {
   return new Registry().define(Box).define(Text).define(Badge);
 }
 
-/** The `type.const` of a schema variant, or undefined for the string leaf. */
-function constOf(variant: Record<string, unknown>): string | undefined {
-  const properties = variant.properties as { type?: { const?: string } } | undefined;
+/** The emitted tree schema shape the assertions reach into. */
+type Schema = {
+  $defs: { node: { oneOf: Array<Record<string, unknown>> } } & Record<
+    string,
+    Record<string, unknown>
+  >;
+};
 
-  return properties?.type?.const;
+/** A component's own `#/$defs/<name>` variant def, by name. */
+function defOf(schema: Schema, name: string): unknown {
+  return (schema.$defs as Record<string, unknown>)[name];
 }
 
 // ---------------------------------------------------------------------------
@@ -232,25 +238,28 @@ describe("treeJsonSchema", () => {
         render: () => createElement("div"),
       });
 
-    const schema = treeJsonSchema(r) as {
-      $defs: { node: { oneOf: Array<Record<string, unknown>> } };
-    };
+    const schema = treeJsonSchema(r) as Schema;
 
-    const variants = schema.$defs.node.oneOf;
+    const union = schema.$defs.node.oneOf;
 
-    // The first variant is the bare string leaf.
-    expect(variants[0]).toEqual({ type: "string" });
+    // The first union member is the bare string leaf; the rest are `$ref`s to
+    // one per-component `$def` each (so an allow-list can ref them individually).
+    expect(union[0]).toEqual({ type: "string" });
+    expect(union).toHaveLength(5);
+    expect(union.slice(1)).toEqual([
+      { $ref: "#/$defs/Box" },
+      { $ref: "#/$defs/Text" },
+      { $ref: "#/$defs/Badge" },
+      { $ref: "#/$defs/Meta" },
+    ]);
 
-    // One variant per registered component plus the string leaf.
-    expect(variants).toHaveLength(5);
-
-    const text = variants.find((v) => constOf(v) === "Text") as {
+    const text = defOf(schema, "Text") as {
       properties: { props: { required?: string[] } } & Record<string, unknown>;
     };
 
     expect(text.properties.props.required).toEqual(["value"]);
 
-    const meta = variants.find((v) => constOf(v) === "Meta") as {
+    const meta = defOf(schema, "Meta") as {
       properties: { props: { properties: Record<string, Record<string, unknown>> } };
     };
 
@@ -262,8 +271,8 @@ describe("treeJsonSchema", () => {
     expect(meta.properties.props.properties.items).toEqual({ type: "array" });
     expect(meta.properties.props.properties.flag).toEqual({ type: "boolean" });
 
-    // A children-accepting component recurses back to the node definition.
-    const box = variants.find((v) => constOf(v) === "Box") as {
+    // A `children: true` component recurses back to the full node union.
+    const box = defOf(schema, "Box") as {
       properties: { children?: { items: { $ref: string } } };
     };
 
@@ -274,11 +283,14 @@ describe("treeJsonSchema", () => {
     expect(text.properties).not.toHaveProperty("children");
   });
 
-  it("includes children for an allow-list and omits it for an empty list", () => {
+  it("narrows children to the allow-list and omits it for an empty list", () => {
     const r = new Registry()
+      .define(Text)
+      .define(Badge)
       .define({
         name: "List",
         props: {},
+        // Only `Text` is an allowed child — NOT `Badge`.
         children: ["Text"],
         render: () => createElement("ul"),
       })
@@ -290,31 +302,105 @@ describe("treeJsonSchema", () => {
         render: () => createElement("hr"),
       });
 
-    const schema = treeJsonSchema(r) as {
-      $defs: { node: { oneOf: Array<Record<string, unknown>> } };
+    const schema = treeJsonSchema(r) as Schema;
+
+    // The allow-list narrows `children.items` to a `oneOf` of the string leaf
+    // (always allowed — allowsChild is guarded by isNodeObject) plus a `$ref` to
+    // ONLY each allowed component, NOT the full node union. This mirrors
+    // `allowsChild` exactly: a `Badge` child fails the schema just as it fails
+    // validateTree's disallowed-child check.
+    const list = defOf(schema, "List") as {
+      properties: { children?: { items: { oneOf: Array<Record<string, unknown>> } } };
     };
 
-    const variants = schema.$defs.node.oneOf;
+    const items = list.properties.children?.items;
 
-    const list = variants.find((v) => constOf(v) === "List") as {
-      properties: { children?: { items: { $ref: string } } };
-    };
+    expect(items?.oneOf).toEqual([{ type: "string" }, { $ref: "#/$defs/Text" }]);
 
-    expect(list.properties.children?.items.$ref).toBe("#/$defs/node");
+    // The narrowed set admits exactly the runtime-allowed component(s): Text in,
+    // Badge out — and crucially NOT the loose `#/$defs/node` union of old.
+    const allowedRefs = (items?.oneOf ?? [])
+      .map((m) => m.$ref)
+      .filter((ref): ref is string => typeof ref === "string");
 
-    const empty = variants.find((v) => constOf(v) === "Empty") as {
-      properties: Record<string, unknown>;
-    };
+    expect(allowedRefs).toContain("#/$defs/Text");
+    expect(allowedRefs).not.toContain("#/$defs/Badge");
+    expect(allowedRefs).not.toContain("#/$defs/node");
+
+    // And the contract that motivates this: a tree validateTree REJECTS for a
+    // disallowed child must NOT be admitted by the schema's allowed-child set.
+    const disallowed = validateTree(r, {
+      type: "List",
+      children: [{ type: "Badge", props: { tone: "info" } }],
+    });
+
+    expect(disallowed.valid).toBe(false);
+    expect(disallowed.errors[0]?.type).toBe("disallowed_child");
+    expect(allowedRefs).not.toContain("#/$defs/Badge");
+
+    // A degenerate empty allow-list is a leaf: no `children` property at all.
+    const empty = defOf(schema, "Empty") as { properties: Record<string, unknown> };
 
     expect(empty.properties).not.toHaveProperty("children");
   });
 
-  it("encodes enum props as a string with an enum list", () => {
-    const schema = treeJsonSchema(registry()) as {
-      $defs: { node: { oneOf: Array<Record<string, unknown>> } };
+  it("drops an allow-list entry that names no registered component (no dangling $ref)", () => {
+    // `allowsChild` returns true for "Ghost" by membership, but walk() would flag
+    // a Ghost child as unknown_component — it can never satisfy a valid tree. The
+    // schema therefore drops it rather than emit a dangling `#/$defs/Ghost` ref.
+    const r = new Registry().define(Text).define({
+      name: "List",
+      props: {},
+      children: ["Text", "Ghost"],
+      render: () => createElement("ul"),
+    });
+
+    const schema = treeJsonSchema(r) as Schema;
+
+    const list = defOf(schema, "List") as {
+      properties: { children?: { items: { oneOf: Array<Record<string, unknown>> } } };
     };
 
-    const badge = schema.$defs.node.oneOf.find((v) => constOf(v) === "Badge") as {
+    // Only the string leaf and the registered Text remain; Ghost is dropped.
+    expect(list.properties.children?.items.oneOf).toEqual([
+      { type: "string" },
+      { $ref: "#/$defs/Text" },
+    ]);
+    expect(schema.$defs).not.toHaveProperty("Ghost");
+  });
+
+  it("JSON-Pointer-escapes a component name with `/` or `~` in its $ref", () => {
+    // Component names are opaque strings; a `~` or `/` must be escaped in the
+    // `$ref` JSON Pointer (`~` -> `~0`, `/` -> `~1`) while the def key stays raw.
+    const r = new Registry()
+      .define({ name: "a/b~c", props: {}, children: false, render: () => createElement("i") })
+      .define({
+        name: "Wrap",
+        props: {},
+        children: ["a/b~c"],
+        render: () => createElement("div"),
+      });
+
+    const schema = treeJsonSchema(r) as Schema;
+
+    // The union refs the escaped pointer; the def is keyed by the raw name.
+    expect(schema.$defs.node.oneOf).toContainEqual({ $ref: "#/$defs/a~1b~0c" });
+    expect(schema.$defs).toHaveProperty(["a/b~c"]);
+
+    const wrap = defOf(schema, "Wrap") as {
+      properties: { children?: { items: { oneOf: Array<Record<string, unknown>> } } };
+    };
+
+    expect(wrap.properties.children?.items.oneOf).toEqual([
+      { type: "string" },
+      { $ref: "#/$defs/a~1b~0c" },
+    ]);
+  });
+
+  it("encodes enum props as a string with an enum list", () => {
+    const schema = treeJsonSchema(registry()) as Schema;
+
+    const badge = defOf(schema, "Badge") as {
       properties: { props: { properties: { tone: Record<string, unknown> } } };
     };
 
@@ -327,16 +413,12 @@ describe("treeJsonSchema", () => {
   it("requires the `props` object for a component with a required prop, so the schema agrees with validateTree", () => {
     const r = registry();
 
-    const schema = treeJsonSchema(r) as {
-      $defs: { node: { oneOf: Array<Record<string, unknown>> } };
-    };
-
-    const variants = schema.$defs.node.oneOf;
+    const schema = treeJsonSchema(r) as Schema;
 
     // Text has a required prop -> the variant must require `props` itself; if it
     // only required `type`, a model could omit `props` and pass the schema while
     // failing validateTree's missing-required-prop check (a looser schema).
-    const text = variants.find((v) => constOf(v) === "Text") as { required: string[] };
+    const text = defOf(schema, "Text") as { required: string[] };
 
     expect(text.required).toEqual(["type", "props"]);
 
@@ -350,15 +432,11 @@ describe("treeJsonSchema", () => {
   });
 
   it("requires only `type` for a component with no required props", () => {
-    const schema = treeJsonSchema(registry()) as {
-      $defs: { node: { oneOf: Array<Record<string, unknown>> } };
-    };
+    const schema = treeJsonSchema(registry()) as Schema;
 
     // Box has no required props, so the model is free to omit `props` — the
     // variant requires only `type`, matching validateTree, which accepts it.
-    const box = schema.$defs.node.oneOf.find((v) => constOf(v) === "Box") as {
-      required: string[];
-    };
+    const box = defOf(schema, "Box") as { required: string[] };
 
     expect(box.required).toEqual(["type"]);
     expect(validateTree(registry(), { type: "Box" }).valid).toBe(true);
