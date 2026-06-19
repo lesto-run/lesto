@@ -107,17 +107,21 @@ idempotent by their `WHERE` clause:
 - **`retry(id)`** — resets a `failed` job to a fresh `ready` (attempts cleared,
   `run_at = now`). Fenced on `status = 'failed'`, so a double-click or stale view can
   never resurrect a running or done job; returns whether a row was re-queued.
-- **`discard(id)`** — deletes a non-`running` job, then RE-EVALUATES its dependents and
-  sweeps its dependency edges. Discarding a prerequisite **unblocks** its dependents:
-  the deleted prerequisite is treated as settled, so any dependent whose every other
-  remaining prerequisite is already `done` is released to `ready` rather than stranded
-  `blocked` forever (the trigger lives in one shared `releaseReadyDependents` helper, run
-  from BOTH `complete` and `discard` — `complete` alone is not enough, because a
-  discarded prerequisite never completes). The order inside the transaction is
-  load-bearing: delete the row, THEN release dependents (still discoverable via the
-  `depends_on_id` edges, and the deleted prerequisite no longer joins, so it counts as
-  satisfied), THEN sweep the edges. Refuses a `running` job — discarding a row a worker
-  holds would race that worker's terminal write.
+- **`discard(id)`** — deletes a non-`running` job and **CASCADES** to its dependents:
+  discarding a prerequisite also discards every job still `blocked` on it, transitively.
+  A blocked dependent never ran and was waiting on this prerequisite's output, which a
+  discard means it will never get — so running it (against missing or failed input) is
+  wrong, and leaving it `blocked` forever strands it; cascade-discard is the only coherent
+  answer. (An earlier cut *released* the dependents instead — caught in review: it ran a
+  step whose prerequisite never succeeded.) Dependents that already settled
+  (`ready`/`running`/`done`/`failed`) are left untouched — discarding an already-settled
+  prerequisite is just cleanup, and a released dependent already has its input. The walk
+  goes FORWARD over the DAG; edges are backward-only (`enqueueBatch` refuses a forward
+  `dependsOn`), so it is acyclic and terminates, and a diamond dependent is collapsed
+  naturally because the `status = 'blocked'` JOIN stops returning a job once it is deleted.
+  Per job the order is load-bearing: read its `blocked` dependents through the edges that
+  still name it, THEN sweep those edges. Refuses a `running` job — discarding a row a
+  worker holds would race that worker's terminal write.
 
 ### 3. The dashboard — dogfooding islands + the admin surface
 

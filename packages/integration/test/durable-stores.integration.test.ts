@@ -339,12 +339,13 @@ describe.each(drivers)("queue concurrency: $name", (driver) => {
     await expect(queue.batch(id)).resolves.toMatchObject({ total: 2, state: "pending" });
   });
 
-  it("discarding a prerequisite releases its dependent and the batch stays truthful — over a real socket", async () => {
-    // The discard-release path runs delete + releaseReadyDependents + edge-sweep in
-    // ONE transaction, with the release on the transaction's PINNED connection. On a
-    // pooled Postgres driver a release off a fresh connection would escape the span;
-    // this proves the dependent is released (not stranded `blocked` forever) and the
-    // all-discarded batch reports `pending`, not a false `completed`, on a real socket.
+  it("cascade-discarding a prerequisite removes its blocked dependent atomically — over a real socket", async () => {
+    // discard runs the forward cascade (delete the row, read its `blocked` dependents,
+    // sweep edges, recurse) in ONE transaction on the pooled driver's PINNED connection.
+    // On a pooled Postgres driver a cascade off a fresh connection would escape the
+    // span; this proves the blocked dependent is cascade-discarded (not stranded
+    // `blocked`, not released to run against missing input) and the now-empty batch
+    // reports `pending`, not a false `completed`, on a real socket.
     const queue = new Queue({ db: handle, dialect: driver.name });
 
     const { id, jobIds } = await queue.enqueueBatch("import", [
@@ -352,12 +353,11 @@ describe.each(drivers)("queue concurrency: $name", (driver) => {
       { name: "thumbnail", dependsOn: [0] },
     ]);
 
-    // Discard the prerequisite → its dependent is released, not stranded.
+    // Discard the prerequisite → its blocked dependent is cascade-discarded too.
     expect(await queue.discard(jobIds[0]!)).toBe(true);
-    expect((await queue.find(jobIds[1]!))?.status).toBe("ready");
+    expect(await queue.find(jobIds[1]!)).toBeNull();
 
-    // Discard the survivor too → an all-discarded batch is truthfully `pending`.
-    expect(await queue.discard(jobIds[1]!)).toBe(true);
+    // Both jobs gone → an all-discarded batch is truthfully `pending`.
     await expect(queue.batch(id)).resolves.toMatchObject({ total: 2, state: "pending" });
   });
 });

@@ -1062,43 +1062,69 @@ export class Queue {
    * Deletes the row outright (and any dependency edges naming it). Refuses a
    * `running` job: discarding a row a worker holds would let that worker's
    * terminal write race a delete, so an operator must wait for it to finish or
-   * for its visibility to lapse. Returns whether a row was removed (`false` for
-   * an unknown id or a running job).
+   * for its visibility to lapse. Returns whether the targeted row was removed
+   * (`false` for an unknown id or a running job).
    *
-   * Discarding a PREREQUISITE re-evaluates its dependents, so a discarded
-   * prerequisite never strands a `blocked` dependent forever: the dependent is
-   * treated as if that prerequisite had settled (the queue's chosen semantics —
-   * discarding a prerequisite UNBLOCKS its dependents, releasing any whose every
-   * other remaining prerequisite is already `done`). The order inside the
-   * transaction is load-bearing: delete the row, THEN
-   * {@link Queue.releaseReadyDependents} (the dependents are still discoverable
-   * via the `depends_on_id` edges, and the JOIN no longer finds the deleted
-   * prerequisite, so it counts as satisfied), THEN sweep the edges.
+   * CASCADES to dependents: discarding a PREREQUISITE also discards every job
+   * still `blocked` on it, transitively. A blocked dependent never ran and was
+   * waiting on this prerequisite's output — which a discard means it will never
+   * get — so running it (against missing or failed input) would be wrong, and
+   * leaving it `blocked` forever would strand it; cascade-discard is the only
+   * coherent answer. Dependents that already settled (`ready`/`running`/`done`/
+   * `failed`) are left untouched: discarding an already-run-or-released
+   * prerequisite is just cleanup, and a released dependent already has its input.
+   *
+   * The walk goes FORWARD over the dependency DAG (a job → the jobs that depend
+   * on it). Edges are backward-only by construction (`enqueueBatch` refuses a
+   * forward `dependsOn`), so the graph is acyclic and the walk terminates; a
+   * dependent reachable two ways (a diamond) is collapsed naturally, because the
+   * `status = 'blocked'` JOIN stops returning a dependent once it is deleted. Per
+   * job the order is load-bearing: read its still-`blocked` dependents through
+   * the `depends_on_id` edges that still name it, THEN sweep those edges.
    */
   async discard(id: number): Promise<boolean> {
     return this.db.transaction(async (tx) => {
-      const result = await tx
+      // Delete the targeted job first; a `running` job or unknown id removes
+      // nothing and is reported as `false` — no cascade for a no-op discard.
+      const root = await tx
         .prepare(`DELETE FROM ${TABLE} WHERE id = ? AND status <> 'running'`)
         .run([id]);
 
-      if (result.changes === 0) {
+      if (root.changes === 0) {
         return false;
       }
 
-      // Re-evaluate this job's dependents BEFORE sweeping the edges that name it:
-      // the release reads the dependents through the `depends_on_id = id` edges,
-      // and the just-deleted prerequisite row no longer joins, so a dependent
-      // whose only remaining unsettled prerequisite was this one is released
-      // rather than stranded `blocked` forever. (`complete` only ever fires the
-      // release, and a discarded prerequisite never completes — this is the
-      // missing trigger.) Run it on `tx` so it stays inside this transaction.
-      await this.releaseReadyDependents(id, tx);
+      // Cascade forward: `frontier` holds just-deleted jobs whose `blocked`
+      // dependents still need discarding.
+      const frontier = [id];
 
-      // Sweep the edges that named this job on either side, so a discarded job
-      // leaves no dangling dependency that could block a sibling forever.
-      await tx
-        .prepare(`DELETE FROM ${DEPS_TABLE} WHERE job_id = ? OR depends_on_id = ?`)
-        .run([id, id]);
+      while (frontier.length > 0) {
+        const prereqId = frontier.pop() as number;
+
+        // This job's still-`blocked` dependents, read through the edges that
+        // still name it (a dependent that already left `blocked` is left alone).
+        const dependents = (await tx
+          .prepare(
+            `SELECT d.job_id AS job_id
+               FROM ${DEPS_TABLE} d
+               JOIN ${TABLE} j ON j.id = d.job_id
+              WHERE d.depends_on_id = ? AND j.status = 'blocked'`,
+          )
+          .all([prereqId])) as Array<{ job_id: string | number }>;
+
+        // Now that we've read them, sweep the edges naming this job on either
+        // side, so a discarded job leaves no dangling dependency edge.
+        await tx
+          .prepare(`DELETE FROM ${DEPS_TABLE} WHERE job_id = ? OR depends_on_id = ?`)
+          .run([prereqId, prereqId]);
+
+        for (const { job_id } of dependents) {
+          const depId = Number(job_id);
+          // Discard the blocked dependent, then cascade through ITS dependents.
+          await tx.prepare(`DELETE FROM ${TABLE} WHERE id = ?`).run([depId]);
+          frontier.push(depId);
+        }
+      }
 
       return true;
     });

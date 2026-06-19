@@ -1350,13 +1350,11 @@ describe("batches & dependency edges", () => {
     expect(summary.counts).toEqual({ done: 3 });
   });
 
-  it("RELEASES a blocked dependent when its (only) prerequisite is DISCARDED", async () => {
-    // The bug this guards: discard sweeps a prerequisite's edges but only
-    // `complete` ever fired the release, so a discarded prerequisite — which never
-    // completes — stranded its dependent `blocked` forever. Discarding the
-    // prerequisite must now release a dependent whose remaining deps are all clear.
-    queue.define("after", () => {});
-
+  it("CASCADE-DISCARDS a blocked dependent when its prerequisite is discarded", async () => {
+    // Discarding a prerequisite a blocked dependent was waiting on means that
+    // dependent will never get its input — so it is discarded too. Both other
+    // answers were shipped and caught in review: leaving it `blocked` forever
+    // strands it; releasing it runs it against output that never existed.
     const { id, jobIds } = await queue.enqueueBatch("pipeline", [
       { name: "prereq" },
       { name: "after", dependsOn: [0] },
@@ -1364,38 +1362,77 @@ describe("batches & dependency edges", () => {
 
     expect((await queue.find(jobIds[1]!))?.status).toBe("blocked");
 
-    // Discard the (blocked-on) prerequisite. Its dependent's last unsettled
-    // prerequisite is now gone → it is RELEASED to `ready`, not stranded.
+    // Discard the prerequisite → its blocked dependent is cascade-discarded.
     expect(await queue.discard(jobIds[0]!)).toBe(true);
-    expect((await queue.find(jobIds[1]!))?.status).toBe("ready");
+    expect(await queue.find(jobIds[1]!)).toBeNull();
 
-    // It is genuinely claimable now (the release was real, not cosmetic).
-    expect((await queue.runOnce())?.job.name).toBe("after");
-    expect((await queue.find(jobIds[1]!))?.status).toBe("done");
-
-    // The batch is no longer permanently pending: its one surviving job is done.
+    // Nothing is claimable, and the now-empty batch is truthfully `pending`.
+    expect(await queue.runOnce()).toBeNull();
     const summary = await queue.batch(id);
-    expect(summary.counts).toEqual({ done: 1 });
+    expect(summary.counts).toEqual({});
+    expect(summary.state).toBe("pending");
   });
 
-  it("releases a fan-in dependent only when its LAST prerequisite is discarded", async () => {
-    // c depends on a AND b. Discarding a alone must NOT release c (b is still
-    // pending); discarding b too — c's last remaining prerequisite — releases it.
-    queue.define("c", () => {});
-
+  it("cascade-discards a fan-in dependent as soon as ANY prerequisite is discarded", async () => {
+    // c depends on a AND b. Discarding a alone — one of c's prerequisites — means
+    // c can never have a's output, so c is discarded at once, not kept waiting for b.
     const { jobIds } = await queue.enqueueBatch("fanin", [
       { name: "a" },
       { name: "b" },
       { name: "c", dependsOn: [0, 1] },
     ]);
 
-    // Discard a: c still has an unsettled prerequisite (b) → stays blocked.
     expect(await queue.discard(jobIds[0]!)).toBe(true);
-    expect((await queue.find(jobIds[2]!))?.status).toBe("blocked");
+    expect(await queue.find(jobIds[2]!)).toBeNull();
+  });
 
-    // Discard b — c's last prerequisite. Now c is released.
-    expect(await queue.discard(jobIds[1]!)).toBe(true);
-    expect((await queue.find(jobIds[2]!))?.status).toBe("ready");
+  it("cascade-discards transitively down a dependency chain", async () => {
+    // a ← b ← c. Discarding the root a discards b (blocked on a) and, in turn,
+    // c (blocked on b) — the whole downstream chain.
+    const { jobIds } = await queue.enqueueBatch("chain", [
+      { name: "a" },
+      { name: "b", dependsOn: [0] },
+      { name: "c", dependsOn: [1] },
+    ]);
+
+    expect(await queue.discard(jobIds[0]!)).toBe(true);
+    expect(await queue.find(jobIds[1]!)).toBeNull();
+    expect(await queue.find(jobIds[2]!)).toBeNull();
+  });
+
+  it("cascade-discards a diamond dependent exactly once", async () => {
+    // d depends on b AND c, both of which depend on a. Discarding a cascades to
+    // b and c, and d (reachable two ways) is discarded once — the `status` JOIN
+    // stops returning d after the first delete.
+    const { jobIds } = await queue.enqueueBatch("diamond", [
+      { name: "a" },
+      { name: "b", dependsOn: [0] },
+      { name: "c", dependsOn: [0] },
+      { name: "d", dependsOn: [1, 2] },
+    ]);
+
+    expect(await queue.discard(jobIds[0]!)).toBe(true);
+    expect(await queue.find(jobIds[1]!)).toBeNull();
+    expect(await queue.find(jobIds[2]!)).toBeNull();
+    expect(await queue.find(jobIds[3]!)).toBeNull();
+  });
+
+  it("leaves an already-released dependent untouched when a settled prerequisite is discarded", async () => {
+    // a ← b. a completes, so b releases to `ready`. Discarding the now-`done` a is
+    // just cleanup: b already has a's output, so it is NOT cascade-discarded.
+    queue.define("a", () => {});
+
+    const { jobIds } = await queue.enqueueBatch("settled", [
+      { name: "a" },
+      { name: "b", dependsOn: [0] },
+    ]);
+
+    expect((await queue.runOnce())?.job.name).toBe("a");
+    expect((await queue.find(jobIds[1]!))?.status).toBe("ready");
+
+    // Discard the settled prerequisite — b stays `ready`, not cascade-discarded.
+    expect(await queue.discard(jobIds[0]!)).toBe(true);
+    expect((await queue.find(jobIds[1]!))?.status).toBe("ready");
   });
 
   it("reports an all-discarded batch as `pending`, never a false `completed`", async () => {
