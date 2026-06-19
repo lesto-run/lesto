@@ -137,6 +137,7 @@ describe("scaffold", () => {
       "@lesto/ui",
       "@lesto/runtime",
       "preact",
+      "preact-render-to-string",
       "react",
       "react-dom",
       "better-sqlite3",
