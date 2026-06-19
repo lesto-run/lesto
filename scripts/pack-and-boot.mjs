@@ -50,10 +50,15 @@ mkdirSync(vendor);
 // 2. Pack each into the vendor dir. `bun pm pack` rewrites `workspace:*` → the exact
 //    version in the emitted tarball, so each tarball is self-describing like a publish.
 for (const dir of publicDirs) {
-  execFileSync("bun", ["pm", "pack", "--destination", vendor], {
-    cwd: join(PACKAGES, dir),
-    stdio: "pipe",
-  });
+  try {
+    // stdout quiet, but let bun's stderr through so a pack failure names the cause.
+    execFileSync("bun", ["pm", "pack", "--destination", vendor], {
+      cwd: join(PACKAGES, dir),
+      stdio: ["ignore", "ignore", "inherit"],
+    });
+  } catch (error) {
+    throw new Error(`bun pm pack failed for packages/${dir}`, { cause: error });
+  }
 }
 
 const tarballs = readdirSync(vendor).filter((file) => file.endsWith(".tgz"));
@@ -61,15 +66,41 @@ if (tarballs.length !== publicDirs.length) {
   throw new Error(`packed ${tarballs.length} tarballs, expected ${publicDirs.length}`);
 }
 
-// 3. Map every packaged name → its tarball, read from the tarball's own package.json
-//    (robust to scope/filename mangling), to become the install `overrides`.
+// 3. Map every packaged name → its tarball (read from the tarball's own package.json,
+//    robust to scope/filename mangling) to become the install `overrides`, while
+//    recording each packed version + every `@lesto/*` cross-reference for the check below.
 const overrides = {};
+const packedVersion = {};
+const crossRefs = [];
 for (const tgz of tarballs) {
-  const manifest = execFileSync("tar", ["-xzOf", join(vendor, tgz), "package/package.json"], {
-    encoding: "utf8",
-  });
+  const meta = JSON.parse(
+    execFileSync("tar", ["-xzOf", join(vendor, tgz), "package/package.json"], { encoding: "utf8" }),
+  );
 
-  overrides[JSON.parse(manifest).name] = `file:${join(vendor, tgz)}`;
+  overrides[meta.name] = `file:${join(vendor, tgz)}`;
+  packedVersion[meta.name] = meta.version;
+
+  for (const [dep, range] of Object.entries({ ...meta.dependencies, ...meta.peerDependencies })) {
+    if (dep.startsWith("@lesto/")) crossRefs.push({ from: meta.name, dep, range });
+  }
+}
+
+// Every `@lesto/*` cross-reference must name a version we actually packed. A stale ref
+// (e.g. a published `@lesto/cloudflare` pinning `@lesto/pg@0.0.0` because bun.lock wasn't
+// regenerated after a version bump) 404s from the registry for a real outsider — but the
+// `overrides` below force the whole graph onto local tarballs, MASKING that 404 here. So
+// assert it directly: an exact `@lesto/*` version reference must equal the packed version.
+const stale = crossRefs.filter(
+  ({ dep, range }) =>
+    packedVersion[dep] !== undefined && /^\d/.test(range) && range !== packedVersion[dep],
+);
+if (stale.length > 0) {
+  throw new Error(
+    "stale @lesto/* version references (regenerate bun.lock after a version bump):\n" +
+      stale
+        .map(({ from, dep, range }) => `  ${from} → ${dep}@${range} (packed ${packedVersion[dep]})`)
+        .join("\n"),
+  );
 }
 
 // 4. Scaffold through the `create-lesto` bin UNDER NODE (its jiti shim) — half the proof:
@@ -92,6 +123,17 @@ for (const dep of Object.keys(appManifest.dependencies ?? {})) {
   if (dep in overrides) appManifest.dependencies[dep] = overrides[dep];
 }
 appManifest.overrides = overrides;
+
+// Every direct `@lesto/*` dep must now be a tarball `file:` spec. A future scaffold dep on
+// a package missing from the public closure would otherwise be left at its `^0.x` range and
+// 404 at install — fail HERE with a clear name instead of a buried npm error.
+const unpinned = Object.entries(appManifest.dependencies ?? {})
+  .filter(([dep, spec]) => dep.startsWith("@lesto/") && !String(spec).startsWith("file:"))
+  .map(([dep]) => dep);
+if (unpinned.length > 0) {
+  throw new Error(`scaffold @lesto/* deps missing from the packed closure: ${unpinned.join(", ")}`);
+}
+
 writeFileSync(appManifestPath, `${JSON.stringify(appManifest, null, 2)}\n`);
 
 console.log("[pack-and-boot] npm install (node) against the tarballs…");
