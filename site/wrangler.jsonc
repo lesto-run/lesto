@@ -1,0 +1,23 @@
+{
+	// Hand-authored, not generated. `@lesto/cloudflare`'s `wranglerConfig` models
+	// an app with a dynamic zone fronting its assets, and refuses a plan with no
+	// dynamic zone (CLOUDFLARE_NO_DYNAMIC_ZONE). This site has none: it is fully
+	// prerendered, and the Worker exists only to serve those static files and
+	// render a 404 for a miss. See docs/plans/docs-site.md and the README runbook.
+	"name": "lesto-docs",
+	"main": "worker.ts",
+	"compatibility_date": "2026-06-01",
+	// Backstop for any node:* surface the assets adapter's transitive imports
+	// touch; the Worker itself runs on Web APIs (crypto, TextEncoder, fetch).
+	"compatibility_flags": [
+		"nodejs_compat",
+	],
+	// The prerendered docs (`bun run build.ts` → out/docs). Cloudflare serves a
+	// matching file directly (cached at the edge, no isolate); a miss falls
+	// through to `worker.ts`, which renders the 404. Default `html_handling`
+	// resolves clean URLs — `/quickstart` → `quickstart/index.html`.
+	"assets": {
+		"directory": "./out/docs",
+		"binding": "ASSETS",
+	},
+}

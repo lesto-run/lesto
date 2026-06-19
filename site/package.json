@@ -1,0 +1,26 @@
+{
+  "name": "@lesto/site",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Lesto documentation site — a static, prerendered Lesto app whose pages are Markdown files rendered by @lesto/content-* at build time and served from Cloudflare's static-asset edge.",
+  "type": "module",
+  "scripts": {
+    "dev": "lesto dev",
+    "build": "bun run build.ts",
+    "deploy": "bun run build.ts && wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/cloudflare": "workspace:*",
+    "@lesto/content-core": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/sites": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "better-sqlite3": "^11.10.0",
+    "react": "^19",
+    "react-dom": "^19",
+    "zod": "^4.0.0"
+  }
+}

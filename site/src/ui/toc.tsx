@@ -1,0 +1,33 @@
+/**
+ * The on-page table of contents — the right rail.
+ *
+ * Built straight from the heading outline `@lesto/content-markdown` extracted
+ * while rendering the page, so it never re-parses the HTML. Each heading already
+ * carries the `slug` that the renderer set as the element's `id`, so the links
+ * are plain in-page anchors. We show H2s and H3s; H1 is the page title, and
+ * deeper levels would crowd the rail. The rail is hidden below 1024px (see the
+ * stylesheet), so it renders nothing rather than empty chrome when there is
+ * nothing worth linking to.
+ */
+
+import type { ReactElement } from "react";
+
+import type { DocHeading } from "../content";
+
+export function TableOfContents({ headings }: { headings: readonly DocHeading[] }): ReactElement | null {
+  const shown = headings.filter((h) => h.depth === 2 || h.depth === 3);
+  if (shown.length === 0) return null;
+
+  return (
+    <nav className="docs-toc" aria-label="On this page">
+      <p className="toc-title">On this page</p>
+      <ul>
+        {shown.map((h) => (
+          <li key={h.slug} className={`depth-${h.depth}`}>
+            <a href={`#${h.slug}`}>{h.text}</a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}

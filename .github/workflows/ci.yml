@@ -74,6 +74,16 @@ jobs:
       - name: Test (examples gallery)
         run: bun run examples:test
 
+      # The documentation site (site/) is a Lesto app built on @lesto/content-*.
+      # Like the examples it is out of the coverage gate (it lives outside
+      # packages/), so run its tests here — and prove the static build, since the
+      # site is not "done" until `build.ts` prerenders every Markdown page to HTML.
+      - name: Test (docs site)
+        run: bun run --filter '@lesto/site' test
+
+      - name: Build (docs site)
+        run: bun run --filter '@lesto/site' build
+
       - name: Format check
         run: bun run ws:format:check
 

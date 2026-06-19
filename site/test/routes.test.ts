@@ -1,0 +1,54 @@
+/**
+ * Every doc renders as a page; an unknown path does not.
+ *
+ * Boots the real app and drives `app.handle` — the exact code path a request
+ * (and the static prerender) takes — to prove each content route answers 200
+ * with its title, the sidebar nav, and the rendered body, and that an
+ * unregistered path is a 404.
+ */
+
+import { createApp } from "@lesto/kernel";
+import type { App } from "@lesto/kernel";
+import { beforeAll, describe, expect, it } from "vitest";
+
+import appConfig from "../lesto.app";
+import { loadDocs } from "../src/content";
+import { text } from "./support";
+
+let app: App;
+
+beforeAll(async () => {
+  app = await createApp(appConfig);
+});
+
+describe("doc routes", () => {
+  it("answers every content route with 200 and its rendered chrome", async () => {
+    for (const doc of await loadDocs()) {
+      const response = await app.handle("GET", doc.route);
+      const html = await text(response);
+
+      expect(response.status).toBe(200);
+      expect(html).toContain(`${doc.title} · Lesto`); // the <title>
+      expect(html).toContain("docs-sidebar"); // the layout/page chrome
+      expect(html).toContain("docs-article");
+    }
+  });
+
+  it("highlights code blocks on a page that has them", async () => {
+    const html = await text(await app.handle("GET", "/batteries/data"));
+
+    expect(html).toContain("data-rehype-pretty-code-figure");
+  });
+
+  it("marks the current page active in the sidebar", async () => {
+    const html = await text(await app.handle("GET", "/quickstart"));
+
+    expect(html).toContain('class="active"');
+  });
+
+  it("returns 404 for a path that is not a doc", async () => {
+    const response = await app.handle("GET", "/does/not/exist");
+
+    expect(response.status).toBe(404);
+  });
+});
