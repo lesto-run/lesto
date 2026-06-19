@@ -13,6 +13,38 @@ the dated JSON beside this file.
 | 2026-06-16 (post Waves 0–5) | 6.8/10 | +0.3 (from 6.5) | `lesto deploy` is still a file copy (never invokes `wrangler deploy`; `remoteReleaseStore` unwired) + secure defaults opt-in, not kernel-enforced — structural | Add `server.maxConnections` cap (`server.ts`, S) |
 | 2026-06-18 (§C in-flight) | 7.3/10 | +0.5 (from 6.8) | Bus-factor-1 + unpublished 0.x (~10-day history) — structural; AND local 100%-gate non-reproducible (better-sqlite3 ABI 115-vs-127 → 71/71 db tests red off-CI) | Pin/rebuild native sqlite ABI so `ws:test` is green locally (`sqlite-drivers.ts` + root postinstall, S) |
 | 2026-06-19 (§C W3 landed) | 8.3/10 | +1.0 (from 7.3) | Adoption-blocked: all 60 pkgs `private:true@0.0.0`, unpublished, bus-factor-1, ~10-day history — structural (publish-day) | Delete empty `packages/rbac` shell + `config`/`hooks` placeholder dirs (S) |
+| 2026-06-19 (run 2, fruit + de-privatize) | 8.4/10 | +0.1 (from 8.3) | The `.ts` bin can't run under `npm create`/`npx` (no node TS loader) — the one hard launch blocker; + bus-factor-1, unpublished, zero external soak | Make the CLI/`create-lesto` bin node-runnable (compiled JS bin or `tsx` shebang), then prove `npx create-lesto` (M) |
+
+## 2026-06-19 (run 2) — 8.4/10 (fruit 1–5 + publish-day de-privatization; prev 8.3)
+
+Calibrated, not averaged (dimension mean ≈8.6). 7-agent run on the **clean** tree at `79ac991`.
+The 8.3 run's named #1 blocker — "all 60 packages `private:true@0.0.0`, unpublished" — is now
+**half-cleared on disk**: the 28-package publish closure **+ `create-lesto`** are de-privatized at
+`version 0.1.0` (`publishConfig.access:public`, `files:["src"]`, `repository`→`lesto-run/lesto`,
+content-* "Docks" metadata reconciled — `982a62d`/`85ad687`), and the npm name gate is verified
+free (`E404`). Low-hanging fruit 1–5 also landed (`9057970` env timeouts, `5bec1ee` content-mcp
+flake, `b40ecc9` webhooks `nodePinningFetch` TOCTOM closure, `cb96691` CODEOWNERS; the empty
+`rbac`/`config`/`hooks` were untracked → already clean). Dimension moves since 8.3:
+**security-wiring 8→8.5** (empty `rbac` shell deleted, folded into `@lesto/authz`; webhook tests
+38→55), **observability/deploy 8.5→9**, **maturity/CI 7.5→8** (de-privatized surface + CODEOWNERS);
+crash-safety **9**, data-layer **9**, framework-correctness **9** hold.
+
+Why only +0.1 to 8.4: the de-privatization is metadata, not *proof*. The judge surfaced **one hard
+launch blocker that publishing would otherwise expose**: every package ships `.ts` and the
+`create-lesto`/`@lesto/cli` `bin` points at `./src/bin.ts`, which `npm create`/`npx` cannot run
+under node without a TS loader — so the entrypoint and CLI are **non-functional for an external
+consumer** until a compiled/loader bin lands. Below that, the cap is unchanged and maturity-shaped:
+bus-factor-1, ~312 commits / 10-day history, nothing published, zero external/production soak;
+pg pooling only proven in gated CI, never under real contention.
+
+Fruit ceiling: **~8.6**. Judge's call: **pivot to a short launch-readiness phase — do NOT keep
+picking generic fruit.** The heavy dimensions (crash-safety/security/data) are already 9/8.5 and
+verified, so the fruit list is thin and capped at ~8.6. The keystone is the **`.ts`-bin fix → prove
+`npx`/`lesto` in a clean node sandbox → flip `RELEASE_ENABLED` → publish `0.1.0` → one external-consumer
+smoke test**. That publish-and-prove phase (then a real multi-worker pg / second-author / adoption
+soak) is the only path into the 9+ band — what caps the repo now is unproven/unpublished maturity,
+not missing architecture. The non-bin fruit (Node-22 `.nvmrc` enforcement, the content-mcp flake,
+content-core NaN guard, CSRF opt-in doc nudge) are a worthwhile sub-day cleanup in passing, but polish.
 
 ## 2026-06-19 — 8.3/10 (§C Wave 3 landed; prev 7.3)
 
