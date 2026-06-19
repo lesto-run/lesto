@@ -20,7 +20,7 @@
  */
 
 import { Registry } from "@lesto/ui";
-import { hydrateDocumentIslands } from "@lesto/ui/client";
+import { enableSoftNav, hydrateDocumentIslands } from "@lesto/ui/client";
 import { startBrowserRum } from "@lesto/observability/rum";
 
 import AccountIsland from "./app/islands/account";
@@ -37,6 +37,14 @@ const registry = new Registry()
   .defineClient(DeferredPanel.island);
 
 hydrateDocumentIslands(registry);
+
+// Client-side soft navigation (ADR 0024): upgrade in-app `<Link>` clicks to a
+// fetch-and-swap over the SAME registry, so a swapped-in page's islands re-hydrate
+// with these exact components. A `<Link>` is a real `<a>`, so with no JS (or before
+// this loads) every link still does an ordinary navigation — soft nav is a pure
+// enhancement. The file-routed gallery (`/lab/gallery`, ADR 0023) is the visible
+// proof: clicking a listing swaps in its detail page without a full reload.
+enableSoftNav(registry);
 
 // Browser RUM (ARCHITECTURE.md §7): read the SSR-injected `lesto-traceparent` meta,
 // adopt the server trace id, and POST navigation/resource/web-vital spans under it

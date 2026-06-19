@@ -109,6 +109,20 @@ export type {
   PropertyMeta,
 } from "./metadata";
 
+// Soft navigation's authoring half (ADR 0024): `<Link>` is an ordinary `<a>` that
+// the client runtime upgrades to a fetch-and-swap when present, and a normal
+// navigation when not — so it is isomorphic (renders the same anchor on server and
+// client) and lives in this core barrel. It pulls only the DOM-FREE contract
+// (`./softnav-contract`: the opt-out attribute + the click/anchor shapes both
+// halves read), never the browser runtime — so a server build that imports
+// `@lesto/ui` for `<Link>` drags in no `fetch`/`DOMParser`/`document`. The RUNTIME
+// half (`enableSoftNav` + its injection seams) is browser-only and lives behind
+// `@lesto/ui/client`.
+export { Link } from "./link";
+export type { LinkProps } from "./link";
+export { eligibleAnchor, RELOAD_ATTR } from "./softnav-contract";
+export type { SoftNavAnchor, SoftNavClick } from "./softnav-contract";
+
 // The hydration runtime and bfcache-safe lifecycle are browser-only (they touch
 // `document`/`window`), so they live behind the `@lesto/ui/client` subpath —
 // server-side importers of `@lesto/ui` never pull DOM code into a build without

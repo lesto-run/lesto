@@ -30,3 +30,25 @@ export type {
   PageLifecycleHandlers,
   StopLifecycle,
 } from "./bfcache";
+
+// Client-side soft navigation (ADR 0024): the browser runtime half of `<Link>`.
+// `enableSoftNav` installs the delegated click listener that fetches + swaps the
+// next page, re-hydrates its islands, and wires Back/Forward — all over injected
+// seams, so it lives behind the DOM-only `/client` subpath alongside the hydration
+// runtime it composes. `<Link>` and the DOM-free contract ship from the isomorphic
+// barrel; everything that touches `fetch`/`document`/`history` is here.
+export { enableSoftNav } from "./softnav";
+export type {
+  DisableSoftNav,
+  FetchedPage,
+  PageFetcher,
+  PageSwapper,
+  PopStateTarget,
+  Rehydrate,
+  ScrollPosition,
+  SoftNavEvent,
+  SoftNavHistory,
+  SoftNavKind,
+  SoftNavOptions,
+  SoftNavWindow,
+} from "./softnav";
