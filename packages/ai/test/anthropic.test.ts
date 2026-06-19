@@ -179,6 +179,25 @@ describe("parseStream", () => {
     expect(deltas).toEqual(["joined"]);
   });
 
+  it("flushes a final text delta the stream closed without a trailing blank line", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    // The last frame has NO terminating `\n\n` — a server that closes right after the
+    // delta. Without a post-loop flush the buffered final token is silently dropped.
+    const frames = [
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"first"}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"last"}}',
+    ];
+
+    const deltas: string[] = [];
+
+    for await (const delta of model.parseStream(sseResponse(frames))) {
+      deltas.push(delta.text);
+    }
+
+    expect(deltas).toEqual(["first", "last"]);
+  });
+
   it("ignores a [DONE] sentinel and a non-text delta", async () => {
     const model = createAnthropic({ apiKey: "sk-test" });
 

@@ -147,7 +147,7 @@ The thing that separates a toy from a shippable AI feature: a way to *score* out
 
 Because the decision is **IN**, this ADR lands with a minimal spike that proves Increments 1–3's pure core:
 
-- `packages/ai/` as a **PREVIEW, gate-excluded** package — **no `test:cov` script**, PREVIEW noted in `package.json` `description`, mirroring `@lesto/content-embeddings`'s exclusion (the gate keys on the missing `test:cov`, line 35 of `scripts/coverage-gate.ts`).
+- `packages/ai/` as a **PREVIEW, gate-excluded** package — **no `test:cov` script**, PREVIEW noted in `package.json` `description`. The gate keys on a missing `test:cov` (line 35 of `scripts/coverage-gate.ts`) — the same lever `@lesto/integration` and `@lesto/e2e` use. (Note: `@lesto/content-embeddings` is excluded by a *different* path — the `content-` directory prefix — and still declares `test:cov`; it is not this precedent.)
 - **Zero runtime dependencies** beyond `@lesto/errors` (workspace). The transport is injected; the default is global `fetch`. No Anthropic SDK, no `zod`, no `ai`.
 - `generateText` + `streamText` over the Anthropic Messages API through an injected transport; a bounded `runAgent` tool loop; a `VectorStore` interface with an in-memory stub demonstrating one RAG retrieval; an `Eval`/guardrail hook.
 - vitest tests for the pure core (message assembly, response parsing, SSE stream parsing, the agent/tool loop, the RAG flow, the guardrail refusal) driven entirely by a fake transport — no network.
@@ -179,7 +179,7 @@ The chain is **1 → 2 → 4** (the loop and the LLM-judge eval both stand on th
 - The "AI-native" claim becomes true in *both* senses: agents operate Lesto (MCP) **and** Lesto builds AI features (`@lesto/ai`).
 - The cost is bounded and on-thesis: a `fetch`-thin transport seam over a substrate (queue, durable stores, db, edge) Lesto already ships. No new vendor lock-in, edge-portable by construction.
 - The dialect/edge-parity discipline extends to the vector backend exactly as it does to SQL — pgvector local-to-prod, Vectorize on the edge, one interface — so "AI feature works the same on SQLite/Node and Postgres/Workers" stays literally true.
-- PREVIEW keeps the central gate honest: `@lesto/ai` ships experimental, off the 100%-coverage gate (no `test:cov`), with its pure core fully tested anyway — the same posture `@lesto/content-embeddings` holds.
+- PREVIEW keeps the central gate honest: `@lesto/ai` ships experimental, off the 100%-coverage gate (no `test:cov`), with its pure core fully tested anyway — the same posture `@lesto/integration` and `@lesto/e2e` hold.
 
 ## Open questions (resolve during the Increment 1 spike / follow-ons)
 

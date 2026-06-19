@@ -10,10 +10,39 @@
 /** A conversational role. `tool` carries the result of a tool the model asked for. */
 export type Role = "user" | "assistant";
 
-/** A single turn in the conversation, as the caller supplies it. */
+/** A plain text segment of a turn. */
+export interface TextBlock {
+  readonly type: "text";
+  readonly text: string;
+}
+
+/** An assistant's tool request, replayed back so the model sees its own call (carries the id to answer). */
+export interface ToolUseBlock {
+  readonly type: "tool_use";
+  readonly id: string;
+  readonly name: string;
+  readonly input: Record<string, unknown>;
+}
+
+/** The result of a tool, answering a prior {@link ToolUseBlock} by its `toolUseId`. */
+export interface ToolResultBlock {
+  readonly type: "tool_result";
+  readonly toolUseId: string;
+  readonly content: string;
+}
+
+/** A structured content block — the form a turn takes once a tool exchange is replayed. */
+export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+
+/**
+ * A single turn in the conversation. Plain `string` content for an ordinary turn;
+ * an array of {@link ContentBlock}s once tools are in play, so the agent loop can
+ * replay the assistant's `tool_use` and answer with a `tool_result` carrying the
+ * matching id — the shape the Anthropic Messages API requires for a tool round-trip.
+ */
 export interface Message {
   readonly role: Role;
-  readonly content: string;
+  readonly content: string | readonly ContentBlock[];
 }
 
 /** A tool call the model emitted on a turn: which tool, the args it chose, and the call id to answer. */

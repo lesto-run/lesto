@@ -42,10 +42,20 @@ describe("runAgent", () => {
     expect(result.steps[0]?.toolResults).toEqual(["sunny, 24C"]);
     expect(result.usage).toEqual({ inputTokens: 7, outputTokens: 11 });
 
-    // The second model call saw the tool result fed back into the conversation.
-    const secondBody = (await requests[1]?.json()) as { messages: { content: string }[] };
-    const lastTurn = secondBody.messages.at(-1);
-    expect(lastTurn?.content).toContain("Result of getWeather: sunny, 24C");
+    // The second model call replays the exchange in the Anthropic wire format: the
+    // assistant's `tool_use` block (carrying its id) followed by a user `tool_result`
+    // answering THAT id — not a prose echo the API would reject.
+    const secondBody = (await requests[1]?.json()) as {
+      messages: { role: string; content: unknown }[];
+    };
+    expect(secondBody.messages.at(-2)).toEqual({
+      role: "assistant",
+      content: [{ type: "tool_use", id: "call-1", name: "getWeather", input: { city: "Rome" } }],
+    });
+    expect(secondBody.messages.at(-1)).toEqual({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "call-1", content: "sunny, 24C" }],
+    });
   });
 
   it("returns immediately when the first turn is plain text", async () => {

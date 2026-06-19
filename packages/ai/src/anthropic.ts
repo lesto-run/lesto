@@ -16,6 +16,7 @@
 import { AiError } from "./errors";
 
 import type {
+  ContentBlock as MessageBlock,
   GenerateOptions,
   GenerateResult,
   LanguageModel,
@@ -68,7 +69,13 @@ export function createAnthropic(config: AnthropicConfig): LanguageModel {
     const payload: Record<string, unknown> = {
       model: options.modelId ?? defaultModelId,
       max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
-      messages: options.messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: options.messages.map((m) => ({
+        role: m.role,
+        // A string turn rides through; a block turn (a replayed tool exchange) is
+        // serialized to the Anthropic content-block wire format, with `tool_use_id`
+        // threaded so the API can pair each result to the call it answers.
+        content: typeof m.content === "string" ? m.content : m.content.map(serializeBlock),
+      })),
       stream,
     };
 
@@ -110,6 +117,18 @@ export function createAnthropic(config: AnthropicConfig): LanguageModel {
     parseResponse,
     parseStream,
   };
+}
+
+/** Serialize one normalized content block to the Anthropic request wire shape. */
+function serializeBlock(block: MessageBlock): Record<string, unknown> {
+  switch (block.type) {
+    case "tool_use":
+      return { type: "tool_use", id: block.id, name: block.name, input: block.input };
+    case "tool_result":
+      return { type: "tool_result", tool_use_id: block.toolUseId, content: block.content };
+    default:
+      return { type: "text", text: block.text };
+  }
 }
 
 /**
@@ -196,6 +215,13 @@ export async function* parseStream(response: Response): AsyncIterable<StreamDelt
       boundary = buffer.indexOf("\n\n");
     }
   }
+
+  // Flush a final frame the stream closed WITHOUT a trailing blank line. The loop
+  // above drained every `\n\n`-terminated frame, so the remainder is at most one last
+  // frame; without this, a terminal `text_delta` with no trailing newline is dropped.
+  buffer += decoder.decode();
+  const last = parseFrame(buffer);
+  if (last !== undefined) yield last;
 }
 
 /**

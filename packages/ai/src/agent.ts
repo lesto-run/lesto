@@ -14,7 +14,7 @@
 import { AiError } from "./errors";
 import { generateText } from "./generate";
 
-import type { LanguageModel, Message, ToolCall, ToolSet, Usage } from "./types";
+import type { ContentBlock, LanguageModel, Message, ToolCall, ToolSet, Usage } from "./types";
 
 export interface RunAgentOptions {
   readonly model: LanguageModel;
@@ -101,10 +101,11 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentResult> {
 
     steps.push({ toolCalls: result.toolCalls, toolResults });
 
-    // Record the assistant's tool request, then the user-role tool answers, so
-    // the next model turn continues from a complete exchange.
-    conversation.push({ role: "assistant", content: result.text });
-    conversation.push({ role: "user", content: formatToolResults(result.toolCalls, toolResults) });
+    // Replay the assistant's tool request as content blocks, then answer each with a
+    // `tool_result` carrying the matching id — the exact shape the Messages API needs
+    // to continue a tool exchange. A plain-text echo here would be rejected by the API.
+    conversation.push({ role: "assistant", content: assistantTurn(result.text, result.toolCalls) });
+    conversation.push({ role: "user", content: toolResultTurn(result.toolCalls, toolResults) });
   }
 
   throw new AiError("AI_MAX_STEPS_EXCEEDED", `Agent did not finish within ${maxSteps} steps.`, {
@@ -122,7 +123,9 @@ async function runTools(calls: readonly ToolCall[], tools: ToolSet): Promise<str
   const results: string[] = [];
 
   for (const call of calls) {
-    const tool = tools[call.name];
+    // Own-property lookup only: a model that hallucinates a tool named `__proto__` or
+    // `constructor` would otherwise resolve a prototype member instead of refusing.
+    const tool = Object.hasOwn(tools, call.name) ? tools[call.name] : undefined;
 
     if (tool === undefined) {
       throw new AiError("AI_TOOL_NOT_FOUND", `Model asked for unregistered tool "${call.name}".`, {
@@ -136,7 +139,26 @@ async function runTools(calls: readonly ToolCall[], tools: ToolSet): Promise<str
   return results;
 }
 
-/** Render the tool results into a single turn the model reads on its next step. */
-function formatToolResults(calls: readonly ToolCall[], results: readonly string[]): string {
-  return calls.map((call, index) => `Result of ${call.name}: ${results[index] ?? ""}`).join("\n");
+/**
+ * Replay the assistant's turn as content blocks: its text (if any) followed by a
+ * `tool_use` block per call. There is always ≥1 tool_use block here (the no-tool
+ * case returned earlier), so the turn is never the empty content the API rejects.
+ */
+function assistantTurn(text: string, calls: readonly ToolCall[]): ContentBlock[] {
+  const blocks: ContentBlock[] = text === "" ? [] : [{ type: "text", text }];
+
+  for (const call of calls) {
+    blocks.push({ type: "tool_use", id: call.id, name: call.name, input: call.input });
+  }
+
+  return blocks;
+}
+
+/** Answer each tool call with a `tool_result` block keyed by the id the API pairs on. */
+function toolResultTurn(calls: readonly ToolCall[], results: readonly string[]): ContentBlock[] {
+  return calls.map((call, index) => ({
+    type: "tool_result",
+    toolUseId: call.id,
+    content: results[index] ?? "",
+  }));
 }
