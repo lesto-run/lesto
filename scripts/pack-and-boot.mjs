@@ -80,25 +80,35 @@ for (const tgz of tarballs) {
   overrides[meta.name] = `file:${join(vendor, tgz)}`;
   packedVersion[meta.name] = meta.version;
 
-  for (const [dep, range] of Object.entries({ ...meta.dependencies, ...meta.peerDependencies })) {
-    if (dep.startsWith("@lesto/")) crossRefs.push({ from: meta.name, dep, range });
+  // Collect every `@lesto/*` cross-reference, flagging OPTIONAL peers — those may
+  // legitimately point at a package outside the published closure (the consumer opts in).
+  for (const [dep, range] of Object.entries(meta.dependencies ?? {})) {
+    if (dep.startsWith("@lesto/")) crossRefs.push({ from: meta.name, dep, range, optional: false });
+  }
+  for (const [dep, range] of Object.entries(meta.peerDependencies ?? {})) {
+    if (dep.startsWith("@lesto/")) {
+      const optional = meta.peerDependenciesMeta?.[dep]?.optional === true;
+      crossRefs.push({ from: meta.name, dep, range, optional });
+    }
   }
 }
 
-// Every `@lesto/*` cross-reference must name a version we actually packed. A stale ref
-// (e.g. a published `@lesto/cloudflare` pinning `@lesto/pg@0.0.0` because bun.lock wasn't
-// regenerated after a version bump) 404s from the registry for a real outsider — but the
-// `overrides` below force the whole graph onto local tarballs, MASKING that 404 here. So
-// assert it directly: an exact `@lesto/*` version reference must equal the packed version.
-const stale = crossRefs.filter(
-  ({ dep, range }) =>
-    packedVersion[dep] !== undefined && /^\d/.test(range) && range !== packedVersion[dep],
+// Every NON-OPTIONAL `@lesto/*` cross-reference must name a package we packed, at the exact
+// version we packed it: a ref to a package outside the public closure won't be published
+// (404 for an outsider), and a stale exact version (e.g. a published `@lesto/cloudflare`
+// pinning `@lesto/pg@0.0.0` because bun.lock wasn't regenerated) 404s too. The `overrides`
+// below force the whole graph onto local tarballs, MASKING both here — so assert directly.
+const bad = crossRefs.filter(
+  ({ dep, range, optional }) =>
+    !optional &&
+    (packedVersion[dep] === undefined ||
+      (/^\d+\.\d+\.\d+/.test(range) && range !== packedVersion[dep])),
 );
-if (stale.length > 0) {
+if (bad.length > 0) {
   throw new Error(
-    "stale @lesto/* version references (regenerate bun.lock after a version bump):\n" +
-      stale
-        .map(({ from, dep, range }) => `  ${from} → ${dep}@${range} (packed ${packedVersion[dep]})`)
+    "unpublishable @lesto/* references (regenerate bun.lock, or a target isn't in the public closure):\n" +
+      bad
+        .map(({ from, dep, range }) => `  ${from} → ${dep}@${range} (packed ${packedVersion[dep] ?? "—"})`)
         .join("\n"),
   );
 }
