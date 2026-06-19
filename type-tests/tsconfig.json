@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  // Inherit the SAME strict bar the packages compile under (tsconfig.base.json:
+  // strict, exactOptionalPropertyTypes, noUncheckedIndexedAccess, …) so a type the
+  // suite pins is checked exactly as a consumer would see it.
+  "extends": "../tsconfig.base.json",
+
+  "compilerOptions": {
+    // A pure type gate — assert types, emit nothing. `tsc -p` here is the check.
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+
+    // The suite's assertions ARE `type _x = Expect<Equal<…>>` aliases: declaring
+    // one and never referencing it is exactly how the check fires (a drift makes
+    // the declaration itself a TS2344 error). The base's `noUnusedLocals` /
+    // `noUnusedParameters` would reject that pattern as dead code, so relax them
+    // HERE only — every other strictness flag (the ones that make the assertions
+    // meaningful) is inherited unchanged from tsconfig.base.json.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+
+    // `@ts-expect-error` only fires when the line is actually checked, so the
+    // fixtures must compile. They reference DOM/`fetch`/`location` through
+    // `@lesto/client`, so pull the DOM lib in alongside the base ES2023.
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+
+    // Resolve the differentiator packages straight from their source `index.ts`
+    // WITHOUT a `bun install` (which would mutate the shared lockfile and race the
+    // other agents). The closure is db + client and everything they re-export
+    // through: client → observability + router + errors; db/router → errors.
+    "paths": {
+      "@lesto/db": ["../packages/db/src/index.ts"],
+      "@lesto/client": ["../packages/client/src/index.ts"],
+
+      // `@lesto/client` only consumes `PathParams` from `@lesto/router`, and that
+      // type lives in `router/src/params.ts` (zero `@lesto` deps, pure type-level).
+      // Point at `params.ts` rather than the package `index.ts` ON PURPOSE: the
+      // index also re-exports the file-based-routing surface a SECOND agent is
+      // actively rewriting this wave, and mapping to source makes `tsc` type-check
+      // that WIP file — flaking THIS gate on unrelated in-flight work. Consuming
+      // the stable `params.ts` keeps the client's `PathParams` invariant pinned
+      // without coupling the gate to the router rewrite. (See the FOLLOW-UP in
+      // docs/adr/0026: add router param-type fixtures once that rewrite lands.)
+      "@lesto/router": ["../packages/router/src/params.ts"],
+
+      "@lesto/observability": ["../packages/observability/src/index.ts"],
+      "@lesto/errors": ["../packages/errors/src/index.ts"]
+    }
+  },
+
+  // Only the suite itself — never the package sources (they have their own gate).
+  "include": ["*.ts"]
+}

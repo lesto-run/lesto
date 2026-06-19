@@ -32,6 +32,17 @@ jobs:
       - name: Typecheck
         run: bun run ws:typecheck
 
+      # The end-to-end TYPE-regression gate (board 206e92c6): a zero-dependency
+      # `tsc --noEmit` over `type-tests/` that pins the differentiator's INFERRED
+      # types — `@lesto/db`'s schema-as-value `InferRow`/`InferInsert`/`InferUpdate`
+      # and `@lesto/client`'s contract-typed request/response/mutation shapes. The
+      # 100%-coverage gate above proves the runtime; this proves the types still
+      # hold, so a silent inference drift (a row field widening to `unknown`, a
+      # required insert key going optional) fails the build instead of shipping.
+      # No external dep, no lockfile mutation — just `tsc` over an in-repo assert kit.
+      - name: Type-regression suite
+        run: bun run test:types
+
       - name: Lint
         run: bun run lint
 
