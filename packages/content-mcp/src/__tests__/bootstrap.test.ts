@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,6 +31,35 @@ vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
 
 const PACKAGE_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
+/**
+ * Spy on `process.exit` and expose a promise that resolves once it has been
+ * called twice (one per signal). The signal handlers are async — they close the
+ * server before exiting — so the test must await the REAL completion rather than
+ * a fixed sleep. A prior `setTimeout(r, 1)` flaked under parallel-coverage CPU
+ * oversubscription, where 1ms was not enough for the async close→exit chain to
+ * run; this waits for the actual second exit, deterministic under any load.
+ */
+function spyOnDoubleExit(): { spy: MockInstance; calledTwice: Promise<void> } {
+  // Assigned synchronously by the Promise executor below (definite assignment).
+  let markCalledTwice!: () => void;
+
+  const calledTwice = new Promise<void>((resolve) => {
+    markCalledTwice = resolve;
+  });
+
+  let count = 0;
+
+  const spy = vi.spyOn(process, "exit").mockImplementation((() => {
+    count += 1;
+
+    if (count === 2) markCalledTwice();
+
+    return undefined;
+  }) as never);
+
+  return { spy, calledTwice };
+}
+
 describe("stdio bootstrap entry points", () => {
   let ctx: TempDirContext;
 
@@ -51,7 +80,7 @@ describe("stdio bootstrap entry points", () => {
   });
 
   it("startMcpServer connects a transport and wires signal handlers that close + exit", async () => {
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const { spy: exitSpy, calledTwice } = spyOnDoubleExit();
     const { startMcpServer } = await import("../server");
 
     await startMcpServer({ cwd: ctx.tempDir });
@@ -60,14 +89,14 @@ describe("stdio bootstrap entry points", () => {
 
     process.emit("SIGINT");
     process.emit("SIGTERM");
-    await new Promise((r) => setTimeout(r, 1));
+    await calledTwice;
 
     expect(exitSpy).toHaveBeenCalledWith(0);
     expect(exitSpy).toHaveBeenCalledTimes(2);
   });
 
   it("startMcpHttpServer connects a transport and wires signal handlers that close + exit", async () => {
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const { spy: exitSpy, calledTwice } = spyOnDoubleExit();
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     // No fetch stub -> Studio health check fails -> server still constructs.
     vi.stubGlobal(
@@ -85,7 +114,7 @@ describe("stdio bootstrap entry points", () => {
 
     process.emit("SIGINT");
     process.emit("SIGTERM");
-    await new Promise((r) => setTimeout(r, 1));
+    await calledTwice;
 
     expect(exitSpy).toHaveBeenCalledWith(0);
     expect(exitSpy).toHaveBeenCalledTimes(2);
