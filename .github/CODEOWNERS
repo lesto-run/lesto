@@ -1,0 +1,41 @@
+# CODEOWNERS — review routing for Lesto.
+#
+# Each line maps a path glob to its default reviewer(s). When "Require review
+# from Code Owners" is enabled in branch protection, a PR touching a matched path
+# auto-requests review from the listed owner and cannot merge without it.
+#
+# PRE-PUBLISH NOTE: `@lesto/core` is a PLACEHOLDER maintainers team. Before you
+# arm branch protection, replace it with a real GitHub org/team (or individual
+# @handles) that exists and has write access — an owner GitHub cannot resolve is
+# silently ignored, so the gate would pass with no review. Until then this file
+# documents intended ownership without blocking the solo maintainer.
+
+# Default owner for everything not matched more specifically below.
+*                           @lesto/core
+
+# --- Security-sensitive surface: changes here warrant extra scrutiny ---
+# The request pipeline, auth/session, and the SSRF/CSRF/CORS/rate-limit
+# batteries. A regression in any of these is a production security incident.
+/packages/kernel/           @lesto/core
+/packages/runtime/          @lesto/core
+/packages/cloudflare/       @lesto/core
+/packages/auth/             @lesto/core
+/packages/identity/         @lesto/core
+/packages/authz/            @lesto/core
+/packages/csrf/             @lesto/core
+/packages/cors/             @lesto/core
+/packages/ratelimit/        @lesto/core
+/packages/webhooks/         @lesto/core
+/SECURITY.md                @lesto/core
+
+# --- Data layer: migrations and adapters are hard to reverse in production ---
+/packages/db/               @lesto/core
+/packages/pg/               @lesto/core
+/packages/migrate/          @lesto/core
+/packages/queue/            @lesto/core
+
+# --- Release & CI plumbing: the publish switch and the green gate ---
+/.github/                   @lesto/core
+/.changeset/                @lesto/core
+/scripts/                   @lesto/core
+/package.json               @lesto/core
