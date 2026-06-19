@@ -80,10 +80,14 @@ export function packageJson(name: string, lestoDep: LestoDepResolver): string {
     dependencies: {
       ...lestoDeps,
       "better-sqlite3": "^11.10.0",
-      // The Preact dialect (`ui.dialect: "preact"`) aliases the island client's
-      // `react` to `preact/compat`, so the app needs `preact` for the ~10 KB
-      // client bundle; `react`/`react-dom` back the React server render.
+      // The Preact dialect (`ui.dialect: "preact"`) renders BOTH halves through
+      // Preact: `preact` aliases the island client's `react` to `preact/compat` for
+      // the ~10 KB bundle, and `preact-render-to-string` is the SERVER renderer
+      // `@lesto/web` loads for that dialect (`@lesto/ui` marks it an optional peer,
+      // so the app that picks the dialect must supply it). `react`/`react-dom` remain
+      // for the JSX runtime the page components compile against.
       preact: "^10.29.2",
+      "preact-render-to-string": "^6",
       react: "^19",
       "react-dom": "^19",
       zod: "^4.0.0",
