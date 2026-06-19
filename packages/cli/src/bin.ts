@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { nodeStaticReader, serve } from "@lesto/runtime";
 import type { LestoAppConfig } from "@lesto/kernel";
 import type { UiDialect } from "@lesto/web";
+import type { TraceSeams } from "@lesto/observability";
 
 import { createNewEntry, runPipeline } from "@lesto/content-core/build";
 import type { RuntimeEntry } from "@lesto/content-core";
@@ -161,12 +162,25 @@ const projectRoot = process.cwd();
 
 const islandsDir = join(projectRoot, ISLANDS_DIR);
 
-const loadApp = async (): Promise<LestoAppConfig> => {
+// A project's `lesto.app.ts` default-exports EITHER a built `LestoAppConfig` or a
+// CONFIG FACTORY `(seams?) => LestoAppConfig | Promise<...>`. The factory shape is
+// what lets a served deploy emit db child-spans: when `serve`/`dev` have an OTLP
+// tracer on, they pass `traces.seams` here, and a factory wires the `db.onQuery`
+// hook into its own `createDb(handle, { onQuery: seams.onQuery })` so a query run
+// during a request parents on the request span. A plain-config export ignores the
+// arg entirely — unchanged, traced or not.
+type AppDefault =
+  | LestoAppConfig
+  | ((seams?: TraceSeams) => LestoAppConfig | Promise<LestoAppConfig>);
+
+const loadApp = async (seams?: TraceSeams): Promise<LestoAppConfig> => {
   const module = (await import(join(process.cwd(), "lesto.app.ts"))) as {
-    default: LestoAppConfig;
+    default: AppDefault;
   };
 
-  return module.default;
+  const exported = module.default;
+
+  return typeof exported === "function" ? exported(seams) : exported;
 };
 
 // True iff the project follows the `app/islands/` convention (ADR 0011); the

@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createTableSql, defineTable, dropTableSql, integer, text } from "@lesto/db";
+import { createDb, createTableSql, defineTable, dropTableSql, integer, text } from "@lesto/db";
 import { currentContext, currentRequestSpan, lesto, runWithContext } from "@lesto/web";
 import { Migrator } from "@lesto/migrate";
 import { contentEntriesMigration } from "@lesto/content-store";
@@ -9,11 +9,12 @@ import type { App, LestoAppConfig, KernelDatabase } from "@lesto/kernel";
 import type { MigrationEntry } from "@lesto/migrate";
 import type { RuntimeEntry } from "@lesto/content-core";
 import type { Server, ServeOptions } from "@lesto/runtime";
+import type { TraceSeams } from "@lesto/observability";
 
 import type { OutputSink, Site } from "@lesto/sites";
 import type { ReleaseStore } from "@lesto/deploy";
 
-import { CliError, parsePort, parseStringFlag, run } from "../src/index";
+import { CliError, parsePort, parseServeLimit, parseStringFlag, run } from "../src/index";
 import type { CliDeps, ReleaseTarget } from "../src/index";
 
 // --- A real-enough app, built over an in-memory better-sqlite3 adapter. ---
@@ -227,6 +228,55 @@ function readinessProbe(serve: ReturnType<typeof fakeServe>): () => Promise<bool
   return health.isReady as () => Promise<boolean>;
 }
 
+// A serve fake that drives the request the way the real runtime does for tracing:
+// mint the request span through the wired tracer, publish it on the context while
+// the app handles the request (so an inline seam parents on it), then end it. The
+// captured app + tracer let a test fire a request and read the resulting spans.
+function tracingServe(): {
+  serve: CliDeps["serve"];
+  request: (method: string, path: string) => Promise<void>;
+} {
+  let captured: { app: App; options: ServeOptions | undefined } | undefined;
+
+  const serve = vi.fn((app: App, options?: ServeOptions): Promise<Server> => {
+    captured = { app, options };
+
+    // Mirror the real runtime: `close` runs the wired `onDrain` (the final flush)
+    // before resolving, so a drain through the shutdown hook ships the buffered
+    // spans exactly as production does.
+    return Promise.resolve({
+      port: 3000,
+      close: () => options?.onDrain?.() ?? Promise.resolve(),
+    });
+  });
+
+  const request = async (method: string, path: string): Promise<void> => {
+    if (captured === undefined) throw new Error("serve was never called");
+
+    const { app, options } = captured;
+    const tracer = options?.tracer;
+
+    // Tracing off: just run the handler, no span context (mirrors the runtime
+    // when no tracer is wired).
+    if (tracer === undefined) {
+      await app.handle(method, path);
+
+      return;
+    }
+
+    // Tracing on: mint the request span, publish it on the context for the
+    // duration of the handler (so `currentRequestSpan` reads it and the query's
+    // `onQuery` seam parents on it), then end it.
+    const span = tracer.startSpan("http.request");
+
+    await runWithContext({ requestId: "req-1", span }, () => app.handle(method, path));
+
+    span.end();
+  };
+
+  return { serve: serve as unknown as CliDeps["serve"], request };
+}
+
 describe("run serve / dev", () => {
   it("serves on the --port flag and prints the listening URL", async () => {
     const serve = fakeServe(8080);
@@ -349,6 +399,124 @@ describe("run serve / dev", () => {
     const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
     await drain();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  // --- Task 1: DB query child-spans on the SERVED path ---
+  //
+  // A project whose `lesto.app.ts` default-exports a config FACTORY threads the
+  // tracer's `db.onQuery` seam into its own `createDb(handle, { onQuery })`. These
+  // pin that `runServe` hands the seams to `loadApp` when tracing is on (so a query
+  // run during a request becomes a `db.query` CHILD span of the request span), and
+  // hands NOTHING when tracing is off (so the app runs untraced — zero overhead).
+
+  // A `loadApp` factory mirroring the production path: it receives the trace seams
+  // and wires them into `createDb(handle, { onQuery })`, so a `/posts` request runs
+  // a query whose span must parent on the request span. It records which seams it
+  // was called with, so a test can assert the off-path passes none.
+  function tracingLoadApp(): {
+    loadApp: (seams?: TraceSeams) => Promise<LestoAppConfig>;
+    seamsSeen: Array<TraceSeams | undefined>;
+  } {
+    const seamsSeen: Array<TraceSeams | undefined> = [];
+
+    const loadApp = (seams?: TraceSeams) => {
+      seamsSeen.push(seams);
+
+      const handle = adapt(database);
+      // The seam-wired db — the SAME shape estate's `buildIdentity` builds.
+      const db = createDb(handle, seams === undefined ? {} : { onQuery: seams.onQuery });
+
+      const app = lesto()
+        .get("/posts", async (c) => {
+          const rows = await db.raw<{ id: number; title: string }>("SELECT id, title FROM posts");
+
+          return c.json({ posts: rows });
+        })
+        .get("/ping", (c) => c.json({ ok: true }));
+
+      return Promise.resolve<LestoAppConfig>({ db: handle, app, migrations });
+    };
+
+    return { loadApp, seamsSeen };
+  }
+
+  it("emits a db.query CHILD span of the request span on the served path when tracing is on", async () => {
+    // Capture the OTLP export the drain flush POSTs, so the span tree can be read
+    // back exactly as a collector would receive it.
+    const bodies: string[] = [];
+    const fetchFn = ((_url: string, init?: { body?: string }) => {
+      if (init?.body !== undefined) bodies.push(init.body);
+
+      return Promise.resolve({ ok: true, status: 200 } as Response);
+    }) as unknown as typeof fetch;
+
+    vi.stubGlobal("fetch", fetchFn);
+
+    try {
+      const { loadApp, seamsSeen } = tracingLoadApp();
+      const { serve, request } = tracingServe();
+      const installShutdown = vi.fn();
+
+      await run(
+        ["serve"],
+        depsWith({
+          serve,
+          loadApp,
+          installShutdown,
+          env: { LESTO_OTLP_URL: "http://collector:4318/v1/traces", LESTO_OTLP_SERVICE: "served" },
+        }),
+      );
+
+      // `runServe` handed the live seams to the app factory (not undefined).
+      expect(seamsSeen).toHaveLength(1);
+      expect(seamsSeen[0]).toBeDefined();
+
+      // Fire the request that runs a query, then drain (the drain flush ships the
+      // buffered spans through the stubbed fetch).
+      await request("GET", "/posts");
+
+      const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
+      await drain();
+
+      // Parse the exported spans out of the OTLP body the exporter POSTed.
+      expect(bodies).toHaveLength(1);
+
+      const payload = JSON.parse(bodies[0]!) as {
+        resourceSpans: {
+          scopeSpans: { spans: { name: string; spanId: string; parentSpanId?: string }[] }[];
+        }[];
+      };
+      const spans = payload.resourceSpans[0]!.scopeSpans[0]!.spans;
+
+      const requestSpan = spans.find((s) => s.name === "http.request");
+      const querySpan = spans.find((s) => s.name === "db.query");
+
+      expect(requestSpan).toBeDefined();
+      expect(querySpan).toBeDefined();
+
+      // THE ACCEPTANCE: the query span is a CHILD of the request span — the deep
+      // request→query tree on the served path, not just the integration harness.
+      expect(querySpan?.parentSpanId).toBe(requestSpan?.spanId);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("passes no seams to loadApp and emits no db.query span when tracing is off", async () => {
+    const { loadApp, seamsSeen } = tracingLoadApp();
+    const { serve, request } = tracingServe();
+
+    await run(["serve"], depsWith({ serve, loadApp, env: {} }));
+
+    // The factory was called with NO seams — the app is untraced, zero overhead.
+    expect(seamsSeen).toEqual([undefined]);
+
+    // The request still runs its query; with no seam wired it emits no span. No
+    // tracer means no `onDrain` flush either — there is simply nothing to export.
+    await request("GET", "/posts");
+
+    const [, options] = (serve as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect((options as ServeOptions | undefined)?.tracer).toBeUndefined();
   });
 });
 
@@ -1729,5 +1897,109 @@ describe("parseStringFlag", () => {
   it("does NOT consume a following flag even when that flag is the last token", () => {
     // The guard fires on the `--` prefix, not on there being a token after it.
     expect(parseStringFlag(["--target", "--out"], "target")).toBeUndefined();
+  });
+});
+
+// --- Task 2: operator-tunable DoS limits, read from the environment ---
+
+describe("parseServeLimit", () => {
+  it("parses a clean positive integer", () => {
+    expect(parseServeLimit("2048")).toBe(2048);
+  });
+
+  it("truncates a fractional value to an integer", () => {
+    // A byte/ms count is integral; a stray decimal is floored, never handed on as
+    // a fraction.
+    expect(parseServeLimit("1500.9")).toBe(1500);
+  });
+
+  it("is undefined when unset, so serve's secure default applies", () => {
+    expect(parseServeLimit(undefined)).toBeUndefined();
+  });
+
+  it("is undefined for a non-numeric value (never weakens the default)", () => {
+    expect(parseServeLimit("16kib")).toBeUndefined();
+  });
+
+  it("is undefined for the empty string", () => {
+    // `Number("")` is 0 — caught by the `<= 0` guard, not silently passed as a
+    // zero limit that would disable the defense.
+    expect(parseServeLimit("")).toBeUndefined();
+  });
+
+  it("is undefined for zero — a zero limit would disable the defense", () => {
+    expect(parseServeLimit("0")).toBeUndefined();
+  });
+
+  it("is undefined for a negative value", () => {
+    expect(parseServeLimit("-1")).toBeUndefined();
+  });
+});
+
+describe("run serve threads the DoS limits from the environment", () => {
+  it("passes every LESTO_* limit through to serve when set to valid values", async () => {
+    const serve = fakeServe(3000);
+
+    await run(
+      ["serve"],
+      depsWith({
+        serve,
+        env: {
+          LESTO_MAX_BODY_BYTES: "2097152",
+          LESTO_HANDLER_TIMEOUT_MS: "45000",
+          LESTO_REQUEST_TIMEOUT_MS: "20000",
+          LESTO_MAX_HEADER_BYTES: "8192",
+          LESTO_DRAIN_TIMEOUT_MS: "15000",
+        },
+      }),
+    );
+
+    const [, options] = serve.mock.calls[0]!;
+
+    expect(options?.maxBodyBytes).toBe(2097152);
+    expect(options?.handlerTimeoutMs).toBe(45000);
+    expect(options?.requestTimeoutMs).toBe(20000);
+    expect(options?.maxHeaderBytes).toBe(8192);
+    expect(options?.drainTimeoutMs).toBe(15000);
+  });
+
+  it("leaves every limit unset (serve's secure defaults apply) when the env is empty", async () => {
+    const serve = fakeServe(3000);
+
+    await run(["serve"], depsWith({ serve, env: {} }));
+
+    const [, options] = serve.mock.calls[0]!;
+
+    // Absent from the options entirely — so `serve` falls through to its own
+    // secure defaults (1 MiB body, 30s handler, etc.) rather than a weakened one.
+    expect(options?.maxBodyBytes).toBeUndefined();
+    expect(options?.handlerTimeoutMs).toBeUndefined();
+    expect(options?.requestTimeoutMs).toBeUndefined();
+    expect(options?.maxHeaderBytes).toBeUndefined();
+    expect(options?.drainTimeoutMs).toBeUndefined();
+  });
+
+  it("ignores an invalid limit (≤0 or non-numeric) and keeps the secure default for it", async () => {
+    const serve = fakeServe(3000);
+
+    await run(
+      ["serve"],
+      depsWith({
+        serve,
+        // A zero body limit and a junk header limit must both fall through; only
+        // the valid handler timeout overrides its default.
+        env: {
+          LESTO_MAX_BODY_BYTES: "0",
+          LESTO_MAX_HEADER_BYTES: "lots",
+          LESTO_HANDLER_TIMEOUT_MS: "60000",
+        },
+      }),
+    );
+
+    const [, options] = serve.mock.calls[0]!;
+
+    expect(options?.maxBodyBytes).toBeUndefined();
+    expect(options?.maxHeaderBytes).toBeUndefined();
+    expect(options?.handlerTimeoutMs).toBe(60000);
   });
 });

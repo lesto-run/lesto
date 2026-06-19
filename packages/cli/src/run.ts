@@ -19,7 +19,7 @@ import { currentRequestSpan } from "@lesto/web";
 import type { UiDialect } from "@lesto/web";
 
 import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
-import type { CurrentSpan, Traces, TracesEnv } from "@lesto/observability";
+import type { CurrentSpan, TraceSeams, Traces, TracesEnv } from "@lesto/observability";
 
 import { deleteEntry, persistEntries, pruneEntries } from "@lesto/content-store";
 import type { RuntimeEntry } from "@lesto/content-core";
@@ -116,8 +116,19 @@ export interface CliDeps {
    * The code-first `lesto()` app shape ({@link LestoAppConfig}) — the only shape
    * `createApp` accepts now that the legacy `{ router, controllers }` surface is
    * gone (ADR 0004 Phase 7.6).
+   *
+   * `seams` is the optional tracing instrumentation the long-lived `serve`/`dev`
+   * commands hand in when `LESTO_OTLP_URL` is set: a project whose `lesto.app.ts`
+   * default-exports a CONFIG FACTORY (`(seams?) => LestoAppConfig`) threads the
+   * `db.onQuery` hook into its own `createDb(handle, { onQuery: seams.onQuery })`,
+   * so a query run during a request becomes a `db.query` CHILD span of the request
+   * span — the served path's equivalent of the integration harness's wiring. A
+   * project that default-exports a plain config (or a `loadApp` that ignores the
+   * arg) is unchanged: absent seams (tracing off) it is never called, so there is
+   * zero overhead and no behaviour change when tracing is off. The bin forwards
+   * the seams to a factory export and ignores them for a plain-config export.
    */
-  loadApp: () => Promise<LestoAppConfig>;
+  loadApp: (seams?: TraceSeams) => Promise<LestoAppConfig>;
 
   /** Stand a real server in front of the app (the bin passes `@lesto/runtime`'s). */
   serve: typeof serve;
@@ -223,12 +234,14 @@ export interface CliDeps {
 
   /**
    * The environment the OTLP tracer reads its two-var setup from
-   * (`LESTO_OTLP_URL` + service-name/headers — see {@link TracesEnv}). Defaults to
-   * `process.env`, so the bin needs no extra wiring; a test injects a literal.
-   * `LESTO_OTLP_URL` absent means tracing is off (no tracer, zero overhead) — the
-   * safe default.
+   * (`LESTO_OTLP_URL` + service-name/headers — see {@link TracesEnv}) AND the
+   * operator-tunable DoS limits read from (`LESTO_MAX_BODY_BYTES` etc. — see
+   * {@link ServeLimitsEnv}). Defaults to `process.env`, so the bin needs no extra
+   * wiring; a test injects a literal. `LESTO_OTLP_URL` absent means tracing is off
+   * (no tracer, zero overhead); every limit var absent leaves `serve`'s secure
+   * defaults in place — the safe defaults.
    */
-  env?: TracesEnv;
+  env?: TracesEnv & ServeLimitsEnv;
 
   /** Where a line of output goes (the bin passes `console.log`). */
   out: (line: string) => void;
@@ -340,6 +353,15 @@ interface ServeTracing {
     readonly onDrain: () => Promise<void>;
   };
 
+  /**
+   * The per-domain seam hooks the app threads into its own batteries — the one we
+   * use here is `seams.onQuery`, handed to `loadApp(seams)` so a project that
+   * default-exports a config factory wires `createDb(handle, { onQuery })` and a
+   * query run during a request becomes a `db.query` child span of the request
+   * span. Absent (tracing off) the seams never reach the app, so it stays untraced.
+   */
+  readonly seams: TraceSeams;
+
   readonly stopInterval: () => void;
 }
 
@@ -375,7 +397,96 @@ function buildServeTracing(deps: CliDeps): ServeTracing | undefined {
       // finish, so a rolling restart does not drop the final spans.
       onDrain: () => traces.flush(),
     },
+    // The seam hooks the app threads into its batteries: `onQuery` rides into
+    // `loadApp(seams)` so the served path emits db child-spans, exactly as the
+    // request tracer above makes the parent `http.request` span.
+    seams: traces.seams,
     stopInterval,
+  };
+}
+
+/**
+ * The operator-tunable DoS limits, read from the environment — the same
+ * env-driven precedent {@link TracesEnv} sets. Each is a positive integer (bytes
+ * or milliseconds); `serve` already enforces SECURE DEFAULTS for every one
+ * (`packages/runtime/src/server.ts`), so these only exist to RETUNE them at deploy
+ * time without reaching for the programmatic API.
+ *
+ *   - `LESTO_MAX_BODY_BYTES`      — largest request body read off a socket (413 above
+ *                                  it). Default 1 MiB.
+ *   - `LESTO_HANDLER_TIMEOUT_MS`  — longest a single handler may run (503 on overrun).
+ *                                  Default 30s.
+ *   - `LESTO_REQUEST_TIMEOUT_MS`  — node:http per-request socket deadline (slow-loris
+ *                                  defense). Default 30s.
+ *   - `LESTO_MAX_HEADER_BYTES`    — largest header block accepted (oversized-header
+ *                                  defense). Default 16 KiB.
+ *   - `LESTO_DRAIN_TIMEOUT_MS`    — how long a graceful shutdown waits for in-flight
+ *                                  requests before forcing sockets closed. Default 10s.
+ *
+ * An UNSET, non-numeric, or ≤0 value is ignored — the var falls through to
+ * `serve`'s secure default rather than weakening it (a `0` would disable the
+ * limit). So the safe baseline always holds unless an operator deliberately
+ * raises it.
+ */
+export interface ServeLimitsEnv {
+  readonly LESTO_MAX_BODY_BYTES?: string | undefined;
+  readonly LESTO_HANDLER_TIMEOUT_MS?: string | undefined;
+  readonly LESTO_REQUEST_TIMEOUT_MS?: string | undefined;
+  readonly LESTO_MAX_HEADER_BYTES?: string | undefined;
+  readonly LESTO_DRAIN_TIMEOUT_MS?: string | undefined;
+}
+
+/**
+ * Parse one env limit into a positive integer, or `undefined` to fall through to
+ * `serve`'s secure default.
+ *
+ * Unset (`undefined`), non-numeric (`NaN`), and any value `<= 0` all yield
+ * `undefined` — we NEVER hand `serve` a zero or negative limit, because that would
+ * weaken (or disable) a defense the default already set safely. Only a clean
+ * positive integer overrides the default. Exported so every branch (unset,
+ * non-numeric, zero/negative, valid) is unit-testable.
+ */
+export function parseServeLimit(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+
+  const value = Number(raw);
+
+  // `Number("")` is 0 and `Number("12px")` is NaN — both rejected by the guards:
+  // a non-finite or non-positive value never overrides the secure default.
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+
+  return Math.trunc(value);
+}
+
+/**
+ * The DoS-limit slice handed to `deps.serve(app, { ...this })`, built from the
+ * environment. Only the keys an operator set to a valid positive value are
+ * present, so `serve`'s secure default applies to every omitted one
+ * (`exactOptionalPropertyTypes` forbids assigning `undefined`, so each present
+ * key is conditionally spread in).
+ *
+ * The slice is intentionally additive: spread it alongside the tracing options on
+ * the serve call, and it tunes only what the operator opted into.
+ */
+function serveLimitsFromEnv(env: ServeLimitsEnv): {
+  maxBodyBytes?: number;
+  handlerTimeoutMs?: number;
+  requestTimeoutMs?: number;
+  maxHeaderBytes?: number;
+  drainTimeoutMs?: number;
+} {
+  const maxBodyBytes = parseServeLimit(env.LESTO_MAX_BODY_BYTES);
+  const handlerTimeoutMs = parseServeLimit(env.LESTO_HANDLER_TIMEOUT_MS);
+  const requestTimeoutMs = parseServeLimit(env.LESTO_REQUEST_TIMEOUT_MS);
+  const maxHeaderBytes = parseServeLimit(env.LESTO_MAX_HEADER_BYTES);
+  const drainTimeoutMs = parseServeLimit(env.LESTO_DRAIN_TIMEOUT_MS);
+
+  return {
+    ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
+    ...(handlerTimeoutMs !== undefined ? { handlerTimeoutMs } : {}),
+    ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+    ...(maxHeaderBytes !== undefined ? { maxHeaderBytes } : {}),
+    ...(drainTimeoutMs !== undefined ? { drainTimeoutMs } : {}),
   };
 }
 
@@ -391,20 +502,31 @@ function buildServeTracing(deps: CliDeps): ServeTracing | undefined {
  * an interval, and a final flush runs on graceful drain.
  */
 async function runServe(args: readonly string[], deps: CliDeps): Promise<number> {
-  const config = await deps.loadApp();
+  // Construct the OTLP tracer from the env (off unless `LESTO_OTLP_URL` is set)
+  // BEFORE loading the app, so its `seams` can be threaded into `loadApp`: a
+  // project whose `lesto.app.ts` default-exports a config factory wires
+  // `db.onQuery` from `seams.onQuery`, and a query run during a request becomes a
+  // `db.query` CHILD span of the request span — the served path's deep
+  // request→query tree, not just the integration harness's. When on, its
+  // serve-options slice (request tracer + `traceparent` parser + drain flush)
+  // rides into `serve` and the steady flush interval is running.
+  const tracing = buildServeTracing(deps);
+
+  // Hand the trace seams to the app loader when tracing is on; absent, `loadApp`
+  // is called with no seams (a plain-config project is unchanged either way).
+  const config = await deps.loadApp(tracing?.seams);
 
   const app = await createApp(config);
 
   const { port } = parsePort(args, DEFAULT_PORT);
 
-  // Construct the OTLP tracer from the env (off unless `LESTO_OTLP_URL` is set).
-  // When on, its serve-options slice (request tracer + `traceparent` parser +
-  // drain flush) rides into `serve` and the steady flush interval is running.
-  const tracing = buildServeTracing(deps);
-
   const server = await deps.serve(app, {
     port,
     health: { isReady: databaseReady(config.db) },
+    // The operator-tunable DoS limits (`LESTO_MAX_BODY_BYTES` etc.): present only
+    // for the vars an operator set to a valid positive value, so `serve`'s secure
+    // default holds for every omitted one (and when no var is set at all).
+    ...serveLimitsFromEnv(deps.env ?? {}),
     ...(tracing === undefined ? {} : tracing.serveOptions),
   });
 
@@ -639,7 +761,14 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
  * next refresh without restarting the dev server.
  */
 async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
-  const config = await deps.loadApp();
+  // Tracing is wired on `dev` exactly as on `serve` (off unless `LESTO_OTLP_URL`
+  // is set), so a developer sees the same spans locally that production emits.
+  // Built BEFORE the app so its `seams` thread into `loadApp` — a project whose
+  // `lesto.app.ts` default-exports a config factory wires `db.onQuery` and a
+  // query run during a dev request becomes a `db.query` child span.
+  const tracing = buildServeTracing(deps);
+
+  const config = await deps.loadApp(tracing?.seams);
 
   const app = await createApp(config);
 
@@ -677,10 +806,6 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   });
 
   const { port } = parsePort(args, DEFAULT_PORT);
-
-  // Tracing is wired on `dev` exactly as on `serve` (off unless `LESTO_OTLP_URL`
-  // is set), so a developer sees the same spans locally that production emits.
-  const tracing = buildServeTracing(deps);
 
   // Wrap the dev dispatcher as the app the server fronts; migrations already ran.
   const server = await deps.serve(

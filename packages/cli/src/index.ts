@@ -12,8 +12,8 @@
  * alive for long-running commands.
  */
 
-export { run } from "./run";
-export type { CliDeps, ReleaseTarget } from "./run";
+export { parseServeLimit, run } from "./run";
+export type { CliDeps, ReleaseTarget, ServeLimitsEnv } from "./run";
 
 export { runMcp } from "./mcp";
 export type { McpDeps } from "./mcp";
