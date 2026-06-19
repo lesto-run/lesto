@@ -246,21 +246,35 @@ const CONTENT_PACKAGES_HINT =
   "The `content:*` commands need the content packages — run " +
   "`npm i @lesto/content-core @lesto/content-store`.";
 
-// Return type is inferred from the dynamic import (the resolved module's shape),
-// so the lazy `runPipeline`/`createNewEntry` calls below stay fully typed.
+// Convert ONLY "the content peer itself isn't installed" into the hint; rethrow anything
+// else — a real error INSIDE an installed content package (e.g. its own undeclared
+// transitive dep) must NOT be masked as "go install it", which would send the operator
+// down the wrong path. Mirrors `loadSites`'s missing-file-vs-real-error distinction below.
+function rethrowUnlessMissingContentPeer(error: unknown): never {
+  const missingPeer =
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "ERR_MODULE_NOT_FOUND" &&
+    error.message.includes("@lesto/content-");
+
+  throw missingPeer ? new Error(CONTENT_PACKAGES_HINT) : error;
+}
+
+// The literal import specifiers stay (a variable specifier would infer `any`), so the
+// resolved module types still flow to the lazy `runPipeline`/`persistEntries` calls below.
 const loadContentCore = async () => {
   try {
     return await import("@lesto/content-core/build");
-  } catch {
-    throw new Error(CONTENT_PACKAGES_HINT);
+  } catch (error) {
+    rethrowUnlessMissingContentPeer(error);
   }
 };
 
 const loadContentStore = async () => {
   try {
     return await import("@lesto/content-store");
-  } catch {
-    throw new Error(CONTENT_PACKAGES_HINT);
+  } catch (error) {
+    rethrowUnlessMissingContentPeer(error);
   }
 };
 
