@@ -1,0 +1,76 @@
+{
+  "date": "2026-06-18",
+  "baselinePrevRun": 6.8,
+  "productionScoreBefore": 2,
+  "productionScoreNow": 7.3,
+  "deltaVsPrevRun": 0.5,
+  "scoreCeilingOfFruit": 7.8,
+  "treeState": "DIRTY — uncommitted ADR-0018 §3 JOIN/alias work in packages/db/src/{conditions,index,queries,table}.ts + test/db.test.ts (typechecks clean, tsc exit 0)",
+  "assessments": [
+    {
+      "key": "crash-safety-dos",
+      "dimension": "crash-safety & DoS surface",
+      "scoreBefore": 2,
+      "scoreNow": 9,
+      "summary": "Node web tier moved from 'must not carry production traffic' (one malformed JSON POST crashes the process, no body cap, no rejection net, socket hangs) to genuinely deploy-safe for an unauthenticated client. Full defense stack present + tested (118 tests in server.test.ts): per-request try/catch/finally boundary always answers the socket; coded JSON.parse catch (400); 1 MiB body cap (413); process unhandledRejection net (async-only, idempotent); 30s cooperative handler timeout (503 + AbortController); socket-level requestTimeout/headersTimeout/keepAliveTimeout (30s/15s/5s) + 16 KiB max-header; client-disconnect cancellation; bounded readiness probe; graceful SIGTERM/SIGINT drain. Gaps: DoS limits not surfaced as CLI/config knobs (fruit); event-loop-blocking sync DoS mitigated structurally not by timer (acceptable v1)."
+    },
+    {
+      "key": "security-wiring",
+      "dimension": "security primitives AND whether they are WIRED",
+      "scoreBefore": 3,
+      "scoreNow": 8.5,
+      "summary": "Default Lesto deploy is now secure-by-default, not unwired libraries. createApp wires per-client rate-limit baseline via a real onion pipeline; estate runs the same secureStack on node and Cloudflare edge with context.ip from cf-connecting-ip. CORS rejects wildcard+credentials at config time; CSRF binds tokens to session id and fails closed; webhooks store secrets by reference + IPv6 SSRF guard with redirect:manual; sessions hash tokens at rest + __Host- cookies; authz gives a real 403 guard. Gap to 10: CSRF/CORS deliberately opt-in (a forgetful browser app ships no CSRF); documented webhook DNS-rebinding TOCTOU residual."
+    },
+    {
+      "key": "data-layer",
+      "dimension": "Data Layer Safety and Scale",
+      "scoreBefore": 3,
+      "scoreNow": 9,
+      "summary": "async surface + two real PG adapters (pg pooled BEGIN/COMMIT/ROLLBACK with release(failure) discard, Hyperdrive edge) sharing one translate source. All baseline data findings resolved: sync escape hatch removed; identifier quoting doubles quotes + rejects NUL; transactional per-migration with advisory xact lock on PG; queue worker error boundary with fencing tokens + FOR UPDATE SKIP LOCKED; FKs declared + enforced (PRAGMA foreign_keys ON, typed thunk refs); empty-IN renders always-false predicate; 100% coverage gate. Residuals: better-sqlite3 ABI pin (fruit); live multi-worker PG contention only proven in gated CI."
+    },
+    {
+      "key": "observability-deploy",
+      "dimension": "observability & deploy/ops",
+      "scoreBefore": 5.5,
+      "scoreNow": 7,
+      "summary": "Genuinely operable, not stubs. @lesto/observability is imported+wired (web/cli/client/runtime/integration). Request path mints an http.request span per request, correlated to X-Request-Id + a structured JSON access log ON BY DEFAULT; lesto serve builds an OTLP exporter (real bounded-buffer fetch POST to /v1/traces, drop-oldest + dropped counter, W3C traceparent join). lesto deploy is REAL: spawns wrangler deploy, parses URL, health-probes /readyz, wrangler rollback on failure; static path does immutable releases/<version>/ with atomic symlink-rename + SigV4 S3/R2. Real gap: DB query child-spans NOT wired through lesto serve (traces.seams.onQuery never handed to createApp) — deep span tree only in the test harness. Metrics/logs pipelines absent BY DESIGN (traces-only v1)."
+    },
+    {
+      "key": "maturity-ci",
+      "dimension": "maturity, tests, CI, hygiene",
+      "scoreBefore": 3,
+      "scoreNow": 8,
+      "summary": "Large jump. CI now exists with 8 blocking jobs (typecheck, lint, serial 100%-coverage gate, content/integration/examples tests, format check, bundle-size, E2E, scaffold-loop, real-Postgres parity, RUM-trace, hermetic Cloudflare deploy dry-run); 42 non-content packages enforce 100% coverage with disciplined exclusions; legacy CommonJS root deleted; 7 formerly zero-test content packages all have tests under a documented up-only ratchet; ws:format:check clean; MIT LICENSE + dormant Changesets pipeline. Wrinkles: ws:test fragile to local Node-ABI skew (better-sqlite3 115-vs-127); root format:check disagrees with ws:format:check (98 JSON files); stale untracked rbac/ + hooks/ dirs. Caps: bus-factor-1, unpublished, ~10-day-old 0.x."
+    },
+    {
+      "key": "framework-correctness",
+      "dimension": "framework correctness/polish",
+      "scoreBefore": 5,
+      "scoreNow": 8.5,
+      "summary": "Strong. 6 of 7 named medium correctness issues fully resolved with file:line evidence: i18n prototype-safe Object.hasOwn lookups; idempotent span end(); finite-number CSS coercion guard; validateRange-gated pagination; filter-routed getCollections() (no draft leak); published-range scaffold pin (no workspace:* emitted). Lone defect: @lesto/ui treeJsonSchema does not narrow children to a component's declared allow-list (always $refs the full node union), so an AI constrained only by the emitted JSON Schema can produce a tree that passes the schema yet fails the strict runtime validateTree — and the doc comment overstates the guarantee. Polish/consistency gap, not a security hole (runtime still rejects)."
+    }
+  ],
+  "judge": {
+    "productionScoreBefore": 2,
+    "productionScoreNow": 7.3,
+    "scoreCeilingOfFruit": 7.8,
+    "biggestRemainingBlockers": [
+      "Bus factor 1 + unpublished + ~10-day-old 0.x: single author (294 commits, 2026-06-09..2026-06-18), every package private:true, release.yml gated off. Dominant structural ceiling regardless of per-package craft. Not fixable by fruit.",
+      "Local toolchain fragility makes the full test/coverage gate non-reproducible off-CI: bun run ws:test goes red via better-sqlite3 NODE_MODULE_VERSION 115-vs-127 ABI skew (71/71 db tests fail on the working tree, persists with in-flight work stashed — environmental, CI-immune). The 100% gate is only trustworthy on CI's pinned runtime.",
+      "DB query child-spans NOT wired through lesto serve (run.ts builds traces, passes traces.requestTracer but never hands traces.seams.onQuery to createApp). Deep request->query span tree only in the integration harness.",
+      "ui treeJsonSchema / validateTree divergence (schema.ts always $refs the full node union instead of the per-component allow-list). Schema-conformant AI tree can still fail the runtime validator. Polish defect, not a security hole.",
+      "CSRF/CORS opt-in by design (forgetful browser app ships no CSRF); documented webhook DNS-rebinding TOCTOU residual. Conscious tradeoffs that cap security-wiring below 10."
+    ],
+    "lowHangingFruit": [
+      { "item": "Pin/rebuild the native sqlite ABI so bun run ws:test is reproducible locally (npm rebuild better-sqlite3 in postinstall, or document/pin Node 22).", "impact": "high", "effort": "S", "location": "packages/runtime/src/sqlite-drivers.ts:38 + root postinstall/engines; reproduced at packages/db/test/db.test.ts:207", "why": "The 100% coverage gate is the headline quality claim but a contributor cannot reproduce green locally (71/71 db tests fail purely from ABI skew). Highest-leverage DX/trust win." },
+      { "item": "Narrow treeJsonSchema children to the component's declared allow-list (oneOf of allowed child variants, not the full nodeRef union) and correct the doc comment.", "impact": "medium", "effort": "M", "location": "packages/ui/src/schema.ts:96,108; validate.ts:25-32; test ui.test.tsx:282,303", "why": "Closes the only named, file:line-confirmed framework-correctness defect and makes the commit's own claim true. Self-contained." },
+      { "item": "Hand traces.seams.onQuery to createApp in the served node tier so DB queries emit child spans under the request span via lesto serve.", "impact": "medium", "effort": "M", "location": "packages/cli/src/run.ts:283 (createApp) + :364 (traces built); seam at packages/db/src/queries.ts:518", "why": "Wiring + seam already exist — a one-line plumb upgrades production tracing from request-only to request+query: 'I see a span' -> 'I can find the slow query'." },
+      { "item": "Surface DoS limits as CLI/lesto.config knobs (maxBodyBytes / handlerTimeoutMs / requestTimeoutMs / maxHeaderBytes / drainTimeoutMs).", "impact": "medium", "effort": "S", "location": "packages/cli/src/run.ts:405-409", "why": "Secure defaults already apply; this just exposes them so an operator can tune for a real workload. Pure plumbing through an existing options object." },
+      { "item": "Reconcile the two format scripts: make root format:check agree with the CI-gating ws:format:check (root flags 98 package.json/tsconfig.json the per-package globs never target).", "impact": "low", "effort": "S", "location": "root package.json format:check vs per-package ws:format:check", "why": "Eliminates a confusing red signal; the CI-gating script is already clean." },
+      { "item": "Remove the two stale untracked package dirs (packages/rbac/, packages/hooks/ — only coverage/ + node_modules/, no package.json).", "impact": "low", "effort": "S", "location": "packages/rbac/, packages/hooks/", "why": "Repo hygiene; leftover dirs confuse ls packages and tooling. (Sandbox blocks rm; gitignore or user deletes.)" },
+      { "item": "Commit or explicitly shelve the in-flight ADR-0018 §3 JOIN/alias work (5 files: conditions.ts, queries.ts, table.ts, index.ts, test/db.test.ts).", "impact": "low", "effort": "S", "location": "packages/db/src/{conditions,queries,table,index}.ts + test/db.test.ts (uncommitted; typechecks clean)", "why": "Multiple assessments asserted 'working tree is clean' when it is not — VERIFIED dirty. Landing or stashing restores the clean-tree invariant the per-wave protocol relies on." }
+    ],
+    "keepGoingRecommendation": "Pick the fruit FIRST, then pivot to a structural phase. ~1 day of high-value, no-architecture work remains (ABI-pin to restore local-test reproducibility, ui schema/validator divergence, onQuery span plumb, DoS-knob surfacing); the ABI item is worth doing immediately because the full test gate is red on any local checkout, which undermines trust in every other claim. But the per-package engineering is already production-grade (crash-safety 9, data-layer 9, security 8.5, correctness 8.5 — all verified), so fruit cannot move the holistic number much. The remaining gap to a true production verdict is structural and NON-fruit: bus-factor-1, unpublished 0.x, ~10 days of history, zero adoption/soak. After fruit, the highest-leverage next phase is the adoption-ship sequence the user deliberately scheduled LAST (publish to npm, second maintainer / external eyes, docs site, real-world soak) plus the deferred metrics/logs pipeline.",
+    "rationale": "Independently verified, not taken on faith. CONFIRMED REAL: crash-safety stack (bounded body cap that drops chunks; per-request boundary), Postgres adapter is genuine pooled BEGIN/COMMIT/ROLLBACK with release(failure) discard NOT a stub, Hyperdrive edge adapter real, lesto deploy genuinely spawns wrangler deploy + health-gates /readyz + wrangler rollback — deploy is NOT a file copy. Security pipeline wiring exists (the assessment's kernel.ts path is stale post-rename, now lesto.ts). The one named correctness gap is real. The prompt's LOW-ceiling premise (Postgres unbuilt, deploy a file copy, batteries unwired) does NOT hold on this tree. CORRECTIONS pulling the number down from a naive ~8.3 weighted blend: (1) 'working tree is clean' is FALSE across five assessments — uncommitted ADR-0018 §3 JOIN/alias work in 5 db files (typechecks, sound, but the clean-tree claim is inaccurate — VERIFIED dirty); (2) the db suite is RED on the working tree right now (71/71 fail) — isolated to the documented better-sqlite3 ABI skew, environmental + CI-immune, but the headline 100%-gate is not locally reproducible. Weighting crash-safety/data/security heavily (8.5-9, verified) lifts the number; bus-factor-1 / unpublished / 10-day-old 0.x maturity and the non-reproducible-local-gate hold it to 7.3 — a large, honest jump from 2/10 but short of a deploy-it-for-strangers verdict."
+  }
+}

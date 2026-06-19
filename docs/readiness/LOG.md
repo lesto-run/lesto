@@ -11,6 +11,34 @@ the dated JSON beside this file.
 | 2026-06-10 | 5.5/10 | +0.0 (flat from 5.5) | async/Postgres unbuilt (sync `SqlDatabase`) — structural | Wire a real readiness probe so `/readyz` stops lying (S) |
 | 2026-06-10 (run 2, post async-merge) | 6.5/10 | +1.0 (from 5.5) | deploy is a non-atomic file copy + observability orphaned (no traces/metrics, `/readyz` lies) — structural | Reformat `@lesto/db` (committed `oxfmt` regression) (S) |
 | 2026-06-16 (post Waves 0–5) | 6.8/10 | +0.3 (from 6.5) | `lesto deploy` is still a file copy (never invokes `wrangler deploy`; `remoteReleaseStore` unwired) + secure defaults opt-in, not kernel-enforced — structural | Add `server.maxConnections` cap (`server.ts`, S) |
+| 2026-06-18 (§C in-flight) | 7.3/10 | +0.5 (from 6.8) | Bus-factor-1 + unpublished 0.x (~10-day history) — structural; AND local 100%-gate non-reproducible (better-sqlite3 ABI 115-vs-127 → 71/71 db tests red off-CI) | Pin/rebuild native sqlite ABI so `ws:test` is green locally (`sqlite-drivers.ts` + root postinstall, S) |
+
+## 2026-06-18 — 7.3/10 (§C differentiators in-flight; prev 6.8)
+
+Calibrated, not averaged (dimension mean ≈8.3). The 6.8 run's two named structural caps are now
+**resolved on disk and independently verified**: (1) `lesto deploy` is NO LONGER a file copy — it
+spawns `wrangler deploy`, parses the workers.dev URL, health-gates `/readyz`, and `wrangler rollback`s
+on failure (`bin.ts:45-90`, `run.ts:785-815`); the static path does immutable `releases/<v>/` trees with
+an atomic symlink-rename + SigV4 S3/R2 PUTs. (2) Security is wired by default — `createApp` runs a real
+onion pipeline (`runPipeline`/`secureStack`) on both node and the CF edge. Dimension jumps since 6.8:
+**crash-safety 8.5→9** (full DoS stack, 118 tests), **data-layer 9** (two real PG adapters, FKs enforced),
+**security-wiring 8→8.5**, **maturity/CI 6.5→8** (8 blocking CI jobs incl. real-PG parity + hermetic CF
+deploy dry-run; 42 pkgs at 100%), **framework-correctness 9→8.5** (one new named defect found),
+**observability/deploy 6.5→7** (real OTLP + deploy, but query child-spans unwired through `lesto serve`).
+
+Why only +0.5 despite the structural caps clearing: the *holistic* ceiling is now dominated by
+**non-fruit maturity reality** — bus-factor-1, every package `private:true`, `release.yml` gated off,
+~10 days of history, zero adoption/soak. Two honest deductions kept it off a naive ~8.3 weighted blend:
+the working tree is **NOT clean** (uncommitted ADR-0018 §3 JOIN/alias work in 5 `@lesto/db` files —
+typechecks, sound, but multiple assessors wrongly asserted "clean"; **verified dirty this run**), and the
+headline **100%-coverage gate is not locally reproducible** — `bun run ws:test` is red on any local
+checkout (71/71 db tests fail) purely from the better-sqlite3 NODE_MODULE_VERSION 115-vs-127 ABI skew
+(environmental, CI-immune via the pinned Bun runtime).
+
+Fruit ceiling: **~7.8**. Judge's call: **pick the fruit FIRST** (~1 day: ABI-pin to restore local-test
+trust, the ui schema/validator divergence, the `onQuery` span plumb, DoS-knob surfacing), then **pivot to
+the adoption-ship phase** (publish → second maintainer → docs site → soak) — the per-package craft is
+already production-grade, so the remaining gap is structural and unreachable by fruit.
 
 ## 2026-06-16 — 6.8/10 (post Waves 0–5; prev 6.5)
 
