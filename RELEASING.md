@@ -6,36 +6,26 @@ This is the source of truth for **how a release happens** and **what gets publis
 > **Status:** the pipeline (Changesets config, scripts, and `.github/workflows/release.yml`)
 > is wired, but **nothing has been published yet** — the public surface is still
 > `private`, and the publish workflow is **skipped** until the `RELEASE_ENABLED`
-> repository variable is set to `true` (and an `NPM_TOKEN` secret exists). Publish day is
-> gated on a rename first (the current names are taken — see §0), then the
-> de-privatization step below.
+> repository variable is set to `true` (and an `NPM_TOKEN` secret exists). The §0 rename
+> gate is now **cleared**; what remains is the de-privatization batch below.
 
-## 0. The names must be free — confirm FIRST (gate)
+## 0. The names must be free — confirm FIRST (gate) — ✅ CLEARED 2026-06-19
 
 A release is impossible until the names it would publish under are actually available on
-npm. **As of 2026-06-17 they are not:**
-
-- `create-lesto` is **taken** — `npm view create-lesto version` → `1.0.0`. So `npm create lesto`
-  would run a stranger's package, not this scaffold. This alone blocks the entrypoint.
-- `lesto` is **taken** — `npm view lesto version` → `0.458.0`.
-- the `@lesto/<pkg>` member names read as free today, but the scope is moot the moment the
-  brand changes.
-
-So **publish day starts with a rename**, not de-privatization. Choose the brand + npm
-scope, confirm every name a publish would claim is free, then rename the workspace before
-any step below:
+npm. **The 2026-06-17 blocker (names taken under the prior brand) is resolved by the
+Keel→Lesto rename**, which already landed (`@lesto` scope secured). A live check on
+2026-06-19 returns `E404` (unclaimed) for every name a publish would touch:
 
 ```sh
-# nothing printed = free to claim:
-npm view @<scope>/cli version
-npm view @<scope>/db version
-npm view create-<name> version   # the `npm create <name>` entrypoint
+# all return E404 = free to claim, as of 2026-06-19:
+npm view create-lesto version    # E404
+npm view lesto version           # E404
+npm view @lesto/cli version      # E404  (and db / kernel / runtime / errors / …)
 ```
 
-The rename is mechanical but wide — ~2,760 `@lesto/` occurrences across ~520 files, the
-`lesto` CLI bin (`packages/cli` → `bin`), and the `create-lesto` package name/scaffold — so
-it lands as one sweep, gated green, ahead of de-privatization. Until it does, leave
-`RELEASE_ENABLED` unset.
+Names can be claimed by anyone until we take them, so **re-run this for the full closure on
+the morning of publish**. But the rename sweep is done and no further rename is required;
+proceed to de-privatization.
 
 ## The published surface
 
@@ -70,8 +60,15 @@ Commit the generated `.changeset/*.md` alongside the code.
 ## Cutting a release
 
 1. **De-privatize the surface (first release only).** For each package in the closure
-   above: drop `"private": true`, set a coherent starting version (`0.1.0`), and add
-   `"publishConfig": { "access": "public" }`. Keep every other package `private`.
+   above: drop `"private": true`, set a coherent starting version (`0.1.0`), add
+   `"publishConfig": { "access": "public" }`, and add **`"files": ["src"]`** — without it
+   `npm pack` ships each package's `test/`, `tsconfig.json`, and `vitest.config.ts` (Lesto
+   runs TS directly, so the tarball needs `src/` and only `src/`). Also set a correct
+   `repository`/`homepage`/`bugs`, and **reconcile the `content-*` packages**: they carry
+   re-badged "Docks" metadata (`repository` → `usedocks/docks`, `main`/`types` → a `./dist`
+   build that does not exist in the TS-direct model) that must be fixed before they publish.
+   Keep every other package `private`. See `docs/plans/publish-day.md` for the verified
+   per-metric gap counts.
 2. **Align the dependency range.** `create-lesto` pins scaffolded apps at
    `LESTO_DEP_RANGE` (`packages/create-lesto/src/scaffold.ts`, currently `^0.1.0`). It
    must satisfy the published versions — for a `0.x` line, `^0.1.0` resolves `0.1.x`
