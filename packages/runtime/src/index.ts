@@ -61,5 +61,16 @@ export { nodeStaticReader } from "./static-reader";
 export { openSqlite } from "./sqlite";
 export type { OpenSqlite, SqliteEngines, SqliteHandle } from "./sqlite";
 
-export { LestoError, RuntimeError } from "./errors";
-export type { RuntimeErrorCode } from "./errors";
+export { LestoError, MutationError, RuntimeError } from "./errors";
+export type { MutationErrorCode, RuntimeErrorCode } from "./errors";
+
+export { defineMutation, mutationRoutes, MUTATION_ROUTE_PREFIX } from "./mutations";
+export type {
+  Mutation,
+  MutationContractOf,
+  MutationCsrfOptions,
+  MutationDef,
+  MutationMap,
+  MutationResult,
+  MutationRoutesOptions,
+} from "./mutations";

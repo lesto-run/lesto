@@ -20,11 +20,13 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
+    "@lesto/csrf": "workspace:*",
     "@lesto/errors": "workspace:*",
     "@lesto/kernel": "workspace:*",
     "@lesto/queue": "workspace:*",
     "@lesto/sites": "workspace:*",
-    "@lesto/web": "workspace:*"
+    "@lesto/web": "workspace:*",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@lesto/observability": "workspace:*"

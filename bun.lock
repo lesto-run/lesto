@@ -113,6 +113,13 @@
         "zod": "^4.0.0",
       },
     },
+    "packages/ai": {
+      "name": "@lesto/ai",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/errors": "workspace:*",
+      },
+    },
     "packages/assets": {
       "name": "@lesto/assets",
       "version": "0.0.0",
@@ -711,11 +718,13 @@
       "name": "@lesto/runtime",
       "version": "0.0.0",
       "dependencies": {
+        "@lesto/csrf": "workspace:*",
         "@lesto/errors": "workspace:*",
         "@lesto/kernel": "workspace:*",
         "@lesto/queue": "workspace:*",
         "@lesto/sites": "workspace:*",
         "@lesto/web": "workspace:*",
+        "zod": "^4.0.0",
       },
       "devDependencies": {
         "@lesto/observability": "workspace:*",
@@ -1008,6 +1017,8 @@
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
     "@lesto/admin": ["@lesto/admin@workspace:packages/admin"],
+
+    "@lesto/ai": ["@lesto/ai@workspace:packages/ai"],
 
     "@lesto/assets": ["@lesto/assets@workspace:packages/assets"],
 

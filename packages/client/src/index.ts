@@ -17,5 +17,14 @@
 export { createApi } from "./client";
 export type { Api, ApiContract, ApiMethod, ApiOptions, RouteSpec, TraceContext } from "./client";
 
+export { createMutationClient, MUTATION_ROUTE_PREFIX } from "./mutations";
+export type {
+  MutationClient,
+  MutationClientOptions,
+  MutationContract,
+  MutationResult,
+  MutationSpec,
+} from "./mutations";
+
 export { ClientError, LestoError } from "./errors";
 export type { ClientErrorCode } from "./errors";

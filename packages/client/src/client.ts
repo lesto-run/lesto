@@ -222,8 +222,12 @@ function applyQuery(url: string, query: Record<string, string | undefined> | und
   return qs === "" ? url : `${url}?${qs}`;
 }
 
-/** The same-origin gate for trace propagation — the live browser origin, or a stub off-browser. */
-function defaultOrigin(): string {
+/**
+ * The same-origin gate for trace propagation — the live browser origin, or a stub
+ * off-browser. Exported so `createMutationClient` shares the exact same gate
+ * (ADR 0022) rather than re-deriving it.
+ */
+export function defaultOrigin(): string {
   return typeof location === "undefined" ? "http://localhost" : location.origin;
 }
 
@@ -233,8 +237,10 @@ function defaultOrigin(): string {
  *
  * A span id is a correlation key, not a security token, so the weaker fallback is
  * acceptable rather than failing propagation outright on an ancient runtime.
+ *
+ * Exported so `createMutationClient` shares one span-id generator (ADR 0022).
  */
-function defaultSpanId(): string {
+export function defaultSpanId(): string {
   const api = typeof crypto === "undefined" ? undefined : crypto;
 
   if (api?.getRandomValues !== undefined) {

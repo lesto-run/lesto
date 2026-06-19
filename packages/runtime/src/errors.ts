@@ -29,3 +29,40 @@ export class RuntimeError extends LestoError<RuntimeErrorCode> {
     this.name = "RuntimeError";
   }
 }
+
+/**
+ * The stable codes the typed-mutation boundary refuses or fails a call under
+ * (ADR 0022). They ride a {@link MutationError} and serialize verbatim into the
+ * result union's failure arm, so an island branches on `error.code`, never prose.
+ */
+export type MutationErrorCode =
+  /** No mutation is registered under the requested `:name` — a 404. */
+  | "MUTATION_NOT_FOUND"
+  /** The CSRF check refused the request (missing or forged token) — a 403. */
+  | "MUTATION_CSRF_FAILED"
+  /** The request body failed the mutation's Zod input schema — a 422. */
+  | "MUTATION_INVALID_INPUT"
+  /** A handler raised a domain refusal (default 400; the code is the app's own). */
+  | "MUTATION_FAILED";
+
+/**
+ * A coded mutation refusal — thrown by the boundary, or by a handler that wants
+ * the typed error arm deliberately.
+ *
+ * A handler `throw new MutationError("LISTING_LOCKED", "…", { status: 409 })`
+ * reaches the island as `{ ok: false, error: { code: "LISTING_LOCKED", … } }`
+ * with a 409, exactly like the framework's own codes — so a domain refusal is a
+ * typed value, not a leaked stack. The `status` rides on `details.status` (the
+ * boundary reads it); the rest of `details` is the app's to populate.
+ */
+export class MutationError extends LestoError<MutationErrorCode | string> {
+  constructor(
+    code: MutationErrorCode | string,
+    message: string,
+    details?: Record<string, unknown>,
+  ) {
+    super(code, message, details);
+
+    this.name = "MutationError";
+  }
+}

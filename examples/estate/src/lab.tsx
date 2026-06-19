@@ -25,10 +25,13 @@ import { createTableSql, defineTable, integer, text } from "@lesto/db";
 import type { Db } from "@lesto/db";
 import { AdminError, createAdmin } from "@lesto/admin";
 import type { Admin, AuditEvent } from "@lesto/admin";
+import { csrfToken } from "@lesto/csrf";
+import { defineMutation, MutationError, mutationRoutes } from "@lesto/runtime";
 import { z } from "zod";
 
 import { Button, Hero, ListingCard, Main, Section, SiteHeader } from "./ui/components";
 import { LiveListing } from "./ui/live-listing";
+import { SaveNote } from "./ui/save-note";
 import { DeferredPanel } from "./ui/deferred-panel";
 import { buildContentRoutes } from "./content";
 import type { ContentStore } from "./content";
@@ -92,6 +95,17 @@ function LabIndex(): ReactNode {
           </p>
 
           <LiveListing listingId="malibu-cliff" />
+        </Section>
+
+        <Section title="Typed server mutation (the SaveNote island)">
+          <p className="copy">
+            A typed WRITE: this island calls the `saveListingNote` server mutation through the typed
+            @lesto/client. The argument + return types are inferred end to end, the input is
+            Zod-validated at the boundary, the call is CSRF-guarded (double-submit token), and a
+            note of `boom` exercises the typed error path.
+          </p>
+
+          <SaveNote listingId="malibu-cliff" />
         </Section>
 
         <Section title="Deferred hydration (the DeferredPanel island)">
@@ -398,6 +412,74 @@ function buildAdminRoutes(store?: ContentStore): Lesto {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Typed server mutations (ADR 0022) — the typed-RPC dogfood.
+//
+// Where `/lab/api/listings/:id` is a typed READ the LiveListing island GETs, this
+// is a typed WRITE: `saveListingNote` is defined ONCE here (Zod input + a typed
+// result), mounted under one CSRF-guarded endpoint, and called by the `SaveNote`
+// island with its argument + return types inferred end to end — no codegen, no
+// RSC transform. It proves all four properties at once: inferred arg/return types,
+// boundary Zod validation, the reused @lesto/csrf double-submit guard, and a typed
+// error path (a note matching the "boom" sentinel takes the failure arm).
+// ---------------------------------------------------------------------------
+
+/**
+ * The demo's CSRF secret + a stable anon session the double-submit token binds to.
+ *
+ * Public by design (it is in the source) and >= 32 bytes so `@lesto/csrf` accepts
+ * it. The `/lab` zone has no per-user session of its own (it is the feature bench),
+ * so the token binds to one fixed anon id — enough to PROVE the boundary: a missing
+ * or forged token is a typed 403, a token minted by `GET /lab/api/csrf` passes. A
+ * real app binds `sessionFor` to its session cookie, exactly as `secureStack` does.
+ */
+const LAB_CSRF_SECRET = "lab-demo-csrf-secret-0123456789abcdef";
+const LAB_CSRF_SESSION = "lab-anon-session";
+
+/** A saved note on a listing — the mutation's typed result `data`. */
+interface SavedNote {
+  readonly listingId: string;
+  readonly note: string;
+  readonly savedAt: string;
+}
+
+/**
+ * `saveListingNote` — the typed server mutation.
+ *
+ * The Zod schema IS the wire contract: `input` is parsed `{ listingId, note }` at
+ * the boundary, so the handler is handed a trusted value (ADR 0005). The handler
+ * returns a typed `{ saved: SavedNote }` — OR throws a coded `MutationError` to take
+ * the typed failure arm deliberately, demonstrating the typed error path.
+ */
+const saveListingNote = defineMutation({
+  name: "saveListingNote",
+  input: z.object({
+    listingId: z.string().min(1),
+    note: z.string().trim().min(1, "A note is required.").max(280),
+  }),
+  handler: (input): { saved: SavedNote } => {
+    // The deliberate typed-error demo: a sentinel note proves a domain refusal
+    // reaches the island as a typed `error.code`, not a thrown stack.
+    if (input.note.toLowerCase() === "boom") {
+      throw new MutationError("LAB_NOTE_REJECTED", "That note was rejected on purpose.", {
+        status: 422,
+      });
+    }
+
+    return {
+      saved: {
+        listingId: input.listingId,
+        note: input.note,
+        // A fixed instant keeps the demo's output deterministic for tests.
+        savedAt: "2026-06-18T00:00:00.000Z",
+      },
+    };
+  },
+});
+
+/** The mutation map the `SaveNote` island derives its client contract from. */
+export const labMutations = { saveListingNote };
+
 /**
  * Build the `/lab` sub-app — mounted by both the Node app (`controllers.ts`) and
  * the Worker (`edge.ts`). `contentStore` is the DB-driven page's backend: the Node
@@ -443,5 +525,21 @@ export function buildLabRoutes(contentStore?: ContentStore): Lesto {
 
         return listing === undefined ? c.json({ error: "not found" }, 404) : c.json(listing);
       })
+      // Mint the double-submit CSRF token the SaveNote island resubmits (ADR 0022).
+      // The page reads it back and the mutation boundary's `verifyToken` checks it —
+      // the same token the `cookie` half would carry in a real per-user session.
+      .get("/lab/api/csrf", (c) => {
+        const { token } = csrfToken(LAB_CSRF_SESSION, LAB_CSRF_SECRET);
+
+        return c.json({ token });
+      })
+      // The typed-mutation endpoint (POST /__lesto/mutations/:name), CSRF-guarded by
+      // the reused @lesto/csrf check. The SaveNote island calls it via the typed
+      // `createMutationClient` over `MutationContractOf<typeof labMutations>`.
+      .route(
+        mutationRoutes(labMutations, {
+          csrf: { secret: LAB_CSRF_SECRET, sessionFor: () => LAB_CSRF_SESSION },
+        }),
+      )
   );
 }

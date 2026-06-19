@@ -26,6 +26,38 @@ async function body(response: LestoResponse): Promise<string> {
   return out + decoder.decode();
 }
 
+/** Mint the double-submit CSRF token the SaveNote island reads back, via its route. */
+async function csrfToken(app: Awaited<ReturnType<typeof buildApp>>): Promise<string> {
+  const response = await app.handle("GET", "/lab/api/csrf");
+
+  return (JSON.parse(response.body) as { token: string }).token;
+}
+
+/**
+ * POST the named mutation with a JSON body + optional CSRF header.
+ *
+ * Estate guards every state-changing request app-wide with `originCheck`
+ * (`secureStack`), so a same-origin browser POST carries `Sec-Fetch-Site:
+ * same-origin` — we send it here so the request clears that OUTER gate and reaches
+ * the mutation boundary's OWN double-submit token check (the defense-in-depth the
+ * ADR notes estate runs).
+ */
+function callMutation(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  name: string,
+  input: unknown,
+  token?: string,
+): Promise<LestoResponse> {
+  return app.handle("POST", `/__lesto/mutations/${name}`, {
+    headers: {
+      "content-type": "application/json",
+      "sec-fetch-site": "same-origin",
+      ...(token === undefined ? {} : { "x-csrf-token": token }),
+    },
+    body: input,
+  });
+}
+
 describe("/lab — SSR data fetching + typed param", () => {
   it("resolves a listing by :id on the server", async () => {
     const app = await buildApp();
@@ -135,5 +167,106 @@ describe("/lab/api/listings/:id — the CSR island's data route", () => {
     const app = await buildApp();
 
     expect((await app.handle("GET", "/lab/api/listings/nope")).status).toBe(404);
+  });
+});
+
+describe("typed server mutation (ADR 0022) — the SaveNote island's endpoint", () => {
+  it("renders the SaveNote island in the lab index", async () => {
+    const app = await buildApp();
+
+    const html = await body(await app.handle("GET", "/lab"));
+
+    expect(html).toContain('"component":"SaveNote"');
+  });
+
+  it("mints a double-submit CSRF token from /lab/api/csrf", async () => {
+    const app = await buildApp();
+
+    const token = await csrfToken(app);
+
+    // A signed token is `<nonce>.<hmac>` — two non-empty halves.
+    expect(token.split(".").filter((p) => p.length > 0)).toHaveLength(2);
+  });
+
+  it("403s a mutation called with NO CSRF token (fail-closed)", async () => {
+    const app = await buildApp();
+
+    const response = await callMutation(app, "saveListingNote", {
+      listingId: "malibu-cliff",
+      note: "A quiet seller.",
+    });
+
+    expect(response.status).toBe(403);
+    expect(JSON.parse(response.body)).toEqual({
+      ok: false,
+      error: { code: "MUTATION_CSRF_FAILED", message: "CSRF check failed for this mutation." },
+    });
+  });
+
+  it("dispatches a valid, CSRF-cleared call and returns the typed success arm", async () => {
+    const app = await buildApp();
+    const token = await csrfToken(app);
+
+    const response = await callMutation(
+      app,
+      "saveListingNote",
+      { listingId: "malibu-cliff", note: "A quiet seller." },
+      token,
+    );
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({
+      ok: true,
+      data: {
+        saved: {
+          listingId: "malibu-cliff",
+          note: "A quiet seller.",
+          savedAt: "2026-06-18T00:00:00.000Z",
+        },
+      },
+    });
+  });
+
+  it("takes the typed ERROR path for the `boom` sentinel note (422 LAB_NOTE_REJECTED)", async () => {
+    const app = await buildApp();
+    const token = await csrfToken(app);
+
+    const response = await callMutation(
+      app,
+      "saveListingNote",
+      { listingId: "malibu-cliff", note: "boom" },
+      token,
+    );
+
+    expect(response.status).toBe(422);
+    expect(JSON.parse(response.body)).toEqual({
+      ok: false,
+      error: { code: "LAB_NOTE_REJECTED", message: "That note was rejected on purpose." },
+    });
+  });
+
+  it("422s a Zod-invalid input (empty note) — boundary validation (ADR 0005)", async () => {
+    const app = await buildApp();
+    const token = await csrfToken(app);
+
+    const response = await callMutation(
+      app,
+      "saveListingNote",
+      { listingId: "malibu-cliff", note: "" },
+      token,
+    );
+
+    expect(response.status).toBe(422);
+    expect(JSON.parse(response.body).error.code).toBe("MUTATION_INVALID_INPUT");
+  });
+
+  it("404s an unknown mutation name", async () => {
+    const app = await buildApp();
+    const token = await csrfToken(app);
+
+    const response = await callMutation(app, "nope", {}, token);
+
+    expect(response.status).toBe(404);
+    expect(JSON.parse(response.body).error.code).toBe("MUTATION_NOT_FOUND");
   });
 });
