@@ -518,7 +518,7 @@
     },
     "packages/create-lesto": {
       "name": "create-lesto",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "bin": "./src/bin.ts",
       "dependencies": {
         "@lesto/errors": "workspace:*",
