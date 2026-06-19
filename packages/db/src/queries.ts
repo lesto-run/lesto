@@ -436,7 +436,9 @@ function hydrateJoin(state: JoinState, raw: unknown): Record<string, unknown> {
 
     for (const [key, spec] of Object.entries(member.table.byKey)) {
       const value = row[`${namespace}.${spec.name}`];
-      if (value !== null) allNull = false;
+      // `!= null` (not `!==`) so a driver that OMITS an unmatched table's columns
+      // (cell `undefined`, not `null`) still reads as "no value" and collapses below.
+      if (value != null) allNull = false;
       obj[key] = coerceCell(spec.kind, value);
     }
 

@@ -578,6 +578,13 @@ describe("joins", () => {
     expect(rows[0]?.manager.name).toBe("CEO");
   });
 
+  it("a double alias still resolves to the real table", () => {
+    const m1 = alias(authors, "m1");
+    const m2 = alias(m1, "m2");
+    expect(m1.sourceTableName).toBe("authors");
+    expect(m2.sourceTableName).toBe("authors"); // not "m1" — FROM "authors" AS "m2"
+  });
+
   it("a column whose SQL name contains a dot round-trips intact (no key mis-split)", async () => {
     // The hardest hydration case: a column whose SQL name itself contains a dot.
     // The projection aliases it `"weird"."a.b" AS "weird.a.b"` — so a hydrator that

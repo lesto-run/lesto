@@ -123,7 +123,10 @@ export function alias<C extends ColumnMap, const N extends string>(
 
   const aliased = Object.assign({}, table, {
     tableName: name,
-    sourceTableName: table.tableName,
+    // Resolve to the REAL table, even when aliasing an alias — otherwise a
+    // double-alias would render `FROM "<inner-alias>" AS "<outer>"`, a table that
+    // does not exist.
+    sourceTableName: table.sourceTableName ?? table.tableName,
     columnList,
     byKey,
     byColumn,

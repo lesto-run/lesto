@@ -49,6 +49,9 @@ export function eq<C extends Column<unknown, boolean, boolean>>(
   column: C,
   value: NonNullable<CellType<C>> | Column<NonNullable<CellType<C>>, boolean, boolean>,
 ): Condition {
+  // A column carries a `spec`; every value type does NOT — `Date`, arrays, and the
+  // scalar types all lack it. (If a `json` column value is ever an object that itself
+  // carries a `spec` key, this must brand columns instead — revisit when `json` lands.)
   if (typeof value === "object" && "spec" in value) {
     return { sql: `${qualified(column)} = ${qualified(value)}`, params: [] };
   }
