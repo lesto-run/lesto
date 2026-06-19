@@ -170,8 +170,31 @@ function patternFor(segments: ReadonlyArray<string>): string {
  * its sibling `layout`) and two files at DIFFERENT directories never collide. The
  * raw segments joined by `/` — `["listings", "[id]"]` → `"listings/[id]"`, the
  * empty root → `""` — uniquely names a directory.
+ *
+ * Exported so the two halves of the convention — the pure compiler here and the
+ * impure applier in `@lesto/web` — key directories the SAME way; a drift between
+ * them would mis-pair a page with its layout. Kept in ONE place, tested once.
  */
-const dirKey = (segments: ReadonlyArray<string>): string => segments.join("/");
+export const dirKey = (segments: ReadonlyArray<string>): string => segments.join("/");
+
+/**
+ * The MATCH-SHAPE key of a compiled pattern: every `:param` segment normalized to a
+ * single `STAR` sentinel, static segments kept literal — `/:id` and `/:slug` both
+ * become `/STAR`, while `/files/:id` becomes `/files/STAR` and `/:category/new`
+ * becomes `/STAR/new` (the sentinel written here as `STAR` for the param wildcard).
+ *
+ * Two patterns share a shape iff they match exactly the same SET of URLs (same
+ * arity, same static segments at the same positions, a dynamic slot wherever
+ * either has one). Deduping on this — not the literal pattern string — is what
+ * catches two dynamic siblings with DIFFERENT param names (`[id]` vs `[slug]`):
+ * their patterns differ as strings but answer the same single-segment URL, so one
+ * would permanently shadow the other. The sentinel is not a legal pattern
+ * character (params are `:name`, statics are `STATIC_SEGMENT`), so it can never
+ * collide with a literal segment an author wrote.
+ */
+function matchShape(pattern: string): string {
+  return pattern.replace(/:[A-Za-z_][A-Za-z0-9_]*/g, "*");
+}
 
 /**
  * Refuse a page whose `[name]` directories repeat a param name across segments.
@@ -219,14 +242,15 @@ function assertNoDuplicateParam(segments: ReadonlyArray<string>, pattern: string
  *     passes through that directory; because the directory tree is a prefix tree,
  *     "wraps" is exactly "the page's segments start with the layout's segments."
  *
- *   - **Collision refusal.** Two `page` files compiling to the SAME pattern (a
- *     duplicated discovery, or two directories that compile identically) is a
- *     convention ambiguity the author must resolve; we refuse it with a coded
- *     `ROUTER_FILE_DUPLICATE_ROUTE` rather than let insertion order silently pick
- *     a winner. A literal `about/` and a `[slug]/` are NOT duplicates — they
- *     compile to distinct patterns (`/about` vs `/:slug`) resolved by precedence,
- *     not refused here. A page that repeats a param across segments (`[id]/[id]`)
- *     is refused too, by `ROUTER_FILE_DUPLICATE_PARAM`.
+ *   - **Collision refusal.** Two `page` files sharing a MATCH SHAPE — the pattern
+ *     with every `:param` normalized to `*`, so `/:id` and `/:slug` both reduce to
+ *     `/*` — answer the same set of URLs and are a convention ambiguity the author
+ *     must resolve; we refuse it with a coded `ROUTER_FILE_DUPLICATE_ROUTE` rather
+ *     than let insertion order silently pick a winner (a string-equal check would
+ *     miss two dynamic siblings with different param names). A literal `about/` and
+ *     a `[slug]/` are NOT duplicates — `/about` and `/*` are distinct shapes
+ *     resolved by precedence, not refused here. A page that repeats a param across
+ *     segments (`[id]/[id]`) is refused too, by `ROUTER_FILE_DUPLICATE_PARAM`.
  *
  *   - **Resolution order.** Pages are returned MOST-SPECIFIC FIRST: a deeper /
  *     more-static path before a shallower / more-dynamic one, so a literal route
@@ -236,9 +260,13 @@ function assertNoDuplicateParam(segments: ReadonlyArray<string>, pattern: string
  *     author expects without hand-ordering files.
  */
 export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): ReadonlyArray<FileRoute> {
-  // Guard against two pages at one URL: compile each page's pattern and refuse a
-  // duplicate by code rather than let the later one silently shadow the earlier.
-  const seenPattern = new Set<string>();
+  // Guard against two pages at one URL: key each page by its MATCH SHAPE (every
+  // `:param` normalized to `*`) and refuse a duplicate by code rather than let the
+  // later one silently shadow the earlier. Deduping on the shape — not the literal
+  // pattern — catches two dynamic siblings with different param names (`[id]` vs
+  // `[slug]`), which match the same URLs yet differ as strings, while leaving
+  // genuinely distinct routes (`files/[id]` vs `[category]/new`) untouched.
+  const seenShape = new Set<string>();
 
   // The directory of every `layout` file, computed once: a page's layout chain is
   // the subset of these that prefix its path, so the lookup is built ahead of the
@@ -262,11 +290,13 @@ export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): Readonl
       continue;
     }
 
-    if (seenPattern.has(pattern)) {
+    const shape = matchShape(pattern);
+
+    if (seenShape.has(shape)) {
       throw new RouterError(
         "ROUTER_FILE_DUPLICATE_ROUTE",
-        `Two file-routes compile to the same pattern "${pattern}" — two pages cannot answer one URL.`,
-        { pattern },
+        `Two file-routes share the match-shape "${shape}" (this one is "${pattern}") — they answer the same URLs, so two pages cannot disambiguate; rename one directory.`,
+        { pattern, shape },
       );
     }
 
@@ -276,7 +306,7 @@ export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): Readonl
     // mirroring the single-segment ambiguity `compile` already rejects.
     assertNoDuplicateParam(file.segments, pattern);
 
-    seenPattern.add(pattern);
+    seenShape.add(shape);
 
     pages.push({
       kind: "page",
@@ -342,10 +372,11 @@ function layoutDepthsFor(
  * static-vs-static (or otherwise identical-shape) pair falls back to the pattern
  * string so the sort is stable and deterministic across reader orderings.
  *
- * The two pages compared here always have DISTINCT patterns — an exact-pattern
- * duplicate is refused upstream with `ROUTER_FILE_DUPLICATE_ROUTE` before the sort
- * runs — so the final string comparison need only choose a side, never report
- * "equal"; `< ? -1 : 1` is total over the distinct-pattern inputs the sort sees.
+ * The two pages compared here always have DISTINCT patterns — two pages that share
+ * a match-shape (so necessarily an exact-pattern duplicate too) are refused upstream
+ * with `ROUTER_FILE_DUPLICATE_ROUTE` before the sort runs — so the final string
+ * comparison need only choose a side, never report "equal"; `< ? -1 : 1` is total
+ * over the distinct-pattern inputs the sort sees.
  */
 function comparePageSpecificity(a: FileRoute, b: FileRoute): number {
   if (a.segments.length !== b.segments.length) {

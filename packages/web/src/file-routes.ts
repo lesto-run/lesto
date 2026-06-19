@@ -25,14 +25,15 @@
  * untouched), with the per-branch nesting living inside the page's component.
  */
 
-import type { ComponentType, ReactElement, ReactNode } from "react";
+import type { ComponentType } from "react";
 import { createElement } from "react";
 
-import { compileFileRoutes } from "@lesto/router";
+import { compileFileRoutes, dirKey } from "@lesto/router";
 import type { DiscoveredFile, FileRoute } from "@lesto/router";
 
 import { WebError } from "./errors";
 import type { Lesto } from "./lesto";
+import { wrap } from "./render-page";
 import type { Layout, PageDef } from "./render-page";
 
 /**
@@ -58,9 +59,6 @@ export interface LoadedRouteModule {
  * so they never drift.
  */
 export type LoadedFileRoutes = ReadonlyMap<string, LoadedRouteModule>;
-
-/** The directory key for a chain of raw segments — `["listings","[id]"]` → `"listings/[id]"`. */
-const dirKey = (segments: ReadonlyArray<string>): string => segments.join("/");
 
 /**
  * The map key for one route module: its kind and directory, `"<kind>:<dir>"`.
@@ -136,10 +134,10 @@ function pageDefFor(route: FileRoute, modules: LoadedFileRoutes): PageDef {
 
   // The composed component: render the authored page, then nest it through each
   // layout outermost-first. Layouts take `children`; the page takes its loaded
-  // props — so we wrap the rendered page element, not the component, mirroring
-  // render-page's own `wrap`.
+  // props — so we wrap the rendered page element, not the component, reusing
+  // render-page's own `wrap` (the SAME nesting the renderer applies to app layouts).
   const wrapped: ComponentType<unknown> = (props: unknown) =>
-    nest(layouts, createElement(inner as ComponentType<unknown>, props as Record<string, unknown>));
+    wrap(layouts, createElement(inner as ComponentType<unknown>, props as Record<string, unknown>));
 
   return { ...def, component: wrapped as PageDef["component"] };
 }
@@ -190,12 +188,4 @@ function moduleAt(
   }
 
   return found;
-}
-
-/** Nest an element through layouts, outermost first (layouts[0] is the outer shell). */
-function nest(layouts: ReadonlyArray<Layout>, page: ReactElement): ReactElement {
-  return layouts.reduceRight<ReactElement>(
-    (child: ReactNode, layout) => createElement(layout, null, child),
-    page,
-  );
 }

@@ -193,8 +193,14 @@ function headElements(metadata: PageMetadata): ReactElement[] {
   return renderMetadata(entries);
 }
 
-/** Wrap the page in its layouts, outermost first (layouts[0] is the outermost shell). */
-function wrap(layouts: readonly Layout[], page: ReactElement): ReactElement {
+/**
+ * Wrap the page in its layouts, outermost first (layouts[0] is the outermost shell).
+ *
+ * Exported for `file-routes.ts`, which composes each file-route page's per-branch
+ * layout chain the SAME way this renderer wraps a page's app-level layouts — one
+ * definition, so the two nesting orders can never drift.
+ */
+export function wrap(layouts: readonly Layout[], page: ReactElement): ReactElement {
   return layouts.reduceRight<ReactElement>(
     (child, layout) => createElement(layout, null, child),
     page,

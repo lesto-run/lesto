@@ -102,8 +102,37 @@ describe("compileFileRoutes — duplicate routes refuse by code", () => {
       expect.unreachable("a duplicate route should throw");
     } catch (error) {
       expect((error as RouterError).code).toBe("ROUTER_FILE_DUPLICATE_ROUTE");
-      expect((error as RouterError).details).toEqual({ pattern: "/about" });
+      expect((error as RouterError).details).toEqual({ pattern: "/about", shape: "/about" });
     }
+  });
+
+  it("refuses two dynamic siblings with DIFFERENT param names (same match-shape)", () => {
+    // `[id]/page.tsx` (`/:id`) and `[slug]/page.tsx` (`/:slug`) are different
+    // strings but answer the SAME single-segment URL — both reduce to the shape
+    // `/*`. A string-equal dedup would let both register and one would permanently
+    // shadow the other; the shape dedup refuses the ambiguity instead.
+    try {
+      compileFileRoutes([page("[id]"), page("[slug]")]);
+
+      expect.unreachable("two siblings of the same match-shape should throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RouterError);
+      expect((error as RouterError).code).toBe("ROUTER_FILE_DUPLICATE_ROUTE");
+      // The second page (the one that collides) names itself and the shared shape.
+      expect((error as RouterError).details).toEqual({ pattern: "/:slug", shape: "/*" });
+    }
+  });
+
+  it("allows distinct routes that share a dynamic count but differ in static positions", () => {
+    // `files/[id]` (`/files/*`) and `[category]/new` (`/*/new`) both have one
+    // dynamic slot at depth 2, yet match DISJOINT URL sets — their shapes differ,
+    // so they must NOT be over-rejected as duplicates.
+    const routes = pagesOf([page("files", "[id]"), page("[category]", "new")]);
+
+    expect(routes.map((route) => route.pattern).toSorted()).toEqual([
+      "/:category/new",
+      "/files/:id",
+    ]);
   });
 
   it("allows a page and a layout at the same directory", () => {
