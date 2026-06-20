@@ -14,10 +14,14 @@
 	],
 	// The prerendered docs (`bun run build.ts` → out/docs). Cloudflare serves a
 	// matching file directly (cached at the edge, no isolate); a miss falls
-	// through to `worker.ts`, which renders the 404. Default `html_handling`
-	// resolves clean URLs — `/quickstart` → `quickstart/index.html`.
+	// through to `worker.ts`, which renders the 404.
+	//
+	// `drop-trailing-slash` makes the no-trailing-slash form canonical, matching
+	// the in-page links (`/quickstart`, `/batteries/data`): each serves its
+	// `index.html` at 200 directly, instead of the default 307 → `/quickstart/`.
 	"assets": {
 		"directory": "./out/docs",
 		"binding": "ASSETS",
+		"html_handling": "drop-trailing-slash",
 	},
 }
