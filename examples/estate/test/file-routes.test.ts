@@ -6,17 +6,17 @@
  * never silently drift from the files (`build.ts` regenerates it).
  */
 
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 import { scanRoutes } from "@lesto/router";
 import type { DirEntry } from "@lesto/router";
+import { generateRouteManifest } from "@lesto/web";
 import type { LestoResponse } from "@lesto/web";
 
 import { buildApp } from "../src/app";
-import { files as manifestFiles } from "../src/routes.gen";
 
 /** Drain a page's streamed body (or pass a string body through) for assertions. */
 async function body(response: LestoResponse): Promise<string> {
@@ -40,20 +40,22 @@ const nodeReader = async (path: string): Promise<readonly DirEntry[]> => {
   return entries.map((entry) => ({ name: entry.name, isDirectory: entry.isDirectory() }));
 };
 
-/** A stable, order-independent key for a discovered file. */
-const keyOf = (file: { kind: string; segments: readonly string[] }): string =>
-  `${file.kind}:${file.segments.join("/")}`;
-
-describe("file-based routing — scan matches the generated manifest", () => {
-  it("scanRoutes over app/routes/ reproduces the generated manifest's files", async () => {
+describe("file-based routing — the committed manifest is fresh", () => {
+  it("src/routes.gen.ts is byte-identical to a fresh generation from app/routes/", async () => {
     const routesDir = fileURLToPath(new URL("../app/routes", import.meta.url));
 
     const scanned = await scanRoutes(nodeReader, routesDir);
+    const fresh = generateRouteManifest(scanned, { importBase: "../app/routes" });
+    const committed = await readFile(
+      fileURLToPath(new URL("../src/routes.gen.ts", import.meta.url)),
+      "utf8",
+    );
 
-    // The real on-disk scan and the committed, generated manifest must name the
-    // SAME set of routes — the layout, the gallery page, and the [id] page. If a
-    // file is added/removed without regenerating, this fails loudly.
-    expect(scanned.map(keyOf).sort()).toEqual(manifestFiles.map(keyOf).sort());
+    // The committed manifest must equal what the codegen produces from the on-disk
+    // tree RIGHT NOW — so a route file added/removed/renamed (or a stale import or
+    // map entry) fails loudly here, not silently at deploy. `build.ts` regenerates
+    // this file; this guard is what keeps the checked-in copy honest.
+    expect(committed).toBe(fresh);
   });
 });
 

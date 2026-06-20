@@ -196,7 +196,11 @@ export function generateRouteManifest(
 
   const imports = sorted.map(
     (file, i) =>
-      `import * as m${i} from "${options.importBase}/${[...file.segments, file.kind].join("/")}";`,
+      // JSON.stringify the specifier: a directory name is interpolated raw, so a
+      // segment with a quote/backslash/newline would otherwise emit malformed TS.
+      // (Segments are the project's own dir names — not a security boundary — but a
+      // clean string literal that fails to resolve beats broken source.)
+      `import * as m${i} from ${JSON.stringify(`${options.importBase}/${[...file.segments, file.kind].join("/")}`)};`,
   );
 
   const fileLines = sorted.map(

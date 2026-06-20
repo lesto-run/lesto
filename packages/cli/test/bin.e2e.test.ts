@@ -133,6 +133,13 @@ describe("bin e2e", () => {
     expect(result.stdout).toContain("GET\t/posts");
     expect(result.stdout).toContain("POST\t/posts");
     expect(result.stdout).toContain("GET\t/posts/:id");
+
+    // ...AND the file routes the CLI auto-discovered under `app/routes/` — proving
+    // the real fs scan + per-file `import()` + apply wiring (the impure seam the
+    // unit tests inject a fake into). `/` is the named-export root page;
+    // `/blog/:slug` is a nested `[slug]` dynamic segment.
+    expect(result.stdout).toContain("GET\t/");
+    expect(result.stdout).toContain("GET\t/blog/:slug");
   }, 30_000);
 
   it("serve: boots over HTTP, answers a request, and exits 0 on SIGTERM", async () => {
