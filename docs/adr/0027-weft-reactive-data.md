@@ -1,10 +1,12 @@
 # ADR 0027 — Page module shape (default-export component); reactive data layer deferred
 
-- **Status:** Accepted, partially implemented. The page-module adapter (`7f293d3`)
-  and the Node `app/routes/` auto-scan (`84e1411`) shipped; the dynamic-edge
-  codegen and the whole reactive data layer remain deferred. Revised twice
-  2026-06-20 — a 3-lens red-team then a Chief-Architect fresh-eyes pass — each of
-  which cut scope. See *Reviews* below.
+- **Status:** Accepted, partially implemented. Shipped: the page-module adapter
+  (`7f293d3`), the Node `app/routes/` auto-scan (`84e1411`), and the edge route
+  codegen `generateRouteManifest` (`2922b7e`, which deleted estate's hand-wired
+  map). Remaining: wiring the codegen into the bare `lesto build`/scaffold for
+  non-estate apps, and the whole reactive data layer. Revised twice 2026-06-20 —
+  a 3-lens red-team then a Chief-Architect fresh-eyes pass — each of which cut
+  scope. See *Reviews* below.
 - **Date:** 2026-06-20
 - **Deciders:** tech lead + owner
 - **Builds on / touches:** ADR 0023 (file-based routing — `applyFileRoutes`, `LoadedRouteModule`), ADR 0012 (`defineDataSource` / island inline data), ADR 0022 (typed mutations / `@lesto/client`).
@@ -81,15 +83,16 @@ a demanded requirement, so none is built until a real app feels the pain.
   path params (`c.param("id")`). estate does the param→fetch→404 in two lines today
   (`[id]/page.tsx:28-32`). Revisit only if that pattern proliferates enough to fund a
   new typed coercion+fetch+404 mechanism.
-- **CLI auto-scan of `app/routes/` — Node path SHIPPED (`84e1411`).** `lesto dev` /
-  `serve` / `build` / `routes` now scan `app/routes/` and `import()` each
-  page/layout, applying them via `loadFileRoutes` + `applyFileRoutes` — "drop a file
-  → it routes," zero wiring, no codegen artifact. **Still deferred: the dynamic-edge
-  case.** A Worker has no `node:fs`, so live-rendering file routes on the edge needs
-  a build-time **static-import codegen map**; that is the genuinely large/risky piece
-  and has no demanded consumer (the docs site is static; estate keeps its hand-wired
-  map and uses custom entries, not the CLI). Build it when a dynamic-edge app wants
-  drop-a-file routing on the Worker.
+- **File routing on Node AND the edge — SHIPPED.** Node (`84e1411`): `lesto dev` /
+  `serve` / `build` / `routes` scan `app/routes/` and `import()` each page/layout via
+  `loadFileRoutes` + `applyFileRoutes` — zero wiring, no artifact. Edge (`2922b7e`):
+  `generateRouteManifest` emits a static-import manifest the Worker bundler sees (a
+  Worker has no `node:fs`) — the Astro/TanStack/React-Router approach. estate now
+  uses the generated manifest (its hand-wired `file-routes-demo.ts` is deleted), and
+  its worker live-renders the file routes on the edge (proven in the bundle).
+  **Remaining (thin):** wire `generateRouteManifest` into the bare `lesto build` +
+  the scaffold's `worker.ts`, so a CLI app gets the edge manifest without a custom
+  `build.ts` (estate has one; the scaffold doesn't yet).
 - **Layout `load`.** Layouts are children-only today (`render-page.tsx:44`). Adding
   per-layout data overlaps with the deferred data layer; revisit alongside it.
 - **The reactive data layer ("Weft").** The explored design: declarative *cells*
