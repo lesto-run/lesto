@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import type { DiscoveredFile } from "@lesto/router";
 
-import { applyFileRoutes, routeKey } from "../src/file-routes";
+import { applyFileRoutes, loadFileRoutes, routeKey } from "../src/file-routes";
 import type { LoadedFileRoutes, LoadedRouteModule } from "../src/file-routes";
 import { lesto } from "../src/lesto";
 import type { PageDef } from "../src/render-page";
@@ -80,6 +80,43 @@ describe("routeKey", () => {
 
   it("keys the root with an empty directory", () => {
     expect(routeKey("page", [])).toBe("page:");
+  });
+});
+
+describe("loadFileRoutes", () => {
+  it("loads each discovered file through the injected loader, keyed for the applier", async () => {
+    const home = page();
+    const rootLayout = layout();
+
+    const loaded = await loadFileRoutes([rootLayout, home], async (kind) =>
+      kind === "page" ? { default: Home } : layoutModule("root"),
+    );
+
+    expect(loaded.get(routeKey("page", []))).toEqual({ default: Home });
+    expect(loaded.get(routeKey("layout", []))?.default).toBeTypeOf("function");
+  });
+
+  it("composes scan → load → apply end to end (a named-export page, wrapped in its layout)", async () => {
+    // `loadFileRoutes`'s loader stands in for the CLI's real `import()`. This is
+    // the whole "drop a file → it routes" pipeline minus the filesystem walk
+    // (`scanRoutes`, covered in @lesto/router): a discovered layout + page, loaded
+    // and applied, render the named-export page wrapped in its layout, head and all.
+    const rootLayout = layout();
+    const posts = page("posts");
+    const files = [rootLayout, posts];
+
+    const modules = await loadFileRoutes(files, async (kind) =>
+      kind === "layout"
+        ? layoutModule("root")
+        : { default: Home, metadata: () => ({ title: "Posts" }) },
+    );
+
+    const app = applyFileRoutes(lesto(), files, modules);
+    const html = await drain(await app.handle("GET", "/posts"));
+
+    expect(html).toContain('<div id="root">'); // the layout wrap
+    expect(html).toContain("<h1>home</h1>"); // the page component (named-export default)
+    expect(html).toContain("<title>Posts</title>"); // the named metadata export, applied
   });
 });
 

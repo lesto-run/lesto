@@ -9,12 +9,14 @@
  */
 
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { watch } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { nodeStaticReader, serve } from "@lesto/runtime";
 import type { LestoAppConfig } from "@lesto/kernel";
+import { scanRoutes } from "@lesto/router";
+import { applyFileRoutes, loadFileRoutes } from "@lesto/web";
 import type { UiDialect } from "@lesto/web";
 import type { TraceSeams } from "@lesto/observability";
 
@@ -174,6 +176,49 @@ type AppDefault =
   | LestoAppConfig
   | ((seams?: TraceSeams) => LestoAppConfig | Promise<LestoAppConfig>);
 
+// The file-route convention dir. If a project has one, every `page`/`layout`
+// under it is auto-registered — "drop a file → it routes," no manual map.
+const ROUTES_DIR = "app/routes";
+const routesDir = join(projectRoot, ROUTES_DIR);
+
+// Whether a directory exists (the convention marker for islands/routes).
+const dirExists = async (path: string): Promise<boolean> => {
+  try {
+    await access(path);
+
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// Auto-wire file-based routes onto the loaded app: scan `app/routes/`, `import()`
+// each page/layout, and register them via `@lesto/web`'s applier. The scan and
+// the per-file import are the impure seams the covered core (`scanRoutes`,
+// `loadFileRoutes`, `applyFileRoutes`) takes as inputs; this composes them with
+// the real `fs.readdir` + `import()`. Node-only by design — it runs under
+// `dev`/`serve`/`build`/`routes`; the static-import map a dynamic-edge Worker
+// needs is a separate, deferred concern (ADR 0027).
+const applyDiscoveredRoutes = async (app: LestoAppConfig["app"]): Promise<void> => {
+  if (!(await dirExists(routesDir))) return;
+
+  const files = await scanRoutes(
+    async (path) =>
+      (await readdir(path, { withFileTypes: true })).map((entry) => ({
+        name: entry.name,
+        isDirectory: entry.isDirectory(),
+      })),
+    routesDir,
+  );
+
+  const modules = await loadFileRoutes(
+    files,
+    (kind, segments) => import(join(routesDir, ...segments, kind)),
+  );
+
+  applyFileRoutes(app, files, modules);
+};
+
 const loadApp = async (seams?: TraceSeams): Promise<LestoAppConfig> => {
   const module = (await import(join(process.cwd(), "lesto.app.ts"))) as {
     default: AppDefault;
@@ -181,7 +226,11 @@ const loadApp = async (seams?: TraceSeams): Promise<LestoAppConfig> => {
 
   const exported = module.default;
 
-  return typeof exported === "function" ? exported(seams) : exported;
+  const config = typeof exported === "function" ? await exported(seams) : exported;
+
+  await applyDiscoveredRoutes(config.app);
+
+  return config;
 };
 
 // True iff the project follows the `app/islands/` convention (ADR 0011); the

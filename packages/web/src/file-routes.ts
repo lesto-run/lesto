@@ -136,6 +136,41 @@ export function applyFileRoutes(
 }
 
 /**
+ * Resolve a discovered file to its module — the one impure seam of the scan→apply
+ * pipeline. The CLI wires a real `import()` (`(kind, segments) => import(path)`); a
+ * test hands a fake. Keeping it injected is what lets {@link loadFileRoutes} stay
+ * pure over its inputs and 100%-testable with no filesystem.
+ */
+export type RouteModuleLoader = (
+  kind: FileRoute["kind"],
+  segments: ReadonlyArray<string>,
+) => Promise<LoadedRouteModule>;
+
+/**
+ * Build the {@link LoadedFileRoutes} map a scan produced — `import()`-ing each
+ * file through the injected {@link RouteModuleLoader} and keying it the way
+ * {@link applyFileRoutes} reads it. The imports run in parallel; the keys are the
+ * same `routeKey` the applier looks up, so the scan and the load never drift.
+ *
+ *   const files = await scanRoutes(reader, "app/routes");
+ *   const modules = await loadFileRoutes(files, (kind, segs) => import(pathOf(kind, segs)));
+ *   applyFileRoutes(app, files, modules);
+ */
+export async function loadFileRoutes(
+  files: ReadonlyArray<DiscoveredFile>,
+  load: RouteModuleLoader,
+): Promise<LoadedFileRoutes> {
+  const entries = await Promise.all(
+    files.map(
+      async (file) =>
+        [routeKey(file.kind, file.segments), await load(file.kind, file.segments)] as const,
+    ),
+  );
+
+  return new Map(entries);
+}
+
+/**
  * Normalize a page module to a {@link PageDef}, accepting both authoring shapes.
  *
  * A function `default` is the **named-export form**: the default IS the component,
