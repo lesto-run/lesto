@@ -1,8 +1,9 @@
 /**
- * The file-based-routing demo (ADR 0023) driven through the real node app, plus a
- * proof that the demo's declared descriptors match what a REAL `scanRoutes` over
- * `app/routes/` discovers — so the convention is exercised end to end and the
- * hand-declared list can never silently drift from the on-disk tree.
+ * File-based routing (ADR 0023) driven through the real node app, plus a proof
+ * that the GENERATED manifest (`src/routes.gen.ts`, emitted by
+ * `generateRouteManifest` from `app/routes/`) names exactly what a REAL
+ * `scanRoutes` over the on-disk tree discovers — so the committed manifest can
+ * never silently drift from the files (`build.ts` regenerates it).
  */
 
 import { readdir } from "node:fs/promises";
@@ -15,7 +16,7 @@ import type { DirEntry } from "@lesto/router";
 import type { LestoResponse } from "@lesto/web";
 
 import { buildApp } from "../src/app";
-import { GALLERY_FILES } from "../src/file-routes-demo";
+import { files as manifestFiles } from "../src/routes.gen";
 
 /** Drain a page's streamed body (or pass a string body through) for assertions. */
 async function body(response: LestoResponse): Promise<string> {
@@ -43,15 +44,16 @@ const nodeReader = async (path: string): Promise<readonly DirEntry[]> => {
 const keyOf = (file: { kind: string; segments: readonly string[] }): string =>
   `${file.kind}:${file.segments.join("/")}`;
 
-describe("file-based routing — scan matches the declared tree", () => {
-  it("scanRoutes over app/routes/ reproduces the demo's descriptor list", async () => {
+describe("file-based routing — scan matches the generated manifest", () => {
+  it("scanRoutes over app/routes/ reproduces the generated manifest's files", async () => {
     const routesDir = fileURLToPath(new URL("../app/routes", import.meta.url));
 
     const scanned = await scanRoutes(nodeReader, routesDir);
 
-    // The real on-disk scan and the demo's hand-declared GALLERY_FILES must name
-    // the SAME set of routes — the layout, the gallery page, and the [id] page.
-    expect(scanned.map(keyOf).sort()).toEqual(GALLERY_FILES.map(keyOf).sort());
+    // The real on-disk scan and the committed, generated manifest must name the
+    // SAME set of routes — the layout, the gallery page, and the [id] page. If a
+    // file is added/removed without regenerating, this fails loudly.
+    expect(scanned.map(keyOf).sort()).toEqual(manifestFiles.map(keyOf).sort());
   });
 });
 

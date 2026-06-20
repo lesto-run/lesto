@@ -17,7 +17,7 @@
 
 import type { ReactNode } from "react";
 
-import { lesto } from "@lesto/web";
+import { applyFileRoutes, lesto } from "@lesto/web";
 import type { Context, Handler, LestoResponse, Lesto } from "@lesto/web";
 import { defineFlags } from "@lesto/flags";
 import { createGuard, definePolicy } from "@lesto/authz";
@@ -35,7 +35,9 @@ import { SaveNote } from "./ui/save-note";
 import { DeferredPanel } from "./ui/deferred-panel";
 import { buildContentRoutes } from "./content";
 import type { ContentStore } from "./content";
-import { buildGalleryRoutes } from "./file-routes-demo";
+// The file-route manifest `lesto build` generates from app/routes/ — static
+// imports the edge bundler sees, no hand-maintained list. (Generated; do not edit.)
+import { files as galleryFiles, modules as galleryModules } from "./routes.gen";
 import { LISTINGS, findListing, formatPrice } from "./listings";
 import type { Listing } from "./listings";
 
@@ -516,11 +518,11 @@ export function buildLabRoutes(contentStore?: ContentStore): Lesto {
       })
       .route(flagGated)
       .route(adminGated)
-      // The file-based-routing demo (ADR 0023): `/lab/gallery` and
-      // `/lab/gallery/:id` are registered purely by the files under `app/routes/`,
-      // composed onto this same router by `applyFileRoutes` — co-existing with
-      // every hand-written `.page` above.
-      .route(buildGalleryRoutes())
+      // File-based routing (ADR 0023): `/lab/gallery` and `/lab/gallery/:id` are
+      // registered purely by the files under `app/routes/`, via the generated
+      // manifest — composed onto this same router by `applyFileRoutes`, co-existing
+      // with every hand-written `.page` above. No hand-maintained route map.
+      .route(applyFileRoutes(lesto(), galleryFiles, galleryModules))
       // DB-driven (WordPress-style) pages: a block tree loaded by slug.
       .route(buildContentRoutes(contentStore))
       // The @lesto/admin dogfood: paginated CRUD + the onMutation audit trail.

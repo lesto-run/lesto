@@ -171,6 +171,61 @@ export async function loadFileRoutes(
 }
 
 /**
+ * Generate the source of a STATIC route manifest from a scan — the edge's answer
+ * to "drop a file → it routes" where `loadFileRoutes`'s runtime `import()` can't
+ * go (a Cloudflare Worker has no `node:fs`, and its bundler must SEE every import
+ * statically). The CLI/build writes this string to a `routes.gen.ts` the app and
+ * the Worker both import; the bundler then folds the routes into the edge bundle.
+ * This is the same move Astro / TanStack / React Router make — a generated route
+ * tree of literal imports — and it replaces any hand-maintained file list/map.
+ *
+ * `importBase` is the path from the generated file to the convention dir
+ * (`"../app/routes"` for a `src/routes.gen.ts` over `app/routes/`); each module is
+ * imported from `<importBase>/<…segments>/<kind>`. The keys are the SAME
+ * {@link routeKey} the applier looks up, computed here so the generated map needs
+ * no key logic of its own. Output is deterministic (sorted by key) so regenerating
+ * an unchanged tree is byte-stable.
+ */
+export function generateRouteManifest(
+  files: ReadonlyArray<DiscoveredFile>,
+  options: { readonly importBase: string },
+): string {
+  const sorted = [...files].toSorted((a, b) =>
+    routeKey(a.kind, a.segments).localeCompare(routeKey(b.kind, b.segments)),
+  );
+
+  const imports = sorted.map(
+    (file, i) =>
+      `import * as m${i} from "${options.importBase}/${[...file.segments, file.kind].join("/")}";`,
+  );
+
+  const fileLines = sorted.map(
+    (file) =>
+      `  { kind: ${JSON.stringify(file.kind)}, segments: ${JSON.stringify(file.segments)} },`,
+  );
+
+  const mapLines = sorted.map(
+    (file, i) =>
+      `  [${JSON.stringify(routeKey(file.kind, file.segments))}, m${i} as LoadedRouteModule],`,
+  );
+
+  return `${[
+    "// AUTO-GENERATED from app/routes/ by lesto — do not edit.",
+    'import type { DiscoveredFile, LoadedFileRoutes, LoadedRouteModule } from "@lesto/web";',
+    "",
+    ...imports,
+    "",
+    "export const files: readonly DiscoveredFile[] = [",
+    ...fileLines,
+    "];",
+    "",
+    "export const modules: LoadedFileRoutes = new Map<string, LoadedRouteModule>([",
+    ...mapLines,
+    "]);",
+  ].join("\n")}\n`;
+}
+
+/**
  * Normalize a page module to a {@link PageDef}, accepting both authoring shapes.
  *
  * A function `default` is the **named-export form**: the default IS the component,

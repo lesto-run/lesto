@@ -24,6 +24,7 @@
     "@lesto/migrate": "workspace:*",
     "@lesto/observability": "workspace:*",
     "@lesto/ratelimit": "workspace:*",
+    "@lesto/router": "workspace:*",
     "@lesto/runtime": "workspace:*",
     "@lesto/sites": "workspace:*",
     "@lesto/ui": "workspace:*",

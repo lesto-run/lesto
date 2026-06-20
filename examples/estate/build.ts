@@ -14,12 +14,33 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { readdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+
+import { scanRoutes } from "@lesto/router";
+import { generateRouteManifest } from "@lesto/web";
 
 import { buildProductionSite } from "./src/production";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const OUT = fileURLToPath(new URL("./out", import.meta.url));
+
+// Regenerate the file-route manifest from app/routes/ before bundling, so the
+// committed src/routes.gen.ts the app + Worker import never drifts from the tree.
+// This is the Lesto codegen (`generateRouteManifest`); estate hand-wires nothing.
+const routeFiles = await scanRoutes(
+  async (path) =>
+    (await readdir(path, { withFileTypes: true })).map((entry) => ({
+      name: entry.name,
+      isDirectory: entry.isDirectory(),
+    })),
+  fileURLToPath(new URL("./app/routes", import.meta.url)),
+);
+await writeFile(
+  fileURLToPath(new URL("./src/routes.gen.ts", import.meta.url)),
+  generateRouteManifest(routeFiles, { importBase: "../app/routes" }),
+);
+console.log(`generated src/routes.gen.ts (${routeFiles.length} route files)`);
 
 // The prerender constructs the dynamic app only to render the static marketing
 // zone — which mints no tokens — so it needs *a* valid identity secret but the

@@ -5,7 +5,12 @@ import { z } from "zod";
 
 import type { DiscoveredFile } from "@lesto/router";
 
-import { applyFileRoutes, loadFileRoutes, routeKey } from "../src/file-routes";
+import {
+  applyFileRoutes,
+  generateRouteManifest,
+  loadFileRoutes,
+  routeKey,
+} from "../src/file-routes";
 import type { LoadedFileRoutes, LoadedRouteModule } from "../src/file-routes";
 import { lesto } from "../src/lesto";
 import type { PageDef } from "../src/render-page";
@@ -117,6 +122,47 @@ describe("loadFileRoutes", () => {
     expect(html).toContain('<div id="root">'); // the layout wrap
     expect(html).toContain("<h1>home</h1>"); // the page component (named-export default)
     expect(html).toContain("<title>Posts</title>"); // the named metadata export, applied
+  });
+});
+
+describe("generateRouteManifest", () => {
+  it("emits static imports + a files list + a keyed module map, sorted and deterministic", () => {
+    const src = generateRouteManifest(
+      [page("lab", "gallery", "[id]"), layout(), page("lab", "gallery")],
+      {
+        importBase: "../app/routes",
+      },
+    );
+
+    // One static import per file (the edge bundler must see these), path = importBase/…segments/kind.
+    expect(src).toContain('import * as m0 from "../app/routes/layout";');
+    expect(src).toContain('import * as m1 from "../app/routes/lab/gallery/page";');
+    expect(src).toContain('import * as m2 from "../app/routes/lab/gallery/[id]/page";');
+
+    // The map, keyed exactly as the applier looks up (routeKey), in sorted order.
+    expect(src).toContain('["layout:", m0 as LoadedRouteModule]');
+    expect(src).toContain('["page:lab/gallery", m1 as LoadedRouteModule]');
+    expect(src).toContain('["page:lab/gallery/[id]", m2 as LoadedRouteModule]');
+
+    // The raw-segment files list the applier compiles.
+    expect(src).toContain('{ kind: "page", segments: ["lab","gallery","[id]"] }');
+
+    // Deterministic: a different input order yields byte-identical output.
+    const reordered = generateRouteManifest(
+      [layout(), page("lab", "gallery"), page("lab", "gallery", "[id]")],
+      { importBase: "../app/routes" },
+    );
+    expect(reordered).toBe(src);
+  });
+
+  it("emits a valid, import-free manifest for an empty tree", () => {
+    const src = generateRouteManifest([], { importBase: "../app/routes" });
+
+    expect(src).toContain("export const files: readonly DiscoveredFile[] = [");
+    expect(src).toContain(
+      "export const modules: LoadedFileRoutes = new Map<string, LoadedRouteModule>([",
+    );
+    expect(src).not.toContain("import * as m");
   });
 });
 
