@@ -114,20 +114,35 @@ For the deeper model behind all of this — apps, sites, islands, the kernel —
 
 ## Add a page
 
-A page is a component with an optional server `load` and `metadata`. Add one to
-`buildApp` in `lesto.app.ts`:
+A page pairs a server `load` with a component that renders its result. Write the
+component as an ordinary React component in a `.tsx` file:
+
+```tsx
+// src/posts-page.tsx
+import type { Post } from "./posts";
+
+export function PostsPage({ posts }: { posts: Post[] }) {
+  return (
+    <main>
+      <h1>Posts</h1>
+      {posts.map((post) => (
+        <p key={post.id}>{post.title}</p>
+      ))}
+    </main>
+  );
+}
+```
+
+Then register it in `lesto.app.ts`:
 
 ```ts
-.page("/posts", {
+import { PostsPage } from "./src/posts-page";
+
+app.page("/posts", {
   load: async () => ({ posts: await db.select().from(posts).orderBy(posts.id, "asc").all() }),
-  component: ({ posts }) => createElement(
-    "main",
-    null,
-    createElement("h1", null, "Posts"),
-    ...posts.map((p) => createElement("p", { key: p.id }, p.title)),
-  ),
+  component: PostsPage,
   metadata: () => ({ title: "Posts" }),
-})
+});
 ```
 
 `load` runs on the server before render; its return value is the component's
