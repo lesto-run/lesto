@@ -217,6 +217,14 @@ const applyDiscoveredRoutes = async (app: LestoAppConfig["app"]): Promise<void> 
   );
 
   applyFileRoutes(app, files, modules);
+
+  // Make the auto-activation visible: file routes register implicitly from the
+  // dir's presence, so a one-line note (on stderr, never polluting `routes`'
+  // stdout) tells the operator the convention kicked in and how much it found.
+  const pages = files.filter((file) => file.kind === "page").length;
+  if (pages > 0) {
+    console.error(`lesto: registered ${pages} file route(s) from ${ROUTES_DIR}/`);
+  }
 };
 
 const loadApp = async (seams?: TraceSeams): Promise<LestoAppConfig> => {

@@ -128,3 +128,22 @@ applyFileRoutes(lesto().get("/api/health", ok), scanned, modules)
 - **A `loading.tsx` / `error.tsx` convention** — streaming + error boundaries
   already exist on the `.page` path; folding them into the file convention is a
   future, additive step.
+
+### Limitations & gotchas (the auto-scan + edge codegen, ADR 0027)
+
+The CLI later grew an **auto-scan** (`lesto dev`/`serve`/`build`/`routes` apply
+`app/routes/` with no wiring) and `generateRouteManifest` (a static-import manifest
+for the edge, since a Worker has no `node:fs`; estate uses it instead of a
+hand-written list). Two consequences an author must know:
+
+- **Guards attach at the ROOT, not to a `.route()` scope.** Auto-discovered file
+  routes register flat on the app and inherit its root `.use(...)` middleware (and
+  the kernel's app-wide security stack) — but NOT the middleware of a mounted
+  `.route("/admin", guarded)` sub-app. Dropping `app/routes/admin/page.tsx` does
+  **not** inherit that sub-app's guard. Guard file routes at the app root (or with
+  app-wide middleware); a per-directory guard convention is a future, additive step.
+- **Static prerender still needs a `lesto.sites.ts` entry.** A file route renders
+  live under `dev`/`serve`, but `lesto build` only prerenders the routes a static
+  site's `pages` list names. A dropped-in page is served dynamically, not baked into
+  the static output, until it is added to that list (auto-deriving the prerender set
+  from the file tree is a future step).

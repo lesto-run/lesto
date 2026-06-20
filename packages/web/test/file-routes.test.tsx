@@ -123,6 +123,23 @@ describe("loadFileRoutes", () => {
     expect(html).toContain("<h1>home</h1>"); // the page component (named-export default)
     expect(html).toContain("<title>Posts</title>"); // the named metadata export, applied
   });
+
+  it("re-raises a coded error, naming the file, when a route module fails to load", async () => {
+    // A throw / bad import inside a page file must surface as a coded error that
+    // names the file — not abort the whole command with a raw stack.
+    await expect(
+      loadFileRoutes([page()], async () => {
+        throw new Error("kaboom inside the route file");
+      }),
+    ).rejects.toMatchObject({ code: "WEB_FILE_ROUTE_LOAD_FAILED" });
+
+    // A non-Error throw is stringified into the message, never crashes the loader.
+    await expect(
+      loadFileRoutes([page("blog")], async () => {
+        throw { reason: "boom" };
+      }),
+    ).rejects.toBeInstanceOf(WebError);
+  });
 });
 
 describe("generateRouteManifest", () => {
@@ -163,6 +180,14 @@ describe("generateRouteManifest", () => {
       "export const modules: LoadedFileRoutes = new Map<string, LoadedRouteModule>([",
     );
     expect(src).not.toContain("import * as m");
+  });
+
+  it("refuses a tree the runtime applier would reject (no manifest that throws at apply)", () => {
+    // A catch-all segment is unsupported; codegen must fail HERE, not emit a
+    // manifest that bundles cleanly then throws the moment it is applied.
+    expect(() =>
+      generateRouteManifest([page("[...rest]")], { importBase: "../app/routes" }),
+    ).toThrow();
   });
 });
 
@@ -319,6 +344,27 @@ describe("applyFileRoutes", () => {
     );
 
     expect(userGetRoutes(app)).toEqual([{ method: "GET", pattern: "/listings" }]);
+  });
+
+  it("refuses a page that default-exports a non-component / non-PageDef, by code", () => {
+    const home = page();
+
+    // null (a forgotten component), a bare value, and an object with no component
+    // — each a common authoring slip — must be refused at registration, not boot a
+    // route that 500s (or renders nothing) per request.
+    for (const bad of [null, 42, {}]) {
+      try {
+        applyFileRoutes(
+          lesto(),
+          [home],
+          moduleMap([home, { default: bad } as unknown as LoadedRouteModule]),
+        );
+        expect.unreachable(`a ${String(bad)} default should be refused`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(WebError);
+        expect((error as WebError).code).toBe("WEB_FILE_ROUTE_INVALID_PAGE");
+      }
+    }
   });
 
   it("refuses a page whose module was not loaded, by code", () => {
