@@ -37,14 +37,43 @@ import { wrap } from "./render-page";
 import type { Layout, PageDef } from "./render-page";
 
 /**
+ * A route module's default when it is a component rather than a {@link PageDef}
+ * object — a page component (the named-export form) or a layout. `ComponentType`
+ * over `never` props accepts any component (props are contravariant), so a
+ * concretely-typed `({ listings }) => …` page and a `({ children }) => …` layout
+ * both assign here; {@link toPageDef} and the layout chain narrow at the use site.
+ */
+type RouteComponent = ComponentType<never>;
+
+/**
  * One loaded route module, keyed in {@link LoadedFileRoutes} by the directory it
- * lives at. A `page` module's `default` is the {@link PageDef} that directory's
- * URL renders; a `layout` module's `default` is the {@link Layout} that wraps the
- * pages at or below it. The loader (the bin) builds this map by `import()`-ing each
- * file the scan found; a test hands a literal map, so the applier needs no fs.
+ * lives at.
+ *
+ * A `page` module may export its definition in EITHER shape — {@link toPageDef}
+ * folds both to one `PageDef`:
+ *   - **named-export form** (idiomatic, Next/Remix-style): `export default` the
+ *     component, with optional named `load` / `metadata` / `params` / `static` /
+ *     `cache` exports; or
+ *   - **object form**: `export default` a whole {@link PageDef}.
+ * A `layout` module's `default` is the {@link Layout} that wraps the pages at or
+ * below it. The loader (the bin / the generated route map) builds this map by
+ * importing each file the scan found; a test hands a literal map, so the applier
+ * needs no fs.
  */
 export interface LoadedRouteModule {
-  default: PageDef | Layout;
+  /** A {@link PageDef} object, a page component (named-export form), or a layout. */
+  default: PageDef | RouteComponent;
+
+  /**
+   * The page component's cross-cutting concerns, as named exports — read only when
+   * `default` is the component. Ignored for the object form (which carries them on
+   * the `PageDef`) and for a layout (which has none).
+   */
+  load?: PageDef["load"];
+  params?: PageDef["params"];
+  metadata?: PageDef["metadata"];
+  static?: PageDef["static"];
+  cache?: PageDef["cache"];
 }
 
 /**
@@ -107,6 +136,33 @@ export function applyFileRoutes(
 }
 
 /**
+ * Normalize a page module to a {@link PageDef}, accepting both authoring shapes.
+ *
+ * A function `default` is the **named-export form**: the default IS the component,
+ * so assemble the `PageDef` from it plus the module's named `load` / `metadata` /
+ * `params` / `static` / `cache`. A non-function `default` is already a `PageDef`
+ * **object** — used verbatim, the original form. The discriminator is `typeof`: a
+ * component is a function (function or class), a `PageDef` is a plain object. This
+ * is what lets a `page.tsx` `export default` its component with named siblings —
+ * the Next/Remix idiom — while every existing `export default <PageDef>` page keeps
+ * working unchanged.
+ */
+function toPageDef(module: LoadedRouteModule): PageDef {
+  const exported = module.default;
+
+  if (typeof exported !== "function") return exported;
+
+  return {
+    component: exported as PageDef["component"],
+    ...(module.load === undefined ? {} : { load: module.load }),
+    ...(module.params === undefined ? {} : { params: module.params }),
+    ...(module.metadata === undefined ? {} : { metadata: module.metadata }),
+    ...(module.static === undefined ? {} : { static: module.static }),
+    ...(module.cache === undefined ? {} : { cache: module.cache }),
+  };
+}
+
+/**
  * Build the {@link PageDef} to register for one page descriptor: its own module's
  * def, with its layout chain composed into the component (outermost layout first).
  *
@@ -118,7 +174,7 @@ export function applyFileRoutes(
 function pageDefFor(route: FileRoute, modules: LoadedFileRoutes): PageDef {
   const pageModule = moduleAt("page", route.segments, modules, route.pattern);
 
-  const def = pageModule.default as PageDef;
+  const def = toPageDef(pageModule);
 
   // `compileFileRoutes` sets `layoutDepth` on EVERY page descriptor (an empty
   // array when no layout sits above it), and this function is only ever called for

@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import type { DiscoveredFile } from "@lesto/router";
 
@@ -92,6 +93,37 @@ describe("applyFileRoutes", () => {
     const html = await drain(await app.handle("GET", "/"));
 
     expect(html).toContain("<h1>home</h1>");
+  });
+
+  it("accepts the named-export form: a default-export component with no named exports", async () => {
+    // The Next/Remix idiom — `export default` the component, nothing else. The
+    // module's `default` is the function itself, not a PageDef object.
+    const home = page();
+    const app = applyFileRoutes(lesto(), [home], moduleMap([home, { default: Home }]));
+
+    const html = await drain(await app.handle("GET", "/"));
+
+    expect(html).toContain("<h1>home</h1>");
+  });
+
+  it("folds named load / params / metadata / static / cache into the PageDef", async () => {
+    // The full named-export form: default component + every cross-cutting concern
+    // as a named export. `load` feeds the component, `metadata` derives the head.
+    const listing = page("listings", "[id]");
+    const mod: LoadedRouteModule = {
+      default: Listing,
+      load: (c) => ({ id: c.param("id") }),
+      params: z.object({}),
+      metadata: () => ({ title: "Listing page" }),
+      static: false,
+      cache: "public",
+    };
+    const app = applyFileRoutes(lesto(), [listing], moduleMap([listing, mod]));
+
+    const html = await drain(await app.handle("GET", "/listings/42"));
+
+    expect(html).toContain("<h1>listing 42</h1>"); // load → component props
+    expect(html).toContain("<title>Listing page</title>"); // named metadata applied
   });
 
   it("returns the same app so file-routes chain with programmatic ones", () => {
