@@ -2,7 +2,7 @@
 title: Auth
 description: Registration, email verification, login, password reset, and two-factor TOTP — with sessions that work on both Node and the edge.
 section: Batteries
-order: 2
+order: 3
 ---
 
 # Auth

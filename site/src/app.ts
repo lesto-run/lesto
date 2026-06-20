@@ -26,7 +26,9 @@ export async function buildAppConfig(): Promise<LestoAppConfig> {
   const docs = await loadDocs();
   const nav = buildNav(docs);
 
-  let app = lesto().layout(DocsLayout);
+  // The search island's client bundle (built into out/docs/client.js); every
+  // page emits its module tag in <head>, which mounts the box on load.
+  let app = lesto().client("/client.js").layout(DocsLayout);
   for (const doc of docs) {
     app = app.page(doc.route, {
       static: true,

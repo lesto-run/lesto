@@ -15,8 +15,8 @@ describe("loadDocs", () => {
     const docs = await loadDocs();
     const routes = docs.map((doc) => doc.route);
 
-    // The skeleton ships six pages; each must render to non-empty HTML.
-    expect(docs.length).toBe(6);
+    // Every doc must have a unique route and render to non-empty HTML.
+    expect(docs.length).toBeGreaterThanOrEqual(18);
     expect(new Set(routes).size).toBe(routes.length);
     for (const doc of docs) {
       expect(doc.title).not.toBe("");
@@ -30,8 +30,11 @@ describe("loadDocs", () => {
 
     expect(routes.has("/")).toBe(true);
     expect(routes.has("/quickstart")).toBe(true);
+    expect(routes.has("/guides/routing")).toBe(true);
     expect(routes.has("/batteries/data")).toBe(true);
+    expect(routes.has("/batteries/admin")).toBe(true);
     expect(routes.has("/deploy/cloudflare")).toBe(true);
+    expect(routes.has("/reference/cli")).toBe(true);
   });
 
   it("renders fenced code with syntax-highlighting markup", async () => {
@@ -54,13 +57,23 @@ describe("buildNav", () => {
   it("groups docs into ordered sections", async () => {
     const nav = buildNav(await loadDocs());
 
-    expect(nav.map((section) => section.title)).toEqual(["Getting started", "Batteries", "Deploy"]);
+    expect(nav.map((section) => section.title)).toEqual([
+      "Getting started",
+      "Guides",
+      "Batteries",
+      "Deploy",
+      "Reference",
+    ]);
   });
 
   it("orders pages within a section by their `order`", async () => {
     const nav = buildNav(await loadDocs());
     const gettingStarted = nav.find((section) => section.title === "Getting started");
 
-    expect(gettingStarted?.items.map((item) => item.title)).toEqual(["Introduction", "Quickstart"]);
+    expect(gettingStarted?.items.map((item) => item.title)).toEqual([
+      "Introduction",
+      "Quickstart",
+      "Concepts",
+    ]);
   });
 });

@@ -11,6 +11,7 @@
 
 import type { ReactElement, ReactNode } from "react";
 
+import SearchIsland from "../../app/islands/search";
 import { DOCS_CSS } from "./styles";
 
 export function DocsLayout({ children }: { children: ReactNode }): ReactElement {
@@ -23,6 +24,7 @@ export function DocsLayout({ children }: { children: ReactNode }): ReactElement 
         </span>
         <span className="tag">docs</span>
         <span className="spacer" />
+        <SearchIsland />
         <nav>
           <a href="/quickstart">Quickstart</a>
           <a href="https://github.com/lesto-run/lesto">GitHub</a>

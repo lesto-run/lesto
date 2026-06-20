@@ -34,6 +34,8 @@ export interface DocEntry {
   readonly order: number;
   /** The sanitized HTML body produced by `@lesto/content-markdown`. */
   readonly html: string;
+  /** The raw Markdown body — the source for the search index's keywords. */
+  readonly text: string;
   /** The heading outline used to build the right-rail table of contents. */
   readonly headings: readonly DocHeading[];
 }
@@ -48,10 +50,11 @@ export interface NavSection {
 const SITE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Sections render in this order; any section not named here sorts after, alphabetically. */
-const SECTION_ORDER = ["Getting started", "Batteries", "Deploy"] as const;
+const SECTION_ORDER = ["Getting started", "Guides", "Batteries", "Deploy", "Reference"] as const;
 
 /** A content entry's frontmatter and rendered body, the slice this module reads. */
 interface RawEntry extends DocFrontmatter {
+  readonly content: string;
   readonly file: { readonly pathSegments: readonly string[] };
   readonly rendered?: { readonly html: string; readonly headings: readonly DocHeading[] };
 }
@@ -70,6 +73,7 @@ function toDocEntry(entry: RawEntry): DocEntry {
     section: entry.section,
     order: entry.order,
     html: entry.rendered?.html ?? "",
+    text: entry.content,
     headings: entry.rendered?.headings ?? [],
   };
 }

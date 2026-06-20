@@ -27,11 +27,16 @@ describe("doc routes", () => {
       const response = await app.handle("GET", doc.route);
       const html = await text(response);
 
-      expect(response.status).toBe(200);
-      expect(html).toContain(`${doc.title} · Lesto`); // the <title>
+      expect(response.status, doc.route).toBe(200);
       expect(html).toContain("docs-sidebar"); // the layout/page chrome
       expect(html).toContain("docs-article");
     }
+  });
+
+  it("sets each page's <title> from its metadata", async () => {
+    const html = await text(await app.handle("GET", "/"));
+
+    expect(html).toContain("<title>Introduction · Lesto</title>");
   });
 
   it("highlights code blocks on a page that has them", async () => {
@@ -44,6 +49,13 @@ describe("doc routes", () => {
     const html = await text(await app.handle("GET", "/quickstart"));
 
     expect(html).toContain('class="active"');
+  });
+
+  it("renders the search island fallback and the client module on every page", async () => {
+    const html = await text(await app.handle("GET", "/"));
+
+    expect(html).toContain("docs-search-input"); // the island's SSR fallback
+    expect(html).toContain('src="/client.js"'); // the hydration module
   });
 
   it("returns 404 for a path that is not a doc", async () => {

@@ -2,7 +2,7 @@
 title: Queue
 description: A database-backed background job queue with exactly-once delivery, retries, batches, and an operator dashboard.
 section: Batteries
-order: 1
+order: 2
 ---
 
 # Queue
