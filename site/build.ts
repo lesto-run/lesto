@@ -53,6 +53,10 @@ const client = await buildClient(
 const index = buildSearchIndex(await loadDocs(), new Date().toISOString());
 await writeFile(join(SITE_OUT, "search-index.json"), JSON.stringify(index));
 
+// 4. A small SVG favicon (an indigo "L"), referenced from every page's <head>.
+const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#4f46e5"/><path d="M22 15h7v26h17v8H22z" fill="#fff"/></svg>`;
+await writeFile(join(SITE_OUT, "favicon.svg"), FAVICON);
+
 console.log(
   `Prerendered ${pageCount} page(s); bundled ${client.islands.length} island(s); indexed ${index.entries.length} doc(s) → ${SITE_OUT}/`,
 );

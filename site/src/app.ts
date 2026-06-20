@@ -36,6 +36,7 @@ export async function buildAppConfig(): Promise<LestoAppConfig> {
       metadata: () => ({
         title: `${doc.title} · Lesto`,
         ...(doc.description === undefined ? {} : { description: doc.description }),
+        links: [{ rel: "icon", href: "/favicon.svg", type: "image/svg+xml" }],
       }),
     });
   }
