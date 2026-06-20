@@ -1,6 +1,10 @@
 # ADR 0027 — Page module shape (default-export component); reactive data layer deferred
 
-- **Status:** Proposed (revised twice 2026-06-20 — a 3-lens red-team then a Chief-Architect fresh-eyes pass — each of which cut scope. See *Reviews* below.)
+- **Status:** Accepted, partially implemented. The page-module adapter (`7f293d3`)
+  and the Node `app/routes/` auto-scan (`84e1411`) shipped; the dynamic-edge
+  codegen and the whole reactive data layer remain deferred. Revised twice
+  2026-06-20 — a 3-lens red-team then a Chief-Architect fresh-eyes pass — each of
+  which cut scope. See *Reviews* below.
 - **Date:** 2026-06-20
 - **Deciders:** tech lead + owner
 - **Builds on / touches:** ADR 0023 (file-based routing — `applyFileRoutes`, `LoadedRouteModule`), ADR 0012 (`defineDataSource` / island inline data), ADR 0022 (typed mutations / `@lesto/client`).
@@ -77,13 +81,15 @@ a demanded requirement, so none is built until a real app feels the pain.
   path params (`c.param("id")`). estate does the param→fetch→404 in two lines today
   (`[id]/page.tsx:28-32`). Revisit only if that pattern proliferates enough to fund a
   new typed coercion+fetch+404 mechanism.
-- **CLI auto-scan of `app/routes/`.** `scanRoutes`/`compileFileRoutes` exist and are
-  tested, but **nothing in the CLI calls them** (`bin.ts`/`run.ts` never import them);
-  estate hand-lists files because a Worker has no `node:fs`. Wiring "drop a file → it
-  routes" requires a **build-time codegen step** that emits a static, fs-free import
-  map — a new CLI subsystem. High refactor risk; defer until drop-a-file routing is
-  wanted badly enough to fund it. (Until then, `applyFileRoutes` is opt-in with a
-  hand-written module map, as ADR 0023 shipped it.)
+- **CLI auto-scan of `app/routes/` — Node path SHIPPED (`84e1411`).** `lesto dev` /
+  `serve` / `build` / `routes` now scan `app/routes/` and `import()` each
+  page/layout, applying them via `loadFileRoutes` + `applyFileRoutes` — "drop a file
+  → it routes," zero wiring, no codegen artifact. **Still deferred: the dynamic-edge
+  case.** A Worker has no `node:fs`, so live-rendering file routes on the edge needs
+  a build-time **static-import codegen map**; that is the genuinely large/risky piece
+  and has no demanded consumer (the docs site is static; estate keeps its hand-wired
+  map and uses custom entries, not the CLI). Build it when a dynamic-edge app wants
+  drop-a-file routing on the Worker.
 - **Layout `load`.** Layouts are children-only today (`render-page.tsx:44`). Adding
   per-layout data overlaps with the deferred data layer; revisit alongside it.
 - **The reactive data layer ("Weft").** The explored design: declarative *cells*
