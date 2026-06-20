@@ -7,48 +7,200 @@ order: 4
 
 # Admin
 
-`@lesto/admin` is a CRUD service over your `@lesto/db` tables. You declare
-resources; it gives you typed `list` / `get` / `create` / `update` / `destroy`
-with validation, a field allow-list, and a mutation hook for auditing.
+`@lesto/admin` is a typed CRUD backbone over your [`@lesto/db`](/batteries/data)
+tables. You declare resources — a name, a table, two Zod schemas, and a field
+allow-list — and it hands you `list` / `get` / `create` / `update` / `destroy`
+with validation, projection, pagination, and a mutation hook for auditing.
+
+It is the generic CRUD layer a WordPress-style admin UI sits on, but it is _not_
+an HTTP surface. The service is transport-agnostic: it returns plain objects and
+throws coded errors, and you decide how to expose it. Reads and writes go through
+`@lesto/db`; input validation goes through each resource's schemas (the same
+boundary discipline as [Validation](/guides/validation)); projection honors a
+per-resource `fields` allow-list, so an undeclared column never leaks out of a
+row.
 
 ## Define resources
 
+A resource binds a table to its validation and projection contract. Pass them to
+`createAdmin(db, resources, options)`, and inject an `onMutation` hook if you want
+an audit trail.
+
 ```ts
 import { createAdmin } from "@lesto/admin";
+import { z } from "zod";
+
+import { products } from "./schema";
+
+const productInsertSchema = z.object({
+  name: z.string().min(1, "Name is required."),
+  price: z.number().int().nonnegative(),
+  stock: z.number().int().nonnegative(),
+  cost: z.number().int().nonnegative(), // writable, but never projected back
+});
+
+// The update schema is the insert schema with every field optional — a patch.
+const productUpdateSchema = productInsertSchema.partial();
 
 const admin = createAdmin(
   db,
   [
     {
-      name: "products",
-      table: products,
-      insertSchema: productInsertSchema,  // validated on create
-      updateSchema: productUpdateSchema,  // validated on update
-      fields: ["name", "price", "stock"], // projection allow-list
+      name: "products", // the name routes + the API address this resource by
+      table: products, // the @lesto/db table it reads and writes
+      insertSchema: productInsertSchema, // validated before create
+      updateSchema: productUpdateSchema, // validated before update
+      fields: ["name", "price", "stock"], // projection allow-list (+ the PK)
     },
   ],
-  { onMutation: makeAuditHook(db) },       // fires on every create/update/destroy
+  { onMutation: makeAuditHook(db) }, // fires after every committed write
 );
 ```
 
+`cost` is a real, writable column left out of `fields` on purpose: `create` and
+`update` accept it, but `list` and `get` project each row down to
+`{ id, ...fields }`, so it never leaves. Projection is an allow-list, not
+cosmetics. The primary key is resolved once at construction — a table with no
+primary key fails _then_, not on the first request.
+
 ## Use it in routes
 
-The service is transport-agnostic — wire it into whatever routes you like:
+The service is just functions, so wire it into whatever router you like. Each
+handler maps an HTTP verb to an admin method and threads a `{ actor }` context
+through the writes. The admin _attributes_ — it never authenticates — so the
+actor is whatever your host supplies (read it off the session in a real app).
 
 ```ts
-app
-  .get("/admin/products", async (c) =>
-    c.json({ rows: await admin.list("products", { limit: 20, offset: 0 }) }),
+import { lesto } from "@lesto/web";
+
+const app = lesto()
+  .get("/admin/products", async (c) => {
+    const rows = await admin.list("products", { limit: 20, offset: 0 });
+    return c.json({ rows });
+  })
+  .get("/admin/products/:id", (c) =>
+    respond(c, () => admin.get("products", Number(c.param("id")))),
   )
-  .post("/admin/products", (c) =>
-    c.json(await admin.create("products", c.req.body, { actor: "admin" }), 201),
-  )
-  .patch("/admin/products/:id", (c) =>
-    c.json(await admin.update("products", Number(c.param("id")), c.req.body, { actor: "admin" })),
-  );
+  .post("/admin/products", (c) => {
+    const actor = c.header("x-admin-actor") ?? "anonymous";
+    // The raw body goes straight to the admin; it validates against insertSchema.
+    return respond(c, () => admin.create("products", c.req.body, { actor }), 201);
+  })
+  .patch("/admin/products/:id", (c) => {
+    const actor = c.header("x-admin-actor") ?? "anonymous";
+    const id = Number(c.param("id"));
+    return respond(c, () => admin.update("products", id, c.req.body, { actor }));
+  })
+  .delete("/admin/products/:id", (c) => {
+    const actor = c.header("x-admin-actor") ?? "anonymous";
+    const id = Number(c.param("id"));
+    return respond(c, async () => {
+      await admin.destroy("products", id, { actor });
+      return { deleted: id };
+    });
+  });
 ```
 
-Bad input raises a coded `ADMIN_VALIDATION_FAILED`; a missing row,
-`ADMIN_RECORD_NOT_FOUND` — map them to status codes at the boundary. The
-`onMutation` hook receives every change, so an audit log is a few lines. See the
-runnable [`examples/admin`](https://github.com/lesto-run/lesto/tree/main/examples/admin).
+Hand the admin the _raw_ body — don't re-validate at the edge. The resource owns
+one validation authority and one error vocabulary; duplicating the schema at the
+route just drifts.
+
+## Methods
+
+`createAdmin` returns an `Admin` — an object of async functions.
+
+| Method | Signature | Returns |
+| --- | --- | --- |
+| `resources` | `resources(): ResourceSummary[]` | `{ name, fields }` for every resource (schemas + tables stay server-side) |
+| `describe` | `describe(name): ResourceSummary` | The `{ name, fields }` summary for one resource |
+| `list` | `list(name, options?: ListOptions): Promise<Record[]>` | Projected rows `{ id, ...fields }`, ordered by PK, paginated |
+| `get` | `get(name, id): Promise<Record>` | One projected row, or throws `ADMIN_RECORD_NOT_FOUND` |
+| `create` | `create(name, attributes, context?: MutationContext): Promise<Record>` | The created row, projected; fires `onMutation` |
+| `update` | `update(name, id, attributes, context?): Promise<Record>` | The merged row, re-read and projected; fires `onMutation` |
+| `destroy` | `destroy(name, id, context?): Promise<void>` | Nothing; fires `onMutation` |
+
+`ListOptions` is `{ limit?, offset? }` — `limit` defaults to a page size of `50`,
+`offset` to `0`. `MutationContext` is `{ actor? }`, passed straight onto the audit
+event. `update` re-reads the row after writing, so the returned object reflects
+merged state, not just the patch you sent.
+
+## Errors
+
+Every refusal is an `AdminError` carrying a stable `code` — branch on the code,
+never the message. The two you handle most often are `ADMIN_VALIDATION_FAILED`
+(a bad body, with the flattened Zod issues in `details`) and
+`ADMIN_RECORD_NOT_FOUND` (no row for that id). Map them to status at the boundary:
+
+```ts
+import { AdminError } from "@lesto/admin";
+
+function statusForAdminError(error: AdminError): number {
+  switch (error.code) {
+    case "ADMIN_UNKNOWN_RESOURCE":
+    case "ADMIN_RECORD_NOT_FOUND":
+      return 404;
+    case "ADMIN_VALIDATION_FAILED":
+    case "ADMIN_EMPTY_UPDATE":
+      return 422;
+    default:
+      return 500; // e.g. ADMIN_NO_PRIMARY_KEY, a construction-time error
+  }
+}
+
+const respond = async (c, op, okStatus = 200) => {
+  try {
+    return c.json(await op(), okStatus);
+  } catch (error) {
+    if (error instanceof AdminError) {
+      return c.json(
+        { error: error.code, message: error.message, details: error.details },
+        statusForAdminError(error),
+      );
+    }
+    throw error;
+  }
+};
+```
+
+`update` adds `ADMIN_EMPTY_UPDATE` when a validated patch sets no known column —
+the admin re-codes `@lesto/db`'s `DB_EMPTY_UPDATE` into its own vocabulary so
+callers never see a leaked underlying code.
+
+## Auditing
+
+If you injected an `onMutation` hook, it fires once _after_ each committed write
+with an `AuditEvent`: `{ action, actor, resource, id, patch }`. `action` is
+`"create" | "update" | "destroy"`; `patch` is the validated attributes for
+create/update and `undefined` for destroy. The admin doesn't own a sink — it
+hands you the event and lets you decide where it lands. A queryable trail is a
+few lines:
+
+```ts
+import type { AuditEvent } from "@lesto/admin";
+
+function makeAuditHook(db: Db): (event: AuditEvent) => void {
+  return (event) => {
+    void db
+      .insert(auditLog)
+      .values({
+        action: event.action,
+        resource: event.resource,
+        recordId: String(event.id), // a PK may be an int or a slug
+        actor: String(event.actor), // an actor is opaque to the admin
+        at: new Date().toISOString(), // the admin reports the change, not the clock
+      })
+      .run()
+      .catch((error) => console.error("[audit] persist failed:", error));
+  };
+}
+```
+
+The hook signature is synchronous (`(event) => void`), and a throw would
+propagate to the caller _after_ the write already committed — so keep it cheap
+and total, or swallow failures inside it, as above. The write succeeded; a broken
+audit sink shouldn't fail the request.
+
+See the runnable
+[`examples/admin`](https://github.com/lesto-run/lesto/tree/main/examples/admin)
+for the full wiring — routes, the audit table, and the `GET /admin/audit` trail
+those writes produce.

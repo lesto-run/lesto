@@ -8,62 +8,210 @@ order: 0
 # Data
 
 `@lesto/db` is a typed query builder over a `SqlDatabase` handle. You define
-tables as values, and inserts, selects, and joins are inferred from them — the
-same builder running against SQLite in development and Postgres in production.
+tables as plain values, and inserts, selects, updates, and joins are inferred
+from them — there is no base class, no global connection, and no row methods.
+The same schema value backs both your queries and your DDL, so the column list
+lives in exactly one place. The same builder runs against SQLite in development
+and Postgres in production; the only statement that differs between the two is
+offset-without-limit, decided at render time from the dialect you pass.
+
+Reach for it when you want a thin, SQL-faithful layer with end-to-end types and
+no ORM machinery: there is no `.save()`, no lazy-loading proxy, and no identity
+map. Foreign keys and joins are supported (per
+[ADR 0018](https://github.com/lesto-run/lesto/blob/main/docs/adr/0018-relational-data-layer.md));
+declarative `relations()` and eager-loading were deliberately deferred.
 
 ## Define a table
 
+`defineTable` takes a name and a column map. Columns come in five kinds —
+`text`, `integer`, `real`, `boolean`, and `timestamp` — each chained with
+modifiers like `.notNull()`, `.unique()`, `.primaryKey()`, `.default()`, and
+`.references()`. A new column is nullable until you mark it `.notNull()`.
+
 ```ts
-import { defineTable, integer, text, type InferRow } from "@lesto/db";
+import { defineTable, integer, text, boolean, timestamp } from "@lesto/db";
 
 export const posts = defineTable("posts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   title: text("title").notNull(),
   body: text("body").notNull(),
-  createdAt: text("created_at").notNull(),
+  published: boolean("published").notNull().default(false),
+  createdAt: timestamp("created_at").notNull(),
 });
-
-// A row, exactly as SELECT yields it — no base class, just a type.
-export type Post = InferRow<typeof posts>;
 ```
 
-Columns come in five types: `text`, `integer`, `real`, `boolean`, and
-`timestamp`.
+The table value is *also* the column-reference table: `posts.title` is the
+typed column the query layer binds against.
+
+## Infer types
+
+The schema value is the source of truth for your TypeScript types too. Three
+helpers derive shapes from it — no hand-written interfaces, no drift:
+
+```ts
+import type { InferRow, InferInsert, InferUpdate } from "@lesto/db";
+
+type Post = InferRow<typeof posts>;
+//   { id: number; title: string; body: string; published: boolean; createdAt: Date }
+
+type NewPost = InferInsert<typeof posts>;
+//   id and published are optional (default / auto-increment); the rest required
+
+type PostPatch = InferUpdate<typeof posts>;
+//   every column optional
+```
+
+Nullable, defaulted, and auto-assigned columns become optional on insert.
+`boolean` reads back as a JS `boolean` and `timestamp` as a `Date` — both store
+as `INTEGER` but hydrate honestly.
 
 ## Query
 
-`createDb(handle)` wraps a database handle in the typed `Db`. Inserts, selects,
-ordering, counts, and conditions are all inferred from the table:
+`createDb(handle)` wraps a driver handle in the typed `Db`. Each verb is a
+fluent chain that terminates in an awaited driver call — `.get()` for the first
+row (always `LIMIT 1`) or `undefined`, `.all()` for every row, `.run()` for a
+write returning `{ changes }`, and `.count()` for a count:
 
 ```ts
 import { createDb, eq } from "@lesto/db";
 
 const db = createDb(handle);
 
-await db.insert(posts).values({ title, body, createdAt }).returning().get();
+// INSERT — .returning().get() hands back the inserted row, hydrated.
+const created = await db
+  .insert(posts)
+  .values({ title: "On Engines", body: "…", createdAt: new Date() })
+  .returning()
+  .get();
 
+// SELECT
 const all = await db.select().from(posts).orderBy(posts.id, "asc").all();
-const one = await db.select().from(posts).where(eq(posts.id, 1)).get();
+const one = await db.select().from(posts).where(eq(posts.id, created.id)).get();
 const total = await db.select().from(posts).count();
+
+// UPDATE / DELETE — WHERE is required (no unbounded writes).
+await db.update(posts).set({ published: true }).where(eq(posts.id, created.id)).run();
+await db.delete(posts).where(eq(posts.id, created.id)).run();
 ```
 
-Conditions compose: `and`, `or`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`,
-`inList`, `isNull`, `isNotNull`. Relational joins across tables are typed end to
-end.
+## Conditions
 
-## Migrate
-
-Schema changes are migrations, applied by the kernel on boot. Declare them with
-`@lesto/migrate`'s `Schema` builder and hand them to your app config:
+Conditions are small typed values you pass to `.where()`. The column reference
+fixes the value type — `eq(posts.id, "x")` is a compile error. `and` / `or`
+combine them:
 
 ```ts
-import { createApp } from "@lesto/kernel";
+import { and, or, eq, gt, like, inList, isNull } from "@lesto/db";
 
-await createApp({ db: handle, app, migrations: [postsMigration] });
+await db
+  .select()
+  .from(posts)
+  .where(
+    and(
+      eq(posts.published, true),
+      or(like(posts.title, "On %"), gt(posts.id, 10)),
+      isNull(posts.deletedAt),
+    ),
+  )
+  .all();
+
+await db.select().from(posts).where(inList(posts.id, [1, 2, 3])).all();
 ```
 
-## See it run
+## Join two tables
 
-[`examples/blog`](https://github.com/lesto-run/lesto/tree/main/examples/blog)
-is a complete app built on `@lesto/db`: a typed schema, a migration, and a page
-plus JSON API reading through the same handle.
+A join promotes a flat select into a result keyed *by table* — `{ posts, authors }` —
+so two same-named `id` columns never collide. `.innerJoin` / `.leftJoin` each
+take a table value and an `ON` condition; a left join makes the joined side
+`… | null` for rows with no match.
+
+```ts
+import { defineTable, integer, text, createDb, eq } from "@lesto/db";
+
+const authors = defineTable("authors", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+});
+
+const posts = defineTable("posts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  authorId: integer("author_id").references(() => authors.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+});
+
+const db = createDb(handle);
+
+const rows = await db
+  .select()
+  .from(posts)
+  .innerJoin(authors, eq(posts.authorId, authors.id))
+  .where(eq(authors.name, "Ada"))
+  .all();
+
+// rows: { posts: Post; authors: Author }[]  — namespaced, not flattened
+rows[0].posts.title;
+rows[0].authors.name;
+```
+
+To join a table to itself, give one side an `alias(table, "name")` with a
+distinct name. A foreign key declares its target as a thunk — `() => authors.id` —
+whose column type must match, so a wrong reference fails at compile time.
+
+## Column builders
+
+| Builder | Storage | JS type | Notes |
+|---|---|---|---|
+| `text(name)` | `TEXT` | `string` | |
+| `integer(name)` | `INTEGER` | `number` | widens to `BIGINT` on Postgres |
+| `real(name)` | `REAL` | `number` | |
+| `boolean(name)` | `INTEGER` | `boolean` | stored `0`/`1` |
+| `timestamp(name)` | `INTEGER` | `Date` | stored epoch-ms |
+
+Modifiers: `.notNull()`, `.unique()`, `.primaryKey({ autoIncrement })`,
+`.default(value)`, and `.references(() => other.col, { onDelete, onUpdate })`.
+Referential actions are `cascade`, `restrict`, `set null`, and `no action`.
+
+## Condition helpers
+
+| Helper | SQL |
+|---|---|
+| `eq(col, v)` | `col = v` (or `col = otherCol` for a join `ON`) |
+| `ne(col, v)` | `col <> v` |
+| `gt` / `gte` / `lt` / `lte` | `>`, `>=`, `<`, `<=` |
+| `like(col, pattern)` | `col LIKE pattern` (text columns only) |
+| `inList(col, values)` | `col IN (…)` (empty list ⇒ matches nothing) |
+| `isNull(col)` / `isNotNull(col)` | `col IS [NOT] NULL` |
+| `and(...)` / `or(...)` | combine conditions |
+
+Every value rides a `?` placeholder, so SQL injection is structurally
+impossible. Terminals: `returning()` (insert), `get()`, `all()`, `count()`.
+
+Errors are coded, not just prose: a refused operation throws a `DbError` with a
+stable `DbErrorCode` such as `DB_EMPTY_INSERT`, `DB_EMPTY_UPDATE`,
+`DB_UNRESOLVED_REFERENCE`, or `DB_DUPLICATE_JOIN_NAMESPACE`. Branch on the
+`code`, never the message.
+
+## Notes and gotchas
+
+- **It is a query builder, not an ORM.** Query roots are single-table
+  (`select().from(t)`), but joins and foreign keys are supported per ADR 0018.
+  Declarative `relations()` and eager-loading were deliberately deferred to a
+  follow-on; for multi-table reads, use a join (or `db.raw()` for SQL the DSL
+  does not model).
+- **`UPDATE` and `DELETE` require a `WHERE`.** There is no unbounded write.
+- **Dialect via `createDb(handle, { dialect })`.** Defaults to `"sqlite"`; pass
+  `"postgres"` in production. Cross-dialect parity is verified in CI against a
+  real Postgres, so "SQLite local, Postgres prod, same APIs" stays literally
+  true.
+- **`db.raw(sql, params)` and `db.exec(sql)`** are the escape hatches for SQL
+  outside the builder; `raw` binds parameters and returns rows, `exec` runs a
+  side-effecting statement with no parameters.
+
+## See also
+
+- [Migrations](/batteries/migrations) — applying schema changes on boot.
+- [Validation](/guides/validation) — validating input at the boundary before it
+  reaches the data layer.
+- [`examples/blog`](https://github.com/lesto-run/lesto/tree/main/examples/blog)
+  is a complete, runnable app built on `@lesto/db`: a typed schema, a migration,
+  and a page plus JSON API reading through the same handle.

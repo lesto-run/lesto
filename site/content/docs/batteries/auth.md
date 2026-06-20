@@ -7,47 +7,206 @@ order: 3
 
 # Auth
 
-`@lesto/identity` is the full account lifecycle — register, verify, login, reset
-— built on `@lesto/auth`'s primitives: scrypt password hashing (fixed key length,
-fail-closed), signed and database-backed sessions, and TOTP two-factor.
+Lesto splits authentication across two packages. `@lesto/auth` owns the
+primitives — scrypt password hashing, TOTP one-time codes, recovery codes, and
+the session stores — each a small, dependency-free function over `node:crypto`.
+`@lesto/identity` is the account lifecycle assembled on top of them: register,
+verify email, login, password reset, and TOTP enrollment, wired over your
+database and a mailer.
 
-## Identity
+Most apps talk to `@lesto/identity`. You reach for `@lesto/auth` when you want a
+piece on its own — a signed token on the edge, or a password hash outside the
+account flow.
 
-`createIdentity` wires the account flows over your database and a mailer:
+## Wiring an identity service
+
+`createIdentity` is a closure factory: pass it a database handle, a signing
+secret, and a mailer, and it returns an object of plain functions. The `db`
+handle is explicit — identity never reaches for a global.
 
 ```ts
 import { createIdentity } from "@lesto/identity";
+import { installSessionSchema, sqlSessionStore } from "@lesto/auth";
 
-const identity = createIdentity({ db, mailer, secret });
+await installSessionSchema(sql); // idempotent — safe at every boot
 
-await identity.register({ email, password });   // sends a verification email
-const { session } = await identity.login(email, password);
+const identity = createIdentity({
+  db,
+  secret: process.env.LESTO_AUTH_SECRET!, // >= 32 bytes; openssl rand -hex 32
+  sessionStore: sqlSessionStore(sql),
+  mailer: { sendVerificationEmail, sendPasswordResetEmail },
+  verificationUrl: (token) => `https://app.com/verify?token=${token}`,
+  resetUrl: (token) => `https://app.com/reset?token=${token}`,
+});
 ```
 
-The secret-strength guard rejects a weak signing secret at construction, so a
-misconfigured deployment fails closed rather than signing sessions with a guessable key.
+`secret` backs the HMAC signatures on verification and reset tokens. The
+secret-strength guard rejects anything under 32 bytes at construction, so a
+misconfigured deployment fails closed at startup rather than signing tokens with
+a guessable key. Without an explicit `sessionStore`, identity defaults to an
+in-memory store suited to a single process.
 
-## Two-factor
-
-TOTP and single-use recovery codes are built in:
+## Register, verify, login
 
 ```ts
-await identity.verifyTotpChallenge(user.id, code);
-await identity.verifyRecoveryCode(user.id, code);
+// Sends a verification email; no session is issued yet.
+await identity.register("ada@example.com", "correct horse battery staple");
+
+// The user clicks the link; verifyEmail is idempotent.
+await identity.verifyEmail(tokenFromLink);
+
+// Login is gated on verification by default.
+const { user, session } = await identity.login(
+  "ada@example.com",
+  "correct horse battery staple",
+);
 ```
+
+`register` is enumeration-safe: a colliding email returns the same
+`{ status: "verification_sent" }` shape and spends the same scrypt cost, so an
+attacker cannot probe which emails are registered. `login` returns
+`IDENTITY_INVALID_CREDENTIALS` for both an unknown email and a wrong password,
+and always runs one `verifyPassword` so the two paths are timing-equal.
+
+To set the cookie from a handler, use the cookie helpers `@lesto/identity` ships:
+
+```ts
+import { readSessionToken, sessionCookie, clearSessionCookie } from "@lesto/identity";
+
+const { session } = await identity.login(email, password);
+return {
+  status: 303,
+  headers: { Location: "/app", "Set-Cookie": sessionCookie(session.token) },
+};
+```
+
+## Password reset
+
+```ts
+// Always resolves "reset_sent", even for an unknown email (enumeration-safe).
+await identity.requestPasswordReset("ada@example.com");
+
+// The reset token is single-use in effect: it is signed with a secret that
+// mixes in the current password hash, so it dies the moment the password changes.
+await identity.resetPassword(tokenFromLink, "a brand new passphrase");
+```
+
+When the session store is SQL-backed, `resetPassword` also revokes every one of
+the user's live sessions — so a victim's reset ends an attacker's stolen
+session, with no extra wiring.
+
+## Two-factor: TOTP and recovery codes
+
+Enrollment is two steps. `enrollTotp` mints a secret and the `otpauth://`
+provisioning URI you render as a QR code; `confirmTotp` confirms it with the
+first authenticator code and returns the one-time-visible recovery codes.
+
+```ts
+// Both methods take the session token — they act on the signed-in user.
+const { secret, keyUri } = await identity.enrollTotp(sessionToken);
+// ...user scans keyUri, types the first code...
+const { recoveryCodes } = await identity.confirmTotp(sessionToken, code);
+// Show recoveryCodes once — only their scrypt hashes are stored.
+```
+
+After a password login, run the second-factor challenge. These methods take the
+numeric `user.id`, not a session token. Both a live code and a single-use
+recovery code are accepted:
+
+```ts
+if (await identity.hasTotp(user.id)) {
+  if (usingRecoveryCode) {
+    await identity.verifyRecoveryCode(user.id, code);
+  } else {
+    await identity.verifyTotpChallenge(user.id, code);
+  }
+}
+```
+
+A wrong, expired, or replayed code throws `IDENTITY_INVALID_TOTP` — enumeration-quiet,
+so it never reveals whether a factor exists. Wire a `totpRateLimiter` to bound an
+attacker iterating codes; a drained bucket refuses with `IDENTITY_TOTP_THROTTLED`
+before the secret is touched.
+
+## Identity methods
+
+| Method | Signature | Returns |
+| --- | --- | --- |
+| `register` | `(email, password)` | `{ status: "verification_sent", user }` |
+| `verifyEmail` | `(token)` | `User` (idempotent) |
+| `login` | `(email, password)` | `{ user, session }` |
+| `requestPasswordReset` | `(email)` | `{ status: "reset_sent" }` |
+| `resetPassword` | `(token, newPassword)` | `User` |
+| `logout` | `(token)` | `void` |
+| `currentUser` | `(token)` | `User \| undefined` |
+| `enrollTotp` | `(token)` | `{ secret, keyUri }` |
+| `confirmTotp` | `(token, code)` | `{ recoveryCodes }` |
+| `hasTotp` | `(userId)` | `boolean` |
+| `verifyTotpChallenge` | `(userId, code)` | `void` |
+| `verifyRecoveryCode` | `(userId, code)` | `void` |
+
+Every failure throws an `IdentityError` carrying a stable `code` (e.g.
+`IDENTITY_INVALID_CREDENTIALS`, `IDENTITY_EMAIL_NOT_VERIFIED`,
+`IDENTITY_WEAK_SECRET`). Branch on the code, never the message. The lower-level
+primitives throw `AuthError` (`AUTH_INVALID_HASH`, `AUTH_WEAK_SECRET`) the same
+way.
 
 ## Sessions on both tiers
 
-`@lesto/auth` ships two session strategies so the same app authenticates on a
-long-lived Node server and on the ephemeral Cloudflare edge:
+`@lesto/auth` ships two session strategies so one app authenticates on a
+long-lived Node server and on the ephemeral Cloudflare edge.
 
-- **`sqlSessionStore`** — server-side sessions in your database, revocable.
-- **`SignedSessions`** — stateless signed tokens that verify anywhere the secret
-  is known, the right fit for per-PoP Worker isolates (keep TTLs short, since
-  there is no central store to revoke against).
+```ts
+import { sqlSessionStore, installSessionSchema, SignedSessions } from "@lesto/auth";
+
+// Server tier: revocable, store-backed. Tokens are sha256-hashed at rest.
+await installSessionSchema(sql);
+const store = sqlSessionStore(sql);
+
+// Edge tier: stateless HMAC tokens, no store to consult.
+const signed = new SignedSessions({ secret: process.env.LESTO_AUTH_SECRET! });
+const token = signed.issue(String(user.id), 15 * 60 * 1000); // 15-minute TTL
+const claim = signed.verify(token); // { userId, expiresAt } | undefined
+```
+
+- **`sqlSessionStore`** — server-side sessions in your database. Revocable
+  per-token (`delete`) and per-user (`deleteByUserId`), which is what powers
+  revoke-on-reset. The right fit for a Node server. Pass it as `createIdentity`'s
+  `sessionStore`.
+- **`SignedSessions`** — stateless signed tokens. The token *is* the proof: any
+  isolate holding the secret can verify a session it never issued, with no
+  lookup. The right fit for per-PoP Worker isolates where there is no shared
+  store. The trade-off is that a signed token cannot be revoked before it expires
+  — keep its TTL short.
+
+## Notes & gotchas
+
+- **The secret guard fails closed at construction.** A secret under 32 bytes
+  throws `IDENTITY_WEAK_SECRET` (or `AUTH_WEAK_SECRET` for `SignedSessions`) when
+  the service is built, turning a weak key into a startup error, not a silent
+  hole. Generate one with `openssl rand -hex 32` and store it as an env var.
+- **Signed sessions have no pre-expiry revocation.** There is nothing to delete,
+  so a leaked signed token is valid until it ages out. Keep TTLs short (minutes,
+  not days) and pair with the SQL store when instant revocation matters.
+- **Scrypt fails closed.** A malformed stored hash verifies to `false` rather
+  than throwing — a truncated hash can never make every password pass. Hashes are
+  self-describing, so `login` transparently upgrades a stale one on the next
+  successful sign-in.
+- **The `__Host-` cookie needs HTTPS.** The session cookie name carries the
+  browser-enforced `__Host-` prefix, so it is dropped over plain
+  `http://localhost`. Use a dev-mode cookie name there; never drop `Secure` on a
+  real deploy.
+- **Not in v1.** There is no OAuth / social sign-in, no passkeys (WebAuthn), and
+  no magic-link factor. The auth battery is email + password + TOTP. Don't reach
+  for those flows yet.
 
 ## See it run
 
 [`examples/estate`](https://github.com/lesto-run/lesto/tree/main/examples/estate)
 puts it together: an auth-aware static marketing zone and a dynamic authed app on
-one origin, sharing one session across Node and Cloudflare.
+one origin, sharing one session across Node (`sqlSessionStore`) and Cloudflare
+(`SignedSessions`).
+
+Related: [Authorization](/batteries/authz) for who-can-do-what once a user is
+signed in, and [Deploy to Cloudflare](/deploy/cloudflare) for running the edge
+session tier in Worker isolates.
