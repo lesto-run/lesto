@@ -120,15 +120,13 @@ export type {
 // `@lesto/ui/client`.
 export { Link } from "./link";
 export type { LinkProps } from "./link";
+// The app-facing typed-route surface is exactly `route` + the `RegisteredRoutes`
+// augmentation target + `RouteHref` (the <Link href> type). The helpers `HrefFor` /
+// `PatternsOf` / `KnownPatterns` / `ParamArgs` stay exported from `./routes` for
+// `route.ts` and the type-gate (which maps `@lesto/ui` → `routes.ts` directly), but
+// are not in the public barrel — nothing an app author needs.
 export { route } from "./route";
-export type {
-  HrefFor,
-  KnownPatterns,
-  ParamArgs,
-  PatternsOf,
-  RegisteredRoutes,
-  RouteHref,
-} from "./routes";
+export type { RegisteredRoutes, RouteHref } from "./routes";
 export { eligibleAnchor, RELOAD_ATTR } from "./softnav-contract";
 export type { SoftNavAnchor, SoftNavClick } from "./softnav-contract";
 
