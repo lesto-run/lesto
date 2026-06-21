@@ -219,6 +219,10 @@ export const pathFor = (
         // slash so the bare prefix stands (`/shop/*r?` → `/shop`), except at the root
         // where the leading `/` is the path itself (`/*r?` → `/`).
         out += between === "/" ? "/" : between.slice(0, -1);
+      } else if (value.some((segment) => segment === "")) {
+        // An empty element would emit a `//` the match regex rejects — refuse it, so
+        // the documented round-trip holds rather than shipping an unroutable link.
+        throw missing(name);
       } else {
         out += between + value.map((segment) => encodeURIComponent(segment)).join("/");
       }

@@ -222,16 +222,49 @@ describe("generateRouteManifest", () => {
     ).toThrow();
   });
 
-  it("emits ${string} RoutePath + a `*catch-all` RoutePattern for a catch-all page", () => {
+  it("emits a catch-all into RoutePath (as ${string}) but EXCLUDES it from RoutePattern", () => {
     const src = generateRouteManifest([page("docs", "[...slug]")], {
       importBase: "../app/routes",
     });
 
-    // The href form collapses the greedy tail to a single `${string}` slot, so a
-    // deep `/docs/a/b` link matches; the pattern form keeps `*slug`, so `PathParams`
-    // can read the catch-all name (and type it `string[]`).
+    // The href form collapses the greedy tail to a `${string}` slot, so a deep
+    // `/docs/a/b` link matches.
     expect(src).toContain("| `/docs/${string}`");
-    expect(src).toContain('| "/docs/*slug"');
+    // But `route()` only substitutes `:name`, so a catch-all must NOT enter
+    // RoutePattern — else `route("/docs/*slug", …)` would type-check yet return a
+    // literal, unbuilt URL. With no other page, RoutePattern is `never`.
+    expect(src).not.toContain("/docs/*slug");
+    expect(src).toContain("export type RoutePattern = never;");
+  });
+
+  it("emits an optional catch-all's bare-parent path into RoutePath", () => {
+    const src = generateRouteManifest([page("docs", "[[...slug]]")], {
+      importBase: "../app/routes",
+    });
+
+    // `/docs/*slug?` serves both `/docs` and `/docs/a/b`, so RoutePath carries the
+    // bare parent too — a `<Link href="/docs">` (or `<StrictLink>`) is a known route.
+    expect(src).toContain('| "/docs"');
+    expect(src).toContain("| `/docs/${string}`");
+  });
+
+  it("emits the bare root for a root optional catch-all", () => {
+    const src = generateRouteManifest([page("[[...slug]]")], { importBase: "../app/routes" });
+
+    // `/*slug?` serves `/` and `/a/b`, so RoutePath includes the bare root.
+    expect(src).toContain('| "/"');
+    expect(src).toContain("| `/${string}`");
+  });
+
+  it("templates a :param in the optional catch-all's parent, not as a literal", () => {
+    const src = generateRouteManifest([page("u", "[id]", "[[...rest]]")], {
+      importBase: "../app/routes",
+    });
+
+    // The parent `/u/:id` keeps its param as a `${string}` slot — a literal "/u/:id"
+    // would type a href no real link is written as.
+    expect(src).toContain("| `/u/${string}`");
+    expect(src).not.toContain('"/u/:id"');
   });
 
   it("strips a (group) directory from the emitted URL but keeps its raw module key", () => {

@@ -406,6 +406,14 @@ describe("pathFor — catch-all reverse routing", () => {
     );
   });
 
+  it("refuses an empty element inside a catch-all — it would not round-trip", () => {
+    // `["a", "", "b"]` would emit `/docs/a//b`, which `match` rejects; refuse it here
+    // rather than ship an unroutable link, mirroring the empty single-param guard.
+    expect(() => pathFor("/docs/*path", { path: ["a", "", "b"] })).toThrowError(
+      expect.objectContaining({ code: "ROUTER_MISSING_PARAM" }),
+    );
+  });
+
   it("refuses a catch-all given the wrong shape (a missing or a string value)", () => {
     expect(() => pathFor("/docs/*path", {})).toThrowError(
       expect.objectContaining({ code: "ROUTER_MISSING_PARAM" }),
