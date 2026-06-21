@@ -230,12 +230,16 @@ export interface RouteName {
  * refusing anything the file-route convention would.
  *
  * `lesto g page blog/[slug]` → pattern `/blog/:slug`, dir `blog/[slug]`, params
- * `["slug"]`. Each segment is a literal name or a `[param]` (the SAME grammar the
- * router compiles), so the generator never emits a page the router will reject:
- * a catch-all/group segment, an empty path, or a param repeated across segments
- * (which would silently shadow) is refused up front by a stable code. The component
- * name is the path's words PascalCased + `Page`, falling back to `Page` for a path
- * with no identifier characters, so the emitted function name always compiles.
+ * `["slug"]`. Each segment is a literal name or a `[param]` (close to the grammar the
+ * router compiles), so the generator never emits a page the router will reject: a
+ * catch-all/group segment, an empty path, or a param repeated across segments (which
+ * would silently shadow) is refused up front by a stable code. A `.`/`..` segment is
+ * refused too — UNLIKE the router (which only ever sees real directory names from a
+ * `readDir` walk), the generator picks its write target from a user string, so it
+ * must reject the path-navigation forms that would escape `app/routes/`. The
+ * component name is the path's words PascalCased + `Page`, falling back to `Page`
+ * when that would not be a valid identifier (an empty or digit-leading name — both
+ * routes the router serves but TS cannot use as a function name).
  */
 export function routeName(rawPath: string): RouteName {
   const segments = rawPath.split("/").filter((segment) => segment.length > 0);
@@ -251,6 +255,18 @@ export function routeName(rawPath: string): RouteName {
   const params: string[] = [];
 
   const patternSegments = segments.map((segment) => {
+    // `.`/`..` are path navigation, not directory names — a crafted path like
+    // `../../etc/x` would otherwise make `dir` escape `app/routes/` and write the
+    // file anywhere the process can. Refuse them at the source (every caller routes
+    // through here). `..foo`/`sitemap.xml` are ordinary literals and pass.
+    if (segment === "." || segment === "..") {
+      throw new CliError(
+        "CLI_GENERATE_BAD_ROUTE",
+        `route segment "${segment}" is not a directory name — a route path can't contain "." or "..".`,
+        { path: rawPath, segment },
+      );
+    }
+
     const dynamic = ROUTE_DYNAMIC.exec(segment);
 
     if (dynamic !== null) {
@@ -282,18 +298,23 @@ export function routeName(rawPath: string): RouteName {
   });
 
   // The component name is every segment's words (a `[param]` contributes its param
-  // name), with `.` treated as a separator so `sitemap.xml` → `SitemapXmlPage`.
+  // name), with `.` treated as a separator so `sitemap.xml` → `SitemapXmlPage`. It
+  // must be a valid JS identifier: a name that is empty (a symbol-only segment like
+  // `_`) or digit-leading (`2024/[slug]`) — both routes the router serves but TS
+  // won't accept as a `function` name — falls back to `Page`.
   const nameWords = segments.flatMap((segment) => {
     const dynamic = ROUTE_DYNAMIC.exec(segment);
 
     return words((dynamic !== null ? dynamic[1]! : segment).replaceAll(".", "-"));
   });
 
+  const base = pascalCase(nameWords);
+
   return {
     pattern: `/${patternSegments.join("/")}`,
     dir: segments.join("/"),
     params,
-    component: nameWords.length > 0 ? `${pascalCase(nameWords)}Page` : "Page",
+    component: /^[A-Za-z]/.test(base) ? `${base}Page` : "Page",
   };
 }
 

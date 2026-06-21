@@ -467,6 +467,33 @@ describe("routeName", () => {
     expect(routeName("_").component).toBe("Page");
   });
 
+  it("falls back to `Page` for a digit-leading route the router serves but TS can't name", () => {
+    // The router accepts `/2024/:slug`, but `function 2024SlugPage()` is not valid TS.
+    expect(routeName("2024/[slug]")).toEqual({
+      pattern: "/2024/:slug",
+      dir: "2024/[slug]",
+      params: ["slug"],
+      component: "Page",
+    });
+  });
+
+  it("refuses a `.` or `..` segment — no path traversal out of app/routes/", () => {
+    expect(() => routeName(".")).toThrow(CliError);
+    expect(() => routeName("..")).toThrow(CliError);
+
+    const error = (() => {
+      try {
+        routeName("../../etc/cron.d/evil");
+      } catch (caught) {
+        return caught as CliError;
+      }
+      throw new Error("expected a refusal");
+    })();
+
+    expect(error.code).toBe("CLI_GENERATE_BAD_ROUTE");
+    expect(error.message).toContain('can\'t contain "." or ".."');
+  });
+
   it("refuses an empty path", () => {
     expect(() => routeName("/")).toThrow(CliError);
   });
@@ -552,6 +579,13 @@ describe("runGenerate — page", () => {
 
   it("refuses an unsupported route segment before touching the filesystem", async () => {
     const error = await refusal(["page", "docs/[...rest]"]);
+
+    expect(error.code).toBe("CLI_GENERATE_BAD_ROUTE");
+    expect(written).toHaveLength(0);
+  });
+
+  it("refuses a path-traversal segment before writing anything (security)", async () => {
+    const error = await refusal(["page", "../../etc/cron.d/evil"]);
 
     expect(error.code).toBe("CLI_GENERATE_BAD_ROUTE");
     expect(written).toHaveLength(0);
