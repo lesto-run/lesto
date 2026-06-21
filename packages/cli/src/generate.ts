@@ -9,10 +9,13 @@
  *   lesto g model Post title:string published:boolean
  *   lesto g migration add_views_to_posts
  *   lesto g island Counter
+ *   lesto g page blog/[slug]
  *
- * Increment 1 ships three generators — `model`, `migration`, `island` — each a
- * pure (resource name, field list) → file-set function. The remaining surface
- * (`page`, `controller`, `mailer`, `job`) is designed in the ADR and deferred.
+ * Ships four generators — `model`, `migration`, `island`, `page` — each a pure
+ * (name/route, field list) → file-set function. `page` takes a ROUTE PATH rather
+ * than a resource name and emits a file-routed `page.tsx` whose props are inferred
+ * via `PageProps<typeof load>` (the recommended no-restated-interface shape). The
+ * remaining surface (`controller`, `mailer`, `job`) is designed in the ADR and deferred.
  *
  * Like `run`/`runOpenApi`, the core is pure and fully injected: a test hands it a
  * fake `exists`/`write` and a capturing `out` and asserts on the exact files that
@@ -198,6 +201,99 @@ export function resourceName(raw: string): ResourceName {
     snake: snakeCase(parts),
     table: snakeCase(tableParts),
     fileStem: snakeCase(parts),
+  };
+}
+
+/** A literal route segment — the SAME grammar `@lesto/router`'s `STATIC_SEGMENT` accepts. */
+const ROUTE_STATIC = /^[A-Za-z0-9_.-]+$/;
+
+/** A `[name]` dynamic route segment — mirrors `@lesto/router`'s `DYNAMIC_SEGMENT`. */
+const ROUTE_DYNAMIC = /^\[([A-Za-z_][A-Za-z0-9_]*)\]$/;
+
+/** Everything the `page` template needs, derived from a route path. */
+export interface RouteName {
+  /** The URL pattern the page registers at — `/blog/:slug`. */
+  readonly pattern: string;
+
+  /** The directory under `app/routes/` the file lives in — `blog/[slug]`. */
+  readonly dir: string;
+
+  /** The `:param` names in order — empty for a static page. */
+  readonly params: readonly string[];
+
+  /** The PascalCase component name — `BlogSlugPage`. */
+  readonly component: string;
+}
+
+/**
+ * Derive a route's pattern, directory, params, and component name from a path arg,
+ * refusing anything the file-route convention would.
+ *
+ * `lesto g page blog/[slug]` → pattern `/blog/:slug`, dir `blog/[slug]`, params
+ * `["slug"]`. Each segment is a literal name or a `[param]` (the SAME grammar the
+ * router compiles), so the generator never emits a page the router will reject:
+ * a catch-all/group segment, an empty path, or a param repeated across segments
+ * (which would silently shadow) is refused up front by a stable code. The component
+ * name is the path's words PascalCased + `Page`, falling back to `Page` for a path
+ * with no identifier characters, so the emitted function name always compiles.
+ */
+export function routeName(rawPath: string): RouteName {
+  const segments = rawPath.split("/").filter((segment) => segment.length > 0);
+
+  if (segments.length === 0) {
+    throw new CliError(
+      "CLI_GENERATE_BAD_ROUTE",
+      `"${rawPath}" is not a route path — use a path like about or blog/[slug].`,
+      { path: rawPath },
+    );
+  }
+
+  const params: string[] = [];
+
+  const patternSegments = segments.map((segment) => {
+    const dynamic = ROUTE_DYNAMIC.exec(segment);
+
+    if (dynamic !== null) {
+      const param = dynamic[1]!;
+
+      // A param repeated across segments (`[id]/[id]`) compiles to `/:id/:id`, where
+      // the deeper capture silently clobbers the shallower — the router refuses it,
+      // so the generator must not mint it.
+      if (params.includes(param)) {
+        throw new CliError(
+          "CLI_GENERATE_BAD_ROUTE",
+          `route path "${rawPath}" uses the param ":${param}" twice — the deeper would shadow the shallower; rename one.`,
+          { path: rawPath, param },
+        );
+      }
+
+      params.push(param);
+
+      return `:${param}`;
+    }
+
+    if (ROUTE_STATIC.test(segment)) return segment;
+
+    throw new CliError(
+      "CLI_GENERATE_BAD_ROUTE",
+      `route segment "${segment}" is neither a literal name nor a "[param]" — use a path like about or blog/[slug].`,
+      { path: rawPath, segment },
+    );
+  });
+
+  // The component name is every segment's words (a `[param]` contributes its param
+  // name), with `.` treated as a separator so `sitemap.xml` → `SitemapXmlPage`.
+  const nameWords = segments.flatMap((segment) => {
+    const dynamic = ROUTE_DYNAMIC.exec(segment);
+
+    return words((dynamic !== null ? dynamic[1]! : segment).replaceAll(".", "-"));
+  });
+
+  return {
+    pattern: `/${patternSegments.join("/")}`,
+    dir: segments.join("/"),
+    params,
+    component: nameWords.length > 0 ? `${pascalCase(nameWords)}Page` : "Page",
   };
 }
 
@@ -527,6 +623,107 @@ describe("${name.pascal} island", () => {
 }
 
 /**
+ * Render the file-routed `page.tsx` — a `PageDef` whose props are INFERRED from a
+ * standalone `load` via `PageProps<typeof load>`, the shape the examples should have
+ * shown but don't (the review's "PageProps ships but is never used" finding).
+ *
+ * A static route (no `[param]`) gets a no-arg `load`; a dynamic route gets a `load`
+ * typed `(c: Context<pattern>)` that reads each `:param` with `c.param(...)`, so the
+ * typed param flows into the component's props with no restated interface. Pulling
+ * `load` out as a top-level `const` is what makes `typeof load` usable — inside the
+ * object literal it would be a circular self-reference.
+ */
+function pageFile(route: RouteName): string {
+  if (route.params.length === 0) {
+    return `import type { ReactNode } from "react";
+
+import type { PageDef, PageProps } from "@lesto/web";
+
+/**
+ * The \`${route.pattern}\` page — generated by \`lesto g page ${route.dir}\`.
+ *
+ * A \`page.tsx\` registers its directory's URL as a route (ADR 0023). \`load\` runs on
+ * the server to produce props; the component's props are INFERRED from it via
+ * \`PageProps<typeof load>\`, so the shape is declared once — no restated interface.
+ * \`app/routes/\` is discovered by \`applyFileRoutes\` / the generated \`routes.gen.ts\`.
+ */
+const load = () => ({ heading: "${route.pattern}" });
+
+function ${route.component}({ heading }: PageProps<typeof load>): ReactNode {
+  return (
+    <main>
+      <h1>{heading}</h1>
+
+      <p>Edit <code>app/routes/${route.dir}/page.tsx</code> to build this page.</p>
+    </main>
+  );
+}
+
+const page: PageDef<"${route.pattern}", PageProps<typeof load>> = {
+  load,
+  component: ${route.component},
+};
+
+export default page;
+`;
+  }
+
+  const loadLines = route.params.map((param) => `  ${param}: c.param("${param}"),`).join("\n");
+  const destructure = route.params.join(", ");
+  const paramRows = route.params
+    .map((param) => `      <p><code>${param}</code>: {${param}}</p>`)
+    .join("\n");
+
+  return `import type { ReactNode } from "react";
+
+import type { Context, PageDef, PageProps } from "@lesto/web";
+
+/**
+ * The \`${route.pattern}\` page — generated by \`lesto g page ${route.dir}\`.
+ *
+ * Each \`[param]\` directory compiles to a typed \`:param\` the server \`load\` reads
+ * with \`c.param(...)\`; the component's props are INFERRED from \`load\` via
+ * \`PageProps<typeof load>\`, declared once — no restated interface (ADR 0023).
+ */
+const load = (c: Context<"${route.pattern}">) => ({
+${loadLines}
+});
+
+function ${route.component}({ ${destructure} }: PageProps<typeof load>): ReactNode {
+  return (
+    <main>
+      <h1>${route.dir}</h1>
+
+${paramRows}
+    </main>
+  );
+}
+
+const page: PageDef<"${route.pattern}", PageProps<typeof load>> = {
+  load,
+  component: ${route.component},
+};
+
+export default page;
+`;
+}
+
+/** Render the page's test stub — a real, passing smoke test of the emitted `PageDef`. */
+function pageTestFile(route: RouteName): string {
+  return `import { describe, expect, it } from "vitest";
+
+import page from "./page";
+
+describe("${route.pattern} page", () => {
+  it("default-exports a page with a server load", () => {
+    expect(typeof page.component).toBe("function");
+    expect(typeof page.load).toBe("function");
+  });
+});
+`;
+}
+
+/**
  * Plan the `model` generator's files: the model (table + row type + migration)
  * and its test, under `app/models/`.
  */
@@ -560,15 +757,30 @@ function planIsland(name: ResourceName): GeneratedFile[] {
   ];
 }
 
+/**
+ * Plan the `page` generator's files: the file-routed page and its (scanner-ignored)
+ * co-located test, under `app/routes/<dir>/`. The dir is the raw route path, so a
+ * `[param]` directory lands on disk exactly as the convention reads it.
+ */
+function planPage(route: RouteName): GeneratedFile[] {
+  return [
+    { path: `app/routes/${route.dir}/page.tsx`, contents: pageFile(route) },
+    { path: `app/routes/${route.dir}/page.test.tsx`, contents: pageTestFile(route) },
+  ];
+}
+
 /** Format the injected instant as a `YYYYMMDDHHMMSS` UTC migration version stamp. */
 function versionStamp(now: () => number): string {
   return new Date(now()).toISOString().replaceAll(/[-:T]/g, "").slice(0, 14);
 }
 
-/** The generators Increment 1 implements — the rest are designed in ADR 0019. */
-const GENERATORS = ["model", "migration", "island"] as const;
+/** The generators this CLI implements — `controller`/`mailer`/`job` are deferred (ADR 0019). */
+const GENERATORS = ["model", "migration", "island", "page"] as const;
 
 type Generator = (typeof GENERATORS)[number];
+
+/** The resource-named generators (everything but `page`, which takes a route path). */
+type ResourceGenerator = Exclude<Generator, "page">;
 
 /** True iff `value` names a generator this CLI implements today. */
 function isGenerator(value: string | undefined): value is Generator {
@@ -584,7 +796,7 @@ function isGenerator(value: string | undefined): value is Generator {
  * test pins it.
  */
 function planFiles(
-  generator: Generator,
+  generator: ResourceGenerator,
   name: ResourceName,
   fieldTokens: readonly string[],
   now: () => number,
@@ -620,7 +832,7 @@ export async function runGenerate(args: readonly string[], deps: GenerateDeps): 
   if (generator === undefined || rawName === undefined) {
     throw new CliError(
       "CLI_GENERATE_MISSING_ARGS",
-      "generate needs a generator and a name: lesto g <model|migration|island> <Name> [field:type …]",
+      "generate needs a generator and a name: lesto g <model|migration|island|page> <Name|path> [field:type …]",
       { generator, name: rawName },
     );
   }
@@ -633,15 +845,20 @@ export async function runGenerate(args: readonly string[], deps: GenerateDeps): 
     );
   }
 
-  const name = resourceName(rawName);
-
-  // Only the trailing `field:type` tokens feed the model template; a flag like
-  // `--dry-run` is consumed separately, never parsed as a field.
-  const fieldTokens = rest.filter((token) => !token.startsWith("--"));
-
   const dryRun = hasFlag(args, "dry-run");
 
-  const files = planFiles(generator, name, fieldTokens, deps.now);
+  // `page` takes a ROUTE PATH (`blog/[slug]`), not a resource name, and ignores any
+  // trailing tokens; the resource generators take a name plus (for `model`) the
+  // `field:type` tokens, with a flag like `--dry-run` never parsed as a field.
+  const files =
+    generator === "page"
+      ? planPage(routeName(rawName))
+      : planFiles(
+          generator,
+          resourceName(rawName),
+          rest.filter((token) => !token.startsWith("--")),
+          deps.now,
+        );
 
   for (const file of files) {
     if (dryRun) {

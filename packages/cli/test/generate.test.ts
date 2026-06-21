@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { CliError } from "../src/errors";
-import { parseField, resourceName, runGenerate } from "../src/generate";
+import { parseField, resourceName, routeName, runGenerate } from "../src/generate";
 import type { GenerateDeps } from "../src/generate";
 
 // A fixed instant so a `migration` version stamp is deterministic in tests.
@@ -419,5 +419,152 @@ describe("runGenerate — refusals", () => {
     expect(error.code).toBe("CLI_GENERATE_BAD_FIELD");
     expect(error.message).toContain('field "title" is declared twice');
     expect(written).toHaveLength(0);
+  });
+});
+
+describe("routeName", () => {
+  it("derives a static route's pattern, dir, and component name", () => {
+    expect(routeName("about")).toEqual({
+      pattern: "/about",
+      dir: "about",
+      params: [],
+      component: "AboutPage",
+    });
+  });
+
+  it("joins nested static segments", () => {
+    expect(routeName("lab/gallery")).toEqual({
+      pattern: "/lab/gallery",
+      dir: "lab/gallery",
+      params: [],
+      component: "LabGalleryPage",
+    });
+  });
+
+  it("compiles a [param] directory to a typed :param and records it", () => {
+    expect(routeName("blog/[slug]")).toEqual({
+      pattern: "/blog/:slug",
+      dir: "blog/[slug]",
+      params: ["slug"],
+      component: "BlogSlugPage",
+    });
+  });
+
+  it("handles multiple params, camel-splitting each into the component name", () => {
+    expect(routeName("shop/[category]/[itemId]")).toEqual({
+      pattern: "/shop/:category/:itemId",
+      dir: "shop/[category]/[itemId]",
+      params: ["category", "itemId"],
+      component: "ShopCategoryItemIdPage",
+    });
+  });
+
+  it("treats a dot in a literal segment as a word separator", () => {
+    expect(routeName("sitemap.xml").component).toBe("SitemapXmlPage");
+  });
+
+  it("falls back to `Page` when a segment has no identifier characters", () => {
+    expect(routeName("_").component).toBe("Page");
+  });
+
+  it("refuses an empty path", () => {
+    expect(() => routeName("/")).toThrow(CliError);
+  });
+
+  it("refuses a catch-all segment (unsupported by the convention)", () => {
+    const error = (() => {
+      try {
+        routeName("docs/[...rest]");
+      } catch (caught) {
+        return caught as CliError;
+      }
+      throw new Error("expected a refusal");
+    })();
+
+    expect(error.code).toBe("CLI_GENERATE_BAD_ROUTE");
+  });
+
+  it("refuses a (group) segment", () => {
+    expect(() => routeName("(marketing)/home")).toThrow(CliError);
+  });
+
+  it("refuses a param repeated across segments", () => {
+    const error = (() => {
+      try {
+        routeName("a/[id]/[id]");
+      } catch (caught) {
+        return caught as CliError;
+      }
+      throw new Error("expected a refusal");
+    })();
+
+    expect(error.code).toBe("CLI_GENERATE_BAD_ROUTE");
+    expect(error.message).toContain('uses the param ":id" twice');
+  });
+});
+
+describe("runGenerate — page", () => {
+  it("writes a static file-routed page + its co-located test, props inferred from load", async () => {
+    const code = await runGenerate(["page", "about"], depsWith());
+
+    expect(code).toBe(0);
+    expect(written.map((file) => file.path)).toEqual([
+      "app/routes/about/page.tsx",
+      "app/routes/about/page.test.tsx",
+    ]);
+
+    const pageSource = contentsAt("app/routes/about/page.tsx") ?? "";
+
+    // The load→props inference shape the examples should have shown: a standalone
+    // `const load`, then PageProps<typeof load> on the component AND the PageDef.
+    expect(pageSource).toContain('import type { PageDef, PageProps } from "@lesto/web";');
+    expect(pageSource).toContain('const load = () => ({ heading: "/about" });');
+    expect(pageSource).toContain(
+      "function AboutPage({ heading }: PageProps<typeof load>): ReactNode",
+    );
+    expect(pageSource).toContain('const page: PageDef<"/about", PageProps<typeof load>> = {');
+    expect(pageSource).toContain("export default page;");
+    // A static page needs no request context.
+    expect(pageSource).not.toContain("Context");
+
+    const testSource = contentsAt("app/routes/about/page.test.tsx") ?? "";
+    expect(testSource).toContain('import page from "./page";');
+    expect(testSource).toContain('expect(typeof page.component).toBe("function");');
+  });
+
+  it("writes a dynamic page that reads its typed :param via c.param", async () => {
+    await runGenerate(["page", "blog/[slug]"], depsWith());
+
+    expect(written.map((file) => file.path)).toEqual([
+      "app/routes/blog/[slug]/page.tsx",
+      "app/routes/blog/[slug]/page.test.tsx",
+    ]);
+
+    const pageSource = contentsAt("app/routes/blog/[slug]/page.tsx") ?? "";
+    expect(pageSource).toContain('import type { Context, PageDef, PageProps } from "@lesto/web";');
+    expect(pageSource).toContain('const load = (c: Context<"/blog/:slug">) => ({');
+    expect(pageSource).toContain('slug: c.param("slug"),');
+    expect(pageSource).toContain(
+      "function BlogSlugPage({ slug }: PageProps<typeof load>): ReactNode",
+    );
+    expect(pageSource).toContain('const page: PageDef<"/blog/:slug", PageProps<typeof load>> = {');
+  });
+
+  it("refuses an unsupported route segment before touching the filesystem", async () => {
+    const error = await refusal(["page", "docs/[...rest]"]);
+
+    expect(error.code).toBe("CLI_GENERATE_BAD_ROUTE");
+    expect(written).toHaveLength(0);
+  });
+
+  it("dry-runs a page without writing", async () => {
+    const code = await runGenerate(["page", "about", "--dry-run"], depsWith());
+
+    expect(code).toBe(0);
+    expect(written).toHaveLength(0);
+    expect(lines).toEqual([
+      "would write app/routes/about/page.tsx",
+      "would write app/routes/about/page.test.tsx",
+    ]);
   });
 });
