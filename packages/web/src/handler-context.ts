@@ -68,9 +68,10 @@ export class Context<Path extends string = string> {
    * single `:param` is a `string`, a `*catchAll` the `string[]` run of segments it
    * spanned. Two narrow overloads keep that split without a Path-dependent RETURN
    * (which would break `Handler<P>` variance). The string overload is the escape
-   * hatch for a dynamically-built name; for a matched route the value is always
-   * present, but it is honestly `string | undefined` (a dynamic name can't be known
-   * to be a catch-all).
+   * hatch for a dynamically-built name; its type is `string | undefined`, but BEWARE
+   * a catch-all key reached this way is a `string[]` at RUNTIME — so a string guard
+   * like `c.param(dynamicName) === x` reads false against a catch-all. Use the typed
+   * key (the first two overloads) whenever the name is statically known.
    */
   param(name: CatchAllParamKeys<Path>): string[];
   param(name: SingleParamKeys<Path>): string;

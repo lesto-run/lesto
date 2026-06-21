@@ -49,6 +49,17 @@
  * `.layout()` registrations on the SAME `Lesto` instance an app declares its
  * programmatic routes on, so a file-route and a hand-written route live side by
  * side with no second router.
+ *
+ * A CATCH-ALL is a greedy FALLBACK — mind its registration order. Among file
+ * routes it is auto-sorted LAST ({@link compileFileRoutes} sinks it below every
+ * non-catch-all), so a file-route tree resolves correctly on its own. But the app
+ * matcher is first-match-by-insertion-order (see `RouteTable`), and that sort does
+ * NOT reach across to hand-written routes, `.data()` sources, or the built-in
+ * `/__lesto/*` endpoints. So a ROOT catch-all (`/*slug`, `app/[[...slug]]`)
+ * registered BEFORE those — e.g. `applyFileRoutes(app, …)` then `app.get("/api/…")`
+ * — will shadow them (the request hits the catch-all page, not the API/data route).
+ * Register specific routes and data sources FIRST, the root catch-all LAST. A
+ * SCOPED catch-all (`/blog/*slug`) only covers its own subtree, so it is unaffected.
  */
 
 import { RouterError } from "./errors";
