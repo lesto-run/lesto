@@ -48,7 +48,14 @@
       "@lesto/router": ["../packages/router/src/params.ts"],
 
       "@lesto/observability": ["../packages/observability/src/index.ts"],
-      "@lesto/errors": ["../packages/errors/src/index.ts"]
+      "@lesto/errors": ["../packages/errors/src/index.ts"],
+
+      // `@lesto/ui`'s typed-route seam (`RegisteredRoutes`/`HrefFor`/`RouteHref`) lives
+      // in `routes.ts` — a PURE type-level module with no react import — so map the
+      // package straight at that file. Pointing at the package `index.ts` would drag
+      // in the whole component tree (react, react-dom/server) just to pin a few
+      // conditional types; `routes.ts` has zero deps, so the gate stays light.
+      "@lesto/ui": ["../packages/ui/src/routes.ts"]
     }
   },
 

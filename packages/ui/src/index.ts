@@ -120,6 +120,7 @@ export type {
 // `@lesto/ui/client`.
 export { Link } from "./link";
 export type { LinkProps } from "./link";
+export type { HrefFor, RegisteredRoutes, RouteHref } from "./routes";
 export { eligibleAnchor, RELOAD_ATTR } from "./softnav-contract";
 export type { SoftNavAnchor, SoftNavClick } from "./softnav-contract";
 

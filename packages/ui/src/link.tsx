@@ -21,12 +21,17 @@
 import { createElement } from "react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 
+import type { RouteHref } from "./routes";
 import { RELOAD_ATTR } from "./softnav-contract";
 
 /** A `Link`'s props: every native anchor attribute, plus `href` (required) and `reload`. */
 export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> {
-  /** The destination. A same-origin path soft-navigates; anything else falls back to a full nav. */
-  href: string;
+  /**
+   * The destination. A same-origin path soft-navigates; anything else falls back to
+   * a full nav. Typed as {@link RouteHref}: when the app has route codegen, the
+   * known routes autocomplete; otherwise it is `string`, unchanged.
+   */
+  href: RouteHref;
 
   /**
    * Force a full document reload for this link, opting OUT of soft nav (renders

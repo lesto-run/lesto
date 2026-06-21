@@ -172,6 +172,26 @@ describe("generateRouteManifest", () => {
     expect(reordered).toBe(src);
   });
 
+  it("emits a RoutePath union + @lesto/ui augmentation from the page patterns", () => {
+    const src = generateRouteManifest(
+      [page("lab", "gallery", "[id]"), layout(), page("lab", "gallery")],
+      { importBase: "../app/routes" },
+    );
+
+    // A static page → a string-literal member; a `:param` page → a template-literal
+    // with each param a `${string}` slot (so an interpolated href matches). A
+    // `layout` contributes no URL and so no member.
+    expect(src).toContain("export type RoutePath =");
+    expect(src).toContain('| "/lab/gallery"');
+    expect(src).toContain("| `/lab/gallery/${string}`");
+
+    // The seam @lesto/ui's `RegisteredRoutes` reads by declaration merging, so the
+    // app's `<Link href>` autocompletes its real routes.
+    expect(src).toContain('declare module "@lesto/ui" {');
+    expect(src).toContain("interface RegisteredRoutes {");
+    expect(src).toContain("href: RoutePath;");
+  });
+
   it("emits a valid, import-free manifest for an empty tree", () => {
     const src = generateRouteManifest([], { importBase: "../app/routes" });
 
@@ -180,6 +200,10 @@ describe("generateRouteManifest", () => {
       "export const modules: LoadedFileRoutes = new Map<string, LoadedRouteModule>([",
     );
     expect(src).not.toContain("import * as m");
+
+    // No pages → `RoutePath` is `never`, so the @lesto/ui augmentation leaves a
+    // codegen-less app's `href` as `string` (the unchanged default).
+    expect(src).toContain("export type RoutePath = never;");
   });
 
   it("refuses a tree the runtime applier would reject (no manifest that throws at apply)", () => {
