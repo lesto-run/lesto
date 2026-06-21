@@ -21,7 +21,7 @@
 import { createElement } from "react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 
-import type { RouteHref } from "./routes";
+import type { RouteHref, StrictRouteHref } from "./routes";
 import { RELOAD_ATTR } from "./softnav-contract";
 
 /** A `Link`'s props: every native anchor attribute, plus `href` (required) and `reload`. */
@@ -64,3 +64,17 @@ export function Link({ href, reload, children, ...rest }: LinkProps): ReactNode 
     children,
   );
 }
+
+/** The props {@link StrictLink} takes: a `Link`'s, but with a STRICT {@link StrictRouteHref}. */
+export type StrictLinkProps = Omit<LinkProps, "href"> & { href: StrictRouteHref };
+
+/**
+ * `<StrictLink>` — `<Link>` with a STRICT href: only the app's known routes, no escape,
+ * so a typo'd `href` is a `tsc` error (the "a bad link won't compile" win, BY DEFAULT —
+ * no `route()` wrapper needed). It IS `Link`, re-typed: runtime-identical, zero new code.
+ *
+ * For a FULLY-file-routed app, where the codegen registry is the complete route set. A
+ * MIXED app (with code-first `.page()` routes) keeps `<Link>` — strict here would
+ * false-positive on those (see {@link StrictRouteHref}).
+ */
+export const StrictLink: (props: StrictLinkProps) => ReactNode = Link;

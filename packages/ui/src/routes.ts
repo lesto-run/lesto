@@ -61,6 +61,24 @@ export type HrefFor<Reg> = [KnownRoutesOf<Reg>] extends [never]
 export type RouteHref = HrefFor<RegisteredRoutes>;
 
 /**
+ * Like {@link HrefFor} but WITHOUT the `(string & {})` escape — only the registry's
+ * known routes, so an unknown literal is NOT assignable (a typo'd link is a `tsc`
+ * error). A generic over `Reg` so it's pinnable in the type gate. An empty registry
+ * still yields `string` (no codegen → unchanged).
+ */
+export type StrictHrefFor<Reg> = [KnownRoutesOf<Reg>] extends [never] ? string : KnownRoutesOf<Reg>;
+
+/**
+ * A STRICT `<Link href>` type for {@link StrictLink}: the app's known routes with no
+ * escape, so a typo'd link does not compile. Sound only for a FULLY-file-routed app —
+ * every route is in the registry. A MIXED app (with code-first `.page()` routes the
+ * codegen can't see) must keep the lenient {@link RouteHref}, or strict mode would
+ * false-positive on those routes (making it strict BY DEFAULT for mixed apps needs
+ * code-first route capture, a deferred large refactor — docs/plans/dx-parity.md).
+ */
+export type StrictRouteHref = StrictHrefFor<RegisteredRoutes>;
+
+/**
  * The known route PATTERNS a registry shape `Reg` declares (`"/blog/:id"`, with
  * `:param` segments KEPT), or `never` when it declares none. {@link route} reads this
  * to constrain its pattern argument to the app's real routes; a generic over `Reg`

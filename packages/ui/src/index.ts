@@ -118,15 +118,16 @@ export type {
 // `@lesto/ui` for `<Link>` drags in no `fetch`/`DOMParser`/`document`. The RUNTIME
 // half (`enableSoftNav` + its injection seams) is browser-only and lives behind
 // `@lesto/ui/client`.
-export { Link } from "./link";
-export type { LinkProps } from "./link";
-// The app-facing typed-route surface is exactly `route` + the `RegisteredRoutes`
-// augmentation target + `RouteHref` (the <Link href> type). The helpers `HrefFor` /
-// `PatternsOf` / `KnownPatterns` / `ParamArgs` stay exported from `./routes` for
-// `route.ts` and the type-gate (which maps `@lesto/ui` → `routes.ts` directly), but
-// are not in the public barrel — nothing an app author needs.
+export { Link, StrictLink } from "./link";
+export type { LinkProps, StrictLinkProps } from "./link";
+// The app-facing typed-route surface is `route` (the checked link builder), `Link` +
+// `StrictLink` (lenient / strict href), the `RegisteredRoutes` augmentation target, and
+// the `RouteHref` / `StrictRouteHref` href types. The helpers `HrefFor` / `StrictHrefFor`
+// / `PatternsOf` / `KnownPatterns` / `ParamArgs` stay exported from `./routes` for
+// `route.ts` and the type-gate (which maps `@lesto/ui` → `routes.ts` directly), but are
+// not in the public barrel — nothing an app author needs.
 export { route } from "./route";
-export type { RegisteredRoutes, RouteHref } from "./routes";
+export type { RegisteredRoutes, RouteHref, StrictRouteHref } from "./routes";
 export { eligibleAnchor, RELOAD_ATTR } from "./softnav-contract";
 export type { SoftNavAnchor, SoftNavClick } from "./softnav-contract";
 

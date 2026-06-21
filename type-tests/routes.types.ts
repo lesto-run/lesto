@@ -12,7 +12,7 @@
  * pin one of the two states). `RouteHref` is just `HrefFor<RegisteredRoutes>`.
  */
 
-import type { HrefFor, ParamArgs, PatternsOf } from "@lesto/ui";
+import type { HrefFor, ParamArgs, PatternsOf, StrictHrefFor } from "@lesto/ui";
 
 import type { Equal, Expect } from "./assert";
 
@@ -55,4 +55,16 @@ type _ArgsStatic = Expect<Equal<ParamArgs<"/lab/gallery">, []>>;
 type _ArgsDynamic = Expect<Equal<ParamArgs<"/lab/gallery/:id">, [params: { id: string }]>>;
 type _ArgsMulti = Expect<
   Equal<ParamArgs<"/shop/:category/:id">, [params: { category: string; id: string }]>
+>;
+
+// ── StrictHrefFor (the <StrictLink> href, for fully-file-routed apps): like HrefFor
+// but WITHOUT the `(string & {})` escape — an unknown literal is NOT assignable ──
+type _StrictEmptyIsString = Expect<Equal<StrictHrefFor<EmptyRegistry>, string>>;
+type _StrictSome = Expect<
+  Equal<StrictHrefFor<PopulatedRegistry>, "/lab/gallery" | `/lab/gallery/${string}`>
+>;
+// The escape is GONE: an arbitrary string does NOT assign, so a typo'd `<StrictLink href>`
+// is a tsc error (a regression that re-added the escape would flip this to `true` and fail).
+type _StrictRejectsArbitrary = Expect<
+  Equal<Extends<string, StrictHrefFor<PopulatedRegistry>>, false>
 >;
