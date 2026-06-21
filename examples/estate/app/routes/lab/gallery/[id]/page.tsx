@@ -12,26 +12,23 @@
 import type { ReactNode } from "react";
 
 import { Link } from "@lesto/ui";
-import type { PageDef } from "@lesto/web";
+import type { Context, PageDef, PageProps } from "@lesto/web";
 
 import { findListing, formatPrice } from "../../../../../src/listings";
-import type { Listing } from "../../../../../src/listings";
 
-interface ListingProps {
-  id: string;
-  listing: Listing | undefined;
-}
+// The typed `:id` the `[id]` directory compiled to — read the same way a code-first
+// route's `load` reads its params. Pulled out as a `const` so the component's props
+// are INFERRED from its return via `PageProps<typeof load>` (no restated interface).
+const load = (c: Context<"/lab/gallery/:id">) => {
+  const id = c.param("id");
 
-const page: PageDef<"/lab/gallery/:id", ListingProps> = {
-  // The typed `:id` the `[id]` directory compiled to — read the same way a
-  // code-first route's `load` reads its params.
-  load: (c) => {
-    const id = c.param("id");
+  return { id, listing: findListing(id) };
+};
 
-    return { id, listing: findListing(id) };
-  },
+const page: PageDef<"/lab/gallery/:id", PageProps<typeof load>> = {
+  load,
 
-  component: ({ id, listing }: ListingProps): ReactNode => {
+  component: ({ id, listing }: PageProps<typeof load>): ReactNode => {
     if (listing === undefined) {
       return (
         <div data-file-route="gallery-detail-missing">
@@ -62,7 +59,7 @@ const page: PageDef<"/lab/gallery/:id", ListingProps> = {
     );
   },
 
-  metadata: ({ listing, id }: ListingProps) => ({
+  metadata: ({ listing, id }: PageProps<typeof load>) => ({
     title: listing === undefined ? "Not found" : `${listing.title} · Gallery`,
     description:
       listing === undefined

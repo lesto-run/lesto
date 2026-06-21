@@ -12,20 +12,22 @@
 import type { ReactNode } from "react";
 
 import { Link } from "@lesto/ui";
-import type { PageDef } from "@lesto/web";
+import type { PageDef, PageProps } from "@lesto/web";
 
 import { LISTINGS, formatPrice } from "../../../../src/listings";
-import type { Listing } from "../../../../src/listings";
 
-interface GalleryProps {
-  listings: readonly Listing[];
-}
+/**
+ * The server load. Pulled out as a `const` so the component's props are INFERRED
+ * from its return via `PageProps<typeof load>` — the shape is declared once, with no
+ * restated interface (the pattern `lesto g page` emits).
+ */
+const load = () => ({ listings: LISTINGS });
 
 /** The default export IS the PageDef the applier registers — view + server load. */
-const page: PageDef<"/lab/gallery", GalleryProps> = {
-  load: () => ({ listings: LISTINGS }),
+const page: PageDef<"/lab/gallery", PageProps<typeof load>> = {
+  load,
 
-  component: ({ listings }: GalleryProps): ReactNode => (
+  component: ({ listings }: PageProps<typeof load>): ReactNode => (
     <div data-file-route="gallery-index">
       <h2 className="section-title">The gallery</h2>
 
