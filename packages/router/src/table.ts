@@ -122,7 +122,14 @@ export class RouteTable<T> {
 
       if (matched === null) continue;
 
-      const params: Record<string, string | string[]> = {};
+      // A NULL-PROTOTYPE map: param names come from the pattern, but a `:constructor`
+      // / `:__proto__` / dynamically-built name must read back as a plain key, never
+      // an inherited `Object.prototype` member (a truthy `params["constructor"]` could
+      // slip past an `if (!params[name])` check) and never mutate the object's proto.
+      const params: Record<string, string | string[]> = Object.create(null) as Record<
+        string,
+        string | string[]
+      >;
 
       entry.paramNames.forEach((paramName, index) => {
         // Group 0 is the whole match; captures start at 1, aligned with paramNames.

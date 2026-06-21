@@ -521,7 +521,9 @@ export class Lesto {
     const request: LestoRequest = {
       method,
       path,
-      params: match?.params ?? {},
+      // A miss carries no params; keep it NULL-PROTOTYPE like a match's params (see
+      // `RouteTable.match`) so `c.param("constructor")` is `undefined`, not a method.
+      params: match?.params ?? (Object.create(null) as Record<string, string | string[]>),
       query: options?.query ?? {},
       headers: options?.headers ?? {},
       body: options?.body,

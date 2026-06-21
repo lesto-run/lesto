@@ -367,6 +367,35 @@ describe("RouteTable catch-all segments", () => {
   });
 });
 
+describe("RouteTable params have no prototype (no inherited-member confusion)", () => {
+  it("reads an unset Object.prototype name as undefined, not a truthy method", () => {
+    const table = new RouteTable<string>();
+
+    table.add("GET", "/p/:id", "x");
+
+    const params = table.match("GET", "/p/5")?.params as Record<string, unknown>;
+
+    expect(params).toEqual({ id: "5" });
+    // A dynamically-built name that happens to be a prototype member must be absent,
+    // so `if (!params[name]) deny` can't be bypassed by `constructor` / `toString`.
+    expect(params["constructor"]).toBeUndefined();
+    expect(params["toString"]).toBeUndefined();
+  });
+
+  it("stores a param literally named __proto__ as an own key, not on the prototype", () => {
+    const table = new RouteTable<string>();
+
+    table.add("GET", "/p/*__proto__", "x");
+
+    const params = table.match("GET", "/p/a/b")?.params as Record<string, unknown>;
+
+    // The value is a normal own key (readable), and the object's prototype is
+    // untouched — a catch-all array can't poison the proto slot.
+    expect(params["__proto__"]).toEqual(["a", "b"]);
+    expect(Object.getPrototypeOf(params)).toBeNull();
+  });
+});
+
 describe("pathFor — catch-all reverse routing", () => {
   it("joins a required catch-all's segments, round-tripping through match", () => {
     const pattern = "/docs/*path";
