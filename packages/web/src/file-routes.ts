@@ -250,15 +250,18 @@ export function generateRouteManifest(
     ...mapLines,
     "]);",
     "",
-    "// Typed `<Link href>`: @lesto/ui reads `RegisteredRoutes` by declaration",
-    "// merging, so an app's `href` autocompletes its real routes. A `:param`",
-    "// segment is a `${string}` slot; a route-less tree emits `never`, leaving",
-    "// `href` as `string` (the unchanged default).",
+    "// Typed navigation: @lesto/ui reads `RegisteredRoutes` by declaration merging.",
+    "// `RoutePath` is the <Link href> form (`:param` → `${string}`, autocompleted);",
+    "// `RoutePattern` is the `route(pattern, params)` form (`:param` kept, so the",
+    "// param names stay typed). A route-less tree emits `never` for both, leaving",
+    "// `href`/`route()` unconstrained — the unchanged default.",
     ...routePathLines(compiled),
+    ...routePatternLines(compiled),
     "",
     'declare module "@lesto/ui" {',
     "  interface RegisteredRoutes {",
     "    href: RoutePath;",
+    "    pattern: RoutePattern;",
     "  }",
     "}",
   ].join("\n")}\n`;
@@ -310,6 +313,28 @@ function routePathLines(routes: ReadonlyArray<FileRoute>): readonly string[] {
 
   return [
     "export type RoutePath =",
+    ...members.map((member, i) => `  | ${member}${i === members.length - 1 ? ";" : ""}`),
+  ];
+}
+
+/**
+ * The `export type RoutePattern = …` source lines — like {@link routePathLines} but
+ * each PAGE pattern is emitted as a plain string-literal with its `:param` segments
+ * KEPT (`"/lab/gallery/:id"`), the form `route(pattern, params)` takes so
+ * `@lesto/router`'s `PathParams` can read the param names off it. A route-less tree
+ * yields `never`. Deduped and code-point-sorted for the same byte-stability.
+ */
+function routePatternLines(routes: ReadonlyArray<FileRoute>): readonly string[] {
+  const members = [
+    ...new Set(
+      routes.filter((route) => route.kind === "page").map((route) => JSON.stringify(route.pattern)),
+    ),
+  ].toSorted(byCodePoint);
+
+  if (members.length === 0) return ["export type RoutePattern = never;"];
+
+  return [
+    "export type RoutePattern =",
     ...members.map((member, i) => `  | ${member}${i === members.length - 1 ? ";" : ""}`),
   ];
 }

@@ -17,16 +17,21 @@ export const modules: LoadedFileRoutes = new Map<string, LoadedRouteModule>([
   ["page:lab/gallery/[id]", m2 as LoadedRouteModule],
 ]);
 
-// Typed `<Link href>`: @lesto/ui reads `RegisteredRoutes` by declaration
-// merging, so an app's `href` autocompletes its real routes. A `:param`
-// segment is a `${string}` slot; a route-less tree emits `never`, leaving
-// `href` as `string` (the unchanged default).
+// Typed navigation: @lesto/ui reads `RegisteredRoutes` by declaration merging.
+// `RoutePath` is the <Link href> form (`:param` → `${string}`, autocompleted);
+// `RoutePattern` is the `route(pattern, params)` form (`:param` kept, so the
+// param names stay typed). A route-less tree emits `never` for both, leaving
+// `href`/`route()` unconstrained — the unchanged default.
 export type RoutePath =
   | "/lab/gallery"
   | `/lab/gallery/${string}`;
+export type RoutePattern =
+  | "/lab/gallery"
+  | "/lab/gallery/:id";
 
 declare module "@lesto/ui" {
   interface RegisteredRoutes {
     href: RoutePath;
+    pattern: RoutePattern;
   }
 }

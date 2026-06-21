@@ -178,18 +178,24 @@ describe("generateRouteManifest", () => {
       { importBase: "../app/routes" },
     );
 
-    // A static page → a string-literal member; a `:param` page → a template-literal
-    // with each param a `${string}` slot (so an interpolated href matches). A
-    // `layout` contributes no URL and so no member.
+    // RoutePath (the <Link href> form): a static page → a string-literal member; a
+    // `:param` page → a template-literal with each param a `${string}` slot (so an
+    // interpolated href matches). A `layout` contributes no URL and so no member.
     expect(src).toContain("export type RoutePath =");
     expect(src).toContain('| "/lab/gallery"');
     expect(src).toContain("| `/lab/gallery/${string}`");
 
-    // The seam @lesto/ui's `RegisteredRoutes` reads by declaration merging, so the
-    // app's `<Link href>` autocompletes its real routes.
+    // RoutePattern (the route(pattern, params) form): the SAME patterns with `:param`
+    // KEPT, so `PathParams` can read the param names.
+    expect(src).toContain("export type RoutePattern =");
+    expect(src).toContain('| "/lab/gallery/:id"');
+
+    // The seam @lesto/ui's `RegisteredRoutes` reads by declaration merging — `href`
+    // for `<Link>` autocomplete, `pattern` for the typed `route()` builder.
     expect(src).toContain('declare module "@lesto/ui" {');
     expect(src).toContain("interface RegisteredRoutes {");
     expect(src).toContain("href: RoutePath;");
+    expect(src).toContain("pattern: RoutePattern;");
   });
 
   it("emits a valid, import-free manifest for an empty tree", () => {
@@ -201,9 +207,10 @@ describe("generateRouteManifest", () => {
     );
     expect(src).not.toContain("import * as m");
 
-    // No pages → `RoutePath` is `never`, so the @lesto/ui augmentation leaves a
-    // codegen-less app's `href` as `string` (the unchanged default).
+    // No pages → `RoutePath`/`RoutePattern` are `never`, so the @lesto/ui augmentation
+    // leaves a codegen-less app's `href` and `route()` unconstrained (the default).
     expect(src).toContain("export type RoutePath = never;");
+    expect(src).toContain("export type RoutePattern = never;");
   });
 
   it("refuses a tree the runtime applier would reject (no manifest that throws at apply)", () => {

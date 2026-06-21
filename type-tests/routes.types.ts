@@ -12,7 +12,7 @@
  * pin one of the two states). `RouteHref` is just `HrefFor<RegisteredRoutes>`.
  */
 
-import type { HrefFor } from "@lesto/ui";
+import type { HrefFor, ParamArgs, PatternsOf } from "@lesto/ui";
 
 import type { Equal, Expect } from "./assert";
 
@@ -23,6 +23,7 @@ type Extends<A, B> = A extends B ? true : false;
 interface EmptyRegistry {}
 interface PopulatedRegistry {
   href: "/lab/gallery" | `/lab/gallery/${string}`;
+  pattern: "/lab/gallery" | "/lab/gallery/:id";
 }
 
 // ── HrefFor over an EMPTY registry: exactly `string` (the unchanged default) ──
@@ -42,3 +43,16 @@ type _InterpolatedMember = Expect<Extends<"/lab/gallery/42", HrefFor<PopulatedRe
 // query/hash, or a code-first route never fails to type-check).
 type _EscapeKeepsAnyString = Expect<Extends<string, HrefFor<PopulatedRegistry>>>;
 type _ExternalUrl = Expect<Extends<"https://example.com", HrefFor<PopulatedRegistry>>>;
+
+// ── PatternsOf (the `route()` registry side): extracts the pattern union, or never ──
+// Unlike the href form, patterns keep `:param` so `PathParams` can read the names.
+type _PatternsNone = Expect<Equal<PatternsOf<EmptyRegistry>, never>>;
+type _PatternsSome = Expect<Equal<PatternsOf<PopulatedRegistry>, "/lab/gallery" | "/lab/gallery/:id">>;
+
+// ── ParamArgs (the `route()` argument list): typed params REQUIRED iff the pattern
+// has `:segments`; a param-less pattern takes NO second argument (an empty tuple) ──
+type _ArgsStatic = Expect<Equal<ParamArgs<"/lab/gallery">, []>>;
+type _ArgsDynamic = Expect<Equal<ParamArgs<"/lab/gallery/:id">, [params: { id: string }]>>;
+type _ArgsMulti = Expect<
+  Equal<ParamArgs<"/shop/:category/:id">, [params: { category: string; id: string }]>
+>;

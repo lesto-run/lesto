@@ -784,6 +784,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@lesto/errors": "workspace:*",
+        "@lesto/router": "workspace:*",
         "react": "^19",
         "react-dom": "^19",
       },

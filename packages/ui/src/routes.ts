@@ -1,22 +1,26 @@
 /**
- * The typed-route seam — how an app's generated `routes.gen.ts` teaches `<Link>`
- * the app's real routes, with ZERO runtime and zero react dependency (this module
- * is pure type-level, so the `@lesto/ui` isomorphic core stays react-free here and
- * the type gate can pin it without pulling the component tree in).
+ * The typed-route seam — how an app's generated `routes.gen.ts` teaches `<Link>` and
+ * {@link route} the app's real routes, with ZERO runtime and no react dependency
+ * (pure type-level — only a TYPE-only import of `PathParams` from `@lesto/router` —
+ * so the `@lesto/ui` isomorphic core stays react-free here and the type gate can pin
+ * it without pulling the component tree in).
  *
  * The mechanism is declaration merging — the same `Register` idiom TanStack Router
  * uses. `@lesto/web`'s `generateRouteManifest` emits, into each app's
- * `routes.gen.ts`, a `RoutePath` union of every route plus:
+ * `routes.gen.ts`, a `RoutePath` + `RoutePattern` union of every route plus:
  *
  *   declare module "@lesto/ui" {
- *     interface RegisteredRoutes { href: RoutePath }
+ *     interface RegisteredRoutes { href: RoutePath; pattern: RoutePattern }
  *   }
  *
- * which merges a `href` member into {@link RegisteredRoutes} below. {@link RouteHref}
- * reads that member, so `<Link href>` (typed as `RouteHref`) gains autocomplete over
- * the app's routes — and, crucially, an app with NO route codegen leaves
- * `RegisteredRoutes` empty, so `RouteHref` stays exactly `string`: nothing breaks.
+ * which merges `href`/`pattern` members into {@link RegisteredRoutes} below.
+ * {@link RouteHref} reads `href` (so `<Link href>` autocompletes the app's routes);
+ * {@link KnownPatterns} reads `pattern` (so {@link route} constrains its pattern arg
+ * and types its params). An app with NO route codegen leaves `RegisteredRoutes`
+ * empty, so both stay unconstrained (`string`): nothing breaks.
  */
+
+import type { PathParams } from "@lesto/router";
 
 /**
  * The route registry an app augments by declaration merging. Empty by design — it
@@ -55,3 +59,25 @@ export type HrefFor<Reg> = [KnownRoutesOf<Reg>] extends [never]
 
 /** A `<Link>` href — see {@link HrefFor}, resolved against the app's {@link RegisteredRoutes}. */
 export type RouteHref = HrefFor<RegisteredRoutes>;
+
+/**
+ * The known route PATTERNS a registry shape `Reg` declares (`"/blog/:id"`, with
+ * `:param` segments KEPT), or `never` when it declares none. {@link route} reads this
+ * to constrain its pattern argument to the app's real routes; a generic over `Reg`
+ * (like {@link HrefFor}) so it's pinnable in the type gate without a global augmentation.
+ */
+export type PatternsOf<Reg> = Reg extends { pattern: infer P extends string } ? P : never;
+
+/** The app's known route patterns once codegen augments {@link RegisteredRoutes}, else `never`. */
+export type KnownPatterns = PatternsOf<RegisteredRoutes>;
+
+/**
+ * The argument list a {@link route} call takes for a pattern `P`: the typed params
+ * object is REQUIRED when `P` has `:segments`, ABSENT otherwise — a tuple, so a
+ * param-less `route("/about")` needs no second argument (the `@lesto/client`
+ * `createApi` `GetArgs` precedent). Param names + value types come from
+ * `@lesto/router`'s `PathParams<P>`.
+ */
+export type ParamArgs<P extends string> = keyof PathParams<P> extends never
+  ? []
+  : [params: PathParams<P>];

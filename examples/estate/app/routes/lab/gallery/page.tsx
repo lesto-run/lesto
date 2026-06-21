@@ -11,7 +11,7 @@
 
 import type { ReactNode } from "react";
 
-import { Link } from "@lesto/ui";
+import { Link, route } from "@lesto/ui";
 import type { PageDef, PageProps } from "@lesto/web";
 
 import { LISTINGS, formatPrice } from "../../../../src/listings";
@@ -34,7 +34,7 @@ const page: PageDef<"/lab/gallery", PageProps<typeof load>> = {
       <ul className="copy">
         {listings.map((listing) => (
           <li key={listing.id}>
-            <Link href={`/lab/gallery/${listing.id}`}>
+            <Link href={route("/lab/gallery/:id", { id: listing.id })}>
               {listing.title} — {formatPrice(listing.price)}
             </Link>
           </li>
