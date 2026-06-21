@@ -122,3 +122,51 @@ describe("file-based routing — registered routes work (ADR 0023)", () => {
     expect(handWritten.status).toBe(200);
   });
 });
+
+describe("file-based routing — richer segments (dx-parity W6)", () => {
+  it("serves a catch-all page with the trailing path as a typed string[]", async () => {
+    const app = await buildApp();
+
+    const html = await body(await app.handle("GET", "/lab/gallery/more/path/downtown/lofts"));
+
+    expect(html).toContain('data-file-route="more-catch-all"');
+    // The greedy `[...crumbs]` captured BOTH segments as a string[] the load read.
+    expect(html).toContain("downtown / lofts");
+    expect(html).toContain('<code data-crumb-count="true">2</code>');
+  });
+
+  it("404s a required catch-all with no trailing segment", async () => {
+    const app = await buildApp();
+
+    // `more/path/[...crumbs]` needs at least one segment — the bare parent misses.
+    expect((await app.handle("GET", "/lab/gallery/more/path")).status).toBe(404);
+  });
+
+  it("serves an optional catch-all at its bare parent AND with segments", async () => {
+    const app = await buildApp();
+
+    // Zero segments → the parent path matches, facets is [].
+    const bare = await body(await app.handle("GET", "/lab/gallery/more/filter"));
+    expect(bare).toContain('data-file-route="more-optional-catch-all"');
+    expect(bare).toContain("bare parent path");
+
+    // Many segments → the same page, facets is the captured array.
+    const many = await body(await app.handle("GET", "/lab/gallery/more/filter/luxury/waterfront"));
+    expect(many).toContain("Filtering by: luxury, waterfront");
+  });
+
+  it("strips a (group) folder from the URL while still nesting its layout", async () => {
+    const app = await buildApp();
+
+    const response = await app.handle("GET", "/lab/gallery/more/about");
+    expect(response.status).toBe(200);
+
+    const html = await body(response);
+
+    // The `(notes)` group added NO URL segment, yet its layout wraps the page —
+    // inside the convention's root layout (the group nests by directory).
+    expect(html).toContain('data-file-route="more-group-about"');
+    expect(html).toContain('data-file-route-layout="notes-group"');
+    expect(html).toContain('data-file-route-layout="root"');
+  });
+});

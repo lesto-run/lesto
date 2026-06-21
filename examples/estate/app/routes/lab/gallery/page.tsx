@@ -40,6 +40,10 @@ const page: PageDef<"/lab/gallery", PageProps<typeof load>> = {
           </li>
         ))}
       </ul>
+
+      <p className="copy">
+        <Link href="/lab/gallery/more">Richer route segments → catch-all, optional, group</Link>
+      </p>
     </div>
   ),
 
