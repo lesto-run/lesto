@@ -214,11 +214,35 @@ describe("generateRouteManifest", () => {
   });
 
   it("refuses a tree the runtime applier would reject (no manifest that throws at apply)", () => {
-    // A catch-all segment is unsupported; codegen must fail HERE, not emit a
-    // manifest that bundles cleanly then throws the moment it is applied.
+    // A catch-all before the end is rejected by the compiler; codegen must fail
+    // HERE, not emit a manifest that bundles cleanly then throws the moment it is
+    // applied.
     expect(() =>
-      generateRouteManifest([page("[...rest]")], { importBase: "../app/routes" }),
+      generateRouteManifest([page("[...rest]", "more")], { importBase: "../app/routes" }),
     ).toThrow();
+  });
+
+  it("emits ${string} RoutePath + a `*catch-all` RoutePattern for a catch-all page", () => {
+    const src = generateRouteManifest([page("docs", "[...slug]")], {
+      importBase: "../app/routes",
+    });
+
+    // The href form collapses the greedy tail to a single `${string}` slot, so a
+    // deep `/docs/a/b` link matches; the pattern form keeps `*slug`, so `PathParams`
+    // can read the catch-all name (and type it `string[]`).
+    expect(src).toContain("| `/docs/${string}`");
+    expect(src).toContain('| "/docs/*slug"');
+  });
+
+  it("strips a (group) directory from the emitted URL but keeps its raw module key", () => {
+    const src = generateRouteManifest([page("(marketing)", "about")], {
+      importBase: "../app/routes",
+    });
+
+    // The URL drops the group; the module import + map key keep the raw segments.
+    expect(src).toContain('| "/about"');
+    expect(src).toContain('import * as m0 from "../app/routes/(marketing)/about/page";');
+    expect(src).toContain('["page:(marketing)/about", m0 as LoadedRouteModule]');
   });
 });
 

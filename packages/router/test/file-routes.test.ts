@@ -75,9 +75,7 @@ describe("compileFileRoutes — malformed segments refuse by code", () => {
   });
 
   it("refuses an empty [] dynamic segment", () => {
-    expect(() => compileFileRoutes([page("[]")])).toThrowError(
-      /neither a literal name nor a "\[param\]"/,
-    );
+    expect(() => compileFileRoutes([page("[]")])).toThrowError(/is neither a literal name/);
   });
 
   it("refuses a param name starting with a digit", () => {
@@ -259,5 +257,162 @@ describe("compileFileRoutes — resolution order (most specific first)", () => {
     const kinds = compileFileRoutes([page("x"), layout()]).map((route) => route.kind);
 
     expect(kinds).toEqual(["layout", "page"]);
+  });
+});
+
+describe("compileFileRoutes — catch-all segments", () => {
+  it("compiles [...slug] to a greedy *slug catch-all", () => {
+    expect(pagesOf([page("docs", "[...slug]")])[0]?.pattern).toBe("/docs/*slug");
+  });
+
+  it("compiles [[...slug]] to an optional *slug? catch-all", () => {
+    expect(pagesOf([page("docs", "[[...slug]]")])[0]?.pattern).toBe("/docs/*slug?");
+  });
+
+  it("accepts a root catch-all", () => {
+    expect(pagesOf([page("[...rest]")])[0]?.pattern).toBe("/*rest");
+  });
+
+  it("refuses a catch-all that is not the final segment", () => {
+    try {
+      compileFileRoutes([page("[...slug]", "more")]);
+
+      expect.unreachable("a non-terminal catch-all should throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RouterError);
+      expect((error as RouterError).code).toBe("ROUTER_FILE_CATCHALL_POSITION");
+      expect((error as RouterError).details).toEqual({
+        pattern: "/*slug/more",
+        segment: "[...slug]",
+      });
+    }
+  });
+
+  it("refuses an optional catch-all that is not the final segment", () => {
+    expect(() => compileFileRoutes([page("[[...slug]]", "more")])).toThrowError(
+      expect.objectContaining({ code: "ROUTER_FILE_CATCHALL_POSITION" }),
+    );
+  });
+
+  it("refuses a name shared between a [param] and a [...catchAll]", () => {
+    try {
+      compileFileRoutes([page("[id]", "[...id]")]);
+
+      expect.unreachable("a duplicate param name should throw");
+    } catch (error) {
+      expect((error as RouterError).code).toBe("ROUTER_FILE_DUPLICATE_PARAM");
+      expect((error as RouterError).details).toEqual({ pattern: "/:id/*id", param: "id" });
+    }
+  });
+
+  it("refuses a required and an optional catch-all that answer the same URLs", () => {
+    try {
+      compileFileRoutes([page("[...a]"), page("[[...b]]")]);
+
+      expect.unreachable("two catch-alls of one shape should throw");
+    } catch (error) {
+      expect((error as RouterError).code).toBe("ROUTER_FILE_DUPLICATE_ROUTE");
+      expect((error as RouterError).details).toEqual({ pattern: "/*b?", shape: "/**" });
+    }
+  });
+
+  it("keeps a catch-all and a single dynamic at one depth as distinct routes", () => {
+    // `/docs/*rest` (shape `/docs/**`) and `/docs/:id` (shape `/docs/*`) differ, so
+    // they are NOT over-rejected as duplicates — they resolve by specificity.
+    const patterns = pagesOf([page("docs", "[...rest]"), page("docs", "[id]")])
+      .map((route) => route.pattern)
+      .toSorted();
+
+    expect(patterns).toEqual(["/docs/*rest", "/docs/:id"]);
+  });
+});
+
+describe("compileFileRoutes — route groups", () => {
+  it("strips a (group) directory from the URL", () => {
+    expect(pagesOf([page("(marketing)", "about")])[0]?.pattern).toBe("/about");
+  });
+
+  it("compiles a group that holds only the root page to '/'", () => {
+    expect(pagesOf([page("(marketing)")])[0]?.pattern).toBe("/");
+  });
+
+  it("keeps the raw segments (group included) for the applier to key by", () => {
+    expect(pagesOf([page("(marketing)", "about")])[0]?.segments).toEqual(["(marketing)", "about"]);
+  });
+
+  it("nests a group's layout by its directory like any other", () => {
+    const route = pagesOf([layout("(marketing)"), page("(marketing)", "about")])[0];
+
+    expect(route?.layoutDepth).toEqual([1]);
+  });
+
+  it("does not let a group change a param or its specificity", () => {
+    expect(pagesOf([page("(g)", "p", "[id]")])[0]?.pattern).toBe("/p/:id");
+  });
+
+  it("refuses two groups that wrap the same URL (a real duplicate)", () => {
+    try {
+      compileFileRoutes([page("(a)", "about"), page("(b)", "about")]);
+
+      expect.unreachable("a group-induced duplicate should throw");
+    } catch (error) {
+      expect((error as RouterError).code).toBe("ROUTER_FILE_DUPLICATE_ROUTE");
+      expect((error as RouterError).details).toEqual({ pattern: "/about", shape: "/about" });
+    }
+  });
+
+  it("refuses an empty () group as a bad segment", () => {
+    expect(() => compileFileRoutes([page("()")])).toThrowError(
+      expect.objectContaining({ code: "ROUTER_FILE_BAD_SEGMENT" }),
+    );
+  });
+});
+
+describe("compileFileRoutes — catch-all resolution order", () => {
+  it("sinks a catch-all below its non-catch-all siblings, regardless of input order", () => {
+    const forward = pagesOf([
+      page("docs", "[...rest]"),
+      page("docs", "intro"),
+      page("docs", "[id]"),
+    ]).map((route) => route.pattern);
+
+    const reverse = pagesOf([
+      page("docs", "intro"),
+      page("docs", "[id]"),
+      page("docs", "[...rest]"),
+    ]).map((route) => route.pattern);
+
+    expect(forward).toEqual(["/docs/intro", "/docs/:id", "/docs/*rest"]);
+    expect(reverse).toEqual(["/docs/intro", "/docs/:id", "/docs/*rest"]);
+  });
+
+  it("orders a deeper catch-all before a shallower one", () => {
+    const order = pagesOf([page("a", "[...x]"), page("a", "b", "[...y]")]).map(
+      (route) => route.pattern,
+    );
+
+    expect(order).toEqual(["/a/b/*y", "/a/*x"]);
+  });
+
+  it("breaks a tie between two catch-alls on the pattern string", () => {
+    const order = pagesOf([page("b", "[...y]"), page("a", "[...x]")]).map((route) => route.pattern);
+
+    expect(order).toEqual(["/a/*x", "/b/*y"]);
+  });
+
+  it("orders the root page behind any deeper page", () => {
+    expect(pagesOf([page(), page("about")]).map((route) => route.pattern)).toEqual(["/about", "/"]);
+  });
+
+  it("lets an optional catch-all and its parent page coexist, the parent winning its own URL", () => {
+    const table = new RouteTable<string>();
+
+    for (const route of pagesOf([page("shop"), page("shop", "[[...slug]]")])) {
+      table.add("GET", route.pattern, route.pattern);
+    }
+
+    // The explicit page answers its own URL; the catch-all answers everything deeper.
+    expect(table.match("GET", "/shop")?.value).toBe("/shop");
+    expect(table.match("GET", "/shop/winter/boots")?.value).toBe("/shop/*slug?");
   });
 });

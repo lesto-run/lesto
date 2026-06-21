@@ -25,8 +25,11 @@ export interface LestoRequest {
 
   path: string;
 
-  /** Path params extracted by the router (e.g. `:id` -> `{ id: "3" }`). */
-  params: Record<string, string>;
+  /**
+   * Path params extracted by the router: a single `:id` -> `{ id: "3" }`, a
+   * catch-all `*rest` -> `{ rest: ["a", "b"] }` (the `string[]` run of segments).
+   */
+  params: Record<string, string | string[]>;
 
   /** Parsed query-string pairs. */
   query: Record<string, string>;

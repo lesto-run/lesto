@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
+  compile,
   type Match,
   type ParamKeys,
   pathFor,
@@ -271,5 +272,146 @@ describe("type-level params", () => {
 
   it("threads the value type through a Match", () => {
     expectTypeOf<Match<number>["value"]>().toEqualTypeOf<number>();
+  });
+
+  it("types a catch-all key as string[] and a mixed pattern per-name", () => {
+    expectTypeOf<ParamKeys<"/docs/*slug">>().toEqualTypeOf<"slug">();
+    expectTypeOf<ParamKeys<"/docs/*slug?">>().toEqualTypeOf<"slug">();
+    expectTypeOf<PathParams<"/docs/*slug">>().toEqualTypeOf<{ slug: string[] }>();
+    expectTypeOf<PathParams<"/u/:id/*rest">>().toEqualTypeOf<{ id: string; rest: string[] }>();
+  });
+});
+
+describe("RouteTable catch-all segments", () => {
+  it("compile marks the catch-all param names (and only those)", () => {
+    expect([...compile("/docs/*slug").catchAllParams]).toEqual(["slug"]);
+    expect([...compile("/docs/*slug?").catchAllParams]).toEqual(["slug"]);
+    expect([...compile("/docs/:id").catchAllParams]).toEqual([]);
+  });
+
+  it("captures a required catch-all as a string[] of one or more segments", () => {
+    const table = new RouteTable<string>();
+
+    table.add("GET", "/docs/*path", "docs");
+
+    expect(table.match("GET", "/docs/intro")?.params).toEqual({ path: ["intro"] });
+    expect(table.match("GET", "/docs/a/b/c")?.params).toEqual({ path: ["a", "b", "c"] });
+    // A required catch-all needs at least one segment — the bare parent does not match.
+    expect(table.match("GET", "/docs")).toBeUndefined();
+  });
+
+  it("captures a root catch-all but never the bare root", () => {
+    const table = new RouteTable<string>();
+
+    table.add("GET", "/*path", "all");
+
+    expect(table.match("GET", "/a/b")?.params).toEqual({ path: ["a", "b"] });
+    expect(table.match("GET", "/")).toBeUndefined();
+  });
+
+  it("matches an optional catch-all down to its parent (zero segments → [])", () => {
+    const table = new RouteTable<string>();
+
+    table.add("GET", "/shop/*rest?", "shop");
+
+    expect(table.match("GET", "/shop")?.params).toEqual({ rest: [] });
+    expect(table.match("GET", "/shop/a/b")?.params).toEqual({ rest: ["a", "b"] });
+    // The catch-all is its own segment, so it must not glue onto the literal prefix.
+    expect(table.match("GET", "/shopX")).toBeUndefined();
+  });
+
+  it("matches a root optional catch-all including the bare root", () => {
+    const table = new RouteTable<string>();
+
+    table.add("GET", "/*rest?", "root");
+
+    expect(table.match("GET", "/")?.params).toEqual({ rest: [] });
+    expect(table.match("GET", "/a")?.params).toEqual({ rest: ["a"] });
+    expect(table.match("GET", "/a/b")?.params).toEqual({ rest: ["a", "b"] });
+  });
+
+  it("decodes each catch-all segment and keeps an encoded slash within one element", () => {
+    const table = new RouteTable<string>();
+
+    table.add("GET", "/d/*p", "d");
+
+    // Each segment decodes independently...
+    expect(table.match("GET", "/d/a%20b/c")?.params).toEqual({ p: ["a b", "c"] });
+    // ...and a %2F decodes to a slash WITHIN an element, never a new boundary.
+    expect(table.match("GET", "/d/a%2Fb/c")?.params).toEqual({ p: ["a/b", "c"] });
+    // A malformed `%` in any segment is a coded 400, not a 500.
+    expect(() => table.match("GET", "/d/ok/%zz")).toThrowError(
+      expect.objectContaining({ code: "ROUTER_MALFORMED_PARAM" }),
+    );
+  });
+
+  it("refuses a catch-all that is not the final segment", () => {
+    const table = new RouteTable<string>();
+
+    // A literal after the catch-all (caught after the token scan).
+    expect(() => table.add("GET", "/a/*x/edit", "x")).toThrowError(
+      expect.objectContaining({ code: "ROUTER_CATCHALL_NOT_LAST" }),
+    );
+    // Another token after the catch-all (caught during the token scan).
+    expect(() => table.add("GET", "/a/*x/:y", "x")).toThrowError(
+      expect.objectContaining({ code: "ROUTER_CATCHALL_NOT_LAST" }),
+    );
+  });
+
+  it("refuses a catch-all glued to a literal instead of its own segment", () => {
+    const table = new RouteTable<string>();
+
+    expect(() => table.add("GET", "/shop*rest", "x")).toThrowError(
+      expect.objectContaining({ code: "ROUTER_CATCHALL_NOT_SEGMENT" }),
+    );
+  });
+});
+
+describe("pathFor — catch-all reverse routing", () => {
+  it("joins a required catch-all's segments, round-tripping through match", () => {
+    const pattern = "/docs/*path";
+    const path = pathFor(pattern, { path: ["a", "b"] });
+
+    expect(path).toBe("/docs/a/b");
+
+    const table = new RouteTable<string>();
+
+    table.add("GET", pattern, "docs");
+
+    expect(table.match("GET", path)?.params).toEqual({ path: ["a", "b"] });
+  });
+
+  it("encodes a slash inside a catch-all segment so it round-trips as one element", () => {
+    const pattern = "/d/*p";
+    const path = pathFor(pattern, { p: ["a/b", "c"] });
+
+    expect(path).toBe("/d/a%2Fb/c");
+
+    const table = new RouteTable<string>();
+
+    table.add("GET", pattern, "d");
+
+    expect(table.match("GET", path)?.params).toEqual({ p: ["a/b", "c"] });
+  });
+
+  it("drops an empty optional catch-all to the parent path (and to '/' at the root)", () => {
+    expect(pathFor("/shop/*rest?", { rest: [] })).toBe("/shop");
+    expect(pathFor("/*rest?", { rest: [] })).toBe("/");
+    expect(pathFor("/shop/*rest?", { rest: ["a"] })).toBe("/shop/a");
+  });
+
+  it("refuses a required catch-all given no segments", () => {
+    expect(() => pathFor("/docs/*path", { path: [] })).toThrowError(
+      expect.objectContaining({ code: "ROUTER_MISSING_PARAM" }),
+    );
+  });
+
+  it("refuses a catch-all given the wrong shape (a missing or a string value)", () => {
+    expect(() => pathFor("/docs/*path", {})).toThrowError(
+      expect.objectContaining({ code: "ROUTER_MISSING_PARAM" }),
+    );
+    expect(() => pathFor("/docs/*path", { path: "oops" })).toThrowError(
+      expect.objectContaining({ code: "ROUTER_MISSING_PARAM" }),
+    );
   });
 });

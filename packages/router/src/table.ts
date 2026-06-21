@@ -37,7 +37,7 @@
  * recovers `v`.
  */
 
-import { compile, PARAM_SEGMENT } from "./compile";
+import { compile, PARAM_TOKEN } from "./compile";
 import { RouterError } from "./errors";
 
 /**
@@ -71,14 +71,23 @@ interface Entry<T> {
 
   paramNames: ReadonlyArray<string>;
 
+  catchAllParams: ReadonlySet<string>;
+
   value: T;
 }
 
-/** A successful match: the stored value and the params captured from the path. */
+/**
+ * A successful match: the stored value and the params captured from the path.
+ *
+ * A single `:param` captures a `string`; a `*catchAll` captures the `string[]` run
+ * of segments it spanned (`[]` for an optional catch-all that matched none) — so a
+ * param value is `string | string[]`, narrowed per-key by `@lesto/router`'s
+ * `PathParams` wherever the pattern is known at the type level.
+ */
 export interface Match<T> {
   value: T;
 
-  params: Record<string, string>;
+  params: Record<string, string | string[]>;
 }
 
 export class RouteTable<T> {
@@ -90,9 +99,9 @@ export class RouteTable<T> {
    * ambiguous pattern (see {@link compile}) fails at declaration, not at request.
    */
   add(method: string, pattern: string, value: T): this {
-    const { regExp, paramNames } = compile(pattern);
+    const { regExp, paramNames, catchAllParams } = compile(pattern);
 
-    this.entries.push({ method, pattern, regExp, paramNames, value });
+    this.entries.push({ method, pattern, regExp, paramNames, catchAllParams, value });
 
     return this;
   }
@@ -113,14 +122,27 @@ export class RouteTable<T> {
 
       if (matched === null) continue;
 
-      const params: Record<string, string> = {};
+      const params: Record<string, string | string[]> = {};
 
       entry.paramNames.forEach((paramName, index) => {
         // Group 0 is the whole match; captures start at 1, aligned with paramNames.
-        // The capture is the on-the-wire (encoded) segment — decode it here, after
-        // the segment boundary is already fixed, so `%2F` can never smuggle a `/`
-        // into the route shape. A malformed `%` becomes a coded 400, not a 500.
-        params[paramName] = decodeParam(paramName, matched[index + 1] as string);
+        // The capture is the on-the-wire (encoded) form — decode it here, after the
+        // segment boundary is already fixed, so `%2F` can never smuggle a `/` into the
+        // route shape. A malformed `%` becomes a coded 400, not a 500.
+        const raw = matched[index + 1] as string | undefined;
+
+        if (entry.catchAllParams.has(paramName)) {
+          // A catch-all captured a `/`-joined run of segments — split on the literal
+          // boundary FIRST, then decode each, so the array element count is fixed on
+          // the wire form (a `%2F` decodes to `/` WITHIN an element, never a new one).
+          // An optional catch-all that matched nothing has no capture (`undefined`) → [].
+          params[paramName] =
+            raw === undefined
+              ? []
+              : raw.split("/").map((segment) => decodeParam(paramName, segment));
+        } else {
+          params[paramName] = decodeParam(paramName, raw as string);
+        }
       });
 
       return { value: entry.value, params };
@@ -139,29 +161,71 @@ export class RouteTable<T> {
  * Build a concrete path from a pattern by substituting and URL-encoding its params
  * — the reverse of {@link RouteTable.match}, so a link never hardcodes a URL.
  *
- * Each `:param` is replaced by `encodeURIComponent` of its value. That encoding is
- * the exact inverse of the `decodeURIComponent` `match` applies, so the two
- * round-trip: a value containing a `/` (or any unicode) survives the trip out and
- * back unchanged — `pathFor("/files/:p", { p: "a/b" })` yields `/files/a%2Fb`,
- * which `match` decodes back to `{ p: "a/b" }` as one segment, never two.
+ * Each `:param` is replaced by `encodeURIComponent` of its `string` value; each
+ * `*catchAll` by its `string[]` value's segments, each encoded and joined by `/`.
+ * That encoding is the exact inverse of the `decodeURIComponent` `match` applies,
+ * so the two round-trip: a value containing a `/` (or any unicode) survives the
+ * trip out and back unchanged — `pathFor("/files/:p", { p: "a/b" })` yields
+ * `/files/a%2Fb`, which `match` decodes back to `{ p: "a/b" }` as one segment;
+ * `pathFor("/docs/*r", { r: ["a", "b"] })` yields `/docs/a/b`, decoded back to the
+ * two-element array. An OPTIONAL catch-all given `[]` drops its whole segment —
+ * `pathFor("/shop/*r?", { r: [] })` is `/shop`, and the root `pathFor("/*r?", { r:
+ * [] })` is `/`.
  *
  * Throws a coded {@link RouterError} (`ROUTER_MISSING_PARAM`) if the pattern needs
- * a param the caller did not supply, or supplied empty: a `[^/]+` capture matches
- * one-or-more chars, so an empty value would yield a path that can never route
- * back (`/files/` misses `/files/:p`). Both are wiring bugs caught here, not
+ * a param the caller did not supply, supplied empty, or supplied with the wrong
+ * shape: a `[^/]+` capture matches one-or-more chars, so an empty single value
+ * yields a path that can never route back (`/files/` misses `/files/:p`), and a
+ * required catch-all needs at least one segment. All wiring bugs caught here, not
  * broken links shipped to a user.
  */
-export const pathFor = (pattern: string, params: Record<string, string> = {}): string =>
-  pattern.replace(PARAM_SEGMENT, (_segment, paramName: string) => {
-    const value = params[paramName];
+export const pathFor = (
+  pattern: string,
+  params: Record<string, string | readonly string[]> = {},
+): string => {
+  const missing = (paramName: string): RouterError =>
+    new RouterError(
+      "ROUTER_MISSING_PARAM",
+      `Pattern "${pattern}" needs a non-empty "${paramName}" param.`,
+      { pattern, param: paramName },
+    );
 
-    if (value === undefined || value === "") {
-      throw new RouterError(
-        "ROUTER_MISSING_PARAM",
-        `Pattern "${pattern}" needs a non-empty "${paramName}" param.`,
-        { pattern, param: paramName },
-      );
+  let out = "";
+  let lastIndex = 0;
+
+  for (const match of pattern.matchAll(PARAM_TOKEN)) {
+    const between = pattern.slice(lastIndex, match.index);
+    const singleName = match[1];
+
+    if (singleName !== undefined) {
+      const value = params[singleName];
+
+      if (typeof value !== "string" || value === "") throw missing(singleName);
+
+      out += between + encodeURIComponent(value);
+    } else {
+      const name = match[2] as string;
+      const optional = match[3] === "?";
+      const value = params[name];
+
+      // A catch-all takes the `string[]` run of segments; a missing or `string` value
+      // is the wrong shape (and narrows `value` to the array for the rest of the arm).
+      if (value === undefined || typeof value === "string") throw missing(name);
+
+      if (value.length === 0) {
+        if (!optional) throw missing(name);
+
+        // An empty optional catch-all contributes no segment: drop the preceding
+        // slash so the bare prefix stands (`/shop/*r?` → `/shop`), except at the root
+        // where the leading `/` is the path itself (`/*r?` → `/`).
+        out += between === "/" ? "/" : between.slice(0, -1);
+      } else {
+        out += between + value.map((segment) => encodeURIComponent(segment)).join("/");
+      }
     }
 
-    return encodeURIComponent(value);
-  });
+    lastIndex = match.index + match[0].length;
+  }
+
+  return out + pattern.slice(lastIndex);
+};

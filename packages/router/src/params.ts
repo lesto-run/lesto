@@ -30,33 +30,69 @@ type ParamName<Raw extends string> = Raw extends `${infer Name}.${string}`
     : Raw;
 
 /**
- * The union of `:param` names in a path pattern.
+ * The union of single-segment `:param` names in a path pattern.
  *
  * Walks the literal: a `:name/` prefix yields `name` and recurses on the rest; a
  * trailing `:name` yields the final name; anything without a `:` yields `never`
- * (a static path has no params). A name stops at the next `/` — or at a `.`/`-`
- * literal within the segment — mirroring the identifier the runtime captures.
+ * (a static path has no single params). A name stops at the next `/` — or at a
+ * `.`/`-` literal within the segment — mirroring the identifier the runtime
+ * captures. Catch-alls (`*name`) are read separately by {@link CatchAllParamKeys},
+ * since they carry a different VALUE type.
+ */
+export type SingleParamKeys<Path extends string> =
+  Path extends `${string}:${infer Param}/${infer Rest}`
+    ? ParamName<Param> | SingleParamKeys<`/${Rest}`>
+    : Path extends `${string}:${infer Param}`
+      ? ParamName<Param>
+      : never;
+
+/**
+ * The catch-all name in a path pattern — the `name` of a `*name` / `*name?`, or
+ * `never` when there is none. A catch-all is always the FINAL token (the matcher
+ * refuses any other position), so it is read straight off the tail: the optional
+ * `*name?` form is matched first so the trailing `?` is a literal, not part of the
+ * captured name. Its value is a `string[]` (the run of segments it captured),
+ * which is why it is tracked apart from the single `:param` names.
+ *
+ * @example
+ * type A = CatchAllParamKeys<"/docs/*rest">;        // "rest"
+ * type B = CatchAllParamKeys<"/docs/*rest?">;       // "rest"
+ * type C = CatchAllParamKeys<"/listings/:id">;      // never
+ */
+export type CatchAllParamKeys<Path extends string> = Path extends `${string}*${infer Name}?`
+  ? Name
+  : Path extends `${string}*${infer Name}`
+    ? Name
+    : never;
+
+/**
+ * The union of param names in a path pattern — single `:param` AND `*catchAll`
+ * names alike. The spine of `c.param(...)` key-checking; {@link PathParams} adds
+ * the per-name value type on top.
  *
  * @example
  * type A = ParamKeys<"/listings/:id">;             // "id"
  * type B = ParamKeys<"/posts/:postId/c/:id">;      // "postId" | "id"
  * type C = ParamKeys<"/files/:name.json">;         // "name"
- * type D = ParamKeys<"/about">;                     // never
+ * type D = ParamKeys<"/docs/*rest">;               // "rest"
+ * type E = ParamKeys<"/about">;                     // never
  */
-export type ParamKeys<Path extends string> = Path extends `${string}:${infer Param}/${infer Rest}`
-  ? ParamName<Param> | ParamKeys<`/${Rest}`>
-  : Path extends `${string}:${infer Param}`
-    ? ParamName<Param>
-    : never;
+export type ParamKeys<Path extends string> = SingleParamKeys<Path> | CatchAllParamKeys<Path>;
 
 /**
- * The record of path params for a pattern: each `:param` name mapped to `string`.
+ * The record of path params for a pattern: each single `:param` mapped to `string`,
+ * each `*catchAll` mapped to `string[]`.
  *
- * Every captured segment is a `string` at runtime (the router never coerces), so
- * the value type is uniformly `string`. A static path produces `{}` — no keys,
- * nothing to read.
+ * Every single-segment capture is a `string` at runtime (the router never
+ * coerces); a catch-all capture is split on `/` into the `string[]` run of
+ * segments it matched (`[]` for an optional catch-all that matched none). A static
+ * path produces `{}` — no keys, nothing to read.
  *
  * @example
  * type P = PathParams<"/listings/:id">;            // { id: string }
+ * type Q = PathParams<"/docs/*rest">;              // { rest: string[] }
+ * type R = PathParams<"/u/:id/*rest">;             // { id: string; rest: string[] }
  */
-export type PathParams<Path extends string> = { [Key in ParamKeys<Path>]: string };
+export type PathParams<Path extends string> = {
+  [Key in ParamKeys<Path>]: Key extends CatchAllParamKeys<Path> ? string[] : string;
+};

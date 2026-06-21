@@ -24,13 +24,26 @@
  *       page.tsx            → the route "/listings"
  *       [id]/
  *         page.tsx          → the route "/listings/:id"  (typed param `id`)
+ *     docs/
+ *       [...slug]/
+ *         page.tsx          → the route "/docs/*slug"  (catch-all, `slug: string[]`)
+ *     (marketing)/          → a pathless GROUP — adds no URL segment
+ *       layout.tsx          → wraps the group's pages without nesting a URL
+ *       about/
+ *         page.tsx          → the route "/about"  (NOT "/(marketing)/about")
  *
  * A segment is a directory name. A `[name]` directory is a dynamic segment that
- * compiles to `:name` — so the typed-param machinery (`ParamKeys`/`PathParams`)
- * the code-first router already has flows through unchanged: the URL the page
- * registers at is an ordinary pattern string. A `page` file at a directory makes
- * that directory's URL a page; a `layout` file makes one that wraps every page at
- * or below it, outermost-first (the directory depth order layouts must nest in).
+ * compiles to `:name`; a `[...name]` is a CATCH-ALL that compiles to the greedy
+ * `*name` (one or more trailing segments, a typed `string[]`), and `[[...name]]`
+ * its OPTIONAL twin `*name?` (zero or more, so the parent path matches too). A
+ * `(name)` directory is a route GROUP: pathless, so it organizes files (and can
+ * hold a shared `layout`) without contributing a URL segment. So the typed-param
+ * machinery (`ParamKeys`/`PathParams`) the code-first router already has flows
+ * through unchanged: the URL the page registers at is an ordinary pattern string.
+ * A `page` file at a directory makes that directory's URL a page; a `layout` file
+ * makes one that wraps every page at or below it, outermost-first (the directory
+ * depth order layouts must nest in — a group's layout nests by its directory like
+ * any other).
  *
  * Co-existence is the whole point: these descriptors become ordinary `.page()` /
  * `.layout()` registrations on the SAME `Lesto` instance an app declares its
@@ -114,24 +127,77 @@ export interface FileRoute {
 // derived pattern is one the router will actually accept.
 const DYNAMIC_SEGMENT = /^\[([A-Za-z_][A-Za-z0-9_]*)\]$/;
 
-// A static segment is one or more path-safe characters with no bracket, slash, or
-// the param colon — a literal directory name. Refusing anything else here turns a
-// stray `[`/`]` (a malformed dynamic segment like `[id` or `[1bad]`) into a coded
-// error at compile time, not a silently-wrong route.
+// A catch-all segment `[...name]` compiles to the greedy `*name` (one or more
+// trailing segments, captured as a typed `string[]`); its optional twin
+// `[[...name]]` to `*name?` (zero or more, so the parent path matches too). The
+// inner name is the same param identifier a `[name]` takes.
+const CATCH_ALL_SEGMENT = /^\[\.\.\.([A-Za-z_][A-Za-z0-9_]*)\]$/;
+const OPTIONAL_CATCH_ALL_SEGMENT = /^\[\[\.\.\.([A-Za-z_][A-Za-z0-9_]*)\]\]$/;
+
+// A route group `(name)` is a PATHLESS directory: it organizes files (and can hold
+// a shared `layout`) without contributing a URL segment — `(marketing)/about` is
+// the route `/about`. The name only labels the group, so the grammar is lenient.
+const GROUP_SEGMENT = /^\(([A-Za-z0-9_-]+)\)$/;
+
+// A static segment is one or more path-safe characters with no bracket, paren,
+// slash, or the param colon — a literal directory name. Refusing anything else here
+// turns a stray `[`/`]` (a malformed dynamic segment like `[id` or `[1bad]`) into a
+// coded error at compile time, not a silently-wrong route.
 const STATIC_SEGMENT = /^[A-Za-z0-9_.-]+$/;
 
+/** A `(group)` directory contributes no URL segment — it is stripped before compiling. */
+const isGroupSegment = (segment: string): boolean => GROUP_SEGMENT.test(segment);
+
+/** A `[...rest]` or `[[...rest]]` directory — a catch-all (the greedy, trailing kind). */
+const isCatchAllSegment = (segment: string): boolean =>
+  CATCH_ALL_SEGMENT.test(segment) || OPTIONAL_CATCH_ALL_SEGMENT.test(segment);
+
 /**
- * Compile one raw directory segment into its pattern piece: `[id]` → `:id`, a
- * literal name → itself, anything malformed → a coded refusal.
+ * The param NAME a raw directory segment binds, or `undefined` for a static or
+ * group segment. A `[id]`, `[...id]`, and `[[...id]]` all bind `id` — so the
+ * duplicate-name guard catches a name repeated across ANY of these forms, not just
+ * across two `[id]`s.
+ */
+function paramNameOf(segment: string): string | undefined {
+  const optional = OPTIONAL_CATCH_ALL_SEGMENT.exec(segment);
+
+  if (optional !== null) return optional[1] as string;
+
+  const catchAll = CATCH_ALL_SEGMENT.exec(segment);
+
+  if (catchAll !== null) return catchAll[1] as string;
+
+  const dynamic = DYNAMIC_SEGMENT.exec(segment);
+
+  if (dynamic !== null) return dynamic[1] as string;
+
+  return undefined;
+}
+
+/**
+ * Compile one raw directory segment into its pattern piece: `[id]` → `:id`,
+ * `[...rest]` → `*rest`, `[[...rest]]` → `*rest?`, a literal name → itself, anything
+ * malformed → a coded refusal. (A `(group)` segment never reaches here — it is
+ * stripped by {@link patternFor} before compilation.)
  *
- * The dynamic case reuses the router's own param grammar so a `[id]` directory
- * yields exactly the `:id` a hand-written route would, typed params and all. A
- * segment that is neither a clean literal nor a well-formed `[param]` (a bare `[`,
- * an empty `[]`, a `[1bad]` starting with a digit) is a convention mistake the
+ * The dynamic and catch-all cases reuse the router's own param grammar so the
+ * derived pattern is exactly what a hand-written route would take, typed params and
+ * all. A segment that is none of those well-formed forms (a bare `[`, an empty `[]`,
+ * a `[1bad]` starting with a digit, an empty `()` group) is a convention mistake the
  * author must fix — surfaced by a stable `ROUTER_FILE_BAD_SEGMENT`, not compiled
  * into a route that can never match.
  */
 function compileSegment(segment: string): string {
+  // Optional catch-all is checked before the required form (its brackets are a
+  // superset), and both before the single `[name]`, so each lands on its own arm.
+  const optional = OPTIONAL_CATCH_ALL_SEGMENT.exec(segment);
+
+  if (optional !== null) return `*${optional[1] as string}?`;
+
+  const catchAll = CATCH_ALL_SEGMENT.exec(segment);
+
+  if (catchAll !== null) return `*${catchAll[1] as string}`;
+
   const dynamic = DYNAMIC_SEGMENT.exec(segment);
 
   if (dynamic !== null) {
@@ -146,23 +212,27 @@ function compileSegment(segment: string): string {
 
   throw new RouterError(
     "ROUTER_FILE_BAD_SEGMENT",
-    `File-route segment "${segment}" is neither a literal name nor a "[param]" — rename the directory to a valid segment.`,
+    `File-route segment "${segment}" is neither a literal name, a "[param]", a "[...catchAll]", nor a "(group)" — rename the directory to a valid segment.`,
     { segment },
   );
 }
 
 /**
- * Turn a chain of raw directory segments into a URL pattern.
+ * Turn a chain of raw directory segments into a URL pattern, dropping `(group)`
+ * directories (which contribute no URL).
  *
- * The empty chain (the convention root's own `page`/`layout`) is the site root
- * `"/"`. Otherwise each segment is compiled (`[id]` → `:id`) and joined under a
- * leading slash, so `["listings", "[id]"]` becomes `/listings/:id` — the exact
- * pattern string the code-first `.page()` would have taken.
+ * The empty chain — or a chain of only groups (`(marketing)/page.tsx`) — is the
+ * site root `"/"`. Otherwise each surviving segment is compiled (`[id]` → `:id`,
+ * `[...rest]` → `*rest`) and joined under a leading slash, so `["listings", "[id]"]`
+ * becomes `/listings/:id` — the exact pattern string the code-first `.page()`
+ * would have taken.
  */
 function patternFor(segments: ReadonlyArray<string>): string {
-  if (segments.length === 0) return "/";
+  const urlSegments = segments.filter((segment) => !isGroupSegment(segment));
 
-  return `/${segments.map(compileSegment).join("/")}`;
+  if (urlSegments.length === 0) return "/";
+
+  return `/${urlSegments.map(compileSegment).join("/")}`;
 }
 
 /**
@@ -191,9 +261,17 @@ export const dirKey = (segments: ReadonlyArray<string>): string => segments.join
  * would permanently shadow the other. The sentinel is not a legal pattern
  * character (params are `:name`, statics are `STATIC_SEGMENT`), so it can never
  * collide with a literal segment an author wrote.
+ *
+ * A catch-all segment (`*rest` / `*rest?`) normalizes to a SECOND sentinel `**`, so
+ * a required and an optional catch-all at the same path (`[...a]` vs `[[...b]]`, both
+ * answering `/x/…`) reduce to the same shape and are refused as duplicates — while a
+ * catch-all and a single dynamic (`/x/*rest` vs `/x/:id`) keep distinct shapes
+ * (`/x/**` vs `/x/*`), so they coexist and resolve by specificity.
  */
 function matchShape(pattern: string): string {
-  return pattern.replace(/:[A-Za-z_][A-Za-z0-9_]*/g, "*");
+  return pattern
+    .replace(/\*[A-Za-z_][A-Za-z0-9_]*\??/g, "**")
+    .replace(/:[A-Za-z_][A-Za-z0-9_]*/g, "*");
 }
 
 /**
@@ -209,11 +287,9 @@ function assertNoDuplicateParam(segments: ReadonlyArray<string>, pattern: string
   const seen = new Set<string>();
 
   for (const segment of segments) {
-    const dynamic = DYNAMIC_SEGMENT.exec(segment);
+    const name = paramNameOf(segment);
 
-    if (dynamic === null) continue;
-
-    const name = dynamic[1] as string;
+    if (name === undefined) continue;
 
     if (seen.has(name)) {
       throw new RouterError(
@@ -224,6 +300,30 @@ function assertNoDuplicateParam(segments: ReadonlyArray<string>, pattern: string
     }
 
     seen.add(name);
+  }
+}
+
+/**
+ * Refuse a page whose catch-all segment is not the LAST URL segment.
+ *
+ * A catch-all (`[...rest]` / `[[...rest]]`) compiles to a greedy capture that
+ * swallows the whole tail, so a segment after it (`[...rest]/edit`) could never
+ * match — the pattern compiler refuses the resulting `/*rest/edit` too, but we
+ * catch it HERE, at convention time, so `generateRouteManifest` fails on the
+ * directory shape rather than emitting a manifest that throws when applied. The
+ * caller passes the GROUP-STRIPPED segments, since a `(group)` adds no URL segment.
+ */
+function assertCatchAllTerminal(urlSegments: ReadonlyArray<string>, pattern: string): void {
+  for (let i = 0; i < urlSegments.length - 1; i += 1) {
+    const segment = urlSegments[i] as string;
+
+    if (isCatchAllSegment(segment)) {
+      throw new RouterError(
+        "ROUTER_FILE_CATCHALL_POSITION",
+        `File-route "${pattern}" puts a catch-all "${segment}" before the end — a catch-all matches the whole remaining path, so it must be the last segment.`,
+        { pattern, segment },
+      );
+    }
   }
 }
 
@@ -290,6 +390,13 @@ export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): Readonl
       continue;
     }
 
+    // The URL-bearing segments (a `(group)` adds none) — what the catch-all-position
+    // and duplicate-param guards reason over, since neither concerns a pathless group.
+    const urlSegments = file.segments.filter((segment) => !isGroupSegment(segment));
+
+    // A catch-all greedily matches the tail, so it must be the final URL segment.
+    assertCatchAllTerminal(urlSegments, pattern);
+
     const shape = matchShape(pattern);
 
     if (seenShape.has(shape)) {
@@ -302,9 +409,10 @@ export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): Readonl
 
     // A `[id]` in two different segments (`[id]/[id]/page.tsx`) compiles to
     // `/:id/:id`, where the deeper capture silently clobbers the shallower at match
-    // time. A typed-param convention must not mint that collision — refuse by code,
-    // mirroring the single-segment ambiguity `compile` already rejects.
-    assertNoDuplicateParam(file.segments, pattern);
+    // time — and likewise a `[id]` and a `[...id]` sharing a name. A typed-param
+    // convention must not mint that collision — refuse by code, mirroring the
+    // single-segment ambiguity `compile` already rejects.
+    assertNoDuplicateParam(urlSegments, pattern);
 
     seenShape.add(shape);
 
@@ -360,36 +468,63 @@ function layoutDepthsFor(
   return depths;
 }
 
+/** The URL segments of a compiled pattern — `[]` for the root, else the `/`-split. */
+const urlPatternSegments = (pattern: string): ReadonlyArray<string> =>
+  pattern === "/" ? [] : pattern.slice(1).split("/");
+
+/** A pattern is a catch-all iff it carries a `*rest` token (single `:` params have none). */
+const isCatchAllPattern = (pattern: string): boolean => pattern.includes("*");
+
 /**
- * Order two pages most-specific first.
+ * A pattern segment's specificity rank, LOWER = more specific: a literal (`0`)
+ * before a single dynamic `:param` (`1`) before a catch-all `*rest` (`2`).
+ */
+function segmentRank(segment: string): number {
+  if (segment.startsWith("*")) return 2;
+  if (segment.startsWith(":")) return 1;
+
+  return 0;
+}
+
+/**
+ * Order two pages most-specific first — over the compiled URL pattern, so a
+ * `(group)` (which adds no URL segment) never skews depth.
  *
- * Deeper paths win (more segments = more specific). At equal depth the comparison
- * is POSITION-AWARE: walk the two segment arrays slot-by-slot and, at the first
- * position where one segment is static and the other dynamic, the STATIC one wins
- * — so `/files/new` (static-then-static) sorts ahead of `/:category/new`, and
- * `/listings/new` ahead of `/listings/:id`, the literal route shadowing a dynamic
- * sibling AT THAT POSITION under first-match resolution. A whole-path
- * static-vs-static (or otherwise identical-shape) pair falls back to the pattern
- * string so the sort is stable and deterministic across reader orderings.
+ * A catch-all route is the BROADEST kind, so it sinks below every non-catch-all
+ * route regardless of depth: an explicit page — even the catch-all's own parent
+ * (`/shop` under a `/shop/[[...slug]]`) — always wins, and the catch-all answers
+ * only what nothing else claimed. Among same-kind routes, deeper paths win (more
+ * segments = more specific); at equal depth the comparison is POSITION-AWARE: at
+ * the first slot where the rank differs, the more specific (literal before `:param`
+ * before `*rest`) sorts earlier — so `/files/new` precedes `/:category/new`, and
+ * `/listings/new` precedes `/listings/:id`, the literal route shadowing its dynamic
+ * sibling AT THAT POSITION under first-match resolution. An otherwise-identical pair
+ * falls back to the pattern string so the sort is stable across reader orderings.
  *
  * The two pages compared here always have DISTINCT patterns — two pages that share
- * a match-shape (so necessarily an exact-pattern duplicate too) are refused upstream
- * with `ROUTER_FILE_DUPLICATE_ROUTE` before the sort runs — so the final string
- * comparison need only choose a side, never report "equal"; `< ? -1 : 1` is total
- * over the distinct-pattern inputs the sort sees.
+ * a match-shape are refused upstream with `ROUTER_FILE_DUPLICATE_ROUTE` before the
+ * sort runs — so the final string comparison need only choose a side, never report
+ * "equal"; `< ? -1 : 1` is total over the distinct-pattern inputs the sort sees.
  */
 function comparePageSpecificity(a: FileRoute, b: FileRoute): number {
-  if (a.segments.length !== b.segments.length) {
-    return b.segments.length - a.segments.length;
+  const aCatchAll = isCatchAllPattern(a.pattern);
+  const bCatchAll = isCatchAllPattern(b.pattern);
+
+  if (aCatchAll !== bCatchAll) return aCatchAll ? 1 : -1;
+
+  const aSegments = urlPatternSegments(a.pattern);
+  const bSegments = urlPatternSegments(b.pattern);
+
+  if (aSegments.length !== bSegments.length) {
+    return bSegments.length - aSegments.length;
   }
 
-  // Equal depth: at the first slot where one side is static and the other dynamic,
-  // the static segment is more specific and sorts earlier.
-  for (let i = 0; i < a.segments.length; i += 1) {
-    const aDynamic = DYNAMIC_SEGMENT.test(a.segments[i] as string);
-    const bDynamic = DYNAMIC_SEGMENT.test(b.segments[i] as string);
+  // Equal depth and kind: at the first slot where specificity differs, the more
+  // specific (lower-rank) segment sorts earlier.
+  for (let i = 0; i < aSegments.length; i += 1) {
+    const rank = segmentRank(aSegments[i] as string) - segmentRank(bSegments[i] as string);
 
-    if (aDynamic !== bDynamic) return aDynamic ? 1 : -1;
+    if (rank !== 0) return rank;
   }
 
   return a.pattern < b.pattern ? -1 : 1;

@@ -13,7 +13,7 @@
  * front of Lesto's end-to-end typing: the compiler knows the keys, with no codegen.
  */
 
-import type { ParamKeys } from "@lesto/router";
+import type { CatchAllParamKeys, SingleParamKeys } from "@lesto/router";
 import type { ZodType } from "zod";
 
 import { currentContext } from "./context";
@@ -63,14 +63,19 @@ export class Context<Path extends string = string> {
   /**
    * A path param the router captured.
    *
-   * Typed to the pattern's `:param` names — `c.param("id")` compiles for
-   * `"/listings/:id"` and a typo'd key does not. The string overload is the
-   * escape hatch for a dynamically-built name; for a matched route the value is
-   * always present, but the wide overload is honestly `string | undefined`.
+   * Typed to the pattern's param names — `c.param("id")` compiles for
+   * `"/listings/:id"` and a typo'd key does not — and to each name's VALUE type: a
+   * single `:param` is a `string`, a `*catchAll` the `string[]` run of segments it
+   * spanned. Two narrow overloads keep that split without a Path-dependent RETURN
+   * (which would break `Handler<P>` variance). The string overload is the escape
+   * hatch for a dynamically-built name; for a matched route the value is always
+   * present, but it is honestly `string | undefined` (a dynamic name can't be known
+   * to be a catch-all).
    */
-  param(name: ParamKeys<Path>): string;
+  param(name: CatchAllParamKeys<Path>): string[];
+  param(name: SingleParamKeys<Path>): string;
   param(name: string): string | undefined;
-  param(name: string): string | undefined {
+  param(name: string): string | string[] | undefined {
     return this.currentRequest.params[name];
   }
 

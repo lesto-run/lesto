@@ -281,15 +281,18 @@ function byCodePoint(a: string, b: string): number {
 
 /**
  * One `RoutePath` union member for a compiled page pattern: a static pattern
- * becomes a string-literal type (`"/lab/gallery"`); a `:param` pattern becomes a
- * template-literal type with each param a `${string}` slot
- * (`` `/lab/gallery/${string}` ``) — the shape a `<Link href>` is actually written
- * as, so an interpolated `/lab/gallery/${id}` matches the type.
+ * becomes a string-literal type (`"/lab/gallery"`); a pattern with a `:param` or a
+ * `*catchAll` becomes a template-literal type with each one a `${string}` slot
+ * (`` `/lab/gallery/${string}` ``, `` `/docs/${string}` ``) — the shape a `<Link
+ * href>` is actually written as, so an interpolated `/lab/gallery/${id}` (or a
+ * `/docs/${a}/${b}` deep catch-all link) matches the type.
  */
 function routePathMember(pattern: string): string {
-  if (!pattern.includes(":")) return JSON.stringify(pattern);
+  if (!/[:*]/.test(pattern)) return JSON.stringify(pattern);
 
-  return `\`${pattern.replace(/:[A-Za-z_][A-Za-z0-9_]*/g, "${string}")}\``;
+  return `\`${pattern
+    .replace(/\*[A-Za-z_][A-Za-z0-9_]*\??/g, "${string}")
+    .replace(/:[A-Za-z_][A-Za-z0-9_]*/g, "${string}")}\``;
 }
 
 /**

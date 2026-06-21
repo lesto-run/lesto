@@ -21,7 +21,7 @@ export { pathFor, RouteTable } from "./table";
 export type { Match } from "./table";
 export { compile, escapeRegExp, PARAM_SEGMENT } from "./compile";
 export type { CompiledPattern } from "./compile";
-export type { ParamKeys, PathParams } from "./params";
+export type { CatchAllParamKeys, ParamKeys, PathParams, SingleParamKeys } from "./params";
 
 // The file-based routing convention: scan a conventional dir (`app/`) into ordered
 // route descriptors that compile to the same `:param` patterns above, so a

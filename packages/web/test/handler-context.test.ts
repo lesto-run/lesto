@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 
 import { runWithContext } from "../src/context";
@@ -36,6 +36,18 @@ describe("Context readers", () => {
     const c = new Context(requestOf());
 
     expect(c.param("missing")).toBeUndefined();
+  });
+
+  it("reads a catch-all param as a typed string[] of segments", () => {
+    // For a known pattern, `param` is typed per-name via `PathParams`: a single
+    // `:id` is a `string`, the `*slug` catch-all a `string[]`.
+    const c = new Context<"/docs/:id/*slug">(requestOf({ params: { id: "7", slug: ["a", "b"] } }));
+
+    expectTypeOf(c.param("id")).toEqualTypeOf<string>();
+    expectTypeOf(c.param("slug")).toEqualTypeOf<string[]>();
+
+    expect(c.param("id")).toBe("7");
+    expect(c.param("slug")).toEqual(["a", "b"]);
   });
 
   it("reads a query value", () => {
