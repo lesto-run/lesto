@@ -48,6 +48,9 @@ const Leaf = (): ReactNode => createElement("span", null, "leaf");
 const Listings = (): ReactNode => createElement("span", null, "listings");
 const Marker = (): ReactNode => createElement("span", null, "x");
 const Listing = ({ id }: { id: string }): ReactNode => createElement("h1", null, `listing ${id}`);
+// Renders its catch-all param so a test can see the `string[]` arrived intact.
+const CatchAll = ({ slug }: { slug: readonly string[] }): ReactNode =>
+  createElement("h1", null, `n=${slug.length} v=${slug.join("-")}`);
 
 /** A page module whose component renders a marker, plus any extra PageDef fields. */
 function pageModule(
@@ -498,5 +501,41 @@ describe("applyFileRoutes", () => {
         pattern: "/x",
       });
     }
+  });
+});
+
+describe("applyFileRoutes — catch-all & group segments end to end", () => {
+  it("renders a catch-all page with its load reading the string[] param", async () => {
+    const slug = page("docs", "[...slug]");
+    const app = applyFileRoutes(
+      lesto(),
+      [slug],
+      moduleMap([slug, { default: CatchAll, load: (c) => ({ slug: c.param("slug") }) }]),
+    );
+
+    expect(app.routes()).toContainEqual({ method: "GET", pattern: "/docs/*slug" });
+
+    // The greedy tail arrives as a typed array of decoded segments at the component.
+    expect(await drain(await app.handle("GET", "/docs/a/b/c"))).toContain("n=3 v=a-b-c");
+    // A required catch-all needs at least one segment — the bare parent 404s.
+    expect((await app.handle("GET", "/docs")).status).toBe(404);
+  });
+
+  it("registers a (group) page at the group-stripped URL, wrapped by the group's layout", async () => {
+    const groupLayout = layout("(marketing)");
+    const about = page("(marketing)", "about");
+    const app = applyFileRoutes(
+      lesto(),
+      [groupLayout, about],
+      moduleMap([groupLayout, layoutModule("mk")], [about, pageModule(About)]),
+    );
+
+    // The group adds no URL segment, but its layout still nests by directory.
+    expect(app.routes()).toContainEqual({ method: "GET", pattern: "/about" });
+
+    const html = await drain(await app.handle("GET", "/about"));
+
+    expect(html).toContain('<div id="mk">');
+    expect(html).toContain("<h1>about</h1>");
   });
 });
