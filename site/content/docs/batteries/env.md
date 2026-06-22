@@ -120,10 +120,17 @@ export default {
 };
 ```
 
-Set the secret once at deploy time:
+`workerEnv` is a generated `interface Env` carrying non-string bindings (an
+`ASSETS` fetcher, KV/DO namespaces); `defineEnv` accepts it as-is and reads only
+the string keys your schema names, so a binding never pollutes a validated value.
+
+Set the secret once at deploy time, and keep a local copy in `.dev.vars` for
+`wrangler dev` (the scaffold's `.gitignore` ignores `.dev.vars`, so it is never
+committed):
 
 ```sh
-wrangler secret put SESSION_SECRET
+wrangler secret put SESSION_SECRET     # production
+echo 'SESSION_SECRET=local-dev-value' >> .dev.vars   # local `wrangler dev`
 ```
 
 The default source is edge-safe (`globalThis.process?.env ?? {}`), so importing

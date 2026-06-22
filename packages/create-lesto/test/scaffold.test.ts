@@ -217,7 +217,7 @@ describe("scaffold", () => {
     // boundary — never import this into an island (it would ship to the browser).
     expect(envFile).toContain(".env.local");
     expect(envFile).toContain("defineEnv(schema, workerEnv)");
-    expect(envFile).toMatch(/do NOT import this module into an .*island/);
+    expect(envFile).toContain("do NOT import this module into an `app/islands/*`");
   });
 
   it("scaffolds the file-routed home page + layout and the agent onboarding files", async () => {
@@ -436,10 +436,12 @@ describe("templates", () => {
     expect(out).toContain("node_modules/");
     expect(out).toContain("*.db");
 
-    // Secrets must not be committable: Bun auto-loads `.env`/`.env.local` into
-    // process.env, so they hold secrets and must be ignored — every `.env` variant.
+    // Secrets must not be committable, across BOTH local channels: Bun auto-loads
+    // `.env`/`.env.local`, and `wrangler dev` reads `.dev.vars` — every variant ignored.
     expect(lines).toContain(".env");
     expect(lines).toContain(".env.*");
+    expect(lines).toContain(".dev.vars");
+    expect(lines).toContain(".dev.vars.*");
     // ...except the secret-free template, re-included by negation.
     expect(lines).toContain("!.env.example");
   });

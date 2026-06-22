@@ -78,4 +78,37 @@ describe("defineEnv", () => {
 
     expect(env).toEqual({ PORT: 3000 });
   });
+
+  it("validates a Cloudflare Worker `env` binding — an `interface` with non-string members", () => {
+    // The REGRESSION GUARD for the documented edge pattern. A Worker `env` is a
+    // generated `interface` carrying non-string bindings; this must (a) TYPECHECK —
+    // `defineEnv(schema, workerEnv)` compiles because the source param is `object`,
+    // not `Record<string, string>`, which a TS `interface` is not assignable to — and
+    // (b) read the string secret while ignoring the non-string binding.
+    interface AssetFetcher {
+      fetch(request: Request): Promise<Response>;
+    }
+
+    interface WorkerEnv {
+      readonly ASSETS: AssetFetcher;
+      readonly SESSION_SECRET?: string;
+    }
+
+    const workerEnv: WorkerEnv = {
+      ASSETS: { fetch: () => Promise.resolve(new Response()) },
+      SESSION_SECRET: "shh",
+    };
+
+    const env = defineEnv({ SESSION_SECRET: envField.string() }, workerEnv);
+
+    expect(env.SESSION_SECRET).toBe("shh");
+  });
+
+  it("treats a non-string source value as unset (a binding object is not an env value)", () => {
+    // A schema key whose source value is NOT a string (a Worker binding object) reads
+    // as unset, so the field applies its optional/default rule rather than coercing it.
+    const env = defineEnv({ THING: envField.string().optional() }, { THING: { not: "a string" } });
+
+    expect(env.THING).toBeUndefined();
+  });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { EnvError } from "../src/errors";
 import { envField } from "../src/fields";
 
 describe("envField.string", () => {
@@ -103,5 +104,32 @@ describe("EnvField.optional / default", () => {
     expect(base.optional()).not.toBe(base);
     expect(base.default("x")).not.toBe(base);
     expect(base.parse(undefined).ok).toBe(false);
+  });
+
+  it("rejects an invalid default EAGERLY — a right-typed but out-of-range value throws at build", () => {
+    // `70000` is a `number`, so TS allows it as a `port()` default — but it is not a
+    // valid port, and a "validated" env must never carry it. Caught when the schema
+    // is built, not silently slipped through.
+    let thrown: unknown;
+
+    try {
+      envField.port().default(70000);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(EnvError);
+    expect((thrown as EnvError).code).toBe("ENV_INVALID_DEFAULT");
+    expect((thrown as EnvError).message).toContain("70000");
+    expect((thrown as EnvError).message).toContain("must be a port");
+
+    // The same for a NaN number default and an over-long... every field's own rule applies.
+    expect(() => envField.number().default(Number.NaN)).toThrow(EnvError);
+  });
+
+  it("accepts a valid default (the common case) without throwing", () => {
+    expect(() => envField.port().default(3000)).not.toThrow();
+    expect(() => envField.boolean().default(false)).not.toThrow();
+    expect(() => envField.oneOf(["a", "b"]).default("a")).not.toThrow();
   });
 });

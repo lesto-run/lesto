@@ -36,20 +36,28 @@ function processEnv(): EnvSource {
 /**
  * Validate `source` (default: `process.env`) against `schema`, returning a frozen,
  * fully-typed env object — or throwing a coded {@link EnvError} that lists EVERY
- * problem at once. Pass `source` explicitly on the edge, where the values live on a
- * Worker `env` binding and there is no `process.env`.
+ * problem at once.
+ *
+ * `source` is typed `object`, not `EnvSource`, on purpose: a Cloudflare Worker `env`
+ * binding is a generated `interface Env` carrying NON-string members (an `ASSETS`
+ * fetcher, KV/DO bindings), and a TS `interface` is assignable to `object` but not to
+ * a `Record<string, string>`. So `defineEnv(schema, workerEnv)` typechecks on the edge
+ * exactly as on Node. Only the keys NAMED in the schema are read, and a value that is
+ * not a string (a binding, or an unset var) reads as "not set" — so a non-string
+ * binding never pollutes a validated value.
  */
-export function defineEnv<S extends EnvSchema>(
-  schema: S,
-  source?: EnvSource,
-): Readonly<InferEnv<S>> {
-  const from = source ?? processEnv();
+export function defineEnv<S extends EnvSchema>(schema: S, source?: object): Readonly<InferEnv<S>> {
+  const from = (source ?? processEnv()) as Record<string, unknown>;
 
   const values: Record<string, unknown> = {};
   const problems: string[] = [];
 
   for (const [key, field] of Object.entries(schema)) {
-    const result = field.parse(from[key]);
+    // Read defensively: only a string is a real env value. A non-string (a Worker
+    // binding) or a missing key both read as unset, so the field applies its
+    // required/optional/default rule rather than coercing a binding object.
+    const raw = from[key];
+    const result = field.parse(typeof raw === "string" ? raw : undefined);
 
     if (result.ok) values[key] = result.value;
     else problems.push(`  ${key} ${result.error}`);

@@ -9,6 +9,8 @@
  * (value may be `undefined`) or `.default(v)` (a fallback when unset).
  */
 
+import { EnvError } from "./errors";
+
 /** The raw env source: a bag of string values keyed by name (`process.env`-shaped). */
 export type EnvSource = Record<string, string | undefined>;
 
@@ -37,8 +39,26 @@ export class EnvField<T> {
     return new EnvField<T | undefined>(this.coerce, { kind: "optional" });
   }
 
-  /** Use `value` when the var is unset (or empty). */
+  /**
+   * Use `value` when the var is unset (or empty).
+   *
+   * The default is validated the SAME way a present value is — by re-coercing its
+   * string form — so an invalid default (`port().default(70000)`,
+   * `number().default(NaN)`) throws a coded {@link EnvError} as the schema is built,
+   * not silently slips an invalid value into a "validated" env. (TS already rejects a
+   * wrong-TYPED default; this catches a right-typed but out-of-range one.)
+   */
   default(value: T): EnvField<T> {
+    const check = this.coerce(String(value));
+
+    if (!check.ok) {
+      throw new EnvError(
+        "ENV_INVALID_DEFAULT",
+        `default value ${JSON.stringify(value)} is invalid: ${check.error}`,
+        { value, reason: check.error },
+      );
+    }
+
     return new EnvField<T>(this.coerce, { kind: "default", value });
   }
 

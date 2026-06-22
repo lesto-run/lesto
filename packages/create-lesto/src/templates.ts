@@ -648,11 +648,11 @@ export function wranglerConfig(name: string): string {
 /**
  * `.gitignore` — keep build artefacts, the local SQLite file, and SECRETS out of git.
  *
- * The `.env*` lines matter: \`lesto dev\`/\`build\` run under Bun, which auto-loads
- * \`.env\` and \`.env.local\` into \`process.env\` (where \`env.ts\`'s \`defineEnv\` reads
- * them), so those files are exactly where an author keeps secrets — and must never be
- * committed. \`.env.example\` is the exception: a committable, secret-free template of
- * the variable NAMES, so a teammate knows what to set.
+ * The secrets lines matter and cover BOTH local-dev secret channels: \`lesto dev\`/
+ * \`build\` run under Bun, which auto-loads \`.env\`/\`.env.local\` into \`process.env\`
+ * (where \`env.ts\`'s \`defineEnv\` reads them); and \`wrangler dev\` reads local secrets
+ * from \`.dev.vars\`. Both hold secrets and must never be committed. \`.env.example\` is
+ * the exception — a committable, secret-free template of the variable NAMES.
  */
 export function gitignore(): string {
   return [
@@ -663,10 +663,12 @@ export function gitignore(): string {
     "out/",
     ".DS_Store",
     "",
-    "# Secrets — Bun auto-loads these into process.env; never commit them.",
+    "# Secrets — local env (Bun loads .env/.env.local) + wrangler (.dev.vars). Never commit.",
     ".env",
     ".env.*",
     "!.env.example",
+    ".dev.vars",
+    ".dev.vars.*",
     "",
   ].join("\n");
 }
