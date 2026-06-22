@@ -37,6 +37,18 @@ export { generateExcerpt } from "./excerpt";
 export { calculateReadingTime } from "./reading-time";
 export { rehypeCallouts, CALLOUT_TYPES, type CalloutType } from "./callouts";
 export { calloutStyles } from "./callout-styles";
+export {
+  rehypePackageCommands,
+  convertNpmCommand,
+  PACKAGE_MANAGERS,
+  PACKAGE_INSTALL_LANG,
+  type PackageManager,
+} from "./package-commands";
+export { packageCommandStyles } from "./package-commands-styles";
+export {
+  enhancePackageCommands,
+  type EnhancePackageCommandsOptions,
+} from "./package-commands-client";
 export type {
   RenderOptions,
   RenderResult,

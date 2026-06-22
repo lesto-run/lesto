@@ -26,6 +26,7 @@ import {
 } from "./syntax-highlighting";
 import { rehypeStripFirstHeading } from "./plugins";
 import { rehypeCallouts } from "./callouts";
+import { rehypePackageCommands } from "./package-commands";
 import type { RenderOptions, RenderResult, Renderer } from "./types";
 
 const DEFAULT_WORDS_PER_MINUTE = 250;
@@ -104,6 +105,7 @@ export function createHybridRenderer(options: HybridRenderOptions = {}): Rendere
     stripFirstHeading = true,
     syntaxHighlighting = false,
     callouts = true,
+    packageCommands = true,
   } = options;
 
   const syntaxOptions = parseSyntaxHighlightingOptions(syntaxHighlighting);
@@ -127,6 +129,12 @@ export function createHybridRenderer(options: HybridRenderOptions = {}): Rendere
       // are touched; plain blockquotes pass through unchanged.
       if (callouts) {
         plugins.push(rehypeCallouts);
+      }
+
+      // Package-manager tabs run before syntax highlighting so the generated
+      // `language-bash` panels get colored. Only `package-install` blocks change.
+      if (packageCommands) {
+        plugins.push(rehypePackageCommands);
       }
 
       if (syntaxOptions) {

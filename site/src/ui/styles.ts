@@ -10,7 +10,7 @@
  */
 
 import { commandPaletteStyles } from "@lesto/content-search";
-import { calloutStyles } from "@lesto/content-markdown/styles";
+import { calloutStyles, packageCommandStyles } from "@lesto/content-markdown/styles";
 
 export const DOCS_CSS = `
 :root {
@@ -261,6 +261,9 @@ a:hover { text-decoration: underline; }
   // GitHub-style callout (admonition) styling, likewise straight from
   // @lesto/content-markdown — the same plugin renders `> [!NOTE]` blocks here.
   calloutStyles +
+  // Package-manager tab styling, also from @lesto/content-markdown — the same
+  // plugin emits the `package-install` tabs the enhancer wires up.
+  packageCommandStyles +
   `
 /* On touch viewports the keyboard hint is meaningless and the label is noise. */
 @media (max-width: 600px) {

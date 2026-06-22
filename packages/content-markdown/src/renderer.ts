@@ -14,6 +14,7 @@ import {
 } from "./syntax-highlighting";
 import { rehypeStripFirstHeading, remarkStripLumenComments } from "./plugins";
 import { rehypeCallouts } from "./callouts";
+import { rehypePackageCommands } from "./package-commands";
 import type { RenderOptions, RenderResult, Renderer } from "./types";
 
 const DEFAULT_WORDS_PER_MINUTE = 250;
@@ -36,6 +37,7 @@ export function createUnifiedRenderer(options: RenderOptions = {}): Renderer {
     stripFirstHeading = true,
     syntaxHighlighting = false,
     callouts = true,
+    packageCommands = true,
   } = options;
 
   const syntaxOptions = parseSyntaxHighlightingOptions(syntaxHighlighting);
@@ -54,6 +56,12 @@ export function createUnifiedRenderer(options: RenderOptions = {}): Renderer {
       // GitHub-style callouts (only transforms `[!TYPE]` blockquotes)
       if (callouts) {
         allRehypePlugins.push(rehypeCallouts);
+      }
+
+      // Package-manager tabs (only transforms `package-install` blocks) — before
+      // syntax highlighting so its `language-bash` panels get colored.
+      if (packageCommands) {
+        allRehypePlugins.push(rehypePackageCommands);
       }
 
       // Only add syntax highlighting if enabled

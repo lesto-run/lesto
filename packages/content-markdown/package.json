@@ -13,8 +13,12 @@
       "import": "./src/index.ts"
     },
     "./styles": {
-      "types": "./src/callout-styles.ts",
-      "import": "./src/callout-styles.ts"
+      "types": "./src/styles.ts",
+      "import": "./src/styles.ts"
+    },
+    "./client": {
+      "types": "./src/package-commands-client.ts",
+      "import": "./src/package-commands-client.ts"
     }
   },
   "scripts": {

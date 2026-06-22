@@ -27,7 +27,7 @@ it, and another worker reclaims and completes it.
 Install the queue and a database driver (skip the driver if your app already has
 one — the queue takes any Lesto `SqlDatabase` handle):
 
-```sh
+```package-install
 npm install @lesto/queue @lesto/runtime better-sqlite3
 ```
 

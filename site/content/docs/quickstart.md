@@ -13,7 +13,7 @@ then ship it to Cloudflare.
 
 ## Scaffold
 
-```bash
+```package-install
 npm create lesto-app@latest my-app
 cd my-app
 npm install

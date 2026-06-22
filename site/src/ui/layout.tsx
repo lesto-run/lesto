@@ -13,6 +13,7 @@ import type { ReactElement, ReactNode } from "react";
 
 import AnalyticsIsland from "../../app/islands/analytics";
 import CopyCodeIsland from "../../app/islands/copy-code";
+import PackageTabsIsland from "../../app/islands/package-tabs";
 import SearchIsland from "../../app/islands/search";
 import { DOCS_CSS } from "./styles";
 
@@ -50,6 +51,7 @@ export function DocsLayout({ children }: { children: ReactNode }): ReactElement 
       {/* Headless islands: boot client behavior, render nothing visible. */}
       <AnalyticsIsland />
       <CopyCodeIsland />
+      <PackageTabsIsland />
     </>
   );
 }

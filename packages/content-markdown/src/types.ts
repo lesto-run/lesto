@@ -65,6 +65,14 @@ export interface RenderOptions {
    * @default true
    */
   callouts?: boolean;
+  /**
+   * Expand ` ```package-install ` code blocks into npm/pnpm/yarn/bun tabs. Only
+   * blocks tagged with that language are affected; everything else is left
+   * alone, so this is safe to leave on.
+   *
+   * @default true
+   */
+  packageCommands?: boolean;
 }
 
 export interface RenderResult {
