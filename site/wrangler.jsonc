@@ -7,6 +7,17 @@
 	"name": "lesto-docs",
 	"main": "worker.ts",
 	"compatibility_date": "2026-06-01",
+	// The canonical home. A Workers Custom Domain: once the `lesto.run` zone is
+	// ACTIVE on Cloudflare (its nameservers switched at the registrar to the
+	// Cloudflare-assigned pair), this route auto-provisions the proxied DNS
+	// record + edge cert for `docs.lesto.run`, making the canonical / OG /
+	// sitemap / llms.txt URLs true end-to-end. PENDING until the NS switch.
+	"routes": [
+		{ "pattern": "docs.lesto.run", "custom_domain": true },
+	],
+	// Keep the *.workers.dev URL live as the working fallback until the custom
+	// domain activates (otherwise the site is unreachable during the NS switch).
+	"workers_dev": true,
 	// Backstop for any node:* surface the assets adapter's transitive imports
 	// touch; the Worker itself runs on Web APIs (crypto, TextEncoder, fetch).
 	"compatibility_flags": [
