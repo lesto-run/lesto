@@ -30,13 +30,16 @@ proceed to de-privatization.
 ## The published surface
 
 A scaffolded app (`create-lesto`) installs `@lesto/cli`, `@lesto/assets`, `@lesto/db`,
-`@lesto/kernel`, `@lesto/migrate`, `@lesto/runtime`, `@lesto/ui`, and `@lesto/web`. Their
-transitive `@lesto/*` closure — **28 packages** — must all be public for an install to
-resolve:
+`@lesto/env`, `@lesto/kernel`, `@lesto/migrate`, `@lesto/runtime`, `@lesto/ui`, and
+`@lesto/web`. Their transitive `@lesto/*` closure must all be public for an install to
+resolve. The closure is **auto-derived**, not maintained by hand: `scripts/pack-and-boot.mjs`
+packs every package that is `private !== true` with `version === "0.1.0"`, and fails if any
+`@lesto/*` dep a scaffolded app pins is missing from that set — so a new published package
+joins the closure simply by being non-private at `0.1.0`. The set is roughly:
 
 ```
 assets auth cli content-core content-embeddings content-markdown content-search
-content-shared content-store content-umbra cors csrf db deploy errors kernel mcp
+content-shared content-store content-umbra cors csrf db deploy env errors kernel mcp
 migrate observability openapi queue ratelimit router runtime sites storage ui web
 ```
 

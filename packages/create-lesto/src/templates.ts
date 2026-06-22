@@ -288,6 +288,19 @@ export function env(): string {
  * of \`process.env\`: it is validated and typed, and a bad value fails at boot, not
  * mid-request. Add fields as you need them — every \`envField\` chains \`.optional()\`
  * or \`.default(value)\`, and a field with neither is REQUIRED (boot throws if unset).
+ *
+ * WHERE VALUES COME FROM:
+ *   - Local dev: \`lesto dev\`/\`build\` run under Bun, which auto-loads \`.env\` and
+ *     \`.env.local\` into \`process.env\` — so put secrets in \`.env.local\` (it is
+ *     gitignored; commit a \`.env.example\` of the NAMES instead).
+ *   - Cloudflare deploy: a Worker has no \`process.env\`. Read config off the Worker
+ *     \`env\` binding (set with \`wrangler secret put NAME\`) and validate it the same
+ *     way with \`defineEnv(schema, workerEnv)\` — pass the binding as the 2nd arg.
+ *
+ * SERVER-ONLY — do NOT import this module into an \`app/islands/*\` component. Islands
+ * are bundled to the browser, where there is no \`process.env\`; a required var would
+ * throw at hydration, and any secret has no business in client code. Pass values an
+ * island needs down as props from a server page/loader instead.
  */
 export const env = defineEnv({
   // The SQLite database file the app opens (see \`lesto.app.ts\`). Defaults to

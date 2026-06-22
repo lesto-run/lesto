@@ -211,6 +211,13 @@ describe("scaffold", () => {
     expect(envFile).toContain('import { defineEnv, envField } from "@lesto/env"');
     expect(envFile).toContain("export const env = defineEnv({");
     expect(envFile).toContain('LESTO_DB: envField.string().default("lesto.db")');
+
+    // ...and it teaches the secrets story on day one: where values come from
+    // (.env.local under Bun + the Worker binding on the edge) and the SERVER-ONLY
+    // boundary — never import this into an island (it would ship to the browser).
+    expect(envFile).toContain(".env.local");
+    expect(envFile).toContain("defineEnv(schema, workerEnv)");
+    expect(envFile).toMatch(/do NOT import this module into an .*island/);
   });
 
   it("scaffolds the file-routed home page + layout and the agent onboarding files", async () => {
