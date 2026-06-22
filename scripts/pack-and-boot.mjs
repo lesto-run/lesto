@@ -114,9 +114,17 @@ if (bad.length > 0) {
 }
 
 // 4. Scaffold through the `create-lesto` bin UNDER NODE (its jiti shim) — half the proof:
-//    `npx create-lesto` itself has to run for an outsider.
+//    `npx create-lesto` itself has to run for an outsider. Pass `--no-install --no-git`:
+//    the scaffold's own default `bun install` would pin `@lesto/*` at the published `^0.x`
+//    range and 404 against the as-yet-unpublished registry (the very thing this proof
+//    stands in for). We want ONLY the file-write + bin-runs-under-node half here; the
+//    install proof is step 5's npm install against the packed TARBALLS below.
 console.log("[pack-and-boot] scaffolding via create-lesto under node…");
-run("node", [join(PACKAGES, "create-lesto", "bin", "create-lesto.mjs"), "boot-proof"], { cwd: work });
+run(
+  "node",
+  [join(PACKAGES, "create-lesto", "bin", "create-lesto.mjs"), "boot-proof", "--no-install", "--no-git"],
+  { cwd: work },
+);
 
 const appDir = join(work, "boot-proof");
 
