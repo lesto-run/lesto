@@ -201,8 +201,13 @@ export interface QueryResult<T> {
  * (never during render), so a server render reads the idle snapshot and never
  * fetches — the client-only data island (`ssr: false`) is the intended caller.
  *
- * `isLoading` is true while uncached or in flight; an errored key does NOT auto
- * retry on re-mount (call {@link QueryResult.refetch}) — kept simple on purpose.
+ * `isLoading` is true while uncached or in flight. A FRESH mount of an uncached
+ * OR previously-errored key kicks a fetch — so navigating away and back to a
+ * listing that failed transiently retries (matching a plain mount-effect fetch),
+ * while a SUCCESS stays cached (the dedupe/cache win). The fetch fires once per
+ * mount / key-change (the effect deps are only `[client, keyStr]`), never per
+ * render, so there is no retry storm; an in-mount retry is a manual
+ * {@link QueryResult.refetch}.
  */
 export function useQuery<T>(
   key: QueryKey,
@@ -231,9 +236,13 @@ export function useQuery<T>(
   );
 
   useEffect(() => {
-    // Fetch only when the key is uncached — a sibling already loading/loaded it is
-    // left alone (that is the dedupe at mount time).
-    if (client.getSnapshot(keyStr).status === "idle") {
+    // Fetch on a fresh mount when the key is uncached (`idle`) OR previously
+    // errored — so a remount retries a transient failure rather than showing a
+    // terminal stale error. A `loading`/`success` key is left alone: a sibling
+    // already has it in flight or cached (the dedupe at mount time).
+    const status = client.getSnapshot(keyStr).status;
+
+    if (status === "idle" || status === "error") {
       void client.fetch(keyStr, () => fetcherRef.current());
     }
   }, [client, keyStr]);

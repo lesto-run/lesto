@@ -76,8 +76,13 @@ export interface PageMetadata {
  * guards a page and its whole subtree exactly as it guards API routes.
  *
  * The `Search` generic is INFERRED from `params`: declare `params: SomeZodSchema`
- * and `load`'s `search` argument is typed to that schema's output, mirror of
- * TanStack `validateSearch`. Declare no `params` and `Search` is the open `unknown`
+ * and `load`'s `search` argument is typed to that schema's output (akin to
+ * TanStack `validateSearch`). One difference to know: the input is `c.req.query`,
+ * a flat `Record<string, string>` (a repeated `?a=1&a=2` is last-wins), so the
+ * schema should validate STRING-keyed scalars — a `z.array(...)`/`z.number()` field
+ * type-checks but rejects every real request until the value is coerced from its
+ * string (use `z.coerce.number()` / a `.transform`); array query params are not
+ * yet parsed. Declare no `params` and `Search` is the open `unknown`
  * default, so an existing `(c) => …` loader is unchanged AND `params` still accepts
  * any schema (`ZodType`'s `Output` is covariant, so a narrower schema assigns to the
  * `unknown` default — the file-route applier, which holds a bare `PageDef`, keeps

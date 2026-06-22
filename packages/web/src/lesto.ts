@@ -771,6 +771,14 @@ type CapturedMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
  * untyped `Lesto.get` (only `apiRoutes()` routes are captured); and a runtime body
  * that diverges from what was `c.json`'d (TypeScript checks the value passed to
  * `c.json`, not the bytes on the wire — there is no runtime schema here).
+ *
+ * **One constraint to know:** a handler's response type is inferred from a SINGLE
+ * `c.json(...)` shape. A handler that returns two different shapes by status —
+ * `if (!ok) return c.json({ error }, 400); return c.json(data);` — does not infer a
+ * union; the second `c.json` must match the first or it is a `tsc` error. Annotate
+ * the union explicitly (`c.json<Ok | Err>(…)`) on each branch, or — the idiomatic
+ * Lesto way — let an error THROW (it surfaces as the client's coded `CLIENT_HTTP_ERROR`)
+ * and keep the typed `c.json` to the one success shape.
  */
 export class ApiRoutes<C extends CapturedContract = Record<never, never>> {
   // A typed builder is a thin façade over a real `lesto()`: it records the same

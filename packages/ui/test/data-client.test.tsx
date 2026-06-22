@@ -212,6 +212,48 @@ describe("useQuery", () => {
     expect((ref.current?.error as Error | undefined)?.message).toBe("nope");
   });
 
+  it("retries on a fresh mount after a transient error (no terminal stale error)", async () => {
+    const client = new QueryClient();
+    const d1 = deferred<string>();
+    const d2 = deferred<string>();
+    let call = 0;
+    const fetcher = vi.fn(() => (++call === 1 ? d1.promise : d2.promise));
+    const ref: { current: QueryResult<string> | null } = { current: null };
+
+    function Probe(): null {
+      ref.current = useQuery("listing:9", fetcher, { client });
+
+      return null;
+    }
+
+    // First mount → the fetch rejects → the snapshot caches an error.
+    const container1 = document.createElement("div");
+    document.body.append(container1);
+    const root1 = createRoot(container1);
+    act(() => root1.render(createElement(Probe)));
+    await act(async () => {
+      d1.reject(new Error("transient"));
+      await d1.promise.catch(() => {});
+    });
+    expect(client.getSnapshot("listing:9").status).toBe("error");
+
+    // Unmount, then REMOUNT on the same client+key → the effect sees `error` and
+    // refetches (where the old `idle`-only guard would have shown a stale error).
+    act(() => root1.unmount());
+    const container2 = document.createElement("div");
+    document.body.append(container2);
+    const root2 = createRoot(container2);
+    roots.push(root2);
+    act(() => root2.render(createElement(Probe)));
+    await act(async () => {
+      d2.resolve("recovered");
+      await d2.promise;
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(ref.current?.data).toBe("recovered");
+  });
+
   it("dedupes at mount — two components on one key fetch once", () => {
     const client = new QueryClient();
     const fetcher = vi.fn(() => new Promise<string>(() => {}));

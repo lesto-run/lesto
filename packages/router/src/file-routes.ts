@@ -84,7 +84,7 @@ export type FileRouteKind = "page" | "layout" | "loading" | "error" | "not-found
  * supply a fallback to) the page at their directory and every page below it, with
  * a deeper file of the same kind overriding the shallower for that subtree. A
  * `page` is the only NON-boundary kind. Listed once so the compiler resolves each
- * boundary the SAME way (`nearestBoundary`) rather than repeating the walk per kind.
+ * boundary the SAME way (`boundariesFor`) rather than repeating the walk per kind.
  */
 export const BOUNDARY_KINDS = ["layout", "loading", "error", "not-found"] as const;
 

@@ -449,13 +449,21 @@ class NotFoundSignal extends Error {
 }
 
 /**
- * Signal "this matched route addresses nothing" from inside a page's render or
- * `load`, rendering the nearest `not-found.tsx` boundary.
+ * Signal "this matched route addresses nothing" from inside a page (or layout)
+ * component's RENDER, rendering the nearest `not-found.tsx` boundary.
  *
  * Throws the {@link NotFoundSignal} sentinel, which unwinds to the page's nearest
- * {@link NotFoundBoundary}. Use it where a route resolved but the resource it names
- * is absent (`const row = await find(id); if (row === undefined) notFound();`).
- * Returns `never`, so TypeScript narrows the value as present after the call.
+ * {@link NotFoundBoundary}. Use it during render where the resource a resolved
+ * route names is absent — read the loaded value and call it if missing:
+ * `if (props.row === undefined) notFound();`. Returns `never`, so TypeScript
+ * narrows the value as present after the call.
+ *
+ * Two honest limits today (tracked follow-ups in docs/plans/dx-parity.md W5, NOT
+ * regressions): (1) it works from RENDER, not from a `load` loader — a loader runs
+ * before the boundary exists, so a `notFound()` thrown there propagates as a 500;
+ * return the absence to the component and call `notFound()` there. (2) Under React's
+ * streaming SSR the boundary recovers on the CLIENT, so the 404 view appears after
+ * hydration and the HTTP status stays 200 (a crawler / no-JS client sees an empty 200).
  */
 export function notFound(): never {
   throw new NotFoundSignal();

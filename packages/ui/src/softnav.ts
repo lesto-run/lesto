@@ -656,6 +656,18 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
       // Re-hydrate against the JUST-SWAPPED document — `root` is the seam islands
       // are looked up under, so the new body's mount scripts are the ones found,
       // not the ambient global `document`'s.
+      //
+      // ACTIVATION CAVEAT for the layout-preserving partial swap: this re-hydrates
+      // the WHOLE document, which is correct ONLY for the full-body swap (today's
+      // path — no server emits `data-lesto-layout`, so `deepestSharedLayout` always
+      // returns undefined). The moment a server DOES emit those markers and a partial
+      // swap keeps an outer layout's DOM, re-scanning the whole doc here would re-mount
+      // that preserved layout's islands (no idempotency guard in `hydrateDocumentIslands`)
+      // and DESTROY the very state the partial swap preserves. So before wiring the
+      // marker, this must scope to the swapped subtree (the `defaultSwap` would have to
+      // surface which element it replaced) OR `hydrateDocumentIslands` must skip an
+      // already-mounted shell. Until then the partial-swap branch stays a dormant, pure
+      // fallback (see docs/plans/dx-parity.md W8) — never activate one without the other.
       const hydration = rehydrate(registry, { root: doc });
 
       // The swapped-in page brings its own `viewport`-prefetch links; register them
