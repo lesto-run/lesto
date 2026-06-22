@@ -122,6 +122,7 @@ describe("scan/catalogue purity (grep-asserted)", () => {
     "managed-region.ts",
     "render-agents.ts",
     "render-llms.ts",
+    "run.ts",
   ])("%s imports no fs/process/node builtins", (file) => {
     const src = readFileSync(join(srcDir, "agents", file), "utf8");
 
