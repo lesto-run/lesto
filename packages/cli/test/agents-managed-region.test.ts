@@ -34,6 +34,29 @@ describe("mergeManagedRegion", () => {
     expect(twice).toBe(once);
   });
 
+  test("treats an inline prose mention of the markers as author text, not a region", () => {
+    // An author documenting the marker syntax in their OWN prose must not have the
+    // text between the mentions silently overwritten — the markers are not whole-line.
+    const existing = `# Notes\n\nWe fence output with \`${MANAGED_REGION_START}\` … \`${MANAGED_REGION_END}\`.\n`;
+
+    const merged = mergeManagedRegion(existing, "BODY");
+
+    // The whole preamble (including the mentioned marker text) survives, and the
+    // real managed block is appended after it — nothing is clobbered.
+    expect(merged).toBe(`${existing.trimEnd()}\n\n${block("BODY")}\n`);
+  });
+
+  test("stays idempotent when the generated body itself contains a marker token", () => {
+    // A scanned value rendered mid-line (e.g. a bullet) can contain the marker text;
+    // because it is not alone on a line, it must not open a second region.
+    const inner = `- \`${MANAGED_REGION_START}\` (page)`;
+
+    const once = mergeManagedRegion("", inner);
+    const twice = mergeManagedRegion(once, inner);
+
+    expect(twice).toBe(once); // no throw, byte-identical
+  });
+
   test("throws CLI_AGENTS_MARKER_MALFORMED on a duplicated start marker", () => {
     const existing = `${MANAGED_REGION_START}\na\n${MANAGED_REGION_START}\nb\n${MANAGED_REGION_END}`;
 

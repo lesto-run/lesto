@@ -58,9 +58,14 @@ interface ContentCoreModule {
  * throwing `getCollections` (store unbuilt) both resolve to an empty list, because a
  * project simply may not use content — that is not an error, and `--check` must stay
  * deterministic regardless of whether the store happens to be built.
+ *
+ * The optional `onError` sink is handed the swallowed cause so the degrade is not
+ * fully silent: the bin wires it to a warning, so a genuine content-core breakage
+ * leaves a trace rather than a mysteriously content-less artifact.
  */
 export function createCollectionsReader(
   importContentCore: () => Promise<ContentCoreModule>,
+  onError?: (error: unknown) => void,
 ): () => Promise<readonly CollectionDescriptor[]> {
   return async () => {
     try {
@@ -70,7 +75,13 @@ export function createCollectionsReader(
         name: collection.name,
         entryCount: collection.entries.length,
       }));
-    } catch {
+    } catch (error) {
+      // Degrade to "no collections" — but surface the cause through the optional
+      // sink (the bin passes a `console.warn`), so a GENUINE content-core failure
+      // is not swallowed without a trace, only the expected peer-absent / store-
+      // unbuilt cases pass quietly.
+      onError?.(error);
+
       return [];
     }
   };
@@ -177,10 +188,13 @@ export async function runGenerateAgents(
     return 0;
   }
 
-  // --dry-run: announce the plan, write nothing.
+  // --dry-run: announce the REAL plan (a byte-identical file would be left
+  // untouched, exactly as a real run reports), and write nothing.
   if (dryRun) {
     for (const target of targets) {
-      deps.out(`would ${target.existed ? "update" : "write"} ${target.path}`);
+      const verb = target.next === target.current ? "leave" : target.existed ? "update" : "write";
+
+      deps.out(`would ${verb} ${target.path}${verb === "leave" ? " unchanged" : ""}`);
     }
 
     return 0;

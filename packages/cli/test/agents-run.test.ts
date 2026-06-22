@@ -16,7 +16,15 @@ function harness(overrides: Partial<GenerateAgentsDeps> = {}) {
     readCollections: async () => [{ name: "posts", entryCount: 2 }],
     summary: { framework: "lesto", uiDialect: "react" },
     exists: async (path) => files.has(path),
-    read: async (path) => files.get(path) ?? "",
+    // Model the real fs: reading an absent path THROWS (ENOENT), so the orchestrator's
+    // `existed ? read : ""` guard is load-bearing — dropping it would crash, not "".
+    read: async (path) => {
+      const contents = files.get(path);
+
+      if (contents === undefined) throw new Error(`ENOENT: ${path}`);
+
+      return contents;
+    },
     write: async (path, contents) => {
       files.set(path, contents);
       writes.push(path);
@@ -37,6 +45,10 @@ describe("runGenerateAgents", () => {
     expect(code).toBe(0);
     expect(lines).toEqual(["wrote AGENTS.md", "wrote llms.txt"]);
     expect(files.get("AGENTS.md")).toContain(MANAGED_REGION_START);
+    // Each artifact carries its OWN distinguishing header, so a wrong-renderer
+    // regression (writing the same content to both) would fail here.
+    expect(files.get("AGENTS.md")).toContain("# Agent guide");
+    expect(files.get("llms.txt")).toContain("# Lesto app");
     // The island inventory appears in BOTH artifacts.
     expect(files.get("AGENTS.md")).toContain("Counter");
     expect(files.get("llms.txt")).toContain("Counter");
@@ -122,6 +134,17 @@ describe("runGenerateAgents", () => {
     expect(lines).toEqual(["would update AGENTS.md", "would update llms.txt"]);
   });
 
+  test("--dry-run reports 'would leave … unchanged' for already-fresh files", async () => {
+    const { deps, lines } = harness();
+    await runGenerateAgents([], deps); // make both current
+    lines.length = 0;
+
+    const code = await runGenerateAgents(["--dry-run"], deps);
+
+    expect(code).toBe(0);
+    expect(lines).toEqual(["would leave AGENTS.md unchanged", "would leave llms.txt unchanged"]);
+  });
+
   test("--check wins when both --check and --dry-run are passed", async () => {
     const { deps, writes } = harness();
 
@@ -173,5 +196,17 @@ describe("createCollectionsReader", () => {
     }));
 
     expect(await read()).toEqual([]);
+  });
+
+  test("surfaces the swallowed cause through onError while still degrading", async () => {
+    const seen: unknown[] = [];
+    const read = createCollectionsReader(
+      () => Promise.reject(new Error("boom")),
+      (error) => seen.push(error),
+    );
+
+    expect(await read()).toEqual([]);
+    expect(seen).toHaveLength(1);
+    expect((seen[0] as Error).message).toBe("boom");
   });
 });
