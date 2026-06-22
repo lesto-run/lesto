@@ -167,6 +167,35 @@ describe("runGenerateAgents", () => {
   });
 });
 
+/** A realistic Node ESM module-resolution error: an `ERR_MODULE_NOT_FOUND` whose message names the missing specifier. */
+function moduleNotFound(specifier: string): Error {
+  const error = new Error(`Cannot find package '${specifier}' imported from /app/x.ts`);
+  (error as { code?: string }).code = "ERR_MODULE_NOT_FOUND";
+
+  return error;
+}
+
+/** An `Error` carrying an arbitrary `code` — for the unrelated-code classification branch. */
+function coded(code: string, message: string): Error {
+  const error = new Error(message);
+  (error as { code?: string }).code = code;
+
+  return error;
+}
+
+/** Drive a reader whose import rejects with `error`, capturing whether `onError` fired. */
+async function degradeWith(error: unknown): Promise<{ result: unknown; warned: unknown[] }> {
+  const warned: unknown[] = [];
+  const read = createCollectionsReader(
+    async () => {
+      throw error;
+    },
+    (cause) => warned.push(cause),
+  );
+
+  return { result: await read(), warned };
+}
+
 describe("createCollectionsReader", () => {
   test("maps content-core collections to descriptors", async () => {
     const read = createCollectionsReader(async () => ({
@@ -182,31 +211,72 @@ describe("createCollectionsReader", () => {
     ]);
   });
 
-  test("degrades to no collections when the content-core peer is absent", async () => {
-    const read = createCollectionsReader(() => Promise.reject(new Error("Cannot find module")));
-
-    expect(await read()).toEqual([]);
-  });
-
-  test("degrades to no collections when the store is unbuilt (getCollections throws)", async () => {
-    const read = createCollectionsReader(async () => ({
-      getCollections: () => {
-        throw new Error("content store not built");
-      },
-    }));
-
-    expect(await read()).toEqual([]);
-  });
-
-  test("surfaces the swallowed cause through onError while still degrading", async () => {
-    const seen: unknown[] = [];
+  test("store unbuilt (getCollections throws 'Content data not initialized') degrades WITHOUT warning", async () => {
+    const warned: unknown[] = [];
     const read = createCollectionsReader(
-      () => Promise.reject(new Error("boom")),
-      (error) => seen.push(error),
+      async () => ({
+        getCollections: () => {
+          throw new Error("Docks: Content data not initialized. Ensure you have imported …");
+        },
+      }),
+      (cause) => warned.push(cause),
+    );
+
+    // This is the NORMAL doc-gen state — degrade silently, no cry-wolf warning.
+    expect(await read()).toEqual([]);
+    expect(warned).toEqual([]);
+  });
+
+  test("an absent @lesto/content- peer degrades WITHOUT warning", async () => {
+    const { result, warned } = await degradeWith(moduleNotFound("@lesto/content-core"));
+
+    expect(result).toEqual([]);
+    expect(warned).toEqual([]);
+  });
+
+  test("a genuine failure inside a built content-core IS surfaced through onError", async () => {
+    const warned: unknown[] = [];
+    const read = createCollectionsReader(
+      async () => ({
+        getCollections: () => {
+          throw new Error("boom");
+        },
+      }),
+      (cause) => warned.push(cause),
     );
 
     expect(await read()).toEqual([]);
-    expect(seen).toHaveLength(1);
-    expect((seen[0] as Error).message).toBe("boom");
+    expect(warned).toHaveLength(1);
+    expect((warned[0] as Error).message).toBe("boom");
+  });
+
+  test("a missing TRANSITIVE dep (non-content specifier) is surfaced, not mistaken for an absent peer", async () => {
+    const { result, warned } = await degradeWith(moduleNotFound("some-transitive-dep"));
+
+    expect(result).toEqual([]);
+    expect(warned).toHaveLength(1);
+  });
+
+  test("an ERR_MODULE_NOT_FOUND with no parseable specifier is surfaced", async () => {
+    const { result, warned } = await degradeWith(
+      coded("ERR_MODULE_NOT_FOUND", "opaque resolver failure"),
+    );
+
+    expect(result).toEqual([]);
+    expect(warned).toHaveLength(1);
+  });
+
+  test("an error with an unrelated code is surfaced", async () => {
+    const { result, warned } = await degradeWith(coded("EACCES", "permission denied"));
+
+    expect(result).toEqual([]);
+    expect(warned).toHaveLength(1);
+  });
+
+  test("a non-Error cause is surfaced", async () => {
+    const { result, warned } = await degradeWith("a string, not an Error");
+
+    expect(result).toEqual([]);
+    expect(warned).toEqual(["a string, not an Error"]);
   });
 });

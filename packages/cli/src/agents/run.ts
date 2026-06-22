@@ -59,9 +59,11 @@ interface ContentCoreModule {
  * project simply may not use content — that is not an error, and `--check` must stay
  * deterministic regardless of whether the store happens to be built.
  *
- * The optional `onError` sink is handed the swallowed cause so the degrade is not
- * fully silent: the bin wires it to a warning, so a genuine content-core breakage
- * leaves a trace rather than a mysteriously content-less artifact.
+ * The optional `onError` sink is handed the swallowed cause ONLY when it is an
+ * UNEXPECTED failure (see {@link isBenignContentAbsence}): the bin wires it to a
+ * warning, so a genuine content-core breakage leaves a trace — but the two ordinary
+ * absences (peer not installed, store not yet initialized) pass quietly, so the
+ * warning keeps its signal value instead of crying wolf on every doc-gen run.
  */
 export function createCollectionsReader(
   importContentCore: () => Promise<ContentCoreModule>,
@@ -76,15 +78,49 @@ export function createCollectionsReader(
         entryCount: collection.entries.length,
       }));
     } catch (error) {
-      // Degrade to "no collections" — but surface the cause through the optional
-      // sink (the bin passes a `console.warn`), so a GENUINE content-core failure
-      // is not swallowed without a trace, only the expected peer-absent / store-
-      // unbuilt cases pass quietly.
-      onError?.(error);
+      // Degrade to "no collections" either way — content is optional. Surface the
+      // cause through the optional sink ONLY when it is NOT one of the expected,
+      // benign absences (peer not installed, or its store not yet initialized — the
+      // norm at doc-gen time). Reporting those would fire on every ordinary run and
+      // drown the signal the sink exists for: a real failure inside a BUILT content-core.
+      if (!isBenignContentAbsence(error)) onError?.(error);
 
       return [];
     }
   };
+}
+
+/**
+ * Whether a swallowed collections error is one of the EXPECTED, benign "this app
+ * just isn't serving content here" causes — as opposed to a real breakage inside an
+ * installed, built content-core. Two benign shapes:
+ *
+ *   - content-core is present but its runtime store hasn't been initialized — the
+ *     normal state at doc-gen time, since `generate agents` never boots the app that
+ *     would populate it (`getCollections` throws "Content data not initialized");
+ *   - the optional peer itself isn't installed: a module-resolution miss
+ *     (`ERR_MODULE_NOT_FOUND`) naming the `@lesto/content-` family. Anchored on the
+ *     missing specifier (the same discipline the bin's `rethrowUnlessMissingContentPeer`
+ *     uses) so a missing TRANSITIVE dep of an INSTALLED content-core is NOT mistaken
+ *     for "content-core absent" — that is a genuine breakage worth surfacing.
+ *
+ * Anything else (a non-`Error` throw, an unrelated code, a real failure from a built
+ * store) is unexpected and flows to the caller's `onError`.
+ */
+function isBenignContentAbsence(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  // content-core present, runtime store not yet initialized (the doc-gen norm).
+  if (error.message.includes("Content data not initialized")) return true;
+
+  // The optional peer itself isn't installed (the missing specifier is in the message).
+  if ("code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
+    const missing = /Cannot find (?:package|module) '([^']+)'/.exec(error.message)?.[1];
+
+    return missing?.startsWith("@lesto/content-") ?? false;
+  }
+
+  return false;
 }
 
 /** The injected seams `runGenerateAgents` needs — all I/O, so the core stays pure. */

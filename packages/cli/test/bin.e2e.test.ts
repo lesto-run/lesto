@@ -280,7 +280,18 @@ describe("bin e2e", () => {
         join(project, "app", "routes", "blog", "[slug]", "page.tsx"),
         "export default {};\n",
       );
+
+      // Two GENUINE islands plus one of every excluded sibling — the bin's island
+      // filter (`readAgentIslands`) lives in coverage-excluded `bin.ts`, so this e2e
+      // is the only thing that can prove its exclusion arms (hidden, `.d.ts`,
+      // `.test`/`.spec`, non-island extension). A regression that surfaced any of the
+      // siblings as a phantom island would otherwise ship green.
       await writeFile(join(project, "app", "islands", "counter.tsx"), "export default {};\n");
+      await writeFile(join(project, "app", "islands", "widget.tsx"), "export default {};\n");
+      await writeFile(join(project, "app", "islands", "counter.test.tsx"), "export default {};\n");
+      await writeFile(join(project, "app", "islands", "button.d.ts"), "export type B = 1;\n");
+      await writeFile(join(project, "app", "islands", ".hidden.tsx"), "export default {};\n");
+      await writeFile(join(project, "app", "islands", "README.md"), "# notes\n");
 
       const gen = await runBinIn(project, ["generate", "agents"]);
 
@@ -288,16 +299,30 @@ describe("bin e2e", () => {
       expect(gen.stdout).toContain("wrote AGENTS.md");
       expect(gen.stdout).toContain("wrote llms.txt");
 
+      // The benign collections degrade (content-core present in the workspace, but its
+      // runtime store is uninitialized at doc-gen time) is now SILENT — the warning is
+      // reserved for a genuine breakage, so it must not appear on this ordinary run.
+      expect(gen.stderr).not.toContain("content collections unavailable");
+
       const agentsMd = await readFile(join(project, "AGENTS.md"), "utf8");
       const llmsTxt = await readFile(join(project, "llms.txt"), "utf8");
 
       // The route compiled from the real `app/routes/blog/[slug]/` scan (the `[slug]`
-      // dynamic segment → `:slug`), the globbed island, and the CLI surface all land
+      // dynamic segment → `:slug`), the globbed islands, and the CLI surface all land
       // in the generated guide — proving the bin's real readers, not a fake.
       expect(agentsMd).toContain("# Agent guide");
       expect(agentsMd).toContain("/blog/:slug");
       expect(agentsMd).toContain("counter");
+      expect(agentsMd).toContain("widget");
       expect(agentsMd).toContain("generate");
+
+      // The excluded siblings are NOT surfaced as islands (the filter held), and the
+      // two real islands appear in deterministic code-point order (counter < widget).
+      expect(agentsMd).not.toContain("button"); // `button.d.ts` (a type decl)
+      expect(agentsMd).not.toContain("README"); // not an island module extension
+      expect(agentsMd).not.toContain("hidden"); // dotfile
+      expect(agentsMd).not.toContain("counter.test"); // co-located test
+      expect(agentsMd.indexOf("counter")).toBeLessThan(agentsMd.indexOf("widget"));
 
       // The project index is the OTHER artifact, with its own distinguishing header.
       expect(llmsTxt).toContain("# Lesto app");
