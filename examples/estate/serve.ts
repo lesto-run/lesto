@@ -26,6 +26,7 @@ import { currentRequestSpan } from "@lesto/web";
 import type { CurrentSpan } from "@lesto/observability";
 
 import { buildProductionSite } from "./src/production";
+import { env } from "./src/env";
 
 // Running the estate example locally IS the public demo, so default it into demo
 // mode (committed fallback secrets + passwordless sign-in) unless the operator
@@ -33,7 +34,7 @@ import { buildProductionSite } from "./src/production";
 // this, so production stays fail-closed on a missing secret.
 process.env["LESTO_DEMO"] ??= "1";
 
-const PORT = Number(process.env["PORT"] ?? 3000);
+const PORT = env.PORT;
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const OUT = fileURLToPath(new URL("./out", import.meta.url));
 

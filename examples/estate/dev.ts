@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 import { dispatchSitesDev, nodeStaticReader, serve } from "@lesto/runtime";
 
 import { buildApp } from "./src/app";
+import { env } from "./src/env";
 import sites from "./lesto.sites";
 
 // Local dev runs the public demo, so default into demo mode (committed fallback
@@ -36,7 +37,7 @@ import sites from "./lesto.sites";
 // does this; production stays fail-closed on a missing secret.
 process.env["LESTO_DEMO"] ??= "1";
 
-const PORT = Number(process.env["PORT"] ?? 3000);
+const PORT = env.PORT;
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const ASSETS = fileURLToPath(new URL("./out", import.meta.url));
 
@@ -58,7 +59,7 @@ let version = 1;
 function bundleClient(): void {
   const started = Date.now();
 
-  const preact = process.env["LESTO_PREACT"] === "1" ? ["--preact"] : [];
+  const preact = env.LESTO_PREACT ? ["--preact"] : [];
 
   try {
     execFileSync("bun", ["build-client.ts", "--outfile", "out/client.js", ...preact], {

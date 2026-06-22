@@ -21,6 +21,7 @@
     "@lesto/cloudflare": "workspace:*",
     "@lesto/csrf": "workspace:*",
     "@lesto/db": "workspace:*",
+    "@lesto/env": "workspace:*",
     "@lesto/flags": "workspace:*",
     "@lesto/identity": "workspace:*",
     "@lesto/migrate": "workspace:*",

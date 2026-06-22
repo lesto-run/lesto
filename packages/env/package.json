@@ -1,0 +1,39 @@
+{
+  "name": "@lesto/env",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Lesto's typed, validated environment — a defineEnv schema that fails fast at boot and hands back frozen, fully-typed values.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@lesto/errors": "workspace:*"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/env"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
+  }
+}
