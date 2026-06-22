@@ -30,6 +30,7 @@ export const LESTO_PACKAGES = [
   "@lesto/assets",
   "@lesto/cloudflare",
   "@lesto/db",
+  "@lesto/env",
   "@lesto/kernel",
   "@lesto/migrate",
   "@lesto/runtime",
@@ -142,6 +143,8 @@ import type { LestoAppConfig } from "@lesto/kernel";
 
 import { z } from "zod";
 
+import { env } from "./env";
+
 // The \`posts\` table — schema as a value backs both the migration's DDL
 // and the inferred row type every query returns.
 export const posts = defineTable("posts", {
@@ -218,8 +221,9 @@ function buildApp(db: Db) {
 // The driver seam: \`@lesto/runtime\`'s \`openSqlite\` boots better-sqlite3 under
 // Node and falls back to the built-in \`bun:sqlite\` under Bun — the framework
 // owns that, so the app never has to. The same handle backs the kernel (which
-// runs migrations) and the typed \`@lesto/db\` the handlers query through.
-const { db: handle } = await openSqlite("lesto.db");
+// runs migrations) and the typed \`@lesto/db\` the handlers query through. The DB
+// file comes from the typed env (\`env.LESTO_DB\`, default \`lesto.db\`) — see \`env.ts\`.
+const { db: handle } = await openSqlite(env.LESTO_DB);
 const db = createDb(handle);
 
 const config: LestoAppConfig = {
@@ -240,6 +244,34 @@ const config: LestoAppConfig = {
 };
 
 export default config;
+`;
+}
+
+/**
+ * `env.ts` — the project's typed, validated environment (`@lesto/env`).
+ *
+ * `defineEnv` validates the environment ONCE at boot into a frozen, fully-typed
+ * object: a missing or malformed var fails fast with a coded error naming every
+ * problem, rather than surfacing as an `undefined` deep in a handler. The starter
+ * wires one real knob — `LESTO_DB`, the SQLite file `lesto.app.ts` opens — so the
+ * pattern is visible on day one; add your own (`envField.string()` for a required
+ * secret, `.port()`, `.boolean()`, `.oneOf([...])`) as the app grows. `lesto.app.ts`
+ * reads `env.LESTO_DB` rather than `process.env` directly.
+ */
+export function env(): string {
+  return `import { defineEnv, envField } from "@lesto/env";
+
+/**
+ * The typed environment. Read each value off \`env\` (e.g. \`env.LESTO_DB\`) instead
+ * of \`process.env\`: it is validated and typed, and a bad value fails at boot, not
+ * mid-request. Add fields as you need them — every \`envField\` chains \`.optional()\`
+ * or \`.default(value)\`, and a field with neither is REQUIRED (boot throws if unset).
+ */
+export const env = defineEnv({
+  // The SQLite database file the app opens (see \`lesto.app.ts\`). Defaults to
+  // \`lesto.db\` in the project root; point it elsewhere with \`LESTO_DB=/path.db\`.
+  LESTO_DB: envField.string().default("lesto.db"),
+});
 `;
 }
 
@@ -383,6 +415,8 @@ TypeScript framework (ESM, run directly — no build step for the source).
 
 - \`lesto.app.ts\` — the app: tables (\`@lesto/db\`), migrations, and a code-first
   \`lesto()\` app with \`.get\`/\`.post\` API routes. The DB handle is opened here.
+- \`env.ts\` — the typed, validated environment (\`@lesto/env\`). \`defineEnv\` checks
+  it at boot; read values off \`env\` (e.g. \`env.LESTO_DB\`), not \`process.env\`.
 - \`app/routes/\` — **file-based routing** (ADR 0023). A \`page.tsx\` makes its
   directory's URL a route; \`layout.tsx\` wraps every page at or below it. A
   \`[param]\` directory is a dynamic segment, \`[...rest]\` a catch-all. Drop a file
@@ -469,7 +503,7 @@ export function tsconfig(): string {
       types: ["node"],
       skipLibCheck: true,
     },
-    include: ["lesto.app.ts", "lesto.sites.ts", "worker.ts", "app"],
+    include: ["env.ts", "lesto.app.ts", "lesto.sites.ts", "worker.ts", "app"],
   };
 
   return `${JSON.stringify(config, null, 2)}\n`;

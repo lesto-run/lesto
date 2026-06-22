@@ -60,6 +60,7 @@ describe("scaffold", () => {
 
     const expected = [
       "package.json",
+      "env.ts",
       "lesto.app.ts",
       "lesto.sites.ts",
       "app/routes/page.tsx",
@@ -120,6 +121,13 @@ describe("scaffold", () => {
     expect(app).not.toContain('.page("/"');
     expect(app).not.toContain('import Counter from "./app/islands/counter"');
 
+    // Typed env on day one: the DB path comes from `env.LESTO_DB` (via `./env`),
+    // not a bare `process.env` or a hardcoded literal.
+    expect(app).toContain('import { env } from "./env"');
+    expect(app).toContain("openSqlite(env.LESTO_DB)");
+    expect(app).not.toContain('openSqlite("lesto.db")');
+    expect(app).not.toContain("process.env");
+
     // package.json carries the project name, the @lesto deps, and the run scripts.
     const manifest = JSON.parse(pkg) as {
       name: string;
@@ -141,6 +149,8 @@ describe("scaffold", () => {
       // The edge adapter the deploy template's worker.ts fronts the app with.
       "@lesto/cloudflare",
       "@lesto/db",
+      // The typed, validated environment the scaffold reads its DB path through.
+      "@lesto/env",
       "@lesto/kernel",
       "@lesto/migrate",
       "@lesto/web",
@@ -187,6 +197,20 @@ describe("scaffold", () => {
     expect(island).toContain("export default defineIsland({");
     expect(island).toContain('name: "Counter"');
     expect(island).toContain("useState");
+  });
+
+  it("scaffolds a typed env.ts wired to @lesto/env", async () => {
+    const targetDir = join(workspace, "enved");
+
+    await scaffold({ name: "enved", targetDir }, realIO);
+
+    const envFile = await readFile(join(targetDir, "env.ts"), "utf8");
+
+    // env.ts is a `defineEnv` schema over `envField`, default-exported as `env`,
+    // demonstrating the DB-path knob with a default (so the starter boots with none set).
+    expect(envFile).toContain('import { defineEnv, envField } from "@lesto/env"');
+    expect(envFile).toContain("export const env = defineEnv({");
+    expect(envFile).toContain('LESTO_DB: envField.string().default("lesto.db")');
   });
 
   it("scaffolds the file-routed home page + layout and the agent onboarding files", async () => {
