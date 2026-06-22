@@ -39,11 +39,13 @@ afterEach(() => {
 });
 
 /** Dispatch a bubbling keydown so React's root delegation + the document-level
- *  global shortcut listener both see it. */
-function fireKey(target: EventTarget, init: KeyboardEventInit): void {
+ *  global shortcut listener both see it. Returns the event for `defaultPrevented`. */
+function fireKey(target: EventTarget, init: KeyboardEventInit): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
   act(() => {
-    target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
+    target.dispatchEvent(event);
   });
+  return event;
 }
 
 /** Set a controlled <input>'s value past React's value tracker, then fire input. */
@@ -63,14 +65,27 @@ interface HarnessProps {
   initialCount?: number;
   onSelect?: (index: number) => void;
   onOpenChange?: (open: boolean) => void;
+  loop?: boolean;
+  openOnSlash?: boolean;
+  defaultOpen?: boolean;
 }
 
-function Harness({ initialCount = 3, onSelect, onOpenChange }: HarnessProps): ReactNode {
+function Harness({
+  initialCount = 3,
+  onSelect,
+  onOpenChange,
+  loop,
+  openOnSlash,
+  defaultOpen,
+}: HarnessProps): ReactNode {
   const [count, setCount] = useState(initialCount);
   const p = useCommandPalette({
     count,
     ...(onSelect && { onSelect }),
     ...(onOpenChange && { onOpenChange }),
+    ...(loop !== undefined && { loop }),
+    ...(openOnSlash !== undefined && { openOnSlash }),
+    ...(defaultOpen !== undefined && { defaultOpen }),
   });
   return createElement(
     "div",
@@ -226,6 +241,38 @@ describe("useCommandPalette", () => {
     expect(onOpenChange).toHaveBeenLastCalledWith(true);
     fireKey(document, { key: "k", metaKey: true });
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("traps Tab so focus cannot leave the open dialog", () => {
+    const el = renderLive(createElement(Harness, {}));
+    fireKey(document, { key: "k", metaKey: true });
+    const input = el.querySelector('[data-testid="input"]') as HTMLInputElement;
+    const event = fireKey(input, { key: "Tab" });
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("does not wrap at the ends when loop is false", () => {
+    const el = renderLive(createElement(Harness, { initialCount: 3, loop: false }));
+    fireKey(document, { key: "k", metaKey: true });
+    const input = el.querySelector('[data-testid="input"]') as HTMLInputElement;
+
+    fireKey(input, { key: "ArrowUp" }); // already at 0 → stays 0
+    expect(txt(el, "active")).toBe("0");
+
+    fireKey(input, { key: "End" });
+    fireKey(input, { key: "ArrowDown" }); // at last → stays last
+    expect(txt(el, "active")).toBe("2");
+  });
+
+  it("does not open on / when openOnSlash is false", () => {
+    const el = renderLive(createElement(Harness, { openOnSlash: false }));
+    fireKey(document.body, { key: "/" });
+    expect(txt(el, "open")).toBe("false");
+  });
+
+  it("can start open via defaultOpen", () => {
+    const el = renderLive(createElement(Harness, { defaultOpen: true }));
+    expect(txt(el, "open")).toBe("true");
   });
 });
 
@@ -409,6 +456,116 @@ describe("CommandPalette", () => {
     const overlay = el.querySelector(".lesto-cmdk-overlay") as HTMLElement;
     act(() => overlay.click());
     expect(el.querySelector(".lesto-cmdk-dialog")).toBeNull();
+  });
+
+  it("neutralizes a dangerous result URL (javascript:) to '#'", async () => {
+    const evil: Tier0Index = {
+      version: 0,
+      builtAt: "2026-06-22T00:00:00.000Z",
+      entries: [
+        {
+          id: "x",
+          slug: "javascript:alert(1)",
+          collection: "docs",
+          title: "Pwn",
+          snippet: "x",
+          keywords: ["pwn"],
+        },
+      ],
+    };
+    stubFetchOk(evil);
+    const onNavigate = vi.fn();
+    const el = renderLive(createElement(CommandPalette, { onNavigate }));
+    await flush();
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+    typeInto(el.querySelector(".lesto-cmdk-input") as HTMLInputElement, "pwn");
+
+    const link = el.querySelector(".lesto-cmdk-item-link") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("#"); // never the javascript: URL
+    act(() => link.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 })));
+    expect(onNavigate).toHaveBeenCalledWith("#"); // and never navigated to it
+  });
+
+  it("returns focus to the trigger when the dialog closes", async () => {
+    stubFetchOk();
+    const el = renderLive(createElement(CommandPalette, {}));
+    await flush();
+    const trigger = el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement;
+    act(() => trigger.focus());
+    fireKey(document, { key: "k", metaKey: true }); // open via shortcut
+    expect(document.activeElement).toBe(el.querySelector(".lesto-cmdk-input"));
+
+    fireKey(el.querySelector(".lesto-cmdk-input") as HTMLInputElement, { key: "Escape" });
+    expect(document.activeElement).toBe(trigger); // focus restored
+  });
+
+  // The default sink (window.location.assign) cannot be exercised under jsdom —
+  // its location.assign is non-configurable and navigation is unimplemented. The
+  // navigation *logic* (safeHref + the onNavigate sink) is covered by the tests
+  // above; only the 2-line fallback branch picking the sink is left uncovered.
+
+  it("forwards collections and limit to the search function", async () => {
+    stubFetchOk();
+    const search = vi.fn().mockReturnValue([]);
+    const el = renderLive(
+      createElement(CommandPalette, { search, collections: ["docs"], limit: 5 }),
+    );
+    await flush();
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+    typeInto(el.querySelector(".lesto-cmdk-input") as HTMLInputElement, "q");
+    expect(search).toHaveBeenCalledWith(
+      "q",
+      expect.anything(),
+      expect.objectContaining({ collections: ["docs"], limit: 5 }),
+    );
+  });
+
+  it("applies a custom className to the dialog", async () => {
+    stubFetchOk();
+    const el = renderLive(createElement(CommandPalette, { className: "my-shell" }));
+    await flush();
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+    expect((el.querySelector(".lesto-cmdk-dialog") as HTMLElement).className).toContain("my-shell");
+  });
+
+  it("keeps a safe https result URL but blocks protocol-relative //host", async () => {
+    const idx: Tier0Index = {
+      version: 0,
+      builtAt: "2026-06-22T00:00:00.000Z",
+      entries: [
+        {
+          id: "a",
+          slug: "https://lesto.run/x",
+          collection: "docs",
+          title: "Ext",
+          snippet: "y",
+          keywords: ["ext"],
+        },
+        {
+          id: "b",
+          slug: "//evil.com",
+          collection: "docs",
+          title: "Evil",
+          snippet: "z",
+          keywords: ["evil"],
+        },
+      ],
+    };
+    stubFetchOk(idx);
+    const el = renderLive(createElement(CommandPalette, {}));
+    await flush();
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+    const input = el.querySelector(".lesto-cmdk-input") as HTMLInputElement;
+
+    typeInto(input, "ext");
+    expect(
+      (el.querySelector(".lesto-cmdk-item-link") as HTMLAnchorElement).getAttribute("href"),
+    ).toBe("https://lesto.run/x");
+
+    typeInto(input, "evil");
+    expect(
+      (el.querySelector(".lesto-cmdk-item-link") as HTMLAnchorElement).getAttribute("href"),
+    ).toBe("#");
   });
 });
 

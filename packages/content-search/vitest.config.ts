@@ -14,7 +14,9 @@ export default defineConfig({
     passWithNoTests: true,
     coverage: {
       provider: "v8",
-      include: ["src/**/*.ts"],
+      // Include .tsx too: the React surface (the hook + command palette) lives in
+      // .tsx, and a `*.ts`-only glob silently dropped it from measurement.
+      include: ["src/**/*.{ts,tsx}"],
       exclude: ["src/index.ts"],
     },
   },

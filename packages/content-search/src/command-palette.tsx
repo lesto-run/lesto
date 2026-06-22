@@ -237,6 +237,12 @@ export function useCommandPalette(options: UseCommandPaletteOptions): UseCommand
           event.preventDefault();
           setOpen(false);
           break;
+        case "Tab":
+          // Trap focus in the modal: the input is the only tab stop (result
+          // options are removed from the tab order and reached via the arrows),
+          // so there is nowhere to Tab to — keep focus from escaping the dialog.
+          event.preventDefault();
+          break;
       }
     },
     [count, loop, active, onSelect],
@@ -326,6 +332,24 @@ function detectMac(): boolean {
 }
 
 /**
+ * Neutralize a result URL before it becomes an `href` or a navigation target.
+ *
+ * The index is usually build-controlled, but this is a reusable component over
+ * a *caller-supplied* index — which may carry user-authored slugs. Allow only
+ * site-relative paths and explicit safe protocols; anything else (notably
+ * `javascript:` / `data:` / `vbscript:` and protocol-relative `//host`) collapses
+ * to `"#"` so a crafted entry can neither execute script nor silently off-site.
+ */
+function safeHref(url: string): string {
+  const trimmed = url.trim();
+  // Absolute path (but not protocol-relative `//host`), or relative/hash/query.
+  if (/^\/(?!\/)/.test(trimmed) || /^[.#?]/.test(trimmed)) return trimmed;
+  // Explicit safe protocols only.
+  if (/^https?:\/\//i.test(trimmed) || /^mailto:/i.test(trimmed)) return trimmed;
+  return "#";
+}
+
+/**
  * A zero-config `⌘K` search palette wired to the prerendered keyword index.
  *
  * Renders a trigger button plus, when open, a modal dialog with a search input
@@ -378,10 +402,12 @@ export function CommandPalette(props: CommandPaletteProps): ReactElement {
 
   const navigate = useCallback(
     (slug: string) => {
+      // Never hand a caller (or the browser) an unvetted URL.
+      const href = safeHref(slug);
       if (onNavigate) {
-        onNavigate(slug);
+        onNavigate(href);
       } else if (typeof window !== "undefined") {
-        window.location.assign(slug);
+        window.location.assign(href);
       }
     },
     [onNavigate],
@@ -399,12 +425,19 @@ export function CommandPalette(props: CommandPaletteProps): ReactElement {
     },
   });
 
-  // Focus the input as the dialog opens; clear the query as it closes.
+  // Move focus into the dialog as it opens, and return it to wherever it was
+  // (the trigger, usually) as it closes — the focus contract a modal owes.
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (palette.open) {
+      if (typeof document !== "undefined") {
+        restoreFocusRef.current = document.activeElement as HTMLElement | null;
+      }
       inputRef.current?.focus();
     } else {
       setQuery("");
+      restoreFocusRef.current?.focus?.();
+      restoreFocusRef.current = null;
     }
   }, [palette.open]);
 
@@ -471,7 +504,10 @@ export function CommandPalette(props: CommandPaletteProps): ReactElement {
                   <li key={hit.id} className="lesto-cmdk-item">
                     <a
                       className="lesto-cmdk-item-link"
-                      href={hit.slug}
+                      href={safeHref(hit.slug)}
+                      // Kept out of the tab order: focus stays on the input and
+                      // options are reached with the arrow keys (combobox model).
+                      tabIndex={-1}
                       onClick={(event) => onResultClick(event, hit)}
                       {...palette.getItemProps(i)}
                     >

@@ -79,12 +79,16 @@ export function rehypeCallouts() {
     visit(tree, "element", (node: Element) => {
       if (node.tagName !== "blockquote") return undefined;
 
-      const firstParagraph = node.children.find(
-        (child): child is Element => child.type === "element" && child.tagName === "p",
+      // The marker must be on the blockquote's first line, so the FIRST element
+      // child has to be the paragraph carrying it. A blockquote that opens with
+      // anything else (a list, a nested quote) is not a callout — matching
+      // GitHub, which only treats `[!TYPE]` as an alert on the opening line.
+      const firstElement = node.children.find(
+        (child): child is Element => child.type === "element",
       );
-      if (!firstParagraph) return undefined;
+      if (!firstElement || firstElement.tagName !== "p") return undefined;
 
-      const firstChild = firstParagraph.children[0];
+      const firstChild = firstElement.children[0];
       if (!firstChild || firstChild.type !== "text") return undefined;
 
       const match = MARKER.exec(firstChild.value);
@@ -100,8 +104,8 @@ export function rehypeCallouts() {
 
       // A bare `> [!NOTE]` leaves an empty paragraph; remove it so the callout
       // has no stray blank line before its body.
-      if (isBlankParagraph(firstParagraph)) {
-        node.children = node.children.filter((child) => child !== firstParagraph);
+      if (isBlankParagraph(firstElement)) {
+        node.children = node.children.filter((child) => child !== firstElement);
       }
 
       const title = element("p", { className: ["lesto-callout-title"] }, [

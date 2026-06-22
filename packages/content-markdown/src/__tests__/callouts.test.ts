@@ -4,6 +4,7 @@ import rehypeParse from "rehype-parse";
 import rehypeStringify from "rehype-stringify";
 import { createRenderer } from "../renderer";
 import { rehypeCallouts, CALLOUT_TYPES } from "../callouts";
+import { calloutStyles } from "../callout-styles";
 
 /** Run a raw HTML fragment through just the callouts plugin (no md4w/sanitize). */
 async function transform(html: string): Promise<string> {
@@ -77,6 +78,22 @@ describe("rehypeCallouts (plugin)", () => {
     expect(html).toContain("<blockquote>");
     expect(html).not.toContain("lesto-callout");
   });
+
+  it("requires the marker on the first line, not a later paragraph", async () => {
+    // A blockquote that opens with something else is not a callout, even if a
+    // later paragraph happens to start with a marker (GitHub's first-line rule).
+    const html = await transform("<blockquote><ul><li>x</li></ul><p>[!NOTE]</p></blockquote>");
+
+    expect(html).toContain("<blockquote>");
+    expect(html).not.toContain("lesto-callout");
+  });
+
+  it("ignores a blockquote whose first paragraph is empty", async () => {
+    const html = await transform("<blockquote><p></p><p>[!NOTE]</p></blockquote>");
+
+    expect(html).toContain("<blockquote>");
+    expect(html).not.toContain("lesto-callout");
+  });
 });
 
 describe("callouts via createRenderer (md4w hybrid, default-on)", () => {
@@ -104,5 +121,29 @@ describe("callouts via createRenderer (md4w hybrid, default-on)", () => {
 
     expect(result.html).not.toContain("lesto-callout");
     expect(result.html).toContain("[!NOTE]");
+  });
+
+  it("does not let callout content smuggle markup past sanitization", async () => {
+    // Callouts run AFTER sanitize, so a payload in the body is already neutralized
+    // before this plugin wraps it — the callout adds no XSS surface.
+    const renderer = createRenderer();
+    const result = await renderer.render(
+      '> [!NOTE]\n> <img src=x onerror="alert(1)"> <a href="javascript:alert(2)">x</a>',
+    );
+
+    expect(result.html).toContain("lesto-callout-note");
+    expect(result.html).not.toContain("onerror");
+    expect(result.html).not.toContain("javascript:");
+  });
+});
+
+describe("calloutStyles", () => {
+  it("is a stylesheet keyed off the public callout class names", () => {
+    expect(calloutStyles).toContain(".lesto-callout");
+    expect(calloutStyles).toContain(".lesto-callout-warning");
+    expect(calloutStyles).toContain(".lesto-callout-title");
+    for (const type of Object.keys(CALLOUT_TYPES)) {
+      expect(calloutStyles).toContain(`.lesto-callout-${type}`);
+    }
   });
 });
