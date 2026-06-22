@@ -16,7 +16,7 @@
 import { createApp } from "@lesto/kernel";
 import type { LestoAppConfig, KernelDatabase } from "@lesto/kernel";
 import { currentRequestSpan } from "@lesto/web";
-import type { UiDialect } from "@lesto/web";
+import type { HandleOptions, LestoResponse, UiDialect } from "@lesto/web";
 
 import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
 import type { CurrentSpan, TraceSeams, Traces, TracesEnv } from "@lesto/observability";
@@ -106,6 +106,40 @@ export interface CloudflareDeployer {
 
   /** Roll the Worker back to its previous deployment — the one-step undo. */
   rollback: () => Promise<void>;
+}
+
+/**
+ * The outcome of regenerating the edge route manifest — the path it wrote and how
+ * many convention files (pages, layouts, boundaries) it scanned. `lesto routes:gen`
+ * prints both; `dev`'s on-change refresh logs the count.
+ */
+export interface RegenerateRoutesResult {
+  /** The manifest path written, relative to the project root (e.g. `src/routes.gen.ts`). */
+  readonly path: string;
+
+  /** The number of convention files the scan found (page + layout + boundary). */
+  readonly count: number;
+}
+
+/**
+ * The dev live-reload channel (Workstream 3) — a WebSocket the bin runs beside the
+ * dev HTTP server, so a saved page/layout/route reloads the open browser.
+ *
+ * The bin owns the socket and exposes three things; the CLI core decides when to
+ * use them. `script` is the client snippet the core injects into every dev HTML
+ * response (it connects to the socket and calls `location.reload()` on a message).
+ * `notify()` broadcasts a reload to every connected browser (the core calls it
+ * after a watched change is processed). `close()` tears the socket down on shutdown.
+ */
+export interface LiveReload {
+  /** The client JS injected into dev HTML — opens the socket, reloads on a message. */
+  readonly script: string;
+
+  /** Broadcast a reload to every connected browser. */
+  readonly notify: () => void;
+
+  /** Shut the live-reload socket down (called on graceful dev shutdown). */
+  readonly close: () => void;
 }
 
 /** The seams the command core depends on — all injected, never imported live. */
@@ -202,6 +236,52 @@ export interface CliDeps {
    */
   watchIslands?: (onChange: () => void) => () => void;
 
+  /**
+   * Watch `app/routes/` and call `onChange` (debounced) when a page / layout /
+   * boundary file changes, returning a stop handle. The bin wires a debounced
+   * `fs.watch` over the convention dir; `dev` registers a closure that re-loads the
+   * app (so a NEW route appears without a server restart), refreshes the edge
+   * manifest (so `routes.gen.ts` stays current), and triggers a browser reload.
+   * Absent → no route watching (Workstream 3 is opt-in; tests provide it). This is
+   * the NODE re-scan path; it is distinct from the edge manifest below — the watcher
+   * does both but they are separate concerns (the plan keeps them apart).
+   */
+  watchRoutes?: (onChange: () => void) => () => void;
+
+  /**
+   * Re-load the project's app from disk — a FRESH `LestoAppConfig` whose file routes
+   * were re-scanned (the bin's `loadApp` runs `applyDiscoveredRoutes`, cache-busting
+   * the route imports so a new or edited route file is picked up). `dev` calls this
+   * on a watched route change and swaps the live server's handle to the new app, so
+   * a route add shows without a restart. Absent → `dev` keeps its boot app. Distinct
+   * from {@link loadApp} only in that the bin cache-busts the route imports here.
+   */
+  reloadApp?: () => Promise<LestoAppConfig>;
+
+  /**
+   * Regenerate the EDGE route manifest (`routes.gen.ts`) — scan `app/routes/`,
+   * render it with `generateRouteManifest`, and write it. Returns the written path
+   * and the file count, or `undefined` when the project has no `app/routes/` (so
+   * there is nothing to generate). Backs `lesto routes:gen` AND `dev`'s on-change
+   * codegen refresh. The bin wires the real fs scan + write; a test fakes it.
+   *
+   * This is the EDGE path — the static-import map a Worker bundles — kept separate
+   * from the Node re-scan ({@link reloadApp}): the Node dev server only needs a
+   * re-load to see a new route, while `routes.gen.ts` is what the edge build reads.
+   * The watcher refreshes both, but they are not the same mechanism.
+   */
+  regenerateRoutes?: () => Promise<RegenerateRoutesResult | undefined>;
+
+  /**
+   * The dev live-reload channel — a tiny WebSocket the bin stands up alongside the
+   * dev HTTP server. `script` is the client snippet injected into every dev HTML
+   * response (it opens the socket and reloads on a message); `notify()` broadcasts
+   * a reload to every connected browser; `close()` shuts the socket down on
+   * shutdown. Absent → no live reload (a save needs a manual refresh, the prior
+   * behaviour). The bin owns the socket; the core decides WHEN to inject and notify.
+   */
+  liveReload?: LiveReload;
+
   /** Build a static-deploy uploader rooted at `distDir` (the bin passes `nodeUploader`). */
   uploader: (distDir: string) => ShipDeps;
 
@@ -266,6 +346,7 @@ const USAGE = [
   "  g, generate       Scaffold a resource: generate <model|migration|island> <Name> [field:type …]",
   "                    e.g. `lesto g model Post title:string published:boolean` (--dry-run to preview)",
   "  routes            List the application's routes",
+  "  routes:gen        Regenerate the edge route manifest (routes.gen.ts) from app/routes/",
   "  migrate           Run pending migrations and print the applied versions",
   "  serve             Boot the app over HTTP (--port, default 3000)",
   "  dev               Run every site live on one origin for local development (--port)",
@@ -786,6 +867,109 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
 }
 
 /**
+ * Regenerate the edge route manifest (`routes.gen.ts`) from `app/routes/`.
+ *
+ * The standalone `lesto routes:gen` command (Workstream 3): it folds what was a
+ * per-app `regenerate-routes.ts` script into the CLI, so refreshing the edge's
+ * static-import map is one first-class command. `deps.regenerateRoutes` does the
+ * scan → `generateRouteManifest` → write (the bin wires the real fs); a project
+ * with no `app/routes/` is a no-op the command says out loud, not an error.
+ *
+ * This is the EDGE path — the manifest a Worker bundles — NOT the Node dev re-scan;
+ * the two are deliberately separate (see {@link CliDeps.regenerateRoutes}).
+ */
+async function runRoutesGen(deps: CliDeps): Promise<number> {
+  if (deps.regenerateRoutes === undefined) {
+    // No seam wired (a test that did not opt in, or a build that disabled it): say
+    // so rather than silently exit, so the operator knows nothing was written.
+    deps.out("routes:gen is not available in this environment");
+
+    return 0;
+  }
+
+  const result = await deps.regenerateRoutes();
+
+  if (result === undefined) {
+    deps.out("no app/routes/ directory — nothing to generate");
+
+    return 0;
+  }
+
+  deps.out(`generated ${result.path} (${result.count} route ${fileNoun(result.count)})`);
+
+  return 0;
+}
+
+/** "file" or "files" — the count noun the routes:gen output reads with. */
+function fileNoun(count: number): string {
+  return count === 1 ? "file" : "files";
+}
+
+/**
+ * Wrap a dev handle so every `text/html` response carries the live-reload client
+ * script — the seam that makes a saved page reload the open browser.
+ *
+ * The script is appended as a trailing `<script>` after the document; a browser
+ * executes a trailing script fine, so this needs no HTML parsing and never touches
+ * the page's own streaming (it adds one final chunk). A non-HTML response (JSON, an
+ * asset, a redirect) passes through untouched. The body may be a string (buffered
+ * Preact / a plain response) or a `ReadableStream` (React streaming) — each is
+ * handled without buffering the stream.
+ */
+function withLiveReload(
+  handle: (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse>,
+  script: string,
+): (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse> {
+  const tag = `<script>${script}</script>`;
+
+  return async (method, path, options) => {
+    const response = await handle(method, path, options);
+
+    if (!isHtmlResponse(response)) return response;
+
+    return { ...response, body: appendToBody(response.body, tag) };
+  };
+}
+
+/** True iff a response's `content-type` is HTML (only those carry the reload script). */
+function isHtmlResponse(response: LestoResponse): boolean {
+  const contentType = response.headers["content-type"];
+  const value = Array.isArray(contentType) ? contentType[0] : contentType;
+
+  return value !== undefined && value.includes("text/html");
+}
+
+/**
+ * Append `tag` to a response body, whether it is a string or a stream.
+ *
+ * A string body is concatenated directly. A stream body is wrapped in a transform
+ * that passes every chunk through and emits `tag` as the final chunk before close —
+ * so the live-reload script lands at the very end of the streamed document without
+ * buffering it. `Uint8Array` bodies are not HTML (assets), so this is only ever
+ * reached for the string and stream arms a page render produces.
+ */
+function appendToBody(body: LestoResponse["body"], tag: string): LestoResponse["body"] {
+  if (typeof body === "string") return body + tag;
+
+  // A stream: pipe it through, then enqueue the tag once before closing. The cast
+  // narrows the declared `string` body of the dispatch contract to the stream a
+  // page render actually produced (LestoResponse defaults its body to `string`, but
+  // a page streams — see types.ts; the transport widens, and here we transform it).
+  const stream = body as unknown as ReadableStream<Uint8Array>;
+  const encoder = new TextEncoder();
+
+  const transformed = stream.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      flush(controller) {
+        controller.enqueue(encoder.encode(tag));
+      },
+    }),
+  );
+
+  return transformed as unknown as LestoResponse["body"];
+}
+
+/**
  * Run every site live on one origin, for local development.
  *
  * Unlike `serve` (a single production app) and `build` (a one-shot prerender),
@@ -798,6 +982,13 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
  * runs on boot (into the dev asset dir `readAsset` serves) and a debounced
  * watcher rebuilds it on change (ADR 0011 Seam 3), so an island edit shows on the
  * next refresh without restarting the dev server.
+ *
+ * Workstream 3 adds the page/route loop: with `watchRoutes` the dev server watches
+ * `app/routes/` and, on a change, re-loads the app (so a NEW route appears WITHOUT
+ * a restart — `applyDiscoveredRoutes` no longer runs only once), refreshes the edge
+ * manifest, and — with `liveReload` — reloads the open browser over a WebSocket. The
+ * live server fronts a FORWARDING handle, so swapping in the re-loaded app's handle
+ * takes effect on the next request with no socket churn.
  */
 async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // Tracing is wired on `dev` exactly as on `serve` (off unless `LESTO_OTLP_URL`
@@ -834,15 +1025,45 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
     });
   }
 
+  // The live server fronts a FORWARDING handle, not the app's handle directly: a
+  // watched route change re-loads the app and points `activeHandle` at the new one,
+  // so a route ADD shows on the next request WITHOUT a server restart (the prior
+  // limitation: `applyDiscoveredRoutes` ran once in `loadApp`). The forwarder reads
+  // `activeHandle` per request, so the swap is atomic and needs no socket churn.
+  let activeHandle = app.handle;
+
+  const forward = (method: string, path: string, options?: HandleOptions): Promise<LestoResponse> =>
+    activeHandle(method, path, options);
+
+  // With live reload on, every dev HTML response carries the reload client script,
+  // so a saved file reloads the open browser over the WebSocket the bin runs.
+  const devHandle =
+    deps.liveReload === undefined ? forward : withLiveReload(forward, deps.liveReload.script);
+
   // Tolerate an app with no declared sites (a missing `lesto.sites.ts`, which the
   // bin's loader resolves to `[]`): dispatch every path straight to the app, so a
   // freshly scaffolded app boots and serves before its author writes a sites file.
   // A declared site set routes as before.
   const dispatch = dispatchSitesDev({
     sites: sites.length === 0 ? [APP_ONLY_SITE] : sites,
-    handle: app.handle,
+    handle: devHandle,
     ...(deps.readAsset === undefined ? {} : { readAsset: deps.readAsset }),
   });
+
+  // Watch `app/routes/` (Workstream 3). On a debounced change: refresh the EDGE
+  // manifest (`routes.gen.ts`), re-load the app so a NEW route is live without a
+  // restart (the NODE re-scan — distinct from the edge manifest above), and reload
+  // the browser. A failure in any step is reported, not fatal — the dev server
+  // stays up so the next save can fix it.
+  const onRouteChange = async (): Promise<void> => {
+    const newHandle = await refreshRoutes(deps);
+
+    if (newHandle !== undefined) activeHandle = newHandle;
+
+    deps.liveReload?.notify();
+  };
+
+  const stopRoutes = deps.watchRoutes?.(() => void onRouteChange());
 
   const { port } = parsePort(args, DEFAULT_PORT);
 
@@ -862,12 +1083,62 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   deps.installShutdown?.(async () => {
     await server.close();
 
+    stopRoutes?.();
+    deps.liveReload?.close();
     tracing?.stopInterval();
   });
 
   deps.out(`dev server on http://127.0.0.1:${server.port}`);
 
   return 0;
+}
+
+/** A bound app dispatch handle — what the dev server's forwarder points at. */
+type AppHandle = (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse>;
+
+/**
+ * Process one watched route change: refresh the edge manifest and re-load the app,
+ * returning the re-loaded app's handle (or `undefined` when nothing was re-loaded).
+ *
+ * The two halves are kept SEPARATE per the plan: `regenerateRoutes` refreshes the
+ * EDGE manifest (`routes.gen.ts`, the Worker's static-import map), while `reloadApp`
+ * is the NODE re-scan (a fresh config whose file routes were re-imported) that, once
+ * `createApp`'d, lets a new route serve without a restart. Either seam may be absent
+ * (a project with no `app/routes/`, or a test that opted into only one); each failure
+ * is reported and swallowed so the dev server survives a transient error mid-edit.
+ */
+async function refreshRoutes(deps: CliDeps): Promise<AppHandle | undefined> {
+  if (deps.regenerateRoutes !== undefined) {
+    try {
+      const result = await deps.regenerateRoutes();
+
+      if (result !== undefined) {
+        deps.out(
+          `routes refreshed: ${result.path} (${result.count} route ${fileNoun(result.count)})`,
+        );
+      }
+    } catch (error) {
+      deps.out(`route manifest refresh failed: ${rebuildErrorMessage(error)}`);
+    }
+  }
+
+  if (deps.reloadApp === undefined) return undefined;
+
+  try {
+    const config = await deps.reloadApp();
+
+    // `createApp` rebuilds the dispatch (and re-runs migrations idempotently) over
+    // the re-scanned routes; its handle is what the forwarder swaps to.
+    const app = await createApp(config);
+
+    return app.handle;
+  } catch (error) {
+    // A syntax error in a just-saved route file would otherwise crash the dev
+    // server; keep the prior app live and report, so the next save recovers.
+    deps.out(`app reload failed: ${rebuildErrorMessage(error)}`);
+
+    return undefined;
+  }
 }
 
 /** The default dist directory `deploy` ships static artifacts into. */
@@ -1137,6 +1408,8 @@ export async function run(argv: readonly string[], deps: CliDeps): Promise<numbe
   const [command, ...args] = argv;
 
   if (command === "routes") return runRoutes(deps);
+
+  if (command === "routes:gen") return runRoutesGen(deps);
 
   if (command === "migrate") return runMigrate(deps);
 

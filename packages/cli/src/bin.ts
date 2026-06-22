@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { nodeStaticReader, serve } from "@lesto/runtime";
 import type { LestoAppConfig } from "@lesto/kernel";
 import { scanRoutes } from "@lesto/router";
-import { applyFileRoutes, loadFileRoutes } from "@lesto/web";
+import { applyFileRoutes, generateRouteManifest, loadFileRoutes } from "@lesto/web";
 import type { UiDialect } from "@lesto/web";
 import type { TraceSeams } from "@lesto/observability";
 
@@ -192,17 +192,11 @@ const dirExists = async (path: string): Promise<boolean> => {
   }
 };
 
-// Auto-wire file-based routes onto the loaded app: scan `app/routes/`, `import()`
-// each page/layout, and register them via `@lesto/web`'s applier. The scan and
-// the per-file import are the impure seams the covered core (`scanRoutes`,
-// `loadFileRoutes`, `applyFileRoutes`) takes as inputs; this composes them with
-// the real `fs.readdir` + `import()`. Node-only by design — it runs under
-// `dev`/`serve`/`build`/`routes`; the static-import map a dynamic-edge Worker
-// needs is a separate, deferred concern (ADR 0027).
-const applyDiscoveredRoutes = async (app: LestoAppConfig["app"]): Promise<void> => {
-  if (!(await dirExists(routesDir))) return;
-
-  const files = await scanRoutes(
+// Scan `app/routes/` with the real `fs.readdir`, yielding the flat DiscoveredFile
+// list the pure compiler/codegen take. The one impure seam shared by the route
+// applier (below) and the edge-manifest codegen (`regenerateRoutes`).
+const scanRoutesDir = () =>
+  scanRoutes(
     async (path) =>
       (await readdir(path, { withFileTypes: true })).map((entry) => ({
         name: entry.name,
@@ -211,10 +205,27 @@ const applyDiscoveredRoutes = async (app: LestoAppConfig["app"]): Promise<void> 
     routesDir,
   );
 
-  const modules = await loadFileRoutes(
-    files,
-    (kind, segments) => import(join(routesDir, ...segments, kind)),
-  );
+// Auto-wire file-based routes onto the loaded app: scan `app/routes/`, `import()`
+// each page/layout, and register them via `@lesto/web`'s applier. The scan and
+// the per-file import are the impure seams the covered core (`scanRoutes`,
+// `loadFileRoutes`, `applyFileRoutes`) takes as inputs; this composes them with
+// the real `fs.readdir` + `import()`. Node-only by design — it runs under
+// `dev`/`serve`/`build`/`routes`; the static-import map a dynamic-edge Worker
+// needs is the SEPARATE edge concern `regenerateRoutes` owns (`routes.gen.ts`).
+//
+// `bust` cache-busts the per-file `import()` (a `?t=<now>` suffix) so a dev
+// re-load picks up a NEW or EDITED route file rather than ESM's cached module —
+// the Node re-scan half of Workstream 3. A normal boot omits it (one clean import).
+const applyDiscoveredRoutes = async (app: LestoAppConfig["app"], bust?: string): Promise<void> => {
+  if (!(await dirExists(routesDir))) return;
+
+  const files = await scanRoutesDir();
+
+  const modules = await loadFileRoutes(files, (kind, segments) => {
+    const specifier = join(routesDir, ...segments, kind);
+
+    return import(bust === undefined ? specifier : `${specifier}?t=${bust}`);
+  });
 
   applyFileRoutes(app, files, modules);
 
@@ -227,8 +238,12 @@ const applyDiscoveredRoutes = async (app: LestoAppConfig["app"]): Promise<void> 
   }
 };
 
-const loadApp = async (seams?: TraceSeams): Promise<LestoAppConfig> => {
-  const module = (await import(join(process.cwd(), "lesto.app.ts"))) as {
+// Load the project's app config + auto-wire its file routes. `bust` (a dev re-load)
+// cache-busts BOTH `lesto.app.ts` and the route imports, so an edit is re-imported
+// rather than served from ESM's module cache.
+const loadAppConfig = async (seams?: TraceSeams, bust?: string): Promise<LestoAppConfig> => {
+  const appPath = join(process.cwd(), "lesto.app.ts");
+  const module = (await import(bust === undefined ? appPath : `${appPath}?t=${bust}`)) as {
     default: AppDefault;
   };
 
@@ -236,9 +251,66 @@ const loadApp = async (seams?: TraceSeams): Promise<LestoAppConfig> => {
 
   const config = typeof exported === "function" ? await exported(seams) : exported;
 
-  await applyDiscoveredRoutes(config.app);
+  await applyDiscoveredRoutes(config.app, bust);
 
   return config;
+};
+
+const loadApp = (seams?: TraceSeams): Promise<LestoAppConfig> => loadAppConfig(seams);
+
+// `dev`'s on-change re-load: a fresh config with cache-busted route imports, so a
+// NEW route appears (and an edited one re-renders) without a server restart.
+const reloadApp = (): Promise<LestoAppConfig> => loadAppConfig(undefined, String(Date.now()));
+
+// The edge route manifest path (`src/routes.gen.ts`) and its import base — the same
+// `src/routes.gen.ts` + `../app/routes` the per-app `regenerate-routes.ts` used, now
+// a first-class `routes:gen` / dev-watch concern.
+const ROUTES_MANIFEST = "src/routes.gen.ts";
+const ROUTES_IMPORT_BASE = "../app/routes";
+
+// Regenerate the EDGE manifest: scan `app/routes/`, render with the covered
+// `generateRouteManifest`, write `src/routes.gen.ts`. Returns the path + file count,
+// or `undefined` when the project has no `app/routes/` (nothing to generate). This
+// is the edge static-import map — kept separate from the Node re-scan above.
+const regenerateRoutes = async (): Promise<{ path: string; count: number } | undefined> => {
+  if (!(await dirExists(routesDir))) return undefined;
+
+  const files = await scanRoutesDir();
+  const source = generateRouteManifest(files, { importBase: ROUTES_IMPORT_BASE });
+  const target = join(projectRoot, ROUTES_MANIFEST);
+
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, source, "utf8");
+
+  return { path: ROUTES_MANIFEST, count: files.length };
+};
+
+// Watch `app/routes/` and fire `onChange` at most once per debounce window, like
+// `watchIslands` — so a burst of saves coalesces into one re-load. Absent dir → a
+// no-op stop handle (dev still runs; there is just nothing to watch).
+const watchRoutes = (onChange: () => void): (() => void) => {
+  let watcher: ReturnType<typeof watch> | undefined;
+
+  try {
+    watcher = watch(routesDir, { recursive: true });
+  } catch {
+    // No `app/routes/` (or it cannot be watched) — nothing to watch; the dev loop
+    // still serves, it just has no route hot-reload. Return a no-op stop handle.
+    return () => undefined;
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  watcher.on("change", () => {
+    clearTimeout(timer);
+
+    timer = setTimeout(onChange, WATCH_DEBOUNCE_MS);
+  });
+
+  return () => {
+    clearTimeout(timer);
+    watcher?.close();
+  };
 };
 
 // True iff the project follows the `app/islands/` convention (ADR 0011); the
@@ -293,6 +365,78 @@ const watchIslands = (onChange: () => void): (() => void) => {
     watcher.close();
   };
 };
+
+// The dev live-reload WebSocket port — fixed so the injected client script knows
+// where to connect (a separate port from the HTTP server keeps the reload channel
+// off the app's own request surface). The bin runs under Bun, whose built-in
+// `Bun.serve` carries a WebSocket server, so this needs no `ws` dependency.
+const LIVE_RELOAD_PORT = 35729;
+
+// Build the dev live-reload channel: a Bun WebSocket server, the client snippet to
+// inject into dev HTML, and the broadcast/close handles `run` orchestrates. The
+// client opens the socket and reloads on any message (or on a dropped connection,
+// so a dev-server restart also reloads). All wiring — coverage-excluded like the
+// rest of the bin; the decision of WHEN to inject/notify is in the covered core.
+const buildLiveReload = (): {
+  script: string;
+  notify: () => void;
+  close: () => void;
+} => {
+  const sockets = new Set<{ send: (data: string) => void }>();
+
+  // `Bun` is the runtime this bin is spawned under (the shebang + the e2e). Typed
+  // loosely here (no `@types/bun` in this package) — it is irreducible wiring.
+  const bun = (globalThis as { Bun?: BunLike }).Bun;
+
+  let server: { stop?: () => void } | undefined;
+
+  try {
+    server = bun?.serve({
+      port: LIVE_RELOAD_PORT,
+      fetch(_request: unknown, srv: { upgrade: (request: unknown) => boolean }) {
+        // Every request to this port is a WS upgrade; a non-upgrade gets a 426.
+        if (srv.upgrade(_request)) return undefined;
+
+        return new Response("expected a websocket upgrade", { status: 426 });
+      },
+      websocket: {
+        open(ws: { send: (data: string) => void }) {
+          sockets.add(ws);
+        },
+        close(ws: { send: (data: string) => void }) {
+          sockets.delete(ws);
+        },
+        message() {
+          // The client never sends; ignore anything it does.
+        },
+      },
+    });
+  } catch {
+    // A busy reload port (a second dev server, a leftover socket) must not crash the
+    // dev boot — live reload just stays off; the HTTP server still serves.
+    server = undefined;
+  }
+
+  // The injected client: connect to the reload socket and reload on any message or
+  // on a closed connection (so a dev restart reloads too). Inlined so no asset fetch
+  // is needed and it runs the moment the document parses.
+  const script = `(()=>{try{const c=()=>{const s=new WebSocket("ws://"+location.hostname+":${LIVE_RELOAD_PORT}");s.onmessage=()=>location.reload();s.onclose=()=>setTimeout(c,1000);};c();}catch{}})();`;
+
+  return {
+    script,
+    notify: () => {
+      for (const ws of sockets) ws.send("reload");
+    },
+    close: () => {
+      server?.stop?.();
+    },
+  };
+};
+
+/** The slice of Bun's runtime API the live-reload server uses — typed loosely (irreducible wiring). */
+interface BunLike {
+  serve: (options: unknown) => { stop?: () => void } | undefined;
+}
 
 // The content (CMS) packages are OPTIONAL PEERS: a default scaffold uses only
 // `dev`/`build`/`serve`/`routes`, so it never installs `@lesto/content-core` or
@@ -445,6 +589,11 @@ if (command === "generate" || command === "g") {
   process.exit(exit);
 }
 
+// The live-reload socket is opened ONLY for `dev` — no other command needs it, and
+// no command should leave a socket bound. Built here so its handle (notify/close)
+// rides into `run` for the dev loop to drive.
+const liveReload = command === "dev" ? buildLiveReload() : undefined;
+
 const code = await run(argv, {
   loadApp,
   serve,
@@ -459,6 +608,10 @@ const code = await run(argv, {
   hasIslandsDir,
   buildClientAssets,
   watchIslands,
+  watchRoutes,
+  reloadApp,
+  regenerateRoutes,
+  ...(liveReload === undefined ? {} : { liveReload }),
   uploader: nodeUploader,
   releaseStore,
   now: Date.now,

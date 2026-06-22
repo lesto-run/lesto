@@ -1114,6 +1114,419 @@ describe("run dev — island client assets", () => {
   });
 });
 
+/** A serve fake that captures the app the dev server fronts, so a test can fire
+ * requests through the dev dispatch (the forwarding handle + live-reload wrap). */
+function capturingServe(): {
+  serve: CliDeps["serve"];
+  app: () => App;
+} {
+  let captured: App | undefined;
+
+  const serve = vi.fn((app: App): Promise<Server> => {
+    captured = app;
+
+    return Promise.resolve({ port: 3000, close: () => Promise.resolve() });
+  });
+
+  return {
+    serve: serve as unknown as CliDeps["serve"],
+    app: () => {
+      if (captured === undefined) throw new Error("serve was never called");
+
+      return captured;
+    },
+  };
+}
+
+/** A streamed HTML body — React's SSR shape — for the stream-injection test. */
+function streamBody(): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode("<html><body>streamed</body></html>"));
+      controller.close();
+    },
+  });
+}
+
+/** Drain a streamed response body to a string. */
+async function drainBody(body: unknown): Promise<string> {
+  if (typeof body === "string") return body;
+
+  const reader = (body as ReadableStream<Uint8Array>).getReader();
+  const decoder = new TextDecoder();
+  let out = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+
+    if (done) break;
+
+    out += decoder.decode(value, { stream: true });
+  }
+
+  return out + decoder.decode();
+}
+
+describe("run routes:gen", () => {
+  it("regenerates the manifest and reports the path + count", async () => {
+    const code = await run(
+      ["routes:gen"],
+      depsWith({
+        regenerateRoutes: () => Promise.resolve({ path: "src/routes.gen.ts", count: 3 }),
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(lines).toEqual(["generated src/routes.gen.ts (3 route files)"]);
+  });
+
+  it("uses the singular noun for a one-file manifest", async () => {
+    await run(
+      ["routes:gen"],
+      depsWith({
+        regenerateRoutes: () => Promise.resolve({ path: "src/routes.gen.ts", count: 1 }),
+      }),
+    );
+
+    expect(lines).toEqual(["generated src/routes.gen.ts (1 route file)"]);
+  });
+
+  it("says nothing-to-generate when there is no app/routes/", async () => {
+    await run(["routes:gen"], depsWith({ regenerateRoutes: () => Promise.resolve(undefined) }));
+
+    expect(lines).toEqual(["no app/routes/ directory — nothing to generate"]);
+  });
+
+  it("reports when the seam is not wired at all", async () => {
+    // `depsWith` omits `regenerateRoutes`, so the command sees the seam as absent.
+    await run(["routes:gen"], depsWith());
+
+    expect(lines).toEqual(["routes:gen is not available in this environment"]);
+  });
+});
+
+describe("run dev — route watching & live reload (Workstream 3)", () => {
+  const sites: readonly Site[] = [{ name: "app", render: "dynamic", basePath: "/" }];
+
+  it("registers a route watcher and, on change, refreshes the manifest, reloads the app, and notifies", async () => {
+    let onChange: (() => void) | undefined;
+    let regenerated = 0;
+    let reloaded = 0;
+    const notified: number[] = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        regenerateRoutes: () => {
+          regenerated += 1;
+
+          return Promise.resolve({ path: "src/routes.gen.ts", count: 2 });
+        },
+        reloadApp: () => {
+          reloaded += 1;
+
+          return Promise.resolve(buildConfig());
+        },
+        liveReload: { script: "x", notify: () => notified.push(1), close: () => undefined },
+      }),
+    );
+
+    expect(onChange).toBeDefined();
+
+    onChange?.();
+    // Let the async refresh settle.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(regenerated).toBe(1);
+    expect(reloaded).toBe(1);
+    expect(notified).toEqual([1]);
+    expect(lines).toContain("routes refreshed: src/routes.gen.ts (2 route files)");
+  });
+
+  it("swaps the live server's handle so a re-loaded app's new route serves without a restart", async () => {
+    let onChange: (() => void) | undefined;
+    const capture = capturingServe();
+
+    // The re-loaded config adds a route the boot app did not have.
+    const reloadedConfig = (): LestoAppConfig => {
+      const base = buildConfig();
+      base.app.get("/brand-new", (c) => c.json({ fresh: true }));
+
+      return base;
+    };
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        reloadApp: () => Promise.resolve(reloadedConfig()),
+      }),
+    );
+
+    // Before the change, the new route is a 404 (the boot app never had it).
+    expect((await capture.app().handle("GET", "/brand-new")).status).toBe(404);
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // After the re-load, the forwarder points at the new app, so the route serves.
+    expect((await capture.app().handle("GET", "/brand-new")).status).toBe(200);
+  });
+
+  it("keeps the dev server up when a route re-load throws, reporting the failure", async () => {
+    let onChange: (() => void) | undefined;
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        reloadApp: () => Promise.reject(new Error("syntax error in page.tsx")),
+      }),
+    );
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(lines.some((line) => line.startsWith("app reload failed:"))).toBe(true);
+  });
+
+  it("reports a manifest refresh failure without crashing the watcher", async () => {
+    let onChange: (() => void) | undefined;
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        regenerateRoutes: () => Promise.reject(new Error("scan blew up")),
+      }),
+    );
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(lines.some((line) => line.startsWith("route manifest refresh failed:"))).toBe(true);
+  });
+
+  it("does not log a refresh line when there is no app/routes/ to regenerate", async () => {
+    let onChange: (() => void) | undefined;
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        regenerateRoutes: () => Promise.resolve(undefined),
+        reloadApp: () => Promise.resolve(buildConfig()),
+      }),
+    );
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(lines.some((line) => line.startsWith("routes refreshed:"))).toBe(false);
+  });
+
+  it("injects the live-reload script into an HTML response", async () => {
+    const capture = capturingServe();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadApp: () =>
+          Promise.resolve({
+            ...buildConfig(),
+            app: lesto().get("/page", () => ({
+              status: 200,
+              headers: { "content-type": "text/html; charset=utf-8" },
+              body: "<html><body>hi</body></html>",
+            })),
+          }),
+        loadSites: () => Promise.resolve(sites),
+        liveReload: { script: "RELOAD_ME();", notify: () => undefined, close: () => undefined },
+      }),
+    );
+
+    const response = await capture.app().handle("GET", "/page");
+    const html = await drainBody(response.body);
+
+    expect(html).toContain("<script>RELOAD_ME();</script>");
+    expect(html).toContain("<html><body>hi</body></html>");
+  });
+
+  it("injects the live-reload script into a STREAMED HTML response", async () => {
+    const capture = capturingServe();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadApp: () =>
+          Promise.resolve({
+            ...buildConfig(),
+            app: lesto().get("/stream", () => ({
+              status: 200,
+              headers: { "content-type": "text/html; charset=utf-8" },
+              body: streamBody() as unknown as string,
+            })),
+          }),
+        loadSites: () => Promise.resolve(sites),
+        liveReload: { script: "STREAM_RELOAD();", notify: () => undefined, close: () => undefined },
+      }),
+    );
+
+    const response = await capture.app().handle("GET", "/stream");
+    const html = await drainBody(response.body);
+
+    expect(html).toContain("streamed");
+    expect(html).toContain("<script>STREAM_RELOAD();</script>");
+  });
+
+  it("leaves a non-HTML (JSON) response untouched", async () => {
+    const capture = capturingServe();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadSites: () => Promise.resolve(sites),
+        liveReload: { script: "NO();", notify: () => undefined, close: () => undefined },
+      }),
+    );
+
+    const response = await capture.app().handle("GET", "/posts");
+    const body = await drainBody(response.body);
+
+    // `/posts` returns JSON; the reload script must not be injected.
+    expect(body).not.toContain("NO();");
+    expect(body).toContain("posts");
+  });
+
+  it("treats an array content-type header (its first value) as HTML for injection", async () => {
+    const capture = capturingServe();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadApp: () =>
+          Promise.resolve({
+            ...buildConfig(),
+            app: lesto().get("/multi", () => ({
+              status: 200,
+              headers: { "content-type": ["text/html; charset=utf-8"] },
+              body: "<html></html>",
+            })),
+          }),
+        loadSites: () => Promise.resolve(sites),
+        liveReload: { script: "ARR();", notify: () => undefined, close: () => undefined },
+      }),
+    );
+
+    const response = await capture.app().handle("GET", "/multi");
+
+    expect(await drainBody(response.body)).toContain("<script>ARR();</script>");
+  });
+
+  it("leaves a response with NO content-type untouched", async () => {
+    const capture = capturingServe();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadApp: () =>
+          Promise.resolve({
+            ...buildConfig(),
+            app: lesto().get("/bare", () => ({ status: 204, headers: {}, body: "" })),
+          }),
+        loadSites: () => Promise.resolve(sites),
+        liveReload: { script: "BARE();", notify: () => undefined, close: () => undefined },
+      }),
+    );
+
+    const response = await capture.app().handle("GET", "/bare");
+
+    expect(await drainBody(response.body)).not.toContain("BARE();");
+  });
+
+  it("stops the route watcher and closes live reload on shutdown", async () => {
+    let stopped = false;
+    let closed = false;
+    let drain: (() => Promise<void>) | undefined;
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: () => () => {
+          stopped = true;
+        },
+        liveReload: {
+          script: "x",
+          notify: () => undefined,
+          close: () => {
+            closed = true;
+          },
+        },
+        installShutdown: (d) => {
+          drain = d;
+        },
+      }),
+    );
+
+    expect(drain).toBeDefined();
+    await drain?.();
+
+    expect(stopped).toBe(true);
+    expect(closed).toBe(true);
+  });
+
+  it("runs dev with neither route watching nor live reload (the unchanged default)", async () => {
+    const capture = capturingServe();
+
+    // No watchRoutes / liveReload seams: the forwarder still serves, untouched.
+    await run(["dev"], depsWith({ serve: capture.serve, loadSites: () => Promise.resolve(sites) }));
+
+    const response = await capture.app().handle("GET", "/posts");
+
+    expect(response.status).toBe(200);
+  });
+});
+
 // A capturing uploader: every shipped key lands in the map.
 function recordingUploader(): {
   uploader: CliDeps["uploader"];

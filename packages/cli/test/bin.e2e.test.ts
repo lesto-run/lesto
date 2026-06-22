@@ -188,6 +188,17 @@ describe("bin e2e", () => {
       });
 
       expect(response.status).toBe(200);
+
+      // Workstream 3: a file-route HTML page carries the injected live-reload client
+      // script (a WebSocket connector). This exercises the real bin wiring end to
+      // end — buildLiveReload's script + the dev handle's HTML injection.
+      const pageResponse = await fetch(`${base}/`, {
+        headers: { "Sec-Fetch-Site": "same-origin" },
+      });
+      const html = await pageResponse.text();
+
+      expect(pageResponse.status).toBe(200);
+      expect(html).toContain("new WebSocket(");
     } finally {
       child.kill("SIGTERM");
     }
