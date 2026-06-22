@@ -13,7 +13,14 @@
  */
 
 export { parseServeLimit, run } from "./run";
-export type { CliDeps, ReleaseTarget, ServeLimitsEnv } from "./run";
+export type {
+  CliDeps,
+  DevError,
+  DevErrorSource,
+  LiveReload,
+  ReleaseTarget,
+  ServeLimitsEnv,
+} from "./run";
 
 export { runMcp } from "./mcp";
 export type { McpDeps } from "./mcp";

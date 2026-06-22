@@ -122,21 +122,53 @@ export interface RegenerateRoutesResult {
 }
 
 /**
+ * Which dev step failed — the dev error overlay's heading, and the hint to where
+ * the author should look. `client-rebuild` = the island bundle; `route-refresh` =
+ * the edge route-manifest codegen; `app-reload` = re-importing the app/route
+ * modules (the classic "syntax error in a just-saved page" case).
+ */
+export type DevErrorSource = "client-rebuild" | "route-refresh" | "app-reload";
+
+/**
+ * A dev build/reload failure pushed to the open browser so `lesto dev` renders an
+ * in-page error overlay instead of leaving the author to find it on stderr.
+ * `message` is the author-facing error (the bundler/loader message, via
+ * {@link rebuildErrorMessage}); `stack` is the underlying cause's stack when present.
+ */
+export interface DevError {
+  readonly source: DevErrorSource;
+
+  readonly message: string;
+
+  readonly stack?: string;
+}
+
+/**
  * The dev live-reload channel (Workstream 3) — a WebSocket the bin runs beside the
  * dev HTTP server, so a saved page/layout/route reloads the open browser.
  *
- * The bin owns the socket and exposes three things; the CLI core decides when to
+ * The bin owns the socket and exposes four things; the CLI core decides when to
  * use them. `script` is the client snippet the core injects into every dev HTML
  * response (it connects to the socket and calls `location.reload()` on a message).
- * `notify()` broadcasts a reload to every connected browser (the core calls it
- * after a watched change is processed). `close()` tears the socket down on shutdown.
+ * `notify()` broadcasts a reload to every connected browser (the core calls it after
+ * a watched change SUCCEEDS). `notifyError()` broadcasts a build/reload FAILURE,
+ * which the client renders as a full-screen overlay (so the error no longer hides on
+ * stderr); the next successful change's `notify()` reload clears it. `close()` tears
+ * the socket down on shutdown.
  */
 export interface LiveReload {
   /** The client JS injected into dev HTML — opens the socket, reloads on a message. */
   readonly script: string;
 
-  /** Broadcast a reload to every connected browser. */
+  /** Broadcast a reload to every connected browser (a watched change succeeded). */
   readonly notify: () => void;
+
+  /**
+   * Broadcast a build/reload FAILURE to every connected browser, which renders it
+   * as a full-screen dev error overlay. The next successful change calls
+   * {@link notify} — a reload that clears the overlay.
+   */
+  readonly notifyError: (error: DevError) => void;
 
   /** Shut the live-reload socket down (called on graceful dev shutdown). */
   readonly close: () => void;
@@ -831,6 +863,50 @@ function rebuildErrorMessage(error: unknown): string {
 }
 
 /**
+ * The stack for a dev error overlay: the bundler/loader cause's stack when the
+ * failure is a coded {@link CliError} wrapping one (the same `details.cause` whose
+ * message {@link rebuildErrorMessage} shows), else the raw error's own stack, else
+ * none — a non-`Error` throw (a string) simply carries no frames.
+ */
+function devErrorStack(error: unknown): string | undefined {
+  const cause = error instanceof CliError ? error.details["cause"] : undefined;
+
+  if (cause instanceof Error) return cause.stack;
+
+  if (error instanceof Error) return error.stack;
+
+  return undefined;
+}
+
+/**
+ * The author-facing message for a dev error overlay. Like {@link rebuildErrorMessage}
+ * but it also unwraps a RAW `Error`'s `.message` (not just a {@link CliError} cause's)
+ * — so the overlay shows a clean `Unexpected token`, never the `Error: ` prefix
+ * `String(error)` would add, and an island error reads the same as a route one.
+ * `rebuildErrorMessage` keeps the `String(error)` form for the stderr log lines.
+ */
+function devErrorMessage(error: unknown): string {
+  const cause = error instanceof CliError ? error.details["cause"] : undefined;
+
+  if (cause instanceof Error) return cause.message;
+
+  if (error instanceof Error) return error.message;
+
+  return String(error);
+}
+
+/**
+ * Build the {@link DevError} broadcast for a caught dev failure — the author-facing
+ * message plus the cause's stack when one exists. Omitting an absent `stack` keeps
+ * the payload exact under `exactOptionalPropertyTypes` (never `stack: undefined`).
+ */
+function devError(source: DevErrorSource, error: unknown): DevError {
+  const stack = devErrorStack(error);
+
+  return { source, message: devErrorMessage(error), ...(stack === undefined ? {} : { stack }) };
+}
+
+/**
  * Prerender the project's static sites to disk.
  *
  * Boots the app, loads its declared sites, and hands the app's own `handle` to
@@ -1019,9 +1095,15 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // showing.
   if (deps.hasIslandsDir !== undefined && (await deps.hasIslandsDir())) {
     deps.watchIslands?.(() => {
-      void buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev", dialect).catch((error: unknown) => {
-        deps.out(`client rebuild failed: ${rebuildErrorMessage(error)}`);
-      });
+      void buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev", dialect).then(
+        // A clean rebuild reloads the browser so the fresh bundle shows AND any
+        // prior error overlay clears (the success reload IS the overlay's dismiss).
+        () => deps.liveReload?.notify(),
+        (error: unknown) => {
+          deps.out(`client rebuild failed: ${rebuildErrorMessage(error)}`);
+          deps.liveReload?.notifyError(devError("client-rebuild", error));
+        },
+      );
     });
   }
 
@@ -1056,11 +1138,15 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // the browser. A failure in any step is reported, not fatal — the dev server
   // stays up so the next save can fix it.
   const onRouteChange = async (): Promise<void> => {
-    const newHandle = await refreshRoutes(deps);
+    const { handle, error } = await refreshRoutes(deps);
 
-    if (newHandle !== undefined) activeHandle = newHandle;
+    if (handle !== undefined) activeHandle = handle;
 
-    deps.liveReload?.notify();
+    // A clean refresh reloads the browser (clearing any overlay); a failure pushes
+    // the overlay INSTEAD of reloading — a reload would just re-paint the stale app
+    // and hide that the save did not take.
+    if (error === undefined) deps.liveReload?.notify();
+    else deps.liveReload?.notifyError(error);
   };
 
   const stopRoutes = deps.watchRoutes?.(() => void onRouteChange());
@@ -1098,16 +1184,24 @@ type AppHandle = (method: string, path: string, options?: HandleOptions) => Prom
 
 /**
  * Process one watched route change: refresh the edge manifest and re-load the app,
- * returning the re-loaded app's handle (or `undefined` when nothing was re-loaded).
+ * returning the re-loaded app's `handle` (or `undefined` when nothing re-loaded) plus
+ * the `error` to surface as a dev overlay (or `undefined` when every step succeeded).
  *
  * The two halves are kept SEPARATE per the plan: `regenerateRoutes` refreshes the
  * EDGE manifest (`routes.gen.ts`, the Worker's static-import map), while `reloadApp`
  * is the NODE re-scan (a fresh config whose file routes were re-imported) that, once
  * `createApp`'d, lets a new route serve without a restart. Either seam may be absent
  * (a project with no `app/routes/`, or a test that opted into only one); each failure
- * is reported and swallowed so the dev server survives a transient error mid-edit.
+ * is reported on stderr AND returned as a {@link DevError} so the caller can paint the
+ * overlay, while the dev server survives the transient error mid-edit. An `app-reload`
+ * failure (the page won't load) outranks a `route-refresh` one (a stale edge manifest)
+ * for the single overlay.
  */
-async function refreshRoutes(deps: CliDeps): Promise<AppHandle | undefined> {
+async function refreshRoutes(
+  deps: CliDeps,
+): Promise<{ handle: AppHandle | undefined; error: DevError | undefined }> {
+  let error: DevError | undefined;
+
   if (deps.regenerateRoutes !== undefined) {
     try {
       const result = await deps.regenerateRoutes();
@@ -1117,27 +1211,30 @@ async function refreshRoutes(deps: CliDeps): Promise<AppHandle | undefined> {
           `routes refreshed: ${result.path} (${result.count} route ${fileNoun(result.count)})`,
         );
       }
-    } catch (error) {
-      deps.out(`route manifest refresh failed: ${rebuildErrorMessage(error)}`);
+    } catch (cause) {
+      deps.out(`route manifest refresh failed: ${rebuildErrorMessage(cause)}`);
+      error = devError("route-refresh", cause);
     }
   }
 
-  if (deps.reloadApp === undefined) return undefined;
+  if (deps.reloadApp === undefined) return { handle: undefined, error };
 
   try {
     const config = await deps.reloadApp();
 
     // `createApp` rebuilds the dispatch (and re-runs migrations idempotently) over
-    // the re-scanned routes; its handle is what the forwarder swaps to.
+    // the re-scanned routes; its handle is what the forwarder swaps to. A manifest
+    // error from above still rides along — the app reloaded, but the edge map is stale.
     const app = await createApp(config);
 
-    return app.handle;
-  } catch (error) {
+    return { handle: app.handle, error };
+  } catch (cause) {
     // A syntax error in a just-saved route file would otherwise crash the dev
-    // server; keep the prior app live and report, so the next save recovers.
-    deps.out(`app reload failed: ${rebuildErrorMessage(error)}`);
+    // server; keep the prior app live and surface the overlay so the next save
+    // recovers. This app-reload failure replaces any manifest error as the overlay.
+    deps.out(`app reload failed: ${rebuildErrorMessage(cause)}`);
 
-    return undefined;
+    return { handle: undefined, error: devError("app-reload", cause) };
   }
 }
 

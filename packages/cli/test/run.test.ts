@@ -13,7 +13,7 @@ import type { OutputSink, Site } from "@lesto/sites";
 import type { ReleaseStore } from "@lesto/deploy";
 
 import { CliError, parsePort, parseServeLimit, parseStringFlag, run } from "../src/index";
-import type { CliDeps, ReleaseTarget } from "../src/index";
+import type { CliDeps, DevError, ReleaseTarget } from "../src/index";
 
 // --- A real-enough app, built over an in-memory better-sqlite3 adapter. ---
 
@@ -977,6 +977,83 @@ describe("run dev — island client assets", () => {
     expect(builds).toBe(2);
   });
 
+  it("reloads the browser when a watched island rebuild succeeds (clearing any overlay)", async () => {
+    let onChange: (() => void) | undefined;
+    const reloads: number[] = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: () => Promise.resolve(),
+        watchIslands: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        liveReload: {
+          script: "x",
+          notify: () => reloads.push(1),
+          notifyError: () => undefined,
+          close: () => undefined,
+        },
+      }),
+    );
+
+    // The boot build does NOT reload; only a watched rebuild does.
+    expect(reloads).toEqual([]);
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(reloads).toEqual([1]);
+  });
+
+  it("paints a dev error overlay when a watched island rebuild fails", async () => {
+    let onChange: (() => void) | undefined;
+    let calls = 0;
+    const errors: DevError[] = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: () => {
+          calls += 1;
+
+          // Boot succeeds; the watch rebuild rejects with the bundler's Error.
+          return calls === 1
+            ? Promise.resolve()
+            : Promise.reject(new Error("esbuild: unexpected }"));
+        },
+        watchIslands: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        liveReload: {
+          script: "x",
+          notify: () => undefined,
+          notifyError: (error) => errors.push(error),
+          close: () => undefined,
+        },
+      }),
+    );
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.source).toBe("client-rebuild");
+    expect(errors[0]?.message).toBe("esbuild: unexpected }");
+    // The CliError wraps the bundler Error as details.cause — its stack is surfaced.
+    expect(errors[0]?.stack).toContain("esbuild: unexpected }");
+  });
+
   it("reports a watch-triggered rebuild failure without crashing the dev server", async () => {
     let onChange: (() => void) | undefined;
     let calls = 0;
@@ -1236,7 +1313,12 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
 
           return Promise.resolve(buildConfig());
         },
-        liveReload: { script: "x", notify: () => notified.push(1), close: () => undefined },
+        liveReload: {
+          script: "x",
+          notify: () => notified.push(1),
+          notifyError: () => undefined,
+          close: () => undefined,
+        },
       }),
     );
 
@@ -1334,6 +1416,111 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
     expect(lines.some((line) => line.startsWith("route manifest refresh failed:"))).toBe(true);
   });
 
+  it("paints a dev error overlay (and does NOT reload) when the app reload fails", async () => {
+    let onChange: (() => void) | undefined;
+    const reloads: number[] = [];
+    const errors: DevError[] = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        reloadApp: () => Promise.reject(new Error("Unexpected token in page.tsx")),
+        liveReload: {
+          script: "x",
+          notify: () => reloads.push(1),
+          notifyError: (error) => errors.push(error),
+          close: () => undefined,
+        },
+      }),
+    );
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // A failure becomes an overlay, NOT a reload — a reload would re-paint the stale
+    // app and hide that the save did not take.
+    expect(reloads).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.source).toBe("app-reload");
+    expect(errors[0]?.message).toBe("Unexpected token in page.tsx");
+    // A real Error carries a stack, surfaced for the overlay's <pre>.
+    expect(errors[0]?.stack).toContain("Unexpected token in page.tsx");
+  });
+
+  it("paints a dev error overlay when the route manifest refresh fails", async () => {
+    let onChange: (() => void) | undefined;
+    const errors: DevError[] = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        regenerateRoutes: () => Promise.reject(new Error("bad route filename")),
+        liveReload: {
+          script: "x",
+          notify: () => undefined,
+          notifyError: (error) => errors.push(error),
+          close: () => undefined,
+        },
+      }),
+    );
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.source).toBe("route-refresh");
+    expect(errors[0]?.message).toBe("bad route filename");
+  });
+
+  it("paints an overlay with NO stack when the failure is not an Error", async () => {
+    let onChange: (() => void) | undefined;
+    const errors: DevError[] = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        // A non-Error throw (a bare string) carries no frames — the overlay omits stack.
+        // eslint-disable-next-line prefer-promise-reject-errors
+        reloadApp: () => Promise.reject("kaboom"),
+        liveReload: {
+          script: "x",
+          notify: () => undefined,
+          notifyError: (error) => errors.push(error),
+          close: () => undefined,
+        },
+      }),
+    );
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.source).toBe("app-reload");
+    expect(errors[0]?.message).toBe("kaboom");
+    expect(errors[0]?.stack).toBeUndefined();
+  });
+
   it("does not log a refresh line when there is no app/routes/ to regenerate", async () => {
     let onChange: (() => void) | undefined;
 
@@ -1375,7 +1562,12 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
             })),
           }),
         loadSites: () => Promise.resolve(sites),
-        liveReload: { script: "RELOAD_ME();", notify: () => undefined, close: () => undefined },
+        liveReload: {
+          script: "RELOAD_ME();",
+          notify: () => undefined,
+          notifyError: () => undefined,
+          close: () => undefined,
+        },
       }),
     );
 
@@ -1403,7 +1595,12 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
             })),
           }),
         loadSites: () => Promise.resolve(sites),
-        liveReload: { script: "STREAM_RELOAD();", notify: () => undefined, close: () => undefined },
+        liveReload: {
+          script: "STREAM_RELOAD();",
+          notify: () => undefined,
+          notifyError: () => undefined,
+          close: () => undefined,
+        },
       }),
     );
 
@@ -1422,7 +1619,12 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
       depsWith({
         serve: capture.serve,
         loadSites: () => Promise.resolve(sites),
-        liveReload: { script: "NO();", notify: () => undefined, close: () => undefined },
+        liveReload: {
+          script: "NO();",
+          notify: () => undefined,
+          notifyError: () => undefined,
+          close: () => undefined,
+        },
       }),
     );
 
@@ -1451,7 +1653,12 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
             })),
           }),
         loadSites: () => Promise.resolve(sites),
-        liveReload: { script: "ARR();", notify: () => undefined, close: () => undefined },
+        liveReload: {
+          script: "ARR();",
+          notify: () => undefined,
+          notifyError: () => undefined,
+          close: () => undefined,
+        },
       }),
     );
 
@@ -1473,7 +1680,12 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
             app: lesto().get("/bare", () => ({ status: 204, headers: {}, body: "" })),
           }),
         loadSites: () => Promise.resolve(sites),
-        liveReload: { script: "BARE();", notify: () => undefined, close: () => undefined },
+        liveReload: {
+          script: "BARE();",
+          notify: () => undefined,
+          notifyError: () => undefined,
+          close: () => undefined,
+        },
       }),
     );
 
@@ -1498,6 +1710,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
         liveReload: {
           script: "x",
           notify: () => undefined,
+          notifyError: () => undefined,
           close: () => {
             closed = true;
           },
