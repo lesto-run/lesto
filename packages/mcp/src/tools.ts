@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import type { App } from "@lesto/kernel";
 import type { SqlDatabase } from "@lesto/migrate";
 
+import { missingContentError } from "./content-peer";
 import { McpError } from "./errors";
 
 /** The runtime's collections map (collection name → its entries) — entries are opaque here. */
@@ -176,10 +177,7 @@ function requireContentDb(context: LestoMcpContext): SqlDatabase {
  */
 async function requireContent(context: LestoMcpContext): Promise<ContentModules> {
   if (context.loadContent === undefined) {
-    throw new McpError(
-      "MCP_CONTENT_PACKAGES_MISSING",
-      "The content tools need the content packages — run `npm i @lesto/content-core @lesto/content-store`.",
-    );
+    throw missingContentError();
   }
 
   return context.loadContent();

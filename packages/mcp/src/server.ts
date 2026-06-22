@@ -14,34 +14,15 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 import { buildTools, dispatch } from "./tools";
 import type { ContentModules, LestoMcpContext } from "./tools";
-import { McpError } from "./errors";
-
-const CONTENT_PACKAGES_HINT =
-  "The content tools need the content packages — run `npm i @lesto/content-core @lesto/content-store`.";
-
-/**
- * Convert a missing optional content PEER into the coded refusal, and rethrow any
- * other error untouched — a real failure INSIDE an installed content package must not
- * be masked as "go install it". Classifies on the missing specifier the runtime names
- * (`Cannot find package '<x>'`), not the whole message. Mirrors `@lesto/cli`'s loader.
- */
-function rethrowUnlessMissingContentPeer(error: unknown): never {
-  if (error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
-    const missing = /Cannot find (?:package|module) '([^']+)'/.exec(error.message)?.[1];
-
-    if (missing?.startsWith("@lesto/content-")) {
-      throw new McpError("MCP_CONTENT_PACKAGES_MISSING", CONTENT_PACKAGES_HINT);
-    }
-  }
-
-  throw error;
-}
+import { rethrowUnlessMissingContentPeer } from "./content-peer";
 
 /**
  * The default content loader the server injects into the context: dynamic-import the
  * optional content peers (literal specifiers so the resolved module types still flow)
- * so `@lesto/mcp` boots and serves its generic tools without them. A missing peer
- * surfaces as a coded `MCP_CONTENT_PACKAGES_MISSING` the first time a content tool runs.
+ * so `@lesto/mcp` boots and serves its generic tools without them. A missing peer is
+ * classified by {@link rethrowUnlessMissingContentPeer} (covered, in `content-peer.ts`)
+ * into a coded `MCP_CONTENT_PACKAGES_MISSING` the first time a content tool runs; the
+ * only logic that stays HERE (coverage-excluded) is the literal `import()` itself.
  */
 async function defaultLoadContent(): Promise<ContentModules> {
   try {

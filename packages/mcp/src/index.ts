@@ -16,6 +16,7 @@
 
 export { buildTools, dispatch } from "./tools";
 export type {
+  ContentModules,
   DispatchOptions,
   LestoMcpContext,
   LestoTool,
