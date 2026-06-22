@@ -94,9 +94,14 @@ below) — this blocks filling correct provenance/repo metadata.
        PREVIEW in ARCHITECTURE.md (dependency-shape change, tracked separately).
 6. [x] `LESTO_DEP_RANGE` is `^0.1.0` — satisfies the published `0.1.0` (`^0.1.0` resolves
        `0.1.x`). No change needed; bump in lockstep if the surface's minor moves.
-7. [ ] Add the `bun pm pack` → scaffold-from-tarball → boot CI job (RELEASING.md §Verifying)
-       — now to LOCK IN the node-runnable bins (the caveat below is resolved) by proving
-       `npx create-lesto` / `lesto` in a clean node sandbox on every push.
+7. [x] The `bun pm pack` → scaffold-from-tarball → boot CI job EXISTS (`ci.yml` job
+       `install-proof`, `bun run test:pack-boot` → `scripts/pack-and-boot.mjs`) and is a
+       blocking gate on every push/PR. **2026-06-22: found it had been silently FAILING** —
+       the W2 scaffold change (`837e51f`) made `create-lesto` run `bun install` by default,
+       so the proof's `create-lesto boot-proof` 404'd against the unpublished registry before
+       the tarball pin could apply. Fixed (`c3ea28a`): pack-and-boot now scaffolds with
+       `--no-install --no-git` (the tarball `npm install` is the real proof). **Verified GREEN
+       locally: 31 packages packed → scaffolded → installed under node → `lesto routes` booted.**
 8. [ ] `bun run version` — for the FIRST release this is a no-op (versions set directly in
        step 3, no queued changesets); it begins mattering for the next bump.
 9. [ ] Set `RELEASE_ENABLED=true` + add `NPM_TOKEN` secret → `bun run release` publishes with
@@ -124,3 +129,23 @@ Residual (not a blocker): `lesto dev`'s island bundling still calls Bun's bundle
 - ✅ **Go on the de-privatization batch** — done now (reversible; nothing publishes until
   `RELEASE_ENABLED` + the explicit step-9 go).
 - ⏳ **Preview trim** (step 5) — still open.
+
+## 2026-06-22 recheck — what actually remains before the step-9 go
+
+The de-privatization batch (steps 2–4, 6) and the install-proof gate (step 7) are DONE and
+the proof is verified green. The real open items:
+
+- **No git remote is configured** (`git remote -v` empty). `release.yml` (the
+  `changesets/action` publish path) and the `repository: github.com/lesto-run/lesto` metadata
+  assume a connected GitHub repo — so the CI publish can't run until the remote is created +
+  pushed, OR publish locally with `bun run release` + `NPM_TOKEN` (still gated on
+  `RELEASE_ENABLED`). Decide the publish venue before the morning-of.
+- **Closure is 30, not 28.** The real transitive runtime closure of the scaffold's 9
+  `LESTO_PACKAGES` is 30 `@lesto/*` — RELEASING.md's list omits `@lesto/cloudflare` (a direct
+  scaffold dep) and `@lesto/pg` (pulled by `@lesto/db`). Both are already `private:false`, so
+  nothing breaks; the RELEASING.md closure list is just stale by two names.
+- **Preview trim (step 5) is a real, non-breaking quality gap:** a hello-world transitively
+  pulls 7 content-* packages (content-core/embeddings/markdown/search/shared/store/umbra).
+  All public, so install resolves — but it's preview-tagged bloat in a default app.
+- Names re-checked 2026-06-22: `create-lesto`, `lesto`, `@lesto/{cli,web,ui,client}` all `E404`
+  (free). Re-run the full closure on the morning of publish.
