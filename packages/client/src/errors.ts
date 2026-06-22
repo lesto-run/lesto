@@ -7,6 +7,8 @@ export type ClientErrorCode =
   | "CLIENT_HTTP_ERROR"
   /** A path declared a `:param` the call did not supply. */
   | "CLIENT_MISSING_PARAM"
+  /** The internal CSRF-token fetch (the `fetchCsrfToken` path) failed to resolve a token. */
+  | "MUTATION_CSRF_FETCH_FAILED"
   /** A typed mutation call could not complete or parse (network down, non-JSON answer). */
   | "MUTATION_TRANSPORT_FAILED";
 

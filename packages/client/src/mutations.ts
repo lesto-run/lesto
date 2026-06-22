@@ -14,12 +14,17 @@
  *   if (result.ok) use(result.data.listing);                       // data typed
  *   else show(result.error.code);                                  // typed error path
  *
- * Every stub POSTs to `/__lesto/mutations/:name`, attaches the configured CSRF token
- * on the `x-csrf-token` header (the double-submit channel 2), and ALWAYS returns the
+ * Every stub POSTs to `/__lesto/mutations/:name`, attaches the CSRF token on the
+ * `x-csrf-token` header (the double-submit channel 2), and ALWAYS returns the
  * discriminated result union — a non-2xx answer is mapped back into the failure arm
  * (the server already shaped it), and a transport failure surfaces as a coded
  * `MUTATION_TRANSPORT_FAILED` failure arm. So a caller writes one `if (result.ok)`
  * and never a `try/catch` around the happy path.
+ *
+ * The CSRF token can be supplied two ways: an explicit `csrfToken` (the caller
+ * already holds it), or `fetchCsrfToken` — the INTERNALIZED round-trip, where the
+ * client fetches the token itself on first use and caches it so a form stops
+ * re-fetching CSRF per submit (the explicit token wins when both are given).
  *
  * Browser-safe by construction: native `fetch`, no Node deps. The server module's
  * VALUES never cross — only its contract TYPE, which is erased at runtime.
@@ -77,8 +82,31 @@ export interface MutationClientOptions {
    * The double-submit CSRF token the page read from its companion cookie. Sent on
    * the `x-csrf-token` header of every call, so the server's `verifyToken` check
    * passes. Omit only when no token-based CSRF guard is configured server-side.
+   *
+   * When BOTH this and {@link fetchCsrfToken} are given, this explicit token wins
+   * (the round-trip is never made) — so wiring an internal fetch never silently
+   * overrides a token the caller already holds.
    */
   csrfToken?: string;
+
+  /**
+   * Fetch the double-submit CSRF token from the server — the INTERNALIZED round-trip.
+   *
+   * Without this, a form has to fetch its CSRF token itself (a `GET /…/csrf`), keep
+   * it in component state, and thread it into `csrfToken` on every submit. Give a
+   * `fetchCsrfToken` instead and the client owns that: it runs the fetch LAZILY on
+   * the first call that needs a token and CACHES the resulting promise, so any
+   * number of concurrent or later submits share a single round-trip — the form
+   * stops re-implementing CSRF per submit.
+   *
+   * A rejecting `fetchCsrfToken` is NOT thrown: the call resolves to a coded
+   * `MUTATION_CSRF_FETCH_FAILED` failure arm (the same one-`if` contract as every
+   * other failure), and the cache is cleared so a later submit retries the fetch.
+   *
+   * Ignored when {@link csrfToken} is set (the explicit token wins). Omit both when
+   * no token-based CSRF guard is configured server-side.
+   */
+  fetchCsrfToken?: () => Promise<string>;
 
   /** Headers sent on every call (e.g. an auth token), overridable by the CSRF header. */
   headers?: Record<string, string>;
@@ -144,6 +172,24 @@ export function createMutationClient<C extends MutationContract>(
   const baseUrl = options.baseUrl ?? "";
   const baseHeaders = options.headers ?? {};
 
+  // The internalized CSRF round-trip (item 2). When `fetchCsrfToken` is given (and
+  // no explicit `csrfToken` overrides it), the FIRST call that needs a token runs
+  // the fetch and caches the in-flight promise here, so concurrent and later
+  // submits share one round-trip instead of each re-fetching. A rejected fetch is
+  // surfaced as a coded failure arm by the caller and the cache is cleared, so a
+  // later submit retries rather than being wedged on a dead promise forever.
+  let csrfTokenPromise: Promise<string> | undefined;
+
+  const resolveCsrfToken = (fetchToken: () => Promise<string>): Promise<string> => {
+    // Cache the in-flight promise on first use so concurrent and later submits
+    // SHARE one round-trip. The rejection is NOT normalized here — `call` owns the
+    // single failure site (it clears this cache and maps to a coded failure arm),
+    // so there is exactly one place the reject becomes a result and no dead branch.
+    csrfTokenPromise ??= fetchToken();
+
+    return csrfTokenPromise;
+  };
+
   // When a trace context is configured, wrap `fetch` so a same-origin mutation
   // carries an outbound `traceparent` continuing the page's trace — identical to
   // `createApi`'s propagation. Absent → the bare configured fetch.
@@ -158,10 +204,36 @@ export function createMutationClient<C extends MutationContract>(
         });
 
   const call = async (name: string, input: unknown): Promise<MutationResult<unknown>> => {
+    // Resolve the CSRF token: the explicit `csrfToken` wins; otherwise the
+    // internalized `fetchCsrfToken` round-trip (cached, shared across calls); else
+    // none (no token-based guard configured). A failed internal fetch is mapped to
+    // a coded failure arm here so the one-`if` contract holds and the call never
+    // throws on the CSRF path.
+    let csrfToken = options.csrfToken;
+
+    if (csrfToken === undefined && options.fetchCsrfToken !== undefined) {
+      try {
+        csrfToken = await resolveCsrfToken(options.fetchCsrfToken);
+      } catch (cause) {
+        // The internal CSRF fetch failed — clear the cached promise so a LATER
+        // submit retries (rather than being wedged on a dead promise forever), and
+        // surface a coded failure arm so the caller's one `if` covers it too.
+        csrfTokenPromise = undefined;
+
+        return {
+          ok: false,
+          error: {
+            code: "MUTATION_CSRF_FETCH_FAILED",
+            message: cause instanceof Error ? cause.message : "CSRF token fetch failed.",
+          },
+        };
+      }
+    }
+
     const headers: Record<string, string> = {
       ...baseHeaders,
       "content-type": "application/json",
-      ...(options.csrfToken === undefined ? {} : { [CSRF_HEADER]: options.csrfToken }),
+      ...(csrfToken === undefined ? {} : { [CSRF_HEADER]: csrfToken }),
     };
 
     let response: Response;

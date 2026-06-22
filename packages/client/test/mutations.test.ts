@@ -295,6 +295,96 @@ describe("createMutationClient — trace propagation (ARCHITECTURE.md §7)", () 
   });
 });
 
+describe("createMutationClient — internalized CSRF round-trip (fetchCsrfToken)", () => {
+  it("fetches the token itself and attaches it, sharing ONE round-trip across calls", async () => {
+    const { fn, calls } = makeFetch(() => json({ ok: true, data: { listing: { id: "1" } } }));
+    let csrfFetches = 0;
+    const fetchCsrfToken = async (): Promise<string> => {
+      csrfFetches += 1;
+
+      return "fetched.tok";
+    };
+
+    const mutate = createMutationClient<SampleMutations>({ fetch: fn, fetchCsrfToken });
+
+    // Two concurrent submits + a later one — all share the single cached fetch.
+    await Promise.all([
+      mutate.renameListing({ id: "1", name: "A" }),
+      mutate.renameListing({ id: "2", name: "B" }),
+    ]);
+    await mutate.renameListing({ id: "3", name: "C" });
+
+    expect(csrfFetches).toBe(1);
+    for (const call of calls) {
+      expect(new Headers(call.init.headers).get("x-csrf-token")).toBe("fetched.tok");
+    }
+  });
+
+  it("lets an explicit csrfToken win — fetchCsrfToken is never called", async () => {
+    const { fn, calls } = makeFetch(() => json({ ok: true, data: { listing: { id: "1" } } }));
+    let csrfFetches = 0;
+    const fetchCsrfToken = async (): Promise<string> => {
+      csrfFetches += 1;
+
+      return "fetched.tok";
+    };
+
+    const mutate = createMutationClient<SampleMutations>({
+      fetch: fn,
+      csrfToken: "explicit.tok",
+      fetchCsrfToken,
+    });
+
+    await mutate.renameListing({ id: "1", name: "A" });
+
+    expect(csrfFetches).toBe(0);
+    expect(new Headers(calls[0]?.init.headers).get("x-csrf-token")).toBe("explicit.tok");
+  });
+
+  it("maps a rejecting fetch to a coded failure arm, clears the cache, and retries next call", async () => {
+    const { fn } = makeFetch(() => json({ ok: true, data: { listing: { id: "1" } } }));
+    let csrfFetches = 0;
+    const fetchCsrfToken = async (): Promise<string> => {
+      csrfFetches += 1;
+
+      if (csrfFetches === 1) throw new Error("csrf endpoint 500");
+
+      return "recovered.tok";
+    };
+
+    const mutate = createMutationClient<SampleMutations>({ fetch: fn, fetchCsrfToken });
+
+    const first = await mutate.renameListing({ id: "1", name: "A" });
+
+    expect(first).toEqual({
+      ok: false,
+      error: { code: "MUTATION_CSRF_FETCH_FAILED", message: "csrf endpoint 500" },
+    });
+
+    // The cache was cleared, so the second submit RETRIES the fetch and succeeds.
+    const second = await mutate.renameListing({ id: "1", name: "A" });
+
+    expect(csrfFetches).toBe(2);
+    expect(second.ok).toBe(true);
+  });
+
+  it("uses a default message when fetchCsrfToken rejects with a non-Error", async () => {
+    const { fn } = makeFetch(() => json({ ok: true, data: { listing: { id: "1" } } }));
+
+    const mutate = createMutationClient<SampleMutations>({
+      fetch: fn,
+      fetchCsrfToken: () => Promise.reject("nope"),
+    });
+
+    const result = await mutate.renameListing({ id: "1", name: "A" });
+
+    if (!result.ok) {
+      expect(result.error.code).toBe("MUTATION_CSRF_FETCH_FAILED");
+      expect(result.error.message).toBe("CSRF token fetch failed.");
+    }
+  });
+});
+
 describe("MutationResult — the discriminated union", () => {
   it("narrows on `ok` to the data arm or the error arm", () => {
     const result = { ok: true, data: 5 } as MutationResult<number>;

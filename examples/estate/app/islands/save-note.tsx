@@ -10,21 +10,24 @@
  *
  * It demonstrates, on one form:
  *   - end-to-end inferred types: `mutate.saveListingNote({ listingId, note })` is
- *     typed to the server's Zod input, and `result.data.saved` to its return.
+ *     typed to the server's Zod input, and the result's `saved` to its return.
  *   - the typed error path: a non-2xx is the `{ ok: false, error }` arm, never a
  *     throw — typing a note of `boom` shows the server's `LAB_NOTE_REJECTED` code.
- *   - CSRF: the double-submit token is read back from `GET /lab/api/csrf` and sent
- *     on `x-csrf-token`, so the boundary's reused `verifyToken` check passes.
- *   - boundary validation: an empty note is refused server-side (`MUTATION_INVALID_INPUT`).
+ *   - `@lesto/ui`'s `useMutation` owning the pending/result state — no hand-rolled
+ *     `useState` saving machine; the discriminated result union IS `save.data`.
+ *   - the INTERNALIZED CSRF round-trip: the mutation client fetches the double-submit
+ *     token itself once (lazily, cached) via `fetchCsrfToken`, so this form no longer
+ *     reads `GET /lab/api/csrf` in a `useEffect`, holds it in state, and rebuilds the
+ *     client per submit — the round-trip lives in the client, not the component.
  *
  * Default-exported (one island per file) so `@lesto/assets` synthesizes its client
  * registration — no hand-written `client.tsx`.
  */
 
-import { useEffect, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import { useState } from "react";
+import type { ReactNode } from "react";
 
-import { defineIsland } from "@lesto/ui";
+import { defineIsland, useMutation } from "@lesto/ui";
 import { createApi, createMutationClient } from "@lesto/client";
 import { readTraceparentMeta } from "@lesto/observability/rum";
 
@@ -45,64 +48,35 @@ const trace = pageTrace === undefined ? {} : { trace: { traceId: pageTrace.trace
 
 const api = createApi<LabApi>(trace);
 
-type SaveState =
-  | { status: "idle" }
-  | { status: "saving" }
-  | { status: "saved"; note: string; savedAt: string }
-  | { status: "error"; code: string; message: string };
+// One mutation client for the island's lifetime, with the CSRF round-trip
+// INTERNALIZED: `fetchCsrfToken` runs once (lazily, then cached) on the first
+// submit that needs a token — replacing the per-submit `GET /lab/api/csrf` +
+// `useState`/`useEffect` + client-rebuild the form used to hand-roll.
+const mutate = createMutationClient<LabMutations>({
+  ...trace,
+  fetchCsrfToken: () => api.get("/lab/api/csrf").then((r) => r.token),
+});
 
 /** The mounted island: a one-field form that calls the typed mutation on submit. */
 function SaveNoteView({ listingId }: { listingId: string }): ReactNode {
   const [note, setNote] = useState("");
-  const [state, setState] = useState<SaveState>({ status: "idle" });
-  const [csrf, setCsrf] = useState<string | undefined>(undefined);
 
-  // Read the double-submit token back from the cookie's companion route — the page
-  // half of the pattern. A real per-user app reads it from the companion cookie.
-  useEffect(() => {
-    let active = true;
+  // useMutation owns `{ isPending, data }`; the mutation's discriminated
+  // `{ ok, … }` union becomes `save.data` directly — one branch, no try/catch.
+  const save = useMutation((input: { listingId: string; note: string }) =>
+    mutate.saveListingNote(input),
+  );
 
-    void (async () => {
-      try {
-        const { token } = await api.get("/lab/api/csrf");
-
-        if (active) setCsrf(token);
-      } catch {
-        // Leave csrf undefined; a submit then takes the typed CSRF-failure path.
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  async function onSubmit(event: FormEvent): Promise<void> {
-    event.preventDefault();
-    setState({ status: "saving" });
-
-    // The typed mutation client, threading the CSRF token onto every call.
-    const mutate = createMutationClient<LabMutations>({
-      ...trace,
-      ...(csrf === undefined ? {} : { csrfToken: csrf }),
-    });
-
-    const result = await mutate.saveListingNote({ listingId, note });
-
-    // The discriminated result union: one `if`, a typed error path, no try/catch.
-    if (result.ok) {
-      setState({
-        status: "saved",
-        note: result.data.saved.note,
-        savedAt: result.data.saved.savedAt,
-      });
-    } else {
-      setState({ status: "error", code: result.error.code, message: result.error.message });
-    }
-  }
+  const result = save.data;
 
   return (
-    <form className="card" onSubmit={(e) => void onSubmit(e)}>
+    <form
+      className="card"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void save.mutate({ listingId, note });
+      }}
+    >
       <label className="copy" htmlFor="note">
         Note for {listingId}
       </label>
@@ -116,20 +90,20 @@ function SaveNoteView({ listingId }: { listingId: string }): ReactNode {
       />
 
       <p className="copy">
-        <button type="submit" disabled={state.status === "saving"}>
-          {state.status === "saving" ? "Saving…" : "Save note (typed mutation)"}
+        <button type="submit" disabled={save.isPending}>
+          {save.isPending ? "Saving…" : "Save note (typed mutation)"}
         </button>
       </p>
 
-      {state.status === "saved" && (
+      {result?.ok && (
         <p className="copy">
-          Saved: “{state.note}” at {state.savedAt}.
+          Saved: “{result.data.saved.note}” at {result.data.saved.savedAt}.
         </p>
       )}
 
-      {state.status === "error" && (
+      {result !== undefined && !result.ok && (
         <p className="copy">
-          Rejected ({state.code}): {state.message}
+          Rejected ({result.error.code}): {result.error.message}
         </p>
       )}
     </form>

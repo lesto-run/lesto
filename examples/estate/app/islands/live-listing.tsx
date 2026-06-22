@@ -9,19 +9,22 @@
  * shared {@link LabApi} contract, so the `:id` param and the `Listing` response
  * are both typed with no codegen. The server paints the fallback until it mounts.
  *
+ * The fetch goes through `@lesto/ui`'s `useQuery` (the minimal Weft step, ADR 0027)
+ * instead of a hand-rolled `useState`+`useEffect`+active-flag: the loading/error
+ * machine is the hook's, the request is keyed (`["listing", id]`) so a second island
+ * on the same id dedupes to one request, and the value is cached until invalidated.
+ *
  * Default-exported (one island per file) so `@lesto/assets` synthesizes its
  * registration into the client entry — no hand-written `client.tsx`.
  */
 
-import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
-import { defineIsland } from "@lesto/ui";
+import { defineIsland, useQuery } from "@lesto/ui";
 import { createApi } from "@lesto/client";
 import { readTraceparentMeta } from "@lesto/observability/rum";
 
 import { formatPrice } from "../../src/listings";
-import type { Listing } from "../../src/listings";
 import type { LabApi } from "../../src/lab-api";
 
 // Same-origin typed client; the contract is the one the server route fulfils.
@@ -37,46 +40,31 @@ const api = createApi<LabApi>(
   pageTrace === undefined ? {} : { trace: { traceId: pageTrace.traceId } },
 );
 
-type LoadState =
-  | { status: "loading" }
-  | { status: "error" }
-  | { status: "loaded"; listing: Listing };
-
-/** The mounted island: fetch the listing by id on mount, render its card. */
+/** The mounted island: fetch the listing by id (via useQuery), render its card. */
 function LiveListingView({ listingId }: { listingId: string }): ReactNode {
-  const [state, setState] = useState<LoadState>({ status: "loading" });
+  const {
+    data: listing,
+    error,
+    isLoading,
+  } = useQuery(["listing", listingId], () =>
+    api.get("/lab/api/listings/:id", { params: { id: listingId } }),
+  );
 
-  useEffect(() => {
-    let active = true;
+  if (isLoading) return <p className="copy">Loading {listingId} on the client…</p>;
 
-    void (async () => {
-      try {
-        const listing = await api.get("/lab/api/listings/:id", { params: { id: listingId } });
-
-        if (active) setState({ status: "loaded", listing });
-      } catch {
-        if (active) setState({ status: "error" });
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, [listingId]);
-
-  if (state.status === "loading") return <p className="copy">Loading {listingId} on the client…</p>;
-
-  if (state.status === "error") return <p className="copy">Could not load {listingId}.</p>;
+  if (error !== undefined || listing === undefined) {
+    return <p className="copy">Could not load {listingId}.</p>;
+  }
 
   return (
     <article className="card">
-      <h2>{state.listing.title}</h2>
+      <h2>{listing.title}</h2>
 
-      <p className="card__where">{state.listing.neighborhood}</p>
+      <p className="card__where">{listing.neighborhood}</p>
 
-      <p className="card__price">{formatPrice(state.listing.price)}</p>
+      <p className="card__price">{formatPrice(listing.price)}</p>
 
-      <p className="copy">Fetched in the browser via the typed @lesto/client.</p>
+      <p className="copy">Fetched in the browser via @lesto/client + useQuery (deduped + cached).</p>
     </article>
   );
 }

@@ -66,6 +66,28 @@ export type { DataSource, DataSourceScope, IslandBind } from "./data";
 export { createSourceResolver, IslandDataContext, IslandDataProvider } from "./data-resolve";
 export type { SourceResolver } from "./data-resolve";
 
+// Client data hooks (the minimal Weft step, ADR 0027): `useQuery`/`useMutation`
+// over one shared cache giving in-flight dedupe + explicit-by-key invalidation —
+// NOT yet the schema-inferred invalidation Weft will add. Decoupled from
+// `@lesto/client` (the caller passes the fetcher/mutationFn thunk), so they stay
+// in this isomorphic core; the fetch is kicked from an effect, so SSR never fetches.
+export {
+  defaultQueryClient,
+  QueryClient,
+  serializeQueryKey,
+  useMutation,
+  useQuery,
+} from "./data-client";
+export type {
+  MutationOptions,
+  MutationResultApi,
+  MutationStatus,
+  QueryKey,
+  QueryResult,
+  QuerySnapshot,
+  QueryStatus,
+} from "./data-client";
+
 // The audited seam for inlining island JSON into a `<script>`: escapes the
 // breakout characters `JSON.stringify` leaves raw. ALL island-manifest emission
 // MUST go through this — never a bare stringify or a `String.replace` splice.
