@@ -11,12 +11,16 @@ import { dirname, join } from "node:path";
 
 import { CreateLestoError } from "./errors";
 import {
+  agentsMd,
+  claudeMd,
   gitignore,
   islandCounter,
   lestoApp,
   lestoSites,
   packageJson,
   readme,
+  routeLayout,
+  routePage,
   tsconfig,
   worker,
   wranglerConfig,
@@ -98,18 +102,25 @@ export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promis
   // The starter, declared as (relative name -> contents). One source of truth for
   // both what gets written and what manifest comes back. `lesto.sites.ts` is what
   // makes `lesto build`/`dev` whole (its absence used to crash); the island under
-  // `app/islands/` is what `lesto build` bundles into `/client.js`. `worker.ts` +
-  // `wrangler.jsonc` are the scaffold→deploy path: `lesto deploy --cloudflare`
-  // builds `out/` and `wrangler deploy`s the Worker that fronts the app.
+  // `app/islands/` is what `lesto build` bundles into `/client.js`. The home page
+  // lives at `app/routes/page.tsx` (file-based routing, ADR 0023) wrapped by
+  // `app/routes/layout.tsx`, so the headline "drop a file → it routes" convention
+  // is visible on day one. `worker.ts` + `wrangler.jsonc` are the scaffold→deploy
+  // path: `lesto deploy --cloudflare` builds `out/` and `wrangler deploy`s the
+  // Worker that fronts the app. `AGENTS.md`/`CLAUDE.md` onboard a coding agent.
   const files: ReadonlyArray<readonly [string, string]> = [
     ["package.json", packageJson(name, lestoDep)],
     ["lesto.app.ts", lestoApp()],
     ["lesto.sites.ts", lestoSites()],
+    ["app/routes/page.tsx", routePage()],
+    ["app/routes/layout.tsx", routeLayout()],
     ["app/islands/counter.tsx", islandCounter()],
     ["worker.ts", worker()],
     ["wrangler.jsonc", wranglerConfig(name)],
     ["tsconfig.json", tsconfig()],
     [".gitignore", gitignore()],
+    ["AGENTS.md", agentsMd(name)],
+    ["CLAUDE.md", claudeMd(name)],
     ["README.md", readme(name)],
   ];
 

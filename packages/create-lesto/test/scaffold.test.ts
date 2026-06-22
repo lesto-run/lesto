@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  agentsMd,
+  claudeMd,
   CreateLestoError,
   fileColonPin,
   gitignore,
@@ -15,6 +17,8 @@ import {
   packageJson,
   publishedRangePin,
   readme,
+  routeLayout,
+  routePage,
   scaffold,
   tsconfig,
   worker,
@@ -58,11 +62,15 @@ describe("scaffold", () => {
       "package.json",
       "lesto.app.ts",
       "lesto.sites.ts",
+      "app/routes/page.tsx",
+      "app/routes/layout.tsx",
       "app/islands/counter.tsx",
       "worker.ts",
       "wrangler.jsonc",
       "tsconfig.json",
       ".gitignore",
+      "AGENTS.md",
+      "CLAUDE.md",
       "README.md",
     ]
       .map((relative) => join(targetDir, relative))
@@ -103,12 +111,14 @@ describe("scaffold", () => {
     expect(app).toContain("z.object({");
     expect(app).toContain("secure: { originCheck: {} }");
 
-    // The Preact-by-default island pipeline: the single ui.dialect key, the
-    // client module tag, the home page, and the island import.
+    // The Preact-by-default island pipeline: the single ui.dialect key and the
+    // client module tag. The HOME PAGE moved to app/routes/page.tsx (file-based
+    // routing), so lesto.app.ts no longer registers a `.page("/")` or imports the
+    // island directly — it stays a pure data/API surface.
     expect(app).toContain('ui: { dialect: "preact" }');
     expect(app).toContain('.client("/client.js")');
-    expect(app).toContain('.page("/"');
-    expect(app).toContain('import Counter from "./app/islands/counter"');
+    expect(app).not.toContain('.page("/"');
+    expect(app).not.toContain('import Counter from "./app/islands/counter"');
 
     // package.json carries the project name, the @lesto deps, and the run scripts.
     const manifest = JSON.parse(pkg) as {
@@ -177,6 +187,34 @@ describe("scaffold", () => {
     expect(island).toContain("export default defineIsland({");
     expect(island).toContain('name: "Counter"');
     expect(island).toContain("useState");
+  });
+
+  it("scaffolds the file-routed home page + layout and the agent onboarding files", async () => {
+    const targetDir = join(workspace, "routed");
+
+    await scaffold({ name: "routed", targetDir }, realIO);
+
+    const page = await readFile(join(targetDir, "app/routes/page.tsx"), "utf8");
+    const layout = await readFile(join(targetDir, "app/routes/layout.tsx"), "utf8");
+    const agents = await readFile(join(targetDir, "AGENTS.md"), "utf8");
+    const claude = await readFile(join(targetDir, "CLAUDE.md"), "utf8");
+
+    // The home page is a JSX PageDef (not createElement) registered at "/" by the
+    // file convention, rendering the Counter island via PageProps inference.
+    expect(page).toContain('PageDef<"/"');
+    expect(page).toContain("PageProps<typeof load>");
+    expect(page).toContain("<Counter start={start} />");
+    expect(page).toContain('import Counter from "../islands/counter"');
+    expect(page).not.toContain("createElement");
+
+    // The root layout wraps every page as children.
+    expect(layout).toContain("export default function RootLayout");
+    expect(layout).toContain("children");
+
+    // The agent files: AGENTS.md is the source of truth, CLAUDE.md defers to it.
+    expect(agents).toContain("# routed — agent guide");
+    expect(agents).toContain("app/routes/");
+    expect(claude).toContain("AGENTS.md");
   });
 
   it("scaffolds the Cloudflare deploy files (worker.ts + wrangler.jsonc)", async () => {
@@ -301,6 +339,37 @@ describe("templates", () => {
   it("islandCounter is one defineIsland default-export", () => {
     expect(islandCounter()).toContain("export default defineIsland({");
     expect(islandCounter()).toContain('name: "Counter"');
+  });
+
+  it("routePage is a JSX PageDef at / (no createElement)", () => {
+    const out = routePage();
+
+    expect(out).toContain('PageDef<"/"');
+    expect(out).toContain("export default page");
+    expect(out).toContain("PageProps<typeof load>");
+    expect(out).not.toContain("createElement");
+  });
+
+  it("routeLayout default-exports a layout that renders its children", () => {
+    const out = routeLayout();
+
+    expect(out).toContain("export default function RootLayout");
+    expect(out).toContain("{children}");
+  });
+
+  it("agentsMd names the project and documents the file-routing convention", () => {
+    const out = agentsMd("acme");
+
+    expect(out).toContain("# acme — agent guide");
+    expect(out).toContain("app/routes/");
+    expect(out).toContain("file-based routing");
+  });
+
+  it("claudeMd defers to AGENTS.md as the single source of truth", () => {
+    const out = claudeMd("acme");
+
+    expect(out).toContain("# acme");
+    expect(out).toContain("AGENTS.md");
   });
 
   it("lestoSites default-exports a Site[] with a dynamic root zone", () => {

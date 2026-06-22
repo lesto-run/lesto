@@ -42,21 +42,28 @@ afterEach(async () => {
 
 describe("bin (e2e)", () => {
   it("scaffolds an app directory and exits 0", async () => {
-    const result = await runBin(["tmp-app-name"], workspace);
+    // `--no-install --no-git` keeps the e2e to the write path: a real `bun install`
+    // would hit the unpublished registry (the published-pin default), and `git` is
+    // a separate, best-effort step. The scaffold→install→git loop is covered
+    // in-process against fake seams in create.test.ts.
+    const result = await runBin(["tmp-app-name", "--no-install", "--no-git"], workspace);
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("Scaffolded tmp-app-name");
+    expect(result.stdout).toContain("Creating tmp-app-name");
+    expect(result.stdout).toContain("Done.");
 
     const appDir = join(workspace, "tmp-app-name");
 
     await expect(access(join(appDir, "lesto.app.ts"))).resolves.toBeUndefined();
     await expect(access(join(appDir, "package.json"))).resolves.toBeUndefined();
+    // The headline file-based routing is visible on day one.
+    await expect(access(join(appDir, "app", "routes", "page.tsx"))).resolves.toBeUndefined();
   }, 30_000);
 
   it("exits non-zero with the stable code when the target exists", async () => {
-    await runBin(["dupe"], workspace);
+    await runBin(["dupe", "--no-install", "--no-git"], workspace);
 
-    const second = await runBin(["dupe"], workspace);
+    const second = await runBin(["dupe", "--no-install", "--no-git"], workspace);
 
     expect(second.code).toBe(1);
     expect(second.stderr).toContain("CREATE_LESTO_TARGET_EXISTS");

@@ -113,6 +113,13 @@ export function lestoApp(): string {
  * API routes (\`.get\`/\`.post\`/…) and pages (\`.page\`), each handler a
  * \`(c) => response\` over the request context \`c\`.
  *
+ * The HOME PAGE is NOT registered here — it lives at \`app/routes/page.tsx\` and is
+ * auto-registered by Lesto's file-based routing (ADR 0023): drop a \`page.tsx\`
+ * under \`app/routes/\` and its directory's URL becomes a route, no \`.page()\` call.
+ * \`lesto dev\`/\`build\` scan that directory and compose every page onto THIS app.
+ * Code-first routes (the \`/posts\` API below) and file routes live side by side on
+ * the same router. Add a page by adding a file; add an API route by chaining \`.get\`.
+ *
  * Two conventions worth seeing on day one:
  *   - Validation at the boundary (ADR 0005): the create handler runs the
  *     untrusted body through a Zod schema with \`c.valid\` before it touches the
@@ -124,8 +131,6 @@ export function lestoApp(): string {
  *     refused (it reads the browser's \`Sec-Fetch-Site\`), with no token plumbing.
  */
 
-import { createElement } from "react";
-
 import { createDb, createTableSql, defineTable, dropTableSql, integer, text } from "@lesto/db";
 import type { Db } from "@lesto/db";
 
@@ -136,8 +141,6 @@ import { openSqlite } from "@lesto/runtime";
 import type { LestoAppConfig } from "@lesto/kernel";
 
 import { z } from "zod";
-
-import Counter from "./app/islands/counter";
 
 // The \`posts\` table — schema as a value backs both the migration's DDL
 // and the inferred row type every query returns.
@@ -174,9 +177,10 @@ const NewPost = z.object({
 // The app — built through a factory so its handlers close over the typed
 // \`Db\`. No \`this\`, no global database connection, no inheritance for domain
 // types. One \`lesto()\` surface for the whole app; grow it by chaining more
-// \`.get\`/\`.post\`/\`.page\` calls. The Cloudflare \`worker.ts\` builds its own
-// minimal edge twin of this (the island home page, no SQLite \`/posts\`) — see its
-// header for why and how to light the data routes on the edge over D1.
+// \`.get\`/\`.post\` calls (and drop \`app/routes/*/page.tsx\` files for pages). The
+// Cloudflare \`worker.ts\` builds its own minimal edge twin of this (the island
+// home page, no SQLite \`/posts\`) — see its header for why and how to light the
+// data routes on the edge over D1.
 function buildApp(db: Db) {
   return (
     lesto()
@@ -186,18 +190,8 @@ function buildApp(db: Db) {
       // this \`/client.js\` (the Preact dialect — see \`ui\` below), and every page
       // gets the head module tag that boots it.
       .client("/client.js")
-      // The home page renders the Counter island. Its button does nothing until
-      // the client bundle hydrates it — a working click is the visible proof the
-      // island came alive on the Preact runtime.
-      .page("/", {
-        component: () =>
-          createElement(
-            "main",
-            null,
-            createElement("h1", null, "Welcome to Lesto"),
-            createElement(Counter, { start: 0 }),
-          ),
-      })
+      // The home page is NOT registered here — it lives at \`app/routes/page.tsx\`
+      // and Lesto's file-based routing composes it onto this app automatically.
       .get("/posts", async (c) => {
         const rows = await db.select().from(posts).orderBy(posts.id, "asc").all();
 
@@ -282,6 +276,155 @@ export default defineIsland({
   component: Counter,
   fallback: ({ start }) => <button type="button" data-testid="counter">count: {start}</button>,
 });
+`;
+}
+
+/**
+ * `app/routes/page.tsx` — the file-routed home page, authored in JSX (ADR 0023).
+ *
+ * This is the headline "drop a file → it routes" convention, visible on day one: a
+ * `page.tsx` at the convention root (`app/routes/`) registers the URL `/`, with no
+ * `.page()` call in `lesto.app.ts`. `lesto dev`/`build` scan `app/routes/` and
+ * compose every page onto the app, wrapped in its layout chain (`layout.tsx`).
+ *
+ * It renders the Counter island — the same deferred-hydration proof the starter
+ * has always shipped, now reached through the file-routing path. Its `load` runs on
+ * the server and the component's props are INFERRED from it via
+ * `PageProps<typeof load>` (declared once, no restated interface — the shape
+ * `lesto g page` emits and the examples use).
+ */
+export function routePage(): string {
+  return `import type { ReactNode } from "react";
+
+import type { PageDef, PageProps } from "@lesto/web";
+
+import Counter from "../islands/counter";
+
+/**
+ * The server load. Pulled out as a top-level \`const\` so the component's props are
+ * INFERRED from its return via \`PageProps<typeof load>\` — declared once, with no
+ * restated interface. Returns the island's starting count.
+ */
+const load = () => ({ start: 0 });
+
+/**
+ * The default export IS the \`PageDef\` the file-route applier registers at \`/\`.
+ * The Counter island is inert until the client bundle hydrates it — a working
+ * click is the visible proof the island came alive on the Preact runtime.
+ */
+const page: PageDef<"/", PageProps<typeof load>> = {
+  load,
+
+  component: ({ start }: PageProps<typeof load>): ReactNode => (
+    <main>
+      <h1>Welcome to Lesto</h1>
+
+      <p>
+        This page is <strong>file-routed</strong>: it lives at{" "}
+        <code>app/routes/page.tsx</code> and registers the URL <code>/</code> with no{" "}
+        <code>.page()</code> call. Add a page by adding a file under{" "}
+        <code>app/routes/</code>.
+      </p>
+
+      <Counter start={start} />
+    </main>
+  ),
+
+  metadata: () => ({
+    title: "Welcome to Lesto",
+    description: "A file-routed home page over the Lesto starter.",
+  }),
+};
+
+export default page;
+`;
+}
+
+/**
+ * `app/routes/layout.tsx` — the file-route convention's root layout (ADR 0023).
+ *
+ * Dropping a `layout.tsx` at the convention root wraps EVERY page discovered under
+ * `app/routes/`. The applier composes it around each page's component
+ * automatically — no `.layout()` call, no per-page wiring. It is an ordinary
+ * component handed the page (or a deeper layout) as `children`.
+ */
+export function routeLayout(): string {
+  return `import type { ReactNode } from "react";
+
+/** Wrap every file-routed page in a shared shell — the convention's root layout. */
+export default function RootLayout({ children }: { children: ReactNode }): ReactNode {
+  return <div data-app-shell>{children}</div>;
+}
+`;
+}
+
+/**
+ * `AGENTS.md` — the open agent-onboarding file (the standard `create-next-app`,
+ * Vercel, and the broader ecosystem now ship). A coding agent dropped into the
+ * project reads this to learn the conventions before touching code.
+ *
+ * `CLAUDE.md` re-points at this one file so there is a single source of truth.
+ */
+export function agentsMd(name: string): string {
+  return `# ${name} — agent guide
+
+This is a [Lesto](https://lesto.run) app. Lesto is a batteries-included fullstack
+TypeScript framework (ESM, run directly — no build step for the source).
+
+## Commands
+
+- \`bun run dev\` — start the dev server (\`lesto dev\`). Boots the app, runs
+  migrations, and serves request dispatch.
+- \`bun run build\` — build the client bundle and prerender (\`lesto build\`).
+- \`lesto deploy --cloudflare\` — prerender to \`out/\` and \`wrangler deploy\` the
+  Worker (\`worker.ts\`).
+
+## Layout
+
+- \`lesto.app.ts\` — the app: tables (\`@lesto/db\`), migrations, and a code-first
+  \`lesto()\` app with \`.get\`/\`.post\` API routes. The DB handle is opened here.
+- \`app/routes/\` — **file-based routing** (ADR 0023). A \`page.tsx\` makes its
+  directory's URL a route; \`layout.tsx\` wraps every page at or below it. A
+  \`[param]\` directory is a dynamic segment, \`[...rest]\` a catch-all. Drop a file
+  to add a route — no manual registration.
+- \`app/islands/\` — client-interactive components (\`defineIsland\`), one default
+  export per file. The build bundles these into \`/client.js\`; the rest of the page
+  is server-rendered.
+- \`lesto.sites.ts\` — the declared sites (dynamic/static zones).
+- \`worker.ts\` + \`wrangler.jsonc\` — the Cloudflare edge deploy.
+
+## Conventions
+
+- **TypeScript + ESM.** Source runs directly; \`type: "module"\`.
+- **Validation at the boundary.** Untrusted input (request bodies) is validated
+  with a Zod schema via \`c.valid(Schema)\` before it is trusted — never deeper.
+- **Security on by default.** \`secure: { originCheck: {} }\` in \`lesto.app.ts\`
+  adds header-based CSRF; per-client rate-limiting is on by the kernel default.
+- **Pages infer their props.** Author a top-level \`const load = ...\` and type the
+  component with \`PageProps<typeof load>\` — declare the shape once.
+- **Islands hydrate on the client.** A component is interactive only if it is a
+  \`defineIsland\` under \`app/islands/\`; everything else is server-only.
+
+## Adding things
+
+- A page: \`app/routes/<path>/page.tsx\` (default-export a \`PageDef\`).
+- An API route: chain \`.get(path, handler)\` / \`.post(...)\` in \`lesto.app.ts\`.
+- A table: \`defineTable(...)\` in \`lesto.app.ts\` plus a \`MigrationEntry\`.
+- An interactive widget: \`app/islands/<name>.tsx\` (default-export \`defineIsland\`).
+`;
+}
+
+/**
+ * `CLAUDE.md` — Claude Code's project file. It defers to `AGENTS.md` so the
+ * conventions live in exactly one place (the open standard) rather than drifting
+ * across two files.
+ */
+export function claudeMd(name: string): string {
+  return `# ${name}
+
+See [\`AGENTS.md\`](./AGENTS.md) for this project's commands, layout, and
+conventions — it is the single source of truth for working in this codebase, for
+Claude Code and any other coding agent alike.
 `;
 }
 

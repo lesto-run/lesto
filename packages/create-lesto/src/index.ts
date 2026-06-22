@@ -17,7 +17,19 @@ export type { CreateLestoErrorCode } from "./errors";
 export { scaffold, fileColonPin, publishedRangePin } from "./scaffold";
 export type { ScaffoldIO, ScaffoldOptions } from "./scaffold";
 
+export { create } from "./create";
+export type {
+  CreateDeps,
+  CreateOptions,
+  CreateResult,
+  Prompter,
+  RunResult,
+  Runner,
+} from "./create";
+
 export {
+  agentsMd,
+  claudeMd,
   gitignore,
   islandCounter,
   lestoApp,
@@ -25,6 +37,8 @@ export {
   LESTO_PACKAGES,
   packageJson,
   readme,
+  routeLayout,
+  routePage,
   tsconfig,
   worker,
   wranglerConfig,
