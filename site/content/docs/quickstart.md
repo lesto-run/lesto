@@ -2,7 +2,7 @@
 title: Quickstart
 description: Scaffold a Lesto app, run it locally, and deploy it to Cloudflare.
 section: Getting started
-order: 1
+order: 2
 ---
 
 # Quickstart

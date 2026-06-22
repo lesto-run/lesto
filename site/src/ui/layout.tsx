@@ -11,6 +11,8 @@
 
 import type { ReactElement, ReactNode } from "react";
 
+import AnalyticsIsland from "../../app/islands/analytics";
+import CopyCodeIsland from "../../app/islands/copy-code";
 import SearchIsland from "../../app/islands/search";
 import { DOCS_CSS } from "./styles";
 
@@ -26,8 +28,18 @@ export function DocsLayout({ children }: { children: ReactNode }): ReactElement 
         <span className="spacer" />
         <SearchIsland />
         <nav>
-          <a href="/quickstart">Quickstart</a>
-          <a href="https://github.com/lesto-run/lesto">GitHub</a>
+          <a href="/quickstart" data-analytics="nav_quickstart">
+            Quickstart
+          </a>
+          <a href="/blog" data-analytics="nav_blog">
+            Blog
+          </a>
+          <a href="/changelog" data-analytics="nav_changelog">
+            Changelog
+          </a>
+          <a href="https://github.com/lesto-run/lesto" data-analytics="nav_github">
+            GitHub
+          </a>
         </nav>
       </header>
       {children}
@@ -35,6 +47,9 @@ export function DocsLayout({ children }: { children: ReactNode }): ReactElement 
         Built with Lesto — these pages are Markdown rendered by{" "}
         <code>@lesto/content-*</code> and prerendered to static HTML.
       </footer>
+      {/* Headless islands: boot client behavior, render nothing visible. */}
+      <AnalyticsIsland />
+      <CopyCodeIsland />
     </>
   );
 }

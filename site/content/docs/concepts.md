@@ -2,7 +2,7 @@
 title: Concepts
 description: How a Lesto app is shaped — the app builder, the kernel, pages and islands, sites, and one app across Node and the edge.
 section: Getting started
-order: 2
+order: 3
 ---
 
 # Concepts

@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildNav, loadDocs } from "../src/content";
+import { adjacentDocs, buildNav, loadBlog, loadChangelog, loadDocs } from "../src/content";
 
 describe("loadDocs", () => {
   it("loads every doc with a unique route and rendered HTML", async () => {
@@ -60,6 +60,7 @@ describe("buildNav", () => {
     expect(nav.map((section) => section.title)).toEqual([
       "Getting started",
       "Guides",
+      "Migrate",
       "Batteries",
       "Deploy",
       "Reference",
@@ -72,8 +73,66 @@ describe("buildNav", () => {
 
     expect(gettingStarted?.items.map((item) => item.title)).toEqual([
       "Introduction",
+      "Why Lesto",
       "Quickstart",
       "Concepts",
     ]);
+  });
+});
+
+describe("adjacentDocs", () => {
+  it("returns the prev/next pages in nav reading order across sections", async () => {
+    const nav = buildNav(await loadDocs());
+    const sequence = nav.flatMap((section) => section.items);
+    expect(sequence.length).toBeGreaterThan(2);
+
+    // The first page has no prev; the last has no next.
+    const first = sequence[0]!;
+    const last = sequence[sequence.length - 1]!;
+    expect(adjacentDocs(nav, first.route).prev).toBeUndefined();
+    expect(adjacentDocs(nav, last.route).next).toBeUndefined();
+
+    // An interior page links both ways, to its sidebar neighbors.
+    const second = sequence[1]!;
+    const { prev, next } = adjacentDocs(nav, second.route);
+    expect(prev?.route).toBe(first.route);
+    expect(next?.route).toBe(sequence[2]!.route);
+  });
+
+  it("returns undefined both ways for an unknown route", async () => {
+    const nav = buildNav(await loadDocs());
+    expect(adjacentDocs(nav, "/nope")).toEqual({ prev: undefined, next: undefined });
+  });
+});
+
+describe("loadBlog", () => {
+  it("loads posts newest-first with /blog/<slug> routes and rendered HTML", async () => {
+    const posts = await loadBlog();
+
+    expect(posts.length).toBeGreaterThanOrEqual(1);
+    for (const post of posts) {
+      expect(post.route).toBe(`/blog/${post.slug}`);
+      expect(post.html.length).toBeGreaterThan(0);
+      expect(post.date).toMatch(/^\d{4}-\d{2}-\d{2}/);
+    }
+
+    // Newest first: the dates descend.
+    const dates = posts.map((post) => post.date);
+    expect([...dates]).toEqual([...dates].toSorted().toReversed());
+  });
+});
+
+describe("loadChangelog", () => {
+  it("loads releases newest-first with a version and rendered HTML", async () => {
+    const releases = await loadChangelog();
+
+    expect(releases.length).toBeGreaterThanOrEqual(1);
+    for (const release of releases) {
+      expect(release.version.length).toBeGreaterThan(0);
+      expect(release.html.length).toBeGreaterThan(0);
+    }
+
+    const dates = releases.map((release) => release.date);
+    expect([...dates]).toEqual([...dates].toSorted().toReversed());
   });
 });

@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 
 import appConfig from "../lesto.app";
 import sites from "../lesto.sites";
-import { loadDocs } from "../src/content";
+import { loadBlog, loadDocs } from "../src/content";
 
 describe("buildStaticSites", () => {
   it("writes one 2xx HTML file per doc at its clean-URL path", async () => {
@@ -25,14 +25,22 @@ describe("buildStaticSites", () => {
     };
 
     const manifests = await buildStaticSites(sites, app.handle, sink);
-    const docs = await loadDocs();
+    const [docs, posts] = await Promise.all([loadDocs(), loadBlog()]);
 
     const pages = manifests.flatMap((manifest) => manifest.pages);
-    expect(pages.length).toBe(docs.length);
+    // Every doc, plus the blog index + one page per post, plus the (always-present)
+    // /blog and /changelog section pages.
+    const expected = docs.length + 1 + posts.length + 1;
+    expect(pages.length).toBe(expected);
     expect(pages.every((page) => page.status >= 200 && page.status < 300)).toBe(true);
 
     // The index lands at docs/index.html; a nested route at its directory index.
     expect(written.has("docs/index.html")).toBe(true);
     expect(written.get("docs/batteries/data/index.html")).toContain("Data · Lesto");
+
+    // The blog and changelog sections prerender too.
+    expect(written.has("docs/blog/index.html")).toBe(true);
+    expect(written.has("docs/changelog/index.html")).toBe(true);
+    expect(written.get("docs/blog/index.html")).toContain("Blog · Lesto");
   });
 });

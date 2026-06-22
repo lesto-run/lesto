@@ -18,6 +18,7 @@
     "@lesto/content-search": "workspace:*",
     "@lesto/kernel": "workspace:*",
     "@lesto/runtime": "workspace:*",
+    "@lesto/seo": "workspace:*",
     "@lesto/sites": "workspace:*",
     "@lesto/ui": "workspace:*",
     "@lesto/web": "workspace:*",

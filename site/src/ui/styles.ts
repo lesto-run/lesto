@@ -146,6 +146,84 @@ a:hover { text-decoration: underline; }
 .docs-sidebar a.active { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
 
 .docs-main { min-width: 0; }
+
+.docs-topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+.docs-crumbs { font-size: 0.82rem; color: var(--muted); }
+.docs-crumbs a { color: var(--muted); }
+.docs-crumbs .current { color: var(--fg); }
+.docs-actions { display: flex; align-items: center; gap: 0.4rem; }
+.docs-actions a, .docs-actions button {
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem 0.55rem;
+  cursor: pointer;
+  text-decoration: none;
+}
+.docs-actions a:hover, .docs-actions button:hover { color: var(--fg); border-color: var(--accent); text-decoration: none; }
+.docs-action-copy.copied { color: var(--accent); border-color: var(--accent); }
+
+.docs-prevnext { display: flex; justify-content: space-between; gap: 1rem; margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
+.docs-prevnext a { display: flex; flex-direction: column; gap: 0.2rem; padding: 0.75rem 1rem; border: 1px solid var(--border); border-radius: 10px; max-width: 48%; }
+.docs-prevnext a:hover { border-color: var(--accent); text-decoration: none; }
+.docs-prevnext .next { text-align: right; margin-left: auto; }
+.docs-prevnext .dir { font-size: 0.78rem; color: var(--muted); }
+.docs-prevnext .label { font-weight: 600; color: var(--fg); }
+
+/* Code blocks from @lesto/content-markdown (rehype-pretty-code + Shiki). The
+   framework emits the figure, the optional filename title, line markup, and a
+   self-contained copy button; the docs only style them. */
+.docs-article [data-rehype-pretty-code-figure] { position: relative; margin: 1.25rem 0; }
+.docs-article [data-rehype-pretty-code-figure] pre { margin: 0; }
+
+/* Filename label (a fenced block with title="lesto.app.ts") — a header tab atop the block. */
+.docs-article [data-rehype-pretty-code-title] {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  background: #161b22;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 10px 10px 0 0;
+  padding: 0.5rem 1rem;
+}
+.docs-article [data-rehype-pretty-code-title] + pre { border-radius: 0 0 10px 10px; }
+
+/* Line highlighting (a fenced block with {1,3-5}) — grid lines so the tint spans full width. */
+.docs-article [data-rehype-pretty-code-figure] code { display: grid; }
+.docs-article [data-line] { padding: 0 1.15rem; border-left: 2px solid transparent; }
+.docs-article [data-highlighted-line] {
+  background: rgba(139, 140, 240, 0.12);
+  border-left-color: var(--accent);
+}
+
+/* The framework's copy button: hover-revealed, with ready/copied labels. */
+.docs-article .rehype-pretty-copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  font: inherit;
+  font-size: 0.72rem;
+  color: #c9d1d9;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.docs-article [data-rehype-pretty-code-figure]:hover .rehype-pretty-copy,
+.docs-article .rehype-pretty-copy:focus { opacity: 1; }
+.docs-article .rehype-pretty-copy:hover { background: rgba(255, 255, 255, 0.16); }
+.docs-article .rehype-pretty-copy .ready::after { content: "Copy"; }
+.docs-article .rehype-pretty-copy .success { display: none; }
+.docs-article .rehype-pretty-copy .success::after { content: "Copied"; color: #7ee787; }
+.docs-article .rehype-pretty-copy.rehype-pretty-copied .ready { display: none; }
+.docs-article .rehype-pretty-copy.rehype-pretty-copied .success { display: inline; }
 .docs-article h1 { font-size: 2.1rem; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 1rem; }
 .docs-article h2 { font-size: 1.45rem; margin: 2.5rem 0 0.75rem; padding-top: 0.5rem; letter-spacing: -0.01em; }
 .docs-article h3 { font-size: 1.15rem; margin: 1.75rem 0 0.5rem; }
@@ -186,6 +264,22 @@ a:hover { text-decoration: underline; }
 .docs-toc .depth-3 { padding-left: 0.85rem; }
 
 .docs-footer { max-width: var(--max); margin: 0 auto; padding: 1.5rem 1.25rem 3rem; color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--border); }
+
+/* Blog + changelog: a centered, single-column prose frame (no docs sidebar). */
+.prose-shell { max-width: 720px; margin: 0 auto; padding: 2rem 1.25rem 4rem; min-width: 0; }
+.prose-shell > h1 { font-size: 2.1rem; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 0.5rem; }
+.prose-lede { color: var(--muted); font-size: 1.05rem; margin: 0 0 2rem; }
+.prose-back { font-size: 0.9rem; margin: 0 0 1rem; }
+.post-list { list-style: none; margin: 0; padding: 0; }
+.post-list li { padding: 1.25rem 0; border-bottom: 1px solid var(--border); }
+.post-list time { display: block; color: var(--muted); font-size: 0.82rem; }
+.post-link { display: inline-block; margin: 0.15rem 0; font-size: 1.2rem; font-weight: 650; color: var(--fg); letter-spacing: -0.01em; }
+.post-link:hover { color: var(--accent); text-decoration: none; }
+.post-list p { margin: 0.25rem 0 0; color: var(--muted); }
+.post-meta { color: var(--muted); font-size: 0.88rem; margin: 0 0 1.5rem; }
+.changelog-release { margin: 0 0 2.5rem; }
+.changelog-release h2 { font-size: 1.45rem; margin: 2rem 0 0.5rem; letter-spacing: -0.01em; }
+.changelog-release h2 time { color: var(--muted); font-size: 1rem; font-weight: 400; }
 
 .docs-404 { max-width: 640px; margin: 0 auto; padding: 6rem 1.25rem; text-align: center; }
 .docs-404 h1 { font-size: 3rem; margin: 0 0 0.5rem; }

@@ -10,13 +10,24 @@
 
 import { defineSites } from "@lesto/sites";
 
-import { loadDocs } from "./src/content";
+import { loadBlog, loadDocs } from "./src/content";
 
 export default defineSites([
   {
     name: "docs",
     render: "static",
     basePath: "/",
-    pages: async () => (await loadDocs()).map((doc) => doc.route),
+    // Every doc route, plus the blog index + one route per post, plus the
+    // changelog. Derived from the content collections at build time — add a
+    // Markdown file under content/{docs,blog,changelog}/ and it prerenders here.
+    pages: async () => {
+      const [docs, posts] = await Promise.all([loadDocs(), loadBlog()]);
+      return [
+        ...docs.map((doc) => doc.route),
+        "/blog",
+        ...posts.map((post) => post.route),
+        "/changelog",
+      ];
+    },
   },
 ]);

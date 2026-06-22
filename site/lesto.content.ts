@@ -42,4 +42,48 @@ const docs = defineCollection({
   render: { syntaxHighlighting: true },
 });
 
-export default defineConfig({ collections: [docs] });
+/** A blog post's frontmatter — drives the post list, the post page, and its meta. */
+export const blogFrontmatter = z.object({
+  /** The post title (its `<title>` and the visible heading source). */
+  title: z.string(),
+  /** A one-line summary — the list blurb and the meta description. */
+  description: z.string().optional(),
+  /** Publish date, ISO `YYYY-MM-DD`; the post list sorts on it, newest first. */
+  date: z.string(),
+  /** Optional byline. */
+  author: z.string().optional(),
+});
+
+/** The shape of a validated blog post's frontmatter. */
+export type BlogFrontmatter = z.infer<typeof blogFrontmatter>;
+
+const blog = defineCollection({
+  name: "blog",
+  directory: "content/blog",
+  include: "**/*.md",
+  schema: blogFrontmatter,
+  render: { syntaxHighlighting: true },
+});
+
+/** A changelog entry's frontmatter — one file per release, listed newest first. */
+export const changelogFrontmatter = z.object({
+  /** The release version (e.g. `0.1.0`) or `Unreleased`. */
+  version: z.string(),
+  /** Release date, ISO `YYYY-MM-DD` (the date the changes landed / are targeted). */
+  date: z.string(),
+  /** Optional one-line headline for the release. */
+  title: z.string().optional(),
+});
+
+/** The shape of a validated changelog entry's frontmatter. */
+export type ChangelogFrontmatter = z.infer<typeof changelogFrontmatter>;
+
+const changelog = defineCollection({
+  name: "changelog",
+  directory: "content/changelog",
+  include: "**/*.md",
+  schema: changelogFrontmatter,
+  render: { syntaxHighlighting: true },
+});
+
+export default defineConfig({ collections: [docs, blog, changelog] });
