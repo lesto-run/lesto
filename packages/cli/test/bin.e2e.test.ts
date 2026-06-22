@@ -199,6 +199,10 @@ describe("bin e2e", () => {
 
       expect(pageResponse.status).toBe(200);
       expect(html).toContain("new WebSocket(");
+      // ...AND the injected client is the dev ERROR-OVERLAY client (dev-overlay.ts),
+      // not a bare reloader: the booted bin ships the overlay renderer, so a pushed
+      // build/reload failure paints `#__lesto_dev_overlay__` in the page.
+      expect(html).toContain("__lesto_dev_overlay__");
     } finally {
       child.kill("SIGTERM");
     }

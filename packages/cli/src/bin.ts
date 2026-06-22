@@ -34,6 +34,7 @@ import { createApp } from "@lesto/kernel";
 
 import { run } from "./run";
 import type { CliDeps, CloudflareDeployer, DevError, ReleaseTarget } from "./run";
+import { devReloadClientScript } from "./dev-overlay";
 import { CliError } from "./errors";
 import { WRANGLER_DEPLOY_ARGS, WRANGLER_ROLLBACK_MESSAGE, wranglerRollbackArgs } from "./wrangler";
 import { runMcp, startMcpServer } from "./mcp";
@@ -422,33 +423,11 @@ const buildLiveReload = (): {
     server = undefined;
   }
 
-  // The injected client: connect to the reload socket; on a `reload` message (or a
-  // dropped connection) reload the page, on an `error` message paint the overlay.
-  // Every dynamic field is set via `textContent`, so the error text is inert markup —
-  // no escaping, no injection. Inlined so no asset fetch is needed and it runs the
-  // moment the document parses. `${LIVE_RELOAD_PORT}` is the only interpolation.
-  const script = `(()=>{try{
-const ID="__lesto_dev_overlay__";
-const clear=()=>{const el=document.getElementById(ID);if(el)el.remove();};
-const sty=(el,css)=>el.setAttribute("style",css);
-const show=(d)=>{clear();
-const o=document.createElement("div");o.id=ID;
-sty(o,"position:fixed;inset:0;z-index:2147483647;background:rgba(8,8,12,.94);color:#f4f4f5;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;padding:6vh 24px;overflow:auto;");
-const card=document.createElement("div");sty(card,"max-width:940px;margin:0 auto;");
-const tag=document.createElement("div");sty(tag,"color:#ff7b7b;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:14px;");
-tag.textContent="lesto dev — "+(d.source||"error");
-const msg=document.createElement("div");sty(msg,"font-size:16px;color:#ffe1e1;white-space:pre-wrap;margin-bottom:18px;");
-msg.textContent=d.message||"Unknown dev error";
-card.appendChild(tag);card.appendChild(msg);
-if(d.stack){const pre=document.createElement("pre");sty(pre,"white-space:pre-wrap;color:#d4d4d8;background:rgba(255,255,255,.06);padding:16px;border-radius:8px;overflow:auto;margin:0;");pre.textContent=d.stack;card.appendChild(pre);}
-const hint=document.createElement("div");sty(hint,"margin-top:18px;color:#8a8a93;");
-hint.textContent="Fix and save — this clears on the next successful build. Press Esc to dismiss.";
-card.appendChild(hint);o.appendChild(card);(document.body||document.documentElement).appendChild(o);};
-addEventListener("keydown",(e)=>{if(e.key==="Escape")clear();});
-const c=()=>{const s=new WebSocket("ws://"+location.hostname+":${LIVE_RELOAD_PORT}");
-s.onmessage=(e)=>{let d;try{d=JSON.parse(e.data);}catch{location.reload();return;}if(d&&d.type==="error")show(d);else location.reload();};
-s.onclose=()=>setTimeout(c,1000);};c();
-}catch{}})();`;
+  // The injected client (see `dev-overlay.ts`): connect to the reload socket; on a
+  // `reload` message (or a dropped connection) reload the page, on an `error` message
+  // paint the overlay. Extracted to a pure builder so its DOM rendering is unit-tested
+  // against a fake socket — this bin injects exactly that tested output.
+  const script = devReloadClientScript(LIVE_RELOAD_PORT);
 
   return {
     script,
