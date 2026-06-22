@@ -412,11 +412,19 @@ describe("templates", () => {
     expect(parsed.include).toContain("app");
   });
 
-  it("gitignore ignores node_modules and the db file", () => {
+  it("gitignore ignores node_modules, the db file, and SECRETS (.env*), but keeps .env.example", () => {
     const out = gitignore();
+    const lines = out.split("\n");
 
     expect(out).toContain("node_modules/");
     expect(out).toContain("*.db");
+
+    // Secrets must not be committable: Bun auto-loads `.env`/`.env.local` into
+    // process.env, so they hold secrets and must be ignored — every `.env` variant.
+    expect(lines).toContain(".env");
+    expect(lines).toContain(".env.*");
+    // ...except the secret-free template, re-included by negation.
+    expect(lines).toContain("!.env.example");
   });
 
   it("readme names the project", () => {
