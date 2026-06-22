@@ -17,8 +17,11 @@
  * What this is NOT (so the doc never over-promises): it is NOT full Weft. There is
  * no schema-INFERRED invalidation (a mutation does not know which queries it
  * dirties — you invalidate by key, explicitly), no normalized `(table, pk)` store,
- * and no automatic background revalidation. Those are the ADR 0027 bet; this is the
- * thin hook layer that an app can adopt now and that Weft can later back.
+ * no automatic background revalidation, and no cache EVICTION — a key's snapshot +
+ * last-fetcher live for the page's lifetime (bounded by the distinct keys an app
+ * queries; fine for a per-session SPA, revisit if a long-lived app accumulates many).
+ * Those are the ADR 0027 bet; this is the thin hook layer an app adopts now and Weft
+ * can later back.
  *
  * Decoupled by design: the hooks never import `@lesto/client`. The caller passes a
  * `fetcher` / `mutationFn` thunk (typically closing over a `createApi` /
