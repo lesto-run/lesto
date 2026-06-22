@@ -61,12 +61,15 @@ function Breadcrumbs({ doc }: { doc: DocEntry }): ReactElement {
  * copy-code island wires up on the client.
  */
 function PageActions({ doc }: { doc: DocEntry }): ReactElement {
-  const mdUrl = `${SITE_URL}/${markdownPath(doc.route)}`;
-  const chatPrompt = `Read ${mdUrl} and help me with it.`;
+  // Relative path for the same-origin runtime fetch + the in-page link (works on
+  // any host the site is served from); absolute canonical URL only for the
+  // assistant prompt, which an external tool resolves against the real home.
+  const mdPath = `/${markdownPath(doc.route)}`;
+  const chatPrompt = `Read ${SITE_URL}${mdPath} and help me with it.`;
   return (
     <div className="docs-actions">
-      <a href={`/${markdownPath(doc.route)}`}>View as Markdown</a>
-      <button type="button" className="docs-action-copy" data-copy-md={mdUrl}>
+      <a href={mdPath}>View as Markdown</a>
+      <button type="button" className="docs-action-copy" data-copy-md={mdPath}>
         Copy as Markdown
       </button>
       <a
