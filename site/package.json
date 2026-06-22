@@ -8,6 +8,8 @@
     "dev": "lesto dev",
     "build": "bun run build.ts",
     "deploy": "bun run build.ts && wrangler deploy",
+    "agents": "lesto generate agents",
+    "agents:check": "lesto generate agents --check",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -28,5 +30,8 @@
     "react": "^19",
     "react-dom": "^19",
     "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@lesto/cli": "workspace:*"
   }
 }

@@ -13,6 +13,7 @@
  * Cloudflare Worker serves the whole `out/docs/` tree as static assets.
  */
 
+import { spawnSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -32,6 +33,26 @@ import { buildSearchIndex } from "./src/search-index";
 const PROJECT_ROOT = process.cwd();
 const OUT_DIR = "out";
 const SITE_OUT = join(OUT_DIR, "docs");
+
+// 0. Agent-legibility drift gate — dogfood `lesto generate agents` (ADR 0035). The
+//    committed AGENTS.md + the PROJECT llms.txt must match the app's current
+//    conventions (routes, islands, content collections, CLI surface); drift means a
+//    convention changed without regenerating, so fail the build rather than ship a
+//    stale agent guide. This is the convention-scan PROJECT index — distinct from the
+//    docs `llms.txt` (the content corpus index) this build writes to out/docs/ below,
+//    so the two never clobber one path. Regenerate with `bun run agents`.
+const drift = spawnSync("lesto", ["generate", "agents", "--check"], {
+  cwd: PROJECT_ROOT,
+  stdio: "inherit",
+});
+
+if (drift.status !== 0) {
+  console.error(
+    "\nAGENTS.md / llms.txt are stale — run `bun run agents` and commit the result.",
+  );
+
+  process.exit(1);
+}
 
 const app = await createApp(appConfig);
 

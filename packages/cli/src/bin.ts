@@ -20,7 +20,7 @@ import { applyFileRoutes, generateRouteManifest, loadFileRoutes } from "@lesto/w
 import type { UiDialect } from "@lesto/web";
 import type { TraceSeams } from "@lesto/observability";
 
-import type { RuntimeEntry } from "@lesto/content-core";
+import type { EngineConfig, RuntimeEntry } from "@lesto/content-core";
 
 import { nodeSink } from "@lesto/sites";
 import type { Site } from "@lesto/sites";
@@ -554,6 +554,25 @@ const loadContentStore = async () => {
 const buildContent = async (): Promise<readonly RuntimeEntry[]> =>
   (await (await loadContentCore()).runPipeline({ skipWrite: true })).entries;
 
+// The project's content collections, for the agent artifacts' inventory (`generate
+// agents`). Sources them the way the app's OWN code does (e.g. `site/src/content.ts`):
+// load `lesto.content.ts` and run the build pipeline, so the artifact lists exactly the
+// collections the app builds from, with accurate per-collection entry counts. A project
+// with NO `lesto.content.ts` is content-free — yield an empty run (the reader groups it
+// to no collections); a genuine pipeline failure (bad frontmatter, an unreadable file)
+// propagates to the reader's `onError` sink rather than being mistaken for "no content".
+const CONTENT_CONFIG_PATH = join(projectRoot, "lesto.content.ts");
+
+const readContentConfig = async (): Promise<{ entries: readonly RuntimeEntry[] }> => {
+  // `dirExists` is a bare existence probe (works for a file too): no config → no content.
+  if (!(await dirExists(CONTENT_CONFIG_PATH))) return { entries: [] };
+
+  const { default: config } = (await import(CONTENT_CONFIG_PATH)) as { default: EngineConfig };
+  const { runPipeline } = await loadContentCore();
+
+  return runPipeline({ cwd: projectRoot, config, skipWrite: true });
+};
+
 const createEntry = async (collection: string, title: string): Promise<void> =>
   (await loadContentCore()).createNewEntry(process.cwd(), collection, title);
 
@@ -663,9 +682,8 @@ if (command === "generate" || command === "g") {
       ...generateIO,
       readRoutes: readAgentRoutes,
       readIslands: readAgentIslands,
-      readCollections: createCollectionsReader(
-        () => import("@lesto/content-core"),
-        (error) => console.warn(`lesto: content collections unavailable — ${String(error)}`),
+      readCollections: createCollectionsReader(readContentConfig, (error) =>
+        console.warn(`lesto: content collections unavailable — ${String(error)}`),
       ),
       summary: { framework: "lesto" },
       out: console.log,

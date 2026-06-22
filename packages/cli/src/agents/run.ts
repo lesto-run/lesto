@@ -36,91 +36,57 @@ import type { AppSummary, CollectionDescriptor, RouteDescriptor } from "./types"
 const AGENTS_PATH = "AGENTS.md";
 const LLMS_PATH = "llms.txt";
 
-/** The collection shape `@lesto/content-core`'s `getCollections` yields. */
-interface RawCollection {
-  readonly name: string;
-
-  readonly entries: readonly unknown[];
+/** One entry the content pipeline yields, reduced to the only field this reader groups on. */
+interface PipelineEntry {
+  readonly collection: string;
 }
 
-/** The slice of the optional `@lesto/content-core` peer the collections reader needs. */
-interface ContentCoreModule {
-  readonly getCollections: () => readonly RawCollection[];
+/** The content-pipeline result the collections reader consumes (`@lesto/content-core`'s `runPipeline`). */
+interface ContentPipelineRun {
+  readonly entries: readonly PipelineEntry[];
 }
 
 /**
- * Build the collections reader, degrading to "no collections" rather than failing
- * when `@lesto/content-core` (an optional peer) is absent OR its compiled store is
- * not built yet.
+ * Build the collections reader from an injected "run the content pipeline" thunk —
+ * the SAME source an app's own content code uses (`runPipeline` over the project's
+ * `lesto.content.ts`), so the artifact lists exactly the collections the app builds
+ * from, with accurate per-collection entry counts.
  *
- * The peer import is INJECTED (the bin passes `() => import("@lesto/content-core")`)
- * so this stays a pure, fully-tested function: a rejected import (peer absent) and a
- * throwing `getCollections` (store unbuilt) both resolve to an empty list, because a
- * project simply may not use content — that is not an error, and `--check` must stay
- * deterministic regardless of whether the store happens to be built.
+ * The thunk is INJECTED (the bin loads `lesto.content.ts` + runs `@lesto/content-core`'s
+ * `runPipeline`), so this stays a pure, fully-tested function: it just groups the flat
+ * entry list by collection name into counts. A content-FREE app is the bin's concern —
+ * it yields an empty run (no `lesto.content.ts`), which groups to no collections; this
+ * function never has to know whether content is installed.
  *
- * The optional `onError` sink is handed the swallowed cause ONLY when it is an
- * UNEXPECTED failure (see {@link isBenignContentAbsence}): the bin wires it to a
- * warning, so a genuine content-core breakage leaves a trace — but the two ordinary
- * absences (peer not installed, store not yet initialized) pass quietly, so the
- * warning keeps its signal value instead of crying wolf on every doc-gen run.
+ * Any failure (a genuine pipeline error — bad frontmatter, an unreadable file) degrades
+ * to "no collections" so `--check` stays deterministic, but is surfaced through the
+ * optional `onError` sink (the bin wires a warning) rather than swallowed silently.
  */
 export function createCollectionsReader(
-  importContentCore: () => Promise<ContentCoreModule>,
+  runContentPipeline: () => Promise<ContentPipelineRun>,
   onError?: (error: unknown) => void,
 ): () => Promise<readonly CollectionDescriptor[]> {
   return async () => {
     try {
-      const mod = await importContentCore();
+      const { entries } = await runContentPipeline();
 
-      return mod.getCollections().map((collection) => ({
-        name: collection.name,
-        entryCount: collection.entries.length,
-      }));
+      // Count entries per collection in first-seen order; the scan re-sorts by name,
+      // so the order here is not load-bearing.
+      const counts = new Map<string, number>();
+
+      for (const entry of entries) {
+        counts.set(entry.collection, (counts.get(entry.collection) ?? 0) + 1);
+      }
+
+      return [...counts].map(([name, entryCount]) => ({ name, entryCount }));
     } catch (error) {
-      // Degrade to "no collections" either way — content is optional. Surface the
-      // cause through the optional sink ONLY when it is NOT one of the expected,
-      // benign absences (peer not installed, or its store not yet initialized — the
-      // norm at doc-gen time). Reporting those would fire on every ordinary run and
-      // drown the signal the sink exists for: a real failure inside a BUILT content-core.
-      if (!isBenignContentAbsence(error)) onError?.(error);
+      // A real pipeline failure — degrade so the rest of the artifact still generates,
+      // but surface the cause (the bin passes a `console.warn`) so it is not lost.
+      onError?.(error);
 
       return [];
     }
   };
-}
-
-/**
- * Whether a swallowed collections error is one of the EXPECTED, benign "this app
- * just isn't serving content here" causes — as opposed to a real breakage inside an
- * installed, built content-core. Two benign shapes:
- *
- *   - content-core is present but its runtime store hasn't been initialized — the
- *     normal state at doc-gen time, since `generate agents` never boots the app that
- *     would populate it (`getCollections` throws "Content data not initialized");
- *   - the optional peer itself isn't installed: a module-resolution miss
- *     (`ERR_MODULE_NOT_FOUND`) naming the `@lesto/content-` family. Anchored on the
- *     missing specifier (the same discipline the bin's `rethrowUnlessMissingContentPeer`
- *     uses) so a missing TRANSITIVE dep of an INSTALLED content-core is NOT mistaken
- *     for "content-core absent" — that is a genuine breakage worth surfacing.
- *
- * Anything else (a non-`Error` throw, an unrelated code, a real failure from a built
- * store) is unexpected and flows to the caller's `onError`.
- */
-function isBenignContentAbsence(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-
-  // content-core present, runtime store not yet initialized (the doc-gen norm).
-  if (error.message.includes("Content data not initialized")) return true;
-
-  // The optional peer itself isn't installed (the missing specifier is in the message).
-  if ("code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
-    const missing = /Cannot find (?:package|module) '([^']+)'/.exec(error.message)?.[1];
-
-    return missing?.startsWith("@lesto/content-") ?? false;
-  }
-
-  return false;
 }
 
 /** The injected seams `runGenerateAgents` needs — all I/O, so the core stays pure. */

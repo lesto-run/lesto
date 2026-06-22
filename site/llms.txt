@@ -1,0 +1,31 @@
+# Lesto app
+
+> Machine-readable index of this Lesto app's routes, islands, content collections, and CLI commands.
+
+## Islands
+- `analytics`
+- `copy-code`
+- `package-tabs`
+- `search`
+
+## Content collections
+- `blog` (4 entries)
+- `changelog` (1 entry)
+- `docs` (38 entries)
+
+## CLI commands
+- `lesto build`: Prerender the static sites to disk
+- `lesto content:build`: Compile markdown content into the content store
+- `lesto content:delete`: Delete a content entry from the store
+- `lesto content:new`: Scaffold a new content entry
+- `lesto deploy`: Build and ship the app (--cloudflare for the one-command edge deploy)
+- `lesto dev`: Run every site live on one origin for local development
+- `lesto generate` (alias `g`): Scaffold a resource (model | migration | island | page)
+- `lesto help`: Show the usage help
+- `lesto mcp`: Run the MCP control-plane server over stdio
+- `lesto migrate`: Run pending migrations and print the applied versions
+- `lesto openapi`: Emit the application's OpenAPI document
+- `lesto rollback`: Flip the live pointer to a published release
+- `lesto routes`: List the application's routes
+- `lesto routes:gen`: Regenerate the edge route manifest (routes.gen.ts) from app/routes/
+- `lesto serve`: Boot the app over HTTP

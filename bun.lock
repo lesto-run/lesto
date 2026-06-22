@@ -879,6 +879,9 @@
         "react-dom": "^19",
         "zod": "^4.0.0",
       },
+      "devDependencies": {
+        "@lesto/cli": "workspace:*",
+      },
     },
   },
   "packages": {
