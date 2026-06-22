@@ -90,8 +90,17 @@ below) — this blocks filling correct provenance/repo metadata.
        `files: ["src"]`. _(982a62d, 85ad687)_
 4. [x] Reconcile content-\* metadata (gap B): removed the Docks repo/homepage/author + the
        `dist` `main`/`module`/`types`. _(982a62d)_
-5. [ ] **Decide preview trim** (open): a hello-world app drags in `content-*` packages tagged
-       PREVIEW in ARCHITECTURE.md (dependency-shape change, tracked separately).
+5. [x] **Preview trim — DONE (`a0d5f95`, 2026-06-22).** A hello-world dragged in 7 `content-*`
+       packages via the single edge `@lesto/cli → @lesto/mcp → content-core + content-store`.
+       Made content an OPTIONAL PEER of `@lesto/mcp` (mirroring `@lesto/cli`'s existing pattern):
+       the 6 content MCP tools lazy-load the peers through an injected seam (real dynamic import
+       in the coverage-excluded `server.ts`), refusing with `MCP_CONTENT_PACKAGES_MISSING` when
+       absent; the 3 generic tools (`list_routes`/`handle_request`/`generate_ui`) are unaffected.
+       Result: the required closure dropped **30 → 23** (zero `content-*`); a scaffolded app's
+       `npm install` went **410 → 157 packages**, verified by pack-and-boot. `content-*` stay
+       PUBLIC as opt-in add-ons (`npm i @lesto/content-core @lesto/content-store`), so the
+       RELEASING.md closure list (28, incl. content-*) now lists the PUBLISHABLE set, broader
+       than the auto-installed-required set (23). mcp at 100% cov; cli typecheck green.
 6. [x] `LESTO_DEP_RANGE` is `^0.1.0` — satisfies the published `0.1.0` (`^0.1.0` resolves
        `0.1.x`). No change needed; bump in lockstep if the surface's minor moves.
 7. [x] The `bun pm pack` → scaffold-from-tarball → boot CI job EXISTS (`ci.yml` job
@@ -140,12 +149,12 @@ the proof is verified green. The real open items:
   assume a connected GitHub repo — so the CI publish can't run until the remote is created +
   pushed, OR publish locally with `bun run release` + `NPM_TOKEN` (still gated on
   `RELEASE_ENABLED`). Decide the publish venue before the morning-of.
-- **Closure is 30, not 28.** The real transitive runtime closure of the scaffold's 9
-  `LESTO_PACKAGES` is 30 `@lesto/*` — RELEASING.md's list omits `@lesto/cloudflare` (a direct
-  scaffold dep) and `@lesto/pg` (pulled by `@lesto/db`). Both are already `private:false`, so
-  nothing breaks; the RELEASING.md closure list is just stale by two names.
-- **Preview trim (step 5) is a real, non-breaking quality gap:** a hello-world transitively
-  pulls 7 content-* packages (content-core/embeddings/markdown/search/shared/store/umbra).
-  All public, so install resolves — but it's preview-tagged bloat in a default app.
+- **Required closure is now 23** (was 30 before the content trim). The pre-trim count was 30,
+  not the 28 RELEASING.md lists (its list omits `@lesto/cloudflare` + `@lesto/pg`); after the
+  content trim (step 5, `a0d5f95`) the 7 `content-*` packages drop out, leaving 23 auto-installed.
+  `content-*` remain PUBLISHABLE (public, opt-in), so RELEASING.md's list still names a valid
+  superset — just relabel it "publishable" vs "required". Worth a one-line RELEASING.md fix later.
+- ✅ **Preview trim (step 5) — DONE** (`a0d5f95`): content is now an optional peer of `@lesto/mcp`;
+  a hello-world install went 410 → 157 packages, zero content-* in the required closure.
 - Names re-checked 2026-06-22: `create-lesto`, `lesto`, `@lesto/{cli,web,ui,client}` all `E404`
   (free). Re-run the full closure on the morning of publish.
