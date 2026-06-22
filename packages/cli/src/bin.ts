@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 
 import { nodeStaticReader, serve } from "@lesto/runtime";
 import type { LestoAppConfig } from "@lesto/kernel";
-import { scanRoutes } from "@lesto/router";
+import { compileFileRoutes, scanRoutes } from "@lesto/router";
 import { applyFileRoutes, generateRouteManifest, loadFileRoutes } from "@lesto/web";
 import type { UiDialect } from "@lesto/web";
 import type { TraceSeams } from "@lesto/observability";
@@ -40,6 +40,9 @@ import { WRANGLER_DEPLOY_ARGS, WRANGLER_ROLLBACK_MESSAGE, wranglerRollbackArgs }
 import { runMcp, startMcpServer } from "./mcp";
 import { runOpenApi } from "./openapi";
 import { runGenerate } from "./generate";
+import type { GenerateIO } from "./generate";
+import { createCollectionsReader, runGenerateAgents } from "./agents/run";
+import type { RouteDescriptor } from "./agents/types";
 
 /**
  * Run a `wrangler` subcommand, streaming its output and resolving with the
@@ -286,6 +289,20 @@ const regenerateRoutes = async (): Promise<{ path: string; count: number } | und
   return { path: ROUTES_MANIFEST, count: files.length };
 };
 
+// The route descriptors under `app/routes/`, for the agent artifacts' route map
+// (`generate agents`): the SAME real `fs` scan the route applier uses, compiled to
+// `{ kind, pattern }` by `@lesto/router`'s `compileFileRoutes`. No per-file
+// `import()` — the artifacts list only each route's kind and URL, never its module —
+// so the scan stays fast and side-effect-free. Absent `app/routes/` → no routes.
+const readAgentRoutes = async (): Promise<readonly RouteDescriptor[]> => {
+  if (!(await dirExists(routesDir))) return [];
+
+  return compileFileRoutes(await scanRoutesDir()).map((route) => ({
+    kind: route.kind,
+    pattern: route.pattern,
+  }));
+};
+
 // Watch `app/routes/` and fire `onChange` at most once per debounce window, like
 // `watchIslands` — so a burst of saves coalesces into one re-load. Absent dir → a
 // no-op stop handle (dev still runs; there is just nothing to watch).
@@ -324,6 +341,32 @@ const hasIslandsDir = async (): Promise<boolean> => {
   } catch {
     return false;
   }
+};
+
+// The island module file extensions an `app/islands/` directory may hold — the same
+// set `@lesto/assets` recognizes (`bun.ts` `ISLAND_EXTENSIONS`).
+const ISLAND_MODULE_EXT = /\.(?:tsx|ts|jsx|js)$/;
+
+// The island module names under `app/islands/`, for the agent artifacts' island
+// inventory (`generate agents`). A GLOB, not an `import()`: the basenames (the
+// extension and any co-located `.test`/`.spec` or `.d.ts` dropped, hidden files
+// skipped) are the agent-legible module names, derivable without loading the
+// components — so the doc scan has no side effects and no React/Preact cost. Absent
+// `app/islands/` → no islands.
+const readAgentIslands = async (): Promise<readonly string[]> => {
+  if (!(await hasIslandsDir())) return [];
+
+  const entries = await readdir(islandsDir);
+
+  return entries
+    .filter(
+      (name) =>
+        !name.startsWith(".") &&
+        !name.endsWith(".d.ts") &&
+        !/\.(?:test|spec)\.[jt]sx?$/.test(name) &&
+        ISLAND_MODULE_EXT.test(name),
+    )
+    .map((name) => name.replace(ISLAND_MODULE_EXT, ""));
 };
 
 // Build the island client bundle with @lesto/assets. The CLI core's "dev" mode
@@ -580,28 +623,59 @@ if (command === "openapi") {
   process.exit(exit);
 }
 
+// The project-rooted filesystem seam every `generate` flavor shares: an `exists`
+// probe (for idempotency / drift), a reader (to tell "unchanged" from "differs"),
+// and a parent-dir-creating writer. Each path is absolute against the project root,
+// so files land in the project regardless of cwd.
+const generateIO: GenerateIO = {
+  exists: async (path) => {
+    try {
+      await access(join(projectRoot, path));
+
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  read: (path) => readFile(join(projectRoot, path), "utf8"),
+  write: async (path, contents) => {
+    const absolute = join(projectRoot, path);
+
+    await mkdir(dirname(absolute), { recursive: true });
+    await writeFile(absolute, contents, "utf8");
+  },
+};
+
 // `generate` (alias `g`) scaffolds a resource (ADR 0019). It lives here, before
-// the shared `run` core, because it brings its own filesystem seam: an `exists`
-// probe (for idempotency) and a parent-dir-creating `write`. Both are absolute
-// against the project root, so the files land in the project regardless of cwd.
+// the shared `run` core, because it brings its own filesystem seam (`generateIO`).
 if (command === "generate" || command === "g") {
+  // `generate agents` (`g agents`) is a WHOLE-APP generator: it scans the app's
+  // conventions into `AGENTS.md` + `llms.txt` (ADR 0035) rather than scaffolding one
+  // named resource, so it has its own orchestrator and is intercepted here before
+  // the per-resource `runGenerate` (whose generator set would reject `agents`). The
+  // route + island readers are the real `fs` scans; content collections degrade to
+  // empty when content-core is absent or its runtime store is uninitialized — the
+  // expected case at doc-gen time — with a genuine breakage surfaced to stderr. The
+  // UI dialect is omitted on purpose: the artifacts stay useful without evaluating
+  // `lesto.app.ts` (and its boot side effects) just to stamp a dialect line.
+  if (commandArgs[0] === "agents") {
+    const exit = await runGenerateAgents(commandArgs.slice(1), {
+      ...generateIO,
+      readRoutes: readAgentRoutes,
+      readIslands: readAgentIslands,
+      readCollections: createCollectionsReader(
+        () => import("@lesto/content-core"),
+        (error) => console.warn(`lesto: content collections unavailable — ${String(error)}`),
+      ),
+      summary: { framework: "lesto" },
+      out: console.log,
+    });
+
+    process.exit(exit);
+  }
+
   const exit = await runGenerate(commandArgs, {
-    exists: async (path) => {
-      try {
-        await access(join(projectRoot, path));
-
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    read: (path) => readFile(join(projectRoot, path), "utf8"),
-    write: async (path, contents) => {
-      const absolute = join(projectRoot, path);
-
-      await mkdir(dirname(absolute), { recursive: true });
-      await writeFile(absolute, contents, "utf8");
-    },
+    ...generateIO,
     now: Date.now,
     out: console.log,
   });

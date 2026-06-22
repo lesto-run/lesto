@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -62,6 +62,15 @@ function collect(child: ChildProcess): Promise<SpawnResult> {
  */
 function runBin(args: readonly string[]): Promise<SpawnResult> {
   return collect(spawn("bun", [binPath, ...args], { cwd: fixtureDir }));
+}
+
+/**
+ * Spawn the real bin against an ARBITRARY cwd — used by `generate agents`, which
+ * writes `AGENTS.md` / `llms.txt` into the cwd (no `--out` redirect), so its e2e
+ * must run inside a throwaway temp project rather than the committed fixture dir.
+ */
+function runBinIn(cwd: string, args: readonly string[]): Promise<SpawnResult> {
+  return collect(spawn("bun", [binPath, ...args], { cwd }));
 }
 
 /**
@@ -254,4 +263,54 @@ describe("bin e2e", () => {
     expect(back.code, back.stderr).toBe(0);
     expect(back.stdout).toContain("rolled back: v2 → v1");
   }, 60_000);
+
+  it("generate agents: scans the app's conventions into AGENTS.md + llms.txt, and --check passes when fresh", async () => {
+    // A throwaway project TREE: file routes + an island. `generate agents` reads the
+    // directory STRUCTURE (it never imports these modules — routes compile from the
+    // scan, islands glob by basename), so stub bodies are enough to drive the real
+    // fs scan + glob wiring the unit tests inject fakes for. Run in its own temp dir
+    // because the artifacts are written cwd-relative, with no `--out` redirect.
+    const project = await mkdtemp(join(tmpdir(), "lesto-agents-e2e-"));
+
+    try {
+      await mkdir(join(project, "app", "routes", "blog", "[slug]"), { recursive: true });
+      await mkdir(join(project, "app", "islands"), { recursive: true });
+      await writeFile(join(project, "app", "routes", "page.tsx"), "export default {};\n");
+      await writeFile(
+        join(project, "app", "routes", "blog", "[slug]", "page.tsx"),
+        "export default {};\n",
+      );
+      await writeFile(join(project, "app", "islands", "counter.tsx"), "export default {};\n");
+
+      const gen = await runBinIn(project, ["generate", "agents"]);
+
+      expect(gen.code, gen.stderr).toBe(0);
+      expect(gen.stdout).toContain("wrote AGENTS.md");
+      expect(gen.stdout).toContain("wrote llms.txt");
+
+      const agentsMd = await readFile(join(project, "AGENTS.md"), "utf8");
+      const llmsTxt = await readFile(join(project, "llms.txt"), "utf8");
+
+      // The route compiled from the real `app/routes/blog/[slug]/` scan (the `[slug]`
+      // dynamic segment → `:slug`), the globbed island, and the CLI surface all land
+      // in the generated guide — proving the bin's real readers, not a fake.
+      expect(agentsMd).toContain("# Agent guide");
+      expect(agentsMd).toContain("/blog/:slug");
+      expect(agentsMd).toContain("counter");
+      expect(agentsMd).toContain("generate");
+
+      // The project index is the OTHER artifact, with its own distinguishing header.
+      expect(llmsTxt).toContain("# Lesto app");
+      expect(llmsTxt).toContain("/blog/:slug");
+
+      // A second run via the `g` alias with --check finds the artifacts fresh and
+      // exits 0 — the CI drift gate, byte-stable across runs.
+      const check = await runBinIn(project, ["g", "agents", "--check"]);
+
+      expect(check.code, check.stderr).toBe(0);
+      expect(check.stdout).toContain("agent files are up to date");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
