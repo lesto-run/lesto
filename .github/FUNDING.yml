@@ -1,0 +1,12 @@
+# Funding sources for Lesto — surfaced as a "Sponsor" button on the repository.
+# Docs: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+#
+# Every entry below is commented out on purpose: with none active, GitHub shows
+# NO Sponsor button (better than a button that 404s). When a funding account
+# exists, uncomment the relevant line(s) and fill in the handle. `lesto-run` is
+# the canonical org slug.
+
+# github: [lesto-run]                     # GitHub Sponsors (enable Sponsors for the org first)
+# open_collective: lesto                  # Open Collective slug
+# ko_fi: lesto                            # Ko-fi username
+# custom: ["https://lesto.run/sponsor"]   # any other URL(s)

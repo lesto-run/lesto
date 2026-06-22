@@ -29,7 +29,7 @@ Instead, report privately through one of:
 - **GitHub private vulnerability reporting** — on the repository's **Security**
   tab, choose **Report a vulnerability**. This opens a private advisory visible
   only to you and the maintainers. This is the preferred channel.
-- **Email** — `security@lesto.dev` with the details below. If you do not receive
+- **Email** — `security@lesto.run` with the details below. If you do not receive
   an acknowledgement within 3 business days, follow up through GitHub private
   reporting.
 

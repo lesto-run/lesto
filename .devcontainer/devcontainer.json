@@ -1,0 +1,37 @@
+{
+  // Try Lesto with zero local install: open this repo in a GitHub Codespace and
+  // everything below is provisioned for you. A real Linux container (not a
+  // browser sandbox) — so Bun and the native better-sqlite3 addon both work,
+  // which WebContainer-based playgrounds (StackBlitz) cannot run.
+  "name": "Lesto",
+
+  // Node 22 (the repo targets `node >= 22`) — present for better-sqlite3's native
+  // addon and the node-based scripts. Bun is the actual runtime, installed below.
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+
+  // Install Bun pinned to the repo's `packageManager` version, then install the
+  // workspace. Full path to bun because PATH isn't updated until the next shell.
+  "postCreateCommand": "curl -fsSL https://bun.sh/install | bash -s bun-v1.3.5 && $HOME/.bun/bin/bun install",
+
+  // Put Bun on PATH for the user's terminals (the installer only edits dotfiles).
+  "remoteEnv": {
+    "PATH": "${containerEnv:HOME}/.bun/bin:${containerEnv:PATH}"
+  },
+
+  // The example servers listen on 3000; auto-forward it and pop the preview open.
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": { "label": "Lesto app", "onAutoForward": "openPreview" }
+  },
+
+  "customizations": {
+    "vscode": {
+      // The repo lints/formats with oxc (oxlint + oxfmt).
+      "extensions": ["oxc.oxc-vscode"]
+    },
+    "codespaces": {
+      // Greet the visitor with the "what to run" guide when the Codespace opens.
+      "openFiles": ["docs/devrel/try-in-codespaces.md"]
+    }
+  }
+}

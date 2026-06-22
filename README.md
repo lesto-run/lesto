@@ -93,6 +93,19 @@ The bar, enforced per package (`packages/queue` is the reference implementation)
 
 ## Quickstart
 
+### Try it in your browser — no install
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/lesto-run/lesto)
+
+Click the badge to open a ready-to-go Codespace — Bun installed, the workspace
+already built. Then run a real app: `bun run examples/blog/serve.ts` (it serves on
+port 3000, auto-forwarded). The Codespace opens a [short guide](./docs/devrel/try-in-codespaces.md)
+with the rest. This is the zero-install on-ramp until `npm create lesto` publishes;
+a Codespace (a real Linux container) runs Bun and native SQLite, which browser
+playgrounds cannot.
+
+### Locally
+
 The runnable end-to-end example lives in [`examples/blog`](./examples/blog) — a small blog that wires the whole stack together: a `Post` ORM model, a migration that creates the `posts` table, an app-defined `@lesto/ui` registry (`Page` + `PostCard`), a `PostsController` that renders an HTML page via `renderTree` and serves a JSON API, RESTful routes via `resources("posts")`, all booted by `@lesto/kernel` over a SQLite database.
 
 ```sh
