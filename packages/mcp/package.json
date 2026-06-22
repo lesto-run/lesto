@@ -11,14 +11,24 @@
     }
   },
   "dependencies": {
-    "@lesto/content-core": "workspace:*",
-    "@lesto/content-store": "workspace:*",
     "@lesto/db": "workspace:*",
     "@lesto/errors": "workspace:*",
     "@lesto/kernel": "workspace:*",
     "@lesto/migrate": "workspace:*",
     "@lesto/web": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "peerDependencies": {
+    "@lesto/content-core": "workspace:*",
+    "@lesto/content-store": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@lesto/content-core": {
+      "optional": true
+    },
+    "@lesto/content-store": {
+      "optional": true
+    }
   },
   "scripts": {
     "test": "vitest run",

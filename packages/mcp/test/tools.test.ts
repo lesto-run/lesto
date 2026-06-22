@@ -8,14 +8,20 @@ import { Migrator } from "@lesto/migrate";
 import type { MigrationEntry } from "@lesto/migrate";
 import type { App, KernelDatabase } from "@lesto/kernel";
 
-import { setData } from "@lesto/content-core";
+import { getCollections, getEntry, query, setData } from "@lesto/content-core";
 import type { RuntimeEntry } from "@lesto/content-core";
-import { contentEntriesMigration } from "@lesto/content-store";
+import {
+  contentEntriesMigration,
+  createEntry,
+  deleteEntry,
+  loadEntries,
+  updateEntry,
+} from "@lesto/content-store";
 
 import { buildTools, dispatch } from "../src/tools";
 import { McpError } from "../src/errors";
 
-import type { LestoMcpContext, McpAuditRecord } from "../src/tools";
+import type { ContentModules, LestoMcpContext, McpAuditRecord } from "../src/tools";
 
 // The DI boundary: the kernel speaks "array of positional params"; this adapter
 // maps that onto better-sqlite3's variadic bind. The terminals are async (ADR
@@ -84,10 +90,27 @@ let app: App;
 // Every dispatch lands here; tests assert the audit trail is never empty.
 let audited: McpAuditRecord[];
 
+// The real content modules behind the optional-peer seam. In the monorepo the
+// content packages ARE installed, so the content tools run against them exactly as
+// the published server would once a user adds the packages — `context()` injects
+// this by default. The "content peer optionality" test builds a context WITHOUT it.
+const loadRealContent = (): Promise<ContentModules> =>
+  Promise.resolve({
+    core: { getCollections, getEntry, query, setData },
+    store: { createEntry, deleteEntry, loadEntries, updateEntry },
+  });
+
 // A context with the mandatory audit sink wired to the capturing array. Each
-// test starts a fresh sink; `mode` defaults to read-only unless overridden.
+// test starts a fresh sink; `mode` defaults to read-only unless overridden, and the
+// content peers default to the real modules (overridable / droppable per test).
 function context(overrides: Partial<LestoMcpContext> = {}): LestoMcpContext {
-  return { app, routes, audit: (record) => void audited.push(record), ...overrides };
+  return {
+    app,
+    routes,
+    audit: (record) => void audited.push(record),
+    loadContent: loadRealContent,
+    ...overrides,
+  };
 }
 
 beforeEach(async () => {
@@ -266,6 +289,28 @@ describe("content tools", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.slug).toBe("hello");
+  });
+});
+
+describe("content peer optionality", () => {
+  it("a content tool refuses with MCP_CONTENT_PACKAGES_MISSING when the peers aren't loaded", async () => {
+    // No `loadContent` on the context — the optional content peers aren't installed,
+    // so the content tools fail closed with one coded message (the generic tools work).
+    const ctx: LestoMcpContext = { app, routes, audit: (record) => void audited.push(record) };
+    const tools = buildTools(ctx);
+
+    await expect(dispatch(ctx, tools, "list_content_collections", {})).rejects.toMatchObject({
+      code: "MCP_CONTENT_PACKAGES_MISSING",
+    });
+
+    const error = await dispatch(ctx, tools, "list_content_collections", {}).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(McpError);
+
+    // The generic, non-content tools are unaffected by the absent content peers.
+    await expect(dispatch(ctx, tools, "list_routes", {})).resolves.toEqual(routes);
   });
 });
 

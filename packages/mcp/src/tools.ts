@@ -12,12 +12,53 @@ import { createHash } from "node:crypto";
 import type { App } from "@lesto/kernel";
 import type { SqlDatabase } from "@lesto/migrate";
 
-import { getCollections, getEntry, query, setData } from "@lesto/content-core";
-import type { RuntimeEntry } from "@lesto/content-core";
-import { createEntry, deleteEntry, loadEntries, updateEntry } from "@lesto/content-store";
-import type { WriteEntryInput } from "@lesto/content-store";
-
 import { McpError } from "./errors";
+
+/** The runtime's collections map (collection name → its entries) — entries are opaque here. */
+type ContentCollections = Record<string, unknown[]>;
+
+/** The authoring shape the content writes take — built from a write tool's loose input. */
+interface ContentWriteInput {
+  collection: string;
+
+  slug: string;
+
+  data?: Record<string, unknown>;
+
+  content?: string;
+}
+
+/**
+ * The optional-peer content surface the content tools run against, INJECTED via the
+ * context. `@lesto/mcp` depends on `@lesto/content-core` / `@lesto/content-store` only
+ * as OPTIONAL PEERS — so it installs (and its generic tools run) without them — and
+ * references them at NEITHER runtime nor the type level: this structural shape is all
+ * the content tools need, and the real dynamic import lives in the coverage-excluded
+ * `server.ts` (tests inject a fake). Content entries are opaque pass-through values the
+ * tools only JSON-serialize, so `unknown`. Method syntax (not property arrows) keeps the
+ * members bivariant, so the concrete content modules assign to this looser shape.
+ */
+export interface ContentModules {
+  core: {
+    getCollections(): { name: string; entries: readonly unknown[] }[];
+
+    getEntry(collection: string, slug: string): unknown;
+
+    query(collection: string): { limit(n: number): { get(): unknown }; get(): unknown };
+
+    setData(collections: ContentCollections): void;
+  };
+
+  store: {
+    loadEntries(db: SqlDatabase, collection?: string): Promise<ContentCollections>;
+
+    createEntry(db: SqlDatabase, input: ContentWriteInput): Promise<{ entry: unknown }>;
+
+    updateEntry(db: SqlDatabase, input: ContentWriteInput): Promise<{ entry: unknown }>;
+
+    deleteEntry(db: SqlDatabase, collection: string, slug: string): Promise<unknown>;
+  };
+}
 
 /**
  * How much the control plane lets an agent *do*.
@@ -80,6 +121,15 @@ export interface LestoMcpContext {
   generateUi?: (prompt: string) => Promise<unknown>;
 
   /**
+   * Load the optional-peer content implementation the content tools run against.
+   * The real {@link startMcpServer} injects a dynamic import of `@lesto/content-core`
+   * + `@lesto/content-store` (`server.ts`); a test injects a fake. ABSENT → the six
+   * content tools refuse with `MCP_CONTENT_PACKAGES_MISSING`; the generic tools
+   * (`list_routes`, `handle_request`, `generate_ui`) are unaffected.
+   */
+  loadContent?: () => Promise<ContentModules>;
+
+  /**
    * The content-store database. Read tools work off the hydrated runtime and
    * need nothing here; the write tools mutate this database, so absent it they
    * are present but inert (they raise `MCP_CONTENT_STORE_UNAVAILABLE`).
@@ -118,6 +168,23 @@ function requireContentDb(context: LestoMcpContext): SqlDatabase {
   return context.contentDb;
 }
 
+/**
+ * The injected content surface, or a coded refusal when the optional content peers
+ * aren't wired (`context.loadContent` absent). Read AND write content tools go through
+ * here, so a server without the content packages fails closed with one clear message
+ * rather than a raw module-resolution error.
+ */
+async function requireContent(context: LestoMcpContext): Promise<ContentModules> {
+  if (context.loadContent === undefined) {
+    throw new McpError(
+      "MCP_CONTENT_PACKAGES_MISSING",
+      "The content tools need the content packages — run `npm i @lesto/content-core @lesto/content-store`.",
+    );
+  }
+
+  return context.loadContent();
+}
+
 /** The server's mode, defaulting to the safe `read-only` floor when unset. */
 function modeOf(context: LestoMcpContext): McpMode {
   return context.mode ?? "read-only";
@@ -147,32 +214,33 @@ function modeOf(context: LestoMcpContext): McpMode {
 interface ContentRuntime {
   /**
    * Refresh the runtime after a write to `collection`: reload just that
-   * collection from the database, patch it into the map, and republish.
+   * collection from the database, patch it into the map, and republish. Takes the
+   * injected {@link ContentModules} (the caller already loaded them for the write).
    */
-  refresh(db: SqlDatabase, collection: string): Promise<void>;
+  refresh(content: ContentModules, db: SqlDatabase, collection: string): Promise<void>;
 }
 
 function createContentRuntime(): ContentRuntime {
   // The authoritative collections map, seeded once on the first write. `undefined`
   // until then — so a tool set that never writes pays nothing.
-  let collections: Record<string, RuntimeEntry[]> | undefined;
+  let collections: ContentCollections | undefined;
 
   return {
-    refresh: async (db, collection) => {
+    refresh: async (content, db, collection) => {
       // Seed once with a single full load; every later write reuses this map and
       // only re-reads the collection it changed.
-      collections ??= await loadEntries(db);
+      collections ??= await content.store.loadEntries(db);
 
       // Reload ONLY the written collection. `loadEntries(db, name)` keys by
       // collection; a now-empty collection (its last entry deleted) yields no key,
       // so we clear it rather than leave a stale array behind.
-      const reloaded = await loadEntries(db, collection);
+      const reloaded = await content.store.loadEntries(db, collection);
 
       collections[collection] = reloaded[collection] ?? [];
 
       // Republish the patched full map; content-core's `setData` is a full
       // replace, but the database read above touched only one collection.
-      setData(collections);
+      content.core.setData(collections);
     },
   };
 }
@@ -238,7 +306,7 @@ function allowedHeaders(input: unknown): Record<string, string> {
 }
 
 /** Narrow a tool's loose input into the store's authoring shape. */
-function toWriteInput(input: Record<string, unknown>): WriteEntryInput {
+function toWriteInput(input: Record<string, unknown>): ContentWriteInput {
   return {
     collection: String(input.collection),
     slug: String(input.slug),
@@ -357,11 +425,14 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
       properties: {},
     },
     destructive: false,
-    handler: async () =>
-      getCollections().map((collection) => ({
+    handler: async () => {
+      const content = await requireContent(context);
+
+      return content.core.getCollections().map((collection) => ({
         name: collection.name,
         count: collection.entries.length,
-      })),
+      }));
+    },
   };
 
   const getContentEntry: LestoTool = {
@@ -376,7 +447,11 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
       required: ["collection", "slug"],
     },
     destructive: false,
-    handler: async (input) => getEntry(String(input.collection), String(input.slug)) ?? null,
+    handler: async (input) => {
+      const content = await requireContent(context);
+
+      return content.core.getEntry(String(input.collection), String(input.slug)) ?? null;
+    },
   };
 
   const queryContent: LestoTool = {
@@ -392,7 +467,9 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
     },
     destructive: false,
     handler: async (input) => {
-      const entries = query(String(input.collection));
+      const content = await requireContent(context);
+
+      const entries = content.core.query(String(input.collection));
 
       // Only narrow when a numeric limit was actually given.
       return typeof input.limit === "number" ? entries.limit(input.limit).get() : entries.get();
@@ -409,13 +486,15 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
 
       const db = requireContentDb(context);
 
+      const content = await requireContent(context);
+
       const write = toWriteInput(input);
 
-      const { entry } = await createEntry(db, write);
+      const { entry } = await content.store.createEntry(db, write);
 
       // The write changed one collection; refresh just that collection so reads
       // see it, without re-reading the rest of the store.
-      await runtime.refresh(db, write.collection);
+      await runtime.refresh(content, db, write.collection);
 
       return entry;
     },
@@ -431,11 +510,13 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
 
       const db = requireContentDb(context);
 
+      const content = await requireContent(context);
+
       const write = toWriteInput(input);
 
-      const { entry } = await updateEntry(db, write);
+      const { entry } = await content.store.updateEntry(db, write);
 
-      await runtime.refresh(db, write.collection);
+      await runtime.refresh(content, db, write.collection);
 
       return entry;
     },
@@ -458,11 +539,13 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
 
       const db = requireContentDb(context);
 
+      const content = await requireContent(context);
+
       const collection = String(input.collection);
 
-      const result = await deleteEntry(db, collection, String(input.slug));
+      const result = await content.store.deleteEntry(db, collection, String(input.slug));
 
-      await runtime.refresh(db, collection);
+      await runtime.refresh(content, db, collection);
 
       return result;
     },
