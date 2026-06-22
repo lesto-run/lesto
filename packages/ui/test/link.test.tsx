@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { Link, RELOAD_ATTR } from "../src/index";
+import { Link, PREFETCH_ATTR, RELOAD_ATTR, StrictLink } from "../src/index";
 
 /**
  * `<Link>` is the deliberately non-magic anchor: it must render the SAME `<a>` on
@@ -64,6 +64,46 @@ describe("Link", () => {
   it("renders with no children", () => {
     expect(renderToStaticMarkup(createElement(Link, { href: "/empty" }))).toBe(
       '<a href="/empty"></a>',
+    );
+  });
+
+  it("emits no prefetch attribute by default", () => {
+    const html = renderToStaticMarkup(createElement(Link, { href: "/a" }, "a"));
+
+    expect(html).not.toContain(PREFETCH_ATTR);
+  });
+
+  it("turns bare prefetch={true} into the viewport strategy attribute", () => {
+    const html = renderToStaticMarkup(createElement(Link, { href: "/a", prefetch: true }, "a"));
+
+    expect(html).toContain(`${PREFETCH_ATTR}="viewport"`);
+  });
+
+  it("renders an explicit hover prefetch strategy", () => {
+    const html = renderToStaticMarkup(createElement(Link, { href: "/a", prefetch: "hover" }, "a"));
+
+    expect(html).toContain(`${PREFETCH_ATTR}="hover"`);
+  });
+
+  it("renders an explicit viewport prefetch strategy", () => {
+    const html = renderToStaticMarkup(
+      createElement(Link, { href: "/a", prefetch: "viewport" }, "a"),
+    );
+
+    expect(html).toContain(`${PREFETCH_ATTR}="viewport"`);
+  });
+
+  it("emits no prefetch attribute when prefetch is explicitly false", () => {
+    const html = renderToStaticMarkup(createElement(Link, { href: "/a", prefetch: false }, "a"));
+
+    expect(html).not.toContain(PREFETCH_ATTR);
+  });
+});
+
+describe("StrictLink", () => {
+  it("is Link re-typed — renders the same anchor at its href", () => {
+    expect(renderToStaticMarkup(createElement(StrictLink, { href: "/strict" }, "Go"))).toBe(
+      '<a href="/strict">Go</a>',
     );
   });
 });

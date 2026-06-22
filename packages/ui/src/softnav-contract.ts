@@ -13,6 +13,65 @@
 export const RELOAD_ATTR = "data-lesto-reload";
 
 /**
+ * The attribute that opts a link INTO prefetch — warming the soft-nav fetch of its
+ * destination before the click, so the navigation feels instant. `<Link prefetch>`
+ * stamps it; the browser runtime ({@link PrefetchStrategy}-aware) reads it.
+ *
+ * Its VALUE is the {@link PrefetchStrategy}: `"viewport"` (prefetch when the link
+ * scrolls into view) or `"hover"` (prefetch on pointer-enter / focus). A bare
+ * `prefetch` (boolean `true`) renders the value `"viewport"` — the cheaper-by-default
+ * eager strategy peer routers use, since a hover is already late for an instant feel.
+ *
+ * DOM-free like {@link RELOAD_ATTR}: it is just an attribute name + value contract
+ * `<Link>` (isomorphic) writes and the runtime (browser) reads, so neither half
+ * dictates the other's environment.
+ */
+export const PREFETCH_ATTR = "data-lesto-prefetch";
+
+/**
+ * When a prefetch fires for a link. `"viewport"` warms the fetch when the anchor
+ * scrolls into view (eager, IntersectionObserver-driven); `"hover"` warms it on
+ * pointer-enter or keyboard focus (lazy, intent-driven). A bare `<Link prefetch>`
+ * is `"viewport"`.
+ */
+export type PrefetchStrategy = "viewport" | "hover";
+
+/**
+ * The attribute that marks a layout-boundary element in the streamed document, so a
+ * soft navigation can do a LAYOUT-PRESERVING PARTIAL SWAP: replace only the inner
+ * subtree that changed, keeping the outer layout DOM (and its island state) mounted.
+ *
+ * Its VALUE is the layout's depth as a decimal string (`"0"` outermost, growing
+ * inward), the `layoutDepth` the router already computes — so the runtime can align
+ * the live and fetched layout chains by a shared prefix of depths and swap only
+ * below the deepest common layout.
+ *
+ * The runtime treats this as ENTIRELY OPTIONAL: a document with no such markers
+ * falls back to the full-body swap (today's behavior), so this never becomes
+ * load-bearing. EMITTING the marker is the server renderer's job (`@lesto/web`'s
+ * `render-page.tsx` / the file-route layout composer) — until it does, the partial
+ * swap is dormant and the full swap runs, with no regression.
+ */
+export const LAYOUT_ATTR = "data-lesto-layout";
+
+/**
+ * Resolve a `<Link prefetch>` prop to the attribute VALUE to render, or `undefined`
+ * when the link does not prefetch.
+ *
+ * `true` → `"viewport"` (the eager default); an explicit `"viewport"`/`"hover"`
+ * passes through; `false`/`undefined` → `undefined` (no attribute). Pure, shared by
+ * `<Link>` (which writes the attribute) so the boolean-sugar rule lives in ONE place
+ * the runtime can trust.
+ */
+export function prefetchAttrValue(
+  prefetch: boolean | PrefetchStrategy | undefined,
+): PrefetchStrategy | undefined {
+  if (prefetch === undefined || prefetch === false) return undefined;
+
+  return prefetch === true ? "viewport" : prefetch;
+}
+
+/**
  * The minimal anchor surface soft nav reads — `HTMLAnchorElement` satisfies it.
  * Kept narrow so a test can hand a plain object and the eligibility logic is
  * exercised with no real DOM node.

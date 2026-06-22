@@ -128,8 +128,8 @@ export type { LinkProps, StrictLinkProps } from "./link";
 // not in the public barrel — nothing an app author needs.
 export { route } from "./route";
 export type { RegisteredRoutes, RouteHref, StrictRouteHref } from "./routes";
-export { eligibleAnchor, RELOAD_ATTR } from "./softnav-contract";
-export type { SoftNavAnchor, SoftNavClick } from "./softnav-contract";
+export { eligibleAnchor, LAYOUT_ATTR, PREFETCH_ATTR, RELOAD_ATTR } from "./softnav-contract";
+export type { PrefetchStrategy, SoftNavAnchor, SoftNavClick } from "./softnav-contract";
 
 // The hydration runtime and bfcache-safe lifecycle are browser-only (they touch
 // `document`/`window`), so they live behind the `@lesto/ui/client` subpath —

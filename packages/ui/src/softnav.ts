@@ -44,17 +44,18 @@
  * testability discipline as `hydrate.tsx` and `bfcache.ts`.
  */
 
+import { UiError } from "./errors";
 import { hydrateDocumentIslands } from "./hydrate";
 import type { HydrateOptions, HydrationResult } from "./hydrate";
 import type { Registry } from "./registry";
-import { eligibleAnchor, RELOAD_ATTR } from "./softnav-contract";
-import type { SoftNavAnchor, SoftNavClick } from "./softnav-contract";
+import { eligibleAnchor, LAYOUT_ATTR, PREFETCH_ATTR, RELOAD_ATTR } from "./softnav-contract";
+import type { PrefetchStrategy, SoftNavAnchor, SoftNavClick } from "./softnav-contract";
 
 // Re-export the DOM-free contract through the runtime barrel, so a caller that
-// reaches for the soft-nav surface sees one module — the constant and the click /
+// reaches for the soft-nav surface sees one module — the constants and the click /
 // anchor shapes that `<Link>` (isomorphic) and this runtime (browser) both read.
-export { eligibleAnchor, RELOAD_ATTR } from "./softnav-contract";
-export type { SoftNavAnchor, SoftNavClick } from "./softnav-contract";
+export { eligibleAnchor, LAYOUT_ATTR, PREFETCH_ATTR, RELOAD_ATTR } from "./softnav-contract";
+export type { PrefetchStrategy, SoftNavAnchor, SoftNavClick } from "./softnav-contract";
 
 /**
  * One history entry's restorable scroll position. Saved into `history.state` on
@@ -118,10 +119,11 @@ export type PageFetcher = (url: string, signal: AbortSignal) => Promise<FetchedP
 /**
  * Swap the fetched document's body into the live one and return the new title.
  *
- * The default {@link defaultSwap} parses the HTML, replaces `document.body`'s contents
- * with the fetched body's, and returns the fetched `<title>`. A caller can inject
- * a finer swap (a single content region, a view-transition wrapper for Bet I)
- * without this module knowing how the page is structured.
+ * The default {@link defaultSwap} parses the HTML, swaps the body — LAYOUT-PRESERVING
+ * when the document carries {@link LAYOUT_ATTR} markers, else replacing the whole
+ * body's contents — and returns the fetched `<title>`. A caller can inject a finer
+ * swap (a single content region, a view-transition wrapper for Bet I) without this
+ * module knowing how the page is structured.
  */
 export type PageSwapper = (html: string, doc: Document) => string | undefined;
 
@@ -173,6 +175,36 @@ export interface SoftNavOptions {
   onNavigate?: (event: SoftNavEvent) => void;
 
   /**
+   * Called the moment a soft navigation STARTS — before its fetch, after the click
+   * is taken over. The pair to {@link onNavigate} (which fires after success): this
+   * is the cue to show pending UI (a top progress bar, a busy cursor). It carries
+   * the destination and {@link SoftNavKind} so a caller can distinguish a forward
+   * push from a Back/Forward replay. Fires once per navigation, including one a
+   * newer click later supersedes (so a started-but-aborted nav is observable too).
+   */
+  onNavigateStart?: (event: SoftNavStart) => void;
+
+  /**
+   * Observe the {@link IsNavigatingSignal} pending flag — called once immediately
+   * with the current value (false) and again on every change, so a caller can drive
+   * pending UI declaratively without tracking start/end itself. The observable form
+   * of {@link onNavigateStart} + {@link onNavigate}; both are wired off the same
+   * in-flight count, so they never disagree. (The same signal is returned from
+   * {@link enableSoftNav} for a caller that prefers to read it.)
+   */
+  onNavigatingChange?: (navigating: boolean) => void;
+
+  /**
+   * How to observe a prefetch link entering the viewport — defaults to the browser's
+   * `IntersectionObserver`. Injected so the viewport-prefetch path is testable under
+   * jsdom (which has no real `IntersectionObserver`) with a fake that fires entries
+   * on demand. A `"viewport"` `<Link prefetch>` needs this; an environment that
+   * lacks it (and supplies no override) refuses viewport prefetch with a coded
+   * `UI_SOFTNAV_PREFETCH_UNSUPPORTED`, leaving the link's hover/click paths intact.
+   */
+  intersectionObserver?: IntersectionObserverFactory;
+
+  /**
    * Called when a soft navigation's fetch or swap throws. The DEFAULT recovers by
    * doing a real navigation to the destination (`assign`), so a soft-nav failure
    * degrades to exactly the full reload the link would have done with no JS —
@@ -181,8 +213,53 @@ export interface SoftNavOptions {
   onError?: (error: unknown, url: string) => void;
 }
 
-/** Detach the soft-nav listeners. Idempotent — a second call is a harmless no-op. */
-export type DisableSoftNav = () => void;
+/** What a STARTING soft navigation reports to {@link SoftNavOptions.onNavigateStart}. */
+export interface SoftNavStart {
+  kind: SoftNavKind;
+  url: string;
+}
+
+/**
+ * The observable "a navigation is in flight" flag returned from {@link enableSoftNav}.
+ *
+ * `get()` reads the current value; `subscribe(listener)` registers a listener called
+ * immediately with the current value and again on every change, returning an
+ * unsubscribe. A thin hand-rolled signal (no dependency): an app wires it to whatever
+ * pending UI it renders — a progress bar, a `aria-busy` flag, a disabled nav.
+ */
+export interface IsNavigatingSignal {
+  get(): boolean;
+  subscribe(listener: (navigating: boolean) => void): () => void;
+}
+
+/**
+ * Construct an {@link IntersectionObserver}-shaped observer — the seam the viewport
+ * prefetch path uses. The real `IntersectionObserver` constructor satisfies it; a
+ * test injects a fake whose callback it can fire with synthetic entries.
+ */
+export type IntersectionObserverFactory = (
+  callback: (entries: IntersectionObserverEntry[]) => void,
+) => IntersectionObserverLike;
+
+/** The slice of `IntersectionObserver` the prefetch wiring uses. */
+export interface IntersectionObserverLike {
+  observe(target: Element): void;
+  unobserve(target: Element): void;
+  disconnect(): void;
+}
+
+/**
+ * The control surface {@link enableSoftNav} returns: a callable that detaches every
+ * listener (idempotent — a second call is a harmless no-op), plus the
+ * {@link IsNavigatingSignal} pending flag a caller can read or subscribe to. It IS a
+ * function (call it to disable), so the original `disable()` call site is unchanged.
+ */
+export interface DisableSoftNav {
+  (): void;
+
+  /** The observable "a navigation is in flight" flag — see {@link IsNavigatingSignal}. */
+  isNavigating: IsNavigatingSignal;
+}
 
 /**
  * Resolve the {@link SoftNavAnchor} a click targets by walking from the clicked
@@ -215,6 +292,28 @@ function resolveAnchor(target: EventTarget | null): SoftNavAnchor | undefined {
 }
 
 /**
+ * The prefetch-eligible anchor a node sits under, with its opted-into strategy — or
+ * `undefined` when there is no enclosing `<a>` carrying a valid {@link PREFETCH_ATTR}.
+ *
+ * Reads the nearest anchor (a hover may land on a child `<span>`) so the intent
+ * listener and any strategy check share one resolution. Pure over the DOM, captures
+ * nothing — a sibling of {@link resolveAnchor}.
+ */
+function prefetchTargetOf(
+  target: EventTarget | null,
+): { anchor: HTMLAnchorElement; strategy: PrefetchStrategy } | undefined {
+  if (!(target instanceof Element)) return undefined;
+
+  const anchor = target.closest("a[href]");
+
+  if (!(anchor instanceof HTMLAnchorElement)) return undefined;
+
+  const value = anchor.getAttribute(PREFETCH_ATTR);
+
+  return value === "viewport" || value === "hover" ? { anchor, strategy: value } : undefined;
+}
+
+/**
  * The default page fetch: a same-origin GET whose body is the page's HTML. The
  * resolved `response.url` rides back so a redirect lands the history entry on the
  * real destination, not the link's pre-redirect href.
@@ -235,22 +334,95 @@ const defaultFetchPage: PageFetcher = async (url, signal) => {
 };
 
 /**
- * The default swap: parse the fetched HTML and replace the live `<body>`'s
- * children with the fetched body's, returning the fetched `<title>`.
+ * Replace a live element's CONTENTS with a fetched element's children, importing
+ * the fetched nodes into the live document. Shared by the full-body swap and the
+ * partial layout swap so the import-and-replace rule lives in one place.
+ */
+function replaceContents(live: Element, fetched: Element, doc: Document): void {
+  live.replaceChildren(...Array.from(fetched.childNodes).map((node) => doc.importNode(node, true)));
+}
+
+/**
+ * The deepest layout-marker subtree the live + fetched documents SHARE, or
+ * `undefined` when they share none (no markers, or the chains diverge at the root).
  *
- * Replacing the body's CONTENTS (not the body element itself) keeps the live
- * `<body>` node — and any listeners delegated to it, this module's included —
- * attached across the swap. The head is intentionally left alone: the app's
- * client module and styles are already loaded, so re-running them would re-execute
- * the bundle; only the title (the one head element that is per-page and cheap) is
- * carried over.
+ * Layout-preserving partial swap (driven by {@link LAYOUT_ATTR}): the server marks
+ * each layout-boundary element with its `data-lesto-layout="<depth>"`. We walk the
+ * live document's marker chain from the outermost depth inward, matching each
+ * against the fetched document's marker at the same depth. As long as a depth marker
+ * exists in BOTH (the two pages pass through the same layout there), the swap can
+ * keep that layout's live DOM mounted and recurse inward. The first depth that is
+ * missing on either side is where the pages diverge — everything from there down is
+ * what must be swapped.
+ *
+ * Returns the matched `{ live, fetched }` element pair for the deepest shared
+ * layout, so the caller swaps only THAT element's contents (the inner page +
+ * deeper layouts), preserving every outer layout above it. `undefined` means
+ * "no shared layout boundary" — the caller does the whole-body fallback swap.
+ */
+function deepestSharedLayout(
+  liveBody: Element,
+  fetchedBody: Element,
+): { live: Element; fetched: Element } | undefined {
+  let live = liveBody.querySelector(`[${LAYOUT_ATTR}="0"]`);
+  let fetched = fetchedBody.querySelector(`[${LAYOUT_ATTR}="0"]`);
+
+  // No depth-0 marker in both documents → no shared layout boundary at all; the
+  // caller falls back to a full body swap (today's behavior, never a regression).
+  if (live === null || fetched === null) return undefined;
+
+  let match: { live: Element; fetched: Element } = { live, fetched };
+
+  // Descend the marker chain depth by depth. The next-deeper layout, if both pages
+  // have it, must be NESTED inside the current matched layout (a prefix tree), so we
+  // look for it WITHIN the matched element — that keeps an unrelated sibling layout
+  // at the same depth elsewhere in the tree from being mistaken for a match.
+  for (let depth = 1; ; depth += 1) {
+    const selector = `[${LAYOUT_ATTR}="${depth}"]`;
+
+    live = match.live.querySelector(selector);
+    fetched = match.fetched.querySelector(selector);
+
+    // One side lacks this depth → the chains diverge here; the previous match is the
+    // deepest layout both pages share.
+    if (live === null || fetched === null) return match;
+
+    match = { live, fetched };
+  }
+}
+
+/**
+ * The default swap: parse the fetched HTML and swap the live `<body>`.
+ *
+ * **Layout-preserving when it can be.** If both the live and fetched documents
+ * carry {@link LAYOUT_ATTR} markers that share an outer prefix, only the DEEPEST
+ * shared layout's contents are replaced (its inner page + any deeper layouts),
+ * leaving every outer layout's DOM — and the island state mounted in it — intact
+ * across the navigation. This is the "nested layouts keep their state" behavior.
+ *
+ * **Full-body fallback otherwise.** With no markers (today's server output) or a
+ * chain that diverges at the root, it replaces the whole `<body>`'s children — the
+ * original behavior, byte-for-byte, so the partial swap is a pure enhancement that
+ * never regresses an unmarked page.
+ *
+ * Either way it replaces CONTENTS (not the `<body>`/layout element itself), keeping
+ * the live nodes — and the click listener delegated to `<body>`'s document — attached
+ * across the swap. The head is left alone (the client module + styles already ran);
+ * only the per-page `<title>` is carried over.
  */
 const defaultSwap: PageSwapper = (html, doc) => {
   const parsed = new DOMParser().parseFromString(html, "text/html");
 
-  doc.body.replaceChildren(
-    ...Array.from(parsed.body.childNodes).map((node) => doc.importNode(node, true)),
-  );
+  const shared = deepestSharedLayout(doc.body, parsed.body);
+
+  if (shared === undefined) {
+    // No shared layout boundary → swap the whole body (the original behavior).
+    replaceContents(doc.body, parsed.body, doc);
+  } else {
+    // A shared outer layout → swap only its inner contents, preserving the outer
+    // layout DOM (and any island state mounted in it) across the navigation.
+    replaceContents(shared.live, shared.fetched, doc);
+  }
 
   // `textContent` is "" when the fetched page has no <title>; treat that as "no
   // title to set" so we never blank the tab on a title-less page.
@@ -309,17 +481,59 @@ function focusMain(doc: Document): void {
 }
 
 /**
+ * A minimal observable boolean — the backing of {@link IsNavigatingSignal}.
+ *
+ * A hand-rolled signal (no framework dependency): `set` no-ops when the value is
+ * unchanged so listeners only hear real transitions, and `subscribe` calls back
+ * immediately with the current value (the "initial render" any pending-UI binding
+ * needs) then on every change. Listeners live in a `Set` so an unsubscribe is exact.
+ */
+function createBooleanSignal(): IsNavigatingSignal & { set(next: boolean): void } {
+  let value = false;
+  const listeners = new Set<(navigating: boolean) => void>();
+
+  return {
+    get: () => value,
+    set(next: boolean): void {
+      if (next === value) return;
+
+      value = next;
+
+      for (const listener of listeners) listener(value);
+    },
+    subscribe(listener: (navigating: boolean) => void): () => void {
+      listeners.add(listener);
+
+      listener(value);
+
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
+/** One warmed prefetch: its in-flight fetch + the controller that can cancel it. */
+interface PrefetchEntry {
+  promise: Promise<FetchedPage>;
+  controller: AbortController;
+}
+
+/**
  * Enable client-side soft navigation: upgrade eligible same-origin link clicks to
- * a fetch-and-swap, wire Back/Forward, and restore scroll — over the supplied
- * island `registry`, so a swapped-in page's islands hydrate with the same
- * components the initial load did.
+ * a fetch-and-swap, wire Back/Forward, restore scroll, and (opt-in per link) PREFETCH
+ * a destination before the click — over the supplied island `registry`, so a
+ * swapped-in page's islands hydrate with the same components the initial load did.
  *
  * Returns a `disable()` that removes every listener and restores the browser's own
  * scroll restoration — so a test (or a hot reload) can tear the whole thing down
- * cleanly. Call it once, after the initial `hydrateDocumentIslands`:
+ * cleanly. The returned function also carries an `isNavigating` {@link IsNavigatingSignal}
+ * for pending UI. Call it once, after the initial `hydrateDocumentIslands`:
  *
  *   hydrateDocumentIslands(registry);
- *   enableSoftNav(registry);
+ *   const softNav = enableSoftNav(registry);
+ *   softNav.isNavigating.subscribe((busy) => …);   // drive a progress bar
+ *   // softNav();                                   // later, to tear down
  */
 export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}): DisableSoftNav {
   const doc: Document = options.document ?? document;
@@ -358,6 +572,35 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
   let currentToken = 0;
   let inFlight: AbortController | undefined;
 
+  // The pending-nav signal: a navigation flips it true on start and false on
+  // settle (success, supersession, or failure). Counted, not a bare boolean, so a
+  // nav that starts while another is still settling never clears the flag early —
+  // it reads false only when NO navigation is in flight. Wired to the optional
+  // change callback so the imperative and observable forms share one source.
+  const isNavigating = createBooleanSignal();
+  let pendingCount = 0;
+
+  if (options.onNavigatingChange !== undefined) {
+    isNavigating.subscribe(options.onNavigatingChange);
+  }
+
+  const navStarted = (): void => {
+    pendingCount += 1;
+
+    isNavigating.set(true);
+  };
+
+  const navSettled = (): void => {
+    pendingCount -= 1;
+
+    if (pendingCount === 0) isNavigating.set(false);
+  };
+
+  // Warmed prefetches, keyed by the destination URL: a `<Link prefetch>` fires its
+  // fetch ahead of the click and parks the in-flight promise here, so the eventual
+  // navigation consumes it instead of starting a second round-trip.
+  const prefetches = new Map<string, PrefetchEntry>();
+
   // Perform the fetch → swap → re-hydrate → scroll for one navigation. `kind`
   // distinguishes a forward push (record where we came from, scroll to top) from a
   // Back/Forward pop (restore the saved scroll, do not push a new entry).
@@ -368,11 +611,25 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
   ): Promise<void> => {
     const mine = ++currentToken;
     inFlight?.abort();
-    const controller = new AbortController();
+
+    // Announce the start (pending UI cue) and flip the in-flight flag — both fire
+    // once per navigation, even one a newer click later supersedes, so a started-
+    // but-aborted nav is observable too. `navSettled()` in `finally` always pairs.
+    options.onNavigateStart?.({ kind, url });
+    navStarted();
+
+    // Consume a warmed prefetch for this exact URL if one is in flight — its fetch
+    // already started (or finished) ahead of the click, so the navigation is
+    // instant. A prefetch is single-use: take it out of the cache so a later nav to
+    // the same URL re-fetches fresh rather than replaying a stale warmed body.
+    const warmed = prefetches.get(url);
+    prefetches.delete(url);
+
+    const controller = warmed?.controller ?? new AbortController();
     inFlight = controller;
 
     try {
-      const { html, url: landed } = await fetchPage(url, controller.signal);
+      const { html, url: landed } = await (warmed?.promise ?? fetchPage(url, controller.signal));
 
       // A newer click/pop superseded us while the fetch was in flight — drop this
       // stale result so it cannot clobber the newer navigation's swap or history.
@@ -401,6 +658,11 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
       // not the ambient global `document`'s.
       const hydration = rehydrate(registry, { root: doc });
 
+      // The swapped-in page brings its own `viewport`-prefetch links; register them
+      // so they warm as the user scrolls the new page. (Hover links are caught by
+      // the persistent delegated listeners, so they need no re-registration.)
+      registerViewportLinks();
+
       // Restore the saved scroll for a Back/Forward, else go to the top of the new
       // page — the browser's own behavior for a fresh navigation.
       if (restore !== undefined) {
@@ -424,7 +686,49 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
       if (mine !== currentToken) return;
 
       onError(error, url);
+    } finally {
+      // Always pair the `navStarted()` above — the flag clears on success, on
+      // supersession (the early `return`s run `finally`), and on failure alike, so
+      // pending UI never sticks on after a navigation settles.
+      navSettled();
     }
+  };
+
+  // Is this RESOLVED href (an anchor's `.href`, always absolute) one soft nav could
+  // navigate to — same-origin, not the current page? The prefetch gate: warming a
+  // cross-origin URL (or the page we're already on) is wasted work, and a
+  // cross-origin warm would be a needless request to a foreign server. Mirrors the
+  // click-time eligibility, minus the event flags (a prefetch is not a click). No
+  // try/catch: the caller only ever passes `anchor.href`, which the DOM has already
+  // normalized to a parseable absolute URL — so `new URL` here cannot throw.
+  const isPrefetchable = (href: string): boolean => {
+    const there = new URL(href);
+
+    if (there.origin !== origin) return false;
+
+    const here = new URL(doc.URL);
+
+    return there.pathname !== here.pathname || there.search !== here.search;
+  };
+
+  // Warm the fetch for a destination: start it (if not already warmed) and park the
+  // in-flight promise so the eventual `navigate(url)` consumes it. The promise's
+  // rejection is swallowed here — a prefetch that fails (offline, aborted on
+  // teardown) must never surface as an unhandled rejection; the click path re-tries
+  // and routes a real failure to `onError`. `url` is the RESOLVED absolute href,
+  // the same key `navigate` looks up.
+  const warmPrefetch = (url: string): void => {
+    if (prefetches.has(url) || !isPrefetchable(url)) return;
+
+    const controller = new AbortController();
+    const promise = fetchPage(url, controller.signal);
+
+    // Detach a no-op catch so a prefetch rejection is never unhandled; the entry's
+    // own `promise` (the un-caught one) is what `navigate` awaits, so the real
+    // error still reaches the click path.
+    promise.catch(() => {});
+
+    prefetches.set(url, { promise, controller });
   };
 
   // Before leaving the current entry, stamp its live scroll position into its
@@ -501,11 +805,86 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
     void navigate(doc.URL, "pop", state.scroll ?? { x: 0, y: 0 });
   };
 
+  // --- Prefetch wiring (opt-in per link via `data-lesto-prefetch`) ----------
+
+  // A pointer-enter / focus on (or within) a `hover`-strategy link warms its fetch.
+  // Delegated on the document (one listener, survives swaps) — `pointerover` and
+  // `focusin` both bubble, so a single pair covers mouse and keyboard intent.
+  const onPrefetchIntent = (event: Event): void => {
+    const found = prefetchTargetOf(event.target);
+
+    if (found?.strategy === "hover") warmPrefetch(found.anchor.href);
+  };
+
+  // The viewport-prefetch observer: an `IntersectionObserver` that warms a
+  // `viewport`-strategy link the moment it scrolls into view, then stops watching it
+  // (a single warm per link). Created lazily on the first viewport link so an app
+  // that uses only hover/no prefetch pays for no observer.
+  let viewportObserver: IntersectionObserverLike | undefined;
+
+  const observeViewportLink = (anchor: HTMLAnchorElement): void => {
+    if (viewportObserver === undefined) {
+      const factory = options.intersectionObserver;
+
+      // No factory and no real `IntersectionObserver` (jsdom, an old engine) → a
+      // coded refusal: viewport prefetch cannot run here. Hover + click still work;
+      // the caller branches on the code to (e.g.) downgrade to hover.
+      if (factory === undefined && typeof IntersectionObserver === "undefined") {
+        throw new UiError(
+          "UI_SOFTNAV_PREFETCH_UNSUPPORTED",
+          'Viewport prefetch needs an IntersectionObserver; this environment has none and none was injected. Use prefetch="hover" or pass options.intersectionObserver.',
+        );
+      }
+
+      const make: IntersectionObserverFactory =
+        factory ?? ((cb) => new IntersectionObserver(cb) as IntersectionObserverLike);
+
+      viewportObserver = make((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+
+          const link = entry.target;
+
+          viewportObserver?.unobserve(link);
+
+          if (link instanceof HTMLAnchorElement) warmPrefetch(link.href);
+        }
+      });
+    }
+
+    viewportObserver.observe(anchor);
+  };
+
+  // Register every current `viewport`-strategy link with the observer. Run on enable
+  // and after each swap (a swapped-in page brings its own prefetch links), so the
+  // set stays current without a per-link mutation observer. Hover links need no
+  // registration — they are caught by the delegated intent listeners.
+  const registerViewportLinks = (): void => {
+    // A `<body>`-less seam (a bare fake document used only to test history/scroll
+    // teardown, never a real page) has no links to scan — skip rather than throw,
+    // so the prefetch scan never makes the body a hard requirement of enabling.
+    const body = doc.body as Element | null | undefined;
+
+    if (body === null || body === undefined) return;
+
+    const links = body.querySelectorAll<HTMLAnchorElement>(`a[href][${PREFETCH_ATTR}="viewport"]`);
+
+    for (const anchor of Array.from(links)) observeViewportLink(anchor);
+  };
+
   // Back/Forward listens on the window (the document's `defaultView`); a test
   // injects a fake target so a synthetic `popstate` needs no real history move.
   const popTarget: PopStateTarget = options.popStateTarget ?? (doc.defaultView as PopStateTarget);
 
+  // Register the initial viewport-prefetch links FIRST: the only throwing path on
+  // enable is the "viewport prefetch unsupported" refusal, and doing it before the
+  // listeners are attached means that refusal leaves NOTHING wired up — no leaked
+  // click/prefetch/popstate listener to undo without a `disable` handle.
+  registerViewportLinks();
+
   doc.addEventListener("click", onClick);
+  doc.addEventListener("pointerover", onPrefetchIntent);
+  doc.addEventListener("focusin", onPrefetchIntent);
   popTarget.addEventListener("popstate", onPopState);
 
   // Seed the initial entry as a soft-nav entry carrying its scroll, so the FIRST
@@ -516,12 +895,28 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
     doc.URL,
   );
 
-  return () => {
-    doc.removeEventListener("click", onClick);
-    popTarget.removeEventListener("popstate", onPopState);
+  const disable: DisableSoftNav = Object.assign(
+    (): void => {
+      doc.removeEventListener("click", onClick);
+      doc.removeEventListener("pointerover", onPrefetchIntent);
+      doc.removeEventListener("focusin", onPrefetchIntent);
+      popTarget.removeEventListener("popstate", onPopState);
 
-    // Hand scroll restoration back to whatever it was on entry, so we leave no
-    // trace (the field is required, so this is a clean unconditional restore).
-    hist.scrollRestoration = priorScrollRestoration;
-  };
+      // Stop watching for viewport prefetches and cancel every still-warming fetch,
+      // so a teardown (a hot reload, a test) leaves no observer or in-flight request
+      // dangling.
+      viewportObserver?.disconnect();
+
+      for (const { controller } of prefetches.values()) controller.abort();
+
+      prefetches.clear();
+
+      // Hand scroll restoration back to whatever it was on entry, so we leave no
+      // trace (the field is required, so this is a clean unconditional restore).
+      hist.scrollRestoration = priorScrollRestoration;
+    },
+    { isNavigating },
+  );
+
+  return disable;
 }

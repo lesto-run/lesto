@@ -22,9 +22,10 @@ import { createElement } from "react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 
 import type { RouteHref, StrictRouteHref } from "./routes";
-import { RELOAD_ATTR } from "./softnav-contract";
+import { PREFETCH_ATTR, prefetchAttrValue, RELOAD_ATTR } from "./softnav-contract";
+import type { PrefetchStrategy } from "./softnav-contract";
 
-/** A `Link`'s props: every native anchor attribute, plus `href` (required) and `reload`. */
+/** A `Link`'s props: every native anchor attribute, plus `href` (required), `reload`, `prefetch`. */
 export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> {
   /**
    * The destination. A same-origin path soft-navigates; anything else falls back to
@@ -40,25 +41,47 @@ export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>,
    */
   reload?: boolean;
 
+  /**
+   * Opt this link INTO prefetch — warming the soft-nav fetch of its destination
+   * before the click, so the navigation feels instant. Renders the
+   * {@link PREFETCH_ATTR} the runtime reads; a server build with no soft-nav runtime
+   * (or one that declines the link, e.g. cross-origin) simply ignores it.
+   *
+   *   - `"viewport"` (or bare `prefetch` / `prefetch={true}`) — warm when the link
+   *     scrolls into view (eager, the cheaper-feeling default).
+   *   - `"hover"` — warm on pointer-enter / keyboard focus (lazy, intent-driven).
+   *   - `false`/omitted — no prefetch (the default; existing links are unchanged).
+   *
+   * Opt-in and additive: the runtime never warms a cross-origin or `route()`-escape
+   * href, so a marked external link is a harmless no-op.
+   */
+  prefetch?: boolean | PrefetchStrategy;
+
   children?: ReactNode;
 }
 
 /**
  * Render a soft-nav-aware anchor.
  *
- * `reload` is lifted off the DOM props and turned into the `data-lesto-reload`
- * attribute the runtime checks, so it never leaks onto the `<a>` as an unknown
- * boolean attribute. Everything else (`className`, `aria-*`, `onClick`, `rel`, a
+ * `reload` and `prefetch` are lifted off the DOM props and turned into the
+ * `data-lesto-reload` / `data-lesto-prefetch` attributes the runtime reads, so
+ * neither leaks onto the `<a>` as an unknown attribute. `prefetch` renders only
+ * when it resolves to a strategy ({@link prefetchAttrValue}: `true` → `"viewport"`,
+ * `false`/omitted → nothing), so an un-prefetched link is byte-for-byte the anchor
+ * it always was. Everything else (`className`, `aria-*`, `onClick`, `rel`, a
  * `target`) passes straight through — a `target="_blank"` link, for instance,
  * still renders normally and the runtime declines to soft-nav it, the correct
  * behavior with no special-casing here.
  */
-export function Link({ href, reload, children, ...rest }: LinkProps): ReactNode {
+export function Link({ href, reload, prefetch, children, ...rest }: LinkProps): ReactNode {
+  const prefetchValue = prefetchAttrValue(prefetch);
+
   return createElement(
     "a",
     {
       href,
       ...(reload === true ? { [RELOAD_ATTR]: "" } : {}),
+      ...(prefetchValue === undefined ? {} : { [PREFETCH_ATTR]: prefetchValue }),
       ...rest,
     },
     children,

@@ -800,3 +800,866 @@ describe("enableSoftNav — default seams (jsdom)", () => {
     disable();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Prefetch, the pending-nav signal, and the layout-preserving partial swap —
+// the Workstream-8 client-nav UX additions. These drive the AMBIENT jsdom
+// document (real body / closest / querySelectorAll / event dispatch), with the
+// platform-edge seams (fetch, IntersectionObserver, history, scroll) injected.
+// ---------------------------------------------------------------------------
+
+/** A fake IntersectionObserver whose callback a test fires with synthetic entries. */
+class FakeIO {
+  observed: Element[] = [];
+  unobserved: Element[] = [];
+  disconnected = false;
+  constructor(public callback: (entries: IntersectionObserverEntry[]) => void) {}
+  observe(target: Element): void {
+    this.observed.push(target);
+  }
+  unobserve(target: Element): void {
+    this.unobserved.push(target);
+  }
+  disconnect(): void {
+    this.disconnected = true;
+  }
+  /** Fire the observer's callback for a target, marking it intersecting (or not). */
+  fire(target: Element, isIntersecting = true): void {
+    this.callback([{ target, isIntersecting } as unknown as IntersectionObserverEntry]);
+  }
+}
+
+/** A no-op history/window/popTarget bundle for the ambient-document prefetch tests. */
+function inertSeams(): Pick<SoftNavOptions, "history" | "window" | "popStateTarget"> {
+  return {
+    history: {
+      state: null,
+      scrollRestoration: "auto",
+      pushState: () => {},
+      replaceState: () => {},
+    },
+    window: { scrollX: 0, scrollY: 0, scrollTo: () => {} },
+    popStateTarget: { addEventListener: () => {}, removeEventListener: () => {} },
+  };
+}
+
+/**
+ * Enable soft nav on the ambient document but CAPTURE its click listener, so a test
+ * can fire a synthetic click through it without a real anchor `.click()` (which jsdom
+ * would try — and noisily fail — to natively navigate). Returns `disable` plus a
+ * `click(anchor)` that drives the captured listener with the anchor as the target.
+ */
+function enableWithCapturedClick(options: SoftNavOptions): {
+  disable: ReturnType<typeof enableSoftNav>;
+  click: (anchor: Element) => void;
+} {
+  let clickListener: ((event: Event) => void) | undefined;
+  const realAdd = document.addEventListener.bind(document);
+  vi.spyOn(document, "addEventListener").mockImplementation(((type: string, l: EventListener) => {
+    if (type === "click") clickListener = l as (event: Event) => void;
+    else realAdd(type, l);
+  }) as typeof document.addEventListener);
+
+  const disable = enableSoftNav(new Registry(), options);
+
+  // Hand the OTHER listeners (pointerover/focusin) back to the real document so
+  // prefetch-intent dispatch still works; only the click was diverted to capture.
+  vi.restoreAllMocks();
+
+  return {
+    disable,
+    click: (anchor: Element) => {
+      clickListener?.({
+        button: 0,
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        defaultPrevented: false,
+        target: anchor,
+        preventDefault: () => {},
+      } as unknown as Event);
+    },
+  };
+}
+
+describe("enableSoftNav — prefetch (hover)", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("warms the fetch on pointerover of a hover-prefetch link", async () => {
+    const fetched: string[] = [];
+    const anchor = document.createElement("a");
+    anchor.href = "/dest";
+    anchor.setAttribute("data-lesto-prefetch", "hover");
+    anchor.append(document.createElement("span"));
+    document.body.append(anchor);
+
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+    });
+
+    // Pointer enters a CHILD of the link — the closest-anchor walk still finds it.
+    anchor.firstChild?.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+    await vi.waitFor(() => expect(fetched).toEqual([`${location.origin}/dest`]));
+
+    disable();
+  });
+
+  it("warms the fetch on focusin of a hover-prefetch link", async () => {
+    const fetched: string[] = [];
+    const anchor = document.createElement("a");
+    anchor.href = "/focusdest";
+    anchor.setAttribute("data-lesto-prefetch", "hover");
+    document.body.append(anchor);
+
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+    });
+
+    anchor.dispatchEvent(new Event("focusin", { bubbles: true }));
+
+    await vi.waitFor(() => expect(fetched).toEqual([`${location.origin}/focusdest`]));
+
+    disable();
+  });
+
+  it("does NOT warm a link with no prefetch marker, or a viewport-strategy link, on hover", () => {
+    const fetched: string[] = [];
+    const plain = document.createElement("a");
+    plain.href = "/plain";
+    const viewport = document.createElement("a");
+    viewport.href = "/vp";
+    viewport.setAttribute("data-lesto-prefetch", "viewport");
+    document.body.append(plain, viewport);
+
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      intersectionObserver: (cb) => new FakeIO(cb),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+    });
+
+    plain.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    // A viewport link's HOVER must not warm — it warms on intersection, not hover.
+    viewport.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+    expect(fetched).toEqual([]);
+
+    disable();
+  });
+
+  it("ignores a pointerover on non-anchor chrome", () => {
+    const fetched: string[] = [];
+    const div = document.createElement("div");
+    document.body.append(div);
+
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+    });
+
+    div.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+    expect(fetched).toEqual([]);
+
+    disable();
+  });
+
+  it("ignores a prefetch-intent event whose target is not an element", () => {
+    const fetched: string[] = [];
+    // Capture the delegated intent listener so we can fire it with a non-element
+    // target (the document itself, which a real pointerover never carries as target
+    // under a link, but the guard must still hold).
+    let intentListener: ((event: Event) => void) | undefined;
+    const realAdd = document.addEventListener.bind(document);
+    vi.spyOn(document, "addEventListener").mockImplementation(((type: string, l: EventListener) => {
+      if (type === "pointerover") intentListener = l as (event: Event) => void;
+      else realAdd(type, l);
+    }) as typeof document.addEventListener);
+
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+    });
+
+    vi.restoreAllMocks();
+
+    intentListener?.({ target: null } as unknown as Event);
+
+    expect(fetched).toEqual([]);
+
+    disable();
+  });
+
+  it("dedupes — a second hover does not start a second fetch", async () => {
+    const fetched: string[] = [];
+    const anchor = document.createElement("a");
+    anchor.href = "/once";
+    anchor.setAttribute("data-lesto-prefetch", "hover");
+    document.body.append(anchor);
+
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+    });
+
+    anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+    await vi.waitFor(() => expect(fetched.length).toBe(1));
+
+    disable();
+  });
+});
+
+describe("enableSoftNav — prefetch (skip rules)", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  const enableWith = (fetched: string[]) =>
+    enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+    });
+
+  it("does not warm a cross-origin link", () => {
+    const fetched: string[] = [];
+    const anchor = document.createElement("a");
+    anchor.href = "https://other.test/x";
+    anchor.setAttribute("data-lesto-prefetch", "hover");
+    document.body.append(anchor);
+
+    const disable = enableWith(fetched);
+    anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+    expect(fetched).toEqual([]);
+    disable();
+  });
+
+  it("does not warm a link to the current page (same path+search)", () => {
+    const fetched: string[] = [];
+    const anchor = document.createElement("a");
+    // The ambient page is the origin root; a link back to it is the current page.
+    anchor.href = location.href;
+    anchor.setAttribute("data-lesto-prefetch", "hover");
+    document.body.append(anchor);
+
+    const disable = enableWith(fetched);
+    anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+
+    expect(fetched).toEqual([]);
+    disable();
+  });
+});
+
+describe("enableSoftNav — prefetch (viewport)", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("warms a viewport-prefetch link when it scrolls into view, then unobserves it", async () => {
+    const fetched: string[] = [];
+    const anchor = document.createElement("a");
+    anchor.href = "/vp";
+    anchor.setAttribute("data-lesto-prefetch", "viewport");
+    document.body.append(anchor);
+
+    let io: FakeIO | undefined;
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      intersectionObserver: (cb) => (io = new FakeIO(cb)),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+    });
+
+    // Registered on enable, not yet warmed (nothing has scrolled into view).
+    expect(io?.observed).toEqual([anchor]);
+    expect(fetched).toEqual([]);
+
+    io?.fire(anchor, true);
+
+    await vi.waitFor(() => expect(fetched).toEqual([`${location.origin}/vp`]));
+    // A single warm per link: it is unobserved once it has fired.
+    expect(io?.unobserved).toEqual([anchor]);
+
+    disable();
+  });
+
+  it("reuses one observer across multiple viewport links", () => {
+    const a = document.createElement("a");
+    a.href = "/v-a";
+    a.setAttribute("data-lesto-prefetch", "viewport");
+    const b = document.createElement("a");
+    b.href = "/v-b";
+    b.setAttribute("data-lesto-prefetch", "viewport");
+    document.body.append(a, b);
+
+    let made = 0;
+    let io: FakeIO | undefined;
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      intersectionObserver: (cb) => {
+        made += 1;
+        return (io = new FakeIO(cb));
+      },
+      fetchPage: async (url) => ({ html: "", url }),
+    });
+
+    // Exactly one observer is created, and BOTH links are observed by it.
+    expect(made).toBe(1);
+    expect(io?.observed).toEqual([a, b]);
+
+    disable();
+    document.body.innerHTML = "";
+  });
+
+  it("ignores a non-intersecting entry (a link scrolling OUT of view)", () => {
+    const fetched: string[] = [];
+    const anchor = document.createElement("a");
+    anchor.href = "/vp2";
+    anchor.setAttribute("data-lesto-prefetch", "viewport");
+    document.body.append(anchor);
+
+    let io: FakeIO | undefined;
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      intersectionObserver: (cb) => (io = new FakeIO(cb)),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+    });
+
+    io?.fire(anchor, false);
+
+    expect(fetched).toEqual([]);
+    expect(io?.unobserved).toEqual([]);
+
+    disable();
+  });
+
+  it("ignores an intersecting entry whose target is not an anchor", () => {
+    const fetched: string[] = [];
+    const anchor = document.createElement("a");
+    anchor.href = "/vp3";
+    anchor.setAttribute("data-lesto-prefetch", "viewport");
+    document.body.append(anchor);
+
+    let io: FakeIO | undefined;
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      intersectionObserver: (cb) => (io = new FakeIO(cb)),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+    });
+
+    // A non-anchor element intersecting — unobserved (single-shot) but never warmed.
+    const div = document.createElement("div");
+    io?.fire(div, true);
+
+    expect(fetched).toEqual([]);
+    expect(io?.unobserved).toEqual([div]);
+
+    disable();
+  });
+
+  it("refuses viewport prefetch with a coded error when no IntersectionObserver exists", () => {
+    const anchor = document.createElement("a");
+    anchor.href = "/vp4";
+    anchor.setAttribute("data-lesto-prefetch", "viewport");
+    document.body.append(anchor);
+
+    const original = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver;
+    // jsdom may or may not define it; force the "unsupported" branch.
+    delete (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver;
+
+    try {
+      expect(() => enableSoftNav(new Registry(), inertSeams())).toThrowError(
+        expect.objectContaining({ code: "UI_SOFTNAV_PREFETCH_UNSUPPORTED" }),
+      );
+    } finally {
+      if (original !== undefined) {
+        (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = original;
+      }
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("uses the real global IntersectionObserver when none is injected", () => {
+    const anchor = document.createElement("a");
+    anchor.href = "/vp5";
+    anchor.setAttribute("data-lesto-prefetch", "viewport");
+    document.body.append(anchor);
+
+    const observed: Element[] = [];
+    class RealIsh {
+      constructor(public cb: unknown) {}
+      observe(t: Element): void {
+        observed.push(t);
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal("IntersectionObserver", RealIsh);
+
+    // No `intersectionObserver` option → the real global constructor path runs.
+    const disable = enableSoftNav(new Registry(), inertSeams());
+
+    expect(observed).toEqual([anchor]);
+
+    disable();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+  });
+});
+
+describe("enableSoftNav — prefetch consumed by the navigation", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("a navigation to a warmed url reuses the prefetch instead of re-fetching", async () => {
+    const fetched: string[] = [];
+    const anchor = document.createElement("a");
+    anchor.href = "/warm";
+    anchor.setAttribute("data-lesto-prefetch", "hover");
+    document.body.append(anchor);
+
+    const onNavigate = vi.fn();
+    const { disable, click } = enableWithCapturedClick({
+      ...inertSeams(),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "<title>Warm</title>", url };
+      },
+      swap: () => "Warm",
+      rehydrate: () => HYDRATION,
+      onNavigate,
+    });
+
+    // Hover warms the fetch.
+    anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    await vi.waitFor(() => expect(fetched.length).toBe(1));
+
+    // Now click it — the navigation consumes the warmed fetch (no second request).
+    click(anchor);
+    await vi.waitFor(() => expect(onNavigate).toHaveBeenCalled());
+
+    expect(fetched).toEqual([`${location.origin}/warm`]);
+
+    disable();
+  });
+
+  it("a prefetch is single-use — a later nav to the same url re-fetches", async () => {
+    const fetched: string[] = [];
+    const anchor = document.createElement("a");
+    anchor.href = "/reuse";
+    anchor.setAttribute("data-lesto-prefetch", "hover");
+    document.body.append(anchor);
+
+    const onNavigate = vi.fn();
+    const { disable, click } = enableWithCapturedClick({
+      ...inertSeams(),
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+      swap: () => undefined,
+      rehydrate: () => HYDRATION,
+      onNavigate,
+    });
+
+    anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    await vi.waitFor(() => expect(fetched.length).toBe(1));
+
+    click(anchor);
+    await vi.waitFor(() => expect(onNavigate).toHaveBeenCalledTimes(1));
+    // The warmed fetch was consumed (still 1).
+    expect(fetched.length).toBe(1);
+
+    // A second click re-fetches — the prefetch was single-use.
+    click(anchor);
+    await vi.waitFor(() => expect(fetched.length).toBe(2));
+
+    disable();
+  });
+
+  it("swallows a prefetch rejection (no unhandled rejection); the click consumes it via onError", async () => {
+    const anchor = document.createElement("a");
+    anchor.href = "/flaky";
+    anchor.setAttribute("data-lesto-prefetch", "hover");
+    document.body.append(anchor);
+
+    const boom = new Error("prefetch offline");
+    const onError = vi.fn();
+
+    // The prefetch fetch rejects; we assert that rejection is swallowed (no
+    // unhandled-rejection crash) and the click — consuming the same warmed promise —
+    // routes it to onError. The captured-click helper avoids a real anchor nav.
+    const { disable, click } = enableWithCapturedClick({
+      ...inertSeams(),
+      fetchPage: () => Promise.reject(boom),
+      swap: () => undefined,
+      rehydrate: () => HYDRATION,
+      onError,
+    });
+
+    anchor.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    // Let the swallowed prefetch rejection settle without surfacing.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    click(anchor);
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(boom, `${location.origin}/flaky`));
+
+    disable();
+  });
+
+  it("teardown aborts a still-warming prefetch and disconnects the viewport observer", async () => {
+    const aborted: string[] = [];
+    const anchor = document.createElement("a");
+    anchor.href = "/pending";
+    anchor.setAttribute("data-lesto-prefetch", "viewport");
+    document.body.append(anchor);
+
+    let io: FakeIO | undefined;
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      intersectionObserver: (cb) => (io = new FakeIO(cb)),
+      fetchPage: (url, signal) =>
+        new Promise<FetchedPage>(() => {
+          signal.addEventListener("abort", () => aborted.push(url));
+        }),
+    });
+
+    io?.fire(anchor, true);
+    await Promise.resolve();
+
+    disable();
+
+    expect(aborted).toEqual([`${location.origin}/pending`]);
+    expect(io?.disconnected).toBe(true);
+  });
+
+  it("re-registers viewport prefetch links brought in by a swap", async () => {
+    const fetched: string[] = [];
+    const link = document.createElement("a");
+    link.href = "/first";
+    link.setAttribute("data-lesto-prefetch", "hover");
+    document.body.append(link);
+
+    let io: FakeIO | undefined;
+    const onNavigate = vi.fn();
+    const { disable, click } = enableWithCapturedClick({
+      ...inertSeams(),
+      intersectionObserver: (cb) => (io = new FakeIO(cb)),
+      // The swapped-in page carries a NEW viewport-prefetch link.
+      swap: (_html, doc) => {
+        const next = doc.createElement("a");
+        next.href = "/second";
+        next.setAttribute("data-lesto-prefetch", "viewport");
+        doc.body.replaceChildren(next);
+        return undefined;
+      },
+      fetchPage: async (url) => {
+        fetched.push(url);
+        return { html: "", url };
+      },
+      rehydrate: () => HYDRATION,
+      onNavigate,
+    });
+
+    // No viewport links at enable → no observer created yet.
+    expect(io).toBeUndefined();
+
+    click(link);
+    await vi.waitFor(() => expect(onNavigate).toHaveBeenCalled());
+
+    // After the swap, the new viewport link is registered with the observer.
+    expect(io?.observed.some((el) => (el as HTMLAnchorElement).href.endsWith("/second"))).toBe(
+      true,
+    );
+
+    disable();
+  });
+});
+
+describe("enableSoftNav — pending-nav signal", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("fires onNavigateStart before the fetch and onNavigate after, and flips isNavigating", async () => {
+    const events: string[] = [];
+    const anchor = document.createElement("a");
+    anchor.href = "/pend";
+    document.body.append(anchor);
+
+    let resolveFetch: ((page: FetchedPage) => void) | undefined;
+    const onNavigate = vi.fn(() => events.push("navigate"));
+    const { disable, click } = enableWithCapturedClick({
+      ...inertSeams(),
+      fetchPage: () =>
+        new Promise<FetchedPage>((resolve) => {
+          events.push("fetch");
+          resolveFetch = resolve;
+        }),
+      swap: () => undefined,
+      rehydrate: () => HYDRATION,
+      onNavigateStart: (e) => events.push(`start:${e.kind}`),
+      onNavigatingChange: (busy) => events.push(`busy:${busy}`),
+      onNavigate,
+    });
+
+    // Subscribe immediately → the initial false value.
+    const seen: boolean[] = [];
+    disable.isNavigating.subscribe((b) => seen.push(b));
+    expect(disable.isNavigating.get()).toBe(false);
+    expect(seen).toEqual([false]);
+
+    click(anchor);
+
+    // Start fired before the fetch; the signal flipped true.
+    await vi.waitFor(() => expect(events).toContain("fetch"));
+    expect(events.indexOf("start:push")).toBeLessThan(events.indexOf("fetch"));
+    expect(disable.isNavigating.get()).toBe(true);
+    expect(seen).toEqual([false, true]);
+
+    resolveFetch?.({ html: "", url: `${location.origin}/pend` });
+    await vi.waitFor(() => expect(onNavigate).toHaveBeenCalled());
+
+    // Settled: the flag is back to false and onNavigate ran after start.
+    expect(disable.isNavigating.get()).toBe(false);
+    expect(seen).toEqual([false, true, false]);
+    expect(events).toContain("busy:true");
+    expect(events).toContain("busy:false");
+
+    disable();
+  });
+
+  it("stays navigating until the LAST overlapping nav settles (count-based, not a bare flag)", async () => {
+    const a = document.createElement("a");
+    a.href = "/a";
+    const b = document.createElement("a");
+    b.href = "/b";
+    document.body.append(a, b);
+
+    const resolvers = new Map<string, () => void>();
+    const { disable, click } = enableWithCapturedClick({
+      ...inertSeams(),
+      fetchPage: (url) =>
+        new Promise<FetchedPage>((resolve) => {
+          resolvers.set(url, () => resolve({ html: "", url }));
+        }),
+      swap: () => undefined,
+      rehydrate: () => HYDRATION,
+    });
+
+    click(a);
+    click(b);
+
+    // Two navigations started; the signal is busy.
+    expect(disable.isNavigating.get()).toBe(true);
+
+    // The superseded A settles first (its token is stale → it returns, but still
+    // runs its `finally`, decrementing the count to 1) — still busy.
+    resolvers.get(`${location.origin}/a`)?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(disable.isNavigating.get()).toBe(true);
+
+    // B (the current nav) settles → count hits 0 → no longer busy.
+    resolvers.get(`${location.origin}/b`)?.();
+    await vi.waitFor(() => expect(disable.isNavigating.get()).toBe(false));
+
+    disable();
+  });
+
+  it("subscribe returns an unsubscribe that stops further notifications", async () => {
+    const anchor = document.createElement("a");
+    anchor.href = "/unsub";
+    document.body.append(anchor);
+
+    const { disable, click } = enableWithCapturedClick({
+      ...inertSeams(),
+      fetchPage: async (url) => ({ html: "", url }),
+      swap: () => undefined,
+      rehydrate: () => HYDRATION,
+    });
+
+    const seen: boolean[] = [];
+    const unsubscribe = disable.isNavigating.subscribe((b) => seen.push(b));
+    expect(seen).toEqual([false]);
+
+    unsubscribe();
+
+    click(anchor);
+    await vi.waitFor(() => expect(disable.isNavigating.get()).toBe(false));
+
+    // After unsubscribe the listener heard nothing more than its initial value.
+    expect(seen).toEqual([false]);
+
+    disable();
+  });
+});
+
+describe("enableSoftNav — layout-preserving partial swap (default swap)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("scrollTo", vi.fn());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+  });
+
+  /**
+   * Run the REAL `defaultSwap` against the ambient document for a fetched HTML, by
+   * firing the runtime's captured click listener with a synthetic event whose target
+   * is a real `<a href="/dest">` (so its own `resolveAnchor` walk runs). The fetch is
+   * injected (no global `fetch`/`location.assign`), and the swap is the default.
+   */
+  async function navigateWithDefaultSwap(destHtml: string): Promise<void> {
+    const onNavigate = vi.fn();
+    const onError = vi.fn();
+
+    let clickListener: ((event: Event) => void) | undefined;
+    const realAdd = document.addEventListener.bind(document);
+    vi.spyOn(document, "addEventListener").mockImplementation(((type: string, l: EventListener) => {
+      if (type === "click") clickListener = l as (event: Event) => void;
+      else realAdd(type, l);
+    }) as typeof document.addEventListener);
+
+    const disable = enableSoftNav(new Registry(), {
+      ...inertSeams(),
+      fetchPage: async () => ({ html: destHtml, url: `${location.origin}/dest` }),
+      onNavigate,
+      onError,
+    });
+
+    vi.restoreAllMocks();
+
+    // A real anchor in the live DOM the runtime's resolveAnchor walks to.
+    const anchor = document.createElement("a");
+    anchor.href = "/dest";
+    const span = document.createElement("span");
+    anchor.append(span);
+    document.body.append(anchor);
+
+    clickListener?.({
+      button: 0,
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      defaultPrevented: false,
+      target: span,
+      preventDefault: () => {},
+    } as unknown as Event);
+
+    await vi.waitFor(() => expect(onNavigate).toHaveBeenCalled());
+    expect(onError).not.toHaveBeenCalled();
+
+    disable();
+  }
+
+  it("swaps only the deepest shared layout's contents, preserving the outer layout DOM", async () => {
+    // Live document: a depth-0 shell wrapping a depth-1 section wrapping the page.
+    document.body.innerHTML = `
+      <div data-lesto-layout="0" id="shell">
+        <header id="keepme">SHELL</header>
+        <div data-lesto-layout="1" id="section">
+          <main id="page">OLD PAGE</main>
+        </div>
+      </div>`;
+
+    const shell = document.getElementById("shell");
+    const keepme = document.getElementById("keepme");
+    // Tag the preserved nodes so we can prove they are the SAME node after the swap.
+    (shell as HTMLElement).dataset["marker"] = "original-shell";
+    (keepme as HTMLElement).dataset["marker"] = "original-header";
+
+    // Fetched document: same layout chain, a DIFFERENT page inside the depth-1 section.
+    await navigateWithDefaultSwap(`<!doctype html><html><head><title>New</title></head><body>
+      <div data-lesto-layout="0">
+        <header>NEW SHELL (should NOT replace the live one)</header>
+        <div data-lesto-layout="1">
+          <main id="page">NEW PAGE</main>
+        </div>
+      </div></body></html>`);
+
+    // The outer shell + header are the SAME live nodes (state/DOM preserved)...
+    expect(document.getElementById("shell")?.dataset["marker"]).toBe("original-shell");
+    expect(document.getElementById("keepme")?.dataset["marker"]).toBe("original-header");
+    // ...the outer header text was NOT replaced by the fetched one...
+    expect(document.getElementById("keepme")?.textContent).toBe("SHELL");
+    // ...but the inner page content WAS swapped.
+    expect(document.getElementById("page")?.textContent).toBe("NEW PAGE");
+  });
+
+  it("falls back to a full body swap when the documents share no layout markers", async () => {
+    document.body.innerHTML = `<main id="page">OLD</main>`;
+
+    await navigateWithDefaultSwap(
+      `<!doctype html><html><head><title>X</title></head><body><main id="page">NEW</main></body></html>`,
+    );
+
+    expect(document.getElementById("page")?.textContent).toBe("NEW");
+    expect(document.title).toBe("X");
+  });
+
+  it("falls back to a full body swap when the chains diverge at the root (no depth-0 in fetched)", async () => {
+    document.body.innerHTML = `<div data-lesto-layout="0"><main id="page">OLD</main></div>`;
+
+    // Fetched page has NO depth-0 marker → no shared boundary → full swap.
+    await navigateWithDefaultSwap(
+      `<!doctype html><html><head><title>Y</title></head><body><main id="page">NEW</main></body></html>`,
+    );
+
+    expect(document.getElementById("page")?.textContent).toBe("NEW");
+    // The whole body was replaced (the old depth-0 wrapper is gone).
+    expect(document.querySelector("[data-lesto-layout='0']")).toBeNull();
+  });
+
+  it("swaps the depth-0 layout's contents when that is the deepest shared (no depth-1)", async () => {
+    document.body.innerHTML = `<div data-lesto-layout="0" id="shell"><main id="page">OLD</main></div>`;
+    (document.getElementById("shell") as HTMLElement).dataset["marker"] = "kept";
+
+    await navigateWithDefaultSwap(`<!doctype html><html><head><title>Z</title></head><body>
+      <div data-lesto-layout="0"><main id="page">NEW</main></div></body></html>`);
+
+    // The depth-0 shell node is preserved; only its inner contents changed.
+    expect(document.getElementById("shell")?.dataset["marker"]).toBe("kept");
+    expect(document.getElementById("page")?.textContent).toBe("NEW");
+  });
+});

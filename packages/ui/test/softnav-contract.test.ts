@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { eligibleAnchor, RELOAD_ATTR } from "../src/softnav-contract";
+import {
+  eligibleAnchor,
+  LAYOUT_ATTR,
+  PREFETCH_ATTR,
+  prefetchAttrValue,
+  RELOAD_ATTR,
+} from "../src/softnav-contract";
 import type { SoftNavAnchor, SoftNavClick } from "../src/softnav-contract";
 
 /**
@@ -34,6 +40,35 @@ const click = (over: Partial<SoftNavClick> = {}): SoftNavClick => ({
 describe("RELOAD_ATTR", () => {
   it("is the data attribute the runtime declines on", () => {
     expect(RELOAD_ATTR).toBe("data-lesto-reload");
+  });
+});
+
+describe("PREFETCH_ATTR / LAYOUT_ATTR", () => {
+  it("are the prefetch + layout marker attribute names", () => {
+    expect(PREFETCH_ATTR).toBe("data-lesto-prefetch");
+    expect(LAYOUT_ATTR).toBe("data-lesto-layout");
+  });
+});
+
+describe("prefetchAttrValue — resolves the <Link prefetch> prop to the attribute value", () => {
+  it("maps undefined to no attribute", () => {
+    expect(prefetchAttrValue(undefined)).toBeUndefined();
+  });
+
+  it("maps false to no attribute", () => {
+    expect(prefetchAttrValue(false)).toBeUndefined();
+  });
+
+  it("maps bare true to the eager viewport default", () => {
+    expect(prefetchAttrValue(true)).toBe("viewport");
+  });
+
+  it("passes an explicit viewport strategy through", () => {
+    expect(prefetchAttrValue("viewport")).toBe("viewport");
+  });
+
+  it("passes an explicit hover strategy through", () => {
+    expect(prefetchAttrValue("hover")).toBe("hover");
   });
 });
 
