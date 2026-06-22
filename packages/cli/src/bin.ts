@@ -399,6 +399,12 @@ const buildLiveReload = (): {
   try {
     server = bun?.serve({
       port: LIVE_RELOAD_PORT,
+      // Bind loopback-only to MATCH the app server (`run.ts` listens on 127.0.0.1).
+      // Bun's default is all interfaces (0.0.0.0); on shared Wi-Fi that would let any
+      // LAN peer connect to the reload socket and observe reload + error-overlay
+      // payloads (local source paths, stack frames). The app is loopback-only, so the
+      // page can only ever be reached at localhost — the WS never needs to be wider.
+      hostname: "127.0.0.1",
       fetch(_request: unknown, srv: { upgrade: (request: unknown) => boolean }) {
         // Every request to this port is a WS upgrade; a non-upgrade gets a 426.
         if (srv.upgrade(_request)) return undefined;
