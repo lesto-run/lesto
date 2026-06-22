@@ -20,6 +20,27 @@ import { currentContext } from "./context";
 import type { AnyLestoResponse, LestoBody, LestoRequest, LestoResponse } from "./types";
 import { validateBody } from "./validate";
 
+/**
+ * A {@link LestoResponse} that REMEMBERS, at the type level, the value its body was
+ * serialized from — the read-path counterpart to `@lesto/runtime`'s `Mutation`
+ * phantom carrier.
+ *
+ * At runtime it is exactly a string-bodied `LestoResponse` (`c.json` JSON-encodes
+ * the value, as it always has). The extra `__json` carrier is a PHANTOM — optional,
+ * never written, erased at emit — present only so a typed route builder can read
+ * the handler's response shape off `typeof handler`'s return, exactly as
+ * `MutationContractOf` reads a mutation's `__output`. Because the carrier is
+ * optional, a `TypedResponse<T>` is still assignable everywhere a `LestoResponse`
+ * is, so existing handlers and consumers compile unchanged.
+ */
+export interface TypedResponse<Json> extends LestoResponse {
+  /** Phantom: the value `c.json` serialized, so a route builder can project the wire type. */
+  readonly __json?: Json;
+}
+
+/** The value a {@link TypedResponse} carries, or `never` for a plain (untyped) response. */
+export type JsonOf<R> = R extends TypedResponse<infer J> ? J : never;
+
 export class Context<Path extends string = string> {
   // The request is immutable for the lifetime of the context; a handler reads it
   // but never reassigns it, so it stays private behind a getter.
@@ -110,8 +131,16 @@ export class Context<Path extends string = string> {
     return this.vars.get(key) as T | undefined;
   }
 
-  /** A JSON response — `data` is serialized and tagged `application/json`. */
-  json(data: unknown, status = 200): LestoResponse {
+  /**
+   * A JSON response — `data` is serialized and tagged `application/json`.
+   *
+   * The return is a {@link TypedResponse} that carries `data`'s type in a phantom
+   * (runtime-identical to before: the body is `JSON.stringify(data)`). That carrier
+   * is what lets `apiRoutes()` project a handler's response shape into a client
+   * contract WITHOUT codegen — the read-path mirror of typed mutations. A handler
+   * that returns `c.json(...)` therefore drift-proofs the client by construction.
+   */
+  json<Data>(data: Data, status = 200): TypedResponse<Data> {
     return {
       status,
       headers: { "content-type": "application/json" },

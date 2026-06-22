@@ -1,6 +1,6 @@
 import { createElement, Suspense } from "react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "zod";
 
 import { defineDataSource, defineIsland } from "@lesto/ui";
@@ -14,6 +14,7 @@ import { applyUiDialect, lesto } from "../src/lesto";
 import { Context as RequestCtx } from "../src/handler-context";
 import { renderPageResponse } from "../src/render-page";
 import type { Context } from "../src/handler-context";
+import type { PageDef, PageProps } from "../src/render-page";
 import type { LestoResponse } from "../src/types";
 
 afterEach(() => {
@@ -184,6 +185,90 @@ describe("page params (query validation)", () => {
       headers: { "content-type": "text/plain" },
       body: "Bad Request",
     });
+  });
+});
+
+// Hoisted: a loader for the typed-search type-test — captures nothing, so it lives
+// at module scope (oxlint's consistent-function-scoping), defined once.
+const searchLoad = (_c: Context<"/search">, search: { q: string; page: number }) => ({
+  term: search.q,
+  page: search.page,
+});
+
+describe("page typed search params (PageDef.search generic — Workstream 8)", () => {
+  const Schema = z.object({ q: z.string(), page: z.coerce.number().default(1) });
+
+  it("flows the VALIDATED, typed search value into load's second argument", async () => {
+    const app = lesto().page("/search", {
+      params: Schema,
+      // `search` is the parsed Zod output — `page` is the coerced number, not the
+      // raw query string. The loader reads it directly, no `c.get(...)` cast.
+      load: (_c, search) => ({ term: search.q, page: search.page }),
+      component: (props: { term: string; page: number }) =>
+        createElement("p", null, `${props.term}#${props.page}`),
+    });
+
+    const html = await drain(
+      await app.handle("GET", "/search", { query: { q: "homes", page: "3" } }),
+    );
+
+    expect(html).toContain("<p>homes#3</p>");
+  });
+
+  it("applies the schema's default when an optional search field is absent", async () => {
+    const app = lesto().page("/search", {
+      params: Schema,
+      load: (_c, search) => ({ page: search.page }),
+      component: (props: { page: number }) => createElement("p", null, `page=${props.page}`),
+    });
+
+    // No `page` query → the schema's `.default(1)` fills it, typed as a number.
+    const html = await drain(await app.handle("GET", "/search", { query: { q: "x" } }));
+
+    expect(html).toContain("<p>page=1</p>");
+  });
+
+  it("types the loader's search argument from the params schema (compile-time)", () => {
+    // The headline type-test: `search` is the schema's OUTPUT, and `PageProps<typeof
+    // searchLoad>` still reads only the loader's return, unaffected by the new argument.
+    const def: PageDef<"/search", PageProps<typeof searchLoad>, { q: string; page: number }> = {
+      params: Schema,
+      load: searchLoad,
+      component: ({ term, page }: PageProps<typeof searchLoad>) =>
+        createElement("p", null, `${term}${page}`),
+    };
+
+    expectTypeOf<Parameters<typeof searchLoad>[1]>().toEqualTypeOf<{ q: string; page: number }>();
+    expectTypeOf<PageProps<typeof searchLoad>>().toEqualTypeOf<{ term: string; page: number }>();
+
+    // Inference path: declaring `params` infers `Search`, so the loader's `search`
+    // arg is the schema output with NO explicit generic — the `.page()` registration
+    // type-checks the inline loader's second parameter.
+    const app = lesto().page("/search", {
+      params: Schema,
+      load: (_c, search) => {
+        expectTypeOf(search).toEqualTypeOf<{ q: string; page: number }>();
+
+        return { term: search.q };
+      },
+      component: (props: { term: string }) => createElement("p", null, props.term),
+    });
+
+    expect(typeof app.handle).toBe("function");
+    expect(typeof def.load).toBe("function");
+  });
+
+  it("a loader that ignores the search argument stays back-compatible (no params)", async () => {
+    // A `(c) => …` loader — one fewer parameter — is still a valid PageLoad, so
+    // every existing page compiles unchanged.
+    const app = lesto().page("/plain", {
+      load: (c) => ({ path: c.path }),
+      component: (props: { path: string }) => createElement("p", null, props.path),
+    });
+
+    const html = await drain(await app.handle("GET", "/plain"));
+
+    expect(html).toContain("<p>/plain</p>");
   });
 });
 

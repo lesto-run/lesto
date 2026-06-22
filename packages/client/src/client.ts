@@ -1,18 +1,27 @@
 /**
  * `createApi` — a typed, browser-safe fetch client for a Lesto app's data routes.
  *
- *   // The contract: the wire types, declared ONCE and shared by import (no
- *   // codegen, no GraphQL). In a real app these reference the same `@lesto/db`
- *   // row/insert types the server handlers use, so client and server can't drift.
- *   interface SavedResponse { user: { id: string; name: string }; saved: Listing[] }
+ * The contract — the wire types — is shared with the server by import, no codegen,
+ * no GraphQL. There are two ways to get it, both drift-checked by `tsc`:
  *
+ *   // 1 · PROJECTED from the server routes (drift-proof by construction). The
+ *   //     server declares its reads with `@lesto/web`'s `apiRoutes()`, which
+ *   //     CAPTURES each handler's `c.json(...)` response; the client consumes the
+ *   //     projection — so a handler edited to return the wrong shape stops the
+ *   //     client compiling. This is the read-path mirror of typed mutations
+ *   //     (`MutationContractOf<typeof defs>`).
+ *   import type { ContractOf } from "@lesto/web";
+ *   const api = createApi<ContractOf<typeof serverApi>>();    // server is the source of truth
+ *
+ *   // 2 · HAND-DECLARED (when the routes aren't built with `apiRoutes()`). A plain
+ *   //     interface of the same shape — still typed end-to-end, but the burden of
+ *   //     keeping it in step with the handlers is yours (1 removes that burden).
  *   interface EstateApi {
  *     "GET /mls/saved": { response: SavedResponse };
  *     "GET /mls/listings/:id": { response: Listing };
  *     "POST /mls/api/sign-out": { response: { ok: true } };
  *   }
- *
- *   const api = createApi<EstateApi>();
+ *   const api2 = createApi<EstateApi>();
  *
  *   const saved = await api.get("/mls/saved");                 // SavedResponse
  *   const one = await api.get("/mls/listings/:id", { params: { id: "3" } });  // Listing
@@ -45,6 +54,12 @@ export interface RouteSpec {
  * An API contract: keys are `"METHOD /path"` (e.g. `"GET /mls/saved"`), values
  * are each route's {@link RouteSpec}. `createApi<Contract>()` infers everything
  * from it — no generated module, no spec file.
+ *
+ * Supply it hand-declared, OR — to make drift a `tsc` error — projected from the
+ * server routes with `@lesto/web`'s `ContractOf<typeof serverApi>` (the routes built
+ * by `apiRoutes()`, which captures each handler's `c.json(...)` response). A
+ * `ContractOf<…>` projection IS an `ApiContract`: its values are `{ response }`,
+ * and every `RouteSpec` field is optional, so the projected shape satisfies this.
  */
 export type ApiContract = Record<string, RouteSpec>;
 

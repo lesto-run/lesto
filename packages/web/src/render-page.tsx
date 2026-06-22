@@ -35,9 +35,20 @@ type MaybePromise<T> = T | Promise<T>;
 /** The props a loaded page hands its component, once erased to the open runtime record. */
 type LoadedProps = Record<string, unknown>;
 
-/** A page's server-side data loader: reads the context, returns the component's props. */
-export type PageLoad<Path extends string = string, Loaded = unknown> = (
+/**
+ * A page's server-side data loader: reads the context, returns the component's props.
+ *
+ * It also receives the page's VALIDATED search params as a second argument —
+ * `def.params`'s parsed output, typed `Search` (mirror of TanStack `validateSearch`).
+ * A loader that ignores it is unaffected: `(c) => …` is still a valid `PageLoad`,
+ * because a function of FEWER parameters is assignable to one of more. A loader that
+ * WANTS the typed search names the second parameter; `Search` is then inferred from
+ * the page's `params` schema. With no `params` schema declared, `Search` is the open
+ * `unknown` default (and the argument is `undefined` at runtime).
+ */
+export type PageLoad<Path extends string = string, Loaded = unknown, Search = unknown> = (
   c: Context<Path>,
+  search: Search,
 ) => MaybePromise<Loaded>;
 
 /** A wrapping layout — a component given the page (or inner layout) as `children`. */
@@ -58,17 +69,28 @@ export interface PageMetadata {
  * The definition a `.page(path, def)` registration carries.
  *
  * `component` is the only required field — the view. `load` feeds it props;
- * `params` validates the query string at the boundary (Zod); `metadata` derives
- * the head from the loaded props. Authorization and feature gating are applied as
- * middleware (`.use(can(...))` / `.use(gate(...))`), which guards a page and its
- * whole subtree exactly as it guards API routes.
+ * `params` validates the query string at the boundary (Zod) AND, since this
+ * version, TYPES the validated value into `load`'s second argument (`Search`);
+ * `metadata` derives the head from the loaded props. Authorization and feature
+ * gating are applied as middleware (`.use(can(...))` / `.use(gate(...))`), which
+ * guards a page and its whole subtree exactly as it guards API routes.
+ *
+ * The `Search` generic is INFERRED from `params`: declare `params: SomeZodSchema`
+ * and `load`'s `search` argument is typed to that schema's output, mirror of
+ * TanStack `validateSearch`. Declare no `params` and `Search` is the open `unknown`
+ * default, so an existing `(c) => …` loader is unchanged AND `params` still accepts
+ * any schema (`ZodType`'s `Output` is covariant, so a narrower schema assigns to the
+ * `unknown` default — the file-route applier, which holds a bare `PageDef`, keeps
+ * compiling). `PageProps<typeof load>` reads only `load`'s RETURN, so it is
+ * unaffected by the new argument — every existing `PageProps<typeof load>` page
+ * keeps compiling.
  */
-export interface PageDef<Path extends string = string, Loaded = unknown> {
+export interface PageDef<Path extends string = string, Loaded = unknown, Search = unknown> {
   component: ComponentType<Loaded>;
 
-  load?: PageLoad<Path, Loaded>;
+  load?: PageLoad<Path, Loaded, Search>;
 
-  params?: ZodType;
+  params?: ZodType<Search>;
 
   metadata?: (loaded: Loaded) => PageMetadata;
 
@@ -294,19 +316,33 @@ export async function renderPageResponse(
   layouts: readonly Layout[],
   options: RenderPageOptions = {},
 ): Promise<AnyLestoResponse> {
+  // The page's VALIDATED search params, when it declared a `params` schema. The
+  // parsed value is both stashed (`c.get("params")`, the prior contract) AND passed
+  // typed into `load`'s second argument (the new typed-search seam). `undefined`
+  // when no schema is declared — exactly the `Search` default, so a `(c) => …`
+  // loader sees no change.
+  let search: unknown;
+
   if (def.params !== undefined) {
     const parsed = def.params.safeParse(c.req.query);
 
     if (!parsed.success) return badRequest();
 
+    search = parsed.data;
     c.set("params", parsed.data);
   }
 
   // The loaded props, erased to the open runtime record. `load` returns the
   // page's typed `Loaded` (the type spine threads it to the component), but the
   // renderer is generic over every page, so here it is the open shape React
-  // receives — one localized erasure, not a hole in the public types.
-  const loaded = ((def.load === undefined ? undefined : await def.load(c)) ?? {}) as LoadedProps;
+  // receives — one localized erasure, not a hole in the public types. `load` is
+  // called with the validated `search` as its second argument; the public `PageDef`
+  // types it `Search`, but the erased `def` here fixes `Search = undefined`, so the
+  // loader is read at the open `(c, search: unknown)` signature at this one
+  // boundary — the same erasure `.page()` makes when it stores the def.
+  const load = def.load as ((c: Context, search: unknown) => MaybePromise<unknown>) | undefined;
+
+  const loaded = ((load === undefined ? undefined : await load(c, search)) ?? {}) as LoadedProps;
 
   const page = wrap(layouts, createElement(def.component as ComponentType<LoadedProps>, loaded));
 

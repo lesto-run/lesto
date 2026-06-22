@@ -39,6 +39,7 @@ import type { ClientErrorSink } from "./client-errors";
 import { currentRequestSpan } from "./context";
 import { WebError } from "./errors";
 import { Context } from "./handler-context";
+import type { TypedResponse } from "./handler-context";
 import type { Middleware, Next } from "./middleware";
 import { renderPageResponse } from "./render-page";
 import type { Layout, PageDef, RenderPageOptions } from "./render-page";
@@ -256,9 +257,10 @@ export class Lesto {
   }
 
   /** Register a page at `path`, wrapped in the layouts declared so far. */
-  page<P extends string, Loaded>(path: P, def: PageDef<P, Loaded>): this {
+  page<P extends string, Loaded, Search = unknown>(path: P, def: PageDef<P, Loaded, Search>): this {
     // The public def is typed over its loaded shape (so the component's props are
-    // inferred); storage is over the erased `PageDef`. A React component is
+    // inferred) AND its validated-search shape (so `load`'s second argument is
+    // typed); storage is over the erased `PageDef`. A React component is
     // contravariant in its props, so a specific def is not directly assignable to
     // the open one — the erasure is deliberate and lives only at this boundary.
     return this.add("GET", path, {
@@ -702,3 +704,174 @@ export function applyUiDialect(app: Lesto, dialect: UiDialect): UiDialect {
 
   return dialect;
 }
+
+/**
+ * One entry in a captured read contract: a route's wire `response`, projected from
+ * the handler's `c.json(...)` return. Shaped to match `@lesto/client`'s `RouteSpec`
+ * exactly, so `createApi<ContractOf<typeof api>>()` consumes it with no adapter.
+ */
+export interface CapturedRouteSpec {
+  response: unknown;
+}
+
+/**
+ * A captured read contract: keys are `"METHOD /path"`, values each route's
+ * {@link CapturedRouteSpec}. {@link ContractOf} projects an {@link ApiRoutes}
+ * builder's `typeof` to this — the read-path mirror of `MutationContractOf`.
+ */
+export type CapturedContract = Record<string, CapturedRouteSpec>;
+
+/** The handler a typed read route runs: it MUST answer with a `c.json(...)` value. */
+type TypedHandler<P extends string, Json> = (
+  c: Context<P>,
+  next: Next,
+) => MaybePromise<TypedResponse<Json>>;
+
+/**
+ * The verbs a typed read route may declare. Reads project a response contract;
+ * `GET` is the canonical read, but a `POST`/`PUT`/`PATCH`/`DELETE` that answers
+ * with `c.json(...)` is captured the same way (the contract keys carry the verb,
+ * exactly as `@lesto/client`'s contract does).
+ */
+type CapturedMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+/**
+ * A typed read-route builder — the drift-proof read path (Workstream 4 / ADR plan).
+ *
+ * `apiRoutes()` returns this. Each `.get(path, handler)` / `.post(...)` / … CAPTURES
+ * the handler's `c.json(...)` response type into the accumulated contract `C`, so the
+ * server routes ARE the single source of truth and the client cannot drift: a
+ * handler edited to return the wrong shape changes `C`, and a `createApi` call typed
+ * to the old shape stops compiling.
+ *
+ *   const api = apiRoutes()
+ *     .get("/listings/:id", (c) => c.json(getListing(c.param("id"))))   // response captured
+ *     .get("/saved", (c) => c.json({ saved: load() }));
+ *
+ *   // server: mount the real routes (a plain `lesto()` sub-app)
+ *   app.route(api.routes());
+ *
+ *   // client: the contract is `typeof api` projected — no hand-written interface
+ *   type Api = ContractOf<typeof api>;
+ *   const client = createApi<Api>();
+ *   await client.get("/listings/:id", { params: { id } });             // typed, drift-proof
+ *
+ * It is the `defineMutation`/`MutationContractOf` pattern for reads: the response
+ * type rides a phantom on `c.json`'s {@link TypedResponse}, the builder accumulates
+ * a `C` of `"METHOD /path" → { response }`, and {@link ContractOf} reads `C` back
+ * out. `Lesto` itself stays NON-generic — `apiRoutes()` wraps a private `lesto()`
+ * and hands back a plain `Lesto` from {@link ApiRoutes.routes} — so nothing that
+ * consumes `Lesto` (`.route`, `applyFileRoutes`, `mutationRoutes`) is disturbed.
+ *
+ * **What this catches:** a handler whose `c.json(...)` shape stops matching what the
+ * client call expects becomes a `tsc` error at the call site. **What it does NOT
+ * catch:** a handler that answers with `c.text(...)`/`c.html(...)`/`c.bytes(...)`
+ * instead of `c.json(...)` (the `TypedHandler` return type rejects it at
+ * registration — those are not read-contract routes); a route declared with the
+ * untyped `Lesto.get` (only `apiRoutes()` routes are captured); and a runtime body
+ * that diverges from what was `c.json`'d (TypeScript checks the value passed to
+ * `c.json`, not the bytes on the wire — there is no runtime schema here).
+ */
+export class ApiRoutes<C extends CapturedContract = Record<never, never>> {
+  // A typed builder is a thin façade over a real `lesto()`: it records the same
+  // routes for dispatch, while its TYPE parameter accumulates the captured
+  // contract. The two never diverge — every `.get`/… both registers and captures.
+  private readonly app: Lesto;
+
+  constructor(app: Lesto = lesto()) {
+    this.app = app;
+  }
+
+  /**
+   * Register `handler` on the inner app and re-type `this` with the contract grown
+   * by one `"METHOD /path" → { response }` entry. The handler is a real `Handler`
+   * at runtime (a {@link TypedResponse} IS a `LestoResponse`); only its captured
+   * RETURN type is narrower, which is the whole point. One private body so every
+   * verb method shares the exact same register-then-retype move.
+   */
+  private grow<M extends CapturedMethod, P extends string, Json>(
+    register: (app: Lesto, path: P, handler: Handler) => Lesto,
+    path: P,
+    handler: TypedHandler<P, Json>,
+  ): ApiRoutes<C & Record<`${M} ${P}`, { response: Json }>> {
+    register(this.app, path, handler as Handler);
+
+    return this as unknown as ApiRoutes<C & Record<`${M} ${P}`, { response: Json }>>;
+  }
+
+  /** Declare a typed `GET` route, capturing its `c.json(...)` response into the contract. */
+  get<P extends string, Json>(
+    path: P,
+    handler: TypedHandler<P, Json>,
+  ): ApiRoutes<C & Record<`GET ${P}`, { response: Json }>> {
+    return this.grow<"GET", P, Json>((app, p, h) => app.get(p, h), path, handler);
+  }
+
+  /** Declare a typed `POST` route, capturing its `c.json(...)` response into the contract. */
+  post<P extends string, Json>(
+    path: P,
+    handler: TypedHandler<P, Json>,
+  ): ApiRoutes<C & Record<`POST ${P}`, { response: Json }>> {
+    return this.grow<"POST", P, Json>((app, p, h) => app.post(p, h), path, handler);
+  }
+
+  /** Declare a typed `PUT` route, capturing its `c.json(...)` response into the contract. */
+  put<P extends string, Json>(
+    path: P,
+    handler: TypedHandler<P, Json>,
+  ): ApiRoutes<C & Record<`PUT ${P}`, { response: Json }>> {
+    return this.grow<"PUT", P, Json>((app, p, h) => app.put(p, h), path, handler);
+  }
+
+  /** Declare a typed `PATCH` route, capturing its `c.json(...)` response into the contract. */
+  patch<P extends string, Json>(
+    path: P,
+    handler: TypedHandler<P, Json>,
+  ): ApiRoutes<C & Record<`PATCH ${P}`, { response: Json }>> {
+    return this.grow<"PATCH", P, Json>((app, p, h) => app.patch(p, h), path, handler);
+  }
+
+  /** Declare a typed `DELETE` route, capturing its `c.json(...)` response into the contract. */
+  delete<P extends string, Json>(
+    path: P,
+    handler: TypedHandler<P, Json>,
+  ): ApiRoutes<C & Record<`DELETE ${P}`, { response: Json }>> {
+    return this.grow<"DELETE", P, Json>((app, p, h) => app.delete(p, h), path, handler);
+  }
+
+  /**
+   * The mountable `lesto()` sub-app carrying every captured route — `.route()` it
+   * into the parent. A plain {@link Lesto}, so the contract TYPE is erased here and
+   * mounting composes middleware/layouts exactly as any sub-app does.
+   */
+  routes(): Lesto {
+    return this.app;
+  }
+}
+
+/**
+ * Start a typed read-route builder (Workstream 4). Every `.get`/`.post`/… captures
+ * its handler's `c.json(...)` response into a contract `@lesto/client` consumes via
+ * {@link ContractOf}, so the read client cannot drift from the server. See
+ * {@link ApiRoutes}.
+ */
+export function apiRoutes(): ApiRoutes {
+  return new ApiRoutes();
+}
+
+/**
+ * Project an {@link ApiRoutes} builder's `typeof` to the read contract `@lesto/client`
+ * consumes — the read-path mirror of `MutationContractOf<typeof defs>`.
+ *
+ *   const api = apiRoutes().get("/saved", (c) => c.json(load()));
+ *   const client = createApi<ContractOf<typeof api>>();   // server is the source of truth
+ *
+ * It unwraps the builder's accumulated contract `C` (whose keys already are the
+ * `"METHOD /path"` strings, values `{ response }`), so it lands as the exact shape
+ * `createApi` infers over. Phantom-derived and erased at runtime.
+ */
+export type ContractOf<A> = A extends ApiRoutes<infer C> ? { [K in keyof C]: C[K] } : never;
+
+// Re-exported so a route builder's handler can name a `c.json(...)` return type, and
+// a contract projection can read it, without reaching into `handler-context`.
+export type { JsonOf, TypedResponse } from "./handler-context";

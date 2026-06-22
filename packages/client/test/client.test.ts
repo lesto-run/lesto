@@ -362,3 +362,51 @@ describe("createApi — type inference", () => {
     expect(typeof typeChecks).toBe("function");
   });
 });
+
+describe("createApi — projected (drift-proof) contract", () => {
+  // The shape `@lesto/web`'s `ContractOf<typeof serverApi>` projects: keys are
+  // `"METHOD /path"`, values `{ response }` — read off each handler's `c.json(...)`.
+  // The client consumes it as any `object` contract (a `{ response }` value
+  // satisfies `RouteSpec`, whose every field is optional). We model that projection
+  // here (the client has no dep on `@lesto/web`) to prove the consume side AND that
+  // a DRIFTED handler — a changed `response` — fails `tsc` at the CALL site.
+  type ProjectedApi = {
+    "GET /listings/:id": { response: Listing };
+    "GET /saved": { response: { saved: Listing[] } };
+  };
+
+  it("infers the projected response and drift breaks the call site (compile-time)", () => {
+    const typeChecks = (api: Api<ProjectedApi>): void => {
+      // The projected response flows to the call's result — no hand-written interface.
+      expectTypeOf(
+        api.get("/listings/:id", { params: { id: "1" } }),
+      ).resolves.toEqualTypeOf<Listing>();
+      expectTypeOf(api.get("/saved")).resolves.toEqualTypeOf<{ saved: Listing[] }>();
+
+      // DRIFT GUARD: a consumer that expected the OLD shape stops compiling once the
+      // projected `response` no longer matches it. Awaiting a `Listing` GET cannot be
+      // assigned to a now-wrong type.
+      async function expectsOldShape(): Promise<void> {
+        // @ts-expect-error — the projected response is `Listing`, not `{ totallyWrong: number }`.
+        const wrong: { totallyWrong: number } = await api.get("/listings/:id", {
+          params: { id: "1" },
+        });
+        void wrong;
+      }
+
+      void expectsOldShape;
+    };
+
+    expect(typeof typeChecks).toBe("function");
+  });
+
+  it("a projected contract is a valid ApiContract and serves a real fetch", async () => {
+    const { fn } = makeFetch(() => json({ id: "7", title: "Projected" }));
+    const api = createApi<ProjectedApi>({ fetch: fn });
+
+    const result = await api.get("/listings/:id", { params: { id: "7" } });
+
+    expect(result).toEqual({ id: "7", title: "Projected" });
+    expectTypeOf(result).toEqualTypeOf<Listing>();
+  });
+});

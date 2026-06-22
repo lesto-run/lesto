@@ -9,8 +9,16 @@
  */
 
 // The code-first router + handler context — Lesto's request-handling surface.
-export { applyUiDialect, fromRequestMiddleware, lesto, Lesto } from "./lesto";
-export type { Handler, UiDialect } from "./lesto";
+export { apiRoutes, ApiRoutes, applyUiDialect, fromRequestMiddleware, lesto, Lesto } from "./lesto";
+export type {
+  CapturedContract,
+  CapturedRouteSpec,
+  ContractOf,
+  Handler,
+  JsonOf,
+  TypedResponse,
+  UiDialect,
+} from "./lesto";
 export { Context } from "./handler-context";
 
 // Page rendering: the lean route contract (load / params / metadata / access /
@@ -81,7 +89,7 @@ export type { SecurityHeaderOptions } from "./harden";
 // `lesto()` app, so a `app/listings/[id]/page.tsx` registers the same typed route
 // `.page("/listings/:id", …)` would (ADR 0023). The pure scan/compile lives in
 // `@lesto/router`; this applies the descriptors over already-loaded modules.
-export { applyFileRoutes, generateRouteManifest, loadFileRoutes, routeKey } from "./file-routes";
+export { applyFileRoutes, generateRouteManifest, loadFileRoutes, notFound, routeKey } from "./file-routes";
 export type { LoadedFileRoutes, LoadedRouteModule, RouteModuleLoader } from "./file-routes";
 
 // Re-export the scan's descriptor type from `@lesto/router`, so an app that calls
