@@ -115,7 +115,7 @@ describe("scan/catalogue purity (grep-asserted)", () => {
   // The Inc 1 acceptance requires the scan to be pure — no fs/process/node builtins.
   // Locked by a source read so a later stray `import "node:fs"` fails a test, not
   // just inspection.
-  test.each(["types.ts", "commands.ts", "scan.ts"])(
+  test.each(["types.ts", "commands.ts", "scan.ts", "managed-region.ts", "render-agents.ts"])(
     "%s imports no fs/process/node builtins",
     (file) => {
       const src = readFileSync(join(srcDir, "agents", file), "utf8");

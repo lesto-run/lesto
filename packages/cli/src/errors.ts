@@ -11,6 +11,7 @@ import { LestoError } from "@lesto/errors";
 export { LestoError };
 
 export type CliErrorCode =
+  | "CLI_AGENTS_MARKER_MALFORMED"
   | "CLI_CLIENT_BUILD_FAILED"
   | "CLI_CONTENT_MISSING_ARGS"
   | "CLI_CONTENT_PACKAGES_MISSING"
