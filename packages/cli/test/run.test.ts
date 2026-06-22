@@ -977,7 +977,7 @@ describe("run dev — island client assets", () => {
     expect(builds).toBe(2);
   });
 
-  it("reloads the browser when a watched island rebuild succeeds (clearing any overlay)", async () => {
+  it("does NOT reload on a clean island rebuild when no overlay is up (leaves island state)", async () => {
     let onChange: (() => void) | undefined;
     const reloads: number[] = [];
 
@@ -1002,9 +1002,55 @@ describe("run dev — island client assets", () => {
       }),
     );
 
-    // The boot build does NOT reload; only a watched rebuild does.
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // No prior error → no reload: a clean island save keeps the page (and its island
+    // state) as before this overlay existed. HMR (a separate task) is what makes a
+    // clean island edit show without a refresh.
+    expect(reloads).toEqual([]);
+  });
+
+  it("reloads to clear the overlay once a failed island rebuild recovers", async () => {
+    let onChange: (() => void) | undefined;
+    let calls = 0;
+    const reloads: number[] = [];
+    const errors: DevError[] = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: () => {
+          calls += 1;
+
+          // Boot OK; first watch rebuild fails (overlay up); second succeeds (recover).
+          return calls === 2 ? Promise.reject(new Error("esbuild: oops")) : Promise.resolve();
+        },
+        watchIslands: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        liveReload: {
+          script: "x",
+          notify: () => reloads.push(1),
+          notifyError: (error) => errors.push(error),
+          close: () => undefined,
+        },
+      }),
+    );
+
+    // First rebuild fails → overlay, no reload.
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(errors).toHaveLength(1);
     expect(reloads).toEqual([]);
 
+    // Second rebuild succeeds → reload, dismissing the overlay (and loading the fix).
     onChange?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -1393,8 +1439,10 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
     expect(lines.some((line) => line.startsWith("app reload failed:"))).toBe(true);
   });
 
-  it("reports a manifest refresh failure without crashing the watcher", async () => {
+  it("reports a manifest refresh failure on stderr but does NOT overlay it (the app reloaded fine)", async () => {
     let onChange: (() => void) | undefined;
+    const reloads: number[] = [];
+    const errors: DevError[] = [];
 
     await run(
       ["dev"],
@@ -1406,7 +1454,16 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
 
           return () => undefined;
         },
+        // The edge manifest regen fails, but the app itself re-loads fine: the running
+        // dev page works, so this must NOT paint a blocking overlay — only a stderr line.
         regenerateRoutes: () => Promise.reject(new Error("scan blew up")),
+        reloadApp: () => Promise.resolve(buildConfig()),
+        liveReload: {
+          script: "x",
+          notify: () => reloads.push(1),
+          notifyError: (error) => errors.push(error),
+          close: () => undefined,
+        },
       }),
     );
 
@@ -1414,6 +1471,41 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(lines.some((line) => line.startsWith("route manifest refresh failed:"))).toBe(true);
+    // A stale edge map does not break the page → reload, never an overlay.
+    expect(errors).toEqual([]);
+    expect(reloads).toEqual([1]);
+  });
+
+  it("reloads on a clean refresh even with no app re-scan seam (manifest only)", async () => {
+    let onChange: (() => void) | undefined;
+    const reloads: number[] = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        regenerateRoutes: () => Promise.resolve({ path: "src/routes.gen.ts", count: 1 }),
+        // No `reloadApp` seam → refreshRoutes returns neither a handle nor an error;
+        // the clean refresh still reloads the browser.
+        liveReload: {
+          script: "x",
+          notify: () => reloads.push(1),
+          notifyError: () => undefined,
+          close: () => undefined,
+        },
+      }),
+    );
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(reloads).toEqual([1]);
   });
 
   it("paints a dev error overlay (and does NOT reload) when the app reload fails", async () => {
@@ -1452,38 +1544,6 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
     expect(errors[0]?.message).toBe("Unexpected token in page.tsx");
     // A real Error carries a stack, surfaced for the overlay's <pre>.
     expect(errors[0]?.stack).toContain("Unexpected token in page.tsx");
-  });
-
-  it("paints a dev error overlay when the route manifest refresh fails", async () => {
-    let onChange: (() => void) | undefined;
-    const errors: DevError[] = [];
-
-    await run(
-      ["dev"],
-      depsWith({
-        serve: fakeServe(3000),
-        loadSites: () => Promise.resolve(sites),
-        watchRoutes: (cb) => {
-          onChange = cb;
-
-          return () => undefined;
-        },
-        regenerateRoutes: () => Promise.reject(new Error("bad route filename")),
-        liveReload: {
-          script: "x",
-          notify: () => undefined,
-          notifyError: (error) => errors.push(error),
-          close: () => undefined,
-        },
-      }),
-    );
-
-    onChange?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(errors).toHaveLength(1);
-    expect(errors[0]?.source).toBe("route-refresh");
-    expect(errors[0]?.message).toBe("bad route filename");
   });
 
   it("paints an overlay with NO stack when the failure is not an Error", async () => {

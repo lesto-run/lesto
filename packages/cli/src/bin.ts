@@ -456,7 +456,9 @@ s.onclose=()=>setTimeout(c,1000);};c();
       for (const ws of sockets) ws.send('{"type":"reload"}');
     },
     notifyError: (error: DevError) => {
-      const data = JSON.stringify({ type: "error", ...error });
+      // Discriminant LAST so it is authoritative — a future `DevError` field named
+      // `type` can never spread over it and mis-route an error as a reload.
+      const data = JSON.stringify({ ...error, type: "error" });
 
       for (const ws of sockets) ws.send(data);
     },
