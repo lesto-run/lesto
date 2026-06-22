@@ -35,6 +35,8 @@ export { createHybridRenderer } from "./hybrid-renderer";
 export { extractHeadings } from "./headings";
 export { generateExcerpt } from "./excerpt";
 export { calculateReadingTime } from "./reading-time";
+export { rehypeCallouts, CALLOUT_TYPES, type CalloutType } from "./callouts";
+export { calloutStyles } from "./callout-styles";
 export type {
   RenderOptions,
   RenderResult,

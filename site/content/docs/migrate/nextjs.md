@@ -12,6 +12,7 @@ page for the backend. Most Next apps end up wired to a hosted Postgres, a separa
 ORM, a queue, an email vendor, and an auth provider. Lesto keeps React and the
 file-routing ergonomics and ships that backend in the box, on one database.
 
+> [!IMPORTANT]
 > **Honest scope.** Lesto's frontend is React SSR + hydrated islands, not a
 > drop-in clone of the Next App Router and React Server Components. If your app
 > leans hard on RSC streaming, parallel routes, or the Next middleware runtime,

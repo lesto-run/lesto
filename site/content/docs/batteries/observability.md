@@ -13,6 +13,7 @@ under it; an exporter ships the finished spans to any OTLP backend. The shape is
 OpenTelemetry-flavored, so a Lesto trace lands in the same collectors and vendors
 the rest of your stack already speaks to.
 
+> [!NOTE]
 > v1 ships **traces** only — no metrics or logs pipeline yet. There are no
 > counters and no histograms here; if you reach for one it does not exist, on
 > purpose. The boundary is deliberate, not an oversight: spans plus the runtime's

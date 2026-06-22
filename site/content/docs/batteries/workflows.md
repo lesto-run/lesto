@@ -15,6 +15,7 @@ them again. It's how you make a multi-step process — a checkout, an onboarding
 drip, a multi-call integration — safe to retry without repeating the parts that
 already succeeded.
 
+> [!WARNING]
 > **Read this boundary first.** This is *memoization*, **not** crash-safe durable
 > execution. Resume is **caller-driven**: nothing re-invokes an interrupted run
 > for you — your app must call `run()` again with the same `runId` to continue.

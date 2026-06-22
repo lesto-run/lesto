@@ -13,6 +13,7 @@ import {
   buildSyntaxHighlightingPlugin,
 } from "./syntax-highlighting";
 import { rehypeStripFirstHeading, remarkStripLumenComments } from "./plugins";
+import { rehypeCallouts } from "./callouts";
 import type { RenderOptions, RenderResult, Renderer } from "./types";
 
 const DEFAULT_WORDS_PER_MINUTE = 250;
@@ -34,6 +35,7 @@ export function createUnifiedRenderer(options: RenderOptions = {}): Renderer {
     headingLevels = DEFAULT_HEADING_LEVELS,
     stripFirstHeading = true,
     syntaxHighlighting = false,
+    callouts = true,
   } = options;
 
   const syntaxOptions = parseSyntaxHighlightingOptions(syntaxHighlighting);
@@ -48,6 +50,11 @@ export function createUnifiedRenderer(options: RenderOptions = {}): Renderer {
     processorPromise = (async () => {
       // Build rehype plugins array
       const allRehypePlugins: unknown[] = [rehypeSlug];
+
+      // GitHub-style callouts (only transforms `[!TYPE]` blockquotes)
+      if (callouts) {
+        allRehypePlugins.push(rehypeCallouts);
+      }
 
       // Only add syntax highlighting if enabled
       if (syntaxOptions) {

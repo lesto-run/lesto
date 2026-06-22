@@ -120,6 +120,7 @@ scheduler.every(60_000, "heartbeat"); // every 60s
 const handle = scheduler.start();
 ```
 
+> [!CAUTION]
 > Cron de-duplication is in-process memory, not durable. Run the scheduler on a
 > **single** designated instance (a leader or a one-replica deployment); two
 > instances each decide the same cron is due and double-fire. The _workers_ they

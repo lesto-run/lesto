@@ -18,6 +18,7 @@ transport** — the same call `@lesto/auth` makes doing TOTP over `node:crypto`
 instead of a library. Because the transport is a parameter, every layer is
 unit-testable with a fake response and no network.
 
+> [!IMPORTANT]
 > **Preview.** `@lesto/ai` is experimental and exempt from the 100%-coverage gate
 > (it declares no `test:cov` script). The surface will move before 1.0. Its pure
 > core is still fully tested; just don't pin a release on these signatures yet.

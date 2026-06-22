@@ -10,6 +10,7 @@
  */
 
 import { commandPaletteStyles } from "@lesto/content-search";
+import { calloutStyles } from "@lesto/content-markdown/styles";
 
 export const DOCS_CSS = `
 :root {
@@ -257,6 +258,9 @@ a:hover { text-decoration: underline; }
   // The ⌘K command palette's own stylesheet, dogfooded straight from the
   // framework so the docs look is the framework's look — not a fork of it.
   commandPaletteStyles +
+  // GitHub-style callout (admonition) styling, likewise straight from
+  // @lesto/content-markdown — the same plugin renders `> [!NOTE]` blocks here.
+  calloutStyles +
   `
 /* On touch viewports the keyboard hint is meaningless and the label is noise. */
 @media (max-width: 600px) {

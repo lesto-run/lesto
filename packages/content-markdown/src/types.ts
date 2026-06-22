@@ -56,6 +56,15 @@ export interface RenderOptions {
    * }
    */
   syntaxHighlighting?: boolean | SyntaxHighlightingOptions;
+  /**
+   * Render GitHub-style callouts (`> [!NOTE]`, `> [!WARNING]`, …) as styled
+   * admonition blocks. Only blockquotes that open with a recognized `[!TYPE]`
+   * marker are affected; ordinary blockquotes are left untouched, so this is
+   * safe to leave on.
+   *
+   * @default true
+   */
+  callouts?: boolean;
 }
 
 export interface RenderResult {

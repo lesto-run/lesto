@@ -145,6 +145,7 @@ no business in client code at all. When an island needs a value, pass it down as
 a prop from a server page or loader (a public API base URL, a feature flag),
 never by importing the server environment into the bundle.
 
+> [!IMPORTANT]
 > Today this is a convention, not an enforced boundary — Lesto does not yet split
 > a schema into server/client halves or refuse a client import at build time (the
 > way t3-env or Astro's `astro:env` do). Treat `env.ts` as server-only by hand.

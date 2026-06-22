@@ -865,6 +865,7 @@
         "@lesto/assets": "workspace:*",
         "@lesto/cloudflare": "workspace:*",
         "@lesto/content-core": "workspace:*",
+        "@lesto/content-markdown": "workspace:*",
         "@lesto/content-search": "workspace:*",
         "@lesto/kernel": "workspace:*",
         "@lesto/runtime": "workspace:*",

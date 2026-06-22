@@ -25,6 +25,7 @@ import {
   buildSyntaxHighlightingPlugin,
 } from "./syntax-highlighting";
 import { rehypeStripFirstHeading } from "./plugins";
+import { rehypeCallouts } from "./callouts";
 import type { RenderOptions, RenderResult, Renderer } from "./types";
 
 const DEFAULT_WORDS_PER_MINUTE = 250;
@@ -102,6 +103,7 @@ export function createHybridRenderer(options: HybridRenderOptions = {}): Rendere
     headingLevels = DEFAULT_HEADING_LEVELS,
     stripFirstHeading = true,
     syntaxHighlighting = false,
+    callouts = true,
   } = options;
 
   const syntaxOptions = parseSyntaxHighlightingOptions(syntaxHighlighting);
@@ -118,6 +120,14 @@ export function createHybridRenderer(options: HybridRenderOptions = {}): Rendere
         [rehypeSanitize, sanitizeSchema], // Sanitize HTML to prevent XSS
         rehypeSlug, // Add IDs to headings
       ];
+
+      // GitHub-style callouts run AFTER sanitize: the marker blockquote is
+      // already sanitized, and we wrap its children in fixed callout markup —
+      // so no new unsanitized surface is introduced. Only `[!TYPE]` blockquotes
+      // are touched; plain blockquotes pass through unchanged.
+      if (callouts) {
+        plugins.push(rehypeCallouts);
+      }
 
       if (syntaxOptions) {
         const highlightPlugin = await buildSyntaxHighlightingPlugin(syntaxOptions);
