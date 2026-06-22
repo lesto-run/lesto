@@ -360,6 +360,16 @@ describe("templates", () => {
     expect(lestoApp()).toContain('ui: { dialect: "preact" }');
   });
 
+  it("lestoApp seeds starter posts via a 002_seed_posts data migration", () => {
+    const out = lestoApp();
+
+    // A data migration (not just schema) so `GET /posts` returns content on
+    // first run instead of an empty list that reads as broken.
+    expect(out).toContain("002_seed_posts");
+    expect(out).toContain("INSERT INTO posts");
+    expect(out).toContain("migrations: [createPosts, seedPosts]");
+  });
+
   it("islandCounter is one defineIsland default-export", () => {
     expect(islandCounter()).toContain("export default defineIsland({");
     expect(islandCounter()).toContain('name: "Counter"');
@@ -436,6 +446,16 @@ describe("templates", () => {
 
     expect(out).toContain("## Deploy to Cloudflare");
     expect(out).toContain("lesto deploy --cloudflare");
+  });
+
+  it("readme has a Try-it section with a copy-paste curl carrying the CSRF header", () => {
+    const out = readme("acme");
+
+    // The first-run gotcha the onboarding audit flagged: a curl POST is refused
+    // 403 without `Sec-Fetch-Site`, because originCheck CSRF is on by default.
+    expect(out).toContain("## Try it");
+    expect(out).toContain("curl http://localhost:3000/posts");
+    expect(out).toContain("Sec-Fetch-Site: same-origin");
   });
 
   it("worker fronts the app with @lesto/cloudflare's toFetchHandler + withAssets", () => {

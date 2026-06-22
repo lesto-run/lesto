@@ -169,6 +169,28 @@ const createPosts: MigrationEntry = {
   },
 };
 
+// A migration's up() can carry DATA, not just schema — it runs arbitrary SQL.
+// This seeds a few starter posts so \`GET /posts\` returns content on first run
+// (instead of an empty list that reads as broken). Delete this migration, and
+// drop these rows, once you have your own data.
+const seedPosts: MigrationEntry = {
+  version: "002_seed_posts",
+  migration: {
+    up: (schema) => {
+      schema.execute(
+        "INSERT INTO posts (title, body, created_at, updated_at) VALUES" +
+          " ('Hello, Lesto', 'Your first post — edit or delete it in lesto.app.ts.', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')," +
+          " ('Batteries included', 'Queue, cache, auth, and mail all live on the database — no Redis.', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')," +
+          " ('Agent-native', 'Drive this app from Claude over MCP, the CLI, or code.', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+      );
+    },
+
+    down: (schema) => {
+      schema.execute("DELETE FROM posts WHERE created_at = '2026-01-01T00:00:00.000Z'");
+    },
+  },
+};
+
 // The input schema for a new post — semantic validation (non-blank, trimmed)
 // lives here, not on the table (the table just says \`notNull()\`). This is the
 // untrusted-input contract; see ADR 0005.
@@ -229,7 +251,7 @@ const db = createDb(handle);
 const config: LestoAppConfig = {
   db: handle,
   app: buildApp(db),
-  migrations: [createPosts],
+  migrations: [createPosts, seedPosts],
   // Security, declared in one place (ADR 0016). Per-client rate-limiting is ALREADY
   // on by the kernel default; \`originCheck\` layers zero-token CSRF over it — a
   // cross-site POST/PUT/PATCH/DELETE is refused at the door (it reads the browser's
@@ -652,6 +674,32 @@ bun run dev
 \`lesto dev\` loads \`lesto.app.ts\` (which default-exports the app config) and
 boots it: the kernel runs migrations and stands up request dispatch over
 the typed \`@lesto/db\` handle the route handlers query through.
+
+## Try it
+
+With \`bun run dev\` running, the app serves on http://localhost:3000. The
+\`posts\` table is seeded with a few starter rows on first boot (the
+\`002_seed_posts\` migration in \`lesto.app.ts\`). Read them from the JSON API:
+
+\`\`\`sh
+curl http://localhost:3000/posts
+\`\`\`
+
+Now create one. State-changing requests are CSRF-guarded by default
+(\`secure: { originCheck: {} }\`), which reads the browser's \`Sec-Fetch-Site\`
+header — a non-browser client like \`curl\` sends none, so it must set it
+explicitly or the request is refused with a 403:
+
+\`\`\`sh
+curl -X POST http://localhost:3000/posts \\
+  -H 'Content-Type: application/json' \\
+  -H 'Sec-Fetch-Site: same-origin' \\
+  -d '{"title":"My first post","body":"Hello from curl."}'
+\`\`\`
+
+A blank \`title\` or \`body\` is rejected at the boundary with a 422, never a
+crash — that is the Zod \`c.valid\` check in \`lesto.app.ts\`. Read the list again
+and your new post is there.
 
 ## Deploy to Cloudflare
 
