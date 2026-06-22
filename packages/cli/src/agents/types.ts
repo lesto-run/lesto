@@ -20,8 +20,8 @@ export interface AppSummary {
    */
   readonly framework: "lesto";
 
-  /** The app's UI dialect when known (`"react"` | `"preact"`), else absent. */
-  readonly uiDialect?: string;
+  /** The app's UI dialect when known, else absent (the matched-pair dialect, ADR 0008). */
+  readonly uiDialect?: "react" | "preact";
 }
 
 /**

@@ -9,13 +9,29 @@ import { CLI_COMMANDS } from "../src/agents/commands";
 const here = dirname(fileURLToPath(import.meta.url));
 const srcDir = join(here, "..", "src");
 
+/** Strip block and line comments so a `command === "X"` inside a comment is not counted. */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "") // block comments
+    .replace(/(^|[^:])\/\/.*$/gm, "$1"); // line comments (the `[^:]` guard spares `://` in URLs)
+}
+
 /**
- * Extract every command token the bin actually dispatches on — the `X` in each
- * `command === "X"` across `bin.ts` and `run.ts`. The empty-string sentinel
- * (`command === ""`, the no-arg help case) is not a command and is dropped.
+ * Extract every command token the bin dispatches on — the `X` in each
+ * `command === "X"` across `bin.ts` and `run.ts`, comments stripped first. The
+ * empty-string sentinel (`command === ""`, the no-arg help case) is dropped.
+ *
+ * SCOPE (honest): this recognizes the LITERAL `command === "X"` idiom, which is the
+ * whole of top-level dispatch today. A future command routed by some other form (a
+ * `switch`, `startsWith`, a lookup table) would be invisible here — so a new
+ * command MUST keep the literal idiom (or this guard must be taught the new form),
+ * else the catalogue could silently drift. Subcommand dispatch (e.g. `generate
+ * <sub>`) is deliberately out of scope: the catalogue lists top-level commands.
  */
 function dispatchedTokens(): Set<string> {
-  const source = `${readFileSync(join(srcDir, "bin.ts"), "utf8")}\n${readFileSync(join(srcDir, "run.ts"), "utf8")}`;
+  const source = stripComments(
+    `${readFileSync(join(srcDir, "bin.ts"), "utf8")}\n${readFileSync(join(srcDir, "run.ts"), "utf8")}`,
+  );
 
   const tokens = new Set<string>();
   const pattern = /command === "([^"]*)"/g;
@@ -86,4 +102,28 @@ describe("two-way sync with the bin's dispatch set", () => {
     expect(declared).toContain("mcp");
     expect(declared).toContain("openapi");
   });
+
+  test("the comment strip prevents a commented-out dispatch from counting", () => {
+    // A `command === "X"` inside a comment must not be read as a real dispatch.
+    expect(stripComments('// command === "ghost"\nif (command === "real") {}')).not.toContain(
+      "ghost",
+    );
+  });
+});
+
+describe("scan/catalogue purity (grep-asserted)", () => {
+  // The Inc 1 acceptance requires the scan to be pure — no fs/process/node builtins.
+  // Locked by a source read so a later stray `import "node:fs"` fails a test, not
+  // just inspection.
+  test.each(["types.ts", "commands.ts", "scan.ts"])(
+    "%s imports no fs/process/node builtins",
+    (file) => {
+      const src = readFileSync(join(srcDir, "agents", file), "utf8");
+
+      expect(src).not.toMatch(/from\s+["']node:/);
+      expect(src).not.toMatch(/\brequire\s*\(/);
+      expect(src).not.toMatch(/\bprocess\./);
+      expect(src).not.toMatch(/from\s+["'](fs|path|os|child_process)["']/);
+    },
+  );
 });

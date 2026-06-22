@@ -13,8 +13,11 @@ function unsortedInput(): ScanInput {
     summary,
     routes: [
       { kind: "page", pattern: "/blog/:slug" },
-      { kind: "layout", pattern: "/" },
+      // page BEFORE layout at the same "/" pattern, so the kind tie-break must
+      // actively reorder them — a pattern-only (stable) sort would leave this
+      // order and fail the assertion, so the test bites if the tie-break is dropped.
       { kind: "page", pattern: "/" },
+      { kind: "layout", pattern: "/" },
       { kind: "page", pattern: "/about" },
     ],
     islands: ["Counter", "Aside", "Nav"],
@@ -71,15 +74,34 @@ describe("scanConventions", () => {
     expect(scanConventions(unsortedInput()).summary).toEqual(summary);
   });
 
+  test("orders by code point, not locale — byte-stable across runtimes/LANG", () => {
+    // Code points: B=66, Z=90, _=95, a=97 → "Banana","Zebra","_hidden","apple".
+    // `localeCompare` would case-fold and reorder these (e.g. apple, Banana, …),
+    // so this fixture fails under locale sorting and passes only under byCodePoint
+    // — pinning the byte-stability the --check drift guard (Inc 2/4) depends on.
+    const { islands } = scanConventions({
+      summary,
+      routes: [],
+      islands: ["apple", "Zebra", "_hidden", "Banana"],
+      collections: [],
+    });
+
+    expect(islands).toEqual(["Banana", "Zebra", "_hidden", "apple"]);
+  });
+
   test("does not mutate the caller's arrays", () => {
     const input = unsortedInput();
     const routesBefore = [...input.routes];
     const islandsBefore = [...input.islands];
+    const collectionsBefore = [...input.collections];
+    const commandsBefore = [...(input.commands ?? [])];
 
     scanConventions(input);
 
     expect(input.routes).toEqual(routesBefore);
     expect(input.islands).toEqual(islandsBefore);
+    expect(input.collections).toEqual(collectionsBefore);
+    expect(input.commands).toEqual(commandsBefore);
   });
 
   test("is deterministic — two differently-ordered inputs scan equal", () => {

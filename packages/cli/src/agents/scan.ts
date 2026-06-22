@@ -10,10 +10,14 @@
  * plain fixtures and no disk, the same discipline `lesto generate` already follows.
  *
  * Ordering is made deterministic HERE, never assumed of the caller: routes sort by
- * pattern then kind, islands and collections by name, commands by name. So the
- * rendered artifacts are byte-stable no matter what order the readers happened to
- * yield their facts in — which is exactly what the `--check` drift guard (Inc 2/4)
- * relies on to tell a real convention change from incidental reader reordering.
+ * pattern then kind, islands and collections by name, commands by name. Every sort
+ * compares by CODE POINT ({@link byCodePoint}), never `localeCompare` — a host's
+ * `LANG`/ICU collation (and even Node-vs-Bun) must never change the generated
+ * bytes, since the `--check` drift guard (Inc 2/4) regenerates under one runtime
+ * and the build under another. So the rendered artifacts are byte-stable no matter
+ * what order the readers yielded their facts in, or which runtime ran the scan —
+ * which is exactly what `--check` relies on to tell a real convention change from
+ * incidental reordering or a collation difference.
  */
 
 import { CLI_COMMANDS } from "./commands";
@@ -61,18 +65,33 @@ export interface ScanInput {
  * to write a contentless artifact. The CLI surface is always present and so never
  * counts toward emptiness.
  */
+/**
+ * Compare two strings by CODE POINT — a total order (`-1`/`0`/`1`) independent of
+ * locale, `LANG`, and the host's ICU build (and of Node vs Bun). The codebase
+ * already learned this for the route manifest (`@lesto/web` `byCodePoint`,
+ * `file-routes.ts`): a freshness guard that regenerates under one runtime and
+ * builds under another must produce identical bytes, which `localeCompare` cannot
+ * guarantee. The `0` case is real here — two routes can share a `pattern` (a
+ * `page` and its `layout`), so the comparison must report equality and let the
+ * caller fall through to the kind tie-break.
+ */
+function byCodePoint(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+
+  return 0;
+}
+
 export function scanConventions(input: ScanInput): AgentArtifacts {
   const routes = input.routes.toSorted(
-    (a, b) => a.pattern.localeCompare(b.pattern) || a.kind.localeCompare(b.kind),
+    (a, b) => byCodePoint(a.pattern, b.pattern) || byCodePoint(a.kind, b.kind),
   );
 
-  const islands = input.islands.toSorted((a, b) => a.localeCompare(b));
+  const islands = input.islands.toSorted(byCodePoint);
 
-  const collections = input.collections.toSorted((a, b) => a.name.localeCompare(b.name));
+  const collections = input.collections.toSorted((a, b) => byCodePoint(a.name, b.name));
 
-  const commands = (input.commands ?? CLI_COMMANDS).toSorted((a, b) =>
-    a.name.localeCompare(b.name),
-  );
+  const commands = (input.commands ?? CLI_COMMANDS).toSorted((a, b) => byCodePoint(a.name, b.name));
 
   const isEmpty = routes.length === 0 && islands.length === 0 && collections.length === 0;
 
