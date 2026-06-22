@@ -54,7 +54,7 @@ describe("doc routes", () => {
   it("renders the search island fallback and the client module on every page", async () => {
     const html = await text(await app.handle("GET", "/"));
 
-    expect(html).toContain("docs-search-input"); // the island's SSR fallback
+    expect(html).toContain("lesto-cmdk-trigger"); // the ⌘K palette's SSR fallback
     expect(html).toContain('src="/client.js"'); // the hydration module
   });
 

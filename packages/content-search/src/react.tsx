@@ -534,3 +534,15 @@ export default useSearch;
 
 // Re-export types for convenience
 export type { SearchResult } from "./types";
+
+// Cmd+K command palette: the headless controller, the batteries-included
+// component, and its drop-in stylesheet.
+export {
+  useCommandPalette,
+  CommandPalette,
+  commandPaletteStyles,
+  type UseCommandPaletteOptions,
+  type UseCommandPaletteReturn,
+  type CommandItemProps,
+  type CommandPaletteProps,
+} from "./command-palette";

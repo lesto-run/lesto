@@ -9,6 +9,8 @@
  * HTML and needs no theme stylesheet here.
  */
 
+import { commandPaletteStyles } from "@lesto/content-search";
+
 export const DOCS_CSS = `
 :root {
   --bg: #ffffff;
@@ -68,51 +70,10 @@ a:hover { text-decoration: underline; }
 .docs-header .spacer { flex: 1; }
 .docs-header nav a { color: var(--muted); font-size: 0.9rem; margin-left: 1rem; }
 
-.docs-search { position: relative; }
-.docs-search-input {
-  width: 220px;
-  max-width: 40vw;
-  padding: 0.4rem 0.7rem;
-  font: inherit;
-  font-size: 0.9rem;
-  color: var(--fg);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  outline: none;
-}
-.docs-search-input:focus { border-color: var(--accent); }
-.docs-search-input:disabled { opacity: 0.6; }
-.docs-search-results {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  width: min(420px, 80vw);
-  max-height: 60vh;
-  overflow-y: auto;
-  margin: 0;
-  padding: 0.35rem;
-  list-style: none;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
-  z-index: 20;
-}
-.docs-search-results li { margin: 0; }
-.docs-search-results a { display: block; padding: 0.5rem 0.6rem; border-radius: 6px; color: var(--fg); }
-.docs-search-results a:hover { background: var(--surface); text-decoration: none; }
-.docs-search-title { display: block; font-weight: 600; font-size: 0.92rem; }
-.docs-search-snippet {
-  display: block;
-  color: var(--muted);
-  font-size: 0.82rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.docs-search-empty { padding: 0.5rem 0.6rem; color: var(--muted); font-size: 0.88rem; }
-@media (max-width: 600px) { .docs-search { display: none; } }
+/* The header search is the framework's <CommandPalette> (⌘K). Its full look
+   ships in @lesto/content-search's commandPaletteStyles, appended to this
+   stylesheet below; only header-fit and mobile tweaks live here. */
+.docs-header .lesto-cmdk-trigger:disabled { opacity: 0.6; cursor: default; }
 
 .docs-shell {
   display: grid;
@@ -291,5 +252,15 @@ a:hover { text-decoration: underline; }
 @media (max-width: 720px) {
   .docs-shell { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
   .docs-sidebar { position: static; max-height: none; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
+}
+` +
+  // The ⌘K command palette's own stylesheet, dogfooded straight from the
+  // framework so the docs look is the framework's look — not a fork of it.
+  commandPaletteStyles +
+  `
+/* On touch viewports the keyboard hint is meaningless and the label is noise. */
+@media (max-width: 600px) {
+  .docs-header .lesto-cmdk-trigger-label { display: none; }
+  .lesto-cmdk-kbd { display: none; }
 }
 `;

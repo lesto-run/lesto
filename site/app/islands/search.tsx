@@ -1,105 +1,41 @@
 /**
- * The docs search box — the site's one interactive island.
+ * The docs search box — the site's one interactive island, now a ⌘K palette.
  *
- * It is a DEFERRED island (`ssr: false`): the server renders the static input
- * `fallback`, and the preact client bundle mounts the real {@link SearchBox}
- * fresh on load (the scaffold's default pairing — React-rendered pages, a small
- * preact client, no hydration of server markup). On mount the box fetches the
- * prerendered `/search-index.json` and, as the user types, runs
- * `@lesto/content-search`'s keyword `keywordSearch` over it entirely in the
- * browser — no server, no model. Results link straight to the matching page.
+ * This is pure dogfooding: the entire palette (the `⌘K` / `Ctrl K` shortcut, the
+ * modal, keyboard navigation, ARIA wiring, and the keyword ranking) is the
+ * framework's own {@link CommandPalette} from `@lesto/content-search/react`. The
+ * site contributes nothing but the slot — exactly the bar we hold ourselves to:
+ * anything we'd hand-roll for the docs should be a feature of the content
+ * packages instead.
+ *
+ * It stays a DEFERRED island (`ssr: false`): the server renders the static
+ * {@link SearchFallback} trigger, and the preact client mounts the real palette
+ * fresh on load. On open the palette fetches the prerendered `/search-index.json`
+ * and runs `keywordSearch` over it entirely in the browser — no server, no model.
  */
 
-import { keywordSearch } from "@lesto/content-search";
-import type { SearchResult } from "@lesto/content-search";
+import { CommandPalette } from "@lesto/content-search/react";
 import { defineIsland } from "@lesto/ui";
-import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
-import type { SearchIndex } from "../../src/search-index";
-
-const RESULT_LIMIT = 8;
-
 function SearchBox(): ReactElement {
-  const [index, setIndex] = useState<SearchIndex | null>(null);
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(() => {
-    let live = true;
-    void (async () => {
-      try {
-        const response = await fetch("/search-index.json");
-        const loaded = (await response.json()) as SearchIndex;
-        if (live) setIndex(loaded);
-      } catch {
-        // Search degrades to absent if the index can't load; the page still works.
-      }
-    })();
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  const results = useMemo<SearchResult[]>(() => {
-    if (index === null || query.trim() === "") return [];
-    return keywordSearch(query, index, { limit: RESULT_LIMIT });
-  }, [index, query]);
-
-  const showResults = open && query.trim() !== "";
-
-  return (
-    <div className="docs-search" role="search">
-      <input
-        className="docs-search-input"
-        type="search"
-        placeholder="Search docs…"
-        aria-label="Search documentation"
-        value={query}
-        disabled={index === null}
-        onInput={(event) => setQuery((event.target as HTMLInputElement).value)}
-        onFocus={() => setOpen(true)}
-        onBlur={() => {
-          // Delay so a click on a result registers before the list unmounts.
-          blurTimer.current = setTimeout(() => setOpen(false), 150);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") setQuery("");
-        }}
-      />
-      {showResults ? (
-        <ul className="docs-search-results">
-          {results.length === 0 ? (
-            <li className="docs-search-empty">No matches</li>
-          ) : (
-            results.map((result) => (
-              <li key={result.id}>
-                <a href={result.slug}>
-                  <span className="docs-search-title">{result.title}</span>
-                  <span className="docs-search-snippet">{result.snippet}</span>
-                </a>
-              </li>
-            ))
-          )}
-        </ul>
-      ) : null}
-    </div>
-  );
+  return <CommandPalette indexPath="/search-index.json" triggerLabel="Search" />;
 }
 
-/** The server-rendered placeholder, shown until the client bundle mounts the box. */
+/**
+ * The server-rendered placeholder: a static, disabled trigger that matches the
+ * palette's own button so nothing shifts when the client mounts the real one.
+ * (The `⌘K` hint is corrected to `Ctrl K` on non-Mac once the client takes over.)
+ */
 function SearchFallback(): ReactElement {
   return (
-    <div className="docs-search" role="search">
-      <input
-        className="docs-search-input"
-        type="search"
-        placeholder="Search docs…"
-        aria-label="Search documentation"
-        disabled
-      />
-    </div>
+    <button className="lesto-cmdk-trigger" type="button" disabled aria-label="Search">
+      <span className="lesto-cmdk-trigger-icon" aria-hidden="true">
+        ⌕
+      </span>
+      <span className="lesto-cmdk-trigger-label">Search</span>
+      <kbd className="lesto-cmdk-kbd">⌘K</kbd>
+    </button>
   );
 }
 

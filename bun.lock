@@ -424,7 +424,10 @@
       },
       "devDependencies": {
         "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "jsdom": "^24.0.0",
         "react": "^19.0.0",
+        "react-dom": "^19.0.0",
         "tsdown": "^0.17.3",
       },
       "peerDependencies": {
@@ -687,8 +690,6 @@
       "name": "@lesto/mcp",
       "version": "0.1.0",
       "dependencies": {
-        "@lesto/content-core": "workspace:*",
-        "@lesto/content-store": "workspace:*",
         "@lesto/db": "workspace:*",
         "@lesto/errors": "workspace:*",
         "@lesto/kernel": "workspace:*",
@@ -696,6 +697,14 @@
         "@lesto/web": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.29.0",
       },
+      "peerDependencies": {
+        "@lesto/content-core": "workspace:*",
+        "@lesto/content-store": "workspace:*",
+      },
+      "optionalPeers": [
+        "@lesto/content-core",
+        "@lesto/content-store",
+      ],
     },
     "packages/migrate": {
       "name": "@lesto/migrate",
@@ -859,6 +868,7 @@
         "@lesto/content-search": "workspace:*",
         "@lesto/kernel": "workspace:*",
         "@lesto/runtime": "workspace:*",
+        "@lesto/seo": "workspace:*",
         "@lesto/sites": "workspace:*",
         "@lesto/ui": "workspace:*",
         "@lesto/web": "workspace:*",
