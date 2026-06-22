@@ -25,8 +25,8 @@
  * untouched), with the per-branch nesting living inside the page's component.
  */
 
-import type { ComponentType } from "react";
-import { createElement } from "react";
+import type { ComponentType, ReactElement, ReactNode } from "react";
+import { Component, createElement, Suspense } from "react";
 
 import { compileFileRoutes, dirKey } from "@lesto/router";
 import type { DiscoveredFile, FileRoute } from "@lesto/router";
@@ -56,12 +56,17 @@ type RouteComponent = ComponentType<never>;
  *     `cache` exports; or
  *   - **object form**: `export default` a whole {@link PageDef}.
  * A `layout` module's `default` is the {@link Layout} that wraps the pages at or
- * below it. The loader (the bin / the generated route map) builds this map by
- * importing each file the scan found; a test hands a literal map, so the applier
- * needs no fs.
+ * below it. A `loading` / `error` / `not-found` boundary module's `default` is the
+ * component the convention renders in the page's place — the Suspense fallback, the
+ * error view, or the per-route 404 — each a plain component (no props it relies on).
+ * The loader (the bin / the generated route map) builds this map by importing each
+ * file the scan found; a test hands a literal map, so the applier needs no fs.
  */
 export interface LoadedRouteModule {
-  /** A {@link PageDef} object, a page component (named-export form), or a layout. */
+  /**
+   * A {@link PageDef} object, a page component (named-export form), a layout, or a
+   * boundary component (`loading`/`error`/`not-found`).
+   */
   default: PageDef | RouteComponent;
 
   /**
@@ -194,10 +199,13 @@ export async function loadFileRoutes(
  *
  * `importBase` is the path from the generated file to the convention dir
  * (`"../app/routes"` for a `src/routes.gen.ts` over `app/routes/`); each module is
- * imported from `<importBase>/<…segments>/<kind>`. The keys are the SAME
- * {@link routeKey} the applier looks up, computed here so the generated map needs
- * no key logic of its own. Output is deterministic — sorted by key, by CODE POINT
- * (not locale), so regenerating an unchanged tree is byte-stable on any host.
+ * imported from `<importBase>/<…segments>/<kind>`. EVERY discovered kind is emitted
+ * — `page`, `layout`, and the `loading`/`error`/`not-found` boundaries — so a
+ * file-routed app's boundaries work on Workers too (the applier reads them from the
+ * same map). The keys are the SAME {@link routeKey} the applier looks up, computed
+ * here so the generated map needs no key logic of its own. Output is deterministic —
+ * sorted by key, by CODE POINT (not locale), so regenerating an unchanged tree is
+ * byte-stable on any host.
  */
 export function generateRouteManifest(
   files: ReadonlyArray<DiscoveredFile>,
@@ -416,39 +424,249 @@ function toPageDef(module: LoadedRouteModule, pattern: string): PageDef {
 }
 
 /**
+ * The sentinel a page throws to render its nearest `not-found` boundary instead of
+ * its own output — the file-route convention's `notFound()` signal.
+ *
+ * A page (or a component it renders) calls `notFound()` to mean "this URL matched a
+ * route, but the thing it addresses does not exist" (a `/listings/:id` for an id
+ * with no row). Throwing during render unwinds to the nearest {@link NotFoundBoundary}
+ * (the page's nearest `not-found.tsx`), which renders that boundary's component —
+ * the per-route 404 view — rather than the generic transport 404. The signal is a
+ * distinct symbol-branded class so the boundary catches ONLY this, never masking a
+ * real bug as a 404 (a thrown `TypeError` still hits the `error` boundary).
+ */
+const NOT_FOUND_SIGNAL = Symbol.for("lesto.file-route.notFound");
+
+/** A thrown `notFound()` signal — branded so {@link NotFoundBoundary} catches only it. */
+class NotFoundSignal extends Error {
+  readonly [NOT_FOUND_SIGNAL] = true;
+
+  constructor() {
+    super("notFound() was called");
+
+    this.name = "NotFoundSignal";
+  }
+}
+
+/**
+ * Signal "this matched route addresses nothing" from inside a page's render or
+ * `load`, rendering the nearest `not-found.tsx` boundary.
+ *
+ * Throws the {@link NotFoundSignal} sentinel, which unwinds to the page's nearest
+ * {@link NotFoundBoundary}. Use it where a route resolved but the resource it names
+ * is absent (`const row = await find(id); if (row === undefined) notFound();`).
+ * Returns `never`, so TypeScript narrows the value as present after the call.
+ */
+export function notFound(): never {
+  throw new NotFoundSignal();
+}
+
+/** True iff `value` is the branded `notFound()` sentinel (never an ordinary error). */
+function isNotFoundSignal(value: unknown): value is NotFoundSignal {
+  return value instanceof Error && NOT_FOUND_SIGNAL in value;
+}
+
+/**
+ * The props a boundary component receives — its rendered children, the `Fallback`
+ * to show when it trips, and a `claims` predicate that decides whether a caught
+ * error is THIS boundary's to handle. `children` is OPTIONAL because `createElement`
+ * supplies it positionally (its third argument), not in the props object.
+ */
+interface BoundaryProps {
+  Fallback: ComponentType<unknown>;
+
+  /** True iff a caught error is this boundary's to render `Fallback` for. */
+  claims: (error: unknown) => boolean;
+
+  children?: ReactNode;
+}
+
+/** A boundary's caught state: the error and whether this boundary claims it. */
+interface BoundaryState {
+  caught: { readonly error: unknown } | undefined;
+}
+
+/**
+ * A render boundary that, when a descendant throws, renders `Fallback` if the error
+ * is THIS boundary's (`claims(error)`) or RE-THROWS it otherwise — so the right
+ * boundary in the stack handles each error kind.
+ *
+ * A class component is the only way React catches a render error (there is no hook
+ * twin). Two instances compose the convention: the `error.tsx` boundary claims
+ * every error EXCEPT the `notFound()` signal (which it re-throws so the 404 boundary
+ * above can render); the `not-found.tsx` boundary claims ONLY that signal (re-throwing
+ * any real error so the `error` boundary handles it). Under React's streaming SSR a
+ * boundary recovers on the CLIENT after hydration (the SSR isolates the subtree); the
+ * Suspense wrap (see {@link wrapBoundaries}) keeps the throw from tearing down the
+ * shell — the same client-recovery model as Next's `error.tsx`.
+ */
+export class FileRouteBoundary extends Component<BoundaryProps, BoundaryState> {
+  override state: BoundaryState = { caught: undefined };
+
+  static getDerivedStateFromError(error: unknown): BoundaryState {
+    // Record the error; `render` decides (via `claims`) whether to show the fallback
+    // or re-throw to the next boundary up — the props are not available here.
+    return { caught: { error } };
+  }
+
+  override render(): ReactNode {
+    const caught = this.state.caught;
+
+    if (caught === undefined) return this.props.children;
+
+    // Our error → render the per-route fallback; anyone else's → re-throw so the
+    // next boundary in the stack catches it (error ↔ not-found cross-over).
+    if (this.props.claims(caught.error)) return createElement(this.props.Fallback);
+
+    throw caught.error;
+  }
+}
+
+/** The `error.tsx` boundary claims every error but the `notFound()` signal. */
+export const claimsError = (error: unknown): boolean => !isNotFoundSignal(error);
+
+/** The `not-found.tsx` boundary claims ONLY the `notFound()` signal. */
+export const claimsNotFound = (error: unknown): boolean => isNotFoundSignal(error);
+
+/**
  * Build the {@link PageDef} to register for one page descriptor: its own module's
- * def, with its layout chain composed into the component (outermost layout first).
+ * def, with its layout chain AND its nearest `loading`/`error`/`not-found`
+ * boundaries composed into the component.
  *
  * The page's `load`, `metadata`, `params`, `static`, and `cache` all ride through
  * from the authored def untouched — only the `component` is replaced by one that
- * renders the original wrapped in its layouts, so the per-branch nesting is
- * invisible to the rest of the page pipeline (it sees an ordinary `PageDef`).
+ * renders the original wrapped, so the per-branch nesting is invisible to the rest
+ * of the page pipeline (it sees an ordinary `PageDef`).
+ *
+ * The nesting, OUTERMOST first: layouts (the whole chain), then the `not-found`
+ * boundary, then the `error` boundary, then the `loading` Suspense fallback,
+ * innermost the page itself. Order matters — the `error` boundary sits BELOW
+ * `not-found` so a `notFound()` thrown during render passes the error boundary
+ * (which re-throws the signal) and is caught by the 404 boundary; the `loading`
+ * Suspense sits innermost so the page's own suspends reveal the fallback while
+ * a deeper error still bubbles to the `error` boundary above it.
  */
 function pageDefFor(route: FileRoute, modules: LoadedFileRoutes): PageDef {
   const pageModule = moduleAt("page", route.segments, modules, route.pattern);
 
   const def = toPageDef(pageModule, route.pattern);
 
-  // `compileFileRoutes` sets `layoutDepth` on EVERY page descriptor (an empty
-  // array when no layout sits above it), and this function is only ever called for
-  // a page (the applier filters to `kind === "page"`). The optional field is for
-  // LAYOUT descriptors, which never reach this path — so an empty list is the
-  // honest reading of "a page with no `layoutDepth`," and it produces no wrapper.
+  // `compileFileRoutes` sets `layoutDepth` + `boundaries` on EVERY page descriptor
+  // (empty when nothing sits above it), and this function is only ever called for a
+  // page (the applier filters to `kind === "page"`). The empty cases produce no
+  // wrapper, so an unbounded page is registered exactly as before.
   const layouts = layoutChainFor(route, modules);
+  const boundaries = boundaryComponentsFor(route, modules);
 
-  // No layouts above this page → its def is registered as-is; nothing to wrap.
-  if (layouts.length === 0) return def;
+  const hasBoundary =
+    boundaries.loading !== undefined ||
+    boundaries.error !== undefined ||
+    boundaries["not-found"] !== undefined;
+
+  // Nothing wraps this page → its def is registered as-is.
+  if (layouts.length === 0 && !hasBoundary) return def;
 
   const inner = def.component;
 
-  // The composed component: render the authored page, then nest it through each
-  // layout outermost-first. Layouts take `children`; the page takes its loaded
-  // props — so we wrap the rendered page element, not the component, reusing
-  // render-page's own `wrap` (the SAME nesting the renderer applies to app layouts).
-  const wrapped: ComponentType<unknown> = (props: unknown) =>
-    wrap(layouts, createElement(inner as ComponentType<unknown>, props as Record<string, unknown>));
+  // The composed component: render the authored page, wrap it in its boundaries
+  // (innermost-first), then nest it through each layout outermost-first — reusing
+  // render-page's own `wrap` for the layout chain (the SAME nesting the renderer
+  // applies to app layouts), so the two orders never drift.
+  const wrapped: ComponentType<unknown> = (props: unknown) => {
+    const page = createElement(inner as ComponentType<unknown>, props as Record<string, unknown>);
+
+    return wrap(layouts, wrapBoundaries(page, boundaries));
+  };
 
   return { ...def, component: wrapped as PageDef["component"] };
+}
+
+/** The boundary components resolved for a page, each absent when it has none above it. */
+interface ResolvedBoundaries {
+  loading?: ComponentType<unknown>;
+  error?: ComponentType<unknown>;
+  "not-found"?: ComponentType<unknown>;
+}
+
+/** An empty Suspense fallback for the SSR-isolation wrap when no `loading` is declared. */
+const NoFallback = (): null => null;
+
+/**
+ * Wrap a rendered page element in its nearest boundaries, innermost-first.
+ *
+ * The nesting, innermost-first: a `<Suspense>` (the loading fallback), then the
+ * `error` boundary, then the `not-found` boundary outermost — so a `notFound()`
+ * thrown in the page bubbles past the error boundary (which re-throws the signal)
+ * to the 404 boundary, a genuine throw is caught by the error boundary, and a
+ * suspended render reveals the loading fallback.
+ *
+ * THE SUSPENSE IS LOAD-BEARING for the error/not-found boundaries under streaming
+ * SSR, not just for `loading`. React's `renderToReadableStream` REJECTS the whole
+ * render if a throw escapes to the shell (outside every `<Suspense>`); inside a
+ * boundary it instead isolates that subtree (emitting client-recovery markers) and
+ * keeps the shell. So whenever an `error`/`not-found` boundary is present we wrap
+ * the page in a Suspense even without a `loading` file (an empty fallback), so a
+ * page throw never tears down the document — the error/404 boundary then renders
+ * its view on the CLIENT after hydration (the same model as Next's client `error.tsx`).
+ * A `loading` file supplies a real fallback for that same Suspense.
+ */
+function wrapBoundaries(page: ReactElement, boundaries: ResolvedBoundaries): ReactElement {
+  let node: ReactElement = page;
+
+  const needsErrorIsolation =
+    boundaries.error !== undefined || boundaries["not-found"] !== undefined;
+
+  // A Suspense is added when the page declares `loading`, OR when an error/not-found
+  // boundary needs the shell-isolation it provides under streaming SSR (above).
+  if (boundaries.loading !== undefined || needsErrorIsolation) {
+    const fallback = createElement(boundaries.loading ?? NoFallback);
+
+    node = createElement(Suspense, { fallback }, node);
+  }
+
+  if (boundaries.error !== undefined) {
+    node = createElement(
+      FileRouteBoundary,
+      { Fallback: boundaries.error, claims: claimsError },
+      node,
+    );
+  }
+
+  if (boundaries["not-found"] !== undefined) {
+    node = createElement(
+      FileRouteBoundary,
+      { Fallback: boundaries["not-found"], claims: claimsNotFound },
+      node,
+    );
+  }
+
+  return node;
+}
+
+/**
+ * Resolve a page's nearest `loading`/`error`/`not-found` boundary components from
+ * its `boundaries` depths — each the `default` export of the boundary module at the
+ * named depth, or absent when the page has none of that kind above it.
+ *
+ * The compiler computed the NEAREST depth per kind (the deepest matching directory,
+ * so a deeper file overrides a shallower); here we load that one module. A boundary
+ * module's `default` is its component (the named-export idiom — a `loading.tsx`
+ * just `export default`s the spinner), looked up the same `routeKey` way layouts are.
+ */
+function boundaryComponentsFor(route: FileRoute, modules: LoadedFileRoutes): ResolvedBoundaries {
+  const resolved: ResolvedBoundaries = {};
+
+  for (const kind of ["loading", "error", "not-found"] as const) {
+    const depth = route.boundaries[kind];
+
+    if (depth === undefined) continue;
+
+    const module = moduleAt(kind, route.segments.slice(0, depth), modules, route.pattern);
+
+    resolved[kind] = module.default as ComponentType<unknown>;
+  }
+
+  return resolved;
 }
 
 /**

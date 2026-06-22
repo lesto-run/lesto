@@ -43,7 +43,10 @@
  * A `page` file at a directory makes that directory's URL a page; a `layout` file
  * makes one that wraps every page at or below it, outermost-first (the directory
  * depth order layouts must nest in — a group's layout nests by its directory like
- * any other).
+ * any other). A `loading`, `error`, or `not-found` file is a directory-scoped
+ * BOUNDARY: it supplies the nearest Suspense fallback, error boundary, or 404
+ * boundary to the page at its directory and below, a deeper file of the same kind
+ * overriding the shallower for that subtree.
  *
  * Co-existence is the whole point: these descriptors become ordinary `.page()` /
  * `.layout()` registrations on the SAME `Lesto` instance an app declares its
@@ -66,11 +69,27 @@ import { RouterError } from "./errors";
 
 /**
  * The recognized file kinds at a directory. A `page` makes the directory's URL a
- * route; a `layout` wraps every route at or below it. Anything else under the
- * convention dir is ignored, so a co-located helper (`listing-card.tsx`, a test,
- * a stylesheet) is not mistaken for a route.
+ * route; a `layout` wraps every route at or below it. A `loading`, `error`, or
+ * `not-found` is a BOUNDARY: like a layout it is directory-scoped (it applies to
+ * the page at its directory and every page below, unless a deeper directory
+ * overrides it) and registers no route of its own — it only supplies the page's
+ * nearest Suspense fallback (`loading`), error boundary (`error`), or 404 boundary
+ * (`not-found`). Anything else under the convention dir is ignored, so a co-located
+ * helper (`listing-card.tsx`, a test, a stylesheet) is not mistaken for a route.
  */
-export type FileRouteKind = "page" | "layout";
+export type FileRouteKind = "page" | "layout" | "loading" | "error" | "not-found";
+
+/**
+ * The DIRECTORY-SCOPED boundary kinds — the ones that, like a `layout`, wrap (or
+ * supply a fallback to) the page at their directory and every page below it, with
+ * a deeper file of the same kind overriding the shallower for that subtree. A
+ * `page` is the only NON-boundary kind. Listed once so the compiler resolves each
+ * boundary the SAME way (`nearestBoundary`) rather than repeating the walk per kind.
+ */
+export const BOUNDARY_KINDS = ["layout", "loading", "error", "not-found"] as const;
+
+/** One of the directory-scoped boundary kinds (everything but `page`). */
+export type BoundaryKind = (typeof BOUNDARY_KINDS)[number];
 
 /**
  * The base names (without extension) that name each kind, in the order a reader
@@ -80,6 +99,9 @@ export type FileRouteKind = "page" | "layout";
 export const ROUTE_FILE_NAMES: Readonly<Record<string, FileRouteKind>> = Object.freeze({
   page: "page",
   layout: "layout",
+  loading: "loading",
+  error: "error",
+  "not-found": "not-found",
 });
 
 /**
@@ -125,11 +147,37 @@ export interface FileRoute {
    * first — the order they must nest in (root outside section outside page).
    *
    * Always present, so the applier reads it with no fallback: a page with no
-   * layouts above it gets `[]`, and a `layout` descriptor gets `[]` too (the
-   * applier never wraps a layout in layouts — only a `page` is registered). Making
-   * it total rather than page-only keeps the consumer branch-free.
+   * layouts above it gets `[]`, and a non-`page` descriptor gets `[]` too (the
+   * applier never wraps a boundary in layouts — only a `page` is registered).
+   * Making it total rather than page-only keeps the consumer branch-free.
    */
   layoutDepth: ReadonlyArray<number>;
+
+  /**
+   * The NEAREST boundary of each kind above this route, as the depth of the
+   * directory holding it — or absent when no such file sits at or above the page.
+   *
+   * Unlike `layoutDepth` (the WHOLE chain, because layouts nest), a `loading`,
+   * `error`, or `not-found` resolves to a SINGLE boundary — the closest one, with a
+   * deeper file overriding a shallower for that subtree — so each is one depth, not
+   * a list. The applier reads the depth to look up the boundary's module and wrap
+   * the page in it (a Suspense fallback for `loading`, an error boundary for
+   * `error`). Present only on a `page` descriptor; a boundary/layout descriptor
+   * carries an empty record (it is never the thing wrapped).
+   */
+  boundaries: BoundaryDepths;
+}
+
+/**
+ * The nearest boundary depth of each non-layout boundary kind above a page, each
+ * absent when no such file sits at or above it. Layouts are NOT here — they nest
+ * as a whole chain ({@link FileRoute.layoutDepth}); these three resolve to one
+ * nearest file each.
+ */
+export interface BoundaryDepths {
+  loading?: number;
+  error?: number;
+  "not-found"?: number;
 }
 
 // A dynamic segment is a directory named `[name]`; it compiles to `:name`. The
@@ -353,6 +401,13 @@ function assertCatchAllTerminal(urlSegments: ReadonlyArray<string>, pattern: str
  *     passes through that directory; because the directory tree is a prefix tree,
  *     "wraps" is exactly "the page's segments start with the layout's segments."
  *
+ *   - **Boundary resolution.** A page's `boundaries` names the NEAREST `loading`,
+ *     `error`, and `not-found` at or above it (the deepest matching directory, so
+ *     a deeper file overrides a shallower for that subtree — Next's per-segment
+ *     override). Unlike layouts these resolve to a single nearest file each, not a
+ *     nesting chain; the applier wraps the page in that one Suspense/error/404
+ *     boundary.
+ *
  *   - **Collision refusal.** Two `page` files sharing a MATCH SHAPE — the pattern
  *     with every `:param` normalized to `*`, so `/:id` and `/:slug` both reduce to
  *     `/*` — answer the same set of URLs and are a convention ambiguity the author
@@ -379,24 +434,35 @@ export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): Readonl
   // genuinely distinct routes (`files/[id]` vs `[category]/new`) untouched.
   const seenShape = new Set<string>();
 
-  // The directory of every `layout` file, computed once: a page's layout chain is
-  // the subset of these that prefix its path, so the lookup is built ahead of the
-  // loop rather than rebuilt per page.
-  const layoutKeys = new Set(
-    files.filter((file) => file.kind === "layout").map((file) => dirKey(file.segments)),
-  );
+  // The directories of every boundary file, grouped by kind and computed once: a
+  // page's layout chain (and each nearest boundary) is the subset that prefixes its
+  // path, so the lookups are built ahead of the loop rather than rebuilt per page.
+  // `layout` is here too, so the one walk feeds the layout chain and the boundaries.
+  const boundaryKeys = boundaryKeysByKind(files);
+  const layoutKeys = boundaryKeys.layout;
 
   const pages: FileRoute[] = [];
-  const layouts: FileRoute[] = [];
+
+  // Every non-page descriptor (layout + the three boundaries), in one bucket: each
+  // registers no route, so the applier keys it by directory and looks it up from a
+  // page's `layoutDepth`/`boundaries`. Kept ahead of the pages in the returned list.
+  const boundaries: FileRoute[] = [];
 
   for (const file of files) {
     const pattern = patternFor(file.segments);
 
-    if (file.kind === "layout") {
-      // A layout descriptor carries an empty `layoutDepth`: it is never the thing
-      // wrapped (only a page is registered), so it has no layouts of its own — but
-      // the field is total, so the applier reads every descriptor branch-free.
-      layouts.push({ kind: "layout", pattern, segments: file.segments, layoutDepth: [] });
+    if (file.kind !== "page") {
+      // A boundary/layout descriptor carries an empty `layoutDepth`/`boundaries`: it
+      // is never the thing wrapped (only a page is registered), so it has none of its
+      // own — but the fields are total, so the applier reads every descriptor
+      // branch-free.
+      boundaries.push({
+        kind: file.kind,
+        pattern,
+        segments: file.segments,
+        layoutDepth: [],
+        boundaries: {},
+      });
 
       continue;
     }
@@ -432,6 +498,7 @@ export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): Readonl
       pattern,
       segments: file.segments,
       layoutDepth: layoutDepthsFor(file.segments, layoutKeys),
+      boundaries: boundariesFor(file.segments, boundaryKeys),
     });
   }
 
@@ -441,13 +508,65 @@ export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): Readonl
   // a dynamic sibling without the author hand-ordering anything.
   pages.sort(comparePageSpecificity);
 
-  // Layouts trail the pages; the applier registers each layout (in shallowest-
-  // first order) before the pages it wraps, but the descriptor order between the
-  // two groups is the applier's to interleave — here we just keep layouts grouped
-  // and depth-ordered so the applier can lean on it.
-  layouts.sort((a, b) => a.segments.length - b.segments.length);
+  // Boundaries (layout + loading/error/not-found) trail the pages; the applier
+  // registers nothing for them directly — it keys them by directory and looks each
+  // up from a page's depths — but we keep them grouped and depth-ordered so a
+  // shallowest-first scan is available to any consumer.
+  boundaries.sort((a, b) => a.segments.length - b.segments.length);
 
-  return [...layouts, ...pages];
+  return [...boundaries, ...pages];
+}
+
+/**
+ * The directories of every boundary file, grouped by kind — a set per kind of the
+ * `dirKey` of each `layout`/`loading`/`error`/`not-found` file. Built once so the
+ * per-page nearest-boundary walk is a set lookup, not a re-filter of the file list.
+ */
+function boundaryKeysByKind(
+  files: ReadonlyArray<DiscoveredFile>,
+): Record<BoundaryKind, Set<string>> {
+  const byKind = {
+    layout: new Set<string>(),
+    loading: new Set<string>(),
+    error: new Set<string>(),
+    "not-found": new Set<string>(),
+  } satisfies Record<BoundaryKind, Set<string>>;
+
+  for (const file of files) {
+    if (file.kind !== "page") byKind[file.kind].add(dirKey(file.segments));
+  }
+
+  return byKind;
+}
+
+/**
+ * The nearest boundary of each non-layout kind above a page — its directory depth,
+ * or absent when no such file sits at or above the page.
+ *
+ * "Nearest" is the DEEPEST directory on the path from the root to the page that
+ * holds the kind, so a deeper `loading`/`error`/`not-found` overrides a shallower
+ * for that subtree (Next's per-segment override). We reuse {@link layoutDepthsFor}
+ * (which records every matching depth shallowest-first) and take its last entry —
+ * the deepest — per kind. Layouts are excluded: they nest as the whole chain, not
+ * a single nearest file.
+ */
+function boundariesFor(
+  pageSegments: ReadonlyArray<string>,
+  keysByKind: Record<BoundaryKind, Set<string>>,
+): BoundaryDepths {
+  const result: BoundaryDepths = {};
+
+  for (const kind of ["loading", "error", "not-found"] as const) {
+    const depths = layoutDepthsFor(pageSegments, keysByKind[kind]);
+
+    // The nearest is the deepest matching directory — the last entry, since
+    // `layoutDepthsFor` records them shallowest-first. Absent when none matched.
+    const nearest = depths.at(-1);
+
+    if (nearest !== undefined) result[kind] = nearest;
+  }
+
+  return result;
 }
 
 /**

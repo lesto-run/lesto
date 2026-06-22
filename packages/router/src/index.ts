@@ -27,8 +27,14 @@ export type { CatchAllParamKeys, ParamKeys, PathParams, SingleParamKeys } from "
 // route descriptors that compile to the same `:param` patterns above, so a
 // file-route and a hand-written route share one router (the applier lives in
 // `@lesto/web`'s `applyFileRoutes`, over these descriptors).
-export { compileFileRoutes, dirKey, ROUTE_FILE_NAMES } from "./file-routes";
-export type { DiscoveredFile, FileRoute, FileRouteKind } from "./file-routes";
+export { BOUNDARY_KINDS, compileFileRoutes, dirKey, ROUTE_FILE_NAMES } from "./file-routes";
+export type {
+  BoundaryDepths,
+  BoundaryKind,
+  DiscoveredFile,
+  FileRoute,
+  FileRouteKind,
+} from "./file-routes";
 export { scanRoutes } from "./scan";
 export type { DirEntry, DirReader } from "./scan";
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BOUNDARY_KINDS,
   compileFileRoutes,
   type DiscoveredFile,
   type FileRoute,
@@ -15,6 +16,15 @@ const page = (...segments: string[]): DiscoveredFile => ({ kind: "page", segment
 /** A layout file at the given raw segments. */
 const layout = (...segments: string[]): DiscoveredFile => ({ kind: "layout", segments });
 
+/** A loading boundary file at the given raw segments. */
+const loading = (...segments: string[]): DiscoveredFile => ({ kind: "loading", segments });
+
+/** An error boundary file at the given raw segments. */
+const errorFile = (...segments: string[]): DiscoveredFile => ({ kind: "error", segments });
+
+/** A not-found boundary file at the given raw segments. */
+const notFound = (...segments: string[]): DiscoveredFile => ({ kind: "not-found", segments });
+
 /** The page descriptors compileFileRoutes returned, in its resolution order. */
 const pagesOf = (files: readonly DiscoveredFile[]): readonly FileRoute[] =>
   compileFileRoutes(files).filter((route) => route.kind === "page");
@@ -24,8 +34,14 @@ const layoutsOf = (files: readonly DiscoveredFile[]): readonly FileRoute[] =>
   compileFileRoutes(files).filter((route) => route.kind === "layout");
 
 describe("ROUTE_FILE_NAMES", () => {
-  it("maps the two recognized base names to their kinds", () => {
-    expect(ROUTE_FILE_NAMES).toEqual({ page: "page", layout: "layout" });
+  it("maps every recognized base name to its kind", () => {
+    expect(ROUTE_FILE_NAMES).toEqual({
+      page: "page",
+      layout: "layout",
+      loading: "loading",
+      error: "error",
+      "not-found": "not-found",
+    });
   });
 });
 
@@ -201,6 +217,77 @@ describe("compileFileRoutes — layout nesting", () => {
     const result = layoutsOf([layout("a", "b"), layout(), layout("a")]);
 
     expect(result.map((route) => route.segments.length)).toEqual([0, 1, 2]);
+  });
+});
+
+describe("BOUNDARY_KINDS", () => {
+  it("lists the directory-scoped kinds (every kind but page)", () => {
+    expect([...BOUNDARY_KINDS]).toEqual(["layout", "loading", "error", "not-found"]);
+  });
+});
+
+describe("compileFileRoutes — boundary resolution (loading / error / not-found)", () => {
+  it("gives a page the NEAREST boundary depth of each kind above it", () => {
+    // Root loading + a deeper section loading; the page picks the deeper (nearest).
+    // A root error and a section not-found each resolve to their one depth.
+    const files = [
+      loading(),
+      loading("listings"),
+      errorFile(),
+      notFound("listings"),
+      page("listings", "[id]"),
+    ];
+
+    const route = pagesOf(files)[0];
+
+    // loading: nearest is depth 1 (the section), overriding the root's depth 0.
+    // error: only the root's depth 0. not-found: only the section's depth 1.
+    expect(route?.boundaries).toEqual({ loading: 1, error: 0, "not-found": 1 });
+  });
+
+  it("gives a page with no boundaries above it an empty boundaries record", () => {
+    expect(pagesOf([page("about")])[0]?.boundaries).toEqual({});
+  });
+
+  it("records a boundary co-located in the page's own directory", () => {
+    const route = pagesOf([loading("dash"), errorFile("dash"), page("dash")])[0];
+
+    expect(route?.boundaries).toEqual({ loading: 1, error: 1 });
+  });
+
+  it("does not apply a sibling branch's boundary to a page outside it", () => {
+    const files = [loading("admin"), page("admin", "users"), page("public")];
+
+    const compiled = compileFileRoutes(files);
+    const adminUsers = compiled.find((route) => route.pattern === "/admin/users");
+    const publicPage = compiled.find((route) => route.pattern === "/public");
+
+    expect(adminUsers?.boundaries).toEqual({ loading: 1 });
+    expect(publicPage?.boundaries).toEqual({});
+  });
+
+  it("returns boundary descriptors (no route of their own) ahead of the pages", () => {
+    const compiled = compileFileRoutes([page("x"), loading(), errorFile(), notFound()]);
+
+    // Each boundary is a descriptor the applier keys by directory; none is a page.
+    const boundaries = compiled.filter((route) => route.kind !== "page");
+
+    expect(boundaries.map((route) => route.kind).toSorted()).toEqual([
+      "error",
+      "loading",
+      "not-found",
+    ]);
+    // A boundary descriptor carries empty depths — it is never the thing wrapped.
+    for (const boundary of boundaries) {
+      expect(boundary.layoutDepth).toEqual([]);
+      expect(boundary.boundaries).toEqual({});
+    }
+  });
+
+  it("keeps a boundary out of the page set — it registers no URL", () => {
+    const pages = pagesOf([page("docs"), loading("docs"), errorFile("docs"), notFound("docs")]);
+
+    expect(pages.map((route) => route.pattern)).toEqual(["/docs"]);
   });
 });
 

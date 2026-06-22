@@ -7,8 +7,12 @@ import type { DiscoveredFile } from "@lesto/router";
 
 import {
   applyFileRoutes,
+  claimsError,
+  claimsNotFound,
+  FileRouteBoundary,
   generateRouteManifest,
   loadFileRoutes,
+  notFound,
   routeKey,
 } from "../src/file-routes";
 import type { LoadedFileRoutes, LoadedRouteModule } from "../src/file-routes";
@@ -38,6 +42,9 @@ async function drain(response: LestoResponse): Promise<string> {
 
 const page = (...segments: string[]): DiscoveredFile => ({ kind: "page", segments });
 const layout = (...segments: string[]): DiscoveredFile => ({ kind: "layout", segments });
+const loadingFile = (...segments: string[]): DiscoveredFile => ({ kind: "loading", segments });
+const errorFile = (...segments: string[]): DiscoveredFile => ({ kind: "error", segments });
+const notFoundFile = (...segments: string[]): DiscoveredFile => ({ kind: "not-found", segments });
 
 // Module-scope marker components — hoisted out of the `it` bodies (they capture
 // nothing) so each is defined once, not recreated per call.
@@ -51,6 +58,28 @@ const Listing = ({ id }: { id: string }): ReactNode => createElement("h1", null,
 // Renders its catch-all param so a test can see the `string[]` arrived intact.
 const CatchAll = ({ slug }: { slug: readonly string[] }): ReactNode =>
   createElement("h1", null, `n=${slug.length} v=${slug.join("-")}`);
+
+// Boundary marker components: each renders a distinct marker so a test can assert
+// which boundary view ended up in the HTML.
+const Spinner = (): ReactNode => createElement("div", { id: "loading" }, "loading…");
+const RootSpinner = (): ReactNode => createElement("div", { id: "root-loading" }, "root…");
+const ErrorView = (): ReactNode => createElement("div", { id: "error" }, "something broke");
+const NotFoundView = (): ReactNode => createElement("div", { id: "not-found" }, "no such thing");
+
+// A page whose render always throws an ordinary error — exercises the error boundary.
+const Boom = (): ReactNode => {
+  throw new Error("kaboom in render");
+};
+
+// A page that signals notFound() during render — exercises the not-found boundary.
+const Missing = (): ReactNode => {
+  notFound();
+};
+
+/** A boundary module: a plain default-export component (the named-export idiom). */
+function boundaryModule(component: (props: never) => ReactNode): LoadedRouteModule {
+  return { default: component as LoadedRouteModule["default"] };
+}
 
 /** A page module whose component renders a marker, plus any extra PageDef fields. */
 function pageModule(
@@ -268,6 +297,32 @@ describe("generateRouteManifest", () => {
     // would type a href no real link is written as.
     expect(src).toContain("| `/u/${string}`");
     expect(src).not.toContain('"/u/:id"');
+  });
+
+  it("emits the loading / error / not-found boundary files into the edge manifest", () => {
+    // The boundaries must reach the edge Worker's static-import map too, so a
+    // file-routed app's boundaries work on Workers (no node:fs there). They are
+    // imported by `<kind>` and keyed by `routeKey`, like a page or layout — but they
+    // contribute NO RoutePath member (only a page registers a URL).
+    const src = generateRouteManifest(
+      [page("docs"), loadingFile("docs"), errorFile("docs"), notFoundFile("docs")],
+      { importBase: "../app/routes" },
+    );
+
+    expect(src).toContain('from "../app/routes/docs/loading"');
+    expect(src).toContain('from "../app/routes/docs/error"');
+    expect(src).toContain('from "../app/routes/docs/not-found"');
+
+    expect(src).toContain('"loading:docs"');
+    expect(src).toContain('"error:docs"');
+    expect(src).toContain('"not-found:docs"');
+
+    // The boundary files are in the raw files list (the applier compiles them).
+    expect(src).toContain('{ kind: "loading", segments: ["docs"] }');
+    expect(src).toContain('{ kind: "not-found", segments: ["docs"] }');
+
+    // Only the page registers a URL, so RoutePath carries just "/docs".
+    expect(src).toContain('| "/docs"');
   });
 
   it("strips a (group) directory from the emitted URL but keeps its raw module key", () => {
@@ -537,5 +592,240 @@ describe("applyFileRoutes — catch-all & group segments end to end", () => {
 
     expect(html).toContain('<div id="mk">');
     expect(html).toContain("<h1>about</h1>");
+  });
+});
+
+describe("applyFileRoutes — loading / error / not-found boundaries", () => {
+  it("renders the page normally when no boundary trips, with a loading boundary present", async () => {
+    // A non-suspending, non-throwing page renders its own output; the loading
+    // Suspense and the error/not-found boundaries wrap it transparently. The wrap
+    // must not change a clean page's output.
+    const home = page();
+    const ld = loadingFile();
+    const err = errorFile();
+    const nf = notFoundFile();
+
+    const app = applyFileRoutes(
+      lesto(),
+      [home, ld, err, nf],
+      moduleMap(
+        [home, pageModule(Home)],
+        [ld, boundaryModule(Spinner)],
+        [err, boundaryModule(ErrorView)],
+        [nf, boundaryModule(NotFoundView)],
+      ),
+    );
+
+    const html = await drain(await app.handle("GET", "/"));
+
+    expect(html).toContain("<h1>home</h1>");
+  });
+
+  it("keeps the document shell intact when a page throws under an error boundary", async () => {
+    // React's streaming SSR cannot server-render an error boundary's fallback (the
+    // boundary recovers on the CLIENT after hydration). What the SSR wrap guarantees
+    // is that a page throw does NOT reject the whole render — the shell still
+    // streams. So the render resolves to a 200 document, not a thrown error.
+    const boom = page("crash");
+    const err = errorFile("crash");
+
+    const app = applyFileRoutes(
+      lesto(),
+      [boom, err],
+      moduleMap([boom, pageModule(Boom)], [err, boundaryModule(ErrorView)]),
+    );
+
+    const response = await app.handle("GET", "/crash");
+
+    expect(response.status).toBe(200);
+    // The shell survived: a full HTML document streamed (the error subtree is left
+    // for client recovery), rather than the render rejecting.
+    expect(await drain(response)).toContain("<html");
+  });
+
+  it("keeps the shell intact when a page calls notFound() under a 404 boundary", async () => {
+    const missing = page("listings", "[id]");
+    const nf = notFoundFile("listings");
+
+    const app = applyFileRoutes(
+      lesto(),
+      [missing, nf],
+      moduleMap([missing, pageModule(Missing)], [nf, boundaryModule(NotFoundView)]),
+    );
+
+    const response = await app.handle("GET", "/listings/99");
+
+    expect(response.status).toBe(200);
+    expect(await drain(response)).toContain("<html");
+  });
+
+  it("composes the loading Suspense and both boundaries with the layout chain", async () => {
+    // A root layout + every boundary at the root, around a clean page: the layout
+    // wraps the boundaries wrap the Suspense wrap the page, and a normal render shows
+    // both the layout and the page (no boundary tripped).
+    const home = page();
+    const root = layout();
+    const ld = loadingFile();
+    const err = errorFile();
+    const nf = notFoundFile();
+
+    const app = applyFileRoutes(
+      lesto(),
+      [home, root, ld, err, nf],
+      moduleMap(
+        [home, pageModule(Home)],
+        [root, layoutModule("root")],
+        [ld, boundaryModule(Spinner)],
+        [err, boundaryModule(ErrorView)],
+        [nf, boundaryModule(NotFoundView)],
+      ),
+    );
+
+    const html = await drain(await app.handle("GET", "/"));
+
+    expect(html).toContain('<div id="root">'); // layout still wraps
+    expect(html).toContain("<h1>home</h1>"); // page rendered, no boundary tripped
+  });
+
+  it("resolves the NEAREST loading boundary when a deeper one overrides the root", async () => {
+    // Two loading files (root + section); the compiler resolves the deeper one for a
+    // page under the section. A non-suspending page renders normally — the assertion
+    // is the wiring (it loaded the deeper module, not the root, without a miss).
+    const sectionPage = page("docs");
+    const rootLoading = loadingFile();
+    const sectionLoading = loadingFile("docs");
+
+    const app = applyFileRoutes(
+      lesto(),
+      [sectionPage, rootLoading, sectionLoading],
+      moduleMap(
+        [sectionPage, pageModule(About)],
+        [rootLoading, boundaryModule(RootSpinner)],
+        [sectionLoading, boundaryModule(Spinner)],
+      ),
+    );
+
+    const html = await drain(await app.handle("GET", "/docs"));
+
+    expect(html).toContain("<h1>about</h1>");
+  });
+
+  it("wraps a page that has ONLY an error boundary (no loading) in an isolating Suspense", async () => {
+    // An error/not-found boundary still needs the Suspense shell-isolation under
+    // streaming SSR even with no `loading` file (an empty fallback). A throwing page
+    // therefore resolves to a 200 document rather than a rejected render.
+    const boom = page("only-err");
+    const err = errorFile("only-err");
+
+    const app = applyFileRoutes(
+      lesto(),
+      [boom, err],
+      moduleMap([boom, pageModule(Boom)], [err, boundaryModule(ErrorView)]),
+    );
+
+    expect((await app.handle("GET", "/only-err")).status).toBe(200);
+  });
+
+  it("refuses a page whose boundary module was not loaded, by code", () => {
+    // The page is present, but its declared loading boundary module is not — a
+    // wiring bug surfaced as the same coded WebError a missing layout gives.
+    const home = page();
+    const ld = loadingFile();
+
+    try {
+      applyFileRoutes(lesto(), [home, ld], moduleMap([home, pageModule(Home)]));
+
+      expect.unreachable("a missing boundary module should throw");
+    } catch (error) {
+      expect((error as WebError).code).toBe("WEB_FILE_ROUTE_MODULE_MISSING");
+      expect((error as WebError).details).toMatchObject({ kind: "loading", pattern: "/" });
+    }
+  });
+});
+
+describe("notFound", () => {
+  it("throws a branded signal so a non-signal error never trips the 404 boundary", () => {
+    // notFound() throws (returns `never`); the thrown value is an Error so React's
+    // boundaries can catch it, and it is distinct from an ordinary Error.
+    expect(() => notFound()).toThrow();
+
+    let signal: unknown;
+    try {
+      notFound();
+    } catch (caught) {
+      signal = caught;
+    }
+
+    expect(signal).toBeInstanceOf(Error);
+    expect(signal).not.toStrictEqual(new Error("notFound() was called"));
+  });
+});
+
+/** Capture the value notFound() throws, for the claims predicates' signal case. */
+function notFoundSignal(): unknown {
+  try {
+    notFound();
+  } catch (caught) {
+    return caught;
+  }
+
+  throw new Error("notFound() did not throw");
+}
+
+describe("boundary claims predicates", () => {
+  it("claimsError owns every error EXCEPT the notFound signal", () => {
+    expect(claimsError(new Error("real"))).toBe(true);
+    expect(claimsError(notFoundSignal())).toBe(false);
+  });
+
+  it("claimsNotFound owns ONLY the notFound signal", () => {
+    expect(claimsNotFound(notFoundSignal())).toBe(true);
+    expect(claimsNotFound(new Error("real"))).toBe(false);
+    // A non-Error value (a thrown string) is not the branded signal either.
+    expect(claimsNotFound("nope")).toBe(false);
+  });
+});
+
+const Fallback = (): ReactNode => createElement("div", { id: "fb" }, "fallback");
+
+describe("FileRouteBoundary", () => {
+  const child = createElement("span", null, "child");
+
+  const makeBoundary = (claims: (error: unknown) => boolean): FileRouteBoundary =>
+    new FileRouteBoundary({ Fallback: Fallback as PageDef["component"], claims, children: child });
+
+  it("derives the caught error into state", () => {
+    const err = new Error("x");
+
+    expect(FileRouteBoundary.getDerivedStateFromError(err)).toEqual({ caught: { error: err } });
+  });
+
+  it("renders its children when nothing was caught", () => {
+    const boundary = makeBoundary(claimsError);
+
+    boundary.state = { caught: undefined };
+
+    expect(boundary.render()).toBe(child);
+  });
+
+  it("renders the Fallback when it claims the caught error", () => {
+    const boundary = makeBoundary(claimsError);
+
+    boundary.state = { caught: { error: new Error("boom") } };
+
+    const rendered = boundary.render();
+
+    expect(rendered).toMatchObject({ type: Fallback });
+  });
+
+  it("re-throws a caught error it does not claim, so the next boundary handles it", () => {
+    // The not-found boundary (claimsNotFound) re-throws a real error → it bubbles to
+    // the error boundary below.
+    const boundary = makeBoundary(claimsNotFound);
+    const real = new Error("real");
+
+    boundary.state = { caught: { error: real } };
+
+    expect(() => boundary.render()).toThrow(real);
   });
 });

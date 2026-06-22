@@ -88,10 +88,32 @@ describe("scanRoutes", () => {
   });
 
   it("ignores an unrecognized base name even with one extension", async () => {
-    const reader = fakeReader({ app: ["loading.tsx", "page.tsx"] });
+    const reader = fakeReader({ app: ["component.tsx", "page.tsx"] });
 
-    // `loading` is not part of this convention's subset; only page/layout count.
+    // `component` is not a convention name; only page/layout/loading/error/not-found count.
     expect(keys(await scanRoutes(reader, "app"))).toEqual(["page:"]);
+  });
+
+  it("recognizes the loading / error / not-found boundary files at a directory", async () => {
+    const reader = fakeReader({
+      app: ["page.tsx", "loading.tsx", "error.tsx", "not-found.tsx"],
+    });
+
+    // The hyphenated `not-found` base classifies despite its dash — the split is on
+    // the FIRST dot, so its base is `not-found`, not a dot-delimited compound.
+    expect(keys(await scanRoutes(reader, "app"))).toEqual([
+      "error:",
+      "loading:",
+      "not-found:",
+      "page:",
+    ]);
+  });
+
+  it("ignores a co-located boundary helper with an inner dot (loading.spinner.tsx)", async () => {
+    const reader = fakeReader({ app: ["loading.spinner.tsx", "loading.tsx"] });
+
+    // A second extension segment marks a co-located file, not the boundary file.
+    expect(keys(await scanRoutes(reader, "app"))).toEqual(["loading:"]);
   });
 
   it("returns an empty list for an empty convention dir", async () => {
