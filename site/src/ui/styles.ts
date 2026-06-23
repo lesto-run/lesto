@@ -163,13 +163,21 @@ a:hover { text-decoration: underline; }
 }
 
 /* The copy button: rehype-pretty-code's transformerCopyButton injects the
-   copy/check SVG icons, the 24px sizing, the absolute positioning, and the
-   hover-reveal — but no button SURFACE, so on its own it shows the browser's
-   default chrome. We give it a frosted surface (the injected backdrop-blur sits
-   under this) and a hover state. We override ONLY color/background/border — the
-   icon and size stay the framework's — and add NO label, so nothing overlaps the
-   icon. The icon lives as a background-image on the inner span; size + center it. */
+   copy/check SVG icons, the icon sizing, and the hover-reveal — but anchors the
+   button to the <pre>, which scrolls, so it drifts on horizontal scroll, and it
+   gives the button no SURFACE (so the bare control shows default chrome).
+
+   Two fixes: (1) make the <pre> position:static so the button's containing block
+   becomes the non-scrolling figure — an abspos child whose containing block is an
+   ancestor of the scroll box is neither moved nor clipped by that scroll, so it
+   stays pinned to the corner; (2) give it a frosted surface and NO label, so it
+   reads as an intentional icon button with nothing overlapping the icon. */
+.docs-article [data-rehype-pretty-code-figure] pre { position: static; }
 .docs-article .rehype-pretty-copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  margin: 0;
   color: #c9d1d9;
   background: rgba(110, 118, 129, 0.22);
   border: 1px solid rgba(240, 246, 252, 0.14);
