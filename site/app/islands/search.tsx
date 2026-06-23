@@ -2,11 +2,11 @@
  * The docs search box — the site's one interactive island, now a ⌘K palette.
  *
  * This is pure dogfooding: the entire palette (the `⌘K` / `Ctrl K` shortcut, the
- * modal, keyboard navigation, ARIA wiring, and the keyword ranking) is the
- * framework's own {@link CommandPalette} from `@lesto/content-search/react`. The
- * site contributes nothing but the slot — exactly the bar we hold ourselves to:
- * anything we'd hand-roll for the docs should be a feature of the content
- * packages instead.
+ * modal, keyboard navigation, ARIA wiring, the keyword ranking, and the empty-state
+ * quick-picks) is the framework's own {@link CommandPalette} from
+ * `@lesto/content-search/react`. The site contributes only the slot and the
+ * curated list of popular pages — exactly the bar we hold ourselves to: anything
+ * we'd hand-roll for the docs should be a feature of the content packages instead.
  *
  * It stays a DEFERRED island (`ssr: false`): the server renders the static
  * {@link SearchFallback} trigger, and the preact client mounts the real palette
@@ -18,8 +18,16 @@ import { CommandPalette } from "@lesto/content-search/react";
 import { defineIsland } from "@lesto/ui";
 import type { ReactElement } from "react";
 
+import { POPULAR_PAGES } from "../../src/popular";
+
 function SearchBox(): ReactElement {
-  return <CommandPalette indexPath="/search-index.json" triggerLabel="Search" />;
+  return (
+    <CommandPalette
+      indexPath="/search-index.json"
+      triggerLabel="Search"
+      defaultItems={POPULAR_PAGES}
+    />
+  );
 }
 
 /**
