@@ -13,7 +13,7 @@ ones that are actually exercised on every change.
 ## 1. Scaffold
 
 ```sh
-npm create lesto-app my-app
+npm create lesto my-app
 # or, with Bun:  bun create lesto my-app
 cd my-app
 bun install

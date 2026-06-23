@@ -7,7 +7,7 @@
 
 ## Context
 
-Lesto scaffolds a whole project (`create-lesto` / `npm create lesto-app`) but has **no
+Lesto scaffolds a whole project (`create-lesto` / `npm create lesto`) but has **no
 per-resource generators**. The Rails `bin/rails generate model Post …` / Laravel
 `php artisan make:model` day-one move — "one line, get a convention-correct, typed,
 test-stubbed file wired into the app" — is absent. Adding a table today means

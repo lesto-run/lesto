@@ -32,7 +32,7 @@ import type { LestoDepResolver } from "./templates";
  * The two ways a scaffolded app pins its `@lesto/*` dependencies.
  *
  * `publishedRangePin` (the DEFAULT) pins each to a published `^0.x` range — what
- * an outsider gets from `npm create lesto-app`, resolvable from the registry once
+ * an outsider gets from `npm create lesto`, resolvable from the registry once
  * the `0.x` publish lands (see `RELEASING.md`). `fileColonPin` pins each to a
  * `file:` path at the in-repo package — the in-monorepo dev/e2e mode, selected by
  * `create-lesto --local`, so `bun install` resolves against the workspace packages

@@ -14,7 +14,7 @@ then ship it to Cloudflare.
 ## Scaffold
 
 ```package-install
-npm create lesto-app@latest my-app
+npm create lesto@latest my-app
 cd my-app
 npm install
 ```

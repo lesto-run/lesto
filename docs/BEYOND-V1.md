@@ -23,7 +23,7 @@ often *ahead* of the JS incumbents on a specific axis — but at the product lev
 research prototype against production platforms, and three of its loudest differentiators
 are overstated or absent. The decisive fact is not quality; it is **maturity**: 240
 commits, single author, ~8 days, 58 private unpublished packages, and no LICENSE — so
-today an outsider literally cannot `npm create lesto-app`.
+today an outsider literally cannot `npm create lesto`.
 
 **Verified-strong (keep, lean on these as the defensible core):** the Node runtime core
 (never-throw per-request boundary, body cap, handler-timeout abort, slow-loris socket
@@ -58,7 +58,7 @@ tracked by the v1 roadmap.
 | Task | Why |
 |---|---|
 | **Add a LICENSE** (`L-5d07b979`) | No `LICENSE` file and no `license` field anywhere → all-rights-reserved by default → legally un-adoptable. |
-| **Release engineering** (`L-ff94be39`) | All 58 packages `private` at 0.0.0/0.1.0; no `.changeset`, no publish path; `create-lesto` uses `file:` pins → `npm create lesto-app` can't resolve for outsiders. Add Changesets + semver + a (dry-run-able) publish workflow; switch the scaffold to real ranges with a `file:`/`--local` dev fallback. |
+| **Release engineering** (`L-ff94be39`) | All 58 packages `private` at 0.0.0/0.1.0; no `.changeset`, no publish path; `create-lesto` uses `file:` pins → `npm create lesto` can't resolve for outsiders. Add Changesets + semver + a (dry-run-able) publish workflow; switch the scaffold to real ranges with a `file:`/`--local` dev fallback. |
 | **Public docs site** (`L-5d64ad98`) | Internal ADRs are not user docs. Quickstart + battery pages (linking gallery examples) + a deploy runbook. |
 | **OSS governance** (`L-7c36dc4d`) | No `SECURITY.md` / `CONTRIBUTING.md` / issue+PR templates — the contributor on-ramp + vuln-disclosure path the "platforms win via ecosystem" thesis needs. (Code of Conduct intentionally omitted.) |
 
