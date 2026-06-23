@@ -127,8 +127,10 @@ export interface RegenerateRoutesResult {
  * re-importing the app/route modules (the classic "syntax error in a just-saved
  * page"). A failed edge route-manifest regen is NOT here: it leaves the running dev
  * page working (it is only the Worker's static-import map), so it stays a stderr line.
+ * `style-rebuild` = the Tailwind CSS rebuild (ADR 0037 TW4) — a bad `@theme`/`@import`
+ * surfaces as the overlay too, cleared by the next successful build.
  */
-export type DevErrorSource = "client-rebuild" | "app-reload";
+export type DevErrorSource = "client-rebuild" | "app-reload" | "style-rebuild";
 
 /**
  * A dev build/reload failure pushed to the open browser so `lesto dev` renders an
@@ -170,6 +172,14 @@ export interface LiveReload {
    * {@link notify} — a reload that clears the overlay.
    */
   readonly notifyError: (error: DevError) => void;
+
+  /**
+   * Broadcast a stylesheet HOT-SWAP to every connected browser (a watched CSS
+   * rebuild succeeded, ADR 0037 TW4). The client swaps the `<link href="/styles.css">`
+   * in place with a cache-busted href and does NOT reload — so island and page state
+   * survive a style edit. Distinct from {@link notify}, which performs a full reload.
+   */
+  readonly notifyStyleUpdate: () => void;
 
   /** Shut the live-reload socket down (called on graceful dev shutdown). */
   readonly close: () => void;
@@ -293,6 +303,16 @@ export interface CliDeps {
    * build on boot, no live rebuilds).
    */
   watchIslands?: (onChange: () => void) => () => void;
+
+  /**
+   * Watch the WHOLE app source tree (`app/`, not just `app/islands/`) and call
+   * `onChange` (debounced) when any file changes, returning a stop handle. Broader
+   * than {@link watchIslands} on purpose (ADR 0037 TW4): Tailwind classes appear in
+   * routes, components, AND islands, so a class edit anywhere must rebuild the CSS.
+   * The bin wires a debounced `fs.watch` over `app/`; `dev` registers the CSS rebuild
+   * + stylesheet hot-swap. Absent → no CSS watching (a one-shot dev CSS build on boot).
+   */
+  watchStyleSources?: (onChange: () => void) => () => void;
 
   /**
    * Watch `app/routes/` and call `onChange` (debounced) when a page / layout /
@@ -1149,7 +1169,7 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   await buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev", dialect);
 
   // Compile the Tailwind stylesheet on boot too, so `/styles.css` is served from
-  // the first request (ADR 0037). The dev-watch CSS rebuild + hot-swap is TW4.
+  // the first request (ADR 0037); the dev watch below rebuilds + hot-swaps it.
   await buildStylesIfPresent(deps, config, DEFAULT_OUT_DIR, "dev");
 
   // One dev error overlay is up at a time; track it so a clean island rebuild
@@ -1182,6 +1202,24 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
         (error: unknown) => {
           deps.out(`client rebuild failed: ${rebuildErrorMessage(error)}`);
           showOverlay(devError("client-rebuild", error));
+        },
+      );
+    });
+  }
+
+  // The CSS dev loop (ADR 0037 TW4): Tailwind classes live across ALL of `app/`
+  // (routes, components, islands), so this watches the broader source set than the
+  // island watcher above. A clean rebuild HOT-SWAPS the stylesheet `<link>` (no
+  // reload, so island state survives a style edit) — unless an overlay is up, when it
+  // reloads to clear it, exactly as the island rebuild does. A compile failure paints
+  // the overlay (cleared by the next successful build).
+  if (deps.cssEntryExists !== undefined && (await deps.cssEntryExists(cssEntryOf(config)))) {
+    deps.watchStyleSources?.(() => {
+      void buildStylesIfPresent(deps, config, DEFAULT_OUT_DIR, "dev").then(
+        () => (overlayUp ? reloadBrowser() : deps.liveReload?.notifyStyleUpdate()),
+        (error: unknown) => {
+          deps.out(`css rebuild failed: ${rebuildErrorMessage(error)}`);
+          showOverlay(devError("style-rebuild", error));
         },
       );
     });

@@ -172,6 +172,10 @@ const projectRoot = process.cwd();
 
 const islandsDir = join(projectRoot, ISLANDS_DIR);
 
+// The app source root Tailwind scans + the dev CSS watcher watches (ADR 0037) — the
+// whole `app/` tree, since utility classes live in routes, components, and islands.
+const appSrcDir = join(projectRoot, APP_SRC_DIR);
+
 // A project's `lesto.app.ts` default-exports EITHER a built `LestoAppConfig` or a
 // CONFIG FACTORY `(seams?) => LestoAppConfig | Promise<...>`. The factory shape is
 // what lets a served deploy emit db child-spans: when `serve`/`dev` have an OTLP
@@ -424,14 +428,14 @@ const buildAppStyles = async (options: {
       mode: options.mode === "dev" ? "development" : "production",
       report: (line) => console.log(line),
     },
-    tailwindStyleCompiler({ resolveBase: projectRoot, scanRoot: join(projectRoot, APP_SRC_DIR) }),
+    tailwindStyleCompiler({ resolveBase: projectRoot, scanRoot: appSrcDir }),
   );
 };
 
-// Watch `app/islands/` and fire `onChange` at most once per debounce window, so
-// a burst of saves coalesces into a single rebuild. Returns a stop handle.
-const watchIslands = (onChange: () => void): (() => void) => {
-  const watcher = watch(islandsDir, { recursive: true });
+// Watch a directory tree recursively and fire `onChange` at most once per debounce
+// window, so a burst of saves coalesces into a single rebuild. Returns a stop handle.
+const watchDir = (dir: string, onChange: () => void): (() => void) => {
+  const watcher = watch(dir, { recursive: true });
 
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -446,6 +450,14 @@ const watchIslands = (onChange: () => void): (() => void) => {
     watcher.close();
   };
 };
+
+// Watch `app/islands/` for the island client rebuild (ADR 0011).
+const watchIslands = (onChange: () => void): (() => void) => watchDir(islandsDir, onChange);
+
+// Watch the WHOLE `app/` tree for the Tailwind CSS rebuild (ADR 0037 TW4): classes
+// appear in routes and components too, not just islands, so this is broader than
+// `watchIslands` — a class edit anywhere triggers a CSS rebuild + stylesheet hot-swap.
+const watchStyleSources = (onChange: () => void): (() => void) => watchDir(appSrcDir, onChange);
 
 // The dev live-reload WebSocket port — fixed so the injected client script knows
 // where to connect (a separate port from the HTTP server keeps the reload channel
@@ -466,6 +478,7 @@ const buildLiveReload = (): {
   script: string;
   notify: () => void;
   notifyError: (error: DevError) => void;
+  notifyStyleUpdate: () => void;
   close: () => void;
 } => {
   const sockets = new Set<{ send: (data: string) => void }>();
@@ -526,6 +539,11 @@ const buildLiveReload = (): {
       const data = JSON.stringify({ ...error, type: "error" });
 
       for (const ws of sockets) ws.send(data);
+    },
+    notifyStyleUpdate: () => {
+      // The client swaps the stylesheet `<link>` in place (no reload) on this frame
+      // — a CSS edit keeps island/page state (ADR 0037 TW4).
+      for (const ws of sockets) ws.send('{"type":"style-update"}');
     },
     close: () => {
       server?.stop?.();
@@ -761,6 +779,7 @@ const code = await run(argv, {
   cssEntryExists,
   buildAppStyles,
   watchIslands,
+  watchStyleSources,
   watchRoutes,
   reloadApp,
   regenerateRoutes,

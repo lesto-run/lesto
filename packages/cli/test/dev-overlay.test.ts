@@ -131,6 +131,36 @@ describe("dev error-overlay client", () => {
     expect(overlay()?.textContent).not.toContain("first");
   });
 
+  it("hot-swaps the stylesheet link (cache-busted) on a style-update frame, without reloading", () => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.setAttribute("href", "/styles.css");
+    document.head.appendChild(link);
+
+    try {
+      const { socket, reload } = mountClient();
+
+      send(socket, { type: "style-update" });
+
+      // The href is re-pointed at a cache-busted `/styles.css?t=<n>` so the swapped
+      // stylesheet is refetched despite its stable name — and crucially NO reload.
+      expect(link.getAttribute("href")).toMatch(/^\/styles\.css\?t=\d+$/);
+      expect(reload).not.toHaveBeenCalled();
+      expect(overlay()).toBeNull();
+    } finally {
+      link.remove();
+    }
+  });
+
+  it("ignores a style-update frame when no framework stylesheet link is present (no reload)", () => {
+    const { socket, reload } = mountClient();
+
+    // No `/styles.css` link in the document — the swap is an inert no-op, never a reload.
+    send(socket, { type: "style-update" });
+
+    expect(reload).not.toHaveBeenCalled();
+  });
+
   it("reloads (and shows no overlay) on a reload frame", () => {
     const { socket, reload } = mountClient();
 

@@ -1106,6 +1106,7 @@ describe("run dev — island client assets", () => {
           script: "x",
           notify: () => reloads.push(1),
           notifyError: () => undefined,
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1147,6 +1148,7 @@ describe("run dev — island client assets", () => {
           script: "x",
           notify: () => reloads.push(1),
           notifyError: (error) => errors.push(error),
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1194,6 +1196,7 @@ describe("run dev — island client assets", () => {
           script: "x",
           notify: () => undefined,
           notifyError: (error) => errors.push(error),
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1401,6 +1404,36 @@ async function drainBody(body: unknown): Promise<string> {
   return out + decoder.decode();
 }
 
+// A live-reload fake that records every channel call, so the CSS watch's
+// hot-swap / reload / overlay routing is asserted exactly.
+function recordingLiveReload(): {
+  liveReload: NonNullable<CliDeps["liveReload"]>;
+  swaps: number;
+  reloads: number;
+  errors: DevError[];
+} {
+  const rec = { swaps: 0, reloads: 0, errors: [] as DevError[] };
+
+  return {
+    liveReload: {
+      script: "x",
+      notify: () => (rec.reloads += 1),
+      notifyError: (error) => rec.errors.push(error),
+      notifyStyleUpdate: () => (rec.swaps += 1),
+      close: () => undefined,
+    },
+    get swaps() {
+      return rec.swaps;
+    },
+    get reloads() {
+      return rec.reloads;
+    },
+    get errors() {
+      return rec.errors;
+    },
+  };
+}
+
 describe("run dev — Tailwind CSS (ADR 0037)", () => {
   const sites: readonly Site[] = [
     { name: "marketing", render: "static", basePath: "/", pages: ["/"] },
@@ -1424,6 +1457,171 @@ describe("run dev — Tailwind CSS (ADR 0037)", () => {
     );
 
     expect(built).toEqual([{ entry: "app/styles/app.css", outDir: "out", mode: "dev" }]);
+  });
+
+  it("watches the broad app/ source set and hot-swaps the stylesheet on a clean rebuild", async () => {
+    let onChange: (() => void) | undefined;
+    let builds = 0;
+    const rec = recordingLiveReload();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        cssEntryExists: () => Promise.resolve(true),
+        buildAppStyles: () => {
+          builds += 1;
+
+          return Promise.resolve();
+        },
+        watchStyleSources: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        liveReload: rec.liveReload,
+      }),
+    );
+
+    // One build on boot; the broad-source watcher is registered.
+    expect(builds).toBe(1);
+    expect(onChange).toBeDefined();
+
+    // A class edit anywhere under app/ rebuilds the CSS and HOT-SWAPS the <link>
+    // (no reload), preserving island state.
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(builds).toBe(2);
+    expect(rec.swaps).toBe(1);
+    expect(rec.reloads).toBe(0);
+  });
+
+  it("hot-swap is an inert no-op when no live-reload channel is wired", async () => {
+    let onChange: (() => void) | undefined;
+    let builds = 0;
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        cssEntryExists: () => Promise.resolve(true),
+        buildAppStyles: () => {
+          builds += 1;
+
+          return Promise.resolve();
+        },
+        watchStyleSources: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+      }),
+    );
+
+    // A clean rebuild with no live-reload channel must not throw (the swap short-circuits).
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(builds).toBe(2);
+  });
+
+  it("paints a dev error overlay (source style-rebuild) when a watched CSS rebuild fails", async () => {
+    let onChange: (() => void) | undefined;
+    let calls = 0;
+    const rec = recordingLiveReload();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        cssEntryExists: () => Promise.resolve(true),
+        buildAppStyles: () => {
+          calls += 1;
+
+          // Boot OK; the watch rebuild fails (a bad @theme/@import).
+          return calls === 2
+            ? Promise.reject(new Error("tailwind: bad @theme"))
+            : Promise.resolve();
+        },
+        watchStyleSources: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        liveReload: rec.liveReload,
+      }),
+    );
+
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(rec.errors).toHaveLength(1);
+    expect(rec.errors[0]?.source).toBe("style-rebuild");
+    expect(rec.errors[0]?.message).toContain("tailwind: bad @theme");
+    expect(rec.swaps).toBe(0);
+  });
+
+  it("reloads to clear the overlay once a failed CSS rebuild recovers", async () => {
+    let onChange: (() => void) | undefined;
+    let calls = 0;
+    const rec = recordingLiveReload();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        cssEntryExists: () => Promise.resolve(true),
+        buildAppStyles: () => {
+          calls += 1;
+
+          // Boot OK; first watch rebuild fails (overlay up); second succeeds (recover).
+          return calls === 2 ? Promise.reject(new Error("tailwind boom")) : Promise.resolve();
+        },
+        watchStyleSources: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        liveReload: rec.liveReload,
+      }),
+    );
+
+    // First rebuild fails → overlay, no swap, no reload.
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(rec.errors).toHaveLength(1);
+    expect(rec.reloads).toBe(0);
+
+    // Second rebuild succeeds while the overlay is up → reload (clears it), not a
+    // silent hot-swap that would leave the stale error painted.
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(rec.reloads).toBe(1);
+    expect(rec.swaps).toBe(0);
+  });
+
+  it("does NOT register a CSS watcher when the entry is absent (Tailwind opt-in)", async () => {
+    const watchStyleSources = vi.fn(() => () => undefined);
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        cssEntryExists: () => Promise.resolve(false),
+        buildAppStyles: () => Promise.resolve(),
+        watchStyleSources,
+      }),
+    );
+
+    expect(watchStyleSources).not.toHaveBeenCalled();
   });
 });
 
@@ -1498,6 +1696,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           script: "x",
           notify: () => notified.push(1),
           notifyError: () => undefined,
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1597,6 +1796,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           script: "x",
           notify: () => reloads.push(1),
           notifyError: (error) => errors.push(error),
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1632,6 +1832,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           script: "x",
           notify: () => reloads.push(1),
           notifyError: () => undefined,
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1663,6 +1864,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           script: "x",
           notify: () => reloads.push(1),
           notifyError: (error) => errors.push(error),
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1702,6 +1904,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           script: "x",
           notify: () => undefined,
           notifyError: (error) => errors.push(error),
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1761,6 +1964,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           script: "RELOAD_ME();",
           notify: () => undefined,
           notifyError: () => undefined,
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1794,6 +1998,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           script: "STREAM_RELOAD();",
           notify: () => undefined,
           notifyError: () => undefined,
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1818,6 +2023,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           script: "NO();",
           notify: () => undefined,
           notifyError: () => undefined,
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1852,6 +2058,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           script: "ARR();",
           notify: () => undefined,
           notifyError: () => undefined,
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1879,6 +2086,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           script: "BARE();",
           notify: () => undefined,
           notifyError: () => undefined,
+          notifyStyleUpdate: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1906,6 +2114,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           script: "x",
           notify: () => undefined,
           notifyError: () => undefined,
+          notifyStyleUpdate: () => undefined,
           close: () => {
             closed = true;
           },
