@@ -1,0 +1,26 @@
+{
+  "name": "@lesto/example-tailwind",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A Lesto app that compiles Tailwind v4 through @lesto/styles: ui.css → out/styles.css, auto-linked via .styles(). The CSS-pipeline QA gate (ADR 0037).",
+  "type": "module",
+  "scripts": {
+    "build": "lesto build",
+    "dev": "lesto dev",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/cli": "workspace:*",
+    "@lesto/db": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/sites": "workspace:*",
+    "@lesto/styles": "workspace:*",
+    "@lesto/ui": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "better-sqlite3": "^11.10.0",
+    "react": "^19",
+    "react-dom": "^19",
+    "tailwindcss": "^4.3.0"
+  }
+}

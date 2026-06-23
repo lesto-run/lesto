@@ -39,6 +39,7 @@ export {
   readme,
   routeLayout,
   routePage,
+  stylesApp,
   tsconfig,
   worker,
   wranglerConfig,

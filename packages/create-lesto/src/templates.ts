@@ -22,8 +22,10 @@
  * silent break — blocker #9); `@lesto/assets` is the client-bundle pipeline the
  * island build needs in the app's graph; `@lesto/cloudflare` is the edge adapter
  * the deploy template's `worker.ts` fronts the app with (`lesto deploy
- * --cloudflare`). The rest are the app's own runtime (db/kernel/migrate/runtime,
- * the web router, the UI engine).
+ * --cloudflare`); `@lesto/styles` is the Tailwind CSS pipeline the CLI lazily
+ * imports to compile `app/styles/app.css` → `out/styles.css` (ADR 0037 — it is the
+ * CLI's optional peer, so the app must carry it to light the CSS build). The rest
+ * are the app's own runtime (db/kernel/migrate/runtime, the web router, the UI engine).
  */
 export const LESTO_PACKAGES = [
   "@lesto/cli",
@@ -34,9 +36,18 @@ export const LESTO_PACKAGES = [
   "@lesto/kernel",
   "@lesto/migrate",
   "@lesto/runtime",
+  "@lesto/styles",
   "@lesto/ui",
   "@lesto/web",
 ] as const;
+
+/**
+ * The Tailwind v4 train the scaffolded app pins (ADR 0037). It MUST match the
+ * `@tailwindcss/*` engine `@lesto/styles` depends on: `tailwindcss` is the PEER the
+ * app's `@import "tailwindcss"` resolves, and the engine `@lesto/styles` owns
+ * compiles against it — a divergent major would mismatch the engine and the app's CSS.
+ */
+const TAILWINDCSS_RANGE = "^4.3.0";
 
 /**
  * Resolve a `@lesto/*` package name to the dependency specifier the scaffold pins
@@ -81,6 +92,10 @@ export function packageJson(name: string, lestoDep: LestoDepResolver): string {
     dependencies: {
       ...lestoDeps,
       "better-sqlite3": "^11.10.0",
+      // The Tailwind v4 engine `@lesto/styles` compiles the app's CSS against — the
+      // PEER the app's `@import "tailwindcss"` resolves (ADR 0037). Pinned to the same
+      // train as the engine `@lesto/styles` owns.
+      tailwindcss: TAILWINDCSS_RANGE,
       // The Preact dialect (`ui.dialect: "preact"`) renders BOTH halves through
       // Preact: `preact` aliases the island client's `react` to `preact/compat` for
       // the ~10 KB bundle, and `preact-render-to-string` is the SERVER renderer
@@ -215,6 +230,10 @@ function buildApp(db: Db) {
       // this \`/client.js\` (the Preact dialect — see \`ui\` below), and every page
       // gets the head module tag that boots it.
       .client("/client.js")
+      // The stylesheet (ADR 0037): \`lesto build\`/\`dev\` compile \`ui.css\`
+      // (\`app/styles/app.css\`, see \`ui\` below) → \`out/styles.css\`, and every page
+      // gets this \`<link rel="stylesheet">\`. A stable name, like \`/client.js\`.
+      .styles("/styles.css")
       // The home page is NOT registered here — it lives at \`app/routes/page.tsx\`
       // and Lesto's file-based routing composes it onto this app automatically.
       .get("/posts", async (c) => {
@@ -262,10 +281,49 @@ const config: LestoAppConfig = {
   // client. The single \`ui.dialect\` key drives BOTH the client bundle's
   // \`react\`→\`preact/compat\` alias (read by \`lesto dev\`/\`build\`) and — for a
   // bespoke worker — the server renderer. Switch to \`"react"\` to opt out.
-  ui: { dialect: "preact" },
+  //
+  // \`ui.css\` (ADR 0037) is the Tailwind v4 entry the CLI compiles to
+  // \`out/styles.css\`. Its presence enables the CSS build; delete the key (and
+  // \`app/styles/app.css\`) to ship no stylesheet. The build is read only by the CLI.
+  ui: { dialect: "preact", css: "app/styles/app.css" },
 };
 
 export default config;
+`;
+}
+
+/**
+ * `app/styles/app.css` — the Tailwind v4 CSS entry (ADR 0037).
+ *
+ * `lesto build`/`dev` compile this to `out/styles.css` (the `ui.css` key in
+ * `lesto.app.ts` points here) and inject it via `.styles("/styles.css")`. Phase 1
+ * ships the minimal entry — `@import "tailwindcss"` plus one `@theme` token — so the
+ * pipeline is visible on day one; the shadcn scaffold (a fast-follow) swaps in the
+ * full OKLCH token block. The scanner gotcha is documented inline because it is the
+ * one thing that surprises newcomers: Tailwind reads `app/` as PLAIN TEXT.
+ */
+export function stylesApp(): string {
+  return `@import "tailwindcss";
+
+/*
+ * Your Tailwind v4 stylesheet. \`lesto build\`/\`dev\` compile it to \`out/styles.css\`
+ * (wired by \`ui.css\` in lesto.app.ts) and every page links it via \`.styles(...)\`.
+ *
+ * SCANNER GOTCHA: Tailwind finds utilities by scanning your \`app/\` source as PLAIN
+ * TEXT — it never runs your code. So write COMPLETE static class strings:
+ *
+ *   ✅ <div className="bg-indigo-600 text-white" />
+ *   ❌ <div className={\`bg-\${color}-600\`} />   // the scanner can't see this
+ *
+ * For genuinely runtime-dynamic classes, list them so the scanner keeps them:
+ *   @source inline("bg-red-600 bg-green-600 bg-blue-600");
+ *
+ * \`@theme\` tokens become BOTH \`:root\` CSS variables AND Tailwind utilities — the
+ * \`--color-brand\` below powers \`bg-brand\`, \`text-brand\`, \`border-brand\`, ….
+ */
+@theme {
+  --color-brand: #4f46e5;
+}
 `;
 }
 
@@ -494,6 +552,10 @@ TypeScript framework (ESM, run directly — no build step for the source).
 - \`app/islands/\` — client-interactive components (\`defineIsland\`), one default
   export per file. The build bundles these into \`/client.js\`; the rest of the page
   is server-rendered.
+- \`app/styles/app.css\` — the **Tailwind v4** entry (\`ui.css\` in \`lesto.app.ts\`).
+  \`lesto build\`/\`dev\` compile it to \`out/styles.css\` and link it on every page.
+  Tailwind scans \`app/\` as PLAIN TEXT, so write complete static class strings (not
+  \`bg-\${x}\`); see the comment in that file.
 - \`lesto.sites.ts\` — the declared sites (dynamic/static zones).
 - \`worker.ts\` + \`wrangler.jsonc\` — the Cloudflare edge deploy.
 
@@ -622,6 +684,9 @@ interface Env {
 // Built ONCE at module scope (per isolate) and reused across every request.
 const app = lesto()
   .client("/client.js")
+  // The stylesheet \`lesto build\` compiled to \`out/styles.css\` (ADR 0037), served
+  // here from \`ASSETS\` and linked into every page — the edge twin of the dev link.
+  .styles("/styles.css")
   .page("/", {
     component: () =>
       createElement(

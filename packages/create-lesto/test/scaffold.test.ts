@@ -12,6 +12,7 @@ import {
   gitignore,
   islandCounter,
   lestoApp,
+  stylesApp,
   lestoSites,
   LESTO_PACKAGES,
   packageJson,
@@ -66,6 +67,7 @@ describe("scaffold", () => {
       "app/routes/page.tsx",
       "app/routes/layout.tsx",
       "app/islands/counter.tsx",
+      "app/styles/app.css",
       "worker.ts",
       "wrangler.jsonc",
       "tsconfig.json",
@@ -116,8 +118,10 @@ describe("scaffold", () => {
     // client module tag. The HOME PAGE moved to app/routes/page.tsx (file-based
     // routing), so lesto.app.ts no longer registers a `.page("/")` or imports the
     // island directly — it stays a pure data/API surface.
-    expect(app).toContain('ui: { dialect: "preact" }');
+    expect(app).toContain('ui: { dialect: "preact", css: "app/styles/app.css" }');
     expect(app).toContain('.client("/client.js")');
+    // The Tailwind stylesheet (ADR 0037): the `.styles()` sibling of `.client()`.
+    expect(app).toContain('.styles("/styles.css")');
     expect(app).not.toContain('.page("/"');
     expect(app).not.toContain('import Counter from "./app/islands/counter"');
 
@@ -156,6 +160,9 @@ describe("scaffold", () => {
       "@lesto/web",
       "@lesto/ui",
       "@lesto/runtime",
+      // The Tailwind CSS pipeline (ADR 0037) — the CLI's optional peer, carried by
+      // the app so `lesto build`/`dev` can compile `app/styles/app.css`.
+      "@lesto/styles",
       "preact",
       "preact-render-to-string",
       "react",
@@ -165,6 +172,9 @@ describe("scaffold", () => {
     ]) {
       expect(manifest.dependencies[dep]).toBeDefined();
     }
+
+    // The Tailwind v4 peer (ADR 0037), pinned to the engine's 4.x train.
+    expect(manifest.dependencies["tailwindcss"]).toMatch(/^\^4\./);
 
     // @lesto/* deps default to published ^0.x ranges (the outsider path — `--local`
     // swaps to file: pins). This locks the default the scaffold actually emits.
@@ -375,10 +385,11 @@ describe("templates", () => {
     expect(parsed.dependencies["react-dom"]).toBeDefined();
   });
 
-  it("lestoApp default-exports a LestoAppConfig with the preact dialect", () => {
+  it("lestoApp default-exports a LestoAppConfig with the preact dialect and the CSS entry", () => {
     expect(lestoApp()).toContain("export default config");
     expect(lestoApp()).toContain("const config: LestoAppConfig");
-    expect(lestoApp()).toContain('ui: { dialect: "preact" }');
+    expect(lestoApp()).toContain('ui: { dialect: "preact", css: "app/styles/app.css" }');
+    expect(lestoApp()).toContain('.styles("/styles.css")');
   });
 
   it("lestoApp seeds starter posts via a 002_seed_posts data migration", () => {
@@ -389,6 +400,16 @@ describe("templates", () => {
     expect(out).toContain("002_seed_posts");
     expect(out).toContain("INSERT INTO posts");
     expect(out).toContain("migrations: [createPosts, seedPosts]");
+  });
+
+  it("stylesApp is a Tailwind v4 entry with a @theme token and the scanner gotcha", () => {
+    const css = stylesApp();
+
+    expect(css).toContain('@import "tailwindcss"');
+    expect(css).toContain("@theme {");
+    expect(css).toContain("--color-brand:");
+    // The plain-text-scan gotcha is documented in the entry itself.
+    expect(css).toContain("@source inline(");
   });
 
   it("islandCounter is one defineIsland default-export", () => {

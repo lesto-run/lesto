@@ -123,6 +123,24 @@
         "zod": "^4.0.0",
       },
     },
+    "examples/tailwind": {
+      "name": "@lesto/example-tailwind",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/cli": "workspace:*",
+        "@lesto/db": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/sites": "workspace:*",
+        "@lesto/styles": "workspace:*",
+        "@lesto/ui": "workspace:*",
+        "@lesto/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+        "react": "^19",
+        "react-dom": "^19",
+        "tailwindcss": "^4.3.0",
+      },
+    },
     "packages/admin": {
       "name": "@lesto/admin",
       "version": "0.0.0",
@@ -1201,6 +1219,8 @@
     "@lesto/example-mailing-lists": ["@lesto/example-mailing-lists@workspace:examples/mailing-lists"],
 
     "@lesto/example-queue-dashboard": ["@lesto/example-queue-dashboard@workspace:examples/queue-dashboard"],
+
+    "@lesto/example-tailwind": ["@lesto/example-tailwind@workspace:examples/tailwind"],
 
     "@lesto/feeds": ["@lesto/feeds@workspace:packages/feeds"],
 

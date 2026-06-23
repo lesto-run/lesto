@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+/*
+ * Tailwind scans `app/` as PLAIN TEXT for utility classes, so the page below uses
+ * COMPLETE static class strings. `@theme` tokens become both `:root` CSS variables
+ * and utilities — `--color-brand` powers `bg-brand` / `text-brand`.
+ */
+@theme {
+  --color-brand: #4f46e5;
+}
