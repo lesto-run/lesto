@@ -101,7 +101,7 @@ const USE_CASES: readonly UseCase[] = [
 export function UseCasesPage(): ReactElement {
   return (
     <main className="section">
-      <div className="section-head">
+      <div className="section-head center">
         <span className="eyebrow">Use cases</span>
         <h1 className="section-title">What you can build with Lesto</h1>
         <p className="section-lede">
@@ -110,15 +110,13 @@ export function UseCasesPage(): ReactElement {
           feature counts as done.
         </p>
       </div>
-      <div className="grid">
+      <div className="ucgrid">
         {USE_CASES.map((uc) => (
-          <div className="card" key={uc.title}>
-            <h3 className="card-title">
-              <span className="card-dot" /> {uc.title}
-            </h3>
-            <p className="card-desc">{uc.desc}</p>
-            <p className="card-meta">{uc.batteries}</p>
-            <p className="card-links">
+          <div className="uccard" key={uc.title}>
+            <h3 className="cell-h">{uc.title}</h3>
+            <p className="cell-d">{uc.desc}</p>
+            <p className="uc-meta">{uc.batteries}</p>
+            <p className="uc-links">
               {uc.links.map((link, i) => (
                 <span key={link.href}>
                   {i > 0 ? <span className="sep"> · </span> : null}

@@ -22,7 +22,9 @@ export function renderNotFound(): string {
   </head>
   <body>
     <header class="site-header">
-      <a class="brand" href="/"><span class="brand-mark">L</span> Lesto</a>
+      <div class="header-inner">
+        <a class="brand" href="/"><span class="brand-mark">L</span> Lesto</a>
+      </div>
     </header>
     <main class="site-404">
       <h1>404</h1>
