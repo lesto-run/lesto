@@ -41,6 +41,7 @@ export {
   readme,
   routeLayout,
   routePage,
+  SHADCN_DEPS,
   stylesApp,
   tsconfig,
   worker,

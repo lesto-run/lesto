@@ -18,6 +18,7 @@ import {
   lestoSites,
   LESTO_PACKAGES,
   packageJson,
+  SHADCN_DEPS,
   publishedRangePin,
   readme,
   routeLayout,
@@ -173,18 +174,19 @@ describe("scaffold", () => {
       "react-dom",
       "better-sqlite3",
       "zod",
-      // The shadcn/ui stack (ADR 0037 Phase 2): cn() = clsx + tailwind-merge, the
-      // tw-animate-css v4 layer the theme imports, and the lucide icon set.
-      "clsx",
-      "tailwind-merge",
-      "tw-animate-css",
-      "lucide-react",
     ]) {
       expect(manifest.dependencies[dep]).toBeDefined();
     }
 
     // The Tailwind v4 peer (ADR 0037), pinned to the engine's 4.x train.
     expect(manifest.dependencies["tailwindcss"]).toMatch(/^\^4\./);
+
+    // The shadcn/ui stack (ADR 0037 Phase 2) — asserted against the SHADCN_DEPS
+    // source of truth (like LESTO_PACKAGES below), so adding a dep there can't drift
+    // out of the scaffold silently. Each is pinned to exactly the declared range.
+    for (const [dep, range] of Object.entries(SHADCN_DEPS)) {
+      expect(manifest.dependencies[dep]).toBe(range);
+    }
 
     // tailwind-merge must be the v3 line — it is the Tailwind-v4-aware merge; a v2
     // would mis-resolve v4 utilities in `cn()`.

@@ -58,7 +58,7 @@ const TAILWINDCSS_RANGE = "^4.3.0";
  * `tailwind-merge` v3 is the Tailwind-v4-aware line — a v2 merge would mis-resolve v4
  * utilities. These are plain npm deps (NOT `@lesto/*`), so they sit beside `react`.
  */
-const SHADCN_DEPS = {
+export const SHADCN_DEPS = {
   clsx: "^2.1.1",
   "tailwind-merge": "^3.3.1",
   "tw-animate-css": "^1.3.4",
