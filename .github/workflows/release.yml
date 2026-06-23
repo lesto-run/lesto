@@ -1,33 +1,33 @@
-# Release: version + publish the public @lesto/* surface via Changesets.
+# Release: publish the public @lesto/* surface to npm — with provenance.
 #
-# When armed, a push to main opens (or updates) a "Version Packages" PR that
-# applies the queued changesets; merging that PR publishes the bumped packages to
-# npm with provenance.
+# Publishing runs `bun run release` (scripts/publish.mjs): it `bun pm pack`s each public
+# package — which rewrites the `workspace:*` protocol to the real version, the thing plain
+# `npm publish` does NOT do — then hands the tarball to `npm publish`. Provenance is
+# attached via OIDC (`id-token: write` + `NPM_CONFIG_PROVENANCE`), which requires this repo
+# to be PUBLIC and `repository.url` (github.com/lesto-run/lesto) to match.
 #
-# Dormant by default: the whole job is gated on the `RELEASE_ENABLED` repository
-# variable (Settings → Variables). Until it is set to `true` the job is SKIPPED —
-# no wasted CI, nothing runs. Arm it only after the public surface is de-privatized
-# and an `NPM_TOKEN` secret exists (see RELEASING.md).
+# Dormant by default: the job is skipped unless the `RELEASE_ENABLED` repo variable is
+# `true` (Settings → Variables) and an `NPM_TOKEN` secret exists. Trigger it from the
+# Actions tab ("Run workflow" → workflow_dispatch) or by pushing to main once armed.
 name: Release
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
-  contents: write # create the version PR / tags
-  pull-requests: write
+  contents: read
   id-token: write # npm provenance
 
 jobs:
   release:
-    # The real switch: the job is skipped entirely unless RELEASE_ENABLED=true,
-    # so it costs nothing on a normal push and cannot publish before the team arms it.
+    # The real switch: skipped entirely unless RELEASE_ENABLED=true, so it costs nothing
+    # on a normal push and cannot publish before the surface is armed.
     if: ${{ vars.RELEASE_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -35,18 +35,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.5
 
       - run: bun install --frozen-lockfile
 
-      - name: Version or publish
-        uses: changesets/action@v1
-        with:
-          version: bun run version
-          publish: bun run release
+      # Auth comes from the repo's .npmrc (`//registry.npmjs.org/:_authToken=${NPM_TOKEN}`).
+      # Provenance is generated from this run's OIDC identity (public repo + id-token: write).
+      - name: Publish to npm
+        run: bun run release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
