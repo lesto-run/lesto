@@ -12,7 +12,8 @@
 import { commandPaletteStyles } from "@lesto/content-search";
 import { calloutStyles, packageCommandStyles } from "@lesto/content-markdown/styles";
 
-export const DOCS_CSS = `
+export const DOCS_CSS =
+  `
 :root {
   --bg: #ffffff;
   --fg: #1c1e21;
@@ -61,9 +62,21 @@ a:hover { text-decoration: underline; }
   gap: 0.75rem;
   height: 56px;
   padding: 0 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+/* The frosted background lives on a pseudo-element, NOT on .docs-header itself.
+   A backdrop-filter makes its element a containing block for position:fixed
+   descendants — and the ⌘K palette (the search island) is a header descendant, so
+   putting the blur on .docs-header would clip the palette's full-viewport overlay
+   to the 56px header strip. On the ::before it frosts identically without trapping
+   the overlay. */
+.docs-header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border);
 }
 .docs-header .brand { font-weight: 700; font-size: 1.05rem; letter-spacing: -0.01em; }
 .docs-header .brand a { color: var(--fg); }
