@@ -207,7 +207,12 @@ function AgentNative(): ReactElement {
         <div className="split-media">
           <div className="panel" aria-hidden="true">
             <div className="panel-bar">
-              <span className="label">claude <span className="accent">· lesto-mcp</span></span>
+              <span className="dots">
+                <i />
+                <i />
+                <i />
+              </span>
+              <span className="panel-tab">claude <span className="accent">· lesto-mcp</span></span>
             </div>
             <pre>
               <code>
@@ -252,17 +257,32 @@ function AppShape(): ReactElement {
           </p>
         </div>
         <div className="split-media">
-          <div className="panel" aria-hidden="true">
+          <div className="panel numbered" aria-hidden="true">
             <div className="panel-bar">
-              <span className="label">app.ts</span>
+              <span className="dots">
+                <i />
+                <i />
+                <i />
+              </span>
+              <span className="panel-tab">app.ts</span>
             </div>
             <pre>
               <code>
-                <span className="c-key">import</span> {"{ lesto }"} <span className="c-key">from</span> <span className="c-str">"@lesto/web"</span>;
-                {"\n\n"}
-                <span className="c-key">export const</span> app = <span className="c-fn">lesto</span>()
-                {"\n  "}.<span className="c-fn">page</span>(<span className="c-str">"/"</span>, {"{ "}component: Home {"}"})
-                {"\n  "}.<span className="c-fn">get</span>(<span className="c-str">"/api/health"</span>, (c) =&gt; c.<span className="c-fn">json</span>({"{ ok: "}<span className="c-key">true</span>{" }"}));
+                <span className="cl">
+                  <span className="c-key">import</span> {"{ lesto }"} <span className="c-key">from</span>{" "}
+                  <span className="c-str">"@lesto/web"</span>;
+                </span>
+                <span className="cl"> </span>
+                <span className="cl">
+                  <span className="c-key">export const</span> app = <span className="c-fn">lesto</span>()
+                </span>
+                <span className="cl">
+                  {"  "}.<span className="c-fn">page</span>(<span className="c-str">"/"</span>, {"{ "}component: Home {"}"})
+                </span>
+                <span className="cl">
+                  {"  "}.<span className="c-fn">get</span>(<span className="c-str">"/api/health"</span>, (c) =&gt; c.
+                  <span className="c-fn">json</span>({"{ ok: "}<span className="c-key">true</span>{" }"}));
+                </span>
               </code>
             </pre>
           </div>
