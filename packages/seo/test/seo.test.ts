@@ -4,6 +4,7 @@ import { escape } from "../src/escape";
 import { LestoError, SeoError } from "../src/errors";
 import { jsonLd } from "../src/json-ld";
 import { metaTags } from "../src/meta-tags";
+import { ogImage } from "../src/og-image";
 import { robots } from "../src/robots";
 import { sitemap } from "../src/sitemap";
 
@@ -205,6 +206,103 @@ describe("robots", () => {
       expect((error as SeoError).code).toBe("SEO_INJECTED_NEWLINE");
       expect((error as SeoError).details.field).toBe("Sitemap URL");
     }
+  });
+});
+
+describe("ogImage", () => {
+  it("renders a 1200×630 svg card from just a title", () => {
+    const svg = ogImage({ title: "Welcome" });
+
+    expect(svg).toContain(`width="1200" height="630"`);
+    expect(svg).toContain(`viewBox="0 0 1200 630"`);
+    expect(svg.startsWith("<svg")).toBe(true);
+    expect(svg.endsWith("</svg>")).toBe(true);
+    expect(svg).toContain(">Welcome</text>");
+  });
+
+  it("applies the default Lesto palette when no colors are given", () => {
+    const svg = ogImage({ title: "Welcome" });
+
+    expect(svg).toContain(`stop-color="#3730a3"`);
+    expect(svg).toContain(`stop-color="#4f46e5"`);
+    expect(svg).toContain(`<path d="M137 124h17v52h33v16h-50z" fill="#4f46e5"/>`);
+  });
+
+  it("merges partial colors over the defaults", () => {
+    const svg = ogImage({ title: "Welcome", colors: { gradientFrom: "#000000" } });
+
+    // Overridden field takes the caller's value...
+    expect(svg).toContain(`stop-color="#000000"`);
+    // ...while an un-passed field keeps the default.
+    expect(svg).toContain(`stop-color="#4f46e5"`);
+  });
+
+  it("emits the wordmark, footer, and description only when present", () => {
+    const full = ogImage({
+      title: "Hero",
+      description: "A supporting line.",
+      wordmark: "Acme",
+      footer: "acme.test",
+    });
+
+    expect(full).toContain(">Acme</text>");
+    expect(full).toContain(">A supporting line.</text>");
+    expect(full).toContain(">acme.test</text>");
+  });
+
+  it("omits the wordmark, description, and footer when absent", () => {
+    const bare = ogImage({ title: "Hero" });
+
+    expect(bare).not.toContain('font-weight="800"'); // the wordmark line
+    expect(bare).not.toContain('font-size="32"'); // the description line
+    expect(bare).not.toContain("ui-monospace"); // the footer line
+  });
+
+  it("tints title lines after the first with the accent color", () => {
+    const svg = ogImage({
+      title: ["First", "Second"],
+      colors: { title: "#ffffff", accent: "#abcdef" },
+    });
+
+    expect(svg).toContain(`fill="#ffffff">First</text>`);
+    expect(svg).toContain(`fill="#abcdef">Second</text>`);
+  });
+
+  it("HTML-escapes attacker-influenced title and description text", () => {
+    const svg = ogImage({
+      title: "Tom & <script>",
+      description: "a & b <c>",
+      wordmark: "A&B",
+      footer: "x&y",
+    });
+
+    expect(svg).toContain(">Tom &amp; &lt;script&gt;</text>");
+    expect(svg).toContain(">a &amp; b &lt;c&gt;</text>");
+    expect(svg).toContain(">A&amp;B</text>");
+    expect(svg).toContain(">x&amp;y</text>");
+    expect(svg).not.toContain("<script>");
+  });
+
+  it("escapes color values so they cannot break out of the attribute", () => {
+    const svg = ogImage({ title: "Hi", colors: { gradientFrom: `"/><script>` } });
+
+    expect(svg).not.toContain(`"/><script>`);
+    expect(svg).toContain("&quot;/&gt;&lt;script&gt;");
+  });
+
+  it("refuses an empty-string title with a coded error", () => {
+    try {
+      ogImage({ title: "   " });
+      expect.unreachable("ogImage should have refused the empty title");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SeoError);
+      expect((error as SeoError).code).toBe("SEO_EMPTY_OG_TITLE");
+    }
+  });
+
+  it("refuses an empty array title (and an all-blank array) with a coded error", () => {
+    expect(() => ogImage({ title: [] })).toThrow(SeoError);
+    expect(() => ogImage({ title: ["", "  "] })).toThrow(SeoError);
   });
 });
 

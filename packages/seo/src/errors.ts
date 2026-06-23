@@ -10,7 +10,7 @@ import { LestoError } from "@lesto/errors";
 
 export { LestoError };
 
-export type SeoErrorCode = "SEO_INJECTED_NEWLINE" | "SEO_INJECTED_FRAGMENT";
+export type SeoErrorCode = "SEO_INJECTED_NEWLINE" | "SEO_INJECTED_FRAGMENT" | "SEO_EMPTY_OG_TITLE";
 
 /** Anything the SEO builders can refuse to do. */
 export class SeoError extends LestoError<SeoErrorCode> {

@@ -5,6 +5,7 @@
  *   sitemap([{ loc: "/about" }], { baseUrl: "https://example.com" });
  *   robots({ disallow: ["/admin"], sitemap: "https://example.com/sitemap.xml" });
  *   jsonLd("Article", { headline: "Hello" });
+ *   ogImage({ title: "Welcome", wordmark: "Acme" });
  */
 
 export { metaTags } from "./meta-tags";
@@ -15,6 +16,9 @@ export type { SitemapOptions, SitemapUrl } from "./sitemap";
 
 export { robots } from "./robots";
 export type { RobotsInput } from "./robots";
+
+export { ogImage } from "./og-image";
+export type { OgImageColors, OgImageInput } from "./og-image";
 
 export { jsonLd } from "./json-ld";
 
