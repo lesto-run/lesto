@@ -47,6 +47,9 @@ export type { BeaconEvent, BeaconEventKind, BeaconOptions, BeaconPayload } from 
 
 export { isChunkFile } from "./chunks";
 
+export { verifyPublicEnvDefine } from "./public-env";
+export type { PublicEnvDefine } from "./public-env";
+
 export { PREACT_ALIAS } from "./preact-alias";
 
 export { bunBuildClientDeps } from "./bun";

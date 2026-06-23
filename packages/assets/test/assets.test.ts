@@ -8,6 +8,7 @@ import type { BuildClientDeps, BundleArtifact, BundleRequest } from "../src/buil
 import { isChunkFile } from "../src/chunks";
 import { AssetsError } from "../src/errors";
 import { PREACT_ALIAS } from "../src/preact-alias";
+import { verifyPublicEnvDefine } from "../src/public-env";
 import { RUM_MODULE, rumImport, rumStartCall } from "../src/rum-client";
 import { islandFileFromModule, synthesizeEntry } from "../src/synthesize";
 import type { IslandFile } from "../src/synthesize";
@@ -264,6 +265,60 @@ describe("buildClient", () => {
     expect(written.get("/out/chunk-deadbeef.js")).toBe("CHUNK");
     expect(result.entry).toBe("/out/client.js");
     expect(result.chunks).toEqual(["/out/chunk-deadbeef.js"]);
+
+    // No public-env injection given → the bundler receives a verified empty map.
+    expect(bundled[0]?.publicEnvDefine).toEqual({});
+  });
+
+  it("threads a verified PUBLIC-env inject map through to the bundler", async () => {
+    const { deps, bundled } = fakeDeps();
+
+    const publicEnvDefine = {
+      "globalThis.__LESTO_PUBLIC_ENV__": '{"PUBLIC_API_BASE":"https://api"}',
+      "import.meta.env.PUBLIC_FLAG": "true",
+    };
+
+    await buildClient(
+      {
+        islandsDir: "/app/islands",
+        outDir: "/out",
+        mode: "production",
+        dialect: "preact",
+        publicEnvDefine,
+      },
+      deps,
+    );
+
+    // The map reaches the bundler verbatim (the bundler merges it into Bun's `define`).
+    expect(bundled[0]?.publicEnvDefine).toEqual(publicEnvDefine);
+  });
+
+  it("REFUSES a build whose inject map names a server (non-public) var", async () => {
+    const { deps, bundled } = fakeDeps();
+
+    let thrown: unknown;
+
+    try {
+      await buildClient(
+        {
+          islandsDir: "/app/islands",
+          outDir: "/out",
+          mode: "production",
+          dialect: "preact",
+          publicEnvDefine: { "process.env.SESSION_SECRET": '"leaked"' },
+        },
+        deps,
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AssetsError);
+    expect((thrown as AssetsError).code).toBe("ASSETS_SERVER_ENV_LEAK");
+    expect((thrown as AssetsError).message).toContain("SESSION_SECRET");
+
+    // It fails BEFORE bundling — a leak never reaches the bundler at all.
+    expect(bundled).toHaveLength(0);
   });
 
   it("honors a custom entry name", async () => {
@@ -667,5 +722,68 @@ describe("buildClient — gzip sizes + budget (ADR 0011: narrate, shout when ove
     expect(result.sizes).toHaveLength(2);
     const entryLine = lines.find((line) => line.includes("entry client.js"));
     expect(entryLine).not.toContain("budget");
+  });
+});
+
+describe("verifyPublicEnvDefine", () => {
+  it("returns {} for an undefined map (the no-injection common case)", () => {
+    expect(verifyPublicEnvDefine(undefined)).toEqual({});
+  });
+
+  it("passes an all-public map through unchanged", () => {
+    const map = {
+      "globalThis.__LESTO_PUBLIC_ENV__": '{"PUBLIC_API_BASE":"https://api"}',
+      "import.meta.env.PUBLIC_FLAG": "true",
+      "process.env.PUBLIC_ANALYTICS": '"abc"',
+    };
+
+    expect(verifyPublicEnvDefine(map)).toBe(map);
+  });
+
+  it("refuses an import.meta.env read of a non-PUBLIC name", () => {
+    let thrown: unknown;
+
+    try {
+      verifyPublicEnvDefine({ "import.meta.env.DATABASE_URL": '"x"' });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as AssetsError).code).toBe("ASSETS_SERVER_ENV_LEAK");
+    expect((thrown as AssetsError).message).toContain("DATABASE_URL");
+    expect((thrown as AssetsError).details["keys"]).toEqual(["import.meta.env.DATABASE_URL"]);
+  });
+
+  it("refuses a process.env read of a non-PUBLIC name", () => {
+    expect(() => verifyPublicEnvDefine({ "process.env.SECRET": '"x"' })).toThrow(AssetsError);
+  });
+
+  it("refuses an arbitrary global / unrecognized key", () => {
+    let thrown: unknown;
+
+    try {
+      verifyPublicEnvDefine({ "globalThis.__SOMETHING_ELSE__": "{}" });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as AssetsError).code).toBe("ASSETS_SERVER_ENV_LEAK");
+  });
+
+  it("lists EVERY leaked key at once (plural noun)", () => {
+    let thrown: AssetsError | undefined;
+
+    try {
+      verifyPublicEnvDefine({
+        "process.env.A": "1",
+        "process.env.B": "2",
+        "import.meta.env.PUBLIC_OK": "3",
+      });
+    } catch (error) {
+      thrown = error as AssetsError;
+    }
+
+    expect(thrown?.message).toContain("keys");
+    expect(thrown?.details["keys"]).toEqual(["process.env.A", "process.env.B"]);
   });
 });

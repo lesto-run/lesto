@@ -33,7 +33,17 @@ export type AssetsErrorCode =
    * must fail the build loudly, not ship silently (ADR 0011: the build narrates
    * what it decided, and shouts when a size promise is broken).
    */
-  | "ASSETS_BUDGET_EXCEEDED";
+  | "ASSETS_BUDGET_EXCEEDED"
+  /**
+   * The client-env inject map the build was handed (`buildClient`'s
+   * `publicEnvDefine`, from `@lesto/env`'s `clientDefineMap`) names a NON-public var
+   * — i.e. a server-only value would be inlined into island code. The build REFUSES
+   * loud + early rather than baking a secret into the browser bundle: only the
+   * public bag global (`globalThis.__LESTO_PUBLIC_ENV__`) and `PUBLIC_*`/process.env
+   * reads of public names may be injected. The structural mirror of `@lesto/env`'s
+   * `ENV_CLIENT_NOT_PUBLIC`, enforced at the bundler boundary.
+   */
+  | "ASSETS_SERVER_ENV_LEAK";
 
 /** Anything the client-asset pipeline can refuse to do. */
 export class AssetsError extends LestoError<AssetsErrorCode> {

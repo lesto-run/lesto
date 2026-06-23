@@ -197,6 +197,14 @@ describe("scaffold", () => {
     expect(island).toContain("export default defineIsland({");
     expect(island).toContain('name: "Counter"');
     expect(island).toContain("useState");
+
+    // It reads PUBLIC config in the BROWSER via the leak-safe client surface — never
+    // the server schema `./env` (a server var would throw ENV_SERVER_LEAK). The
+    // bundler inlines the PUBLIC_ subset, so this resolves with no process.env.
+    expect(island).toContain('import { defineClientEnv, envField } from "@lesto/env/client"');
+    expect(island).toContain("defineClientEnv({");
+    expect(island).toContain("clientEnv.PUBLIC_APP_NAME");
+    expect(island).not.toContain('from "./env"');
   });
 
   it("scaffolds a typed env.ts wired to @lesto/env", async () => {
@@ -206,18 +214,24 @@ describe("scaffold", () => {
 
     const envFile = await readFile(join(targetDir, "env.ts"), "utf8");
 
-    // env.ts is a `defineEnv` schema over `envField`, default-exported as `env`,
-    // demonstrating the DB-path knob with a default (so the starter boots with none set).
+    // env.ts is a SPLIT `defineEnv` schema over `envField`, default-exported as `env`,
+    // demonstrating both halves: a server DB-path knob (defaulted, so the starter boots
+    // with none set) and a PUBLIC_ client var (the leak-safe surface an island reads).
     expect(envFile).toContain('import { defineEnv, envField } from "@lesto/env"');
     expect(envFile).toContain("export const env = defineEnv({");
+    expect(envFile).toContain("server: {");
+    expect(envFile).toContain("client: {");
     expect(envFile).toContain('LESTO_DB: envField.string().default("lesto.db")');
+    expect(envFile).toContain('PUBLIC_APP_NAME: envField.string().default("Lesto app")');
 
     // ...and it teaches the secrets story on day one: where values come from
-    // (.env.local under Bun + the Worker binding on the edge) and the SERVER-ONLY
-    // boundary — never import this into an island (it would ship to the browser).
+    // (.env.local under Bun + the Worker binding on the edge) and the SERVER/CLIENT
+    // leak boundary — a server var read in an island throws ENV_SERVER_LEAK, client
+    // vars must be PUBLIC_*.
     expect(envFile).toContain(".env.local");
     expect(envFile).toContain("defineEnv(schema, workerEnv)");
-    expect(envFile).toContain("do NOT import this module into an `app/islands/*`");
+    expect(envFile).toContain("ENV_SERVER_LEAK");
+    expect(envFile).toContain("PUBLIC_*");
   });
 
   it("scaffolds the file-routed home page + layout and the agent onboarding files", async () => {

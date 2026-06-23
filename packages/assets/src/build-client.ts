@@ -17,6 +17,8 @@ import { join } from "node:path";
 
 import { isChunkFile } from "./chunks";
 import { AssetsError } from "./errors";
+import { verifyPublicEnvDefine } from "./public-env";
+import type { PublicEnvDefine } from "./public-env";
 import { synthesizeEntry } from "./synthesize";
 import type { IslandFile } from "./synthesize";
 
@@ -58,6 +60,18 @@ export interface BuildClientOptions {
    * asserted in a test.
    */
   readonly report?: BuildReport;
+
+  /**
+   * The PUBLIC-env inject map (`@lesto/env`'s `clientDefineMap`): a bundler
+   * `define`/replace that inlines a `PUBLIC_*`-only schema's validated values into
+   * island code, so an island can read public config (an API base, an analytics key)
+   * in the browser where there is no `process.env`.
+   *
+   * Verified before it reaches the bundler ({@link verifyPublicEnvDefine}): a key that
+   * names anything other than the public bag global or a `PUBLIC_*` read is a server
+   * leak and FAILS the build with `ASSETS_SERVER_ENV_LEAK`. Omitted = inject nothing.
+   */
+  readonly publicEnvDefine?: PublicEnvDefine;
 }
 
 /** One line of build narration. */
@@ -89,6 +103,15 @@ export interface BundleRequest {
   readonly mode: BuildMode;
 
   readonly dialect: Dialect;
+
+  /**
+   * The verified PUBLIC-env `define`/replace map (see
+   * {@link BuildClientOptions.publicEnvDefine}) — merged into the bundler's `define`
+   * so `PUBLIC_*` config is inlined into island code. Always present (an empty `{}`
+   * when nothing is injected), already leak-checked, so the bundler seam applies it
+   * verbatim with no further validation.
+   */
+  readonly publicEnvDefine: PublicEnvDefine;
 }
 
 /** The injected seams `buildClient` orchestrates over — real implementations in `bun.ts`. */
@@ -226,12 +249,18 @@ export async function buildClient(
     }
   }
 
+  // Verify the PUBLIC-env inject map BEFORE bundling — a server var that would leak
+  // into island code fails the build loud + early (ASSETS_SERVER_ENV_LEAK), never
+  // silently inlined. An empty `{}` (the common case) is the verified no-op.
+  const publicEnvDefine = verifyPublicEnvDefine(options.publicEnvDefine);
+
   const entrySource = synthesizeEntry(islands);
 
   const artifacts = await deps.bundle({
     entrySource,
     mode: options.mode,
     dialect: options.dialect,
+    publicEnvDefine,
   });
 
   const entryArtifact = artifacts.find((artifact) => artifact.kind === "entry");

@@ -15,7 +15,10 @@
  */
 
 import { EnvError } from "./errors";
-import type { EnvField, EnvSource } from "./fields";
+import { EnvField } from "./fields";
+import type { EnvSource } from "./fields";
+import { defineSplitEnv } from "./split";
+import type { InferSplit, SplitEnvSchema } from "./split";
 
 /** A schema: a {@link EnvField} per variable name. */
 export type EnvSchema = Record<string, EnvField<unknown>>;
@@ -24,6 +27,22 @@ export type EnvSchema = Record<string, EnvField<unknown>>;
 export type InferEnv<S extends EnvSchema> = {
   [K in keyof S]: S[K] extends EnvField<infer T> ? T : never;
 };
+
+/**
+ * Whether `schema` is the two-sided split shape (`{ server?, client? }`) rather than a
+ * flat field map. A split half is a plain RECORD of fields, never an {@link EnvField};
+ * a flat schema's values are all `EnvField`s. So a `server`/`client` key whose value is
+ * not an `EnvField` is the unambiguous split signal — a flat schema with a literal var
+ * named `server` would carry an `EnvField` there, and is (correctly) read as flat.
+ */
+function isSplitSchema(schema: object): schema is SplitEnvSchema {
+  const candidate = schema as { server?: unknown; client?: unknown };
+
+  return (
+    (candidate.server !== undefined && !(candidate.server instanceof EnvField)) ||
+    (candidate.client !== undefined && !(candidate.client instanceof EnvField))
+  );
+}
 
 /**
  * The ambient process env, read edge-safely: `{}` where there is no `process` (a
@@ -45,14 +64,31 @@ function processEnv(): EnvSource {
  * exactly as on Node. Only the keys NAMED in the schema are read, and a value that is
  * not a string (a binding, or an unset var) reads as "not set" — so a non-string
  * binding never pollutes a validated value.
+ *
+ * Two shapes:
+ *   - FLAT (`{ NAME: envField.… }`) — every var is server-side, returned as a flat
+ *     frozen object. The original surface; unchanged.
+ *   - SPLIT (`{ server: {…}, client: {…} }`) — delegates to {@link defineSplitEnv}: the
+ *     `PUBLIC_` convention is enforced on the client half and the result is leak-guarded
+ *     (a server key read in a browser throws `ENV_SERVER_LEAK`).
  */
-export function defineEnv<S extends EnvSchema>(schema: S, source?: object): Readonly<InferEnv<S>> {
+export function defineEnv<S extends SplitEnvSchema>(
+  schema: S,
+  source?: object,
+): Readonly<InferSplit<S>>;
+export function defineEnv<S extends EnvSchema>(schema: S, source?: object): Readonly<InferEnv<S>>;
+export function defineEnv(schema: object, source?: object): Readonly<Record<string, unknown>> {
+  // The split shape (`{ server?, client? }`) carries its own convention + leak guard.
+  if (isSplitSchema(schema)) {
+    return defineSplitEnv(schema, source) as Readonly<Record<string, unknown>>;
+  }
+
   const from = (source ?? processEnv()) as Record<string, unknown>;
 
   const values: Record<string, unknown> = {};
   const problems: string[] = [];
 
-  for (const [key, field] of Object.entries(schema)) {
+  for (const [key, field] of Object.entries(schema as EnvSchema)) {
     // Read defensively: only a string is a real env value. A non-string (a Worker
     // binding) or a missing key both read as unset, so the field applies its
     // required/optional/default rule rather than coercing a binding object.
@@ -73,5 +109,5 @@ export function defineEnv<S extends EnvSchema>(schema: S, source?: object): Read
     );
   }
 
-  return Object.freeze(values) as Readonly<InferEnv<S>>;
+  return Object.freeze(values);
 }

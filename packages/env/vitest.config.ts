@@ -7,7 +7,9 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/index.ts"],
+      // The barrels (re-export only, no logic): the root entry and the named
+      // server boundary surface — excluded exactly as `index.ts` is.
+      exclude: ["src/index.ts", "src/server.ts"],
       thresholds: {
         lines: 100,
         functions: 100,

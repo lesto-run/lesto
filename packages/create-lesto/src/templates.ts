@@ -284,10 +284,19 @@ export function env(): string {
   return `import { defineEnv, envField } from "@lesto/env";
 
 /**
- * The typed environment. Read each value off \`env\` (e.g. \`env.LESTO_DB\`) instead
- * of \`process.env\`: it is validated and typed, and a bad value fails at boot, not
- * mid-request. Add fields as you need them — every \`envField\` chains \`.optional()\`
- * or \`.default(value)\`, and a field with neither is REQUIRED (boot throws if unset).
+ * The typed environment, SPLIT into \`server\` and \`client\` halves. Read each value
+ * off \`env\` (e.g. \`env.LESTO_DB\`, \`env.PUBLIC_APP_NAME\`) instead of \`process.env\`:
+ * it is validated and typed, and a bad value fails at boot, not mid-request. Every
+ * \`envField\` chains \`.optional()\` or \`.default(value)\`; a field with neither is
+ * REQUIRED (boot throws if unset).
+ *
+ * SERVER vs CLIENT (the leak boundary):
+ *   - \`server\` vars (secrets, the DB path) NEVER reach the browser. Read a server
+ *     value in an \`app/islands/*\` component and it throws \`ENV_SERVER_LEAK\` LOUD +
+ *     EARLY — a secret can't slip into client code.
+ *   - \`client\` vars MUST be named \`PUBLIC_*\` (the leak contract). They ARE safe to
+ *     ship: the island bundler inlines them, so an island reads them in the browser
+ *     via \`@lesto/env/client\` (\`defineClientEnv\`) — no \`process.env\` needed there.
  *
  * WHERE VALUES COME FROM:
  *   - Local dev: \`lesto dev\`/\`build\` run under Bun, which auto-loads \`.env\` and
@@ -296,16 +305,20 @@ export function env(): string {
  *   - Cloudflare deploy: a Worker has no \`process.env\`. Read config off the Worker
  *     \`env\` binding (set with \`wrangler secret put NAME\`) and validate it the same
  *     way with \`defineEnv(schema, workerEnv)\` — pass the binding as the 2nd arg.
- *
- * SERVER-ONLY — do NOT import this module into an \`app/islands/*\` component. Islands
- * are bundled to the browser, where there is no \`process.env\`; a required var would
- * throw at hydration, and any secret has no business in client code. Pass values an
- * island needs down as props from a server page/loader instead.
  */
 export const env = defineEnv({
-  // The SQLite database file the app opens (see \`lesto.app.ts\`). Defaults to
-  // \`lesto.db\` in the project root; point it elsewhere with \`LESTO_DB=/path.db\`.
-  LESTO_DB: envField.string().default("lesto.db"),
+  server: {
+    // The SQLite database file the app opens (see \`lesto.app.ts\`). Defaults to
+    // \`lesto.db\` in the project root; point it elsewhere with \`LESTO_DB=/path.db\`.
+    LESTO_DB: envField.string().default("lesto.db"),
+    // Add server-only secrets here — e.g. SESSION_SECRET: envField.string().
+    // They are validated at boot and NEVER shipped to the browser.
+  },
+  client: {
+    // Public config, inlined into island bundles — every key MUST be \`PUBLIC_*\`.
+    // An island reads these in the browser via \`@lesto/env/client\` (see the counter).
+    PUBLIC_APP_NAME: envField.string().default("Lesto app"),
+  },
 });
 `;
 }
@@ -319,19 +332,38 @@ export const env = defineEnv({
  * the sound pairing while the CLI server renders React (full server-side Preact is
  * estate's bespoke whole-process-aliased path). The `useState` button is inert
  * until hydration, so a working click is the visible proof the island came alive.
+ *
+ * It also reads PUBLIC config in the browser via `@lesto/env/client` — the safe
+ * client surface, by construction free of any server secret. The bundler inlines the
+ * `PUBLIC_*` subset (from `env.ts`'s `client` half), so `defineClientEnv` resolves to
+ * the validated literal with no `process.env` in the browser. NEVER import `./env`
+ * (the server schema) here — reaching a server var from an island throws
+ * `ENV_SERVER_LEAK`; the bundler likewise refuses to inline a non-`PUBLIC_*` var.
  */
 export function islandCounter(): string {
   return `import { useState } from "react";
 import type { ReactElement } from "react";
 
 import { defineIsland } from "@lesto/ui";
+import { defineClientEnv, envField } from "@lesto/env/client";
+
+// PUBLIC config, inlined by the island bundler — every key is \`PUBLIC_*\`. This is the
+// browser-safe surface: it can hold no secret. (The server schema lives in \`./env\`.)
+const clientEnv = defineClientEnv({
+  PUBLIC_APP_NAME: envField.string().default("Lesto app"),
+});
 
 /** A trivial interactive component: the local count proves hydration is live. */
 function Counter({ start }: { start: number }): ReactElement {
   const [n, setN] = useState(start);
 
   return (
-    <button type="button" data-testid="counter" onClick={() => setN((value) => value + 1)}>
+    <button
+      type="button"
+      data-testid="counter"
+      title={clientEnv.PUBLIC_APP_NAME}
+      onClick={() => setN((value) => value + 1)}
+    >
       count: {n}
     </button>
   );
@@ -450,8 +482,11 @@ TypeScript framework (ESM, run directly — no build step for the source).
 
 - \`lesto.app.ts\` — the app: tables (\`@lesto/db\`), migrations, and a code-first
   \`lesto()\` app with \`.get\`/\`.post\` API routes. The DB handle is opened here.
-- \`env.ts\` — the typed, validated environment (\`@lesto/env\`). \`defineEnv\` checks
-  it at boot; read values off \`env\` (e.g. \`env.LESTO_DB\`), not \`process.env\`.
+- \`env.ts\` — the typed, validated environment (\`@lesto/env\`), split \`server\` /
+  \`client\`. \`defineEnv\` checks it at boot; read values off \`env\` (e.g.
+  \`env.LESTO_DB\`), not \`process.env\`. Server vars never reach the browser (reading
+  one in an island throws \`ENV_SERVER_LEAK\`); \`client\` vars are \`PUBLIC_*\` and an
+  island reads them via \`@lesto/env/client\`.
 - \`app/routes/\` — **file-based routing** (ADR 0023). A \`page.tsx\` makes its
   directory's URL a route; \`layout.tsx\` wraps every page at or below it. A
   \`[param]\` directory is a dynamic segment, \`[...rest]\` a catch-all. Drop a file

@@ -75,7 +75,14 @@ async function bundle(request: BundleRequest, appRoot: string): Promise<readonly
       target: "browser",
       splitting: true,
       minify: production,
-      define: production ? { "process.env.NODE_ENV": '"production"' } : {},
+      // Inline the verified PUBLIC-env subset alongside NODE_ENV, so an island reads
+      // its public config (an API base, an analytics key) in the browser where there
+      // is no `process.env`. The map is already leak-checked in `build-client.ts`
+      // (ASSETS_SERVER_ENV_LEAK), so it is applied verbatim here.
+      define: {
+        ...(production ? { "process.env.NODE_ENV": '"production"' } : {}),
+        ...request.publicEnvDefine,
+      },
       plugins: request.dialect === "preact" ? [preactAliasPlugin(appRoot)] : [],
     });
 
