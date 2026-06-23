@@ -883,6 +883,30 @@
         "@lesto/cli": "workspace:*",
       },
     },
+    "www": {
+      "name": "@lesto/www",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/assets": "workspace:*",
+        "@lesto/cloudflare": "workspace:*",
+        "@lesto/content-core": "workspace:*",
+        "@lesto/content-markdown": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/seo": "workspace:*",
+        "@lesto/sites": "workspace:*",
+        "@lesto/ui": "workspace:*",
+        "@lesto/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+        "preact": "^10.29.2",
+        "react": "^19",
+        "react-dom": "^19",
+        "zod": "^4.0.0",
+      },
+      "devDependencies": {
+        "@lesto/cli": "workspace:*",
+      },
+    },
   },
   "packages": {
     "@ampproject/remapping": ["@ampproject/remapping@2.3.0", "", { "dependencies": { "@jridgewell/gen-mapping": "^0.3.5", "@jridgewell/trace-mapping": "^0.3.24" } }, "sha512-30iZtAPgz+LTIYoeivqYo853f02jBYSd5uGnGpkFV0M3xOt9aN73erkgYAmZU43x4VfqcnLxW9Kpg3R5LC4YYw=="],
@@ -1216,6 +1240,8 @@
     "@lesto/webhooks": ["@lesto/webhooks@workspace:packages/webhooks"],
 
     "@lesto/workflows": ["@lesto/workflows@workspace:packages/workflows"],
+
+    "@lesto/www": ["@lesto/www@workspace:www"],
 
     "@manypkg/find-root": ["@manypkg/find-root@1.1.0", "", { "dependencies": { "@babel/runtime": "^7.5.5", "@types/node": "^12.7.1", "find-up": "^4.1.0", "fs-extra": "^8.1.0" } }, "sha512-mki5uBvhHzO8kYYix/WRy2WX8S3B5wdVSc9D6KcU5lQNglP2yt58/VfLuAK49glRXChosY8ap2oJ1qgma3GUVA=="],
 

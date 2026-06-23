@@ -1,0 +1,41 @@
+{
+	// Hand-authored, not generated. `@lesto/cloudflare`'s `wranglerConfig` models
+	// an app with a dynamic zone fronting its assets, and refuses a plan with no
+	// dynamic zone (CLOUDFLARE_NO_DYNAMIC_ZONE). This site has none: it is fully
+	// prerendered, and the Worker exists only to serve those static files and
+	// render a 404 for a miss. Mirrors site/ (the docs site) exactly — see
+	// site/wrangler.jsonc and www/README.md.
+	"name": "lesto-www",
+	"main": "worker.ts",
+	"compatibility_date": "2026-06-01",
+	// The canonical home — the apex marketing site. A Workers Custom Domain: once
+	// the `lesto.run` zone is ACTIVE on Cloudflare (its nameservers switched at the
+	// registrar to the Cloudflare-assigned pair), these routes auto-provision the
+	// proxied DNS record + edge cert for the apex and the `www.` host, making the
+	// canonical / OG / sitemap URLs true end-to-end. The docs live on the sibling
+	// `docs.lesto.run` Worker (site/). PENDING until the NS switch.
+	"routes": [
+		{ "pattern": "lesto.run", "custom_domain": true },
+		{ "pattern": "www.lesto.run", "custom_domain": true },
+	],
+	// Keep the *.workers.dev URL live as the working fallback until the custom
+	// domain activates (otherwise the site is unreachable during the NS switch).
+	"workers_dev": true,
+	// Backstop for any node:* surface the assets adapter's transitive imports
+	// touch; the Worker itself runs on Web APIs (crypto, TextEncoder, fetch).
+	"compatibility_flags": [
+		"nodejs_compat",
+	],
+	// The prerendered marketing site (`bun run build.ts` → out/www). Cloudflare
+	// serves a matching file directly (cached at the edge, no isolate); a miss
+	// falls through to `worker.ts`, which renders the 404.
+	//
+	// `drop-trailing-slash` makes the no-trailing-slash form canonical, matching
+	// the in-page links (`/blog`, `/use-cases`): each serves its `index.html` at
+	// 200 directly, instead of the default 307 → `/blog/`.
+	"assets": {
+		"directory": "./out/www",
+		"binding": "ASSETS",
+		"html_handling": "drop-trailing-slash",
+	},
+}
