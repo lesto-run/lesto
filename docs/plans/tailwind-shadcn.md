@@ -196,8 +196,11 @@ Co-Authored-By / "Generated with Claude" / 🤖 trailer.)
    Emit `components.json` (`style: "new-york"`, `tailwind.config: ""`,
    `tailwind.css: "app/styles/app.css"`, `cssVariables: true`, `baseColor: "neutral"`,
    `iconLibrary: "lucide"`, `aliases` → `@/components`, `@/components/ui`, `@/lib/utils`,
-   `@/lib`, `@/hooks`); add `"paths": { "@/*": ["./*"] }` to the scaffolded `tsconfig.json`
-   (`scaffold.ts:124`); replace `app/styles/app.css` with the shadcn v4 block
+   `@/lib`, `@/hooks`); add `"paths": { "@/*": ["./app/*"] }` to the scaffolded
+   `tsconfig.json` (app code lives under `app/`, so `@/lib/utils` → `app/lib/utils` and
+   `@/components/ui` → `app/components/ui`; a root-level `./*` would resolve `@/lib/utils`
+   to a non-existent `./lib/utils` and fail the typecheck-resolves acceptance below);
+   replace `app/styles/app.css` with the shadcn v4 block
    (`@import "tailwindcss"; @import "tw-animate-css"; @custom-variant dark (&:is(.dark *));`
    + `@theme inline { … }` + `:root`/`.dark` OKLCH tokens + `@layer base`); write
    `app/lib/utils.ts` with `cn()`; add the deps. Components install **in-app** under
