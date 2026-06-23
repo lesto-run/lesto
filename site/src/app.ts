@@ -18,10 +18,8 @@ import { openSqlite } from "@lesto/runtime";
 import type { PageMetadata } from "@lesto/web";
 import { lesto } from "@lesto/web";
 
-import { buildNav, type DocEntry, loadBlog, loadChangelog, loadDocs } from "./content";
+import { buildNav, type DocEntry, loadDocs } from "./content";
 import { canonicalUrl, SITE_URL } from "./site";
-import { makeBlogIndex, makeBlogPost } from "./ui/blog";
-import { makeChangelog } from "./ui/changelog";
 import { makeDocPage } from "./ui/doc-page";
 import { DocsLayout } from "./ui/layout";
 
@@ -36,8 +34,7 @@ const OG_IMAGE = `${SITE_URL}/og.svg`;
  * Twitter card block (so a shared link renders a rich preview, not a blank card),
  * a canonical link, and the favicon. The og/twitter tags flow through
  * `PageMetadata.meta` as typed `MetaSpec`s — `@lesto/web` renders them into the
- * document head, so this stays declarative and HTML-escaped. Shared by the docs,
- * the blog, and the changelog.
+ * document head, so this stays declarative and HTML-escaped.
  */
 export function seoMetadata(input: {
   title: string;
@@ -87,7 +84,7 @@ export function pageMetadata(doc: DocEntry): PageMetadata {
 
 export async function buildAppConfig(): Promise<LestoAppConfig> {
   const { db } = await openSqlite();
-  const [docs, posts, releases] = await Promise.all([loadDocs(), loadBlog(), loadChangelog()]);
+  const docs = await loadDocs();
   const nav = buildNav(docs);
 
   // The search island's client bundle (built into out/docs/client.js); every
@@ -100,45 +97,6 @@ export async function buildAppConfig(): Promise<LestoAppConfig> {
       metadata: () => pageMetadata(doc),
     });
   }
-
-  // The blog: an index at /blog and one page per post at /blog/<slug>.
-  app = app.page("/blog", {
-    static: true,
-    component: makeBlogIndex(posts),
-    metadata: () =>
-      seoMetadata({
-        title: "Blog · Lesto",
-        description: "Notes from the people building Lesto.",
-        route: "/blog",
-        type: "website",
-      }),
-  });
-  for (const post of posts) {
-    app = app.page(post.route, {
-      static: true,
-      component: makeBlogPost(post),
-      metadata: () =>
-        seoMetadata({
-          title: `${post.title} · Lesto`,
-          ...(post.description === undefined ? {} : { description: post.description }),
-          route: post.route,
-          type: "article",
-        }),
-    });
-  }
-
-  // The changelog: every release on one page.
-  app = app.page("/changelog", {
-    static: true,
-    component: makeChangelog(releases),
-    metadata: () =>
-      seoMetadata({
-        title: "Changelog · Lesto",
-        description: "Notable changes to Lesto, newest first.",
-        route: "/changelog",
-        type: "website",
-      }),
-  });
 
   // No migrations: the content lives in files, rendered at build time; the
   // database is present only because the kernel's config requires one.

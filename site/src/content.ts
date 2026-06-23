@@ -15,11 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import { runPipeline } from "@lesto/content-core/build";
 
-import config, {
-  type BlogFrontmatter,
-  type ChangelogFrontmatter,
-  type DocFrontmatter,
-} from "../lesto.content";
+import config, { type DocFrontmatter } from "../lesto.content";
 
 /** One heading in a doc's body — the raw material for the on-page table of contents. */
 export interface DocHeading {
@@ -56,9 +52,9 @@ const SITE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 /** Sections render in this order; any section not named here sorts after, alphabetically. */
 const SECTION_ORDER = ["Getting started", "Guides", "Migrate", "Batteries", "Deploy", "Reference"] as const;
 
-/** The fields every pipeline entry carries, regardless of collection. */
+/** The fields every pipeline entry carries. */
 interface RawBase {
-  /** The collection the entry came from — `docs` | `blog` | `changelog`. */
+  /** The collection the entry came from — only `docs` on this (docs) site. */
   readonly collection: string;
   readonly content: string;
   readonly file: { readonly pathSegments: readonly string[] };
@@ -66,8 +62,6 @@ interface RawBase {
 }
 
 type RawDoc = RawBase & DocFrontmatter;
-type RawBlog = RawBase & BlogFrontmatter;
-type RawChangelog = RawBase & ChangelogFrontmatter;
 
 /** Map a route's path segments to its URL: `[]` → `/`, `["a","b"]` → `/a/b`. */
 function routeOf(pathSegments: readonly string[]): string {
@@ -102,8 +96,8 @@ function byOrder(a: DocEntry, b: DocEntry): number {
 export async function loadDocs(): Promise<DocEntry[]> {
   const result = await runPipeline({ cwd: SITE_ROOT, config, skipWrite: true });
   const entries = result.entries as unknown as RawBase[];
-  // The config now carries `blog`/`changelog` collections too; the docs nav,
-  // search index, and prerender must only ever see the `docs` collection.
+  // Only the `docs` collection lives on this site (the blog + changelog moved to
+  // the marketing site); the filter stays as a defensive guard on the shape.
   return entries
     .filter((entry): entry is RawDoc => entry.collection === "docs")
     .map(toDocEntry)
@@ -154,81 +148,4 @@ export function adjacentDocs(
   const index = sequence.findIndex((item) => item.route === current);
   if (index === -1) return { prev: undefined, next: undefined };
   return { prev: sequence[index - 1], next: sequence[index + 1] };
-}
-
-// ── Blog ──────────────────────────────────────────────────────────────────
-
-/** One blog post, rendered and ready to route at `/blog/<slug>`. */
-export interface BlogPost {
-  /** The URL the post is served at, e.g. `/blog/one-substrate`. */
-  readonly route: string;
-  readonly slug: string;
-  readonly title: string;
-  readonly description: string | undefined;
-  /** ISO `YYYY-MM-DD`; the index sorts on this, newest first. */
-  readonly date: string;
-  readonly author: string | undefined;
-  /** The sanitized HTML body produced by `@lesto/content-markdown`. */
-  readonly html: string;
-}
-
-/** Sort newest-first by date, then by title for a stable tiebreak. */
-function byDateDesc(a: { date: string; title: string }, b: { date: string; title: string }): number {
-  return b.date.localeCompare(a.date) || a.title.localeCompare(b.title);
-}
-
-/** Reshape a pipeline entry into a {@link BlogPost}. */
-function toBlogPost(entry: RawBlog): BlogPost {
-  const slug = entry.file.pathSegments.join("/");
-  return {
-    route: `/blog/${slug}`,
-    slug,
-    title: entry.title,
-    description: entry.description,
-    date: entry.date,
-    author: entry.author,
-    html: entry.rendered?.html ?? "",
-  };
-}
-
-/** Run the pipeline and return every blog post, newest first. */
-export async function loadBlog(): Promise<BlogPost[]> {
-  const result = await runPipeline({ cwd: SITE_ROOT, config, skipWrite: true });
-  const entries = result.entries as unknown as RawBase[];
-  return entries
-    .filter((entry): entry is RawBlog => entry.collection === "blog")
-    .map(toBlogPost)
-    .toSorted(byDateDesc);
-}
-
-// ── Changelog ─────────────────────────────────────────────────────────────
-
-/** One changelog release, rendered for the single `/changelog` page. */
-export interface ChangelogRelease {
-  readonly version: string;
-  /** ISO `YYYY-MM-DD`; releases render newest first. */
-  readonly date: string;
-  readonly title: string | undefined;
-  /** The sanitized HTML body produced by `@lesto/content-markdown`. */
-  readonly html: string;
-}
-
-/** Reshape a pipeline entry into a {@link ChangelogRelease}. */
-function toChangelogRelease(entry: RawChangelog): ChangelogRelease {
-  return {
-    version: entry.version,
-    date: entry.date,
-    title: entry.title,
-    html: entry.rendered?.html ?? "",
-  };
-}
-
-/** Run the pipeline and return every changelog release, newest first. */
-export async function loadChangelog(): Promise<ChangelogRelease[]> {
-  const result = await runPipeline({ cwd: SITE_ROOT, config, skipWrite: true });
-  const entries = result.entries as unknown as RawBase[];
-  return entries
-    .filter((entry): entry is RawChangelog => entry.collection === "changelog")
-    .map(toChangelogRelease)
-    .toSorted((a, b) => b.date.localeCompare(a.date) || b.version.localeCompare(a.version));
 }

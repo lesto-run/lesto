@@ -32,10 +32,11 @@ export function DocsLayout({ children }: { children: ReactNode }): ReactElement 
           <a href="/quickstart" data-analytics="nav_quickstart">
             Quickstart
           </a>
-          <a href="/blog" data-analytics="nav_blog">
+          {/* The blog + changelog live on the marketing site (lesto.run). */}
+          <a href="https://lesto.run/blog" data-analytics="nav_blog">
             Blog
           </a>
-          <a href="/changelog" data-analytics="nav_changelog">
+          <a href="https://lesto.run/changelog" data-analytics="nav_changelog">
             Changelog
           </a>
           <a href="https://github.com/lesto-run/lesto" data-analytics="nav_github">

@@ -18,8 +18,6 @@ _None._
 
 ## Content collections
 
-- `blog` — 4 entries
-- `changelog` — 1 entry
 - `docs` — 38 entries
 
 ## CLI commands

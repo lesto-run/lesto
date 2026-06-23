@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { adjacentDocs, buildNav, loadBlog, loadChangelog, loadDocs } from "../src/content";
+import { adjacentDocs, buildNav, loadDocs } from "../src/content";
 
 describe("loadDocs", () => {
   it("loads every doc with a unique route and rendered HTML", async () => {
@@ -102,37 +102,5 @@ describe("adjacentDocs", () => {
   it("returns undefined both ways for an unknown route", async () => {
     const nav = buildNav(await loadDocs());
     expect(adjacentDocs(nav, "/nope")).toEqual({ prev: undefined, next: undefined });
-  });
-});
-
-describe("loadBlog", () => {
-  it("loads posts newest-first with /blog/<slug> routes and rendered HTML", async () => {
-    const posts = await loadBlog();
-
-    expect(posts.length).toBeGreaterThanOrEqual(1);
-    for (const post of posts) {
-      expect(post.route).toBe(`/blog/${post.slug}`);
-      expect(post.html.length).toBeGreaterThan(0);
-      expect(post.date).toMatch(/^\d{4}-\d{2}-\d{2}/);
-    }
-
-    // Newest first: the dates descend.
-    const dates = posts.map((post) => post.date);
-    expect([...dates]).toEqual([...dates].toSorted().toReversed());
-  });
-});
-
-describe("loadChangelog", () => {
-  it("loads releases newest-first with a version and rendered HTML", async () => {
-    const releases = await loadChangelog();
-
-    expect(releases.length).toBeGreaterThanOrEqual(1);
-    for (const release of releases) {
-      expect(release.version.length).toBeGreaterThan(0);
-      expect(release.html.length).toBeGreaterThan(0);
-    }
-
-    const dates = releases.map((release) => release.date);
-    expect([...dates]).toEqual([...dates].toSorted().toReversed());
   });
 });

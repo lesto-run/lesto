@@ -14,7 +14,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { buildClient, bunBuildClientDeps } from "@lesto/assets";
@@ -26,7 +26,7 @@ import appConfig from "./lesto.app";
 import sites from "./lesto.sites";
 import { docMarkdown, llmsFull, llmsIndex, markdownPath } from "./src/ai-docs";
 import { canonicalUrl, SITE_URL } from "./src/app";
-import { loadBlog, loadDocs } from "./src/content";
+import { loadDocs } from "./src/content";
 import { ogImage } from "./src/og";
 import { buildSearchIndex } from "./src/search-index";
 
@@ -71,6 +71,12 @@ if (drift.status !== 0) {
 
 const app = await createApp(appConfig);
 
+// Clean the output dir first — the sink only writes, never deletes, so a route
+// removed since the last build (e.g. the blog/changelog that moved to the
+// marketing site) would otherwise leave a stale orphan HTML file that a local
+// `wrangler deploy` would still ship.
+await rm(SITE_OUT, { recursive: true, force: true });
+
 // 1. Prerender every doc page.
 const manifests = await buildStaticSites(sites, app.handle, nodeSink(OUT_DIR));
 const pageCount = manifests.reduce((total, manifest) => total + manifest.pages.length, 0);
@@ -99,19 +105,10 @@ const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><re
 await writeFile(join(SITE_OUT, "favicon.svg"), FAVICON);
 
 // 5. SEO discoverability — dogfood @lesto/seo. A sitemap of every prerendered
-//    route (docs + blog + changelog), a permissive robots.txt that points
-//    crawlers at it, and the social-preview image (og.svg) every page's <head>
-//    advertises. The worker serves the whole out/docs/ tree, so these land at
-//    /sitemap.xml etc.
-// /blog and /changelog are registered + prerendered unconditionally (see
-// lesto.sites.ts), so the sitemap lists them unconditionally too.
-const blog = await loadBlog();
-const routes: string[] = [
-  ...docs.map((doc) => doc.route),
-  "/blog",
-  ...blog.map((post) => post.route),
-  "/changelog",
-];
+//    doc route, a permissive robots.txt that points crawlers at it, and the
+//    social-preview image (og.svg) every page's <head> advertises. The worker
+//    serves the whole out/docs/ tree, so these land at /sitemap.xml etc.
+const routes: string[] = docs.map((doc) => doc.route);
 const sitemapUrls: SitemapUrl[] = routes.map((route) => ({
   loc: canonicalUrl(route),
   priority: route === "/" ? 1 : 0.7,

@@ -263,22 +263,6 @@ a:hover { text-decoration: underline; }
 
 .docs-footer { max-width: var(--max); margin: 0 auto; padding: 1.5rem 1.25rem 3rem; color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--border); }
 
-/* Blog + changelog: a centered, single-column prose frame (no docs sidebar). */
-.prose-shell { max-width: 720px; margin: 0 auto; padding: 2rem 1.25rem 4rem; min-width: 0; }
-.prose-shell > h1 { font-size: 2.1rem; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 0.5rem; }
-.prose-lede { color: var(--muted); font-size: 1.05rem; margin: 0 0 2rem; }
-.prose-back { font-size: 0.9rem; margin: 0 0 1rem; }
-.post-list { list-style: none; margin: 0; padding: 0; }
-.post-list li { padding: 1.25rem 0; border-bottom: 1px solid var(--border); }
-.post-list time { display: block; color: var(--muted); font-size: 0.82rem; }
-.post-link { display: inline-block; margin: 0.15rem 0; font-size: 1.2rem; font-weight: 650; color: var(--fg); letter-spacing: -0.01em; }
-.post-link:hover { color: var(--accent); text-decoration: none; }
-.post-list p { margin: 0.25rem 0 0; color: var(--muted); }
-.post-meta { color: var(--muted); font-size: 0.88rem; margin: 0 0 1.5rem; }
-.changelog-release { margin: 0 0 2.5rem; }
-.changelog-release h2 { font-size: 1.45rem; margin: 2rem 0 0.5rem; letter-spacing: -0.01em; }
-.changelog-release h2 time { color: var(--muted); font-size: 1rem; font-weight: 400; }
-
 .docs-404 { max-width: 640px; margin: 0 auto; padding: 6rem 1.25rem; text-align: center; }
 .docs-404 h1 { font-size: 3rem; margin: 0 0 0.5rem; }
 
