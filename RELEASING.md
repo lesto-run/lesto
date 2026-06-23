@@ -82,20 +82,32 @@ Commit the generated `.changeset/*.md` alongside the code.
    only, so bump `LESTO_DEP_RANGE` in lockstep when the surface's minor moves.
 3. **Version.** `bun run version` consumes the queued changesets, bumping versions and
    writing changelogs. Commit the result.
-4. **Arm + publish.** Export `NPM_TOKEN` (locally) or add the `NPM_TOKEN` secret +
-   `RELEASE_ENABLED=true` repo variable (CI). `bun run release` runs
-   **`node scripts/publish.mjs`**, which `bun pm pack`s each public package and hands the
-   tarball to `npm publish`.
+4. **Publish via Trusted Publishing (OIDC) in CI — the supported path.** Releases run from
+   `.github/workflows/release.yml` on `github.com/lesto-run/lesto`, authenticated by GitHub's
+   OIDC identity (NO `NPM_TOKEN`), matched against each package's **trusted publisher** config
+   on npmjs.com. Arm with the `RELEASE_ENABLED=true` repo variable, then trigger from the
+   Actions tab ("Run workflow") or by pushing to main. The job runs `bun run release`
+   (**`node scripts/publish.mjs`**), which `bun pm pack`s each public package and hands the
+   tarball to `npm publish`. Provenance is automatic.
 
-   > ⚠️ **Do NOT publish with `changeset publish` / plain `npm publish`.** Internal deps are
-   > declared `"workspace:*"`, and **npm does not rewrite the `workspace:` protocol** — it
-   > uploads the literal `workspace:*`, so every package fails to install with
-   > `EUNSUPPORTEDPROTOCOL`. (This bit the first `0.1.0` publish — 2026-06-23 — which had to be
-   > superseded by `0.1.1`.) `bun pm pack` rewrites `workspace:*` → the exact version, so
-   > `scripts/publish.mjs` publishes the SAME tarball `scripts/pack-and-boot.mjs` validates.
-   > The legacy `changeset publish` is kept as `bun run release:changeset` for reference only —
-   > don't use it to upload. The CI `changesets/action` path (`release.yml`) will therefore not
-   > produce changeset-style GitHub releases; revisit if/when CI publishing is adopted.
+   **One-time setup (per package, no bulk API):** for every published package, npmjs.com →
+   the package → **Settings → Trusted publishing** → GitHub Actions, with **Organization or
+   user** = `lesto-run`, **Repository** = `lesto`, **Workflow filename** = `release.yml`
+   (filename only), Environment blank. Requires **npm CLI ≥ 11.5.1** + **Node ≥ 22.14** (the
+   workflow upgrades npm; the Node-22 bundled npm is too old).
+
+   > ⚠️ **Two traps, both already hit:**
+   > 1. **Never publish with `changeset publish` / plain `npm publish` from the package dir.**
+   >    Internal deps are `"workspace:*"` and **npm does not rewrite the `workspace:` protocol**
+   >    — it uploads the literal `workspace:*`, so every package fails to install with
+   >    `EUNSUPPORTEDPROTOCOL`. This bit the first `0.1.0` publish (2026-06-23, superseded by
+   >    `0.1.1`). `bun pm pack` rewrites it; `scripts/publish.mjs` publishes the SAME tarball
+   >    `scripts/pack-and-boot.mjs` validates. `release:changeset` is kept for reference only.
+   > 2. **Local/token publishing requires OTP per package** when the account 2FA is
+   >    "Authorization and writes" — and Classic Automation tokens (which bypassed it) are gone.
+   >    Trusted Publishing sidesteps tokens and 2FA entirely, which is why it's the supported
+   >    path. There is intentionally **no committed `.npmrc`**: an `${NPM_TOKEN}` authToken line
+   >    expands empty under OIDC and shadows trusted-publishing auth.
 
 ## Verifying the published shape without a registry
 
