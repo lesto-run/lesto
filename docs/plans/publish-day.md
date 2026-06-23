@@ -149,12 +149,24 @@ the proof is verified green. The real open items:
   assume a connected GitHub repo — so the CI publish can't run until the remote is created +
   pushed, OR publish locally with `bun run release` + `NPM_TOKEN` (still gated on
   `RELEASE_ENABLED`). Decide the publish venue before the morning-of.
-- **Required closure is now 23** (was 30 before the content trim). The pre-trim count was 30,
+- ✅ **Required closure is 23** (was 30 before the content trim). The pre-trim count was 30,
   not the 28 RELEASING.md lists (its list omits `@lesto/cloudflare` + `@lesto/pg`); after the
   content trim (step 5, `a0d5f95`) the 7 `content-*` packages drop out, leaving 23 auto-installed.
-  `content-*` remain PUBLISHABLE (public, opt-in), so RELEASING.md's list still names a valid
-  superset — just relabel it "publishable" vs "required". Worth a one-line RELEASING.md fix later.
+  `content-*` remain PUBLISHABLE (public, opt-in). **RELEASING.md relabeled "publishable" vs
+  "required-to-install" 2026-06-23.**
 - ✅ **Preview trim (step 5) — DONE** (`a0d5f95`): content is now an optional peer of `@lesto/mcp`;
   a hello-world install went 410 → 157 packages, zero content-* in the required closure.
 - Names re-checked 2026-06-22: `create-lesto`, `lesto`, `@lesto/{cli,web,ui,client}` all `E404`
   (free). Re-run the full closure on the morning of publish.
+
+### 2026-06-23 re-verification (agent prep pass — no publish)
+
+Re-ran the agent-doable prep against the live tree:
+- **Closure metadata:** 32 publishable packages all clean — `version 0.1.0`, `files:["src"]`,
+  `publishConfig.access:public`, correct `repository`, no broken `dist` `main`. Zero gaps.
+- **Names:** `create-lesto`, `lesto`, `@lesto/{cli,web,ui,kernel,runtime,db,errors}` all `E404` (free).
+- **`bun run test:pack-boot`: GREEN** — 32 packed → scaffolded under node → 158 installed → `lesto routes` booted.
+- Owner steer 2026-06-23: **prep only, do not publish yet.** The two human/outward gates stay open:
+  (a) **publish venue** — create+push `github.com/lesto-run/lesto` for the CI path, OR publish locally
+  with `NPM_TOKEN` (no remote needed); (b) **the step-9 go** — `RELEASE_ENABLED=true` + `NPM_TOKEN` +
+  `bun run release`. Re-run the closure name check the morning of.

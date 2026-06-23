@@ -32,10 +32,14 @@ proceed to de-privatization.
 A scaffolded app (`create-lesto`) installs `@lesto/cli`, `@lesto/assets`, `@lesto/db`,
 `@lesto/env`, `@lesto/kernel`, `@lesto/migrate`, `@lesto/runtime`, `@lesto/ui`, and
 `@lesto/web`. Their transitive `@lesto/*` closure must all be public for an install to
-resolve. The closure is **auto-derived**, not maintained by hand: `scripts/pack-and-boot.mjs`
-packs every package that is `private !== true` with `version === "0.1.0"`, and fails if any
-`@lesto/*` dep a scaffolded app pins is missing from that set — so a new published package
-joins the closure simply by being non-private at `0.1.0`. The set is roughly:
+resolve — **23 packages** after the content trim (`a0d5f95`), which made `content-*` an
+optional peer of `@lesto/mcp` rather than a required dep. The **publishable** set is
+broader than that **required-to-install** closure: it is **auto-derived**, not maintained
+by hand — `scripts/pack-and-boot.mjs` packs every package that is `private !== true` with
+`version === "0.1.0"`, and fails if any `@lesto/*` dep a scaffolded app pins is missing
+from that set — so a new published package joins simply by being non-private at `0.1.0`.
+The publishable set is roughly (the `content-*` entries publish as opt-in add-ons, not
+auto-installed):
 
 ```
 assets auth cli content-core content-embeddings content-markdown content-search
@@ -43,10 +47,10 @@ content-shared content-store content-umbra cors csrf db deploy env errors kernel
 migrate observability openapi queue ratelimit router runtime sites storage ui web
 ```
 
-> Note: the closure currently drags in several `content-*` packages tagged **preview**
-> in `ARCHITECTURE.md`. Trimming the supported surface so a hello-world app does not
-> pull preview packages is tracked separately (it is a dependency-shape change, not a
-> release-tooling one).
+> Note: the content trim is **done** (`a0d5f95`) — `content-*` (tagged **preview** in
+> `ARCHITECTURE.md`) are now optional peers of `@lesto/mcp`, so a hello-world app no
+> longer pulls them (install dropped 410 → 157 packages). They stay public and
+> publishable as opt-in add-ons: `npm i @lesto/content-core @lesto/content-store`.
 
 Everything outside this closure stays `private` until it has a reason to publish.
 
