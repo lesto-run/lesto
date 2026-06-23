@@ -143,8 +143,15 @@ export interface LestoAppConfig {
    * runtime to ~10 KB gzip; absent (or `"react"`) keeps React streaming, the
    * default. `createApp` wires the server half; the CLI wires the client half
    * from the same value, so the two can never diverge.
+   *
+   * `css` is the Tailwind v4 CSS entry (ADR 0037) — the `@import "tailwindcss"`
+   * source the CLI compiles to `out/styles.css` on `build`/`dev`. Read by the CLI
+   * only; defaults by convention to `app/styles/app.css`, and the build is skipped
+   * entirely when the resolved file is absent (Tailwind stays opt-in). The server
+   * never reads it — the stylesheet `<link>` is injected via `lesto().styles(...)`
+   * (the matched sibling of `.client(...)`).
    */
-  ui?: { dialect: UiDialect };
+  ui?: { dialect: UiDialect; css?: string };
 
   /**
    * Install the durable-store schemas (sessions + rate limits, ADR 0013) on the

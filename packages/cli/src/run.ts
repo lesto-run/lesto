@@ -262,6 +262,31 @@ export interface CliDeps {
   }) => Promise<void>;
 
   /**
+   * Probe whether the project's resolved Tailwind CSS entry exists (ADR 0037).
+   * The CLI core resolves the entry path from `ui.css` (default `app/styles/app.css`)
+   * and asks this seam; when it answers true, `build`/`dev` run the CSS build, else
+   * they skip it (Tailwind stays opt-in, gated on the entry's presence exactly as
+   * the client build is gated on `app/islands/`). The bin passes an fs probe rooted
+   * at the project; absent, the CLI never builds CSS (so tests opt in by providing it).
+   */
+  cssEntryExists?: (entry: string) => Promise<boolean>;
+
+  /**
+   * Build the project's Tailwind v4 stylesheet to `out/styles.css` (`@lesto/styles`,
+   * ADR 0037). The bin wires this to a LAZY `await import("@lesto/styles")` —
+   * `@lesto/styles` is an optional `peerDependency`, so the heavy `@tailwindcss/*`
+   * native engine never enters the CLI's eager graph and an app that uses no
+   * Tailwind never pulls it. The CLI core only decides WHEN to call it (a prod build
+   * for `build`, an unminified one on `dev` boot + on watch). A rejected build is
+   * surfaced as a coded `CLI_STYLES_BUILD_FAILED`.
+   */
+  buildAppStyles?: (options: {
+    entry: string;
+    outDir: string;
+    mode: "dev" | "production";
+  }) => Promise<void>;
+
+  /**
    * Watch `app/islands/` and call `onChange` (debounced) when a module changes,
    * returning a stop handle. The bin wires this to a debounced `fs.watch`; the
    * CLI core just registers the rebuild. Absent → no watching (a one-shot dev
@@ -849,6 +874,53 @@ function dialectOf(config: LestoAppConfig): UiDialect {
   return config.ui !== undefined ? config.ui.dialect : "react";
 }
 
+/** The project convention for the Tailwind CSS entry when `ui.css` is unset (ADR 0037). */
+const DEFAULT_CSS_ENTRY = "app/styles/app.css";
+
+/**
+ * The Tailwind CSS entry a config selects (ADR 0037) — `config.ui.css`, or the
+ * `app/styles/app.css` convention when unset. The path is project-relative; the
+ * bin resolves it against the project root. Whether the resolved file actually
+ * exists (and so whether the CSS build runs at all) is the `cssEntryExists` seam's
+ * call — this only names the path to probe.
+ */
+function cssEntryOf(config: LestoAppConfig): string {
+  return config.ui?.css ?? DEFAULT_CSS_ENTRY;
+}
+
+/**
+ * Build the Tailwind stylesheet into `outDir` when the project's resolved CSS entry
+ * exists, wrapping any compile failure in a coded CLI error so the command fails
+ * loudly rather than shipping a page with no styles. A project with no CSS entry is
+ * a no-op (Tailwind is opt-in) — the matched sibling of {@link buildClientIfPresent}.
+ *
+ * The probe (`cssEntryExists`) and the builder (`buildAppStyles`) are seams the bin
+ * wires to the real filesystem + a lazy `@lesto/styles` import; absent, the CLI never
+ * builds CSS.
+ */
+async function buildStylesIfPresent(
+  deps: CliDeps,
+  config: LestoAppConfig,
+  outDir: string,
+  mode: "dev" | "production",
+): Promise<void> {
+  if (deps.cssEntryExists === undefined || deps.buildAppStyles === undefined) return;
+
+  const entry = cssEntryOf(config);
+
+  if (!(await deps.cssEntryExists(entry))) return;
+
+  try {
+    await deps.buildAppStyles({ entry, outDir, mode });
+  } catch (cause) {
+    throw new CliError(
+      "CLI_STYLES_BUILD_FAILED",
+      "the Tailwind CSS build failed — see the cause for the compiler error",
+      { outDir, mode, entry, cause },
+    );
+  }
+}
+
 /**
  * The human message for a watch-triggered rebuild failure. A `buildClientIfPresent`
  * failure is a coded `CliError` carrying the bundler's own error as
@@ -917,6 +989,8 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
   const selected = selectTarget(sites, target);
 
   await buildClientIfPresent(deps, outDir, "production", dialectOf(config));
+
+  await buildStylesIfPresent(deps, config, outDir, "production");
 
   const manifest = await buildStaticSites(selected, app.handle, deps.sink(outDir));
 
@@ -1073,6 +1147,10 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // Build the island client on boot, then watch for changes. The dev outDir is
   // the same root the bin's `readAsset` serves from (DEFAULT_OUT_DIR).
   await buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev", dialect);
+
+  // Compile the Tailwind stylesheet on boot too, so `/styles.css` is served from
+  // the first request (ADR 0037). The dev-watch CSS rebuild + hot-swap is TW4.
+  await buildStylesIfPresent(deps, config, DEFAULT_OUT_DIR, "dev");
 
   // One dev error overlay is up at a time; track it so a clean island rebuild
   // reloads ONLY to dismiss a shown overlay (recovering from an island error) and
@@ -1377,6 +1455,11 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
   // src="/client.js">` that 404s and never hydrates. No-ops when there is no
   // `app/islands/`.
   await buildClientIfPresent(deps, outDir, "production", dialectOf(config));
+
+  // Compile the Tailwind stylesheet to `out/styles.css` on every deploy path too,
+  // so a deployed app ships its styles alongside `/client.js` (ADR 0037). No-ops
+  // when the project has no CSS entry.
+  await buildStylesIfPresent(deps, config, outDir, "production");
 
   const manifest = await buildStaticSites(selected, app.handle, deps.sink(outDir));
 

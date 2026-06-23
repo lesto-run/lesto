@@ -160,6 +160,9 @@ const DEV_ASSET_DIR = "out";
 /** The project's island-convention directory (ADR 0011) — its presence enables the client build. */
 const ISLANDS_DIR = "app/islands";
 
+/** The app source root Tailwind scans for utility classes (ADR 0037) — routes, components, islands all live under it. */
+const APP_SRC_DIR = "app";
+
 /** Debounce window for the dev island watcher: coalesce a burst of saves into one rebuild. */
 const WATCH_DEBOUNCE_MS = 100;
 
@@ -388,6 +391,40 @@ const buildClientAssets = async (options: {
       dialect: options.dialect,
     },
     bunBuildClientDeps(projectRoot),
+  );
+};
+
+// Whether the project's resolved Tailwind CSS entry exists (ADR 0037). The CLI core
+// names the project-relative entry (`ui.css`, default `app/styles/app.css`); this
+// resolves it against the project root and probes the real filesystem. Absent → the
+// CSS build is skipped (Tailwind stays opt-in), exactly as a missing `app/islands/`
+// skips the client build.
+const cssEntryExists = (entry: string): Promise<boolean> => dirExists(join(projectRoot, entry));
+
+// Build the Tailwind v4 stylesheet with @lesto/styles. The native engine
+// (`@tailwindcss/node` + `@tailwindcss/oxide`) is heavy and OFFICIALLY internal, so
+// `@lesto/styles` is an OPTIONAL peerDependency reached ONLY through this LAZY
+// `await import("@lesto/styles")` — guarded upstream by `cssEntryExists`, so an app
+// that uses no Tailwind never resolves it and the native binaries never enter the
+// CLI's eager graph (the `@lesto/content-core` precedent). The literal specifier
+// stays so the resolved module's types flow to `buildStyles`/`tailwindStyleCompiler`.
+// `resolveBase` (the project root, where `@import "tailwindcss"` resolves) and
+// `scanRoot` (the `app/` source Tailwind scans) are the engine's two distinct roots.
+const buildAppStyles = async (options: {
+  entry: string;
+  outDir: string;
+  mode: "dev" | "production";
+}): Promise<void> => {
+  const { buildStyles, tailwindStyleCompiler } = await import("@lesto/styles");
+
+  await buildStyles(
+    {
+      entry: join(projectRoot, options.entry),
+      outDir: join(projectRoot, options.outDir),
+      mode: options.mode === "dev" ? "development" : "production",
+      report: (line) => console.log(line),
+    },
+    tailwindStyleCompiler({ resolveBase: projectRoot, scanRoot: join(projectRoot, APP_SRC_DIR) }),
   );
 };
 
@@ -721,6 +758,8 @@ const code = await run(argv, {
   readAsset: nodeStaticReader(join(process.cwd(), DEV_ASSET_DIR)),
   hasIslandsDir,
   buildClientAssets,
+  cssEntryExists,
+  buildAppStyles,
   watchIslands,
   watchRoutes,
   reloadApp,

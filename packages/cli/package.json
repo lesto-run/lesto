@@ -38,13 +38,17 @@
   },
   "peerDependencies": {
     "@lesto/content-core": "workspace:*",
-    "@lesto/content-store": "workspace:*"
+    "@lesto/content-store": "workspace:*",
+    "@lesto/styles": "workspace:*"
   },
   "peerDependenciesMeta": {
     "@lesto/content-core": {
       "optional": true
     },
     "@lesto/content-store": {
+      "optional": true
+    },
+    "@lesto/styles": {
       "optional": true
     }
   },

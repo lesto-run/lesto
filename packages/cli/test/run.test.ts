@@ -879,6 +879,115 @@ describe("run build — island client assets", () => {
   });
 });
 
+describe("run build — Tailwind CSS (ADR 0037)", () => {
+  it("builds the stylesheet (production) into the out dir when the CSS entry exists", async () => {
+    const built: Array<{ entry: string; outDir: string; mode: string }> = [];
+
+    const code = await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+        cssEntryExists: () => Promise.resolve(true),
+        buildAppStyles: (options) => {
+          built.push(options);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(code).toBe(0);
+    // No `ui.css` key → the entry defaults to the `app/styles/app.css` convention.
+    expect(built).toEqual([{ entry: "app/styles/app.css", outDir: "out", mode: "production" }]);
+  });
+
+  it("resolves the CSS entry from ui.css when set", async () => {
+    const built: string[] = [];
+
+    await run(
+      ["build"],
+      depsWith({
+        loadApp: () =>
+          Promise.resolve({
+            ...buildConfig(),
+            ui: { dialect: "react" as const, css: "app/theme.css" },
+          }),
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+        cssEntryExists: (path) => {
+          built.push(path);
+
+          return Promise.resolve(true);
+        },
+        buildAppStyles: (options) => {
+          built.push(options.entry);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    // Both the probe and the build see the configured entry, not the convention.
+    expect(built).toEqual(["app/theme.css", "app/theme.css"]);
+  });
+
+  it("skips the CSS build when the entry does not exist (Tailwind opt-in)", async () => {
+    const buildAppStyles = vi.fn(() => Promise.resolve());
+
+    await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+        cssEntryExists: () => Promise.resolve(false),
+        buildAppStyles,
+      }),
+    );
+
+    expect(buildAppStyles).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the CSS seams are absent (the default, no CSS pipeline)", async () => {
+    const code = await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(lines).toEqual(["built marketing: 1 page"]);
+  });
+
+  it("fails with CLI_STYLES_BUILD_FAILED when the compiler throws", async () => {
+    const cause = new Error("tailwind blew up");
+
+    try {
+      await run(
+        ["build"],
+        depsWith({
+          loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+          sink: recordingSink().sink,
+          cssEntryExists: () => Promise.resolve(true),
+          buildAppStyles: () => Promise.reject(cause),
+        }),
+      );
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).code).toBe("CLI_STYLES_BUILD_FAILED");
+      expect((error as CliError).details).toMatchObject({
+        outDir: "out",
+        mode: "production",
+        entry: "app/styles/app.css",
+        cause,
+      });
+    }
+  });
+});
+
 describe("run dev — island client assets", () => {
   const sites: readonly Site[] = [
     { name: "marketing", render: "static", basePath: "/", pages: ["/"] },
@@ -1291,6 +1400,32 @@ async function drainBody(body: unknown): Promise<string> {
 
   return out + decoder.decode();
 }
+
+describe("run dev — Tailwind CSS (ADR 0037)", () => {
+  const sites: readonly Site[] = [
+    { name: "marketing", render: "static", basePath: "/", pages: ["/"] },
+  ];
+
+  it("builds the stylesheet (dev mode) on boot when the CSS entry exists", async () => {
+    const built: Array<{ entry: string; outDir: string; mode: string }> = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        cssEntryExists: () => Promise.resolve(true),
+        buildAppStyles: (options) => {
+          built.push(options);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(built).toEqual([{ entry: "app/styles/app.css", outDir: "out", mode: "dev" }]);
+  });
+});
 
 describe("run routes:gen", () => {
   it("regenerates the manifest and reports the path + count", async () => {

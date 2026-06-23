@@ -207,10 +207,12 @@
       "peerDependencies": {
         "@lesto/content-core": "workspace:*",
         "@lesto/content-store": "workspace:*",
+        "@lesto/styles": "workspace:*",
       },
       "optionalPeers": [
         "@lesto/content-core",
         "@lesto/content-store",
+        "@lesto/styles",
       ],
     },
     "packages/client": {
