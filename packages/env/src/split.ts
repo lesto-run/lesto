@@ -123,20 +123,31 @@ export function defineSplitEnv<S extends SplitEnvSchema>(
   const serverKeys = new Set(Object.keys(serverSchema));
   const merged: Record<string, unknown> = { ...clientValues, ...serverValues };
 
-  // (3) The leak guard. A server key read from the browser throws LOUD + EARLY.
+  // (3) The leak guard. A server key read from the browser throws LOUD + EARLY — on
+  // EVERY value-exposing path, not just `env.KEY`: a direct `get` (which also covers
+  // spread, `JSON.stringify`, `Object.entries`, and `for..in`+read, all of which read
+  // through `get`) AND `Object.getOwnPropertyDescriptor(env, key).value`, which would
+  // otherwise hand back the secret without ever tripping `get`.
+  const assertNotLeaked = (prop: string | symbol): void => {
+    if (typeof prop === "string" && serverKeys.has(prop) && !isServerContext(serverContext)) {
+      throw new EnvError(
+        "ENV_SERVER_LEAK",
+        `server env "${prop}" was read in a browser context — it is server-only and must ` +
+          `never reach client code. Move it to the \`client\` half (named "${PUBLIC_PREFIX}*") ` +
+          `if it is safe to ship, or pass the value down as a prop from a server page/loader.`,
+        { key: prop },
+      );
+    }
+  };
+
   const guarded = new Proxy(Object.freeze(merged), {
     get(target, prop, receiver) {
-      if (typeof prop === "string" && serverKeys.has(prop) && !isServerContext(serverContext)) {
-        throw new EnvError(
-          "ENV_SERVER_LEAK",
-          `server env "${prop}" was read in a browser context — it is server-only and must ` +
-            `never reach client code. Move it to the \`client\` half (named "${PUBLIC_PREFIX}*") ` +
-            `if it is safe to ship, or pass the value down as a prop from a server page/loader.`,
-          { key: prop },
-        );
-      }
-
+      assertNotLeaked(prop);
       return Reflect.get(target, prop, receiver);
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      assertNotLeaked(prop);
+      return Reflect.getOwnPropertyDescriptor(target, prop);
     },
   });
 

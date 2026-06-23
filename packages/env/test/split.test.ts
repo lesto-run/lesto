@@ -123,6 +123,35 @@ describe("defineSplitEnv", () => {
     expect((thrown as EnvError).details["key"]).toBe("SESSION_SECRET");
   });
 
+  it("THROWS ENV_SERVER_LEAK when a server key is read via getOwnPropertyDescriptor in the browser", () => {
+    const env = defineSplitEnv(
+      {
+        server: { SESSION_SECRET: envField.string() },
+        client: { PUBLIC_API_BASE: envField.string() },
+      },
+      source,
+      false, // browser
+    );
+
+    // A public key's descriptor reads fine in the browser…
+    expect(Object.getOwnPropertyDescriptor(env, "PUBLIC_API_BASE")?.value).toBe(
+      "https://api.example.com",
+    );
+
+    // …but the server secret's descriptor throws too — `.value` can't smuggle it past `get`.
+    let thrown: unknown;
+
+    try {
+      void Object.getOwnPropertyDescriptor(env, "SESSION_SECRET");
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(EnvError);
+    expect((thrown as EnvError).code).toBe("ENV_SERVER_LEAK");
+    expect((thrown as EnvError).details["key"]).toBe("SESSION_SECRET");
+  });
+
   it("auto-detects the browser context when no override is given (guard fires)", () => {
     vi.stubGlobal("window", {});
     vi.stubGlobal("document", {});
