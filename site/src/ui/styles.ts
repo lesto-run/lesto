@@ -139,7 +139,11 @@ a:hover { text-decoration: underline; }
    framework emits the figure, the optional filename title, line markup, and a
    self-contained copy button; the docs only style them. */
 .docs-article [data-rehype-pretty-code-figure] { position: relative; margin: 1.25rem 0; }
-.docs-article [data-rehype-pretty-code-figure] pre { margin: 0; }
+/* Highlighted blocks carry their horizontal padding on each [data-line] (so the
+   highlight tint can span full width), so the <pre> must NOT also pad
+   horizontally — otherwise the left gap doubles. Vertical padding stays here.
+   Plain fenced blocks (no figure, no [data-line]) keep the default pre padding. */
+.docs-article [data-rehype-pretty-code-figure] pre { margin: 0; padding: 1rem 0; }
 
 /* Filename label (a fenced block with title="lesto.app.ts") — a header tab atop the block. */
 .docs-article [data-rehype-pretty-code-title] {
