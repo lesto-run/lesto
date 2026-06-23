@@ -54,10 +54,14 @@ This one rule buys all three properties the rejected design failed on:
 
 - **Sound** — invalidation comes from the writer declaring intent, not from an
   in-process graph inferring it (which is blind to out-of-band writes; see *Rejected*).
-- **Secure** — the push carries no data, so it needs no per-row authz. The data only
-  ever returns through the existing authorized fetch (`.use(can())` / CSRF unchanged),
-  which re-authorizes on every refetch. Topics are coarse and non-secret
-  (e.g. `posts`, `org:123:posts`).
+- **Secure** — the push carries no data, so it needs no per-row authz: data only ever
+  returns through the existing authorized read (`can()` re-runs on every refetch; CSRF is
+  irrelevant — a refetch is a GET, not a mutation). No-data-on-the-wire is necessary but
+  not sufficient; two obligations make it real. **(a) Subscription is authorized** — the
+  fan-out only lets a connection subscribe to topics its principal may observe. A topic
+  like `org:123:posts` otherwise leaks *when* a tenant's data changes (a cross-tenant
+  timing side-channel) even with no payload. **(b) Tenant topics are principal-scoped**;
+  only genuinely public data rides an unauthenticated topic.
 - **Cheap** — a `NOTIFY` payload (~8 KB cap) carries a topic, never a record.
 
 Each phase is independently shippable and useful.
@@ -72,16 +76,28 @@ The prior scope of this ADR number: the `toPageDef` adapter letting a route modu
 
 ### Phase 1 — explicit invalidation, client-local (mostly built; formalize)
 
-Make the existing behavior a first-class, documented contract:
+Two symmetric declarations over the cache that already exists in `@lesto/ui`
+(`data-client.ts`):
 
-- A mutation **declares the keys it invalidates** — `invalidates: [...keys]` (or a
-  helper on `useMutation`) — instead of callers hand-calling `invalidate`. The
-  TanStack/SWR/Remix model.
-- **One key contract.** Unify the `useQuery` key with `@lesto/client`'s
-  `"METHOD /path"` so a single string names a query everywhere. Today the
-  SSR-hydrate path (`defineDataSource`) keys by bare source name while `@lesto/client`
-  keys by `"METHOD /path"` — bridging them is the real (small) work here, and the
-  prerequisite that makes Phase 2 push events addressable.
+- A **mutation declares the topics it dirties** — `invalidates: ["posts", …]` (or a
+  `useMutation` option) — instead of callers hand-calling `QueryClient.invalidate`.
+- A **query declares the topics it subscribes to** — `useQuery(key, fetcher, { topics:
+  ["posts"] })`. The `QueryClient` keeps a small **topic → keys** registry; invalidating
+  a topic drops every key registered under it and refetches. The TanStack/SWR/Remix model.
+
+Crucially this does **not** unify the keyspaces. `useQuery` keys are arbitrary
+(`serializeQueryKey`, data-client.ts:57), `@lesto/client` keys by `"METHOD /path"`
+(client.ts:52), and `defineDataSource` seeds by bare source name (`hydrate.tsx`) — three
+independent keyspaces. The prior reviews already ruled that bridging them is net-new glue,
+**not free** — so we don't. The addressable unit is the **topic**, decoupled from any key
+format, and a topic is all Phase 2 needs to target a push. (SSR-hydrate *seeding* — paint
+`useQuery`'s first value from the page's `__lestoData` payload — is a separate, explicitly
+optional, *local* concern a page opts into per key; it is NOT a global key contract and is
+not on Phase 1's critical path.)
+
+Also in Phase 1, independent of the invalidation spine: **background revalidation** —
+`staleTime`, refetch-on-focus, refetch-on-reconnect, optional `refetchInterval` (all
+opt-in; focus/online/timer events behind an injected seam). Splittable if P1 grows heavy.
 
 No server, no transport. Delivers a clean, drift-resistant client cache today.
 
@@ -90,11 +106,16 @@ No server, no transport. Delivers a clean, drift-resistant client cache today.
 Depends on `L-ee9433f8` (transport) + `L-dd3cdca1` (browser fan-out) + Phase 1.
 
 A server mutation `publish`es an invalidation **topic** to `@lesto/pubsub` (now
-`LISTEN/NOTIFY`-backed); the fan-out delivers it to subscribed browsers; the client
-maps topic → cache key(s) and invalidates → `useQuery` refetches through its
-authorized endpoint. `useQuery` is now **live across tabs, clients, and processes,
-with zero websocket code in the app** — Convex/Supabase-Realtime parity, on plain
-Postgres, with explicit topics. **Edge tier:** Durable Objects are the fan-out point
+`LISTEN/NOTIFY`-backed) **on commit, not before** — Postgres `NOTIFY` is delivered at
+commit by default; the in-process/SQLite path must sequence the publish *after* the write
+commits, so a subscriber's refetch cannot race the writer and re-cache pre-write state.
+The fan-out delivers the topic to subscribed browsers — **authorizing each subscription
+against the connection's principal** (see *Secure*) — and the client's topic → keys
+registry (Phase 1) invalidates the matching keys → `useQuery` refetches through its
+authorized read. `useQuery` is now **live across tabs, clients, and processes, with zero
+websocket code in the app** — Convex/Supabase-Realtime parity, on plain Postgres, with
+explicit topics. A client receiving its own mutation's topic just refetches once more
+(idempotent; no special-casing). **Edge tier:** Durable Objects are the fan-out point
 (owned by the transport/realtime ADRs).
 
 ### Phase 3 — durable client cache (IndexedDB), parallel track
@@ -131,17 +152,20 @@ invalidation graph + DB-sourced live queries, built all at once. Two reviews
 re-derived:
 
 1. **No "free" SSR-hydrate bridge** — `defineDataSource` keys by bare source name
-   (`hydrate.tsx:112`), `@lesto/client` by `"METHOD /path"` (`client.ts:52`); unifying
-   them is net-new glue (now Phase 1's explicit work, not a freebie).
+   (`hydrate.tsx:112`), `@lesto/client` by `"METHOD /path"` (`client.ts:52`), `useQuery`
+   by an arbitrary key (`data-client.ts:57`): three keyspaces. Unifying them is net-new
+   glue — so this revision does **not**; the **topic** is the addressable unit (Phase 1)
+   and SSR seeding stays an optional, local concern.
 2. **No multi-loader-per-branch model to "just generalize"** — `renderPageResponse`
    runs exactly one `def.load`; layouts compose as components, not loaders.
 3. **Schema-inferred invalidation is unsound as a foundation** — an in-process graph
    is blind to out-of-band writes (queue raw SQL, `db.raw`, triggers, other processes)
    and needs a `.tables` accessor `@lesto/db` lacks. The sound "what changed" source is
    the DB itself (`LISTEN/NOTIFY`) — which is exactly what this revision builds on.
-4. **Per-cell `authorize()` was unspecified** against the real middleware/CSRF model —
-   a security hole. The explicit-topic spine removes the question: the push carries no
-   data, so refetch re-authorizes through the existing path.
+4. **Per-cell `authorize()` was unspecified** against the real middleware model — a
+   security hole. The explicit-topic spine narrows it to two stated obligations: the push
+   carries no data (refetch re-authorizes the read), and **subscriptions are authorized**
+   against the principal so topics don't leak change-timing (see *Secure*).
 
 Why explicit-first wins: it is sound and secure by construction, it reuses the cache
 and transport we already ship, and it lands in small useful increments — upholding
@@ -158,3 +182,23 @@ slow iteration while still reaching live-query parity at Phase 2.
   the 2026-06-20 reviews enforced.
 - The rejected inference-first design is preserved, with its falsified claims
   corrected, so it is neither lost nor prematurely built.
+
+## Review — 2026-06-22 (red-team)
+
+A hostile pass over this rewrite, grounded in the seams, changed four things and left the
+spine intact:
+
+- **Subscription authz (security).** "No data on the wire" is necessary, not sufficient —
+  an unauthorized subscriber to `org:123:posts` learns change-*timing*. The fan-out now
+  must authorize subscriptions against the principal; tenant topics are principal-scoped.
+- **Dropped the cross-layer key unification.** It was the net-new glue the prior reviews
+  rejected, smuggled back as "small," and unnecessary: a query/mutation declares its
+  *topics* (keys stay arbitrary), which is all Phase 2 needs to target a push. Phase 1
+  shrinks back to honestly "mostly already in the code."
+- **Publish on commit.** Stated the ordering so a refetch can't race the writer and
+  re-cache pre-write state.
+- **CSRF precision.** A refetch is a GET; `can()` re-authorizes it — CSRF does not apply.
+
+No materially simpler whole-cloth alternative survived: the spine (explicit invalidation,
+topic push, authorized refetch) is already the minimal sound shape, and inference stays
+rejected.
