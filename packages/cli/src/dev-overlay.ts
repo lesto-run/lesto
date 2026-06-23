@@ -42,7 +42,7 @@ const hint=document.createElement("div");sty(hint,"margin-top:18px;color:#8a8a93
 hint.textContent="Fix and save — this clears on the next successful build. Press Esc to dismiss.";
 card.appendChild(hint);o.appendChild(card);(document.body||document.documentElement).appendChild(o);};
 addEventListener("keydown",(e)=>{if(e.key==="Escape")clear();});
-const swap=()=>{const l=document.querySelector('link[rel="stylesheet"][href^="/styles.css"]');if(l)l.setAttribute("href","/styles.css?t="+Date.now());};
+const swap=()=>{const l=document.querySelector('link[rel="stylesheet"][href="/styles.css"],link[rel="stylesheet"][href^="/styles.css?"]');if(l)l.setAttribute("href","/styles.css?t="+Date.now());};
 const c=()=>{const s=new WebSocket("ws://"+location.hostname+":${port}");
 s.onmessage=(e)=>{let d;try{d=JSON.parse(e.data);}catch{location.reload();return;}if(d&&d.type==="error")show(d);else if(d&&d.type==="style-update")swap();else location.reload();};
 s.onclose=()=>setTimeout(c,1000);};c();

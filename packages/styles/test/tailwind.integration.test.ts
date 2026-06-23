@@ -43,6 +43,14 @@ beforeAll(async () => {
     `export const Page = () => <main className="text-center font-display p-4">hi</main>;\n`,
     "utf8",
   );
+  // A file OUTSIDE scanRoot (in the project root, not under app/) using a class that
+  // appears NOWHERE else — proof the scan is SCOPED to scanRoot, not resolveBase: its
+  // `uppercase` utility must not leak into the output.
+  await writeFile(
+    join(projectDir, "outside.tsx"),
+    `export const Stray = () => <div className="uppercase">x</div>;\n`,
+    "utf8",
+  );
   await writeFile(
     entry,
     `@import "tailwindcss";\n@theme {\n  --font-display: "Satoshi", sans-serif;\n}\n`,
@@ -72,6 +80,11 @@ describe("tailwindStyleCompiler (real @tailwindcss/* engine)", () => {
     expect(css).toContain("--font-display");
     // Minified in production — no double newlines.
     expect(css).not.toContain("\n\n");
+
+    // The scan is SCOPED to scanRoot (app/), not resolveBase (the project root): the
+    // `uppercase` class in `<projectDir>/outside.tsx` is neither compiled nor watched.
+    expect(css).not.toContain("uppercase");
+    expect(result.dependencies).not.toContain(join(projectDir, "outside.tsx"));
 
     // The watch set names the @import'ed CSS, the scanned source, and the entry.
     expect(result.dependencies.length).toBeGreaterThan(0);
