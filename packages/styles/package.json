@@ -1,0 +1,39 @@
+{
+  "name": "@lesto/styles",
+  "version": "0.1.1",
+  "license": "MIT",
+  "description": "Lesto's CSS build pipeline (ADR 0037) — a pure buildStyles() over an injected StyleCompiler seam, so an app compiles Tailwind v4 to a served stylesheet with no bespoke build script. The real @tailwindcss engine wiring lives in a separate coverage-excluded edge.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "dependencies": {
+    "@lesto/errors": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/styles"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
+  }
+}

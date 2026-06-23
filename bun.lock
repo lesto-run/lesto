@@ -796,6 +796,13 @@
         "@lesto/errors": "workspace:*",
       },
     },
+    "packages/styles": {
+      "name": "@lesto/styles",
+      "version": "0.1.1",
+      "dependencies": {
+        "@lesto/errors": "workspace:*",
+      },
+    },
     "packages/ui": {
       "name": "@lesto/ui",
       "version": "0.1.1",
@@ -1228,6 +1235,8 @@
     "@lesto/sites": ["@lesto/sites@workspace:packages/sites"],
 
     "@lesto/storage": ["@lesto/storage@workspace:packages/storage"],
+
+    "@lesto/styles": ["@lesto/styles@workspace:packages/styles"],
 
     "@lesto/ui": ["@lesto/ui@workspace:packages/ui"],
 
