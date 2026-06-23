@@ -162,12 +162,30 @@ a:hover { text-decoration: underline; }
   border-left-color: var(--accent);
 }
 
-/* The copy button is the framework's own ICON button: rehype-pretty-code's
-   transformerCopyButton injects the copy/check SVGs, the 24px sizing, the
-   positioning, and the hover-reveal. We add nothing else on purpose — styling it
-   ourselves only fought that icon, and an earlier injected "Copy" label rendered
-   ON TOP of the icon. The one gap in the injected style is touch: there is no
-   hover to reveal it, so show it on coarse pointers. */
+/* The copy button: rehype-pretty-code's transformerCopyButton injects the
+   copy/check SVG icons, the 24px sizing, the absolute positioning, and the
+   hover-reveal — but no button SURFACE, so on its own it shows the browser's
+   default chrome. We give it a frosted surface (the injected backdrop-blur sits
+   under this) and a hover state. We override ONLY color/background/border — the
+   icon and size stay the framework's — and add NO label, so nothing overlaps the
+   icon. The icon lives as a background-image on the inner span; size + center it. */
+.docs-article .rehype-pretty-copy {
+  color: #c9d1d9;
+  background: rgba(110, 118, 129, 0.22);
+  border: 1px solid rgba(240, 246, 252, 0.14);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.docs-article .rehype-pretty-copy:hover {
+  background: rgba(110, 118, 129, 0.4);
+  border-color: rgba(240, 246, 252, 0.26);
+}
+.docs-article .rehype-pretty-copy span {
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 0.95rem;
+}
+/* Touch has no hover to reveal it. */
 @media (hover: none) {
   .docs-article .rehype-pretty-copy { opacity: 1; }
 }
