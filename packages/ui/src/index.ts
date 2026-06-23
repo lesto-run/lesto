@@ -66,9 +66,10 @@ export type { DataSource, DataSourceScope, IslandBind } from "./data";
 export { createSourceResolver, IslandDataContext, IslandDataProvider } from "./data-resolve";
 export type { SourceResolver } from "./data-resolve";
 
-// Client data hooks (the minimal Weft step, ADR 0027): `useQuery`/`useMutation`
-// over one shared cache giving in-flight dedupe + explicit-by-key invalidation —
-// NOT yet the schema-inferred invalidation Weft will add. Decoupled from
+// Client data hooks (the first step of the reactive data layer, ADR 0027):
+// `useQuery`/`useMutation` over one shared cache giving in-flight dedupe +
+// explicit-by-key invalidation — NOT yet the schema-inferred invalidation a
+// later phase may add. Decoupled from
 // `@lesto/client` (the caller passes the fetcher/mutationFn thunk), so they stay
 // in this isomorphic core; the fetch is kicked from an effect, so SSR never fetches.
 export {

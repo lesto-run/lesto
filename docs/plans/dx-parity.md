@@ -96,11 +96,11 @@ Increment 1 deliberately delivers only autocomplete (a typo still compiles, and 
 
 ---
 
-## Workstream 7 — Client data ergonomics (the minimal Weft step) · **major**
+## Workstream 7 — Client data ergonomics (the first reactive-data step) · **major**
 
-**Why (verified):** no client cache/dedupe/revalidate/invalidate. Islands hand-roll `useState`+`useEffect` (`examples/estate/app/islands/live-listing.tsx:40-65`); mutations expose no pending/optimistic/invalidate (`save-note.tsx` even re-fetches CSRF + rebuilds the client per submit). Weft (ADR 0027) is design-accepted but unbuilt. *(Lesto does dedupe within a single page load via the data primer, and `defineDataSource`/`IslandDataProvider` removes the SSR fetch waterfall — credit where due.)*
+**Why (verified):** no client cache/dedupe/revalidate/invalidate. Islands hand-roll `useState`+`useEffect` (`examples/estate/app/islands/live-listing.tsx:40-65`); mutations expose no pending/optimistic/invalidate (`save-note.tsx` even re-fetches CSRF + rebuilds the client per submit). The reactive data layer (ADR 0027) is design-accepted but unbuilt. *(Lesto does dedupe within a single page load via the data primer, and `defineDataSource`/`IslandDataProvider` removes the SSR fetch waterfall — credit where due.)*
 
-- Ship a thin `useQuery`/`useResource` over `createApi` keys (in-flight dedupe + explicit-invalidation cache) and a `useMutation` over `createMutationClient` exposing `{ mutate, isPending, error, data }` with optimistic/`onSuccess(invalidate)`. Let the mutation client fetch/cache CSRF internally so forms stop re-implementing the round-trip. This is the smallest credible step toward Weft.
+- Ship a thin `useQuery`/`useResource` over `createApi` keys (in-flight dedupe + explicit-invalidation cache) and a `useMutation` over `createMutationClient` exposing `{ mutate, isPending, error, data }` with optimistic/`onSuccess(invalidate)`. Let the mutation client fetch/cache CSRF internally so forms stop re-implementing the round-trip. This is the smallest credible step of the reactive data layer.
 
 ---
 

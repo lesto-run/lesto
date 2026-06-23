@@ -9,7 +9,7 @@
  * shared {@link LabApi} contract, so the `:id` param and the `Listing` response
  * are both typed with no codegen. The server paints the fallback until it mounts.
  *
- * The fetch goes through `@lesto/ui`'s `useQuery` (the minimal Weft step, ADR 0027)
+ * The fetch goes through `@lesto/ui`'s `useQuery` (the first reactive-data step, ADR 0027)
  * instead of a hand-rolled `useState`+`useEffect`+active-flag: the loading/error
  * machine is the hook's, the request is keyed (`["listing", id]`) so a second island
  * on the same id dedupes to one request, and the value is cached until invalidated.

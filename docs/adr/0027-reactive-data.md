@@ -1,157 +1,160 @@
-# ADR 0027 — Page module shape (default-export component); reactive data layer deferred
+# ADR 0027 — Reactive data, incrementally: a LISTEN/NOTIFY-fed explicit-invalidation cache
 
-- **Status:** Accepted, partially implemented. Shipped: the page-module adapter
-  (`7f293d3`), the Node `app/routes/` auto-scan (`84e1411`), and the edge route
-  codegen `generateRouteManifest` (`2922b7e`, which deleted estate's hand-wired
-  map). Remaining: wiring the codegen into the bare `lesto build`/scaffold for
-  non-estate apps, and the whole reactive data layer. Revised twice 2026-06-20 —
-  a 3-lens red-team then a Chief-Architect fresh-eyes pass — each of which cut
-  scope. See *Reviews* below.
-- **Date:** 2026-06-20
-- **Deciders:** tech lead + owner
-- **Builds on / touches:** ADR 0023 (file-based routing — `applyFileRoutes`, `LoadedRouteModule`), ADR 0012 (`defineDataSource` / island inline data), ADR 0022 (typed mutations / `@lesto/client`).
+- **Status:** Accepted (revised 2026-06-22). **Supersedes** this ADR's prior
+  "reactive data layer deferred" stance. Reactivity now has a demanded requirement
+  — competitive parity with Convex / Supabase Realtime, and agent-native live views
+  — so we build it, but **incrementally**: a thin layer over primitives we already
+  ship, in phases that each land and pay off on their own. We do **not** ship a
+  finished reactive runtime on day one, and we do **not** make schema-inference the
+  foundation (the 2026-06-20 reviews were right that it is unsound — see *Rejected*).
+- **Date:** 2026-06-20 (page-shape adapter) · revised 2026-06-22 (reactivity plan).
+- **Deciders:** tech lead + owner.
+- **Builds on / touches:** ADR 0022 (typed mutations / `@lesto/client`), ADR 0012
+  (`defineDataSource` / island inline data), ADR 0023 (file routing). Concrete seams:
+  `@lesto/ui` data-client `useQuery`/`useMutation`/`QueryClient.invalidate`
+  (`packages/ui/src/data-client.ts:158`), `@lesto/client` `"METHOD /path"` keys
+  (`packages/client/src/client.ts:52`), `@lesto/pubsub` `publish`/`subscribe`
+  (`packages/pubsub/src/pubsub.ts`). Depends on board tasks `L-ee9433f8` (PG
+  `LISTEN/NOTIFY` transport) and `L-dd3cdca1` (realtime browser fan-out).
 
 ## Context
 
-The concrete, demanded requirement: a file-based page must today
-`export default` a **`PageDef` object** —
-`const page: PageDef<…> = { component, load, metadata }; export default page`
-(`examples/estate/app/routes/lab/gallery/page.tsx:25-50`). Next.js and Remix
-instead `export default` the **component** and use named exports for the loader and
-metadata. That extra ceremony is the rough edge to remove.
+The earlier revision of this ADR deferred reactivity because it had "no demanded
+requirement" and its interactive cases were "already served by shipping primitives."
+The Convex/Supabase competitive review (2026-06-22) is the use-case trigger that
+deferral named: reactive queries — *change the data, the UI updates, with no
+websocket plumbing in app code* — are the single most-loved capability we lack.
 
-Separately, this work explored a **novel reactive data layer** ("Weft" — declarative
-cells, an inferred cache-invalidation graph, live queries) to attack the
-data-fetching waterfall/cache-invalidation pain other frameworks still have. That
-exploration is recorded under *Deferred* below — but it is **not** what we build
-now: two reviews found it has **no demanded requirement** behind it, that the
-interactive cases are already covered by shipping primitives, and that its headline
-mechanisms are either unsound or not "free." Building a new client-cache runtime now
-would violate slow-iteration and add a large untested surface for no current user.
+We are not starting from zero. We already have:
 
-## Decision — build now: the page-module shape adapter (only this)
+- **A client query cache with explicit invalidation.** `@lesto/ui`'s `useQuery` /
+  `useMutation` cache results by key; `QueryClient.invalidate(key)` drops a key and
+  refetches every mounted reader (`data-client.ts:158`). Its own doc-comment already
+  reserves the boundary: *"Explicit-only — a mutation names the keys it dirties;
+  there is no inferred invalidation."* That is the design, not an accident — this
+  ADR formalizes it.
+- **A contract-typed fetch keyed by `"METHOD /path"`** (`@lesto/client`).
+- **A channel pub/sub API** (`@lesto/pubsub`) whose in-process hub is about to gain
+  a Postgres `LISTEN/NOTIFY` transport under the same `publish`/`subscribe` surface
+  (`L-ee9433f8`), with a browser fan-out over WebSocket/SSE (`L-dd3cdca1`).
 
-Add a `toPageDef` adapter in `packages/web/src/file-routes.ts` (where
-`LoadedRouteModule` already lives, `file-routes.ts:46-48`) that lets a route module
-take **either** shape, and wire it into `pageDefFor` where the default export is
-read today (`file-routes.ts:118-121`):
+So "reactivity" is not a new runtime — it is **invalidation, delivered first locally,
+then over the wire**, on the cache and transport we already have.
 
-```ts
-// New idiomatic shape (the requested ergonomics):
-export default function Posts({ posts }: PageProps<typeof load>) { … }  // the component
-export const load = (c) => ({ posts: … });        // optional named loader
-export const metadata = ({ posts }) => ({ … });   // optional named metadata
-export const params = z.object({ … });            // optional (query-string Zod, unchanged)
-// `static` / `cache` may also be named exports.
+## Decision
 
-// Existing shape still works, untouched:
-const page: PageDef = { component, load, metadata };
-export default page;
-```
+Reactivity is **explicit invalidation**. The spine, held across every phase:
 
-- **Discriminator (pinned, so an implementer can't mis-fold):** if `module.default`
-  is **callable** (a function component), assemble a `PageDef` from it plus the named
-  exports (`{ component: module.default, load: module.load, metadata: module.metadata,
-  params: module.params, static: module.static, cache: module.cache }`). If
-  `module.default` is a **non-callable object** (it has a `component` field), use it
-  as the `PageDef` verbatim — the existing path.
-- **Props inference comes for free:** `PageProps<typeof load>` already infers the
-  component's props from the loader's return (`render-page.tsx:140-142`); the
-  named-export form is what makes it ergonomic to reach (no `PageDef<Path, Props>`
-  restatement).
-- **Back-compat by construction:** every existing `default: PageDef` page and
-  estate's hand-wired demo (`examples/estate/src/file-routes-demo.ts`) keep working —
-  the object branch is the current behavior unchanged.
-- **Scope:** ~40 LOC + tests in `@lesto/web`; no new runtime, no new dependency, no
-  new security surface, no change to rendering (`renderPageResponse` still receives a
-  `PageDef`). Proof: convert estate's two gallery pages to the named-export form and
-  update `file-routes-demo.ts`'s module wrapper. Testable to 100% as a pure function
-  over a module shape, like the existing `pageDefFor`/`compileFileRoutes` tests.
+> **The writer declares what it dirties. A change publishes an invalidation
+> *topic* — a key/channel string — never row data. A subscriber maps the topic to
+> its cache key(s), drops them, and refetches through the normal authorized
+> endpoint.**
 
-That is the whole committed change. It directly removes the boilerplate the
-requirement named, and nothing else.
+This one rule buys all three properties the rejected design failed on:
 
-## Deferred — not scheduled; each blocked on a real use-case
+- **Sound** — invalidation comes from the writer declaring intent, not from an
+  in-process graph inferring it (which is blind to out-of-band writes; see *Rejected*).
+- **Secure** — the push carries no data, so it needs no per-row authz. The data only
+  ever returns through the existing authorized fetch (`.use(can())` / CSRF unchanged),
+  which re-authorizes on every refetch. Topics are coarse and non-secret
+  (e.g. `posts`, `org:123:posts`).
+- **Cheap** — a `NOTIFY` payload (~8 KB cap) carries a topic, never a record.
 
-These were explored and are written down so we don't re-derive them — but none has
-a demanded requirement, so none is built until a real app feels the pain.
+Each phase is independently shippable and useful.
 
-- **Route-model binding (`bind(model)`).** Pitched as `params = { post: bind(posts) }`
-  coercing a path segment to a column type, fetching the row, 404-on-miss, typed as
-  `Post`. This is **net-new**, not "the same field richer": today `params` is a
-  `ZodType` over the **query string** (`render-page.tsx:71,297-302`), separate from
-  path params (`c.param("id")`). estate does the param→fetch→404 in two lines today
-  (`[id]/page.tsx:28-32`). Revisit only if that pattern proliferates enough to fund a
-  new typed coercion+fetch+404 mechanism.
-- **File routing on Node AND the edge — SHIPPED.** Node (`84e1411`): `lesto dev` /
-  `serve` / `build` / `routes` scan `app/routes/` and `import()` each page/layout via
-  `loadFileRoutes` + `applyFileRoutes` — zero wiring, no artifact. Edge (`2922b7e`):
-  `generateRouteManifest` emits a static-import manifest the Worker bundler sees (a
-  Worker has no `node:fs`) — the Astro/TanStack/React-Router approach. estate now
-  uses the generated manifest (its hand-wired `file-routes-demo.ts` is deleted), and
-  its worker live-renders the file routes on the edge (proven in the bundle).
-  **Remaining (thin):** wire `generateRouteManifest` into the bare `lesto build` +
-  the scaffold's `worker.ts`, so a CLI app gets the edge manifest without a custom
-  `build.ts` (estate has one; the scaffold doesn't yet).
-- **Layout `load`.** Layouts are children-only today (`render-page.tsx:44`). Adding
-  per-layout data overlaps with the deferred data layer; revisit alongside it.
-- **The reactive data layer ("Weft").** The explored design: declarative *cells*
-  (a component + a co-located query); parallel composable loaders; a client cache;
-  optional schema-inferred invalidation; DB-sourced live queries over the (unbuilt)
-  PG `LISTEN/NOTIFY`. **Why deferred, not built:**
-  - **No demanded requirement, and the cases that exist are already served** —
-    co-located 0-RTT data by `defineDataSource` + the render-time resolver
-    (`data-resolve.tsx:79-102`, `define-island.tsx:119-121`); typed
-    mutations/optimistic by `@lesto/runtime` mutations + `@lesto/client`; typed reads
-    keyed by contract path by `createApi` (`client.ts:49-58`). A new reactive store is
-    additive machinery on top of three primitives that already cover today's needs.
-  - **Corrected claims from the reviews (do not repeat them if this is revived):**
-    (1) there is **no "free" SSR-hydrate bridge** — `defineDataSource` keys by bare
-    source name (`hydrate.tsx:112-118`, `/__lesto/data/<name>`) while `@lesto/client`
-    keys by `"METHOD /path"` (`client.ts:52-58`); bridging them is net-new glue, not
-    free. (2) There is **no multi-loader-per-branch execution model** to "just
-    generalize" — `renderPageResponse` runs exactly one `def.load`
-    (`render-page.tsx:309`) and layouts compose as components, not loaders. (3)
-    Schema-inferred invalidation is **unsound as a foundation** (out-of-band writes via
-    the queue's raw SQL `queue.ts:383`, `db.raw` `queries.ts:714`, triggers, or another
-    process are invisible to an in-process graph) and needs a `tables` accessor
-    `@lesto/db` does not expose (`queries.ts:105-111,361-380`); the sound source of
-    "what changed" is the DB itself (`LISTEN/NOTIFY`). (4) Per-cell `authorize()` is
-    unspecified against the real middleware/CSRF model (`lesto.ts:142-157,289-308`) and
-    is a security-sensitive hole to design properly **before**, not during, any build.
-  - **If revived:** the smallest credible first step is an *explicit*-invalidation
-    cache (author declares what a mutation invalidates — the TanStack/SWR/Remix model)
-    layered on the existing `@lesto/client` keys, with live fed from `LISTEN/NOTIFY`
-    into that explicit map. Inference, if ever, is a later opt-in gated on a throwaway
-    coverage spike over a real app's queries — never the foundation.
+### Phase 0 — page-module shape (shipped, historical)
+
+The prior scope of this ADR number: the `toPageDef` adapter letting a route module
+`export default` the **component** with named `load`/`metadata` exports
+(`7f293d3`), plus Node `app/routes/` auto-scan (`84e1411`) and edge route codegen
+(`2922b7e`). Done; retained here only for provenance. Thin remainder: wire
+`generateRouteManifest` into the bare `lesto build` + scaffold `worker.ts`.
+
+### Phase 1 — explicit invalidation, client-local (mostly built; formalize)
+
+Make the existing behavior a first-class, documented contract:
+
+- A mutation **declares the keys it invalidates** — `invalidates: [...keys]` (or a
+  helper on `useMutation`) — instead of callers hand-calling `invalidate`. The
+  TanStack/SWR/Remix model.
+- **One key contract.** Unify the `useQuery` key with `@lesto/client`'s
+  `"METHOD /path"` so a single string names a query everywhere. Today the
+  SSR-hydrate path (`defineDataSource`) keys by bare source name while `@lesto/client`
+  keys by `"METHOD /path"` — bridging them is the real (small) work here, and the
+  prerequisite that makes Phase 2 push events addressable.
+
+No server, no transport. Delivers a clean, drift-resistant client cache today.
+
+### Phase 2 — server-pushed invalidation over LISTEN/NOTIFY (the live moment)
+
+Depends on `L-ee9433f8` (transport) + `L-dd3cdca1` (browser fan-out) + Phase 1.
+
+A server mutation `publish`es an invalidation **topic** to `@lesto/pubsub` (now
+`LISTEN/NOTIFY`-backed); the fan-out delivers it to subscribed browsers; the client
+maps topic → cache key(s) and invalidates → `useQuery` refetches through its
+authorized endpoint. `useQuery` is now **live across tabs, clients, and processes,
+with zero websocket code in the app** — Convex/Supabase-Realtime parity, on plain
+Postgres, with explicit topics. **Edge tier:** Durable Objects are the fan-out point
+(owned by the transport/realtime ADRs).
+
+### Phase 3 — durable client cache (IndexedDB), parallel track
+
+Persist the `QueryClient` cache to IndexedDB so cold loads render last-known data
+instantly and reads survive reload/offline. On reconnect, reconcile: drain missed
+invalidation topics (or honor a coarse "refetch — you were offline" signal) so a
+disconnect can't leave the UI stale. Independent of Phases 1–2 (a local enhancement)
+but also what makes Phase 2 robust across disconnects. Tracked separately.
+
+### Phase 4 — inference, opt-in and spike-gated (NOT now)
+
+Only after Phases 1–2 are real and a live app's query set is measured: an **opt-in**
+where a query declares its table deps and a mutation auto-derives topics from the
+rows it wrote (needs a `.tables` accessor `@lesto/db` does not yet expose). Out-of-band
+writes (queue raw SQL `queue.ts:383`, `db.raw` `queries.ts:714`, triggers, other
+processes) stay the writer's explicit responsibility — or, the sound long-term source,
+a DB trigger that `NOTIFY`s. Inference is **never** the foundation; explicit topics
+always work underneath it.
 
 ## Non-goals
 
-- No GraphQL; no RSC `use client` transform.
-- No new client-side data runtime, cache, or cell system until a real use-case demands
-  it. `defineDataSource` remains the data primitive.
+- No schema-inferred invalidation as the foundation. No GraphQL, no RSC `use client`
+  transform, no bespoke "cell"/component-query runtime.
+- **The push channel never carries row data** — only invalidation topics. Data flows
+  exclusively through the authorized fetch.
 - No change to the secure-by-default kernel, CSRF, or boundary validation.
 
-## Reviews
+## Rejected alternative — the original inference-first design
 
-- **Red-team (3-lens, grounded).** Found the original draft staked its foundation on
-  schema-inferred invalidation, which is unimplementable without unnamed `@lesto/db`
-  APIs, unsound for out-of-band writes, renderer-infeasible (no preact streaming
-  Suspense), and missing per-cell authz. Cut: inference demoted from foundation to a
-  spike-gated opt-in; live made DB-sourced.
-- **Chief-Architect fresh-eyes pass.** Found that even the revised multi-tier plan was
-  a ~40-line change in disguise: the interactive tiers are redundant with shipping
-  primitives and unbacked by any requirement, and Tier 2's "free hydrate bridge" claim
-  was false against the code. Cut: everything but the `toPageDef` adapter is deferred,
-  not scheduled.
+The 2026-06-20 draft staked its foundation on declarative *cells* + a **schema-inferred**
+invalidation graph + DB-sourced live queries, built all at once. Two reviews
+(3-lens red-team + Chief-Architect) cut it. Keep these corrections so they are not
+re-derived:
+
+1. **No "free" SSR-hydrate bridge** — `defineDataSource` keys by bare source name
+   (`hydrate.tsx:112`), `@lesto/client` by `"METHOD /path"` (`client.ts:52`); unifying
+   them is net-new glue (now Phase 1's explicit work, not a freebie).
+2. **No multi-loader-per-branch model to "just generalize"** — `renderPageResponse`
+   runs exactly one `def.load`; layouts compose as components, not loaders.
+3. **Schema-inferred invalidation is unsound as a foundation** — an in-process graph
+   is blind to out-of-band writes (queue raw SQL, `db.raw`, triggers, other processes)
+   and needs a `.tables` accessor `@lesto/db` lacks. The sound "what changed" source is
+   the DB itself (`LISTEN/NOTIFY`) — which is exactly what this revision builds on.
+4. **Per-cell `authorize()` was unspecified** against the real middleware/CSRF model —
+   a security hole. The explicit-topic spine removes the question: the push carries no
+   data, so refetch re-authorizes through the existing path.
+
+Why explicit-first wins: it is sound and secure by construction, it reuses the cache
+and transport we already ship, and it lands in small useful increments — upholding
+slow iteration while still reaching live-query parity at Phase 2.
 
 ## Consequences
 
-- We ship the exact ergonomics fix the requirement named — `export default` a
-  component, named `load`/`metadata` — as a small, additive, fully back-compatible,
-  100%-testable adapter, with no new runtime and no new attack surface.
-- The reactive-data-layer thinking is preserved as a recorded, honest, deferred
-  direction (with its falsified claims corrected), so it is neither lost nor
-  prematurely built.
-- Slow iteration upheld: one small change lands; the large, speculative surface waits
-  for a real use-case to justify it.
+- Reactivity arrives in shippable steps, not a big-bang runtime. Phase 1 is mostly
+  already in the code; Phase 2 reaches Convex/Supabase-Realtime parity on Postgres;
+  Phase 3 adds offline/instant cold-load; Phase 4 keeps inference available later
+  without ever being load-bearing.
+- The competitive gap (live queries) closes on terrain Convex can't follow onto —
+  real SQL, a full framework, an edge tier — without abandoning the discipline that
+  the 2026-06-20 reviews enforced.
+- The rejected inference-first design is preserved, with its falsified claims
+  corrected, so it is neither lost nor prematurely built.

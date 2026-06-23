@@ -1,8 +1,8 @@
 /**
  * Client data hooks — `useQuery` / `useMutation` over a tiny shared cache.
  *
- * The smallest credible step toward Weft (ADR 0027), and no more: islands today
- * hand-roll `useState`+`useEffect` to fetch (a re-implemented loading/error
+ * The smallest credible step of the reactive data layer (ADR 0027), and no more:
+ * islands today hand-roll `useState`+`useEffect` to fetch (a re-implemented loading/error
  * machine per island, no sharing) and re-build a mutation client per submit. These
  * hooks replace that with one cache that gives:
  *
@@ -14,14 +14,14 @@
  *   - **`useMutation`** — `{ mutate, isPending, error, data }` with optimistic
  *     update + rollback and an `onSuccess` hook that typically invalidates keys.
  *
- * What this is NOT (so the doc never over-promises): it is NOT full Weft. There is
- * no schema-INFERRED invalidation (a mutation does not know which queries it
- * dirties — you invalidate by key, explicitly), no normalized `(table, pk)` store,
- * no automatic background revalidation, and no cache EVICTION — a key's snapshot +
+ * What this is NOT (so the doc never over-promises): it is NOT the full reactive
+ * layer. There is no schema-INFERRED invalidation (a mutation does not know which
+ * queries it dirties — you invalidate by key, explicitly), no normalized `(table, pk)`
+ * store, no automatic background revalidation, and no cache EVICTION — a key's snapshot +
  * last-fetcher live for the page's lifetime (bounded by the distinct keys an app
  * queries; fine for a per-session SPA, revisit if a long-lived app accumulates many).
- * Those are the ADR 0027 bet; this is the thin hook layer an app adopts now and Weft
- * can later back.
+ * Those are the later ADR 0027 phases (server-pushed invalidation over LISTEN/NOTIFY,
+ * durable storage); this is the thin hook layer an app adopts now and they build on.
  *
  * Decoupled by design: the hooks never import `@lesto/client`. The caller passes a
  * `fetcher` / `mutationFn` thunk (typically closing over a `createApi` /
@@ -157,7 +157,7 @@ export class QueryClient {
   /**
    * Invalidate `key`: drop its cached value and refetch with its last fetcher, so
    * every mounted `useQuery(key)` re-renders fresh. Explicit-only — a mutation
-   * names the keys it dirties; there is no inferred invalidation (that is Weft). A
+   * names the keys it dirties; there is no inferred invalidation (a later ADR 0027 phase). A
    * key never fetched (no remembered fetcher) is simply reset to idle.
    */
   invalidate(key: string): Promise<unknown> | undefined {
