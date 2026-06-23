@@ -87,7 +87,7 @@ JSONC bytes — but a hand-written one works just as well.
 
 ## Build and ship
 
-```bash
+```package-install
 npm run build        # prerender static zones (and bundle islands, if any)
 npx wrangler login   # once
 npx wrangler deploy  # upload the Worker + static assets in one step
@@ -108,7 +108,7 @@ lesto deploy --cloudflare --health-url https://<your-worker-url>/readyz
 Anything sensitive — a session signing secret, API keys — is a Wrangler secret,
 never committed:
 
-```bash
+```package-install
 npx wrangler secret put SESSION_SECRET
 ```
 

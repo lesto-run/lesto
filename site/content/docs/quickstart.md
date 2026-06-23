@@ -178,7 +178,7 @@ column types, relations, and JOINs are covered in **[Data](/batteries/data)**.
 
 ## Build and deploy
 
-```bash
+```package-install
 npm run build       # prerender static zones + bundle the island client into out/
 npx wrangler deploy # ship the Worker and its assets to Cloudflare
 ```
