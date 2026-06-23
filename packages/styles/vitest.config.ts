@@ -10,9 +10,11 @@ export default defineConfig({
       provider: "v8",
       include: ["src/**/*.ts"],
       // The barrel (re-export only, no logic) is excluded exactly as the sibling
-      // packages exclude their `index.ts`. TW2's real `@tailwindcss/*` engine edge
-      // (the `bin`-equivalent) joins this list when it lands.
-      exclude: ["src/index.ts"],
+      // packages exclude their `index.ts`. `tailwind.ts` — the real `@tailwindcss/*`
+      // engine + `node:fs` edge — is the `bin`-equivalent (excluded exactly as
+      // `@lesto/assets`'s `bun.ts` is); its behavior is verified by the integration
+      // test that compiles a real fixture, not by branch coverage.
+      exclude: ["src/index.ts", "src/tailwind.ts"],
       thresholds: {
         lines: 100,
         functions: 100,

@@ -19,7 +19,15 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@lesto/errors": "workspace:*"
+    "@lesto/errors": "workspace:*",
+    "@tailwindcss/node": "4.3.1",
+    "@tailwindcss/oxide": "4.3.1"
+  },
+  "peerDependencies": {
+    "tailwindcss": "^4.3.0"
+  },
+  "devDependencies": {
+    "tailwindcss": "4.3.1"
   },
   "publishConfig": {
     "access": "public"
