@@ -199,7 +199,7 @@ const badRequest = (): AnyLestoResponse => ({
 export const DEFAULT_RENDER_DEADLINE_MS = 10_000;
 
 /** Build the `<head>` children: the always-on charset + viewport, then the page's own tags. */
-function headElements(metadata: PageMetadata): ReactElement[] {
+function headElements(metadata: PageMetadata, clientStyles: string | undefined): ReactElement[] {
   const entries: MetadataEntry[] = [
     { kind: "meta", spec: { charSet: "utf-8" } },
     { kind: "meta", spec: { name: "viewport", content: "width=device-width, initial-scale=1" } },
@@ -212,6 +212,14 @@ function headElements(metadata: PageMetadata): ReactElement[] {
   }
 
   for (const spec of metadata.meta ?? []) entries.push({ kind: "meta", spec });
+
+  // The framework stylesheet (ADR 0037) leads the page's own links so it is the cascade
+  // BASE a page-specific stylesheet overrides. Routed through `renderMetadata` (not
+  // appended raw like the client module) so an identical `metadata.links` `/styles.css`
+  // collapses to one (deduped by rel+href), while other stylesheets coexist.
+  if (clientStyles !== undefined) {
+    entries.push({ kind: "link", spec: { rel: "stylesheet", href: clientStyles } });
+  }
 
   for (const spec of metadata.links ?? []) entries.push({ kind: "link", spec });
 
@@ -241,6 +249,14 @@ export interface RenderPageOptions {
 
   /** The app's client module src — emitted as a head `<script type="module">` (ADR 0011). */
   clientModule?: string;
+
+  /**
+   * The app's framework stylesheet src — emitted as a head `<link rel="stylesheet">`
+   * (ADR 0037), the matched sibling of {@link clientModule}. Routed through
+   * `renderMetadata`, so it dedupes against an identical `metadata.links` entry while
+   * coexisting with a page's other stylesheets.
+   */
+  clientStyles?: string;
 
   /**
    * Whether the app declares any `private`-scoped data source (ADR 0010 §3a).
@@ -358,7 +374,10 @@ export async function renderPageResponse(
       ? page
       : createElement(IslandDataProvider, { resolver: options.resolver }, page);
 
-  const head = headElements(def.metadata === undefined ? {} : def.metadata(loaded));
+  const head = headElements(
+    def.metadata === undefined ? {} : def.metadata(loaded),
+    options.clientStyles,
+  );
 
   // The browser→server trace join (ARCHITECTURE.md §7): stamp the request span's
   // `traceparent` into the head so the browser RUM runtime adopts its trace id and

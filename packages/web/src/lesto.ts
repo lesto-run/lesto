@@ -193,6 +193,13 @@ export class Lesto {
   // no client runtime, no tag.
   private clientModuleSrc: string | undefined;
 
+  // The app's framework stylesheet src (`.styles("/styles.css")`), emitted as the
+  // head `<link rel="stylesheet">` on every page when set (ADR 0037) — the matched
+  // sibling of `clientModuleSrc`. A STABLE constant (the CSS build's `/styles.css`,
+  // written beside `/client.js`), baked into the worker JS so it resolves the same
+  // on node and the edge. Undefined = no framework stylesheet, no tag.
+  private clientStylesSrc: string | undefined;
+
   // The server-render dialect (ADR 0008's matched pair). Undefined = React
   // streaming (the default). Set to a Preact `ServerRenderer` (via `.renderer()`)
   // when the client bundle is built under the `preact/compat` alias, so an
@@ -349,6 +356,26 @@ export class Lesto {
    */
   client(src: string): this {
     this.clientModuleSrc = src;
+
+    return this;
+  }
+
+  /**
+   * Declare the app's framework stylesheet, emitted as a `<link rel="stylesheet"
+   * href=…>` in every page's `<head>` (ADR 0037) — the matched sibling of
+   * {@link client}.
+   *
+   * Like `.client(...)`, it is CONFIG-DRIVEN, not page-gated: a styled app ships the
+   * stylesheet on every page (a streamed `<head>` flushes before the body renders, so
+   * a tag cannot be retroactively gated on what a page used). The value is a STABLE
+   * constant — the CSS build's `/styles.css`, written beside `/client.js` — baked into
+   * the worker JS exactly like the client module, so it resolves identically on node
+   * and the Cloudflare edge (which has no request-time asset manifest). A page's own
+   * `metadata.links` stays for additional stylesheets; an identical `/styles.css`
+   * there collapses to one (deduped by rel+href).
+   */
+  styles(src: string): this {
+    this.clientStylesSrc = src;
 
     return this;
   }
@@ -613,6 +640,7 @@ export class Lesto {
       const options: RenderPageOptions = {
         privateData,
         ...(this.clientModuleSrc === undefined ? {} : { clientModule: this.clientModuleSrc }),
+        ...(this.clientStylesSrc === undefined ? {} : { clientStyles: this.clientStylesSrc }),
         ...(this.serverRenderer === undefined ? {} : { serverRenderer: this.serverRenderer }),
         ...(this.renderDeadlineMs === undefined ? {} : { renderDeadlineMs: this.renderDeadlineMs }),
       };

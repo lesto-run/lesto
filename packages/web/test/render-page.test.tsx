@@ -309,6 +309,56 @@ describe("lesto().client() — head module tag", () => {
   });
 });
 
+describe("lesto().styles() — head stylesheet link (ADR 0037)", () => {
+  it("emits the framework stylesheet <link> in the head of every page when set", async () => {
+    const app = lesto()
+      .styles("/styles.css")
+      .page("/", { component: () => createElement("main", null, "home") });
+
+    const html = await drain(await app.handle("GET", "/"));
+
+    expect(html).toContain('<link rel="stylesheet" href="/styles.css"');
+    // It is in the head, before the body content.
+    expect(html.indexOf("/styles.css")).toBeLessThan(html.indexOf("<body>"));
+  });
+
+  it("emits no stylesheet link when .styles() was never called", async () => {
+    const app = lesto().page("/", { component: () => createElement("main", null, "home") });
+
+    expect(await drain(await app.handle("GET", "/"))).not.toContain('rel="stylesheet"');
+  });
+
+  it("dedupes an identical metadata.links /styles.css down to exactly one framework link", async () => {
+    const app = lesto()
+      .styles("/styles.css")
+      .page("/", {
+        component: () => createElement("main", null, "home"),
+        metadata: () => ({ links: [{ rel: "stylesheet", href: "/styles.css" }] }),
+      });
+
+    const html = await drain(await app.handle("GET", "/"));
+
+    // Declared twice (framework + metadata), rendered once (deduped by rel+href).
+    expect(html.split('href="/styles.css"').length - 1).toBe(1);
+  });
+
+  it("coexists with a page's other stylesheets (different href)", async () => {
+    const app = lesto()
+      .styles("/styles.css")
+      .page("/", {
+        component: () => createElement("main", null, "home"),
+        metadata: () => ({ links: [{ rel: "stylesheet", href: "/fonts.css" }] }),
+      });
+
+    const html = await drain(await app.handle("GET", "/"));
+
+    // The framework sheet leads (cascade base) and the page's font sheet follows.
+    expect(html).toContain('href="/styles.css"');
+    expect(html).toContain('href="/fonts.css"');
+    expect(html.indexOf("/styles.css")).toBeLessThan(html.indexOf("/fonts.css"));
+  });
+});
+
 // A shared source + a canonical ssr:true island that renders its count inline.
 const reactions = defineDataSource<{ likes: number }>("reactions", { scope: "shared" });
 
