@@ -1,6 +1,6 @@
 {
   "name": "@lesto/errors",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "Lesto's shared error foundation — the LestoError base every package error extends, plus a Result type.",
   "type": "module",

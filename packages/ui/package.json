@@ -1,6 +1,6 @@
 {
   "name": "@lesto/ui",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "Lesto's AI-native UI rendering engine core — validate a JSON UI tree and render it to React against a vetted component registry.",
   "type": "module",

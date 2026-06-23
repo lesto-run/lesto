@@ -1,6 +1,6 @@
 {
   "name": "@lesto/csrf",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "Lesto's stateless double-submit CSRF tokens — HMAC-signed nonces, no server-side state.",
   "type": "module",

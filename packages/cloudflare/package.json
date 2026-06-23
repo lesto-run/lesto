@@ -1,6 +1,6 @@
 {
   "name": "@lesto/cloudflare",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "Lesto on Cloudflare Workers — adapt the pure dispatcher to a Worker fetch handler, serve static assets, and generate wrangler config from a deploy plan.",
   "type": "module",

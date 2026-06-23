@@ -1,6 +1,6 @@
 {
   "name": "@lesto/content-store",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "SUPPORTED (v1 content seam) — Lesto content on the SQL substrate — persists @lesto/content-core entries to the database and hydrates the runtime from it.",
   "type": "module",

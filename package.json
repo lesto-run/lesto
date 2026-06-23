@@ -19,7 +19,8 @@
     "test:pack-boot": "node scripts/pack-and-boot.mjs",
     "changeset": "changeset",
     "version": "changeset version",
-    "release": "changeset publish"
+    "release": "node scripts/publish.mjs",
+    "release:changeset": "changeset publish"
   },
   "license": "MIT",
   "dependencies": {

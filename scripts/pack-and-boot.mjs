@@ -31,14 +31,15 @@ function run(cmd, args, opts = {}) {
   execFileSync(cmd, args, { stdio: "inherit", ...opts });
 }
 
-// 1. Every public package: the de-privatized `0.1.0` closure plus `create-lesto`.
+// 1. Every public package: the de-privatized closure plus `create-lesto`. Version-agnostic
+//    (each package's own version is the source of truth) so a coordinated bump needs no edit
+//    here — must match the same filter `scripts/publish.mjs` uses, or the proof and the
+//    publish would cover different sets.
 const publicDirs = readdirSync(PACKAGES).filter((name) => {
   const pj = join(PACKAGES, name, "package.json");
   if (!existsSync(pj)) return false;
 
-  const meta = JSON.parse(readFileSync(pj, "utf8"));
-
-  return meta.private !== true && meta.version === "0.1.0";
+  return JSON.parse(readFileSync(pj, "utf8")).private !== true;
 });
 
 console.log(`[pack-and-boot] packing ${publicDirs.length} public packages…`);

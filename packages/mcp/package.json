@@ -1,6 +1,6 @@
 {
   "name": "@lesto/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "Lesto's MCP control plane — exposes Lesto operations to AI agents as MCP tools over @modelcontextprotocol/sdk.",
   "type": "module",

@@ -82,10 +82,20 @@ Commit the generated `.changeset/*.md` alongside the code.
    only, so bump `LESTO_DEP_RANGE` in lockstep when the surface's minor moves.
 3. **Version.** `bun run version` consumes the queued changesets, bumping versions and
    writing changelogs. Commit the result.
-4. **Arm + publish.** Set the `RELEASE_ENABLED` repository variable to `true` and add
-   the `NPM_TOKEN` secret. `bun run release` (`changeset publish`) publishes the bumped
-   packages to npm with provenance — in CI this is the `changesets/action` step in
-   `.github/workflows/release.yml`, which stays skipped until `RELEASE_ENABLED` is set.
+4. **Arm + publish.** Export `NPM_TOKEN` (locally) or add the `NPM_TOKEN` secret +
+   `RELEASE_ENABLED=true` repo variable (CI). `bun run release` runs
+   **`node scripts/publish.mjs`**, which `bun pm pack`s each public package and hands the
+   tarball to `npm publish`.
+
+   > ⚠️ **Do NOT publish with `changeset publish` / plain `npm publish`.** Internal deps are
+   > declared `"workspace:*"`, and **npm does not rewrite the `workspace:` protocol** — it
+   > uploads the literal `workspace:*`, so every package fails to install with
+   > `EUNSUPPORTEDPROTOCOL`. (This bit the first `0.1.0` publish — 2026-06-23 — which had to be
+   > superseded by `0.1.1`.) `bun pm pack` rewrites `workspace:*` → the exact version, so
+   > `scripts/publish.mjs` publishes the SAME tarball `scripts/pack-and-boot.mjs` validates.
+   > The legacy `changeset publish` is kept as `bun run release:changeset` for reference only —
+   > don't use it to upload. The CI `changesets/action` path (`release.yml`) will therefore not
+   > produce changeset-style GitHub releases; revisit if/when CI publishing is adopted.
 
 ## Verifying the published shape without a registry
 
