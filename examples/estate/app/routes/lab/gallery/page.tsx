@@ -44,6 +44,12 @@ const page: PageDef<"/lab/gallery", PageProps<typeof load>> = {
       <p className="copy">
         <Link href="/lab/gallery/more">Richer route segments → catch-all, optional, group</Link>
       </p>
+
+      <p className="copy">
+        <Link href="/lab/gallery/secret?key=jade">
+          The pocket listing → guarded by a co-located <code>middleware.ts</code>
+        </Link>
+      </p>
     </div>
   ),
 

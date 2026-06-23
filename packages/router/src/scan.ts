@@ -9,10 +9,10 @@
  * a fake in-memory reader with no filesystem. The bin wires a real reader
  * (`fs.readdir(..., { withFileTypes: true })`); a test hands a literal tree.
  *
- * Only the convention's recognized files (`page`, `layout`, and the `loading` /
- * `error` / `not-found` boundaries — any recognized extension) are surfaced; every
- * other file is ignored, so a co-located component, test, or stylesheet under the
- * convention dir is never mistaken for a route. The file's EXTENSION is irrelevant
+ * Only the convention's recognized files (`page`, `layout`, `middleware`, and the
+ * `loading` / `error` / `not-found` boundaries — any recognized extension) are
+ * surfaced; every other file is ignored, so a co-located component, test, or
+ * stylesheet under the convention dir is never mistaken for a route. The EXTENSION is irrelevant
  * to the convention — `page.tsx`, `page.ts`, `page.jsx`, `page.js` all name the
  * directory's page — because the impure loader (the bin) is what resolves a
  * concrete module path; the scan only needs the base name to classify the kind.
@@ -37,11 +37,12 @@ export type DirReader = (path: string) => Promise<ReadonlyArray<DirEntry>>;
 
 /**
  * The base name of a route file is `<kind>.<ext>` — `page.tsx`, `layout.ts`,
- * `not-found.tsx`. We split on the FIRST dot so a name like `page.test.tsx`
- * classifies as `page` only if its base is exactly `page`; a co-located
- * `page.helper.tsx` has base `page` too, so we additionally require the name to be
- * a recognized kind (`page`/`layout`/`loading`/`error`/`not-found`) followed by a
- * SINGLE extension. (A boundary's hyphen is part of its base — `not-found` is one
+ * `middleware.ts`, `not-found.tsx`. We split on the FIRST dot so a name like
+ * `page.test.tsx` classifies as `page` only if its base is exactly `page`; a
+ * co-located `page.helper.tsx` has base `page` too, so we additionally require the
+ * name to be a recognized kind (`page`/`layout`/`middleware`/`loading`/`error`/
+ * `not-found`) followed by a SINGLE extension. (A boundary's hyphen is part of its
+ * base — `not-found` is one
  * base name, not a dot-delimited compound.) This pulls the base name (everything
  * before the first dot) and the remainder so the classifier can demand a single
  * extension segment.

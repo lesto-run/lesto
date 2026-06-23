@@ -72,11 +72,22 @@ export function fromRequestMiddleware(middleware: Middleware): Handler {
   return (c, next) => middleware(c.req, next);
 }
 
-/** A page's own payload: its definition plus the layouts wrapping it, outermost first. */
+/**
+ * A page's own payload: its definition, the layouts wrapping it (outermost first),
+ * and the file-route middleware guarding it (outermost first).
+ *
+ * `guards` are run BEFORE the page's loader, in order: a guard may answer outright
+ * (a redirect / 403 — short-circuiting the load) or fall through (return nothing),
+ * having optionally augmented the shared {@link Context} with `c.set(...)` for the
+ * loader to read. Empty for a hand-written `.page()` and for a file-routed page with
+ * no `middleware.ts` above it — identical behavior to a guard-free page.
+ */
 interface PagePayload {
   def: PageDef;
 
   layouts: readonly Layout[];
+
+  guards: readonly Handler[];
 }
 
 /**
@@ -256,8 +267,22 @@ export class Lesto {
     return this.add("DELETE", path, handlers as readonly Handler[]);
   }
 
-  /** Register a page at `path`, wrapped in the layouts declared so far. */
-  page<P extends string, Loaded, Search = unknown>(path: P, def: PageDef<P, Loaded, Search>): this {
+  /**
+   * Register a page at `path`, wrapped in the layouts declared so far.
+   *
+   * `guards` are file-route middleware that run BEFORE the page's loader, in the
+   * order given (outermost first): each may answer outright (a redirect / 403 —
+   * short-circuiting the load) or fall through, having optionally augmented the
+   * request {@link Context} via `c.set(...)` for the loader to read. They are an
+   * internal seam the file-route applier uses to compose a page's `middleware.ts`
+   * chain; a hand-written `.page()` passes none and behaves exactly as before. The
+   * guards run inside the page route, AFTER any app-level `.use()` middleware.
+   */
+  page<P extends string, Loaded, Search = unknown>(
+    path: P,
+    def: PageDef<P, Loaded, Search>,
+    guards: readonly Handler<P>[] = [],
+  ): this {
     // The public def is typed over its loaded shape (so the component's props are
     // inferred) AND its validated-search shape (so `load`'s second argument is
     // typed); storage is over the erased `PageDef`. A React component is
@@ -266,6 +291,7 @@ export class Lesto {
     return this.add("GET", path, {
       def: def as unknown as PageDef,
       layouts: [...this.layoutChain],
+      guards: guards as readonly Handler[],
     });
   }
 
@@ -462,7 +488,14 @@ export class Lesto {
         pattern: prefix + route.pattern,
         middleware: [...this.useChain, ...route.middleware],
         own: isPage(route.own)
-          ? { def: route.own.def, layouts: [...this.layoutChain, ...route.own.layouts] }
+          ? {
+              def: route.own.def,
+              layouts: [...this.layoutChain, ...route.own.layouts],
+              // A page's file-route guards ride along unchanged when its sub-app is
+              // mounted — they run inside the page route, after the (now-merged)
+              // app-level middleware, exactly as they did in the sub-app.
+              guards: route.own.guards,
+            }
           : route.own,
       });
     }
@@ -617,9 +650,17 @@ export class Lesto {
     };
   }
 
-  /** The full handler chain a route runs: its middleware, then its own work (or page render). */
+  /**
+   * The full handler chain a route runs: its app-level middleware, then — for a page
+   * — its file-route guards (which run before the loader and may short-circuit), then
+   * its own work (the page render, or an API route's inline handlers).
+   *
+   * A page's guards precede its terminal so a redirect-before-load guard answers
+   * before any render begins; a guard that falls through leaves its `c.set(...)` in
+   * the context the loader then reads. An API route carries no guards.
+   */
   private chainOf(route: CollectedRoute): readonly Handler[] {
-    const own = isPage(route.own) ? [this.pageHandler(route.own)] : route.own;
+    const own = isPage(route.own) ? [...route.own.guards, this.pageHandler(route.own)] : route.own;
 
     return [...route.middleware, ...own];
   }

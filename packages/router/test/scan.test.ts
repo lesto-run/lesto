@@ -94,16 +94,18 @@ describe("scanRoutes", () => {
     expect(keys(await scanRoutes(reader, "app"))).toEqual(["page:"]);
   });
 
-  it("recognizes the loading / error / not-found boundary files at a directory", async () => {
+  it("recognizes the middleware / loading / error / not-found files at a directory", async () => {
     const reader = fakeReader({
-      app: ["page.tsx", "loading.tsx", "error.tsx", "not-found.tsx"],
+      app: ["page.tsx", "middleware.ts", "loading.tsx", "error.tsx", "not-found.tsx"],
     });
 
     // The hyphenated `not-found` base classifies despite its dash — the split is on
-    // the FIRST dot, so its base is `not-found`, not a dot-delimited compound.
+    // the FIRST dot, so its base is `not-found`, not a dot-delimited compound. A
+    // `middleware.ts` is recognized the same way every other kind is.
     expect(keys(await scanRoutes(reader, "app"))).toEqual([
       "error:",
       "loading:",
+      "middleware:",
       "not-found:",
       "page:",
     ]);

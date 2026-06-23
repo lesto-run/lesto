@@ -31,10 +31,36 @@ import { Component, createElement, Suspense } from "react";
 import { compileFileRoutes, dirKey } from "@lesto/router";
 import type { DiscoveredFile, FileRoute } from "@lesto/router";
 
+import type { Context } from "./handler-context";
 import { WebError } from "./errors";
-import type { Lesto } from "./lesto";
+import type { Handler, Lesto } from "./lesto";
 import { wrap } from "./render-page";
 import type { Layout, PageDef } from "./render-page";
+import type { AnyLestoResponse } from "./types";
+
+type MaybePromise<T> = T | Promise<T>;
+
+/**
+ * A file-route `middleware.ts`'s default export — a directory-scoped GUARD that runs
+ * BEFORE the nearest page's loader, down the layout chain (every `middleware` above
+ * the page, outermost first), the impure twin of the `@lesto/router` convention.
+ *
+ * Given the request {@link Context}, a guard either:
+ *   - **redirects / short-circuits before load** — return a response (`c.redirect(...)`,
+ *     a 403) and the page's loader and render never run; or
+ *   - **augments the loader context** — call `c.set(key, value)` (e.g. the resolved
+ *     user a `middleware.ts` looked up) and return nothing, so the chain falls
+ *     through to the next guard and ultimately the page's `load`, which reads the
+ *     value with `c.get(key)`.
+ *
+ * It is exactly a `Handler` minus the explicit `next` — returning a response answers,
+ * returning nothing falls through — so the applier registers it verbatim ahead of the
+ * page terminal in the route's chain (where `next` auto-advances). Generic in the
+ * page's `Path` so `c.param(...)` is typed to the pattern the guard sits above.
+ */
+export type RouteMiddleware<Path extends string = string> = (
+  c: Context<Path>,
+) => MaybePromise<AnyLestoResponse | void>;
 
 /**
  * A route module's default when it is a component rather than a {@link PageDef}
@@ -56,18 +82,21 @@ type RouteComponent = ComponentType<never>;
  *     `cache` exports; or
  *   - **object form**: `export default` a whole {@link PageDef}.
  * A `layout` module's `default` is the {@link Layout} that wraps the pages at or
- * below it. A `loading` / `error` / `not-found` boundary module's `default` is the
- * component the convention renders in the page's place — the Suspense fallback, the
- * error view, or the per-route 404 — each a plain component (no props it relies on).
- * The loader (the bin / the generated route map) builds this map by importing each
- * file the scan found; a test hands a literal map, so the applier needs no fs.
+ * below it. A `middleware` module's `default` is a {@link RouteMiddleware} guard run
+ * before the page's loader (redirect / context augmentation). A `loading` / `error`
+ * / `not-found` boundary module's `default` is the component the convention renders
+ * in the page's place — the Suspense fallback, the error view, or the per-route 404
+ * — each a plain component (no props it relies on). The loader (the bin / the
+ * generated route map) builds this map by importing each file the scan found; a test
+ * hands a literal map, so the applier needs no fs.
  */
 export interface LoadedRouteModule {
   /**
-   * A {@link PageDef} object, a page component (named-export form), a layout, or a
-   * boundary component (`loading`/`error`/`not-found`).
+   * A {@link PageDef} object, a page component (named-export form), a layout, a
+   * {@link RouteMiddleware} guard, or a boundary component
+   * (`loading`/`error`/`not-found`).
    */
-  default: PageDef | RouteComponent;
+  default: PageDef | RouteComponent | RouteMiddleware;
 
   /**
    * The page component's cross-cutting concerns, as named exports — read only when
@@ -134,10 +163,43 @@ export function applyFileRoutes(
   for (const route of compiled) {
     if (route.kind !== "page") continue;
 
-    app.page(route.pattern, pageDefFor(route, modules));
+    // The page's middleware chain (every `middleware.ts` above it, outermost first)
+    // runs BEFORE its loader — passed as the page's guards so a redirect short-circuits
+    // before render and a `c.set(...)` reaches the loader. Empty when none sits above.
+    app.page(route.pattern, pageDefFor(route, modules), guardChainFor(route, modules));
   }
 
   return app;
+}
+
+/**
+ * The file-route middleware guards that run before a page's loader, outermost first
+ * — resolved from the descriptor's `middlewareDepth` (the depths whose directories
+ * hold a `middleware` file, shallowest first, i.e. outermost first).
+ *
+ * Each depth names a directory on the path from the root to the page (the page's own
+ * segments truncated to that depth); its module's `default` is the {@link RouteMiddleware}
+ * guard. A guard is a `Handler` minus the explicit `next`: returning a response
+ * short-circuits the chain (a redirect before load), returning nothing falls through
+ * to the next guard and ultimately the page (where `next` auto-advances in `runChain`).
+ * The adapter discards the guard's `next` argument, so a guard that augments context
+ * with `c.set(...)` and returns nothing advances correctly.
+ */
+function guardChainFor(route: FileRoute, modules: LoadedFileRoutes): readonly Handler[] {
+  return route.middlewareDepth.map((depth) => {
+    const middlewareModule = moduleAt(
+      "middleware",
+      route.segments.slice(0, depth),
+      modules,
+      route.pattern,
+    );
+
+    const guard = middlewareModule.default as RouteMiddleware;
+
+    // Adapt the guard to a `Handler`: drop `next` (the chain auto-advances on a void
+    // return), so a fall-through guard runs the page and a responding guard answers.
+    return (c) => guard(c);
+  });
 }
 
 /**

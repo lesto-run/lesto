@@ -5,6 +5,7 @@ import {
   compileFileRoutes,
   type DiscoveredFile,
   type FileRoute,
+  NEAREST_BOUNDARY_KINDS,
   ROUTE_FILE_NAMES,
   RouteTable,
   RouterError,
@@ -25,6 +26,9 @@ const errorFile = (...segments: string[]): DiscoveredFile => ({ kind: "error", s
 /** A not-found boundary file at the given raw segments. */
 const notFound = (...segments: string[]): DiscoveredFile => ({ kind: "not-found", segments });
 
+/** A middleware file at the given raw segments. */
+const middleware = (...segments: string[]): DiscoveredFile => ({ kind: "middleware", segments });
+
 /** The page descriptors compileFileRoutes returned, in its resolution order. */
 const pagesOf = (files: readonly DiscoveredFile[]): readonly FileRoute[] =>
   compileFileRoutes(files).filter((route) => route.kind === "page");
@@ -38,6 +42,7 @@ describe("ROUTE_FILE_NAMES", () => {
     expect(ROUTE_FILE_NAMES).toEqual({
       page: "page",
       layout: "layout",
+      middleware: "middleware",
       loading: "loading",
       error: "error",
       "not-found": "not-found",
@@ -220,9 +225,85 @@ describe("compileFileRoutes — layout nesting", () => {
   });
 });
 
+describe("compileFileRoutes — middleware nesting", () => {
+  it("gives a page the depths of every middleware above it, shallowest first", () => {
+    // A middleware composes the WHOLE ancestor chain like a layout — every guard
+    // directory on the path to the page, outermost first — not a single nearest.
+    const files = [middleware(), middleware("admin"), page("admin", "users")];
+
+    const route = pagesOf(files)[0];
+
+    // Root guard at depth 0, section guard at depth 1; the page's own directory
+    // (depth 2) holds no middleware, so only 0 and 1.
+    expect(route?.middlewareDepth).toEqual([0, 1]);
+  });
+
+  it("gives a page with no middleware above it an empty middlewareDepth", () => {
+    expect(pagesOf([page("about")])[0]?.middlewareDepth).toEqual([]);
+  });
+
+  it("records a middleware co-located in the page's own directory", () => {
+    const route = pagesOf([middleware("dash"), page("dash")])[0];
+
+    expect(route?.middlewareDepth).toEqual([1]);
+  });
+
+  it("does not guard a page under a sibling branch's middleware", () => {
+    const files = [middleware("admin"), page("admin", "users"), page("public")];
+
+    const compiled = compileFileRoutes(files);
+
+    const adminUsers = compiled.find((route) => route.pattern === "/admin/users");
+    const publicPage = compiled.find((route) => route.pattern === "/public");
+
+    expect(adminUsers?.middlewareDepth).toEqual([1]);
+    expect(publicPage?.middlewareDepth).toEqual([]);
+  });
+
+  it("resolves layouts AND middleware independently for the same page", () => {
+    // A layout at the root and a middleware at a section: each chain is computed from
+    // its own kind's directories, so the two never bleed into one another.
+    const files = [layout(), middleware("admin"), page("admin", "users")];
+
+    const route = pagesOf(files)[0];
+
+    expect(route?.layoutDepth).toEqual([0]);
+    expect(route?.middlewareDepth).toEqual([1]);
+  });
+
+  it("nests a group's middleware by its directory like any other", () => {
+    const route = pagesOf([middleware("(marketing)"), page("(marketing)", "about")])[0];
+
+    expect(route?.middlewareDepth).toEqual([1]);
+  });
+
+  it("keeps a middleware out of the page set — it registers no URL", () => {
+    const pages = pagesOf([page("admin"), middleware("admin")]);
+
+    expect(pages.map((route) => route.pattern)).toEqual(["/admin"]);
+  });
+
+  it("returns a middleware descriptor (no route of its own, empty depths) among the non-pages", () => {
+    const compiled = compileFileRoutes([page("admin"), middleware("admin")]);
+
+    const guard = compiled.find((route) => route.kind === "middleware");
+
+    expect(guard?.pattern).toBe("/admin");
+    expect(guard?.layoutDepth).toEqual([]);
+    expect(guard?.middlewareDepth).toEqual([]);
+    expect(guard?.boundaries).toEqual({});
+  });
+});
+
 describe("BOUNDARY_KINDS", () => {
   it("lists the directory-scoped kinds (every kind but page)", () => {
-    expect([...BOUNDARY_KINDS]).toEqual(["layout", "loading", "error", "not-found"]);
+    expect([...BOUNDARY_KINDS]).toEqual(["layout", "middleware", "loading", "error", "not-found"]);
+  });
+});
+
+describe("NEAREST_BOUNDARY_KINDS", () => {
+  it("lists only the single-nearest boundary kinds (not the chained layout/middleware)", () => {
+    expect([...NEAREST_BOUNDARY_KINDS]).toEqual(["loading", "error", "not-found"]);
   });
 });
 
@@ -280,6 +361,7 @@ describe("compileFileRoutes — boundary resolution (loading / error / not-found
     // A boundary descriptor carries empty depths — it is never the thing wrapped.
     for (const boundary of boundaries) {
       expect(boundary.layoutDepth).toEqual([]);
+      expect(boundary.middlewareDepth).toEqual([]);
       expect(boundary.boundaries).toEqual({});
     }
   });

@@ -15,7 +15,7 @@ import {
   notFound,
   routeKey,
 } from "../src/file-routes";
-import type { LoadedFileRoutes, LoadedRouteModule } from "../src/file-routes";
+import type { LoadedFileRoutes, LoadedRouteModule, RouteMiddleware } from "../src/file-routes";
 import { lesto } from "../src/lesto";
 import type { PageDef } from "../src/render-page";
 import { WebError } from "../src/errors";
@@ -42,6 +42,10 @@ async function drain(response: LestoResponse): Promise<string> {
 
 const page = (...segments: string[]): DiscoveredFile => ({ kind: "page", segments });
 const layout = (...segments: string[]): DiscoveredFile => ({ kind: "layout", segments });
+const middlewareFile = (...segments: string[]): DiscoveredFile => ({
+  kind: "middleware",
+  segments,
+});
 const loadingFile = (...segments: string[]): DiscoveredFile => ({ kind: "loading", segments });
 const errorFile = (...segments: string[]): DiscoveredFile => ({ kind: "error", segments });
 const notFoundFile = (...segments: string[]): DiscoveredFile => ({ kind: "not-found", segments });
@@ -55,6 +59,9 @@ const Leaf = (): ReactNode => createElement("span", null, "leaf");
 const Listings = (): ReactNode => createElement("span", null, "listings");
 const Marker = (): ReactNode => createElement("span", null, "x");
 const Listing = ({ id }: { id: string }): ReactNode => createElement("h1", null, `listing ${id}`);
+// Renders a `user` prop a middleware guard augmented into the loader context.
+const Greeting = ({ user }: { user?: string }): ReactNode =>
+  createElement("h1", null, `hi ${user}`);
 // Renders its catch-all param so a test can see the `string[]` arrived intact.
 const CatchAll = ({ slug }: { slug: readonly string[] }): ReactNode =>
   createElement("h1", null, `n=${slug.length} v=${slug.join("-")}`);
@@ -79,6 +86,11 @@ const Missing = (): ReactNode => {
 /** A boundary module: a plain default-export component (the named-export idiom). */
 function boundaryModule(component: (props: never) => ReactNode): LoadedRouteModule {
   return { default: component as LoadedRouteModule["default"] };
+}
+
+/** A middleware module: a plain default-export guard (the named-export idiom). */
+function middlewareModule(guard: RouteMiddleware): LoadedRouteModule {
+  return { default: guard as LoadedRouteModule["default"] };
 }
 
 /** A page module whose component renders a marker, plus any extra PageDef fields. */
@@ -740,6 +752,196 @@ describe("applyFileRoutes — loading / error / not-found boundaries", () => {
       expect((error as WebError).code).toBe("WEB_FILE_ROUTE_MODULE_MISSING");
       expect((error as WebError).details).toMatchObject({ kind: "loading", pattern: "/" });
     }
+  });
+});
+
+describe("applyFileRoutes — middleware (per-route guards)", () => {
+  it("runs a middleware guard before the page and falls through to render", async () => {
+    // A guard that returns nothing falls through to the page loader/render — the
+    // page output proves the chain ran the guard then the page.
+    const home = page();
+    const mw = middlewareFile();
+    const order: string[] = [];
+
+    const app = applyFileRoutes(
+      lesto(),
+      [home, mw],
+      moduleMap(
+        [home, pageModule(Home, { load: () => (order.push("load"), {}) })],
+        [
+          mw,
+          middlewareModule(() => {
+            order.push("guard");
+          }),
+        ],
+      ),
+    );
+
+    const html = await drain(await app.handle("GET", "/"));
+
+    expect(order).toEqual(["guard", "load"]); // guard before load
+    expect(html).toContain("<h1>home</h1>");
+  });
+
+  it("short-circuits the load when the guard redirects (redirect before load)", async () => {
+    let loaded = false;
+    const admin = page("admin");
+    const mw = middlewareFile("admin");
+
+    const app = applyFileRoutes(
+      lesto(),
+      [admin, mw],
+      moduleMap(
+        [admin, pageModule(Home, { load: () => ((loaded = true), {}) })],
+        [mw, middlewareModule((c) => c.redirect("/login"))],
+      ),
+    );
+
+    const response = await app.handle("GET", "/admin");
+
+    expect(response.status).toBe(302);
+    expect(response.headers.Location).toBe("/login");
+    expect(loaded).toBe(false); // the loader never ran
+  });
+
+  it("augments the loader context: a value the guard set reaches load via c.get", async () => {
+    const me = page("me");
+    const mw = middlewareFile("me");
+
+    const app = applyFileRoutes(
+      lesto(),
+      [me, mw],
+      moduleMap(
+        [
+          me,
+          pageModule(Greeting as PageDef["component"], { load: (c) => ({ user: c.get("user") }) }),
+        ],
+        [
+          mw,
+          middlewareModule((c) => {
+            c.set("user", "ada");
+          }),
+        ],
+      ),
+    );
+
+    const html = await drain(await app.handle("GET", "/me"));
+
+    expect(html).toContain("<h1>hi ada</h1>");
+  });
+
+  it("composes the middleware chain down the layout tree, outermost (root) first", async () => {
+    // A root middleware and a section middleware both guard a page under the section;
+    // the root's runs before the section's (outermost-first, the same order layouts nest).
+    const order: string[] = [];
+    const rootMw = middlewareFile();
+    const sectionMw = middlewareFile("admin");
+    const adminUsers = page("admin", "users");
+
+    const app = applyFileRoutes(
+      lesto(),
+      [rootMw, sectionMw, adminUsers],
+      moduleMap(
+        [
+          rootMw,
+          middlewareModule(() => {
+            order.push("root");
+          }),
+        ],
+        [
+          sectionMw,
+          middlewareModule(() => {
+            order.push("section");
+          }),
+        ],
+        [adminUsers, pageModule(Leaf)],
+      ),
+    );
+
+    await drain(await app.handle("GET", "/admin/users"));
+
+    expect(order).toEqual(["root", "section"]);
+  });
+
+  it("does not guard a page outside the middleware's branch", async () => {
+    let ran = false;
+    const adminMw = middlewareFile("admin");
+    const adminPage = page("admin");
+    const publicPage = page("public");
+
+    const app = applyFileRoutes(
+      lesto(),
+      [adminMw, adminPage, publicPage],
+      moduleMap(
+        [
+          adminMw,
+          middlewareModule(() => {
+            ran = true;
+          }),
+        ],
+        [adminPage, pageModule(Home)],
+        [publicPage, pageModule(About)],
+      ),
+    );
+
+    // The /public page is outside the /admin branch — its guard must not run.
+    await drain(await app.handle("GET", "/public"));
+    expect(ran).toBe(false);
+
+    // The /admin page IS in the branch — its guard runs.
+    await drain(await app.handle("GET", "/admin"));
+    expect(ran).toBe(true);
+  });
+
+  it("registers a page with no middleware without any guard (unchanged behavior)", async () => {
+    const about = page("about");
+    const app = applyFileRoutes(lesto(), [about], moduleMap([about, pageModule(About)]));
+
+    const html = await drain(await app.handle("GET", "/about"));
+
+    expect(html).toContain("<h1>about</h1>");
+  });
+
+  it("registers no route for a middleware descriptor of its own", () => {
+    const home = page();
+    const mw = middlewareFile();
+
+    const app = applyFileRoutes(
+      lesto(),
+      [home, mw],
+      moduleMap([home, pageModule(Home)], [mw, middlewareModule(() => undefined)]),
+    );
+
+    expect(userGetRoutes(app)).toEqual([{ method: "GET", pattern: "/" }]);
+  });
+
+  it("refuses a page whose middleware module was not loaded, by code", () => {
+    // The page module is present, but the middleware the descriptor references is not.
+    const home = page();
+    const mw = middlewareFile();
+
+    try {
+      applyFileRoutes(lesto(), [home, mw], moduleMap([home, pageModule(Home)]));
+
+      expect.unreachable("a missing middleware module should throw");
+    } catch (error) {
+      expect((error as WebError).code).toBe("WEB_FILE_ROUTE_MODULE_MISSING");
+      expect((error as WebError).details).toMatchObject({ kind: "middleware", pattern: "/" });
+    }
+  });
+});
+
+describe("generateRouteManifest — middleware", () => {
+  it("emits a middleware file into the edge manifest, keyed and imported by kind", () => {
+    const src = generateRouteManifest([page("admin"), middlewareFile("admin")], {
+      importBase: "../app/routes",
+    });
+
+    expect(src).toContain('from "../app/routes/admin/middleware"');
+    expect(src).toContain('"middleware:admin"');
+    expect(src).toContain('{ kind: "middleware", segments: ["admin"] }');
+    // A middleware registers no URL — only the page contributes a RoutePath member.
+    expect(src).toContain('| "/admin"');
   });
 });
 

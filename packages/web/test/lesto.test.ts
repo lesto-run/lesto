@@ -59,6 +59,14 @@ const sloppy: Handler = async (_c, next) => {
   await next();
 };
 
+// Module-scope page guards for the `.page()` guard suite — each captures nothing.
+const redirectGuard: Handler = (c) => c.redirect("/login");
+const augmentUser: Handler = (c) => {
+  c.set("user", "ada");
+};
+const blockGuard: Handler = (c) => c.text("blocked", 403);
+const homePage = { component: () => createElement("main", null, "home") };
+
 describe("lesto verbs + dispatch", () => {
   it("dispatches each verb to its handler", async () => {
     const app = lesto()
@@ -320,6 +328,113 @@ describe("lesto.route composition", () => {
     await app.handle("GET", "/api/x");
 
     expect(order).toEqual(["parent", "child"]);
+  });
+});
+
+describe("lesto().page() — file-route guards (per-route middleware)", () => {
+  it("runs a guard BEFORE the page loader and falls through to render when it returns nothing", async () => {
+    const order: string[] = [];
+    const pass: Handler = () => {
+      order.push("guard");
+    };
+    const app = lesto().page(
+      "/",
+      { load: () => (order.push("load"), {}), component: homePage.component },
+      [pass],
+    );
+
+    const html = await drainBody((await app.handle("GET", "/")).body);
+
+    // The guard ran, then the loader, then the page rendered — guard precedes load.
+    expect(order).toEqual(["guard", "load"]);
+    expect(html).toContain("home");
+  });
+
+  it("short-circuits the load when a guard answers (redirect before load)", async () => {
+    let loaded = false;
+    const app = lesto().page(
+      "/admin",
+      { load: () => ((loaded = true), {}), component: homePage.component },
+      [redirectGuard],
+    );
+
+    const response = await app.handle("GET", "/admin");
+
+    expect(response.status).toBe(302);
+    expect(response.headers.Location).toBe("/login");
+    // The loader never ran — the guard short-circuited before render.
+    expect(loaded).toBe(false);
+  });
+
+  it("passes a value a guard set on the context through to the loader (context augmentation)", async () => {
+    const app = lesto().page(
+      "/me",
+      {
+        load: (c) => ({ user: c.get<string>("user") ?? "nobody" }),
+        component: ({ user }: { user: string }) => createElement("main", null, `hi ${user}`),
+      },
+      [augmentUser],
+    );
+
+    const html = await drainBody((await app.handle("GET", "/me")).body);
+
+    expect(html).toContain("hi ada");
+  });
+
+  it("runs multiple guards in order, the outermost first", async () => {
+    const order: string[] = [];
+    const outer: Handler = () => {
+      order.push("outer");
+    };
+    const inner: Handler = () => {
+      order.push("inner");
+    };
+    const app = lesto().page("/", homePage, [outer, inner]);
+
+    await app.handle("GET", "/");
+
+    expect(order).toEqual(["outer", "inner"]);
+  });
+
+  it("runs app-level .use() middleware BEFORE the page's own guards", async () => {
+    const order: string[] = [];
+    const appMw: Handler = (_c, next) => {
+      order.push("app");
+      return next();
+    };
+    const pageGuard: Handler = () => {
+      order.push("guard");
+    };
+    const app = lesto().use(appMw).page("/", homePage, [pageGuard]);
+
+    await app.handle("GET", "/");
+
+    expect(order).toEqual(["app", "guard"]);
+  });
+
+  it("renders a guard-free page exactly as before (empty guards default)", async () => {
+    const app = lesto().page("/", homePage);
+
+    const html = await drainBody((await app.handle("GET", "/")).body);
+
+    expect(html).toContain("home");
+  });
+
+  it("preserves a page's guards when its sub-app is mounted with .route()", async () => {
+    let loaded = false;
+    const sub = lesto().page(
+      "/secret",
+      { load: () => ((loaded = true), {}), component: homePage.component },
+      [blockGuard],
+    );
+    const app = lesto().route("/app", sub);
+
+    const response = await app.handle("GET", "/app/secret");
+
+    expect(response.status).toBe(403);
+    expect(response.body).toBe("blocked");
+    // The mounted guard still short-circuited the load.
+    expect(loaded).toBe(false);
   });
 });
 
