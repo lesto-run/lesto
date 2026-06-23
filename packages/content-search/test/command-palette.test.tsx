@@ -330,12 +330,12 @@ describe("CommandPalette", () => {
     const trigger = el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement;
     expect(trigger).not.toBeNull();
     expect(el.querySelector(".lesto-cmdk-kbd")?.textContent).toMatch(/K$/);
-    expect(el.querySelector(".lesto-cmdk-dialog")).toBeNull();
+    expect(document.querySelector(".lesto-cmdk-dialog")).toBeNull();
 
     act(() => trigger.click());
-    const dialog = el.querySelector(".lesto-cmdk-dialog");
+    const dialog = document.querySelector(".lesto-cmdk-dialog");
     expect(dialog).not.toBeNull();
-    expect(document.activeElement).toBe(el.querySelector(".lesto-cmdk-input"));
+    expect(document.activeElement).toBe(document.querySelector(".lesto-cmdk-input"));
   });
 
   it("shows guidance and the empty label as the query changes", async () => {
@@ -344,11 +344,11 @@ describe("CommandPalette", () => {
     await flush();
     act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
 
-    expect(el.querySelector(".lesto-cmdk-empty")?.textContent).toBe("Type to search");
+    expect(document.querySelector(".lesto-cmdk-empty")?.textContent).toBe("Type to search");
 
-    const input = el.querySelector(".lesto-cmdk-input") as HTMLInputElement;
+    const input = document.querySelector(".lesto-cmdk-input") as HTMLInputElement;
     typeInto(input, "zzzznomatch");
-    expect(el.querySelector(".lesto-cmdk-empty")?.textContent).toBe("Nothing here");
+    expect(document.querySelector(".lesto-cmdk-empty")?.textContent).toBe("Nothing here");
   });
 
   it("ranks matching results and navigates on click", async () => {
@@ -358,17 +358,17 @@ describe("CommandPalette", () => {
     await flush();
     act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
 
-    const input = el.querySelector(".lesto-cmdk-input") as HTMLInputElement;
+    const input = document.querySelector(".lesto-cmdk-input") as HTMLInputElement;
     typeInto(input, "queue");
 
-    const links = el.querySelectorAll<HTMLAnchorElement>(".lesto-cmdk-item-link");
+    const links = document.querySelectorAll<HTMLAnchorElement>(".lesto-cmdk-item-link");
     expect(links.length).toBeGreaterThan(0);
     expect(links[0]?.textContent).toContain("Queue jobs");
     expect(links[0]?.getAttribute("href")).toBe("/batteries/queue");
 
     act(() => links[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 })));
     expect(onNavigate).toHaveBeenCalledWith("/batteries/queue");
-    expect(el.querySelector(".lesto-cmdk-dialog")).toBeNull(); // closed after select
+    expect(document.querySelector(".lesto-cmdk-dialog")).toBeNull(); // closed after select
   });
 
   it("selects the active result with Enter", async () => {
@@ -378,7 +378,7 @@ describe("CommandPalette", () => {
     await flush();
     act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
 
-    const input = el.querySelector(".lesto-cmdk-input") as HTMLInputElement;
+    const input = document.querySelector(".lesto-cmdk-input") as HTMLInputElement;
     typeInto(input, "queue");
     fireKey(input, { key: "Enter" });
     expect(onNavigate).toHaveBeenCalledWith("/batteries/queue");
@@ -390,12 +390,12 @@ describe("CommandPalette", () => {
     const el = renderLive(createElement(CommandPalette, { onNavigate }));
     await flush();
     act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
-    typeInto(el.querySelector(".lesto-cmdk-input") as HTMLInputElement, "queue");
+    typeInto(document.querySelector(".lesto-cmdk-input") as HTMLInputElement, "queue");
 
-    const link = el.querySelector(".lesto-cmdk-item-link") as HTMLAnchorElement;
+    const link = document.querySelector(".lesto-cmdk-item-link") as HTMLAnchorElement;
     act(() => link.dispatchEvent(new MouseEvent("click", { bubbles: true, metaKey: true })));
     expect(onNavigate).not.toHaveBeenCalled(); // browser handles the new-tab open
-    expect(el.querySelector(".lesto-cmdk-dialog")).toBeNull(); // palette still closes
+    expect(document.querySelector(".lesto-cmdk-dialog")).toBeNull(); // palette still closes
   });
 
   it("shows a loading state until the index resolves", async () => {
@@ -403,7 +403,7 @@ describe("CommandPalette", () => {
     vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}) as Promise<Response>);
     const el = renderLive(createElement(CommandPalette, {}));
     act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
-    expect(el.querySelector(".lesto-cmdk-empty")?.textContent).toBe("Loading…");
+    expect(document.querySelector(".lesto-cmdk-empty")?.textContent).toBe("Loading…");
   });
 
   it("degrades gracefully when the index fails to load", async () => {
@@ -444,7 +444,7 @@ describe("CommandPalette", () => {
     expect(custom.textContent).toContain("find");
     expect(el.querySelector(".lesto-cmdk-trigger")).toBeNull(); // default trigger replaced
     act(() => custom.click());
-    expect(el.querySelector(".lesto-cmdk-dialog")).not.toBeNull();
+    expect(document.querySelector(".lesto-cmdk-dialog")).not.toBeNull();
   });
 
   it("closes when the overlay backdrop is clicked", async () => {
@@ -453,9 +453,9 @@ describe("CommandPalette", () => {
     await flush();
     act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
 
-    const overlay = el.querySelector(".lesto-cmdk-overlay") as HTMLElement;
+    const overlay = document.querySelector(".lesto-cmdk-overlay") as HTMLElement;
     act(() => overlay.click());
-    expect(el.querySelector(".lesto-cmdk-dialog")).toBeNull();
+    expect(document.querySelector(".lesto-cmdk-dialog")).toBeNull();
   });
 
   it("neutralizes a dangerous result URL (javascript:) to '#'", async () => {
@@ -478,9 +478,9 @@ describe("CommandPalette", () => {
     const el = renderLive(createElement(CommandPalette, { onNavigate }));
     await flush();
     act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
-    typeInto(el.querySelector(".lesto-cmdk-input") as HTMLInputElement, "pwn");
+    typeInto(document.querySelector(".lesto-cmdk-input") as HTMLInputElement, "pwn");
 
-    const link = el.querySelector(".lesto-cmdk-item-link") as HTMLAnchorElement;
+    const link = document.querySelector(".lesto-cmdk-item-link") as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe("#"); // never the javascript: URL
     act(() => link.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 })));
     expect(onNavigate).toHaveBeenCalledWith("#"); // and never navigated to it
@@ -493,9 +493,9 @@ describe("CommandPalette", () => {
     const trigger = el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement;
     act(() => trigger.focus());
     fireKey(document, { key: "k", metaKey: true }); // open via shortcut
-    expect(document.activeElement).toBe(el.querySelector(".lesto-cmdk-input"));
+    expect(document.activeElement).toBe(document.querySelector(".lesto-cmdk-input"));
 
-    fireKey(el.querySelector(".lesto-cmdk-input") as HTMLInputElement, { key: "Escape" });
+    fireKey(document.querySelector(".lesto-cmdk-input") as HTMLInputElement, { key: "Escape" });
     expect(document.activeElement).toBe(trigger); // focus restored
   });
 
@@ -512,7 +512,7 @@ describe("CommandPalette", () => {
     );
     await flush();
     act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
-    typeInto(el.querySelector(".lesto-cmdk-input") as HTMLInputElement, "q");
+    typeInto(document.querySelector(".lesto-cmdk-input") as HTMLInputElement, "q");
     expect(search).toHaveBeenCalledWith(
       "q",
       expect.anything(),
@@ -525,7 +525,9 @@ describe("CommandPalette", () => {
     const el = renderLive(createElement(CommandPalette, { className: "my-shell" }));
     await flush();
     act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
-    expect((el.querySelector(".lesto-cmdk-dialog") as HTMLElement).className).toContain("my-shell");
+    expect((document.querySelector(".lesto-cmdk-dialog") as HTMLElement).className).toContain(
+      "my-shell",
+    );
   });
 
   it("keeps a safe https result URL but blocks protocol-relative //host", async () => {
@@ -555,17 +557,154 @@ describe("CommandPalette", () => {
     const el = renderLive(createElement(CommandPalette, {}));
     await flush();
     act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
-    const input = el.querySelector(".lesto-cmdk-input") as HTMLInputElement;
+    const input = document.querySelector(".lesto-cmdk-input") as HTMLInputElement;
 
     typeInto(input, "ext");
     expect(
-      (el.querySelector(".lesto-cmdk-item-link") as HTMLAnchorElement).getAttribute("href"),
+      (document.querySelector(".lesto-cmdk-item-link") as HTMLAnchorElement).getAttribute("href"),
     ).toBe("https://lesto.run/x");
 
     typeInto(input, "evil");
     expect(
-      (el.querySelector(".lesto-cmdk-item-link") as HTMLAnchorElement).getAttribute("href"),
+      (document.querySelector(".lesto-cmdk-item-link") as HTMLAnchorElement).getAttribute("href"),
     ).toBe("#");
+  });
+});
+
+// ===========================================================================
+// CommandPalette — default items (popular quick-picks shown before you type)
+// ===========================================================================
+
+describe("CommandPalette default items", () => {
+  const POPULAR = [
+    { slug: "/batteries/queue" }, // indexed page — title/snippet resolve from the index
+    {
+      id: "gh",
+      slug: "https://example.com/repo",
+      title: "Star on GitHub",
+      snippet: "Browse the source",
+    },
+  ];
+
+  it("surfaces resolved quick-picks under a heading before the user types", async () => {
+    stubFetchOk();
+    const el = renderLive(createElement(CommandPalette, { defaultItems: POPULAR }));
+    await flush();
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+
+    expect(document.querySelector(".lesto-cmdk-group")?.textContent).toBe("Popular");
+    expect(document.querySelector(".lesto-cmdk-empty")).toBeNull(); // defaults stand in for the prompt
+
+    const links = document.querySelectorAll<HTMLAnchorElement>(".lesto-cmdk-item-link");
+    expect(links.length).toBe(2);
+    // The indexed page took its title from the index; the action kept its own.
+    expect(links[0]?.querySelector(".lesto-cmdk-item-title")?.textContent).toBe("Queue jobs");
+    expect(links[0]?.getAttribute("href")).toBe("/batteries/queue");
+    expect(links[1]?.querySelector(".lesto-cmdk-item-title")?.textContent).toBe("Star on GitHub");
+    expect(links[1]?.getAttribute("href")).toBe("https://example.com/repo");
+  });
+
+  it("navigates the highlighted quick-pick on Enter", async () => {
+    stubFetchOk();
+    const onNavigate = vi.fn();
+    const el = renderLive(createElement(CommandPalette, { defaultItems: POPULAR, onNavigate }));
+    await flush();
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+
+    fireKey(document.querySelector(".lesto-cmdk-input") as HTMLInputElement, { key: "Enter" });
+    expect(onNavigate).toHaveBeenCalledWith("/batteries/queue"); // first default is active
+  });
+
+  it("hides quick-picks while searching and restores them when the query clears", async () => {
+    stubFetchOk();
+    const el = renderLive(createElement(CommandPalette, { defaultItems: POPULAR }));
+    await flush();
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+    const input = document.querySelector(".lesto-cmdk-input") as HTMLInputElement;
+
+    typeInto(input, "auth");
+    expect(document.querySelector(".lesto-cmdk-group")).toBeNull(); // defaults give way to results
+    expect(document.querySelector(".lesto-cmdk-item-title")?.textContent).toBe("Auth and sessions");
+
+    typeInto(input, "");
+    expect(document.querySelector(".lesto-cmdk-group")?.textContent).toBe("Popular"); // and come back
+    expect(document.querySelector(".lesto-cmdk-item-title")?.textContent).toBe("Queue jobs");
+  });
+
+  it("drops a page that is no longer in the index instead of linking to a dead route", async () => {
+    stubFetchOk();
+    const el = renderLive(createElement(CommandPalette, { defaultItems: [{ slug: "/gone" }] }));
+    await flush();
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+
+    expect(document.querySelector(".lesto-cmdk-item-link")).toBeNull();
+    expect(document.querySelector(".lesto-cmdk-empty")?.textContent).toBe("Type to search");
+  });
+
+  it("shows off-index actions even before the index has loaded", () => {
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}) as Promise<Response>);
+    const el = renderLive(
+      createElement(CommandPalette, {
+        defaultItems: [{ slug: "/batteries/queue" }, { slug: "https://x.test", title: "Repo" }],
+      }),
+    );
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+
+    const links = document.querySelectorAll<HTMLAnchorElement>(".lesto-cmdk-item-link");
+    expect(links.length).toBe(1); // the indexed page can't resolve a title yet
+    expect(links[0]?.querySelector(".lesto-cmdk-item-title")?.textContent).toBe("Repo");
+  });
+
+  it("omits the heading when defaultItemsLabel is empty and caps at the limit", async () => {
+    stubFetchOk();
+    const el = renderLive(
+      createElement(CommandPalette, {
+        defaultItems: [{ slug: "/batteries/queue" }, { slug: "/batteries/auth" }],
+        defaultItemsLabel: "",
+        limit: 1,
+      }),
+    );
+    await flush();
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+
+    expect(document.querySelector(".lesto-cmdk-group")).toBeNull(); // heading suppressed
+    expect(document.querySelectorAll(".lesto-cmdk-item-link").length).toBe(1); // limited
+  });
+
+  it("dedupes quick-picks that resolve to the same id (no clashing React key)", async () => {
+    stubFetchOk();
+    const el = renderLive(
+      createElement(CommandPalette, {
+        defaultItems: [
+          { slug: "/batteries/queue" },
+          { slug: "/batteries/queue" }, // duplicate — must collapse
+          { slug: "/batteries/auth" },
+        ],
+      }),
+    );
+    await flush();
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+
+    const links = document.querySelectorAll(".lesto-cmdk-item-link");
+    expect(links.length).toBe(2);
+    expect(links[0]?.textContent).toContain("Queue jobs");
+    expect(links[1]?.textContent).toContain("Auth and sessions");
+  });
+
+  it("drops a quick-pick with an empty title instead of rendering a blank row", async () => {
+    stubFetchOk();
+    const el = renderLive(
+      createElement(CommandPalette, {
+        // An explicit "" overrides the index title, so there is nothing to show.
+        defaultItems: [{ slug: "/batteries/queue", title: "" }, { slug: "/batteries/auth" }],
+      }),
+    );
+    await flush();
+    act(() => (el.querySelector(".lesto-cmdk-trigger") as HTMLButtonElement).click());
+
+    const links = document.querySelectorAll(".lesto-cmdk-item-link");
+    expect(links.length).toBe(1);
+    expect(links[0]?.textContent).toContain("Auth and sessions");
   });
 });
 

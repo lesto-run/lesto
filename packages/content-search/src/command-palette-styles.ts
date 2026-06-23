@@ -77,6 +77,15 @@ export const commandPaletteStyles = `
   padding: 0.4rem;
   list-style: none;
 }
+.lesto-cmdk-group {
+  flex: 0 0 auto;
+  padding: 0.6rem 1.1rem 0.2rem;
+  color: var(--muted, #6b7280);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
 .lesto-cmdk-item { margin: 0; }
 .lesto-cmdk-item-link {
   display: block;

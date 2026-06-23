@@ -296,6 +296,26 @@ export function useCommandPalette(options: UseCommandPaletteOptions): UseCommand
 
 type SearchFn = (query: string, index: Tier0Index, options: SearchOptions) => SearchResult[];
 
+/**
+ * A quick-pick shown before the user types — a popular page or a one-shot action.
+ *
+ * For an internal page, `slug` alone is enough: the title and snippet are read
+ * from the loaded index entry for that slug, so a page's quick-pick always tracks
+ * its real, build-validated title (and a renamed page simply drops out of the list
+ * instead of linking to a dead route). Supply `title` for an entry that is *not*
+ * in the index — typically an action that points off-site (e.g. a repo link).
+ */
+export interface CommandPaletteItem {
+  /** Navigation target: a site-relative path (`/quickstart`) or a safe external URL. */
+  slug: string;
+  /** Display title. Optional for indexed pages; required for off-index actions. */
+  title?: string;
+  /** Secondary line. Falls back to the index entry's snippet for indexed pages. */
+  snippet?: string;
+  /** Stable list key / option id. Defaults to `slug`. */
+  id?: string;
+}
+
 export interface CommandPaletteProps {
   /** Where the prerendered keyword index lives. Default `"/search-index.json"`. */
   indexPath?: string;
@@ -309,6 +329,15 @@ export interface CommandPaletteProps {
   triggerLabel?: string;
   /** Shown when a query matches nothing. Default `"No results"`. */
   emptyLabel?: string;
+  /**
+   * Popular pages / quick actions surfaced when the query is empty, so `⌘K` lands
+   * on something useful instead of a blank prompt. Each is keyboard-navigable and
+   * selected exactly like a search hit. Indexed-page entries auto-resolve their
+   * title/snippet from the loaded index (see {@link CommandPaletteItem}).
+   */
+  defaultItems?: CommandPaletteItem[];
+  /** Heading above the default items. Default `"Popular"`; pass `""` to omit. */
+  defaultItemsLabel?: string;
   /** ⌘/Ctrl + this key opens the palette. Default `"k"`. */
   shortcut?: string;
   /** Ranking function over the loaded index. Default {@link keywordSearch}. */
@@ -350,6 +379,48 @@ function safeHref(url: string): string {
 }
 
 /**
+ * Turn the caller's quick-picks into renderable results, resolving each indexed
+ * page's title/snippet from the loaded index by slug.
+ *
+ * An entry with no usable title — neither an explicit one nor a matching index
+ * entry (and an empty string counts as none) — has nothing meaningful to show, so
+ * it is dropped rather than rendered as a blank row. That is what keeps the default
+ * list self-healing: before the index loads only explicit (off-index) actions
+ * appear, and a page renamed out of the index quietly leaves the list instead of
+ * linking somewhere that 404s. Duplicate ids are dropped too, so a caller-supplied
+ * list can never emit a clashing React key.
+ */
+function resolveDefaults(
+  items: readonly CommandPaletteItem[],
+  index: Tier0Index | null,
+  limit: number,
+): SearchResult[] {
+  const bySlug = new Map((index?.entries ?? []).map((entry) => [entry.slug, entry]));
+  const seen = new Set<string>();
+  const resolved: SearchResult[] = [];
+  for (const item of items) {
+    const entry = bySlug.get(item.slug);
+    const title = item.title ?? entry?.title;
+    if (!title) continue;
+    // Prefer the index entry's real id so a page's default and its search hit
+    // agree on identity; fall back to the slug.
+    const id = item.id ?? entry?.id ?? item.slug;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    resolved.push({
+      id,
+      slug: item.slug,
+      collection: entry?.collection ?? "",
+      title,
+      snippet: item.snippet ?? entry?.snippet ?? "",
+      score: 1,
+    });
+    if (resolved.length >= limit) break;
+  }
+  return resolved;
+}
+
+/**
  * A zero-config `⌘K` search palette wired to the prerendered keyword index.
  *
  * Renders a trigger button plus, when open, a modal dialog with a search input
@@ -364,6 +435,8 @@ export function CommandPalette(props: CommandPaletteProps): ReactElement {
     placeholder = "Search docs…",
     triggerLabel = "Search",
     emptyLabel = "No results",
+    defaultItems = [],
+    defaultItemsLabel = "Popular",
     shortcut = "k",
     search = keywordSearch,
     onNavigate,
@@ -395,10 +468,22 @@ export function CommandPalette(props: CommandPaletteProps): ReactElement {
     };
   }, [indexPath]);
 
-  const results = useMemo<SearchResult[]>(() => {
+  const matches = useMemo<SearchResult[]>(() => {
     if (index === null || query.trim() === "") return [];
     return search(query, index, { limit, ...(collections && { collections }) });
   }, [index, query, search, limit, collections]);
+
+  // Before the user types, fall back to the caller's quick-picks (popular pages /
+  // actions) so the palette opens onto something useful. They render through the
+  // same result path, so keyboard navigation and selection need no special-casing.
+  const defaults = useMemo<SearchResult[]>(
+    () => (defaultItems.length === 0 ? [] : resolveDefaults(defaultItems, index, limit)),
+    [defaultItems, index, limit],
+  );
+
+  const isEmptyQuery = query.trim() === "";
+  const showDefaults = isEmptyQuery && defaults.length > 0;
+  const results = showDefaults ? defaults : matches;
 
   const navigate = useCallback(
     (slug: string) => {
@@ -460,8 +545,71 @@ export function CommandPalette(props: CommandPaletteProps): ReactElement {
     navigate(hit.slug);
   }
 
-  const emptyText =
-    index === null ? "Loading…" : query.trim() === "" ? "Type to search" : emptyLabel;
+  const emptyText = index === null ? "Loading…" : isEmptyQuery ? "Type to search" : emptyLabel;
+
+  const overlay = (
+    <div className="lesto-cmdk-overlay" {...palette.overlayProps}>
+      <div
+        className={className ? `lesto-cmdk-dialog ${className}` : "lesto-cmdk-dialog"}
+        aria-label={triggerLabel}
+        {...palette.dialogProps}
+      >
+        <input
+          ref={inputRef}
+          className="lesto-cmdk-input"
+          type="search"
+          placeholder={placeholder}
+          aria-label={triggerLabel}
+          value={query}
+          onInput={(event) => setQuery((event.target as HTMLInputElement).value)}
+          {...palette.inputProps}
+        />
+        {/* The section label sits outside the listbox so it stays a purely visual
+            cue — the options are self-describing, so it carries no ARIA role. */}
+        {showDefaults && defaultItemsLabel !== "" ? (
+          <div className="lesto-cmdk-group" aria-hidden="true">
+            {defaultItemsLabel}
+          </div>
+        ) : null}
+        <ul className="lesto-cmdk-list" {...palette.listProps}>
+          {results.length === 0 ? (
+            <li className="lesto-cmdk-empty" aria-disabled="true">
+              {emptyText}
+            </li>
+          ) : (
+            results.map((hit, i) => (
+              <li key={hit.id} className="lesto-cmdk-item">
+                <a
+                  className="lesto-cmdk-item-link"
+                  href={safeHref(hit.slug)}
+                  // Kept out of the tab order: focus stays on the input and
+                  // options are reached with the arrow keys (combobox model).
+                  tabIndex={-1}
+                  onClick={(event) => onResultClick(event, hit)}
+                  {...palette.getItemProps(i)}
+                >
+                  <span className="lesto-cmdk-item-title">{hit.title}</span>
+                  <span className="lesto-cmdk-item-snippet">{hit.snippet}</span>
+                </a>
+              </li>
+            ))
+          )}
+        </ul>
+        <div className="lesto-cmdk-footer" aria-hidden="true">
+          <span>
+            <kbd>↑</kbd>
+            <kbd>↓</kbd> navigate
+          </span>
+          <span>
+            <kbd>↵</kbd> open
+          </span>
+          <span>
+            <kbd>esc</kbd> close
+          </span>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <>
@@ -477,62 +625,12 @@ export function CommandPalette(props: CommandPaletteProps): ReactElement {
         </button>
       )}
 
-      {palette.open ? (
-        <div className="lesto-cmdk-overlay" {...palette.overlayProps}>
-          <div
-            className={className ? `lesto-cmdk-dialog ${className}` : "lesto-cmdk-dialog"}
-            aria-label={triggerLabel}
-            {...palette.dialogProps}
-          >
-            <input
-              ref={inputRef}
-              className="lesto-cmdk-input"
-              type="search"
-              placeholder={placeholder}
-              aria-label={triggerLabel}
-              value={query}
-              onInput={(event) => setQuery((event.target as HTMLInputElement).value)}
-              {...palette.inputProps}
-            />
-            <ul className="lesto-cmdk-list" {...palette.listProps}>
-              {results.length === 0 ? (
-                <li className="lesto-cmdk-empty" aria-disabled="true">
-                  {emptyText}
-                </li>
-              ) : (
-                results.map((hit, i) => (
-                  <li key={hit.id} className="lesto-cmdk-item">
-                    <a
-                      className="lesto-cmdk-item-link"
-                      href={safeHref(hit.slug)}
-                      // Kept out of the tab order: focus stays on the input and
-                      // options are reached with the arrow keys (combobox model).
-                      tabIndex={-1}
-                      onClick={(event) => onResultClick(event, hit)}
-                      {...palette.getItemProps(i)}
-                    >
-                      <span className="lesto-cmdk-item-title">{hit.title}</span>
-                      <span className="lesto-cmdk-item-snippet">{hit.snippet}</span>
-                    </a>
-                  </li>
-                ))
-              )}
-            </ul>
-            <div className="lesto-cmdk-footer" aria-hidden="true">
-              <span>
-                <kbd>↑</kbd>
-                <kbd>↓</kbd> navigate
-              </span>
-              <span>
-                <kbd>↵</kbd> open
-              </span>
-              <span>
-                <kbd>esc</kbd> close
-              </span>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {/* The overlay is `position: fixed; inset: 0`, so it covers the viewport —
+          but only if no ancestor establishes a containing block for it (a
+          `transform`/`filter`/`backdrop-filter` ancestor would clip it to its own
+          box). Host shells must keep the trigger out of such a context, or the
+          backdrop dims only a strip. */}
+      {palette.open ? overlay : null}
     </>
   );
 }

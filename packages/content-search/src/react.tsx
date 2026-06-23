@@ -545,4 +545,5 @@ export {
   type UseCommandPaletteReturn,
   type CommandItemProps,
   type CommandPaletteProps,
+  type CommandPaletteItem,
 } from "./command-palette";
