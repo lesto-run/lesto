@@ -50,6 +50,22 @@ export const LESTO_PACKAGES = [
 const TAILWINDCSS_RANGE = "^4.3.0";
 
 /**
+ * The shadcn/ui runtime stack a scaffolded app ships so it is a *generic* shadcn
+ * project on day one (ADR 0037 Phase 2): `clsx` + `tailwind-merge` back the `cn()`
+ * helper (`app/lib/utils.ts`) every shadcn component imports; `tw-animate-css` is
+ * the v4 animation layer the theme `@import`s (the successor to `tailwindcss-animate`);
+ * `lucide-react` is the icon set `components.json` selects (`iconLibrary: "lucide"`).
+ * `tailwind-merge` v3 is the Tailwind-v4-aware line — a v2 merge would mis-resolve v4
+ * utilities. These are plain npm deps (NOT `@lesto/*`), so they sit beside `react`.
+ */
+const SHADCN_DEPS = {
+  clsx: "^2.1.1",
+  "tailwind-merge": "^3.3.1",
+  "tw-animate-css": "^1.3.4",
+  "lucide-react": "^0.515.0",
+} as const;
+
+/**
  * Resolve a `@lesto/*` package name to the dependency specifier the scaffold pins
  * it at.
  *
@@ -106,6 +122,9 @@ export function packageJson(name: string, lestoDep: LestoDepResolver): string {
       "preact-render-to-string": "^6",
       react: "^19",
       "react-dom": "^19",
+      // The shadcn/ui stack (ADR 0037 Phase 2): cn() = clsx + tailwind-merge, the
+      // tw-animate-css v4 layer the theme imports, and the lucide icon set.
+      ...SHADCN_DEPS,
       zod: "^4.0.0",
     },
   };
@@ -293,36 +312,216 @@ export default config;
 }
 
 /**
- * `app/styles/app.css` — the Tailwind v4 CSS entry (ADR 0037).
+ * `app/styles/app.css` — the Tailwind v4 + shadcn/ui CSS entry (ADR 0037 Phase 2).
  *
  * `lesto build`/`dev` compile this to `out/styles.css` (the `ui.css` key in
- * `lesto.app.ts` points here) and inject it via `.styles("/styles.css")`. Phase 1
- * ships the minimal entry — `@import "tailwindcss"` plus one `@theme` token — so the
- * pipeline is visible on day one; the shadcn scaffold (a fast-follow) swaps in the
- * full OKLCH token block. The scanner gotcha is documented inline because it is the
+ * `lesto.app.ts` points here) and inject it via `.styles("/styles.css")`. This is
+ * the canonical shadcn v4 theme — `@import "tailwindcss"`, the `tw-animate-css`
+ * layer, the `.dark` `@custom-variant`, the full OKLCH `:root`/`.dark` token sets
+ * (`new-york` style, `neutral` base), the `@theme inline` block that exposes those
+ * tokens as utilities (`bg-background`, `text-foreground`, …), and the `@layer base`
+ * defaults — so a scaffolded app IS a generic shadcn project: `lesto add <name>`
+ * drops components straight in. The scanner gotcha leads the file because it is the
  * one thing that surprises newcomers: Tailwind reads `app/` as PLAIN TEXT.
  */
 export function stylesApp(): string {
-  return `@import "tailwindcss";
-
-/*
- * Your Tailwind v4 stylesheet. \`lesto build\`/\`dev\` compile it to \`out/styles.css\`
- * (wired by \`ui.css\` in lesto.app.ts) and every page links it via \`.styles(...)\`.
+  return `/*
+ * Your Tailwind v4 + shadcn/ui stylesheet. \`lesto build\`/\`dev\` compile it to
+ * \`out/styles.css\` (wired by \`ui.css\` in lesto.app.ts) and every page links it via
+ * \`.styles(...)\`. The OKLCH tokens below are shadcn's \`neutral\` theme; edit them (or
+ * run \`npx shadcn theme\`) to recolor, and toggle \`.dark\` on \`<html>\` for dark mode.
  *
  * SCANNER GOTCHA: Tailwind finds utilities by scanning your \`app/\` source as PLAIN
  * TEXT — it never runs your code. So write COMPLETE static class strings:
  *
- *   ✅ <div className="bg-indigo-600 text-white" />
+ *   ✅ <div className="bg-primary text-primary-foreground" />
  *   ❌ <div className={\`bg-\${color}-600\`} />   // the scanner can't see this
  *
  * For genuinely runtime-dynamic classes, list them so the scanner keeps them:
  *   @source inline("bg-red-600 bg-green-600 bg-blue-600");
- *
- * \`@theme\` tokens become BOTH \`:root\` CSS variables AND Tailwind utilities — the
- * \`--color-brand\` below powers \`bg-brand\`, \`text-brand\`, \`border-brand\`, ….
  */
-@theme {
-  --color-brand: #4f46e5;
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+`;
+}
+
+/**
+ * `components.json` — the shadcn/ui project manifest (ADR 0037 Phase 2).
+ *
+ * Its presence is what makes a scaffolded app a *generic* shadcn project: the
+ * shadcn CLI (`npx shadcn add <name>`, which `lesto add` delegates to in TW8) reads
+ * this to know the style, the CSS entry, the base color, the icon set, and — via
+ * `aliases` resolved against `tsconfig.json`'s `@/*` path — where to write each
+ * component. `tailwind.config: ""` is correct for v4 (config-less, the theme lives
+ * in `app/styles/app.css`). The aliases point at the in-app tree (`@/* → ./app/*`),
+ * so components land under `app/components/ui` and `cn()` resolves at `@/lib/utils`.
+ */
+export function componentsJson(): string {
+  const manifest = {
+    $schema: "https://ui.shadcn.com/schema.json",
+    style: "new-york",
+    // Lesto server-renders plain React, not React Server Components.
+    rsc: false,
+    tsx: true,
+    tailwind: {
+      // Empty: Tailwind v4 is config-less — the theme lives in the CSS entry below.
+      config: "",
+      css: "app/styles/app.css",
+      baseColor: "neutral",
+      cssVariables: true,
+      prefix: "",
+    },
+    iconLibrary: "lucide",
+    aliases: {
+      components: "@/components",
+      ui: "@/components/ui",
+      utils: "@/lib/utils",
+      lib: "@/lib",
+      hooks: "@/hooks",
+    },
+  };
+
+  return `${JSON.stringify(manifest, null, 2)}\n`;
+}
+
+/**
+ * `app/lib/utils.ts` — the `cn()` class-name helper every shadcn component imports.
+ *
+ * `clsx` resolves conditional/array class inputs; `tailwind-merge` then de-conflicts
+ * the result so a later Tailwind utility wins over an earlier one (e.g. `cn("p-2",
+ * "p-4")` → `"p-4"`). Imported as `@/lib/utils` via the `@/*` tsconfig path. The
+ * `ClassValue` type is a TYPE-only import — the scaffolded tsconfig sets
+ * `verbatimModuleSyntax`, so a value import of a type would fail to compile.
+ */
+export function libUtils(): string {
+  return `import { clsx } from "clsx";
+import type { ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+/**
+ * Merge class names the shadcn way: \`clsx\` flattens conditional inputs, then
+ * \`tailwind-merge\` resolves conflicting Tailwind utilities so the last one wins.
+ */
+export function cn(...inputs: ClassValue[]): string {
+  return twMerge(clsx(inputs));
 }
 `;
 }
@@ -634,6 +833,14 @@ export function tsconfig(): string {
       jsx: "react-jsx",
       types: ["node"],
       skipLibCheck: true,
+      // The shadcn `@/*` alias (ADR 0037 Phase 2): app code lives under `app/`, so
+      // `@/lib/utils` → `app/lib/utils` and `@/components/ui` → `app/components/ui`.
+      // `components.json`'s aliases resolve against this, so `npx shadcn add` writes
+      // each component into the in-app tree. TS 5 resolves `paths` without `baseUrl`
+      // (relative to this file) under `moduleResolution: "Bundler"`.
+      paths: {
+        "@/*": ["./app/*"],
+      },
     },
     include: ["env.ts", "lesto.app.ts", "lesto.sites.ts", "worker.ts", "app"],
   };

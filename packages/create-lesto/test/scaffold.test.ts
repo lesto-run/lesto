@@ -7,11 +7,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   agentsMd,
   claudeMd,
+  componentsJson,
   CreateLestoError,
   fileColonPin,
   gitignore,
   islandCounter,
   lestoApp,
+  libUtils,
   stylesApp,
   lestoSites,
   LESTO_PACKAGES,
@@ -68,6 +70,8 @@ describe("scaffold", () => {
       "app/routes/layout.tsx",
       "app/islands/counter.tsx",
       "app/styles/app.css",
+      "app/lib/utils.ts",
+      "components.json",
       "worker.ts",
       "wrangler.jsonc",
       "tsconfig.json",
@@ -169,12 +173,22 @@ describe("scaffold", () => {
       "react-dom",
       "better-sqlite3",
       "zod",
+      // The shadcn/ui stack (ADR 0037 Phase 2): cn() = clsx + tailwind-merge, the
+      // tw-animate-css v4 layer the theme imports, and the lucide icon set.
+      "clsx",
+      "tailwind-merge",
+      "tw-animate-css",
+      "lucide-react",
     ]) {
       expect(manifest.dependencies[dep]).toBeDefined();
     }
 
     // The Tailwind v4 peer (ADR 0037), pinned to the engine's 4.x train.
     expect(manifest.dependencies["tailwindcss"]).toMatch(/^\^4\./);
+
+    // tailwind-merge must be the v3 line — it is the Tailwind-v4-aware merge; a v2
+    // would mis-resolve v4 utilities in `cn()`.
+    expect(manifest.dependencies["tailwind-merge"]).toMatch(/^\^3\./);
 
     // @lesto/* deps default to published ^0.x ranges (the outsider path — `--local`
     // swaps to file: pins). This locks the default the scaffold actually emits.
@@ -402,14 +416,72 @@ describe("templates", () => {
     expect(out).toContain("migrations: [createPosts, seedPosts]");
   });
 
-  it("stylesApp is a Tailwind v4 entry with a @theme token and the scanner gotcha", () => {
+  it("stylesApp is the shadcn v4 theme block (imports, dark variant, OKLCH tokens, @theme inline, base layer)", () => {
     const css = stylesApp();
 
+    // The canonical shadcn v4 entry: Tailwind + the tw-animate-css layer.
     expect(css).toContain('@import "tailwindcss"');
-    expect(css).toContain("@theme {");
-    expect(css).toContain("--color-brand:");
-    // The plain-text-scan gotcha is documented in the entry itself.
+    expect(css).toContain('@import "tw-animate-css"');
+    // The dark-mode variant shadcn drives via a `.dark` class on an ancestor.
+    expect(css).toContain("@custom-variant dark (&:is(.dark *))");
+    // Both token sets, expressed in OKLCH, with the shadcn semantic tokens.
+    expect(css).toContain(":root {");
+    expect(css).toContain(".dark {");
+    expect(css).toContain("oklch(");
+    expect(css).toContain("--primary:");
+    expect(css).toContain("--background:");
+    expect(css).toContain("--radius:");
+    // The inline @theme that re-exposes the tokens as utilities (bg-background, …),
+    // and the base layer that applies the border/background defaults.
+    expect(css).toContain("@theme inline {");
+    expect(css).toContain("--color-primary: var(--primary)");
+    expect(css).toContain("@layer base {");
+    expect(css).toContain("@apply bg-background text-foreground");
+    // The plain-text-scan gotcha is still documented in the entry itself.
     expect(css).toContain("@source inline(");
+  });
+
+  it("componentsJson is a schema-valid shadcn manifest pointing at the in-app tree", () => {
+    const parsed = JSON.parse(componentsJson()) as {
+      $schema: string;
+      style: string;
+      rsc: boolean;
+      tsx: boolean;
+      tailwind: { config: string; css: string; baseColor: string; cssVariables: boolean };
+      iconLibrary: string;
+      aliases: Record<string, string>;
+    };
+
+    expect(parsed.$schema).toBe("https://ui.shadcn.com/schema.json");
+    expect(parsed.style).toBe("new-york");
+    // Lesto server-renders plain React (no RSC).
+    expect(parsed.rsc).toBe(false);
+    expect(parsed.tsx).toBe(true);
+    // Tailwind v4 is config-less; the theme lives in the CSS entry the scaffold writes.
+    expect(parsed.tailwind.config).toBe("");
+    expect(parsed.tailwind.css).toBe("app/styles/app.css");
+    expect(parsed.tailwind.baseColor).toBe("neutral");
+    expect(parsed.tailwind.cssVariables).toBe(true);
+    expect(parsed.iconLibrary).toBe("lucide");
+    // The aliases the shadcn CLI resolves against the `@/*` tsconfig path.
+    expect(parsed.aliases).toEqual({
+      components: "@/components",
+      ui: "@/components/ui",
+      utils: "@/lib/utils",
+      lib: "@/lib",
+      hooks: "@/hooks",
+    });
+  });
+
+  it("libUtils exports cn() backed by clsx + tailwind-merge, with a TYPE-only ClassValue import", () => {
+    const out = libUtils();
+
+    expect(out).toContain('import { clsx } from "clsx"');
+    // ClassValue is imported as a type — verbatimModuleSyntax would reject a value import.
+    expect(out).toContain('import type { ClassValue } from "clsx"');
+    expect(out).toContain('import { twMerge } from "tailwind-merge"');
+    expect(out).toContain("export function cn(...inputs: ClassValue[]): string");
+    expect(out).toContain("return twMerge(clsx(inputs))");
   });
 
   it("islandCounter is one defineIsland default-export", () => {
@@ -453,15 +525,22 @@ describe("templates", () => {
     expect(lestoSites()).toContain('render: "dynamic"');
   });
 
-  it("tsconfig is bundler-resolution, strict JSON that includes the island dir", () => {
+  it("tsconfig is bundler-resolution, strict JSON that includes the island dir and the shadcn @/* path", () => {
     const parsed = JSON.parse(tsconfig()) as {
-      compilerOptions: { moduleResolution: string; strict: boolean };
+      compilerOptions: {
+        moduleResolution: string;
+        strict: boolean;
+        paths: Record<string, string[]>;
+      };
       include: string[];
     };
 
     expect(parsed.compilerOptions.moduleResolution).toBe("Bundler");
     expect(parsed.compilerOptions.strict).toBe(true);
     expect(parsed.include).toContain("app");
+    // The shadcn `@/*` alias resolves into the in-app tree, so `@/lib/utils` →
+    // `app/lib/utils` and `npx shadcn add` writes components under `app/components`.
+    expect(parsed.compilerOptions.paths["@/*"]).toEqual(["./app/*"]);
   });
 
   it("gitignore ignores node_modules, the db file, and SECRETS (.env*), but keeps .env.example", () => {

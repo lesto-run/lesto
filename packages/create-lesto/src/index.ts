@@ -30,10 +30,12 @@ export type {
 export {
   agentsMd,
   claudeMd,
+  componentsJson,
   gitignore,
   islandCounter,
   lestoApp,
   lestoSites,
+  libUtils,
   LESTO_PACKAGES,
   packageJson,
   readme,

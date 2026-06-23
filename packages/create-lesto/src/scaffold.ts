@@ -13,11 +13,13 @@ import { CreateLestoError } from "./errors";
 import {
   agentsMd,
   claudeMd,
+  componentsJson,
   env,
   gitignore,
   islandCounter,
   lestoApp,
   lestoSites,
+  libUtils,
   packageJson,
   readme,
   routeLayout,
@@ -112,6 +114,9 @@ export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promis
   // is visible on day one. `worker.ts` + `wrangler.jsonc` are the scaffold→deploy
   // path: `lesto deploy --cloudflare` builds `out/` and `wrangler deploy`s the
   // Worker that fronts the app. `AGENTS.md`/`CLAUDE.md` onboard a coding agent.
+  // `components.json` + `app/lib/utils.ts` (`cn()`) make the app a generic shadcn
+  // project (ADR 0037 Phase 2): `lesto add <name>` installs components into
+  // `app/components/ui` via the `@/*` tsconfig path `components.json` resolves against.
   const files: ReadonlyArray<readonly [string, string]> = [
     ["package.json", packageJson(name, lestoDep)],
     ["env.ts", env()],
@@ -121,6 +126,8 @@ export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promis
     ["app/routes/layout.tsx", routeLayout()],
     ["app/islands/counter.tsx", islandCounter()],
     ["app/styles/app.css", stylesApp()],
+    ["app/lib/utils.ts", libUtils()],
+    ["components.json", componentsJson()],
     ["worker.ts", worker()],
     ["wrangler.jsonc", wranglerConfig(name)],
     ["tsconfig.json", tsconfig()],
