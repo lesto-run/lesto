@@ -58,9 +58,12 @@ interface ContentPipelineRun {
  * it yields an empty run (no `lesto.content.ts`), which groups to no collections; this
  * function never has to know whether content is installed.
  *
- * Any failure (a genuine pipeline error — bad frontmatter, an unreadable file) degrades
- * to "no collections" so `--check` stays deterministic, but is surfaced through the
- * optional `onError` sink (the bin wires a warning) rather than swallowed silently.
+ * Any failure that THROWS (an unreadable content file, a missing `@lesto/content-core`
+ * peer, a malformed config) degrades to "no collections" so `--check` stays
+ * deterministic, but is surfaced through the optional `onError` sink (the bin wires a
+ * warning) rather than swallowed silently. A schema-invalid ENTRY is not a throw — the
+ * pipeline drops it with its own warning, so it merely lowers a count (which `--check`
+ * then flags as drift), it does not reach `onError`.
  */
 export function createCollectionsReader(
   runContentPipeline: () => Promise<ContentPipelineRun>,

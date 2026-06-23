@@ -46,6 +46,21 @@ const drift = spawnSync("lesto", ["generate", "agents", "--check"], {
   stdio: "inherit",
 });
 
+// A spawn FAILURE is not staleness: when `lesto` can't be run at all (`@lesto/cli`
+// not installed / not on PATH → ENOENT, or a crash signal) `spawnSync` leaves
+// `status` null and sets `error`/`signal`. Diagnose that distinctly rather than
+// blaming the artifacts and sending the operator to regenerate — the same
+// don't-mask-one-failure-as-another discipline `rethrowUnlessMissingContentPeer` uses.
+if (drift.error !== undefined || drift.signal !== null) {
+  console.error(
+    `\nCould not run \`lesto generate agents --check\` — is @lesto/cli installed? ${
+      drift.error?.message ?? `killed by ${drift.signal}`
+    }`,
+  );
+
+  process.exit(1);
+}
+
 if (drift.status !== 0) {
   console.error(
     "\nAGENTS.md / llms.txt are stale — run `bun run agents` and commit the result.",

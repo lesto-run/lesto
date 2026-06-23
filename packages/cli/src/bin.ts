@@ -559,8 +559,10 @@ const buildContent = async (): Promise<readonly RuntimeEntry[]> =>
 // load `lesto.content.ts` and run the build pipeline, so the artifact lists exactly the
 // collections the app builds from, with accurate per-collection entry counts. A project
 // with NO `lesto.content.ts` is content-free — yield an empty run (the reader groups it
-// to no collections); a genuine pipeline failure (bad frontmatter, an unreadable file)
-// propagates to the reader's `onError` sink rather than being mistaken for "no content".
+// to no collections); a genuine pipeline THROW (an unreadable content file, a missing
+// `@lesto/content-core` peer) propagates to the reader's `onError` sink rather than being
+// mistaken for "no content". (A schema-invalid entry is dropped with its own warning by
+// the pipeline — it lowers a count, not an `onError`.)
 const CONTENT_CONFIG_PATH = join(projectRoot, "lesto.content.ts");
 
 const readContentConfig = async (): Promise<{ entries: readonly RuntimeEntry[] }> => {
@@ -672,10 +674,10 @@ if (command === "generate" || command === "g") {
   // conventions into `AGENTS.md` + `llms.txt` (ADR 0035) rather than scaffolding one
   // named resource, so it has its own orchestrator and is intercepted here before
   // the per-resource `runGenerate` (whose generator set would reject `agents`). The
-  // route + island readers are the real `fs` scans; content collections degrade to
-  // empty when content-core is absent or its runtime store is uninitialized — the
-  // expected case at doc-gen time — with a genuine breakage surfaced to stderr. The
-  // UI dialect is omitted on purpose: the artifacts stay useful without evaluating
+  // route + island readers are the real `fs` scans; content collections come from
+  // running the content pipeline over `lesto.content.ts` (empty when the app has no
+  // content config), with a genuine pipeline failure surfaced to stderr. The UI
+  // dialect is omitted on purpose: the artifacts stay useful without evaluating
   // `lesto.app.ts` (and its boot side effects) just to stamp a dialect line.
   if (commandArgs[0] === "agents") {
     const exit = await runGenerateAgents(commandArgs.slice(1), {
