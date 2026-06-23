@@ -1,6 +1,6 @@
 # ADR 0033 — In-preview AI surface (Cmd-K chat, fix-this, point-and-describe on the live preview)
 
-- **Status:** Proposed — pending owner ratification. The committed **build-now** is
+- **Status:** Accepted (ratified 2026-06-23). The committed **build-now** is
   **Phase 1**, and it is **inspect-only**: a single, dev-only browser-injected overlay
   seam (a Cmd-K chat panel + an "Ask Claude to fix" button on the *existing* dev error
   overlay) that assembles a read-only, full-stack context payload, renders the agent's

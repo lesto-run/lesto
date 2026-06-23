@@ -1,6 +1,6 @@
 # ADR 0031 — Agent-observable runtime (LLM / tool / MCP calls as spans on the one request trace)
 
-- **Status:** Proposed — pending owner ratification. The committed **build-now** is a single
+- **Status:** Accepted (ratified 2026-06-23). The committed **build-now** is a single
   shippable seam: **Phase 1** adds an INJECTED tracer seam to `@lesto/mcp`'s `dispatch` so
   every governed agent action becomes a `mcp.tool` span in the same collector (the
   shippable/covered piece), plus a small shared AI/agent **span vocabulary** in

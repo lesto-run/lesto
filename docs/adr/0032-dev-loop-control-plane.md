@@ -1,6 +1,6 @@
 # ADR 0032 — Dev-loop control plane (`lesto dev` as a live, governed MCP server + a source-location bridge)
 
-- **Status:** Proposed — pending owner ratification. **Phase 1** (a DEV-ONLY MCP
+- **Status:** Accepted (ratified 2026-06-23). **Phase 1** (a DEV-ONLY MCP
   server stood up by `lesto dev`, exposing read-only introspection tools —
   `get_dev_diagnostics`, `get_recent_requests`, `tail_logs` — over the existing
   `buildTools`/`dispatch`/audit machinery, over a **new loopback HTTP MCP transport**

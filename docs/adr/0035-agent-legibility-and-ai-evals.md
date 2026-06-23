@@ -1,6 +1,6 @@
 # ADR 0035 — Agent legibility & AI quality gates (make any Lesto app legible to any coding agent, and hold AI features to a test bar)
 
-- **Status:** Proposed — pending owner ratification. **Phase 1** (the `lesto generate agents`
+- **Status:** Accepted (ratified 2026-06-23). **Phase 1** (the `lesto generate agents`
   generator emitting a project-specific `AGENTS.md` + `llms.txt` from the app's own
   conventions) is the committed build-now and is shippable at the full bar — and, per the
   2026-06-22 chief-architect synthesis, it is **the highest-leverage, gate-free,

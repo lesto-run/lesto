@@ -1,6 +1,6 @@
 # ADR 0034 — Agent-native schema operations & app contract (MCP resources now; governed migration tools deferred)
 
-- **Status:** Proposed — pending owner ratification. This ADR is **split** after the
+- **Status:** Accepted (ratified 2026-06-23). This ADR is **split** after the
   2026-06-22 independent review (see *Reviews*). **Part A — committed build-now:** read-only
   MCP *resources* + a `describe_app` tool (the app's route map, OpenAPI document, schema
   shape, and content collections handed to an agent without tool round-trips). Additive,
@@ -296,7 +296,7 @@ the off-board blockers (see *Board prerequisites*). The hard prerequisites:
 5. **Observability composes ADR 0031 (when its seam exists).** `apply_migration` emits an
    **audit record now** (`tools.ts:608` dispatch path); trace-span attachment to the unified
    trace lands **only when ADR 0031 Phase 1's `@lesto/mcp` dispatch-tracer seam exists** —
-   that seam is itself "Proposed — pending owner ratification" and unbuilt, so the span is
+   that seam is itself **Accepted (ADR 0031 Phase 1) but unbuilt**, so the span is
    gated on it, not asserted against it.
 
 ### The downstream claim is gated on Part B.2 (a follow-up doc task, not a claim now)
