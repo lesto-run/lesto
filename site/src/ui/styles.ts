@@ -162,46 +162,15 @@ a:hover { text-decoration: underline; }
   border-left-color: var(--accent);
 }
 
-/* The framework's copy button: hover-revealed, pinned to the block's top-right.
-   It is positioned against the figure (not the scrolling <pre>), so it stays put
-   on horizontal scroll, and carries an OPAQUE background so code never bleeds
-   through it. Hidden until hover/focus so it doesn't cover code at rest. */
-.docs-article .rehype-pretty-copy {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 4.5ch;
-  font: inherit;
-  font-size: 0.72rem;
-  line-height: 1;
-  color: #c9d1d9;
-  background: #2b313b;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 6px;
-  padding: 0.32rem 0.55rem;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s ease, background 0.12s ease, border-color 0.12s ease;
-}
-.docs-article [data-rehype-pretty-code-figure]:hover .rehype-pretty-copy,
-.docs-article .rehype-pretty-copy:focus-visible { opacity: 1; }
-/* No hover on touch — keep it faintly visible so the affordance isn't lost. */
+/* The copy button is the framework's own ICON button: rehype-pretty-code's
+   transformerCopyButton injects the copy/check SVGs, the 24px sizing, the
+   positioning, and the hover-reveal. We add nothing else on purpose — styling it
+   ourselves only fought that icon, and an earlier injected "Copy" label rendered
+   ON TOP of the icon. The one gap in the injected style is touch: there is no
+   hover to reveal it, so show it on coarse pointers. */
 @media (hover: none) {
-  .docs-article .rehype-pretty-copy { opacity: 0.65; }
+  .docs-article .rehype-pretty-copy { opacity: 1; }
 }
-.docs-article .rehype-pretty-copy:hover {
-  background: #353c47;
-  border-color: rgba(255, 255, 255, 0.28);
-}
-.docs-article .rehype-pretty-copy .ready::after { content: "Copy"; }
-.docs-article .rehype-pretty-copy .success { display: none; }
-.docs-article .rehype-pretty-copy .success::after { content: "Copied"; color: #7ee787; }
-.docs-article .rehype-pretty-copy.rehype-pretty-copied .ready { display: none; }
-.docs-article .rehype-pretty-copy.rehype-pretty-copied .success { display: inline; }
 
 /* Reconcile the package-manager tab panels with rehype-pretty-code: the
    highlighter wraps each panel's <pre> in a figure that carries its own margin
