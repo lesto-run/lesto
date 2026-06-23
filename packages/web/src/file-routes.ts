@@ -57,6 +57,13 @@ type MaybePromise<T> = T | Promise<T>;
  * returning nothing falls through — so the applier registers it verbatim ahead of the
  * page terminal in the route's chain (where `next` auto-advances). Generic in the
  * page's `Path` so `c.param(...)` is typed to the pattern the guard sits above.
+ *
+ * SCOPE — a `middleware.ts` guards ONLY the page document's GET request. It does NOT
+ * run on the page's `.data()` / island endpoints (`/__lesto/data/*`) or on API routes,
+ * which register as their own routes. So an auth guard here gates the page shell, but
+ * a `scope: "private"` island fetch is reached over a separate, UNGUARDED route — guard
+ * that data with an app-level `.use()` middleware or a per-source check, not by relying
+ * on this file-route guard alone.
  */
 export type RouteMiddleware<Path extends string = string> = (
   c: Context<Path>,
@@ -194,11 +201,23 @@ function guardChainFor(route: FileRoute, modules: LoadedFileRoutes): readonly Ha
       route.pattern,
     );
 
-    const guard = middlewareModule.default as RouteMiddleware;
+    const guard = middlewareModule.default;
+
+    // A `middleware.ts` that default-exports the wrong shape (an object, nothing) would
+    // otherwise throw a bare `guard is not a function` per request, far from its cause —
+    // and silently FAIL OPEN for an auth guard. Refuse it loudly at registration, like
+    // toPageDef does for a malformed page.
+    if (typeof guard !== "function") {
+      throw new WebError(
+        "WEB_FILE_ROUTE_INVALID_MIDDLEWARE",
+        `file-route "${route.pattern}" middleware must default-export a function`,
+        { pattern: route.pattern, depth },
+      );
+    }
 
     // Adapt the guard to a `Handler`: drop `next` (the chain auto-advances on a void
     // return), so a fall-through guard runs the page and a responding guard answers.
-    return (c) => guard(c);
+    return (c) => (guard as RouteMiddleware)(c);
   });
 }
 

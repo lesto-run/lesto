@@ -804,6 +804,32 @@ describe("applyFileRoutes — middleware (per-route guards)", () => {
     expect(loaded).toBe(false); // the loader never ran
   });
 
+  it("refuses a middleware that default-exports a non-function, by code", () => {
+    const admin = page("admin");
+    const mw = middlewareFile("admin");
+
+    // An object / a bare value / nothing — each would otherwise throw a bare
+    // `guard is not a function` per request (fail-open for an auth guard); refuse it
+    // at registration like a malformed page.
+    for (const bad of [null, 42, {}]) {
+      try {
+        applyFileRoutes(
+          lesto(),
+          [admin, mw],
+          moduleMap(
+            [admin, pageModule(Home)],
+            [mw, { default: bad } as unknown as LoadedRouteModule],
+          ),
+        );
+        expect.unreachable(`a ${String(bad)} middleware default should be refused`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(WebError);
+        expect((error as WebError).code).toBe("WEB_FILE_ROUTE_INVALID_MIDDLEWARE");
+        expect((error as WebError).details).toEqual({ pattern: "/admin", depth: 1 });
+      }
+    }
+  });
+
   it("augments the loader context: a value the guard set reaches load via c.get", async () => {
     const me = page("me");
     const mw = middlewareFile("me");
