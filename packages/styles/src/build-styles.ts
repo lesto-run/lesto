@@ -9,7 +9,7 @@
  * — so the decision logic here is tested without Tailwind or a disk.
  */
 
-import { StylesError } from "./errors";
+import { LestoError, StylesError } from "./errors";
 
 /**
  * A development (unminified) or production (minified) build.
@@ -143,10 +143,11 @@ export async function buildStyles(
       mode: options.mode,
     });
   } catch (error) {
-    // A coded StylesError from the compiler (e.g. the missing-entry contract) is
-    // already branchable — propagate it. Anything else is wrapped so the caller
-    // never sees a raw bundler/Tailwind throw.
-    if (error instanceof StylesError) throw error;
+    // Any coded error — a `StylesError` (e.g. the missing-entry contract) or any
+    // other `LestoError` the compiler chose to throw — is already branchable, so
+    // propagate it with its code intact. Only a non-coded throw is wrapped, so the
+    // caller never sees a raw bundler/Tailwind error but a coded code is never lost.
+    if (error instanceof LestoError) throw error;
 
     throw new StylesError(
       "STYLES_COMPILE_FAILED",
