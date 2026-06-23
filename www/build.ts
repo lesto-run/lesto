@@ -23,6 +23,7 @@ import { buildClient, bunBuildClientDeps } from "@lesto/assets";
 import { createApp } from "@lesto/kernel";
 import { robots, sitemap, type SitemapUrl } from "@lesto/seo";
 import { buildStaticSites, nodeSink } from "@lesto/sites";
+import { buildStyles, tailwindStyleCompiler } from "@lesto/styles";
 
 import appConfig from "./lesto.app";
 import sites from "./lesto.sites";
@@ -59,6 +60,17 @@ const client = await buildClient(
   bunBuildClientDeps(PROJECT_ROOT),
 );
 
+// 2b. Compile the Tailwind v4 stylesheet → out/www/styles.css (ADR 0037). The site
+//     dogfoods @lesto/styles: `app/styles/app.css` is scanned against `src/` (where
+//     every utility class lives) and resolved from the project root (`tailwindcss`).
+const styles = await buildStyles(
+  { entry: "app/styles/app.css", outDir: SITE_OUT, mode: "production" },
+  tailwindStyleCompiler({
+    resolveBase: PROJECT_ROOT,
+    scanRoot: join(PROJECT_ROOT, "src"),
+  }),
+);
+
 // 3. A small SVG favicon (an indigo "L"), referenced from every page's <head>.
 const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#4f46e5"/><path d="M22 15h7v26h17v8H22z" fill="#fff"/></svg>`;
 await writeFile(join(SITE_OUT, "favicon.svg"), FAVICON);
@@ -84,5 +96,7 @@ await writeFile(join(SITE_OUT, "robots.txt"), robots({ sitemap: `${SITE_URL}/sit
 await writeFile(join(SITE_OUT, "og.svg"), ogImage());
 
 console.log(
-  `Prerendered ${pageCount} page(s); bundled ${client.islands.length} island(s); wrote sitemap.xml + robots.txt + og.svg → ${SITE_OUT}/`,
+  `Prerendered ${pageCount} page(s); bundled ${client.islands.length} island(s); ` +
+    `compiled styles.css (${(styles.gzipBytes / 1024).toFixed(1)} KB gzip); ` +
+    `wrote sitemap.xml + robots.txt + og.svg → ${SITE_OUT}/`,
 );

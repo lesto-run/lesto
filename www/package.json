@@ -20,12 +20,14 @@
     "@lesto/runtime": "workspace:*",
     "@lesto/seo": "workspace:*",
     "@lesto/sites": "workspace:*",
+    "@lesto/styles": "workspace:*",
     "@lesto/ui": "workspace:*",
     "@lesto/web": "workspace:*",
     "better-sqlite3": "^11.10.0",
     "preact": "^10.29.2",
     "react": "^19",
     "react-dom": "^19",
+    "tailwindcss": "^4.3.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

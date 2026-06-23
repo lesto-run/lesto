@@ -1,11 +1,11 @@
 /**
- * The use-cases showcase at `/use-cases` — "what you can build", grounded only
- * in shipped reality.
+ * The use-cases showcase at `/use-cases` — "what you can build", grounded only in
+ * shipped reality. Styled with Tailwind utilities compiled by `@lesto/styles`.
  *
  * Every card maps to a real, runnable artifact: an app in the `examples/` gallery
- * (each example is a per-battery QA gate that must run locally and deploy), and/or
- * a blog deep-dive and the battery's docs page. Nothing here is an aspirational
- * case study — each link goes to code or prose that exists today.
+ * (each example is a per-battery QA gate that must run locally and deploy), and/or a
+ * blog deep-dive and the battery's docs page. Nothing here is an aspirational case
+ * study — each link goes to code or prose that exists today.
  */
 
 import type { ReactElement } from "react";
@@ -100,26 +100,39 @@ const USE_CASES: readonly UseCase[] = [
 /** The showcase page: a header, then one card per use case. */
 export function UseCasesPage(): ReactElement {
   return (
-    <main className="section">
-      <div className="section-head center">
-        <span className="eyebrow">Use cases</span>
-        <h1 className="section-title">What you can build with Lesto</h1>
-        <p className="section-lede">
+    <main className="max-w-[1080px] mx-auto px-7 py-[6.5rem]">
+      <div className="max-w-[40rem] mx-auto text-center mb-12">
+        <span className="block text-[0.78rem] font-semibold tracking-[0.02em] text-accent-ink mb-[0.9rem]">
+          Use cases
+        </span>
+        <h1 className="text-[clamp(1.7rem,3.4vw,2.3rem)] leading-[1.12] tracking-[-0.032em] font-semibold mb-[0.9rem] text-ink">
+          What you can build with Lesto
+        </h1>
+        <p className="text-[1.08rem] leading-[1.55] text-muted tracking-[-0.012em]">
           Every example here is real and runnable — an app in the gallery, a deep-dive, or a
           battery's docs. Each gallery app is a QA gate that must run locally and deploy before the
           feature counts as done.
         </p>
       </div>
-      <div className="ucgrid">
+      <div className="grid grid-cols-3 gap-4 max-[820px]:grid-cols-2 max-[540px]:grid-cols-1">
         {USE_CASES.map((uc) => (
-          <div className="uccard" key={uc.title}>
-            <h3 className="cell-h">{uc.title}</h3>
-            <p className="cell-d">{uc.desc}</p>
-            <p className="uc-meta">{uc.batteries}</p>
-            <p className="uc-links">
+          <div
+            className="flex flex-col px-[1.55rem] py-6 border border-line rounded-card bg-panel transition-all hover:border-accent-line hover:-translate-y-[3px] hover:[background:radial-gradient(110%_90%_at_50%_-10%,color-mix(in_srgb,var(--accent)_7%,var(--panel)),var(--panel)_70%)] hover:shadow-[0_18px_40px_-24px_color-mix(in_srgb,var(--accent)_45%,transparent)]"
+            key={uc.title}
+          >
+            <h3 className="flex items-center gap-[0.6rem] mb-[0.55rem] text-[0.98rem] font-semibold tracking-[-0.015em] text-ink">
+              {uc.title}
+            </h3>
+            <p className="m-0 flex-1 text-[0.9rem] leading-[1.55] text-muted tracking-[-0.008em]">
+              {uc.desc}
+            </p>
+            <p className="mt-[0.9rem] mb-[0.55rem] text-[0.74rem] font-semibold tracking-[0.03em] uppercase text-accent-ink">
+              {uc.batteries}
+            </p>
+            <p className="m-0 text-[0.86rem] tracking-[-0.01em] [&_a]:text-ink-2 [&_a]:font-medium [&_a:hover]:text-accent">
               {uc.links.map((link, i) => (
                 <span key={link.href}>
-                  {i > 0 ? <span className="sep"> · </span> : null}
+                  {i > 0 ? <span className="text-faint"> · </span> : null}
                   <a href={link.href}>{link.label}</a>
                 </span>
               ))}

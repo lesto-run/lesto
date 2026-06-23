@@ -27,8 +27,18 @@ describe("marketing routes", () => {
 
     expect(html).toContain("Batteries-included.");
     expect(html).toContain("Agent-native.");
-    expect(html).toContain("hero"); // the gradient hero section
-    expect(html).toContain("site-footer"); // the shared layout footer
+    expect(html).toContain('class="hero'); // the gradient hero section (custom backdrop)
+    // The shared layout footer's base line (the `site-footer` class became utilities).
+    expect(html).toContain("Built with Lesto — a static, prerendered Lesto app.");
+  });
+
+  it("links the Tailwind stylesheet @lesto/styles compiles (the site dogfoods the pipeline)", async () => {
+    const html = await text(await app.handle("GET", "/"));
+
+    // `.styles("/styles.css")` injects the framework stylesheet link (ADR 0037); the
+    // old hand-authored inline `<style>` design system is gone.
+    expect(html).toContain('<link rel="stylesheet" href="/styles.css"');
+    expect(html).not.toContain("--accent-soft:"); // no inline SITE_CSS palette anymore
   });
 
   it("sets the landing page <title> from its metadata", async () => {
