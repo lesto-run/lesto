@@ -438,6 +438,11 @@ function buildAdminRoutes(store: ContentStore | undefined, resolvePrincipal: Han
         });
       })
       // The audit trail the onMutation hook fills — the dogfood's observability.
+      // Operator-only: the "who changed what" change-log is the most privileged
+      // surface here, so it is gated `lab.admin` (admin), not the viewer's read.
+      // `.use` is positional, so this guard wraps ONLY the audit route below — the
+      // CRUD routes above keep their per-verb gating (a viewer still reads notes).
+      .use(can("lab.admin"))
       .get("/lab/admin/api/audit", async (c) => {
         const { audit } = await wiring();
 

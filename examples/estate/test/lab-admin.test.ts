@@ -179,19 +179,19 @@ describe("/lab/admin/api/audit — the onMutation audit trail (the dogfood headl
     expect(audit).toHaveLength(0);
   });
 
-  it("does NOT record an audit event for a write the policy refuses", async () => {
+  it("gates the audit trail to the operator — a viewer and an anon are refused (403)", async () => {
+    // The change-log is the most privileged surface: only the admin (`lab.admin`)
+    // may read it, even though a viewer may read the notes themselves.
     const store = nodeContentStore();
     const operator = labFor(store, "jade");
-    const viewer = labFor(store, "guest");
 
     await createNote(operator, { title: "Shared", body: "b" });
-    // The viewer's destroy is refused before any commit, so no event is emitted.
-    expect((await viewer.handle("DELETE", "/lab/admin/api/notes/1")).status).toBe(403);
 
-    const audit = JSON.parse(
-      (await viewer.handle("GET", "/lab/admin/api/audit")).body,
-    ) as unknown[];
+    // The operator reads the trail.
+    expect((await operator.handle("GET", "/lab/admin/api/audit")).status).toBe(200);
 
-    expect(audit).toHaveLength(0);
+    // A viewer (read-only) and an unauthenticated caller are both refused.
+    expect((await labFor(store, "guest").handle("GET", "/lab/admin/api/audit")).status).toBe(403);
+    expect((await labFor(store).handle("GET", "/lab/admin/api/audit")).status).toBe(403);
   });
 });
