@@ -1,7 +1,7 @@
 /**
  * The static build prerenders every doc to a file.
  *
- * Runs the same `buildStaticSites` path `build.ts` uses, but writes through an
+ * Runs the same `buildStaticSites` path `lesto build` uses, but writes through an
  * in-memory sink so the test can assert what would land on disk: one HTML file
  * per route, every page 2xx (a non-2xx page would make the all-or-nothing build
  * throw before writing), at the clean-URL path Cloudflare serves.

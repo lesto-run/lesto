@@ -1,7 +1,7 @@
 /**
  * The social-preview (Open Graph) image, as a self-contained SVG.
  *
- * `build.ts` writes the output to `out/www/og.svg`, and every page's `<head>`
+ * the `lesto.build.ts` build hook writes the output to `out/www/og.svg`, and every page's `<head>`
  * points `og:image` / `twitter:image` at it (see `src/app.ts`). The card's
  * layout — gradient, mark glyph, wordmark, hero lines, footer — lives in
  * `@lesto/seo`'s `ogImage`, so any Lesto site gets a branded card; this module
@@ -18,7 +18,7 @@
 
 import { ogImage as brandedOgImage } from "@lesto/seo";
 
-/** Brand indigo, matching the favicon mark in `build.ts`. */
+/** Brand indigo, matching the favicon mark in `lesto.build.ts`. */
 const INDIGO = "#4f46e5";
 const INDIGO_DEEP = "#3730a3";
 

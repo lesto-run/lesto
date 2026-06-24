@@ -5,7 +5,7 @@
  * the content pipeline once — globbing `content/blog/` and `content/changelog/`,
  * validating frontmatter, rendering Markdown to HTML — and reshapes each entry
  * into the small types the routes and UI consume. Everything here executes under
- * Node at build time (during `lesto dev`, `build.ts`, and the static prerender);
+ * Node at build time (during `lesto dev`, `lesto build`, and the static prerender);
  * no content engine, database, or filesystem read reaches the Cloudflare edge,
  * which only ever serves the prerendered HTML.
  *

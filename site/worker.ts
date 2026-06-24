@@ -1,7 +1,7 @@
 /**
  * The Cloudflare Worker — the docs site's edge front door.
  *
- * The site is fully prerendered (`build.ts` writes `out/docs/`), so the Worker does
+ * The site is fully prerendered (`lesto build` writes `out/docs/`), so the Worker does
  * almost nothing. `staticAssetsWorker` (@lesto/cloudflare) owns the whole pattern:
  * serve a matching static file from the `ASSETS` binding (cached at the edge, no
  * isolate), and on a genuine miss render a hardened 404. This site supplies only

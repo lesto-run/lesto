@@ -39,9 +39,9 @@ export interface StaticSiteArtifacts {
   emit(sink: OutputSink): Promise<void>;
 }
 
-/** Drop a single trailing slash so `${siteUrl}${route}` never doubles up. */
+/** Drop any trailing slashes so `${siteUrl}${route}` never doubles up. */
 function origin(siteUrl: string): string {
-  return siteUrl.replace(/\/$/, "");
+  return siteUrl.replace(/\/+$/, "");
 }
 
 /**

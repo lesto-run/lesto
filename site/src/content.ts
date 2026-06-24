@@ -5,7 +5,7 @@
  * the content pipeline once — globbing `content/docs/`, validating frontmatter,
  * rendering Markdown to HTML with a heading outline — and reshapes each entry
  * into the small {@link DocEntry} the routes and UI consume. Everything here
- * executes under Node at build time (during `lesto dev`, `build.ts`, and the
+ * executes under Node at build time (during `lesto dev`, `lesto build`, and the
  * static prerender); no content engine, database, or filesystem read reaches
  * the Cloudflare edge, which only ever serves the prerendered HTML.
  */

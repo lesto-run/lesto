@@ -995,7 +995,7 @@ async function buildStylesIfPresent(
     throw new CliError(
       "CLI_STYLES_BUILD_FAILED",
       "the Tailwind CSS build failed — see the cause for the compiler error",
-      { outDir, mode, entry, cause },
+      { outDir, mode, entry, scanRoot, cause },
     );
   }
 }
@@ -1067,10 +1067,14 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
 
   const selected = selectTarget(sites, target);
 
-  // Clear the output root first: the sink only writes, so a route removed since the
-  // last build would otherwise leave a stale orphan the deploy still ships.
+  // Clear each selected static site's output dir first: the sink only writes, so a
+  // route removed since the last build would otherwise leave a stale orphan the
+  // deploy still ships. Cleaning per-site (not the whole output root) keeps a
+  // `--target` build from wiping a sibling site that is not being rebuilt.
   if (deps.cleanDir !== undefined) {
-    await deps.cleanDir(outDir);
+    for (const site of staticTargetsOf(selected)) {
+      await deps.cleanDir(joinOut(outDir, site.name));
+    }
   }
 
   // The client + styles must land in the SAME tree the pages serve from. A single
@@ -1120,10 +1124,15 @@ function joinOut(outDir: string, name: string): string {
  * targets there is no single such root, so the output root stands.
  */
 function assetRootFor(selected: readonly Site[], outDir: string): string {
-  const staticTargets = selected.filter((site) => site.render === "static");
+  const staticTargets = staticTargetsOf(selected);
   const only = staticTargets.length === 1 ? staticTargets[0] : undefined;
 
   return only !== undefined ? joinOut(outDir, only.name) : outDir;
+}
+
+/** The static sites among the selected set — the ones a build prerenders and cleans. */
+function staticTargetsOf(selected: readonly Site[]): readonly Site[] {
+  return selected.filter((site) => site.render === "static");
 }
 
 /**

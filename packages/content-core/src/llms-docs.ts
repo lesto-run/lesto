@@ -50,9 +50,9 @@ export interface LlmsDocsOptions {
   readonly howToUse?: readonly string[];
 }
 
-/** Drop a single trailing slash so `${siteUrl}${route}` never doubles up. */
+/** Drop any trailing slashes so `${siteUrl}${route}` never doubles up. */
 function origin(siteUrl: string): string {
-  return siteUrl.replace(/\/$/, "");
+  return siteUrl.replace(/\/+$/, "");
 }
 
 /** The `.md` twin path for a route: `/` → `index.md`, `/a/b` → `a/b.md`. */

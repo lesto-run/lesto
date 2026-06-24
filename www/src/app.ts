@@ -6,7 +6,7 @@
  * rendered by `@lesto/content-*`. Every route becomes one `static: true` page
  * whose component is fully bound — no per-request loader, because a marketing
  * page has nothing to resolve at request time. `lesto build` then prerenders each
- * route to an HTML file (see `build.ts` and `lesto.sites.ts`), and the edge
+ * route to an HTML file (see `lesto.sites.ts` and the `lesto.build.ts` hook), and the edge
  * serves those files directly.
  *
  * The kernel requires a database handle, so we open an in-memory SQLite one to
@@ -31,7 +31,7 @@ import { makeUseCases } from "./ui/use-cases";
 // Re-exported for the build, which imports the canonical origin from the app.
 export { canonicalUrl, SITE_URL };
 
-/** The social-preview image every page advertises (emitted by `build.ts`). */
+/** The social-preview image every page advertises (emitted by the `lesto.build.ts` build hook). */
 const OG_IMAGE = `${SITE_URL}/og.svg`;
 
 /**

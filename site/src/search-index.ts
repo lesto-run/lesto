@@ -5,7 +5,7 @@
  * embeddings, no model, no server — just per-doc keywords extracted at build
  * time and matched against the query in the browser. We build that index here
  * with the SAME `extractKeywords` the runtime `keywordSearch` uses, so the index
- * terms and the query terms are tokenized identically. `build.ts` writes the
+ * terms and the query terms are tokenized identically. the `lesto.build.ts` hook writes the
  * result to `out/docs/search-index.json`; the search island fetches it on mount.
  */
 

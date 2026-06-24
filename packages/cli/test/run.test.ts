@@ -801,7 +801,7 @@ describe("run build", () => {
 // ---------------------------------------------------------------------------
 
 describe("run build — clean + post-build hook", () => {
-  it("cleans the output root before building (a removed route leaves no orphan)", async () => {
+  it("cleans each static site's own output dir, not the whole root (so --target spares siblings)", async () => {
     const cleaned: string[] = [];
 
     await run(
@@ -817,10 +817,11 @@ describe("run build — clean + post-build hook", () => {
       }),
     );
 
-    expect(cleaned).toEqual(["out"]);
+    // The site dir, not "out" — a sibling site's output is never wiped.
+    expect(cleaned).toEqual(["out/marketing"]);
   });
 
-  it("cleans the chosen --out dir", async () => {
+  it("cleans the chosen --out dir's site subtree", async () => {
     const cleaned: string[] = [];
 
     await run(
@@ -836,7 +837,26 @@ describe("run build — clean + post-build hook", () => {
       }),
     );
 
-    expect(cleaned).toEqual(["dist"]);
+    expect(cleaned).toEqual(["dist/marketing"]);
+  });
+
+  it("cleans nothing when no static site is selected (a dynamic-only build)", async () => {
+    const cleaned: string[] = [];
+
+    await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([{ name: "api", render: "dynamic", basePath: "/api" }]),
+        sink: recordingSink().sink,
+        cleanDir: (dir) => {
+          cleaned.push(dir);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(cleaned).toEqual([]);
   });
 
   it("fires the post-build hook with each site's name, routes, and an output-rooted sink", async () => {
@@ -1069,6 +1089,31 @@ describe("run build — Tailwind CSS (ADR 0037)", () => {
     expect(built).toEqual(["app/theme.css", "app/theme.css"]);
   });
 
+  it("passes ui.cssScanRoot through to the build (an app whose markup is outside app/)", async () => {
+    const scanRoots: string[] = [];
+
+    await run(
+      ["build"],
+      depsWith({
+        loadApp: () =>
+          Promise.resolve({
+            ...buildConfig(),
+            ui: { dialect: "react" as const, cssScanRoot: "src" },
+          }),
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+        cssEntryExists: () => Promise.resolve(true),
+        buildAppStyles: (options) => {
+          scanRoots.push(options.scanRoot);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(scanRoots).toEqual(["src"]);
+  });
+
   it("skips the CSS build when the entry does not exist (Tailwind opt-in)", async () => {
     const buildAppStyles = vi.fn(() => Promise.resolve());
 
@@ -1119,6 +1164,7 @@ describe("run build — Tailwind CSS (ADR 0037)", () => {
         outDir: "out/marketing",
         mode: "production",
         entry: "app/styles/app.css",
+        scanRoot: "app",
         cause,
       });
     }
