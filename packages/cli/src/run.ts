@@ -187,6 +187,44 @@ export interface LiveReload {
   readonly close: () => void;
 }
 
+/**
+ * The dev-only island bundler (`@lesto/island-dev`) — a Vite middleware server with
+ * React/Preact Fast Refresh, so a saved island re-renders in place keeping its state
+ * instead of a full reload (DX-parity R2, the "HMR" task). The bin lazy-imports it
+ * for `dev` ONLY when the optional `@lesto/island-dev` peer is installed; absent, the
+ * dev path is exactly as before (the Bun island build + watch + reload).
+ *
+ * When present it takes over islands entirely in dev: `dev` skips the Bun client
+ * build and the island watcher, routes every {@link ownsPath} request to Vite's
+ * {@link handle}, and runs each dev HTML response through {@link transformHtml}
+ * (which injects the Vite client + the Fast-Refresh preamble). The existing
+ * {@link LiveReload} WebSocket stays for server-driven signals (error overlay, CSS
+ * hot-swap, route reload); Vite owns ONLY island module HMR, on its own socket.
+ */
+export interface IslandDevServer {
+  /** Whether a request path is Vite's (route it to {@link handle}) rather than the app's. */
+  readonly ownsPath: (path: string) => boolean;
+
+  /** Serve a Vite-owned request (the entry, an island module, the Fast-Refresh runtime). */
+  readonly handle: (
+    method: string,
+    path: string,
+    options?: HandleOptions,
+  ) => Promise<LestoResponse>;
+
+  /** Inject the Vite client + the dialect's Fast-Refresh preamble into a dev HTML document. */
+  readonly transformHtml: (url: string, html: string) => Promise<string>;
+
+  /** Tear the Vite dev server and its HMR socket down (called on graceful dev shutdown). */
+  readonly close: () => Promise<void>;
+}
+
+/** What `dev` hands its {@link IslandDevServer} factory: the config-derived client dialect. */
+export interface IslandDevRequest {
+  /** The client dialect (`ui.dialect`, ADR 0008) — picks the matched Fast-Refresh plugin. */
+  readonly dialect: UiDialect;
+}
+
 /** One static site as the post-build hook sees it: its name, routes, and a sink. */
 export interface BuiltSite {
   /** The site's name — its subdirectory under the output root. */
@@ -429,6 +467,18 @@ export interface CliDeps {
    * behaviour). The bin owns the socket; the core decides WHEN to inject and notify.
    */
   liveReload?: LiveReload;
+
+  /**
+   * Build the dev-only island Fast-Refresh server for the app's dialect, or resolve
+   * `undefined` when the optional `@lesto/island-dev` peer is not installed (the Bun
+   * dev island path, unchanged). A FACTORY rather than a prebuilt value because the
+   * dialect (ADR 0008) is config-derived and known only here in `dev`; the bin's
+   * factory uses it to pick the matched Fast-Refresh plugin and resolves the PUBLIC_*
+   * inject map itself. Present only for `dev`. When it yields a server, `dev` lets
+   * Vite own islands (skips the Bun client build + island watch, routes Vite-owned
+   * paths to it, transforms dev HTML through it, and closes it on shutdown).
+   */
+  islandDev?: (request: IslandDevRequest) => Promise<IslandDevServer | undefined>;
 
   /** Build a static-deploy uploader rooted at `distDir` (the bin passes `nodeUploader`). */
   uploader: (distDir: string) => ShipDeps;
@@ -1276,6 +1326,69 @@ function appendToBody(body: LestoResponse["body"], tag: string): LestoResponse["
 }
 
 /**
+ * Wrap a dev handle so a Vite-owned request goes to the island dev server and
+ * everything else to the app dispatch — the routing fork that lets Vite serve the
+ * island entry + module graph on the app's own origin (the {@link IslandDevServer}
+ * keystone: the app's request path is otherwise untouched).
+ */
+function withIslandRouting(
+  dispatch: (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse>,
+  islandDev: IslandDevServer,
+): (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse> {
+  return (method, path, options) =>
+    islandDev.ownsPath(path)
+      ? islandDev.handle(method, path, options)
+      : dispatch(method, path, options);
+}
+
+/**
+ * Wrap a dev handle so every `text/html` response is run through the island dev
+ * server's `transformIndexHtml` — injecting the Vite client + the Fast-Refresh
+ * preamble. A non-HTML response passes through untouched. Unlike the live-reload
+ * append (which can stream), this BUFFERS a streamed document to a string first,
+ * because `transformIndexHtml` needs the whole HTML — an accepted dev-only cost (no
+ * production path runs this) for correct preamble injection.
+ */
+function withIslandDevHtml(
+  handle: (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse>,
+  islandDev: IslandDevServer,
+): (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse> {
+  return async (method, path, options) => {
+    const response = await handle(method, path, options);
+
+    if (!isHtmlResponse(response)) return response;
+
+    const html = await readHtmlBody(response.body);
+
+    return { ...response, body: await islandDev.transformHtml(path, html) };
+  };
+}
+
+/** Read a dev HTML response body — a string as-is, or a streamed document drained to a string. */
+async function readHtmlBody(body: LestoResponse["body"]): Promise<string> {
+  if (typeof body === "string") return body;
+
+  // A React-streamed document: drain the stream to a string so `transformIndexHtml`
+  // sees the whole HTML. The cast narrows the declared `string` body to the stream a
+  // page render actually produced (see `appendToBody` for the same transport widening).
+  const stream = body as unknown as ReadableStream<Uint8Array>;
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+
+  let html = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+
+    if (done) break;
+
+    html += decoder.decode(value, { stream: true });
+  }
+
+  return html + decoder.decode();
+}
+
+/**
  * Run every site live on one origin, for local development.
  *
  * Unlike `serve` (a single production app) and `build` (a one-shot prerender),
@@ -1315,9 +1428,21 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // so dev's bundle and its server render speak one dialect.
   const dialect = dialectOf(config);
 
+  // Resolve the Vite island dev server for this dialect (DX-parity R2). Absent factory
+  // OR an uninstalled `@lesto/island-dev` peer → `undefined`, and dev keeps the Bun
+  // island build/watch/reload path. Present → Vite owns islands (Fast Refresh).
+  const islandDev = deps.islandDev === undefined ? undefined : await deps.islandDev({ dialect });
+
   // Build the island client on boot, then watch for changes. The dev outDir is
-  // the same root the bin's `readAsset` serves from (DEFAULT_OUT_DIR).
-  await buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev", dialect);
+  // the same root the bin's `readAsset` serves from (DEFAULT_OUT_DIR). When the Vite
+  // island dev server is wired (`@lesto/island-dev` installed), it OWNS islands in
+  // dev — serving and Fast-Refresh-HMRing them — so the Bun client build is skipped
+  // here (and the island watcher below) to avoid a second, redundant bundle.
+  // (Expressed as an awaited conditional, not an `if`-with-`await`, so the branch
+  // counts cleanly under v8 coverage.)
+  await (islandDev === undefined
+    ? buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev", dialect)
+    : Promise.resolve());
 
   // Compile the Tailwind stylesheet on boot too, so `/styles.css` is served from
   // the first request (ADR 0037); the dev watch below rebuilds + hot-swaps it.
@@ -1342,8 +1467,10 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // A change rebuilds the bundle; a rebuild failure during dev is reported AND painted
   // as an overlay, not fatal — the dev server stays up so the next save can fix it.
   // The coded `CliError`'s `details.cause` is the bundler's own error, the message
-  // worth showing.
-  if (deps.hasIslandsDir !== undefined && (await deps.hasIslandsDir())) {
+  // worth showing. Skipped entirely when the Vite island dev server is wired — Vite
+  // watches the island graph and Fast-Refresh-HMRs it (the headline of this task),
+  // so this Bun rebuild-on-save (which only ever reloads) would be redundant.
+  if (islandDev === undefined && deps.hasIslandsDir !== undefined && (await deps.hasIslandsDir())) {
     deps.watchIslands?.(() => {
       void buildClientIfPresent(deps, DEFAULT_OUT_DIR, "dev", dialect).then(
         // A clean rebuild reloads only to clear a shown overlay (the new bundle then
@@ -1386,10 +1513,17 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   const forward = (method: string, path: string, options?: HandleOptions): Promise<LestoResponse> =>
     activeHandle(method, path, options);
 
+  // When Vite owns islands, every dev HTML response is run through its
+  // `transformIndexHtml` FIRST — injecting the Vite client + the Fast-Refresh
+  // preamble so the page's `/client.js` entry hydrates with HMR. Then (outermost) the
+  // live-reload script is appended, so the two compose: Vite's island module HMR plus
+  // the existing reload channel for server-driven signals.
+  const htmlHandle = islandDev === undefined ? forward : withIslandDevHtml(forward, islandDev);
+
   // With live reload on, every dev HTML response carries the reload client script,
   // so a saved file reloads the open browser over the WebSocket the bin runs.
   const devHandle =
-    deps.liveReload === undefined ? forward : withLiveReload(forward, deps.liveReload.script);
+    deps.liveReload === undefined ? htmlHandle : withLiveReload(htmlHandle, deps.liveReload.script);
 
   // Tolerate an app with no declared sites (a missing `lesto.sites.ts`, which the
   // bin's loader resolves to `[]`): dispatch every path straight to the app, so a
@@ -1400,6 +1534,13 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
     handle: devHandle,
     ...(deps.readAsset === undefined ? {} : { readAsset: deps.readAsset }),
   });
+
+  // Vite-owned requests (the island entry `/client.js`, its module graph, the
+  // Fast-Refresh runtime) are routed to the island dev server BEFORE the app dispatch
+  // — and before the production-shaped `readAsset`, so the dev entry is the
+  // Vite-transformed one, never a stale Bun bundle. Everything else falls through to
+  // the app exactly as before. Absent island dev server → the app dispatch verbatim.
+  const rootHandle = islandDev === undefined ? dispatch : withIslandRouting(dispatch, islandDev);
 
   // Watch `app/routes/` (Workstream 3). On a debounced change: refresh the EDGE
   // manifest (`routes.gen.ts`), re-load the app so a NEW route is live without a
@@ -1424,7 +1565,7 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
 
   // Wrap the dev dispatcher as the app the server fronts; migrations already ran.
   const server = await deps.serve(
-    { handle: dispatch, migrationsApplied: app.migrationsApplied },
+    { handle: rootHandle, migrationsApplied: app.migrationsApplied },
     {
       port,
       // The same operator-tunable DoS limits `serve` honors (`LESTO_MAX_BODY_BYTES`
@@ -1440,6 +1581,7 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
 
     stopRoutes?.();
     deps.liveReload?.close();
+    await islandDev?.close();
     tracing?.stopInterval();
   });
 

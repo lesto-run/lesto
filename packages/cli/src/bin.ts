@@ -36,7 +36,14 @@ import type { ClientSchema } from "@lesto/env";
 import { createApp } from "@lesto/kernel";
 
 import { run } from "./run";
-import type { BuildHook, CliDeps, CloudflareDeployer, DevError, ReleaseTarget } from "./run";
+import type {
+  BuildHook,
+  CliDeps,
+  CloudflareDeployer,
+  DevError,
+  IslandDevServer,
+  ReleaseTarget,
+} from "./run";
 import { devReloadClientScript } from "./dev-overlay";
 import { CliError } from "./errors";
 import { WRANGLER_DEPLOY_ARGS, WRANGLER_ROLLBACK_MESSAGE, wranglerRollbackArgs } from "./wrangler";
@@ -432,6 +439,56 @@ const resolvePublicEnvDefine = async (): Promise<PublicEnvDefine | undefined> =>
   if (module.clientEnv === undefined) return undefined;
 
   return clientDefineMap(module.clientEnv);
+};
+
+// The dev-only Vite island ports (DX-parity R2). `VITE` is the loopback HTTP port the
+// CLI proxies island module requests to; `HMR` is the dedicated WebSocket port the
+// browser connects to for Fast-Refresh updates. Fixed like `LIVE_RELOAD_PORT` so they
+// are predictable, and distinct from the app port and the Bun reload socket.
+const ISLAND_DEV_VITE_PORT = 24677;
+const ISLAND_DEV_HMR_PORT = 24678;
+
+// Build the Vite island Fast-Refresh dev server (DX-parity R2). OPT-IN: only when the
+// project has an `app/islands/` dir AND installed the optional `@lesto/island-dev`
+// peer. A missing peer (the default scaffold) → `undefined`, and `lesto dev` keeps the
+// Bun island build/watch/reload path. The heavy Vite + plugin graph is reached ONLY
+// through this LAZY `import`, so a default install never resolves it (the
+// `@lesto/styles` precedent). The dialect rides in from the CLI core (config-derived);
+// the PUBLIC_* inject map is resolved here, the same one the Bun build inlines.
+const buildIslandDev = async (dialect: UiDialect): Promise<IslandDevServer | undefined> => {
+  if (!(await dirExists(islandsDir))) return undefined;
+
+  const islandDevModule = await loadIslandDevPeer();
+
+  if (islandDevModule === undefined) return undefined;
+
+  const publicEnvDefine = await resolvePublicEnvDefine();
+
+  return islandDevModule.createIslandDevServer(
+    {
+      root: projectRoot,
+      islandsDir,
+      dialect,
+      vitePort: ISLAND_DEV_VITE_PORT,
+      hmrPort: ISLAND_DEV_HMR_PORT,
+      ...(publicEnvDefine === undefined ? {} : { publicEnvDefine }),
+    },
+    islandDevModule.viteIslandDevDeps(projectRoot),
+  );
+};
+
+// Lazy-import the optional `@lesto/island-dev` peer, or `undefined` when it is not
+// installed (the default scaffold). The literal specifier stays so the resolved
+// module's types flow to `buildIslandDev`'s call sites; the return type is INFERRED
+// (not a written `import()` annotation), keeping the lint rule satisfied. Only a
+// missing-peer resolution is swallowed — a genuine error inside an installed
+// `@lesto/island-dev` would surface through `createIslandDevServer` below.
+const loadIslandDevPeer = async () => {
+  try {
+    return await import("@lesto/island-dev");
+  } catch {
+    return undefined;
+  }
 };
 
 // Whether the project's resolved Tailwind CSS entry exists (ADR 0037). The CLI core
@@ -870,6 +927,14 @@ if (command === "generate" || command === "g") {
 // rides into `run` for the dev loop to drive.
 const liveReload = command === "dev" ? buildLiveReload() : undefined;
 
+// The Vite island Fast-Refresh server is wired ONLY for `dev` (DX-parity R2). A
+// factory, not a built value: the dialect it needs is config-derived, resolved inside
+// the dev loop, which calls this with it. Off for every other command.
+const islandDev =
+  command === "dev"
+    ? (request: { dialect: UiDialect }) => buildIslandDev(request.dialect)
+    : undefined;
+
 const code = await run(argv, {
   loadApp,
   serve,
@@ -894,6 +959,7 @@ const code = await run(argv, {
   reloadApp,
   regenerateRoutes,
   ...(liveReload === undefined ? {} : { liveReload }),
+  ...(islandDev === undefined ? {} : { islandDev }),
   uploader: nodeUploader,
   releaseStore,
   now: Date.now,

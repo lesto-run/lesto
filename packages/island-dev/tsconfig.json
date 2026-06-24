@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+
+  "compilerOptions": {
+    "rootDir": ".",
+    "types": ["node"],
+
+    // This package imports type-only from `@lesto/web` / `@lesto/assets`, whose
+    // public types resolve through `.tsx` sources (the page renderer, the island
+    // beacon). `react-jsx` lets those parse — the same setting `@lesto/cli` uses
+    // for the same reason. This package ships no JSX of its own.
+    "jsx": "react-jsx"
+  },
+
+  "include": ["src", "test"]
+}

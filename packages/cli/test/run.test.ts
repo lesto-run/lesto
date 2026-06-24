@@ -1702,6 +1702,195 @@ function recordingLiveReload(): {
   };
 }
 
+// A fake Vite island dev server: spies for the four seams, with `ownsPath` claiming
+// the entry + Vite-prefixed URLs and `transformHtml` marking the document.
+function fakeIslandDev(): IslandDevServer & {
+  handle: ReturnType<typeof vi.fn>;
+  transformHtml: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
+} {
+  return {
+    ownsPath: (path: string) => path === "/client.js" || path.startsWith("/@"),
+    handle: vi.fn(async () => ({
+      status: 200,
+      headers: { "content-type": "application/javascript" },
+      body: "island-module",
+    })),
+    transformHtml: vi.fn(async (_url: string, html: string) => `${html}<!--vite-->`),
+    close: vi.fn(async () => undefined),
+  };
+}
+
+// The shape `run`'s `islandDev` factory seam expects.
+type IslandDevServer = NonNullable<Awaited<ReturnType<NonNullable<CliDeps["islandDev"]>>>>;
+
+// A one-chunk text/html stream body, so the HTML-transform seam's stream-draining
+// branch (a React-streamed document) is exercised, not just the string branch.
+function htmlStreamResponse(html: string): {
+  status: number;
+  headers: { "content-type": string };
+  body: ReadableStream<Uint8Array>;
+} {
+  return {
+    status: 200,
+    headers: { "content-type": "text/html" },
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(html));
+        controller.close();
+      },
+    }),
+  };
+}
+
+describe("run dev — Vite island Fast Refresh (DX-parity R2)", () => {
+  // A config whose app answers `/` with a string HTML document and `/posts` with JSON,
+  // so the dev path exercises both the HTML-transform seam and its non-HTML passthrough.
+  function htmlConfig(): LestoAppConfig {
+    return {
+      db: adapt(database),
+      app: lesto()
+        .get("/", (c) => c.html("<html><head></head><body>hi</body></html>"))
+        .get("/posts", (c) => c.json({ ok: true })),
+      migrations,
+    };
+  }
+
+  it("lets Vite own islands: skips the Bun build + watch, routes the entry, transforms HTML", async () => {
+    const serve = fakeServe(3000);
+    const island = fakeIslandDev();
+    const islandDev = vi.fn(async () => island);
+    const buildClientAssets = vi.fn(() => Promise.resolve());
+    const watchIslands = vi.fn(() => () => undefined);
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve,
+        loadApp: () => Promise.resolve(htmlConfig()),
+        loadSites: () => Promise.resolve([]),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets,
+        watchIslands,
+        islandDev,
+        liveReload: {
+          script: "RELOAD",
+          notify: () => undefined,
+          notifyError: () => undefined,
+          notifyStyleUpdate: () => undefined,
+          close: () => undefined,
+        },
+      }),
+    );
+
+    // The factory got the config-derived dialect; Vite owns islands, so the Bun client
+    // build and the island watcher are both skipped.
+    expect(islandDev).toHaveBeenCalledWith({ dialect: "react" });
+    expect(buildClientAssets).not.toHaveBeenCalled();
+    expect(watchIslands).not.toHaveBeenCalled();
+
+    const [app] = serve.mock.calls[0]!;
+
+    // A Vite-owned request is served by the island dev server, not the app/readAsset.
+    const entryResponse = await app.handle("GET", "/client.js");
+    expect(entryResponse.body).toBe("island-module");
+    expect(island.handle).toHaveBeenCalledTimes(1);
+
+    // An HTML response is transformed (Vite client + preamble), then the live-reload
+    // script is appended — the two compose.
+    const page = await app.handle("GET", "/");
+    expect(page.body).toBe(
+      "<html><head></head><body>hi</body></html><!--vite--><script>RELOAD</script>",
+    );
+    expect(island.transformHtml).toHaveBeenCalledTimes(1);
+
+    // A non-HTML response passes the transform seam through untouched.
+    const json = await app.handle("GET", "/posts");
+    expect(JSON.parse(json.body as string)).toEqual({ ok: true });
+    expect(island.transformHtml).toHaveBeenCalledTimes(1);
+  });
+
+  it("buffers a streamed HTML document before transforming it", async () => {
+    const serve = fakeServe(3000);
+    const island = fakeIslandDev();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve,
+        loadApp: () =>
+          Promise.resolve({
+            db: adapt(database),
+            app: lesto().get(
+              "/",
+              () => htmlStreamResponse("<html><body>streamed</body></html>") as never,
+            ),
+            migrations,
+          }),
+        loadSites: () => Promise.resolve([]),
+        islandDev: async () => island,
+      }),
+    );
+
+    const [app] = serve.mock.calls[0]!;
+    const page = await app.handle("GET", "/");
+
+    // The whole streamed document reached `transformHtml` as a string, marked once.
+    expect(island.transformHtml).toHaveBeenCalledWith("/", "<html><body>streamed</body></html>");
+    expect(page.body).toBe("<html><body>streamed</body></html><!--vite-->");
+  });
+
+  it("falls back to the Bun island path when the @lesto/island-dev peer is absent", async () => {
+    const serve = fakeServe(3000);
+    const buildClientAssets = vi.fn(() => Promise.resolve());
+    // The factory resolves `undefined` exactly as the bin does when the peer is not installed.
+    const islandDev = vi.fn(async () => undefined);
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve,
+        loadSites: () => Promise.resolve([]),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets,
+        islandDev,
+      }),
+    );
+
+    expect(islandDev).toHaveBeenCalledTimes(1);
+
+    // No Vite server → the Bun client build runs, exactly as before this task.
+    expect(buildClientAssets).toHaveBeenCalledTimes(1);
+
+    // And no island routing wraps the dispatch: the entry path falls through to
+    // readAsset (absent here → the app's 404), not a Vite handler.
+    const [app] = serve.mock.calls[0]!;
+    const entryResponse = await app.handle("GET", "/client.js");
+    expect(entryResponse.status).toBe(404);
+  });
+
+  it("closes the Vite island server on graceful shutdown", async () => {
+    const serve = fakeServe(3000);
+    const island = fakeIslandDev();
+    const installShutdown = vi.fn();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve,
+        loadSites: () => Promise.resolve([]),
+        islandDev: async () => island,
+        installShutdown,
+      }),
+    );
+
+    const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
+    await drain();
+
+    expect(island.close).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("run dev — Tailwind CSS (ADR 0037)", () => {
   const sites: readonly Site[] = [
     { name: "marketing", render: "static", basePath: "/", pages: ["/"] },

@@ -40,6 +40,7 @@
   "peerDependencies": {
     "@lesto/content-core": "workspace:*",
     "@lesto/content-store": "workspace:*",
+    "@lesto/island-dev": "workspace:*",
     "@lesto/styles": "workspace:*"
   },
   "peerDependenciesMeta": {
@@ -47,6 +48,9 @@
       "optional": true
     },
     "@lesto/content-store": {
+      "optional": true
+    },
+    "@lesto/island-dev": {
       "optional": true
     },
     "@lesto/styles": {

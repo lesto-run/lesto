@@ -164,3 +164,75 @@ behind the existing seams) and prod (`lesto build`), plus page-reload → partia
 keeping the edge Worker static-import map untouched. Drop to Phase-1-only (Vite dev,
 Bun prod) only if that combined increment proves too large. Phase 3 (Environments /
 `ModuleRunner`, retiring `dispatchSitesDev`) is a follow-on task under the Bet III epic.
+
+---
+
+## Phase 1 build — as built (2026-06-24, `L-9cc30811`)
+
+**Owner decision (open decision 1):** **Phase-1-only.** Vite is the island bundler in
+**dev only**; `lesto build` keeps `Bun.build`. The dev/prod bundler mismatch is
+accepted and documented (see "Divergence + parity gate" below) rather than closed now;
+Phase 2 (Vite prod build) closes it next. This is the narrower, lower-blast-radius
+slice the task brief names.
+
+### Package: `@lesto/island-dev` (new, optional peer of `@lesto/cli`)
+
+Mirrors the `@lesto/styles` precedent exactly — heavy third-party tooling (here Vite +
+the Fast-Refresh plugin) wrapped behind a pure seam, declared an **optional**
+`peerDependency` of the CLI, lazy-imported ONLY for `lesto dev`. A default scaffold
+that does not install it gets today's behaviour unchanged (Bun dev build + reload). An
+app opts into Fast Refresh by installing `@lesto/island-dev`.
+
+- **Covered (pure / fake-Vite orchestration):** `isViteOwnedPath` (the dispatch
+  branch predicate), `dialectPluginSpec` (the ADR-0008 matched pair: `react` →
+  `@vitejs/plugin-react`, `preact` → `@prefresh/vite`), `devEntrySource` (reuses
+  `@lesto/assets` `synthesizeEntry` with `beacon.dev`), `viteIslandConfig` (the pure
+  Vite `InlineConfig` builder), and `createIslandDevServer` (orchestration over an
+  injected Vite factory).
+- **Excluded (irreducible IO edge, the `bun.ts`/`tailwind.ts` twin):** `vite.ts` —
+  the real `createServer({ server: { middlewareMode: true, hmr: { port } } })`, the
+  dialect-plugin import, the virtual-entry plugin, and the Connect→response bridge.
+
+### Integration shape (same-origin, app surface untouched)
+
+The keystone constraint — *no dev-server machinery leaks into the app/request path* —
+is honoured: the app's rendered HTML is **unchanged** (it still emits
+`<script type="module" src="/client.js">`). The CLI dev path gains exactly two seams:
+
+1. **Dispatch branch.** A request whose path `islandDev.ownsPath(p)` (`=== "/client.js"`
+   or starts with the Vite base `"/@lesto-dev/"`) routes to the Vite middleware bridge;
+   everything else routes to the app exactly as before. `/client.js` is mapped (by a
+   virtual-module plugin) to the synthesized dev entry, so the app's existing entry tag
+   is served by Vite — Fast-Refresh-transformed — with no HTML rewrite and no knowledge
+   of the app's private `clientModuleSrc`.
+2. **HTML transform.** Dev `text/html` responses pass through
+   `vite.transformIndexHtml`, which injects the Vite client + the plugin's
+   React-refresh **preamble** (same-origin → relative URLs; no CORS). This composes
+   with the existing `withLiveReload` script injection.
+
+When `islandDev` is active, the CLI **skips** the Bun dev `buildClientAssets` and the
+`watchIslands` rebuild — Vite owns the island module graph, its file watch, and HMR.
+The existing Bun WebSocket stays for server-driven signals (error overlay, CSS
+`style-update`, route partial-swap); Vite owns island module HMR on its own dedicated
+HMR-WS port. (Open decision 3, "keep our WS, Vite owns island HMR" — taken.)
+
+### Divergence + parity gate (open decision 1's required guard)
+
+Phase 1 ships a **real dev/prod bundler mismatch**: islands are served by Vite in dev
+and bundled by `Bun.build` in prod. This is the documented hazard, not a silent one.
+The guard until Phase 2 closes it: `lesto build` is unchanged and remains the source of
+truth for what ships; the dev path is additive and opt-in. A build-vs-dev parity smoke
+test (a fixture island that compiles under BOTH bundlers and hydrates identically) is a
+tracked follow-up before Vite-dev becomes the scaffold default.
+
+### What this task does NOT do (tracked follow-ups)
+
+- **Page-reload → partial-swap** (the cheaper second half) — deferred; it reuses the R1
+  `data-lesto-layout` machinery and is independent of the island Fast-Refresh path.
+- **Browser e2e proof** that an island edit preserves `useState` (and that
+  `defineIsland`-wrapped default exports are valid Fast-Refresh **boundaries**, not
+  reload-propagating modules). The Vite **transform** is verified in-process
+  (`middlewareMode` + `transformRequest`, no port bound); the live HMR round-trip needs
+  a real `lesto dev` + browser, which the build sandbox cannot start.
+- **Making Vite-dev the scaffold default** — gated on the e2e proof + the parity smoke.
+- **Phase 2** (Vite prod build) and **Phase 3** (Environments / `ModuleRunner`).
