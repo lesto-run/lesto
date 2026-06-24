@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -71,6 +71,25 @@ function runBin(args: readonly string[]): Promise<SpawnResult> {
  */
 function runBinIn(cwd: string, args: readonly string[]): Promise<SpawnResult> {
   return collect(spawn("bun", [binPath, ...args], { cwd }));
+}
+
+/**
+ * A gitignored scratch root INSIDE the repo tree (`packages/cli/.out/`, ignored via
+ * the root `.gitignore` `.out/` rule) for temp projects whose own files import the
+ * workspace packages (`@lesto/content-core`, `@lesto/web`, `zod`, …). A project under
+ * `os.tmpdir()` cannot resolve those bare specifiers — Node/Bun walk UP from the
+ * importer to find `node_modules`, and a `/tmp` dir has no parent `node_modules` — so a
+ * `lesto.content.ts` (Task 2) or a copied buildable fixture (Task 3) MUST live within the
+ * repo to resolve them. `os.tmpdir()` still fits the convention-scan-only projects above
+ * (`generate agents` never imports the project's modules — it scans the dir structure).
+ */
+const inRepoTmpRoot = join(here, "..", ".out", "e2e");
+
+/** Make a unique temp project dir inside the repo scratch root (parents created). */
+async function mkdtempInRepo(prefix: string): Promise<string> {
+  await mkdir(inRepoTmpRoot, { recursive: true });
+
+  return mkdtemp(join(inRepoTmpRoot, prefix));
 }
 
 /**
@@ -338,4 +357,113 @@ describe("bin e2e", () => {
       await rm(project, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("generate agents: a content-driven app lists its collection and notes programmatic routing", async () => {
+    // The content-collections reader (`readContentConfig`) is coverage-excluded in the
+    // bin, and the previous e2e exercises only its EMPTY branch (its temp project has no
+    // `lesto.content.ts`). This project DOES carry one — plus two content files — so the
+    // real wiring runs: load `lesto.content.ts`, run `@lesto/content-core`'s `runPipeline`,
+    // group entries into per-collection counts. A reader-wiring regression (wrong config
+    // arg, wrong grouping) would show up here as a missing/miscounted collection.
+    //
+    // It lives in the REPO scratch root (not `os.tmpdir()`) because `lesto.content.ts`
+    // imports `@lesto/content-core` and `zod` by bare specifier, which only resolve when
+    // the importer has a parent `node_modules` — i.e. inside the workspace.
+    const project = await mkdtempInRepo("agents-content-");
+
+    try {
+      await mkdir(join(project, "content", "docs"), { recursive: true });
+
+      // A content collection registered the way an app's own code does. No `app/routes/`
+      // dir at all — this is the content-driven app whose pages register programmatically.
+      await writeFile(
+        join(project, "lesto.content.ts"),
+        [
+          'import { defineCollection, defineConfig } from "@lesto/content-core";',
+          'import { z } from "zod";',
+          "",
+          "const docs = defineCollection({",
+          '  name: "docs",',
+          '  directory: "content/docs",',
+          '  include: "**/*.md",',
+          "  schema: z.object({ title: z.string() }),",
+          "});",
+          "",
+          "export default defineConfig({ collections: [docs] });",
+          "",
+        ].join("\n"),
+      );
+
+      await writeFile(
+        join(project, "content", "docs", "intro.md"),
+        "---\ntitle: Intro\n---\n\n# Intro\n",
+      );
+      await writeFile(
+        join(project, "content", "docs", "guide.md"),
+        "---\ntitle: Guide\n---\n\n# Guide\n",
+      );
+
+      const gen = await runBinIn(project, ["generate", "agents"]);
+
+      expect(gen.code, gen.stderr).toBe(0);
+      expect(gen.stdout).toContain("wrote AGENTS.md");
+
+      // The benign degrade warning must NOT appear — the pipeline read the real config.
+      expect(gen.stderr).not.toContain("content collections unavailable");
+
+      const agentsMd = await readFile(join(project, "AGENTS.md"), "utf8");
+
+      // The collection is listed with the right entry count (two `.md` files → 2 entries),
+      // proving the reader wired the config + grouped the run correctly.
+      expect(agentsMd).toContain("## Content collections");
+      expect(agentsMd).toContain("- `docs` — 2 entries");
+
+      // Task 1: with NO file-based routes but a content collection present, the Routes
+      // section is no longer the misleading bare "_None._" — it names the programmatic
+      // routing model and points at the collections, without fabricating any URL pattern.
+      expect(agentsMd).toContain("## Routes");
+      expect(agentsMd).toContain(
+        "registers its pages programmatically from its content collections",
+      );
+      expect(agentsMd).toContain("see the Content collections section below");
+      expect(agentsMd).not.toContain("## Routes\n\n_None._");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("build: proceeds hookless when lesto.build.ts is absent, and fails loud on a syntax error in it", async () => {
+    // `loadBuildHook` is coverage-excluded in the bin and only ever mocked in `run.test.ts`,
+    // so this e2e is the sole guard on its import-error classification: swallow the absent
+    // hook (no `lesto.build.ts` → build proceeds), but rethrow a real error inside an
+    // existing one (a syntax error → loud, non-zero exit). The project is a COPY of the
+    // committed fixture (a complete buildable app), placed in the repo scratch root so its
+    // `@lesto/*` imports resolve.
+    const project = await mkdtempInRepo("build-hook-");
+
+    try {
+      await cp(fixtureDir, project, { recursive: true });
+
+      // (a) No `lesto.build.ts` at all → the build runs to a clean exit, hookless.
+      const hookless = await runBinIn(project, ["build", "--out", "out"]);
+
+      expect(hookless.code, hookless.stderr).toBe(0);
+      expect(hookless.stdout).toContain("built app:");
+
+      // (b) A `lesto.build.ts` that exists but has a SYNTAX ERROR must fail the build
+      // loudly — a real bug must never be swallowed as "no hook".
+      await writeFile(
+        join(project, "lesto.build.ts"),
+        "export default function ( { this is not valid typescript :::\n",
+      );
+
+      const broken = await runBinIn(project, ["build", "--out", "out"]);
+
+      expect(broken.code).not.toBe(0);
+      // The failure surfaces the offending file, not a swallowed silent success.
+      expect(`${broken.stdout}${broken.stderr}`).toContain("lesto.build.ts");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

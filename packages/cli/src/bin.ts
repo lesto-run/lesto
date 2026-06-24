@@ -689,13 +689,43 @@ const loadBuildHook = async (): Promise<BuildHook | undefined> => {
 
     return module.default;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
-      if ((error as { message: string }).message.includes("lesto.build.ts")) return undefined;
-    }
+    if (isMissingBuildHook(error)) return undefined;
 
     throw error;
   }
 };
+
+// Classify an `import()` failure as "the hook file itself is absent" (→ no hook) vs.
+// any real error inside an existing file (a syntax error, a missing transitive import),
+// which must fail the build LOUD. Two cross-runtime hazards drive the exact shape here:
+//
+//   1. NOT `instanceof Error`: under Bun a missing-module import throws a `ResolveMessage`
+//      that is NOT an `Error` instance (only its `code`/`message` are reliable), so gating
+//      on `instanceof Error` would mis-rethrow an absent hook as a fatal build failure. We
+//      duck-type on `code` + `message` instead, which holds under both Node and Bun.
+//   2. Classify on the MISSING SPECIFIER, not the whole message: a missing TRANSITIVE
+//      import's message embeds the IMPORTER's path (`Cannot find module '<dep>' from
+//      '<importer>'`), so an importer of `lesto.build.ts` would match a naive
+//      `message.includes("lesto.build.ts")` and wrongly be swallowed. Anchoring on the
+//      extracted missing specifier — only the absent hook FILE names `lesto.build.ts` as
+//      the missing module — rethrows a transitive miss. (Mirrors `rethrowUnlessMissingContentPeer`.)
+function isMissingBuildHook(error: unknown): boolean {
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    !("code" in error) ||
+    (error as { code?: unknown }).code !== "ERR_MODULE_NOT_FOUND" ||
+    !("message" in error)
+  ) {
+    return false;
+  }
+
+  const missing = /Cannot find (?:package|module) '([^']+)'/.exec(
+    String((error as { message: unknown }).message),
+  )?.[1];
+
+  return missing !== undefined && missing.endsWith("lesto.build.ts");
+}
 
 // Remove the output dir before a build, so a route deleted since the last build leaves
 // no orphan the deploy still ships (the sink only writes). `force` tolerates the first
