@@ -2,58 +2,39 @@
  * The URL contract between the running app's dev dispatch and the Vite island dev
  * server — the one place the "which requests does Vite own?" decision lives.
  *
- * The app's rendered HTML is UNCHANGED by this package (it still emits
- * `<script type="module" src="/client.js">`, ADR 0011), and Vite serves on the SAME
- * origin (`base: "/"`). Two kinds of request are Vite's:
- *
- *   - {@link ENTRY_PATH} (`/client.js`) — the island hydration entry. The app's entry
- *     tag points here; a virtual-module plugin maps it to the synthesized dev entry,
- *     so the browser loads a Fast-Refresh-transformed entry with no HTML rewrite and
- *     no knowledge of the app's private client src. (`vite.transformIndexHtml` may
- *     rewrite the tag to a `/@id/…` virtual URL instead — also owned, see below.)
- *   - anything under a Vite-internal prefix ({@link VITE_PREFIXES}) — the Vite client,
- *     the Fast-Refresh runtime, `@fs`/`@id` module URLs, pre-bundled deps. Island
- *     modules resolve through `/@fs/` (their `importPath` is ABSOLUTE), never a
- *     root-relative `/app/…` URL, so no real app route is ever shadowed.
+ * Vite is configured with a dedicated `base` ({@link VITE_BASE}), so EVERY URL it
+ * serves — the entry, island modules, the Vite client, the Fast-Refresh runtime,
+ * pre-bundled deps — sits under that one prefix. (Critically: island modules live
+ * INSIDE the project root, so Vite serves them as ROOT-RELATIVE URLs, not `/@fs/`;
+ * a dedicated base is what makes that whole set ownable by a single prefix and keeps
+ * it from ever shadowing a real app route.) `vite.transformIndexHtml` even rewrites
+ * the app's existing `<script src="/client.js">` to `<base>client.js`, so the app's
+ * HTML needs no change and the browser only ever requests `<base>…` URLs.
  *
  * The CLI dev dispatch checks {@link isViteOwnedPath} BEFORE the app (and before the
- * production-shaped `readAsset` passthrough), routing a match to the Vite middleware
- * bridge; a miss falls through to the app exactly as before.
+ * production-shaped `readAsset` passthrough), routing a match to the Vite proxy; a
+ * miss falls through to the app exactly as before.
  */
 
+/** The base prefix Vite serves all of its URLs under (its `config.base`). */
+export const VITE_BASE = "/@lesto-dev/";
+
 /**
- * The URL the app's hydration entry tag points at (`.client("/client.js")`, the
- * scaffold default and a stable constant). Served by Vite as the synthesized entry.
+ * The id the synthesized dev entry is resolved by — the app's `.client("/client.js")`
+ * src (the scaffold default, a stable constant). Vite strips {@link VITE_BASE} before
+ * resolving, so the virtual-entry plugin claims this bare path; the browser only ever
+ * requests it base-prefixed (`<base>client.js`). Not part of {@link isViteOwnedPath}:
+ * the bare `/client.js` is never requested once `transformIndexHtml` base-prefixes it.
  */
 export const ENTRY_PATH = "/client.js";
 
 /**
- * The path prefixes Vite owns under `base: "/"`. `@fs`/`@id` cover every transformed
- * source module (islands included — their absolute paths route through `/@fs/`);
- * `@vite`/`@react-refresh` are the client + Fast-Refresh runtimes; `/node_modules/`
- * covers pre-bundled deps and symlinked workspace packages.
- */
-export const VITE_PREFIXES: readonly string[] = [
-  "/@vite/",
-  "/@id/",
-  "/@fs/",
-  "/@react-refresh",
-  "/node_modules/",
-];
-
-/**
  * Whether a request path is owned by the Vite island dev server rather than the app.
  *
- * A path is Vite's iff it is the entry ({@link ENTRY_PATH}) or starts with a
- * Vite-internal prefix ({@link VITE_PREFIXES}). The query string is ignored — Vite
- * versions module URLs with `?v=`/`?t=`/`?import` suffixes, which still resolve by
- * their pathname.
+ * A path is Vite's iff it sits under {@link VITE_BASE} — a single, collision-proof
+ * prefix no real app route can start with. The query string (`?v=`/`?t=`/`?import`)
+ * is irrelevant: it never precedes the base.
  */
 export function isViteOwnedPath(path: string): boolean {
-  const query = path.indexOf("?");
-  const pathname = query === -1 ? path : path.slice(0, query);
-
-  if (pathname === ENTRY_PATH) return true;
-
-  return VITE_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+  return path.startsWith(VITE_BASE);
 }

@@ -16,7 +16,7 @@ describe("viteIslandConfig", () => {
     const config = viteIslandConfig({ ...base, dialect: "react" });
 
     expect(config.root).toBe("/proj");
-    expect(config.base).toBe("/");
+    expect(config.base).toBe("/@lesto-dev/");
     expect(config.appType).toBe("custom");
     expect(config.configFile).toBe(false);
     expect(config.server).toEqual({

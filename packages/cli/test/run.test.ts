@@ -1703,14 +1703,15 @@ function recordingLiveReload(): {
 }
 
 // A fake Vite island dev server: spies for the four seams, with `ownsPath` claiming
-// the entry + Vite-prefixed URLs and `transformHtml` marking the document.
+// everything under the Vite base (as the real predicate does) and `transformHtml`
+// marking the document.
 function fakeIslandDev(): IslandDevServer & {
   handle: ReturnType<typeof vi.fn>;
   transformHtml: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
 } {
   return {
-    ownsPath: (path: string) => path === "/client.js" || path.startsWith("/@"),
+    ownsPath: (path: string) => path.startsWith("/@lesto-dev/"),
     handle: vi.fn(async () => ({
       status: 200,
       headers: { "content-type": "application/javascript" },
@@ -1791,8 +1792,9 @@ describe("run dev — Vite island Fast Refresh (DX-parity R2)", () => {
 
     const [app] = serve.mock.calls[0]!;
 
-    // A Vite-owned request is served by the island dev server, not the app/readAsset.
-    const entryResponse = await app.handle("GET", "/client.js");
+    // A Vite-owned request (under the base) is served by the island dev server, not
+    // the app/readAsset.
+    const entryResponse = await app.handle("GET", "/@lesto-dev/client.js");
     expect(entryResponse.body).toBe("island-module");
     expect(island.handle).toHaveBeenCalledTimes(1);
 
@@ -1867,6 +1869,31 @@ describe("run dev — Vite island Fast Refresh (DX-parity R2)", () => {
     const [app] = serve.mock.calls[0]!;
     const entryResponse = await app.handle("GET", "/client.js");
     expect(entryResponse.status).toBe(404);
+  });
+
+  it("falls back to the Bun path (not a crash) when the Vite server fails to start", async () => {
+    const serve = fakeServe(3000);
+    const buildClientAssets = vi.fn(() => Promise.resolve());
+    // A genuine startup failure (e.g. the HMR port is bound) — must NOT crash dev boot.
+    const islandDev = vi.fn(async () => {
+      throw new Error("EADDRINUSE: hmr port 24678 in use");
+    });
+
+    const code = await run(
+      ["dev"],
+      depsWith({
+        serve,
+        loadSites: () => Promise.resolve([]),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets,
+        islandDev,
+      }),
+    );
+
+    // Dev still booted; the Bun client build ran; the failure was logged, not thrown.
+    expect(code).toBe(0);
+    expect(buildClientAssets).toHaveBeenCalledTimes(1);
+    expect(lines.some((line) => line.includes("island Fast Refresh unavailable"))).toBe(true);
   });
 
   it("closes the Vite island server on graceful shutdown", async () => {

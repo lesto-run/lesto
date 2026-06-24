@@ -480,14 +480,24 @@ const buildIslandDev = async (dialect: UiDialect): Promise<IslandDevServer | und
 // Lazy-import the optional `@lesto/island-dev` peer, or `undefined` when it is not
 // installed (the default scaffold). The literal specifier stays so the resolved
 // module's types flow to `buildIslandDev`'s call sites; the return type is INFERRED
-// (not a written `import()` annotation), keeping the lint rule satisfied. Only a
-// missing-peer resolution is swallowed — a genuine error inside an installed
-// `@lesto/island-dev` would surface through `createIslandDevServer` below.
+// (not a written `import()` annotation), keeping the lint rule satisfied. ONLY "the
+// peer itself isn't resolvable" is swallowed — a genuine error INSIDE an installed
+// `@lesto/island-dev` (a broken transitive, a removed `@lesto/assets` export, a bad
+// publish) must surface, not be masked as "peer absent" (a dev who installed it for
+// Fast Refresh would otherwise silently get nothing). Mirrors
+// `rethrowUnlessMissingContentPeer`: classify on the MISSING specifier, not the whole
+// message (which also embeds the importer path).
 const loadIslandDevPeer = async () => {
   try {
     return await import("@lesto/island-dev");
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
+      const missing = /Cannot find (?:package|module) '([^']+)'/.exec(error.message)?.[1];
+
+      if (missing === "@lesto/island-dev") return undefined;
+    }
+
+    throw error;
   }
 };
 

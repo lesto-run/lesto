@@ -200,6 +200,12 @@ export interface LiveReload {
  * (which injects the Vite client + the Fast-Refresh preamble). The existing
  * {@link LiveReload} WebSocket stays for server-driven signals (error overlay, CSS
  * hot-swap, route reload); Vite owns ONLY island module HMR, on its own socket.
+ *
+ * This STRUCTURALLY mirrors `@lesto/island-dev`'s exported `IslandDevServer` on
+ * purpose: it is a copy, not a `import type`, so the CLI's covered core never depends
+ * — even at the type level — on the OPTIONAL peer (a published `@lesto/cli` without
+ * `@lesto/island-dev` installed would dangle a type import). The bin's factory returns
+ * the package's value, which satisfies this shape by structural typing.
  */
 export interface IslandDevServer {
   /** Whether a request path is Vite's (route it to {@link handle}) rather than the app's. */
@@ -1326,6 +1332,29 @@ function appendToBody(body: LestoResponse["body"], tag: string): LestoResponse["
 }
 
 /**
+ * Resolve the dev island Fast-Refresh server (or `undefined`). Absent factory / an
+ * uninstalled peer → `undefined` (the Bun island path). A genuine startup FAILURE (a
+ * bound HMR port, a bad plugin) is caught here and degraded to `undefined` with a
+ * logged note — the Bun build/watch/reload path still serves, exactly as the Bun
+ * reload socket tolerates a busy port (`buildLiveReload`). It must never crash the
+ * long-running dev boot.
+ */
+async function resolveIslandDev(
+  deps: CliDeps,
+  dialect: UiDialect,
+): Promise<IslandDevServer | undefined> {
+  if (deps.islandDev === undefined) return undefined;
+
+  try {
+    return await deps.islandDev({ dialect });
+  } catch (error) {
+    deps.out(`island Fast Refresh unavailable, using full reload: ${rebuildErrorMessage(error)}`);
+
+    return undefined;
+  }
+}
+
+/**
  * Wrap a dev handle so a Vite-owned request goes to the island dev server and
  * everything else to the app dispatch — the routing fork that lets Vite serve the
  * island entry + module graph on the app's own origin (the {@link IslandDevServer}
@@ -1430,8 +1459,11 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
 
   // Resolve the Vite island dev server for this dialect (DX-parity R2). Absent factory
   // OR an uninstalled `@lesto/island-dev` peer → `undefined`, and dev keeps the Bun
-  // island build/watch/reload path. Present → Vite owns islands (Fast Refresh).
-  const islandDev = deps.islandDev === undefined ? undefined : await deps.islandDev({ dialect });
+  // island build/watch/reload path. Present → Vite owns islands (Fast Refresh). A
+  // genuine startup failure (a bound port, a bad plugin) FALLS BACK to the Bun path
+  // with a logged note rather than crashing the dev boot — the same tolerance the Bun
+  // reload socket has for a busy port.
+  const islandDev = await resolveIslandDev(deps, dialect);
 
   // Build the island client on boot, then watch for changes. The dev outDir is
   // the same root the bin's `readAsset` serves from (DEFAULT_OUT_DIR). When the Vite

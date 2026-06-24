@@ -13,7 +13,7 @@
  * four seams the CLI dev path drives: `ownsPath` (the dispatch branch predicate),
  * `handle` (serve a Vite-owned module), `transformHtml` (inject the Vite client +
  * Fast-Refresh preamble into a dev document), and `close`. The real Vite
- * `createServer` + Connect→response bridge lives in the coverage-excluded `vite.ts`
+ * `createServer` + `listen()` + fetch-proxy lives in the coverage-excluded `vite.ts`
  * edge ({@link IslandDevDeps}); this orchestration is covered with a fake backend.
  */
 
@@ -52,7 +52,7 @@ export interface IslandDevBackend {
 
 /** The request the orchestration hands the backend to construct a Vite server. */
 export interface CreateBackendRequest {
-  /** The narrow Vite config (base, middleware mode, HMR port, define, alias). */
+  /** The narrow Vite config (base, ports, HMR port, define, alias). */
   readonly config: ViteIslandConfig;
 
   /** The synthesized dev entry source Vite serves at `/client.js`. */
@@ -67,7 +67,7 @@ export interface IslandDevDeps {
   /** Discover + classify the app's islands (the same listing `lesto build` uses). */
   listIslands: (islandsDir: string) => Promise<readonly IslandFile[]>;
 
-  /** Stand up the real Vite middleware server for the given config + entry. */
+  /** Stand up the real (loopback, proxied) Vite dev server for the given config + entry. */
   createBackend: (request: CreateBackendRequest) => Promise<IslandDevBackend>;
 }
 

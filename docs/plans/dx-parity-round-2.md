@@ -184,37 +184,51 @@ that does not install it gets today's behaviour unchanged (Bun dev build + reloa
 app opts into Fast Refresh by installing `@lesto/island-dev`.
 
 - **Covered (pure / fake-Vite orchestration):** `isViteOwnedPath` (the dispatch
-  branch predicate), `dialectPluginSpec` (the ADR-0008 matched pair: `react` →
-  `@vitejs/plugin-react`, `preact` → `@prefresh/vite`), `devEntrySource` (reuses
-  `@lesto/assets` `synthesizeEntry` with `beacon.dev`), `viteIslandConfig` (the pure
-  Vite `InlineConfig` builder), and `createIslandDevServer` (orchestration over an
-  injected Vite factory).
+  branch predicate — a single `startsWith(VITE_BASE)`), `dialectPluginSpec` (the
+  ADR-0008 matched pair: `react` → `@vitejs/plugin-react`, `preact` → `@prefresh/vite`),
+  `devEntrySource` (reuses `@lesto/assets` `synthesizeEntry` with `beacon.dev`),
+  `viteIslandConfig` (the pure narrow-config builder), `viteQuery`/`proxyHeaders` (the
+  pure pieces of the proxy), and `createIslandDevServer` (orchestration over an injected
+  Vite factory). These are package-INTERNAL (the barrel exports only
+  `createIslandDevServer` + `viteIslandDevDeps` + their types + the error).
 - **Excluded (irreducible IO edge, the `bun.ts`/`tailwind.ts` twin):** `vite.ts` —
-  the real `createServer({ server: { middlewareMode: true, hmr: { port } } })`, the
-  dialect-plugin import, the virtual-entry plugin, and the Connect→response bridge.
+  the real `createServer(...)` + `server.listen()` on a loopback port, the dialect-plugin
+  import, the virtual-entry plugin, and the `fetch`-proxy that forwards a Vite-owned
+  request to that server.
 
 ### Integration shape (same-origin, app surface untouched)
 
 The keystone constraint — *no dev-server machinery leaks into the app/request path* —
 is honoured: the app's rendered HTML is **unchanged** (it still emits
-`<script type="module" src="/client.js">`). The CLI dev path gains exactly two seams:
+`<script type="module" src="/client.js">`). Vite listens on its OWN internal loopback
+port; the CLI dev path gains exactly two seams that adapt it to the runtime's
+transport-free `handle(method, path) → LestoResponse` string contract (which is *why*
+a proxy, not Vite's Connect `middlewares` — the runtime never exposes the raw socket
+the Connect stack needs):
 
-1. **Dispatch branch.** A request whose path `islandDev.ownsPath(p)` (`=== "/client.js"`
-   or starts with the Vite base `"/@lesto-dev/"`) routes to the Vite middleware bridge;
-   everything else routes to the app exactly as before. `/client.js` is mapped (by a
-   virtual-module plugin) to the synthesized dev entry, so the app's existing entry tag
-   is served by Vite — Fast-Refresh-transformed — with no HTML rewrite and no knowledge
-   of the app's private `clientModuleSrc`.
+1. **Dispatch branch.** A request whose path `islandDev.ownsPath(p)` — `startsWith`
+   the dedicated Vite base `"/@lesto-dev/"` — is `fetch`-PROXIED to the internal Vite
+   server (server-side, so the browser only ever talks to the app's own origin);
+   everything else routes to the app exactly as before. The base is dedicated and
+   collision-proof: island modules live INSIDE the project root, so Vite serves them at
+   **root-relative** URLs (NOT `/@fs/`), and only a dedicated base keeps that whole set
+   ownable by one prefix without shadowing app routes. A virtual-module plugin maps the
+   base-stripped `/client.js` to the synthesized dev entry.
 2. **HTML transform.** Dev `text/html` responses pass through
-   `vite.transformIndexHtml`, which injects the Vite client + the plugin's
-   React-refresh **preamble** (same-origin → relative URLs; no CORS). This composes
-   with the existing `withLiveReload` script injection.
+   `vite.transformIndexHtml`, which injects the Vite client + the plugin's React-refresh
+   **preamble** AND base-prefixes the app's existing `<script src="/client.js">` to
+   `"/@lesto-dev/client.js"` — so the app's HTML needs no manual rewrite and the browser
+   only ever requests `"/@lesto-dev/…"` URLs. This composes with the existing
+   `withLiveReload` script injection (the streamed document is buffered to a string first,
+   a documented dev-only cost). The body is proxied as raw BYTES so binary modules/assets
+   aren't corrupted.
 
 When `islandDev` is active, the CLI **skips** the Bun dev `buildClientAssets` and the
-`watchIslands` rebuild — Vite owns the island module graph, its file watch, and HMR.
-The existing Bun WebSocket stays for server-driven signals (error overlay, CSS
-`style-update`, route partial-swap); Vite owns island module HMR on its own dedicated
-HMR-WS port. (Open decision 3, "keep our WS, Vite owns island HMR" — taken.)
+`watchIslands` rebuild — Vite owns the island module graph, its file watch, and HMR. A
+Vite startup failure (a bound port) falls back to the Bun path with a logged note, never
+crashing the dev boot. The existing Bun WebSocket stays for server-driven signals (error
+overlay, CSS `style-update`, route partial-swap); Vite owns island module HMR on its own
+dedicated HMR-WS port. (Open decision 3, "keep our WS, Vite owns island HMR" — taken.)
 
 ### Divergence + parity gate (open decision 1's required guard)
 
@@ -231,8 +245,13 @@ tracked follow-up before Vite-dev becomes the scaffold default.
   `data-lesto-layout` machinery and is independent of the island Fast-Refresh path.
 - **Browser e2e proof** that an island edit preserves `useState` (and that
   `defineIsland`-wrapped default exports are valid Fast-Refresh **boundaries**, not
-  reload-propagating modules). The Vite **transform** is verified in-process
-  (`middlewareMode` + `transformRequest`, no port bound); the live HMR round-trip needs
-  a real `lesto dev` + browser, which the build sandbox cannot start.
+  reload-propagating modules). Two things ARE verified in-process (`middlewareMode` +
+  `transformRequest`, no port bound): the Fast-Refresh **transform** emits the boundary
+  footer, and — caught + fixed in wrap-up review — the entry's island import is
+  rewritten to a **base-prefixed URL that `isViteOwnedPath` owns** (with `base: "/"` it
+  was a root-relative `/app/…` URL the dispatch did NOT own → islands would have 404'd).
+  The remaining gaps need a real browser the build sandbox cannot start: the live HMR
+  WS round-trip, the cross-port HMR-WS Origin handshake, `optimizeDeps`/`resolve.dedupe`
+  for the workspace `@lesto/*` (React de-dup), and the `@prefresh/vite` preact path.
 - **Making Vite-dev the scaffold default** — gated on the e2e proof + the parity smoke.
 - **Phase 2** (Vite prod build) and **Phase 3** (Environments / `ModuleRunner`).

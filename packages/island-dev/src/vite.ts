@@ -34,6 +34,7 @@ import type { InlineConfig, Plugin, PluginOption } from "vite";
 
 import type { CreateBackendRequest, IslandDevBackend, IslandDevDeps } from "./dev-server";
 import { ENTRY_PATH } from "./paths";
+import { proxyHeaders, viteQuery } from "./proxy";
 
 /** The virtual module id the synthesized entry is loaded as (a `.tsx` id so JSX transforms apply). */
 const ENTRY_MODULE_ID = "\0lesto-island-entry.tsx";
@@ -70,22 +71,17 @@ function inlineConfig(request: CreateBackendRequest): InlineConfig {
 }
 
 /**
- * Rebuild the `?…` Vite needs from the parsed query the dev server hands us. Lesto's
- * `handle` receives the PATHNAME only (`request.path = url.pathname`), with the query
- * split off into `options.query` — but Vite versions module URLs (`?v=<hash>`,
- * `?t=<ts>`, `?import`, `?direct`), so the proxy MUST re-attach them or HMR and dep
- * pre-bundling break. Key presence is preserved (a flag like `import` becomes
- * `import=`, which Vite reads identically).
+ * Proxy a Vite-owned request to the internal Vite server and adapt its response.
+ *
+ * The body is carried as raw BYTES (`arrayBuffer` → `Uint8Array`), never decoded to a
+ * string: Vite serves binary modules/assets (an island's imported `.png`/`.woff2`,
+ * `?url` assets, `.wasm`, source maps) under the very base it owns, and a UTF-8
+ * round-trip would corrupt them. The runtime writes a `Uint8Array` body verbatim — the
+ * `as unknown as string` is the transport-widening cast the dispatch contract uses for
+ * non-string bodies (mirrors `withLiveReload`'s stream handling). Request headers ride
+ * along so Vite's `If-None-Match`/`Accept` 304 fast-path works; `viteQuery` re-attaches
+ * the `?v=`/`?t=`/`?import` Vite needs (Lesto split it into `options.query`).
  */
-function viteQuery(query: HandleOptions["query"]): string {
-  if (query === undefined) return "";
-
-  const search = new URLSearchParams(query).toString();
-
-  return search === "" ? "" : `?${search}`;
-}
-
-/** Proxy a Vite-owned request to the internal Vite server and adapt its response. */
 async function proxyToVite(
   origin: string,
   method: string,
@@ -95,16 +91,15 @@ async function proxyToVite(
   const response = await fetch(origin + path + viteQuery(options?.query), {
     method,
     redirect: "manual",
+    ...(options?.headers === undefined ? {} : { headers: options.headers }),
   });
 
-  const body = await response.text();
+  const body = new Uint8Array(await response.arrayBuffer());
 
   return {
     status: response.status,
-    // Vite serves JS modules; default to the JS type so a header-less module still
-    // executes (the browser refuses `text/html`-typed module scripts).
-    headers: { "content-type": response.headers.get("content-type") ?? "application/javascript" },
-    body,
+    headers: proxyHeaders(response.headers),
+    body: body as unknown as string,
   };
 }
 

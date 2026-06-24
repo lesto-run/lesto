@@ -77,8 +77,8 @@ describe("createIslandDevServer", () => {
     expect(requests[0]?.config.server.port).toBe(24677);
     expect(requests[0]?.config.resolve.alias).toEqual([]);
 
-    // ownsPath is the shared predicate.
-    expect(server.ownsPath("/client.js")).toBe(true);
+    // ownsPath is the shared predicate (everything under the Vite base; not app routes).
+    expect(server.ownsPath("/@lesto-dev/client.js")).toBe(true);
     expect(server.ownsPath("/about")).toBe(false);
 
     // handle / transformHtml / close delegate to the backend.

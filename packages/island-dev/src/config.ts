@@ -8,10 +8,11 @@
  * plugin INSTANCES (Fast Refresh + the virtual-entry plugin) it alone can construct.
  *
  * Two choices are load-bearing:
- *   - `appType: "custom"` + the default `base: "/"` — Vite serves modules on the
- *     app's own origin and never an index.html / SPA fallback (the app owns HTML).
- *     Island modules resolve through `/@fs/` (absolute paths), so the app's request
- *     space ({@link paths}) is never shadowed.
+ *   - `appType: "custom"` + a dedicated `base` ({@link VITE_BASE}) — Vite serves
+ *     modules under one ownable prefix and never an index.html / SPA fallback (the app
+ *     owns HTML). Island modules live INSIDE the project root, so Vite serves them as
+ *     ROOT-RELATIVE URLs (NOT `/@fs/`); the dedicated base is what keeps that whole set
+ *     from shadowing the app's request space ({@link paths}).
  *   - Vite listens on its OWN loopback `server.port`; the CLI proxies Vite-owned
  *     requests to it server-side (so the browser sees one same-origin server), while
  *     Vite's HMR WebSocket runs on a DEDICATED `server.hmr.port` the browser connects
@@ -23,6 +24,7 @@ import { PREACT_ALIAS } from "@lesto/assets";
 import type { PublicEnvDefine } from "@lesto/assets";
 
 import type { IslandDialect } from "./dialect";
+import { VITE_BASE } from "./paths";
 
 /** One anchored module-resolution alias (the preact dialect's `react` → `preact/compat`). */
 export interface ViteIslandAlias {
@@ -35,8 +37,8 @@ export interface ViteIslandConfig {
   /** The project root — where islands, `node_modules`, and the entry resolve from. */
   readonly root: string;
 
-  /** Vite's default URL base — modules are served on the app's own origin. */
-  readonly base: "/";
+  /** The dedicated prefix every Vite-served URL sits under ({@link VITE_BASE}). */
+  readonly base: string;
 
   /** `custom`: Vite serves modules but never an index.html / SPA fallback (the app owns HTML). */
   readonly appType: "custom";
@@ -111,7 +113,7 @@ function preactAliases(): readonly ViteIslandAlias[] {
 export function viteIslandConfig(options: ViteIslandConfigOptions): ViteIslandConfig {
   return {
     root: options.root,
-    base: "/",
+    base: VITE_BASE,
     appType: "custom",
     configFile: false,
     clearScreen: false,
