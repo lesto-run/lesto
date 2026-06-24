@@ -14,6 +14,9 @@
 
 export { parseServeLimit, run } from "./run";
 export type {
+  BuildHook,
+  BuildHookContext,
+  BuiltSite,
   CliDeps,
   DevError,
   DevErrorSource,

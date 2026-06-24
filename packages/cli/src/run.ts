@@ -185,6 +185,32 @@ export interface LiveReload {
   readonly close: () => void;
 }
 
+/** One static site as the post-build hook sees it: its name, routes, and a sink. */
+export interface BuiltSite {
+  /** The site's name — its subdirectory under the output root. */
+  readonly name: string;
+  /** The origin paths prerendered for this site (e.g. `/`, `/blog`) — the sitemap's routes. */
+  readonly routes: readonly string[];
+  /** A sink rooted at this site's output dir (`<outDir>/<name>`) — write files beside its HTML. */
+  readonly sink: OutputSink;
+}
+
+/** The context a `lesto build` post-build hook receives. */
+export interface BuildHookContext {
+  /** The resolved output root (the `--out` dir; default `out`). */
+  readonly outDir: string;
+  /** Every static site that was built. */
+  readonly sites: readonly BuiltSite[];
+}
+
+/**
+ * A project's `lesto.build.ts` default export: runs AFTER `lesto build` prerenders the
+ * pages and builds the client + styles, to emit whatever the command itself can't —
+ * SEO files, an AI-docs surface, a search index — through the same sink seam the pages
+ * use. So a static marketing/docs app no longer forks `lesto build` with its own script.
+ */
+export type BuildHook = (context: BuildHookContext) => void | Promise<void>;
+
 /** The seams the command core depends on — all injected, never imported live. */
 export interface CliDeps {
   /**
@@ -235,6 +261,22 @@ export interface CliDeps {
 
   /** Build a sink rooted at `outDir` for the static build (the bin passes `nodeSink`). */
   sink: (outDir: string) => OutputSink;
+
+  /**
+   * Load the project's post-build hook (`lesto.build.ts`'s default export) — the seam
+   * `lesto build` fires after prerender + client + styles to emit the discoverability
+   * files the command itself can't (SEO, an AI-docs surface, a search index). The bin
+   * imports the file when present and tolerates its absence (→ undefined, no hook),
+   * mirroring {@link loadSites}. Absent seam (a test that did not opt in) → no hook.
+   */
+  loadBuildHook?: () => Promise<BuildHook | undefined>;
+
+  /**
+   * Remove the output dir before a build, so a route deleted since the last build leaves
+   * no stale orphan the deploy still ships (the sink only writes, never deletes). The bin
+   * wires an `rm(dir, { recursive, force })`; absent → no clean (tests opt in).
+   */
+  cleanDir?: (dir: string) => Promise<void>;
 
   /**
    * Read a client build asset (e.g. `/client.js`) for the dev server, or absent
@@ -294,6 +336,8 @@ export interface CliDeps {
     entry: string;
     outDir: string;
     mode: "dev" | "production";
+    /** The directory Tailwind scans for utility classes (`ui.cssScanRoot`, default `app/`). */
+    scanRoot: string;
   }) => Promise<void>;
 
   /**
@@ -908,6 +952,19 @@ function cssEntryOf(config: LestoAppConfig): string {
   return config.ui?.css ?? DEFAULT_CSS_ENTRY;
 }
 
+/** The project convention for the Tailwind scan root when `ui.cssScanRoot` is unset (ADR 0037). */
+const DEFAULT_CSS_SCAN_ROOT = "app";
+
+/**
+ * The directory Tailwind scans for utility classes (ADR 0037) — `config.ui.cssScanRoot`,
+ * or the `app/` convention when unset. Project-relative; the bin resolves it against the
+ * project root. An app whose markup lives outside `app/` (a marketing/docs site with
+ * components in `src/`) points it there so its classes are not missed.
+ */
+function cssScanRootOf(config: LestoAppConfig): string {
+  return config.ui?.cssScanRoot ?? DEFAULT_CSS_SCAN_ROOT;
+}
+
 /**
  * Build the Tailwind stylesheet into `outDir` when the project's resolved CSS entry
  * exists, wrapping any compile failure in a coded CLI error so the command fails
@@ -930,8 +987,10 @@ async function buildStylesIfPresent(
 
   if (!(await deps.cssEntryExists(entry))) return;
 
+  const scanRoot = cssScanRootOf(config);
+
   try {
-    await deps.buildAppStyles({ entry, outDir, mode });
+    await deps.buildAppStyles({ entry, outDir, mode, scanRoot });
   } catch (cause) {
     throw new CliError(
       "CLI_STYLES_BUILD_FAILED",
@@ -1008,9 +1067,21 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
 
   const selected = selectTarget(sites, target);
 
-  await buildClientIfPresent(deps, outDir, "production", dialectOf(config));
+  // Clear the output root first: the sink only writes, so a route removed since the
+  // last build would otherwise leave a stale orphan the deploy still ships.
+  if (deps.cleanDir !== undefined) {
+    await deps.cleanDir(outDir);
+  }
 
-  await buildStylesIfPresent(deps, config, outDir, "production");
+  // The client + styles must land in the SAME tree the pages serve from. A single
+  // static site is served from `out/<name>/` (its `assets.directory`), so build its
+  // assets there, not loose in `out/`. With no single static target, fall back to the
+  // output root (the historical behaviour; multi-site asset placement is its own task).
+  const assetDir = assetRootFor(selected, outDir);
+
+  await buildClientIfPresent(deps, assetDir, "production", dialectOf(config));
+
+  await buildStylesIfPresent(deps, config, assetDir, "production");
 
   const manifest = await buildStaticSites(selected, app.handle, deps.sink(outDir));
 
@@ -1018,7 +1089,41 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
     deps.out(`built ${site.site}: ${site.pages.length} ${pageNoun(site.pages.length)}`);
   }
 
+  // Fire the post-build hook (lesto.build.ts): it emits the discoverability files
+  // `lesto build` itself does not — SEO, an AI-docs surface, a search index — each
+  // through a sink rooted at its own site's output dir.
+  const onBuilt = deps.loadBuildHook === undefined ? undefined : await deps.loadBuildHook();
+
+  if (onBuilt !== undefined) {
+    await onBuilt({
+      outDir,
+      sites: manifest.map((site) => ({
+        name: site.site,
+        routes: site.pages.map((page) => page.path),
+        sink: deps.sink(joinOut(outDir, site.site)),
+      })),
+    });
+  }
+
   return 0;
+}
+
+/** Join an output root and a site name into one relative path (posix; the bin resolves it). */
+function joinOut(outDir: string, name: string): string {
+  return `${outDir.replace(/\/+$/, "")}/${name}`;
+}
+
+/**
+ * The dir the client + styles build into: a lone static site's served root
+ * (`<outDir>/<name>`), else the output root. A static site is served from its own
+ * `out/<name>/` subtree, so its assets belong there; with zero or several static
+ * targets there is no single such root, so the output root stands.
+ */
+function assetRootFor(selected: readonly Site[], outDir: string): string {
+  const staticTargets = selected.filter((site) => site.render === "static");
+  const only = staticTargets.length === 1 ? staticTargets[0] : undefined;
+
+  return only !== undefined ? joinOut(outDir, only.name) : outDir;
 }
 
 /**

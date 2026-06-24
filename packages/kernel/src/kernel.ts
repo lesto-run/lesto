@@ -150,8 +150,14 @@ export interface LestoAppConfig {
    * entirely when the resolved file is absent (Tailwind stays opt-in). The server
    * never reads it — the stylesheet `<link>` is injected via `lesto().styles(...)`
    * (the matched sibling of `.client(...)`).
+   *
+   * `cssScanRoot` is the directory Tailwind scans for utility classes, relative to
+   * the project root (CLI-only, ADR 0037). Defaults to `app/` — the convention for
+   * a standard app whose components live under `app/`. An app whose markup lives
+   * elsewhere (e.g. a marketing/docs site with components in `src/`) points it
+   * there so its classes are not missed.
    */
-  ui?: { dialect: UiDialect; css?: string };
+  ui?: { dialect: UiDialect; css?: string; cssScanRoot?: string };
 
   /**
    * Install the durable-store schemas (sessions + rate limits, ADR 0013) on the

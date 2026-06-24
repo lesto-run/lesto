@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "lesto dev",
-    "build": "bun run build.ts",
-    "deploy": "bun run build.ts && wrangler deploy",
+    "build": "lesto generate agents --check && bun --bun lesto build",
+    "deploy": "lesto generate agents --check && bun --bun lesto build && wrangler deploy",
     "agents": "lesto generate agents",
     "agents:check": "lesto generate agents --check",
     "test": "vitest run",

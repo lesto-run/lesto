@@ -9,7 +9,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { watch } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -33,7 +33,7 @@ import { buildClient, bunBuildClientDeps } from "@lesto/assets";
 import { createApp } from "@lesto/kernel";
 
 import { run } from "./run";
-import type { CliDeps, CloudflareDeployer, DevError, ReleaseTarget } from "./run";
+import type { BuildHook, CliDeps, CloudflareDeployer, DevError, ReleaseTarget } from "./run";
 import { devReloadClientScript } from "./dev-overlay";
 import { CliError } from "./errors";
 import { WRANGLER_DEPLOY_ARGS, WRANGLER_ROLLBACK_MESSAGE, wranglerRollbackArgs } from "./wrangler";
@@ -418,6 +418,7 @@ const buildAppStyles = async (options: {
   entry: string;
   outDir: string;
   mode: "dev" | "production";
+  scanRoot: string;
 }): Promise<void> => {
   const { buildStyles, tailwindStyleCompiler } = await import("@lesto/styles");
 
@@ -428,7 +429,13 @@ const buildAppStyles = async (options: {
       mode: options.mode === "dev" ? "development" : "production",
       report: (line) => console.log(line),
     },
-    tailwindStyleCompiler({ resolveBase: projectRoot, scanRoot: appSrcDir }),
+    // `scanRoot` is the project-relative dir Tailwind scans (`ui.cssScanRoot`, default
+    // `app/`); an app with markup outside `app/` (a docs/marketing site under `src/`)
+    // points it there so its classes are compiled in.
+    tailwindStyleCompiler({
+      resolveBase: projectRoot,
+      scanRoot: join(projectRoot, options.scanRoot),
+    }),
   );
 };
 
@@ -669,6 +676,33 @@ const loadSites = async (): Promise<readonly Site[]> => {
   }
 };
 
+// The project's optional post-build hook, mirroring `lesto.sites.ts`: `lesto.build.ts`
+// default-exports an `onBuilt` function that `lesto build` fires after prerender +
+// client + styles. A MISSING file is tolerated (→ undefined, no hook); any OTHER import
+// error (a syntax error in an existing file, or a missing transitive import) is rethrown
+// so a real bug is not swallowed as "no hook".
+const BUILD_HOOK_PATH = join(projectRoot, "lesto.build.ts");
+
+const loadBuildHook = async (): Promise<BuildHook | undefined> => {
+  try {
+    const module = (await import(BUILD_HOOK_PATH)) as { default: BuildHook };
+
+    return module.default;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
+      if ((error as { message: string }).message.includes("lesto.build.ts")) return undefined;
+    }
+
+    throw error;
+  }
+};
+
+// Remove the output dir before a build, so a route deleted since the last build leaves
+// no orphan the deploy still ships (the sink only writes). `force` tolerates the first
+// build, when the dir does not yet exist.
+const cleanDir = (dir: string): Promise<void> =>
+  rm(join(projectRoot, dir), { recursive: true, force: true });
+
 const [command, ...commandArgs] = argv;
 
 // `mcp` and `openapi` live in their own command files (operability-dx #4/#5);
@@ -772,6 +806,8 @@ const code = await run(argv, {
   deleteEntry,
   createEntry,
   loadSites,
+  loadBuildHook,
+  cleanDir,
   sink: nodeSink,
   readAsset: nodeStaticReader(join(process.cwd(), DEV_ASSET_DIR)),
   hasIslandsDir,

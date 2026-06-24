@@ -13,7 +13,7 @@ import type { OutputSink, Site } from "@lesto/sites";
 import type { ReleaseStore } from "@lesto/deploy";
 
 import { CliError, parsePort, parseServeLimit, parseStringFlag, run } from "../src/index";
-import type { CliDeps, DevError, ReleaseTarget } from "../src/index";
+import type { BuildHook, BuildHookContext, CliDeps, DevError, ReleaseTarget } from "../src/index";
 
 // --- A real-enough app, built over an in-memory better-sqlite3 adapter. ---
 
@@ -796,6 +796,95 @@ describe("run build", () => {
 });
 
 // ---------------------------------------------------------------------------
+// The build folds in the output clean and a post-build hook (`lesto.build.ts`),
+// so a static site no longer forks `lesto build` with a hand-rolled script.
+// ---------------------------------------------------------------------------
+
+describe("run build — clean + post-build hook", () => {
+  it("cleans the output root before building (a removed route leaves no orphan)", async () => {
+    const cleaned: string[] = [];
+
+    await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+        cleanDir: (dir) => {
+          cleaned.push(dir);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(cleaned).toEqual(["out"]);
+  });
+
+  it("cleans the chosen --out dir", async () => {
+    const cleaned: string[] = [];
+
+    await run(
+      ["build", "--out", "dist"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+        cleanDir: (dir) => {
+          cleaned.push(dir);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(cleaned).toEqual(["dist"]);
+  });
+
+  it("fires the post-build hook with each site's name, routes, and an output-rooted sink", async () => {
+    const { sink, outDirs, written } = recordingSink();
+    const seen: BuildHookContext[] = [];
+    const onBuilt: BuildHook = (ctx) => {
+      seen.push(ctx);
+
+      // The hook writes through its site's sink, beside that site's prerendered HTML.
+      return ctx.sites[0]?.sink("extra.txt", "hi");
+    };
+
+    const code = await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink,
+        loadBuildHook: () => Promise.resolve(onBuilt),
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.outDir).toBe("out");
+    expect(seen[0]?.sites).toEqual([
+      { name: "marketing", routes: ["/posts"], sink: expect.any(Function) },
+    ]);
+    // The per-site sink is rooted at out/marketing, and the hook's write went through it.
+    expect(outDirs).toContain("out/marketing");
+    expect(written.get("extra.txt")).toBe("hi");
+  });
+
+  it("skips the hook when lesto.build.ts resolves no default export (undefined)", async () => {
+    const code = await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+        loadBuildHook: () => Promise.resolve(undefined),
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(lines).toEqual(["built marketing: 1 page"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ADR 0011 Seam 3: the CLI runs the @lesto/assets client build when the project
 // has an `app/islands/` directory. The probe + builder + watcher are seams.
 // ---------------------------------------------------------------------------
@@ -820,7 +909,52 @@ describe("run build — island client assets", () => {
 
     expect(code).toBe(0);
     // The app config carries no `ui` key, so the client build defaults to "react".
-    expect(built).toEqual([{ outDir: "out", mode: "production", dialect: "react" }]);
+    // A lone static site ("marketing") is served from out/marketing/, so its client
+    // bundle builds there — beside the pages — not loose in out/.
+    expect(built).toEqual([{ outDir: "out/marketing", mode: "production", dialect: "react" }]);
+  });
+
+  it("builds client assets into the output root when several static sites are selected", async () => {
+    const built: Array<{ outDir: string }> = [];
+
+    await run(
+      ["build"],
+      depsWith({
+        // Two static sites (no pages to render — the client build runs before
+        // prerender, so empty pages still exercise the multi-site asset-root path).
+        loadSites: () => Promise.resolve([staticSite("a", []), staticSite("b", [])]),
+        sink: recordingSink().sink,
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: (options) => {
+          built.push(options);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    // No single static target → assets stay at the output root, not a site subdir.
+    expect(built.map((b) => b.outDir)).toEqual(["out"]);
+  });
+
+  it("builds client assets into the output root when no static site is selected", async () => {
+    const built: Array<{ outDir: string }> = [];
+
+    await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([{ name: "api", render: "dynamic", basePath: "/api" }]),
+        sink: recordingSink().sink,
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets: (options) => {
+          built.push(options);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(built.map((b) => b.outDir)).toEqual(["out"]);
   });
 
   it("skips the client build when app/islands/ does not exist (island-less app)", async () => {
@@ -871,7 +1005,7 @@ describe("run build — island client assets", () => {
       expect(error).toBeInstanceOf(CliError);
       expect((error as CliError).code).toBe("CLI_CLIENT_BUILD_FAILED");
       expect((error as CliError).details).toMatchObject({
-        outDir: "out",
+        outDir: "out/marketing",
         mode: "production",
         cause,
       });
@@ -898,8 +1032,11 @@ describe("run build — Tailwind CSS (ADR 0037)", () => {
     );
 
     expect(code).toBe(0);
-    // No `ui.css` key → the entry defaults to the `app/styles/app.css` convention.
-    expect(built).toEqual([{ entry: "app/styles/app.css", outDir: "out", mode: "production" }]);
+    // No `ui.css`/`ui.cssScanRoot` keys → entry defaults to `app/styles/app.css` and
+    // the scan root to `app`. A lone static site builds its styles into out/marketing/.
+    expect(built).toEqual([
+      { entry: "app/styles/app.css", outDir: "out/marketing", mode: "production", scanRoot: "app" },
+    ]);
   });
 
   it("resolves the CSS entry from ui.css when set", async () => {
@@ -979,7 +1116,7 @@ describe("run build — Tailwind CSS (ADR 0037)", () => {
       expect(error).toBeInstanceOf(CliError);
       expect((error as CliError).code).toBe("CLI_STYLES_BUILD_FAILED");
       expect((error as CliError).details).toMatchObject({
-        outDir: "out",
+        outDir: "out/marketing",
         mode: "production",
         entry: "app/styles/app.css",
         cause,
@@ -1456,7 +1593,9 @@ describe("run dev — Tailwind CSS (ADR 0037)", () => {
       }),
     );
 
-    expect(built).toEqual([{ entry: "app/styles/app.css", outDir: "out", mode: "dev" }]);
+    expect(built).toEqual([
+      { entry: "app/styles/app.css", outDir: "out", mode: "dev", scanRoot: "app" },
+    ]);
   });
 
   it("watches the broad app/ source set and hot-swaps the stylesheet on a clean rebuild", async () => {

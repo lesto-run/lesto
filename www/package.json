@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "lesto dev",
-    "build": "bun run build.ts",
-    "deploy": "bun run build.ts && wrangler deploy",
+    "build": "bun --bun lesto build",
+    "deploy": "bun --bun lesto build && wrangler deploy",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

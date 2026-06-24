@@ -159,13 +159,15 @@ export async function buildAppConfig(): Promise<LestoAppConfig> {
   // No migrations: the content lives in files, rendered at build time; the
   // database is present only because the kernel's config requires one.
   //
-  // `ui.css` points the CSS build at the Tailwind entry (ADR 0037); `dialect: "react"`
-  // keeps the SERVER renderer React (the pages are React-SSR'd) while `build.ts`
-  // bundles the deferred islands on the Preact client — the established pairing.
+  // `ui` config the CLI reads (ADR 0037). `dialect: "preact"` renders BOTH the pages
+  // (server) and the deferred islands (client) on Preact — the ~10 KB runtime, and a
+  // single dialect so `lesto build` never diverges them. `css` is the Tailwind entry;
+  // `cssScanRoot: "src"` points Tailwind at this site's components (they live in `src/`,
+  // not the default `app/`), so its utility classes are compiled in.
   return {
     db,
     app,
     migrations: "skip",
-    ui: { dialect: "react", css: "app/styles/app.css" },
+    ui: { dialect: "preact", css: "app/styles/app.css", cssScanRoot: "src" },
   };
 }
