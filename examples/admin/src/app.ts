@@ -263,7 +263,8 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
         fields: ["name", "price", "stock"],
       },
     ],
-    { onMutation: makeAuditHook(db) },
+    // This demo predates per-verb authz (ADR 0028); opt out loudly for now.
+    { policy: { ungoverned: true }, onMutation: makeAuditHook(db) },
   );
 
   // The kernel runs the table migrations before dispatch is live.

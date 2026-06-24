@@ -145,6 +145,7 @@
       "name": "@lesto/admin",
       "version": "0.0.0",
       "dependencies": {
+        "@lesto/authz": "workspace:*",
         "@lesto/db": "workspace:*",
         "@lesto/errors": "workspace:*",
         "zod": "^4.0.0",

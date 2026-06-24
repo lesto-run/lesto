@@ -325,7 +325,8 @@ function makeAdminWiring(store: ContentStore): () => Promise<AdminWiring> {
           fields: ["title", "body"],
         },
       ],
-      { onMutation: (event) => audit.push(event) },
+      // OCP-2: opt out loudly until OCP-4 wires a real principal-resolved policy.
+      { policy: { ungoverned: true }, onMutation: (event) => audit.push(event) },
     );
 
     return { admin, audit };

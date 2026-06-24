@@ -12,9 +12,16 @@ import {
   type SqlDatabase,
 } from "@lesto/db";
 
+import { definePolicy } from "@lesto/authz";
+
 import { AdminError, createAdmin } from "../src/index";
 
 import type { Admin, AdminErrorCode, AdminResource, AuditEvent } from "../src/index";
+
+// The loud opt-out: the existing behavioral suite is authorization-agnostic, so it
+// runs ungoverned. The `describe("governance")` block at the bottom exercises a real
+// policy. `as const` keeps the `{ ungoverned: true }` literal in the policy union.
+const UNGOVERNED = { ungoverned: true } as const;
 
 // ---------------------------------------------------------------------------
 // Test rig
@@ -100,7 +107,7 @@ beforeEach(async () => {
   db = createDb(sql);
   await db.exec(createTableSql(posts));
 
-  admin = createAdmin(db, [postsResource]);
+  admin = createAdmin(db, [postsResource], { policy: UNGOVERNED });
 });
 
 afterEach(() => {
@@ -303,7 +310,7 @@ describe("createAdmin", () => {
         }),
       } as unknown as Db;
 
-      const stubAdmin = createAdmin(stubDb, [postsResource]);
+      const stubAdmin = createAdmin(stubDb, [postsResource], { policy: UNGOVERNED });
 
       await expect(stubAdmin.update("posts", 1, { title: "x" })).rejects.toBe(boom);
     });
@@ -331,15 +338,19 @@ describe("createAdmin", () => {
 
       await expectCode(
         () =>
-          createAdmin(db, [
-            {
-              name: "broken",
-              table: noPk,
-              insertSchema: z.object({ name: z.string() }),
-              updateSchema: z.object({ name: z.string().optional() }),
-              fields: ["name"],
-            },
-          ]),
+          createAdmin(
+            db,
+            [
+              {
+                name: "broken",
+                table: noPk,
+                insertSchema: z.object({ name: z.string() }),
+                updateSchema: z.object({ name: z.string().optional() }),
+                fields: ["name"],
+              },
+            ],
+            { policy: UNGOVERNED },
+          ),
         "ADMIN_NO_PRIMARY_KEY",
       );
     });
@@ -351,15 +362,19 @@ describe("createAdmin", () => {
       });
       await db.exec(createTableSql(slugTable));
 
-      const slugAdmin = createAdmin(db, [
-        {
-          name: "by_slug",
-          table: slugTable,
-          insertSchema: z.object({ slug: z.string(), body: z.string() }),
-          updateSchema: z.object({ body: z.string().optional() }),
-          fields: ["body"],
-        },
-      ]);
+      const slugAdmin = createAdmin(
+        db,
+        [
+          {
+            name: "by_slug",
+            table: slugTable,
+            insertSchema: z.object({ slug: z.string(), body: z.string() }),
+            updateSchema: z.object({ body: z.string().optional() }),
+            fields: ["body"],
+          },
+        ],
+        { policy: UNGOVERNED },
+      );
 
       await slugAdmin.create("by_slug", { slug: "hello", body: "world" });
 
@@ -380,6 +395,7 @@ describe("createAdmin", () => {
     it("emits create/update/destroy events with actor, resource, id, and patch", async () => {
       const events: AuditEvent[] = [];
       const audited = createAdmin(db, [postsResource], {
+        policy: UNGOVERNED,
         onMutation: (event) => events.push(event),
       });
 
@@ -411,6 +427,7 @@ describe("createAdmin", () => {
     it("reports an undefined actor when no context is passed", async () => {
       const events: AuditEvent[] = [];
       const audited = createAdmin(db, [postsResource], {
+        policy: UNGOVERNED,
         onMutation: (event) => events.push(event),
       });
 
@@ -422,6 +439,7 @@ describe("createAdmin", () => {
     it("does NOT emit when a mutation fails (validation rejects before the write)", async () => {
       const events: AuditEvent[] = [];
       const audited = createAdmin(db, [postsResource], {
+        policy: UNGOVERNED,
         onMutation: (event) => events.push(event),
       });
 
@@ -443,6 +461,172 @@ describe("createAdmin", () => {
         expect(adminError.details).toEqual({ name: "widgets" });
         expect(Object.isFrozen(adminError.details)).toBe(true);
       }
+    });
+  });
+
+  describe("governance (per-verb authz gating)", () => {
+    const policy = definePolicy({
+      roles: ["viewer", "editor", "admin"],
+      can: {
+        "posts:read": ["viewer", "editor", "admin"],
+        "posts:create": ["editor", "admin"],
+        "posts:update": ["editor", "admin"],
+        "posts:destroy": ["admin"],
+      },
+    });
+
+    // The same fixture resource, now declaring a permission per verb.
+    const governedResource: AdminResource = {
+      ...postsResource,
+      permissions: {
+        read: "posts:read",
+        create: "posts:create",
+        update: "posts:update",
+        destroy: "posts:destroy",
+      },
+    };
+
+    // Principals as the resolver would hand them in: `{ actor, actorRoles }`.
+    const viewer = { actor: "u-viewer", actorRoles: ["viewer"] };
+    const editor = { actor: "u-editor", actorRoles: ["editor"] };
+    const operator = { actor: "u-admin", actorRoles: ["admin"] };
+
+    let governed: Admin;
+
+    beforeEach(() => {
+      governed = createAdmin(db, [governedResource], { policy });
+    });
+
+    it("allows list + get when the actor's roles grant read", async () => {
+      await governed.create("posts", { title: "Visible", body: "b" }, editor);
+
+      expect(await governed.list("posts", undefined, viewer)).toEqual([
+        { id: 1, title: "Visible", body: "b" },
+      ]);
+      expect(await governed.get("posts", 1, viewer)).toEqual({
+        id: 1,
+        title: "Visible",
+        body: "b",
+      });
+    });
+
+    it("denies a read for an actor with no granting role (deny-by-default)", async () => {
+      // No context → no roles → the declared read permission is refused.
+      try {
+        await governed.list("posts");
+        expect.unreachable("expected ADMIN_FORBIDDEN");
+      } catch (error) {
+        const err = error as AdminError;
+
+        expect(err.code).toBe("ADMIN_FORBIDDEN");
+        expect(err.details).toMatchObject({
+          resource: "posts",
+          action: "list",
+          permission: "posts:read",
+        });
+      }
+    });
+
+    it("allows an editor to create/update and the audit carries the resolved actor", async () => {
+      const events: AuditEvent[] = [];
+      const auditedGoverned = createAdmin(db, [governedResource], {
+        policy,
+        onMutation: (event) => events.push(event),
+      });
+
+      const created = await auditedGoverned.create("posts", { title: "Draft", body: "b" }, editor);
+      await auditedGoverned.update("posts", created["id"], { title: "Revised" }, editor);
+
+      expect(events.map((e) => ({ action: e.action, actor: e.actor }))).toEqual([
+        { action: "create", actor: "u-editor" },
+        { action: "update", actor: "u-editor" },
+      ]);
+    });
+
+    it("denies create for a viewer (lacks posts:create) with ADMIN_FORBIDDEN details", async () => {
+      try {
+        await governed.create("posts", { title: "Nope", body: "b" }, viewer);
+        expect.unreachable("expected ADMIN_FORBIDDEN");
+      } catch (error) {
+        const err = error as AdminError;
+
+        expect(err.code).toBe("ADMIN_FORBIDDEN");
+        expect(err.details).toMatchObject({
+          resource: "posts",
+          action: "create",
+          permission: "posts:create",
+        });
+      }
+    });
+
+    it("gates destroy to admin — an editor is refused, the operator succeeds", async () => {
+      await governed.create("posts", { title: "Doomed", body: "b" }, editor);
+
+      await expectCode(() => governed.destroy("posts", 1, editor), "ADMIN_FORBIDDEN");
+
+      await expect(governed.destroy("posts", 1, operator)).resolves.toBeUndefined();
+      expect(await governed.list("posts", undefined, viewer)).toHaveLength(0);
+    });
+
+    it("refuses an unattributed governed write even when the roles would grant it", async () => {
+      // Roles present but no actor — the resolver is the sole actor source, so the
+      // write is refused before any policy check (and never reaches the audit hook).
+      try {
+        await governed.create("posts", { title: "Ghost", body: "b" }, { actorRoles: ["editor"] });
+        expect.unreachable("expected ADMIN_FORBIDDEN");
+      } catch (error) {
+        const err = error as AdminError;
+
+        expect(err.code).toBe("ADMIN_FORBIDDEN");
+        expect(err.details).toMatchObject({
+          resource: "posts",
+          action: "create",
+          reason: "unattributed",
+        });
+      }
+    });
+
+    it("denies any verb a resource declares no permission for (fail-closed)", async () => {
+      const undeclared = createAdmin(db, [{ ...postsResource, permissions: {} }], { policy });
+
+      // read is undeclared → list is denied even for the operator.
+      try {
+        await undeclared.list("posts", undefined, operator);
+        expect.unreachable("expected ADMIN_FORBIDDEN");
+      } catch (error) {
+        const err = error as AdminError;
+
+        expect(err.code).toBe("ADMIN_FORBIDDEN");
+        expect(err.details["permission"]).toBeUndefined();
+        expect(err.details).toMatchObject({ resource: "posts", action: "list" });
+      }
+
+      // create is undeclared too → denied past the (satisfied) attribution gate.
+      await expectCode(
+        () => undeclared.create("posts", { title: "x", body: "y" }, operator),
+        "ADMIN_FORBIDDEN",
+      );
+    });
+
+    it("authorizes BEFORE validation — an unauthorized bad-input create is FORBIDDEN, not VALIDATION_FAILED", async () => {
+      // The empty title would fail validation, but the viewer is refused first.
+      await expectCode(() => governed.create("posts", { title: "" }, viewer), "ADMIN_FORBIDDEN");
+    });
+
+    it("authorizes BEFORE the db is touched — an unauthorized update on a missing row is FORBIDDEN, not NOT_FOUND", async () => {
+      await expectCode(
+        () => governed.update("posts", 999, { title: "x" }, viewer),
+        "ADMIN_FORBIDDEN",
+      );
+    });
+
+    it("ungoverned bypasses declared permissions entirely (the loud opt-out)", async () => {
+      const open = createAdmin(db, [governedResource], { policy: UNGOVERNED });
+
+      // No context, no roles — yet every verb runs, because gating is off.
+      await open.create("posts", { title: "Free", body: "b" });
+      expect(await open.list("posts")).toHaveLength(1);
+      await expect(open.destroy("posts", 1)).resolves.toBeUndefined();
     });
   });
 });

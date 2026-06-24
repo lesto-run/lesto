@@ -14,7 +14,8 @@ export type AdminErrorCode =
   | "ADMIN_RECORD_NOT_FOUND"
   | "ADMIN_NO_PRIMARY_KEY"
   | "ADMIN_VALIDATION_FAILED"
-  | "ADMIN_EMPTY_UPDATE";
+  | "ADMIN_EMPTY_UPDATE"
+  | "ADMIN_FORBIDDEN";
 
 /** Anything the admin layer can refuse to do. */
 export class AdminError extends LestoError<AdminErrorCode> {

@@ -259,15 +259,20 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
 
   // The admin manages ONLY the run ledger (a generic CRUD table). The queue's
   // own tables are managed by the queue's operator verbs, not the admin.
-  const admin = createAdmin(db, [
-    {
-      name: "runs",
-      table: jobRuns,
-      insertSchema: jobRunInsertSchema,
-      updateSchema: jobRunUpdateSchema,
-      fields: ["jobId", "name", "outcome", "attempt", "durationMs", "at"],
-    },
-  ]);
+  const admin = createAdmin(
+    db,
+    [
+      {
+        name: "runs",
+        table: jobRuns,
+        insertSchema: jobRunInsertSchema,
+        updateSchema: jobRunUpdateSchema,
+        fields: ["jobId", "name", "outcome", "attempt", "durationMs", "at"],
+      },
+    ],
+    // This demo predates per-verb authz (ADR 0028); opt out loudly for now.
+    { policy: { ungoverned: true } },
+  );
 
   const app = await createApp({
     db: handle,
