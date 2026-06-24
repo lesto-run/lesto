@@ -7,6 +7,19 @@ function normalizeBasePath(basePath: string): string {
 }
 
 /**
+ * The characters a site name may use.
+ *
+ * A name is also a path segment — `outputPath` writes pages to `<name>/…` and the
+ * build hook roots a sink at `out/<name>`. Constraining it to lowercase letters,
+ * digits, `-`, and `_` means a name can never contain a `/`, a `..`, or anything
+ * else that would let a write escape its output tree. The page sink (`nodeSink`)
+ * already guards traversal, but the hook re-roots the sink at `out/<name>`, moving
+ * that guard's anchor — so we validate the name once, here, the single source of
+ * truth both paths read from, as cheap defense-in-depth.
+ */
+const VALID_NAME = /^[a-z0-9_-]+$/;
+
+/**
  * Declare a project's sites.
  *
  * Validates the set up front — names are present and unique, base paths are
@@ -21,6 +34,17 @@ export function defineSites(sites: readonly Site[]): readonly Site[] {
   for (const site of sites) {
     if (site.name === "") {
       throw new SitesError("SITES_EMPTY_NAME", "A site needs a non-empty name.");
+    }
+
+    // A name becomes a path segment in two places — `outputPath`'s `<name>/…` and
+    // the build hook's `out/<name>` sink root. Reject anything that is not a plain
+    // slug so neither write can ever escape its tree (e.g. a `../../x` name).
+    if (!VALID_NAME.test(site.name)) {
+      throw new SitesError(
+        "SITES_INVALID_NAME",
+        `Site name "${site.name}" must match ${VALID_NAME.source} (lowercase letters, digits, "-", "_").`,
+        { name: site.name },
+      );
     }
 
     if (seenNames.has(site.name)) {

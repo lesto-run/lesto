@@ -4,6 +4,8 @@ import { LestoError } from "@lesto/errors";
 export type SitesErrorCode =
   /** A site was declared without a name. */
   | "SITES_EMPTY_NAME"
+  /** A site name has characters that are not safe in an output path (`^[a-z0-9_-]+$`). */
+  | "SITES_INVALID_NAME"
   /** Two sites share a name. */
   | "SITES_DUPLICATE_NAME"
   /** A site's `basePath` does not start with `/`. */

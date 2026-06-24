@@ -76,6 +76,28 @@ describe("defineSites", () => {
     }
   });
 
+  it("accepts a slug name (lowercase, digits, '-', '_')", () => {
+    const sites = defineSites([
+      { name: "my-site_2", render: "static", basePath: "/", pages: ["/"] },
+    ]);
+
+    expect(sites[0]?.name).toBe("my-site_2");
+  });
+
+  it.each(["../../x", "a/b", "Foo", "site name", "café"])(
+    "rejects a name with unsafe path characters: %s",
+    (name) => {
+      try {
+        defineSites([{ name, render: "dynamic", basePath: "/" }]);
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(SitesError);
+        expect((error as SitesError).code).toBe("SITES_INVALID_NAME");
+        expect((error as SitesError).details["name"]).toBe(name);
+      }
+    },
+  );
+
   it("rejects two sites with the same name", () => {
     expect(() =>
       defineSites([
