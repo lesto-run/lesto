@@ -24,6 +24,7 @@ import {
   routeLayout,
   routePage,
   scaffold,
+  toPackageName,
   tsconfig,
   worker,
   wranglerConfig,
@@ -165,6 +166,9 @@ describe("scaffold", () => {
       "@lesto/web",
       "@lesto/ui",
       "@lesto/runtime",
+      // `lesto.sites.ts`'s `import type { Site }` source — without it a standalone
+      // (non-monorepo) install 404s on the type import.
+      "@lesto/sites",
       // The Tailwind CSS pipeline (ADR 0037) — the CLI's optional peer, carried by
       // the app so `lesto build`/`dev` can compile `app/styles/app.css`.
       "@lesto/styles",
@@ -301,10 +305,13 @@ describe("scaffold", () => {
     expect(workerTs).toContain('from "@lesto/cloudflare"');
     expect(workerTs).toContain("toFetchHandler");
     expect(workerTs).toContain("withAssets(env.ASSETS, handler)");
-    // It builds its own minimal edge twin (the island home page), never importing
-    // lesto.app.ts — which opens a filesystem SQLite handle a Worker has no fs for.
+    // It mounts the SAME file-routed home as `lesto dev` (page + layout defaults
+    // from app/routes), never importing lesto.app.ts — which opens a filesystem
+    // SQLite handle a Worker has no fs for.
     expect(workerTs).not.toContain('from "./lesto.app"');
-    expect(workerTs).toContain('import Counter from "./app/islands/counter"');
+    expect(workerTs).toContain('import home from "./app/routes/page"');
+    expect(workerTs).toContain('import RootLayout from "./app/routes/layout"');
+    expect(workerTs).toContain('.page("/", home)');
 
     // wrangler.jsonc is valid JSONC (comments + trailing commas) wiring the
     // nodejs_compat flag, the worker entry, and the ASSETS binding rooted at out/.
@@ -527,6 +534,24 @@ describe("templates", () => {
     expect(lestoSites()).toContain('render: "dynamic"');
   });
 
+  it("toPackageName coerces a project name into a registry-valid npm name", () => {
+    // An already-valid name passes straight through.
+    expect(toPackageName("blogish")).toBe("blogish");
+    // npm names must be lowercase — an uppercase directory name is lowercased.
+    expect(toPackageName("MyApp")).toBe("myapp");
+    // A leading dot/underscore is illegal in an npm name — stripped.
+    expect(toPackageName("_private")).toBe("private");
+    expect(toPackageName(".hidden")).toBe("hidden");
+    // A name that sanitizes to empty (all leading dots/underscores) falls back.
+    expect(toPackageName("__")).toBe("lesto-app");
+  });
+
+  it("packageJson lowercases the manifest name field for an uppercase project name", () => {
+    const manifest = JSON.parse(packageJson("MyApp", fakePin)) as { name: string };
+
+    expect(manifest.name).toBe("myapp");
+  });
+
   it("tsconfig is bundler-resolution, strict JSON that includes the island dir and the shadcn @/* path", () => {
     const parsed = JSON.parse(tsconfig()) as {
       compilerOptions: {
@@ -589,10 +614,16 @@ describe("templates", () => {
     expect(out).toContain('from "@lesto/cloudflare"');
     expect(out).toContain("toFetchHandler");
     expect(out).toContain("withAssets(env.ASSETS, handler)");
-    // The edge twin builds its own island home page rather than importing the
-    // SQLite-booting lesto.app.ts.
+    // It does NOT import the SQLite-booting lesto.app.ts (the Worker has no fs DB).
     expect(out).not.toContain('from "./lesto.app"');
-    expect(out).toContain('import Counter from "./app/islands/counter"');
+    // The edge mounts the SAME file-routed home as `lesto dev` — the page + layout
+    // defaults from app/routes — instead of hand-building a divergent createElement
+    // twin, so editing those files changes the deployed Worker too.
+    expect(out).toContain('import home from "./app/routes/page"');
+    expect(out).toContain('import RootLayout from "./app/routes/layout"');
+    expect(out).toContain(".layout(RootLayout)");
+    expect(out).toContain('.page("/", home)');
+    expect(out).not.toContain("createElement");
   });
 
   it("wranglerConfig embeds the name and is valid JSON once its comments are stripped", () => {

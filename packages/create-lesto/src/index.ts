@@ -43,6 +43,7 @@ export {
   routePage,
   SHADCN_DEPS,
   stylesApp,
+  toPackageName,
   tsconfig,
   worker,
   wranglerConfig,

@@ -36,6 +36,9 @@ export const LESTO_PACKAGES = [
   "@lesto/kernel",
   "@lesto/migrate",
   "@lesto/runtime",
+  // `lesto.sites.ts` does `import type { Site } from "@lesto/sites"`; without this
+  // dep the scaffolded app's type import 404s on a standalone (non-monorepo) install.
+  "@lesto/sites",
   "@lesto/styles",
   "@lesto/ui",
   "@lesto/web",
@@ -79,19 +82,35 @@ export const SHADCN_DEPS = {
 export type LestoDepResolver = (pkg: (typeof LESTO_PACKAGES)[number]) => string;
 
 /**
+ * Coerce a project name into a valid npm package name for the `package.json`
+ * `name` field. `validate-npm-package-name` requires lowercase and forbids a
+ * leading `.`/`_`, but the project/directory name is laxer (`assertValidName`
+ * permits uppercase and a leading `_`/`.`), so the manifest name is DERIVED rather
+ * than used verbatim — a `MyApp` directory still yields a valid `"myapp"` manifest.
+ * An input that sanitizes to empty (e.g. `"__"`) falls back to the default name.
+ */
+export function toPackageName(name: string): string {
+  const lowered = name.toLowerCase().replace(/^[._]+/, "");
+
+  return lowered.length > 0 ? lowered : "lesto-app";
+}
+
+/**
  * `package.json` for the scaffolded app: starter deps + a `lesto dev` script.
  *
- * The `@lesto/*` specifiers come from the injected `lestoDep` resolver (a `file:`
- * pin today; a published range post-launch), keeping this a pure function of its
- * inputs. The app ships `preact` (the ~10 KB island client the Preact dialect
+ * The `@lesto/*` specifiers come from the injected `lestoDep` resolver (the
+ * published `^0.x` range by default, a `file:` pin under `--local`), keeping this
+ * a pure function of its inputs. The app ships `preact` (the ~10 KB island client the Preact dialect
  * aliases `react` to) AND `react`/`react-dom` (the server still renders React —
- * see `lesto.app.ts`'s `ui: { dialect: "preact" }`).
+ * see `lesto.app.ts`'s `ui: { dialect: "preact" }`). The `name` field is run
+ * through {@link toPackageName} so an uppercase directory name still yields a
+ * registry-valid manifest name.
  */
 export function packageJson(name: string, lestoDep: LestoDepResolver): string {
   const lestoDeps = Object.fromEntries(LESTO_PACKAGES.map((pkg) => [pkg, lestoDep(pkg)]));
 
   const manifest = {
-    name,
+    name: toPackageName(name),
     version: "0.0.0",
     type: "module",
     private: true,
@@ -107,6 +126,10 @@ export function packageJson(name: string, lestoDep: LestoDepResolver): string {
 
     dependencies: {
       ...lestoDeps,
+      // The native SQLite addon `@lesto/runtime`'s `openSqlite` boots. Pinned to the
+      // SAME `^11.10.0` train the framework itself depends on and tests against
+      // (`@lesto/migrate`/`content-store`/`integration`), NOT a newer major — the
+      // scaffold must not run ahead of the engine its driver is verified against.
       "better-sqlite3": "^11.10.0",
       // The Tailwind v4 engine `@lesto/styles` compiles the app's CSS against — the
       // PEER the app's `@import "tailwindcss"` resolves (ADR 0037). Pinned to the same
@@ -872,37 +895,34 @@ export function tsconfig(): string {
  *   lesto deploy --cloudflare        # builds out/, then `wrangler deploy`
  */
 export function worker(): string {
-  return `import { createElement } from "react";
-
-import { toFetchHandler, withAssets } from "@lesto/cloudflare";
+  return `import { toFetchHandler, withAssets } from "@lesto/cloudflare";
 import type { AssetExecutionContext, AssetFetcher } from "@lesto/cloudflare";
 
 import { lesto } from "@lesto/web";
 
-import Counter from "./app/islands/counter";
+import home from "./app/routes/page";
+import RootLayout from "./app/routes/layout";
 
 /** The bindings this Worker is configured with (see wrangler.jsonc). */
 interface Env {
   readonly ASSETS: AssetFetcher;
 }
 
-// The edge twin of \`lesto.app.ts\`'s home page — the same client module tag and
-// Counter island, no SQLite-backed \`/posts\` (the Worker has no filesystem DB).
-// Built ONCE at module scope (per isolate) and reused across every request.
+// The edge entry mounts the SAME file-routed home as \`lesto dev\`: \`home\` is the
+// \`PageDef\` default-exported by \`app/routes/page.tsx\`, wrapped by the \`RootLayout\`
+// from \`app/routes/layout.tsx\` — so editing those files changes BOTH the dev page
+// and the deployed Worker, with no hand-built twin to drift out of sync. A Worker
+// has no filesystem to discover routes at request time, so each route is registered
+// EXPLICITLY here: add a \`.page("/path", def)\` for every new file route you want at
+// the edge (richer SQLite-backed routes stay server-side — the Worker has no
+// filesystem DB). Built ONCE at module scope (per isolate), reused every request.
 const app = lesto()
   .client("/client.js")
   // The stylesheet \`lesto build\` compiled to \`out/styles.css\` (ADR 0037), served
   // here from \`ASSETS\` and linked into every page — the edge twin of the dev link.
   .styles("/styles.css")
-  .page("/", {
-    component: () =>
-      createElement(
-        "main",
-        null,
-        createElement("h1", null, "Welcome to Lesto"),
-        createElement(Counter, { start: 0 }),
-      ),
-  });
+  .layout(RootLayout)
+  .page("/", home);
 
 const handler = toFetchHandler((method, path, options) => app.handle(method, path, options));
 

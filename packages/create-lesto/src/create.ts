@@ -11,8 +11,8 @@
  *   - `Runner`      — running a command in the project dir (install / git).
  *
  * `bin.ts` is the thin executable that wires the REAL seams (a `node:readline`
- * prompter, an `execFile` runner) to this; the timing lives there, the decisions
- * live here.
+ * prompter, a `node:child_process` `spawn` runner) to this; the timing lives
+ * there, the decisions live here.
  */
 
 import { CreateLestoError } from "./errors";

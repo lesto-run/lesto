@@ -35,11 +35,11 @@ import type { LestoDepResolver } from "./templates";
  * The two ways a scaffolded app pins its `@lesto/*` dependencies.
  *
  * `publishedRangePin` (the DEFAULT) pins each to a published `^0.x` range — what
- * an outsider gets from `npm create lesto`, resolvable from the registry once
- * the `0.x` publish lands (see `RELEASING.md`). `fileColonPin` pins each to a
- * `file:` path at the in-repo package — the in-monorepo dev/e2e mode, selected by
- * `create-lesto --local`, so `bun install` resolves against the workspace packages
- * before anything is published.
+ * an outsider gets from `npm create lesto`. Lesto `0.1.x` is published, so this
+ * resolves straight from the registry (see `RELEASING.md`). `fileColonPin` pins
+ * each to a `file:` path at the in-repo package — the in-monorepo dev/e2e mode,
+ * selected by `create-lesto --local`, so `bun install` resolves against the
+ * workspace packages without touching the registry.
  *
  * The resolver is injectable (`ScaffoldOptions.lestoDep`), so a test can pin to a
  * fake specifier and the publish line lives in exactly one place.
