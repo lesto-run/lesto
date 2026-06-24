@@ -95,7 +95,62 @@ bun benchmarks/driver/run.ts --generator oha      # if oha is installed (default
 
 The driver installs/builds each app once, boots it on a fresh port, verifies
 parity, warms it, runs the load generator `--runs` times per workload, keeps the
-median, and writes `RESULTS.md`.
+median, and writes `RESULTS.md`. Every `RESULTS.md` ends with an auto-stamped **Run
+provenance** block (git SHA, real CPU/RAM/OS, resolved tool + framework versions,
+and the observed governor/turbo/core-pinning) — and a loud ⚠️ if the host wasn't
+publication-grade. **Don't hand-publish raw `run.ts` output; use the runner below.**
+
+## Reproduce it yourself
+
+Publication-grade numbers come from a **controlled host**, not a laptop or a shared
+CI runner. The runner pins cores and stamps the conditions; it never silently
+changes your CPU governor (that's a documented root step).
+
+**TL;DR** — on the canonical rig:
+
+```sh
+cd benchmarks && bun install            # once
+bun benchmarks/driver/reproduce.ts --strict --duration 30 --connections 100 --runs 5
+```
+
+`--strict` refuses to produce numbers unless the host is canonical (Linux,
+performance governor, turbo off, taskset present, ≥4 cores). Drop `--strict` for an
+indicative dev run (it'll be stamped NON-CANONICAL).
+
+**The canonical rig.** A dedicated/bare-metal box or a dedicated cloud instance —
+**not** a shared VM (oversubscription = noise) and **not** Docker (virtualization
+adds scheduler noise and can't control clocks). Document the exact instance type
+alongside any published result.
+
+**Host setup (one-time, root — exact commands; the runner verifies, never sets them):**
+
+```sh
+# Performance governor on every core
+sudo cpupower frequency-set -g performance        # pkg: linux-tools-common / cpupower
+# Disable turbo/boost (pick the one your CPU exposes)
+echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo      # Intel
+echo 0 | sudo tee /sys/devices/system/cpu/cpufreq/boost              # AMD / acpi-cpufreq
+# (Advanced, max isolation) reserve cores at boot via the kernel cmdline, then reboot:
+#   isolcpus=2-5 nohz_full=2-5 rcu_nocbs=2-5    (grub GRUB_CMDLINE_LINUX)
+```
+
+The runner then puts the server and the load generator on **disjoint** core sets
+(default server `2,3`, generator `4,5`; override with `--server-cpus` / `--gen-cpus`)
+so they never contend.
+
+**Docker path (lower fidelity).** Pins the software stack only — no governor/turbo/
+isolation control, so results are stamped NON-CANONICAL. Use it to re-run the
+methodology on your own hardware without fighting installs:
+
+```sh
+docker build -f benchmarks/Dockerfile -t lesto-bench .   # build context = repo root
+docker run --rm lesto-bench                               # in-process comparison
+```
+
+**Before publishing any comparison:** (1) generate charts from `RESULTS.md`,
+(2) keep the prior run for a version-over-version trend, (3) attach the raw
+per-run output, and (4) get an **external methodology review** (a competing-
+framework maintainer or the community) — see task `L-97e1bca5`.
 
 ## Framework matrix
 
@@ -116,17 +171,12 @@ comparison — the render engine is compared separately in `compare/`).
 Meta-framework apps use their **native SSR** on `/ssr`; compare those within the
 meta tier. `/json` and `/plaintext` are directly comparable across all tiers.
 
-### Versions + hardware (fill in per published run)
+### Versions + hardware
 
-```
-date:        <UTC>
-machine:     <CPU, cores, RAM, OS>
-node:        <version>      bun: <version>
-generator:   <autocannon|oha> <version>   (-c <conn>, -d <dur>s, <runs> runs, median)
-lesto:       <version>
-hono:        <version>      fastify: <version>   express: <version>   elysia: <version>
-next:        <version>      sveltekit: <version> astro: <version>     react-router: <version>
-```
+Auto-stamped — every `RESULTS.md` ends with a **Run provenance** table (commit, CPU,
+RAM, OS, Bun/Node, generator + resolved framework versions, and the observed
+governor/turbo/core-pinning). No hand-filled matrix to rot; the report records what
+actually ran. A run on a non-canonical host is flagged ⚠️ and must not be published.
 
 ## Layout
 
@@ -140,9 +190,12 @@ benchmarks/
     run.ts        bin → COMPARISON.md
   driver/         real-server load harness (CI / local)
     parse.ts      pure: parse oha/autocannon JSON (req/s, p99, success), median, rank  (+ .test.ts)
+    env.ts        pure: render run-provenance block + host-readiness probe  (+ .test.ts)
     apps.ts       the framework matrix (data)
-    run.ts        orchestrator: prepare → boot → parity(+compression) → load → median
-  node_modules/   competitor libs (hono/elysia/fastify/find-my-way) — isolated, gitignored
+    run.ts        orchestrator: prepare → boot → parity(+ct+compression) → load → median → stamp provenance
+    reproduce.ts  one-command runner: host checks → pin cores (taskset) → run → stamp
+  Dockerfile      software-pin image (lower fidelity; stamped non-canonical)
+  node_modules/   competitor libs (hono/elysia/fastify/find-my-way/autocannon) — isolated, gitignored
   apps/
     _contract.mjs the canonical workload bodies (single source of truth)
     lesto/ hono/ fastify/ express/ elysia/    ready apps

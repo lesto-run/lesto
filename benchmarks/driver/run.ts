@@ -30,6 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { APPS, WORKLOADS, type AppDef } from "./apps";
+import { collectEnv, isCanonical, renderProvenance } from "./env";
 import {
   medianSample,
   PARSERS,
@@ -65,6 +66,10 @@ interface Options {
   generator: "autocannon" | "oha";
   only: ReadonlySet<string> | null;
   startTimeoutMs: number;
+  /** Cores the server (this driver + its spawned servers) is pinned to, for stamping. Set by reproduce.ts. */
+  serverCpus: string | null;
+  /** Cores to pin the load generator to via taskset, so it doesn't share the server's cores. */
+  genCpus: string | null;
 }
 
 function intFlag(argv: readonly string[], flag: string, fallback: number): number {
@@ -97,6 +102,11 @@ function parseOptions(argv: readonly string[]): Options {
     generator,
     only,
     startTimeoutMs: intFlag(argv, "--start-timeout", 60_000),
+    // Core pinning comes from reproduce.ts via env (the runner pins the driver →
+    // server through inherited affinity, and tells the driver which cores to put
+    // the generator on so the two don't contend). Empty → unpinned (non-canonical).
+    serverCpus: process.env.BENCH_SERVER_CPUS || null,
+    genCpus: process.env.BENCH_GEN_CPUS || null,
   };
 }
 
@@ -211,31 +221,27 @@ async function verifyParity(baseUrl: string): Promise<void> {
 
 /** Build the load generator argv for one workload URL. */
 function generatorCmd(opts: Options, url: string): string[] {
-  if (opts.generator === "oha") {
-    return [
-      "oha",
-      "--no-tui",
-      "-j",
-      "-z",
-      `${opts.duration}s`,
-      "-c",
-      String(opts.connections),
-      url,
-    ];
-  }
+  const base =
+    opts.generator === "oha"
+      ? ["oha", "--no-tui", "-j", "-z", `${opts.duration}s`, "-c", String(opts.connections), url]
+      : // autocannon: prefers the pinned local install (benchmarks/node_modules), else fetches.
+        [
+          "npx",
+          "--yes",
+          "autocannon",
+          "-j",
+          "-c",
+          String(opts.connections),
+          "-d",
+          String(opts.duration),
+          url,
+        ];
 
-  // autocannon via npx: no separate binary required in CI.
-  return [
-    "npx",
-    "--yes",
-    "autocannon",
-    "-j",
-    "-c",
-    String(opts.connections),
-    "-d",
-    String(opts.duration),
-    url,
-  ];
+  // Pin the generator to its own cores so it doesn't steal cycles from the server.
+  // The driver (and its spawned servers) inherit the server core set from reproduce.ts;
+  // this taskset OVERRIDES that inherited mask for the generator only. Linux-only —
+  // unset on macOS/dev, where the run is non-canonical anyway.
+  return opts.genCpus ? ["taskset", "-c", opts.genCpus, ...base] : base;
 }
 
 /** Drive one workload `--runs` times and return the median sample. */
@@ -327,10 +333,42 @@ async function main(): Promise<void> {
     return;
   }
 
-  const markdown = renderResults(all, new Date().toISOString());
+  const recordedAt = new Date().toISOString();
+
+  // Stamp the run's own provenance into the report — git SHA, real CPU/RAM/OS,
+  // resolved tool + framework versions, and the OBSERVED isolation state — so the
+  // numbers carry their conditions instead of trusting a hand-filled README matrix.
+  const frameworks = [...new Set(all.map((r) => r.framework))].map((name) => {
+    const def = APPS.find((a) => a.name === name);
+
+    return {
+      name,
+      dir: def?.dir ?? name,
+      // Lesto variants resolve @lesto/* from the repo root → the git SHA is the version;
+      // a competitor's package name is its own name (hono/fastify/express/elysia).
+      pkg: name.startsWith("lesto") ? null : name,
+    };
+  });
+
+  const env = await collectEnv({
+    recordedAt,
+    generator: opts.generator,
+    appsDir: APPS_DIR,
+    frameworks,
+    serverCpus: opts.serverCpus,
+    genCpus: opts.genCpus,
+  });
+
+  const markdown = `${renderResults(all, recordedAt)}\n${renderProvenance(env)}`;
   await writeFile(RESULTS_MD, markdown, "utf8");
   console.log(`\n${markdown}`);
   console.log(`Wrote ${RESULTS_MD}`);
+  if (!isCanonical(env)) {
+    console.log(
+      "\n⚠️  Non-canonical host — indicative numbers only. For publication-grade results run\n" +
+        "    `bun benchmarks/driver/reproduce.ts --strict` on the documented rig (README → Reproduce it yourself).",
+    );
+  }
 }
 
 await main();
