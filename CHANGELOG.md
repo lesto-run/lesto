@@ -11,12 +11,17 @@ may include breaking changes.
 
 ### Security
 
-- **web:** a page's `.data()` / island endpoints (`/__lesto/data/*`) can now enforce
-  the page's file-route guards. `.data(source, loader, guards)` accepts the same
-  `middleware.ts` guard chain `.page()` takes, so an author can gate the
-  `/__lesto/data/*` route that an island's `scope: "private"` source rides — which
-  otherwise had no way to share the page's guard. (Opt-in: the guards are passed
-  explicitly; data routes are not auto-guarded by the file-route applier.)
+- **web:** a private `.data()` source is now secure by default. Registering a
+  `scope: "private"` source with no guards throws `WEB_PRIVATE_DATA_UNGUARDED` at
+  registration — before any request — closing the bypass where an island's per-user
+  data rode the unguarded `/__lesto/data/*` route a page's `middleware.ts` never
+  reaches. To register one, EITHER pass the page's guard chain
+  (`.data(source, loader, guards)` — the same `middleware.ts` chain `.page()` takes),
+  OR declare the source `access: "request-scoped"` on `defineDataSource` (the explicit
+  opt-out: its loader reads only the caller's own request, e.g. a "who am I" session,
+  so it leaks nothing unguarded). **Breaking:** an existing private source registered
+  without guards now fails at boot — add guards or the `request-scoped` declaration.
+  `scope: "shared"` sources are unaffected.
 - **router:** an orphan `middleware.ts` — one with no page at or below its directory
   (a typo'd filename or a misplaced file) — now throws `ROUTER_FILE_ORPHAN_MIDDLEWARE`
   at compile time instead of silently never running. A guard that silently doesn't run

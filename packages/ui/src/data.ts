@@ -10,9 +10,11 @@
  * write — the whole point.
  *
  * The token carries only a NAME, a SCOPE (per-user vs shared — it picks the auto
- * route's cache header, ADR 0010 §3a), and a phantom TYPE. It deliberately holds
- * no implementation, so importing the shared token module from the client bundle
- * (as the island registry does) drags no server code across the wire.
+ * route's cache header, ADR 0010 §3a), an ACCESS posture (whether a per-user
+ * source may be served without a guard chain — see {@link DataSourceAccess}), and
+ * a phantom TYPE. It deliberately holds no implementation, so importing the shared
+ * token module from the client bundle (as the island registry does) drags no
+ * server code across the wire.
  *
  * Delivery is chosen by topology, never by the author:
  *   - dynamically rendered → the render-time resolver in `data-resolve.tsx`
@@ -43,15 +45,48 @@ import type { IslandMount } from "./island";
 export type DataSourceScope = "private" | "shared";
 
 /**
+ * Whether a per-user (`scope: "private"`) source's auto-exposed route may be
+ * served WITHOUT a guard chain — the secure-by-default decision a private source
+ * must make (ADR 0010 §5a).
+ *
+ *   - `"guarded"` (the default for a private source): the route serves per-user
+ *     data, so it MUST be registered behind guards. `lesto().data(source, loader)`
+ *     with neither a guard chain nor this posture relaxed throws
+ *     `WEB_PRIVATE_DATA_UNGUARDED` at registration — before any request — so a
+ *     private source cannot be shipped on the unguarded `/__lesto/data/<name>`
+ *     route by omission. A file-route `middleware.ts` guards only the page
+ *     document GET, never the separate data route, so the framework refuses to
+ *     guess that "no guards" was intentional.
+ *   - `"request-scoped"`: the explicit opt-out — the loader derives its result
+ *     SOLELY from the caller's own request (its cookie / session / params), so an
+ *     unguarded route leaks nothing across users (each caller sees only their own
+ *     data). A `"who am I"` session source is the canonical case. Declaring it is
+ *     a visible statement of that invariant, not a silent default.
+ *
+ * It is moot for a `scope: "shared"` source — shared data is the same for every
+ * visitor and publicly cacheable by construction, so its route is never guarded
+ * on these grounds and `access` is ignored.
+ */
+export type DataSourceAccess = "guarded" | "request-scoped";
+
+/**
  * A typed handle to a named data source — no implementation, just a name, a
- * scope, and a phantom value type. `defineDataSource<User | null>("session")`
- * names the source and pins what its loader returns / its bound prop receives.
+ * scope, an access posture, and a phantom value type.
+ * `defineDataSource<User | null>("session")` names the source and pins what its
+ * loader returns / its bound prop receives.
  */
 export interface DataSource<T = unknown> {
   readonly name: string;
 
   /** Per-user or shared — drives the route's cache header. Defaults to `"private"`. */
   readonly scope: DataSourceScope;
+
+  /**
+   * Whether a private source may serve unguarded — {@link DataSourceAccess}.
+   * Defaults to `"guarded"` (a private source must be guarded or explicitly
+   * declared `"request-scoped"`). Moot for a shared source.
+   */
+  readonly access: DataSourceAccess;
 
   /** Phantom: carries the resolved value's type to the binding. Never present at runtime. */
   readonly __value?: T;
@@ -85,10 +120,18 @@ export function dataSourceHref(name: string): string {
  * route's cache header (ADR 0010 §3a). Private-by-default keeps the dangerous
  * configuration (a per-user value heuristically cached by a CDN) unrepresentable
  * without a visible declaration.
+ *
+ * `access` declares whether a private source's route may serve UNGUARDED
+ * (`"guarded"`, the default, vs `"request-scoped"` — {@link DataSourceAccess}).
+ * It pairs with the scope default: a private source is both not-shared-cacheable
+ * AND not-servable-unguarded unless the author says otherwise, so the bypass
+ * (a per-user route the page's `middleware.ts` never reaches) is closed by
+ * default rather than by remembering to pass guards. It is recorded on the token
+ * here and enforced where the route is registered (`lesto().data(...)`).
  */
 export function defineDataSource<T>(
   name: string,
-  options?: { scope?: DataSourceScope },
+  options?: { scope?: DataSourceScope; access?: DataSourceAccess },
 ): DataSource<T> {
   if (!VALID_SOURCE_NAME.test(name)) {
     throw new UiError(
@@ -98,7 +141,7 @@ export function defineDataSource<T>(
     );
   }
 
-  return { name, scope: options?.scope ?? "private" };
+  return { name, scope: options?.scope ?? "private", access: options?.access ?? "guarded" };
 }
 
 /** One bound prop on an island: which source feeds it, and where the client fetches it. */

@@ -57,7 +57,7 @@ export { islandMount } from "./mount";
 // + `dataPrimerScript` are the STATIC-tier server delivery seams (the client half
 // lives in `@lesto/ui/client`'s hydration runtime).
 export { DATA_ROUTE_PREFIX, dataPrimerScript, dataSourceHref, defineDataSource } from "./data";
-export type { DataSource, DataSourceScope, IslandBind } from "./data";
+export type { DataSource, DataSourceAccess, DataSourceScope, IslandBind } from "./data";
 
 // The render-time source resolver (ADR 0012): the DYNAMIC-tier delivery that runs
 // loaders during the render and inlines the values — feeding the canonical

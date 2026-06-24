@@ -331,14 +331,38 @@ export class Lesto {
    * `/__lesto/data/<name>` route. Pass the SAME guard chain that protects the page
    * binding the source (the file-route applier composes that chain from the page's
    * `middlewareDepth` — {@link RouteMiddleware}); an app declaring `.data()` by hand
-   * passes the guards (or the app-level `.use()` middleware) the source needs. Empty
-   * (the default) is an unguarded source — identical to a bare `.data()`.
+   * passes the guards the source needs.
+   *
+   * SECURE BY DEFAULT (ADR 0010 §5a): a `scope: "private"` source serves per-user
+   * data, so registering it with NO guards is refused with a coded {@link WebError}
+   * (`WEB_PRIVATE_DATA_UNGUARDED`) at registration time — before any request — UNLESS
+   * the source is declared `access: "request-scoped"` ({@link DataSource}), the
+   * explicit opt-out stating its loader reads only the caller's own request (a
+   * "who am I" session) and so leaks nothing unguarded. The decision lives at the
+   * `.data()` call (a guard chain) or on the token (`request-scoped`), never in an
+   * easy-to-forget omission. App-level `.use()` middleware does NOT exempt the source
+   * — it is global and ordering-dependent and may not be a guard, so it cannot stand
+   * in for the explicit per-source decision. A `scope: "shared"` source is publicly
+   * cacheable by construction and needs no guards.
    */
   data<T>(
     source: DataSource<T>,
     loader: (c: Context) => MaybePromise<T>,
     guards: readonly Handler[] = [],
   ): this {
+    // Fail closed: a per-user source on the unguarded auto-route is the red-team
+    // bypass (L-f82d573b). Refuse it at registration unless guarded here or the
+    // token opts out as request-scoped. `access` may be absent on a hand-built
+    // token (the type requires it, but a cast can omit it), so anything that is
+    // not the explicit opt-out requires guards — the secure reading.
+    if (source.scope !== "shared" && source.access !== "request-scoped" && guards.length === 0) {
+      throw new WebError(
+        "WEB_PRIVATE_DATA_UNGUARDED",
+        `data source "${source.name}" is scope:"private" but registered with no guards — its ${dataSourceHref(source.name)} route would serve per-user data over a route no page middleware.ts reaches. Pass the page's guard chain as the third argument of .data(), or declare access:"request-scoped" on the source if its loader reads only the caller's own request.`,
+        { source: source.name },
+      );
+    }
+
     const cacheControl =
       source.scope === "shared" ? "public, max-age=0, must-revalidate" : "private, no-store";
 

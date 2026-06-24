@@ -12,10 +12,10 @@ import {
 import type { IslandMount } from "../src/index";
 
 describe("defineDataSource", () => {
-  it("returns a token carrying the name and a default private scope", () => {
+  it("returns a token carrying the name, a default private scope, and default guarded access", () => {
     const source = defineDataSource<{ id: string }>("session");
 
-    expect(source).toEqual({ name: "session", scope: "private" });
+    expect(source).toEqual({ name: "session", scope: "private", access: "guarded" });
   });
 
   it("defaults scope to private when no options are given", () => {
@@ -28,6 +28,22 @@ describe("defineDataSource", () => {
 
   it("carries an explicit private scope", () => {
     expect(defineDataSource("session", { scope: "private" }).scope).toBe("private");
+  });
+
+  it("defaults access to guarded — a private source must opt in to serving unguarded", () => {
+    expect(defineDataSource("session").access).toBe("guarded");
+  });
+
+  it("carries an explicit request-scoped access (the secure-by-default opt-out)", () => {
+    expect(defineDataSource("session", { access: "request-scoped" }).access).toBe("request-scoped");
+  });
+
+  it("carries scope and access together", () => {
+    expect(defineDataSource("session", { scope: "private", access: "request-scoped" })).toEqual({
+      name: "session",
+      scope: "private",
+      access: "request-scoped",
+    });
   });
 
   it.each(["a/b", "a b", "", "a.b", "sess!on", "../escape"])(

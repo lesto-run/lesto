@@ -473,7 +473,12 @@ describe("lesto().data() + a defineIsland on a page (the canonical island)", () 
 // A PRIVATE source + a DEFERRED (ssr:false) island that binds it — estate's
 // "Account" shape: a cacheable static page whose island fetches per-user data on
 // the client, while a dynamic page inlines the same data per request.
-const sessionSrc = defineDataSource<{ name: string } | null>("session");
+// request-scoped: resolves the caller's own session from their cookie, so the route
+// is safe unguarded — the opt-out that lets `.data(sessionSrc, …)` register without a
+// guard chain. Still scope:"private" (the default), so the no-store assertions hold.
+const sessionSrc = defineDataSource<{ name: string } | null>("session", {
+  access: "request-scoped",
+});
 
 const AccountIsh = defineIsland({
   name: "AccountIsh",

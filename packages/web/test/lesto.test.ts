@@ -8,6 +8,7 @@ import { BROWSER_SPANS_ROUTE } from "../src/browser-spans";
 import { CLIENT_ERRORS_ROUTE } from "../src/client-errors";
 import type { ClientErrorEvent } from "../src/client-errors";
 import { runWithContext } from "../src/context";
+import { WebError } from "../src/errors";
 import { fromRequestMiddleware, lesto } from "../src/lesto";
 import type { Handler } from "../src/lesto";
 import type { Middleware } from "../src/middleware";
@@ -461,7 +462,12 @@ describe("lesto.routes inspection", () => {
 });
 
 describe("lesto().data() — island data sources (ADR 0010)", () => {
-  const sessionSource = defineDataSource<{ id: string; name: string } | null>("session");
+  // request-scoped: a "who am I" session resolves from the caller's own cookie, so
+  // its auto-route is safe unguarded — the secure-by-default opt-out that lets these
+  // suites register it without a guard chain (the throw is exercised separately below).
+  const sessionSource = defineDataSource<{ id: string; name: string } | null>("session", {
+    access: "request-scoped",
+  });
 
   it("auto-exposes a source at GET /__lesto/data/<name>, running the loader with context", async () => {
     const app = lesto().data(sessionSource, (c) =>
@@ -563,6 +569,63 @@ describe("lesto().data() — island data sources (ADR 0010)", () => {
     expect(allowed.headers["cache-control"]).toBe("private, no-store"); // header rule still applies
     expect(JSON.parse(allowed.body)).toEqual({ id: "jade", name: "Jade" });
     expect(loaderRan).toBe(true);
+  });
+
+  describe("secure by default — a private source must be guarded or request-scoped", () => {
+    // The default `defineDataSource(name)` is scope:"private", access:"guarded" — the
+    // dangerous fail-open configuration (per-user data on the bypass route) is now
+    // unrepresentable by omission. The decision is forced AT the .data() call.
+    const guardedSource = defineDataSource<{ secret: string }>("billing");
+
+    it("REFUSES a private source registered with no guards (throws at registration, before any request)", () => {
+      let loaderRan = false;
+
+      try {
+        lesto().data(guardedSource, () => ((loaderRan = true), { secret: "$$$" }));
+        expect.unreachable("registering an unguarded private source must throw");
+      } catch (error) {
+        expect(error).toBeInstanceOf(WebError);
+        expect((error as WebError).code).toBe("WEB_PRIVATE_DATA_UNGUARDED");
+        expect((error as WebError).details).toEqual({ source: "billing" });
+      }
+
+      // It fails CLOSED at registration — the loader never even gets a chance to run.
+      expect(loaderRan).toBe(false);
+    });
+
+    it("ACCEPTS a private source when a guard chain is passed", () => {
+      const app = lesto().data(guardedSource, () => ({ secret: "$$$" }), [cookieGuard]);
+
+      expect(app.routes()).toContainEqual({ method: "GET", pattern: "/__lesto/data/billing" });
+    });
+
+    it("ACCEPTS a private source declared access:'request-scoped' with no guards (the opt-out)", () => {
+      const ownSource = defineDataSource<{ id: string }>("whoami", { access: "request-scoped" });
+
+      const app = lesto().data(ownSource, (c) => ({ id: c.header("cookie") ?? "anon" }));
+
+      expect(app.routes()).toContainEqual({ method: "GET", pattern: "/__lesto/data/whoami" });
+    });
+
+    it("ACCEPTS a shared source with no guards (shared data is publicly cacheable, never guarded)", () => {
+      const sharedSource = defineDataSource<number>("count", { scope: "shared" });
+
+      const app = lesto().data(sharedSource, () => 7);
+
+      expect(app.routes()).toContainEqual({ method: "GET", pattern: "/__lesto/data/count" });
+    });
+
+    it("does NOT let app-level .use() middleware stand in for the per-source decision", () => {
+      // `.use` is global, ordering-dependent, and may not be a guard — so it cannot
+      // satisfy the rule. The author must still pass guards or declare request-scoped.
+      const build = () =>
+        lesto()
+          .use((_c, next) => next())
+          .data(guardedSource, () => ({ secret: "$$$" }));
+
+      expect(build).toThrow(WebError);
+      expect(build).toThrow(/WEB_PRIVATE_DATA_UNGUARDED|no guards/);
+    });
   });
 });
 

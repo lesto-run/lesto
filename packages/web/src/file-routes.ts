@@ -63,12 +63,14 @@ type MaybePromise<T> = T | Promise<T>;
  * they do not inherit this guard automatically — a `scope: "private"` island fetch
  * would otherwise ride a separate, unguarded route (the data most worth protecting on
  * the least-protected route). The applier does NOT auto-propagate a page's guards to
- * its `.data()` sources — closing the bypass is the author's call: `.data(source,
- * loader, guards)` takes the SAME guard chain `.page(...)` does ({@link Lesto.data}),
- * so pass the same `middleware.ts` guard(s) the page carries (import and re-pass them)
- * — or an app-level `.use()` middleware that covers `/__lesto/data/*` — so the data
- * route enforces the identical guard. Hand-written API routes register their own chains
- * too; guard those the same way.
+ * its `.data()` sources: islands bind sources by NAME at render time, so there is no
+ * static page→source map to propagate from. Instead the source registration fails
+ * closed — `lesto().data(source, loader)` REFUSES a `scope: "private"` source with no
+ * guards (a coded {@link Lesto.data} `WEB_PRIVATE_DATA_UNGUARDED`, at boot) unless the
+ * source declares `access: "request-scoped"`. So the author either passes the SAME
+ * guard chain `.page(...)` takes (import and re-pass the page's `middleware.ts`) or
+ * declares the source request-scoped — the bypass cannot be shipped by omission.
+ * Hand-written API routes register their own chains too; guard those the same way.
  */
 export type RouteMiddleware<Path extends string = string> = (
   c: Context<Path>,
