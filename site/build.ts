@@ -18,6 +18,13 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { buildClient, bunBuildClientDeps } from "@lesto/assets";
+import {
+  markdownTwinPath,
+  renderLlmsFull,
+  renderLlmsIndex,
+  renderMarkdownTwin,
+  type LlmsDocSection,
+} from "@lesto/content-core/build";
 import { createApp } from "@lesto/kernel";
 import { robots, sitemap, type SitemapUrl } from "@lesto/seo";
 import { buildStaticSites, nodeSink } from "@lesto/sites";
@@ -25,9 +32,8 @@ import { buildStyles, tailwindStyleCompiler } from "@lesto/styles";
 
 import appConfig from "./lesto.app";
 import sites from "./lesto.sites";
-import { docMarkdown, llmsFull, llmsIndex, markdownPath } from "./src/ai-docs";
 import { canonicalUrl, SITE_URL } from "./src/app";
-import { loadDocs } from "./src/content";
+import { buildNav, loadDocs, type DocEntry } from "./src/content";
 import { ogImage } from "./src/og";
 import { buildSearchIndex } from "./src/search-index";
 
@@ -127,17 +133,44 @@ await writeFile(join(SITE_OUT, "sitemap.xml"), sitemap(sitemapUrls));
 await writeFile(join(SITE_OUT, "robots.txt"), robots({ sitemap: `${SITE_URL}/sitemap.xml` }));
 await writeFile(join(SITE_OUT, "og.svg"), ogImage());
 
-// 6. AI-native docs surface — Lesto is agent-native, so its docs are too. A clean
-//    Markdown twin of every page (append `.md` to any URL), an `llms.txt` index
-//    with usage instructions, and `llms-full.txt` (the whole corpus). The page
-//    dirs already exist from the prerender, so each `.md` lands beside its HTML.
+// 6. AI-native docs surface — Lesto is agent-native, so its docs are too. Dogfood
+//    @lesto/content-core's docs AI surface: a clean Markdown twin of every page
+//    (append `.md` to any URL), an `llms.txt` index with usage instructions, and
+//    `llms-full.txt` (the whole corpus). The nav grouping/order is the site's, so
+//    map it into the package's generic page model; the renderers do the rest.
+const byRoute = new Map(docs.map((doc) => [doc.route, doc]));
+const toPage = (doc: DocEntry) => ({
+  route: doc.route,
+  title: doc.title,
+  description: doc.description,
+  body: doc.text,
+});
+const docSections: LlmsDocSection[] = buildNav(docs).map((section) => ({
+  title: section.title,
+  pages: section.items
+    .map((item) => byRoute.get(item.route))
+    .filter((doc): doc is DocEntry => doc !== undefined)
+    .map(toPage),
+}));
+const llmsOptions = {
+  name: "Lesto",
+  tagline:
+    "Lesto is a batteries-included, agent-native, full-stack TypeScript framework. This documentation is published in Markdown for AI assistants to read directly.",
+  siteUrl: SITE_URL,
+  howToUse: [
+    `Every page is available as clean Markdown at its path + \`.md\` (e.g. \`${SITE_URL}/quickstart.md\`; the home page is \`${SITE_URL}/index.md\`).`,
+    `\`${SITE_URL}/llms-full.txt\` is the entire docs corpus in a single file.`,
+    "Pages tag anything that is preview or deferred; if a page does not say so, treat it as shipped.",
+  ],
+};
+// The page dirs already exist from the prerender, so each `.md` lands beside its HTML.
 for (const doc of docs) {
-  const mdPath = join(SITE_OUT, markdownPath(doc.route));
+  const mdPath = join(SITE_OUT, markdownTwinPath(doc.route));
   await mkdir(dirname(mdPath), { recursive: true }); // nested routes: ensure the dir exists
-  await writeFile(mdPath, docMarkdown(doc, canonicalUrl(doc.route)));
+  await writeFile(mdPath, renderMarkdownTwin(toPage(doc), canonicalUrl(doc.route)));
 }
-await writeFile(join(SITE_OUT, "llms.txt"), llmsIndex(docs, SITE_URL));
-await writeFile(join(SITE_OUT, "llms-full.txt"), llmsFull(docs, SITE_URL));
+await writeFile(join(SITE_OUT, "llms.txt"), renderLlmsIndex(docSections, llmsOptions));
+await writeFile(join(SITE_OUT, "llms-full.txt"), renderLlmsFull(docSections, llmsOptions));
 
 console.log(
   `Prerendered ${pageCount} page(s); bundled ${client.islands.length} island(s); ` +

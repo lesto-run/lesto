@@ -85,6 +85,12 @@ export type { FeedOptions, FeedEntry } from "./feeds";
 export { generateLlmsTxt } from "./llms-txt";
 export type { LlmsTxtOptions, LlmsTxtEntry, LlmsTxtSection } from "./llms-txt";
 
+// The `.md` twin path is pure and runtime-safe — a doc page links to its own twin.
+// The build-time emitters (renderLlmsIndex/renderLlmsFull/renderMarkdownTwin) live
+// in the `@lesto/content-core/build` barrel.
+export { markdownTwinPath } from "./llms-docs";
+export type { LlmsDocPage, LlmsDocSection, LlmsDocsOptions } from "./llms-docs";
+
 // RAG context primitives for AI chat integration
 export { buildRAGContext, formatContextForLLM, estimateTokens } from "./rag";
 export type {

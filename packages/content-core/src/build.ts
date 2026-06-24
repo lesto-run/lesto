@@ -221,6 +221,14 @@ export {
 
 export type { ResolvedAssetsConfig } from "./assets";
 
+// llms.txt generation — the feed/collection index over content entries.
+export { generateLlmsTxt } from "./llms-txt";
+export type { LlmsTxtOptions, LlmsTxtEntry, LlmsTxtSection } from "./llms-txt";
+
+// The docs AI surface — `.md` page twins, the `llms.txt` index, and `llms-full.txt`.
+export { markdownTwinPath, renderMarkdownTwin, renderLlmsIndex, renderLlmsFull } from "./llms-docs";
+export type { LlmsDocPage, LlmsDocSection, LlmsDocsOptions } from "./llms-docs";
+
 // NOTE: Embedding generation and search APIs are NOT re-exported here.
 // Import directly from the dedicated packages:
 //   - @lesto/content-embeddings: Build-time embedding generation

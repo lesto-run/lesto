@@ -12,9 +12,9 @@
  * factory can register one static `.page()` per doc without a loader.
  */
 
+import { markdownTwinPath } from "@lesto/content-core";
 import type { ReactElement } from "react";
 
-import { markdownPath } from "../ai-docs";
 import { adjacentDocs, type DocEntry, type NavSection } from "../content";
 import { SITE_URL } from "../site";
 import { TableOfContents } from "./toc";
@@ -74,7 +74,7 @@ function Breadcrumbs({ doc }: { doc: DocEntry }): ReactElement {
 function PageActions({ doc }: { doc: DocEntry }): ReactElement {
   // Relative path for the same-origin runtime fetch + the in-page link; absolute
   // canonical URL only for the assistant prompt an external tool resolves.
-  const mdPath = `/${markdownPath(doc.route)}`;
+  const mdPath = `/${markdownTwinPath(doc.route)}`;
   const chatPrompt = `Read ${SITE_URL}${mdPath} and help me with it.`;
   const action =
     "text-[0.78rem] text-muted bg-surface border border-border rounded-md px-[0.55rem] py-1 cursor-pointer no-underline hover:text-fg hover:border-accent hover:no-underline";
