@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Node } from "unist";
 import type { Plugin } from "unified";
-import { createRenderer } from "../renderer";
+import { createRenderer, createUnifiedRenderer } from "../renderer";
 
 // Hoisted to module scope: these plugins capture no variables from their
 // parent scope, so recreating them per-test is unnecessary.
@@ -109,6 +109,39 @@ describe("createRenderer", () => {
     const result = await renderer.render("Hello");
 
     expect(result.html).toContain("<p>Hello</p>");
+  });
+});
+
+describe("createUnifiedRenderer sanitization (fallback path)", () => {
+  // The unified renderer is the fallback used when md4w WASM init fails in the
+  // hybrid renderer. It must sanitize on this path too — defense-in-depth must
+  // hold on EVERY render path, not just the primary md4w one.
+  it("strips <script> tags from rendered output", async () => {
+    const renderer = createUnifiedRenderer();
+    const result = await renderer.render("Hello\n\n<script>alert('xss')</script>\n\nWorld");
+
+    expect(result.html.toLowerCase()).not.toContain("<script");
+    expect(result.html).toContain("Hello");
+    expect(result.html).toContain("World");
+  });
+
+  it("strips dangerous javascript: link hrefs", async () => {
+    // This is load-bearing on rehype-sanitize specifically: without it, a
+    // markdown link survives remark-rehype and renders the javascript: href.
+    const renderer = createUnifiedRenderer();
+    const result = await renderer.render("[click me](javascript:alert(1))");
+
+    expect(result.html.toLowerCase()).not.toContain("javascript:");
+    expect(result.html).toContain("click me");
+  });
+
+  it("preserves heading IDs through sanitization", async () => {
+    // The shared sanitizeSchema must allow `id`, so rehype-slug's heading IDs
+    // survive the sanitize pass that now runs before it.
+    const renderer = createUnifiedRenderer();
+    const result = await renderer.render("## Hello World");
+
+    expect(result.html).toContain('id="hello-world"');
   });
 });
 

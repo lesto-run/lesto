@@ -38,7 +38,7 @@ const DEFAULT_HEADING_LEVELS = [2, 3, 4];
  * - Allows id attributes on all elements (rehype-slug adds them to headings)
  * - Disables clobberPrefix to avoid "user-content-" prefix on IDs
  */
-const sanitizeSchema: SanitizeOptions = {
+export const sanitizeSchema: SanitizeOptions = {
   ...defaultSchema,
   // Allow id attribute on all elements
   attributes: {

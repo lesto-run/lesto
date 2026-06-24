@@ -7,7 +7,8 @@ import rehypeStringify from "rehype-stringify";
 import { extractHeadings } from "./headings";
 import { generateExcerpt } from "./excerpt";
 import { calculateReadingTime } from "./reading-time";
-import { createHybridRenderer } from "./hybrid-renderer";
+import rehypeSanitize from "rehype-sanitize";
+import { createHybridRenderer, sanitizeSchema } from "./hybrid-renderer";
 import {
   parseSyntaxHighlightingOptions,
   buildSyntaxHighlightingPlugin,
@@ -50,8 +51,12 @@ export function createUnifiedRenderer(options: RenderOptions = {}): Renderer {
     if (processorPromise) return processorPromise;
 
     processorPromise = (async () => {
-      // Build rehype plugins array
-      const allRehypePlugins: unknown[] = [rehypeSlug];
+      // Build rehype plugins array. Sanitize FIRST — before rehype-slug and the
+      // other transforms — mirroring the hybrid renderer's parse→sanitize→slug
+      // order so defense-in-depth holds on this fallback path too. The shared
+      // `sanitizeSchema` keeps the `id`/`className` allowances that rehype-slug
+      // and the callout/highlight transforms below depend on.
+      const allRehypePlugins: unknown[] = [[rehypeSanitize, sanitizeSchema], rehypeSlug];
 
       // GitHub-style callouts (only transforms `[!TYPE]` blockquotes)
       if (callouts) {
