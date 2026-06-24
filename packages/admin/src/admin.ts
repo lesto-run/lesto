@@ -81,16 +81,29 @@ export type MutationAction = "create" | "update" | "destroy";
 /**
  * One audit record, handed to {@link AdminOptions.onMutation} *after* a write
  * commits. The payload is everything an audit log needs to answer "who changed
- * what": the `actor` (carried by the caller — the admin layer never invents
- * identity), the `resource` name, the affected row `id`, and the `patch` that
- * was applied (the validated attributes for create/update; `undefined` for a
- * destroy, which has no patch).
+ * what": the `actor` (the resolver-sourced principal the caller threaded in — the
+ * admin layer never invents identity), the `resource` name, the affected row `id`,
+ * and the `patch` that was applied (the validated attributes for create/update;
+ * `undefined` for a destroy, which has no patch).
+ *
+ * Attribution here is **trustworthy-at-source, not tamper-evident**. The `actor`
+ * is whoever the `@lesto/authz` principal resolver named for the request — never a
+ * client-asserted identity — and a governed write with no resolved actor is refused
+ * *before* it commits (`authorize`), so every event that reaches the hook is
+ * genuinely attributed. What this layer does *not* promise is the log's durability:
+ * a durable, append-only audit store is deferred (ADR 0028 Phase 2), so nothing here
+ * stops a privileged process from dropping or rewriting an event after the fact.
+ * Phase 1 guarantees the actor is real; it does not yet guarantee the record is.
  */
 export interface AuditEvent {
   /** The verb that ran. */
   readonly action: MutationAction;
 
-  /** Who performed the mutation, as supplied by the caller (`undefined` if unattributed). */
+  /**
+   * Who performed the mutation — the resolver-sourced principal the caller threaded
+   * in. `undefined` only on an *ungoverned* write; a governed write with no resolved
+   * actor is refused upstream and never reaches this hook.
+   */
   readonly actor: unknown;
 
   /** The admin resource name the mutation targeted. */

@@ -593,6 +593,53 @@ describe("createAdmin", () => {
       }
     });
 
+    it("carries the resolved actor into the audit for all three governed verbs", async () => {
+      // The operator's role grants create/update/destroy, so one principal drives a
+      // full mutation lifecycle — proving onMutation receives the resolved actor for
+      // every write verb under a governed policy (ADR 0028 Phase 1, attribution).
+      const events: AuditEvent[] = [];
+      const auditedGoverned = createAdmin(db, [governedResource], {
+        policy,
+        onMutation: (event) => events.push(event),
+      });
+
+      const created = await auditedGoverned.create(
+        "posts",
+        { title: "Draft", body: "b" },
+        operator,
+      );
+      await auditedGoverned.update("posts", created["id"], { title: "Revised" }, operator);
+      await auditedGoverned.destroy("posts", created["id"], operator);
+
+      expect(events.map((e) => ({ action: e.action, actor: e.actor }))).toEqual([
+        { action: "create", actor: "u-admin" },
+        { action: "update", actor: "u-admin" },
+        { action: "destroy", actor: "u-admin" },
+      ]);
+    });
+
+    it("an unattributed governed write never reaches onMutation", async () => {
+      // The acceptance criterion in the flesh: the refusal happens before the write,
+      // so the audit hook on a governed admin sees nothing for an unattributed write.
+      const events: AuditEvent[] = [];
+      const auditedGoverned = createAdmin(db, [governedResource], {
+        policy,
+        onMutation: (event) => events.push(event),
+      });
+
+      await expectCode(
+        () =>
+          auditedGoverned.create(
+            "posts",
+            { title: "Ghost", body: "b" },
+            { actorRoles: ["editor"] },
+          ),
+        "ADMIN_FORBIDDEN",
+      );
+
+      expect(events).toHaveLength(0);
+    });
+
     it("denies any verb a resource declares no permission for (fail-closed)", async () => {
       const undeclared = createAdmin(db, [{ ...postsResource, permissions: {} }], { policy });
 
