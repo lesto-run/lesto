@@ -72,9 +72,10 @@ are the cautionary tale this suite is built around:
   driver parses success rate (oha `successRate`; autocannon 2xx/attempts) and flags
   any rank posted at <100% success with ⚠️.
 - **Realistic workload > hello-world.** Their CardMarket e-commerce app (full SSR,
-  1–5 ms DB latency, no caching) is far more credible than plaintext/JSON. Our
-  current workloads are the simpler TechEmpower set; a realistic-page workload is
-  the next upgrade (see remaining work) and dovetails with the examples gallery.
+  1–5 ms DB latency, no caching) is far more credible than plaintext/JSON. **Now
+  shipped** as the `/realistic` workload (see the 2026-06-24 update below) — a 24-card
+  catalog page re-rendered per request behind a simulated 1–5 ms DB round-trip with no
+  caching, alongside the simpler TechEmpower set.
 
 ## What shipped this session
 
@@ -142,6 +143,24 @@ now renders a per-workload max-sustainable ranking plus the per-framework satura
 curve. `bun test driver` green (48 tests). Still CI/local-only (binds ports); the
 **first published run** below remains the un-done piece.
 
+## Update 2026-06-24 — realistic-page workload shipped (task `L-2d2c4b86`)
+
+Added `/realistic` as a fourth workload (`workloads.md`): a credible e-commerce
+catalog page (a 24-card product grid in a full `<head>`/header/footer document,
+~5 KB) **re-rendered on every request** (no response caching, mirroring a
+personalized page) behind a **simulated 1–5 ms DB round-trip**. The page body and
+the latency model both live in `apps/_contract.mjs` (`realisticBody()`,
+`realisticProduct/Card`, `simulateDbLatency()`) so all apps incur the identical I/O
+wait and emit byte-identical bytes — the comparison is then framework overhead +
+async handling under real I/O, the gap the hello-world routes hide. Wired into all
+five server-tier apps (lesto/hono/fastify/express/elysia), the driver
+(`WORKLOADS` + the parity `CONTRACT`), and the scaffold READMEs. New
+`driver/contract.test.ts` pins the body's byte-stability/structure AND dispatches
+`/realistic` through the **real Lesto pipeline in-process** (no socket). Deliberately
+NOT dogfooding the examples gallery — byte-identity across five frameworks is far
+simpler from a fixed contract function. `bun test` green (74 tests). Competitor apps'
+live parity is gated by the driver at run time (CI/local — can't boot here).
+
 ## Remaining work (tracked as Studio tasks)
 
 - **⭐ Measure + investigate the default secure-stack hot-path cost** on the
@@ -157,7 +176,7 @@ curve. `bun test driver` green (48 tests). Still CI/local-only (binds ports); th
   (`www/`) per the DevRel GTM program. THIS is what turns the suite into an actual
   published cross-framework eval — until then we have the harness + in-process
   signal, not the headline.
-- **Realistic-page workload** — a CardMarket-style SSR page (per the Platformatic
-  prior art) instead of plaintext/JSON, ideally dogfooding the examples gallery.
+- ~~**Realistic-page workload**~~ — ✅ DONE (task `L-2d2c4b86`, the `/realistic`
+  workload; see the 2026-06-24 update above).
 - **Optional:** a `.page`-pipeline SSR workload (full Lesto streaming document) as a
   separate, clearly-labeled real-server row vs the meta-framework tier.

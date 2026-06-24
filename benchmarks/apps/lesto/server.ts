@@ -18,7 +18,13 @@ import { createApp } from "@lesto/kernel";
 import { openSqlite, serve } from "@lesto/runtime";
 import { lesto } from "@lesto/web";
 
-import { jsonObject, plaintextBody, ssrBody } from "../_contract.mjs";
+import {
+  jsonObject,
+  plaintextBody,
+  realisticBody,
+  simulateDbLatency,
+  ssrBody,
+} from "../_contract.mjs";
 
 const PORT = Number(process.env.PORT ?? 3100);
 
@@ -29,7 +35,14 @@ const SSR_BODY = ssrBody();
 export const webApp = lesto()
   .get("/plaintext", (c) => c.text(plaintextBody))
   .get("/json", (c) => c.json(jsonObject))
-  .get("/ssr", (c) => c.html(SSR_BODY));
+  .get("/ssr", (c) => c.html(SSR_BODY))
+  // /realistic re-renders the catalog page behind a simulated DB round-trip on EVERY
+  // request (no caching) — see `_contract.mjs`. Async to exercise the await pipeline.
+  .get("/realistic", async (c) => {
+    await simulateDbLatency();
+
+    return c.html(realisticBody());
+  });
 
 /**
  * Build the booted kernel app (migrations are a no-op here — no schema needed).

@@ -190,10 +190,14 @@ framework maintainer or the community) — see task `L-97e1bca5`.
 | Meta   | Astro                  | 🚧 scaffold | `apps/astro`                                                 |
 | Meta   | React Router 7 (Remix) | 🚧 scaffold | `apps/remix`                                                 |
 
-Server-tier apps deliver a server-built HTML page on `/ssr` (a clean HTTP-layer
-comparison — the render engine is compared separately in `compare/`).
-Meta-framework apps use their **native SSR** on `/ssr`; compare those within the
-meta tier. `/json` and `/plaintext` are directly comparable across all tiers.
+Server-tier apps deliver a server-built HTML page on `/ssr` and `/realistic` (a
+clean HTTP-layer comparison — the render engine is compared separately in
+`compare/`). Meta-framework apps use their **native SSR** for those routes; compare
+those within the meta tier. `/json` and `/plaintext` are directly comparable across
+all tiers. **`/realistic`** is the credible workload — a 24-card catalog page
+re-rendered per request behind a simulated 1–5 ms DB round-trip with no caching (see
+`workloads.md`); the hello-world routes flatter raw routers and hide real fullstack
+cost.
 
 ### Versions + hardware
 

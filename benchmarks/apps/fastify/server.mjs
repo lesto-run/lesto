@@ -4,7 +4,13 @@
  */
 import Fastify from "fastify";
 
-import { jsonObject, plaintextBody, ssrBody } from "../_contract.mjs";
+import {
+  jsonObject,
+  plaintextBody,
+  realisticBody,
+  simulateDbLatency,
+  ssrBody,
+} from "../_contract.mjs";
 
 const PORT = Number(process.env.PORT ?? 3102);
 const SSR_BODY = ssrBody();
@@ -13,6 +19,12 @@ const app = Fastify({ logger: false });
 app.get("/plaintext", (_req, reply) => reply.type("text/plain").send(plaintextBody));
 app.get("/json", (_req, reply) => reply.send(jsonObject));
 app.get("/ssr", (_req, reply) => reply.type("text/html").send(SSR_BODY));
+// /realistic: re-render the catalog page per request behind a simulated DB round-trip.
+app.get("/realistic", async (_req, reply) => {
+  await simulateDbLatency();
+
+  return reply.type("text/html").send(realisticBody());
+});
 
 app.listen({ port: PORT, host: "127.0.0.1" }, (err, address) => {
   if (err) {

@@ -19,6 +19,10 @@ A minimal app serving the workload contract in `../../workloads.md` from a
   The body must match `ssrBody()` from `../_contract.mjs` — use a minimal
   `app/root.tsx` so no extra document chrome leaks in (or serve `/ssr` as a
   resource route that calls `renderToStaticMarkup`).
+- `app/routes/realistic.tsx` → the realistic catalog page (`text/html`), same
+  mechanism as `/ssr`: `await simulateDbLatency()` then emit `realisticBody()` from
+  `../_contract.mjs`, **re-rendered per request** (no caching). Native SSR must emit
+  `realisticBody()` byte-for-byte (see `../../workloads.md`).
 
 ## Prepare + start (already wired in `apps.ts`)
 

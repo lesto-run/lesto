@@ -17,6 +17,10 @@ A minimal Next.js app (App Router) that serves the workload contract in
   The emitted body must match `ssrBody()` from `../_contract.mjs` (no extra
   framework markup — strip the default `app/layout.tsx` chrome, or serve via a
   Route Handler that calls `renderToStaticMarkup`).
+- `app/realistic/...` → the realistic catalog page (`text/html`), same mechanism as
+  `/ssr`: `await simulateDbLatency()` then emit `realisticBody()` from
+  `../_contract.mjs`, **re-rendered per request** (no caching). Native SSR must emit
+  `realisticBody()` byte-for-byte (see `../../workloads.md`).
 
 ## Prepare + start (already wired in `apps.ts`)
 

@@ -52,13 +52,16 @@ import {
   type ReportMeta,
   type SaturationResult,
 } from "./parse";
-import { jsonBody, plaintextBody, ssrBody } from "../apps/_contract.mjs";
+import { jsonBody, plaintextBody, realisticBody, ssrBody } from "../apps/_contract.mjs";
 
 /** The exact body each workload path must return — the parity oracle (see `../workloads.md`). */
 const CONTRACT: Record<string, string> = {
   "/plaintext": plaintextBody,
   "/json": jsonBody,
   "/ssr": ssrBody(),
+  // realisticBody() is deterministic — calling it once yields the canonical bytes the
+  // apps must reproduce on every (uncached) render.
+  "/realistic": realisticBody(),
 };
 
 /** The Content-Type prefix each workload must declare — an app that skips real serialization is caught here. */
@@ -66,6 +69,7 @@ const CONTRACT_CONTENT_TYPE: Record<string, string> = {
   "/plaintext": "text/plain",
   "/json": "application/json",
   "/ssr": "text/html",
+  "/realistic": "text/html",
 };
 
 /** The default connection ladder swept when `--connections` isn't given. */

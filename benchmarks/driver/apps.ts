@@ -133,4 +133,7 @@ export const WORKLOADS: readonly Workload[] = [
   { name: "plaintext", path: "/plaintext" },
   { name: "json", path: "/json" },
   { name: "ssr", path: "/ssr" },
+  // The realistic catalog page: a non-trivial SSR document re-rendered per request
+  // behind a simulated 1–5 ms DB round-trip (no caching). See `../workloads.md`.
+  { name: "realistic", path: "/realistic" },
 ];

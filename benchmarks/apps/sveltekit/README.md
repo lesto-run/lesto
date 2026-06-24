@@ -14,6 +14,10 @@ contract in `../../workloads.md` from a **production** build:
   50-row list via SvelteKit's native SSR. The body must match `ssrBody()` from
   `../_contract.mjs` — set a bare `src/app.html` shell so no extra markup leaks
   in, or serve `/ssr` via a `+server.ts` that returns the rendered string.
+- `src/routes/realistic/...` → the realistic catalog page (`text/html`), same
+  mechanism as `/ssr`: `await simulateDbLatency()` then emit `realisticBody()` from
+  `../_contract.mjs`, **re-rendered per request** (no caching). Native SSR must emit
+  `realisticBody()` byte-for-byte (see `../../workloads.md`).
 
 ## Prepare + start (already wired in `apps.ts`)
 
