@@ -56,8 +56,13 @@ export interface Guard<Permission extends string> {
   ensure(c: Context, permission: Permission): boolean;
 }
 
-/** The context var an upstream auth middleware sets with the subject's roles. */
-const ROLES_VAR = "roles";
+/**
+ * The context var an upstream auth middleware — or {@link createPrincipalResolver} —
+ * sets with the subject's roles. Exported as the single source of truth for the key,
+ * so the resolver writes the exact var the guard reads and the two never drift apart
+ * behind a duplicated magic string (a drift the no-`tsc` coverage gate can't catch).
+ */
+export const ROLES_VAR = "roles";
 
 const defaultRolesOf = (c: Context): Iterable<string> | undefined =>
   c.get<readonly string[]>(ROLES_VAR);

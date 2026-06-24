@@ -20,13 +20,21 @@
  *
  * Deny-by-default is structural here too: an unauthenticated request resolves to
  * **empty roles and no principal**, so guards refuse it and a governed admin write
- * has no actor to attribute and must be refused as unattributed.
+ * has no actor to attribute and must be refused as unattributed. A `verifySession`
+ * or `rolesOf` that *throws* aborts the chain (fail-closed — the request 500s and is
+ * never granted), never a half-resolved principal a downstream handler could read.
  *
- * `subject`/`subjectRoles` — the operator-vs-impersonated split — are a Phase 2
- * addition (ADR 0028); Phase 1 carries only the actor, and no second context var.
+ * The carrier is the two-field `{ actor, actorRoles }` principal. ADR 0028 Phase 1
+ * defers the `subject`/`subjectRoles` operator-vs-impersonated split (and the
+ * four-field `Principal` it needs) to the phase that first makes them diverge — but
+ * the actor still needs *somewhere to live*: the `"roles"` var carries roles only, so
+ * a single `"principal"` var threads the actor to admin. That carrier is the Phase-1
+ * shape, not the deferred Phase-2 machinery.
  */
 
 import type { Context, Handler } from "@lesto/web";
+
+import { ROLES_VAR } from "./guard";
 
 /** A value that may be delivered now or awaited — the established local convention. */
 type MaybePromise<T> = T | Promise<T>;
@@ -72,9 +80,6 @@ export interface PrincipalResolverOptions {
 
 /** The context var the resolved {@link Principal} is stashed under for admin/handlers to read. */
 const PRINCIPAL_VAR = "principal";
-
-/** The context var the guard reads the subject's roles from (shared verbatim with `guard.ts`). */
-const ROLES_VAR = "roles";
 
 /**
  * Read the {@link Principal} a {@link createPrincipalResolver} middleware resolved
