@@ -15,6 +15,7 @@ import {
   claudeMd,
   componentsJson,
   env,
+  envClient,
   gitignore,
   islandCounter,
   lestoApp,
@@ -105,8 +106,9 @@ export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promis
 
   // The starter, declared as (relative name -> contents). One source of truth for
   // both what gets written and what manifest comes back. `env.ts` is the typed,
-  // validated environment (`@lesto/env`) `lesto.app.ts` reads its DB path from.
-  // `lesto.sites.ts` is what
+  // validated environment (`@lesto/env`) `lesto.app.ts` reads its DB path from;
+  // `env.client.ts` holds its `PUBLIC_*` schema, shared with the island and inlined
+  // into the client bundle by `lesto build`/`dev`. `lesto.sites.ts` is what
   // makes `lesto build`/`dev` whole (its absence used to crash); the island under
   // `app/islands/` is what `lesto build` bundles into `/client.js`. The home page
   // lives at `app/routes/page.tsx` (file-based routing, ADR 0023) wrapped by
@@ -120,6 +122,7 @@ export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promis
   const files: ReadonlyArray<readonly [string, string]> = [
     ["package.json", packageJson(name, lestoDep)],
     ["env.ts", env()],
+    ["env.client.ts", envClient()],
     ["lesto.app.ts", lestoApp()],
     ["lesto.sites.ts", lestoSites()],
     ["app/routes/page.tsx", routePage()],

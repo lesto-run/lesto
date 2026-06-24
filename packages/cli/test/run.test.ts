@@ -1,6 +1,9 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { clientDefineMap, envField, PUBLIC_ENV_DEFINE_KEY } from "@lesto/env";
+import { verifyPublicEnvDefine } from "@lesto/assets";
+
 import { createDb, createTableSql, defineTable, dropTableSql, integer, text } from "@lesto/db";
 import { currentContext, currentRequestSpan, lesto, runWithContext } from "@lesto/web";
 import type { App, LestoAppConfig, KernelDatabase } from "@lesto/kernel";
@@ -1030,6 +1033,88 @@ describe("run build — island client assets", () => {
         cause,
       });
     }
+  });
+
+  it("threads the resolved PUBLIC_* inject map into the client build", async () => {
+    const built: Array<{ publicEnvDefine?: Record<string, string> }> = [];
+    const define = clientDefineMap(
+      { PUBLIC_API_BASE: envField.string() },
+      { PUBLIC_API_BASE: "x" },
+    );
+
+    await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+        hasIslandsDir: () => Promise.resolve(true),
+        resolvePublicEnvDefine: () => Promise.resolve(define),
+        buildClientAssets: (options) => {
+          built.push(options);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(built).toHaveLength(1);
+    expect(built[0]?.publicEnvDefine).toEqual(define);
+  });
+
+  it("passes no inject map when the env resolver yields undefined (app has no client env)", async () => {
+    const built: Array<{ publicEnvDefine?: Record<string, string> }> = [];
+
+    await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+        sink: recordingSink().sink,
+        hasIslandsDir: () => Promise.resolve(true),
+        resolvePublicEnvDefine: () => Promise.resolve(undefined),
+        buildClientAssets: (options) => {
+          built.push(options);
+
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(built[0]?.publicEnvDefine).toBeUndefined();
+  });
+
+  it("fails with CLI_CLIENT_BUILD_FAILED when resolving the PUBLIC_* env throws (bad var)", async () => {
+    const cause = new Error("ENV_VALIDATION_FAILED: PUBLIC_API_BASE is required");
+
+    try {
+      await run(
+        ["build"],
+        depsWith({
+          loadSites: () => Promise.resolve([staticSite("marketing", ["/posts"])]),
+          sink: recordingSink().sink,
+          hasIslandsDir: () => Promise.resolve(true),
+          // A missing/malformed required PUBLIC_* var throws while the map is
+          // computed — it must fail the build coded, not silently at hydration.
+          resolvePublicEnvDefine: () => Promise.reject(cause),
+          buildClientAssets: () => Promise.resolve(),
+        }),
+      );
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).code).toBe("CLI_CLIENT_BUILD_FAILED");
+      expect((error as CliError).details).toMatchObject({ cause });
+    }
+  });
+
+  it("the env-inject contract round-trips: clientDefineMap's key passes the bundler guard", () => {
+    // The `__LESTO_PUBLIC_ENV__` contract is spelled in BOTH @lesto/env (the producer,
+    // clientDefineMap) and @lesto/assets (the verifier, verifyPublicEnvDefine). This
+    // pins them together: the map @lesto/env emits must survive the assets guard, so a
+    // drift in either constant fails here rather than at a real `lesto build`.
+    const map = clientDefineMap({ PUBLIC_API_BASE: envField.string() }, { PUBLIC_API_BASE: "x" });
+
+    expect(Object.keys(map)).toEqual([PUBLIC_ENV_DEFINE_KEY]);
+    expect(verifyPublicEnvDefine(map)).toEqual(map);
   });
 });
 

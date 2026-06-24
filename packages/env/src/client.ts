@@ -8,9 +8,10 @@
  *   fetch(`${env.PUBLIC_API_BASE}/posts`);
  *
  * A browser has no `process.env`, so the framework INLINES the public subset at build
- * time (see `@lesto/assets`): the island bundler writes a single global,
- * `globalThis.{@link PUBLIC_ENV_GLOBAL}`, holding the frozen `PUBLIC_*` literals, and
- * `defineClientEnv` reads it. On the server (dev/SSR) that global is absent, so it
+ * time: `lesto build`/`dev` read the project's `env.client.ts` schema and hand
+ * `@lesto/assets`'s `buildClient` the inject map, so the island bundle carries a single
+ * global, `globalThis.{@link PUBLIC_ENV_GLOBAL}`, holding the frozen `PUBLIC_*` literals,
+ * and `defineClientEnv` reads it. On the server (dev/SSR) that global is absent, so it
  * falls back to `process.env` — so the SAME call works in both places.
  *
  * This module imports NOTHING server-side: no secrets, no `defineEnv` over a server

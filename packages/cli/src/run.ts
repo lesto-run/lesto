@@ -13,6 +13,8 @@
  * covered; only that wiring is excluded.
  */
 
+import type { PublicEnvDefine } from "@lesto/assets";
+
 import { createApp } from "@lesto/kernel";
 import type { LestoAppConfig, KernelDatabase } from "@lesto/kernel";
 import { currentRequestSpan } from "@lesto/web";
@@ -311,7 +313,31 @@ export interface CliDeps {
     outDir: string;
     mode: "dev" | "production";
     dialect: UiDialect;
+    /**
+     * The verified `PUBLIC_*` inject map (`@lesto/env`'s `clientDefineMap`) the
+     * bundler bakes into island code so `defineClientEnv` resolves its public bag
+     * in the browser instead of falling back to `{}`. Computed by
+     * {@link resolvePublicEnvDefine}; `undefined`/absent when the app declares no
+     * client env (the bundler then injects nothing — unchanged behavior).
+     */
+    publicEnvDefine?: PublicEnvDefine;
   }) => Promise<void>;
+
+  /**
+   * Resolve the project's `PUBLIC_*` env inject map for the island bundle — the
+   * verified `define`/replace (`@lesto/env`'s `clientDefineMap` over the app's
+   * client schema) that inlines validated public config into browser code.
+   *
+   * The bin wires this to: read the convention `env.client.ts` (a client-safe
+   * module exporting the `clientEnv` schema, importing only `@lesto/env/client`),
+   * and compute the map from it against the build-time `process.env`. Absent
+   * module → `undefined` (no inlining). Threaded into {@link buildClientAssets}
+   * INSIDE the build try, so a malformed/missing required `PUBLIC_*` var fails the
+   * build with the same coded `CLI_CLIENT_BUILD_FAILED` as any bundler error —
+   * not silently at hydration. Absent seam → no inlining (back-compat; tests opt
+   * in by providing it).
+   */
+  resolvePublicEnvDefine?: () => Promise<PublicEnvDefine | undefined>;
 
   /**
    * Probe whether the project's resolved Tailwind CSS entry exists (ADR 0037).
@@ -917,7 +943,18 @@ async function buildClientIfPresent(
   if (!(await deps.hasIslandsDir())) return;
 
   try {
-    await deps.buildClientAssets({ outDir, mode, dialect });
+    // Resolve the PUBLIC_* inject map first, INSIDE the try: computing it validates
+    // the app's client schema against the environment, so a missing/malformed
+    // required PUBLIC_* var fails the build here (coded) rather than at hydration.
+    const publicEnvDefine =
+      deps.resolvePublicEnvDefine !== undefined ? await deps.resolvePublicEnvDefine() : undefined;
+
+    await deps.buildClientAssets({
+      outDir,
+      mode,
+      dialect,
+      ...(publicEnvDefine !== undefined ? { publicEnvDefine } : {}),
+    });
   } catch (cause) {
     throw new CliError(
       "CLI_CLIENT_BUILD_FAILED",

@@ -7,8 +7,10 @@
  * A browser has no `process.env`, so a public value an island reads must be SUBSTITUTED
  * at build time. This builds the `define` a bundler applies: a SINGLE entry mapping the
  * runtime global `defineClientEnv` reads ({@link PUBLIC_ENV_GLOBAL}) to a frozen JSON
- * object of the validated `PUBLIC_*` literals. The bundler (`@lesto/assets`) applies it;
- * this stays pure so the substitution is unit-tested without a bundler.
+ * object of the validated `PUBLIC_*` literals. `@lesto/assets`'s `buildClient` applies
+ * it; `lesto build`/`dev` wire it by resolving the project's `env.client.ts` schema and
+ * computing this map (see `@lesto/cli`'s `resolvePublicEnvDefine`). This stays pure so
+ * the substitution is unit-tested without a bundler.
  *
  * Only `PUBLIC_*` names enter the bag — a server secret cannot, by construction, be
  * inlined (it is never in a client schema, and a misnamed client key was already

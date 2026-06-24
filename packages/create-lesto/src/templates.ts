@@ -563,6 +563,8 @@ export function cn(...inputs: ClassValue[]): string {
 export function env(): string {
   return `import { defineEnv, envField } from "@lesto/env";
 
+import { clientEnv } from "./env.client";
+
 /**
  * The typed environment, SPLIT into \`server\` and \`client\` halves. Read each value
  * off \`env\` (e.g. \`env.LESTO_DB\`, \`env.PUBLIC_APP_NAME\`) instead of \`process.env\`:
@@ -574,9 +576,11 @@ export function env(): string {
  *   - \`server\` vars (secrets, the DB path) NEVER reach the browser. Read a server
  *     value in an \`app/islands/*\` component and it throws \`ENV_SERVER_LEAK\` LOUD +
  *     EARLY — a secret can't slip into client code.
- *   - \`client\` vars MUST be named \`PUBLIC_*\` (the leak contract). They ARE safe to
- *     ship: the island bundler inlines them, so an island reads them in the browser
- *     via \`@lesto/env/client\` (\`defineClientEnv\`) — no \`process.env\` needed there.
+ *   - \`client\` vars MUST be named \`PUBLIC_*\` (the leak contract). They live in the
+ *     browser-safe \`env.client.ts\` (imported as \`clientEnv\`), so ONE schema feeds
+ *     three places: this server validation, the island's \`defineClientEnv\`, and the
+ *     bundler that inlines the values. \`lesto build\`/\`dev\` reads \`env.client.ts\` and
+ *     bakes the \`PUBLIC_*\` literals into island code — no \`process.env\` in the browser.
  *
  * WHERE VALUES COME FROM:
  *   - Local dev: \`lesto dev\`/\`build\` run under Bun, which auto-loads \`.env\` and
@@ -594,12 +598,37 @@ export const env = defineEnv({
     // Add server-only secrets here — e.g. SESSION_SECRET: envField.string().
     // They are validated at boot and NEVER shipped to the browser.
   },
-  client: {
-    // Public config, inlined into island bundles — every key MUST be \`PUBLIC_*\`.
-    // An island reads these in the browser via \`@lesto/env/client\` (see the counter).
-    PUBLIC_APP_NAME: envField.string().default("Lesto app"),
-  },
+  // The \`PUBLIC_*\` client schema, shared with the island + the bundler (env.client.ts).
+  client: clientEnv,
 });
+`;
+}
+
+/**
+ * `env.client.ts` — the project's PUBLIC (`PUBLIC_*`) env schema, declared ONCE.
+ *
+ * This module imports ONLY `@lesto/env/client` (the browser-safe surface, by
+ * construction free of any server secret), so it is the single source of truth three
+ * places share: `env.ts` validates it as its `client` half, the island validates it
+ * with `defineClientEnv`, and `lesto build`/`dev` reads its `clientEnv` export to
+ * inline the validated `PUBLIC_*` values into the island bundle. Keeping it separate
+ * from `env.ts` (which validates the server half on import) is what lets the bundler
+ * read the client schema WITHOUT running server validation. Every key MUST be `PUBLIC_*`.
+ */
+export function envClient(): string {
+  return `import { envField } from "@lesto/env/client";
+import type { ClientSchema } from "@lesto/env/client";
+
+/**
+ * The PUBLIC config the app ships to the browser — every key MUST be \`PUBLIC_*\`. The
+ * bundler inlines these into island code (\`lesto build\`/\`dev\`), so \`defineClientEnv\`
+ * resolves them in the browser with no \`process.env\`. A \`.default()\` makes a var
+ * optional; drop it for a REQUIRED one (a missing value then fails the build, not at
+ * hydration). NEVER put a secret here — only \`PUBLIC_*\` names are accepted.
+ */
+export const clientEnv = {
+  PUBLIC_APP_NAME: envField.string().default("Lesto app"),
+} satisfies ClientSchema;
 `;
 }
 
@@ -625,13 +654,15 @@ export function islandCounter(): string {
 import type { ReactElement } from "react";
 
 import { defineIsland } from "@lesto/ui";
-import { defineClientEnv, envField } from "@lesto/env/client";
+import { defineClientEnv } from "@lesto/env/client";
 
-// PUBLIC config, inlined by the island bundler — every key is \`PUBLIC_*\`. This is the
-// browser-safe surface: it can hold no secret. (The server schema lives in \`./env\`.)
-const clientEnv = defineClientEnv({
-  PUBLIC_APP_NAME: envField.string().default("Lesto app"),
-});
+import { clientEnv } from "../../env.client";
+
+// PUBLIC config, read in the browser from the SHARED \`env.client.ts\` schema (the same
+// one \`env.ts\` validates and the bundler inlines). \`@lesto/env/client\` is the
+// browser-safe surface: by construction it can hold no secret. NEVER import \`../../env\`
+// (the server schema) here — reaching a server var from an island throws ENV_SERVER_LEAK.
+const publicEnv = defineClientEnv(clientEnv);
 
 /** A trivial interactive component: the local count proves hydration is live. */
 function Counter({ start }: { start: number }): ReactElement {
@@ -641,7 +672,7 @@ function Counter({ start }: { start: number }): ReactElement {
     <button
       type="button"
       data-testid="counter"
-      title={clientEnv.PUBLIC_APP_NAME}
+      title={publicEnv.PUBLIC_APP_NAME}
       onClick={() => setN((value) => value + 1)}
     >
       count: {n}

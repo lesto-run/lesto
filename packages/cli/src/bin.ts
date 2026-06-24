@@ -29,6 +29,9 @@ import { nodeReleaseStore, nodeUploader, remoteReleaseStore } from "@lesto/deplo
 import type { ReleaseStore } from "@lesto/deploy";
 
 import { buildClient, bunBuildClientDeps } from "@lesto/assets";
+import type { PublicEnvDefine } from "@lesto/assets";
+import { clientDefineMap } from "@lesto/env";
+import type { ClientSchema } from "@lesto/env";
 
 import { createApp } from "@lesto/kernel";
 
@@ -386,6 +389,7 @@ const buildClientAssets = async (options: {
   outDir: string;
   mode: "dev" | "production";
   dialect: UiDialect;
+  publicEnvDefine?: PublicEnvDefine;
 }): Promise<void> => {
   await buildClient(
     {
@@ -393,9 +397,41 @@ const buildClientAssets = async (options: {
       outDir: join(projectRoot, options.outDir),
       mode: options.mode === "dev" ? "development" : "production",
       dialect: options.dialect,
+      // The verified PUBLIC_* inject map the CLI core resolved (absent → the bundler
+      // injects nothing) — baked into island code so `defineClientEnv` reads its
+      // public bag in the browser instead of falling back to `{}`.
+      ...(options.publicEnvDefine !== undefined
+        ? { publicEnvDefine: options.publicEnvDefine }
+        : {}),
     },
     bunBuildClientDeps(projectRoot),
   );
+};
+
+// The convention module a project declares its PUBLIC_* (client) env schema in:
+// `env.client.ts` at the project root — a CLIENT-SAFE module that imports only
+// `@lesto/env/client` (never a server secret) and exports a `clientEnv` schema. It
+// is kept separate from `env.ts` (which validates the server half against
+// `process.env` on import) precisely so resolving the client schema here never runs
+// server validation. The scaffold's `env.ts` and its island both import `clientEnv`
+// from it, so the inlined bag and what the island reads share ONE source of truth.
+const ENV_CLIENT_PATH = join(projectRoot, "env.client.ts");
+
+// Compute the island bundle's PUBLIC_* inject map. If the project declares
+// `env.client.ts`, import its `clientEnv` schema and turn it into the verified
+// `define`/replace map: `clientDefineMap` validates the PUBLIC_* values against the
+// build-time `process.env`, so a missing/malformed required PUBLIC_* var throws here
+// (surfaced by the CLI core as a coded build failure, not silently at hydration).
+// Absent module — or one with no `clientEnv` export — yields `undefined`, and the
+// bundler injects nothing (an app with no public config is unchanged).
+const resolvePublicEnvDefine = async (): Promise<PublicEnvDefine | undefined> => {
+  if (!(await dirExists(ENV_CLIENT_PATH))) return undefined;
+
+  const module = (await import(ENV_CLIENT_PATH)) as { clientEnv?: ClientSchema };
+
+  if (module.clientEnv === undefined) return undefined;
+
+  return clientDefineMap(module.clientEnv);
 };
 
 // Whether the project's resolved Tailwind CSS entry exists (ADR 0037). The CLI core
@@ -849,6 +885,7 @@ const code = await run(argv, {
   readAsset: nodeStaticReader(join(process.cwd(), DEV_ASSET_DIR)),
   hasIslandsDir,
   buildClientAssets,
+  resolvePublicEnvDefine,
   cssEntryExists,
   buildAppStyles,
   watchIslands,

@@ -31,6 +31,7 @@ export {
   agentsMd,
   claudeMd,
   componentsJson,
+  envClient,
   gitignore,
   islandCounter,
   lestoApp,

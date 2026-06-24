@@ -66,6 +66,7 @@ describe("scaffold", () => {
     const expected = [
       "package.json",
       "env.ts",
+      "env.client.ts",
       "lesto.app.ts",
       "lesto.sites.ts",
       "app/routes/page.tsx",
@@ -228,13 +229,15 @@ describe("scaffold", () => {
     expect(island).toContain('name: "Counter"');
     expect(island).toContain("useState");
 
-    // It reads PUBLIC config in the BROWSER via the leak-safe client surface — never
-    // the server schema `./env` (a server var would throw ENV_SERVER_LEAK). The
-    // bundler inlines the PUBLIC_ subset, so this resolves with no process.env.
-    expect(island).toContain('import { defineClientEnv, envField } from "@lesto/env/client"');
-    expect(island).toContain("defineClientEnv({");
-    expect(island).toContain("clientEnv.PUBLIC_APP_NAME");
-    expect(island).not.toContain('from "./env"');
+    // It reads PUBLIC config in the BROWSER via the leak-safe client surface, off the
+    // SHARED `env.client.ts` schema — never the server schema (a server var would throw
+    // ENV_SERVER_LEAK). The bundler inlines the PUBLIC_ subset, so it needs no process.env.
+    expect(island).toContain('import { defineClientEnv } from "@lesto/env/client"');
+    expect(island).toContain('import { clientEnv } from "../../env.client"');
+    expect(island).toContain("defineClientEnv(clientEnv)");
+    expect(island).toContain("publicEnv.PUBLIC_APP_NAME");
+    // The island imports the client SCHEMA module, never the server env module.
+    expect(island).not.toContain('from "../../env"');
   });
 
   it("scaffolds a typed env.ts wired to @lesto/env", async () => {
@@ -244,15 +247,15 @@ describe("scaffold", () => {
 
     const envFile = await readFile(join(targetDir, "env.ts"), "utf8");
 
-    // env.ts is a SPLIT `defineEnv` schema over `envField`, default-exported as `env`,
-    // demonstrating both halves: a server DB-path knob (defaulted, so the starter boots
-    // with none set) and a PUBLIC_ client var (the leak-safe surface an island reads).
+    // env.ts is a SPLIT `defineEnv` schema over `envField`, default-exported as `env`.
+    // Its server half is a defaulted DB-path knob (so the starter boots with none set);
+    // its client half is sourced from the shared `env.client.ts` (one PUBLIC_* schema).
     expect(envFile).toContain('import { defineEnv, envField } from "@lesto/env"');
+    expect(envFile).toContain('import { clientEnv } from "./env.client"');
     expect(envFile).toContain("export const env = defineEnv({");
     expect(envFile).toContain("server: {");
-    expect(envFile).toContain("client: {");
     expect(envFile).toContain('LESTO_DB: envField.string().default("lesto.db")');
-    expect(envFile).toContain('PUBLIC_APP_NAME: envField.string().default("Lesto app")');
+    expect(envFile).toContain("client: clientEnv");
 
     // ...and it teaches the secrets story on day one: where values come from
     // (.env.local under Bun + the Worker binding on the edge) and the SERVER/CLIENT
@@ -262,6 +265,25 @@ describe("scaffold", () => {
     expect(envFile).toContain("defineEnv(schema, workerEnv)");
     expect(envFile).toContain("ENV_SERVER_LEAK");
     expect(envFile).toContain("PUBLIC_*");
+  });
+
+  it("scaffolds env.client.ts as the shared PUBLIC_* schema (browser-safe surface)", async () => {
+    const targetDir = join(workspace, "enved-client");
+
+    await scaffold({ name: "enved-client", targetDir }, realIO);
+
+    const clientFile = await readFile(join(targetDir, "env.client.ts"), "utf8");
+
+    // It imports ONLY the browser-safe `@lesto/env/client` surface (never the server
+    // `@lesto/env`), and exports a `clientEnv` schema the island, env.ts, and the
+    // bundler all share. `satisfies ClientSchema` keeps every key a real PUBLIC_* field.
+    expect(clientFile).toContain('import { envField } from "@lesto/env/client"');
+    expect(clientFile).toContain('import type { ClientSchema } from "@lesto/env/client"');
+    expect(clientFile).toContain("export const clientEnv = {");
+    expect(clientFile).toContain('PUBLIC_APP_NAME: envField.string().default("Lesto app")');
+    expect(clientFile).toContain("} satisfies ClientSchema");
+    // The shared client schema must NOT reach for the server surface.
+    expect(clientFile).not.toContain('from "@lesto/env"');
   });
 
   it("scaffolds the file-routed home page + layout and the agent onboarding files", async () => {
