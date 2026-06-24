@@ -135,8 +135,9 @@ echo 0 | sudo tee /sys/devices/system/cpu/cpufreq/boost              # AMD / acp
 ```
 
 The runner then puts the server and the load generator on **disjoint** core sets
-(default server `2,3`, generator `4,5`; override with `--server-cpus` / `--gen-cpus`)
-so they never contend.
+so they never contend. Defaults scale with core count: on a ≥6-core box, server
+`2,3` and generator `4,5` (cores `0,1` left for the OS); on a 4–5-core box, server
+`2` and generator `3`. Override either with `--server-cpus` / `--gen-cpus`.
 
 **Docker path (lower fidelity).** Pins the software stack only — no governor/turbo/
 isolation control, so results are stamped NON-CANONICAL. Use it to re-run the
@@ -154,17 +155,18 @@ framework maintainer or the community) — see task `L-97e1bca5`.
 
 ## Framework matrix
 
-| Tier   | Framework              | Status      | App              |
-| ------ | ---------------------- | ----------- | ---------------- |
-| Server | **Lesto**              | ✅ ready    | `apps/lesto`     |
-| Server | Hono                   | ✅ ready    | `apps/hono`      |
-| Server | Fastify                | ✅ ready    | `apps/fastify`   |
-| Server | Express                | ✅ ready    | `apps/express`   |
-| Server | Elysia                 | ✅ ready    | `apps/elysia`    |
-| Meta   | Next.js                | 🚧 scaffold | `apps/next`      |
-| Meta   | SvelteKit              | 🚧 scaffold | `apps/sveltekit` |
-| Meta   | Astro                  | 🚧 scaffold | `apps/astro`     |
-| Meta   | React Router 7 (Remix) | 🚧 scaffold | `apps/remix`     |
+| Tier   | Framework              | Status      | App                                                          |
+| ------ | ---------------------- | ----------- | ------------------------------------------------------------ |
+| Server | **Lesto**              | ✅ ready    | `apps/lesto`                                                 |
+| Server | **Lesto** (bare)       | ✅ ready    | `apps/lesto` (`LESTO_BENCH_SECURE=false` — secure stack off) |
+| Server | Hono                   | ✅ ready    | `apps/hono`                                                  |
+| Server | Fastify                | ✅ ready    | `apps/fastify`                                               |
+| Server | Express                | ✅ ready    | `apps/express`                                               |
+| Server | Elysia                 | ✅ ready    | `apps/elysia`                                                |
+| Meta   | Next.js                | 🚧 scaffold | `apps/next`                                                  |
+| Meta   | SvelteKit              | 🚧 scaffold | `apps/sveltekit`                                             |
+| Meta   | Astro                  | 🚧 scaffold | `apps/astro`                                                 |
+| Meta   | React Router 7 (Remix) | 🚧 scaffold | `apps/remix`                                                 |
 
 Server-tier apps deliver a server-built HTML page on `/ssr` (a clean HTTP-layer
 comparison — the render engine is compared separately in `compare/`).

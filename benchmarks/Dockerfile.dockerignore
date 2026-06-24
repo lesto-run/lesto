@@ -1,0 +1,21 @@
+# Scoped to benchmarks/Dockerfile ONLY (BuildKit looks for <dockerfile>.dockerignore
+# next to the Dockerfile before the root .dockerignore). Keeps this image's repo-root
+# build context lean WITHOUT changing the root app image's context. The image installs
+# deps fresh, so local installs/build artifacts must never ship.
+node_modules
+**/node_modules
+.git
+var
+coverage
+**/coverage
+dist
+**/dist
+build
+**/build
+.next
+**/.next
+.svelte-kit
+**/.svelte-kit
+*.png
+.playwright-mcp
+.devcontainer

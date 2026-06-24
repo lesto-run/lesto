@@ -91,14 +91,11 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Pass through the driver's own flags (duration/connections/runs/only/generator/etc.).
-  const passthrough = argv.filter(
-    (a, i) =>
-      !["--strict"].includes(a) &&
-      !["--server-cpus", "--gen-cpus"].includes(a) &&
-      argv[i - 1] !== "--server-cpus" &&
-      argv[i - 1] !== "--gen-cpus",
-  );
+  // Forward everything except our own `--strict` to the driver. The driver reads
+  // only the flags it recognizes (duration/connections/runs/only/generator/...) and
+  // takes the core sets via env (BENCH_*_CPUS), so a leftover `--server-cpus 2,3`
+  // is harmless — no need for a brittle positional strip.
+  const passthrough = argv.filter((a) => a !== "--strict");
 
   // Pin the driver (→ the servers it spawns) to the server cores via taskset, if we
   // have it and a set; the driver re-pins the generator via BENCH_GEN_CPUS.
@@ -117,8 +114,11 @@ async function main(): Promise<void> {
   });
 
   await new Promise<void>((resolve) => {
-    child.on("exit", (code) => {
-      process.exitCode = code ?? 0;
+    child.on("exit", (code, signal) => {
+      // A signal-killed driver (SIGTERM/SIGKILL/OOM) has code === null — that's a
+      // FAILED run, not success. Surface it as non-zero so CI never reads a killed
+      // benchmark as passed.
+      process.exitCode = signal ? 1 : (code ?? 0);
       resolve();
     });
     child.on("error", (err) => {
