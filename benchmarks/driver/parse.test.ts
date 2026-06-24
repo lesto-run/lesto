@@ -382,7 +382,7 @@ describe("renderResults", () => {
     );
 
     expect(md).toContain("#### lesto — json");
-    expect(md).toContain("| conns | req/s | success | p50 | p90 | p99 | p99.9 | max | CV |");
+    expect(md).toContain("| conns | req/s | success | p50 | p75 | p90 | p99 | p99.9 | max | CV |");
     expect(md).toContain("| 50 |");
     expect(md).toContain("| 100 |");
   });

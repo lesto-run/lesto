@@ -335,21 +335,31 @@ function cellKey(workload: string, connections: number): string {
   return `${workload}|${connections}`;
 }
 
+/** A deterministic 32-bit FNV-1a hash of a string — used to derive a per-app run-order seed. */
+function hashString(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+
+  return h >>> 0;
+}
+
 /**
  * Benchmark one app end-to-end: prepare, boot, probe, warm every workload, then run
  * the WHOLE (workload × connection-rung × trial) schedule in a seeded-random order
  * (so no rung is systematically measured cold-first or hot-last), and reduce each
  * rung to its median + stability and each (app, workload) to its saturation curve.
  */
-async function benchApp(
-  app: AppDef,
-  port: number,
-  opts: Options,
-  rng: () => number,
-): Promise<SaturationResult[]> {
+async function benchApp(app: AppDef, port: number, opts: Options): Promise<SaturationResult[]> {
   const cwd = join(APPS_DIR, app.dir);
   const baseUrl = `http://127.0.0.1:${port}`;
   const parse = PARSERS[opts.generator] as (json: string) => LoadSample;
+  // Derive this app's run-order RNG from (seed, app name) — NOT the shared stream —
+  // so a given app's trial order depends only on the seed, never on which other apps
+  // ran (`--only`) or in what order. That keeps the stamped seed reproducible per app.
+  const appRng = mulberry32((opts.seed ^ hashString(app.name)) >>> 0);
 
   console.log(`\n=== ${app.name} (port ${port}) ===`);
   for (const step of app.prepare) {
@@ -388,7 +398,7 @@ async function benchApp(
         }
       }
     }
-    const schedule = opts.shuffleOrder ? shuffle(units, rng) : units;
+    const schedule = opts.shuffleOrder ? shuffle(units, appRng) : units;
 
     const byCell = new Map<string, LoadSample[]>();
     for (const unit of schedule) {
@@ -458,7 +468,7 @@ async function main(): Promise<void> {
       continue;
     }
     try {
-      all.push(...(await benchApp(app, port, opts, rng)));
+      all.push(...(await benchApp(app, port, opts)));
     } catch (error) {
       console.error(`  ${app.name} FAILED: ${(error as Error).message}`);
     }

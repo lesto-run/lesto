@@ -519,16 +519,16 @@ function renderCurve(result: SaturationResult): string {
 
     return (
       `| ${level.connections} | ${round2(s.requestsPerSec)} | ${fmtSuccess(s.successRate)} | ` +
-      `${round2(s.p50Ms)} | ${round2(s.p90Ms)} | ${round2(s.p99Ms)} | ${round2(s.p999Ms)} | ` +
-      `${round2(s.maxMs)} | ${cvCell} |`
+      `${round2(s.p50Ms)} | ${round2(s.p75Ms)} | ${round2(s.p90Ms)} | ${round2(s.p99Ms)} | ` +
+      `${round2(s.p999Ms)} | ${round2(s.maxMs)} | ${cvCell} |`
     );
   });
 
   return [
     `#### ${result.framework} — ${result.workload}`,
     "",
-    "| conns | req/s | success | p50 | p90 | p99 | p99.9 | max | CV |",
-    "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| conns | req/s | success | p50 | p75 | p90 | p99 | p99.9 | max | CV |",
+    "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows,
     "",
   ].join("\n");
