@@ -320,8 +320,25 @@ export class Lesto {
    * header is heuristically shared-cacheable — a session leak waiting for a CDN —
    * and `Vary: Cookie` is not honored by Cloudflare's cache, so "do not store" is
    * the only defense for per-user JSON; the framework never emits the bare GET.
+   *
+   * `guards` are file-route middleware (`@lesto/web`'s {@link RouteMiddleware}, the
+   * same `Handler` chain {@link page} takes) that run BEFORE the loader, outermost
+   * first — so a source bound by an island on a GUARDED page is reached over a route
+   * that enforces the SAME guard chain protecting the page document. This closes the
+   * data-route bypass: without it, the per-user data an island fetches (the data most
+   * worth protecting) would ride the LEAST-protected route — a page's auth
+   * `middleware.ts` covers only its document GET, never the separate
+   * `/__lesto/data/<name>` route. Pass the SAME guard chain that protects the page
+   * binding the source (the file-route applier composes that chain from the page's
+   * `middlewareDepth` — {@link RouteMiddleware}); an app declaring `.data()` by hand
+   * passes the guards (or the app-level `.use()` middleware) the source needs. Empty
+   * (the default) is an unguarded source — identical to a bare `.data()`.
    */
-  data<T>(source: DataSource<T>, loader: (c: Context) => MaybePromise<T>): this {
+  data<T>(
+    source: DataSource<T>,
+    loader: (c: Context) => MaybePromise<T>,
+    guards: readonly Handler[] = [],
+  ): this {
     const cacheControl =
       source.scope === "shared" ? "public, max-age=0, must-revalidate" : "private, no-store";
 
@@ -335,7 +352,12 @@ export class Lesto {
       this.hasPrivateData = true;
     }
 
-    return this.get(dataSourceHref(source.name), async (c) => {
+    // The guards run AFTER the app-level `.use` middleware (which `.get` prepends)
+    // and BEFORE the loader — the same order a page's file-route guards run in its
+    // chain (`chainOf`: `[...middleware, ...guards, pageHandler]`). A guard that
+    // answers (a redirect / 403) short-circuits the loader; one that falls through
+    // (returns nothing) advances the chain to it.
+    return this.get(dataSourceHref(source.name), ...guards, async (c) => {
       const response = c.json(await loader(c));
 
       return { ...response, headers: { ...response.headers, "cache-control": cacheControl } };

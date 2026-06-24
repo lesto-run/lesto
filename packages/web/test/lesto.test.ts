@@ -67,6 +67,12 @@ const augmentUser: Handler = (c) => {
 const blockGuard: Handler = (c) => c.text("blocked", 403);
 const homePage = { component: () => createElement("main", null, "home") };
 
+// An auth-shaped guard: fall through when the session cookie is present, else redirect
+// — the exact shape a page's `middleware.ts` is, shared by the page GET and its bound
+// data route so the data-route bypass test gates both with the SAME chain.
+const cookieGuard: Handler = (c) =>
+  c.header("cookie") === "sid=jade" ? undefined : c.redirect("/login");
+
 describe("lesto verbs + dispatch", () => {
   it("dispatches each verb to its handler", async () => {
     const app = lesto()
@@ -520,6 +526,41 @@ describe("lesto().data() — island data sources (ADR 0010)", () => {
     expect(
       (await app.handle("GET", "/__lesto/data/session", { headers: { "x-allow": "1" } })).status,
     ).toBe(200);
+  });
+
+  it("enforces the SAME file-route guard on the data route as on the guarded page GET", async () => {
+    // The red-team bypass (task L-f82d573b): a page's auth `middleware.ts` covers
+    // only the page document GET, but an island's `scope: "private"` source rides a
+    // SEPARATE `/__lesto/data/<name>` route that never sees the file-route guard — so
+    // the data most worth protecting fetches over the LEAST-protected route. The fix:
+    // `.data()` takes the SAME guard chain (the file-route applier prepends the page's
+    // composed `middlewareDepth`), so the data route is gated identically.
+    let loaderRan = false;
+
+    const app = lesto()
+      // The page document GET carries the guard via `.page`'s guards parameter.
+      .page("/secret", { component: () => createElement("h1", null, "secret") }, [cookieGuard])
+      // The bound source carries the SAME guard — closing the bypass.
+      .data(sessionSource, () => ((loaderRan = true), { id: "jade", name: "Jade" }), [cookieGuard]);
+
+    // Unauthenticated: the page GET is redirected before render…
+    expect((await app.handle("GET", "/secret")).status).toBe(302);
+
+    // …and the data route is redirected by the SAME guard, BEFORE the loader runs —
+    // the per-user data never leaks over the formerly-unguarded route.
+    const blocked = await app.handle("GET", "/__lesto/data/session");
+    expect(blocked.status).toBe(302);
+    expect(blocked.headers.Location).toBe("/login");
+    expect(loaderRan).toBe(false); // the guard short-circuited the loader
+
+    // Authenticated: the guard falls through, the loader runs, the data is served.
+    const allowed = await app.handle("GET", "/__lesto/data/session", {
+      headers: { cookie: "sid=jade" },
+    });
+    expect(allowed.status).toBe(200);
+    expect(allowed.headers["cache-control"]).toBe("private, no-store"); // header rule still applies
+    expect(JSON.parse(allowed.body)).toEqual({ id: "jade", name: "Jade" });
+    expect(loaderRan).toBe(true);
   });
 });
 

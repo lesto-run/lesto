@@ -58,12 +58,16 @@ type MaybePromise<T> = T | Promise<T>;
  * page terminal in the route's chain (where `next` auto-advances). Generic in the
  * page's `Path` so `c.param(...)` is typed to the pattern the guard sits above.
  *
- * SCOPE — a `middleware.ts` guards ONLY the page document's GET request. It does NOT
- * run on the page's `.data()` / island endpoints (`/__lesto/data/*`) or on API routes,
- * which register as their own routes. So an auth guard here gates the page shell, but
- * a `scope: "private"` island fetch is reached over a separate, UNGUARDED route — guard
- * that data with an app-level `.use()` middleware or a per-source check, not by relying
- * on this file-route guard alone.
+ * SCOPE — a `middleware.ts` composes into the page document's GET chain. The page's
+ * `.data()` / island endpoints (`/__lesto/data/*`) register as their OWN routes, so
+ * they do not inherit this guard automatically — a `scope: "private"` island fetch
+ * would otherwise ride a separate, unguarded route (the data most worth protecting on
+ * the least-protected route). To close that, `.data(source, loader, guards)` takes the
+ * SAME guard chain `.page(...)` does ({@link Lesto.data}): pass the page's composed
+ * file-route guards (the depths {@link guardChainFor} resolves) — or an app-level
+ * `.use()` middleware that covers `/__lesto/data/*` — so the data route enforces the
+ * identical guard. Hand-written API routes register their own chains too; guard those
+ * the same way.
  */
 export type RouteMiddleware<Path extends string = string> = (
   c: Context<Path>,
