@@ -33,7 +33,12 @@ import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@lesto/r
 import { openSqlite } from "@lesto/runtime";
 
 import { createIdentity, insertUser, totpMigration, usersMigration } from "@lesto/identity";
-import { findUserByEmail } from "@lesto/identity";
+import {
+  findUserByEmail,
+  grantRole,
+  rolesOf as queryRoles,
+  userRolesMigration,
+} from "@lesto/identity";
 import type { Identity } from "@lesto/identity";
 
 import type { TraceSeams } from "@lesto/observability";
@@ -81,6 +86,12 @@ export interface DemoAccount {
   readonly email: string;
   readonly password: string;
   readonly displayName: string;
+  /**
+   * The roles this account holds — the ground truth seeded into the `user_roles`
+   * store (OCP-5). Jade is the operator; Guest a read-only viewer. The lab's authz
+   * resolves these from the store per request, no `?role=` knob.
+   */
+  readonly roles: readonly string[];
 }
 
 /**
@@ -96,31 +107,43 @@ export const DEMO_ACCOUNTS: readonly DemoAccount[] = [
     email: "jade@demo.example.com",
     password: "demo-password-jade",
     displayName: "Jade Mills",
+    roles: ["admin"],
   },
   {
     id: "guest",
     email: "guest@demo.example.com",
     password: "demo-password-guest",
     displayName: "Guest Buyer",
+    roles: ["viewer"],
   },
 ];
 
 /** The default demo account the sign-in form pre-fills. */
 export const DEFAULT_DEMO = DEMO_ACCOUNTS[0]!;
 
-/** Insert the demo accounts (idempotent — running twice is a no-op). */
+/**
+ * Insert the demo accounts and their role grants (idempotent — running twice is a
+ * no-op). Roles are keyed by the demo `id` (`jade`/`guest`) — the same canonical
+ * actor string the lab's session resolver produces (`controllers.ts`), so a request
+ * signed in as Jade resolves `["admin"]` straight from the `user_roles` store.
+ */
 async function seedDemoAccounts(db: Db): Promise<void> {
   const now = new Date().toISOString();
 
   for (const demo of DEMO_ACCOUNTS) {
-    if (await findUserByEmail(db, demo.email)) continue;
+    if (!(await findUserByEmail(db, demo.email))) {
+      await insertUser(db, {
+        email: demo.email,
+        passwordHash: await hashPassword(demo.password),
+        // Seeded users are born verified — the demo skips the email click.
+        emailVerifiedAt: now,
+      });
+    }
 
-    await insertUser(db, {
-      email: demo.email,
-      passwordHash: await hashPassword(demo.password),
-      // Seeded users are born verified — the demo skips the email click.
-      emailVerifiedAt: now,
-    });
+    // `grantRole` is itself idempotent, so re-seeding never duplicates a grant.
+    for (const role of demo.roles) {
+      await grantRole(db, demo.id, role);
+    }
   }
 }
 
@@ -153,14 +176,21 @@ export async function buildIdentity(
   close: () => void;
   /** The demo mailer's record of rendered verify/reset emails (see {@link createDemoMailer}). */
   outbox: readonly SentEmail[];
+  /**
+   * The `rolesOf` seam bound to this identity's DB — the durable replacement for the
+   * lab's old hard-coded role map (OCP-5). The app threads it into the lab's principal
+   * resolver, so authz reads the seeded `user_roles` store, not a `?role=` knob.
+   */
+  rolesOf: (actor: string) => Promise<string[]>;
 }> {
   const { db: sql, close } = await openSqlite();
 
   // Order is the contract: migrate, build the db, seed, then the service.
   // A query before migrate would hit an empty schema. The TOTP factor tables
   // (ADR 0020) migrate alongside users so the demo's second-factor enrollment
-  // has somewhere to land.
-  await new Migrator(sql, [usersMigration, totpMigration]).migrate();
+  // has somewhere to land; the `user_roles` store (ADR 0028 OCP-5) migrates here
+  // too so the seeded role grants and the lab's authz resolution have a table.
+  await new Migrator(sql, [usersMigration, totpMigration, userRolesMigration]).migrate();
   await installSessionSchema(sql);
   await installRateLimitSchema(sql);
 
@@ -220,5 +250,11 @@ export async function buildIdentity(
     resetUrl: (token) => `/mls/api/reset?token=${token}`,
   });
 
-  return { identity, handle: sql, close, outbox: mailer.outbox };
+  return {
+    identity,
+    handle: sql,
+    close,
+    outbox: mailer.outbox,
+    rolesOf: (actor) => queryRoles(db, actor),
+  };
 }

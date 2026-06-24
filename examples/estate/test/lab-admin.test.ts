@@ -29,9 +29,18 @@ import type { Lesto } from "@lesto/web";
 
 type Store = ReturnType<typeof nodeContentStore>;
 
+// The role map this suite injects for `rolesOf` — standing in for the durable
+// `user_roles` store the real node app seeds (the store itself is unit-tested in
+// @lesto/identity). Jade is the operator, Guest a read-only viewer.
+const DEMO_ROLES: Record<string, readonly string[]> = { jade: ["admin"], guest: ["viewer"] };
+
 /** A lab sub-app over a given store, optionally authenticated as a demo user. */
 function labFor(store: Store, as?: "jade" | "guest"): Lesto {
-  return buildLabRoutes(store, as === undefined ? undefined : () => ({ userId: as }));
+  return buildLabRoutes(
+    store,
+    as === undefined ? undefined : () => ({ userId: as }),
+    (actor) => DEMO_ROLES[actor] ?? [],
+  );
 }
 
 /** A fresh lab over a fresh in-memory store, optionally signed in. */

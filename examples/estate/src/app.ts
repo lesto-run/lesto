@@ -52,7 +52,7 @@ const NODE_RATE_LIMIT = { capacity: 60, refillPerSecond: 10 } as const;
  * isolated.
  */
 export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promise<LestoAppConfig> {
-  const { identity, handle } = await buildIdentity(secret, seams);
+  const { identity, handle, rolesOf } = await buildIdentity(secret, seams);
 
   // Zero-token, header-based CSRF on every state-changing request, plus a
   // DURABLE per-client rate limit over the shared SQL handle (ADR 0013):
@@ -72,7 +72,7 @@ export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promi
       }).map(fromRequestMiddleware),
     )
     .client("/client.js")
-    .route(buildEstateRoutes(identity));
+    .route(buildEstateRoutes(identity, rolesOf));
 
   // The client-error beacon sink (operability-dx item 3): a hydration failure in
   // a real browser POSTs to `/__lesto/client-errors`, and this wires that beacon to

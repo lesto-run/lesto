@@ -55,6 +55,8 @@ export {
 } from "./totp";
 export type { RecoveryCode, TotpFactor } from "./totp";
 
+export { grantRole, revokeRole, rolesOf, userRoles, userRolesMigration } from "./roles";
+
 export {
   clearSessionCookie,
   readCookie,

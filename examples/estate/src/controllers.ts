@@ -65,8 +65,15 @@ function sessionUser(email: string): SessionResponseUser {
   return { id: email, name: displayNameFor(email) };
 }
 
-/** The estate app's routes, closing over the {@link Identity} they authenticate against. */
-export function buildEstateRoutes(identity: Identity): Lesto {
+/**
+ * The estate app's routes, closing over the {@link Identity} they authenticate
+ * against. `rolesOf` is the durable `user_roles` seam (OCP-5) bound to the same
+ * identity DB — threaded into the lab so its authz resolves real, persisted roles.
+ */
+export function buildEstateRoutes(
+  identity: Identity,
+  rolesOf: (actor: string) => Promise<string[]>,
+): Lesto {
   /** The current user (an Identity model), or undefined when signed out. */
   const currentUser = async (c: Context): Promise<{ email: string } | undefined> => {
     const user = await identity.currentUser(readSessionToken(c.header("cookie")));
@@ -75,10 +82,11 @@ export function buildEstateRoutes(identity: Identity): Lesto {
   };
 
   /**
-   * The lab's session→principal seam (ADR 0028 Phase 1): verify the request's
-   * session and hand back its `userId` for the lab's `rolesOf`. Keyed by the demo
-   * account id (`jade`/`guest`) so one local `rolesOf` serves both runtimes; a
-   * non-demo signed-in user falls back to their email (no roles → denied).
+   * The lab's session→principal seam (ADR 0028): verify the request's session and
+   * hand back its `userId` for the `rolesOf` store. Keyed by the demo account id
+   * (`jade`/`guest`) — the same key the roles were seeded under — so a signed-in
+   * Jade resolves `["admin"]`; a non-demo user falls back to their email (no roles
+   * → denied).
    */
   const verifyLabSession = async (c: Context): Promise<{ userId: string } | undefined> => {
     const user = await currentUser(c);
@@ -292,7 +300,8 @@ export function buildEstateRoutes(identity: Identity): Lesto {
       })
       // The /lab feature-demo zone (SSR + CSR fetch, async data, flags, authz,
       // DB-driven content over portable SQLite). The lab's admin gate + CRUD read
-      // their principal from the SAME identity session minted by `/mls` sign-in.
-      .route(buildLabRoutes(nodeContentStore(), verifyLabSession))
+      // their principal from the SAME identity session minted by `/mls` sign-in, and
+      // its roles from the durable `user_roles` store (OCP-5) — no `?role=` knob.
+      .route(buildLabRoutes(nodeContentStore(), verifyLabSession, rolesOf))
   );
 }

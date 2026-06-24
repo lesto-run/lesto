@@ -33,12 +33,18 @@ import { LISTINGS } from "./listings";
 export interface User {
   readonly id: string;
   readonly name: string;
+  /** The roles this user holds — the edge tier's in-memory `userId -> roles` (OCP-5). */
+  readonly roles: readonly string[];
 }
 
-/** The demo's users, by id. A real app looks these up in its database. */
+/**
+ * The demo's users, by id. A real app looks these up in its database — but the edge
+ * is a stateless, store-free tier (ADR 0013 §8), so unlike the node path's durable
+ * `user_roles` store, roles live in this in-memory map keyed by the same user id.
+ */
 const USERS = new Map<string, User>([
-  ["jade", { id: "jade", name: "Jade Mills" }],
-  ["guest", { id: "guest", name: "Guest Buyer" }],
+  ["jade", { id: "jade", name: "Jade Mills", roles: ["admin"] }],
+  ["guest", { id: "guest", name: "Guest Buyer", roles: ["viewer"] }],
 ]);
 
 // The session cookie name and serializers live in `@lesto/identity`'s cookie
@@ -198,13 +204,18 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Lest
     })
     // The /lab feature-demo zone, on the edge too (DB-driven content over D1).
     // The lab's admin gate + CRUD resolve their principal from the SAME signed
-    // session cookie the edge `/mls` sign-in mints — the user id IS the role key.
+    // session cookie the edge `/mls` sign-in mints — the user id IS the role key,
+    // and `rolesOf` reads the in-memory `USERS` map (the edge's store-free tier).
     .route(
-      buildLabRoutes(options.contentStore, (c) => {
-        const user = currentUser(c.header("cookie"));
+      buildLabRoutes(
+        options.contentStore,
+        (c) => {
+          const user = currentUser(c.header("cookie"));
 
-        return user === undefined ? undefined : { userId: user.id };
-      }),
+          return user === undefined ? undefined : { userId: user.id };
+        },
+        (actor) => USERS.get(actor)?.roles ?? [],
+      ),
     );
 
   // The matched-pair SERVER half (ADR 0008): the Worker passes the Preact

@@ -65,17 +65,6 @@ const policy = definePolicy({
 });
 const { can } = createGuard(policy);
 
-/**
- * The estate-local `userId -> roles` seam the principal resolver calls.
- *
- * ADR 0028 Phase 1 ships only this seam; the durable `user_roles` store lands in
- * OCP-5. Keyed by the two demo identities — Jade is the operator (admin), Guest a
- * read-only viewer — so a real signed-in session, not a query knob, decides what a
- * caller may do. An unknown user resolves to no roles: deny-by-default.
- */
-const rolesOf = (userId: string): readonly string[] =>
-  userId === "jade" ? ["admin"] : userId === "guest" ? ["viewer"] : [];
-
 /** The lab landing page: links to each demo + the live (CSR) listing island. */
 function LabIndex(): ReactNode {
   return (
@@ -522,24 +511,33 @@ export const labMutations = { saveListingNote };
 /** How the lab learns who is making a request — the session-verify half of the resolver. */
 type VerifySession = PrincipalResolverOptions["verifySession"];
 
+/** How the lab learns what a user may do — the `userId -> roles` half of the resolver. */
+type RolesOf = PrincipalResolverOptions["rolesOf"];
+
 /**
  * Build the `/lab` sub-app — mounted by both the Node app (`controllers.ts`) and
  * the Worker (`edge.ts`). `contentStore` is the DB-driven page's backend: the Node
  * SQLite store on the server, the D1 store on the edge, or `undefined` when no
  * store is configured (the content page then renders a "configure D1" view).
  *
- * `verifySession` is each runtime's session→`{ userId }` reader (node identity,
- * edge signed token); the lab pairs it with its local {@link rolesOf} into a
- * principal resolver that governs the admin page + CRUD. Omitted (an isolated
- * unit), every request resolves to no principal — deny-by-default.
+ * `verifySession` + `rolesOf` are each runtime's two resolver halves: who the caller
+ * is (node identity session / edge signed token) and what roles they hold (node's
+ * durable `user_roles` store / the edge's in-memory map, OCP-5). The lab pairs them
+ * into a principal resolver that governs the admin page + CRUD. Either omitted (an
+ * isolated unit), every request resolves to no principal / no roles — deny-by-default.
  */
-export function buildLabRoutes(contentStore?: ContentStore, verifySession?: VerifySession): Lesto {
+export function buildLabRoutes(
+  contentStore?: ContentStore,
+  verifySession?: VerifySession,
+  rolesOf?: RolesOf,
+): Lesto {
   // The resolver: turn the request's session into `{ actor, actorRoles }`, set the
   // "roles" var (for `can()`) + the principal (for `getPrincipal`/admin). With no
-  // `verifySession`, no session ever resolves, so every gate denies by default.
+  // `verifySession`/`rolesOf`, no session or no roles ever resolves — every gate
+  // denies by default.
   const resolvePrincipal = createPrincipalResolver({
     verifySession: verifySession ?? (() => undefined),
-    rolesOf,
+    rolesOf: rolesOf ?? (() => []),
   });
 
   // The flag- and authz-gated pages live in their own sub-routers so the gate
