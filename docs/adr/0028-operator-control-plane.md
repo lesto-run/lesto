@@ -105,10 +105,12 @@ Two integration points, kept on the right side of the existing layering:
    an **app-supplied** `rolesOf(userId: string)` — the plane provides the plumbing, not
    a roles datastore (see *the roles gap*). It writes the existing `"roles"` context
    var (the actor's roles), so every existing `can()` route guard keeps working
-   **unchanged** (`guard.ts:59-63`), and threads the resolved roles to admin (next).
-   Phase 1 does **not** add a second `subject`/`subjectRoles` context var or a
-   four-field `Principal` — `subject === actor` always until Phase 2, so that machinery
-   is deferred to the phase that first makes them diverge.
+   **unchanged** (`guard.ts:59-63`), and threads the resolved `{ actor, actorRoles }`
+   to admin via a single two-field `"principal"` context var (next) — the `"roles"`
+   var carries roles only, so the actor lives nowhere else on the context. Phase 1
+   does **not** add a second `subject`/`subjectRoles` context var or a four-field
+   `Principal` — `subject === actor` always until Phase 2, so that machinery is
+   deferred to the phase that first makes them diverge.
 
 2. **Per-`(resource, action)` gating (admin layer).** `AdminResource` gains an
    optional `permissions?: { read?; create?; update?; destroy? }`. `createAdmin`
@@ -246,6 +248,15 @@ the JWT against the configured issuer's JWKS + the expected audience) so the Res
 Server logic is thin, testable, and identical whether the issuer is an external IdP
 (first path) or the first-party AS (ADR 0029, later).
 
+**Default wiring is specified in ADR 0039** (the batteries capstone): the default
+`verifyAccessToken` implementation lives **here, in the RS package (`@lesto/mcp-http`),
+config-parameterized by issuer + JWKS URL** (external-IdP `alg` allow-list vs in-house
+ES256 — never `none`/HMAC-confusion), the canonical MCP-server URI is auto-registered as
+the only allow-listed `resource`/`aud`, and `lesto add mcp-auth` (CLI codegen) scaffolds
+the mount + consent/login views. ADR 0039 commits the **external-IdP** path now and makes
+the in-house AS contingent; it also owns the **single end-to-end security review** for the
+whole MCP-auth flow.
+
 Two honest caveats the panel surfaced:
 - **Scopes are *not* equivalent to permissions, but they *are* an enforced ceiling.**
   `policy.allows` resolves wildcard (`"*"`, `"posts:*"`) and inherited grants
@@ -298,7 +309,9 @@ Two honest caveats the panel surfaced:
   tamper-evidence explicitly *not* claimed; the impersonation ceiling corrected to
   "read-only is the real guardrail" + a new `grantsFor`/`subsumes` accessor; the
   `kernel → mcp` **cycle** flagged (app mounts the transport); Phase 1 trimmed to
-  actor-only (no premature `subject`/`subjectRoles`/`principal` var or audit field);
+  actor-only (no premature `subject`/`subjectRoles` var, four-field `Principal`, or
+  audit field — the two-field `{ actor, actorRoles }` `"principal"` carrier stays: it
+  is the only thread for the actor to admin);
   the `mode` flag **retired** onto one policy gate; the existing `handle_request`
   passthrough hole **brought into scope**; `userId` pinned to `string`. The
   dual-principal *model* and the Phase 1 per-verb binding survived as already-minimal.

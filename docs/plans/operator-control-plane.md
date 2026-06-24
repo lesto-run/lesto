@@ -31,8 +31,11 @@ grep-asserted: `@lesto/admin` gains **no** `@lesto/web` import (type-only authz)
    (injected `verifySession`, so authz keeps no `@lesto/auth` dep), resolves
    `actor = session.userId` (a **`string`** — `auth/types.ts:15`), computes
    `actorRoles = rolesOf(actor)`, sets the existing `"roles"` context var (so every
-   `can()` guard keeps working, `guard.ts:59-63`), and exposes the resolved roles for
-   admin to consume. No second context var.
+   `can()` guard keeps working, `guard.ts:59-63`), and exposes the resolved actor +
+   roles to admin via a two-field `{ actor, actorRoles }` `"principal"` context var
+   (`getPrincipal(c)`) — the `"roles"` var carries roles only, so the *actor* lives
+   nowhere else on the context. No second **subject** context var: the
+   `subject`/`subjectRoles` impersonation split is Phase 2, not this carrier.
    Acceptance: unauthenticated → empty roles → deny-by-default holds; `rolesOf`
    injected; `userId` typed `string` end-to-end; existing guard tests unchanged; 100%.
 
