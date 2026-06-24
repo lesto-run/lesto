@@ -466,4 +466,31 @@ describe("bin e2e", () => {
       await rm(project, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("build: rejects a path-unsafe site name from a hand-built lesto.sites.ts (live-path validation)", async () => {
+    // The site-name guard lives in `defineSites`, but a project can `export default [...]`
+    // a hand-built `Site[]` that skips it (as `examples/tailwind` does). `loadSites` runs
+    // the raw export through `defineSites`, so name validation is enforced on the live
+    // build path: a `../../`-shaped name — which would re-root `cleanDir` / the build-hook
+    // sink OUTSIDE the output tree — fails the build loudly instead of writing or deleting
+    // outside `out/`. (Coverage-excluded `loadSites`; this e2e is the sole guard on the wiring.)
+    const project = await mkdtempInRepo("sites-name-");
+
+    try {
+      await cp(fixtureDir, project, { recursive: true });
+      await writeFile(
+        join(project, "lesto.sites.ts"),
+        'import type { Site } from "@lesto/sites";\n' +
+          'const sites: Site[] = [{ name: "../../x", render: "static", basePath: "/", pages: ["/"] }];\n' +
+          "export default sites;\n",
+      );
+
+      const result = await runBinIn(project, ["build", "--out", "out"]);
+
+      expect(result.code).not.toBe(0);
+      expect(`${result.stdout}${result.stderr}`).toContain("../../x");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

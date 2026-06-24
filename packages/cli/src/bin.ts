@@ -22,7 +22,7 @@ import type { TraceSeams } from "@lesto/observability";
 
 import type { EngineConfig, RuntimeEntry } from "@lesto/content-core";
 
-import { nodeSink } from "@lesto/sites";
+import { defineSites, nodeSink } from "@lesto/sites";
 import type { Site } from "@lesto/sites";
 
 import { nodeReleaseStore, nodeUploader, remoteReleaseStore } from "@lesto/deploy";
@@ -657,13 +657,20 @@ const deleteEntry: CliDeps["deleteEntry"] = async (db, collection, id) =>
 // scaffold boots before its author writes a sites file — blocker #9). Any OTHER
 // import error (a syntax error in an existing file) is rethrown, so a real bug in
 // the sites file is not silently swallowed as "no sites".
+//
+// The raw default export is run through `defineSites` HERE — not just trusted — so
+// the name/basePath invariants are enforced on the live load path, the chokepoint
+// every consumer (build, serve, deploy) reads from. A hand-built `Site[]` that
+// skips `defineSites` in the config (e.g. `export default [...]`) is still
+// validated, so a `../../`-shaped name can never reach `cleanDir`/the build-hook
+// sink, which root a path AT `out/<name>` (defense-in-depth, ADR 0038 review).
 const SITES_PATH = join(process.cwd(), "lesto.sites.ts");
 
 const loadSites = async (): Promise<readonly Site[]> => {
   try {
     const module = (await import(SITES_PATH)) as { default: readonly Site[] };
 
-    return module.default;
+    return defineSites(module.default);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
       // Distinguish "the sites file is absent" from "a module it imports is
