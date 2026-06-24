@@ -111,8 +111,10 @@ export function realisticBody(count = REALISTIC_PRODUCTS) {
  * Simulate one uncached database round-trip for the realistic page: a 1–5 ms async
  * wait, drawn per call. Defined here so EVERY app shares the identical latency model
  * (fairness), and awaited PER REQUEST (never memoised) to mirror a personalized page
- * that can't be cached. The per-request jitter averages out across a load run, so it
- * doesn't inflate the trial-to-trial CV the driver's stability gate watches.
+ * that can't be cached. Note it's the per-request LATENCY that jitters, not the
+ * metric the stability gate watches: each load trial aggregates many thousands of
+ * requests, so the jitter averages out WITHIN a trial and the trial-to-trial
+ * THROUGHPUT (req/s) — what the driver's CV gate measures — stays stable.
  */
 export function simulateDbLatency() {
   const ms = 1 + Math.floor(Math.random() * 5); // 1..5 ms

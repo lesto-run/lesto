@@ -1,10 +1,17 @@
 /**
  * Tests for the workload contract that CAN run without a socket — the realistic
  * catalog page in particular. The full real-server suite (driver/run.ts) is
- * CI/local-only, but the contract's byte-stability is the thing the parity check
- * depends on, so it's pinned here. We also dispatch the realistic route through the
- * REAL Lesto pipeline in-process (no port) to prove the highest-value app actually
- * serves the contract bytes — the same in-process dispatch the compare suite uses.
+ * CI/local-only, but the contract's byte-stability is what the parity check depends
+ * on, so it's pinned here.
+ *
+ * Coverage, stated honestly: this verifies (1) the PURE contract — `realisticBody()`
+ * is deterministic and well-formed — and (2) that the LESTO app serves those bytes
+ * through its real pipeline in-process (the same dispatch the compare suite uses;
+ * Lesto is the one app that boots without a socket here, via `buildBenchApp`). The
+ * four competitor apps (hono/fastify/express/elysia) start a LISTENING server, so
+ * their `/realistic` parity is NOT unit-tested here — by design it's enforced by the
+ * driver's `verifyParity` (body + Content-Type + Content-Encoding) against each live
+ * server before a single number is recorded.
  */
 
 import { describe, expect, test } from "bun:test";
