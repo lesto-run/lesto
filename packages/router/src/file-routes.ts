@@ -432,10 +432,11 @@ function assertCatchAllTerminal(urlSegments: ReadonlyArray<string>, pattern: str
  * chain by). A `middleware` whose directory prefixes no page is therefore referenced
  * by no page's `middlewareDepth`, so the applier never runs it. For a layout or a
  * boundary that is merely dead weight; for a `middleware` — typically an AUTH guard —
- * it is a fail-OPEN hole: a one-character typo (`middlware.ts`, or a file placed a
- * level too deep) ships a guard that quietly protects nothing. We surface it as a
- * coded `ROUTER_FILE_ORPHAN_MIDDLEWARE` at compile time (the same loud-build-time
- * refusal every other file-route mistake gets), naming the directory to fix.
+ * it is a fail-OPEN hole: a `middleware.ts` placed where no page sits below it — a
+ * wrong/typo'd directory, or a file one level too deep — ships a guard that quietly
+ * protects nothing. We surface it as a coded `ROUTER_FILE_ORPHAN_MIDDLEWARE` at compile
+ * time (the same loud-build-time refusal every other file-route mistake gets), naming
+ * the directory to fix.
  *
  * "At or below" is the prefix test: a page wraps in a middleware iff the page's raw
  * segments start with the middleware's raw segments — directory keys compared by

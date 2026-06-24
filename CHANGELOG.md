@@ -11,18 +11,20 @@ may include breaking changes.
 
 ### Security
 
-- **web:** a page's `.data()` / island endpoints (`/__lesto/data/*`) no longer
-  silently bypass file-route guards. `.data(source, loader, guards)` now accepts the
-  same `middleware.ts` guard chain `.page()` takes, so a `scope: "private"` source an
-  island fetches can enforce the guard that protects its page — previously the per-user
-  data most worth protecting rode a separate, unguarded route.
+- **web:** a page's `.data()` / island endpoints (`/__lesto/data/*`) can now enforce
+  the page's file-route guards. `.data(source, loader, guards)` accepts the same
+  `middleware.ts` guard chain `.page()` takes, so an author can gate the
+  `/__lesto/data/*` route that an island's `scope: "private"` source rides — which
+  otherwise had no way to share the page's guard. (Opt-in: the guards are passed
+  explicitly; data routes are not auto-guarded by the file-route applier.)
 - **router:** an orphan `middleware.ts` — one with no page at or below its directory
   (a typo'd filename or a misplaced file) — now throws `ROUTER_FILE_ORPHAN_MIDDLEWARE`
   at compile time instead of silently never running. A guard that silently doesn't run
   is a fail-open auth hole.
-- **content-markdown:** the Markdown fallback render path (used when the md4w WASM
-  renderer fails to initialize) now applies the same HTML sanitization as the primary
-  path, so author HTML can never render unsanitized on either path.
+- **content-markdown:** the unified Markdown render path (the md4w WASM fallback, and
+  the primary path when remark plugins are configured) now applies the same HTML
+  sanitization the hybrid path does, so author HTML can never render unsanitized on
+  either path.
 - **sites:** `defineSites` now validates each site `name` against `^[a-z0-9_-]+$`,
   rejecting path-traversal-shaped names as defense-in-depth on the static-build
   output paths.

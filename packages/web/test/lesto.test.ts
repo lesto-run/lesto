@@ -533,8 +533,10 @@ describe("lesto().data() — island data sources (ADR 0010)", () => {
     // only the page document GET, but an island's `scope: "private"` source rides a
     // SEPARATE `/__lesto/data/<name>` route that never sees the file-route guard — so
     // the data most worth protecting fetches over the LEAST-protected route. The fix:
-    // `.data()` takes the SAME guard chain (the file-route applier prepends the page's
-    // composed `middlewareDepth`), so the data route is gated identically.
+    // `.data()` accepts the SAME guard chain `.page()` does — wired by hand here, the
+    // identical guard the page carries — so the data route is gated identically. (The
+    // file-route applier does NOT auto-propagate a page's guards to its `.data()`
+    // sources; an author passes them, as below.)
     let loaderRan = false;
 
     const app = lesto()
