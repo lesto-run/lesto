@@ -356,10 +356,17 @@ export class Lesto {
     // token (the type requires it, but a cast can omit it), so anything that is
     // not the explicit opt-out requires guards — the secure reading.
     if (source.scope !== "shared" && source.access !== "request-scoped" && guards.length === 0) {
+      const name = source.name;
+
       throw new WebError(
         "WEB_PRIVATE_DATA_UNGUARDED",
-        `data source "${source.name}" is scope:"private" but registered with no guards — its ${dataSourceHref(source.name)} route would serve per-user data over a route no page middleware.ts reaches. Pass the page's guard chain as the third argument of .data(), or declare access:"request-scoped" on the source if its loader reads only the caller's own request.`,
-        { source: source.name },
+        // Teach the fix, don't just refuse: name the source + route + risk, point at
+        // the ADR, and give BOTH remedies as copy-pasteable code with this source's
+        // own name filled in. The dev should be able to act without leaving the error.
+        `data source "${name}" is scope:"private" but .data() received no guards — its ${dataSourceHref(name)} route would serve per-user data over a route a page's middleware.ts never reaches (ADR 0010 §5a). Close it one of two ways:\n` +
+          `  1. pass the page's guard chain as the 3rd argument — .data(source, loader, [yourGuard]); or\n` +
+          `  2. if the loader reads ONLY the caller's own request (e.g. a "who am I" session), declare the source safe — defineDataSource("${name}", { access: "request-scoped" }).`,
+        { source: name },
       );
     }
 

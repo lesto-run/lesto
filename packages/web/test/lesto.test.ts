@@ -587,6 +587,14 @@ describe("lesto().data() — island data sources (ADR 0010)", () => {
         expect(error).toBeInstanceOf(WebError);
         expect((error as WebError).code).toBe("WEB_PRIVATE_DATA_UNGUARDED");
         expect((error as WebError).details).toEqual({ source: "billing" });
+
+        // The message must TEACH the fix, not just refuse: name the source + route,
+        // and offer BOTH remedies as copy-pasteable code with this source's own name.
+        const message = (error as WebError).message;
+        expect(message).toContain('"billing"'); // names the offending source
+        expect(message).toContain("/__lesto/data/billing"); // names the leaking route
+        expect(message).toContain(".data(source, loader, [yourGuard])"); // remedy 1, pasteable
+        expect(message).toContain('defineDataSource("billing", { access: "request-scoped" })'); // remedy 2, pasteable
       }
 
       // It fails CLOSED at registration — the loader never even gets a chance to run.
