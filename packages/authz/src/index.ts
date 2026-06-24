@@ -48,5 +48,8 @@ export type { Policy, PolicyConfig } from "./policy";
 export { AUTHZ_DENIED_KIND, createGuard } from "./guard";
 export type { Guard, GuardOptions } from "./guard";
 
+export { createPrincipalResolver, getPrincipal } from "./principal";
+export type { Principal, PrincipalResolverOptions, PrincipalSession } from "./principal";
+
 export { AuthzError, LestoError } from "./errors";
 export type { AuthzErrorCode } from "./errors";
