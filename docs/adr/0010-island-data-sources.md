@@ -91,6 +91,17 @@ The **default is the parallel primer**, not edge prop-injection. The skeptic pro
 - **Fail open to anonymous:** a malformed/forged cookie resolves to the source's anonymous value, never an error or another identity.
 - Precondition for Phase 2: estate's `POST /mls/api/sign-in?as=<id>` mints a signed session for any id with no credential check — that hole must be closed before any cookie-gated personalization ships on top of it.
 
+### 5a. A `private` source is guarded by default — the auto-route bypass is closed at registration (2026-06-24)
+
+A `.data()` source registers as its OWN route `GET /__lesto/data/<name>`, separate from any page. A page's file-route `middleware.ts` guard composes only into the page document's GET chain — it never reaches the data route. So an island binding a `scope: "private"` source on a guarded page would fetch the per-user data (the data most worth protecting) over the *least*-protected route: a developer writes an auth `middleware.ts`, believes the page is locked down, and ships a data leak. Auto-propagation was considered and rejected — islands bind sources by NAME at render time, so there is no static page→source map to propagate a page's `middlewareDepth` from, and the framework cannot distinguish a request-scoped loader (returns only the caller's own data) from one that needs an auth guard.
+
+The rule, therefore: **`lesto().data(source, loader)` refuses a `scope: "private"` source registered with no guards** — a coded `WEB_PRIVATE_DATA_UNGUARDED` thrown at registration, before any request, so the dangerous fail-open configuration is unrepresentable by omission (the same posture §3a takes on the cache header). Two ways to satisfy it, each a visible decision rather than a silent default:
+
+- **pass a guard chain** — `.data(source, loader, guards)` takes the same `Handler` chain `.page()` does; pass the page's `middleware.ts` guard(s) so the data route enforces the identical gate; or
+- **declare the source request-scoped** — `defineDataSource(name, { access: "request-scoped" })` is the explicit opt-out asserting the loader derives its result solely from the caller's own request (cookie/session/params), so an unguarded route leaks nothing across users — the canonical "who am I" session source.
+
+App-level `.use()` middleware does NOT exempt the source: it is global, ordering-dependent, and may not be a guard at all, so it cannot stand in for the explicit per-source decision. A `scope: "shared"` source is publicly cacheable by construction (§3a) and is never guarded on these grounds. This is a breaking change (pre-1.0 minor); it closes the red-team review's highest-priority finding.
+
 ## Consequences
 
 - **Extends, never replaces.** `island()` + static props are untouched; `data` is an optional field on `ClientComponentDef`; the manifest gains an optional `bind` field, absent unless used — the same byte-for-byte-stable rule ADR 0009 applied to `strategy`, so every existing manifest, serialized payload, and shape-pinning test reads unchanged.
