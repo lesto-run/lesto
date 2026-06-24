@@ -90,7 +90,13 @@ export type LestoDepResolver = (pkg: (typeof LESTO_PACKAGES)[number]) => string;
  * An input that sanitizes to empty (e.g. `"__"`) falls back to the default name.
  */
 export function toPackageName(name: string): string {
-  const lowered = name.toLowerCase().replace(/^[._]+/, "");
+  // Lowercase, drop any char outside npm's allowed set, then strip a leading `.`/`_`.
+  // (The `create` flow pre-restricts the name to `[A-Za-z0-9._-]`, but this helper is
+  // exported and may be called directly, so it stays valid for any input.)
+  const lowered = name
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "")
+    .replace(/^[._]+/, "");
 
   return lowered.length > 0 ? lowered : "lesto-app";
 }

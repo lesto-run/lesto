@@ -564,6 +564,9 @@ describe("templates", () => {
     // A leading dot/underscore is illegal in an npm name — stripped.
     expect(toPackageName("_private")).toBe("private");
     expect(toPackageName(".hidden")).toBe("hidden");
+    // Chars outside npm's allowed set are dropped (the helper is exported, so it
+    // stays valid even for a caller that skipped the `create` flow's name check).
+    expect(toPackageName("My App!")).toBe("myapp");
     // A name that sanitizes to empty (all leading dots/underscores) falls back.
     expect(toPackageName("__")).toBe("lesto-app");
   });
