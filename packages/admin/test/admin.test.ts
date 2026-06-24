@@ -12,11 +12,18 @@ import {
   type SqlDatabase,
 } from "@lesto/db";
 
-import { definePolicy } from "@lesto/authz";
+import { definePolicy } from "@lesto/authz/policy";
 
 import { AdminError, createAdmin } from "../src/index";
 
-import type { Admin, AdminErrorCode, AdminResource, AuditEvent } from "../src/index";
+import type {
+  Admin,
+  AdminErrorCode,
+  AdminOptions,
+  AdminPolicy,
+  AdminResource,
+  AuditEvent,
+} from "../src/index";
 
 // The loud opt-out: the existing behavioral suite is authorization-agnostic, so it
 // runs ungoverned. The `describe("governance")` block at the bottom exercises a real
@@ -627,6 +634,26 @@ describe("createAdmin", () => {
       await open.create("posts", { title: "Free", body: "b" });
       expect(await open.list("posts")).toHaveLength(1);
       await expect(open.destroy("posts", 1)).resolves.toBeUndefined();
+    });
+
+    it("refuses { ungoverned: false } loudly — a falsy opt-out must NOT silently fail open", async () => {
+      // The discriminator keys on VALUE, not presence: `{ ungoverned: false }` reads
+      // as "governance on" to a human, so it must be refused, never treated as opt-out.
+      // (A JS caller / dynamically-built options bag is the realistic source — hence the cast.)
+      await expectCode(
+        () =>
+          createAdmin(db, [governedResource], {
+            policy: { ungoverned: false } as unknown as AdminPolicy,
+          }),
+        "ADMIN_INVALID_POLICY",
+      );
+    });
+
+    it("refuses an absent policy at construction (a JS caller bypassing the required type)", async () => {
+      await expectCode(
+        () => createAdmin(db, [postsResource], {} as unknown as AdminOptions),
+        "ADMIN_INVALID_POLICY",
+      );
     });
   });
 });

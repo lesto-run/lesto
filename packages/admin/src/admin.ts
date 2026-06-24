@@ -41,7 +41,7 @@
 
 import { DbError, eq } from "@lesto/db";
 import type { Column, ColumnSpec, Db, Table } from "@lesto/db";
-import type { Policy } from "@lesto/authz";
+import type { Policy } from "@lesto/authz/policy";
 import type { ZodType } from "zod";
 
 import { AdminError } from "./errors";
@@ -293,6 +293,30 @@ function validate<T>(resourceName: string, schema: ZodType<T>, attributes: unkno
   return parsed.data;
 }
 
+/**
+ * Resolve `options.policy` to the gate, discriminating by VALUE — never key
+ * presence. A real {@link Policy} (identified by a callable `allows`) governs; the
+ * ONLY non-policy accepted is the explicit `{ ungoverned: true }`, which disables
+ * gating. Anything else — `{ ungoverned: false }`, `{}`, a `policy` a JS caller
+ * omitted past the required type — is a misconfiguration refused loudly with
+ * `ADMIN_INVALID_POLICY`. A falsy/absent value must never read as "governance on"
+ * while silently disabling it: that is the one fail-open this layer must not have.
+ */
+function resolvePolicyGate(policy: AdminPolicy): Policy<string, string> | undefined {
+  if (policy != null && typeof (policy as Policy<string, string>).allows === "function") {
+    return policy as Policy<string, string>;
+  }
+
+  if (policy != null && (policy as { ungoverned?: unknown }).ungoverned === true) {
+    return undefined;
+  }
+
+  throw new AdminError(
+    "ADMIN_INVALID_POLICY",
+    "createAdmin requires options.policy to be a @lesto/authz Policy or { ungoverned: true }.",
+  );
+}
+
 export function createAdmin(
   db: Db,
   resources: readonly AdminResource[],
@@ -300,12 +324,10 @@ export function createAdmin(
 ): Admin {
   const { onMutation, policy } = options;
 
-  // Governed unless the caller named the loud opt-out. `governedPolicy` is the
-  // single gate source: `undefined` ⇒ ungoverned (no checks, legacy behavior);
-  // otherwise every verb is authorized against it. There is no third "no policy"
-  // state — `options.policy` is required — so the admin can never be silently open.
-  const governedPolicy: Policy<string, string> | undefined =
-    "ungoverned" in policy ? undefined : policy;
+  // The gate, resolved by VALUE (see `resolvePolicyGate`): `undefined` ⇒ ungoverned
+  // (no checks), a Policy ⇒ every verb authorized against it. A malformed or absent
+  // policy is refused at construction, so the admin is never *silently* fail-open.
+  const governedPolicy = resolvePolicyGate(policy);
 
   // Resolve every resource's primary-key column up front. A missing PK fails
   // *now*, not on the first request — startup-time errors are cheaper to fix.

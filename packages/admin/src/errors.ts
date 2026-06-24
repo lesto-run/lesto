@@ -15,7 +15,8 @@ export type AdminErrorCode =
   | "ADMIN_NO_PRIMARY_KEY"
   | "ADMIN_VALIDATION_FAILED"
   | "ADMIN_EMPTY_UPDATE"
-  | "ADMIN_FORBIDDEN";
+  | "ADMIN_FORBIDDEN"
+  | "ADMIN_INVALID_POLICY";
 
 /** Anything the admin layer can refuse to do. */
 export class AdminError extends LestoError<AdminErrorCode> {

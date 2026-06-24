@@ -3,12 +3,7 @@
 
   "compilerOptions": {
     "rootDir": ".",
-    "types": ["node"],
-
-    // The type-only `@lesto/authz` dep (for `Policy`) re-exports its `@lesto/web`
-    // middleware, whose types point at .tsx, so the JSX flag must be set even though
-    // this package authors no JSX itself — mirrors @lesto/authz's own tsconfig.
-    "jsx": "react-jsx"
+    "types": ["node"]
   },
 
   "include": ["src", "test"]
