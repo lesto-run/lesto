@@ -49,6 +49,35 @@ function section(heading: string, items: readonly string[]): string {
 }
 
 /**
+ * The Routes section body. A bare `_None._` is wrong for a content-driven app (like
+ * the docs site) that registers its pages PROGRAMMATICALLY from content collections
+ * rather than the file-based `app/routes/` convention the scan reads — it serves
+ * dozens of pages, but the file scan finds nothing. So when there are no file-based
+ * routes BUT the app declares content collections, replace the misleading "None"
+ * with an honest note that names the routing model and points at the Content
+ * collections section (where those pages are listed). We do NOT fabricate URL
+ * patterns: the page URLs live in the app's own page-registration code (not cleanly
+ * exposed by the content config), so surfacing them would be a guess — the note
+ * states the model accurately instead. With file-based routes present, the section
+ * lists them as before.
+ */
+function routesBody(artifacts: AgentArtifacts): string {
+  if (artifacts.routes.length > 0) {
+    return artifacts.routes.map(routeLine).join("\n");
+  }
+
+  if (artifacts.collections.length > 0) {
+    return (
+      "_No file-based routes (`app/routes/`). This app registers its pages " +
+      "programmatically from its content collections — see the Content collections " +
+      "section below._"
+    );
+  }
+
+  return "_None._";
+}
+
+/**
  * Render the `AGENTS.md` managed-region content (the inner block, no markers) from
  * the scanned conventions. Deterministic and byte-stable for a given
  * {@link AgentArtifacts}.
@@ -64,7 +93,7 @@ export function renderAgentsMd(artifacts: AgentArtifacts): string {
     "",
     `**Stack:** ${stack}`,
     "",
-    section("Routes", artifacts.routes.map(routeLine)),
+    `## Routes\n\n${routesBody(artifacts)}`,
     "",
     section(
       "Islands",

@@ -90,6 +90,28 @@ describe("renderAgentsMd", () => {
     expect(out).toContain("## CLI commands\n\n_None._");
   });
 
+  test("renders the programmatic-routing note when there are no file routes but collections exist", () => {
+    // A content-driven app (the docs site): no `app/routes/` files, but it registers
+    // its pages programmatically from a content collection. A bare "_None._" would be
+    // misleading — the app serves a page per entry — so the Routes section explains the
+    // routing model and points at the collections, without fabricating URL patterns.
+    const out = renderAgentsMd(
+      scanConventions({
+        summary: { framework: "lesto" },
+        routes: [],
+        islands: [],
+        collections: [{ name: "docs", entryCount: 40 }],
+        commands: [],
+      }),
+    );
+
+    expect(out).toContain("## Routes\n\n_No file-based routes");
+    expect(out).toContain("registers its pages programmatically from its content collections");
+    expect(out).toContain("see the Content collections section below");
+    // The honest note REPLACES the misleading "None" in the Routes section.
+    expect(out).not.toContain("## Routes\n\n_None._");
+  });
+
   test("renders multiple aliases as a comma-separated list", () => {
     const out = renderAgentsMd(
       scanConventions({
