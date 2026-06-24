@@ -127,10 +127,15 @@ throwaway**, deleted at Phase 2. We do not silently keep two bundlers.
 ## Open decisions for the owner (before code)
 
 1. **Phase-1 dev/prod bundler mismatch — accept or avoid?** Phase 1 alone means Vite
-   in dev, Bun in prod (a real, if bounded, parity risk — same class Astro/Next lived
-   with historically). The alternative is doing Phase 1+2 together (one bundler, bigger
-   increment). **Recommendation: accept the mismatch for one increment**, gated on a
-   build-vs-dev parity smoke test, then close it in Phase 2 promptly.
+   in dev, Bun in prod — a real parity hazard (chunking, splitting, `define` inlining,
+   and "compiles in dev, breaks built" can all diverge). Note this is NOT the industry
+   norm to be sanguine about: Astro runs Vite in **both** dev and prod, and Next uses
+   one toolchain end-to-end — neither carries this split. The alternative is doing
+   Phase 1+2 together (one bundler in dev AND prod; a bigger but mismatch-free
+   increment). **Recommendation: prefer Phase 1+2 together** so dev and prod share one
+   bundler from the start; fall back to Phase-1-only (Vite dev, Bun prod) ONLY if the
+   combined increment proves too large, and then gate it on a build-vs-dev parity smoke
+   test and close the gap in Phase 2 immediately.
 2. **Dialect (ADR 0008).** Fast Refresh differs by matched pair: `@vitejs/plugin-react`
    for `react`, `@prefresh/vite` for `preact`. The dev plugin must be selected from the
    same single `ui.dialect` key that picks the client alias + server renderer — the
@@ -152,7 +157,10 @@ throwaway**, deleted at Phase 2. We do not silently keep two bundlers.
 
 ## Next step
 
-This doc unblocks the **build task**. Recommend filing Phase 1 as its own Studio task
-(blocked-by this design), scoped to: Vite middleware dev server for islands + Fast
-Refresh behind the existing seams + page-reload → partial-swap, with `lesto build`
-left on `Bun.build`. Phases 2–3 are follow-on tasks under the Bet III epic.
+This doc unblocks the **build task**. Recommend filing it as its own Studio task
+(blocked-by this design), scoped — per open decision 1 — to **Phases 1+2 together**:
+Vite/Rolldown as the island bundler in BOTH dev (middleware server + Fast Refresh
+behind the existing seams) and prod (`lesto build`), plus page-reload → partial-swap,
+keeping the edge Worker static-import map untouched. Drop to Phase-1-only (Vite dev,
+Bun prod) only if that combined increment proves too large. Phase 3 (Environments /
+`ModuleRunner`, retiring `dispatchSitesDev`) is a follow-on task under the Bet III epic.
