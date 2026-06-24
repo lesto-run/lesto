@@ -131,7 +131,14 @@ surface is reconsidered. This gate is the true meeting point with ADR 0028 Phase
 - **Discovery + clients:** RFC 8414 AS metadata (`/.well-known/oauth-authorization-server`)
   and RFC 9207 `iss` on the authorization response. Client registration via **one**
   mechanism for the first cut — **pre-registration** (or Client ID Metadata Documents);
-  dynamic registration (RFC 7591) stays out (deprecated).
+  dynamic registration (RFC 7591) stays out for a *closed* first client.
+  **Amended by ADR 0039 for the MCP Resource-Server consumer:** pre-registration is
+  insufficient for the open MCP client ecosystem (arbitrary agents arrive unknown), so
+  **CIMD-preferred with a DCR (RFC 7591) compatibility path** is in-scope when this AS
+  serves MCP — DCR is *retained for backward compat / de-emphasized* by the current MCP
+  spec, **not** formally deprecated. Its open-redirect / SSRF-on-`redirect_uri` /
+  registration-spam surface is covered by ADR 0039's single end-to-end security review,
+  which this AS's gate owns.
 - **Scope is an enforced ceiling, not the decision and not display-only (carried from
   ADR 0028).** Scopes are coarse (e.g. `mcp:admin`). The RS decision is the
   **intersection** `scope-permits(action) AND policy.allows(rolesOf(sub), action)`:
