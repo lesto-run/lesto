@@ -9,7 +9,7 @@
 - `search`
 
 ## Content collections
-- `docs` (38 entries)
+- `docs` (40 entries)
 
 ## CLI commands
 - `lesto build`: Prerender the static sites to disk

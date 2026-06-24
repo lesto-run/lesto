@@ -18,7 +18,7 @@ _None._
 
 ## Content collections
 
-- `docs` — 38 entries
+- `docs` — 40 entries
 
 ## CLI commands
 
