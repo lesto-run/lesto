@@ -49,8 +49,14 @@ export interface BenchEnv {
   readonly generatorVersion: string | null;
   /** Resolved version per framework that ran (lesto* → the git SHA). */
   readonly frameworkVersions: Readonly<Record<string, string>>;
-  /** CPU scaling governor (Linux), or null on non-Linux / unreadable. */
+  /** CPU scaling governor of cpu0 (Linux), or null on non-Linux / unreadable. */
   readonly governor: string | null;
+  /**
+   * Whether EVERY readable core shares cpu0's governor. False = a mixed set (some
+   * core throttled) → the run is not publication-grade even if cpu0 reads
+   * "performance". Null on non-Linux / no readable cores.
+   */
+  readonly governorUniform: boolean | null;
   /** Whether turbo/boost is disabled (Linux): true/false, or null if unknown. */
   readonly turboDisabled: boolean | null;
   /** The core set the server was pinned to via taskset, or null if unpinned. */
@@ -60,13 +66,15 @@ export interface BenchEnv {
 }
 
 /**
- * Is this a publication-grade run? Only on Linux with the performance governor,
- * turbo disabled, and BOTH server and generator pinned to disjoint cores. Anything
- * less is indicative-only and must be flagged.
+ * Is this a publication-grade run? Only on Linux with the performance governor on
+ * EVERY core (not just cpu0), turbo disabled, and BOTH server and generator pinned to
+ * disjoint cores. Anything less — including a host where cpu0 is "performance" but a
+ * pinned core is throttled — is indicative-only and must be flagged.
  */
 export function isCanonical(env: BenchEnv): boolean {
   return (
     env.governor === "performance" &&
+    env.governorUniform === true &&
     env.turboDisabled === true &&
     env.serverCpus !== null &&
     env.genCpus !== null
@@ -118,7 +126,7 @@ export function renderProvenance(env: BenchEnv): string {
     `| Bun | ${fmt(env.bunVersion)} |`,
     `| Node | ${fmt(env.nodeVersion)} |`,
     `| generator | ${env.generator} ${fmt(env.generatorVersion)} |`,
-    `| governor | ${fmt(env.governor)}${env.governor !== null && env.governor !== "performance" ? " ⚠️" : ""} |`,
+    `| governor | ${fmt(env.governor)}${env.governorUniform === false ? " (mixed across cores)" : ""}${env.governor !== null && (env.governor !== "performance" || env.governorUniform === false) ? " ⚠️" : ""} |`,
     `| turbo/boost | ${turbo} |`,
     `| core pinning | ${pinning} |`,
     `| frameworks | ${frameworks || "—"} |`,
@@ -126,22 +134,50 @@ export function renderProvenance(env: BenchEnv): string {
   ].join("\n");
 }
 
-/** Read a `key` (single-line) out of a Linux `/sys` file, or null if unreadable. */
+/** The errno-ish `code` some Node rejections carry (ENOENT, EACCES, …) or an exit code. */
+function errCode(err: unknown): string | number | undefined {
+  return (err as { code?: string | number } | null)?.code;
+}
+
+/**
+ * Read a single-line value out of a Linux `/sys` file, or null if unreadable.
+ *
+ * `ENOENT` is the EXPECTED "this knob doesn't exist here" (non-Linux, no cpufreq,
+ * offline core) and stays quiet. Any OTHER failure — `EACCES` on a locked-down
+ * `/sys`, an I/O error — is a real fault that would otherwise masquerade as "knob
+ * absent" and silently downgrade a correctly-tuned host to non-canonical; surface it
+ * on stderr (one line) so the operator can see WHY a configured host reads "unknown".
+ */
 async function readSys(path: string): Promise<string | null> {
   try {
     return (await readFile(path, "utf8")).trim();
-  } catch {
+  } catch (err) {
+    if (errCode(err) !== "ENOENT") {
+      console.warn(`bench/env: could not read ${path}: ${errCode(err) ?? (err as Error).message}`);
+    }
+
     return null;
   }
 }
 
-/** Capture a command's trimmed stdout, or null if it fails (tool absent, non-zero). */
+/**
+ * Capture a command's trimmed stdout, or null on failure. `ENOENT` (the binary
+ * isn't installed) is the expected "tool absent" and stays quiet; any other failure
+ * — a non-zero exit, `EACCES`, `EAGAIN` — is surfaced on stderr so a real fault is
+ * distinguishable from a missing tool rather than both reading as "unknown".
+ */
 async function tryExec(cmd: string, args: readonly string[]): Promise<string | null> {
   try {
     const { stdout } = await run(cmd, args as string[]);
 
     return stdout.trim();
-  } catch {
+  } catch (err) {
+    if (errCode(err) !== "ENOENT") {
+      console.warn(
+        `bench/env: \`${cmd} ${args.join(" ")}\` failed: ${errCode(err) ?? (err as Error).message}`,
+      );
+    }
+
     return null;
   }
 }
@@ -172,31 +208,61 @@ async function generatorVersion(generator: string, benchmarksDir: string): Promi
 }
 
 /**
- * Read the Linux CPU governor + turbo state. Returns `{ null, null }` on non-Linux
- * or when the files aren't readable — the report then shows "unknown" and the run
- * is treated as non-canonical (the honest default).
+ * Read every logical core's CPU governor, in core order (cpu0 first). An offline
+ * core (no `cpufreq` dir) reads `ENOENT` → skipped quietly; the returned list is the
+ * readable cores only.
+ */
+async function readGovernors(coreCount: number): Promise<string[]> {
+  const governors: string[] = [];
+  for (let i = 0; i < coreCount; i += 1) {
+    // Sequential on purpose — tiny `/sys` reads, and it keeps cpu0 first as the rep.
+    // oxlint-disable-next-line no-await-in-loop -- ordered, cheap, bounded by core count
+    const g = await readSys(`/sys/devices/system/cpu/cpu${i}/cpufreq/scaling_governor`);
+    if (g !== null) {
+      governors.push(g);
+    }
+  }
+
+  return governors;
+}
+
+/**
+ * Read the Linux CPU governor + turbo state. Returns nulls on non-Linux or when the
+ * files aren't readable — the report then shows "unknown" and the run is treated as
+ * non-canonical (the honest default).
+ *
+ * The governor is read for EVERY core, not just cpu0: reading cpu0 alone is a trap —
+ * on a big.LITTLE or partially-tuned host cpu0 can be "performance" while the cores
+ * the run is actually pinned to (2,3,4,5) sit on "powersave", so a throttled run
+ * would falsely stamp as publication-grade. `governorUniform` is true only when every
+ * readable core agrees with cpu0; a mixed set fails the canonical gate.
  */
 async function readIsolation(): Promise<{
   governor: string | null;
+  governorUniform: boolean | null;
   turboDisabled: boolean | null;
 }> {
   if (platform() !== "linux") {
-    return { governor: null, turboDisabled: null };
+    return { governor: null, governorUniform: null, turboDisabled: null };
   }
 
-  const governor = await readSys("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
+  const governors = await readGovernors(cpus().length);
+  const governor = governors[0] ?? null;
+  // Uniform = at least one reading AND every readable core matches cpu0. No readable
+  // cores → null (unknown), which is not canonical either.
+  const governorUniform = governor === null ? null : governors.every((g) => g === governor);
 
   // Intel: intel_pstate/no_turbo (1 = turbo OFF). Generic acpi-cpufreq: cpufreq/boost (0 = OFF).
   const noTurbo = await readSys("/sys/devices/system/cpu/intel_pstate/no_turbo");
   if (noTurbo !== null) {
-    return { governor, turboDisabled: noTurbo === "1" };
+    return { governor, governorUniform, turboDisabled: noTurbo === "1" };
   }
   const boost = await readSys("/sys/devices/system/cpu/cpufreq/boost");
   if (boost !== null) {
-    return { governor, turboDisabled: boost === "0" };
+    return { governor, governorUniform, turboDisabled: boost === "0" };
   }
 
-  return { governor, turboDisabled: null };
+  return { governor, governorUniform, turboDisabled: null };
 }
 
 /** What the runner learns about the host before deciding whether a run is publication-grade. */
@@ -204,6 +270,8 @@ export interface HostReadiness {
   readonly linux: boolean;
   readonly cores: number;
   readonly governor: string | null;
+  /** Whether every readable core shares cpu0's governor (false = some core throttled). */
+  readonly governorUniform: boolean | null;
   readonly turboDisabled: boolean | null;
   readonly hasTaskset: boolean;
   /** Human-readable reasons the host is NOT canonical (empty = good to publish). */
@@ -220,7 +288,7 @@ export interface HostReadiness {
 export async function checkHostReadiness(): Promise<HostReadiness> {
   const linux = platform() === "linux";
   const cores = cpus().length;
-  const { governor, turboDisabled } = await readIsolation();
+  const { governor, governorUniform, turboDisabled } = await readIsolation();
   const hasTaskset = (await tryExec("taskset", ["--version"])) !== null;
 
   const issues: string[] = [];
@@ -229,6 +297,11 @@ export async function checkHostReadiness(): Promise<HostReadiness> {
   }
   if (linux && governor !== "performance") {
     issues.push(`CPU governor is ${governor ?? "unknown"}, not "performance"`);
+  }
+  // cpu0 can read "performance" while another (possibly pinned) core is throttled —
+  // require the governor to be uniform, not just cpu0's value.
+  if (linux && governor === "performance" && governorUniform !== true) {
+    issues.push('CPU governor is not "performance" on every core (a pinned core may be throttled)');
   }
   if (linux && turboDisabled !== true) {
     issues.push("turbo/boost is not confirmed disabled (clock drift adds noise)");
@@ -240,7 +313,7 @@ export async function checkHostReadiness(): Promise<HostReadiness> {
     issues.push(`only ${cores} cores — need ≥4 for separate server + generator core sets`);
   }
 
-  return { linux, cores, governor, turboDisabled, hasTaskset, issues };
+  return { linux, cores, governor, governorUniform, turboDisabled, hasTaskset, issues };
 }
 
 /** Inputs `collectEnv` needs from the run that just completed. */
@@ -289,6 +362,7 @@ export async function collectEnv(opts: CollectEnvOptions): Promise<BenchEnv> {
     generatorVersion: await generatorVersion(opts.generator, benchmarksDir),
     frameworkVersions,
     governor: isolation.governor,
+    governorUniform: isolation.governorUniform,
     turboDisabled: isolation.turboDisabled,
     serverCpus: opts.serverCpus,
     genCpus: opts.genCpus,

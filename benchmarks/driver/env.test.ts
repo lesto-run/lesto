@@ -16,6 +16,7 @@ const canonical: BenchEnv = {
   generatorVersion: "8.0.0",
   frameworkVersions: { lesto: "abc1234", hono: "4.12.27" },
   governor: "performance",
+  governorUniform: true,
   turboDisabled: true,
   serverCpus: "2,3",
   genCpus: "4,5",
@@ -28,6 +29,12 @@ describe("isCanonical", () => {
 
   test("false if the governor isn't performance", () => {
     expect(isCanonical({ ...canonical, governor: "powersave" })).toBe(false);
+  });
+
+  test("false if cpu0 is performance but the governor isn't uniform across cores", () => {
+    // The big.LITTLE trap: cpu0 reads "performance" while a pinned core is throttled.
+    expect(isCanonical({ ...canonical, governorUniform: false })).toBe(false);
+    expect(isCanonical({ ...canonical, governorUniform: null })).toBe(false);
   });
 
   test("false if turbo is on or unknown", () => {
@@ -77,6 +84,13 @@ describe("renderProvenance", () => {
 
     expect(md).toContain("powersave ⚠️");
     expect(md).toContain("ENABLED ⚠️");
+  });
+
+  test("a non-uniform governor is flagged even when cpu0 reads performance", () => {
+    const md = renderProvenance({ ...canonical, governorUniform: false });
+
+    expect(md).toContain("performance (mixed across cores) ⚠️");
+    expect(md).toContain("NON-CANONICAL HOST"); // the mixed governor breaks canonical
   });
 
   test("missing optional values render as 'unknown', not blanks", () => {

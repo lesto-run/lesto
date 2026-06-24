@@ -67,9 +67,13 @@ async function main(): Promise<void> {
   console.log(
     `  OS: ${host.linux ? "Linux" : "non-Linux"}  cores: ${host.cores}  taskset: ${host.hasTaskset ? "yes" : "no"}`,
   );
-  console.log(
-    `  governor: ${host.governor ?? "unknown"}  turbo-disabled: ${host.turboDisabled ?? "unknown"}`,
-  );
+  const governorLabel =
+    host.governor === null
+      ? "unknown"
+      : host.governorUniform === false
+        ? `${host.governor} (mixed across cores)`
+        : host.governor;
+  console.log(`  governor: ${governorLabel}  turbo-disabled: ${host.turboDisabled ?? "unknown"}`);
   if (host.issues.length === 0) {
     console.log("  ✓ canonical host — publication-grade conditions met.");
   } else {
