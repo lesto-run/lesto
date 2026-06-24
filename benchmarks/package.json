@@ -1,0 +1,23 @@
+{
+  "name": "lesto-benchmarks",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cross-framework benchmarks for Lesto: in-process render/router/dispatch comparisons (run anywhere) + a real-server HTTP load harness driven against pinned competitor apps (run in CI / locally). NOT an @lesto/* package, so it stays out of the publish + 100%-coverage gates. @lesto/* + react/preact resolve from the repo root; the competitor libs below install into an isolated benchmarks/node_modules (no impact on the root bun.lock).",
+  "type": "module",
+  "scripts": {
+    "compare": "bun run compare/run.ts",
+    "compare:test": "bun test compare",
+    "driver:test": "bun test driver",
+    "test": "bun test compare driver"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "elysia": "^1.2.0",
+    "fastify": "^5.2.0",
+    "find-my-way": "^9.1.0",
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "autocannon": "^8.0.0"
+  }
+}

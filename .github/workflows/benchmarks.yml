@@ -1,0 +1,94 @@
+# Cross-framework benchmarks (see benchmarks/README.md).
+#
+# Manual + scheduled, never a blocking PR gate: these numbers are volatile and
+# machine-specific (a shared CI runner is the noisiest possible box), so they are
+# a signal to read, not a wall to fail builds on. The in-process comparison and
+# the real-server load test run as separate jobs; both upload their report as an
+# artifact.
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Load test seconds per run"
+        default: "10"
+      connections:
+        description: "Concurrent connections"
+        default: "50"
+      runs:
+        description: "Repetitions per workload (median taken)"
+        default: "3"
+      only:
+        description: "Comma-separated apps (blank = all ready)"
+        default: "lesto,hono,fastify,express,elysia"
+  schedule:
+    # Weekly, Monday 06:00 UTC — a trend line, not a gate.
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: benchmarks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  in-process:
+    name: In-process comparison (render + router)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Install dependencies (root)
+        run: bun install --frozen-lockfile
+      - name: Install competitor libs (isolated, in benchmarks/)
+        run: cd benchmarks && bun install
+      - name: Run comparison
+        run: bun run benchmarks/compare/run.ts --iterations 5000 --warmup 500
+      - name: Run comparison tests
+        run: cd benchmarks && bun test compare
+      - uses: actions/upload-artifact@v4
+        with:
+          name: in-process-comparison
+          path: benchmarks/COMPARISON.md
+
+  real-server:
+    name: Real-server load test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Driver self-test (pure parsers/median/ranking)
+        run: cd benchmarks && bun test driver
+      - name: Run load test
+        # Inputs flow through env (never interpolated into the command) so a crafted
+        # dispatch input can't inject shell. The driver validates/parses them itself.
+        env:
+          NODE_ENV: production
+          BENCH_DURATION: ${{ github.event.inputs.duration || '10' }}
+          BENCH_CONNECTIONS: ${{ github.event.inputs.connections || '50' }}
+          BENCH_RUNS: ${{ github.event.inputs.runs || '3' }}
+          BENCH_ONLY: ${{ github.event.inputs.only || 'lesto,hono,fastify,express,elysia' }}
+        # bun, not node: the driver imports TypeScript (./apps, ./parse) and the
+        # Lesto/Elysia apps are TS. Node setup above stays for the competitor apps
+        # (node server.mjs) and `npx autocannon`.
+        run: >
+          bun benchmarks/driver/run.ts
+          --duration "$BENCH_DURATION"
+          --connections "$BENCH_CONNECTIONS"
+          --runs "$BENCH_RUNS"
+          --only "$BENCH_ONLY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: real-server-results
+          path: benchmarks/RESULTS.md

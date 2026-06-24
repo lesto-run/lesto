@@ -1,0 +1,10 @@
+{
+  "name": "lesto-bench-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Lesto benchmark app. Resolves @lesto/* from the monorepo root — no install step (run with `bun run server.ts` from the repo). Not a workspace member, so it carries no workspace:* deps.",
+  "type": "module",
+  "scripts": {
+    "start": "bun run server.ts"
+  }
+}
