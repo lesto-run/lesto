@@ -19,7 +19,8 @@ export type RouterErrorCode =
   | "ROUTER_FILE_BAD_SEGMENT"
   | "ROUTER_FILE_CATCHALL_POSITION"
   | "ROUTER_FILE_DUPLICATE_ROUTE"
-  | "ROUTER_FILE_DUPLICATE_PARAM";
+  | "ROUTER_FILE_DUPLICATE_PARAM"
+  | "ROUTER_FILE_ORPHAN_MIDDLEWARE";
 
 /** Anything the router can refuse to do. */
 export class RouterError extends LestoError<RouterErrorCode> {

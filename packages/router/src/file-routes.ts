@@ -423,6 +423,60 @@ function assertCatchAllTerminal(urlSegments: ReadonlyArray<string>, pattern: str
 }
 
 /**
+ * Refuse a `middleware.ts` that has NO page at or below its directory — an orphan
+ * guard that silently never runs.
+ *
+ * A `middleware` registers no route of its own: a page picks it up only when the
+ * page's path passes THROUGH the middleware's directory (the page's segments start
+ * with the middleware's — the same prefix rule {@link layoutDepthsFor} composes the
+ * chain by). A `middleware` whose directory prefixes no page is therefore referenced
+ * by no page's `middlewareDepth`, so the applier never runs it. For a layout or a
+ * boundary that is merely dead weight; for a `middleware` — typically an AUTH guard —
+ * it is a fail-OPEN hole: a one-character typo (`middlware.ts`, or a file placed a
+ * level too deep) ships a guard that quietly protects nothing. We surface it as a
+ * coded `ROUTER_FILE_ORPHAN_MIDDLEWARE` at compile time (the same loud-build-time
+ * refusal every other file-route mistake gets), naming the directory to fix.
+ *
+ * "At or below" is the prefix test: a page wraps in a middleware iff the page's raw
+ * segments start with the middleware's raw segments — directory keys compared by
+ * {@link dirKey} so a `[id]` segment matches itself, not a sibling. A middleware at a
+ * directory that is itself a page's directory counts (the page is "below" at depth 0).
+ */
+function assertNoOrphanMiddleware(
+  files: ReadonlyArray<DiscoveredFile>,
+  pages: ReadonlyArray<FileRoute>,
+): void {
+  // The directory key of every page — `middleware` guards a page iff the page's
+  // segments START WITH the middleware's, i.e. some page key has the middleware key
+  // as a path prefix (`""` = root prefixes all; `"admin"` prefixes `admin`/`admin/x`).
+  const pageKeys = pages.map((page) => dirKey(page.segments));
+
+  for (const file of files) {
+    if (file.kind !== "middleware") continue;
+
+    const middlewareKey = dirKey(file.segments);
+
+    // The ROOT middleware (`""`) is a prefix of every page, so any page at all means
+    // it guards something; a deeper middleware (`"admin"`) guards a page iff that
+    // page's key is the directory itself or sits below it (`"admin"` / `"admin/x"`).
+    const guardsAPage =
+      middlewareKey === ""
+        ? pageKeys.length > 0
+        : pageKeys.some(
+            (pageKey) => pageKey === middlewareKey || pageKey.startsWith(`${middlewareKey}/`),
+          );
+
+    if (guardsAPage) continue;
+
+    throw new RouterError(
+      "ROUTER_FILE_ORPHAN_MIDDLEWARE",
+      `File-route middleware at "${middlewareKey || "<root>"}" has no page at or below its directory — it guards nothing and would silently never run (a fail-open auth hole if it is a guard); move it to a directory with a page, or delete it.`,
+      { dir: middlewareKey },
+    );
+  }
+}
+
+/**
  * Compile a flat list of {@link DiscoveredFile}s into ordered {@link FileRoute}s
  * ready for the applier to register, oldest-convention rules enforced here once.
  *
@@ -544,6 +598,13 @@ export function compileFileRoutes(files: ReadonlyArray<DiscoveredFile>): Readonl
       boundaries: boundariesFor(file.segments, boundaryKeys),
     });
   }
+
+  // A `middleware.ts` with NO page at or below its directory guards nothing — no
+  // page's `middlewareDepth` ever references it, so the applier never runs it. That
+  // is a silent FAIL-OPEN for an auth guard (a typo'd dir, or one placed a level too
+  // deep), so refuse it by code here rather than ship a guard that quietly never
+  // runs. Run after the pages are collected so the whole page set is known.
+  assertNoOrphanMiddleware(files, pages);
 
   // Most-specific first: a deeper path before a shallower one, and at equal depth
   // the path whose first differing segment is static (not `:param`) before the

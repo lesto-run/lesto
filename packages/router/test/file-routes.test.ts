@@ -293,6 +293,63 @@ describe("compileFileRoutes — middleware nesting", () => {
     expect(guard?.middlewareDepth).toEqual([]);
     expect(guard?.boundaries).toEqual({});
   });
+
+  it("refuses an orphan middleware with no page at or below its directory, by code", () => {
+    // The fail-open hole (task L-0d506f86): a `middleware.ts` placed where no page
+    // sits at or below it (a typo'd dir, or one a level too deep) is referenced by no
+    // page's `middlewareDepth`, so the applier never runs it — a guard that silently
+    // protects nothing. Refuse it loudly at compile time, like every other file-route
+    // mistake, so the typo can't fail open.
+    try {
+      compileFileRoutes([middleware("admin"), page("public")]);
+
+      expect.unreachable("an orphan middleware should be refused");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RouterError);
+      expect((error as RouterError).code).toBe("ROUTER_FILE_ORPHAN_MIDDLEWARE");
+      expect((error as RouterError).details).toEqual({ dir: "admin" });
+    }
+  });
+
+  it("refuses an orphan middleware placed a level too DEEP (page is its parent, not below)", () => {
+    // A middleware at `admin/settings` whose only page is at `admin` — the page is
+    // ABOVE the middleware, not at/below it, so the guard never runs. A common
+    // off-by-one (the guard meant to cover `admin` was nested one directory too far).
+    try {
+      compileFileRoutes([middleware("admin", "settings"), page("admin")]);
+
+      expect.unreachable("a too-deep middleware should be refused");
+    } catch (error) {
+      expect((error as RouterError).code).toBe("ROUTER_FILE_ORPHAN_MIDDLEWARE");
+      expect((error as RouterError).details).toEqual({ dir: "admin/settings" });
+    }
+  });
+
+  it("refuses an orphan ROOT middleware when the tree has no page at all", () => {
+    // A `middleware.ts` at the convention root with not a single page below it — the
+    // root prefixes every page, so "no page anywhere" is the only way it is an orphan.
+    try {
+      compileFileRoutes([middleware(), layout("admin")]);
+
+      expect.unreachable("a root middleware over a page-less tree should be refused");
+    } catch (error) {
+      expect((error as RouterError).code).toBe("ROUTER_FILE_ORPHAN_MIDDLEWARE");
+      // The root's dirKey is the empty string; the message renders it as "<root>".
+      expect((error as RouterError).details).toEqual({ dir: "" });
+    }
+  });
+
+  it("accepts a root middleware as long as SOME page exists below it", () => {
+    // The root guard prefixes every page, so any page at all means it guards
+    // something — even a page in a different branch than where the author was looking.
+    expect(() => compileFileRoutes([middleware(), page("admin", "users")])).not.toThrow();
+  });
+
+  it("accepts a middleware co-located with the page it guards (page at depth 0 below it)", () => {
+    // A guard in the page's OWN directory is the canonical case — the page is "below"
+    // the middleware at prefix depth 0, so it is not an orphan.
+    expect(() => compileFileRoutes([middleware("admin"), page("admin")])).not.toThrow();
+  });
 });
 
 describe("BOUNDARY_KINDS", () => {
