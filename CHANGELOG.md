@@ -1,0 +1,54 @@
+# Changelog
+
+All notable changes to Lesto are recorded here. The public `@lesto/*` packages are
+versioned and released together, so one version line covers the whole surface.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Lesto
+follows [Semantic Versioning](https://semver.org/) — while pre-1.0, minor releases
+may include breaking changes.
+
+## [Unreleased]
+
+### Security
+
+- **web:** a page's `.data()` / island endpoints (`/__lesto/data/*`) no longer
+  silently bypass file-route guards. `.data(source, loader, guards)` now accepts the
+  same `middleware.ts` guard chain `.page()` takes, so a `scope: "private"` source an
+  island fetches can enforce the guard that protects its page — previously the per-user
+  data most worth protecting rode a separate, unguarded route.
+- **router:** an orphan `middleware.ts` — one with no page at or below its directory
+  (a typo'd filename or a misplaced file) — now throws `ROUTER_FILE_ORPHAN_MIDDLEWARE`
+  at compile time instead of silently never running. A guard that silently doesn't run
+  is a fail-open auth hole.
+- **content-markdown:** the Markdown fallback render path (used when the md4w WASM
+  renderer fails to initialize) now applies the same HTML sanitization as the primary
+  path, so author HTML can never render unsanitized on either path.
+- **sites:** `defineSites` now validates each site `name` against `^[a-z0-9_-]+$`,
+  rejecting path-traversal-shaped names as defense-in-depth on the static-build
+  output paths.
+
+## [0.1.1] - 2026-06-23
+
+The first installable public release of Lesto — the batteries-included, agent-native,
+full-stack TypeScript framework. All public `@lesto/*` packages publish together at
+this version, with npm provenance via trusted publishing (OIDC).
+
+### Added
+
+- `npm create lesto@latest` scaffolds and boots a new app.
+- The first-party battery set on one SQL substrate (SQLite for local, Postgres for
+  scale, Cloudflare D1 / Hyperdrive at the edge): data & migrations, the durable queue,
+  workflows, cache, auth & authz, mail, admin, feature flags, content, observability,
+  and the `lesto` CLI. See [README.md](./README.md) for the full package catalog.
+
+### Fixed
+
+- Packaging: released tarballs now install correctly. `0.1.0` published the literal
+  `workspace:*` protocol in dependency specs (npm does not rewrite it), so installs
+  failed with `EUNSUPPORTEDPROTOCOL`. Releases are now packed with `bun pm pack` —
+  which rewrites `workspace:*` to the exact dependency version — before `npm publish`.
+
+## [0.1.0] - 2026-06-23
+
+Initial publish. **Broken — do not use:** every package shipped the unresolved
+`workspace:*` protocol and fails to install. Fixed in `0.1.1`.
