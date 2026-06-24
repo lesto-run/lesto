@@ -28,7 +28,10 @@ describe("marketing routes", () => {
     expect(html).toContain("Batteries-included.");
     expect(html).toContain("Agent-native.");
     expect(html).toContain('class="hero'); // the gradient hero section (custom backdrop)
-    // The shared layout footer's base line (the `site-footer` class became utilities).
+    // The shared layout footer (the `site-footer` class became utilities): assert its
+    // structure rendered via the footer-only column headings + base line, not a class.
+    expect(html).toContain("Product");
+    expect(html).toContain("Project");
     expect(html).toContain("Built with Lesto — a static, prerendered Lesto app.");
   });
 

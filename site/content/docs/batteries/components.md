@@ -18,7 +18,7 @@ scaffolds all four:
 
 1. **`components.json`** — `style: "new-york"`, `baseColor: "neutral"`, CSS variables
    on, `iconLibrary: "lucide"`, and `aliases` pointing at `@/components`,
-   `@/components/ui`, `@/lib/utils`, and `@/lib`.
+   `@/components/ui`, `@/lib/utils`, `@/lib`, and `@/hooks`.
 2. **Path aliases** — `tsconfig.json` maps `@/*` to `./app/*`, so the aliases resolve
    and components land under `app/components/ui`.
 3. **A Tailwind v4 CSS entry** — `app/styles/app.css` (see [Styling](/batteries/styling)),
