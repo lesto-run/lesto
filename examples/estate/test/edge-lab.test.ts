@@ -13,11 +13,18 @@ import { describe, expect, it } from "vitest";
 
 import { buildEdgeApp } from "../src/edge";
 import { d1ContentStore, hyperdriveContentStore } from "../src/content";
+import { toFetchHandler } from "@lesto/cloudflare";
 import type { D1Database, D1PreparedStatement, HyperdriveConnection } from "@lesto/cloudflare";
 import type { LestoResponse } from "@lesto/web";
 
 // >= 32 bytes: the secret-strength guard rejects shorter signing secrets.
 const SECRET = "edge-lab-secret-0123456789abcdefg";
+
+const ORIGIN = "https://estate.example.com";
+
+// A same-origin browser POST — what the edge originCheck must let through (a
+// state-changing request with no origin signal is refused before dispatch).
+const SAME_ORIGIN = { "sec-fetch-site": "same-origin" };
 
 /** Drain a `.page` body (React streams on the in-process edge app). */
 async function body(response: LestoResponse): Promise<string> {
@@ -146,7 +153,7 @@ describe("the /lab zone on the edge — DB-driven content over D1", () => {
 });
 
 describe("the /lab zone on the edge — the compute demos", () => {
-  it("serves async server data, the flag gate, authz, and the data route", async () => {
+  it("serves async server data, the flag gate, and the data route", async () => {
     const app = buildEdgeApp(SECRET);
 
     expect(await body(await app.handle("GET", "/lab/streaming"))).toContain("Async server data");
@@ -154,10 +161,31 @@ describe("the /lab zone on the edge — the compute demos", () => {
     expect((await app.handle("GET", "/lab/flags")).status).toBe(404);
     expect((await app.handle("GET", "/lab/flags", { query: { preview: "1" } })).status).toBe(200);
 
+    // Deny-by-default: with no signed session, the authz gate refuses.
     expect((await app.handle("GET", "/lab/admin")).status).toBe(403);
-    expect((await app.handle("GET", "/lab/admin", { query: { role: "admin" } })).status).toBe(200);
 
     const data = await app.handle("GET", "/lab/api/listings/malibu-cliff");
     expect(JSON.parse(data.body)).toMatchObject({ id: "malibu-cliff", title: "Malibu Cliffside" });
+  });
+
+  it("gates /lab/admin on the signed session — the cookie, not a ?role= knob, decides", async () => {
+    // Drive the EXACT Worker fetch handler: an origin-checked POST mints a signed
+    // cookie (demo sign-in), which the lab's principal resolver reads back as the
+    // admin's session — exactly as a browser would carry it across requests.
+    const app = buildEdgeApp(SECRET, { demo: true });
+    const handler = toFetchHandler((method, path, options) => app.handle(method, path, options));
+
+    // Signed out: deny-by-default.
+    expect((await handler(new Request(`${ORIGIN}/lab/admin`))).status).toBe(403);
+
+    // Sign in as jade (the admin), then replay the signed cookie on the gate.
+    const signIn = await handler(
+      new Request(`${ORIGIN}/mls/api/sign-in?as=jade`, { method: "POST", headers: SAME_ORIGIN }),
+    );
+    expect(signIn.status).toBe(303);
+    const cookie = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+
+    const admin = await handler(new Request(`${ORIGIN}/lab/admin`, { headers: { cookie } }));
+    expect(admin.status).toBe(200);
   });
 });

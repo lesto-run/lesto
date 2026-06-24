@@ -74,6 +74,22 @@ export function buildEstateRoutes(identity: Identity): Lesto {
     return user === undefined ? undefined : { email: user.email };
   };
 
+  /**
+   * The lab's session→principal seam (ADR 0028 Phase 1): verify the request's
+   * session and hand back its `userId` for the lab's `rolesOf`. Keyed by the demo
+   * account id (`jade`/`guest`) so one local `rolesOf` serves both runtimes; a
+   * non-demo signed-in user falls back to their email (no roles → denied).
+   */
+  const verifyLabSession = async (c: Context): Promise<{ userId: string } | undefined> => {
+    const user = await currentUser(c);
+
+    if (user === undefined) return undefined;
+
+    const demoId = DEMO_ACCOUNTS.find((d) => d.email === user.email)?.id;
+
+    return { userId: demoId ?? user.email };
+  };
+
   return (
     lesto()
       .layout(EstateLayout)
@@ -275,7 +291,8 @@ export function buildEstateRoutes(identity: Identity): Lesto {
         }
       })
       // The /lab feature-demo zone (SSR + CSR fetch, async data, flags, authz,
-      // DB-driven content over portable SQLite).
-      .route(buildLabRoutes(nodeContentStore()))
+      // DB-driven content over portable SQLite). The lab's admin gate + CRUD read
+      // their principal from the SAME identity session minted by `/mls` sign-in.
+      .route(buildLabRoutes(nodeContentStore(), verifyLabSession))
   );
 }

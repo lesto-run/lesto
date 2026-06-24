@@ -197,7 +197,15 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Lest
       return c.json({ user, saved: LISTINGS.slice(0, 2) });
     })
     // The /lab feature-demo zone, on the edge too (DB-driven content over D1).
-    .route(buildLabRoutes(options.contentStore));
+    // The lab's admin gate + CRUD resolve their principal from the SAME signed
+    // session cookie the edge `/mls` sign-in mints — the user id IS the role key.
+    .route(
+      buildLabRoutes(options.contentStore, (c) => {
+        const user = currentUser(c.header("cookie"));
+
+        return user === undefined ? undefined : { userId: user.id };
+      }),
+    );
 
   // The matched-pair SERVER half (ADR 0008): the Worker passes the Preact
   // renderer (its bundle is aliased), the in-process tests leave it unset (React).

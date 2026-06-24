@@ -20,7 +20,8 @@ import type { ReactNode } from "react";
 import { applyFileRoutes, lesto } from "@lesto/web";
 import type { Context, Handler, LestoResponse, Lesto } from "@lesto/web";
 import { defineFlags } from "@lesto/flags";
-import { createGuard, definePolicy } from "@lesto/authz";
+import { createGuard, createPrincipalResolver, definePolicy, getPrincipal } from "@lesto/authz";
+import type { PrincipalResolverOptions } from "@lesto/authz";
 import { createTableSql, defineTable, integer, text } from "@lesto/db";
 import type { Db } from "@lesto/db";
 import { AdminError, createAdmin } from "@lesto/admin";
@@ -48,20 +49,32 @@ const flags = defineFlags({
   resolve: (_flag, c) => (c.query("preview") === "1" ? true : undefined),
 });
 
-// One policy, deny-by-default: only the `admin` role may reach `lab.admin`.
+// One policy, deny-by-default. The `admin` role reaches the `lab.admin` page and
+// holds every `notes` verb; a `viewer` may only READ. That split is what lets the
+// dogfood show a real session-sourced role allowed a read but refused a destroy
+// (ADR 0028 Phase 1 acceptance) — not a self-granted `?role=` knob.
 const policy = definePolicy({
-  roles: ["guest", "admin"],
-  can: { "lab.admin": ["admin"] },
+  roles: ["viewer", "admin"],
+  can: {
+    "lab.admin": ["admin"],
+    "notes:read": ["viewer", "admin"],
+    "notes:create": ["admin"],
+    "notes:update": ["admin"],
+    "notes:destroy": ["admin"],
+  },
 });
 const { can } = createGuard(policy);
 
-// A demo roles middleware: in a real app the roles come from the session; here
-// `?role=admin` is the knob, so the authz demo is self-contained.
-const withDemoRole: Handler = (c, next) => {
-  c.set("roles", c.query("role") === "admin" ? ["admin"] : ["guest"]);
-
-  return next();
-};
+/**
+ * The estate-local `userId -> roles` seam the principal resolver calls.
+ *
+ * ADR 0028 Phase 1 ships only this seam; the durable `user_roles` store lands in
+ * OCP-5. Keyed by the two demo identities — Jade is the operator (admin), Guest a
+ * read-only viewer — so a real signed-in session, not a query knob, decides what a
+ * caller may do. An unknown user resolves to no roles: deny-by-default.
+ */
+const rolesOf = (userId: string): readonly string[] =>
+  userId === "jade" ? ["admin"] : userId === "guest" ? ["viewer"] : [];
 
 /** The lab landing page: links to each demo + the live (CSR) listing island. */
 function LabIndex(): ReactNode {
@@ -82,7 +95,7 @@ function LabIndex(): ReactNode {
             <Button variant="ghost" href="/lab/flags?preview=1">
               Feature flag
             </Button>{" "}
-            <Button variant="ghost" href="/lab/admin?role=admin">
+            <Button variant="ghost" href="/lab/admin">
               Authorization
             </Button>{" "}
             <Button variant="ghost" href="/lab/content/welcome">
@@ -263,6 +276,9 @@ const noteUpdate = z.object({
 /** Map an admin error code to the HTTP status the admin UI / API expects. */
 function statusForAdminError(code: string): number {
   switch (code) {
+    // A governed verb the principal's roles don't grant (or an unattributed write).
+    case "ADMIN_FORBIDDEN":
+      return 403;
     case "ADMIN_UNKNOWN_RESOURCE":
     case "ADMIN_RECORD_NOT_FOUND":
       return 404;
@@ -323,21 +339,25 @@ function makeAdminWiring(store: ContentStore): () => Promise<AdminWiring> {
           insertSchema: noteInsert,
           updateSchema: noteUpdate,
           fields: ["title", "body"],
+          // Per-verb gating (OCP-4): a viewer reads, only the admin writes. The
+          // resolver-sourced `actorRoles` (below) are checked against these.
+          permissions: {
+            read: "notes:read",
+            create: "notes:create",
+            update: "notes:update",
+            destroy: "notes:destroy",
+          },
         },
       ],
-      // OCP-2: opt out loudly until OCP-4 wires a real principal-resolved policy.
-      { policy: { ungoverned: true }, onMutation: (event) => audit.push(event) },
+      // OCP-4: governed by the real `policy` against the resolved principal's roles;
+      // every committed write flows through the audit hook.
+      { policy, onMutation: (event) => audit.push(event) },
     );
 
     return { admin, audit };
   };
 
   return () => (ready ??= open());
-}
-
-/** The audit actor for a write — the demo's `?role` knob, so events are attributed. */
-function actorOf(c: Context): { actor: string } {
-  return { actor: c.query("role") ?? "anonymous" };
 }
 
 /** Read a positive integer query param, or `undefined` when absent/invalid. */
@@ -353,13 +373,15 @@ function intQuery(c: Context, name: string): number | undefined {
 /**
  * The admin CRUD + audit routes, over the injected store — mounted into `/lab`.
  *
- * Every write carries an `actor` (the demo's `?role` knob, so the audit event is
- * attributed without a real session), and every write flows through the
- * `onMutation` hook, so `GET /lab/admin/api/audit` shows the trail. When no
- * store is configured (a Worker without a D1 binding) the routes answer 503 —
- * the same honest "not configured" signal the content page renders.
+ * `resolvePrincipal` runs first on every route, so each verb reads the resolved
+ * {@link getPrincipal} — the session-sourced `{ actor, actorRoles }` — and hands it
+ * to the governed admin: the `actorRoles` gate the per-verb permission, the `actor`
+ * attributes the audit event (`GET /lab/admin/api/audit`). A request with no session
+ * resolves to no principal, so a read is denied and a write refused as unattributed —
+ * deny-by-default, no `?role=` knob. When no store is configured (a Worker without a
+ * D1 binding) the routes answer 503 — the same honest "not configured" signal.
  */
-function buildAdminRoutes(store?: ContentStore): Lesto {
+function buildAdminRoutes(store: ContentStore | undefined, resolvePrincipal: Handler): Lesto {
   if (store === undefined) {
     return lesto().get("/lab/admin/api/*rest", (c) =>
       c.json({ error: "admin store not configured" }, 503),
@@ -370,31 +392,39 @@ function buildAdminRoutes(store?: ContentStore): Lesto {
 
   return (
     lesto()
-      // List notes — paginated + projected (id + declared fields only).
+      // Resolve the principal from the session before any admin verb runs, so each
+      // route below reads `getPrincipal(c)` for both gating and attribution.
+      .use(resolvePrincipal)
+      // List notes — paginated + projected (id + declared fields only). Gated by
+      // `notes:read`, so a request with no granting role is denied before any read.
       .get("/lab/admin/api/notes", async (c) => {
         const { admin } = await wiring();
         const limit = intQuery(c, "limit");
         const offset = intQuery(c, "offset");
 
         return adminJson(c, () =>
-          admin.list("notes", {
-            ...(limit === undefined ? {} : { limit }),
-            ...(offset === undefined ? {} : { offset }),
-          }),
+          admin.list(
+            "notes",
+            {
+              ...(limit === undefined ? {} : { limit }),
+              ...(offset === undefined ? {} : { offset }),
+            },
+            getPrincipal(c),
+          ),
         );
       })
       // Create — body is the validated attributes; the audit event records the actor.
       .post("/lab/admin/api/notes", async (c) => {
         const { admin } = await wiring();
 
-        return adminJson(c, () => admin.create("notes", c.req.body, actorOf(c)));
+        return adminJson(c, () => admin.create("notes", c.req.body, getPrincipal(c)));
       })
       // Update — `:id` plus a patch; an empty patch surfaces ADMIN_EMPTY_UPDATE (422).
       .patch("/lab/admin/api/notes/:id", async (c) => {
         const { admin } = await wiring();
 
         return adminJson(c, () =>
-          admin.update("notes", Number(c.param("id")), c.req.body, actorOf(c)),
+          admin.update("notes", Number(c.param("id")), c.req.body, getPrincipal(c)),
         );
       })
       // Destroy — records a patch-less audit event.
@@ -402,7 +432,7 @@ function buildAdminRoutes(store?: ContentStore): Lesto {
         const { admin } = await wiring();
 
         return adminJson(c, async () => {
-          await admin.destroy("notes", Number(c.param("id")), actorOf(c));
+          await admin.destroy("notes", Number(c.param("id")), getPrincipal(c));
 
           return { ok: true };
         });
@@ -484,13 +514,29 @@ const saveListingNote = defineMutation({
 /** The mutation map the `SaveNote` island derives its client contract from. */
 export const labMutations = { saveListingNote };
 
+/** How the lab learns who is making a request — the session-verify half of the resolver. */
+type VerifySession = PrincipalResolverOptions["verifySession"];
+
 /**
  * Build the `/lab` sub-app — mounted by both the Node app (`controllers.ts`) and
  * the Worker (`edge.ts`). `contentStore` is the DB-driven page's backend: the Node
  * SQLite store on the server, the D1 store on the edge, or `undefined` when no
  * store is configured (the content page then renders a "configure D1" view).
+ *
+ * `verifySession` is each runtime's session→`{ userId }` reader (node identity,
+ * edge signed token); the lab pairs it with its local {@link rolesOf} into a
+ * principal resolver that governs the admin page + CRUD. Omitted (an isolated
+ * unit), every request resolves to no principal — deny-by-default.
  */
-export function buildLabRoutes(contentStore?: ContentStore): Lesto {
+export function buildLabRoutes(contentStore?: ContentStore, verifySession?: VerifySession): Lesto {
+  // The resolver: turn the request's session into `{ actor, actorRoles }`, set the
+  // "roles" var (for `can()`) + the principal (for `getPrincipal`/admin). With no
+  // `verifySession`, no session ever resolves, so every gate denies by default.
+  const resolvePrincipal = createPrincipalResolver({
+    verifySession: verifySession ?? (() => undefined),
+    rolesOf,
+  });
+
   // The flag- and authz-gated pages live in their own sub-routers so the gate
   // wraps ONLY that page, not the whole lab zone.
   const flagGated = lesto()
@@ -498,7 +544,7 @@ export function buildLabRoutes(contentStore?: ContentStore): Lesto {
     .page("/lab/flags", { component: FlagPage });
 
   const adminGated = lesto()
-    .use(withDemoRole)
+    .use(resolvePrincipal)
     .use(can("lab.admin"))
     .page("/lab/admin", { component: AdminPage });
 
@@ -526,8 +572,9 @@ export function buildLabRoutes(contentStore?: ContentStore): Lesto {
       .route(applyFileRoutes(lesto(), galleryFiles, galleryModules))
       // DB-driven (WordPress-style) pages: a block tree loaded by slug.
       .route(buildContentRoutes(contentStore))
-      // The @lesto/admin dogfood: paginated CRUD + the onMutation audit trail.
-      .route(buildAdminRoutes(contentStore))
+      // The @lesto/admin dogfood: paginated CRUD + the onMutation audit trail,
+      // governed by the same resolved principal as the page above.
+      .route(buildAdminRoutes(contentStore, resolvePrincipal))
       // The data route the LiveListing island fetches (typed by `LabApi`).
       .get("/lab/api/listings/:id", (c) => {
         const listing = findListing(c.param("id"));

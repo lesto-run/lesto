@@ -9,6 +9,8 @@
 import { describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app";
+import { DEFAULT_DEMO, DEMO_ACCOUNTS } from "../src/identity";
+import type { DemoAccount } from "../src/identity";
 import type { LestoResponse } from "@lesto/web";
 
 /** Drain a page's streamed body (or pass a string body through) for assertions. */
@@ -116,17 +118,57 @@ describe("/lab/flags — the feature-flag gate (@lesto/flags)", () => {
   });
 });
 
+// The viewer demo account — read-only; lacks the admin role the page requires.
+const GUEST = DEMO_ACCOUNTS.find((d) => d.id === "guest")!;
+
+// A same-origin form post — what the originCheck on `/mls/api/sign-in` lets through.
+const SAME_ORIGIN = {
+  "content-type": "application/x-www-form-urlencoded",
+  "sec-fetch-site": "same-origin",
+};
+
+/**
+ * Sign in as a demo account through the REAL `/mls` flow (Identity.login), and
+ * return the `name=value` session cookie to replay on a subsequent request — the
+ * same cookie a browser would carry. This is what replaced the `?role=` knob: the
+ * lab's admin gate reads its principal from this very session.
+ */
+async function signInCookie(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  account: DemoAccount,
+): Promise<string> {
+  const res = await app.handle("POST", "/mls/api/sign-in", {
+    headers: SAME_ORIGIN,
+    body: new URLSearchParams({ email: account.email, password: account.password }).toString(),
+  });
+
+  expect(res.status).toBe(303);
+
+  const setCookie = res.headers["Set-Cookie"]!;
+  const header = Array.isArray(setCookie) ? setCookie[0]! : setCookie;
+
+  return header.split(";")[0]!;
+}
+
 describe("/lab/admin — the authorization gate (@lesto/authz, deny-by-default)", () => {
-  it("denies the guest role (403)", async () => {
+  it("denies an unauthenticated visitor (403)", async () => {
     const app = await buildApp();
 
     expect((await app.handle("GET", "/lab/admin")).status).toBe(403);
   });
 
-  it("allows the admin role (200)", async () => {
+  it("denies a signed-in viewer who lacks the admin role (403)", async () => {
     const app = await buildApp();
+    const cookie = await signInCookie(app, GUEST);
 
-    const response = await app.handle("GET", "/lab/admin", { query: { role: "admin" } });
+    expect((await app.handle("GET", "/lab/admin", { headers: { cookie } })).status).toBe(403);
+  });
+
+  it("allows a signed-in admin (200) — the session, not a ?role= knob, decides", async () => {
+    const app = await buildApp();
+    const cookie = await signInCookie(app, DEFAULT_DEMO);
+
+    const response = await app.handle("GET", "/lab/admin", { headers: { cookie } });
 
     expect(response.status).toBe(200);
     expect(await body(response)).toContain("Admin only");
