@@ -1,5 +1,7 @@
 # Lesto
 
+> *One substrate. Every capability. Agent-native from day one.*
+
 **Lesto is a batteries-included, AI-native, fullstack TypeScript framework** — the best of Rails (conventions, ActiveRecord ORM, migrations, RESTful routing), Laravel (in-house batteries: queues, mail, cache, events), WordPress (content, an admin surface, and an actions/filters extensibility model that lets anyone build onto the platform), and Next.js (React, server-side rendering, DX), with one twist the others predate: it is designed to be driven by an agent. Every capability is an in-house API on **one substrate — the SQL database** (SQLite for zero-config local, Postgres for scale), so there is no zoo of external services to glue together; thin drivers live only at the irreducible edges (mail transport, object storage, OAuth). The north star: change your site's content, UI, schema, and data — and ship it — from code, the CLI, or an MCP client inside Claude or ChatGPT.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the product vision and the build order, and [CONVENTIONS.md](./CONVENTIONS.md) for the engineering bar.
