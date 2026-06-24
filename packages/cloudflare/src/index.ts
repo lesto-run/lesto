@@ -49,6 +49,9 @@ export type {
 export { withAssets } from "./assets";
 export type { AssetAppHandler, AssetExecutionContext, AssetFetcher } from "./assets";
 
+export { staticAssetsWorker } from "./static-site";
+export type { StaticAssetsEnv, StaticAssetsWorker, StaticAssetsWorkerOptions } from "./static-site";
+
 export { serializeWranglerConfig, wranglerConfig } from "./wrangler";
 export type {
   WranglerComments,

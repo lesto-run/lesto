@@ -19,7 +19,8 @@
     "format:check": "oxfmt --check src test"
   },
   "dependencies": {
-    "@lesto/errors": "workspace:*"
+    "@lesto/errors": "workspace:*",
+    "@lesto/seo": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

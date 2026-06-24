@@ -26,8 +26,7 @@ import {
   type LlmsDocSection,
 } from "@lesto/content-core/build";
 import { createApp } from "@lesto/kernel";
-import { robots, sitemap, type SitemapUrl } from "@lesto/seo";
-import { buildStaticSites, nodeSink } from "@lesto/sites";
+import { buildStaticSites, defineStaticSite, nodeSink } from "@lesto/sites";
 import { buildStyles, tailwindStyleCompiler } from "@lesto/styles";
 
 import appConfig from "./lesto.app";
@@ -116,22 +115,16 @@ const docs = await loadDocs();
 const index = buildSearchIndex(docs, new Date().toISOString());
 await writeFile(join(SITE_OUT, "search-index.json"), JSON.stringify(index));
 
-// 4. A small SVG favicon (an indigo "L"), referenced from every page's <head>.
+// 4. Discoverability — dogfood @lesto/sites' defineStaticSite (over @lesto/seo).
+//    A favicon, a sitemap of every prerendered doc route, a permissive robots.txt
+//    that points crawlers at it, and the social-preview og.svg every page's
+//    <head> advertises. The worker serves the whole out/docs/ tree, so these land
+//    at /sitemap.xml etc.
 const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#4f46e5"/><path d="M22 15h7v26h17v8H22z" fill="#fff"/></svg>`;
-await writeFile(join(SITE_OUT, "favicon.svg"), FAVICON);
-
-// 5. SEO discoverability — dogfood @lesto/seo. A sitemap of every prerendered
-//    doc route, a permissive robots.txt that points crawlers at it, and the
-//    social-preview image (og.svg) every page's <head> advertises. The worker
-//    serves the whole out/docs/ tree, so these land at /sitemap.xml etc.
 const routes: string[] = docs.map((doc) => doc.route);
-const sitemapUrls: SitemapUrl[] = routes.map((route) => ({
-  loc: canonicalUrl(route),
-  priority: route === "/" ? 1 : 0.7,
-}));
-await writeFile(join(SITE_OUT, "sitemap.xml"), sitemap(sitemapUrls));
-await writeFile(join(SITE_OUT, "robots.txt"), robots({ sitemap: `${SITE_URL}/sitemap.xml` }));
-await writeFile(join(SITE_OUT, "og.svg"), ogImage());
+await defineStaticSite({ siteUrl: SITE_URL, routes, og: ogImage(), favicon: FAVICON }).emit(
+  nodeSink(SITE_OUT),
+);
 
 // 6. AI-native docs surface — Lesto is agent-native, so its docs are too. Dogfood
 //    @lesto/content-core's docs AI surface: a clean Markdown twin of every page

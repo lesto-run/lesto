@@ -807,6 +807,7 @@
       "version": "0.1.1",
       "dependencies": {
         "@lesto/errors": "workspace:*",
+        "@lesto/seo": "workspace:*",
       },
     },
     "packages/storage": {

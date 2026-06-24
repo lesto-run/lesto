@@ -27,6 +27,9 @@ export { writePages, nodeSink } from "./write";
 export { buildStaticSites } from "./build";
 export type { SiteManifest } from "./build";
 
+export { defineStaticSite } from "./static-site";
+export type { StaticSiteArtifacts, StaticSiteConfig } from "./static-site";
+
 export { SitesError } from "./errors";
 export type { SitesErrorCode } from "./errors";
 
