@@ -21,6 +21,7 @@ import { buildClient, bunBuildClientDeps } from "@lesto/assets";
 import { createApp } from "@lesto/kernel";
 import { robots, sitemap, type SitemapUrl } from "@lesto/seo";
 import { buildStaticSites, nodeSink } from "@lesto/sites";
+import { buildStyles, tailwindStyleCompiler } from "@lesto/styles";
 
 import appConfig from "./lesto.app";
 import sites from "./lesto.sites";
@@ -62,9 +63,7 @@ if (drift.error !== undefined || drift.signal !== null) {
 }
 
 if (drift.status !== 0) {
-  console.error(
-    "\nAGENTS.md / llms.txt are stale — run `bun run agents` and commit the result.",
-  );
+  console.error("\nAGENTS.md / llms.txt are stale — run `bun run agents` and commit the result.");
 
   process.exit(1);
 }
@@ -93,6 +92,17 @@ const client = await buildClient(
     dialect: "preact",
   },
   bunBuildClientDeps(PROJECT_ROOT),
+);
+
+// 2b. Compile the Tailwind v4 stylesheet → out/docs/styles.css (ADR 0037). The docs
+//     dogfood @lesto/styles: `app/styles/app.css` is scanned against `src/` (where the
+//     chrome's utility classes live) and resolved from the project root (`tailwindcss`).
+const styles = await buildStyles(
+  { entry: "app/styles/app.css", outDir: SITE_OUT, mode: "production" },
+  tailwindStyleCompiler({
+    resolveBase: PROJECT_ROOT,
+    scanRoot: join(PROJECT_ROOT, "src"),
+  }),
 );
 
 // 3. Emit the keyword search index the island fetches on mount.
@@ -130,5 +140,7 @@ await writeFile(join(SITE_OUT, "llms.txt"), llmsIndex(docs, SITE_URL));
 await writeFile(join(SITE_OUT, "llms-full.txt"), llmsFull(docs, SITE_URL));
 
 console.log(
-  `Prerendered ${pageCount} page(s); bundled ${client.islands.length} island(s); indexed ${index.entries.length} doc(s); wrote sitemap.xml + robots.txt + og.svg → ${SITE_OUT}/`,
+  `Prerendered ${pageCount} page(s); bundled ${client.islands.length} island(s); ` +
+    `compiled styles.css (${(styles.gzipBytes / 1024).toFixed(1)} KB gzip); ` +
+    `indexed ${index.entries.length} doc(s); wrote sitemap.xml + robots.txt + og.svg → ${SITE_OUT}/`,
 );

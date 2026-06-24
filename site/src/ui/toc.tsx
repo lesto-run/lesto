@@ -14,17 +14,31 @@ import type { ReactElement } from "react";
 
 import type { DocHeading } from "../content";
 
-export function TableOfContents({ headings }: { headings: readonly DocHeading[] }): ReactElement | null {
+export function TableOfContents({
+  headings,
+}: {
+  headings: readonly DocHeading[];
+}): ReactElement | null {
   const shown = headings.filter((h) => h.depth === 2 || h.depth === 3);
   if (shown.length === 0) return null;
 
   return (
-    <nav className="docs-toc" aria-label="On this page">
-      <p className="toc-title">On this page</p>
-      <ul>
+    <nav
+      className="sticky top-[72px] self-start text-[0.85rem] max-[1024px]:hidden"
+      aria-label="On this page"
+    >
+      <p className="text-[0.72rem] font-bold uppercase tracking-[0.06em] text-muted mb-2">
+        On this page
+      </p>
+      <ul className="list-none m-0 p-0">
         {shown.map((h) => (
-          <li key={h.slug} className={`depth-${h.depth}`}>
-            <a href={`#${h.slug}`}>{h.text}</a>
+          <li key={h.slug} className={h.depth === 3 ? "pl-[0.85rem]" : undefined}>
+            <a
+              className="block py-[0.2rem] text-muted no-underline hover:text-fg hover:no-underline"
+              href={`#${h.slug}`}
+            >
+              {h.text}
+            </a>
           </li>
         ))}
       </ul>

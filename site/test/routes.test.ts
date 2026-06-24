@@ -28,8 +28,8 @@ describe("doc routes", () => {
       const html = await text(response);
 
       expect(response.status, doc.route).toBe(200);
-      expect(html).toContain("docs-sidebar"); // the layout/page chrome
-      expect(html).toContain("docs-article");
+      expect(html).toContain('<link rel="stylesheet" href="/styles.css"'); // dogfoods @lesto/styles
+      expect(html).toContain("docs-article"); // the rendered-Markdown frame
     }
   });
 
@@ -48,7 +48,8 @@ describe("doc routes", () => {
   it("marks the current page active in the sidebar", async () => {
     const html = await text(await app.handle("GET", "/quickstart"));
 
-    expect(html).toContain('class="active"');
+    // The active sidebar link is the only element styled `text-accent-fg` (utilities).
+    expect(html).toContain("text-accent-fg");
   });
 
   it("renders the search island fallback and the client module on every page", async () => {

@@ -88,8 +88,10 @@ export async function buildAppConfig(): Promise<LestoAppConfig> {
   const nav = buildNav(docs);
 
   // The search island's client bundle (built into out/docs/client.js); every
-  // page emits its module tag in <head>, which mounts the box on load.
-  let app = lesto().client("/client.js").layout(DocsLayout);
+  // page emits its module tag in <head>, which mounts the box on load. `.styles()`
+  // links the Tailwind stylesheet @lesto/styles compiles from `app/styles/app.css`
+  // — the docs dogfood Lesto's own CSS pipeline (ADR 0037).
+  let app = lesto().client("/client.js").styles("/styles.css").layout(DocsLayout);
   for (const doc of docs) {
     app = app.page(doc.route, {
       static: true,
@@ -100,5 +102,14 @@ export async function buildAppConfig(): Promise<LestoAppConfig> {
 
   // No migrations: the content lives in files, rendered at build time; the
   // database is present only because the kernel's config requires one.
-  return { db, app, migrations: "skip" };
+  //
+  // `ui.css` points the CSS build at the Tailwind entry (ADR 0037); `dialect: "react"`
+  // keeps the SERVER renderer React (the pages are React-SSR'd) while `build.ts`
+  // bundles the deferred search island on the Preact client — the established pairing.
+  return {
+    db,
+    app,
+    migrations: "skip",
+    ui: { dialect: "react", css: "app/styles/app.css" },
+  };
 }
