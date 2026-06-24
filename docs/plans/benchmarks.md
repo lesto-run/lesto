@@ -125,6 +125,23 @@ Read the ranking and the gap, not absolutes — these are volatile micro-benchma
 - **None of this proves "fastest."** The in-process dispatch caveat (not
   apples-to-apples) means it can't; the credible verdict is the real-server suite.
 
+## Update 2026-06-24 — saturation curve + statistical rigor shipped (task `L-7847fc40`)
+
+The driver no longer hits a single `(connections, duration)` point. It now **sweeps
+a connection ladder** (`--connections 16,32,64,128,256`) and reports the real
+headline metric — **max sustainable req/s**, the highest throughput a framework
+holds at ≥99.9% success (the Platformatic 1k-rps framing), with `↑` when the curve
+is still climbing at the top rung and `⚠️ none` when a framework drops requests at
+every rung. Added statistical rigor, all in the pure (unit-tested) `parse.ts`:
+N-trial **mean/stddev/coefficient-of-variation** with a **stability gate** that
+flags any rung whose CV exceeds `--cv-threshold` (default 5%); **seeded-random run
+order** (app + trial, `--seed`, stamped) to defeat thermal/ordering bias; the full
+latency spread **p50/p75/p90/p99/p99.9/max**; and **coordinated-omission-aware**
+constant-rate load via `--rate` (autocannon `--overallRate` / oha `-q`). `RESULTS.md`
+now renders a per-workload max-sustainable ranking plus the per-framework saturation
+curve. `bun test driver` green (48 tests). Still CI/local-only (binds ports); the
+**first published run** below remains the un-done piece.
+
 ## Remaining work (tracked as Studio tasks)
 
 - **⭐ Measure + investigate the default secure-stack hot-path cost** on the

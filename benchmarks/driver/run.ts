@@ -3,25 +3,31 @@
  * The real-server load harness orchestrator.
  *
  *   bun benchmarks/driver/run.ts
- *   bun benchmarks/driver/run.ts --duration 10 --connections 50 --runs 3 --only lesto,hono
- *   bun benchmarks/driver/run.ts --generator oha
+ *   bun benchmarks/driver/run.ts --duration 10 --connections 16,64,256 --runs 5 --only lesto,hono
+ *   bun benchmarks/driver/run.ts --rate 50000          # constant-rate (coordinated-omission-aware) load
+ *   bun benchmarks/driver/run.ts --generator oha --seed 1234
  *
  * Run it with **bun**, not node: this file imports TypeScript (`./apps`, `./parse`)
  * with extensionless specifiers and the Lesto/Elysia apps are TS — node's loader
  * won't resolve those. (The apps it SPAWNS still use node or bun per `apps.ts`.)
  *
- * For each framework app (see `apps.ts`): install + build it once, boot its
- * server on a fresh port, wait until it answers, warm it, then run the load
- * generator `--runs` times against each workload and keep the MEDIAN. Results are
- * ranked per workload and written to `RESULTS.md` next to this package.
+ * For each framework app (see `apps.ts`): install + build it once, boot its server
+ * on a fresh port, wait until it answers, warm it, then SWEEP a ladder of
+ * connection levels — running the load generator `--runs` times per (workload,
+ * level) in a SEEDED-RANDOM order to defeat thermal/ordering bias. The median of
+ * each rung's trials, its throughput stability (CV), and the curve's max-sustainable
+ * req/s (highest throughput held at ≥99.9% success — the real headline) are written
+ * to `RESULTS.md`.
  *
  * This is the credible, apples-to-apples request-throughput suite — it cannot run
  * in a sandbox that blocks server starts (it spawns real servers and sockets), so
- * it runs in CI or locally. The PURE parsing/median/ranking it depends on is unit
- * tested in `parse.test.ts`; this file is the impure spawn/poll/kill glue.
+ * it runs in CI or locally. The PURE parsing/stats/saturation/render it depends on
+ * is unit tested in `parse.test.ts`; this file is the impure spawn/poll/kill glue.
  *
  * Default generator is `autocannon` via `npx` (no separate binary needed); pass
- * `--generator oha` to use a locally installed `oha`.
+ * `--generator oha` to use a locally installed `oha`. With `--rate`, autocannon's
+ * `--overallRate` (and oha's `-q`) drive a fixed open-loop rate and autocannon
+ * corrects its latency histogram for the coordinated-omission issue.
  */
 
 import { spawn } from "node:child_process";
@@ -29,14 +35,22 @@ import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { APPS, WORKLOADS, type AppDef } from "./apps";
+import { APPS, WORKLOADS, type AppDef, type Workload } from "./apps";
 import { collectEnv, isCanonical, renderProvenance } from "./env";
 import {
+  assessStability,
+  DEFAULT_CV_THRESHOLD,
   medianSample,
+  mulberry32,
   PARSERS,
   renderResults,
-  type FrameworkResult,
+  shuffle,
+  summarizeSaturation,
+  SUCCESS_THRESHOLD,
+  type ConnectionLevel,
   type LoadSample,
+  type ReportMeta,
+  type SaturationResult,
 } from "./parse";
 import { jsonBody, plaintextBody, ssrBody } from "../apps/_contract.mjs";
 
@@ -54,18 +68,30 @@ const CONTRACT_CONTENT_TYPE: Record<string, string> = {
   "/ssr": "text/html",
 };
 
+/** The default connection ladder swept when `--connections` isn't given. */
+const DEFAULT_CONNECTIONS: readonly number[] = [16, 32, 64, 128, 256];
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APPS_DIR = join(HERE, "..", "apps");
 const RESULTS_MD = join(HERE, "..", "RESULTS.md");
 
 interface Options {
   duration: number;
-  connections: number;
+  /** The connection ladder to sweep (ascending) — one rung per level. */
+  connections: number[];
   runs: number;
   warmupSeconds: number;
   generator: "autocannon" | "oha";
   only: ReadonlySet<string> | null;
   startTimeoutMs: number;
+  /** Constant request rate (req/s) for coordinated-omission-aware load, or null = closed-loop. */
+  rateRps: number | null;
+  /** Seed for the randomized run order (so the order is reproducible and stamped). */
+  seed: number;
+  /** Whether to randomize app + trial order (off → deterministic order, for debugging). */
+  shuffleOrder: boolean;
+  /** CV ceiling (fraction) for the stability gate. */
+  cvThreshold: number;
   /** Cores the server (this driver + its spawned servers) is pinned to, for stamping. Set by reproduce.ts. */
   serverCpus: string | null;
   /** Cores to pin the load generator to via taskset, so it doesn't share the server's cores. */
@@ -78,6 +104,28 @@ function intFlag(argv: readonly string[], flag: string, fallback: number): numbe
   const v = Number(argv[i + 1]);
 
   return Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
+/** A positive integer flag that may be absent entirely (returns null), e.g. `--rate`. */
+function optionalIntFlag(argv: readonly string[], flag: string): number | null {
+  const i = argv.indexOf(flag);
+  if (i === -1 || i + 1 >= argv.length) return null;
+  const v = Number(argv[i + 1]);
+
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : null;
+}
+
+/** Parse a comma-separated list of positive integers, e.g. `--connections 16,64,256`. */
+function intListFlag(argv: readonly string[], flag: string, fallback: readonly number[]): number[] {
+  const i = argv.indexOf(flag);
+  if (i === -1 || i + 1 >= argv.length) return [...fallback];
+  const parts = (argv[i + 1] ?? "")
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .map((n) => Math.floor(n));
+
+  return parts.length > 0 ? parts : [...fallback];
 }
 
 function parseOptions(argv: readonly string[]): Options {
@@ -93,15 +141,23 @@ function parseOptions(argv: readonly string[]): Options {
       : null;
   const genIndex = argv.indexOf("--generator");
   const generator = genIndex !== -1 && argv[genIndex + 1] === "oha" ? "oha" : "autocannon";
+  // A `--cv-threshold 8` (percent) → 0.08 fraction; default 5%.
+  const cvPct = intFlag(argv, "--cv-threshold", DEFAULT_CV_THRESHOLD * 100);
 
   return {
     duration: intFlag(argv, "--duration", 10),
-    connections: intFlag(argv, "--connections", 50),
+    connections: intListFlag(argv, "--connections", DEFAULT_CONNECTIONS).toSorted((a, b) => a - b),
     runs: intFlag(argv, "--runs", 3),
     warmupSeconds: intFlag(argv, "--warmup", 3),
     generator,
     only,
     startTimeoutMs: intFlag(argv, "--start-timeout", 60_000),
+    rateRps: optionalIntFlag(argv, "--rate"),
+    // A fixed seed makes the randomized run order reproducible; absent → a random
+    // seed is chosen and STAMPED into the report so the run can still be repeated.
+    seed: optionalIntFlag(argv, "--seed") ?? Math.floor(Math.random() * 0xffffffff),
+    shuffleOrder: !argv.includes("--no-shuffle"),
+    cvThreshold: cvPct / 100,
     // Core pinning comes from reproduce.ts via env (the runner pins the driver →
     // server through inherited affinity, and tells the driver which cores to put
     // the generator on so the two don't contend). Empty → unpinned (non-canonical).
@@ -219,11 +275,34 @@ async function verifyParity(baseUrl: string): Promise<void> {
   }
 }
 
-/** Build the load generator argv for one workload URL. */
-function generatorCmd(opts: Options, url: string): string[] {
+/**
+ * Build the load generator argv for one workload URL at a given concurrency. With a
+ * `rateRps`, the generator runs OPEN-LOOP at a fixed rate — autocannon's
+ * `--overallRate` (and oha's `-q`) — which is the coordinated-omission-aware load:
+ * latency is measured against the intended send schedule, not against whenever a
+ * busy server happened to free a connection. autocannon additionally corrects its
+ * latency histogram for the coordinated-omission issue when rate-limited.
+ */
+function generatorCmd(
+  opts: Options,
+  url: string,
+  connections: number,
+  durationSeconds: number,
+  rateRps: number | null,
+): string[] {
   const base =
     opts.generator === "oha"
-      ? ["oha", "--no-tui", "-j", "-z", `${opts.duration}s`, "-c", String(opts.connections), url]
+      ? [
+          "oha",
+          "--no-tui",
+          "-j",
+          "-z",
+          `${durationSeconds}s`,
+          "-c",
+          String(connections),
+          ...(rateRps != null ? ["-q", String(rateRps)] : []),
+          url,
+        ]
       : // autocannon: prefers the pinned local install (benchmarks/node_modules), else fetches.
         [
           "npx",
@@ -231,9 +310,10 @@ function generatorCmd(opts: Options, url: string): string[] {
           "autocannon",
           "-j",
           "-c",
-          String(opts.connections),
+          String(connections),
           "-d",
-          String(opts.duration),
+          String(durationSeconds),
+          ...(rateRps != null ? ["-R", String(rateRps)] : []),
           url,
         ];
 
@@ -244,27 +324,32 @@ function generatorCmd(opts: Options, url: string): string[] {
   return opts.genCpus ? ["taskset", "-c", opts.genCpus, ...base] : base;
 }
 
-/** Drive one workload `--runs` times and return the median sample. */
-async function loadWorkload(opts: Options, baseUrl: string, path: string): Promise<LoadSample> {
-  const url = `${baseUrl}${path}`;
-  const parse = PARSERS[opts.generator] as (json: string) => LoadSample;
-
-  // Warm the path first (timed-and-thrown-away), then take the recorded runs.
-  await capture(generatorCmd({ ...opts, duration: opts.warmupSeconds }, url), HERE);
-
-  const samples: LoadSample[] = [];
-  for (let i = 0; i < opts.runs; i += 1) {
-    const json = await capture(generatorCmd(opts, url), HERE);
-    samples.push(parse(json));
-  }
-
-  return medianSample(samples);
+/** A single measurement unit in the randomized schedule: one trial of one (workload, rung). */
+interface TrialUnit {
+  readonly workload: Workload;
+  readonly connections: number;
 }
 
-/** Benchmark one app end-to-end: prepare, boot, probe, load every workload, stop. */
-async function benchApp(app: AppDef, port: number, opts: Options): Promise<FrameworkResult[]> {
+/** Bucket key for a (workload, rung)'s repeated trials. */
+function cellKey(workload: string, connections: number): string {
+  return `${workload}|${connections}`;
+}
+
+/**
+ * Benchmark one app end-to-end: prepare, boot, probe, warm every workload, then run
+ * the WHOLE (workload × connection-rung × trial) schedule in a seeded-random order
+ * (so no rung is systematically measured cold-first or hot-last), and reduce each
+ * rung to its median + stability and each (app, workload) to its saturation curve.
+ */
+async function benchApp(
+  app: AppDef,
+  port: number,
+  opts: Options,
+  rng: () => number,
+): Promise<SaturationResult[]> {
   const cwd = join(APPS_DIR, app.dir);
   const baseUrl = `http://127.0.0.1:${port}`;
+  const parse = PARSERS[opts.generator] as (json: string) => LoadSample;
 
   console.log(`\n=== ${app.name} (port ${port}) ===`);
   for (const step of app.prepare) {
@@ -282,16 +367,65 @@ async function benchApp(app: AppDef, port: number, opts: Options): Promise<Frame
   try {
     await waitForReady(`${baseUrl}/plaintext`, opts.startTimeoutMs);
     await verifyParity(baseUrl);
-    console.log("  ready + parity OK — loading workloads...");
+    console.log("  ready + parity OK — warming + sweeping...");
 
-    const results: FrameworkResult[] = [];
+    // Warm each workload once at the top of the ladder (JIT, connection pools) — timed
+    // and thrown away — before any recorded trial, so warmup isn't mixed into the data.
+    const warmConns = Math.max(...opts.connections);
     for (const workload of WORKLOADS) {
-      const sample = await loadWorkload(opts, baseUrl, workload.path);
-      console.log(
-        `  ${workload.name.padEnd(10)} ${sample.requestsPerSec.toFixed(0).padStart(10)} req/s  ` +
-          `p99=${sample.p99Ms.toFixed(2)}ms`,
+      await capture(
+        generatorCmd(opts, `${baseUrl}${workload.path}`, warmConns, opts.warmupSeconds, null),
+        HERE,
       );
-      results.push({ framework: app.name, workload: workload.name, sample });
+    }
+
+    // Build the full schedule (every workload × rung × trial) and randomize its order.
+    const units: TrialUnit[] = [];
+    for (const workload of WORKLOADS) {
+      for (const connections of opts.connections) {
+        for (let t = 0; t < opts.runs; t += 1) {
+          units.push({ workload, connections });
+        }
+      }
+    }
+    const schedule = opts.shuffleOrder ? shuffle(units, rng) : units;
+
+    const byCell = new Map<string, LoadSample[]>();
+    for (const unit of schedule) {
+      const url = `${baseUrl}${unit.workload.path}`;
+      const json = await capture(
+        generatorCmd(opts, url, unit.connections, opts.duration, opts.rateRps),
+        HERE,
+      );
+      const key = cellKey(unit.workload.name, unit.connections);
+      const list = byCell.get(key) ?? [];
+      list.push(parse(json));
+      byCell.set(key, list);
+    }
+
+    // Reduce: each rung → median + stability; each (app, workload) → saturation curve.
+    const results: SaturationResult[] = [];
+    for (const workload of WORKLOADS) {
+      const levels: ConnectionLevel[] = opts.connections.map((connections) => {
+        const samples = byCell.get(cellKey(workload.name, connections)) ?? [];
+
+        return {
+          connections,
+          sample: medianSample(samples),
+          stability: assessStability(
+            samples.map((s) => s.requestsPerSec),
+            opts.cvThreshold,
+          ),
+        };
+      });
+      const saturation = summarizeSaturation(app.name, workload.name, levels, SUCCESS_THRESHOLD);
+      const peak =
+        saturation.maxSustainableRps > 0
+          ? `${saturation.maxSustainableRps.toFixed(0)} req/s @ ${saturation.maxSustainableAt}c` +
+            (saturation.saturated ? "" : " (still climbing)")
+          : "none sustained (dropped requests at every rung)";
+      console.log(`  ${workload.name.padEnd(10)} max sustainable: ${peak}`);
+      results.push(saturation);
     }
 
     return results;
@@ -304,14 +438,19 @@ async function benchApp(app: AppDef, port: number, opts: Options): Promise<Frame
 
 async function main(): Promise<void> {
   const opts = parseOptions(process.argv.slice(2));
-  const selected = APPS.filter((a) => (opts.only ? opts.only.has(a.name) : true));
+  const selectedDefs = APPS.filter((a) => (opts.only ? opts.only.has(a.name) : true));
+  const rng = mulberry32(opts.seed);
+  // Randomize app order too — distributes the cold-CPU-first / hot-CPU-last bias
+  // across frameworks instead of always penalizing whoever's listed first.
+  const selected = opts.shuffleOrder ? shuffle(selectedDefs, rng) : selectedDefs;
 
   console.log(
     `Real-server benchmark — generator=${opts.generator}, duration=${opts.duration}s, ` +
-      `connections=${opts.connections}, runs=${opts.runs} (median)`,
+      `ladder=${opts.connections.join("/")}c, runs=${opts.runs} (median), ` +
+      `${opts.rateRps != null ? `rate=${opts.rateRps} req/s (CO-aware)` : "closed-loop"}, seed=${opts.seed}`,
   );
 
-  const all: FrameworkResult[] = [];
+  const all: SaturationResult[] = [];
   let port = 3100;
   for (const app of selected) {
     if (app.status === "scaffold") {
@@ -319,7 +458,7 @@ async function main(): Promise<void> {
       continue;
     }
     try {
-      all.push(...(await benchApp(app, port, opts)));
+      all.push(...(await benchApp(app, port, opts, rng)));
     } catch (error) {
       console.error(`  ${app.name} FAILED: ${(error as Error).message}`);
     }
@@ -359,7 +498,15 @@ async function main(): Promise<void> {
     genCpus: opts.genCpus,
   });
 
-  const markdown = `${renderResults(all, recordedAt)}\n${renderProvenance(env)}`;
+  const meta: ReportMeta = {
+    recordedAt,
+    runs: opts.runs,
+    seed: opts.seed,
+    rateRps: opts.rateRps,
+    connections: opts.connections,
+    cvThresholdPct: Math.round(opts.cvThreshold * 100),
+  };
+  const markdown = `${renderResults(all, meta)}\n${renderProvenance(env)}`;
   await writeFile(RESULTS_MD, markdown, "utf8");
   console.log(`\n${markdown}`);
   console.log(`Wrote ${RESULTS_MD}`);

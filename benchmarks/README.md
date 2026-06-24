@@ -27,13 +27,18 @@ enforced by the harness and the parity check, not by good intentions:
    Platformatic SSR benchmark's first cut — gzip on one app, none on another, makes
    the wire bytes and the req/s incomparable.)
 2. **Success rate first.** A huge req/s at <100% success is a framework dropping
-   requests under load, not sustained throughput — the report flags it ⚠️ and you
-   read it before the rank. Then read **p99** (tail latency), the number users feel.
+   requests under load, not sustained throughput — so the headline is **max
+   sustainable req/s** (the best throughput held at ≥99.9% success), the report
+   flags any sub-100%-success rung ⚠️, and you read it before the rank. Then read
+   **p99/p99.9** (tail latency), the number users feel.
 3. **Same machine, same run.** Numbers are compared only within one invocation —
    never across machines, never across runs. (In-process noise alone runs tens of
    percent run to run.)
-4. **Median, not best.** The driver records the median of N repetitions after a
-   warmup. The best run flatters; the median is what the framework sustains.
+4. **Median, not best — and the spread is shown.** The driver records the median of
+   N repetitions after a warmup, in a seeded-random order, and reports the
+   run-to-run **coefficient of variation** per rung. The best run flatters; the
+   median is what the framework sustains; a rung whose CV exceeds the gate (default
+   5%) is flagged ⚠️ as too noisy to trust rather than quietly published.
 5. **Production mode, pinned versions.** Apps run their production build with
    `NODE_ENV=production`. Each pins its framework version; **every published
    number must cite the version matrix and hardware below.**
@@ -88,17 +93,34 @@ Run the driver with **bun** (it's TypeScript and boots TS apps); `node` cannot.
 
 ```sh
 bun benchmarks/driver/run.ts
-bun benchmarks/driver/run.ts --duration 10 --connections 50 --runs 3
+bun benchmarks/driver/run.ts --duration 10 --connections 16,64,256 --runs 5   # sweep a connection ladder
 bun benchmarks/driver/run.ts --only lesto,lesto-bare,hono,fastify
-bun benchmarks/driver/run.ts --generator oha      # if oha is installed (default: pinned autocannon)
+bun benchmarks/driver/run.ts --rate 50000          # constant-rate (coordinated-omission-aware) load
+bun benchmarks/driver/run.ts --generator oha --seed 1234   # oha if installed (default: pinned autocannon)
 ```
 
 The driver installs/builds each app once, boots it on a fresh port, verifies
-parity, warms it, runs the load generator `--runs` times per workload, keeps the
-median, and writes `RESULTS.md`. Every `RESULTS.md` ends with an auto-stamped **Run
-provenance** block (git SHA, real CPU/RAM/OS, resolved tool + framework versions,
-and the observed governor/turbo/core-pinning) — and a loud ⚠️ if the host wasn't
-publication-grade. **Don't hand-publish raw `run.ts` output; use the runner below.**
+parity, warms it, then **sweeps a ladder of connection levels** (`--connections`,
+default `16,32,64,128,256`), running the load generator `--runs` times per
+(workload, rung). The headline per workload is **max sustainable req/s** — the
+highest throughput a framework holds at ≥99.9% success, not the biggest number it
+posts while shedding load (the Platformatic 1k-rps framing). It keeps the median of
+each rung and writes the full saturation curve to `RESULTS.md`.
+
+**Statistical rigor.** Trials run in a **seeded-random order** (`--seed`; stamped
+into the report) so no rung is systematically measured cold-first or hot-last; each
+rung reports its **coefficient of variation** across trials and is flagged ⚠️ when
+the CV exceeds the stability gate (`--cv-threshold`, default 5%) — a noisy,
+non-reproducible number. Latency is reported across the full spread
+(p50/p75/p90/p99/p99.9/max). `--rate <req/s>` switches to constant-rate open-loop
+load (autocannon `--overallRate` / oha `-q`), which is **coordinated-omission-aware**
+— latency is measured against the intended send schedule, not whenever a busy
+server freed a connection (autocannon additionally corrects its histogram).
+
+Every `RESULTS.md` ends with an auto-stamped **Run provenance** block (git SHA, real
+CPU/RAM/OS, resolved tool + framework versions, and the observed
+governor/turbo/core-pinning) — and a loud ⚠️ if the host wasn't publication-grade.
+**Don't hand-publish raw `run.ts` output; use the runner below.**
 
 ## Reproduce it yourself
 
@@ -191,10 +213,13 @@ benchmarks/
     dispatch.ts   Lesto vs Hono/Elysia/Fastify in-process dispatch  (+ .test.ts)
     run.ts        bin → COMPARISON.md
   driver/         real-server load harness (CI / local)
-    parse.ts      pure: parse oha/autocannon JSON (req/s, p99, success), median, rank  (+ .test.ts)
+    parse.ts      pure: parse oha/autocannon JSON (req/s, p50–max spread, success); stats
+                  (mean/stddev/CV + stability gate); saturation (max sustainable req/s);
+                  seeded run-order shuffle; median; rank/render  (+ .test.ts)
     env.ts        pure: render run-provenance block + host-readiness probe  (+ .test.ts)
     apps.ts       the framework matrix (data)
-    run.ts        orchestrator: prepare → boot → parity(+ct+compression) → load → median → stamp provenance
+    run.ts        orchestrator: prepare → boot → parity(+ct+compression) → warm → sweep the
+                  connection ladder in seeded-random order → median+CV → saturation → stamp
     reproduce.ts  one-command runner: host checks → pin cores (taskset) → run → stamp
   Dockerfile      software-pin image (lower fidelity; stamped non-canonical)
   node_modules/   competitor libs (hono/elysia/fastify/find-my-way/autocannon) — isolated, gitignored
