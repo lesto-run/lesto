@@ -139,14 +139,18 @@ describe("createBearerAuthenticator", () => {
     expect(rolesOf).not.toHaveBeenCalled();
   });
 
-  it("refuses a token minted for another audience — no passthrough (string aud)", async () => {
+  it("refuses a cross-audience token without resolving roles — no passthrough (string aud)", async () => {
+    const rolesOf = vi.fn(async () => ["operator"]);
+
     const authenticate = createBearerAuthenticator({
       verifyAccessToken: async () => ({ ...ownClaims, audience: "https://other.test/mcp" }),
       resource: RESOURCE,
-      rolesOf: async () => ["operator"],
+      rolesOf,
     });
 
     expect(await authenticate("cross.audience.token")).toBeUndefined();
+    // A token we're about to refuse never triggers a roles lookup.
+    expect(rolesOf).not.toHaveBeenCalled();
   });
 
   it("refuses a token whose audience array omits this resource", async () => {
@@ -160,6 +164,41 @@ describe("createBearerAuthenticator", () => {
     });
 
     expect(await authenticate("cross.audience.token")).toBeUndefined();
+  });
+
+  it("refuses a token carrying an empty audience array (fail-closed)", async () => {
+    const authenticate = createBearerAuthenticator({
+      verifyAccessToken: async () => ({ ...ownClaims, audience: [] }),
+      resource: RESOURCE,
+      rolesOf: async () => ["operator"],
+    });
+
+    expect(await authenticate("no.audience.token")).toBeUndefined();
+  });
+
+  it("composes synchronous seams too (MaybePromise, not just async)", async () => {
+    const authenticate = createBearerAuthenticator({
+      verifyAccessToken: () => ownClaims,
+      resource: RESOURCE,
+      rolesOf: () => ["operator"],
+    });
+
+    const session = await authenticate("a.token");
+
+    expect(session).toEqual({
+      principal: { actor: "user-42", actorRoles: ["operator"] },
+      scopes: ["mcp:read", "mcp:write"],
+    });
+  });
+
+  it("refuses to build against an empty resource — the audience guard would be vacuous", () => {
+    expect(() =>
+      createBearerAuthenticator({
+        verifyAccessToken: async () => ownClaims,
+        resource: "",
+        rolesOf: async () => ["operator"],
+      }),
+    ).toThrow(/non-empty `resource`/);
   });
 });
 

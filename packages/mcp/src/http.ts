@@ -33,6 +33,8 @@
 
 import type { Policy, Principal } from "@lesto/authz";
 
+import { McpError } from "./errors";
+
 /** A value delivered now or awaited — the established local convention. */
 type MaybePromise<T> = T | Promise<T>;
 
@@ -50,8 +52,10 @@ export interface AccessTokenClaims {
 
   /**
    * The OAuth scopes the token grants — the enforced ceiling on what its bearer may
-   * do (a `mcp:read` token can never reach a write). The seam parses the space-
-   * delimited `scope` claim (RFC 6749 §3.3) into this list.
+   * do (a `mcp:read` token can never reach a write). The seam MUST hand back the
+   * already-split scope tokens, NOT the raw space-delimited `scope` string (RFC 6749
+   * §3.3): the ceiling is an exact-membership check, so a single un-split
+   * `["mcp:read mcp:write"]` element would silently match nothing and deny everything.
    */
   scopes: readonly string[];
 }
@@ -71,15 +75,17 @@ export type VerifyAccessToken = (token: string) => MaybePromise<AccessTokenClaim
  * Extract the bearer token from an `Authorization` header value, or `undefined` when
  * the header is absent or not a well-formed `Bearer <token>`.
  *
- * The scheme is matched case-insensitively (RFC 6750 §2.1), and the token must be a
- * single non-empty run with no embedded spaces. The transport reads the bearer from
- * the `Authorization` header ONLY — never a query string, where it would leak into
- * logs and referrers — so this parser is the sole entry point for a token.
+ * The scheme is matched case-insensitively (RFC 6750 §2.1), and the captured token is
+ * constrained to the spec's `b64token` grammar (`ALPHA / DIGIT / "-._~+/" / "="`) — so a
+ * malformed credential is rejected at this boundary rather than handed on to the verify
+ * seam. The transport reads the bearer from the `Authorization` header ONLY — never a
+ * query string, where it would leak into logs and referrers — so this parser is the sole
+ * entry point for a token.
  */
 export function bearerFromAuthorization(header: string | undefined): string | undefined {
   if (header === undefined) return undefined;
 
-  const match = /^Bearer +(\S+)$/i.exec(header.trim());
+  const match = /^Bearer +([A-Za-z0-9._~+/-]+=*)$/i.exec(header.trim());
 
   return match?.[1];
 }
@@ -104,7 +110,11 @@ export interface ProtectedResourceMetadata {
 
 /** What {@link protectedResourceMetadata} needs to describe this Resource Server. */
 export interface ProtectedResourceMetadataOptions {
-  /** This RS's own resource identifier — the audience tokens must carry. */
+  /**
+   * This RS's own resource identifier — the audience tokens must carry. The canonical
+   * resource URI, byte-identical to the `resource` the authenticator checks against and
+   * to the `aud` the issuer mints.
+   */
   resource: string;
 
   /** The issuer(s) this RS trusts to mint tokens — the configured external IdP first. */
@@ -150,7 +160,11 @@ export interface BearerAuthenticatorOptions {
   /**
    * This RS's own resource identifier. A validated token whose audience does NOT name
    * this resource is refused — no passthrough — so a token a user granted to a
-   * different service can never be replayed here (the confused-deputy guard).
+   * different service can never be replayed here (the confused-deputy guard). MUST be
+   * the canonical resource URI, byte-identical to the `aud` value the issuer mints
+   * (audience comparison is exact per RFC 7519 §4.1.3 — no trailing-slash/port/case
+   * normalization is applied here), and non-empty (an empty resource would make the
+   * guard vacuous; {@link createBearerAuthenticator} rejects it at construction).
    */
   resource: string;
 
@@ -182,6 +196,17 @@ export function createBearerAuthenticator(
   options: BearerAuthenticatorOptions,
 ): (token: string) => Promise<BearerSession | undefined> {
   const { verifyAccessToken, resource, rolesOf } = options;
+
+  // A blank resource would make the audience guard vacuous — `"" === ""` and
+  // `[""].includes("")` both hold — so a token audienced to nothing would slip
+  // through. Refuse it loudly at construction rather than silently honoring such
+  // tokens at request time (a misconfig that otherwise reads as "every token valid").
+  if (resource === "") {
+    throw new McpError(
+      "MCP_RESOURCE_REQUIRED",
+      "An MCP Resource Server needs a non-empty `resource` identifier to check token audiences against.",
+    );
+  }
 
   return async (token) => {
     const claims = await verifyAccessToken(token);

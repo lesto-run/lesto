@@ -14,7 +14,9 @@ export type McpErrorCode =
   /** The optional content peers aren't installed, so the content tools can't load. */
   | "MCP_CONTENT_PACKAGES_MISSING"
   | "MCP_CONTENT_STORE_UNAVAILABLE"
-  | "MCP_OPERATOR_REQUIRED";
+  | "MCP_OPERATOR_REQUIRED"
+  /** A Resource Server was built without the non-empty `resource` its audience guard needs. */
+  | "MCP_RESOURCE_REQUIRED";
 
 /** Anything the MCP control plane can refuse to do. */
 export class McpError extends LestoError<McpErrorCode> {
