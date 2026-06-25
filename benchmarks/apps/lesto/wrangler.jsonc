@@ -1,0 +1,21 @@
+{
+	// The Lesto bench app as a Cloudflare Worker — Lesto's edge-native target.
+	// Used two ways: `wrangler deploy` (a live functional + bundle-size check) and
+	// `wrangler dev` (local workerd, the driver's apples-to-apples edge load path).
+	// Minimal on purpose: the four workload routes are pure dynamic dispatch — NO
+	// static-assets binding (no prerendered files) and NO D1/Hyperdrive (the routes
+	// never query a DB), unlike the estate example.
+	"name": "lesto-bench-edge",
+	"main": "worker.ts",
+	"compatibility_date": "2026-06-01",
+	// node:crypto etc. that @lesto/web may reach for (request-id minting); matches
+	// the estate worker's flags.
+	"compatibility_flags": [
+		"nodejs_compat",
+	],
+	// No request logging on the bench path (fair vs the bare competitors) and no
+	// analytics overhead.
+	"observability": {
+		"enabled": false,
+	},
+}

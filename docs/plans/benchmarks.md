@@ -161,6 +161,26 @@ NOT dogfooding the examples gallery — byte-identity across five frameworks is 
 simpler from a fixed contract function. `bun test` green (74 tests). Competitor apps'
 live parity is gated by the driver at run time (CI/local — can't boot here).
 
+## Update 2026-06-25 — edge/Workers tier (task `L-ca067176`)
+
+Added Lesto's **primary target — Cloudflare Workers** — to the suite. `apps/lesto`
+now has an edge entry (`worker.ts` via `@lesto/cloudflare`'s `toFetchHandler`)
+fronting the SAME four routes as the node server: the routes were extracted to a
+shared, edge-safe `app.ts` (imports only `@lesto/web` — no `node:http`/`openSqlite`),
+so one dispatch powers both transports. **Verified live** (`wrangler deploy`): the
+Worker builds, deploys, and serves byte-identical bytes on all four routes
+(`lesto-bench-edge.<account>.workers.dev`); footprint **636 KiB / 121.6 KiB gzip**,
+**16 ms** startup. The local-workerd load path is wired as the `lesto-workers` app
+(`start-edge.mjs` → `wrangler dev --local`, honoring the driver's PORT), marked
+`scaffold` — the deploy is proven, but booting workerd as a benchmark target is
+unvalidated in a sandbox that blocks server starts.
+
+**Honesty line held:** no edge req/s number. Hitting a deployed Worker over the
+internet measures the network + CF's multi-tenant edge, not Lesto, and breaks the
+"same machine, never cross-machine" charter. The only honest edge throughput is
+local workerd (same machine, same load path) — deferred to a real-machine run, like
+the rest of the driver suite. `bun test` green (76).
+
 ## Remaining work (tracked as Studio tasks)
 
 - **⭐ Measure + investigate the default secure-stack hot-path cost** on the

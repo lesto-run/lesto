@@ -78,6 +78,24 @@ export const APPS: readonly AppDef[] = [
     start: ["bun", "run", "server.ts"],
     status: "ready",
   },
+  {
+    // Lesto on its PRIMARY target — Cloudflare Workers — served by LOCAL workerd
+    // (`wrangler dev --local`, via `start-edge.mjs`) so it's an apples-to-apples,
+    // same-machine comparison with the Node/Bun servers, NOT the deployed Worker over
+    // the internet. Reuses the `lesto` dir: the `@lesto/cloudflare` Worker entry
+    // (`worker.ts`) fronts the SAME routes (`app.ts`) the node server serves.
+    //
+    // `scaffold` — the Worker BUILDS, DEPLOYS, and serves byte-identical bytes on the
+    // live edge (verified: see README → "Edge tier"), but booting local workerd AS a
+    // benchmark target (readiness + non-interactive `wrangler dev`) is unvalidated in
+    // a sandbox that blocks server starts. Flip to `"ready"` once confirmed on a real
+    // machine — then the run compares Lesto-on-workerd vs Lesto-on-node head to head.
+    name: "lesto-workers",
+    dir: "lesto",
+    prepare: [],
+    start: ["node", "start-edge.mjs"],
+    status: "scaffold",
+  },
   // Meta-frameworks: scaffolded with build steps; apps tracked as follow-ups (see
   // apps/<name>/README.md). Marked `scaffold` so the orchestrator skips them until
   // their server is implemented, rather than failing the whole run.

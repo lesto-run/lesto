@@ -187,6 +187,7 @@ framework maintainer or the community) — see task `L-97e1bca5`.
 | Server | Fastify                | ✅ ready    | `apps/fastify`                                               |
 | Server | Express                | ✅ ready    | `apps/express`                                               |
 | Server | Elysia                 | ✅ ready    | `apps/elysia`                                                |
+| Edge   | **Lesto** (Workers)    | 🚧 scaffold | `apps/lesto` (`worker.ts` — local workerd; deploy verified)  |
 | Meta   | Next.js                | 🚧 scaffold | `apps/next`                                                  |
 | Meta   | SvelteKit              | 🚧 scaffold | `apps/sveltekit`                                             |
 | Meta   | Astro                  | 🚧 scaffold | `apps/astro`                                                 |
@@ -200,6 +201,41 @@ all tiers. **`/realistic`** is the credible workload — a 24-card catalog page
 re-rendered per request behind a simulated 1–5 ms DB round-trip with no caching (see
 `workloads.md`); the hello-world routes flatter raw routers and hide real fullstack
 cost.
+
+### Edge tier (Cloudflare Workers) — Lesto's real target
+
+Lesto is edge-native, so a Node-only comparison measures a deployment it doesn't
+primarily ship to. `apps/lesto/worker.ts` runs the SAME four routes (`app.ts`,
+shared with the node server) through `@lesto/cloudflare`'s `toFetchHandler` — pure
+dispatch, no `node:http`, no DB, no static-assets binding.
+
+**Verified live** (`wrangler deploy`, 2026-06-25): the Worker builds, deploys, and
+serves **byte-identical** bytes on all four routes (`/plaintext`, `/json`, `/ssr`,
+`/realistic`) at `lesto-bench-edge.<account>.workers.dev`.
+
+| Edge metric | Value |
+| --- | --- |
+| Worker bundle (upload) | **635.98 KiB** (gzip **121.56 KiB**) |
+| Worker startup time | **16 ms** (wrangler-reported) |
+| Workload parity | ✅ all 4 routes byte-identical to the contract |
+
+```sh
+cd benchmarks/apps/lesto
+wrangler deploy --dry-run --outdir /tmp/w   # bundle only — size, no deploy
+wrangler deploy                             # live functional + footprint check
+wrangler dev --local --port 8787            # local workerd (the driver's edge load path)
+```
+
+**On throughput, honestly:** there is deliberately **no edge req/s number here**.
+Hammering a deployed Worker over the public internet measures your network path +
+CF's multi-tenant edge + Workers' per-request CPU cap — not Lesto — and it violates
+this suite's "same machine, never cross-machine" rule. The *only* honest edge
+throughput comparison is **local workerd** (`wrangler dev --local`, wired as the
+`lesto-workers` app via `apps/lesto/start-edge.mjs`): same machine, same load path,
+no internet. That app is `scaffold` — the deploy is proven, but booting local
+workerd as a benchmark target is unvalidated in a sandbox that blocks server starts;
+flip it to `ready` once confirmed on a real machine, and it runs head-to-head with
+Lesto-on-node.
 
 ### Versions + hardware
 
