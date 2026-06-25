@@ -34,7 +34,20 @@ may include breaking changes.
   rejecting path-traversal-shaped names as defense-in-depth on the static-build
   output paths.
 
-## [0.1.1] - 2026-06-23
+### Fixed
+
+- **cli:** `lesto dev`, `serve`, and `build` no longer hang when the **optional**
+  `lesto.sites.ts` (or the optional `lesto.build.ts`) is absent. Both files are
+  documented as optional — an app with no `lesto.sites.ts` dispatches every path to its
+  own handle — but the loaders relied on a dynamic `import()` *throwing*
+  `ERR_MODULE_NOT_FOUND` for a missing file. The CLI runs its TypeScript through the
+  jiti loader, under which a missing-module `import()` HANGS (it never resolves and
+  never throws) rather than raising that error, so the command blocked forever before
+  the server ever started. The loaders now probe for the file first (the same shape the
+  `lesto.content.ts` loader already used), so an absent optional config is tolerated as
+  documented. This was present in 0.1.1; any app run through the `lesto` CLI without a
+  `lesto.sites.ts` was affected (the scaffold ships one, so freshly-created apps were
+  not, but the file was never actually required and now genuinely isn't).
 
 The first installable public release of Lesto — the batteries-included, agent-native,
 full-stack TypeScript framework. All public `@lesto/*` packages publish together at

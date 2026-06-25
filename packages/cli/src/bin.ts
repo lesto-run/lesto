@@ -770,15 +770,25 @@ const deleteEntry: CliDeps["deleteEntry"] = async (db, collection, id) =>
 const SITES_PATH = join(process.cwd(), "lesto.sites.ts");
 
 const loadSites = async (): Promise<readonly Site[]> => {
+  // `lesto.sites.ts` is OPTIONAL — an app with none dispatches every path to its own
+  // handle. Probe existence FIRST rather than rely on `import()` THROWING for an absent
+  // file: under the bin's jiti loader a missing-module import HANGS (never resolves,
+  // never throws) instead of raising ERR_MODULE_NOT_FOUND, so the prior throw-and-catch
+  // shape blocked `lesto dev`/`serve`/`build` FOREVER when the (documented-optional)
+  // file was absent. `dirExists` is a bare existence probe (works for a file too) — the
+  // same probe-first shape `readContentConfig` already uses for `lesto.content.ts`.
+  if (!(await dirExists(SITES_PATH))) return [];
+
   try {
     const module = (await import(SITES_PATH)) as { default: readonly Site[] };
 
     return defineSites(module.default);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
-      // Distinguish "the sites file is absent" from "a module it imports is
-      // missing": only the former — the sites file itself not existing — is the
-      // tolerated empty-sites case. A missing transitive import is a real error.
+      // The file existed at the probe but a module it imports is missing — only the
+      // sites file itself being absent is tolerated (handled above); a missing
+      // transitive import is a real error. (A delete between probe and import lands
+      // here too, and returning empty is the right tolerant answer.)
       if ((error as { message: string }).message.includes("lesto.sites.ts")) return [];
     }
 
@@ -794,6 +804,11 @@ const loadSites = async (): Promise<readonly Site[]> => {
 const BUILD_HOOK_PATH = join(projectRoot, "lesto.build.ts");
 
 const loadBuildHook = async (): Promise<BuildHook | undefined> => {
+  // Same probe-first guard as `loadSites`: `lesto.build.ts` is OPTIONAL, and the bin's
+  // jiti loader HANGS on a missing-module `import()` rather than throwing — so an absent
+  // hook would block `lesto build` forever. Probe before importing.
+  if (!(await dirExists(BUILD_HOOK_PATH))) return undefined;
+
   try {
     const module = (await import(BUILD_HOOK_PATH)) as { default: BuildHook };
 
