@@ -28,5 +28,21 @@ export type {
 
 export { startMcpServer } from "./server";
 
+export {
+  authorizeBearer,
+  bearerFromAuthorization,
+  createBearerAuthenticator,
+  protectedResourceMetadata,
+} from "./http";
+export type {
+  AccessTokenClaims,
+  BearerAuthenticatorOptions,
+  BearerAuthorization,
+  BearerSession,
+  ProtectedResourceMetadata,
+  ProtectedResourceMetadataOptions,
+  VerifyAccessToken,
+} from "./http";
+
 export { McpError } from "./errors";
 export type { McpErrorCode } from "./errors";
