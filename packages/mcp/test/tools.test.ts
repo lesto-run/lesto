@@ -644,16 +644,18 @@ describe("principal + actor in audit (ADR 0028 Phase 3a)", () => {
 
   it("takes NO @lesto/auth runtime dependency — the session seam is injected, not imported", () => {
     // ADR 0028 Phase 3a: @lesto/mcp resolves a principal from injected seams, never by
-    // reaching into @lesto/auth itself. Assert no source file imports it. The type-only
-    // @lesto/authz (for the `Principal` type) is distinct and allowed — the trailing
-    // quote in the pattern keeps `@lesto/authz` from matching.
+    // reaching into @lesto/auth itself. Assert no source file references it — in ANY
+    // import form: static `from "@lesto/auth"`, a subpath `"@lesto/auth/x"`, a dynamic
+    // `import("@lesto/auth")`, or `require(...)`. The type-only @lesto/authz (for the
+    // `Principal` type) is distinct and allowed — a `z` (not `/` or a quote) follows
+    // `auth`, so the pattern never matches it.
     const srcDir = fileURLToPath(new URL("../src", import.meta.url));
 
     for (const file of readdirSync(srcDir).filter((name) => name.endsWith(".ts"))) {
       const source = readFileSync(`${srcDir}/${file}`, "utf8");
 
-      expect(source, `${file} must not import @lesto/auth`).not.toMatch(
-        /from\s+["']@lesto\/auth["']/,
+      expect(source, `${file} must not reference @lesto/auth`).not.toMatch(
+        /["']@lesto\/auth(\/[^"']*)?["']/,
       );
     }
   });

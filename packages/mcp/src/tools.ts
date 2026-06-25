@@ -131,13 +131,14 @@ export interface LestoMcpContext {
   audit: McpAuditSink;
 
   /**
-   * Resolve who is driving this connection — the per-request principal (ADR 0028
-   * Phase 3a). Injected, so `@lesto/mcp` takes no `@lesto/auth` dependency. Absent
-   * (or resolving `undefined`) → unauthenticated: no `actor` is recorded, the
-   * principal's roles are empty, and a governed write is denied by default. The
-   * stdio server resolves it once from its launch identity; the remote transport
-   * (Phase 3b) resolves it per request from a validated bearer token. Build one from
-   * a session + roles seam with {@link mcpPrincipalResolver}.
+   * Resolve who is driving this connection — the principal (ADR 0028 Phase 3a).
+   * Injected, so `@lesto/mcp` takes no `@lesto/auth` dependency. Absent (or resolving
+   * `undefined`) → unauthenticated: no `actor` is recorded, the principal's roles are
+   * empty, and a governed write is denied by default. Called once per `dispatch`, so
+   * the stdio server's connection-constant identity and the remote transport's
+   * per-request bearer-token principal (Phase 3b) both fit the same seam (a
+   * connection-constant resolver may memoize). Build one from a session + roles seam
+   * with {@link mcpPrincipalResolver}.
    */
   resolvePrincipal?: () => MaybePromise<Principal | undefined>;
 

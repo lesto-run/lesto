@@ -87,6 +87,9 @@ describe("runMcp", () => {
       inputHash: "abc123",
       outcome: "ok",
       durationMs: 7,
+      // Unattributed: the CLI stdio server wires no principal resolver yet (OCP-6
+      // resolves+records the actor; the resolver wiring lands with OCP-7).
+      actor: undefined,
     };
 
     // The context's audit hook renders the record and forwards it to the sink.
