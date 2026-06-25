@@ -12,22 +12,31 @@ import { expect, test } from "@playwright/test";
  * Vite-dev becomes the scaffold default.
  *
  * Phase 1 ships a real mismatch: islands are served by Vite in dev (`@lesto/island-dev`)
- * and bundled by `Bun.build` in prod (`lesto build`). This proves the SAME island source
- * compiles and HYDRATES under BOTH bundlers — catching a "works in dev, breaks built"
- * divergence (dialect, chunking, define inlining, JSX runtime).
+ * and bundled by `Bun.build` for prod (`lesto build`). This SMOKE proves the SAME island
+ * source compiles AND hydrates under BOTH bundlers — so a divergence that breaks
+ * compilation or hydration on one side (a dialect / JSX-runtime mismatch, a define /
+ * resolve break) can't slip through unnoticed once Vite-dev becomes the default.
  *
  * One fixture, two bundlers, by toggling ONE thing: the `examples/island-fast-refresh`
  * app is copied to two temp dirs that differ ONLY in whether `package.json` declares the
  * optional `@lesto/island-dev` peer — the single switch that selects the dev bundler:
- *   - declares it  → `lesto dev` runs the Vite island path  (`/@lesto-dev/…`).
- *   - omits it     → `lesto dev` runs the Bun build/serve path (bare `/client.js`).
- * Each is booted under the real `lesto` bin (so each really runs its bundler), and the
- * same Counter island must hydrate identically (a click increments 0→1) in both. The
- * markers also assert each leg actually used the bundler we intended (no silent fallback).
+ *   - omits it     → `lesto dev` builds islands with `Bun.build` (the SAME bundler
+ *                    `lesto build` uses) and serves the bare `/client.js`.
+ *   - declares it  → `lesto dev` serves islands through Vite under `/@lesto-dev/…`.
+ * Each is booted under the real `lesto` bin (so each really runs its bundler); the same
+ * Counter island must hydrate (click 0→1) in both, the markers assert each leg actually
+ * used the bundler we intended (no silent fallback), and the Bun bundle is checked to be
+ * the Preact client (no `react-dom/server`) so a dialect divergence is caught too.
  *
- * Workspace packages are linked the same way `scaffold-loop.spec.ts` does (symlink the
- * repo `node_modules` into each temp app) — the published-install equivalent while the
- * `@lesto/*` packages resolve from the workspace.
+ * SCOPE — a smoke, not full prod parity: the Bun leg runs `lesto dev`'s Bun path in DEV
+ * mode (unminified), because `lesto serve` does not serve `out/` assets (prod static is
+ * the Worker/CDN's job), so a minified-prod browser leg isn't reachable via the CLI.
+ *
+ * Workspace packages are linked the way `scaffold-loop.spec.ts` does (symlink the repo
+ * `node_modules` into each temp app). NOTE: the Vite leg binds island-dev's FIXED ports
+ * (24677/24678), shared with `island-fast-refresh.spec.ts` — run this via its own
+ * `test:bundler-parity` script / CI job, never alongside that spec in one `playwright
+ * test` invocation (they would collide on those ports).
  */
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -77,9 +86,13 @@ async function copyFixture(dest: string): Promise<void> {
 async function dropIslandDevPeer(appDir: string): Promise<void> {
   const path = join(appDir, "package.json");
   const pkg = JSON.parse(await readFile(path, "utf8")) as {
+    dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
   };
 
+  // Strip from BOTH sections so the switch holds even if the peer is ever declared as a
+  // runtime dep rather than a devDep (the gate reads both).
+  if (pkg.dependencies) delete pkg.dependencies["@lesto/island-dev"];
   if (pkg.devDependencies) delete pkg.devDependencies["@lesto/island-dev"];
 
   await writeFile(path, JSON.stringify(pkg, null, 2));
@@ -116,13 +129,22 @@ test.afterAll(async () => {
   if (workspace !== undefined) await rm(workspace, { recursive: true, force: true });
 });
 
-test("the Bun-bundled island (lesto build path) hydrates", async ({ page, request }) => {
+test("the Bun-bundled island (lesto dev's Bun.build path) hydrates as a Preact client", async ({
+  page,
+  request,
+}) => {
   // Marker: the Bun path serves the bare client bundle — island-dev did NOT activate.
   const html = await (
     await request.get(`${BUN_URL}/`, { headers: { "Sec-Fetch-Site": "same-origin" } })
   ).text();
   expect(html).toContain('src="/client.js"');
   expect(html).not.toContain("/@lesto-dev/");
+
+  // The Bun bundle is the Preact client — no react-dom/server leaked, so the dialect
+  // held (matching the Vite leg). Mirrors scaffold-loop's bundle-dialect guard.
+  const bundle = await (await request.get(`${BUN_URL}/client.js`)).text();
+  expect(bundle).not.toContain("renderToReadableStream");
+  expect(bundle).not.toContain("renderToStaticMarkup");
 
   await page.goto(`${BUN_URL}/`);
   const counter = page.locator('[data-testid="counter"]');

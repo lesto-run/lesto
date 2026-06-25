@@ -212,7 +212,7 @@ jobs:
         working-directory: packages/e2e
         run: bunx playwright install --with-deps chromium
 
-      - name: Same island hydrates under Bun (build) and Vite (dev)
+      - name: Same island hydrates under Bun.build and Vite (both via lesto dev)
         working-directory: packages/e2e
         run: bun run test:bundler-parity
 
