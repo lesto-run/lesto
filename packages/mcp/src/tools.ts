@@ -11,9 +11,13 @@ import { createHash } from "node:crypto";
 
 import type { App } from "@lesto/kernel";
 import type { SqlDatabase } from "@lesto/migrate";
+import type { Principal } from "@lesto/authz";
 
 import { missingContentError } from "./content-peer";
 import { McpError } from "./errors";
+
+/** A value delivered now or awaited — the established local convention. */
+type MaybePromise<T> = T | Promise<T>;
 
 /** The runtime's collections map (collection name → its entries) — entries are opaque here. */
 type ContentCollections = Record<string, unknown[]>;
@@ -90,6 +94,14 @@ export interface McpAuditRecord {
 
   /** Wall-clock duration of the dispatch, in milliseconds. */
   durationMs: number;
+
+  /**
+   * The resolved principal's `actor` (ADR 0028 Phase 3a) — WHO drove this dispatch,
+   * as {@link LestoMcpContext.resolvePrincipal} named them. `undefined` on an
+   * unauthenticated server (no resolver, or no session): the dispatch is still
+   * audited, just unattributed — and a governed write would be refused.
+   */
+  actor: string | undefined;
 }
 
 /** Where every dispatch is recorded. Sync or async; a rejection is left to the caller. */
@@ -118,6 +130,17 @@ export interface LestoMcpContext {
    */
   audit: McpAuditSink;
 
+  /**
+   * Resolve who is driving this connection — the per-request principal (ADR 0028
+   * Phase 3a). Injected, so `@lesto/mcp` takes no `@lesto/auth` dependency. Absent
+   * (or resolving `undefined`) → unauthenticated: no `actor` is recorded, the
+   * principal's roles are empty, and a governed write is denied by default. The
+   * stdio server resolves it once from its launch identity; the remote transport
+   * (Phase 3b) resolves it per request from a validated bearer token. Build one from
+   * a session + roles seam with {@link mcpPrincipalResolver}.
+   */
+  resolvePrincipal?: () => MaybePromise<Principal | undefined>;
+
   /** Injected by the caller (wired to `@lesto/ui-generate`); absent disables `generate_ui`. */
   generateUi?: (prompt: string) => Promise<unknown>;
 
@@ -136,6 +159,49 @@ export interface LestoMcpContext {
    * are present but inert (they raise `MCP_CONTENT_STORE_UNAVAILABLE`).
    */
   contentDb?: SqlDatabase;
+}
+
+/** The session + roles seams an {@link mcpPrincipalResolver} composes into a principal. */
+export interface McpPrincipalResolverOptions {
+  /**
+   * Verify the calling session, returning its `userId` or `undefined` when there is
+   * none. Injected so `@lesto/mcp` takes NO `@lesto/auth` dependency: the stdio server
+   * resolves its launch identity, the remote transport (Phase 3b) wraps a validated
+   * bearer token's subject.
+   */
+  verifySession: () => MaybePromise<{ userId: string } | undefined>;
+
+  /**
+   * Resolve an authenticated user's roles — the `userId -> roles` seam (e.g.
+   * `@lesto/identity`'s `rolesOf`). An authenticated user with no roles is still
+   * attributed, but denied: empty roles satisfy no permission.
+   */
+  rolesOf: (actor: string) => MaybePromise<Iterable<string>>;
+}
+
+/**
+ * Build the MCP principal resolver (ADR 0028 Phase 3a): caller → `actor` (via
+ * `verifySession`) → roles (via `rolesOf`) → {@link Principal} — what
+ * {@link LestoMcpContext.resolvePrincipal} expects. MCP has no web `Context`, so this
+ * composes the two injected seams directly rather than reusing the web middleware.
+ * An unauthenticated caller (no session) resolves to `undefined`: no actor to record,
+ * and downstream gating denies by default.
+ */
+export function mcpPrincipalResolver(
+  options: McpPrincipalResolverOptions,
+): () => Promise<Principal | undefined> {
+  const { verifySession, rolesOf } = options;
+
+  return async () => {
+    const session = await verifySession();
+
+    if (session === undefined) return undefined;
+
+    const actor = session.userId;
+    const actorRoles = [...(await rolesOf(actor))];
+
+    return { actor, actorRoles };
+  };
 }
 
 /** One MCP tool: its identity, its input contract, and the handler that runs it. */
@@ -617,13 +683,23 @@ export async function dispatch(
   const startedAt = now();
   const inputHash = hashInput(input);
 
+  // Resolve who is driving this dispatch (ADR 0028 Phase 3a). An absent resolver or
+  // no session → no principal: the call is still audited, just unattributed.
+  const principal = await context.resolvePrincipal?.();
+
   // Record one line for this invocation, with the duration measured to the
   // moment of recording. Awaited so an async sink (a DB write, a log flush)
   // completes before the dispatch resolves — the audit is part of the contract,
   // not fire-and-forget.
   const audit = (outcome: "ok" | "error"): Promise<void> =>
     Promise.resolve(
-      context.audit({ tool: name, inputHash, outcome, durationMs: now() - startedAt }),
+      context.audit({
+        tool: name,
+        inputHash,
+        outcome,
+        durationMs: now() - startedAt,
+        actor: principal?.actor,
+      }),
     );
 
   const tool = tools.find((candidate) => candidate.name === name);

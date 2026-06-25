@@ -726,6 +726,7 @@
       "name": "@lesto/mcp",
       "version": "0.1.1",
       "dependencies": {
+        "@lesto/authz": "workspace:*",
         "@lesto/db": "workspace:*",
         "@lesto/errors": "workspace:*",
         "@lesto/kernel": "workspace:*",

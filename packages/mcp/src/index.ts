@@ -14,7 +14,7 @@
  * separate adapter in `server.ts`.
  */
 
-export { buildTools, dispatch } from "./tools";
+export { buildTools, dispatch, mcpPrincipalResolver } from "./tools";
 export type {
   ContentModules,
   DispatchOptions,
@@ -23,6 +23,7 @@ export type {
   McpAuditRecord,
   McpAuditSink,
   McpMode,
+  McpPrincipalResolverOptions,
 } from "./tools";
 
 export { startMcpServer } from "./server";

@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -18,7 +21,7 @@ import {
   updateEntry,
 } from "@lesto/content-store";
 
-import { buildTools, dispatch } from "../src/tools";
+import { buildTools, dispatch, mcpPrincipalResolver } from "../src/tools";
 import { McpError } from "../src/errors";
 
 import type { ContentModules, LestoMcpContext, McpAuditRecord } from "../src/tools";
@@ -563,6 +566,96 @@ describe("audit sink", () => {
     await dispatch(ctx, tools, "list_routes", {});
 
     expect(writes).toEqual(["list_routes"]);
+  });
+});
+
+describe("principal + actor in audit (ADR 0028 Phase 3a)", () => {
+  describe("mcpPrincipalResolver", () => {
+    it("resolves a session into a principal carrying actor + roles", async () => {
+      const resolve = mcpPrincipalResolver({
+        verifySession: () => ({ userId: "u-1" }),
+        rolesOf: (actor) => (actor === "u-1" ? ["operator", "viewer"] : []),
+      });
+
+      expect(await resolve()).toEqual({ actor: "u-1", actorRoles: ["operator", "viewer"] });
+    });
+
+    it("resolves to undefined when there is no session, never consulting rolesOf", async () => {
+      const resolve = mcpPrincipalResolver({
+        verifySession: () => undefined,
+        rolesOf: () => {
+          throw new Error("rolesOf called for an unauthenticated caller");
+        },
+      });
+
+      expect(await resolve()).toBeUndefined();
+    });
+
+    it("attributes an authenticated user with no roles (still denied downstream)", async () => {
+      const resolve = mcpPrincipalResolver({
+        verifySession: () => ({ userId: "u-2" }),
+        rolesOf: () => [],
+      });
+
+      expect(await resolve()).toEqual({ actor: "u-2", actorRoles: [] });
+    });
+  });
+
+  it("records the resolved actor on every dispatch", async () => {
+    const ctx = context({
+      resolvePrincipal: mcpPrincipalResolver({
+        verifySession: () => ({ userId: "ada" }),
+        rolesOf: () => ["operator"],
+      }),
+    });
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "list_routes", {});
+
+    expect(audited[0]?.actor).toBe("ada");
+  });
+
+  it("records an undefined actor when the server has no resolver (unattributed)", async () => {
+    const ctx = context(); // no resolvePrincipal wired
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "list_routes", {});
+
+    expect(audited[0]).toMatchObject({ tool: "list_routes", actor: undefined });
+  });
+
+  it("records an undefined actor when the resolver finds no session", async () => {
+    const ctx = context({ resolvePrincipal: () => undefined });
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "list_routes", {});
+
+    expect(audited[0]?.actor).toBeUndefined();
+  });
+
+  it("attributes even an audited refusal (unknown tool) to the actor", async () => {
+    const ctx = context({ resolvePrincipal: () => ({ actor: "ada", actorRoles: [] }) });
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "nope", {}).catch(() => {});
+
+    expect(audited[0]).toMatchObject({ tool: "nope", outcome: "error", actor: "ada" });
+  });
+
+  it("takes NO @lesto/auth runtime dependency — the session seam is injected, not imported", () => {
+    // ADR 0028 Phase 3a: @lesto/mcp resolves a principal from injected seams, never by
+    // reaching into @lesto/auth itself. Assert no source file imports it. The type-only
+    // @lesto/authz (for the `Principal` type) is distinct and allowed — the trailing
+    // quote in the pattern keeps `@lesto/authz` from matching.
+    const srcDir = fileURLToPath(new URL("../src", import.meta.url));
+
+    for (const file of readdirSync(srcDir).filter((name) => name.endsWith(".ts"))) {
+      const source = readFileSync(`${srcDir}/${file}`, "utf8");
+
+      expect(source, `${file} must not import @lesto/auth`).not.toMatch(
+        /from\s+["']@lesto\/auth["']/,
+      );
+    }
   });
 });
 

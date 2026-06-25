@@ -11,6 +11,7 @@
     }
   },
   "dependencies": {
+    "@lesto/authz": "workspace:*",
     "@lesto/db": "workspace:*",
     "@lesto/errors": "workspace:*",
     "@lesto/kernel": "workspace:*",
