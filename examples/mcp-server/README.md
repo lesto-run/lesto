@@ -101,7 +101,10 @@ bun --filter '@lesto/example-mcp-server' test
    verify seam is AS-agnostic.
 3. **Register the MCP server as an OAuth resource** in your IdP, with `mcp:read` /
    `mcp:write` scopes, audienced to your `resource` URL.
-4. The agent's own OAuth client obtains the token (it discovered where from the PRM)
+4. **Wire `rolesOf` to your identity service** (`rolesOf: (actor) => identity.rolesOf(actor)`)
+   instead of the demo's hardcoded table. It rides the principal + the audit trail today
+   and is the input the OCP-7 per-tool policy floor will read.
+5. The agent's own OAuth client obtains the token (it discovered where from the PRM)
    and presents it as `Authorization: Bearer …`. The RS validates, gates, audits.
 
 The seam (ADR 0028 Phase 3b) is the point: the issuer is configuration. When the

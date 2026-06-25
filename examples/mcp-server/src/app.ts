@@ -142,7 +142,9 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
       return booted.handle(method, path, requestOptions);
     },
     get migrationsApplied(): readonly string[] {
-      return booted?.migrationsApplied ?? [];
+      if (booted === undefined) throw new Error("MCP context used before the app booted");
+
+      return booted.migrationsApplied;
     },
   };
 
