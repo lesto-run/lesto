@@ -22,15 +22,17 @@ import type { EdgeExecutionContext } from "@lesto/cloudflare";
 
 import { webApp } from "./app";
 
-// Call `handle` through an arrow so its `this` is preserved when passed to the
-// adapter; the request `options` the adapter supplies satisfy `handle`'s optional shape.
+// Call `handle` through an arrow so its method binding survives being passed to the
+// adapter — `handle` uses `this` internally (the route matcher), so an unbound
+// reference would break. The adapter-supplied `options` satisfy `handle`'s optional shape.
 const handler = toFetchHandler((method, path, options) => webApp.handle(method, path, options));
 
 export default {
   // Workers call `fetch(request, env, ctx)`; forward only request + ctx to the adapter
-  // (no bindings — env is unused). ctx is passed so a future OTLP flush could ride
+  // (no bindings — env is unused). `ctx` is optional to match the adapter's signature
+  // (a node-shaped caller may omit it); it's passed so a future OTLP flush could ride
   // `ctx.waitUntil`, exactly as the estate worker does.
-  fetch(request: Request, _env: unknown, ctx: EdgeExecutionContext): Promise<Response> {
+  fetch(request: Request, _env: unknown, ctx?: EdgeExecutionContext): Promise<Response> {
     return handler(request, ctx);
   },
 };

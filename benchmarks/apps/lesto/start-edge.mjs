@@ -22,7 +22,9 @@ const port = process.env.PORT ?? "8787";
 const here = dirname(fileURLToPath(import.meta.url));
 
 // `--local` runs workerd locally (no account/network); `--inspector-port 0` takes a
-// free debugger port so several edge apps don't collide on the default one.
+// free debugger port so several edge apps don't collide on the default one;
+// `--show-interactive-dev-session false` suppresses the hotkey UI so it never blocks
+// on stdin under the driver / in CI (where it would hang waitForReady forever).
 const child = spawn(
   "npx",
   [
@@ -36,6 +38,8 @@ const child = spawn(
     String(port),
     "--inspector-port",
     "0",
+    "--show-interactive-dev-session",
+    "false",
   ],
   { cwd: here, stdio: "inherit" },
 );
