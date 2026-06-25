@@ -139,7 +139,15 @@ function runtimeDeps(dialect: IslandDialect): { dedupe: string[]; include: strin
       }
     : {
         dedupe: ["react", "react-dom"],
-        include: ["react", "react-dom", "react-dom/client", "react/jsx-runtime"],
+        // `react/jsx-dev-runtime` (NOT just `jsx-runtime`) is the automatic runtime Vite
+        // emits in DEV (`jsxDEV`); without it the first island request triggers a re-optimize.
+        include: [
+          "react",
+          "react-dom",
+          "react-dom/client",
+          "react/jsx-runtime",
+          "react/jsx-dev-runtime",
+        ],
       };
 }
 

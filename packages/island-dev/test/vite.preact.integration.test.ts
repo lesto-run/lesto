@@ -30,7 +30,7 @@ import { createServer } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { Server } from "node:http";
-import type { ViteDevServer } from "vite";
+import type { PluginOption, ViteDevServer } from "vite";
 
 import { viteIslandConfig } from "../src/config";
 
@@ -60,7 +60,10 @@ describe("Vite island Fast-Refresh transform (preact / @prefresh/vite)", () => {
       root: process.cwd(),
       resolve: { alias: config.resolve.alias, dedupe: config.resolve.dedupe },
       server: { middlewareMode: true, hmr: { server: httpServer } },
-      plugins: [prefresh()],
+      // `@prefresh/vite` is typed against its OWN bundled `vite` copy (distinct from this
+      // package's), so its plugin isn't assignable to our `PluginOption` without a cast —
+      // the same duplicate-install type gap `vite.ts` bridges for the shipped wiring.
+      plugins: [prefresh()] as PluginOption[],
       optimizeDeps: { noDiscovery: true, include: [] },
     });
   });
