@@ -11,6 +11,9 @@ export default defineConfig({
         "src/index.ts",
         // Pure wiring: builds the SDK server and connects a process stdio transport.
         "src/server.ts",
+        // Pure wiring: drives the SDK Streamable-HTTP transport over @lesto/web handlers.
+        // Every governance decision it applies is tested in http.ts / tools.ts.
+        "src/streamable-http.ts",
       ],
       thresholds: {
         lines: 100,

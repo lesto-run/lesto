@@ -34,6 +34,7 @@
 import type { Policy, Principal } from "@lesto/authz";
 
 import { McpError } from "./errors";
+import type { McpMode } from "./tools";
 
 /** A value delivered now or awaited — the established local convention. */
 type MaybePromise<T> = T | Promise<T>;
@@ -266,4 +267,221 @@ export function authorizeBearer(request: BearerAuthorization): boolean {
 
   // Floor: the subject's roles must be granted the permission by the policy.
   return policy.allows(roles, permission);
+}
+
+/**
+ * Map a token's scopes to the MCP mode they unlock — the scope ceiling expressed through
+ * the existing read-only/operator gate ({@link McpMode}).
+ *
+ * A token carrying the write scope unlocks `operator`, so the destructive tools become
+ * reachable (still subject to the policy floor); any narrower token gets the `read-only`
+ * floor, so a read-scoped bearer can never drive a write no matter how privileged its
+ * subject. The write-scope name is injected — the OAuth scope vocabulary belongs to the
+ * deployment, not this package.
+ */
+export function mcpModeForScopes(
+  scopes: readonly string[],
+  options: { writeScope: string },
+): McpMode {
+  return scopes.includes(options.writeScope) ? "operator" : "read-only";
+}
+
+/**
+ * Is this request's `Origin` allowed — the DNS-rebinding guard?
+ *
+ * A browser attaches `Origin` to every cross-site request, so a malicious page in a
+ * victim's browser could otherwise drive a local MCP server (DNS rebinding). A PRESENT
+ * origin must therefore be on the allowlist. An ABSENT origin is a non-browser client
+ * (the agent's own HTTP call, curl) and carries no rebinding risk — the threat is a
+ * browser forging cross-site requests, which always sends an `Origin` — so it is allowed.
+ */
+export function isOriginAllowed(
+  origin: string | undefined,
+  allowedOrigins: readonly string[],
+): boolean {
+  return origin === undefined || allowedOrigins.includes(origin);
+}
+
+/** Escape a value for an RFC 7235 quoted-string (`\` and `"` become quoted-pairs). */
+function quoteParam(value: string): string {
+  return value.replace(/[\\"]/g, (char) => `\\${char}`);
+}
+
+/**
+ * Render a `Bearer` challenge from its quoted parameters, dropping the absent ones.
+ * Every caller supplies at least one parameter (a 401 always carries `resource_metadata`,
+ * a 403 always carries `error`+`scope`), so the rendered list is never empty.
+ */
+function bearerChallengeFrom(params: Record<string, string | undefined>): string {
+  const rendered = Object.entries(params)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined)
+    .map(([key, value]) => `${key}="${quoteParam(value)}"`);
+
+  return `Bearer ${rendered.join(", ")}`;
+}
+
+/**
+ * The `WWW-Authenticate` value for a `401` — an unauthenticated or invalid-token request.
+ *
+ * Always points the client at this RS's Protected Resource Metadata (RFC 9728 §5.1) so it
+ * can discover where to obtain a token. When a token WAS presented but failed validation,
+ * `invalidToken` adds `error="invalid_token"` (RFC 6750 §3) — distinguishing "no token"
+ * from "bad token" to the client without leaking *why* the token was rejected.
+ */
+export function bearerChallenge(options: {
+  resourceMetadata: string;
+  invalidToken?: boolean;
+}): string {
+  return bearerChallengeFrom({
+    error: options.invalidToken === true ? "invalid_token" : undefined,
+    resource_metadata: options.resourceMetadata,
+  });
+}
+
+/**
+ * The `WWW-Authenticate` value for a `403` — an authenticated caller whose token scope
+ * does not clear the requested action (RFC 6750 §3.1).
+ *
+ * `scope` names the permission/scope the action required, for the client to surface or
+ * step up to; `resourceMetadata` is included when known so the client can re-discover the
+ * issuer.
+ */
+export function insufficientScopeChallenge(options: {
+  scope: string;
+  resourceMetadata?: string;
+}): string {
+  return bearerChallengeFrom({
+    error: "insufficient_scope",
+    scope: options.scope,
+    resource_metadata: options.resourceMetadata,
+  });
+}
+
+/** The RS's verdict on an inbound HTTP request, before any tool runs. */
+export type McpHttpGateDecision =
+  | {
+      /** Refuse the request at the HTTP layer with this status (+ challenge, on a 401). */
+      kind: "reject";
+      status: number;
+      wwwAuthenticate?: string;
+    }
+  | {
+      /** Proceed: the authenticated session + the {@link McpMode} its scopes unlock. */
+      kind: "accept";
+      session: BearerSession;
+      mode: McpMode;
+    };
+
+/** What {@link gateMcpHttpRequest} needs to decide an inbound request. */
+export interface McpHttpGateOptions {
+  /** The request's `Origin` header (absent for a non-browser client). */
+  origin: string | undefined;
+
+  /** The request's `Authorization` header value. */
+  authorization: string | undefined;
+
+  /** The browser origins allowed to reach this server (the DNS-rebinding allowlist). */
+  allowedOrigins: readonly string[];
+
+  /** Validate a bearer and bind it to a session — a {@link createBearerAuthenticator}. */
+  authenticate: (token: string) => Promise<BearerSession | undefined>;
+
+  /** This RS's Protected Resource Metadata URL, for the `WWW-Authenticate` pointer. */
+  resourceMetadata: string;
+
+  /** The OAuth scope that unlocks writes — the ceiling {@link mcpModeForScopes} reads. */
+  writeScope: string;
+}
+
+/**
+ * The RS's request-level gate (ADR 0028 Phase 3b): `Origin` guard → bearer authentication
+ * → scope-derived {@link McpMode}.
+ *
+ * Returns a `reject` carrying the spec-shaped status (and, on a 401, the
+ * `WWW-Authenticate` challenge) the transport renders into an HTTP error, or an `accept`
+ * carrying the authenticated {@link BearerSession} and the mode its scopes unlock. The
+ * ordering is deliberate: a cross-site origin is refused (`403`, no challenge — it is not
+ * an auth problem) before any token is read; a missing token is a bare `401` pointing at
+ * the metadata; a presented-but-invalid token is a `401` marked `invalid_token`. The
+ * per-tool scope ceiling ({@link scopeCeilingChallenge}) and the policy floor apply later,
+ * inside dispatch.
+ */
+export async function gateMcpHttpRequest(
+  options: McpHttpGateOptions,
+): Promise<McpHttpGateDecision> {
+  if (!isOriginAllowed(options.origin, options.allowedOrigins)) {
+    return { kind: "reject", status: 403 };
+  }
+
+  const token = bearerFromAuthorization(options.authorization);
+
+  if (token === undefined) {
+    return {
+      kind: "reject",
+      status: 401,
+      wwwAuthenticate: bearerChallenge({ resourceMetadata: options.resourceMetadata }),
+    };
+  }
+
+  const session = await options.authenticate(token);
+
+  if (session === undefined) {
+    return {
+      kind: "reject",
+      status: 401,
+      wwwAuthenticate: bearerChallenge({
+        resourceMetadata: options.resourceMetadata,
+        invalidToken: true,
+      }),
+    };
+  }
+
+  return {
+    kind: "accept",
+    session,
+    mode: mcpModeForScopes(session.scopes, { writeScope: options.writeScope }),
+  };
+}
+
+/** A minimal view of a JSON-RPC `tools/call` — the only message the scope ceiling inspects. */
+interface ToolsCallMessage {
+  method?: unknown;
+  params?: { name?: unknown };
+}
+
+/** Narrow an unknown JSON-RPC body to a `tools/call`, returning the tool name or `undefined`. */
+function toolsCallName(message: unknown): string | undefined {
+  if (typeof message !== "object" || message === null) return undefined;
+
+  const candidate = message as ToolsCallMessage;
+
+  if (candidate.method !== "tools/call") return undefined;
+
+  return typeof candidate.params?.name === "string" ? candidate.params.name : undefined;
+}
+
+/**
+ * The scope-ceiling refusal for a tool call — or `undefined` to let it through.
+ *
+ * A request whose scopes only unlock `read-only` mode may not call a destructive tool: the
+ * transport turns the returned challenge into an HTTP `403` BEFORE dispatch, so a
+ * scope-insufficient write is refused at the HTTP layer (RFC 6750 §3.1) rather than
+ * surfacing as a JSON-RPC error inside a `200`. The check is the ceiling only — the policy
+ * floor still runs in dispatch — and it inspects only a `tools/call`; a `tools/list` or the
+ * `initialize` handshake passes through untouched. In `operator` mode (the write scope was
+ * present) it never fires.
+ */
+export function scopeCeilingChallenge(options: {
+  message: unknown;
+  mode: McpMode;
+  destructiveTools: ReadonlySet<string>;
+  writeScope: string;
+}): string | undefined {
+  if (options.mode === "operator") return undefined;
+
+  const name = toolsCallName(options.message);
+
+  if (name === undefined || !options.destructiveTools.has(name)) return undefined;
+
+  return insufficientScopeChallenge({ scope: options.writeScope });
 }

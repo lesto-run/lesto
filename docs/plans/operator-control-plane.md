@@ -165,6 +165,21 @@ store (Inc 5), a configured IdP, and Inc 6's principal path.
    edge. **Confused-deputy defaults (asserted):** dedicated least-privilege agent role;
    read-only default; impersonation tools never registered on the MCP surface.
 
+   **Seam decision (`L-15fd2238`, settled by the OCP-8 wrap-up review) — option (a).** The
+   per-request bearer subject flows through a fresh per-request `runContext` + `buildTools`
+   whose `resolvePrincipal` closes over the request's authenticated `BearerSession`
+   (`() => session.principal`); the zero-arg `LestoMcpContext.resolvePrincipal` from OCP-6
+   is left UNCHANGED (no `(caller)` arg). `buildTools` is cheap and request-scoped context
+   is the standard request-scoped-DI pattern (refuted "wasteful"); concurrency-safe because
+   nothing is shared between requests. Option (b) (widen the signature, thread a caller) was
+   rejected as a needless API change.
+
+   **Split (this increment vs MA-6).** OCP-9 ships the *reusable transport battery* in
+   `@lesto/mcp` (the coverage-excluded `streamable-http.ts` handler factory) + its TESTED
+   governance (origin guard, 401/403 `WWW-Authenticate` builders, scope→mode ceiling) +
+   the structural asserts. The *production demo mount* (an `examples/` server wired to a
+   real external IdP + launch content) is **MA-6**'s stated job — not pre-built here.
+
 ## Owned elsewhere (do not duplicate)
 
 - The `Session` lifecycle + session-token hardening → `@lesto/auth` + the

@@ -4,11 +4,19 @@ import { definePolicy } from "@lesto/authz";
 
 import {
   authorizeBearer,
+  bearerChallenge,
   bearerFromAuthorization,
   createBearerAuthenticator,
+  gateMcpHttpRequest,
+  insufficientScopeChallenge,
+  isOriginAllowed,
+  mcpModeForScopes,
   protectedResourceMetadata,
+  scopeCeilingChallenge,
 } from "../src/http";
-import type { AccessTokenClaims } from "../src/http";
+import type { AccessTokenClaims, BearerSession } from "../src/http";
+
+const PRM_URL = "https://api.example.test/.well-known/oauth-protected-resource";
 
 // This RS's own identifier — the audience every accepted token must carry.
 const RESOURCE = "https://api.example.test/mcp";
@@ -247,5 +255,198 @@ describe("authorizeBearer", () => {
         permission: "mcp.write",
       }),
     ).toBe(false);
+  });
+});
+
+describe("mcpModeForScopes", () => {
+  it("unlocks operator mode when the write scope is present", () => {
+    expect(mcpModeForScopes(["mcp:read", "mcp:write"], { writeScope: "mcp:write" })).toBe(
+      "operator",
+    );
+  });
+
+  it("floors a narrower token to read-only — a read token can never write", () => {
+    expect(mcpModeForScopes(["mcp:read"], { writeScope: "mcp:write" })).toBe("read-only");
+    expect(mcpModeForScopes([], { writeScope: "mcp:write" })).toBe("read-only");
+  });
+});
+
+describe("isOriginAllowed", () => {
+  const allowed = ["https://app.example.test"];
+
+  it("allows a present origin on the allowlist", () => {
+    expect(isOriginAllowed("https://app.example.test", allowed)).toBe(true);
+  });
+
+  it("refuses a present origin off the allowlist (DNS-rebinding guard)", () => {
+    expect(isOriginAllowed("https://evil.test", allowed)).toBe(false);
+  });
+
+  it("allows an absent origin — a non-browser client carries no rebinding risk", () => {
+    expect(isOriginAllowed(undefined, allowed)).toBe(true);
+  });
+});
+
+describe("bearerChallenge", () => {
+  it("points an unauthenticated request at the protected-resource metadata", () => {
+    expect(bearerChallenge({ resourceMetadata: PRM_URL })).toBe(
+      `Bearer resource_metadata="${PRM_URL}"`,
+    );
+  });
+
+  it("marks a presented-but-invalid token with error=invalid_token", () => {
+    expect(bearerChallenge({ resourceMetadata: PRM_URL, invalidToken: true })).toBe(
+      `Bearer error="invalid_token", resource_metadata="${PRM_URL}"`,
+    );
+  });
+});
+
+describe("insufficientScopeChallenge", () => {
+  it("names the required permission as the scope, for the client to display", () => {
+    expect(insufficientScopeChallenge({ scope: "mcp:write" })).toBe(
+      `Bearer error="insufficient_scope", scope="mcp:write"`,
+    );
+  });
+
+  it("includes the resource metadata when known, and escapes quoted-string specials", () => {
+    expect(insufficientScopeChallenge({ scope: 'a"b', resourceMetadata: PRM_URL })).toBe(
+      `Bearer error="insufficient_scope", scope="a\\"b", resource_metadata="${PRM_URL}"`,
+    );
+  });
+});
+
+describe("gateMcpHttpRequest", () => {
+  const operatorSession: BearerSession = {
+    principal: { actor: "user-42", actorRoles: ["operator"] },
+    scopes: ["mcp:read", "mcp:write"],
+  };
+
+  const base = {
+    allowedOrigins: ["https://app.example.test"],
+    resourceMetadata: PRM_URL,
+    writeScope: "mcp:write",
+  };
+
+  it("refuses a cross-site origin with 403 and no challenge — before reading any token", async () => {
+    const authenticate = vi.fn(async () => operatorSession);
+
+    const decision = await gateMcpHttpRequest({
+      ...base,
+      origin: "https://evil.test",
+      authorization: "Bearer good.token",
+      authenticate,
+    });
+
+    expect(decision).toEqual({ kind: "reject", status: 403 });
+    expect(authenticate).not.toHaveBeenCalled();
+  });
+
+  it("answers a missing token with a bare 401 pointing at the metadata", async () => {
+    const decision = await gateMcpHttpRequest({
+      ...base,
+      origin: undefined,
+      authorization: undefined,
+      authenticate: async () => operatorSession,
+    });
+
+    expect(decision).toEqual({
+      kind: "reject",
+      status: 401,
+      wwwAuthenticate: `Bearer resource_metadata="${PRM_URL}"`,
+    });
+  });
+
+  it("marks a presented-but-invalid token 401 invalid_token", async () => {
+    const decision = await gateMcpHttpRequest({
+      ...base,
+      origin: "https://app.example.test",
+      authorization: "Bearer bad.token",
+      authenticate: async () => undefined,
+    });
+
+    expect(decision).toEqual({
+      kind: "reject",
+      status: 401,
+      wwwAuthenticate: `Bearer error="invalid_token", resource_metadata="${PRM_URL}"`,
+    });
+  });
+
+  it("accepts a write-scoped token and unlocks operator mode", async () => {
+    const decision = await gateMcpHttpRequest({
+      ...base,
+      origin: "https://app.example.test",
+      authorization: "Bearer good.token",
+      authenticate: async () => operatorSession,
+    });
+
+    expect(decision).toEqual({ kind: "accept", session: operatorSession, mode: "operator" });
+  });
+
+  it("accepts a read-only token and floors the mode to read-only", async () => {
+    const readSession: BearerSession = {
+      principal: { actor: "user-9", actorRoles: ["viewer"] },
+      scopes: ["mcp:read"],
+    };
+
+    const decision = await gateMcpHttpRequest({
+      ...base,
+      origin: undefined,
+      authorization: "Bearer read.token",
+      authenticate: async () => readSession,
+    });
+
+    expect(decision).toEqual({ kind: "accept", session: readSession, mode: "read-only" });
+  });
+});
+
+describe("scopeCeilingChallenge", () => {
+  const destructiveTools = new Set(["handle_request", "create_content_entry"]);
+  const opts = { destructiveTools, writeScope: "mcp:write" };
+
+  it("never fires in operator mode (the write scope was present)", () => {
+    expect(
+      scopeCeilingChallenge({
+        ...opts,
+        mode: "operator",
+        message: { method: "tools/call", params: { name: "handle_request" } },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("refuses a destructive tools/call under read-only with an insufficient_scope challenge", () => {
+    expect(
+      scopeCeilingChallenge({
+        ...opts,
+        mode: "read-only",
+        message: { method: "tools/call", params: { name: "handle_request" } },
+      }),
+    ).toBe(`Bearer error="insufficient_scope", scope="mcp:write"`);
+  });
+
+  it("lets a non-destructive tools/call through under read-only", () => {
+    expect(
+      scopeCeilingChallenge({
+        ...opts,
+        mode: "read-only",
+        message: { method: "tools/call", params: { name: "list_routes" } },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("ignores non-tools/call messages (a list, the initialize handshake)", () => {
+    expect(
+      scopeCeilingChallenge({ ...opts, mode: "read-only", message: { method: "tools/list" } }),
+    ).toBeUndefined();
+  });
+
+  it("ignores a non-object body and a call with a non-string tool name", () => {
+    expect(scopeCeilingChallenge({ ...opts, mode: "read-only", message: null })).toBeUndefined();
+    expect(
+      scopeCeilingChallenge({
+        ...opts,
+        mode: "read-only",
+        message: { method: "tools/call", params: { name: 7 } },
+      }),
+    ).toBeUndefined();
   });
 });

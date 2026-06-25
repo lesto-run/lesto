@@ -30,19 +30,30 @@ export { startMcpServer } from "./server";
 
 export {
   authorizeBearer,
+  bearerChallenge,
   bearerFromAuthorization,
   createBearerAuthenticator,
+  gateMcpHttpRequest,
+  insufficientScopeChallenge,
+  isOriginAllowed,
+  mcpModeForScopes,
   protectedResourceMetadata,
+  scopeCeilingChallenge,
 } from "./http";
 export type {
   AccessTokenClaims,
   BearerAuthenticatorOptions,
   BearerAuthorization,
   BearerSession,
+  McpHttpGateDecision,
+  McpHttpGateOptions,
   ProtectedResourceMetadata,
   ProtectedResourceMetadataOptions,
   VerifyAccessToken,
 } from "./http";
+
+export { createMcpHttpHandlers } from "./streamable-http";
+export type { McpHttpHandlers, McpHttpServerOptions } from "./streamable-http";
 
 export { McpError } from "./errors";
 export type { McpErrorCode } from "./errors";
