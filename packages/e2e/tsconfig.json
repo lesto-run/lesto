@@ -8,5 +8,5 @@
     "types": ["node"]
   },
 
-  "include": ["fixtures", "island-hydration.spec.ts", "playwright.config.ts"]
+  "include": ["fixtures", "*.spec.ts", "playwright.config.ts"]
 }
