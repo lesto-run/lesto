@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,10 +20,16 @@ import { expect, test } from "@playwright/test";
  *    story; at the `0.x` publish they flip to a real version range).
  * 2. `lesto build` produces the Preact island client (`out/client.js`) — a build
  *    that used to crash on a missing `out/` dir, and on the absent `lesto.sites.ts`
- *    the scaffold now ships.
- * 3. `lesto dev` boots and serves the page; we assert on the raw server HTML that
- *    the island shipped its fallback + co-located mount script + the client module
- *    tag, and that `/client.js` is the PREACT bundle (no `react-dom/server`).
+ *    the scaffold now ships. We read that BUILT artifact off disk and assert it is
+ *    the PREACT bundle (no `react-dom/server`): `lesto build` always uses `Bun.build`
+ *    for prod regardless of the dev bundler, so the prod client is checked at its
+ *    source, not over HTTP (dev now serves islands via Vite — see step 3).
+ * 3. `lesto dev` boots and serves the page through the Vite Fast-Refresh server — the
+ *    scaffold now declares the `@lesto/island-dev` peer by DEFAULT (DX-parity R2), so
+ *    `lesto dev` serves islands via Vite under `/@lesto-dev/` (the document's client
+ *    tag is rewritten to the base + the Vite client is injected), NOT the bare Bun
+ *    `/client.js`. We assert the island's SSR fallback + that Vite-rewritten tag on
+ *    the raw server HTML.
  * 4. In a real browser the deferred island mounts and its `useState` button goes
  *    live — a click increments the count, the visible proof hydration ran on the
  *    Preact runtime, not just that the server painted markup.
@@ -102,7 +108,11 @@ test.beforeAll(async () => {
   // 1. Scaffold a fresh app via create-lesto's own bin. `--local` pins the @lesto/*
   //    deps at in-repo `file:` paths (the in-monorepo dev mode) — the default emits
   //    published `^0.x` ranges, which only resolve from the registry post-publish.
-  await run("bun", [CREATE_LESTO_BIN, APP_NAME, "--local"], workspace);
+  //    `--no-install` because step 2 IS the install: a real `bun install` of `file:`
+  //    pins can't resolve their transitive `workspace:*` deps until publish (the
+  //    unpublished-package problem this e2e works around — see the file header), and
+  //    skipping it leaves `node_modules` absent so the symlink below can claim it.
+  await run("bun", [CREATE_LESTO_BIN, APP_NAME, "--local", "--no-install"], workspace);
 
   // 2. "Install" the workspace-linked packages: link the app's node_modules at the
   //    repo's installed workspace node_modules (the publish-equivalent of `bun
@@ -125,7 +135,7 @@ test.afterAll(async () => {
   await rm(workspace, { recursive: true, force: true });
 });
 
-test("the scaffolded page ships the island fallback + mount script + client tag", async ({
+test("the scaffolded page ships the island fallback + the Vite Fast-Refresh client tag", async ({
   request,
 }) => {
   const html = await (
@@ -138,16 +148,20 @@ test("the scaffolded page ships the island fallback + mount script + client tag"
   expect(html).toContain('data-testid="counter"');
   expect(html).toContain('"component":"Counter"');
 
-  // The hydration runtime is wired: the head module tag that boots /client.js.
-  expect(html).toContain('<script type="module" src="/client.js">');
+  // island Fast Refresh is the scaffold DEFAULT: the app declares `@lesto/island-dev`,
+  // so `lesto dev` serves the entry through Vite (base-prefixed) + injects the Vite
+  // client — never the bare Bun `/client.js`. A bare tag would mean the default flip
+  // regressed (island-dev failed to activate and the dev server fell back to Bun).
+  expect(html).toContain('src="/@lesto-dev/@vite/client"');
+  expect(html).toContain('src="/@lesto-dev/client.js"');
+  expect(html).not.toContain('src="/client.js"');
 });
 
-test("the served client.js is the Preact bundle, never react-dom/server", async ({ request }) => {
-  const response = await request.get(`${BASE_URL}/client.js`);
-
-  expect(response.status()).toBe(200);
-
-  const source = await response.text();
+test("the BUILT out/client.js is the Preact bundle, never react-dom/server", async () => {
+  // `lesto build` (step 2) always emits the prod client with `Bun.build` — independent of
+  // the dev bundler. Read that artifact off disk (the dev server now serves islands via
+  // Vite, so the prod bundle is checked at its source, not over HTTP).
+  const source = await readFile(join(appDir, "out", "client.js"), "utf8");
 
   // The headline of blocker #8: the client never drags React's server renderer.
   expect(source).not.toContain("renderToReadableStream");
