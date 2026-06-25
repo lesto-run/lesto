@@ -71,9 +71,20 @@ full flow (discovery → 401 → viewer reads → viewer refused → operator de
 bun run examples/mcp-server/serve.ts        # PORT=3000 by default
 ```
 
-The QA gate — drives the whole flow over a **live** server with real `fetch` calls
-carrying real signed JWTs (this is the runtime proof the package's in-process tests
-couldn't give):
+A **real MCP client** completes the dance — connects the actual
+`@modelcontextprotocol/sdk` `Client` (the same library Claude/Cursor/MCP-Inspector
+use) over `StreamableHTTPClientTransport` to the live server, with a real bearer:
+operator `connect`/`listTools`/`callTool` → a real deploy; viewer refused by the
+scope ceiling; anonymous turned away:
+
+```
+bun run examples/mcp-server/agent.ts
+```
+
+The QA gate — drives the whole flow over a **live** server, two ways: with real
+`fetch` + signed JWTs (`test/mcp-server.test.ts`), and through a real MCP **client**
+(`test/mcp-client.test.ts`). This is the runtime proof the package's in-process
+tests couldn't give:
 
 ```
 bun --filter '@lesto/example-mcp-server' test

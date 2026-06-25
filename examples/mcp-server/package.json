@@ -7,6 +7,7 @@
   "scripts": {
     "start": "bun run run.ts",
     "serve": "bun run serve.ts",
+    "agent": "bun run agent.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -15,6 +16,7 @@
     "@lesto/mcp": "workspace:*",
     "@lesto/runtime": "workspace:*",
     "@lesto/web": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^11.10.0",
     "jose": "^6.2.3"
   }
