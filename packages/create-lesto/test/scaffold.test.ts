@@ -16,6 +16,7 @@ import {
   libUtils,
   stylesApp,
   lestoSites,
+  LESTO_DEV_PACKAGES,
   LESTO_PACKAGES,
   packageJson,
   SHADCN_DEPS,
@@ -428,6 +429,22 @@ describe("templates", () => {
     expect(parsed.dependencies["preact"]).toBeDefined();
     expect(parsed.dependencies["react"]).toBeDefined();
     expect(parsed.dependencies["react-dom"]).toBeDefined();
+  });
+
+  it("declares the dev-only @lesto/island-dev peer in devDependencies (Fast Refresh by default)", () => {
+    const parsed = JSON.parse(packageJson("acme", fakePin)) as {
+      dependencies: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
+
+    for (const pkg of LESTO_DEV_PACKAGES) {
+      // In devDependencies, resolved through the injected pin (never the workspace protocol)...
+      expect(parsed.devDependencies[pkg]).toBe(fakePin(pkg));
+      expect(parsed.devDependencies[pkg]).not.toContain("workspace:");
+
+      // ...and NOT in the runtime deps — it is a dev-only bundler, unused by `lesto build`.
+      expect(parsed.dependencies[pkg]).toBeUndefined();
+    }
   });
 
   it("lestoApp default-exports a LestoAppConfig with the preact dialect and the CSS entry", () => {

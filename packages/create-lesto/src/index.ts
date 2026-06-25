@@ -37,6 +37,7 @@ export {
   lestoApp,
   lestoSites,
   libUtils,
+  LESTO_DEV_PACKAGES,
   LESTO_PACKAGES,
   packageJson,
   readme,
@@ -49,4 +50,4 @@ export {
   worker,
   wranglerConfig,
 } from "./templates";
-export type { LestoDepResolver } from "./templates";
+export type { LestoDepResolver, LestoPackage } from "./templates";

@@ -45,6 +45,24 @@ export const LESTO_PACKAGES = [
 ] as const;
 
 /**
+ * The dev-ONLY `@lesto/*` peers a scaffolded app declares in `devDependencies` (resolved
+ * through the SAME injected pin as {@link LESTO_PACKAGES}).
+ *
+ * `@lesto/island-dev` is the Vite Fast-Refresh dev server (DX-parity R2, ADR 0011): an
+ * OPTIONAL peer of `@lesto/cli` that `lesto dev` activates IFF the app declares it, so
+ * editing an island preserves `useState` instead of full-reloading. It is dev-only — it
+ * carries Vite + the React/Preact Fast-Refresh plugins (a heavy graph never loaded in a
+ * production install) and `lesto build` never uses it — so it sits in `devDependencies`,
+ * NOT the runtime `dependencies`. Shipping it by default makes Fast Refresh the
+ * out-of-the-box `lesto dev` experience; the CLI picks free Vite/HMR ports per `lesto dev`
+ * so a second concurrent app does not collide.
+ */
+export const LESTO_DEV_PACKAGES = ["@lesto/island-dev"] as const;
+
+/** Every `@lesto/*` package the scaffold pins — runtime ({@link LESTO_PACKAGES}) or dev ({@link LESTO_DEV_PACKAGES}). */
+export type LestoPackage = (typeof LESTO_PACKAGES)[number] | (typeof LESTO_DEV_PACKAGES)[number];
+
+/**
  * The Tailwind v4 train the scaffolded app pins (ADR 0037). It MUST match the
  * `@tailwindcss/*` engine `@lesto/styles` depends on: `tailwindcss` is the PEER the
  * app's `@import "tailwindcss"` resolves, and the engine `@lesto/styles` owns
@@ -79,7 +97,7 @@ export const SHADCN_DEPS = {
  * resolver is injected so a test can pin to a fake specifier and the publish
  * decision lives in exactly one place.
  */
-export type LestoDepResolver = (pkg: (typeof LESTO_PACKAGES)[number]) => string;
+export type LestoDepResolver = (pkg: LestoPackage) => string;
 
 /**
  * Coerce a project name into a valid npm package name for the `package.json`
@@ -111,9 +129,14 @@ export function toPackageName(name: string): string {
  * see `lesto.app.ts`'s `ui: { dialect: "preact" }`). The `name` field is run
  * through {@link toPackageName} so an uppercase directory name still yields a
  * registry-valid manifest name.
+ *
+ * `devDependencies` carries {@link LESTO_DEV_PACKAGES} — `@lesto/island-dev`, so every new
+ * app gets Vite Fast Refresh on `lesto dev` by default (it activates only because the app
+ * declares it). It is dev-only (heavy Vite graph, unused by `lesto build`), hence a devDep.
  */
 export function packageJson(name: string, lestoDep: LestoDepResolver): string {
   const lestoDeps = Object.fromEntries(LESTO_PACKAGES.map((pkg) => [pkg, lestoDep(pkg)]));
+  const lestoDevDeps = Object.fromEntries(LESTO_DEV_PACKAGES.map((pkg) => [pkg, lestoDep(pkg)]));
 
   const manifest = {
     name: toPackageName(name),
@@ -155,6 +178,10 @@ export function packageJson(name: string, lestoDep: LestoDepResolver): string {
       // tw-animate-css v4 layer the theme imports, and the lucide icon set.
       ...SHADCN_DEPS,
       zod: "^4.0.0",
+    },
+
+    devDependencies: {
+      ...lestoDevDeps,
     },
   };
 
