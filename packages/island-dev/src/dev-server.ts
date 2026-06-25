@@ -2,7 +2,7 @@
  * The island dev server — pure orchestration over an injected Vite backend.
  *
  *   const islandDev = await createIslandDevServer(
- *     { root, islandsDir, dialect: "react", hmrPort: 24678 },
+ *     { root, islandsDir, dialect: "react", vitePort, hmrPort },  // free ports, per-`lesto dev`
  *     viteIslandDevDeps(),
  *   );
  *   // in the CLI dev dispatch:

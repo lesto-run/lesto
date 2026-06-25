@@ -59,7 +59,13 @@ export interface ViteIslandConfig {
     /** The internal port Vite's HTTP server listens on (proxied to by the CLI dev path). */
     readonly port: number;
 
-    /** Fail fast if the internal port is taken rather than silently drifting to another. */
+    /**
+     * Bind exactly the CLI-chosen port or fail — never silently drift to another, which
+     * would strand the CLI's proxy (it targets {@link port}) on the wrong server. The CLI
+     * picks a FREE port per `lesto dev` (`findIslandDevPorts`), so the bind effectively
+     * always succeeds; on the rare TOCTOU loss the bind rejects and the CLI degrades to
+     * full reload rather than crashing.
+     */
     readonly strictPort: true;
 
     /** Vite's HMR WebSocket on a dedicated port (the Bun reload socket keeps its own). */

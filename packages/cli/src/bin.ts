@@ -11,6 +11,8 @@
 import { spawn } from "node:child_process";
 import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { watch } from "node:fs";
+import { createServer as createNetServer } from "node:net";
+import type { AddressInfo, Server as NetServer } from "node:net";
 import { dirname, join } from "node:path";
 
 import { nodeStaticReader, serve } from "@lesto/runtime";
@@ -441,12 +443,66 @@ const resolvePublicEnvDefine = async (): Promise<PublicEnvDefine | undefined> =>
   return clientDefineMap(module.clientEnv);
 };
 
-// The dev-only Vite island ports (DX-parity R2). `VITE` is the loopback HTTP port the
-// CLI proxies island module requests to; `HMR` is the dedicated WebSocket port the
-// browser connects to for Fast-Refresh updates. Fixed like `LIVE_RELOAD_PORT` so they
-// are predictable, and distinct from the app port and the Bun reload socket.
-const ISLAND_DEV_VITE_PORT = 24677;
-const ISLAND_DEV_HMR_PORT = 24678;
+// The island Fast Refresh ports (DX-parity R2): the loopback HTTP port the CLI proxies
+// island modules to, and the dedicated WebSocket port the browser connects to for
+// Fast-Refresh updates.
+interface IslandDevPorts {
+  readonly vitePort: number;
+  readonly hmrPort: number;
+}
+
+// Pick two DISTINCT free loopback TCP ports for island Fast Refresh. Both ephemeral
+// (`:0`) listeners are held open SIMULTANEOUSLY so the OS hands back distinct ports, then
+// released. Chosen per `lesto dev` (NOT fixed like `LIVE_RELOAD_PORT`) so a second
+// concurrent `lesto dev` claims its own pair instead of colliding on a shared constant —
+// the old fixed 24677/24678 made the second app's Vite bind fail (`strictPort`), silently
+// degrading it to full reload. A tiny TOCTOU window between release and Vite's bind
+// remains; `strictPort` + the `resolveIslandDev` degrade cover it (a lost race → full
+// reload, never a crash).
+const findIslandDevPorts = (): Promise<IslandDevPorts> =>
+  new Promise((resolve, reject) => {
+    const servers: NetServer[] = [];
+    const ports: number[] = [];
+
+    const closeAll = (done: () => void): void => {
+      let pending = servers.length;
+
+      for (const server of servers) {
+        server.close(() => {
+          pending -= 1;
+
+          if (pending === 0) done();
+        });
+      }
+    };
+
+    const fail = (cause: unknown): void => {
+      closeAll(() =>
+        reject(cause instanceof Error ? cause : new Error("could not find a free port")),
+      );
+    };
+
+    for (let index = 0; index < 2; index += 1) {
+      const server = createNetServer();
+
+      servers.push(server);
+      server.on("error", fail);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address() as AddressInfo | null;
+
+        if (address === null) {
+          fail(new Error("could not resolve a free port"));
+
+          return;
+        }
+
+        ports.push(address.port);
+
+        if (ports.length === 2)
+          closeAll(() => resolve({ vitePort: ports[0]!, hmrPort: ports[1]! }));
+      });
+    }
+  });
 
 // Build the Vite island Fast-Refresh dev server (DX-parity R2). OPT-IN: only when the
 // project has an `app/islands/` dir AND installed the optional `@lesto/island-dev`
@@ -469,14 +525,15 @@ const buildIslandDev = async (dialect: UiDialect): Promise<IslandDevServer | und
   if (islandDevModule === undefined) return undefined;
 
   const publicEnvDefine = await resolvePublicEnvDefine();
+  const { vitePort, hmrPort } = await findIslandDevPorts();
 
   return islandDevModule.createIslandDevServer(
     {
       root: projectRoot,
       islandsDir,
       dialect,
-      vitePort: ISLAND_DEV_VITE_PORT,
-      hmrPort: ISLAND_DEV_HMR_PORT,
+      vitePort,
+      hmrPort,
       ...(publicEnvDefine === undefined ? {} : { publicEnvDefine }),
     },
     islandDevModule.viteIslandDevDeps(projectRoot),

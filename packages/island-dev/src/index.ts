@@ -2,7 +2,7 @@
  * @lesto/island-dev — the dev-only island bundler (DX-parity R2, ADR 0011).
  *
  *   const islandDev = await createIslandDevServer(
- *     { root, islandsDir, dialect: "react", vitePort: 24677, hmrPort: 24678 },
+ *     { root, islandsDir, dialect: "react", vitePort, hmrPort },  // free ports, per-`lesto dev`
  *     viteIslandDevDeps(root),
  *   );
  *   // in `lesto dev`'s dispatch:

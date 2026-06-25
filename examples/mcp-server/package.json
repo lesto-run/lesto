@@ -1,0 +1,21 @@
+{
+  "name": "@lesto/example-mcp-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "An authenticated, production-shaped remote MCP server: agents reach the Lesto control plane over HTTP behind a real OAuth bearer token validated against an external IdP's JWKS (jose) — RFC 9728 discovery, the audience no-passthrough guard, and the mcp:write scope ceiling that floors a read-only token to read-only mode while an operator token unlocks the destructive tools.",
+  "type": "module",
+  "scripts": {
+    "start": "bun run run.ts",
+    "serve": "bun run serve.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/kernel": "workspace:*",
+    "@lesto/mcp": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "better-sqlite3": "^11.10.0",
+    "jose": "^6.2.3"
+  }
+}

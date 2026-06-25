@@ -127,6 +127,18 @@
         "better-sqlite3": "^11.10.0",
       },
     },
+    "examples/mcp-server": {
+      "name": "@lesto/example-mcp-server",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/kernel": "workspace:*",
+        "@lesto/mcp": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+        "jose": "^6.2.3",
+      },
+    },
     "examples/queue-dashboard": {
       "name": "@lesto/example-queue-dashboard",
       "version": "0.0.0",
@@ -1290,6 +1302,8 @@
     "@lesto/example-island-fast-refresh": ["@lesto/example-island-fast-refresh@workspace:examples/island-fast-refresh"],
 
     "@lesto/example-mailing-lists": ["@lesto/example-mailing-lists@workspace:examples/mailing-lists"],
+
+    "@lesto/example-mcp-server": ["@lesto/example-mcp-server@workspace:examples/mcp-server"],
 
     "@lesto/example-queue-dashboard": ["@lesto/example-queue-dashboard@workspace:examples/queue-dashboard"],
 
