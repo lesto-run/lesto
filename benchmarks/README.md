@@ -113,9 +113,11 @@ rung reports its **coefficient of variation** across trials and is flagged ⚠�
 the CV exceeds the stability gate (`--cv-threshold`, default 5%) — a noisy,
 non-reproducible number. Latency is reported across the full spread
 (p50/p75/p90/p99/p99.9/max). `--rate <req/s>` switches to constant-rate open-loop
-load (autocannon `--overallRate` / oha `-q`), which is **coordinated-omission-aware**
-— latency is measured against the intended send schedule, not whenever a busy
-server freed a connection (autocannon additionally corrects its histogram).
+load (autocannon `--overallRate` / oha `-q`): the generator keeps sending on
+schedule instead of backing off when the server stalls — the structural mitigation
+for coordinated omission. **autocannon** additionally back-corrects its latency
+histogram for coordinated omission, so it's the CO-rigorous default; oha `-q` paces
+the send rate but reports observed latency (no histogram correction).
 
 Every `RESULTS.md` ends with an auto-stamped **Run provenance** block (git SHA, real
 CPU/RAM/OS, resolved tool + framework versions, and the observed

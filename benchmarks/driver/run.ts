@@ -282,10 +282,11 @@ async function verifyParity(baseUrl: string): Promise<void> {
 /**
  * Build the load generator argv for one workload URL at a given concurrency. With a
  * `rateRps`, the generator runs OPEN-LOOP at a fixed rate — autocannon's
- * `--overallRate` (and oha's `-q`) — which is the coordinated-omission-aware load:
- * latency is measured against the intended send schedule, not against whenever a
- * busy server happened to free a connection. autocannon additionally corrects its
- * latency histogram for the coordinated-omission issue when rate-limited.
+ * `--overallRate` (or oha's `-q`): it keeps sending on schedule instead of backing
+ * off when the server stalls, the structural mitigation for coordinated omission.
+ * autocannon ADDITIONALLY back-corrects its latency histogram for coordinated
+ * omission when rate-limited (so it's the CO-rigorous default); oha's `-q` paces the
+ * rate but reports observed latency, with no histogram correction.
  */
 function generatorCmd(
   opts: Options,
