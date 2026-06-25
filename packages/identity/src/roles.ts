@@ -15,6 +15,10 @@
  * edge's signed token. So the store stays decoupled from the integer surrogate and
  * works for any actor id. Deny-by-default is structural: a user with no rows resolves to
  * `[]`, which satisfies no permission.
+ *
+ * It lives in `@lesto/identity` because roles most often sit beside the users they
+ * describe — but it holds NO foreign key, so it is cleanly extractable to a standalone
+ * package the day an app's actors stop coming from this identity store.
  */
 
 import {
@@ -30,19 +34,21 @@ import {
 import type { Migration } from "@lesto/migrate";
 
 export const userRoles = defineTable("user_roles", {
-  // A surrogate key: `@lesto/db` exposes no composite-key seam, so a `(user, role)`
-  // grant's uniqueness is enforced by `grantRole` (check-then-insert), not the schema.
+  // A surrogate key, because `@lesto/db`'s `defineTable` has no composite-PK seam.
+  // Uniqueness of a `(user, role)` grant is enforced structurally instead — by a
+  // composite UNIQUE INDEX `userRolesMigration` adds — so a grant can never duplicate
+  // even under a concurrent race; `grantRole` keeps a sequential repeat a clean no-op.
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: text("user_id").notNull(),
   role: text("role").notNull(),
 });
 
-/** The distinct roles a user holds — `[]` when none (deny-by-default). */
+/** The roles a user holds — `[]` when none (deny-by-default). */
 export async function rolesOf(db: Db, userId: string): Promise<string[]> {
   const rows = await db.select().from(userRoles).where(eq(userRoles.userId, userId)).all();
 
-  // A user's roles are a SET; dedupe defensively even though `grantRole` is idempotent.
-  return [...new Set(rows.map((row) => row.role))];
+  // The `(user, role)` unique index makes every grant distinct, so no dedupe is needed.
+  return rows.map((row) => row.role);
 }
 
 /** Grant `role` to `userId`, idempotently — a no-op when the grant already exists. */
@@ -76,8 +82,13 @@ export const userRolesMigration: { version: string; migration: Migration } = {
   migration: {
     async up(schema) {
       await schema.execute(createTableSql(userRoles, schema.dialect));
+      // Enforce one row per `(user, role)` at the schema level — the composite
+      // uniqueness `defineTable` cannot express. This is the structural backstop
+      // behind `grantRole`'s idempotency (and why `rolesOf` needn't dedupe).
+      await schema.addIndex("user_roles", ["user_id", "role"], { unique: true });
     },
     async down(schema) {
+      // Dropping the table takes its index with it.
       await schema.execute(dropTableSql(userRoles));
     },
   },

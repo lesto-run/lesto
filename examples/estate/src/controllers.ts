@@ -18,6 +18,7 @@
 
 import { lesto } from "@lesto/web";
 import type { Context, Lesto } from "@lesto/web";
+import type { PrincipalResolverOptions } from "@lesto/authz";
 
 import {
   clearSessionCookie,
@@ -72,7 +73,7 @@ function sessionUser(email: string): SessionResponseUser {
  */
 export function buildEstateRoutes(
   identity: Identity,
-  rolesOf: (actor: string) => Promise<string[]>,
+  rolesOf: PrincipalResolverOptions["rolesOf"],
 ): Lesto {
   /** The current user (an Identity model), or undefined when signed out. */
   const currentUser = async (c: Context): Promise<{ email: string } | undefined> => {

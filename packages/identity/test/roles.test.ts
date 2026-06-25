@@ -13,7 +13,7 @@ import { createDb } from "@lesto/db";
 import type { Db, SqlDatabase } from "@lesto/db";
 import { Migrator } from "@lesto/migrate";
 
-import { grantRole, revokeRole, rolesOf, userRolesMigration } from "../src/index";
+import { grantRole, revokeRole, rolesOf, userRoles, userRolesMigration } from "../src/index";
 
 // ---------------------------------------------------------------------------
 // Test rig — one in-memory SQLite per test wrapped in the `@lesto/db` async
@@ -109,6 +109,16 @@ describe("grantRole", () => {
     await grantRole(db, "u-1", "admin");
 
     expect(await rolesOf(db, "u-1")).toEqual(["admin"]);
+  });
+
+  it("the schema rejects a duplicate (user, role) on a direct insert (the structural backstop)", async () => {
+    await grantRole(db, "u-1", "admin");
+
+    // Bypass grantRole's check-then-insert: the composite UNIQUE INDEX is what
+    // guarantees no duplicate grant, even under a concurrent race grantRole can't see.
+    await expect(
+      db.insert(userRoles).values({ userId: "u-1", role: "admin" }).run(),
+    ).rejects.toThrow();
   });
 });
 
