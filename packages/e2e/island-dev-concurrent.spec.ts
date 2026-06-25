@@ -4,26 +4,35 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
-import type { APIRequestContext, Page } from "@playwright/test";
+import type { APIRequestContext } from "@playwright/test";
 
 /**
- * Two concurrent `lesto dev` apps both keep island Fast Refresh — the regression gate
- * for the per-`lesto dev` free-port fix (DX-parity R2, `L-40a57050`), and the guard that
- * lets island Fast Refresh be the SCAFFOLD DEFAULT without a footgun.
+ * Two concurrent `lesto dev` apps each get their OWN island Fast Refresh server — the
+ * regression gate for the per-`lesto dev` free-port fix (DX-parity R2, `L-40a57050`), and
+ * the guard that lets island Fast Refresh be the SCAFFOLD DEFAULT without a footgun.
  *
- * island-dev's Vite HTTP + HMR sockets used to bind FIXED ports (24677/24678), so a
- * second concurrent `lesto dev` failed to bind them — `strictPort` rejected and the CLI
- * silently degraded that app to full reload (no Fast Refresh). That is fine for an opt-in
- * feature, but as the universal default it would regress every multi-app dev workflow.
- * The CLI now picks a FREE pair per `lesto dev` (`findIslandDevPorts` in `bin.ts`), so two
- * apps never collide.
+ * island-dev's Vite HTTP + HMR sockets used to bind FIXED ports (24677/24678), so a second
+ * concurrent `lesto dev` failed to bind them — `strictPort` rejected and the CLI silently
+ * degraded that app to full reload (no Fast Refresh, serving the bare Bun `/client.js`).
+ * That is fine for an opt-in feature, but as the universal default it would regress every
+ * multi-app dev workflow. The CLI now picks a FREE pair per `lesto dev` (`findIslandDevPorts`
+ * in `bin.ts`), so two apps never collide.
  *
  * The proof: boot the SAME tracked `examples/island-fast-refresh` app (which DECLARES the
- * `@lesto/island-dev` peer) TWICE on two different app ports, and assert BOTH serve the
- * island through Vite (`/@lesto-dev/client.js`) AND hydrate. With the old fixed ports the
- * second app would degrade to the bare Bun `/client.js` and this would fail. No file is
- * edited — this is purely the concurrent-boot collision check (the edit→state-preserved
- * round-trip is `island-fast-refresh.spec.ts`).
+ * `@lesto/island-dev` peer) TWICE, on two app ports, AT ONCE, and assert BOTH serve the
+ * island through Vite — the document's client tag is rewritten to the Vite base
+ * (`/@lesto-dev/client.js`) and the Vite client preamble is injected, which the CLI does
+ * ONLY when island-dev's Vite server actually started (a failed start degrades to the bare
+ * `/client.js`). Under the OLD fixed ports the second app loses the 24677 race → degrades →
+ * bare `/client.js` → this fails. So the served HTML is a sufficient, deterministic
+ * collision check.
+ *
+ * SCOPE — this is the no-port-collision concurrency check, NOT a hydration test. The live
+ * `useState`/HMR round-trip (which depends on Vite's cold-start dep-optimizer settling, a
+ * timing the browser recovers from via reload but a test can race) is proven, reliably and
+ * single-server, by `island-fast-refresh.spec.ts`. Driving a browser click here would only
+ * re-test hydration while adding that cold-start flake under the doubled CPU load — so this
+ * spec stays at the HTTP layer.
  *
  * The app is an in-repo workspace member, so its `@lesto/*` deps already resolve — no
  * scaffold/symlink step. Both processes share one project dir read-only; only their app
@@ -83,37 +92,29 @@ test.afterAll(() => {
   devB?.kill("SIGTERM");
 });
 
-/** Assert an app serves its island through Vite (island-dev active, not degraded) + hydrates. */
-async function expectViteFastRefresh(
-  url: string,
-  page: Page,
-  request: APIRequestContext,
-): Promise<void> {
+/** Assert an app's document is served through island-dev's Vite server (not the degraded Bun path). */
+async function expectIslandDevActive(url: string, request: APIRequestContext): Promise<void> {
   const html = await (
     await request.get(`${url}/`, { headers: { "Sec-Fetch-Site": "same-origin" } })
   ).text();
 
-  // island-dev is live for THIS app: the entry is Vite-base-prefixed, not the bare Bun path.
+  // island-dev's Vite server is live for THIS app: the Vite client + the island entry are
+  // base-prefixed under `/@lesto-dev/` (the CLI only rewrites to the base when the server
+  // actually started), and the bare Bun `/client.js` is gone. A bare tag would mean this
+  // app lost the port race and degraded — the regression this gate exists to catch.
+  expect(html).toContain('src="/@lesto-dev/@vite/client"');
   expect(html).toContain('src="/@lesto-dev/client.js"');
   expect(html).not.toContain('src="/client.js"');
-
-  await page.goto(`${url}/`);
-  const counter = page.locator('[data-testid="counter"]');
-  await expect(counter).toHaveText("count: 0");
-  await counter.click();
-  await expect(counter).toHaveText("count: 1");
 }
 
-test("the FIRST concurrent lesto dev serves island Fast Refresh via Vite", async ({
-  page,
+test("the FIRST concurrent lesto dev serves the island via its own Vite server", async ({
   request,
 }) => {
-  await expectViteFastRefresh(URL_A, page, request);
+  await expectIslandDevActive(URL_A, request);
 });
 
-test("the SECOND concurrent lesto dev ALSO serves Fast Refresh (no fixed-port collision)", async ({
-  page,
+test("the SECOND concurrent lesto dev ALSO serves via Vite (no fixed-port collision)", async ({
   request,
 }) => {
-  await expectViteFastRefresh(URL_B, page, request);
+  await expectIslandDevActive(URL_B, request);
 });

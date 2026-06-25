@@ -33,10 +33,9 @@ import { expect, test } from "@playwright/test";
  * the Worker/CDN's job), so a minified-prod browser leg isn't reachable via the CLI.
  *
  * Workspace packages are linked the way `scaffold-loop.spec.ts` does (symlink the repo
- * `node_modules` into each temp app). NOTE: the Vite leg binds island-dev's FIXED ports
- * (24677/24678), shared with `island-fast-refresh.spec.ts` — run this via its own
- * `test:bundler-parity` script / CI job, never alongside that spec in one `playwright
- * test` invocation (they would collide on those ports).
+ * `node_modules` into each temp app). The Vite leg's island-dev now picks FREE Vite/HMR
+ * ports per `lesto dev` (no longer the old fixed 24677/24678), so it no longer collides
+ * with the other island-dev specs on those ports.
  */
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");

@@ -463,8 +463,17 @@ const findIslandDevPorts = (): Promise<IslandDevPorts> =>
   new Promise((resolve, reject) => {
     const servers: NetServer[] = [];
     const ports: number[] = [];
+    let settled = false;
 
-    const closeAll = (done: () => void): void => {
+    // Settle ONCE: release every listener, then run the resolve/reject. The `settled` guard
+    // makes a second event (e.g. both ephemeral binds erroring) a no-op instead of a double
+    // settle, and clears the timeout below.
+    const settle = (done: () => void): void => {
+      if (settled) return;
+
+      settled = true;
+      clearTimeout(timer);
+
       let pending = servers.length;
 
       for (const server of servers) {
@@ -476,11 +485,15 @@ const findIslandDevPorts = (): Promise<IslandDevPorts> =>
       }
     };
 
-    const fail = (cause: unknown): void => {
-      closeAll(() =>
+    const fail = (cause: unknown): void =>
+      settle(() =>
         reject(cause instanceof Error ? cause : new Error("could not find a free port")),
       );
-    };
+
+    // A loopback `listen(0)` effectively always fires `listening`/`error`, but never let a
+    // pathological stall WEDGE the dev boot: `resolveIslandDev` degrades a REJECTION to full
+    // reload, not a hang — so time out → reject → fall back, never hang with no log.
+    const timer = setTimeout(() => fail(new Error("timed out finding a free port")), 5000);
 
     for (let index = 0; index < 2; index += 1) {
       const server = createNetServer();
@@ -498,8 +511,7 @@ const findIslandDevPorts = (): Promise<IslandDevPorts> =>
 
         ports.push(address.port);
 
-        if (ports.length === 2)
-          closeAll(() => resolve({ vitePort: ports[0]!, hmrPort: ports[1]! }));
+        if (ports.length === 2) settle(() => resolve({ vitePort: ports[0]!, hmrPort: ports[1]! }));
       });
     }
   });
