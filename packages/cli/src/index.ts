@@ -12,7 +12,7 @@
  * alive for long-running commands.
  */
 
-export { parseServeLimit, run } from "./run";
+export { declaresIslandDevPeer, parseServeLimit, run } from "./run";
 export type {
   BuildHook,
   BuildHookContext,

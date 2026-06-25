@@ -1,8 +1,9 @@
 /**
  * The pure Vite config builder. The load-bearing fields are asserted directly: the
- * ports, `base: "/"`, `appType: "custom"`, the public-env define passthrough, and the
- * preact dialect's ANCHORED `react` → `preact/compat` alias map (so `react` is
- * rewritten without also catching `react-dom`).
+ * ports, `base: "/@lesto-dev/"`, `appType: "custom"`, the public-env define passthrough,
+ * the per-dialect runtime dedupe + optimizeDeps (the duplicate-runtime guard), and the
+ * preact dialect's ANCHORED `react` → `preact/compat` alias map (so `react` is rewritten
+ * without also catching `react-dom`).
  */
 
 import { describe, expect, it } from "vitest";
@@ -27,6 +28,15 @@ describe("viteIslandConfig", () => {
     });
     expect(config.resolve.alias).toEqual([]);
     expect(config.define).toEqual({});
+
+    // The react runtime is deduped to one copy and pre-bundled (no per-island re-optimize).
+    expect(config.resolve.dedupe).toEqual(["react", "react-dom"]);
+    expect(config.optimizeDeps.include).toEqual([
+      "react",
+      "react-dom",
+      "react-dom/client",
+      "react/jsx-runtime",
+    ]);
   });
 
   it("anchors each preact alias so react-dom is not caught by react", () => {
@@ -43,6 +53,10 @@ describe("viteIslandConfig", () => {
 
     expect(jsxAlias?.replacement).toBe("preact/jsx-runtime");
     expect(jsxAlias?.find.test("react/jsx-runtimeX")).toBe(false);
+
+    // The preact runtime is deduped to one copy; the aliased compat layer is pre-bundled.
+    expect(config.resolve.dedupe).toEqual(["preact"]);
+    expect(config.optimizeDeps.include).toContain("preact/compat");
   });
 
   it("inlines the verified public-env define as a copy", () => {

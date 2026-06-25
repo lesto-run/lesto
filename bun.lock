@@ -91,6 +91,27 @@
         "zod": "^4.0.0",
       },
     },
+    "examples/island-fast-refresh": {
+      "name": "@lesto/example-island-fast-refresh",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/cli": "workspace:*",
+        "@lesto/db": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/sites": "workspace:*",
+        "@lesto/ui": "workspace:*",
+        "@lesto/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+        "preact": "^10.29.2",
+        "preact-render-to-string": "^6",
+        "react": "^19",
+        "react-dom": "^19",
+      },
+      "devDependencies": {
+        "@lesto/island-dev": "workspace:*",
+      },
+    },
     "examples/mailing-lists": {
       "name": "@lesto/example-mailing-lists",
       "version": "0.0.0",
@@ -1265,6 +1286,8 @@
     "@lesto/example-blog": ["@lesto/example-blog@workspace:examples/blog"],
 
     "@lesto/example-estate": ["@lesto/example-estate@workspace:examples/estate"],
+
+    "@lesto/example-island-fast-refresh": ["@lesto/example-island-fast-refresh@workspace:examples/island-fast-refresh"],
 
     "@lesto/example-mailing-lists": ["@lesto/example-mailing-lists@workspace:examples/mailing-lists"],
 

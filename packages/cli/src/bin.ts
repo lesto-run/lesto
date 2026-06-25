@@ -35,7 +35,7 @@ import type { ClientSchema } from "@lesto/env";
 
 import { createApp } from "@lesto/kernel";
 
-import { run } from "./run";
+import { declaresIslandDevPeer, run } from "./run";
 import type {
   BuildHook,
   CliDeps,
@@ -458,6 +458,12 @@ const ISLAND_DEV_HMR_PORT = 24678;
 const buildIslandDev = async (dialect: UiDialect): Promise<IslandDevServer | undefined> => {
   if (!(await dirExists(islandsDir))) return undefined;
 
+  // The opt-in gate: the app's OWN package.json must declare `@lesto/island-dev`. Mere
+  // resolvability is not enough — inside this monorepo (and the scaffold-loop e2e, which
+  // links the whole workspace node_modules) the peer always imports, so gating on the
+  // import alone would hijack every in-repo app's `lesto dev`. See `declaresIslandDevPeer`.
+  if (!(await appDeclaresIslandDev())) return undefined;
+
   const islandDevModule = await loadIslandDevPeer();
 
   if (islandDevModule === undefined) return undefined;
@@ -487,6 +493,20 @@ const buildIslandDev = async (dialect: UiDialect): Promise<IslandDevServer | und
 // Fast Refresh would otherwise silently get nothing). Mirrors
 // `rethrowUnlessMissingContentPeer`: classify on the MISSING specifier, not the whole
 // message (which also embeds the importer path).
+// Whether the app opted into island Fast Refresh by DECLARING `@lesto/island-dev` in
+// its own `package.json`. A missing/unparseable file → not opted in (the default
+// scaffold). The declaration test is the pure, covered `declaresIslandDevPeer`; this is
+// only the fs read (a no package.json app falls back to the Bun reload path).
+const appDeclaresIslandDev = async (): Promise<boolean> => {
+  try {
+    return declaresIslandDevPeer(
+      JSON.parse(await readFile(join(projectRoot, "package.json"), "utf8")),
+    );
+  } catch {
+    return false;
+  }
+};
+
 const loadIslandDevPeer = async () => {
   try {
     return await import("@lesto/island-dev");

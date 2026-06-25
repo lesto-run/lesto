@@ -15,7 +15,14 @@ import type { TraceSeams } from "@lesto/observability";
 import type { OutputSink, Site } from "@lesto/sites";
 import type { ReleaseStore } from "@lesto/deploy";
 
-import { CliError, parsePort, parseServeLimit, parseStringFlag, run } from "../src/index";
+import {
+  CliError,
+  declaresIslandDevPeer,
+  parsePort,
+  parseServeLimit,
+  parseStringFlag,
+  run,
+} from "../src/index";
 import type { BuildHook, BuildHookContext, CliDeps, DevError, ReleaseTarget } from "../src/index";
 
 // --- A real-enough app, built over an in-memory better-sqlite3 adapter. ---
@@ -3564,5 +3571,34 @@ describe("run serve threads the DoS limits from the environment", () => {
 
     expect(options?.maxBodyBytes).toBe(2097152);
     expect(options?.handlerTimeoutMs).toBe(45000);
+  });
+});
+
+describe("declaresIslandDevPeer — the island Fast-Refresh opt-in gate", () => {
+  it("is false when the package.json is not an object", () => {
+    expect(declaresIslandDevPeer(null)).toBe(false);
+    expect(declaresIslandDevPeer("not-an-object")).toBe(false);
+  });
+
+  it("is true when @lesto/island-dev is a dependency", () => {
+    expect(declaresIslandDevPeer({ dependencies: { "@lesto/island-dev": "workspace:*" } })).toBe(
+      true,
+    );
+  });
+
+  it("is true when @lesto/island-dev is only a devDependency", () => {
+    expect(declaresIslandDevPeer({ devDependencies: { "@lesto/island-dev": "^0.1.0" } })).toBe(
+      true,
+    );
+  });
+
+  it("is false when neither dependency map names the peer", () => {
+    expect(
+      declaresIslandDevPeer({ dependencies: { react: "^19" }, devDependencies: { vite: "^7" } }),
+    ).toBe(false);
+  });
+
+  it("is false when a dependency map is null rather than an object", () => {
+    expect(declaresIslandDevPeer({ dependencies: null })).toBe(false);
   });
 });

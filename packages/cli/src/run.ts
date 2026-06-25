@@ -1331,6 +1331,35 @@ function appendToBody(body: LestoResponse["body"], tag: string): LestoResponse["
   return transformed as unknown as LestoResponse["body"];
 }
 
+/** The optional peer an app installs to enable the Vite island Fast-Refresh dev path. */
+const ISLAND_DEV_PEER = "@lesto/island-dev";
+
+/** Whether a parsed `package.json` dependency map names the `@lesto/island-dev` peer. */
+function listsIslandDevPeer(deps: unknown): boolean {
+  return typeof deps === "object" && deps !== null && ISLAND_DEV_PEER in deps;
+}
+
+/**
+ * Whether an app's parsed `package.json` DECLARES the optional `@lesto/island-dev`
+ * peer (in `dependencies` or `devDependencies`) — the true opt-in signal for the Vite
+ * Fast-Refresh dev path.
+ *
+ * Mere resolvability is NOT a sufficient gate: inside this monorepo (and in the
+ * `scaffold-loop` e2e, which links the WHOLE workspace `node_modules` into the app)
+ * the peer is always importable, so gating `lesto dev` on the import alone would hijack
+ * EVERY in-repo app — rewriting its `/client.js` to the Vite base and breaking apps
+ * that never opted in. Reading the declaration matches the documented contract ("the
+ * app installed the optional peer"): a real published install only resolves what it
+ * declares, and this makes the in-repo behaviour match that.
+ */
+export function declaresIslandDevPeer(packageJson: unknown): boolean {
+  if (typeof packageJson !== "object" || packageJson === null) return false;
+
+  const pkg = packageJson as { dependencies?: unknown; devDependencies?: unknown };
+
+  return listsIslandDevPeer(pkg.dependencies) || listsIslandDevPeer(pkg.devDependencies);
+}
+
 /**
  * Resolve the dev island Fast-Refresh server (or `undefined`). Absent factory / an
  * uninstalled peer → `undefined` (the Bun island path). A genuine startup FAILURE (a

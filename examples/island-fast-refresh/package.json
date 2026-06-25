@@ -1,0 +1,29 @@
+{
+  "name": "@lesto/example-island-fast-refresh",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The island Fast Refresh DX gate (DX-parity R2, ADR 0011): `lesto dev` with @lesto/island-dev preserves an island's useState on edit instead of full-reloading. Preact dialect — the scaffold default. Proven by packages/e2e/island-fast-refresh.spec.ts.",
+  "type": "module",
+  "scripts": {
+    "build": "lesto build",
+    "dev": "lesto dev",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/cli": "workspace:*",
+    "@lesto/db": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/sites": "workspace:*",
+    "@lesto/ui": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "better-sqlite3": "^11.10.0",
+    "preact": "^10.29.2",
+    "preact-render-to-string": "^6",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@lesto/island-dev": "workspace:*"
+  }
+}

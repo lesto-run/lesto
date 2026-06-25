@@ -69,8 +69,22 @@ export interface ViteIslandConfig {
   /** Build-time literal replacements — the verified PUBLIC_* inject map (ADR-0011). */
   readonly define: Record<string, string>;
 
-  /** Module aliases — empty for `react`, the anchored preact/compat map for `preact`. */
-  readonly resolve: { readonly alias: readonly ViteIslandAlias[] };
+  /**
+   * Pre-bundle the dialect's client runtime so Vite optimizes it ONCE rather than
+   * re-discovering it on the first island request. `include` is a plain `string[]`
+   * (not `readonly`) because Vite's `DepOptimizationOptions.include` is mutable — this
+   * narrow config spreads straight into the real `InlineConfig` ({@link viteIslandConfig}).
+   */
+  readonly optimizeDeps: { readonly include: string[] };
+
+  /**
+   * Module resolution. `alias` is empty for `react`, the anchored preact/compat map for
+   * `preact`; `dedupe` forces ONE runtime copy across the app and the symlinked workspace
+   * `@lesto/ui` — a second React/preact instance breaks hooks AND Fast Refresh (the
+   * duplicate-runtime footgun `vite.ts` flagged). `dedupe` is a plain `string[]` for the
+   * same Vite-mutability reason as `optimizeDeps.include`.
+   */
+  readonly resolve: { readonly alias: readonly ViteIslandAlias[]; readonly dedupe: string[] };
 }
 
 /** Inputs the {@link viteIslandConfig} builder reads. */
@@ -109,8 +123,30 @@ function preactAliases(): readonly ViteIslandAlias[] {
   }));
 }
 
+/**
+ * The dialect's client runtime as `{ dedupe, include }`. Both lists name the SAME
+ * runtime the app and `@lesto/ui` import: `dedupe` collapses them to one copy (a second
+ * React/preact instance breaks hooks + Fast Refresh), and `include` pre-bundles it so
+ * Vite doesn't re-optimize on the first island request. For `preact` the `react`
+ * specifiers are aliased to `preact/compat` BEFORE optimization, so the runtime named
+ * here is preact's own (`preact/compat`), not React.
+ */
+function runtimeDeps(dialect: IslandDialect): { dedupe: string[]; include: string[] } {
+  return dialect === "preact"
+    ? {
+        dedupe: ["preact"],
+        include: ["preact", "preact/compat", "preact/hooks", "preact/jsx-runtime"],
+      }
+    : {
+        dedupe: ["react", "react-dom"],
+        include: ["react", "react-dom", "react-dom/client", "react/jsx-runtime"],
+      };
+}
+
 /** Build the narrow Vite config for the island dev server. */
 export function viteIslandConfig(options: ViteIslandConfigOptions): ViteIslandConfig {
+  const runtime = runtimeDeps(options.dialect);
+
   return {
     root: options.root,
     base: VITE_BASE,
@@ -125,6 +161,10 @@ export function viteIslandConfig(options: ViteIslandConfigOptions): ViteIslandCo
       hmr: { port: options.hmrPort },
     },
     define: options.publicEnvDefine === undefined ? {} : { ...options.publicEnvDefine },
-    resolve: { alias: options.dialect === "preact" ? preactAliases() : [] },
+    optimizeDeps: { include: runtime.include },
+    resolve: {
+      alias: options.dialect === "preact" ? preactAliases() : [],
+      dedupe: runtime.dedupe,
+    },
   };
 }
