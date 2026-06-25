@@ -41,7 +41,9 @@ export interface McpHttpServerOptions {
   /**
    * The tool context, MINUS the per-request `mode`/`resolvePrincipal` this transport sets
    * from each request's token. Carries the app, routes, audit sink, and optional content
-   * seams — everything connection-constant.
+   * seams — everything connection-constant. Unlike the stdio `startMcpServer`, this path
+   * injects NO default `loadContent`: a server that wants the content tools must supply
+   * `context.loadContent` itself (absent it, the content tools refuse, coded).
    */
   context: Omit<LestoMcpContext, "mode" | "resolvePrincipal">;
 
@@ -60,10 +62,19 @@ export interface McpHttpServerOptions {
   /** The OAuth scope that unlocks writes — the ceiling (`mcp:write`, say). */
   writeScope: string;
 
-  /** The browser origins allowed to reach this server (the DNS-rebinding allowlist). */
+  /**
+   * The browser origins allowed to reach this server (the DNS-rebinding allowlist). The
+   * SDK transport's own origin/Host guard is left off in favor of this tested check, which
+   * runs FIRST (a bad origin is refused before any token is read); note it guards `Origin`
+   * only — Host-header rebinding is a deployment concern (bind to loopback / a trusted host).
+   */
   allowedOrigins: readonly string[];
 
-  /** The absolute URL of the PRM document, for the `WWW-Authenticate` pointer on a 401. */
+  /**
+   * The absolute URL of the PRM document, for the `WWW-Authenticate` pointer on a 401. MUST
+   * match the path the app actually mounts the {@link McpHttpHandlers.metadata} handler at
+   * (RFC 9728 §3.1), or discovery 404s.
+   */
   resourceMetadataUrl: string;
 
   /** The MCP server identity advertised to clients; defaults to this package. */

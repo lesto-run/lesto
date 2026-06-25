@@ -449,4 +449,27 @@ describe("scopeCeilingChallenge", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("refuses a destructive tools/call wrapped in a JSON-RPC batch array — no slip-through", () => {
+    expect(
+      scopeCeilingChallenge({
+        ...opts,
+        mode: "read-only",
+        message: [{ method: "tools/call", params: { name: "handle_request" } }],
+      }),
+    ).toBe(`Bearer error="insufficient_scope", scope="mcp:write"`);
+  });
+
+  it("lets a batch of only reads through under read-only", () => {
+    expect(
+      scopeCeilingChallenge({
+        ...opts,
+        mode: "read-only",
+        message: [
+          { method: "tools/list" },
+          { method: "tools/call", params: { name: "list_routes" } },
+        ],
+      }),
+    ).toBeUndefined();
+  });
 });

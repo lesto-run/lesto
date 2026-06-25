@@ -22,9 +22,11 @@
  *     principal/authz path — and enforce that the token's audience names THIS
  *     resource, refusing any token minted for another audience (no passthrough, the
  *     confused-deputy guard).
- *   - **Authorize** each action as the INTERSECTION of the token's scope ceiling and
- *     the policy floor ({@link authorizeBearer}): a read-scoped token can never
- *     reach a write, and a privileged subject is still bounded by the token's scope.
+ *   - **Authorize.** {@link authorizeBearer} expresses the full INTERSECTION (scope
+ *     ceiling AND policy floor) — the building block for OCP-7's per-tool gate. The
+ *     transport itself (OCP-9) wires only the scope ceiling, via {@link mcpModeForScopes}
+ *     → the `dispatch` operator gate; the per-tool policy floor is NOT yet enforced on
+ *     the MCP dispatch path (OCP-7), so `authorizeBearer` has no caller there yet.
  *
  * Plus the RFC 9728 Protected Resource Metadata ({@link protectedResourceMetadata})
  * a client reads from `.well-known/oauth-protected-resource` to discover where to get
@@ -274,10 +276,15 @@ export function authorizeBearer(request: BearerAuthorization): boolean {
  * the existing read-only/operator gate ({@link McpMode}).
  *
  * A token carrying the write scope unlocks `operator`, so the destructive tools become
- * reachable (still subject to the policy floor); any narrower token gets the `read-only`
- * floor, so a read-scoped bearer can never drive a write no matter how privileged its
- * subject. The write-scope name is injected — the OAuth scope vocabulary belongs to the
- * deployment, not this package.
+ * reachable; any narrower token gets the `read-only` floor, so a read-scoped bearer can
+ * never drive a write no matter how privileged its subject. The write-scope name is
+ * injected — the OAuth scope vocabulary belongs to the deployment, not this package.
+ *
+ * NOTE: this is the scope CEILING only. A per-tool POLICY floor (`policy.allows(roles, …)`
+ * via {@link authorizeBearer}) is NOT yet wired on the MCP dispatch path — `dispatch`
+ * gates a destructive tool purely on this mode, so within `operator` every destructive
+ * tool is reachable regardless of the subject's roles. The per-tool policy gate lands with
+ * OCP-7; until then a write scope is the only gate on a write.
  */
 export function mcpModeForScopes(
   scopes: readonly string[],
@@ -403,8 +410,8 @@ export interface McpHttpGateOptions {
  * ordering is deliberate: a cross-site origin is refused (`403`, no challenge — it is not
  * an auth problem) before any token is read; a missing token is a bare `401` pointing at
  * the metadata; a presented-but-invalid token is a `401` marked `invalid_token`. The
- * per-tool scope ceiling ({@link scopeCeilingChallenge}) and the policy floor apply later,
- * inside dispatch.
+ * per-tool scope ceiling ({@link scopeCeilingChallenge}) applies later; the per-tool policy
+ * floor is OCP-7 and is NOT yet enforced on the MCP dispatch path.
  */
 export async function gateMcpHttpRequest(
   options: McpHttpGateOptions,
@@ -449,7 +456,7 @@ interface ToolsCallMessage {
   params?: { name?: unknown };
 }
 
-/** Narrow an unknown JSON-RPC body to a `tools/call`, returning the tool name or `undefined`. */
+/** Narrow a single JSON-RPC message to a `tools/call`, returning the tool name or `undefined`. */
 function toolsCallName(message: unknown): string | undefined {
   if (typeof message !== "object" || message === null) return undefined;
 
@@ -461,15 +468,34 @@ function toolsCallName(message: unknown): string | undefined {
 }
 
 /**
+ * Every `tools/call` tool name in a JSON-RPC body — a single message OR a batch array.
+ * The SDK transport processes a batch (`[msg, …]`) element-by-element, so the ceiling must
+ * see inside it too, or a one-element batch would slip the check.
+ */
+function toolsCallNames(body: unknown): string[] {
+  const messages = Array.isArray(body) ? body : [body];
+
+  return messages.flatMap((message) => {
+    const name = toolsCallName(message);
+
+    return name === undefined ? [] : [name];
+  });
+}
+
+/**
  * The scope-ceiling refusal for a tool call — or `undefined` to let it through.
  *
  * A request whose scopes only unlock `read-only` mode may not call a destructive tool: the
  * transport turns the returned challenge into an HTTP `403` BEFORE dispatch, so a
  * scope-insufficient write is refused at the HTTP layer (RFC 6750 §3.1) rather than
- * surfacing as a JSON-RPC error inside a `200`. The check is the ceiling only — the policy
- * floor still runs in dispatch — and it inspects only a `tools/call`; a `tools/list` or the
- * `initialize` handshake passes through untouched. In `operator` mode (the write scope was
- * present) it never fires.
+ * surfacing as a JSON-RPC error inside a `200`. It inspects a `tools/call` — including each
+ * element of a JSON-RPC batch array — and lets a `tools/list` or the `initialize` handshake
+ * through. In `operator` mode (the write scope was present) it never fires.
+ *
+ * This is the scope CEILING only. It is also enforced in depth by `dispatch`'s
+ * `requireOperator` gate (a destructive tool refuses outside `operator`), so a call the
+ * peek misses is still refused — just as a coded JSON-RPC error rather than a clean `403`.
+ * The per-tool POLICY floor (roles) is OCP-7 and is NOT yet wired.
  */
 export function scopeCeilingChallenge(options: {
   message: unknown;
@@ -479,9 +505,9 @@ export function scopeCeilingChallenge(options: {
 }): string | undefined {
   if (options.mode === "operator") return undefined;
 
-  const name = toolsCallName(options.message);
+  const callsDestructive = toolsCallNames(options.message).some((name) =>
+    options.destructiveTools.has(name),
+  );
 
-  if (name === undefined || !options.destructiveTools.has(name)) return undefined;
-
-  return insufficientScopeChallenge({ scope: options.writeScope });
+  return callsDestructive ? insufficientScopeChallenge({ scope: options.writeScope }) : undefined;
 }
