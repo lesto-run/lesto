@@ -93,6 +93,17 @@ describe("renderProvenance", () => {
     expect(md).toContain("NON-CANONICAL HOST"); // the mixed governor breaks canonical
   });
 
+  test("an unknown-uniformity governor is flagged ⚠️ (the render warning matches isCanonical)", () => {
+    // governorUniform null with governor "performance" can't arise on a real host, but
+    // the render must still flag it — isCanonical rejects null, so the cell can't read
+    // a clean "performance" while the run is non-canonical.
+    const md = renderProvenance({ ...canonical, governorUniform: null });
+
+    expect(md).toContain("performance ⚠️");
+    expect(md).not.toContain("(mixed across cores)"); // null is "unknown", not "mixed"
+    expect(md).toContain("NON-CANONICAL HOST");
+  });
+
   test("missing optional values render as 'unknown', not blanks", () => {
     const md = renderProvenance({
       ...canonical,

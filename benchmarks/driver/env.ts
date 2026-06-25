@@ -126,7 +126,7 @@ export function renderProvenance(env: BenchEnv): string {
     `| Bun | ${fmt(env.bunVersion)} |`,
     `| Node | ${fmt(env.nodeVersion)} |`,
     `| generator | ${env.generator} ${fmt(env.generatorVersion)} |`,
-    `| governor | ${fmt(env.governor)}${env.governorUniform === false ? " (mixed across cores)" : ""}${env.governor !== null && (env.governor !== "performance" || env.governorUniform === false) ? " ⚠️" : ""} |`,
+    `| governor | ${fmt(env.governor)}${env.governorUniform === false ? " (mixed across cores)" : ""}${env.governor !== null && (env.governor !== "performance" || env.governorUniform !== true) ? " ⚠️" : ""} |`,
     `| turbo/boost | ${turbo} |`,
     `| core pinning | ${pinning} |`,
     `| frameworks | ${frameworks || "—"} |`,
@@ -161,10 +161,12 @@ async function readSys(path: string): Promise<string | null> {
 }
 
 /**
- * Capture a command's trimmed stdout, or null on failure. `ENOENT` (the binary
- * isn't installed) is the expected "tool absent" and stays quiet; any other failure
- * — a non-zero exit, `EACCES`, `EAGAIN` — is surfaced on stderr so a real fault is
- * distinguishable from a missing tool rather than both reading as "unknown".
+ * Capture a command's trimmed stdout, or null on failure. `ENOENT` (the binary isn't
+ * installed — "tool absent") stays quiet; a STRING errno other than ENOENT (`EACCES`,
+ * `EAGAIN` — a real spawn/IO fault) is surfaced on stderr so it's distinguishable from
+ * a missing tool. A NUMERIC `code` is the tool's own non-zero EXIT — it ran and said
+ * no (e.g. `git rev-parse` exit 128 outside a repo) — which is benign, so we stay
+ * quiet rather than warn on every expected tool refusal.
  */
 async function tryExec(cmd: string, args: readonly string[]): Promise<string | null> {
   try {
@@ -172,10 +174,9 @@ async function tryExec(cmd: string, args: readonly string[]): Promise<string | n
 
     return stdout.trim();
   } catch (err) {
-    if (errCode(err) !== "ENOENT") {
-      console.warn(
-        `bench/env: \`${cmd} ${args.join(" ")}\` failed: ${errCode(err) ?? (err as Error).message}`,
-      );
+    const code = errCode(err);
+    if (typeof code === "string" && code !== "ENOENT") {
+      console.warn(`bench/env: \`${cmd} ${args.join(" ")}\` failed: ${code}`);
     }
 
     return null;
@@ -208,19 +209,17 @@ async function generatorVersion(generator: string, benchmarksDir: string): Promi
 }
 
 /**
- * Read every logical core's CPU governor, in core order (cpu0 first). An offline
- * core (no `cpufreq` dir) reads `ENOENT` → skipped quietly; the returned list is the
- * readable cores only.
+ * Read every logical core's CPU governor, in core order (cpu0 at index 0). An offline
+ * core (no `cpufreq` dir) reads `ENOENT` → `null` AT ITS INDEX. The index is PRESERVED
+ * (not compacted) so the caller can tell cpu0 apart from "the first readable core" —
+ * they differ exactly when cpu0 itself is unreadable, the case a compacted list hides.
  */
-async function readGovernors(coreCount: number): Promise<string[]> {
-  const governors: string[] = [];
+async function readGovernors(coreCount: number): Promise<(string | null)[]> {
+  const governors: (string | null)[] = [];
   for (let i = 0; i < coreCount; i += 1) {
-    // Sequential on purpose — tiny `/sys` reads, and it keeps cpu0 first as the rep.
+    // Sequential on purpose — tiny `/sys` reads, and it keeps cpu0 at index 0.
     // oxlint-disable-next-line no-await-in-loop -- ordered, cheap, bounded by core count
-    const g = await readSys(`/sys/devices/system/cpu/cpu${i}/cpufreq/scaling_governor`);
-    if (g !== null) {
-      governors.push(g);
-    }
+    governors.push(await readSys(`/sys/devices/system/cpu/cpu${i}/cpufreq/scaling_governor`));
   }
 
   return governors;
@@ -234,8 +233,12 @@ async function readGovernors(coreCount: number): Promise<string[]> {
  * The governor is read for EVERY core, not just cpu0: reading cpu0 alone is a trap —
  * on a big.LITTLE or partially-tuned host cpu0 can be "performance" while the cores
  * the run is actually pinned to (2,3,4,5) sit on "powersave", so a throttled run
- * would falsely stamp as publication-grade. `governorUniform` is true only when every
- * readable core agrees with cpu0; a mixed set fails the canonical gate.
+ * would falsely stamp as publication-grade. `governor` is cpu0's value specifically
+ * (null if cpu0 itself is unreadable — we then can't anchor the check), and
+ * `governorUniform` is true only when every readable core agrees with cpu0; a mixed
+ * set fails the canonical gate. (Only the cores Node enumerates via `cpus().length`
+ * are checked — adequate on a normal host; a cgroup-restricted count could miss a
+ * sibling core. Documented limitation, not handled here.)
  */
 async function readIsolation(): Promise<{
   governor: string | null;
@@ -246,11 +249,14 @@ async function readIsolation(): Promise<{
     return { governor: null, governorUniform: null, turboDisabled: null };
   }
 
-  const governors = await readGovernors(cpus().length);
-  const governor = governors[0] ?? null;
-  // Uniform = at least one reading AND every readable core matches cpu0. No readable
-  // cores → null (unknown), which is not canonical either.
-  const governorUniform = governor === null ? null : governors.every((g) => g === governor);
+  const perCore = await readGovernors(cpus().length);
+  // cpu0 SPECIFICALLY (index 0), not "the first readable core" — null if cpu0 is itself
+  // unreadable, so a host we can't anchor on cpu0 is treated as unknown (not canonical).
+  const governor = perCore[0] ?? null;
+  const readable = perCore.filter((g): g is string => g !== null);
+  // Uniform = cpu0 readable AND every readable core agrees with it. cpu0 unreadable
+  // (governor === null) → null (unknown), which is not canonical either.
+  const governorUniform = governor === null ? null : readable.every((g) => g === governor);
 
   // Intel: intel_pstate/no_turbo (1 = turbo OFF). Generic acpi-cpufreq: cpufreq/boost (0 = OFF).
   const noTurbo = await readSys("/sys/devices/system/cpu/intel_pstate/no_turbo");
