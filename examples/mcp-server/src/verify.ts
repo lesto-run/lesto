@@ -74,8 +74,15 @@ export function createJwksVerifier(options: JwksVerifierOptions): VerifyAccessTo
   return async (token: string): Promise<AccessTokenClaims | undefined> => {
     try {
       // Verify signature + issuer + expiry. NOT audience — that is the authenticator's
-      // no-passthrough check against this resource (see the module note).
-      const { payload } = await jwtVerify(token, keys, { issuer: options.issuer });
+      // no-passthrough check against this resource (see the module note). `algorithms` pins
+      // the accepted signature algorithm: jose already rejects `alg:none`/alg-confusion against
+      // a JWKS, so this is belt-and-braces here — but it is the canonical JWT hardening and the
+      // thing a single-key (non-JWKS) adaptation MUST set. A real deployment lists the
+      // algorithm(s) its issuer signs with (e.g. `["RS256"]` or `["ES256"]`).
+      const { payload } = await jwtVerify(token, keys, {
+        issuer: options.issuer,
+        algorithms: ["RS256"],
+      });
 
       // A token with no string subject can't be attributed to a principal — refuse it.
       if (typeof payload.sub !== "string") return undefined;
