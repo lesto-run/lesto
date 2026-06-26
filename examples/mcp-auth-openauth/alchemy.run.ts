@@ -18,7 +18,7 @@
 import alchemy from "alchemy";
 import { KVNamespace, Worker } from "alchemy/cloudflare";
 
-import { CLIENT_ID } from "./idp/dance";
+import { CLIENT_ID, getAccessToken } from "./idp/dance";
 
 const app = await alchemy("lesto-mcp-auth-openauth");
 
@@ -68,3 +68,17 @@ console.log("  metadata: ", `${rs.url}/.well-known/oauth-protected-resource`);
 console.log("  mcp:      ", `${rs.url}/mcp`);
 
 await app.finalize();
+
+// Cold-start warmup (the L-35a55b2e fix): OpenAuth generates its ES256 signing + RSA-OAEP
+// encryption keys LAZILY on first use and persists them to KV. On a fresh deploy, concurrent cold
+// isolates across colos each generate-and-persist before KV propagates (a "key storm"), and the
+// first `/authorize` can 503 under the keygen CPU. One SEQUENTIAL dance here forces BOTH keys to
+// be generated + persisted ONCE, before any real traffic — so later cold isolates read the keys
+// from KV (cheap) instead of regenerating, and there's no storm. Best-effort: a slow warmup
+// shouldn't fail the deploy.
+try {
+  await getAccessToken(issuerUrl, "viewer");
+  console.log("warmup:      keys seeded (cold-start primed)");
+} catch (error) {
+  console.warn("warmup:      skipped —", (error as Error).message);
+}

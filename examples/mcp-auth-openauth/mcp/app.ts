@@ -8,9 +8,10 @@
  * Node and on the edge. Pointing the RS at a different issuer is config, not code; running it on
  * a different transport is a substrate swap, not a rewrite.
  *
- * The app's own surface is a tiny deploy API: `handle_request` (operator-only) drives a real
- * `POST /deployments`, `list_routes` is read-only — so the OpenAuth scopes (`mcp:read` vs
- * `mcp:read mcp:write`, carried in the token's `properties.scopes`) gate exactly as designed.
+ * The app's own surface is a live MLB scout's console: `handle_request` (operator-only) drives
+ * the MLB Stats API reads + the `POST /scouting` write, `list_routes` is read-only — so the
+ * OpenAuth scopes (`mcp:read` vs `mcp:read mcp:write`, carried in the token's `properties.scopes`)
+ * gate exactly as designed.
  */
 
 import { createApp } from "@lesto/kernel";
@@ -18,11 +19,11 @@ import type { App, KernelDatabase } from "@lesto/kernel";
 import type { McpAuditRecord } from "@lesto/mcp";
 
 import { buildGovernedApi, SCOPES, demoRolesOf } from "./governance";
-import type { Deployment, GovernanceOptions } from "./governance";
+import type { GovernanceOptions, ScoutEntry } from "./governance";
 
 // Re-exported so the example's tests and entrypoints keep importing them from `./app`.
 export { SCOPES, demoRolesOf };
-export type { Deployment };
+export type { ScoutEntry };
 
 export interface BuildRsOptions extends GovernanceOptions {
   /** The kernel database handle (from `@lesto/runtime`'s `openSqlite`). */
@@ -33,7 +34,7 @@ export interface BootedRs {
   app: App;
   resource: string;
   audit: McpAuditRecord[];
-  deployments: Deployment[];
+  board: ScoutEntry[];
 }
 
 export async function buildRs(options: BuildRsOptions): Promise<BootedRs> {
@@ -62,6 +63,6 @@ export async function buildRs(options: BuildRsOptions): Promise<BootedRs> {
     app: booted,
     resource: governed.resource,
     audit: governed.audit,
-    deployments: governed.deployments,
+    board: governed.board,
   };
 }

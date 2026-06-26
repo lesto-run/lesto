@@ -16,12 +16,15 @@ import type { McpAuditRecord } from "@lesto/mcp";
 import { lesto } from "@lesto/web";
 import type { Lesto } from "@lesto/web";
 
+import { leagueStandings, playerSeasonHitting, searchPlayers } from "./mlb";
 import { createOpenAuthVerifier } from "./verify";
 
-export interface Deployment {
+/** An entry on the scouting board — the operator's privileged "write" in this demo. */
+export interface ScoutEntry {
   id: number;
-  app: string;
-  ref: string;
+  playerId: number;
+  name: string;
+  note: string;
   at: string;
 }
 
@@ -74,8 +77,8 @@ export interface GovernedApi {
   /** The MCP audit trail (every authenticated tool call lands here). */
   audit: McpAuditRecord[];
 
-  /** The demo's deploy log — what the `handle_request` tool writes to via `POST /deployments`. */
-  deployments: Deployment[];
+  /** The scouting board — what the `handle_request` tool writes to via `POST /scouting`. */
+  board: ScoutEntry[];
 }
 
 /**
@@ -96,23 +99,49 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
   const resource = options.clientID;
   const resourceMetadataUrl = `${options.baseUrl}/.well-known/oauth-protected-resource`;
 
-  const deployments: Deployment[] = [];
+  const board: ScoutEntry[] = [];
   const audit: McpAuditRecord[] = [];
 
+  // A scout's console backed by the LIVE MLB Stats API. The reads proxy `statsapi.mlb.com`; the
+  // board is in-memory. Every route is reached through the MCP `handle_request` tool, so the
+  // OpenAuth scopes gate them: an operator (mcp:write) drives the console, a viewer (mcp:read) is
+  // refused the destructive tool, an unauthenticated agent never connects.
   const api = lesto()
     .get("/health", (c) => c.json({ ok: true }))
-    .get("/deployments", (c) => c.json({ deployments }))
-    .post("/deployments", (c) => {
-      const input = (c.req.body ?? {}) as { app?: unknown; ref?: unknown };
-      const deployment: Deployment = {
-        id: deployments.length + 1,
-        app: String(input.app ?? "unknown"),
-        ref: String(input.ref ?? "main"),
+    // Live MLB reads.
+    .get("/standings", async (c) => {
+      const league = c.query("league") ?? "AL";
+      const season = c.query("season") ?? "2024";
+
+      return c.json({ league, season, divisions: await leagueStandings(league, season) });
+    })
+    .get("/players", async (c) => {
+      const query = c.query("q") ?? "";
+
+      return c.json({ query, players: await searchPlayers(query) });
+    })
+    .get("/players/:id/stats", async (c) => {
+      const season = c.query("season") ?? "2024";
+      const stats = await playerSeasonHitting(Number(c.param("id")), season);
+
+      return stats === undefined
+        ? c.json({ error: "no hitting stats for that player/season" }, 404)
+        : c.json(stats);
+    })
+    // The scouting board: GET reads it, POST is the operator-only write.
+    .get("/scouting", (c) => c.json({ board }))
+    .post("/scouting", (c) => {
+      const input = (c.req.body ?? {}) as { playerId?: unknown; name?: unknown; note?: unknown };
+      const entry: ScoutEntry = {
+        id: board.length + 1,
+        playerId: Number(input.playerId ?? 0),
+        name: String(input.name ?? "unknown"),
+        note: String(input.note ?? ""),
         at: new Date().toISOString(),
       };
-      deployments.push(deployment);
+      board.push(entry);
 
-      return c.json({ deployment }, 201);
+      return c.json({ entry }, 201);
     });
 
   // Captured BEFORE the MCP routes are mounted, so `list_routes` reports the deploy API only,
@@ -158,7 +187,7 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
     .post("/mcp", handlers.rpc)
     .get("/mcp", () => ({ status: 405, headers: { allow: "POST" }, body: "" }));
 
-  return { api, resource, audit, deployments };
+  return { api, resource, audit, board };
 }
 
 /** Demo `subject → roles`: the OpenAuth subject (an email) maps to a role. */

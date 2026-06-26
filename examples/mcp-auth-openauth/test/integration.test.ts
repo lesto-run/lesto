@@ -7,9 +7,12 @@
  *   - the RS advertises the OpenAuth issuer in its RFC 9728 metadata,
  *   - no token → 401,
  *   - a token minted for ANOTHER OpenAuth client → 401 (confused-deputy guard),
- *   - an operator (mcp:read mcp:write) drives a real deploy via the MCP tools,
+ *   - an operator (mcp:read mcp:write) drives the scout's console (a `POST /scouting` write),
  *   - a viewer (mcp:read) is refused the destructive tool — the scope ceiling, sourced from
  *     the OpenAuth token's `properties.scopes`.
+ *
+ * The governance assertions use the in-memory `/scouting` write only (no live MLB) so CI is
+ * deterministic; the live MLB reads are exercised by `agent.ts`.
  */
 
 import { serve as honoServe } from "@hono/node-server";
@@ -37,7 +40,7 @@ interface Harness {
   rsServer: Server;
   idpServer: ReturnType<typeof honoServe>;
   close: () => void;
-  deployments: { app: string; ref: string }[];
+  board: { playerId: number; name: string }[];
 }
 
 let h: Harness;
@@ -67,7 +70,7 @@ beforeAll(async () => {
 
   // 2. The Lesto RS, pointed at the issuer's JWKS (resource = the OpenAuth client id).
   const { db: handle, close } = await openSqlite();
-  const { app, deployments } = await buildRs({
+  const { app, board } = await buildRs({
     handle,
     issuer: issuerUrl,
     jwksUrl: new URL(`${issuerUrl}/.well-known/jwks.json`),
@@ -89,7 +92,7 @@ beforeAll(async () => {
     rsServer,
     idpServer,
     close,
-    deployments: deployments as { app: string; ref: string }[],
+    board: board as { playerId: number; name: string }[],
   };
 });
 
@@ -125,7 +128,7 @@ describe("Lesto MCP RS validates a real OpenAuth issuer (over live HTTP)", () =>
     expect(res.status).toBe(401);
   });
 
-  it("lets an operator drive a real deploy through the MCP tools", async () => {
+  it("lets an operator drive the scout's console through the MCP tools", async () => {
     const list = await rpc(
       { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} },
       h.operatorToken,
@@ -142,7 +145,11 @@ describe("Lesto MCP RS validates a real OpenAuth issuer (over live HTTP)", () =>
         method: "tools/call",
         params: {
           name: "handle_request",
-          arguments: { method: "POST", path: "/deployments", body: { app: "web", ref: "v2" } },
+          arguments: {
+            method: "POST",
+            path: "/scouting",
+            body: { playerId: 677951, name: "Bobby Witt Jr.", note: "five-tool SS" },
+          },
         },
       },
       h.operatorToken,
@@ -150,7 +157,9 @@ describe("Lesto MCP RS validates a real OpenAuth issuer (over live HTTP)", () =>
     expect(res.status).toBe(200);
     const appResponse = toolJson<{ status: number; body: string }>(await res.json());
     expect(appResponse.status).toBe(201);
-    expect(h.deployments).toContainEqual(expect.objectContaining({ app: "web", ref: "v2" }));
+    expect(h.board).toContainEqual(
+      expect.objectContaining({ playerId: 677951, name: "Bobby Witt Jr." }),
+    );
   });
 
   it("refuses a viewer's destructive call — the scope ceiling from properties.scopes (403)", async () => {
@@ -161,7 +170,11 @@ describe("Lesto MCP RS validates a real OpenAuth issuer (over live HTTP)", () =>
         method: "tools/call",
         params: {
           name: "handle_request",
-          arguments: { method: "POST", path: "/deployments", body: { app: "web", ref: "v3" } },
+          arguments: {
+            method: "POST",
+            path: "/scouting",
+            body: { playerId: 1, name: "nope", note: "" },
+          },
         },
       },
       h.viewerToken,

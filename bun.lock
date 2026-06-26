@@ -131,6 +131,7 @@
       "name": "@lesto/example-mcp-auth-openauth",
       "version": "0.0.0",
       "dependencies": {
+        "@anthropic-ai/sdk": "^0.102.0",
         "@hono/node-server": "^1.13.0",
         "@lesto/cloudflare": "workspace:*",
         "@lesto/kernel": "workspace:*",

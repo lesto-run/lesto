@@ -24,9 +24,11 @@ idp/   — a REAL OpenAuth issuer (its own Hono app)
            worker.ts  the Cloudflare Worker entry (CloudflareStorage over KV)
 mcp/   — the Lesto MCP Resource Server
            verify.ts     adapts OpenAuth's token → the RS's {subject, audience, scopes}
-           governance.ts the @lesto/mcp battery wiring, UNCHANGED — the deploy API + the RS
+           governance.ts the @lesto/mcp battery wiring, UNCHANGED — the MLB scout's console + RS
+           mlb.ts        a tiny client for the live MLB Stats API (statsapi.mlb.com, no key)
            app.ts        substrate A: Node (`@lesto/runtime` serve + sqlite)
            worker.ts     substrate B: Cloudflare Worker (`@lesto/cloudflare` toFetchHandler)
+agent.ts — a real @modelcontextprotocol/sdk agent that scouts live MLB through the gated server
 ```
 
 **One governance, two transports.** `governance.ts` (`buildGovernedApi`) is the whole wedge in
@@ -45,13 +47,32 @@ the Worker ships (in-process, no workerd):
 - **no token → 401**;
 - a valid token minted for **another OpenAuth client → 401** (the confused-deputy guard,
   against a real issuer);
-- an **operator** (`mcp:read mcp:write`) drives a real `POST /deployments` through the MCP tools;
+- an **operator** (`mcp:read mcp:write`) drives the scout's console (a `POST /scouting` write)
+  through the MCP tools;
 - a **viewer** (`mcp:read`) is refused the destructive tool — `403 insufficient_scope`, the
   ceiling sourced from the OpenAuth token's `properties.scopes`.
 
 ```
 bun --filter '@lesto/example-mcp-auth-openauth' test
 ```
+
+## The agent: scouting live MLB through the gated server
+
+`agent.ts` is a fully self-contained, runnable demo — it boots the issuer + RS in-process, runs
+a real PKCE dance, and connects the actual `@modelcontextprotocol/sdk` `Client` (the library
+Claude/Cursor/Inspector use) over the OAuth-gated transport. The server's `handle_request` tool
+reaches a scout's console backed by the **live MLB Stats API**.
+
+```
+bun run examples/mcp-auth-openauth/agent.ts            # scripted (no key)
+ANTHROPIC_API_KEY=sk-... bun run …/agent.ts            # + Claude scouts autonomously
+```
+
+It shows an **operator** agent investigate live data across several tool calls — AL standings,
+search a player, pull their season line — then write a prospect to the scouting board; a
+**viewer** refused that write (403); an **anonymous** agent refused the connection (401). With an
+API key, **Claude** is handed the same five tools and scouts autonomously, deciding which MLB
+queries to run and whom to add to the board. The governance is the same on every call.
 
 ## Deploy (live, on Cloudflare via [Alchemy](https://alchemy.run))
 
@@ -70,6 +91,12 @@ bun run destroy               # tear down
 > binding** (`ISSUER` in `alchemy.run.ts`), not the public url. Against a real external IdP (a
 > different origin) the binding is absent and the RS fetches the JWKS over the public internet —
 > the verifier's optional `fetchJwks` seam handles both, the battery unchanged.
+>
+> **Known rough edge (key persistence).** OpenAuth's signing keys are not reliably persisting to
+> KV on this deploy, so the JWKS can diverge across isolates and live verification is flaky. A
+> post-deploy warmup primes the keys (fixes the cold-start 503), but the robust fix is
+> Durable-Object-backed key storage (strongly consistent) — tracked as a follow-up. The
+> in-process `agent.ts` demo (MemoryStorage, one key) is the reliable, runnable path today.
 
 ## How OpenAuth's token maps to the RS (confirmed against its source, not docs)
 

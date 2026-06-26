@@ -8,9 +8,11 @@
  * It asserts, against the fetch handler:
  *   - the RS advertises the OpenAuth issuer in its RFC 9728 metadata,
  *   - no token → 401, a token minted for ANOTHER client → 401 (confused-deputy guard),
- *   - an operator drives a real deploy through the MCP tools, visible via `GET /deployments`
- *     (so the MCP tool's dispatch back INTO the edge app is exercised, not just the gate),
+ *   - an operator drives the scout's console, the write visible via `GET /scouting` (so the MCP
+ *     tool's dispatch back INTO the edge app is exercised, not just the gate),
  *   - a viewer is refused the destructive tool — the scope ceiling from `properties.scopes`.
+ *
+ * Uses the in-memory `/scouting` write only (no live MLB) so it's a deterministic CI gate.
  */
 
 import { serve as honoServe } from "@hono/node-server";
@@ -103,7 +105,7 @@ describe("Lesto MCP RS on the edge (toFetchHandler) validates a real OpenAuth is
     expect(res.status).toBe(401);
   });
 
-  it("lets an operator drive a real deploy, visible via GET /deployments", async () => {
+  it("lets an operator drive the scout's console, visible via GET /scouting", async () => {
     const list = await edgeRpc(
       { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} },
       h.operatorToken,
@@ -120,7 +122,11 @@ describe("Lesto MCP RS on the edge (toFetchHandler) validates a real OpenAuth is
         method: "tools/call",
         params: {
           name: "handle_request",
-          arguments: { method: "POST", path: "/deployments", body: { app: "web", ref: "v2" } },
+          arguments: {
+            method: "POST",
+            path: "/scouting",
+            body: { playerId: 677951, name: "Bobby Witt Jr.", note: "five-tool SS" },
+          },
         },
       },
       h.operatorToken,
@@ -129,9 +135,11 @@ describe("Lesto MCP RS on the edge (toFetchHandler) validates a real OpenAuth is
     expect(toolJson<{ status: number }>(await res.json()).status).toBe(201);
 
     // The MCP tool dispatched back into the edge app — confirm the write landed.
-    const deployed = await h.handler(new Request(`${RS_BASE}/deployments`));
-    const body = (await deployed.json()) as { deployments: { app: string; ref: string }[] };
-    expect(body.deployments).toContainEqual(expect.objectContaining({ app: "web", ref: "v2" }));
+    const scouting = await h.handler(new Request(`${RS_BASE}/scouting`));
+    const body = (await scouting.json()) as { board: { playerId: number; name: string }[] };
+    expect(body.board).toContainEqual(
+      expect.objectContaining({ playerId: 677951, name: "Bobby Witt Jr." }),
+    );
   });
 
   it("refuses a viewer's destructive call — the scope ceiling from properties.scopes (403)", async () => {
@@ -142,7 +150,7 @@ describe("Lesto MCP RS on the edge (toFetchHandler) validates a real OpenAuth is
         method: "tools/call",
         params: {
           name: "handle_request",
-          arguments: { method: "POST", path: "/deployments", body: { app: "web", ref: "v3" } },
+          arguments: { method: "POST", path: "/scouting", body: { playerId: 1, name: "nope" } },
         },
       },
       h.viewerToken,

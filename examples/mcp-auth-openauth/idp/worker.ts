@@ -8,6 +8,12 @@
  *
  * The issuer is built lazily and memoized per isolate: bindings are isolate-constant, so
  * one app instance serves every request and keeps OpenAuth's in-memory key cache warm.
+ *
+ * NOTE (L-35a55b2e): OpenAuth's signing keys are not reliably persisting to KV on this deploy
+ * (the namespace reads empty while each isolate mints its own in-memory keys), so the JWKS can
+ * diverge across isolates and the service-binding RS may fetch a key set missing a token's `kid`.
+ * The robust fix is Durable-Object-backed key storage (strongly consistent), tracked separately;
+ * the local `agent.ts` demo (MemoryStorage, one key) is unaffected.
  */
 
 import { CloudflareStorage } from "@openauthjs/openauth/storage/cloudflare";
