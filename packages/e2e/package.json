@@ -11,6 +11,7 @@
     "test:island-hmr": "playwright test island-fast-refresh.spec.ts",
     "test:island-concurrent": "playwright test island-dev-concurrent.spec.ts",
     "test:page-swap": "playwright test page-swap.spec.ts",
+    "test:page-swap-bun": "playwright test page-swap-bun.spec.ts",
     "test:bundler-parity": "playwright test island-bundler-parity.spec.ts",
     "typecheck": "tsc --noEmit"
   },

@@ -314,7 +314,15 @@ export async function buildClient(
   // silently inlined. An empty `{}` (the common case) is the verified no-op.
   const publicEnvDefine = verifyPublicEnvDefine(options.publicEnvDefine);
 
-  const entrySource = synthesizeEntry(islands);
+  // In development the synthesized entry installs the page-refresh hook AND the
+  // ADR-0011 hydration-error overlay (`beacon.dev`): a saved `app/routes/*` file swaps
+  // the page in place instead of full-reloading, and a hydration error paints the
+  // overlay instead of POSTing to the beacon. This `buildClient` is the Bun dev
+  // FALLBACK path (an app that opted out of the island-dev Vite server) — the Vite dev
+  // server sets the same flag via its own entry — so wiring it here is what lights the
+  // page swap up on the Bun path too. Production passes `dev: false`, so the prod
+  // bundle ships neither the hook nor the overlay swap.
+  const entrySource = synthesizeEntry(islands, { dev: options.mode === "development" });
 
   const artifacts = await deps.bundle({
     entrySource,

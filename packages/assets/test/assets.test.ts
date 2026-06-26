@@ -287,6 +287,27 @@ describe("buildClient", () => {
     expect(bundled[0]?.publicEnvDefine).toEqual({});
   });
 
+  it("installs the page-swap/overlay hook in the DEV entry, not the prod entry (Bun dev path)", async () => {
+    // The Bun dev FALLBACK path now threads `mode` into the synthesized entry, so a
+    // `lesto dev` route save swaps the page in place (and hydration errors paint the
+    // ADR-0011 overlay) — the dev page-swap is no longer island-dev/Vite-only.
+    const dev = fakeDeps();
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "development", dialect: "react" },
+      dev.deps,
+    );
+    expect(dev.bundled[0]?.entrySource).toContain("enableDevPageRefresh(registry);");
+
+    // A production build ships neither the import nor the call — the swap machinery is
+    // dev-only, so `lesto build`'s bundle never carries it.
+    const prod = fakeDeps();
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+      prod.deps,
+    );
+    expect(prod.bundled[0]?.entrySource).not.toContain("enableDevPageRefresh");
+  });
+
   it("threads a verified PUBLIC-env inject map through to the bundler", async () => {
     const { deps, bundled } = fakeDeps();
 
