@@ -21,7 +21,7 @@
 import { createElement } from "react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
 
-import { IslandDataProvider, renderMetadata } from "@lesto/ui";
+import { IslandDataProvider, LAYOUT_ATTR, renderMetadata } from "@lesto/ui";
 import type { LinkSpec, MetadataEntry, MetaSpec, SourceResolver } from "@lesto/ui";
 import { renderPageStream } from "@lesto/ui/server";
 import type { ServerRenderer } from "@lesto/ui/server";
@@ -234,10 +234,37 @@ function headElements(metadata: PageMetadata, clientStyles: string | undefined):
  * Exported for `file-routes.ts`, which composes each file-route page's per-branch
  * layout chain the SAME way this renderer wraps a page's app-level layouts — one
  * definition, so the two nesting orders can never drift.
+ *
+ * Each layout's children are wrapped in a `data-lesto-layout="<depth>"` marker
+ * ({@link LAYOUT_ATTR}, depth 0 = outermost), the boundary the client's soft-nav /
+ * dev page-swap reads to do a LAYOUT-PRESERVING PARTIAL SWAP: it aligns the live and
+ * fetched layout chains by shared depth and replaces only the deepest shared layout's
+ * inner contents, keeping every outer layout's DOM — and the island state mounted in
+ * it — across a navigation or a dev re-render (see `@lesto/ui`'s `deepestSharedLayout`).
+ * The marker sits AROUND each layout's children (not its chrome), so swapping the
+ * deepest shared marker's contents replaces the inner page while the layout's own DOM
+ * is preserved. It is `display:contents` — present in the DOM for the swap to find,
+ * but generating no box, so it never perturbs the user's layout. A page with no
+ * layouts gets no marker and the runtime falls back to the full-body swap, unchanged.
+ *
+ * Depth is per layout CHAIN (this one `wrap` call): an app that nests an app-level
+ * `.layout()` chain around a file-route `layout.tsx` chain restarts the numbering at
+ * the inner chain, so the partial swap preserves the outer chain and re-renders the
+ * inner one — correct, just less-preserving than a single chain; the common case
+ * (one chain) numbers contiguously from 0.
  */
 export function wrap(layouts: readonly Layout[], page: ReactElement): ReactElement {
   return layouts.reduceRight<ReactElement>(
-    (child, layout) => createElement(layout, null, child),
+    (child, layout, depth) =>
+      createElement(
+        layout,
+        null,
+        createElement(
+          "div",
+          { [LAYOUT_ATTR]: String(depth), style: { display: "contents" } },
+          child,
+        ),
+      ),
     page,
   );
 }

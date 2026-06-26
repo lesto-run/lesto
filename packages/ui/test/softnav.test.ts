@@ -1662,6 +1662,89 @@ describe("enableSoftNav — layout-preserving partial swap (default swap)", () =
     expect(document.getElementById("shell")?.dataset["marker"]).toBe("kept");
     expect(document.getElementById("page")?.textContent).toBe("NEW");
   });
+
+  it("re-hydrates ONLY the deepest shared layout's inner subtree, never the preserved outer layout", async () => {
+    // A depth-0 shell holding an island (the layout's own), and a depth-1 marker that
+    // wraps the swappable page region. After the partial swap the shell + its island
+    // are KEPT, so re-hydration must be scoped to the inner region — re-scanning the
+    // whole doc would re-mount the preserved layout island and reset its state.
+    document.body.innerHTML = `
+      <div data-lesto-layout="0" id="shell">
+        <div data-lesto-island="$.layout" id="layout-island">layout island</div>
+        <div data-lesto-layout="1" id="inner"><main id="page">OLD</main></div>
+      </div>`;
+
+    const rehydrated: Array<{ root: unknown }> = [];
+    const onNavigate = vi.fn();
+
+    const anchor = document.createElement("a");
+    anchor.href = "/dest";
+    document.body.append(anchor);
+
+    const { disable, click } = enableWithCapturedClick({
+      ...inertSeams(),
+      // Real `defaultSwap` (no `swap` override) runs against the ambient document.
+      fetchPage: async () => ({
+        html: `<!doctype html><html><head><title>New</title></head><body>
+          <div data-lesto-layout="0">
+            <div data-lesto-island="$.layout">layout island</div>
+            <div data-lesto-layout="1"><main id="page">NEW</main></div>
+          </div></body></html>`,
+        url: `${location.origin}/dest`,
+      }),
+      rehydrate: (_registry, opts) => {
+        rehydrated.push({ root: opts.root });
+
+        return HYDRATION;
+      },
+      onNavigate,
+    });
+
+    click(anchor);
+    await vi.waitFor(() => expect(onNavigate).toHaveBeenCalled());
+    disable();
+
+    // The inner page swapped, the outer shell + its island are the SAME live nodes,
+    // and re-hydration targeted the depth-1 inner element — NOT the whole document.
+    expect(document.getElementById("page")?.textContent).toBe("NEW");
+    expect(document.getElementById("layout-island")).not.toBeNull();
+    expect(rehydrated).toHaveLength(1);
+    expect(rehydrated[0]?.root).toBe(document.getElementById("inner"));
+  });
+
+  it("re-hydrates the whole body for a full-body fallback swap (no shared layout marker)", async () => {
+    document.body.innerHTML = `<main id="page">OLD</main>`;
+
+    const rehydrated: Array<{ root: unknown }> = [];
+    const onNavigate = vi.fn();
+
+    const anchor = document.createElement("a");
+    anchor.href = "/dest";
+    document.body.append(anchor);
+
+    const { disable, click } = enableWithCapturedClick({
+      ...inertSeams(),
+      fetchPage: async () => ({
+        html: `<!doctype html><html><head><title>New</title></head><body><main id="page">NEW</main></body></html>`,
+        url: `${location.origin}/dest`,
+      }),
+      rehydrate: (_registry, opts) => {
+        rehydrated.push({ root: opts.root });
+
+        return HYDRATION;
+      },
+      onNavigate,
+    });
+
+    click(anchor);
+    await vi.waitFor(() => expect(onNavigate).toHaveBeenCalled());
+    disable();
+
+    // No marker → full-body swap → re-hydrate scope is the body (equivalent to the
+    // old whole-document re-hydrate, since mount scripts live in the body).
+    expect(rehydrated).toHaveLength(1);
+    expect(rehydrated[0]?.root).toBe(document.body);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1789,5 +1872,47 @@ describe("enableDevPageRefresh", () => {
     // the body and carried the title — proving the `??` fallbacks run end to end.
     expect(document.body.textContent).toContain("fresh");
     expect(document.title).toBe("Fresh");
+  });
+
+  it("scopes re-hydration to the swapped subtree when the page carries layout markers (keeps layout island state)", async () => {
+    // A page-swap (same URL re-render) of a layout-wrapped page: the outer layout (with
+    // its island) is unchanged, only the depth-1 page region differs. The real default
+    // swap keeps the shell and replaces just the inner region; the re-hydrate must be
+    // scoped to that inner element so the layout island is NOT re-mounted — the proof
+    // the deferred half (layout-preserving page swap) is wired.
+    document.body.innerHTML = `
+      <div data-lesto-layout="0" id="shell">
+        <div data-lesto-island="$.layout" id="layout-island">layout island</div>
+        <div data-lesto-layout="1" id="inner"><main id="page">OLD</main></div>
+      </div>`;
+
+    const rehydrated: Array<{ root: unknown }> = [];
+
+    const refresh = enableDevPageRefresh(new Registry(), {
+      // Ambient document + real `defaultSwap` (no `swap` override).
+      target: {},
+      fetchPage: async (url) => ({
+        html: `<!doctype html><html><head><title>New</title></head><body>
+          <div data-lesto-layout="0">
+            <div data-lesto-island="$.layout">layout island</div>
+            <div data-lesto-layout="1"><main id="page">NEW</main></div>
+          </div></body></html>`,
+        url,
+      }),
+      rehydrate: (_registry, opts) => {
+        rehydrated.push({ root: opts.root });
+
+        return HYDRATION;
+      },
+    });
+
+    await refresh();
+
+    // The shell + its island are preserved, the inner page swapped, and re-hydration
+    // targeted the depth-1 inner element — not the whole document.
+    expect(document.getElementById("page")?.textContent).toBe("NEW");
+    expect(document.getElementById("layout-island")).not.toBeNull();
+    expect(rehydrated).toHaveLength(1);
+    expect(rehydrated[0]?.root).toBe(document.getElementById("inner"));
   });
 });

@@ -47,10 +47,12 @@ export type PrefetchStrategy = "viewport" | "hover";
  * below the deepest common layout.
  *
  * The runtime treats this as ENTIRELY OPTIONAL: a document with no such markers
- * falls back to the full-body swap (today's behavior), so this never becomes
- * load-bearing. EMITTING the marker is the server renderer's job (`@lesto/web`'s
- * `render-page.tsx` / the file-route layout composer) — until it does, the partial
- * swap is dormant and the full swap runs, with no regression.
+ * falls back to the full-body swap, so this never becomes load-bearing. EMITTING the
+ * marker is the server renderer's job — `@lesto/web`'s `wrap` (`render-page.tsx`,
+ * shared by the app-level and file-route layout chains) stamps one `display:contents`
+ * marker around each layout's children, so a page with layouts gets a marker per
+ * layout depth and the partial swap activates; a page with none emits no marker and
+ * the full-body swap runs, with no regression.
  */
 export const LAYOUT_ATTR = "data-lesto-layout";
 

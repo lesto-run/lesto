@@ -46,7 +46,7 @@
 
 import { UiError } from "./errors";
 import { hydrateDocumentIslands } from "./hydrate";
-import type { HydrateOptions, HydrationResult } from "./hydrate";
+import type { HydrateOptions, HydrationResult, IslandRoot } from "./hydrate";
 import type { Registry } from "./registry";
 import { eligibleAnchor, LAYOUT_ATTR, PREFETCH_ATTR, RELOAD_ATTR } from "./softnav-contract";
 import type { PrefetchStrategy, SoftNavAnchor, SoftNavClick } from "./softnav-contract";
@@ -117,15 +117,47 @@ export interface FetchedPage {
 export type PageFetcher = (url: string, signal: AbortSignal) => Promise<FetchedPage>;
 
 /**
- * Swap the fetched document's body into the live one and return the new title.
- *
- * The default {@link defaultSwap} parses the HTML, swaps the body — LAYOUT-PRESERVING
- * when the document carries {@link LAYOUT_ATTR} markers, else replacing the whole
- * body's contents — and returns the fetched `<title>`. A caller can inject a finer
- * swap (a single content region, a view-transition wrapper for Bet I) without this
- * module knowing how the page is structured.
+ * What a swap REPLACED: the new `<title>` to adopt (or `undefined` to leave the tab
+ * alone) and the live SUBTREE whose contents now hold the swapped-in page — the
+ * element the caller re-hydrates, and ONLY that element. Scoping re-hydration to the
+ * swapped subtree is what makes the layout-preserving partial swap safe: re-scanning
+ * the whole document would re-mount the PRESERVED outer layout's islands (there is no
+ * idempotency guard in `hydrateDocumentIslands`) and reset the very state the partial
+ * swap kept.
  */
-export type PageSwapper = (html: string, doc: Document) => string | undefined;
+export interface SwapResult {
+  /** The fetched `<title>`, or `undefined` when the page is title-less (don't blank the tab). */
+  title: string | undefined;
+
+  /** The live element whose CONTENTS were replaced — the re-hydration scope. */
+  root: IslandRoot;
+}
+
+/**
+ * Swap the fetched document's body into the live one. Returns a {@link SwapResult}
+ * (the new title + the swapped subtree to re-hydrate), or — the back-compatible
+ * shorthand — a bare title `string`/`undefined`, which the runtime reads as "re-hydrate
+ * the WHOLE document" (the pre-partial-swap behavior).
+ *
+ * The default {@link defaultSwap} parses the HTML and swaps the body — LAYOUT-PRESERVING
+ * when the document carries {@link LAYOUT_ATTR} markers (it returns just the deepest
+ * shared layout's inner element as `root`), else replacing the whole body's contents
+ * (root = `<body>`). A caller can inject a finer swap (a single content region, a
+ * view-transition wrapper for Bet I) without this module knowing how the page is
+ * structured; a finer swap that wants scoped re-hydration returns its own `root`.
+ */
+export type PageSwapper = (html: string, doc: Document) => SwapResult | string | undefined;
+
+/**
+ * Normalize a {@link PageSwapper}'s result to a {@link SwapResult}: a bare title
+ * (the back-compatible shorthand) becomes `{ title, root: <whole document> }`, so an
+ * old-style swap keeps the pre-partial-swap whole-document re-hydrate while a
+ * `SwapResult`-returning swap drives the scoped re-hydrate. The one place the union is
+ * collapsed, shared by both the soft-nav and dev-page-swap appliers.
+ */
+function readSwapResult(result: SwapResult | string | undefined, doc: Document): SwapResult {
+  return typeof result === "object" ? result : { title: result, root: doc };
+}
 
 /**
  * The re-hydrate call after a swap — defaults to {@link hydrateDocumentIslands}.
@@ -409,26 +441,30 @@ function deepestSharedLayout(
  * the live nodes — and the click listener delegated to `<body>`'s document — attached
  * across the swap. The head is left alone (the client module + styles already ran);
  * only the per-page `<title>` is carried over.
+ *
+ * Returns the swapped element as `root` — the body for a full swap, the deepest shared
+ * layout's inner element for a partial one — so the caller re-hydrates ONLY that
+ * subtree and a preserved outer layout's islands are never re-mounted.
  */
 const defaultSwap: PageSwapper = (html, doc) => {
   const parsed = new DOMParser().parseFromString(html, "text/html");
 
   const shared = deepestSharedLayout(doc.body, parsed.body);
 
-  if (shared === undefined) {
-    // No shared layout boundary → swap the whole body (the original behavior).
-    replaceContents(doc.body, parsed.body, doc);
-  } else {
-    // A shared outer layout → swap only its inner contents, preserving the outer
-    // layout DOM (and any island state mounted in it) across the navigation.
-    replaceContents(shared.live, shared.fetched, doc);
-  }
+  // The live element whose CONTENTS we replace, and therefore the subtree to
+  // re-hydrate. A shared outer layout → swap only its inner contents (the page + any
+  // deeper layouts), preserving every outer layout's DOM and island state; no shared
+  // boundary → the whole `<body>`, the original full-swap behavior.
+  const root = shared?.live ?? doc.body;
+  const fetched = shared?.fetched ?? parsed.body;
+
+  replaceContents(root, fetched, doc);
 
   // `textContent` is "" when the fetched page has no <title>; treat that as "no
   // title to set" so we never blank the tab on a title-less page.
   const title = parsed.title;
 
-  return title === "" ? undefined : title;
+  return { title: title === "" ? undefined : title, root };
 };
 
 /** The id of the framework-owned `aria-live` region soft nav announces routes through. */
@@ -643,7 +679,7 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
         return;
       }
 
-      const title = swap(html, doc);
+      const { title, root } = readSwapResult(swap(html, doc), doc);
 
       if (title !== undefined) doc.title = title;
 
@@ -653,22 +689,15 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
         hist.pushState({ lestoSoftNav: true, scroll: { x: 0, y: 0 } }, "", landed);
       }
 
-      // Re-hydrate against the JUST-SWAPPED document — `root` is the seam islands
-      // are looked up under, so the new body's mount scripts are the ones found,
-      // not the ambient global `document`'s.
-      //
-      // ACTIVATION CAVEAT for the layout-preserving partial swap: this re-hydrates
-      // the WHOLE document, which is correct ONLY for the full-body swap (today's
-      // path — no server emits `data-lesto-layout`, so `deepestSharedLayout` always
-      // returns undefined). The moment a server DOES emit those markers and a partial
-      // swap keeps an outer layout's DOM, re-scanning the whole doc here would re-mount
-      // that preserved layout's islands (no idempotency guard in `hydrateDocumentIslands`)
-      // and DESTROY the very state the partial swap preserves. So before wiring the
-      // marker, this must scope to the swapped subtree (the `defaultSwap` would have to
-      // surface which element it replaced) OR `hydrateDocumentIslands` must skip an
-      // already-mounted shell. Until then the partial-swap branch stays a dormant, pure
-      // fallback (see docs/plans/dx-parity.md W8) — never activate one without the other.
-      const hydration = rehydrate(registry, { root: doc });
+      // Re-hydrate ONLY the swapped subtree — `root` is the element whose contents
+      // the swap just replaced (the `<body>` for a full swap, or just the deepest
+      // shared layout's inner region for a layout-preserving partial swap). Scoping
+      // here is what makes the partial swap safe: re-scanning the WHOLE document would
+      // re-mount the preserved outer layout's islands (no idempotency guard in
+      // `hydrateDocumentIslands`) and DESTROY the very state the partial swap keeps.
+      // A full-body swap's `root` is the body, so this stays equivalent to the old
+      // whole-document re-hydrate (mount scripts live in the body, never the head).
+      const hydration = rehydrate(registry, { root });
 
       // The swapped-in page brings its own `viewport`-prefetch links; register them
       // so they warm as the user scrolls the new page. (Hover links are caught by
@@ -982,12 +1011,12 @@ export interface DevPageRefreshOptions {
  * path AND prod) does not set it, so there the dev client falls back to a full reload and
  * prod ships neither symbol nor call (extending it to the Bun dev path is tracked separately).
  *
- * Reuses {@link defaultSwap}, so the moment the server emits {@link LAYOUT_ATTR} markers
- * the DOM swap becomes layout-preserving for free. Island-STATE preservation is NOT free,
- * though — see the re-hydrate caveat inside: scoping re-hydration to the swapped subtree is
- * the deferred half. It needs no type change (`HydrateOptions.root` already accepts an
- * `Element`) but does touch this function's body (and `defaultSwap` returning the swapped
- * element), so it is a confined body edit, not a new dev-path seam.
+ * Reuses {@link defaultSwap}, so when the server emits {@link LAYOUT_ATTR} markers the
+ * DOM swap is layout-preserving AND the re-hydrate is scoped to the swapped subtree
+ * (via the swap's returned `root`) — so editing an `app/routes/*` page re-renders just
+ * the page region and the unchanged layout's islands keep their state across the swap,
+ * no full reload and no re-mount. A page with no layouts swaps the whole body and
+ * re-hydrates it, exactly as before.
  *
  * Returns the refresh function (also installed on the target) so a test can drive it
  * directly without reaching through the global.
@@ -1006,17 +1035,16 @@ export function enableDevPageRefresh(
     // so a fresh, never-aborted controller just satisfies `PageFetcher`'s required signal.
     const { html } = await fetchPage(doc.URL, new AbortController().signal);
 
-    const title = swap(html, doc);
+    const { title, root } = readSwapResult(swap(html, doc), doc);
 
     if (title !== undefined) doc.title = title;
 
-    // Re-hydrate the just-swapped document. TODAY `defaultSwap` replaces the WHOLE body
-    // (no server emits `data-lesto-layout`), so re-mounting every island is correct.
-    // DEFERRED (the layout-preserving half, mirroring the `LAYOUT_ATTR` caveat in
-    // `enableSoftNav`): once the marker is emitted and the swap keeps an outer layout,
-    // this must scope to the swapped subtree or it double-mounts the preserved layout's
-    // islands and destroys their state. Until then this stays a full-document re-hydrate.
-    rehydrate(registry, { root: doc });
+    // Re-hydrate ONLY the swapped subtree — `root` is the element the swap replaced.
+    // For a full-body swap that is the body (re-mount every island, correct since the
+    // whole page changed); for a layout-preserving partial swap it is just the inner
+    // page region, so the unchanged outer layout's islands are NOT re-mounted and keep
+    // their state — the deferred half of the dev page-swap, now wired.
+    rehydrate(registry, { root });
   };
 
   // Install the hook for the dev client to call. The document's window is the default

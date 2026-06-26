@@ -51,6 +51,7 @@ export type {
   SoftNavKind,
   SoftNavOptions,
   SoftNavWindow,
+  SwapResult,
 } from "./softnav";
 
 // The `lesto dev` page-refresh hook (DX-parity R2): a saved `app/routes/*` file does a

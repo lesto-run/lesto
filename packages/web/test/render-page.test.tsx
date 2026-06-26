@@ -128,8 +128,36 @@ describe("page layouts", () => {
 
     const html = await drain(await app.handle("GET", "/p"));
 
-    // Outer must enclose inner, which encloses the leaf.
-    expect(html).toMatch(/<div id="outer"><div id="inner"><span>leaf<\/span><\/div><\/div>/);
+    // Outer must enclose inner, which encloses the leaf — each layout's children
+    // wrapped in its `data-lesto-layout` partial-swap marker (the markers add no box).
+    expect(html).toMatch(
+      /<div id="outer"><div [^>]*data-lesto-layout="0"[^>]*><div id="inner"><div [^>]*data-lesto-layout="1"[^>]*><span>leaf<\/span><\/div><\/div><\/div><\/div>/,
+    );
+  });
+
+  it("emits a data-lesto-layout marker at each layout depth, display:contents (the partial-swap boundary)", async () => {
+    const app = lesto()
+      .layout(Outer)
+      .layout(Inner)
+      .page("/p", { component: () => createElement("span", null, "leaf") });
+
+    const html = await drain(await app.handle("GET", "/p"));
+
+    // Outermost layout → depth 0, nested → depth 1; the marker wraps each layout's
+    // children, so the client's `deepestSharedLayout` can align chains by depth and
+    // swap only the deepest shared layout's contents (keeping outer layout DOM/state).
+    expect(html).toMatch(/<div id="outer"><div [^>]*data-lesto-layout="0"/);
+    expect(html).toMatch(/<div id="inner"><div [^>]*data-lesto-layout="1"/);
+    // `display:contents` so the marker is queryable but generates no box.
+    expect(html).toContain('data-lesto-layout="0" style="display:contents"');
+  });
+
+  it("emits no marker for a page with no layouts (full-body swap stays the fallback)", async () => {
+    const app = lesto().page("/p", { component: () => createElement("span", null, "leaf") });
+
+    const html = await drain(await app.handle("GET", "/p"));
+
+    expect(html).not.toContain("data-lesto-layout");
   });
 
   it("composes a parent layout around a mounted sub-router's page", async () => {
@@ -138,7 +166,7 @@ describe("page layouts", () => {
 
     const html = await drain(await app.handle("GET", "/sub/inner"));
 
-    expect(html).toMatch(/<div id="parent"><span>x<\/span><\/div>/);
+    expect(html).toMatch(/<div id="parent"><div [^>]*data-lesto-layout="0"[^>]*><span>x<\/span>/);
   });
 });
 

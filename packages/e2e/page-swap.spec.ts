@@ -18,12 +18,15 @@ import { expect, test } from "@playwright/test";
  *      AND the `window` marker SURVIVES — proving the page re-rendered via the page-swap
  *      hook (`enableDevPageRefresh`), not a full reload.
  *
- * SCOPE: this proves the page swapped in place (no reload). It does NOT assert island
- * state survives — the page swap is full-body today, so islands re-mount; the
- * layout-preserving partial swap that would keep them is the deferred half (it needs the
- * server to emit `data-lesto-layout` + scoped re-hydration — see softnav.ts's
- * `enableDevPageRefresh`). A page is server-rendered, so there is no client state the
- * reload-vs-swap distinction must protect here; the win is purely avoiding the reload.
+ * SCOPE: this proves the page swapped in place (no reload). It does NOT assert layout
+ * island state survives — this example is a single page-level island with no layout, so
+ * the swap re-mounts it (correct: a server-rendered page has no client state the
+ * reload-vs-swap distinction must protect here; the win is purely avoiding the reload).
+ * The layout-preserving HALF — the server now emits `data-lesto-layout` markers and the
+ * swap scopes re-hydration to the swapped subtree, so a page edit keeps an unchanged
+ * LAYOUT's island state — is wired and unit-proven (`@lesto/web` render-page emits the
+ * marker; `@lesto/ui` softnav scopes the re-hydrate). A live browser demo of layout
+ * island survival (a layout-with-island example) is a follow-up.
  *
  * The island file is left untouched; the page file is edited in place and ALWAYS restored
  * in `afterAll`.
