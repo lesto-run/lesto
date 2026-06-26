@@ -4,6 +4,7 @@
   "license": "MIT",
   "description": "Lesto's AI-native UI rendering engine core — validate a JSON UI tree and render it to React against a vetted component registry.",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./src/index.ts",
