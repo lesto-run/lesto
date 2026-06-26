@@ -1,0 +1,23 @@
+{
+  "name": "@lesto/example-mcp-auth-openauth",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The agent-native wedge with a REAL self-hosted issuer: an OpenAuth Authorization Server (its own Hono app/Worker) mints JWTs, and a Lesto MCP Resource Server validates them purely via the issuer's JWKS — the @lesto/mcp createBearerAuthenticator/createMcpHttpHandlers governance unchanged, the external issuer a config swap (ADR 0039 interim real issuer).",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/mcp": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@openauthjs/openauth": "^0.4.3",
+    "better-sqlite3": "^11.10.0",
+    "jose": "^6.2.3",
+    "valibot": "^1.0.0"
+  }
+}
