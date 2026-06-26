@@ -183,6 +183,16 @@ export interface LiveReload {
    */
   readonly notifyStyleUpdate: () => void;
 
+  /**
+   * Broadcast a page PARTIAL-SWAP to every connected browser (a watched `app/routes/*`
+   * change re-rendered, DX-parity R2). The client re-fetches the current url and swaps
+   * its body in place — no full reload, so scroll is kept and there is no white flash;
+   * a page is server-rendered, so there is no client state to lose. The client falls
+   * back to a full reload if the page-refresh hook is absent or its refresh throws.
+   * Distinct from {@link notify} (full reload) and {@link notifyStyleUpdate} (CSS only).
+   */
+  readonly notifyPageSwap: () => void;
+
   /** Shut the live-reload socket down (called on graceful dev shutdown). */
   readonly close: () => void;
 }
@@ -1520,6 +1530,13 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
     deps.liveReload?.notify();
   };
 
+  // A clean route change with no overlay up swaps the page in place (DX-parity R2): the
+  // client re-renders the current url without a full reload. Only reached when no overlay
+  // is showing — clearing an overlay still needs the fresh document a full reload gives.
+  const swapPage = (): void => {
+    deps.liveReload?.notifyPageSwap();
+  };
+
   const showOverlay = (error: DevError): void => {
     overlayUp = true;
     deps.liveReload?.notifyError(error);
@@ -1613,11 +1630,13 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
 
     if (handle !== undefined) activeHandle = handle;
 
-    // A clean refresh reloads the browser (clearing any overlay); a failure pushes
-    // the overlay INSTEAD of reloading — a reload would just re-paint the stale app
-    // and hide that the save did not take.
-    if (error === undefined) reloadBrowser();
-    else showOverlay(error);
+    // A failure pushes the overlay INSTEAD of reloading — a reload would just re-paint
+    // the stale app and hide that the save did not take. A clean refresh with an overlay
+    // up does a full reload to CLEAR it (a fresh document); otherwise it swaps the page
+    // in place (DX-parity R2) — no jarring reload for an ordinary route edit.
+    if (error !== undefined) showOverlay(error);
+    else if (overlayUp) reloadBrowser();
+    else swapPage();
   };
 
   const stopRoutes = deps.watchRoutes?.(() => void onRouteChange());

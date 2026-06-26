@@ -932,3 +932,88 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
 
   return disable;
 }
+
+/**
+ * The window-global the `lesto dev` live-reload client calls to refresh the current
+ * page in place — the wire contract between the CLI's injected reload script
+ * (`@lesto/cli`'s `dev-overlay.ts`, a raw string that cannot import this module) and
+ * the hook {@link enableDevPageRefresh} installs. A literal both sides pin, like the
+ * live-reload WebSocket's message types.
+ */
+export const DEV_PAGE_REFRESH_GLOBAL = "__lestoDevRefreshPage";
+
+/** The injectable seams {@link enableDevPageRefresh} runs on; all default to the real browser. */
+export interface DevPageRefreshOptions {
+  /** The document to refresh + re-hydrate. Defaults to `document`. */
+  document?: Document;
+
+  /** How to fetch the current page's fresh HTML. Defaults to the same same-origin GET soft nav uses. */
+  fetchPage?: PageFetcher;
+
+  /** How to swap the fetched body in. Defaults to {@link defaultSwap} (layout-aware, full-body fallback). */
+  swap?: PageSwapper;
+
+  /** How to re-hydrate after the swap. Defaults to {@link hydrateDocumentIslands}. */
+  rehydrate?: Rehydrate;
+
+  /** Where the refresh hook is installed for the dev client to call. Defaults to the document's window. */
+  target?: Record<string, unknown>;
+}
+
+/**
+ * Install the `lesto dev` PAGE refresh hook: a function that re-fetches the CURRENT
+ * url, swaps its body in, and re-hydrates — the same fetch-and-swap soft nav does, but
+ * for a server-driven dev signal (a saved `app/routes/*` file) rather than a click.
+ *
+ * The CLI's live-reload client (`dev-overlay.ts`) calls the installed
+ * {@link DEV_PAGE_REFRESH_GLOBAL} on a `{type:"page-swap"}` frame instead of
+ * `location.reload()`, so a page edit re-renders WITHOUT the jarring full reload
+ * (scroll kept, no white flash, no asset re-download). A page is server-rendered, so
+ * there is no client component state to preserve — re-hydrating the whole document is
+ * exactly right here; the win is purely avoiding the reload. If the hook is absent or
+ * its refresh throws, the client falls back to a real reload — the floor always holds.
+ *
+ * The synthesized client entry (`@lesto/assets`'s `synthesizeEntry`) calls this ONLY
+ * in dev (`beacon.dev`), so a production bundle never carries it.
+ *
+ * Reuses {@link defaultSwap}, so the moment the server emits {@link LAYOUT_ATTR}
+ * markers this refresh becomes layout-preserving for free — see the re-hydrate caveat
+ * inside (the deferred half: scope re-hydration to the swapped subtree).
+ *
+ * Returns the refresh function (also installed on the target) so a test can drive it
+ * directly without reaching through the global.
+ */
+export function enableDevPageRefresh(
+  registry: Registry,
+  options: DevPageRefreshOptions = {},
+): () => Promise<void> {
+  const doc: Document = options.document ?? document;
+  const fetchPage: PageFetcher = options.fetchPage ?? defaultFetchPage;
+  const swap: PageSwapper = options.swap ?? defaultSwap;
+  const rehydrate: Rehydrate = options.rehydrate ?? hydrateDocumentIslands;
+
+  const refresh = async (): Promise<void> => {
+    const { html } = await fetchPage(doc.URL, new AbortController().signal);
+
+    const title = swap(html, doc);
+
+    if (title !== undefined) doc.title = title;
+
+    // Re-hydrate the just-swapped document. TODAY `defaultSwap` replaces the WHOLE body
+    // (no server emits `data-lesto-layout`), so re-mounting every island is correct.
+    // DEFERRED (the layout-preserving half, mirroring the `LAYOUT_ATTR` caveat in
+    // `enableSoftNav`): once the marker is emitted and the swap keeps an outer layout,
+    // this must scope to the swapped subtree or it double-mounts the preserved layout's
+    // islands and destroys their state. Until then this stays a full-document re-hydrate.
+    rehydrate(registry, { root: doc });
+  };
+
+  // Install the hook for the dev client to call. The document's window is the default
+  // target; a detached document (a test fake) with no `defaultView` gets none — the
+  // returned `refresh` is still usable directly.
+  const target = options.target ?? (doc.defaultView as unknown as Record<string, unknown> | null);
+
+  if (target !== null && target !== undefined) target[DEV_PAGE_REFRESH_GLOBAL] = refresh;
+
+  return refresh;
+}

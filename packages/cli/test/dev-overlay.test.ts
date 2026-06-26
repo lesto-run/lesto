@@ -71,9 +71,18 @@ function send(socket: FakeSocket, payload: unknown): void {
   socket.onmessage?.({ data: typeof payload === "string" ? payload : JSON.stringify(payload) });
 }
 
+// The page-refresh hook the synthesized dev entry installs (`@lesto/ui`'s
+// `enableDevPageRefresh`); the client calls it on a `page-swap` frame.
+const REFRESH_GLOBAL = "__lestoDevRefreshPage";
+
+function setRefreshHook(hook: (() => Promise<void>) | undefined): void {
+  (window as unknown as Record<string, unknown>)[REFRESH_GLOBAL] = hook;
+}
+
 describe("dev error-overlay client", () => {
   afterEach(() => {
     overlay()?.remove();
+    delete (window as unknown as Record<string, unknown>)[REFRESH_GLOBAL];
   });
 
   it("connects to the live-reload port it was built with", () => {
@@ -174,6 +183,41 @@ describe("dev error-overlay client", () => {
     const { socket, reload } = mountClient();
 
     send(socket, "not-json");
+
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls the page-refresh hook (not a reload) on a page-swap frame", async () => {
+    const refresh = vi.fn(() => Promise.resolve());
+    setRefreshHook(refresh);
+
+    const { socket, reload } = mountClient();
+
+    send(socket, { type: "page-swap" });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a reload on a page-swap frame when no refresh hook is installed", async () => {
+    setRefreshHook(undefined);
+
+    const { socket, reload } = mountClient();
+
+    send(socket, { type: "page-swap" });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to a reload when the page-refresh hook rejects", async () => {
+    setRefreshHook(() => Promise.reject(new Error("swap blew up")));
+
+    const { socket, reload } = mountClient();
+
+    send(socket, { type: "page-swap" });
+    await new Promise((r) => setTimeout(r, 0));
 
     expect(reload).toHaveBeenCalledTimes(1);
   });

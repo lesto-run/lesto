@@ -15,6 +15,11 @@
  *   - `{type:"style-update"}` → swap the framework stylesheet `<link href="/styles.css">`
  *     in place with a cache-busted href (`/styles.css?t=<n>`), NEVER reloading — so a
  *     Tailwind edit re-paints styles while island/page state survives (ADR 0037 TW4);
+ *   - `{type:"page-swap"}` → call the page-refresh hook (`window.__lestoDevRefreshPage`,
+ *     installed by the synthesized dev entry's `enableDevPageRefresh`) to re-render the
+ *     current page in place — no full reload (DX-parity R2); falls back to
+ *     `location.reload()` if the hook is absent (e.g. an island-less app) or its refresh
+ *     rejects, so the floor always holds;
  *   - anything else (a `{type:"reload"}`, or a malformed frame) → `location.reload()`;
  *   - a dropped connection → retry every second (so a dev-server restart reloads too).
  *
@@ -43,8 +48,9 @@ hint.textContent="Fix and save — this clears on the next successful build. Pre
 card.appendChild(hint);o.appendChild(card);(document.body||document.documentElement).appendChild(o);};
 addEventListener("keydown",(e)=>{if(e.key==="Escape")clear();});
 const swap=()=>{const l=document.querySelector('link[rel="stylesheet"][href="/styles.css"],link[rel="stylesheet"][href^="/styles.css?"]');if(l)l.setAttribute("href","/styles.css?t="+Date.now());};
+const pageSwap=()=>{const r=window.__lestoDevRefreshPage;if(typeof r==="function")Promise.resolve().then(r).catch(()=>location.reload());else location.reload();};
 const c=()=>{const s=new WebSocket("ws://"+location.hostname+":${port}");
-s.onmessage=(e)=>{let d;try{d=JSON.parse(e.data);}catch{location.reload();return;}if(d&&d.type==="error")show(d);else if(d&&d.type==="style-update")swap();else location.reload();};
+s.onmessage=(e)=>{let d;try{d=JSON.parse(e.data);}catch{location.reload();return;}if(d&&d.type==="error")show(d);else if(d&&d.type==="style-update")swap();else if(d&&d.type==="page-swap")pageSwap();else location.reload();};
 s.onclose=()=>setTimeout(c,1000);};c();
 }catch{}})();`;
 }

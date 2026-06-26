@@ -163,11 +163,16 @@ export function synthesizeEntry(
   beacon: BeaconConfig = {},
   rum: RumConfig = {},
 ): string {
-  const imports: string[] = [
-    `import { Registry } from "@lesto/ui";`,
-    `import { hydrateDocumentIslands } from "@lesto/ui/client";`,
-    rumImport(),
-  ];
+  // In dev the entry also installs the page-refresh hook ({@link enableDevPageRefresh}),
+  // so a saved `app/routes/*` file swaps the page in place rather than full-reloading;
+  // a production build (`beacon.dev` unset) imports neither the symbol nor the call, so
+  // the swap machinery never ships to prod.
+  const clientImport =
+    beacon.dev === true
+      ? `import { enableDevPageRefresh, hydrateDocumentIslands } from "@lesto/ui/client";`
+      : `import { hydrateDocumentIslands } from "@lesto/ui/client";`;
+
+  const imports: string[] = [`import { Registry } from "@lesto/ui";`, clientImport, rumImport()];
 
   const registrations: string[] = [];
 
@@ -200,6 +205,19 @@ export function synthesizeEntry(
     beaconOptions.push(`dev: ${JSON.stringify(beacon.dev)}`);
   }
 
+  // In dev, install the page-refresh hook AFTER the initial hydrate (it captures the
+  // same `registry`), so a saved route file re-renders + swaps the page in place. Empty
+  // in prod — the swap machinery is dev-only.
+  const devPageRefresh =
+    beacon.dev === true
+      ? [
+          "// `lesto dev`: a saved app/routes/* file swaps the page in place (no full reload);",
+          "// the injected live-reload client calls the hook this installs.",
+          `enableDevPageRefresh(registry);`,
+          "",
+        ]
+      : [];
+
   return [
     ...imports,
     "",
@@ -220,6 +238,7 @@ export function synthesizeEntry(
     "",
     `beacon.report(result);`,
     "",
+    ...devPageRefresh,
     // Browser RUM: read the SSR `lesto-traceparent` meta, adopt the server trace id,
     // and POST navigation/resource/web-vital spans under it (ARCHITECTURE.md §7).
     rumStartCall(rum),

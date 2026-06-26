@@ -1382,6 +1382,7 @@ describe("run dev — island client assets", () => {
           notify: () => reloads.push(1),
           notifyError: () => undefined,
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1424,6 +1425,7 @@ describe("run dev — island client assets", () => {
           notify: () => reloads.push(1),
           notifyError: (error) => errors.push(error),
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1472,6 +1474,7 @@ describe("run dev — island client assets", () => {
           notify: () => undefined,
           notifyError: (error) => errors.push(error),
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => undefined,
         },
       }),
@@ -1685,9 +1688,10 @@ function recordingLiveReload(): {
   liveReload: NonNullable<CliDeps["liveReload"]>;
   swaps: number;
   reloads: number;
+  pageSwaps: number;
   errors: DevError[];
 } {
-  const rec = { swaps: 0, reloads: 0, errors: [] as DevError[] };
+  const rec = { swaps: 0, reloads: 0, pageSwaps: 0, errors: [] as DevError[] };
 
   return {
     liveReload: {
@@ -1695,6 +1699,7 @@ function recordingLiveReload(): {
       notify: () => (rec.reloads += 1),
       notifyError: (error) => rec.errors.push(error),
       notifyStyleUpdate: () => (rec.swaps += 1),
+      notifyPageSwap: () => (rec.pageSwaps += 1),
       close: () => undefined,
     },
     get swaps() {
@@ -1702,6 +1707,9 @@ function recordingLiveReload(): {
     },
     get reloads() {
       return rec.reloads;
+    },
+    get pageSwaps() {
+      return rec.pageSwaps;
     },
     get errors() {
       return rec.errors;
@@ -1786,6 +1794,7 @@ describe("run dev — Vite island Fast Refresh (DX-parity R2)", () => {
           notify: () => undefined,
           notifyError: () => undefined,
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => undefined,
         },
       }),
@@ -2159,11 +2168,12 @@ describe("run routes:gen", () => {
 describe("run dev — route watching & live reload (Workstream 3)", () => {
   const sites: readonly Site[] = [{ name: "app", render: "dynamic", basePath: "/" }];
 
-  it("registers a route watcher and, on change, refreshes the manifest, reloads the app, and notifies", async () => {
+  it("registers a route watcher and, on change, refreshes the manifest, reloads the app, and swaps the page", async () => {
     let onChange: (() => void) | undefined;
     let regenerated = 0;
     let reloaded = 0;
-    const notified: number[] = [];
+    const reloads: number[] = [];
+    const pageSwaps: number[] = [];
 
     await run(
       ["dev"],
@@ -2187,9 +2197,10 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
         },
         liveReload: {
           script: "x",
-          notify: () => notified.push(1),
+          notify: () => reloads.push(1),
           notifyError: () => undefined,
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => pageSwaps.push(1),
           close: () => undefined,
         },
       }),
@@ -2203,7 +2214,9 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
 
     expect(regenerated).toBe(1);
     expect(reloaded).toBe(1);
-    expect(notified).toEqual([1]);
+    // A clean route edit with no overlay up swaps the page in place — NOT a full reload.
+    expect(pageSwaps).toEqual([1]);
+    expect(reloads).toEqual([]);
     expect(lines).toContain("routes refreshed: src/routes.gen.ts (2 route files)");
   });
 
@@ -2269,6 +2282,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
   it("reports a manifest refresh failure on stderr but does NOT overlay it (the app reloaded fine)", async () => {
     let onChange: (() => void) | undefined;
     const reloads: number[] = [];
+    const pageSwaps: number[] = [];
     const errors: DevError[] = [];
 
     await run(
@@ -2290,6 +2304,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           notify: () => reloads.push(1),
           notifyError: (error) => errors.push(error),
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => pageSwaps.push(1),
           close: () => undefined,
         },
       }),
@@ -2299,14 +2314,16 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(lines.some((line) => line.startsWith("route manifest refresh failed:"))).toBe(true);
-    // A stale edge map does not break the page → reload, never an overlay.
+    // A stale edge map does not break the page → swap (no overlay, no full reload).
     expect(errors).toEqual([]);
-    expect(reloads).toEqual([1]);
+    expect(pageSwaps).toEqual([1]);
+    expect(reloads).toEqual([]);
   });
 
-  it("reloads on a clean refresh even with no app re-scan seam (manifest only)", async () => {
+  it("swaps the page on a clean refresh even with no app re-scan seam (manifest only)", async () => {
     let onChange: (() => void) | undefined;
     const reloads: number[] = [];
+    const pageSwaps: number[] = [];
 
     await run(
       ["dev"],
@@ -2320,12 +2337,13 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
         },
         regenerateRoutes: () => Promise.resolve({ path: "src/routes.gen.ts", count: 1 }),
         // No `reloadApp` seam → refreshRoutes returns neither a handle nor an error;
-        // the clean refresh still reloads the browser.
+        // the clean refresh still swaps the page (no overlay up → no full reload).
         liveReload: {
           script: "x",
           notify: () => reloads.push(1),
           notifyError: () => undefined,
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => pageSwaps.push(1),
           close: () => undefined,
         },
       }),
@@ -2334,7 +2352,57 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
     onChange?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    expect(pageSwaps).toEqual([1]);
+    expect(reloads).toEqual([]);
+  });
+
+  it("does a FULL reload (not a page swap) on a clean refresh that clears a prior overlay", async () => {
+    let onChange: (() => void) | undefined;
+    let shouldFail = true;
+    const reloads: number[] = [];
+    const pageSwaps: number[] = [];
+    const errors: DevError[] = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        // First refresh throws (paints the overlay); the second succeeds.
+        reloadApp: () =>
+          shouldFail
+            ? Promise.reject(new Error("boom in page.tsx"))
+            : Promise.resolve(buildConfig()),
+        liveReload: {
+          script: "x",
+          notify: () => reloads.push(1),
+          notifyError: (error) => errors.push(error),
+          notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => pageSwaps.push(1),
+          close: () => undefined,
+        },
+      }),
+    );
+
+    // First change fails → overlay up, neither reload nor swap.
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(errors).toHaveLength(1);
+    expect(reloads).toEqual([]);
+    expect(pageSwaps).toEqual([]);
+
+    // Second change succeeds while the overlay is up → a FULL reload clears it (a page
+    // swap would leave the failed build's overlay element on screen).
+    shouldFail = false;
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(reloads).toEqual([1]);
+    expect(pageSwaps).toEqual([]);
   });
 
   it("paints a dev error overlay (and does NOT reload) when the app reload fails", async () => {
@@ -2358,6 +2426,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           notify: () => reloads.push(1),
           notifyError: (error) => errors.push(error),
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => undefined,
         },
       }),
@@ -2398,6 +2467,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           notify: () => undefined,
           notifyError: (error) => errors.push(error),
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => undefined,
         },
       }),
@@ -2458,6 +2528,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           notify: () => undefined,
           notifyError: () => undefined,
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => undefined,
         },
       }),
@@ -2492,6 +2563,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           notify: () => undefined,
           notifyError: () => undefined,
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => undefined,
         },
       }),
@@ -2517,6 +2589,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           notify: () => undefined,
           notifyError: () => undefined,
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => undefined,
         },
       }),
@@ -2552,6 +2625,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           notify: () => undefined,
           notifyError: () => undefined,
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => undefined,
         },
       }),
@@ -2580,6 +2654,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           notify: () => undefined,
           notifyError: () => undefined,
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => undefined,
         },
       }),
@@ -2608,6 +2683,7 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
           notify: () => undefined,
           notifyError: () => undefined,
           notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => undefined,
           close: () => {
             closed = true;
           },

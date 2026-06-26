@@ -52,3 +52,9 @@ export type {
   SoftNavOptions,
   SoftNavWindow,
 } from "./softnav";
+
+// The `lesto dev` page-refresh hook (DX-parity R2): a saved `app/routes/*` file does a
+// server re-render + DOM swap instead of a full reload. The synthesized dev entry calls
+// `enableDevPageRefresh` so the CLI's live-reload client can refresh the page in place.
+export { DEV_PAGE_REFRESH_GLOBAL, enableDevPageRefresh } from "./softnav";
+export type { DevPageRefreshOptions } from "./softnav";

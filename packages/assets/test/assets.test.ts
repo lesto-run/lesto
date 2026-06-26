@@ -107,6 +107,23 @@ describe("synthesizeEntry — client error beacon (ADR 0011)", () => {
     expect(source).toContain("reportClientErrors({ dev: true });");
   });
 
+  it("installs the page-refresh hook only in dev (DX-parity R2 page swap)", () => {
+    const dev = synthesizeEntry(islands, { dev: true });
+
+    // In dev the entry imports + calls enableDevPageRefresh, so a saved route file swaps
+    // the page in place rather than full-reloading.
+    expect(dev).toContain(
+      'import { enableDevPageRefresh, hydrateDocumentIslands } from "@lesto/ui/client";',
+    );
+    expect(dev).toContain("enableDevPageRefresh(registry);");
+
+    // A production build ships neither the import nor the call — the swap is dev-only.
+    const prod = synthesizeEntry(islands, { dev: false });
+
+    expect(prod).toContain('import { hydrateDocumentIslands } from "@lesto/ui/client";');
+    expect(prod).not.toContain("enableDevPageRefresh");
+  });
+
   it("emits both knobs together when both are set", () => {
     const source = synthesizeEntry(islands, { sampleRate: 0.25, dev: false });
 

@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Registry } from "../src/index";
-import { enableSoftNav } from "../src/softnav";
+import { DEV_PAGE_REFRESH_GLOBAL, enableDevPageRefresh, enableSoftNav } from "../src/softnav";
 import type {
   FetchedPage,
   PopStateTarget,
@@ -1661,5 +1661,133 @@ describe("enableSoftNav — layout-preserving partial swap (default swap)", () =
     // The depth-0 shell node is preserved; only its inner contents changed.
     expect(document.getElementById("shell")?.dataset["marker"]).toBe("kept");
     expect(document.getElementById("page")?.textContent).toBe("NEW");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `enableDevPageRefresh` — the `lesto dev` page-swap bridge (DX-parity R2). It
+// reuses the same fetch + swap + re-hydrate machinery soft nav does, installed as a
+// window hook the CLI's live-reload client calls on a `{type:"page-swap"}` frame.
+// ---------------------------------------------------------------------------
+
+describe("enableDevPageRefresh", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+  });
+
+  it("installs a hook that fetches the current url, swaps, sets the title, and re-hydrates", async () => {
+    const fetched: string[] = [];
+    const swapped: string[] = [];
+    const rehydrated: Array<{ root: unknown }> = [];
+    const target: Record<string, unknown> = {};
+    const doc = { URL: "https://app.test/here", title: "" } as unknown as Document;
+
+    const refresh = enableDevPageRefresh(new Registry(), {
+      document: doc,
+      target,
+      fetchPage: async (url) => {
+        fetched.push(url);
+
+        return { html: "<title>New</title><p>new</p>", url };
+      },
+      swap: (html) => {
+        swapped.push(html);
+
+        return "New";
+      },
+      rehydrate: (_registry, opts) => {
+        rehydrated.push({ root: opts.root });
+
+        return HYDRATION;
+      },
+    });
+
+    // The installed hook IS the returned refresh — the dev client calls it by name.
+    expect(target[DEV_PAGE_REFRESH_GLOBAL]).toBe(refresh);
+
+    await refresh();
+
+    // It fetches the CURRENT url (not a clicked link), swaps the fetched html, carries
+    // the new title, and re-hydrates the swapped document.
+    expect(fetched).toEqual(["https://app.test/here"]);
+    expect(swapped).toHaveLength(1);
+    expect(doc.title).toBe("New");
+    expect(rehydrated).toEqual([{ root: doc }]);
+  });
+
+  it("leaves the title untouched when the swap returns no title", async () => {
+    const doc = { URL: "https://app.test/", title: "Keep" } as unknown as Document;
+
+    const refresh = enableDevPageRefresh(new Registry(), {
+      document: doc,
+      target: {},
+      fetchPage: async (url) => ({ html: "<p>x</p>", url }),
+      swap: () => undefined,
+      rehydrate: () => HYDRATION,
+    });
+
+    await refresh();
+
+    expect(doc.title).toBe("Keep");
+  });
+
+  it("installs the hook on the document's defaultView when no target is given", () => {
+    const view: Record<string, unknown> = {};
+    const doc = { URL: "https://app.test/", defaultView: view } as unknown as Document;
+
+    const refresh = enableDevPageRefresh(new Registry(), {
+      document: doc,
+      fetchPage: async (url) => ({ html: "", url }),
+      swap: () => undefined,
+      rehydrate: () => HYDRATION,
+    });
+
+    expect(view[DEV_PAGE_REFRESH_GLOBAL]).toBe(refresh);
+  });
+
+  it("installs no hook (but returns a usable refresh) when there is no window", async () => {
+    let swaps = 0;
+    const doc = { URL: "https://app.test/", title: "", defaultView: null } as unknown as Document;
+
+    const refresh = enableDevPageRefresh(new Registry(), {
+      document: doc,
+      fetchPage: async (url) => ({ html: "<p>x</p>", url }),
+      swap: () => {
+        swaps += 1;
+
+        return undefined;
+      },
+      rehydrate: () => HYDRATION,
+    });
+
+    // No defaultView and no target → nothing to install on, no throw; refresh still runs.
+    await refresh();
+
+    expect(swaps).toBe(1);
+  });
+
+  it("defaults to the ambient document + real fetch/DOMParser/hydrate seams (jsdom)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        text: async () => "<html><head><title>Fresh</title></head><body><p>fresh</p></body></html>",
+        url: "http://localhost:3000/",
+      })),
+    );
+
+    document.body.innerHTML = "<p>stale</p>";
+
+    // Default document/fetchPage/swap/rehydrate; the hook defaults onto the real window.
+    const refresh = enableDevPageRefresh(new Registry());
+
+    expect((window as unknown as Record<string, unknown>)[DEV_PAGE_REFRESH_GLOBAL]).toBe(refresh);
+
+    await refresh();
+
+    // The real default swap (DOMParser, full-body since no data-lesto-layout) replaced
+    // the body and carried the title — proving the `??` fallbacks run end to end.
+    expect(document.body.textContent).toContain("fresh");
+    expect(document.title).toBe("Fresh");
   });
 });

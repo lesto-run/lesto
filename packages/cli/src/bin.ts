@@ -678,6 +678,7 @@ const buildLiveReload = (): {
   notify: () => void;
   notifyError: (error: DevError) => void;
   notifyStyleUpdate: () => void;
+  notifyPageSwap: () => void;
   close: () => void;
 } => {
   const sockets = new Set<{ send: (data: string) => void }>();
@@ -743,6 +744,12 @@ const buildLiveReload = (): {
       // The client swaps the stylesheet `<link>` in place (no reload) on this frame
       // — a CSS edit keeps island/page state (ADR 0037 TW4).
       for (const ws of sockets) ws.send('{"type":"style-update"}');
+    },
+    notifyPageSwap: () => {
+      // The client re-fetches the current url and swaps its body in place (no reload) on
+      // this frame — a saved `app/routes/*` file re-renders without a jarring full reload
+      // (DX-parity R2). The client falls back to a reload if its refresh hook is absent.
+      for (const ws of sockets) ws.send('{"type":"page-swap"}');
     },
     close: () => {
       server?.stop?.();
