@@ -1,17 +1,20 @@
 /**
  * @lesto/assets — the framework-owned client-asset pipeline (ADR 0011, Seam 2).
  *
- *   const deps = bunBuildClientDeps(projectRoot);
+ *   const deps = viteBuildClientDeps(projectRoot);
  *   await buildClient({ islandsDir, outDir, mode: "production", dialect: "preact" }, deps);
  *
  * Synthesizes the island hydration entry from an `app/islands/` convention (the
- * framework writes the `client.tsx` an app used to hand-author), bundles it with
- * `Bun.build` (splitting + the opt-in preact dialect), and sweeps stale chunks —
- * so an app ships an optimized `/client.js` with no bespoke build script.
+ * framework writes the `client.tsx` an app used to hand-author), bundles it
+ * (splitting + the opt-in preact dialect), and sweeps stale chunks — so an app
+ * ships an optimized `/client.js` with no bespoke build script.
  *
  * The orchestration (`buildClient`) and the decision logic (`synthesizeEntry`,
- * `isChunkFile`, the alias map) are pure; the real Bun + filesystem wiring is
- * `bunBuildClientDeps`.
+ * `isChunkFile`, the alias map) are pure and bundler-agnostic; the real bundler +
+ * filesystem wiring is the injected deps. Two backends ship: `viteBuildClientDeps`
+ * (Vite/Rolldown — `lesto build`, sharing ONE bundler with the `lesto dev` island
+ * server, DX-parity R2 Phase 2) and `bunBuildClientDeps` (`Bun.build` — the dev
+ * fallback for an app that opts out of the `@lesto/island-dev` Vite dev server).
  */
 
 export { buildClient } from "./build-client";
@@ -53,6 +56,8 @@ export type { PublicEnvDefine } from "./public-env";
 export { PREACT_ALIAS } from "./preact-alias";
 
 export { bunBuildClientDeps } from "./bun";
+
+export { viteBuildClientDeps } from "./vite-build";
 
 export { AssetsError, LestoError } from "./errors";
 export type { AssetsErrorCode } from "./errors";

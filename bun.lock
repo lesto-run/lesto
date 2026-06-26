@@ -219,6 +219,7 @@
         "@lesto/errors": "workspace:*",
         "@lesto/observability": "workspace:*",
         "preact": "^10.29.2",
+        "vite": "^7.0.0",
       },
       "devDependencies": {
         "@types/bun": "latest",

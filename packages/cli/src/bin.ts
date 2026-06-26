@@ -30,7 +30,7 @@ import type { Site } from "@lesto/sites";
 import { nodeReleaseStore, nodeUploader, remoteReleaseStore } from "@lesto/deploy";
 import type { ReleaseStore } from "@lesto/deploy";
 
-import { buildClient, bunBuildClientDeps } from "@lesto/assets";
+import { buildClient, bunBuildClientDeps, viteBuildClientDeps } from "@lesto/assets";
 import type { PublicEnvDefine } from "@lesto/assets";
 import { clientDefineMap } from "@lesto/env";
 import type { ClientSchema } from "@lesto/env";
@@ -394,6 +394,13 @@ const readAgentIslands = async (): Promise<readonly string[]> => {
 // single `ui.dialect` key and passes it here, while `createApp` wires the server
 // renderer from the same value — so the client alias and the server render never
 // diverge.
+//
+// The bundler is chosen by MODE (DX-parity R2 Phase 2): `production` (`lesto build`)
+// bundles islands with Vite/Rolldown — the SAME bundler the `lesto dev` island server
+// (`@lesto/island-dev`, the scaffold default) serves them through, so dev and prod no
+// longer disagree. `dev` is the FALLBACK path only — reached when an app opts out of
+// the island-dev Vite server — and keeps `Bun.build` (no Vite/Fast-Refresh install
+// required for that bare dev build).
 const buildClientAssets = async (options: {
   outDir: string;
   mode: "dev" | "production";
@@ -413,7 +420,9 @@ const buildClientAssets = async (options: {
         ? { publicEnvDefine: options.publicEnvDefine }
         : {}),
     },
-    bunBuildClientDeps(projectRoot),
+    options.mode === "production"
+      ? viteBuildClientDeps(projectRoot)
+      : bunBuildClientDeps(projectRoot),
   );
 };
 

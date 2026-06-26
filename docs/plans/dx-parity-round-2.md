@@ -255,3 +255,73 @@ tracked follow-up before Vite-dev becomes the scaffold default.
   for the workspace `@lesto/*` (React de-dup), and the `@prefresh/vite` preact path.
 - **Making Vite-dev the scaffold default** — gated on the e2e proof + the parity smoke.
 - **Phase 2** (Vite prod build) and **Phase 3** (Environments / `ModuleRunner`).
+
+---
+
+## Phase 2 build — as built (2026-06-25, `L-01f9ba06`)
+
+**Owner decision (open decision 1, now resolved):** the Phase-1 dev/prod bundler
+mismatch is **closed for the default path.** `lesto build` now bundles islands with
+**Vite/Rolldown**, the SAME bundler the `lesto dev` island server (`@lesto/island-dev`,
+the scaffold default since `L-8d9c732a`) already serves them through — so dev and prod
+share ONE bundler. `Bun.build` is retained ONLY as the dev FALLBACK for an app that opts
+OUT of the island-dev Vite server (`bunBuildClientDeps`, `lesto dev`'s non-island-dev
+path); it ships no `lesto build` artifact anymore.
+
+### Where it lives: `@lesto/assets`, beside the Bun edge (NOT `@lesto/island-dev`)
+
+The prod build is the direct sibling of `bunBuildClientDeps` — a new
+**coverage-excluded** edge `packages/assets/src/vite-build.ts` exporting
+`viteBuildClientDeps(appRoot)`, the same `BuildClientDeps` contract feeding the same pure,
+bundler-agnostic `buildClient` orchestration (the stale-chunk sweep, the budget, the
+dialect/SSR refusal — all unchanged). Only the `bundle` step is Vite's; island discovery
+and every filesystem/gzip seam are reused VERBATIM from `bunBuildClientDeps`. It lives in
+`@lesto/assets` (gaining a plain `vite` dep), NOT in `@lesto/island-dev`, because the PROD
+build needs **only `vite`** — no Fast-Refresh plugin — so it must not drag the dev-only
+`@vitejs/plugin-react` / `@prefresh/vite` peers into every `lesto build`. The CLI
+`buildClientAssets` (`bin.ts`) selects the backend by MODE: `production` → Vite, `dev`
+(fallback) → Bun.
+
+### Parity reconciled (chunking / splitting / define / minify / dialect)
+
+- **Chunk naming** — `output.chunkFileNames: "chunk-[hash].js"` + `hashCharacters: "hex"`
+  so a lazy island's split is `chunk-<hex>.js`, matching `isChunkFile`
+  (`/^chunk-[A-Za-z0-9]+\.js$/`) so the generation marker + stale-sweep track it. (Rollup's
+  base64url default emits `-`/`_`, which that predicate rejects.)
+- **Splitting** — a `hydrate: "visible"` island's dynamic `import()` becomes its own chunk
+  automatically (ADR 0009), referenced from the entry by a RELATIVE `import("./chunk-x.js")`
+  via `base: "./"` — resolving beside `/client.js` exactly as Bun's relative chunk imports.
+- **define** — `mode: production|development` drives `process.env.NODE_ENV` (the React/Preact
+  dead-code path); the verified PUBLIC_* inject map rides `define` verbatim.
+- **minify** — `build.minify` gated on production, as Bun's.
+- **dialect (ADR 0008)** — the preact dialect applies `PREACT_ALIAS` as `resolve.alias`
+  (the Vite twin of Bun's `preactAliasPlugin`) + `dedupe` to force one runtime copy.
+- **Artifacts** — `build({ write: false })`; the orchestration owns the write-then-sweep on
+  disk (so a crash never strands a half-swept out dir).
+- **`MISSING_EXPORT` leniency (Bun parity)** — a custom `onwarn` downgrades Rollup's
+  namespace-member missing-export warning (`ns.missing` → `undefined` at runtime, which Bun
+  bundles the same lenient way) back to a non-fatal warning that Vite otherwise escalates.
+  The contained live case is `@lesto/ui`'s `React.use` under the preact dialect
+  (`preact/compat` exports no `use`; only ever CALLED server-side — `define-island.tsx`). A
+  genuine missing NAMED import stays a hard Rollup ERROR.
+
+### Verified (real `lesto build`, no port needed — runnable in the build sandbox)
+
+`examples/island-fast-refresh` (preact dialect) builds clean: no `react-dom/server` leaked,
+`@lesto/ui` bundled inline, entry 15.6 KB gzip (vs Bun's 15.2 KB — a +0.4 KB cost of the
+swap). A lazy island emits `chunk-<hex>.js` + records it in `.lesto-chunks.json` +
+dynamic-imports it relatively. The `react` dialect builds at 64.0 KB gzip (vs Bun 63.2 KB).
+100% coverage held on `@lesto/assets` + `@lesto/cli`; `ws:typecheck` green.
+
+### What this task does NOT do (tracked follow-ups)
+
+- **The `bundle-size` CI gate still measures the Bun bundle** (`scripts/bundle-size.ts`),
+  i.e. the dev FALLBACK — not the Vite bundle prod now ships. It should measure Vite, but
+  switching it is **blocked on a pre-existing preact budget creep**: the preact entry is
+  already 15.2 KB gzip under Bun (over the 15.0 KB budget — main is at/over the edge
+  already), and Vite is +0.4 KB, so the gate would harden the wrong way until the runtime is
+  trimmed. File: trim the preact island runtime under 15 KB, then point the gate at Vite.
+- **Prod-Vite browser e2e** — `lesto serve` does not serve `out/` (prod static is the
+  Worker/CDN's job), so a built browser leg isn't reachable via the CLI; the existing
+  Bun-dev-vs-Vite-dev parity smoke (`L-56f79043`) is unaffected and still holds.
+- **Phase 3** (Vite Environments / `ModuleRunner`, retiring `dispatchSitesDev`).

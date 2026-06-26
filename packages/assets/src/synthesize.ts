@@ -167,10 +167,10 @@ export function synthesizeEntry(
   // ({@link enableDevPageRefresh}), so a saved `app/routes/*` file swaps the page in
   // place rather than full-reloading. `beacon.dev` is set TODAY only by the island-dev
   // (Vite) dev entry (`@lesto/island-dev`'s `devEntrySource`) — the scaffold default; the
-  // Bun client build (`buildClient`, which serves `lesto dev`'s non-island-dev path AND
-  // every prod `lesto build`) does NOT set it, so there the dev client falls back to a
-  // full reload and prod ships neither the symbol nor the call. Extending it to the Bun
-  // dev path is tracked separately.
+  // production `buildClient` (Vite via `viteBuildClientDeps`) and the Bun dev FALLBACK
+  // (`bunBuildClientDeps`, `lesto dev`'s non-island-dev path) both leave it unset, so prod
+  // ships neither the symbol nor the call, and the Bun dev fallback full-reloads. Extending
+  // the page-refresh hook to that Bun dev path is tracked separately.
   const clientImport =
     beacon.dev === true
       ? `import { enableDevPageRefresh, hydrateDocumentIslands } from "@lesto/ui/client";`
