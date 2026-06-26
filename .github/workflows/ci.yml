@@ -32,6 +32,14 @@ jobs:
       - name: Typecheck
         run: bun run ws:typecheck
 
+      # `ws:typecheck` filters to `@lesto/*`; the browser-e2e suite is deliberately named
+      # `lesto-e2e` (outside that scope, so the workspace test/typecheck filters skip it),
+      # so its Playwright specs are typechecked here explicitly — otherwise a type error in
+      # a spec ships green (Playwright transpiles with esbuild, which strips types, not checks).
+      - name: Typecheck (e2e specs)
+        working-directory: packages/e2e
+        run: bun run typecheck
+
       # The end-to-end TYPE-regression gate (board 206e92c6): a zero-dependency
       # `tsc --noEmit` over `type-tests/` that pins the differentiator's INFERRED
       # types — `@lesto/db`'s schema-as-value `InferRow`/`InferInsert`/`InferUpdate`
