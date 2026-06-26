@@ -466,6 +466,150 @@ describe("buildClient", () => {
     expect(removed).toEqual(["/out/chunk-stale0001.js"]);
   });
 
+  it("tolerates a marker that is valid JSON but neither an array nor an object", async () => {
+    // `null` / a bare number parse cleanly but carry no provenance — treated as no
+    // prior generation (the legacy-array and `{current,prior}` branches both miss),
+    // so the orphaned chunk falls to the isChunkFile fallback net and is swept.
+    const { deps, removed } = fakeDeps({
+      listOutDir: () => Promise.resolve(["chunk-stale0001.js"]),
+      read: () => Promise.resolve("null"),
+    });
+
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+      deps,
+    );
+
+    expect(removed).toEqual(["/out/chunk-stale0001.js"]);
+  });
+
+  it("reads the two-generation `{ current, prior }` marker, retaining current + sweeping prior", async () => {
+    // The current marker shape: production retains `current` (the immediately-prior
+    // generation, for in-flight documents) and sweeps `prior` (the generation behind
+    // it) — even for an extensionless ASSET, which isChunkFile can never catch.
+    const { deps, removed } = fakeDeps({
+      bundle: () =>
+        Promise.resolve([
+          { kind: "entry", fileName: "entry.js", contents: "ENTRY" },
+          { kind: "chunk", fileName: "asset-new000.css", contents: "NEW" },
+        ] as BundleArtifact[]),
+      listOutDir: () =>
+        Promise.resolve(["client.js", "asset-cur111.css", "asset-pri222.css", "asset-new000.css"]),
+      read: () =>
+        Promise.resolve(
+          JSON.stringify({ current: ["asset-cur111.css"], prior: ["asset-pri222.css"] }),
+        ),
+    });
+
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+      deps,
+    );
+
+    // `current` (asset-cur111.css) is retained; only `prior` (asset-pri222.css) is swept.
+    expect(removed).toEqual(["/out/asset-pri222.css"]);
+  });
+
+  it("development sweeps a stale ASSET the build no longer emits (the cross-bundler leak)", async () => {
+    // An island that imported a non-JS asset (`import './x.css'`) makes the bundler
+    // emit an `asset-<hash>.<ext>` file — recorded in the marker like a chunk, but
+    // NOT matched by isChunkFile (`.js`-only). Before the provenance-driven sweep it
+    // accumulated forever. Build 1 emits the asset; build 2 drops it.
+    const { deps, written, removed } = fakeDeps({
+      bundle: () =>
+        Promise.resolve([
+          { kind: "entry", fileName: "entry.js", contents: "ENTRY" },
+          { kind: "chunk", fileName: "chunk-deadbeef.js", contents: "CHUNK" },
+          { kind: "chunk", fileName: "asset-stylee1.css", contents: "CSS" },
+        ] as BundleArtifact[]),
+      listOutDir: () => Promise.resolve([]),
+    });
+
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "development", dialect: "react" },
+      deps,
+    );
+
+    // Build 1 wrote the asset and recorded it in the marker.
+    expect(written.has("/out/asset-stylee1.css")).toBe(true);
+    expect(removed).toEqual([]);
+
+    // Build 2 no longer imports the asset (entry + chunk only). The out dir still
+    // holds the now-stale asset, which dev must sweep — it is marker provenance, not
+    // a chunk by name.
+    deps.bundle = () =>
+      Promise.resolve([
+        { kind: "entry", fileName: "entry.js", contents: "ENTRY2" },
+        { kind: "chunk", fileName: "chunk-cafef00d.js", contents: "CHUNK2" },
+      ] as BundleArtifact[]);
+    deps.listOutDir = () =>
+      Promise.resolve(["client.js", "chunk-deadbeef.js", "chunk-cafef00d.js", "asset-stylee1.css"]);
+
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "development", dialect: "react" },
+      deps,
+    );
+
+    // The stale asset AND the stale chunk are both swept (dev keeps only the new set).
+    expect(removed.toSorted()).toEqual(["/out/asset-stylee1.css", "/out/chunk-deadbeef.js"]);
+  });
+
+  it("production keeps the immediately-prior ASSET but sweeps the generation before it", async () => {
+    // The asset analogue of the chunk one-prior-generation rule. Three production
+    // builds, each emitting a fresh asset; isChunkFile can never catch an asset, so
+    // the marker's two-generation provenance is what bounds accumulation at one.
+    const { deps, removed } = fakeDeps({
+      bundle: () =>
+        Promise.resolve([
+          { kind: "entry", fileName: "entry.js", contents: "E1" },
+          { kind: "chunk", fileName: "asset-gen1aaa.css", contents: "A1" },
+        ] as BundleArtifact[]),
+      listOutDir: () => Promise.resolve([]),
+    });
+
+    // Build 1: emits asset-gen1aaa.css. Nothing prior to sweep.
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+      deps,
+    );
+    expect(removed).toEqual([]);
+
+    // Build 2: emits asset-gen2bbb.css. The immediately-prior asset (gen1) must
+    // survive for in-flight documents.
+    deps.bundle = () =>
+      Promise.resolve([
+        { kind: "entry", fileName: "entry.js", contents: "E2" },
+        { kind: "chunk", fileName: "asset-gen2bbb.css", contents: "A2" },
+      ] as BundleArtifact[]);
+    deps.listOutDir = () =>
+      Promise.resolve(["client.js", "asset-gen1aaa.css", "asset-gen2bbb.css"]);
+
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+      deps,
+    );
+    // Gen1 survives — production keeps exactly one prior generation.
+    expect(removed).toEqual([]);
+
+    // Build 3: emits asset-gen3ccc.css. Now gen1 is TWO generations old and must be
+    // swept; gen2 (the new immediately-prior) survives.
+    deps.bundle = () =>
+      Promise.resolve([
+        { kind: "entry", fileName: "entry.js", contents: "E3" },
+        { kind: "chunk", fileName: "asset-gen3ccc.css", contents: "A3" },
+      ] as BundleArtifact[]);
+    deps.listOutDir = () =>
+      Promise.resolve(["client.js", "asset-gen1aaa.css", "asset-gen2bbb.css", "asset-gen3ccc.css"]);
+
+    await buildClient(
+      { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+      deps,
+    );
+
+    // Only the two-generations-old asset is swept; the prior generation is retained.
+    expect(removed).toEqual(["/out/asset-gen1aaa.css"]);
+  });
+
   it("throws ASSETS_NO_ENTRY when the bundler produced no entry artifact", async () => {
     const { deps } = fakeDeps({
       bundle: () => Promise.resolve([{ kind: "chunk", fileName: "chunk-x.js", contents: "c" }]),

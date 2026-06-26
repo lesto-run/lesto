@@ -3,14 +3,16 @@
  * (ADR 0011, Seam 2), absorbing what estate hand-wrote in `build-client.ts`.
  *
  * The orchestration is pure logic over injected seams (discover islands, write
- * the entry, sweep stale chunks), so it is tested without a bundler or a disk;
+ * the entry, sweep stale artifacts), so it is tested without a bundler or a disk;
  * the real `Bun.build` + `node:fs` wiring lives in `bun.ts` (the default deps,
  * which the coverage gate excludes exactly as it excludes a `bin`).
  *
  * The order is the contract: discover the islands → synthesize the entry from
- * their declarations → bundle → sweep the *previous* build's hashed chunks
- * (only after a successful build, so a failed rebuild leaves the last good
- * output intact) → write the entry + this build's chunks.
+ * their declarations → bundle → write the entry + this build's artifacts → sweep
+ * the *previous* build's stale artifacts (chunks AND emitted assets). The sweep
+ * runs only after a successful build (a failed rebuild leaves the last good output
+ * intact) and only after the new artifacts are on disk (write-then-sweep, never the
+ * reverse — see {@link buildClient}).
  */
 
 import { join } from "node:path";
@@ -159,25 +161,73 @@ export interface BuildClientResult {
 const DEFAULT_ENTRY = "client.js";
 
 /**
- * The prior-generation marker: a production build records the chunk file names it
- * wrote here, so the NEXT production build knows which chunks are the one
- * generation to retain (everything older is swept). Hidden so it is never mistaken
- * for an asset and never served.
+ * The generation marker: each build records the non-entry artifact file names it
+ * wrote (chunks AND emitted assets — an island's imported CSS/binary), so the NEXT
+ * build knows the pipeline's own provenance. Hidden so it is never mistaken for an
+ * asset and never served.
+ *
+ * It carries TWO generations, not one. `current` is this build's artifacts — the one
+ * generation a production rebuild retains for in-flight documents. `prior` is the
+ * generation BEFORE that (the names `current` itself superseded), kept only so a
+ * production rebuild can SWEEP it: once `current` becomes the retained prior
+ * generation, the generation behind it must be removed, but its names would
+ * otherwise be forgotten the moment the marker was overwritten. A content-hashed JS
+ * chunk has a structural fallback net ({@link isChunkFile}); an emitted ASSET
+ * (`asset-<hash>.css`, a `logo.png`) does NOT — its extension is arbitrary — so the
+ * marker is the only record of which non-chunk files this pipeline owns. Tracking the
+ * one-generation-back names gives assets the SAME exactly-one-prior-generation
+ * guarantee chunks already get, instead of letting them accumulate forever.
  */
 const GENERATION_MARKER = ".lesto-chunks.json";
 
-/** Parse the generation marker's chunk-name list; tolerate a missing/corrupt marker. */
-function parseGeneration(contents: string | undefined): readonly string[] {
-  if (contents === undefined) return [];
+/**
+ * The pipeline's own provenance read from {@link GENERATION_MARKER}: the previous
+ * build's artifacts (`current`, the one generation a prod rebuild retains) and the
+ * generation before that (`prior`, kept only to be swept).
+ */
+interface Generation {
+  /** The previous build's non-entry artifact names — the retainable prior generation. */
+  readonly current: readonly string[];
+
+  /** The generation before `current` — pipeline files now stale and sweepable. */
+  readonly prior: readonly string[];
+}
+
+/** Keep only the string members of an unknown value that should be a name array. */
+function stringArray(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((name): name is string => typeof name === "string")
+    : [];
+}
+
+/**
+ * Parse the generation marker; tolerate a missing/corrupt marker (treated as no
+ * provenance). Back-compatible with the original BARE-ARRAY marker that recorded a
+ * single generation's chunk names: that form parses as `current` with no `prior`,
+ * so a pre-upgrade on-disk marker keeps working (its chunks still sweep via
+ * {@link isChunkFile}; any assets it left simply sweep one generation later — bounded,
+ * never unbounded).
+ */
+function parseGeneration(contents: string | undefined): Generation {
+  if (contents === undefined) return { current: [], prior: [] };
 
   try {
     const parsed: unknown = JSON.parse(contents);
 
-    return Array.isArray(parsed)
-      ? parsed.filter((name): name is string => typeof name === "string")
-      : [];
+    // The legacy form: a bare array of the previous build's chunk names.
+    if (Array.isArray(parsed)) return { current: stringArray(parsed), prior: [] };
+
+    // The current form: `{ current, prior }`. A non-object (or missing fields)
+    // degrades to empty arrays rather than throwing.
+    if (typeof parsed === "object" && parsed !== null) {
+      const record = parsed as Record<string, unknown>;
+
+      return { current: stringArray(record["current"]), prior: stringArray(record["prior"]) };
+    }
+
+    return { current: [], prior: [] };
   } catch {
-    return [];
+    return { current: [], prior: [] };
   }
 }
 
@@ -203,11 +253,21 @@ function parseGeneration(contents: string | undefined): readonly string[] {
  *     build is even written 404s those chunks mid-rebuild. Hashed names make
  *     keeping both generations safe — they never collide.
  *
- * The sweep policy is mode-aware. Development sweeps every chunk not in the new
- * build (a clean dir, no CDN, no in-flight concern). Production keeps exactly ONE
- * previous generation — the chunks the LAST production build wrote, recorded in a
- * {@link GENERATION_MARKER} — so an in-flight old document still resolves its
- * chunks, while a third generation does not accumulate unbounded.
+ * The sweep policy is mode-aware. Development sweeps every prior artifact not in the
+ * new build (a clean dir, no CDN, no in-flight concern). Production keeps exactly ONE
+ * previous generation — the artifacts the LAST production build wrote, recorded in a
+ * {@link GENERATION_MARKER} — so an in-flight old document still resolves its chunks,
+ * while a third generation does not accumulate unbounded.
+ *
+ * The sweep covers ASSETS, not just JS chunks. An island that imports a non-JS asset
+ * (`import "./x.css"`, `import logo from "./logo.png?url"`) makes the bundler emit an
+ * `asset-<hash>.<ext>` file; it is written + recorded in the marker like any chunk,
+ * but its extension is arbitrary, so {@link isChunkFile} (`.js`-only) never matched it
+ * and it accumulated across builds forever. The sweep is therefore driven by the
+ * marker's PROVENANCE (the files this pipeline previously wrote), with `isChunkFile`
+ * retained only as the fallback net for orphaned JS chunks with NO marker provenance
+ * (a pre-marker build, a deleted/corrupt marker, a dialect switch). See
+ * {@link GENERATION_MARKER} for why the marker tracks two generations.
  */
 export async function buildClient(
   options: BuildClientOptions,
@@ -273,10 +333,12 @@ export async function buildClient(
 
   const markerPath = join(options.outDir, GENERATION_MARKER);
 
-  // Read the prior generation's chunk names BEFORE writing — in production these
-  // are the one generation to retain for in-flight documents. (Read up front so a
+  // Read the pipeline's own provenance BEFORE writing — `current` is the one
+  // generation to retain in production (for in-flight documents); `prior` is the
+  // generation behind it, kept only so it can be swept now. (Read up front so a
   // failed read never strands the build mid-write.)
-  const priorGeneration = parseGeneration(await deps.read(markerPath));
+  const generation = parseGeneration(await deps.read(markerPath));
+  const priorGeneration = generation.current;
 
   // PHASE 1 — write the new artifacts first, so a crash here leaves a servable
   // (current) build on disk rather than a half-swept empty dir.
@@ -317,25 +379,45 @@ export async function buildClient(
     chunks.push(chunkPath);
   }
 
-  // PHASE 2 — sweep stale chunks. Keep this build's chunks always; in production
-  // also keep the immediately-prior generation (in-flight documents still fetch
-  // it), so only the generation BEFORE that is removed. Development keeps only the
-  // new set. Hashed names guarantee a retained chunk never shadows a new one.
+  // PHASE 2 — sweep stale artifacts (chunks AND emitted assets). Keep this build's
+  // artifacts always; in production also keep the immediately-prior generation
+  // (in-flight documents still fetch it), so only the generation BEFORE that is
+  // removed. Development keeps only the new set. Hashed names guarantee a retained
+  // artifact never shadows a new one.
   const retained = new Set<string>(newChunkNames);
 
   if (options.mode === "production") {
     for (const name of priorGeneration) retained.add(name);
   }
 
+  // A file is OURS to sweep when it is not retained AND the pipeline is known to
+  // have written it — i.e. it carries marker provenance (it is in the prior
+  // generation `current`, or the generation behind it, `prior`), OR it matches the
+  // structural fallback net for orphaned JS chunks with no provenance at all
+  // ({@link isChunkFile}). The marker only ever lists NON-ENTRY artifacts, so a
+  // provenance-driven removal can never touch the entry, the marker itself, or the
+  // prerendered HTML — each absent from both name lists and not a `chunk-*.js`.
+  //   - Development: `retained` is the new set only, so a prior-generation asset
+  //     (in `current`, not retained) is swept here — closing the dev asset leak.
+  //   - Production: `current` is retained, so its assets survive; the generation
+  //     behind it (`prior`) is NOT retained and IS provenance, so its assets are
+  //     swept — the exactly-one-prior-generation rule, now for assets too.
+  const provenance = new Set<string>([...generation.current, ...generation.prior]);
+
   for (const name of await deps.listOutDir(options.outDir)) {
-    if (isChunkFile(name) && !retained.has(name)) {
+    if (!retained.has(name) && (provenance.has(name) || isChunkFile(name))) {
       await deps.remove(join(options.outDir, name));
     }
   }
 
-  // Record THIS build's chunks as the prior generation the next production build
-  // will retain. Written last, after the dir is consistent.
-  await deps.write(markerPath, JSON.stringify(newChunkNames));
+  // Record THIS build's artifacts as `current` (the generation the next production
+  // build retains) and the generation it just superseded as `prior` (so the build
+  // after next can sweep it even after this marker is overwritten — the only record
+  // of an extensionless asset's provenance). Written last, after the dir is
+  // consistent.
+  const nextMarker: Generation = { current: newChunkNames, prior: priorGeneration };
+
+  await deps.write(markerPath, JSON.stringify(nextMarker));
 
   // Narrate what the build decided (ADR 0011): the dialect/mode, then each
   // artifact's gzipped size, with the entry's budget verdict inline. A no-op
