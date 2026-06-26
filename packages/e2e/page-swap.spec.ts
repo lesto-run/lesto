@@ -88,8 +88,16 @@ test("editing a route file swaps the page in place — new markup, no full reloa
   // initial hydrate). A real edit happens seconds after load — but the test edits at
   // once, so without this the swap could fire before the hook exists and fall back to a
   // full reload (which is the correct floor, just not what this test asserts).
+  //
+  // Residual (rare) race: the live-reload WebSocket (a SEPARATE injected script) might
+  // still be connecting when the route save fires `notifyPageSwap()` — the frame would
+  // broadcast to zero sockets and be lost, timing out the heading assertion below. The
+  // hook is installed AFTER `/client.js` loads + hydrates, by which point the early-parsed
+  // WS script has almost always connected, so the window is tiny; it FAILS CLOSED (a
+  // timeout, never a false green) and CI `retries: 1` absorbs it.
   await page.waitForFunction(
-    () => typeof (window as unknown as Record<string, unknown>)["__lestoDevRefreshPage"] === "function",
+    () =>
+      typeof (window as unknown as Record<string, unknown>)["__lestoDevRefreshPage"] === "function",
     undefined,
     { timeout: 15_000 },
   );

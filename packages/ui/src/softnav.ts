@@ -938,7 +938,10 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
  * page in place — the wire contract between the CLI's injected reload script
  * (`@lesto/cli`'s `dev-overlay.ts`, a raw string that cannot import this module) and
  * the hook {@link enableDevPageRefresh} installs. A literal both sides pin, like the
- * live-reload WebSocket's message types.
+ * live-reload WebSocket's message types: `dev-overlay.ts` hardcodes the SAME literal
+ * (it cannot import this constant across the package boundary), so a rename here must
+ * update it there too — `packages/e2e/page-swap.spec.ts` guards the pair end to end (a
+ * mismatch makes the client miss the hook → full reload → the spec's marker assertion fails).
  */
 export const DEV_PAGE_REFRESH_GLOBAL = "__lestoDevRefreshPage";
 
@@ -973,12 +976,18 @@ export interface DevPageRefreshOptions {
  * exactly right here; the win is purely avoiding the reload. If the hook is absent or
  * its refresh throws, the client falls back to a real reload — the floor always holds.
  *
- * The synthesized client entry (`@lesto/assets`'s `synthesizeEntry`) calls this ONLY
- * in dev (`beacon.dev`), so a production bundle never carries it.
+ * The synthesized client entry (`@lesto/assets`'s `synthesizeEntry`) calls this only
+ * when built with `beacon.dev` — TODAY the island-dev (Vite) dev entry, the scaffold
+ * default. The Bun client build (`buildClient`, which serves `lesto dev`'s non-island-dev
+ * path AND prod) does not set it, so there the dev client falls back to a full reload and
+ * prod ships neither symbol nor call (extending it to the Bun dev path is tracked separately).
  *
- * Reuses {@link defaultSwap}, so the moment the server emits {@link LAYOUT_ATTR}
- * markers this refresh becomes layout-preserving for free — see the re-hydrate caveat
- * inside (the deferred half: scope re-hydration to the swapped subtree).
+ * Reuses {@link defaultSwap}, so the moment the server emits {@link LAYOUT_ATTR} markers
+ * the DOM swap becomes layout-preserving for free. Island-STATE preservation is NOT free,
+ * though — see the re-hydrate caveat inside: scoping re-hydration to the swapped subtree is
+ * the deferred half. It needs no type change (`HydrateOptions.root` already accepts an
+ * `Element`) but does touch this function's body (and `defaultSwap` returning the swapped
+ * element), so it is a confined body edit, not a new dev-path seam.
  *
  * Returns the refresh function (also installed on the target) so a test can drive it
  * directly without reaching through the global.
@@ -993,6 +1002,8 @@ export function enableDevPageRefresh(
   const rehydrate: Rehydrate = options.rehydrate ?? hydrateDocumentIslands;
 
   const refresh = async (): Promise<void> => {
+    // A dev refresh has no supersession/cancel story (unlike soft nav's click navigations),
+    // so a fresh, never-aborted controller just satisfies `PageFetcher`'s required signal.
     const { html } = await fetchPage(doc.URL, new AbortController().signal);
 
     const title = swap(html, doc);
