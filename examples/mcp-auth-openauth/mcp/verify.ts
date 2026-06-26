@@ -28,7 +28,7 @@
  * and maps the claims — issuer-specific in WHAT it reads, standard in HOW it verifies.
  */
 
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, customFetch, jwtVerify } from "jose";
 
 import type { AccessTokenClaims, VerifyAccessToken } from "@lesto/mcp";
 
@@ -39,6 +39,16 @@ export interface OpenAuthVerifierOptions {
 
   /** The issuer's `jwks_uri` (from its discovery doc) — fetched + cached. */
   jwksUrl: URL;
+
+  /**
+   * The fetch the JWKS request rides on. Omit it (the default) for a normal cross-origin issuer
+   * (Auth0/Okta/an OpenAuth on its own domain), where the global `fetch` reaches the JWKS fine.
+   * The edge demo passes one: when the issuer is ANOTHER Worker on the SAME Cloudflare account,
+   * a `workers.dev → workers.dev` subrequest is refused (CF error 1042), so the RS Worker routes
+   * the JWKS fetch through a SERVICE BINDING to the issuer instead. jose's reload/cooldown logic
+   * is unchanged — only the transport differs.
+   */
+  fetchJwks?: typeof fetch;
 }
 
 /** The subject `properties` an OpenAuth token carries for this demo (see ../idp/subjects.ts). */
@@ -53,7 +63,10 @@ interface DemoProperties {
  * expired/wrong-issuer — the RS maps that to a 401.
  */
 export function createOpenAuthVerifier(options: OpenAuthVerifierOptions): VerifyAccessToken {
-  const keys = createRemoteJWKSet(options.jwksUrl);
+  const keys = createRemoteJWKSet(
+    options.jwksUrl,
+    options.fetchJwks === undefined ? undefined : { [customFetch]: options.fetchJwks },
+  );
 
   return async (token: string): Promise<AccessTokenClaims | undefined> => {
     try {

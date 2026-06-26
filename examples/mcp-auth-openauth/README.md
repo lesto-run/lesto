@@ -17,18 +17,29 @@ its own Worker, not a from-scratch crypto build.
 ## The two pieces
 
 ```
-idp/   — a REAL OpenAuth issuer (its own Hono server / Worker)
+idp/   — a REAL OpenAuth issuer (its own Hono app)
            /.well-known/oauth-authorization-server  (discovery)
            /.well-known/jwks.json                    (ES256 signing keys)
            /authorize → /token                       (PKCE)
+           worker.ts  the Cloudflare Worker entry (CloudflareStorage over KV)
 mcp/   — the Lesto MCP Resource Server
-           verify.ts  adapts OpenAuth's token → the RS's {subject, audience, scopes}
-           app.ts     the @lesto/mcp battery, UNCHANGED, pointed at the issuer's JWKS
+           verify.ts     adapts OpenAuth's token → the RS's {subject, audience, scopes}
+           governance.ts the @lesto/mcp battery wiring, UNCHANGED — the deploy API + the RS
+           app.ts        substrate A: Node (`@lesto/runtime` serve + sqlite)
+           worker.ts     substrate B: Cloudflare Worker (`@lesto/cloudflare` toFetchHandler)
 ```
 
-## What it proves (`test/integration.test.ts`, 5 assertions over live HTTP)
+**One governance, two transports.** `governance.ts` (`buildGovernedApi`) is the whole wedge in
+one place; `app.ts` boots it on the Node kernel and `worker.ts` runs the *same* app on a
+Cloudflare Worker. The `@lesto/mcp` battery and the OpenAuth verifier are byte-identical across
+both — only the substrate (and, on the edge, the JWKS *transport*) differs. That's the thesis:
+the governance is the battery, the issuer is config, the transport is a swap.
 
-Both servers run for real; tokens come from the **real PKCE dance** (`idp/dance.ts`):
+## What it proves (10 assertions; tokens from the **real PKCE dance**, `idp/dance.ts`)
+
+The same five claims are proven on **both** substrates — `test/integration.test.ts` over the Node
+server (live HTTP) and `test/edge.test.ts` through the actual `@lesto/cloudflare` `toFetchHandler`
+the Worker ships (in-process, no workerd):
 
 - the RS advertises the OpenAuth issuer in its RFC 9728 metadata;
 - **no token → 401**;
@@ -41,6 +52,24 @@ Both servers run for real; tokens come from the **real PKCE dance** (`idp/dance.
 ```
 bun --filter '@lesto/example-mcp-auth-openauth' test
 ```
+
+## Deploy (live, on Cloudflare via [Alchemy](https://alchemy.run))
+
+Two Workers — the OpenAuth issuer and the Lesto RS — defined as TypeScript IaC in
+`alchemy.run.ts` (no `wrangler.toml`). Alchemy resolves the issuer Worker's url and passes it to
+the RS, so the RS trusts the issuer's JWKS with nothing hardcoded:
+
+```
+bunx alchemy login            # one-time: Alchemy needs its OWN CF creds (not wrangler's)
+bun run deploy                # → prints the live issuer + RS URLs
+bun run destroy               # tear down
+```
+
+> **CF gotcha — same-account Worker→Worker.** A `workers.dev → workers.dev` subrequest on the
+> same account is refused (CF error 1042), so the RS reaches the issuer's JWKS through a **service
+> binding** (`ISSUER` in `alchemy.run.ts`), not the public url. Against a real external IdP (a
+> different origin) the binding is absent and the RS fetches the JWKS over the public internet —
+> the verifier's optional `fetchJwks` seam handles both, the battery unchanged.
 
 ## How OpenAuth's token maps to the RS (confirmed against its source, not docs)
 

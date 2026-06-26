@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
+    "@lesto/cloudflare": "workspace:*",
     "@lesto/kernel": "workspace:*",
     "@lesto/mcp": "workspace:*",
     "@lesto/runtime": "workspace:*",
