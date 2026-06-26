@@ -18,6 +18,9 @@ playwright-report/
 # Wrangler local dev cache
 .wrangler/
 
+# Alchemy (alchemy.run) local IaC state
+.alchemy/
+
 # Sandbox out-of-repo write redirect (e.g. packages/runtime/var/)
 var/
 

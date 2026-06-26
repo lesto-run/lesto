@@ -49,22 +49,33 @@ function fixedDemoProvider(grant: DemoGrant): Provider<DemoGrant> {
   };
 }
 
-export const issuerApp = issuer({
-  subjects,
-  // Local (Phase 3): in-memory. NOTE for the Worker deploy (Phase 4): swap to
-  // `CloudflareStorage({ namespace: env.OPENAUTH_KV })` — OpenAuth persists its ES256 SIGNING
-  // keys in storage (keys.js), so MemoryStorage regenerates them every process (fine in-process,
-  // but a Worker needs KV or the JWKS would change across isolates and break in-flight tokens).
-  storage: MemoryStorage(),
-  providers: {
-    operator: fixedDemoProvider({
-      userID: "operator@example.com",
-      scopes: ["mcp:read", "mcp:write"],
-    }),
-    viewer: fixedDemoProvider({ userID: "viewer@example.com", scopes: ["mcp:read"] }),
-  },
-  // Map the provider's grant onto the subject the token will carry.
-  async success(ctx, value) {
-    return ctx.subject("user", { userID: value.userID, scopes: value.scopes });
-  },
-});
+/** OpenAuth's storage seam (a simple KV adapter). `MemoryStorage` + `CloudflareStorage` both return it. */
+type Storage = ReturnType<typeof MemoryStorage>;
+
+/**
+ * Build the issuer over an injected {@link Storage} — so the same app runs on Node/Bun with
+ * `MemoryStorage` (local + tests, below) and on a Worker with `CloudflareStorage({ namespace:
+ * env.OPENAUTH_KV })` (../idp/worker.ts). OpenAuth persists its ES256 signing keys IN storage
+ * (keys.js), so on a Worker the keys MUST live in KV — an in-memory store would regenerate them
+ * per isolate and the JWKS would churn, breaking in-flight tokens.
+ */
+export function buildIssuer(storage: Storage): ReturnType<typeof issuer> {
+  return issuer({
+    subjects,
+    storage,
+    providers: {
+      operator: fixedDemoProvider({
+        userID: "operator@example.com",
+        scopes: ["mcp:read", "mcp:write"],
+      }),
+      viewer: fixedDemoProvider({ userID: "viewer@example.com", scopes: ["mcp:read"] }),
+    },
+    // Map the provider's grant onto the subject the token will carry.
+    async success(ctx, value) {
+      return ctx.subject("user", { userID: value.userID, scopes: value.scopes });
+    },
+  });
+}
+
+/** The local/test issuer (in-memory). The Worker deploy uses {@link buildIssuer} with KV storage. */
+export const issuerApp = buildIssuer(MemoryStorage());
