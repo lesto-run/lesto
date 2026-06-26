@@ -78,6 +78,10 @@ const TAILWINDCSS_RANGE = "^4.3.0";
  * `lucide-react` is the icon set `components.json` selects (`iconLibrary: "lucide"`).
  * `tailwind-merge` v3 is the Tailwind-v4-aware line — a v2 merge would mis-resolve v4
  * utilities. These are plain npm deps (NOT `@lesto/*`), so they sit beside `react`.
+ *
+ * NOTE: `packages/e2e` mirrors these in its devDependencies so `scaffold-loop.spec.ts`'s
+ * symlinked build can resolve them (the scaffolded app's CSS `@import "tw-animate-css"` +
+ * `cn()` are not otherwise in the repo's `node_modules`). Keep that copy in sync if a range here changes.
  */
 export const SHADCN_DEPS = {
   clsx: "^2.1.1",
