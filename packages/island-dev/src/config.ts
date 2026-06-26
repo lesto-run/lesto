@@ -20,7 +20,7 @@
  *     (overlay, CSS, route swap).
  */
 
-import { PREACT_ALIAS } from "@lesto/assets";
+import { dialectRuntimeDeps, preactAliases } from "@lesto/assets";
 import type { PublicEnvDefine } from "@lesto/assets";
 
 import type { IslandDialect } from "./dialect";
@@ -111,55 +111,18 @@ export interface ViteIslandConfigOptions {
   readonly publicEnvDefine?: PublicEnvDefine;
 }
 
-/** Escape a string so it matches literally inside a `new RegExp(...)`. */
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
-}
-
 /**
- * The preact dialect's resolve aliases: each `react*` specifier anchored (`^…$`) to
- * its `preact/compat` target, so `react` is rewritten without also catching
- * `react-dom`. The matched sibling of `@lesto/assets`'s Bun `preactAliasPlugin` —
- * same map, expressed as Vite `resolve.alias` instead of an `onResolve` plugin.
+ * Build the narrow Vite config for the island dev server.
+ *
+ * The preact `resolve.alias` and the per-dialect `{ dedupe, include }` runtime deps are
+ * derived from `@lesto/assets`'s SHARED {@link preactAliases} / {@link dialectRuntimeDeps}
+ * — the SAME derivation the prod island build (`vite-build.ts`) consumes — so dev and
+ * prod can never drift in how `react` is rewritten or which runtime is deduped to one
+ * copy. The shared aliases come back as the narrow `{ find, replacement }` shape, which
+ * is exactly this config's {@link ViteIslandAlias}, so they spread straight in.
  */
-function preactAliases(): readonly ViteIslandAlias[] {
-  return Object.entries(PREACT_ALIAS).map(([from, to]) => ({
-    find: new RegExp(`^${escapeRegExp(from)}$`),
-    replacement: to,
-  }));
-}
-
-/**
- * The dialect's client runtime as `{ dedupe, include }`. Both lists name the SAME
- * runtime the app and `@lesto/ui` import: `dedupe` collapses them to one copy (a second
- * React/preact instance breaks hooks + Fast Refresh), and `include` pre-bundles it so
- * Vite doesn't re-optimize on the first island request. For `preact` the `react`
- * specifiers are aliased to `preact/compat` BEFORE optimization, so the runtime named
- * here is preact's own (`preact/compat`), not React.
- */
-function runtimeDeps(dialect: IslandDialect): { dedupe: string[]; include: string[] } {
-  return dialect === "preact"
-    ? {
-        dedupe: ["preact"],
-        include: ["preact", "preact/compat", "preact/hooks", "preact/jsx-runtime"],
-      }
-    : {
-        dedupe: ["react", "react-dom"],
-        // `react/jsx-dev-runtime` (NOT just `jsx-runtime`) is the automatic runtime Vite
-        // emits in DEV (`jsxDEV`); without it the first island request triggers a re-optimize.
-        include: [
-          "react",
-          "react-dom",
-          "react-dom/client",
-          "react/jsx-runtime",
-          "react/jsx-dev-runtime",
-        ],
-      };
-}
-
-/** Build the narrow Vite config for the island dev server. */
 export function viteIslandConfig(options: ViteIslandConfigOptions): ViteIslandConfig {
-  const runtime = runtimeDeps(options.dialect);
+  const runtime = dialectRuntimeDeps(options.dialect);
 
   return {
     root: options.root,

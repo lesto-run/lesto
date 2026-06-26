@@ -26,50 +26,9 @@ import type { Alias, Rollup } from "vite";
 
 import { bunBuildClientDeps } from "./bun";
 import type { BuildClientDeps, BundleArtifact, BundleRequest } from "./build-client";
+import { collectArtifacts } from "./collect-artifacts";
 import { AssetsError } from "./errors";
-import { PREACT_ALIAS } from "./preact-alias";
-
-/**
- * The preact dialect's resolve aliases — each `react*` specifier anchored (`^…$`) to
- * its `preact/compat` target so `react` is rewritten without also catching `react-dom`.
- * The matched sibling of `bun.ts`'s `preactAliasPlugin` and `@lesto/island-dev`'s dev
- * config: the SAME {@link PREACT_ALIAS} map, expressed as Vite `resolve.alias`.
- */
-function preactAliases(): Alias[] {
-  return Object.entries(PREACT_ALIAS).map(([from, to]) => ({
-    find: new RegExp(`^${from.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}$`),
-    replacement: to,
-  }));
-}
-
-/**
- * Flatten Vite's build result into the {@link BundleArtifact}s the orchestration writes.
- *
- * `build({ write: false })` returns the in-memory Rollup output (an array iff multiple
- * outputs were configured; one object otherwise). The synthesized entry's chunk is the
- * one with `isEntry` — every other chunk is a lazy island's split (a `hydrate: "visible"`
- * island reached through a dynamic `import()`, the ADR-0009 per-island split). Emitted
- * assets (an island's imported CSS/binary) ride through as non-entry artifacts so they
- * are written too. The orchestration renames the entry to its configured `client.js` and
- * writes the chunks under their content-hashed names.
- */
-function collectArtifacts(
-  result: Rollup.RollupOutput | Rollup.RollupOutput[],
-): readonly BundleArtifact[] {
-  const outputs = Array.isArray(result) ? result : [result];
-
-  return outputs.flatMap((output) =>
-    output.output.map((item) =>
-      item.type === "chunk"
-        ? {
-            kind: item.isEntry ? ("entry" as const) : ("chunk" as const),
-            fileName: item.fileName,
-            contents: item.code,
-          }
-        : { kind: "chunk" as const, fileName: item.fileName, contents: item.source },
-    ),
-  );
-}
+import { dialectRuntimeDeps, preactAliases } from "./vite-alias";
 
 /** Bundle the synthesized entry with Vite, applying the preact alias for the preact dialect. */
 async function bundle(request: BundleRequest, appRoot: string): Promise<readonly BundleArtifact[]> {
@@ -103,10 +62,15 @@ async function bundle(request: BundleRequest, appRoot: string): Promise<readonly
       // path's `define`. NODE_ENV is handled by `mode`, so only the public map is here.
       define: { ...request.publicEnvDefine },
       resolve: {
-        alias: request.dialect === "preact" ? preactAliases() : [],
+        // The shared {@link preactAliases} returns the narrow `{find, replacement}` shape
+        // (Vite-free, so island-dev's covered config can share it); it is structurally a
+        // Vite `Alias`, cast here at the bundler edge to satisfy `resolve.alias`'s mutable
+        // `Alias[]`. `react` needs no alias (its specifiers are already the real runtime).
+        alias: request.dialect === "preact" ? (preactAliases() as Alias[]) : [],
         // Force ONE runtime copy across the app and the symlinked workspace `@lesto/ui` —
-        // a second React/Preact instance breaks hooks. The dev config's matched guard.
-        dedupe: request.dialect === "preact" ? ["preact"] : ["react", "react-dom"],
+        // a second React/Preact instance breaks hooks. The dev config's matched guard,
+        // derived from the SAME shared {@link dialectRuntimeDeps} so dev and prod agree.
+        dedupe: dialectRuntimeDeps(request.dialect).dedupe,
       },
       build: {
         // Keep the artifacts in memory; the orchestration owns the write-then-sweep on

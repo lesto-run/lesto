@@ -55,6 +55,12 @@ export type { PublicEnvDefine } from "./public-env";
 
 export { PREACT_ALIAS } from "./preact-alias";
 
+// The Vite dialect config (preact alias + per-dialect dedupe/include) shared by the
+// prod island build (`vite-build.ts`) and the `@lesto/island-dev` dev server, so the
+// two bundlers can never drift in how the dialect resolves.
+export { dialectRuntimeDeps, preactAliases } from "./vite-alias";
+export type { DialectAlias, DialectRuntimeDeps } from "./vite-alias";
+
 export { bunBuildClientDeps } from "./bun";
 
 export { viteBuildClientDeps } from "./vite-build";
