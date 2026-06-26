@@ -146,9 +146,13 @@ async function bundle(request: BundleRequest, appRoot: string): Promise<readonly
             // `isChunkFile` (`chunk-<hash>.js`) for the stale-chunk sweep + generation
             // marker to track them. `hashCharacters: "hex"` keeps the hash alphanumeric
             // (Rollup's base64url default emits `-`/`_`, which that predicate rejects).
+            // An emitted asset (an island's imported CSS/binary) gets a DISTINCT
+            // `asset-` prefix — never `chunk-` — so it does not masquerade as a sweepable
+            // JS chunk (`isChunkFile` is `.js`-only; an asset is not swept under either
+            // bundler — a pre-existing cross-bundler gap tracked separately).
             entryFileNames: "client.js",
             chunkFileNames: "chunk-[hash].js",
-            assetFileNames: "chunk-[hash][extname]",
+            assetFileNames: "asset-[hash][extname]",
             hashCharacters: "hex",
           },
         },
