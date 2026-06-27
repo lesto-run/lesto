@@ -13,7 +13,7 @@ import { createClient } from "@openauthjs/openauth/client";
 export const CLIENT_ID = "lesto-ops-console";
 
 /** The demo identities the issuer can mint a token for (`?provider=`). */
-export type Provider = "sre" | "oncall" | "viewer";
+export type Provider = "sre" | "oncall" | "viewer" | "stakeholder";
 
 /** A loopback redirect the demo never actually serves — we intercept the `code` off it. */
 const REDIRECT = "http://localhost:9999/callback";

@@ -2,7 +2,7 @@
   "name": "@lesto/example-mcp-ops-console",
   "version": "0.0.0",
   "private": true,
-  "description": "The flagship 'the app IS the governed MCP surface' demo: a real multi-domain Lesto ops console (services + incidents + deploys) exposed as a governed REMOTE @lesto/mcp Resource Server, behind a self-hosted OpenAuth issuer, driven by a real @modelcontextprotocol/sdk agent that runs a MULTI-STEP incident-response task across all three domains. Scope governance enforced today (sre writes / viewer refused / anon 401); roles wired for the OCP-7 per-tool policy floor.",
+  "description": "The flagship 'the app IS the governed MCP surface' demo: a real multi-domain Lesto ops console (services + incidents + deploys) exposed as a governed REMOTE @lesto/mcp Resource Server, behind a self-hosted OpenAuth issuer, driven by a real @modelcontextprotocol/sdk agent that runs a MULTI-STEP incident-response task across all three domains. Governance enforced today: the scope ceiling (viewer refused / anon 401) AND the OCP-7 per-tool role floor (an over-scoped stakeholder with mcp:write is refused by role, lacking console:operate); per-route gating is the follow-up.",
   "type": "module",
   "scripts": {
     "test": "vitest run",
@@ -14,6 +14,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.102.0",
     "@hono/node-server": "^1.13.0",
+    "@lesto/authz": "workspace:*",
     "@lesto/cloudflare": "workspace:*",
     "@lesto/kernel": "workspace:*",
     "@lesto/mcp": "workspace:*",

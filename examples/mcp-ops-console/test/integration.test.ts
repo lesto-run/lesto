@@ -39,6 +39,7 @@ interface Harness {
   issuerUrl: string;
   sreToken: string;
   viewerToken: string;
+  stakeholderToken: string;
   foreignToken: string;
   rsServer: Server;
   idpServer: ReturnType<typeof honoServe>;
@@ -108,6 +109,8 @@ beforeAll(async () => {
     issuerUrl,
     sreToken: await getAccessToken(issuerUrl, "sre"),
     viewerToken: await getAccessToken(issuerUrl, "viewer"),
+    // Over-scoped: holds mcp:write, but the role floor doesn't grant it `console:operate`.
+    stakeholderToken: await getAccessToken(issuerUrl, "stakeholder"),
     // A valid token minted for a DIFFERENT client id → wrong `aud` → must be refused.
     foreignToken: await getAccessToken(issuerUrl, "sre", "some-other-client"),
     rsServer,
@@ -202,5 +205,30 @@ describe("Lesto MCP ops console validates a real OpenAuth issuer (over live HTTP
 
     expect(res.status).toBe(403);
     expect(res.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
+  });
+
+  it("refuses an over-scoped stakeholder's write — the ROLE FLOOR, not the scope ceiling (OCP-7, 403)", async () => {
+    const res = await rpc(
+      {
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: {
+          name: "handle_request",
+          arguments: {
+            method: "POST",
+            path: "/incidents",
+            body: { title: "exec wants this shipped", severity: "sev3", services: [] },
+          },
+        },
+      },
+      h.stakeholderToken,
+    );
+
+    // The stakeholder clears the scope CEILING (it holds `mcp:write`) but the per-tool POLICY FLOOR
+    // refuses it: the challenge names the missing PERMISSION (`console:operate`), not the write
+    // scope — proving the role floor, not the ceiling, stopped a token the scope alone would allow.
+    expect(res.status).toBe(403);
+    expect(res.headers.get("www-authenticate")).toContain('scope="console:operate"');
   });
 });

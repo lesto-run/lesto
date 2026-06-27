@@ -17,6 +17,7 @@
  * refused every write, an unauthenticated agent never connects.
  */
 
+import { definePolicy } from "@lesto/authz";
 import type { App } from "@lesto/kernel";
 import { createBearerAuthenticator, createMcpHttpHandlers } from "@lesto/mcp";
 import type { McpAuditRecord } from "@lesto/mcp";
@@ -35,26 +36,44 @@ export const SCOPES = { read: "mcp:read", write: "mcp:write" } as const;
  * (a viewer can't write at all); the per-tool ROLE FLOOR is the forward-looking half — see
  * {@link toolPolicy} and {@link demoRolesOf}.
  */
-export const ROLES = { sre: "sre", oncall: "oncall", viewer: "viewer" } as const;
+export const ROLES = {
+  sre: "sre",
+  oncall: "oncall",
+  viewer: "viewer",
+  // An exec/stakeholder handed a broad token (mcp:read mcp:write) but who should NOT operate the
+  // console — the over-scoped identity the role floor exists to bound (see {@link opsPolicy}).
+  stakeholder: "stakeholder",
+} as const;
 
 /**
- * The per-tool ROLE FLOOR this console WOULD enforce once the OCP-7 policy floor lands
- * (`authorizeBearer` has no caller on the dispatch path yet, by design). It is declared here,
- * today, so the example documents the intended capability split and `rolesOf` is shaped to feed
- * it — but it is NOT consulted on the live path: governance today is scope-only, so `oncall` and
- * `sre` are indistinguishable at runtime (both hold `mcp:write`). The split that lands LATER:
- *
- *   - `sre`     may declare incidents, annotate them, AND gate deploys (full control);
- *   - `oncall`  may declare + annotate incidents, but NOT push deploys (a deploy floor);
- *   - `viewer`  reads only (already enforced today by the scope ceiling).
- *
- * Exported so the README and a future floor wire to the same table rather than re-deriving it.
+ * The permission the console's WRITE tool demands — the OCP-7 role floor, now WIRED on the
+ * dispatch path. Every write flows through the one destructive MCP tool, `handle_request`, which
+ * {@link buildGovernedApi} maps to this permission via `toolPermissions`. So the floor intersects
+ * the scope ceiling: `handle_request` needs the `mcp:write` scope AND `console:operate`. An
+ * over-scoped token is therefore still bounded by the subject's ROLE.
+ */
+const OPERATE = "console:operate";
+
+/**
+ * The `@lesto/authz` policy the OCP-7 floor consults. Only `sre`/`oncall` may operate the console;
+ * a `viewer` (no write scope) and a `stakeholder` (write scope but no `console:operate`) are both
+ * refused the write tool — the `stakeholder` BY ROLE, demonstrating the floor catching a token the
+ * scope ceiling alone would let through. Passed to `createMcpHttpHandlers` in {@link buildGovernedApi}.
+ */
+export const opsPolicy = definePolicy({
+  roles: [ROLES.sre, ROLES.oncall, ROLES.viewer, ROLES.stakeholder],
+  can: { [OPERATE]: [ROLES.sre, ROLES.oncall] },
+});
+
+/**
+ * The per-ROUTE split (e.g. `oncall` may annotate incidents but not gate deploys) the console
+ * WOULD enforce once the floor is ROUTE-aware. The TOOL-level floor is wired TODAY (see
+ * {@link opsPolicy}: `handle_request` → `console:operate`); per-route gating needs domain-specific
+ * MCP tools (one tool per action) instead of the generic `handle_request` — a follow-up. This
+ * table documents that future split and is a test fixture; it is not consulted on the live path.
  */
 export const toolPolicy: Record<string, readonly string[]> = {
-  // Reads are open to any authenticated role (the scope ceiling still applies).
   list_routes: [ROLES.sre, ROLES.oncall, ROLES.viewer],
-  // The console's writes go through `handle_request`; the floor would split them per ROUTE once
-  // the floor is route-aware. Until then this table is documentation + a test fixture.
   declare_incident: [ROLES.sre, ROLES.oncall],
   annotate_incident: [ROLES.sre, ROLES.oncall],
   gate_deploy: [ROLES.sre],
@@ -249,6 +268,10 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
     writeScope: SCOPES.write,
     allowedOrigins: options.allowedOrigins,
     resourceMetadataUrl,
+    // OCP-7 role floor (now wired): the write tool needs `console:operate` ON TOP of `mcp:write`,
+    // so a subject with the scope but not the role (the stakeholder) is refused — a 403 floor.
+    policy: opsPolicy,
+    toolPermissions: { handle_request: OPERATE },
   });
 
   api
@@ -268,6 +291,7 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
 export function demoRolesOf(actor: string): string[] {
   if (actor === "sre@ops.example.com") return [ROLES.sre];
   if (actor === "oncall@ops.example.com") return [ROLES.oncall];
+  if (actor === "stakeholder@ops.example.com") return [ROLES.stakeholder];
 
   return [ROLES.viewer];
 }

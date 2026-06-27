@@ -18,12 +18,12 @@ import { createApp } from "@lesto/kernel";
 import type { App, KernelDatabase } from "@lesto/kernel";
 import type { McpAuditRecord } from "@lesto/mcp";
 
-import { buildGovernedApi, ROLES, SCOPES, demoRolesOf, toolPolicy } from "./governance";
+import { buildGovernedApi, ROLES, SCOPES, demoRolesOf, opsPolicy, toolPolicy } from "./governance";
 import type { GovernanceOptions } from "./governance";
 import type { OpsStore } from "./ops";
 
 // Re-exported so the example's tests and entrypoints keep importing them from `./app`.
-export { ROLES, SCOPES, demoRolesOf, toolPolicy };
+export { ROLES, SCOPES, demoRolesOf, opsPolicy, toolPolicy };
 
 export interface BuildRsOptions extends GovernanceOptions {
   /** The kernel database handle (from `@lesto/runtime`'s `openSqlite`). */

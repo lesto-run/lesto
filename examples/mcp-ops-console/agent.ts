@@ -15,10 +15,12 @@
  *      domains — survey services, declare an incident, watch a deploy get FROZEN by it, post
  *      mitigation, resolve, then watch the SAME deploy clear — a multi-step, multi-tool task
  *      whose later steps depend on the earlier writes;
- *   2. a VIEWER (mcp:read) is refused every destructive tool (403 — the scope ceiling, sourced
- *      from the OpenAuth token's `properties.scopes`);
- *   3. an ANONYMOUS agent can't even connect (401);
- *   4. with ANTHROPIC_API_KEY set, Claude is handed the same tools and runs the incident
+ *   2. a VIEWER (mcp:read) is refused every write by the SCOPE ceiling (403);
+ *   3. an over-scoped STAKEHOLDER (mcp:write) is refused by the ROLE floor (OCP-7) — it holds the
+ *      write scope, but its role isn't granted `console:operate`, so the floor catches the write
+ *      the scope alone would allow;
+ *   4. an ANONYMOUS agent can't even connect (401);
+ *   5. with ANTHROPIC_API_KEY set, Claude is handed the same tools and runs the incident
  *      response autonomously — deciding for itself the order of operations.
  *
  * The deploy-freeze rule (a deploy is blocked while its service has an open incident) lives in the
@@ -160,8 +162,15 @@ async function scriptedIncidentResponse(sre: Client): Promise<void> {
   }
 }
 
-/** The governance proof: a viewer is refused the writes, an anonymous agent can't connect. */
-async function governanceProof(base: string, viewerToken: string): Promise<void> {
+/**
+ * The governance proof: a viewer is refused by the SCOPE ceiling, an over-scoped stakeholder is
+ * refused by the ROLE floor (OCP-7), and an anonymous agent can't connect at all.
+ */
+async function governanceProof(
+  base: string,
+  viewerToken: string,
+  stakeholderToken: string,
+): Promise<void> {
   console.log("\n── GOVERNANCE ─────────────────────────────────────────────────");
 
   const viewer = await connect(base, viewerToken);
@@ -171,17 +180,32 @@ async function governanceProof(base: string, viewerToken: string): Promise<void>
       name: "handle_request",
       arguments: { method: "POST", path: "/incidents", body: { title: "x", severity: "sev3" } },
     });
-    console.log("  viewer declare-incident → UNEXPECTEDLY ALLOWED");
+    console.log("  viewer (mcp:read) declare-incident → UNEXPECTEDLY ALLOWED");
   } catch (error) {
-    console.log(`  viewer declare-incident → refused (${(error as Error).message.split("\n")[0]})`);
+    console.log(`  viewer (mcp:read) declare-incident → refused by SCOPE ceiling`);
   }
   await viewer.close();
+
+  // The stakeholder holds mcp:write — it clears the scope ceiling — but its ROLE isn't granted
+  // `console:operate`, so the OCP-7 policy floor refuses the write the scope alone would allow.
+  const stakeholder = await connect(base, stakeholderToken);
+  await stakeholder.listTools();
+  try {
+    await stakeholder.callTool({
+      name: "handle_request",
+      arguments: { method: "POST", path: "/incidents", body: { title: "x", severity: "sev3" } },
+    });
+    console.log("  stakeholder (mcp:write) declare-incident → UNEXPECTEDLY ALLOWED");
+  } catch (error) {
+    console.log(`  stakeholder (mcp:write) declare-incident → refused by ROLE floor (needs console:operate)`);
+  }
+  await stakeholder.close();
 
   try {
     await connect(base, undefined);
     console.log("  anonymous connect → UNEXPECTEDLY ALLOWED");
   } catch (error) {
-    console.log(`  anonymous connect → refused (${(error as Error).message.split("\n")[0]})`);
+    console.log(`  anonymous connect → refused (401)`);
   }
 }
 
@@ -328,6 +352,7 @@ async function main(): Promise<void> {
   // 2. Real PKCE tokens from the real dance.
   const sreToken = await getAccessToken(issuerUrl, "sre");
   const viewerToken = await getAccessToken(issuerUrl, "viewer");
+  const stakeholderToken = await getAccessToken(issuerUrl, "stakeholder");
 
   // 3. The SRE agent runs the incident-response chain across all three domains.
   const sre = await connect(base, sreToken);
@@ -335,8 +360,8 @@ async function main(): Promise<void> {
   console.log(`SRE connected — ${tools.length} tools available`);
   await scriptedIncidentResponse(sre);
 
-  // 4. Governance: viewer refused the writes, anonymous refused the connection.
-  await governanceProof(base, viewerToken);
+  // 4. Governance: viewer refused by scope, stakeholder refused by role (OCP-7), anon refused.
+  await governanceProof(base, viewerToken, stakeholderToken);
 
   // 5. Optional: let Claude drive the same tools autonomously.
   if (process.env.ANTHROPIC_API_KEY) {

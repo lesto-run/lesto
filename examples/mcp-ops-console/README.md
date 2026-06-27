@@ -60,24 +60,30 @@ substrate (and, on the edge, the JWKS *transport*) differs.
 
 ## Roles & scopes — capability split, today and tomorrow
 
-The issuer mints three identities, selected by `?provider=`:
+The issuer mints four identities, selected by `?provider=`:
 
-| role     | scopes                | can today (scope ceiling)            | would gain under the OCP-7 floor |
-| -------- | --------------------- | ------------------------------------ | -------------------------------- |
-| `sre`    | `mcp:read mcp:write`  | read + every write                   | gate deploys (full control)      |
-| `oncall` | `mcp:read mcp:write`  | read + every write                   | incidents only — **no** deploys  |
-| `viewer` | `mcp:read`            | read only                            | (unchanged)                      |
+| role          | scopes                | enforced today                                                      |
+| ------------- | --------------------- | ------------------------------------------------------------------ |
+| `sre`         | `mcp:read mcp:write`  | full operator — scope + the `console:operate` role permission      |
+| `oncall`      | `mcp:read mcp:write`  | operator too (the per-route sre/oncall split is future, see below) |
+| `viewer`      | `mcp:read`            | read only — refused writes by the **scope ceiling**                |
+| `stakeholder` | `mcp:read mcp:write`  | refused writes by the **role floor** — has the scope, not the role |
 
-**Enforced TODAY:** the **scope ceiling** — `mcp:write` unlocks the destructive tools, so a `viewer`
-is refused every write (`403 insufficient_scope`) and an anonymous agent can't connect (`401`). This
-is the proven half (`createBearerAuthenticator` → `createMcpHttpHandlers`, the sibling's machinery).
+**Enforced TODAY — both halves of the intersection:**
+- the **scope ceiling** — `mcp:write` unlocks the destructive tools, so a `viewer` (`mcp:read`) is
+  refused every write (`403`) and an anonymous agent can't connect (`401`); and
+- the **per-tool role FLOOR** (OCP-7, now wired) — `handle_request` (the write tool) requires the
+  `console:operate` permission ON TOP of `mcp:write`. So the over-scoped **`stakeholder`** — which
+  *holds* `mcp:write` but whose role isn't granted `console:operate` — is refused the write **by
+  ROLE**: a `403` whose challenge names `scope="console:operate"`, not the token's scope. That's the
+  floor catching a write the scope ceiling alone would allow (`mcp/governance.ts`'s `opsPolicy` +
+  `toolPermissions`, intersected via `@lesto/mcp`'s `authorizeBearer`).
 
-**Designed but NOT yet enforced:** the per-tool **role FLOOR** (`mcp/governance.ts`'s `toolPolicy`).
-`@lesto/mcp`'s `authorizeBearer` (the scope-ceiling ∩ role-floor intersection) has **no caller on
-the dispatch path yet** — that's OCP-7. Until it lands, `sre` and `oncall` are *equivalent at
-runtime* (both hold `mcp:write`); the role rides in the token and `rolesOf` resolves it, so the
-moment the floor lands, `oncall` is scoped to incidents with **no change to this example's wiring**.
-The table above is the contract that floor will read.
+**Designed but NOT yet enforced — per-ROUTE gating.** The floor today is per-TOOL (`handle_request`
+as a whole). The finer split — `oncall` may annotate incidents but NOT gate deploys — is per-ROUTE,
+which the single generic `handle_request` can't express: it needs domain-specific MCP tools (one per
+action) instead of the do-everything tool. `mcp/governance.ts`'s `toolPolicy` table documents that
+future split; until app-defined tools land, `sre` and `oncall` operate equivalently.
 
 ## What it proves (CI; tokens from the **real PKCE dance**, `idp/dance.ts`)
 
@@ -166,15 +172,16 @@ that stamps the resource into `aud` — only the verifier changes, not the batte
 
 ## Going to production
 
-1. **Delete the demo providers.** `idp/issuer.ts`'s three `fixedDemoProvider`s issue a token to
+1. **Delete the demo providers.** `idp/issuer.ts`'s four `fixedDemoProvider`s issue a token to
    **anyone** with no credential check — a hermetic test convenience, never for production. Configure
    OpenAuth's real providers (`password`, `code`, GitHub/Google, …) instead.
 2. **Persist the signing keys.** The Worker deploy already uses a Durable Object; for another host
    swap `MemoryStorage()` for a strongly-consistent store — OpenAuth keeps its ES256 signing keys in
    storage, so an in-memory store regenerates them per process.
 3. **Wire `rolesOf`** to your identity service (the demo maps an email → role).
-4. **Land the role floor.** When OCP-7 wires `authorizeBearer` onto the dispatch path, the
-   `toolPolicy` table here begins to bite — `oncall` loses deploy gating with no change to this app.
+4. **Per-route gating (follow-up).** The tool-level role floor is wired (`opsPolicy` →
+   `handle_request` requires `console:operate`). The per-route split (`oncall` keeps incidents but
+   loses deploy gating) needs domain-specific MCP tools instead of the generic `handle_request`.
 
 The issuer is configuration. When a first-party `@lesto` Authorization Server lands (ADR 0029), you
 point the verifier at its JWKS and the Resource Server is unchanged.

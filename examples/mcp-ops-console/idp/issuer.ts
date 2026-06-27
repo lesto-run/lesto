@@ -10,11 +10,13 @@
  * subject `properties` (OpenAuth has no OAuth `scope` claim); the RS reads them back via the
  * `VerifyAccessToken` seam (../mcp/verify.ts).
  *
- * For a hermetic demo + CI, three providers below auto-issue a FIXED identity with no login UI:
- *   - `sre`     — an SRE: `mcp:read mcp:write`, role `sre` (the full-control operator);
- *   - `oncall`  — an on-call responder: `mcp:read mcp:write`, role `oncall` (writes today; the
- *                 OCP-7 policy floor would later scope them to incidents, not deploy gating);
- *   - `viewer`  — a read-only stakeholder: `mcp:read`, role `viewer`.
+ * For a hermetic demo + CI, four providers below auto-issue a FIXED identity with no login UI:
+ *   - `sre`         — an SRE: `mcp:read mcp:write`, role `sre` (the full-control operator);
+ *   - `oncall`      — an on-call responder: `mcp:read mcp:write`, role `oncall`;
+ *   - `viewer`      — read-only: `mcp:read`, role `viewer` (refused writes by the scope CEILING);
+ *   - `stakeholder` — an OVER-SCOPED exec: `mcp:read mcp:write` (broad token) but role
+ *                     `stakeholder`, which the role FLOOR does not grant `console:operate` — so a
+ *                     write is refused by ROLE despite the scope (the OCP-7 floor in action).
  * The role is selected by the client via `?provider=`. The real `/authorize → code → /token`
  * PKCE dance still runs end to end; only the human login step is stubbed. A production
  * deployment swaps these for OpenAuth's real providers (password, code, GitHub/Google, …).
@@ -80,6 +82,12 @@ export function buildIssuer(storage: StorageAdapter): ReturnType<typeof issuer> 
         userID: "viewer@ops.example.com",
         scopes: ["mcp:read"],
         role: "viewer",
+      }),
+      // Over-scoped on purpose: a broad `mcp:write` token whose ROLE the floor still bounds.
+      stakeholder: fixedDemoProvider({
+        userID: "stakeholder@ops.example.com",
+        scopes: ["mcp:read", "mcp:write"],
+        role: "stakeholder",
       }),
     },
     // Map the provider's grant onto the subject the token will carry.

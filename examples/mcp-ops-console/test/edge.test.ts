@@ -33,6 +33,7 @@ interface Harness {
   idpServer: ReturnType<typeof honoServe>;
   sreToken: string;
   viewerToken: string;
+  stakeholderToken: string;
   foreignToken: string;
 }
 
@@ -87,6 +88,7 @@ beforeAll(async () => {
     idpServer,
     sreToken: await getAccessToken(issuerUrl, "sre"),
     viewerToken: await getAccessToken(issuerUrl, "viewer"),
+    stakeholderToken: await getAccessToken(issuerUrl, "stakeholder"),
     foreignToken: await getAccessToken(issuerUrl, "sre", "some-other-client"),
   };
 });
@@ -165,5 +167,29 @@ describe("Lesto MCP ops console on the edge (toFetchHandler) validates a real Op
 
     expect(res.status).toBe(403);
     expect(res.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
+  });
+
+  it("refuses an over-scoped stakeholder's write — the ROLE floor, not the scope ceiling (OCP-7, 403)", async () => {
+    const res = await edgeRpc(
+      {
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: {
+          name: "handle_request",
+          arguments: {
+            method: "POST",
+            path: "/incidents",
+            body: { title: "exec wants this", severity: "sev3", services: [] },
+          },
+        },
+      },
+      h.stakeholderToken,
+    );
+
+    // Holds mcp:write (clears the ceiling) but the role lacks `console:operate` → floor refuses,
+    // and the challenge names the missing permission, not the scope.
+    expect(res.status).toBe(403);
+    expect(res.headers.get("www-authenticate")).toContain('scope="console:operate"');
   });
 });
