@@ -98,6 +98,34 @@ describe("runMcp", () => {
     expect(audit).toEqual(["mcp.audit tool=list_routes outcome=ok hash=abc123 duration_ms=7"]);
   });
 
+  it("carries the read-only app contract: openApiInfo + the declared schema shape", async () => {
+    const app = lesto().get("/posts", (c) => c.json({ posts: [] }));
+    const config: LestoAppConfig = {
+      db: sentinelDb,
+      app,
+      migrations: [
+        { version: "001_create_posts", migration: { up: () => {} } },
+        { version: "002_add_index", migration: { up: () => {} } },
+      ],
+    };
+
+    await runMcp([], depsWith({ loadApp: () => Promise.resolve(config) }));
+
+    // No app-meta source yet, so info is the shared default; the schema surfaces the
+    // boot migration versions (tables are the deferred-introspection empty floor).
+    expect(captured?.openApiInfo).toEqual({ title: "Lesto API", version: "0.0.0" });
+    expect(captured?.schema).toEqual({
+      migrations: ["001_create_posts", "002_add_index"],
+      tables: [],
+    });
+  });
+
+  it("derives an empty migration list when the app declares none", async () => {
+    await runMcp([], depsWith());
+
+    expect(captured?.schema).toEqual({ migrations: [], tables: [] });
+  });
+
   it("boots the app before standing up the server", async () => {
     const order: string[] = [];
 

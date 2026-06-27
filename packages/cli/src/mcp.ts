@@ -87,6 +87,20 @@ export async function runMcp(args: readonly string[], deps: McpDeps): Promise<nu
 
     mode,
 
+    // The read-only app contract (ADR 0034 Part A): `info` + the declared schema
+    // shape surface as the `lesto://*` resources and `describe_app`. There is no
+    // app-meta source yet, so `info` is the shared default (mirroring `lesto
+    // openapi`). The declared schema is the cheaply-available shape — the boot
+    // migration versions; per-table column reflection is the deferred "full schema
+    // introspection" (ADR 0034), so `tables` is the empty-but-valid floor.
+    openApiInfo: { title: "Lesto API", version: "0.0.0" },
+    schema: {
+      migrations: Array.isArray(config.migrations)
+        ? config.migrations.map((entry) => entry.version)
+        : [],
+      tables: [],
+    },
+
     // Every dispatch lands one structured line on the audit sink. This is the
     // governance the control plane exists to provide — there is no un-audited path.
     audit: (record) => deps.audit(auditLine(record)),
