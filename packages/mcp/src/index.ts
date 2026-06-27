@@ -28,10 +28,16 @@ export type {
   McpPrincipalResolverOptions,
 } from "./tools";
 
-export { startMcpServer } from "./server";
+export { startMcpServer, startMcpHttpServer } from "./server";
+export type { McpHttpServerHandle } from "./server";
 
 export { buildResources, describeApp, listResources, readResource } from "./resources";
 export type { LestoResource } from "./resources";
+
+// The loopback dev MCP transport's covered security core (ADR 0032 Phase 1) — the
+// Origin/Host allowlist + per-session-token gate, reused by the live-reload WS retrofit.
+export { gateDevRequest, isHostAllowed, loopbackAllowlist } from "./http-transport";
+export type { DevMcpGateDecision, DevMcpSecurity } from "./http-transport";
 
 export {
   authorizeBearer,

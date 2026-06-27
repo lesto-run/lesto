@@ -1,15 +1,22 @@
 /**
- * The stdio transport for the Lesto MCP control plane.
+ * The MCP transports for the Lesto control plane: the stdio server (`lesto mcp`)
+ * and the loopback HTTP dev server (`lesto dev`, ADR 0032 Phase 1).
  *
  * This is pure wiring and lives behind a coverage exclusion: it owns no business
  * logic. It builds the SDK `Server`, registers the Lesto tool set (the real logic,
- * in `tools.ts`), and connects a process `StdioServerTransport`. Everything an
- * agent can actually *do* is decided by `buildTools` / `dispatch`, which are
- * tested directly; this file only carries those decisions onto the wire.
+ * in `tools.ts`), and connects a transport. Everything an agent can actually *do*
+ * is decided by `buildTools` / `dispatch` (tested directly), and every dev-transport
+ * security decision is made by the covered `http-transport.ts` gate; this file only
+ * carries those decisions onto the wire — the irreducible socket bind.
  */
+
+import { createServer } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
   CallToolRequestSchema,
   ListResourcesRequestSchema,
@@ -20,6 +27,8 @@ import {
 import { buildTools, dispatch } from "./tools";
 import type { ContentModules, LestoMcpContext } from "./tools";
 import { buildResources, listResources, readResource } from "./resources";
+import { gateDevRequest, loopbackAllowlist } from "./http-transport";
+import type { DevMcpSecurity } from "./http-transport";
 import { rethrowUnlessMissingContentPeer } from "./content-peer";
 
 /**
@@ -110,5 +119,188 @@ export async function startMcpServer(context: LestoMcpContext): Promise<void> {
     // `addEventListener`, so the property assignment is the API, not a smell.
     // oxlint-disable-next-line unicorn/prefer-add-event-listener
     server.onclose = resolve;
+  });
+}
+
+/** The header the loopback dev MCP client presents the per-session token in. */
+const DEV_TOKEN_HEADER = "x-lesto-dev-token";
+
+/** A running loopback dev MCP server (ADR 0032 Phase 1). */
+export interface McpHttpServerHandle {
+  /** The bound loopback port (resolved when `0` was requested). */
+  port: number;
+
+  /** Stop the server — close the loopback socket. */
+  close(): Promise<void>;
+}
+
+/** The first value of a possibly-repeated node header. */
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/** Adapt node's incoming-message headers into a Web `Headers` for the SDK transport. */
+function nodeHeadersToWeb(headers: IncomingMessage["headers"]): Headers {
+  const web = new Headers();
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (value === undefined) continue;
+
+    for (const single of Array.isArray(value) ? value : [value]) web.append(key, single);
+  }
+
+  return web;
+}
+
+/** Read a node request body to a string. */
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+/** Drive one accepted dev MCP request through a fresh stateless SDK transport. */
+async function runDevMcp(
+  context: LestoMcpContext,
+  req: IncomingMessage,
+  parsedBody: unknown,
+): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+  const tools = buildTools(context);
+
+  const server = new Server(
+    { name: "@lesto/mcp", version: "0.0.0" },
+    { capabilities: { tools: {} } },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      annotations: { destructiveHint: tool.destructive },
+    })),
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const result = await dispatch(
+      context,
+      tools,
+      request.params.name,
+      request.params.arguments ?? {},
+    );
+
+    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+  });
+
+  // Stateless: a fresh transport per request, JSON responses (no SSE), mirroring the
+  // remote Streamable-HTTP path. The covered `gateDevRequest` already ran, so the SDK's
+  // own DNS-rebinding guard is redundant and left off.
+  const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
+
+  await server.connect(transport);
+
+  const webRequest = new Request(`http://127.0.0.1${req.url ?? "/"}`, {
+    method: req.method ?? "POST",
+    headers: nodeHeadersToWeb(req.headers),
+  });
+
+  const response = await transport.handleRequest(webRequest, { parsedBody });
+
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+
+  return { status: response.status, headers, body: await response.text() };
+}
+
+/** Gate one inbound dev connection (covered `gateDevRequest`), then dispatch or refuse. */
+async function handleDevConnection(
+  context: LestoMcpContext,
+  security: DevMcpSecurity,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const raw = await readBody(req);
+
+  let parsedBody: unknown;
+  try {
+    parsedBody = raw === "" ? undefined : JSON.parse(raw);
+  } catch {
+    parsedBody = undefined;
+  }
+
+  const decision = gateDevRequest({
+    origin: headerValue(req.headers.origin),
+    host: headerValue(req.headers.host),
+    token: headerValue(req.headers[DEV_TOKEN_HEADER]),
+    security,
+  });
+
+  if (decision.kind === "reject") {
+    res.writeHead(decision.status, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: decision.code, message: decision.reason }));
+
+    return;
+  }
+
+  const { status, headers, body } = await runDevMcp(context, req, parsedBody);
+
+  res.writeHead(status, headers);
+  res.end(body);
+}
+
+/**
+ * Stand the DEV-ONLY loopback MCP server up (ADR 0032 Phase 1).
+ *
+ * Binds a `node:http` server to loopback (`127.0.0.1`), mints nothing itself — the
+ * caller supplies the per-session `token` — and gates EVERY request through the
+ * covered `gateDevRequest` (foreign Origin/Host or wrong token → coded
+ * `MCP_DEV_ORIGIN_REJECTED`) before driving the SDK transport against the injected
+ * dev `context`. This is the irreducible socket bind; all security logic is in the
+ * covered `http-transport.ts`. Mounted ONLY by the `lesto dev` bin path (Inc 4b).
+ */
+export function startMcpHttpServer(
+  context: LestoMcpContext,
+  options: { token: string; port?: number; host?: string },
+): Promise<McpHttpServerHandle> {
+  const host = options.host ?? "127.0.0.1";
+
+  // The allowlist depends on the bound port; set once `listen` resolves, before any
+  // request can arrive. A request landing in the race window gets a plain 503.
+  let security: DevMcpSecurity | undefined;
+
+  const httpServer = createServer((req, res) => {
+    if (security === undefined) {
+      res.writeHead(503);
+      res.end();
+
+      return;
+    }
+
+    void handleDevConnection(context, security, req, res);
+  });
+
+  return new Promise((resolve, reject) => {
+    httpServer.once("error", reject);
+
+    httpServer.listen(options.port ?? 0, host, () => {
+      const port = (httpServer.address() as AddressInfo).port;
+      const { allowedOrigins, allowedHosts } = loopbackAllowlist(port);
+
+      security = { token: options.token, allowedOrigins, allowedHosts };
+
+      resolve({
+        port,
+        close: () =>
+          new Promise<void>((closed) => {
+            httpServer.close(() => closed());
+          }),
+      });
+    });
   });
 }
