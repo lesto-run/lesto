@@ -16,6 +16,7 @@
 
 export { buildTools, dispatch, mcpPrincipalResolver } from "./tools";
 export type {
+  AppSchemaShape,
   ContentModules,
   DispatchOptions,
   LestoMcpContext,

@@ -12,12 +12,32 @@ import { createHash } from "node:crypto";
 import type { App } from "@lesto/kernel";
 import type { SqlDatabase } from "@lesto/migrate";
 import type { Principal } from "@lesto/authz";
+import type { OpenApiInfo } from "@lesto/openapi";
 
 import { missingContentError } from "./content-peer";
 import { McpError } from "./errors";
 
 /** A value delivered now or awaited — the established local convention. */
 type MaybePromise<T> = T | Promise<T>;
+
+/**
+ * The app's DECLARED schema shape (ADR 0034 Part A) — what the contract surfaces
+ * as the `lesto://schema` resource and `describe_app`'s `schema` key. This is the
+ * cheaply-available declared shape, NOT live database reflection: the known
+ * migration versions and each `defineTable`'s column names/types, exactly as the
+ * app declares them. The app builds this (e.g. `lesto mcp`); absent → an
+ * empty-but-valid shape.
+ */
+export interface AppSchemaShape {
+  /** The known migration versions, in declared order. */
+  migrations: readonly string[];
+
+  /** Each declared table's name and the declared name/type of its columns. */
+  tables: readonly {
+    name: string;
+    columns: readonly { name: string; type: string }[];
+  }[];
+}
 
 /** The runtime's collections map (collection name → its entries) — entries are opaque here. */
 type ContentCollections = Record<string, unknown[]>;
@@ -113,6 +133,20 @@ export interface LestoMcpContext {
 
   /** The app's routes (verb + pattern), as `lesto().routes()` yields — surfaced by `list_routes`. */
   routes: readonly { method: string; pattern: string }[];
+
+  /**
+   * The OpenAPI `info` block for the contract resources + `describe_app` (ADR 0034
+   * Part A). Absent → a default `{ title: "Lesto API", version: "0.0.0" }`. The app
+   * supplies its real title/version through `lesto mcp` (`cli/src/mcp.ts`).
+   */
+  openApiInfo?: OpenApiInfo;
+
+  /**
+   * The app's DECLARED schema shape (ADR 0034 Part A) — see {@link AppSchemaShape}.
+   * Surfaced by the `lesto://schema` resource and `describe_app`. Absent → an
+   * empty-but-valid shape (never invented reflection).
+   */
+  schema?: AppSchemaShape;
 
   /**
    * How much this server lets an agent do (see {@link McpMode}). Absent defaults

@@ -14,11 +14,16 @@
  * two views can never drift.
  */
 
+import { toOpenApi } from "@lesto/openapi";
+
 import { McpError } from "./errors";
 import type { LestoMcpContext } from "./tools";
 
 /** Every Lesto resource serves JSON. */
 const JSON_MIME = "application/json";
+
+/** The `info` block used when the app supplies none (`context.openApiInfo` absent). */
+const DEFAULT_OPENAPI_INFO = { title: "Lesto API", version: "0.0.0" } as const;
 
 /** A read-only MCP resource: a stable URI and a pure reader for its JSON body. */
 export interface LestoResource {
@@ -28,6 +33,9 @@ export interface LestoResource {
   /** A human-facing name for the resource. */
   name: string;
 
+  /** An optional caveat/limitation note, surfaced to the client in `resources/list`. */
+  description?: string;
+
   /** The MIME type of the `read()` payload — `application/json` for every Lesto resource. */
   mimeType: string;
 
@@ -36,11 +44,12 @@ export interface LestoResource {
 }
 
 /**
- * Build the app-contract resources for a context.
+ * Build the app-contract resources for a context — the route map, the OpenAPI
+ * document, the content collections, and the declared schema shape.
  *
- * Increment 1 ships the **route map** (`context.routes`, already on the context);
- * the OpenAPI, collections, and schema-shape resources follow in Increment 2.
- * The list order is stable — clients and tests can rely on it.
+ * The list order is stable (clients and tests rely on it), and every resource
+ * degrades gracefully: an app with no content peers or no declared schema yields
+ * an empty-but-valid body, never a refusal — reading the contract must never fail.
  */
 export function buildResources(context: LestoMcpContext): LestoResource[] {
   return [
@@ -50,7 +59,52 @@ export function buildResources(context: LestoMcpContext): LestoResource[] {
       mimeType: JSON_MIME,
       read: () => context.routes,
     },
+    {
+      uri: "lesto://openapi",
+      name: "OpenAPI document",
+      description:
+        "Route-shape skeleton only: every operation carries a bare 200 and no request/response body schema (the Zod-extracted tier is post-1.0). This is the UNFILTERED route set — internal routes are not excluded here.",
+      mimeType: JSON_MIME,
+      read: () => toOpenApi(context.routes, context.openApiInfo ?? DEFAULT_OPENAPI_INFO),
+    },
+    {
+      uri: "lesto://collections",
+      name: "Content collections",
+      mimeType: JSON_MIME,
+      read: () => readCollections(context),
+    },
+    {
+      uri: "lesto://schema",
+      name: "Schema shape",
+      description:
+        "Declared shape only — known migration versions and each defineTable's column names/types, not full database reflection.",
+      mimeType: JSON_MIME,
+      read: () => context.schema ?? { migrations: [], tables: [] },
+    },
   ];
+}
+
+/**
+ * The content collections, each with its entry count — or an empty-but-valid list
+ * when the optional content peers aren't wired.
+ *
+ * Graceful degradation (ADR 0034 Part A must-fix): unlike the
+ * `list_content_collections` tool, which throws `MCP_CONTENT_PACKAGES_MISSING`
+ * through `requireContent` when `context.loadContent` is absent, the contract
+ * resource yields `[]` so reading the app contract never fails on a content-less
+ * app. Where the peers ARE wired it mirrors that tool's `{ name, count }` shape.
+ */
+async function readCollections(
+  context: LestoMcpContext,
+): Promise<{ name: string; count: number }[]> {
+  if (context.loadContent === undefined) return [];
+
+  const content = await context.loadContent();
+
+  return content.core.getCollections().map((collection) => ({
+    name: collection.name,
+    count: collection.entries.length,
+  }));
 }
 
 /**
@@ -60,10 +114,15 @@ export function buildResources(context: LestoMcpContext): LestoResource[] {
  * delegates here so it carries no select logic.
  */
 export function listResources(resources: LestoResource[]): {
-  resources: { uri: string; name: string; mimeType: string }[];
+  resources: { uri: string; name: string; description?: string; mimeType: string }[];
 } {
   return {
-    resources: resources.map(({ uri, name, mimeType }) => ({ uri, name, mimeType })),
+    resources: resources.map(({ uri, name, description, mimeType }) => ({
+      uri,
+      name,
+      ...(description === undefined ? {} : { description }),
+      mimeType,
+    })),
   };
 }
 
