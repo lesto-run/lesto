@@ -16,23 +16,25 @@
  */
 
 import alchemy from "alchemy";
-import { KVNamespace, Worker } from "alchemy/cloudflare";
+import { DurableObjectNamespace, Worker } from "alchemy/cloudflare";
 
 import { CLIENT_ID, getAccessToken } from "./idp/dance";
 
 const app = await alchemy("lesto-mcp-auth-openauth");
 
-// OpenAuth persists its ES256 signing keys + auth state here, so the JWKS is stable across
-// isolates. `adopt` reuses an existing namespace of the same title rather than failing.
-const openauthKv = await KVNamespace("openauth-kv", {
-  title: `${app.name}-${app.stage}-openauth-kv`,
-  adopt: true,
-});
-
+// OpenAuth's ES256 signing keys + auth state live in a single Durable Object (the `OpenAuthKeyStore`
+// class exported from idp/worker.ts) — strongly consistent across isolates, so the JWKS never
+// diverges. This replaces the KV namespace, whose eventual consistency caused the key-storm
+// (L-35a55b2e). Alchemy hosts the DO in this worker and generates its migration.
 const issuer = await Worker("openauth-issuer", {
   name: `${app.name}-${app.stage}-issuer`,
   entrypoint: "idp/worker.ts",
-  bindings: { OPENAUTH_KV: openauthKv },
+  bindings: {
+    OPENAUTH_DO: DurableObjectNamespace("openauth-store", {
+      className: "OpenAuthKeyStore",
+      sqlite: true,
+    }),
+  },
   url: true,
   compatibilityDate: "2025-04-01",
   compatibilityFlags: ["nodejs_compat"],
@@ -69,13 +71,12 @@ console.log("  mcp:      ", `${rs.url}/mcp`);
 
 await app.finalize();
 
-// Cold-start warmup (the L-35a55b2e fix): OpenAuth generates its ES256 signing + RSA-OAEP
-// encryption keys LAZILY on first use and persists them to KV. On a fresh deploy, concurrent cold
-// isolates across colos each generate-and-persist before KV propagates (a "key storm"), and the
-// first `/authorize` can 503 under the keygen CPU. One SEQUENTIAL dance here forces BOTH keys to
-// be generated + persisted ONCE, before any real traffic — so later cold isolates read the keys
-// from KV (cheap) instead of regenerating, and there's no storm. Best-effort: a slow warmup
-// shouldn't fail the deploy.
+// Cold-start warmup: OpenAuth generates its ES256 signing + RSA-OAEP encryption keys LAZILY on
+// first use, and the keygen CPU can 503 the very first `/authorize` on a cold isolate. One
+// SEQUENTIAL dance forces BOTH keys to be generated + persisted (into the Durable Object) ONCE,
+// before any real traffic, so later requests read the existing key instead of regenerating.
+// (Cross-isolate divergence is already prevented by the DO's strong consistency — this is purely
+// a latency prime.) Best-effort: a slow warmup shouldn't fail the deploy.
 try {
   await getAccessToken(issuerUrl, "viewer");
   console.log("warmup:      keys seeded (cold-start primed)");

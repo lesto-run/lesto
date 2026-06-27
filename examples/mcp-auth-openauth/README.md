@@ -92,11 +92,13 @@ bun run destroy               # tear down
 > different origin) the binding is absent and the RS fetches the JWKS over the public internet —
 > the verifier's optional `fetchJwks` seam handles both, the battery unchanged.
 >
-> **Known rough edge (key persistence).** OpenAuth's signing keys are not reliably persisting to
-> KV on this deploy, so the JWKS can diverge across isolates and live verification is flaky. A
-> post-deploy warmup primes the keys (fixes the cold-start 503), but the robust fix is
-> Durable-Object-backed key storage (strongly consistent) — tracked as a follow-up. The
-> in-process `agent.ts` demo (MemoryStorage, one key) is the reliable, runnable path today.
+> **Key storage = a Durable Object (not KV).** OpenAuth scans storage for its signing key and
+> mints a new one when the scan is empty (`keys.js`). KV's eventually-consistent `list` made cold
+> isolates each see "no key" and mint their own, so the JWKS diverged and live verification 401'd.
+> The fix (`idp/key-store.ts`): a single strongly-consistent **Durable Object** every isolate
+> routes storage to, so one generated key is the only key any isolate sees. Live JWKS went from
+> ~65 churning keys to **one stable key**, and the two-Worker dance verifies reliably. (A
+> post-deploy warmup still primes that key to avoid a cold-keygen 503 on the first request.)
 
 ## How OpenAuth's token maps to the RS (confirmed against its source, not docs)
 

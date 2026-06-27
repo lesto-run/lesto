@@ -21,6 +21,7 @@
 import { issuer } from "@openauthjs/openauth";
 import { MemoryStorage } from "@openauthjs/openauth/storage/memory";
 import type { Provider } from "@openauthjs/openauth/provider/provider";
+import type { StorageAdapter } from "@openauthjs/openauth/storage/storage";
 
 import { subjects } from "./subjects";
 
@@ -49,17 +50,15 @@ function fixedDemoProvider(grant: DemoGrant): Provider<DemoGrant> {
   };
 }
 
-/** OpenAuth's storage seam (a simple KV adapter). `MemoryStorage` + `CloudflareStorage` both return it. */
-type Storage = ReturnType<typeof MemoryStorage>;
-
 /**
- * Build the issuer over an injected {@link Storage} — so the same app runs on Node/Bun with
- * `MemoryStorage` (local + tests, below) and on a Worker with `CloudflareStorage({ namespace:
- * env.OPENAUTH_KV })` (../idp/worker.ts). OpenAuth persists its ES256 signing keys IN storage
- * (keys.js), so on a Worker the keys MUST live in KV — an in-memory store would regenerate them
- * per isolate and the JWKS would churn, breaking in-flight tokens.
+ * Build the issuer over an injected {@link StorageAdapter} — so the same app runs on Node/Bun
+ * with `MemoryStorage` (local + tests, below) and on a Worker with a Durable-Object-backed store
+ * (`durableObjectStorage`, ../idp/key-store.ts). OpenAuth persists its ES256 signing keys IN
+ * storage (keys.js), so on a Worker the store MUST be strongly consistent across isolates — an
+ * in-memory store (or eventually-consistent KV) regenerates them per isolate and the JWKS churns,
+ * breaking in-flight tokens (the key-storm, L-35a55b2e).
  */
-export function buildIssuer(storage: Storage): ReturnType<typeof issuer> {
+export function buildIssuer(storage: StorageAdapter): ReturnType<typeof issuer> {
   return issuer({
     subjects,
     storage,
