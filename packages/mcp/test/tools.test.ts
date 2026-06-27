@@ -569,6 +569,104 @@ describe("audit sink", () => {
   });
 });
 
+describe("onSpan seam (ADR 0031 Phase 1)", () => {
+  it("fires exactly once on a successful dispatch, with the SAME record the audit got", async () => {
+    const spanned: McpAuditRecord[] = [];
+    const ctx = context();
+    const tools = buildTools(ctx);
+
+    await dispatch(
+      ctx,
+      tools,
+      "list_routes",
+      {},
+      { onSpan: (record) => void spanned.push(record) },
+    );
+
+    expect(spanned).toHaveLength(1);
+    // The exact object the audit sink received — governance and observability read
+    // one record, never two diverging copies.
+    expect(spanned[0]).toBe(audited[0]);
+    expect(spanned[0]).toMatchObject({ tool: "list_routes", outcome: "ok" });
+  });
+
+  it("fires with the error record when a tool throws", async () => {
+    const spanned: McpAuditRecord[] = [];
+    const ctx = context({ mode: "read-only" });
+    const tools = buildTools(ctx);
+
+    await dispatch(
+      ctx,
+      tools,
+      "handle_request",
+      { method: "GET", path: "/x" },
+      { onSpan: (record) => void spanned.push(record) },
+    ).catch(() => {});
+
+    expect(spanned).toHaveLength(1);
+    expect(spanned[0]).toBe(audited[0]);
+    expect(spanned[0]).toMatchObject({ tool: "handle_request", outcome: "error" });
+  });
+
+  it("fires on an unknown-tool refusal too", async () => {
+    const spanned: McpAuditRecord[] = [];
+    const ctx = context();
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "nope", {}, { onSpan: (record) => void spanned.push(record) }).catch(
+      () => {},
+    );
+
+    expect(spanned).toHaveLength(1);
+    expect(spanned[0]).toBe(audited[0]);
+    expect(spanned[0]).toMatchObject({ tool: "nope", outcome: "error" });
+  });
+
+  it("swallows a throw from onSpan on success — the result is unaffected", async () => {
+    const ctx = context();
+    const tools = buildTools(ctx);
+
+    const result = await dispatch(
+      ctx,
+      tools,
+      "list_routes",
+      {},
+      {
+        onSpan: () => {
+          throw new Error("span sink is broken");
+        },
+      },
+    );
+
+    // The dispatch resolved normally and the awaited audit still landed.
+    expect(result).toEqual(routes);
+    expect(audited).toHaveLength(1);
+    expect(audited[0]).toMatchObject({ tool: "list_routes", outcome: "ok" });
+  });
+
+  it("swallows a throw from onSpan on the error path — the original error still surfaces", async () => {
+    const ctx = context();
+    const tools = buildTools(ctx);
+
+    // The unknown-tool refusal surfaces MCP_UNKNOWN_TOOL, never the span fault.
+    await expect(
+      dispatch(
+        ctx,
+        tools,
+        "nope",
+        {},
+        {
+          onSpan: () => {
+            throw new Error("span sink is broken");
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "MCP_UNKNOWN_TOOL" });
+
+    expect(audited).toHaveLength(1);
+  });
+});
+
 describe("principal + actor in audit (ADR 0028 Phase 3a)", () => {
   describe("mcpPrincipalResolver", () => {
     it("resolves a session into a principal carrying actor + roles", async () => {

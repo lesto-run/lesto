@@ -658,6 +658,23 @@ export interface DispatchOptions {
    * `Date.now`; a test injects a fake so the recorded duration is deterministic.
    */
   now?: () => number;
+
+  /**
+   * An optional observability seam (ADR 0031 Phase 1): fired once per dispatch —
+   * on success, on handler error, AND on `MCP_UNKNOWN_TOOL` — with the SAME
+   * {@link McpAuditRecord} the mandatory audit received, AFTER that audit has been
+   * written. `onSpan` is observability, not governance: it is optional (absent → a
+   * zero-cost no-op, mirroring `LESTO_OTLP_URL` absent), and a throw from it is
+   * swallowed so a faulty span sink can never break a governed dispatch — the
+   * awaited audit stays the record of what ran. The app supplies it (e.g. opening
+   * a standalone `mcp.tool` span via `@lesto/observability`'s vocabulary);
+   * `@lesto/mcp` takes no `@lesto/observability` dependency — the seam is injected.
+   *
+   * Honest scope: `dispatch` runs from the stdio server outside any HTTP request,
+   * so the `mcp.tool` span the app opens here is STANDALONE (unparented) — the
+   * MCP↔request-trace join is Deferred (ADR 0031), not shipped by this seam.
+   */
+  onSpan?: (record: McpAuditRecord) => void;
 }
 
 /**
@@ -680,6 +697,7 @@ export async function dispatch(
   options: DispatchOptions = {},
 ): Promise<unknown> {
   const now = options.now ?? Date.now;
+  const { onSpan } = options;
 
   const startedAt = now();
   const inputHash = hashInput(input);
@@ -691,17 +709,29 @@ export async function dispatch(
   // Record one line for this invocation, with the duration measured to the
   // moment of recording. Awaited so an async sink (a DB write, a log flush)
   // completes before the dispatch resolves — the audit is part of the contract,
-  // not fire-and-forget.
-  const audit = (outcome: "ok" | "error"): Promise<void> =>
-    Promise.resolve(
-      context.audit({
-        tool: name,
-        inputHash,
-        outcome,
-        durationMs: now() - startedAt,
-        actor: principal?.actor,
-      }),
-    );
+  // not fire-and-forget. Then offer the SAME record to the optional `onSpan` seam
+  // (ADR 0031): observability, never governance, so a throw from it is swallowed —
+  // a faulty span sink cannot break a governed dispatch, and the awaited audit
+  // above stays the record of what ran.
+  const audit = async (outcome: "ok" | "error"): Promise<void> => {
+    const record: McpAuditRecord = {
+      tool: name,
+      inputHash,
+      outcome,
+      durationMs: now() - startedAt,
+      actor: principal?.actor,
+    };
+
+    await context.audit(record);
+
+    if (onSpan === undefined) return;
+
+    try {
+      onSpan(record);
+    } catch {
+      // Swallowed by design: observability never breaks governance.
+    }
+  };
 
   const tool = tools.find((candidate) => candidate.name === name);
 
