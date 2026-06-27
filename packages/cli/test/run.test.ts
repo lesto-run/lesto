@@ -24,6 +24,7 @@ import {
   run,
 } from "../src/index";
 import type { BuildHook, BuildHookContext, CliDeps, DevError, ReleaseTarget } from "../src/index";
+import { createDevState } from "../src/dev-state";
 
 // --- A real-enough app, built over an in-memory better-sqlite3 adapter. ---
 
@@ -1651,6 +1652,22 @@ function capturingServe(): {
   };
 }
 
+/** A serve fake that captures the options, so a test can invoke the wired `logRequest`. */
+function optionCapturingServe(): {
+  serve: CliDeps["serve"];
+  options: () => ServeOptions | undefined;
+} {
+  let captured: ServeOptions | undefined;
+
+  const serve = vi.fn((_app: App, options?: ServeOptions): Promise<Server> => {
+    captured = options;
+
+    return Promise.resolve({ port: 3000, close: () => Promise.resolve() });
+  });
+
+  return { serve: serve as unknown as CliDeps["serve"], options: () => captured };
+}
+
 /** A streamed HTML body — React's SSR shape — for the stream-injection test. */
 function streamBody(): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -2740,6 +2757,80 @@ function recordingUploader(): {
 
   return { uploader, shipped, distDirs };
 }
+
+describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
+  const sites: readonly Site[] = [
+    { name: "marketing", render: "static", basePath: "/", pages: ["/"] },
+  ];
+
+  it("feeds the ring: served requests, the route-refresh log, and the DevError it later clears", async () => {
+    const devState = createDevState();
+    const capture = optionCapturingServe();
+    let onChange: (() => void) | undefined;
+
+    // First refresh fails (overlay → error recorded); the second succeeds (clears it).
+    let reloads = 0;
+    const reloadApp = (): Promise<LestoAppConfig> => {
+      reloads += 1;
+
+      return reloads === 1
+        ? Promise.reject(new Error("syntax error in page.tsx"))
+        : Promise.resolve(buildConfig());
+    };
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadSites: () => Promise.resolve(sites),
+        devState,
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        regenerateRoutes: () => Promise.resolve({ path: "src/routes.gen.ts", count: 2 }),
+        reloadApp,
+      }),
+    );
+
+    // The access-log seam is wired only with a ring; feed it one request → the ring.
+    expect(capture.options()?.logRequest).toBeDefined();
+    capture.options()?.logRequest?.({
+      method: "GET",
+      path: "/posts",
+      status: 200,
+      ms: 4,
+      requestId: "req-1",
+    });
+    expect(devState.recentRequests(10).map((record) => record.requestId)).toEqual(["req-1"]);
+    expect(devState.spanFor("req-1")?.status).toBe(200);
+
+    // Route change #1 fails → the ring records the app-reload DevError + the refresh log.
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(devState.getDiagnostics()?.source).toBe("app-reload");
+    expect(devState.recentLogs(20)).toContain(
+      "routes refreshed: src/routes.gen.ts (2 route files)",
+    );
+
+    // Route change #2 succeeds → the overlay clears, so the ring's error clears too.
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(devState.getDiagnostics()).toBeUndefined();
+  });
+
+  it("leaves the default access log untouched when no ring is wired (unchanged behaviour)", async () => {
+    const capture = optionCapturingServe();
+
+    await run(["dev"], depsWith({ serve: capture.serve, loadSites: () => Promise.resolve(sites) }));
+
+    // No ring → no `logRequest` override → the runtime's default access log stands.
+    expect(capture.options()?.logRequest).toBeUndefined();
+  });
+});
 
 describe("run deploy", () => {
   // Two zones: a static marketing root (two pages) and a dynamic mls app. Both

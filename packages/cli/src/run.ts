@@ -30,11 +30,12 @@ import { buildStaticSites } from "@lesto/sites";
 import type { OutputSink, Site } from "@lesto/sites";
 
 import { dispatchSitesDev } from "@lesto/runtime";
-import type { serve, StaticReader } from "@lesto/runtime";
+import type { AccessEntry, serve, StaticReader } from "@lesto/runtime";
 
 import { planDeploy, rollback, shipRelease, shipStatic } from "@lesto/deploy";
 import type { ReleaseStore, ShipDeps } from "@lesto/deploy";
 
+import type { DevState } from "./dev-state";
 import { CliError } from "./errors";
 import { parsePort, parseStringFlag } from "./flags";
 
@@ -483,6 +484,16 @@ export interface CliDeps {
    * behaviour). The bin owns the socket; the core decides WHEN to inject and notify.
    */
   liveReload?: LiveReload;
+
+  /**
+   * The live-dev-state ring (ADR 0032 Phase 1) — the bounded record the dev MCP
+   * introspection tools read. Injected ONLY by the `lesto dev` bin path; `runDev`
+   * fills it as it works (the current {@link DevError}, dev-loop log lines, and —
+   * via the `serve` access-log seam — each served request). Absent → unchanged
+   * behaviour (no ring, default access logging); the bin owns the dev MCP server
+   * that reads it, the core only feeds it.
+   */
+  devState?: DevState;
 
   /**
    * Build the dev-only island Fast-Refresh server for the app's dialect, or resolve
@@ -1527,8 +1538,23 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // existed. A route change reloads regardless (a new route needs a fresh document).
   let overlayUp = false;
 
+  // The live-dev-state ring (ADR 0032 Phase 1), when the bin wired one: `runDev` fills
+  // it as it works so the dev MCP introspection tools can read it. Absent → every write
+  // below is a no-op and behaviour is unchanged.
+  const devState = deps.devState;
+
+  // Emit a dev-loop activity line to stderr AND (when wired) the dev-state log ring, so
+  // `tail_logs` surfaces the same events the developer sees on the console.
+  const devLog = (line: string): void => {
+    deps.out(line);
+    devState?.appendLog(line);
+  };
+
   const reloadBrowser = (): void => {
     overlayUp = false;
+    // A successful change cleared the overlay; mirror that in the ring so
+    // `get_dev_diagnostics` reports no current error.
+    devState?.setError(undefined);
     deps.liveReload?.notify();
   };
 
@@ -1541,6 +1567,7 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
 
   const showOverlay = (error: DevError): void => {
     overlayUp = true;
+    devState?.setError(error);
     deps.liveReload?.notifyError(error);
   };
 
@@ -1558,7 +1585,7 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
         // (the separate live-reload task), an island edit still shows on next refresh.
         () => (overlayUp ? reloadBrowser() : undefined),
         (error: unknown) => {
-          deps.out(`client rebuild failed: ${rebuildErrorMessage(error)}`);
+          devLog(`client rebuild failed: ${rebuildErrorMessage(error)}`);
           showOverlay(devError("client-rebuild", error));
         },
       );
@@ -1576,7 +1603,7 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
       void buildStylesIfPresent(deps, config, DEFAULT_OUT_DIR, "dev").then(
         () => (overlayUp ? reloadBrowser() : deps.liveReload?.notifyStyleUpdate()),
         (error: unknown) => {
-          deps.out(`css rebuild failed: ${rebuildErrorMessage(error)}`);
+          devLog(`css rebuild failed: ${rebuildErrorMessage(error)}`);
           showOverlay(devError("style-rebuild", error));
         },
       );
@@ -1628,7 +1655,7 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // the browser. A failure in any step is reported, not fatal — the dev server
   // stays up so the next save can fix it.
   const onRouteChange = async (): Promise<void> => {
-    const { handle, error } = await refreshRoutes(deps);
+    const { handle, error } = await refreshRoutes(deps, devLog);
 
     if (handle !== undefined) activeHandle = handle;
 
@@ -1655,6 +1682,12 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
       // tunes them here too, and every unset var falls through to the secure default.
       ...serveLimitsFromEnv(deps.env ?? {}),
       ...(tracing === undefined ? {} : tracing.serveOptions),
+      // Feed each served request into the dev-state ring (ADR 0032 Phase 1) so
+      // `get_recent_requests` can read it. Only when a ring is wired — absent it, the
+      // default structured access log is left untouched (unchanged behaviour).
+      ...(devState === undefined
+        ? {}
+        : { logRequest: (entry: AccessEntry) => devState.recordRequest(entry) }),
     },
   );
 
@@ -1692,19 +1725,18 @@ type AppHandle = (method: string, path: string, options?: HandleOptions) => Prom
  */
 async function refreshRoutes(
   deps: CliDeps,
+  log: (line: string) => void,
 ): Promise<{ handle: AppHandle | undefined; error: DevError | undefined }> {
   if (deps.regenerateRoutes !== undefined) {
     try {
       const result = await deps.regenerateRoutes();
 
       if (result !== undefined) {
-        deps.out(
-          `routes refreshed: ${result.path} (${result.count} route ${fileNoun(result.count)})`,
-        );
+        log(`routes refreshed: ${result.path} (${result.count} route ${fileNoun(result.count)})`);
       }
     } catch (cause) {
       // Stderr only: a stale edge manifest does not break the running dev page.
-      deps.out(`route manifest refresh failed: ${rebuildErrorMessage(cause)}`);
+      log(`route manifest refresh failed: ${rebuildErrorMessage(cause)}`);
     }
   }
 
@@ -1721,7 +1753,7 @@ async function refreshRoutes(
   } catch (cause) {
     // A syntax error in a just-saved route file would otherwise crash the dev server;
     // keep the prior app live and surface the overlay so the next save recovers.
-    deps.out(`app reload failed: ${rebuildErrorMessage(cause)}`);
+    log(`app reload failed: ${rebuildErrorMessage(cause)}`);
 
     return { handle: undefined, error: devError("app-reload", cause) };
   }
