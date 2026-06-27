@@ -28,6 +28,9 @@ export type {
 
 export { startMcpServer } from "./server";
 
+export { buildResources, listResources, readResource } from "./resources";
+export type { LestoResource } from "./resources";
+
 export {
   authorizeBearer,
   bearerChallenge,

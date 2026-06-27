@@ -10,10 +10,16 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ListResourcesRequestSchema,
+  ListToolsRequestSchema,
+  ReadResourceRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 
 import { buildTools, dispatch } from "./tools";
 import type { ContentModules, LestoMcpContext } from "./tools";
+import { buildResources, listResources, readResource } from "./resources";
 import { rethrowUnlessMissingContentPeer } from "./content-peer";
 
 /**
@@ -52,10 +58,11 @@ export async function startMcpServer(context: LestoMcpContext): Promise<void> {
   };
 
   const tools = buildTools(runContext);
+  const resources = buildResources(runContext);
 
   const server = new Server(
     { name: "@lesto/mcp", version: "0.0.0" },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {}, resources: {} } },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -81,6 +88,14 @@ export async function startMcpServer(context: LestoMcpContext): Promise<void> {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
   });
+
+  // The read-only app contract (ADR 0034 Part A). Both handlers delegate straight
+  // to the covered builders in `resources.ts` — this file adds no select logic.
+  server.setRequestHandler(ListResourcesRequestSchema, async () => listResources(resources));
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) =>
+    readResource(resources, request.params.uri),
+  );
 
   const transport = new StdioServerTransport();
 

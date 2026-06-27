@@ -10,6 +10,8 @@ import { LestoError } from "@lesto/errors";
 
 export type McpErrorCode =
   | "MCP_UNKNOWN_TOOL"
+  /** No resource carries the requested URI — a client typo or a stale resource list. */
+  | "MCP_UNKNOWN_RESOURCE"
   | "MCP_GENERATE_UNAVAILABLE"
   /** The optional content peers aren't installed, so the content tools can't load. */
   | "MCP_CONTENT_PACKAGES_MISSING"
