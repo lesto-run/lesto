@@ -25,6 +25,8 @@ import {
 } from "../src/index";
 import type { BuildHook, BuildHookContext, CliDeps, DevError, ReleaseTarget } from "../src/index";
 import { createDevState } from "../src/dev-state";
+import { startMcpHttpServer } from "@lesto/mcp";
+import type { LestoMcpContext, McpAuditRecord } from "@lesto/mcp";
 
 // --- A real-enough app, built over an in-memory better-sqlite3 adapter. ---
 
@@ -1652,6 +1654,13 @@ function capturingServe(): {
   };
 }
 
+/** Parse the tool result text out of an MCP `tools/call` JSON-RPC response. */
+async function toolResult(res: Response): Promise<unknown> {
+  const message = (await res.json()) as { result?: { content?: { text?: string }[] } };
+
+  return JSON.parse(message.result?.content?.[0]?.text ?? "null");
+}
+
 /** A serve fake that captures the options, so a test can invoke the wired `logRequest`. */
 function optionCapturingServe(): {
   serve: CliDeps["serve"];
@@ -2829,6 +2838,107 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
 
     // No ring → no `logRequest` override → the runtime's default access log stands.
     expect(capture.options()?.logRequest).toBeUndefined();
+  });
+
+  // THE COMMITTED QA GATE (ADR 0032 Phase 1 Inc 6): drive `runDev` to fill the ring,
+  // stand a REAL loopback dev MCP server over that same ring, and read it back over the
+  // wire — proving the end-to-end (runDev fills → MCP reads) path plus the security gate
+  // and the audit. Lives here (not a separate file) to reuse the `depsWith` dev harness.
+  it("serves the live dev state over the loopback MCP transport, gated + audited", async () => {
+    const devState = createDevState();
+    const capture = optionCapturingServe();
+    let onChange: (() => void) | undefined;
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadSites: () => Promise.resolve(sites),
+        devState,
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        regenerateRoutes: () => Promise.resolve({ path: "src/routes.gen.ts", count: 2 }),
+        // Fail the route re-load so the ring records a DevError the tool reads back.
+        reloadApp: () => Promise.reject(new Error("syntax error in page.tsx")),
+      }),
+    );
+
+    // runDev fills the ring: one served request, then a failed route change.
+    capture.options()?.logRequest?.({
+      method: "GET",
+      path: "/posts",
+      status: 200,
+      ms: 4,
+      requestId: "req-1",
+    });
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Stand a REAL loopback dev MCP server over the SAME ring (what the bin wires in Inc 4b).
+    const audited: McpAuditRecord[] = [];
+    const devContext: LestoMcpContext = {
+      app: {
+        handle: () => Promise.resolve({ status: 200, headers: {}, body: "" }),
+      } as unknown as App,
+      routes: [],
+      audit: (record) => void audited.push(record),
+      devState,
+    };
+    const handle = await startMcpHttpServer(devContext, { token: "dev-token", port: 0 });
+
+    const base = `http://127.0.0.1:${handle.port}/`;
+    const call = (name: string, extraHeaders: Record<string, string> = {}): Promise<Response> =>
+      fetch(base, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "x-lesto-dev-token": "dev-token",
+          ...extraHeaders,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name, arguments: {} },
+        }),
+      });
+
+    try {
+      // get_dev_diagnostics → the app-reload DevError runDev recorded.
+      const diagnostics = (await toolResult(await call("get_dev_diagnostics"))) as DevError;
+      expect(diagnostics.source).toBe("app-reload");
+
+      // get_recent_requests → the access entry the serve seam fed the ring.
+      const requests = (await toolResult(await call("get_recent_requests"))) as {
+        requestId: string;
+      }[];
+      expect(requests.map((record) => record.requestId)).toEqual(["req-1"]);
+
+      // tail_logs → the route-refresh activity line.
+      const logs = (await toolResult(await call("tail_logs"))) as string[];
+      expect(logs).toContain("routes refreshed: src/routes.gen.ts (2 route files)");
+
+      // A foreign-Origin call is refused with MCP_DEV_ORIGIN_REJECTED before any dispatch.
+      const rejected = await call("get_dev_diagnostics", { origin: "https://evil.example" });
+      expect(rejected.status).toBe(403);
+      expect((await rejected.json()) as unknown).toMatchObject({
+        error: "MCP_DEV_ORIGIN_REJECTED",
+      });
+
+      // Every accepted tools/call was audited; the rejected one never reached dispatch.
+      expect(audited.map((record) => record.tool)).toEqual([
+        "get_dev_diagnostics",
+        "get_recent_requests",
+        "tail_logs",
+      ]);
+      expect(audited.every((record) => record.outcome === "ok")).toBe(true);
+    } finally {
+      await handle.close();
+    }
   });
 });
 
