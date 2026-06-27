@@ -24,7 +24,12 @@ import {
 import { buildTools, dispatch, mcpPrincipalResolver } from "../src/tools";
 import { McpError } from "../src/errors";
 
-import type { ContentModules, LestoMcpContext, McpAuditRecord } from "../src/tools";
+import type {
+  ContentModules,
+  LestoMcpContext,
+  McpAuditRecord,
+  McpDevStateReader,
+} from "../src/tools";
 
 // The DI boundary: the kernel speaks "array of positional params"; this adapter
 // maps that onto better-sqlite3's variadic bind. The terminals are async (ADR
@@ -150,6 +155,9 @@ describe("buildTools", () => {
       "create_content_entry",
       "update_content_entry",
       "delete_content_entry",
+      "get_dev_diagnostics",
+      "get_recent_requests",
+      "tail_logs",
     ]);
 
     for (const tool of tools) {
@@ -214,6 +222,93 @@ describe("describe_app tool", () => {
     const payload = (await dispatch(ctx, tools, "describe_app", {})) as { collections: unknown };
 
     expect(payload.collections).toEqual([]);
+  });
+});
+
+describe("dev introspection tools (ADR 0032 Phase 1)", () => {
+  const devError = { source: "client-rebuild", message: "boom" };
+
+  function devContext(): {
+    ctx: LestoMcpContext;
+    calls: { requests: number[]; logs: number[] };
+  } {
+    const calls = { requests: [] as number[], logs: [] as number[] };
+
+    const reader: McpDevStateReader = {
+      getDiagnostics: () => devError,
+      recentRequests: (n) => {
+        calls.requests.push(n);
+
+        return [{ requestId: "r1", method: "GET", path: "/x", status: 200, ms: 1 }];
+      },
+      recentLogs: (n) => {
+        calls.logs.push(n);
+
+        return ["log-a"];
+      },
+    };
+
+    return { ctx: context({ devState: reader }), calls };
+  }
+
+  it("get_dev_diagnostics returns the current DevError", async () => {
+    const { ctx } = devContext();
+    const tools = buildTools(ctx);
+
+    expect(await dispatch(ctx, tools, "get_dev_diagnostics", {})).toEqual(devError);
+  });
+
+  it("get_dev_diagnostics returns null when the last change succeeded", async () => {
+    const ctx = context({
+      devState: { getDiagnostics: () => undefined, recentRequests: () => [], recentLogs: () => [] },
+    });
+    const tools = buildTools(ctx);
+
+    expect(await dispatch(ctx, tools, "get_dev_diagnostics", {})).toBeNull();
+  });
+
+  it("get_recent_requests passes the limit through, defaulting to 50 when absent", async () => {
+    const { ctx, calls } = devContext();
+    const tools = buildTools(ctx);
+
+    const out = await dispatch(ctx, tools, "get_recent_requests", { limit: 5 });
+    await dispatch(ctx, tools, "get_recent_requests", {});
+
+    expect(out).toEqual([{ requestId: "r1", method: "GET", path: "/x", status: 200, ms: 1 }]);
+    expect(calls.requests).toEqual([5, 50]);
+  });
+
+  it("tail_logs passes the limit through, defaulting to 50 when absent", async () => {
+    const { ctx, calls } = devContext();
+    const tools = buildTools(ctx);
+
+    const out = await dispatch(ctx, tools, "tail_logs", {});
+
+    expect(out).toEqual(["log-a"]);
+    expect(calls.logs).toEqual([50]);
+  });
+
+  it("each dev tool refuses with MCP_DEV_STATE_UNAVAILABLE when no reader is wired", async () => {
+    const ctx = context(); // no devState — not `lesto dev`
+    const tools = buildTools(ctx);
+
+    for (const name of ["get_dev_diagnostics", "get_recent_requests", "tail_logs"]) {
+      await expect(dispatch(ctx, tools, name, {})).rejects.toMatchObject({
+        code: "MCP_DEV_STATE_UNAVAILABLE",
+      });
+    }
+  });
+
+  it("audits both a successful dev dispatch and the unavailable refusal", async () => {
+    const { ctx } = devContext();
+    await dispatch(ctx, buildTools(ctx), "tail_logs", {});
+
+    expect(audited.at(-1)).toMatchObject({ tool: "tail_logs", outcome: "ok" });
+
+    const bare = context();
+    await dispatch(bare, buildTools(bare), "get_dev_diagnostics", {}).catch(() => {});
+
+    expect(audited.at(-1)).toMatchObject({ tool: "get_dev_diagnostics", outcome: "error" });
   });
 });
 

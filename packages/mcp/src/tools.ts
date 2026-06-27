@@ -40,6 +40,26 @@ export interface AppSchemaShape {
   }[];
 }
 
+/**
+ * The live-dev-state reader the dev introspection tools read (ADR 0032 Phase 1).
+ *
+ * Declared STRUCTURALLY here, so `@lesto/mcp` imports neither `@lesto/cli` (which
+ * owns the ring, `dev-state.ts`) nor `@lesto/runtime` (which owns the access entry)
+ * — the bin injects the ring on the dev `LestoMcpContext` and `@lesto/cli`'s
+ * `DevState` satisfies this shape structurally. The return values are opaque
+ * (`unknown`): the tools serialize them straight to the agent, never inspect them.
+ */
+export interface McpDevStateReader {
+  /** The current build/reload error, or `undefined`/`null` when the last change succeeded. */
+  getDiagnostics(): unknown;
+
+  /** The most recent served requests, capped at `n`. */
+  recentRequests(n: number): readonly unknown[];
+
+  /** The most recent dev log lines, capped at `n`. */
+  recentLogs(n: number): readonly string[];
+}
+
 /** The runtime's collections map (collection name → its entries) — entries are opaque here. */
 type ContentCollections = Record<string, unknown[]>;
 
@@ -148,6 +168,14 @@ export interface LestoMcpContext {
    * empty-but-valid shape (never invented reflection).
    */
   schema?: AppSchemaShape;
+
+  /**
+   * The live-dev-state reader (ADR 0032 Phase 1) the dev introspection tools read.
+   * Injected ONLY by `lesto dev` (the bin wires the ring); absent on every other
+   * server, where the three dev tools are present but inert and refuse with
+   * `MCP_DEV_STATE_UNAVAILABLE`. See {@link McpDevStateReader}.
+   */
+  devState?: McpDevStateReader;
 
   /**
    * How much this server lets an agent do (see {@link McpMode}). Absent defaults
@@ -269,6 +297,26 @@ function requireContentDb(context: LestoMcpContext): SqlDatabase {
   }
 
   return context.contentDb;
+}
+
+/** The live-dev-state reader, or a clear refusal on a server that is not `lesto dev`. */
+function requireDevState(context: LestoMcpContext): McpDevStateReader {
+  if (context.devState === undefined) {
+    throw new McpError(
+      "MCP_DEV_STATE_UNAVAILABLE",
+      "The dev introspection tools are only available under `lesto dev`.",
+    );
+  }
+
+  return context.devState;
+}
+
+/** How many entries the bounded dev introspection tools return when no `limit` is given. */
+const DEFAULT_DEV_TAIL = 50;
+
+/** The `limit` from a dev tool's input, defaulting when absent or non-numeric. */
+function devTailLimit(input: Record<string, unknown>): number {
+  return typeof input.limit === "number" ? input.limit : DEFAULT_DEV_TAIL;
 }
 
 /**
@@ -665,6 +713,49 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
     },
   };
 
+  // The dev-loop introspection tools (ADR 0032 Phase 1) — read-only, audited like
+  // every dispatch, and inert (refusing `MCP_DEV_STATE_UNAVAILABLE`) on any server
+  // that is not `lesto dev`, where no `devState` reader is wired.
+  const getDevDiagnostics: LestoTool = {
+    name: "get_dev_diagnostics",
+    description:
+      "Report the current dev build/reload error, or null when the last change succeeded.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+    destructive: false,
+    handler: () => Promise.resolve(requireDevState(context).getDiagnostics() ?? null),
+  };
+
+  const getRecentRequests: LestoTool = {
+    name: "get_recent_requests",
+    description:
+      "List the most recently served requests from the live dev access log (optionally capped by limit).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number" },
+      },
+    },
+    destructive: false,
+    handler: (input) =>
+      Promise.resolve(requireDevState(context).recentRequests(devTailLimit(input))),
+  };
+
+  const tailLogs: LestoTool = {
+    name: "tail_logs",
+    description: "Return the most recent dev log lines (optionally capped by limit).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number" },
+      },
+    },
+    destructive: false,
+    handler: (input) => Promise.resolve(requireDevState(context).recentLogs(devTailLimit(input))),
+  };
+
   return [
     listRoutes,
     handleRequest,
@@ -676,6 +767,9 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
     createContentEntry,
     updateContentEntry,
     deleteContentEntry,
+    getDevDiagnostics,
+    getRecentRequests,
+    tailLogs,
   ];
 }
 

@@ -16,6 +16,8 @@ export type McpErrorCode =
   /** The optional content peers aren't installed, so the content tools can't load. */
   | "MCP_CONTENT_PACKAGES_MISSING"
   | "MCP_CONTENT_STORE_UNAVAILABLE"
+  /** A dev introspection tool ran on a server with no live-dev-state reader wired (not `lesto dev`). */
+  | "MCP_DEV_STATE_UNAVAILABLE"
   | "MCP_OPERATOR_REQUIRED"
   /** A Resource Server was built without the non-empty `resource` its audience guard needs. */
   | "MCP_RESOURCE_REQUIRED";

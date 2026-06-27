@@ -23,6 +23,7 @@ export type {
   LestoTool,
   McpAuditRecord,
   McpAuditSink,
+  McpDevStateReader,
   McpMode,
   McpPrincipalResolverOptions,
 } from "./tools";
