@@ -68,6 +68,26 @@
  * `traceparent`.
  */
 
+// The shared AI/agent span vocabulary (ADR 0031) — the one contract the covered
+// `mcp.tool` span and the preview `ai.*` spans agree on. The mapper takes a
+// STRUCTURAL record, so this gains no `@lesto/mcp`/`@lesto/ai` edge.
+export {
+  AI_GENERATE_SPAN,
+  AI_MODEL_ATTR,
+  AI_STOP_REASON_ATTR,
+  AI_TOOL_NAME_ATTR,
+  AI_TOOL_SPAN,
+  AI_USAGE_INPUT_TOKENS_ATTR,
+  AI_USAGE_OUTPUT_TOKENS_ATTR,
+  MCP_DURATION_MS_ATTR,
+  MCP_INPUT_HASH_ATTR,
+  MCP_OUTCOME_ATTR,
+  MCP_TOOL_ATTR,
+  MCP_TOOL_SPAN,
+  mcpAuditToSpanAttributes,
+} from "./agent-vocabulary";
+export type { McpAuditShape } from "./agent-vocabulary";
+
 export { InMemoryExporter } from "./exporter";
 
 export { DEFAULT_MAX_BUFFERED_SPANS, OtlpHttpExporter, otlpTraceRequest } from "./otlp";
