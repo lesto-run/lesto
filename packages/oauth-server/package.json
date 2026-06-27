@@ -1,0 +1,34 @@
+{
+  "name": "@lesto/oauth-server",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "SKELETON ONLY (ADR 0040) — the shape of open MCP client registration (CIMD-first, RFC 7591 DCR compat). Non-functional: no persistence, no crypto, no fetch. Not shippable DCR.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@lesto/errors": "workspace:*"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/oauth-server"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
+  }
+}
