@@ -146,6 +146,7 @@ describe("buildTools", () => {
       "list_content_collections",
       "get_content_entry",
       "query_content",
+      "describe_app",
       "create_content_entry",
       "update_content_entry",
       "delete_content_entry",
@@ -179,6 +180,40 @@ describe("buildTools", () => {
       "handle_request",
       "update_content_entry",
     ]);
+  });
+});
+
+describe("describe_app tool", () => {
+  it("dispatches in read-only mode without refusal, returning the four-part contract", async () => {
+    // Hydrate content-core's runtime as a booted server would (the content view of
+    // the contract needs it, exactly as `list_content_collections` does).
+    setData({ posts: [entry("posts", "hello", { title: "Hello" })] });
+
+    const ctx = context({ mode: "read-only" });
+    const tools = buildTools(ctx);
+
+    const payload = (await dispatch(ctx, tools, "describe_app", {})) as {
+      routes: unknown;
+      openapi: unknown;
+      collections: unknown;
+      schema: unknown;
+    };
+
+    expect(payload.routes).toEqual(routes);
+    expect(payload).toHaveProperty("openapi");
+    expect(payload.collections).toEqual([{ name: "posts", count: 1 }]);
+    expect(payload).toHaveProperty("schema");
+  });
+
+  it("dispatches without refusal on a content-less app (collections empty, not thrown)", async () => {
+    // No `loadContent`: the content tools would throw MCP_CONTENT_PACKAGES_MISSING,
+    // but `describe_app` degrades gracefully to an empty collections list.
+    const ctx: LestoMcpContext = { app, routes, audit: (record) => void audited.push(record) };
+    const tools = buildTools(ctx);
+
+    const payload = (await dispatch(ctx, tools, "describe_app", {})) as { collections: unknown };
+
+    expect(payload.collections).toEqual([]);
   });
 });
 

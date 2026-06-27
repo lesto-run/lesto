@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { toOpenApi } from "@lesto/openapi";
 
-import { buildResources, listResources, readResource } from "../src/resources";
+import { buildResources, describeApp, listResources, readResource } from "../src/resources";
 import { McpError } from "../src/errors";
 
 import type { App } from "@lesto/kernel";
@@ -132,6 +132,33 @@ describe("listResources", () => {
 
     expect(byUri["lesto://openapi"]?.description).toContain("Route-shape skeleton only");
     expect(byUri["lesto://schema"]?.description).toContain("Declared shape only");
+  });
+});
+
+describe("describeApp", () => {
+  it("returns the same four-part contract as the resources (no drift)", async () => {
+    const ctx = context({
+      openApiInfo: { title: "Estate", version: "1.0.0" },
+      schema: { migrations: ["001_create_posts"], tables: [] },
+      loadContent: fakeLoadContent([{ name: "posts", entries: [1, 2] }]),
+    });
+
+    const payload = await describeApp(ctx);
+    const resources = buildResources(ctx);
+    const read = (uri: string): Promise<unknown> | unknown =>
+      resources.find((resource) => resource.uri === uri)?.read();
+
+    expect(payload.routes).toEqual(await read("lesto://routes"));
+    expect(payload.openapi).toEqual(await read("lesto://openapi"));
+    expect(payload.collections).toEqual(await read("lesto://collections"));
+    expect(payload.schema).toEqual(await read("lesto://schema"));
+  });
+
+  it("graceful-degrades on a content-less, schema-less app", async () => {
+    const payload = await describeApp(context());
+
+    expect(payload.collections).toEqual([]);
+    expect(payload.schema).toEqual({ migrations: [], tables: [] });
   });
 });
 

@@ -25,6 +25,17 @@ const JSON_MIME = "application/json";
 /** The `info` block used when the app supplies none (`context.openApiInfo` absent). */
 const DEFAULT_OPENAPI_INFO = { title: "Lesto API", version: "0.0.0" } as const;
 
+// The four contract readers — the single source of truth shared by `buildResources`
+// (the resources view) and `describeApp` (the tool view), so the two can never drift.
+
+const readRoutes = (context: LestoMcpContext): unknown => context.routes;
+
+const readOpenApi = (context: LestoMcpContext): unknown =>
+  toOpenApi(context.routes, context.openApiInfo ?? DEFAULT_OPENAPI_INFO);
+
+const readSchema = (context: LestoMcpContext): unknown =>
+  context.schema ?? { migrations: [], tables: [] };
+
 /** A read-only MCP resource: a stable URI and a pure reader for its JSON body. */
 export interface LestoResource {
   /** The stable `lesto://…` URI a client reads this resource by. */
@@ -57,7 +68,7 @@ export function buildResources(context: LestoMcpContext): LestoResource[] {
       uri: "lesto://routes",
       name: "Route map",
       mimeType: JSON_MIME,
-      read: () => context.routes,
+      read: () => readRoutes(context),
     },
     {
       uri: "lesto://openapi",
@@ -65,7 +76,7 @@ export function buildResources(context: LestoMcpContext): LestoResource[] {
       description:
         "Route-shape skeleton only: every operation carries a bare 200 and no request/response body schema (the Zod-extracted tier is post-1.0). This is the UNFILTERED route set — internal routes are not excluded here.",
       mimeType: JSON_MIME,
-      read: () => toOpenApi(context.routes, context.openApiInfo ?? DEFAULT_OPENAPI_INFO),
+      read: () => readOpenApi(context),
     },
     {
       uri: "lesto://collections",
@@ -79,9 +90,32 @@ export function buildResources(context: LestoMcpContext): LestoResource[] {
       description:
         "Declared shape only — known migration versions and each defineTable's column names/types, not full database reflection.",
       mimeType: JSON_MIME,
-      read: () => context.schema ?? { migrations: [], tables: [] },
+      read: () => readSchema(context),
     },
   ];
+}
+
+/**
+ * The `describe_app` payload — the same four-part contract the resources serve,
+ * in one object, for MCP clients that don't speak resources.
+ *
+ * It reads through the SAME contract readers `buildResources` uses, so the tool
+ * view and the resource view can never drift. Graceful-degrades exactly as the
+ * resources do: a content-less app yields `collections: []`, a schema-less app
+ * yields an empty-but-valid `schema` — `describe_app` never refuses.
+ */
+export async function describeApp(context: LestoMcpContext): Promise<{
+  routes: unknown;
+  openapi: unknown;
+  collections: unknown;
+  schema: unknown;
+}> {
+  return {
+    routes: readRoutes(context),
+    openapi: readOpenApi(context),
+    collections: await readCollections(context),
+    schema: readSchema(context),
+  };
 }
 
 /**

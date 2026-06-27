@@ -16,6 +16,7 @@ import type { OpenApiInfo } from "@lesto/openapi";
 
 import { missingContentError } from "./content-peer";
 import { McpError } from "./errors";
+import { describeApp } from "./resources";
 
 /** A value delivered now or awaited — the established local convention. */
 type MaybePromise<T> = T | Promise<T>;
@@ -575,6 +576,20 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
     },
   };
 
+  const describeAppTool: LestoTool = {
+    name: "describe_app",
+    description:
+      "Describe the app's read-only contract in one payload: its route map, OpenAPI document, content collections, and declared schema shape — the same data as the resources, for clients without resource support.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+    destructive: false,
+    // Reuses the resource readers, so the payload can never drift from the resources;
+    // graceful-degrades (no content peers → empty collections) so it never refuses.
+    handler: () => describeApp(context),
+  };
+
   const createContentEntry: LestoTool = {
     name: "create_content_entry",
     description: "Create a new content entry in the store; errors if one already exists.",
@@ -657,6 +672,7 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
     listContentCollections,
     getContentEntry,
     queryContent,
+    describeAppTool,
     createContentEntry,
     updateContentEntry,
     deleteContentEntry,
