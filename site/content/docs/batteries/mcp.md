@@ -93,6 +93,44 @@ await startMcpServer({ app, router, mode: "operator", audit: (record) => log.inf
 Run it as its own process pointed at the same app; the MCP client launches or
 connects to it and the tools appear. Leave `mode` unset for a read-only server.
 
+## Remote MCP, over OAuth
+
+Stdio is for a *local* agent — the MCP client launches the server as a child
+process, so identity is the launch context. An agent reaching your app over the
+**internet** needs to authenticate per request, so `@lesto/mcp` is also a standards
+OAuth **Resource Server**: `createMcpHttpHandlers` returns plain `@lesto/web`
+handlers the application mounts, validating a bearer token on every request.
+
+```ts
+import { createBearerAuthenticator, createMcpHttpHandlers } from "@lesto/mcp";
+
+const handlers = createMcpHttpHandlers({
+  context: { app, routes, audit },
+  authenticate: createBearerAuthenticator({ verifyAccessToken, resource, rolesOf }),
+  resource,
+  authorizationServers: [issuer],
+  scopesSupported: ["mcp:read", "mcp:write"],
+  writeScope: "mcp:write",                  // the scope that unlocks operator mode
+  allowedOrigins: [],
+  resourceMetadataUrl: `${baseUrl}/.well-known/oauth-protected-resource`,
+});
+
+app
+  .get("/.well-known/oauth-protected-resource", handlers.metadata)
+  .post("/mcp", handlers.rpc);
+```
+
+The RS is **issuer-agnostic**: it does no JWKS work itself, so you inject a
+`verifyAccessToken` that validates the token against your issuer's keys (Auth0,
+Okta, a self-hosted OpenAuth, …) and hands back `{ subject, audience, scopes }`.
+The same read-only/operator gate guards both transports — here the mode is
+*derived from the token's scopes*, so a read-scoped token can never reach a write.
+The audience guard refuses a token minted for another resource (no replay), the
+origin guard blocks browser DNS-rebinding, and the audit names *who* drove each
+call. For the full model — scopes versus roles, audience binding, the audit
+trail — see **[MCP governance](/batteries/mcp-governance)**; for an end-to-end
+build, **[Build an authenticated MCP server](/guides/authenticated-mcp)**.
+
 ## Notes and gotchas
 
 - **Read-only is the floor, on purpose.** An unconfigured server can never mutate
