@@ -100,4 +100,15 @@ export async function startMcpServer(context: LestoMcpContext): Promise<void> {
   const transport = new StdioServerTransport();
 
   await server.connect(transport);
+
+  // `connect` resolves the instant the transport is wired — NOT when it closes. If we
+  // returned here the caller would `process.exit(0)` immediately and the server would
+  // die before serving a single request. Stay resolved-pending until the client
+  // disconnects (stdin ends / transport closes), which is what "serve over stdio" means.
+  await new Promise<void>((resolve) => {
+    // The SDK's `Protocol` exposes `onclose` as a settable hook — it has no
+    // `addEventListener`, so the property assignment is the API, not a smell.
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener
+    server.onclose = resolve;
+  });
 }
