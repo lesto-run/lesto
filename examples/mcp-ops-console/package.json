@@ -1,0 +1,32 @@
+{
+  "name": "@lesto/example-mcp-ops-console",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The flagship 'the app IS the governed MCP surface' demo: a real multi-domain Lesto ops console (services + incidents + deploys) exposed as a governed REMOTE @lesto/mcp Resource Server, behind a self-hosted OpenAuth issuer, driven by a real @modelcontextprotocol/sdk agent that runs a MULTI-STEP incident-response task across all three domains. Scope governance enforced today (sre writes / viewer refused / anon 401); roles wired for the OCP-7 per-tool policy floor.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "agent": "bun agent.ts",
+    "deploy": "bun alchemy.run.ts",
+    "destroy": "bun alchemy.run.ts --destroy"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.102.0",
+    "@hono/node-server": "^1.13.0",
+    "@lesto/cloudflare": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/mcp": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@openauthjs/openauth": "^0.4.3",
+    "better-sqlite3": "^11.10.0",
+    "jose": "^6.2.3",
+    "valibot": "^1.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.0.0",
+    "alchemy": "^0.93.12"
+  }
+}
