@@ -1,5 +1,5 @@
 /**
- * Open MCP client registration — the shape (ADR 0040).
+ * Open MCP client registration — the shape (ADR 0041).
  *
  * SKELETON. Nothing here runs: every resolver is a `notImplemented` stub. What IS
  * captured is the *contract* — the `resolveClient` seam that keeps ADR 0029's `/authorize`
@@ -27,7 +27,7 @@ import type {
  * {@link resolveClient} will branch on; encoded here so the seam's shape is legible.
  *
  * SKELETON: the real predicate also enforces "no fragment" and the public-address SSRF
- * guard (ADR 0040 D6) *before* any fetch; this stub only states the branch.
+ * guard (ADR 0041 D6) *before* any fetch; this stub only states the branch.
  */
 export function looksLikeCimdClientId(clientId: string): boolean {
   void clientId;
@@ -36,7 +36,7 @@ export function looksLikeCimdClientId(clientId: string): boolean {
 }
 
 /**
- * Resolve a CIMD client (ADR 0040 D2). The real flow:
+ * Resolve a CIMD client (ADR 0041 D2). The real flow:
  *   1. reject the `client_id` URL if not `https:`, has a fragment, or resolves private (SSRF guard);
  *   2. fetch over TLS with a hard timeout + max body + capped, re-guarded redirects;
  *   3. require the document's `client_id` to byte-equal the fetched URL;
@@ -51,7 +51,7 @@ export function resolveCimdClient(clientId: string): Promise<RegisteredClient> {
 }
 
 /**
- * Register a client dynamically (RFC 7591 DCR — ADR 0040 D3). Off by default. The real flow:
+ * Register a client dynamically (RFC 7591 DCR — ADR 0041 D3). Off by default. The real flow:
  *   1. rate-limit hard, per-IP and global (the anti-spam control — the only writable surface);
  *   2. validate the {@link ClientMetadataDocument} with the SAME schema as CIMD;
  *   3. if a trust anchor is configured, require + verify a signed software statement (attested DCR);
@@ -70,7 +70,7 @@ export function registerDynamicClient(
 
 /**
  * Look up a previously-persisted client by its minted/pre-shared id (the DCR-minted and
- * pre-registered cases — ADR 0040 D1). No fetch; a single `SqlDatabase` read.
+ * pre-registered cases — ADR 0041 D1). No fetch; a single `SqlDatabase` read.
  */
 export function lookupRegisteredClient(clientId: string): Promise<RegisteredClient | undefined> {
   void clientId;

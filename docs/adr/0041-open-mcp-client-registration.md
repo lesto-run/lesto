@@ -1,4 +1,4 @@
-# ADR 0040 — Open MCP client registration: CIMD-first, with an RFC 7591 DCR compatibility path
+# ADR 0041 — Open MCP client registration: CIMD-first, with an RFC 7591 DCR compatibility path
 
 - **Status:** Proposed (design + skeleton). The **concrete mechanism** ADR for the
   open-client-registration gap that ADR 0039 D2 named but left as *posture pending the

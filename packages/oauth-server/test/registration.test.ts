@@ -6,7 +6,7 @@ import type { RegistrationConfig } from "../src/types";
 
 const config: RegistrationConfig = { dynamicRegistration: false };
 
-// SKELETON (ADR 0040). These tests assert exactly one thing the skeleton DOES promise:
+// SKELETON (ADR 0041). These tests assert exactly one thing the skeleton DOES promise:
 // every entry point refuses with `OAUTH_NOT_IMPLEMENTED` rather than silently half-working.
 // That keeps a non-functional package honest — it cannot be mistaken for shippable DCR.
 describe("@lesto/oauth-server skeleton", () => {

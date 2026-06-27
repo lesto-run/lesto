@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "license": "MIT",
-  "description": "SKELETON ONLY (ADR 0040) — the shape of open MCP client registration (CIMD-first, RFC 7591 DCR compat). Non-functional: no persistence, no crypto, no fetch. Not shippable DCR.",
+  "description": "SKELETON ONLY (ADR 0041) — the shape of open MCP client registration (CIMD-first, RFC 7591 DCR compat). Non-functional: no persistence, no crypto, no fetch. Not shippable DCR.",
   "type": "module",
   "exports": {
     ".": {

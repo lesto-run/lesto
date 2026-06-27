@@ -140,8 +140,8 @@ surface is reconsidered. This gate is the true meeting point with ADR 0028 Phase
   registration-spam surface is covered by ADR 0039's single end-to-end security review,
   which this AS's gate owns. **The concrete mechanism — endpoints, the client-metadata
   document shape, the CIMD/DCR/pre-registration resolution flow, the `aud`/`resource`
-  separation, and the registration threat model — is designed in ADR 0040 (open MCP client
-  registration); this bullet is that design's policy hook, and ADR 0040 is its Phase 3.**
+  separation, and the registration threat model — is designed in ADR 0041 (open MCP client
+  registration); this bullet is that design's policy hook, and ADR 0041 is its Phase 3.**
 - **Scope is an enforced ceiling, not the decision and not display-only (carried from
   ADR 0028).** Scopes are coarse (e.g. `mcp:admin`). The RS decision is the
   **intersection** `scope-permits(action) AND policy.allows(rolesOf(sub), action)`:

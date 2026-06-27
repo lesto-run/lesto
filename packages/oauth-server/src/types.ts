@@ -1,7 +1,7 @@
 /**
- * The registration shapes — the contract ADR 0040 designs, encoded as types.
+ * The registration shapes — the contract ADR 0041 designs, encoded as types.
  *
- * SKELETON (ADR 0040): these are the *shapes* the open-MCP-client-registration build
+ * SKELETON (ADR 0041): these are the *shapes* the open-MCP-client-registration build
  * (ADR 0029 Phase 3) will produce and consume. They carry no behavior. Three mechanisms
  * — CIMD, DCR (RFC 7591), pre-registration — all resolve to the single
  * {@link RegisteredClient} the AS's `/authorize` consumes, so nothing downstream branches
@@ -20,7 +20,7 @@ export interface RegisteredClient {
   /**
    * The client identity. For CIMD this IS the `https:` URL the metadata was fetched from;
    * for DCR / pre-registration it is an opaque minted id. NEVER the token's `aud` — the
-   * audience is the registered *resource* (ADR 0040 D4), kept distinct on purpose so the
+   * audience is the registered *resource* (ADR 0041 D4), kept distinct on purpose so the
    * confused-deputy boundary is not blurred.
    */
   readonly clientId: string;
@@ -81,7 +81,7 @@ export interface ClientMetadataDocument {
   readonly software_statement?: string;
 }
 
-/** How a Lesto AS deployment configures the registration surface (the posture levers of ADR 0040 D3/D6). */
+/** How a Lesto AS deployment configures the registration surface (the posture levers of ADR 0041 D3/D6). */
 export interface RegistrationConfig {
   /**
    * Whether `POST /register` (RFC 7591 DCR) is enabled. **Off by default** — DCR is the

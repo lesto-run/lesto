@@ -5,7 +5,7 @@
  * machine-readable `code`. Clients, logs, and tests branch on the code — never on a
  * message string, which is free to change for humans without breaking machines.
  *
- * SKELETON (ADR 0040): the only code wired today is {@link OAuthServerErrorCode}'s
+ * SKELETON (ADR 0041): the only code wired today is {@link OAuthServerErrorCode}'s
  * `OAUTH_NOT_IMPLEMENTED`, thrown by every stub. The remaining codes are the contract
  * the real registration build (ADR 0029 Phase 3) will raise — declared up front so the
  * shape is legible and so callers can branch on them before the bodies exist.
@@ -14,7 +14,7 @@
 import { LestoError } from "@lesto/errors";
 
 export type OAuthServerErrorCode =
-  /** This is a non-functional skeleton — the body is not built yet (ADR 0040). */
+  /** This is a non-functional skeleton — the body is not built yet (ADR 0041). */
   | "OAUTH_NOT_IMPLEMENTED"
   /** A `client_id` did not resolve to a registered client by any mechanism. */
   | "OAUTH_UNKNOWN_CLIENT"
@@ -24,7 +24,7 @@ export type OAuthServerErrorCode =
   | "OAUTH_CIMD_URL_REJECTED"
   /** The fetched CIMD document's `client_id` did not byte-equal the URL it was fetched from. */
   | "OAUTH_CIMD_IDENTITY_MISMATCH"
-  /** Dynamic registration is disabled by config (the off-by-default posture, ADR 0040 D3). */
+  /** Dynamic registration is disabled by config (the off-by-default posture, ADR 0041 D3). */
   | "OAUTH_DCR_DISABLED"
   /** A required, configured software statement was absent or failed verification (attested DCR). */
   | "OAUTH_SOFTWARE_STATEMENT_REQUIRED";
@@ -46,7 +46,7 @@ export class OAuthServerError extends LestoError<OAuthServerErrorCode> {
 export function notImplemented(what: string): never {
   throw new OAuthServerError(
     "OAUTH_NOT_IMPLEMENTED",
-    `${what} is a non-functional skeleton (ADR 0040) — not built yet`,
+    `${what} is a non-functional skeleton (ADR 0041) — not built yet`,
     { what },
   );
 }
