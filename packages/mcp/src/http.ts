@@ -23,10 +23,13 @@
  *     resource, refusing any token minted for another audience (no passthrough, the
  *     confused-deputy guard).
  *   - **Authorize.** {@link authorizeBearer} expresses the full INTERSECTION (scope
- *     ceiling AND policy floor) — the building block for OCP-7's per-tool gate. The
- *     transport itself (OCP-9) wires only the scope ceiling, via {@link mcpModeForScopes}
- *     → the `dispatch` operator gate; the per-tool policy floor is NOT yet enforced on
- *     the MCP dispatch path (OCP-7), so `authorizeBearer` has no caller there yet.
+ *     ceiling AND policy floor). The transport always wires the scope ceiling, via
+ *     {@link mcpModeForScopes} → the `dispatch` operator gate; when the deployment
+ *     configures a {@link Policy} + per-tool requirements, {@link policyFloorChallenge}
+ *     also wires the per-tool POLICY floor (OCP-7) at the HTTP gate, so within `operator`
+ *     a destructive tool is reachable only by a subject whose roles the policy grants —
+ *     not by any write-scoped bearer. With no policy configured the gate is a no-op, so
+ *     the scope ceiling stays the sole gate (the back-compatible default).
  *
  * Plus the RFC 9728 Protected Resource Metadata ({@link protectedResourceMetadata})
  * a client reads from `.well-known/oauth-protected-resource` to discover where to get
@@ -280,11 +283,12 @@ export function authorizeBearer(request: BearerAuthorization): boolean {
  * never drive a write no matter how privileged its subject. The write-scope name is
  * injected — the OAuth scope vocabulary belongs to the deployment, not this package.
  *
- * NOTE: this is the scope CEILING only. A per-tool POLICY floor (`policy.allows(roles, …)`
- * via {@link authorizeBearer}) is NOT yet wired on the MCP dispatch path — `dispatch`
- * gates a destructive tool purely on this mode, so within `operator` every destructive
- * tool is reachable regardless of the subject's roles. The per-tool policy gate lands with
- * OCP-7; until then a write scope is the only gate on a write.
+ * NOTE: this is the scope CEILING only. The per-tool POLICY floor (`policy.allows(roles, …)`
+ * via {@link authorizeBearer}) is a SEPARATE, complementary gate: {@link policyFloorChallenge}
+ * wires it at the HTTP layer (OCP-7) when a deployment configures a {@link Policy}. With a
+ * policy configured, `operator` mode is necessary but no longer sufficient — a destructive
+ * tool is reachable only by a subject the policy also grants the tool's permission. With no
+ * policy configured (the back-compatible default) a write scope is the only gate on a write.
  */
 export function mcpModeForScopes(
   scopes: readonly string[],
@@ -410,8 +414,9 @@ export interface McpHttpGateOptions {
  * ordering is deliberate: a cross-site origin is refused (`403`, no challenge — it is not
  * an auth problem) before any token is read; a missing token is a bare `401` pointing at
  * the metadata; a presented-but-invalid token is a `401` marked `invalid_token`. The
- * per-tool scope ceiling ({@link scopeCeilingChallenge}) applies later; the per-tool policy
- * floor is OCP-7 and is NOT yet enforced on the MCP dispatch path.
+ * per-tool scope ceiling ({@link scopeCeilingChallenge}) and the per-tool policy floor
+ * ({@link policyFloorChallenge}, when a policy is configured) both apply later, against the
+ * accepted session.
  */
 export async function gateMcpHttpRequest(
   options: McpHttpGateOptions,
@@ -495,7 +500,8 @@ function toolsCallNames(body: unknown): string[] {
  * This is the scope CEILING only. It is also enforced in depth by `dispatch`'s
  * `requireOperator` gate (a destructive tool refuses outside `operator`), so a call the
  * peek misses is still refused — just as a coded JSON-RPC error rather than a clean `403`.
- * The per-tool POLICY floor (roles) is OCP-7 and is NOT yet wired.
+ * The per-tool POLICY floor (roles) is the complementary {@link policyFloorChallenge}, run
+ * right after this when a deployment configures a {@link Policy}.
  */
 export function scopeCeilingChallenge(options: {
   message: unknown;
@@ -510,4 +516,85 @@ export function scopeCeilingChallenge(options: {
   );
 
   return callsDestructive ? insufficientScopeChallenge({ scope: options.writeScope }) : undefined;
+}
+
+/** The scope + permission a single tool demands — the per-tool half of the OCP-7 floor. */
+export interface ToolRequirement {
+  /**
+   * The OAuth scope this tool needs — the per-tool ceiling {@link authorizeBearer} checks
+   * before the policy. For a destructive tool this is the deployment's write scope; the same
+   * value {@link mcpModeForScopes} reads, restated per tool so the intersection is exact.
+   */
+  scope: string;
+
+  /** The policy permission this tool needs — the floor the subject's roles are checked against. */
+  permission: string;
+}
+
+/**
+ * The policy-floor refusal for a tool call — or `undefined` to let it through (OCP-7).
+ *
+ * The complement to {@link scopeCeilingChallenge}: where the ceiling asks "does the TOKEN
+ * carry the write scope?", the floor asks "do the SUBJECT's roles hold this tool's
+ * permission?". A deployment opts in by configuring a compiled {@link Policy} plus a
+ * `requirements` map (tool name → its {@link ToolRequirement}); each `tools/call` whose tool
+ * names a requirement is run through {@link authorizeBearer}, the full INTERSECTION of scope
+ * ceiling and policy floor. The first call the intersection denies yields a `403` challenge
+ * naming the missing permission — refused at the HTTP layer BEFORE dispatch, like the ceiling.
+ *
+ * Fail-OPEN by configuration, fail-CLOSED by data: with no `policy` (the back-compatible
+ * default) the floor is a no-op and the scope ceiling stays the sole gate; WITH a policy, a
+ * tool that names a requirement is gated, and a subject whose roles the policy does not grant
+ * is refused even in `operator` mode. A `tools/call` whose tool is absent from `requirements`
+ * carries no policy floor — it is governed by the scope ceiling alone — so a deployment grants
+ * a floor exactly to the tools it maps (typically the destructive ones).
+ *
+ * Like the ceiling it inspects a `tools/call` (including each element of a JSON-RPC batch) and
+ * lets `tools/list` / `initialize` through. The roles are the authenticated subject's
+ * ({@link BearerSession.principal}'s `actorRoles`); empty roles satisfy no permission, so an
+ * attributed-but-unprivileged subject is denied.
+ */
+export function policyFloorChallenge(options: {
+  message: unknown;
+  scopes: readonly string[];
+  roles: Iterable<string>;
+  policy: Policy<string, string> | undefined;
+  requirements: ReadonlyMap<string, ToolRequirement>;
+  resourceMetadata?: string;
+}): string | undefined {
+  // No policy configured → the floor is off; the scope ceiling is the only gate (back-compat).
+  if (options.policy === undefined) return undefined;
+
+  const { policy } = options;
+
+  // `authorizeBearer` reads `roles` as an `Iterable`; a one-shot iterator would be drained by
+  // the first tool in a batch, so materialize the roles once for every per-tool check.
+  const roles = [...options.roles];
+
+  for (const name of toolsCallNames(options.message)) {
+    const requirement = options.requirements.get(name);
+
+    // A tool with no mapped requirement carries no policy floor — the ceiling governs it.
+    if (requirement === undefined) continue;
+
+    const permitted = authorizeBearer({
+      scopes: options.scopes,
+      requiredScope: requirement.scope,
+      roles,
+      policy,
+      permission: requirement.permission,
+    });
+
+    if (!permitted) {
+      // Name the permission the action required, for the client to surface or step up to.
+      return insufficientScopeChallenge({
+        scope: requirement.permission,
+        ...(options.resourceMetadata === undefined
+          ? {}
+          : { resourceMetadata: options.resourceMetadata }),
+      });
+    }
+  }
+
+  return undefined;
 }

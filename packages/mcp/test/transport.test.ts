@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { Context } from "@lesto/web";
 import type { AnyLestoResponse, LestoRequest, Next } from "@lesto/web";
+import { definePolicy } from "@lesto/authz";
 
 import { buildTools, createMcpHttpHandlers, mcpModeForScopes } from "../src";
 import type { BearerSession, LestoMcpContext, McpHttpServerOptions } from "../src";
@@ -185,5 +186,92 @@ describe("createMcpHttpHandlers (end to end, in process)", () => {
     const res = must(await handlers.rpc(c, noop));
 
     expect(res.status).toBe(403);
+  });
+});
+
+// OCP-7 end to end: a configured policy enforces the per-tool ROLE floor through the real
+// handler chain, in INTERSECTION with the scope ceiling. The `rogue` token clears the scope
+// ceiling (it carries the write scope → operator mode) but its subject's role does not hold the
+// write permission — so the floor must refuse it, the gap OCP-7 closes.
+describe("createMcpHttpHandlers — per-tool policy floor (OCP-7)", () => {
+  // The operator role may write; the auditor may only read.
+  const policy = definePolicy({
+    roles: ["auditor", "operator"],
+    can: {
+      "mcp.read": ["auditor", "operator"],
+      "mcp.write": ["operator"],
+    },
+  });
+
+  // A genuine operator: write scope AND the operator role.
+  const operatorSession: BearerSession = {
+    principal: { actor: "op", actorRoles: ["operator"] },
+    scopes: ["mcp:read", "mcp:write"],
+  };
+  // The gap OCP-7 closes: a write-scoped token whose subject is only an auditor. The scope
+  // ceiling alone would let this drive a destructive tool; the policy floor must refuse it.
+  const rogueSession: BearerSession = {
+    principal: { actor: "rogue", actorRoles: ["auditor"] },
+    scopes: ["mcp:read", "mcp:write"],
+  };
+
+  const options: McpHttpServerOptions = {
+    context: {
+      app: { handle: () => Promise.resolve({ status: 200, headers: {}, body: "" }) },
+      routes: [{ method: "GET", pattern: "/health" }],
+      audit: () => {},
+    } as unknown as McpHttpServerOptions["context"],
+    authenticate: async (token) =>
+      token === "op" ? operatorSession : token === "rogue" ? rogueSession : undefined,
+    resource: "https://api.example.test/mcp",
+    authorizationServers: ["https://issuer.example.test"],
+    writeScope: "mcp:write",
+    allowedOrigins: ["https://app.example.test"],
+    resourceMetadataUrl: "https://api.example.test/.well-known/oauth-protected-resource",
+    policy,
+    toolPermissions: { handle_request: "mcp.write" },
+  };
+
+  const handlers = createMcpHttpHandlers(options);
+
+  const callHandleRequest = (token: string): Context =>
+    post(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "handle_request", arguments: { method: "GET", path: "/health" } },
+      },
+      { ...MCP_HEADERS, authorization: `Bearer ${token}` },
+    );
+
+  it("(a) lets a subject WITH the role + write scope drive the destructive tool", async () => {
+    const res = must(await handlers.rpc(callHandleRequest("op"), noop));
+
+    expect(res.status).toBe(200);
+  });
+
+  it("(b) refuses a subject WITH the write scope but WITHOUT the role — even in operator mode (403)", async () => {
+    const res = must(await handlers.rpc(callHandleRequest("rogue"), noop));
+
+    expect(res.status).toBe(403);
+    expect((res.headers as Record<string, string>)["www-authenticate"]).toContain(
+      'error="insufficient_scope"',
+    );
+    // The challenge names the PERMISSION the floor demanded, not the scope.
+    expect((res.headers as Record<string, string>)["www-authenticate"]).toContain(
+      'scope="mcp.write"',
+    );
+  });
+
+  it("still lets a non-mapped read tool through for the role-short subject (the floor is per-tool)", async () => {
+    const c = post(
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_routes" } },
+      { ...MCP_HEADERS, authorization: "Bearer rogue" },
+    );
+
+    const res = must(await handlers.rpc(c, noop));
+
+    expect(res.status).toBe(200);
   });
 });

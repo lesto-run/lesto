@@ -11,10 +11,11 @@ import {
   insufficientScopeChallenge,
   isOriginAllowed,
   mcpModeForScopes,
+  policyFloorChallenge,
   protectedResourceMetadata,
   scopeCeilingChallenge,
 } from "../src/http";
-import type { AccessTokenClaims, BearerSession } from "../src/http";
+import type { AccessTokenClaims, BearerSession, ToolRequirement } from "../src/http";
 
 const PRM_URL = "https://api.example.test/.well-known/oauth-protected-resource";
 
@@ -469,6 +470,145 @@ describe("scopeCeilingChallenge", () => {
           { method: "tools/list" },
           { method: "tools/call", params: { name: "list_routes" } },
         ],
+      }),
+    ).toBeUndefined();
+  });
+});
+
+/** A one-shot generator of the operator role — proves the floor materializes roles once. */
+function* operatorRoleOnce(): Generator<string> {
+  yield "operator";
+}
+
+describe("policyFloorChallenge (OCP-7)", () => {
+  // The operator role may write; everyone reads. The floor is checked against the SUBJECT's
+  // roles, independent of the token's scopes.
+  const policy = definePolicy({
+    roles: ["viewer", "operator"],
+    can: {
+      "mcp.read": ["viewer", "operator"],
+      "mcp.write": ["operator"],
+    },
+  });
+
+  // `handle_request` needs the write scope AND the `mcp.write` permission; an unmapped tool
+  // (e.g. `list_routes`) carries no floor.
+  const requirements = new Map<string, ToolRequirement>([
+    ["handle_request", { scope: "mcp:write", permission: "mcp.write" }],
+  ]);
+
+  const writeCall = { method: "tools/call", params: { name: "handle_request" } };
+
+  it("lets a mapped destructive call through when scope ceiling AND policy floor both hold", () => {
+    expect(
+      policyFloorChallenge({
+        message: writeCall,
+        scopes: ["mcp:read", "mcp:write"],
+        roles: ["operator"],
+        policy,
+        requirements,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("refuses a mapped call when the subject's roles lack the permission — even with the write scope (the floor)", () => {
+    // A write-scoped token held by a mere viewer: operator mode is reached, but the policy denies.
+    expect(
+      policyFloorChallenge({
+        message: writeCall,
+        scopes: ["mcp:read", "mcp:write"],
+        roles: ["viewer"],
+        policy,
+        requirements,
+      }),
+    ).toBe(`Bearer error="insufficient_scope", scope="mcp.write"`);
+  });
+
+  it("refuses a mapped call when the scope is missing, even when the roles allow (the ceiling)", () => {
+    expect(
+      policyFloorChallenge({
+        message: writeCall,
+        scopes: ["mcp:read"],
+        roles: ["operator"],
+        policy,
+        requirements,
+      }),
+    ).toBe(`Bearer error="insufficient_scope", scope="mcp.write"`);
+  });
+
+  it("includes the resource metadata in the challenge when known", () => {
+    expect(
+      policyFloorChallenge({
+        message: writeCall,
+        scopes: ["mcp:write"],
+        roles: ["viewer"],
+        policy,
+        requirements,
+        resourceMetadata: PRM_URL,
+      }),
+    ).toBe(`Bearer error="insufficient_scope", scope="mcp.write", resource_metadata="${PRM_URL}"`);
+  });
+
+  it("is a no-op when no policy is configured — the back-compatible default (scope ceiling only)", () => {
+    // A viewer calling a write: with no policy the floor never fires, so the scope ceiling stays
+    // the sole gate — exactly the pre-OCP-7 behavior.
+    expect(
+      policyFloorChallenge({
+        message: writeCall,
+        scopes: ["mcp:write"],
+        roles: ["viewer"],
+        policy: undefined,
+        requirements,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("carries no floor for a tool absent from the requirements map (the ceiling governs it)", () => {
+    expect(
+      policyFloorChallenge({
+        message: { method: "tools/call", params: { name: "list_routes" } },
+        scopes: ["mcp:read"],
+        roles: ["viewer"],
+        policy,
+        requirements,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("ignores non-tools/call messages (a list, the initialize handshake)", () => {
+    expect(
+      policyFloorChallenge({
+        message: { method: "tools/list" },
+        scopes: ["mcp:write"],
+        roles: ["viewer"],
+        policy,
+        requirements,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("refuses the first denied mapped call in a JSON-RPC batch — no slip-through", () => {
+    expect(
+      policyFloorChallenge({
+        message: [{ method: "tools/call", params: { name: "list_routes" } }, writeCall],
+        scopes: ["mcp:write"],
+        roles: ["viewer"],
+        policy,
+        requirements,
+      }),
+    ).toBe(`Bearer error="insufficient_scope", scope="mcp.write"`);
+  });
+
+  it("materializes the roles once so every tool in a batch is checked against them (no drained iterator)", () => {
+    // A one-shot generator would be exhausted by the first mapped call, leaving the second
+    // checked against empty roles. The floor must see the operator role for BOTH writes.
+    expect(
+      policyFloorChallenge({
+        message: [writeCall, writeCall],
+        scopes: ["mcp:write"],
+        roles: operatorRoleOnce(),
+        policy,
+        requirements,
       }),
     ).toBeUndefined();
   });

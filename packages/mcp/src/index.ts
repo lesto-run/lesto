@@ -40,6 +40,7 @@ export {
   insufficientScopeChallenge,
   isOriginAllowed,
   mcpModeForScopes,
+  policyFloorChallenge,
   protectedResourceMetadata,
   scopeCeilingChallenge,
 } from "./http";
@@ -52,6 +53,7 @@ export type {
   McpHttpGateOptions,
   ProtectedResourceMetadata,
   ProtectedResourceMetadataOptions,
+  ToolRequirement,
   VerifyAccessToken,
 } from "./http";
 

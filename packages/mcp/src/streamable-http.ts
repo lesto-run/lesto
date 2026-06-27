@@ -4,9 +4,9 @@
  * Like `server.ts` (the stdio transport), this is pure wiring behind a coverage
  * exclusion — it owns NO governance. Every security decision is made by the tested
  * logic in `http.ts` (the `Origin` guard, the `401`/`403` `WWW-Authenticate` challenges,
- * the scope→mode ceiling) and `tools.ts` (`buildTools`/`dispatch` and their audit +
- * operator gate); this file only carries those decisions onto HTTP and drives the
- * `@modelcontextprotocol/sdk` Streamable-HTTP transport.
+ * the scope→mode ceiling, and the per-tool policy floor) and `tools.ts` (`buildTools`/
+ * `dispatch` and their audit + operator gate); this file only carries those decisions
+ * onto HTTP and drives the `@modelcontextprotocol/sdk` Streamable-HTTP transport.
  *
  * **Mounted by the app, never the kernel.** `@lesto/mcp` already depends on
  * `@lesto/kernel`; if the kernel mounted this, that edge would close a cycle. So the
@@ -31,10 +31,17 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 import type { AnyLestoResponse, Handler, LestoRequest } from "@lesto/web";
 
+import type { Policy } from "@lesto/authz";
+
 import { buildTools, dispatch } from "./tools";
 import type { LestoMcpContext } from "./tools";
-import { gateMcpHttpRequest, protectedResourceMetadata, scopeCeilingChallenge } from "./http";
-import type { BearerSession } from "./http";
+import {
+  gateMcpHttpRequest,
+  policyFloorChallenge,
+  protectedResourceMetadata,
+  scopeCeilingChallenge,
+} from "./http";
+import type { BearerSession, ToolRequirement } from "./http";
 
 /** What {@link createMcpHttpHandlers} needs to serve a Resource Server over HTTP. */
 export interface McpHttpServerOptions {
@@ -61,6 +68,26 @@ export interface McpHttpServerOptions {
 
   /** The OAuth scope that unlocks writes — the ceiling (`mcp:write`, say). */
   writeScope: string;
+
+  /**
+   * The compiled authorization {@link Policy} for the per-tool ROLE floor (OCP-7). OPTIONAL,
+   * and the default is to omit it: absent (or with no {@link toolPermissions} mapping a tool
+   * a request calls), governance is the scope ceiling alone — the back-compatible behavior, so
+   * a server configured before OCP-7 is unchanged. PRESENT, it gates each mapped tool through
+   * `authorizeBearer` (scope ceiling AND policy floor) BEFORE dispatch: within `operator` mode a
+   * destructive tool becomes reachable only by a subject whose roles the policy grants the
+   * tool's permission — closing the gap where any write-scoped bearer could drive any write.
+   */
+  policy?: Policy<string, string>;
+
+  /**
+   * The permission each tool demands — `tool name → policy permission` — the per-tool half of
+   * the OCP-7 floor. Consulted ONLY when {@link policy} is set; a tool absent from this map
+   * carries no floor (the scope ceiling governs it), so a deployment maps exactly the tools it
+   * wants role-gated (typically the destructive ones). Each mapped tool's required SCOPE is the
+   * {@link writeScope}, so the floor is an exact intersection with the existing ceiling.
+   */
+  toolPermissions?: Readonly<Record<string, string>>;
 
   /**
    * The browser origins allowed to reach this server (the DNS-rebinding allowlist). The
@@ -165,11 +192,23 @@ async function runStreamableHttp(
  * The `metadata` handler serves the PRM; the `rpc` handler gates each request through
  * `http.ts` — `Origin` guard, then bearer authentication (`401` + challenge on failure),
  * then the scope ceiling (`403` + `insufficient_scope` before a scope-short write reaches
- * dispatch) — and, on an accepted request, drives the SDK transport against a per-request
- * context whose `resolvePrincipal` is the authenticated session.
+ * dispatch), then — when a {@link McpHttpServerOptions.policy} is configured — the per-tool
+ * ROLE floor (`403` before a role-short call reaches dispatch, OCP-7) — and, on an accepted
+ * request, drives the SDK transport against a per-request context whose `resolvePrincipal` is
+ * the authenticated session.
  */
 export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHandlers {
   const serverInfo = options.serverInfo ?? DEFAULT_SERVER_INFO;
+
+  // The per-tool floor requirements (OCP-7), compiled once: `tool name → { scope, permission }`.
+  // Each mapped tool's required scope IS the write scope, so the floor intersects exactly with
+  // the existing scope ceiling. Empty (and inert) when no `toolPermissions` map was supplied.
+  const requirements = new Map<string, ToolRequirement>(
+    Object.entries(options.toolPermissions ?? {}).map(([tool, permission]) => [
+      tool,
+      { scope: options.writeScope, permission },
+    ]),
+  );
 
   const metadataBody = JSON.stringify(
     protectedResourceMetadata({
@@ -230,6 +269,22 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
 
     if (denial !== undefined) {
       return { status: 403, headers: { "www-authenticate": denial }, body: "" };
+    }
+
+    // Policy floor (OCP-7): refuse a tool whose permission the subject's roles do not hold —
+    // even in operator mode — at the HTTP layer (403) before dispatch. A no-op when no policy
+    // is configured, so the scope ceiling stays the sole gate (the back-compatible default).
+    const floorDenial = policyFloorChallenge({
+      message: c.req.body,
+      scopes: session.scopes,
+      roles: session.principal.actorRoles,
+      policy: options.policy,
+      requirements,
+      resourceMetadata: options.resourceMetadataUrl,
+    });
+
+    if (floorDenial !== undefined) {
+      return { status: 403, headers: { "www-authenticate": floorDenial }, body: "" };
     }
 
     return runStreamableHttp(runContext, tools, c.req, serverInfo);
