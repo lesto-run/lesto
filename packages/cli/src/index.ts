@@ -34,6 +34,9 @@ export type { OpenApiDeps } from "./openapi";
 export { parseField, resourceName, runGenerate } from "./generate";
 export type { GenerateDeps, GenerateIO, GeneratedFile, ResourceName } from "./generate";
 
+export { runAdd } from "./add";
+export type { AddDeps, AddIO } from "./add";
+
 export { hasFlag, parsePort, parseStringFlag } from "./flags";
 export type { PortFlag } from "./flags";
 

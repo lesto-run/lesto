@@ -53,6 +53,7 @@ import { runMcp, startMcpServer } from "./mcp";
 import { runOpenApi } from "./openapi";
 import { runGenerate } from "./generate";
 import type { GenerateIO } from "./generate";
+import { runAdd } from "./add";
 import { createCollectionsReader, runGenerateAgents } from "./agents/run";
 import type { RouteDescriptor } from "./agents/types";
 
@@ -1046,6 +1047,18 @@ if (command === "generate" || command === "g") {
   const exit = await runGenerate(commandArgs, {
     ...generateIO,
     now: Date.now,
+    out: console.log,
+  });
+
+  process.exit(exit);
+}
+
+// `add` wires a batteries-included integration (ADR 0039) — several files plus a bit of
+// composition, not one resource. It shares `generate`'s project-rooted filesystem seam
+// (`exists`/`read`/`write`), so it lives here next to `generate` and writes into the project.
+if (command === "add") {
+  const exit = await runAdd(commandArgs, {
+    ...generateIO,
     out: console.log,
   });
 

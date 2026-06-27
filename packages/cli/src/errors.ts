@@ -11,6 +11,8 @@ import { LestoError } from "@lesto/errors";
 export { LestoError };
 
 export type CliErrorCode =
+  | "CLI_ADD_MISSING_INTEGRATION"
+  | "CLI_ADD_UNKNOWN_INTEGRATION"
   | "CLI_AGENTS_MARKER_MALFORMED"
   | "CLI_AGENTS_NOTHING_TO_SCAN"
   | "CLI_CLIENT_BUILD_FAILED"

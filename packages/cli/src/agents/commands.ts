@@ -26,6 +26,10 @@ export const CLI_COMMANDS: readonly CliCommandDescriptor[] = [
     aliases: ["g"],
     summary: "Scaffold a resource (model | migration | island | page)",
   },
+  {
+    name: "add",
+    summary: "Wire an integration (mcp-auth: an authenticated MCP Resource Server)",
+  },
   { name: "routes", summary: "List the application's routes" },
   {
     name: "routes:gen",

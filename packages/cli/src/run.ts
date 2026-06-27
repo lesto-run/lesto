@@ -559,6 +559,8 @@ const USAGE = [
   "Commands:",
   "  g, generate       Scaffold a resource: generate <model|migration|island> <Name> [field:type …]",
   "                    e.g. `lesto g model Post title:string published:boolean` (--dry-run to preview)",
+  "  add               Wire an integration: add mcp-auth (an authenticated MCP Resource Server)",
+  "                    (--dry-run to preview)",
   "  routes            List the application's routes",
   "  routes:gen        Regenerate the edge route manifest (routes.gen.ts) from app/routes/",
   "  migrate           Run pending migrations and print the applied versions",
