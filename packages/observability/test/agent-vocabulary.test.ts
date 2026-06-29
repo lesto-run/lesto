@@ -1,3 +1,7 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -40,6 +44,33 @@ describe("attribute keys", () => {
     expect(MCP_INPUT_HASH_ATTR).toBe("mcp.input_hash");
     expect(MCP_OUTCOME_ATTR).toBe("mcp.outcome");
     expect(MCP_DURATION_MS_ATTR).toBe("mcp.duration_ms");
+  });
+});
+
+// Every `.ts` file under a directory, recursively.
+const tsFilesUnder = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+
+    if (entry.isDirectory()) return tsFilesUnder(path);
+
+    return entry.isFile() && path.endsWith(".ts") ? [path] : [];
+  });
+
+// Quoted-specifier match (bare OR subpath); doc-comment prose (backtick-quoted) is not a hit.
+const importsPackage = (pkg: string): RegExp => new RegExp(`["']${pkg}(/[^"']*)?["']`);
+
+describe("layering (ADR 0031 — the vocabulary is structural)", () => {
+  const srcDir = join(fileURLToPath(new URL(".", import.meta.url)), "..", "src");
+
+  it("@lesto/observability imports neither @lesto/mcp nor @lesto/ai (the mapper takes a structural record)", () => {
+    const offenders = tsFilesUnder(srcDir).filter((file) => {
+      const source = readFileSync(file, "utf8");
+
+      return importsPackage("@lesto/mcp").test(source) || importsPackage("@lesto/ai").test(source);
+    });
+
+    expect(offenders).toEqual([]);
   });
 });
 

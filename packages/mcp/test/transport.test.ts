@@ -29,6 +29,9 @@ function tsFilesUnder(dir: string): string[] {
   });
 }
 
+/** A quoted-specifier (bare OR subpath) matcher, so backtick-quoted prose isn't a false hit. */
+const importsForbidden = (pkg: string): RegExp => new RegExp(`["']${pkg}(/[^"']*)?["']`);
+
 describe("no kernel → mcp edge (the app mounts the transport, never the kernel)", () => {
   it("@lesto/kernel does not depend on @lesto/mcp", () => {
     const pkg = JSON.parse(readFileSync(join(kernelDir, "package.json"), "utf8")) as {
@@ -55,31 +58,33 @@ describe("no kernel → mcp edge (the app mounts the transport, never the kernel
   });
 });
 
-describe("no @lesto/mcp → @lesto/cli edge (the dev-state reader is injected, never imported)", () => {
+describe("@lesto/mcp injects, never imports — the forbidden edges (ADR 0031/0032)", () => {
   const mcpSrcDir = join(here, "..", "src");
 
-  it("@lesto/mcp does not depend on @lesto/cli", () => {
+  it("@lesto/mcp depends on neither @lesto/cli nor @lesto/observability", () => {
     const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
     };
 
-    const everyDep = {
-      ...pkg.dependencies,
-      ...pkg.devDependencies,
-      ...pkg.peerDependencies,
-    };
+    const everyDep = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies };
 
+    // The dev-state reader (0032) is an injected structural seam; the `onSpan` seam
+    // (0031) is injected too — `@lesto/mcp` opens no observability span itself.
     expect(everyDep["@lesto/cli"]).toBeUndefined();
+    expect(everyDep["@lesto/observability"]).toBeUndefined();
   });
 
-  it("no @lesto/mcp source imports @lesto/cli (the ADR 0032 dev-state seam is structural)", () => {
-    // Match the quoted module specifier of a real import, so prose mentions of
-    // `@lesto/cli` in doc comments (backtick-quoted) are not false positives.
-    const offenders = tsFilesUnder(mcpSrcDir).filter((file) =>
-      readFileSync(file, "utf8").includes('"@lesto/cli"'),
-    );
+  it("no @lesto/mcp source imports @lesto/cli or @lesto/observability (incl. subpaths)", () => {
+    const offenders = tsFilesUnder(mcpSrcDir).filter((file) => {
+      const source = readFileSync(file, "utf8");
+
+      return (
+        importsForbidden("@lesto/cli").test(source) ||
+        importsForbidden("@lesto/observability").test(source)
+      );
+    });
 
     expect(offenders).toEqual([]);
   });
