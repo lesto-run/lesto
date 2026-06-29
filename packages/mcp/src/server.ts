@@ -25,9 +25,15 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { buildTools, dispatch } from "./tools";
-import type { ContentModules, LestoMcpContext } from "./tools";
+import type { ContentModules, LestoMcpContext, LestoTool } from "./tools";
 import { buildResources, listResources, readResource } from "./resources";
-import { gateDevRequest, loopbackAllowlist } from "./http-transport";
+import {
+  gateDevRequest,
+  headerValue,
+  loopbackAllowlist,
+  nodeHeadersToWeb,
+  parseDevBody,
+} from "./http-transport";
 import type { DevMcpSecurity } from "./http-transport";
 import { rethrowUnlessMissingContentPeer } from "./content-peer";
 
@@ -53,10 +59,39 @@ async function defaultLoadContent(): Promise<ContentModules> {
 }
 
 /**
+ * Register the `tools/list` + `tools/call` handlers on an SDK server — shared by the
+ * stdio server and the loopback dev HTTP server so the wire shape can't drift. Both
+ * delegate to the tested `buildTools`/`dispatch`; this only carries them onto the wire.
+ */
+function registerToolHandlers(server: Server, context: LestoMcpContext, tools: LestoTool[]): void {
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      // Surface the destructive flag so a client can warn before invoking a tool
+      // that mutates state or drives the live app.
+      annotations: { destructiveHint: tool.destructive },
+    })),
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const result = await dispatch(
+      context,
+      tools,
+      request.params.name,
+      request.params.arguments ?? {},
+    );
+
+    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+  });
+}
+
+/**
  * Stand up the MCP server over stdio and serve the Lesto tool set.
  *
- * Resolves once the transport is connected; the server then runs until the
- * client disconnects or the process exits.
+ * Resolves only once the client disconnects (the transport closes); the server runs
+ * until then.
  */
 export async function startMcpServer(context: LestoMcpContext): Promise<void> {
   // Inject the real content loader unless the caller supplied one; the content tools
@@ -74,29 +109,7 @@ export async function startMcpServer(context: LestoMcpContext): Promise<void> {
     { capabilities: { tools: {}, resources: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-      // Surface the destructive flag so a client can warn before invoking a tool
-      // that mutates state or drives the live app.
-      annotations: { destructiveHint: tool.destructive },
-    })),
-  }));
-
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const result = await dispatch(
-      runContext,
-      tools,
-      request.params.name,
-      request.params.arguments ?? {},
-    );
-
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    };
-  });
+  registerToolHandlers(server, runContext, tools);
 
   // The read-only app contract (ADR 0034 Part A). Both handlers delegate straight
   // to the covered builders in `resources.ts` — this file adds no select logic.
@@ -134,24 +147,6 @@ export interface McpHttpServerHandle {
   close(): Promise<void>;
 }
 
-/** The first value of a possibly-repeated node header. */
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-/** Adapt node's incoming-message headers into a Web `Headers` for the SDK transport. */
-function nodeHeadersToWeb(headers: IncomingMessage["headers"]): Headers {
-  const web = new Headers();
-
-  for (const [key, value] of Object.entries(headers)) {
-    if (value === undefined) continue;
-
-    for (const single of Array.isArray(value) ? value : [value]) web.append(key, single);
-  }
-
-  return web;
-}
-
 /** Read a node request body to a string. */
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -176,25 +171,7 @@ async function runDevMcp(
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-      annotations: { destructiveHint: tool.destructive },
-    })),
-  }));
-
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const result = await dispatch(
-      context,
-      tools,
-      request.params.name,
-      request.params.arguments ?? {},
-    );
-
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
-  });
+  registerToolHandlers(server, context, tools);
 
   // Stateless: a fresh transport per request, JSON responses (no SSE), mirroring the
   // remote Streamable-HTTP path. The covered `gateDevRequest` already ran, so the SDK's
@@ -225,15 +202,8 @@ async function handleDevConnection(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const raw = await readBody(req);
-
-  let parsedBody: unknown;
-  try {
-    parsedBody = raw === "" ? undefined : JSON.parse(raw);
-  } catch {
-    parsedBody = undefined;
-  }
-
+  // Gate on the HEADERS first — before reading the body — so a refused (foreign-Origin /
+  // untokened) request never buffers an unbounded body into memory.
   const decision = gateDevRequest({
     origin: headerValue(req.headers.origin),
     host: headerValue(req.headers.host),
@@ -247,6 +217,8 @@ async function handleDevConnection(
 
     return;
   }
+
+  const parsedBody = parseDevBody(await readBody(req));
 
   const { status, headers, body } = await runDevMcp(context, req, parsedBody);
 
@@ -282,7 +254,13 @@ export function startMcpHttpServer(
       return;
     }
 
-    void handleDevConnection(context, security, req, res);
+    handleDevConnection(context, security, req, res).catch(() => {
+      // A failure in the dev glue (NOT a tool error — those are JSON-RPC responses the
+      // SDK shapes) must not hang the socket or surface as an unhandled rejection.
+      if (!res.headersSent) res.writeHead(500);
+
+      res.end();
+    });
   });
 
   return new Promise((resolve, reject) => {

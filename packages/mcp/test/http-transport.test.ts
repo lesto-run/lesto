@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { gateDevRequest, isHostAllowed, loopbackAllowlist } from "../src/http-transport";
+import {
+  gateDevRequest,
+  headerValue,
+  isHostAllowed,
+  loopbackAllowlist,
+  nodeHeadersToWeb,
+  parseDevBody,
+} from "../src/http-transport";
 
 import type { DevMcpSecurity } from "../src/http-transport";
 
@@ -37,6 +44,32 @@ describe("isHostAllowed", () => {
   it("refuses a foreign Host and allows a loopback Host", () => {
     expect(isHostAllowed("evil.example:4321", allowedHosts)).toBe(false);
     expect(isHostAllowed("localhost:4321", allowedHosts)).toBe(true);
+  });
+});
+
+describe("request shaping", () => {
+  it("headerValue takes the first of a repeated header, passes a string, and forwards undefined", () => {
+    expect(headerValue("one")).toBe("one");
+    expect(headerValue(["a", "b"])).toBe("a");
+    expect(headerValue(undefined)).toBeUndefined();
+  });
+
+  it("nodeHeadersToWeb skips undefined values and expands repeated headers", () => {
+    const web = nodeHeadersToWeb({
+      host: "127.0.0.1:1",
+      absent: undefined,
+      "set-cookie": ["a", "b"],
+    });
+
+    expect(web.get("host")).toBe("127.0.0.1:1");
+    expect(web.has("absent")).toBe(false);
+    expect(web.get("set-cookie")).toBe("a, b");
+  });
+
+  it("parseDevBody yields undefined for empty/malformed and the value for valid JSON", () => {
+    expect(parseDevBody("")).toBeUndefined();
+    expect(parseDevBody("{not json")).toBeUndefined();
+    expect(parseDevBody('{"jsonrpc":"2.0"}')).toEqual({ jsonrpc: "2.0" });
   });
 });
 

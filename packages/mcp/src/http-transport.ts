@@ -46,6 +46,42 @@ export function isHostAllowed(host: string | undefined, allowedHosts: readonly s
   return host !== undefined && allowedHosts.includes(host);
 }
 
+/**
+ * The first value of a possibly-repeated request header (node delivers a header as
+ * `string | string[]`). Pure request-shaping, here in the covered core rather than
+ * the excluded socket layer.
+ */
+export function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/** Adapt node-style request headers into a Web `Headers` for the SDK transport. */
+export function nodeHeadersToWeb(headers: Record<string, string | string[] | undefined>): Headers {
+  const web = new Headers();
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (value === undefined) continue;
+
+    for (const single of Array.isArray(value) ? value : [value]) web.append(key, single);
+  }
+
+  return web;
+}
+
+/**
+ * Parse a dev-request body: an empty body or malformed JSON yields `undefined`, which
+ * the SDK transport turns into a clean JSON-RPC error rather than a crash.
+ */
+export function parseDevBody(raw: string): unknown {
+  if (raw === "") return undefined;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The per-session token + the loopback allowlists the dev transport gates on. */
 export interface DevMcpSecurity {
   /** The per-session token the dev command minted; the client must present it verbatim. */
