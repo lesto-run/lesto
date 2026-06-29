@@ -97,6 +97,28 @@ describe("buildResources", () => {
     expect(await collections?.read()).toEqual([]);
   });
 
+  it("collections read() degrades to [] when the loader THROWS MCP_CONTENT_PACKAGES_MISSING (the real-server case)", async () => {
+    // The real stdio server always wires a default loader that throws this rather than
+    // leaving `loadContent` absent; reading the contract must still never refuse.
+    const resources = buildResources(
+      context({
+        loadContent: () =>
+          Promise.reject(new McpError("MCP_CONTENT_PACKAGES_MISSING", "peers not installed")),
+      }),
+    );
+    const collections = resources.find((resource) => resource.uri === "lesto://collections");
+
+    expect(await collections?.read()).toEqual([]);
+  });
+
+  it("collections read() rethrows a loader error that is NOT the missing-peers refusal", async () => {
+    const boom = new Error("the content store is on fire");
+    const resources = buildResources(context({ loadContent: () => Promise.reject(boom) }));
+    const collections = resources.find((resource) => resource.uri === "lesto://collections");
+
+    await expect(collections?.read()).rejects.toBe(boom);
+  });
+
   it("schema read() returns the app's declared shape when present", async () => {
     const schema: AppSchemaShape = {
       migrations: ["001_create_posts"],

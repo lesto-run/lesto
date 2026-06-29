@@ -91,8 +91,8 @@ export async function runMcp(args: readonly string[], deps: McpDeps): Promise<nu
     // shape surface as the `lesto://*` resources and `describe_app`. There is no
     // app-meta source yet, so `info` is the shared default (mirroring `lesto
     // openapi`). The declared schema is the cheaply-available shape — the boot
-    // migration versions; per-table column reflection is the deferred "full schema
-    // introspection" (ADR 0034), so `tables` is the empty-but-valid floor.
+    // migration versions; per-table columns are deferred pending a declared-table
+    // registry on `LestoAppConfig`, so `tables` is the empty-but-valid floor.
     openApiInfo: { title: "Lesto API", version: "0.0.0" },
     schema: {
       migrations: Array.isArray(config.migrations)

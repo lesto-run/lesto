@@ -17,7 +17,7 @@
 import { toOpenApi } from "@lesto/openapi";
 
 import { McpError } from "./errors";
-import type { LestoMcpContext } from "./tools";
+import type { ContentModules, LestoMcpContext } from "./tools";
 
 /** Every Lesto resource serves JSON. */
 const JSON_MIME = "application/json";
@@ -88,7 +88,7 @@ export function buildResources(context: LestoMcpContext): LestoResource[] {
       uri: "lesto://schema",
       name: "Schema shape",
       description:
-        "Declared shape only — known migration versions and each defineTable's column names/types, not full database reflection.",
+        "Declared shape only — the app's known migration versions. Per-table column names/types are NOT yet surfaced (deferred pending a declared-table registry on the app config), so `tables` is empty.",
       mimeType: JSON_MIME,
       read: () => readSchema(context),
     },
@@ -133,7 +133,21 @@ async function readCollections(
 ): Promise<{ name: string; count: number }[]> {
   if (context.loadContent === undefined) return [];
 
-  const content = await context.loadContent();
+  let content: ContentModules;
+
+  try {
+    content = await context.loadContent();
+  } catch (error) {
+    // The real stdio server NEVER leaves `loadContent` absent — it injects a default
+    // loader that THROWS `MCP_CONTENT_PACKAGES_MISSING` when the optional content peers
+    // aren't installed. Reading the contract must never fail on that, so the collections
+    // degrade to empty exactly as an absent loader does; any other error is real and rethrows.
+    if (error instanceof McpError && error.code === "MCP_CONTENT_PACKAGES_MISSING") {
+      return [];
+    }
+
+    throw error;
+  }
 
   return content.core.getCollections().map((collection) => ({
     name: collection.name,

@@ -24,16 +24,22 @@ type MaybePromise<T> = T | Promise<T>;
 /**
  * The app's DECLARED schema shape (ADR 0034 Part A) — what the contract surfaces
  * as the `lesto://schema` resource and `describe_app`'s `schema` key. This is the
- * cheaply-available declared shape, NOT live database reflection: the known
- * migration versions and each `defineTable`'s column names/types, exactly as the
- * app declares them. The app builds this (e.g. `lesto mcp`); absent → an
- * empty-but-valid shape.
+ * cheaply-available declared shape, NOT live database reflection.
+ *
+ * Today the only producer (`lesto mcp`) populates `migrations` (the known migration
+ * versions) and leaves `tables` empty: `LestoAppConfig` exposes no `defineTable`
+ * registry, so per-table column names/types are not yet cheaply available. The
+ * `tables` shape is the forward contract — it fills in once a declared-table source
+ * exists. Absent → an empty-but-valid shape.
  */
 export interface AppSchemaShape {
   /** The known migration versions, in declared order. */
   migrations: readonly string[];
 
-  /** Each declared table's name and the declared name/type of its columns. */
+  /**
+   * Each declared table's name and the declared name/type of its columns. The
+   * forward shape — empty today (no table registry on the app config yet).
+   */
   tables: readonly {
     name: string;
     columns: readonly { name: string; type: string }[];
