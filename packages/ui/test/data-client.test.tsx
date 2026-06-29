@@ -6,13 +6,57 @@ import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  browserRevalidationEnvironment,
   defaultQueryClient,
   QueryClient,
   serializeQueryKey,
   useMutation,
   useQuery,
 } from "../src/index";
-import type { MutationResultApi, QueryResult } from "../src/index";
+import type { MutationResultApi, QueryResult, RevalidationEnvironment } from "../src/index";
+
+// A fake revalidation seam: capture the focus/online/interval callbacks so a test
+// can fire them deterministically, with spies for the unsubscribe/cancel thunks.
+function fakeEnv(): {
+  environment: RevalidationEnvironment;
+  fireFocus: () => void;
+  fireReconnect: () => void;
+  fireInterval: () => void;
+  intervalMs: () => number | undefined;
+  cancelInterval: ReturnType<typeof vi.fn>;
+} {
+  let focus: (() => void) | undefined;
+  let reconnect: (() => void) | undefined;
+  let interval: (() => void) | undefined;
+  let ms: number | undefined;
+  const cancelInterval = vi.fn();
+
+  return {
+    environment: {
+      onFocus(cb) {
+        focus = cb;
+
+        return vi.fn();
+      },
+      onReconnect(cb) {
+        reconnect = cb;
+
+        return vi.fn();
+      },
+      setInterval(cb, every) {
+        interval = cb;
+        ms = every;
+
+        return cancelInterval;
+      },
+    },
+    fireFocus: () => focus?.(),
+    fireReconnect: () => reconnect?.(),
+    fireInterval: () => interval?.(),
+    intervalMs: () => ms,
+    cancelInterval,
+  };
+}
 
 // A promise whose resolution the test controls — lets us assert the loading state
 // BETWEEN the render that kicks the fetch and the settle that resolves it.
@@ -51,6 +95,29 @@ function mount(element: ReturnType<typeof createElement>): void {
   roots.push(root);
 
   act(() => root.render(element));
+}
+
+// Mount a `useQuery` with options (the return value is unused — these tests assert
+// on the fetcher/client, not the hook result).
+function probeQuery<T>(
+  key: string,
+  fetcher: () => Promise<T>,
+  options: Parameters<typeof useQuery<T>>[2],
+): void {
+  function Probe(): null {
+    useQuery(key, fetcher, options);
+
+    return null;
+  }
+
+  mount(createElement(Probe));
+}
+
+// Let queued microtasks (the mount-effect fetch) settle inside `act`.
+async function flush(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
 }
 
 describe("serializeQueryKey", () => {
@@ -457,5 +524,377 @@ describe("useMutation", () => {
     act(() => ref.current?.reset());
     expect(ref.current?.status).toBe("idle");
     expect(ref.current?.data).toBeUndefined();
+  });
+
+  it("invalidates the declared topics on success, refetching subscribed keys", async () => {
+    const client = new QueryClient();
+    const qf = vi.fn(() => Promise.resolve("list"));
+    await client.fetch("list", qf);
+    client.registerTopics("list", ["posts"]);
+
+    const ref = setup(async () => "ok", { client, invalidates: ["posts"] });
+    await act(async () => {
+      await ref.current?.mutate(undefined as never);
+    });
+
+    expect(qf).toHaveBeenCalledTimes(2);
+  });
+
+  it("does nothing for an empty invalidates list", async () => {
+    const client = new QueryClient();
+    const qf = vi.fn(() => Promise.resolve("v"));
+    await client.fetch("k", qf);
+    client.registerTopics("k", ["t"]);
+
+    const ref = setup(async () => "ok", { client, invalidates: [] });
+    await act(async () => {
+      await ref.current?.mutate(undefined as never);
+    });
+
+    expect(qf).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates on the default client when no client option is given", async () => {
+    const qf = vi.fn(() => Promise.resolve("v"));
+    await defaultQueryClient.fetch("mut-default-key", qf);
+    const off = defaultQueryClient.registerTopics("mut-default-key", ["mut-default-topic"]);
+
+    const ref = setup(async () => "ok", { invalidates: ["mut-default-topic"] });
+    await act(async () => {
+      await ref.current?.mutate(undefined as never);
+    });
+
+    expect(qf).toHaveBeenCalledTimes(2);
+    off();
+  });
+});
+
+describe("QueryClient — topics", () => {
+  it("invalidateTopic refetches every key registered to it", async () => {
+    const client = new QueryClient();
+    const f = vi.fn(() => Promise.resolve("v"));
+    await client.fetch("k", f);
+    client.registerTopics("k", ["posts"]);
+
+    await client.invalidateTopic("posts");
+
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates a key registered under two topics exactly once", async () => {
+    const client = new QueryClient();
+    const f = vi.fn(() => Promise.resolve("v"));
+    await client.fetch("k", f);
+    client.registerTopics("k", ["a", "b"]);
+
+    await client.invalidateTopics(["a", "b"]);
+
+    expect(f).toHaveBeenCalledTimes(2); // one extra refetch, not two
+  });
+
+  it("invalidateTopic on an unknown topic resolves and refetches nothing", async () => {
+    const client = new QueryClient();
+
+    await expect(client.invalidateTopic("nobody")).resolves.toBeUndefined();
+  });
+
+  it("resets a registered-but-never-fetched key to idle on topic invalidation", async () => {
+    const client = new QueryClient();
+    client.setData("k", "stale"); // success, but no remembered fetcher
+    client.registerTopics("k", ["t"]);
+
+    await client.invalidateTopic("t");
+
+    expect(client.getSnapshot("k")).toEqual({ status: "idle" });
+  });
+
+  it("reference-counts registration: a key leaves a topic only on the last unregister", async () => {
+    const client = new QueryClient();
+    const f = vi.fn(() => Promise.resolve("v"));
+    await client.fetch("k", f);
+    const offA = client.registerTopics("k", ["t"]);
+    const offB = client.registerTopics("k", ["t"]);
+
+    offA();
+    await client.invalidateTopic("t"); // still registered by B
+    expect(f).toHaveBeenCalledTimes(2);
+
+    offB();
+    await client.invalidateTopic("t"); // last reader gone → no refetch
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("unregister is idempotent (a second call is a no-op)", () => {
+    const client = new QueryClient();
+    const off = client.registerTopics("k", ["t"]);
+
+    off();
+    expect(() => off()).not.toThrow();
+  });
+
+  it("a redundant unregister of one key is harmless while another keeps the topic", async () => {
+    const client = new QueryClient();
+    const f = vi.fn(() => Promise.resolve("v"));
+    await client.fetch("k2", f);
+
+    const offK1 = client.registerTopics("k1", ["t"]);
+    client.registerTopics("k2", ["t"]); // k2 keeps topic "t" alive
+
+    offK1(); // removes k1
+    offK1(); // k1 already gone, "t" still present (k2) — a no-op, not a throw
+
+    await client.invalidateTopic("t");
+    expect(f).toHaveBeenCalledTimes(2); // k2 still registered → refetched
+  });
+});
+
+describe("QueryClient — staleTime / isStale", () => {
+  it("treats a never-fetched key as stale", () => {
+    const client = new QueryClient();
+
+    expect(client.isStale("k", 1000)).toBe(true);
+  });
+
+  it("measures staleness against the injected clock", async () => {
+    let now = 1000;
+    const client = new QueryClient(() => now);
+    await client.fetch("k", () => Promise.resolve("v")); // fetchedAt = 1000
+
+    expect(client.isStale("k", 5000)).toBe(false); // 0 elapsed
+
+    now = 5999; // 4999 elapsed
+    expect(client.isStale("k", 5000)).toBe(false);
+
+    now = 6000; // exactly 5000 elapsed
+    expect(client.isStale("k", 5000)).toBe(true);
+  });
+});
+
+describe("useQuery — background revalidation", () => {
+  it("revalidates a stale cached key on mount when staleTime is set", async () => {
+    let now = 0;
+    const client = new QueryClient(() => now);
+    const f = vi.fn(() => Promise.resolve("v"));
+    await client.fetch("k", f); // fetchedAt 0, 1 call
+    now = 10_000;
+
+    probeQuery("k", f, { client, staleTime: 5000 });
+    await flush();
+
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not revalidate a still-fresh cached key on mount", async () => {
+    let now = 0;
+    const client = new QueryClient(() => now);
+    const f = vi.fn(() => Promise.resolve("v"));
+    await client.fetch("k", f);
+    now = 1000; // < staleTime
+
+    probeQuery("k", f, { client, staleTime: 5000 });
+    await flush();
+
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("refetches on window focus (no staleTime ⇒ always stale on the event)", async () => {
+    const env = fakeEnv();
+    const client = new QueryClient();
+    const f = vi.fn(() => Promise.resolve("v"));
+    await client.fetch("k", f); // cached success, 1 call
+
+    probeQuery("k", f, { client, refetchOnWindowFocus: true, environment: env.environment });
+    await flush();
+
+    await act(async () => {
+      env.fireFocus();
+      await Promise.resolve();
+    });
+
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("refetches on reconnect", async () => {
+    const env = fakeEnv();
+    const client = new QueryClient();
+    const f = vi.fn(() => Promise.resolve("v"));
+    await client.fetch("k", f);
+
+    probeQuery("k", f, { client, refetchOnReconnect: true, environment: env.environment });
+    await flush();
+
+    await act(async () => {
+      env.fireReconnect();
+      await Promise.resolve();
+    });
+
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not refetch on focus while the value is still fresh", async () => {
+    let now = 0;
+    const env = fakeEnv();
+    const client = new QueryClient(() => now);
+    const f = vi.fn(() => Promise.resolve("v"));
+    await client.fetch("k", f);
+
+    probeQuery("k", f, {
+      client,
+      refetchOnWindowFocus: true,
+      staleTime: 5000,
+      environment: env.environment,
+    });
+    await flush();
+
+    now = 1000; // still fresh
+    await act(async () => {
+      env.fireFocus();
+      await Promise.resolve();
+    });
+
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refetch on focus before the first success", async () => {
+    const env = fakeEnv();
+    const client = new QueryClient();
+    const d = deferred<string>();
+    const f = vi.fn(() => d.promise);
+
+    probeQuery("k", f, { client, refetchOnWindowFocus: true, environment: env.environment });
+
+    // The mount fetch is in flight (loading), not success → focus is a no-op.
+    await act(async () => {
+      env.fireFocus();
+      await Promise.resolve();
+    });
+    expect(f).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      d.resolve("v");
+      await d.promise;
+    });
+  });
+
+  it("registers its topics while mounted so a topic invalidation refetches it", async () => {
+    const client = new QueryClient();
+    const f = vi.fn(() => Promise.resolve("v"));
+
+    probeQuery("post:1", f, { client, topics: ["posts"] });
+    await flush();
+    expect(f).toHaveBeenCalledTimes(1); // initial mount load
+
+    await act(async () => {
+      await client.invalidateTopic("posts");
+    });
+
+    expect(f).toHaveBeenCalledTimes(2); // the mounted reader refetched
+  });
+
+  it("registers nothing for an empty topics array", async () => {
+    const client = new QueryClient();
+    const f = vi.fn(() => Promise.resolve("v"));
+
+    probeQuery("k", f, { client, topics: [] });
+    await flush();
+
+    await act(async () => {
+      await client.invalidateTopic("anything");
+    });
+
+    expect(f).toHaveBeenCalledTimes(1); // never registered → no extra refetch
+  });
+
+  it("polls on refetchInterval and cancels the timer on unmount", async () => {
+    const env = fakeEnv();
+    const client = new QueryClient();
+    const f = vi.fn(() => Promise.resolve("v"));
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    function Probe(): null {
+      useQuery("k", f, { client, refetchInterval: 1000, environment: env.environment });
+
+      return null;
+    }
+
+    act(() => root.render(createElement(Probe)));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(env.intervalMs()).toBe(1000);
+    expect(f).toHaveBeenCalledTimes(1); // mount load
+
+    await act(async () => {
+      env.fireInterval();
+      await Promise.resolve();
+    });
+    expect(f).toHaveBeenCalledTimes(2); // one poll
+
+    act(() => root.unmount());
+    expect(env.cancelInterval).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("browserRevalidationEnvironment", () => {
+  it("fires onFocus for window focus and a visible visibilitychange, then unsubscribes", () => {
+    const cb = vi.fn();
+    const off = browserRevalidationEnvironment.onFocus(cb);
+
+    window.dispatchEvent(new Event("focus"));
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    document.dispatchEvent(new Event("visibilitychange")); // jsdom default: visible
+    expect(cb).toHaveBeenCalledTimes(2);
+
+    off();
+    window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(cb).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a visibilitychange while the tab is hidden", () => {
+    const cb = vi.fn();
+    const off = browserRevalidationEnvironment.onFocus(cb);
+
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(cb).not.toHaveBeenCalled();
+
+    Reflect.deleteProperty(document, "visibilityState"); // restore the prototype getter
+    off();
+  });
+
+  it("fires onReconnect for the online event, then unsubscribes", () => {
+    const cb = vi.fn();
+    const off = browserRevalidationEnvironment.onReconnect(cb);
+
+    window.dispatchEvent(new Event("online"));
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    off();
+    window.dispatchEvent(new Event("online"));
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules a repeating callback and cancels it", () => {
+    vi.useFakeTimers();
+
+    try {
+      const cb = vi.fn();
+      const cancel = browserRevalidationEnvironment.setInterval(cb, 1000);
+
+      vi.advanceTimersByTime(2500);
+      expect(cb).toHaveBeenCalledTimes(2);
+
+      cancel();
+      vi.advanceTimersByTime(2000);
+      expect(cb).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

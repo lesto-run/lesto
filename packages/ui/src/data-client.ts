@@ -1,27 +1,38 @@
 /**
  * Client data hooks — `useQuery` / `useMutation` over a tiny shared cache.
  *
- * The smallest credible step of the reactive data layer (ADR 0027), and no more:
- * islands today hand-roll `useState`+`useEffect` to fetch (a re-implemented loading/error
+ * The client-local layer of the reactive data layer (ADR 0027 Phase 1): islands
+ * otherwise hand-roll `useState`+`useEffect` to fetch (a re-implemented loading/error
  * machine per island, no sharing) and re-build a mutation client per submit. These
  * hooks replace that with one cache that gives:
  *
  *   - **in-flight dedupe** — N components asking for the same key while a request
  *     is in flight share ONE request, not N;
- *   - **an explicit-invalidation cache** — a resolved key stays cached until a
- *     mutation (or a manual `refetch`) invalidates it, so a re-mount or a sibling
- *     reading the same key paints instantly;
+ *   - **an explicit-invalidation cache** — by KEY (`invalidate(key)`) or by **topic**:
+ *     a mutation declares the topics it dirties (`invalidates: ["posts"]`) and a query
+ *     subscribes to topics (`useQuery(key, fetcher, { topics: ["posts"] })`). The client
+ *     keeps a **topic → keys** registry; invalidating a topic refetches every mounted
+ *     reader registered under it. Still EXPLICIT — the writer names the topic; nothing is
+ *     schema-inferred. The keyspaces are NOT unified (a `useQuery` key, a `@lesto/client`
+ *     `"METHOD /path"` key, and a `defineDataSource` name stay independent); the **topic**
+ *     is the addressable unit, decoupled from any key format — which is exactly what the
+ *     later server-push phase targets.
+ *   - **opt-in background revalidation** — `staleTime`, refetch-on-focus,
+ *     refetch-on-reconnect, and a polling `refetchInterval`, with the focus/online/timer
+ *     events behind an injected {@link RevalidationEnvironment} seam (so it is testable and
+ *     SSR-safe, and absent when not opted into — the default behaviour is unchanged);
  *   - **`useMutation`** — `{ mutate, isPending, error, data }` with optimistic
- *     update + rollback and an `onSuccess` hook that typically invalidates keys.
+ *     update + rollback, a declarative `invalidates` (the topics to drop on success), and
+ *     an `onSuccess` hook.
  *
  * What this is NOT (so the doc never over-promises): it is NOT the full reactive
- * layer. There is no schema-INFERRED invalidation (a mutation does not know which
- * queries it dirties — you invalidate by key, explicitly), no normalized `(table, pk)`
- * store, no automatic background revalidation, and no cache EVICTION — a key's snapshot +
- * last-fetcher live for the page's lifetime (bounded by the distinct keys an app
- * queries; fine for a per-session SPA, revisit if a long-lived app accumulates many).
- * Those are the later ADR 0027 phases (server-pushed invalidation over LISTEN/NOTIFY,
- * durable storage); this is the thin hook layer an app adopts now and they build on.
+ * layer. Topic invalidation is EXPLICIT, never schema-INFERRED (a mutation declares its
+ * topics; the client does not derive them from the rows a write touched). There is no
+ * normalized `(table, pk)` store and no cache EVICTION — a key's snapshot + last-fetcher
+ * live for the page's lifetime (bounded by the distinct keys an app queries; fine for a
+ * per-session SPA). The push that makes a topic invalidation cross processes / tabs /
+ * clients (LISTEN/NOTIFY + browser fan-out) and durable storage are the later ADR 0027
+ * phases; the topic registry defined here is the seam they build on.
  *
  * Decoupled by design: the hooks never import `@lesto/client`. The caller passes a
  * `fetcher` / `mutationFn` thunk (typically closing over a `createApi` /
@@ -64,9 +75,13 @@ export function serializeQueryKey(key: QueryKey): string {
  * One instance backs every hook by default ({@link defaultQueryClient}); a test
  * (or an app wanting an isolated cache) constructs its own and passes it via the
  * hook's `client` option. Holds the published snapshots, the in-flight promises
- * (for dedupe), the last fetcher per key (so `invalidate` can refetch), and the
+ * (for dedupe), the last fetcher per key (so `invalidate` can refetch), the
  * per-key subscriber sets — kept OUT of the snapshot so a re-render is driven only
- * by a value change.
+ * by a value change — the per-key "last fetched at" stamp (for `staleTime`), and the
+ * **topic → keys** registry (for topic invalidation).
+ *
+ * `now` is injected for testability: a fake clock drives `staleTime` math without real
+ * time. It defaults to `Date.now`.
  */
 export class QueryClient {
   readonly #snapshots = new Map<string, QuerySnapshot<unknown>>();
@@ -76,6 +91,20 @@ export class QueryClient {
   readonly #fetchers = new Map<string, () => Promise<unknown>>();
 
   readonly #listeners = new Map<string, Set<() => void>>();
+
+  /** When `key` last became `success` — used by {@link isStale} for `staleTime`. */
+  readonly #fetchedAt = new Map<string, number>();
+
+  /** topic -> (key -> mount count): the readers registered to each topic. N mounted
+   *  readers of one key under one topic register once; the key leaves the topic only
+   *  when the last reader unmounts. The single source of truth for topic membership. */
+  readonly #topicKeyCounts = new Map<string, Map<string, number>>();
+
+  readonly #now: () => number;
+
+  constructor(now: () => number = Date.now) {
+    this.#now = now;
+  }
 
   /** The current published snapshot for `key` — the shared idle one until it has one. */
   getSnapshot(key: string): QuerySnapshot<unknown> {
@@ -157,8 +186,8 @@ export class QueryClient {
   /**
    * Invalidate `key`: drop its cached value and refetch with its last fetcher, so
    * every mounted `useQuery(key)` re-renders fresh. Explicit-only — a mutation
-   * names the keys it dirties; there is no inferred invalidation (a later ADR 0027 phase). A
-   * key never fetched (no remembered fetcher) is simply reset to idle.
+   * names the keys (or topics) it dirties; there is no inferred invalidation (a later
+   * ADR 0027 phase). A key never fetched (no remembered fetcher) is simply reset to idle.
    */
   invalidate(key: string): Promise<unknown> | undefined {
     const fetcher = this.#fetchers.get(key);
@@ -172,9 +201,90 @@ export class QueryClient {
     return this.fetch(key, fetcher);
   }
 
-  /** Publish a new snapshot for `key` and notify its subscribers. */
+  /**
+   * Register `key` as a reader of every `topic`, so a later {@link invalidateTopic}
+   * refetches it. Returns an unregister thunk (call on unmount). Reference-counted: M
+   * mounted readers of the same key+topic register once; the key leaves the topic only
+   * when the last unregisters. The registry holds only currently-mounted readers.
+   */
+  registerTopics(key: string, topics: readonly string[]): () => void {
+    for (const topic of topics) {
+      let counts = this.#topicKeyCounts.get(topic);
+
+      if (counts === undefined) {
+        counts = new Map();
+        this.#topicKeyCounts.set(topic, counts);
+      }
+
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+
+    return () => {
+      for (const topic of topics) {
+        const counts = this.#topicKeyCounts.get(topic);
+
+        if (counts === undefined) continue;
+
+        const remaining = (counts.get(key) ?? 0) - 1;
+
+        if (remaining > 0) {
+          counts.set(key, remaining);
+
+          continue;
+        }
+
+        counts.delete(key);
+
+        if (counts.size === 0) this.#topicKeyCounts.delete(topic);
+      }
+    };
+  }
+
+  /** Invalidate every key registered to `topic`. The seam the server-push phase targets. */
+  invalidateTopic(topic: string): Promise<void> {
+    return this.invalidateTopics([topic]);
+  }
+
+  /**
+   * Invalidate every key registered to ANY of `topics` (a mutation's `invalidates`).
+   * A key dirtied by two topics is invalidated once. Resolves when every refetch settles.
+   */
+  invalidateTopics(topics: readonly string[]): Promise<void> {
+    const keys = new Set<string>();
+
+    for (const topic of topics) {
+      const counts = this.#topicKeyCounts.get(topic);
+
+      if (counts !== undefined) for (const key of counts.keys()) keys.add(key);
+    }
+
+    const pending: Array<Promise<unknown>> = [];
+
+    for (const key of keys) {
+      const promise = this.invalidate(key);
+
+      if (promise !== undefined) pending.push(promise);
+    }
+
+    return Promise.all(pending).then(() => undefined);
+  }
+
+  /**
+   * Whether `key`'s cached value is older than `staleTimeMs` (by the injected clock).
+   * A key that never succeeded is considered stale. The hook guards its calls with a
+   * `success` check, so the caller controls when this matters.
+   */
+  isStale(key: string, staleTimeMs: number): boolean {
+    const at = this.#fetchedAt.get(key);
+
+    return at === undefined ? true : this.#now() - at >= staleTimeMs;
+  }
+
+  /** Publish a new snapshot for `key`, stamp its fetch time on success, and notify subscribers. */
   #publish(key: string, snapshot: QuerySnapshot<unknown>): void {
     this.#snapshots.set(key, snapshot);
+
+    if (snapshot.status === "success") this.#fetchedAt.set(key, this.#now());
 
     const set = this.#listeners.get(key);
 
@@ -184,6 +294,79 @@ export class QueryClient {
 
 /** The cache every hook shares unless given its own `client` — the common case. */
 export const defaultQueryClient = new QueryClient();
+
+/**
+ * The focus / online / timer events that drive background revalidation, injected so
+ * the hook stays testable (a fake env, no real time or DOM events) and SSR-safe (the
+ * methods are only ever called from a client-only effect, never during render).
+ */
+export interface RevalidationEnvironment {
+  /** Call `cb` when the tab regains focus / becomes visible. Returns an unsubscribe. */
+  onFocus(cb: () => void): () => void;
+
+  /** Call `cb` when the browser comes back online. Returns an unsubscribe. */
+  onReconnect(cb: () => void): () => void;
+
+  /** Call `cb` every `ms` until the returned cancel thunk runs (the poll loop). */
+  setInterval(cb: () => void, ms: number): () => void;
+}
+
+/** The default {@link RevalidationEnvironment} over real `window`/`document` events + timers. */
+export const browserRevalidationEnvironment: RevalidationEnvironment = {
+  onFocus(cb) {
+    const onVisible = (): void => {
+      if (document.visibilityState === "visible") cb();
+    };
+
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", cb);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", cb);
+    };
+  },
+
+  onReconnect(cb) {
+    window.addEventListener("online", cb);
+
+    return () => window.removeEventListener("online", cb);
+  },
+
+  setInterval(cb, ms) {
+    const id = setInterval(cb, ms);
+
+    return () => clearInterval(id);
+  },
+};
+
+/** Options for {@link useQuery} — cache selection, topic subscription, and revalidation. */
+export interface QueryOptions {
+  /** The cache to read/write — defaults to the shared {@link defaultQueryClient}. */
+  client?: QueryClient;
+
+  /** Topics this query reads; invalidating any of them refetches this key while mounted. */
+  topics?: readonly string[];
+
+  /**
+   * Treat a cached value younger than this (ms) as fresh. When set, a mount or a
+   * focus/reconnect event refetches only if the value is older. Absent ⇒ no
+   * staleness-driven refetch (the default; a cached success is never auto-refetched).
+   */
+  staleTime?: number;
+
+  /** Refetch when the tab regains focus (gated by {@link QueryOptions.staleTime}). */
+  refetchOnWindowFocus?: boolean;
+
+  /** Refetch when the browser comes back online (gated by {@link QueryOptions.staleTime}). */
+  refetchOnReconnect?: boolean;
+
+  /** Poll: refetch every this-many ms while mounted (ignores `staleTime` — it is a poll). */
+  refetchInterval?: number;
+
+  /** The focus/online/timer seam — defaults to {@link browserRevalidationEnvironment}. */
+  environment?: RevalidationEnvironment;
+}
 
 /** What `useQuery` returns. `data` is undefined until the first success. */
 export interface QueryResult<T> {
@@ -207,23 +390,42 @@ export interface QueryResult<T> {
  * `isLoading` is true while uncached or in flight. A FRESH mount of an uncached
  * OR previously-errored key kicks a fetch — so navigating away and back to a
  * listing that failed transiently retries (matching a plain mount-effect fetch),
- * while a SUCCESS stays cached (the dedupe/cache win). The fetch fires once per
- * mount / key-change (the effect deps are only `[client, keyStr]`), never per
- * render, so there is no retry storm; an in-mount retry is a manual
- * {@link QueryResult.refetch}.
+ * while a SUCCESS stays cached (the dedupe/cache win) UNLESS a `staleTime` is set and
+ * the value has aged past it. The fetch fires once per mount / key-change (the effect
+ * deps are only `[client, keyStr, staleTime]`), never per render, so there is no retry
+ * storm; an in-mount retry is a manual {@link QueryResult.refetch}.
+ *
+ * Opt-in background revalidation ({@link QueryOptions}): `staleTime`,
+ * `refetchOnWindowFocus`, `refetchOnReconnect`, and a polling `refetchInterval`, all
+ * wired through the injected {@link RevalidationEnvironment}. None of it runs unless
+ * opted into — the default is the explicit-invalidation behaviour above. A query may
+ * also declare the `topics` it reads, so a mutation's topic invalidation refetches it.
  */
 export function useQuery<T>(
   key: QueryKey,
   fetcher: () => Promise<T>,
-  options?: { client?: QueryClient },
+  options?: QueryOptions,
 ): QueryResult<T> {
   const client = options?.client ?? defaultQueryClient;
   const keyStr = serializeQueryKey(key);
+
+  const topics = options?.topics;
+  const staleTime = options?.staleTime;
+  const refetchOnWindowFocus = options?.refetchOnWindowFocus ?? false;
+  const refetchOnReconnect = options?.refetchOnReconnect ?? false;
+  const refetchInterval = options?.refetchInterval;
+  const environment = options?.environment ?? browserRevalidationEnvironment;
 
   // The latest fetcher closure, read through a ref so `refetch`/the effect always
   // run the current one without re-subscribing when the closure identity changes.
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
+
+  // Topics through a ref so the registration effect re-runs only when the topic SET
+  // changes (keyed by `topicsKey`), not on every render's fresh array identity.
+  const topicsRef = useRef(topics);
+  topicsRef.current = topics;
+  const topicsKey = topics === undefined ? "" : topics.join(" ");
 
   // One getSnapshot for both client and server reads (same idle/cached value), so
   // there is a single function to cover and no SSR/CSR snapshot divergence.
@@ -241,14 +443,66 @@ export function useQuery<T>(
   useEffect(() => {
     // Fetch on a fresh mount when the key is uncached (`idle`) OR previously
     // errored — so a remount retries a transient failure rather than showing a
-    // terminal stale error. A `loading`/`success` key is left alone: a sibling
-    // already has it in flight or cached (the dedupe at mount time).
+    // terminal stale error. A cached `success` is left alone UNLESS a `staleTime`
+    // is set and the value has aged past it (then revalidate on mount).
     const status = client.getSnapshot(keyStr).status;
 
-    if (status === "idle" || status === "error") {
+    if (
+      status === "idle" ||
+      status === "error" ||
+      (status === "success" && staleTime !== undefined && client.isStale(keyStr, staleTime))
+    ) {
       void client.fetch(keyStr, () => fetcherRef.current());
     }
-  }, [client, keyStr]);
+  }, [client, keyStr, staleTime]);
+
+  useEffect(() => {
+    // Register while mounted so a topic invalidation refetches this key; re-runs only
+    // when the topic SET changes (keyed by `topicsKey`, not the array's render identity).
+    const current = topicsRef.current;
+
+    if (current === undefined || current.length === 0) return undefined;
+
+    return client.registerTopics(keyStr, current);
+  }, [client, keyStr, topicsKey]);
+
+  useEffect(() => {
+    const offs: Array<() => void> = [];
+
+    // Revalidate on an event only when the cached value is success and stale (an
+    // absent `staleTime` means "always stale on the event" — i.e. refetch every time).
+    const revalidate = (): void => {
+      if (
+        client.getSnapshot(keyStr).status === "success" &&
+        client.isStale(keyStr, staleTime ?? 0)
+      ) {
+        void client.fetch(keyStr, () => fetcherRef.current());
+      }
+    };
+
+    if (refetchOnWindowFocus) offs.push(environment.onFocus(revalidate));
+    if (refetchOnReconnect) offs.push(environment.onReconnect(revalidate));
+
+    if (refetchInterval !== undefined) {
+      offs.push(
+        environment.setInterval(() => {
+          void client.fetch(keyStr, () => fetcherRef.current());
+        }, refetchInterval),
+      );
+    }
+
+    return () => {
+      for (const off of offs) off();
+    };
+  }, [
+    client,
+    keyStr,
+    staleTime,
+    refetchOnWindowFocus,
+    refetchOnReconnect,
+    refetchInterval,
+    environment,
+  ]);
 
   const refetch = useCallback(() => {
     void client.fetch(keyStr, () => fetcherRef.current());
@@ -274,7 +528,16 @@ export interface MutationOptions<Input, Data> {
    */
   onMutate?: (input: Input) => (() => void) | void;
 
-  /** Run after success — typically `client.invalidate(key)` to revalidate reads. */
+  /**
+   * The topics this mutation dirties. On success the client invalidates every key
+   * registered to them — the declarative alternative to hand-calling `invalidate`.
+   */
+  invalidates?: readonly string[];
+
+  /** The cache `invalidates` targets — defaults to the shared {@link defaultQueryClient}. */
+  client?: QueryClient;
+
+  /** Run after success (after `invalidates`) — for side effects beyond revalidation. */
   onSuccess?: (data: Data, input: Input) => void;
 
   /** Run after a failed request (after any rollback). */
@@ -302,8 +565,8 @@ export interface MutationResultApi<Input, Data> {
 /**
  * Manage one write: `mutate(input)` flips `isPending`, runs `mutationFn`, and lands
  * the result on `data` or the throw on `error` (never re-thrown — the result-union
- * style). Supports an optimistic `onMutate` (with rollback on failure) and an
- * `onSuccess`/`onError` pair (the former usually invalidates queries).
+ * style). Supports an optimistic `onMutate` (with rollback on failure), a declarative
+ * `invalidates` (the topics dropped on success), and an `onSuccess`/`onError` pair.
  *
  * `mutationFn` may itself return a discriminated result (e.g. a `@lesto/client`
  * mutation's `{ ok, … }` union) — that union simply becomes `data`; throw inside
@@ -328,13 +591,21 @@ export function useMutation<Input, Data>(
   const mutate = useCallback(async (input: Input): Promise<Data | undefined> => {
     setState({ status: "pending" });
 
-    const rollback = optionsRef.current?.onMutate?.(input);
+    const opts = optionsRef.current;
+    const rollback = opts?.onMutate?.(input);
 
     try {
       const data = await fnRef.current(input);
 
       setState({ status: "success", data });
-      optionsRef.current?.onSuccess?.(data, input);
+
+      // Declarative revalidation first (drop the dirtied topics' keys), then the
+      // success side-effect hook.
+      if (opts?.invalidates !== undefined && opts.invalidates.length > 0) {
+        void (opts.client ?? defaultQueryClient).invalidateTopics(opts.invalidates);
+      }
+
+      opts?.onSuccess?.(data, input);
 
       return data;
     } catch (error) {
@@ -342,7 +613,7 @@ export function useMutation<Input, Data>(
       if (typeof rollback === "function") rollback();
 
       setState({ status: "error", error });
-      optionsRef.current?.onError?.(error, input);
+      opts?.onError?.(error, input);
 
       return undefined;
     }

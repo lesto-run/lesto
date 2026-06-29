@@ -67,12 +67,15 @@ export { createSourceResolver, IslandDataContext, IslandDataProvider } from "./d
 export type { SourceResolver } from "./data-resolve";
 
 // Client data hooks (the first step of the reactive data layer, ADR 0027):
-// `useQuery`/`useMutation` over one shared cache giving in-flight dedupe +
-// explicit-by-key invalidation — NOT yet the schema-inferred invalidation a
-// later phase may add. Decoupled from
-// `@lesto/client` (the caller passes the fetcher/mutationFn thunk), so they stay
-// in this isomorphic core; the fetch is kicked from an effect, so SSR never fetches.
+// `useQuery`/`useMutation` over one shared cache giving in-flight dedupe,
+// explicit invalidation by key OR by topic (a mutation declares the topics it
+// dirties; a query subscribes to them — still EXPLICIT, never schema-inferred), and
+// opt-in background revalidation (staleTime / focus / reconnect / interval behind an
+// injected RevalidationEnvironment). Decoupled from `@lesto/client` (the caller passes
+// the fetcher/mutationFn thunk), so they stay in this isomorphic core; the fetch is
+// kicked from an effect, so SSR never fetches.
 export {
+  browserRevalidationEnvironment,
   defaultQueryClient,
   QueryClient,
   serializeQueryKey,
@@ -84,9 +87,11 @@ export type {
   MutationResultApi,
   MutationStatus,
   QueryKey,
+  QueryOptions,
   QueryResult,
   QuerySnapshot,
   QueryStatus,
+  RevalidationEnvironment,
 } from "./data-client";
 
 // The audited seam for inlining island JSON into a `<script>`: escapes the
