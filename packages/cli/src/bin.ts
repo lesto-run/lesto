@@ -1201,7 +1201,17 @@ const code = await run(argv, {
   // On a deploy's rolling restart, drain in-flight requests then exit cleanly.
   installShutdown: (drain) => {
     const shutdown = (): void => {
-      void drain().then(() => process.exit(0));
+      // Drain in-flight requests + run teardown, THEN exit. A teardown REJECTION (a socket
+      // close that threw, the dev MCP / trace flush that rejected) must still terminate the
+      // process — with a non-zero code and a stderr line — never hang on an unhandled
+      // rejection. The `dev` teardown closes several resources, so this path is reachable.
+      void drain().then(
+        () => process.exit(0),
+        (error: unknown) => {
+          console.error(error);
+          process.exit(1);
+        },
+      );
     };
 
     process.on("SIGTERM", shutdown);
