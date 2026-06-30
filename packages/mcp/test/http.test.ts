@@ -13,6 +13,7 @@ import {
   mcpModeForScopes,
   policyFloorChallenge,
   protectedResourceMetadata,
+  refusalBody,
   scopeCeilingChallenge,
 } from "../src/http";
 import type { AccessTokenClaims, BearerSession, ToolRequirement } from "../src/http";
@@ -338,7 +339,14 @@ describe("gateMcpHttpRequest", () => {
       authenticate,
     });
 
-    expect(decision).toEqual({ kind: "reject", status: 403 });
+    expect(decision).toEqual({
+      kind: "reject",
+      status: 403,
+      body: JSON.stringify({
+        error: "access_denied",
+        error_description: "Cross-site origin not allowed (the DNS-rebinding guard).",
+      }),
+    });
     expect(authenticate).not.toHaveBeenCalled();
   });
 
@@ -354,6 +362,11 @@ describe("gateMcpHttpRequest", () => {
       kind: "reject",
       status: 401,
       wwwAuthenticate: `Bearer resource_metadata="${PRM_URL}"`,
+      body: JSON.stringify({
+        error: "invalid_request",
+        error_description: "Authorization required: present a Bearer access token.",
+        resource_metadata: PRM_URL,
+      }),
     });
   });
 
@@ -369,6 +382,11 @@ describe("gateMcpHttpRequest", () => {
       kind: "reject",
       status: 401,
       wwwAuthenticate: `Bearer error="invalid_token", resource_metadata="${PRM_URL}"`,
+      body: JSON.stringify({
+        error: "invalid_token",
+        error_description: "The access token is invalid or expired.",
+        resource_metadata: PRM_URL,
+      }),
     });
   });
 
@@ -421,7 +439,14 @@ describe("scopeCeilingChallenge", () => {
         mode: "read-only",
         message: { method: "tools/call", params: { name: "handle_request" } },
       }),
-    ).toBe(`Bearer error="insufficient_scope", scope="mcp:write"`);
+    ).toEqual({
+      wwwAuthenticate: `Bearer error="insufficient_scope", scope="mcp:write"`,
+      body: JSON.stringify({
+        error: "insufficient_scope",
+        error_description: "This tool requires a broader token scope.",
+        scope: "mcp:write",
+      }),
+    });
   });
 
   it("lets a non-destructive tools/call through under read-only", () => {
@@ -458,7 +483,14 @@ describe("scopeCeilingChallenge", () => {
         mode: "read-only",
         message: [{ method: "tools/call", params: { name: "handle_request" } }],
       }),
-    ).toBe(`Bearer error="insufficient_scope", scope="mcp:write"`);
+    ).toEqual({
+      wwwAuthenticate: `Bearer error="insufficient_scope", scope="mcp:write"`,
+      body: JSON.stringify({
+        error: "insufficient_scope",
+        error_description: "This tool requires a broader token scope.",
+        scope: "mcp:write",
+      }),
+    });
   });
 
   it("lets a batch of only reads through under read-only", () => {
@@ -521,7 +553,14 @@ describe("policyFloorChallenge (OCP-7)", () => {
         policy,
         requirements,
       }),
-    ).toBe(`Bearer error="insufficient_scope", scope="mcp.write"`);
+    ).toEqual({
+      wwwAuthenticate: `Bearer error="insufficient_scope", scope="mcp.write"`,
+      body: JSON.stringify({
+        error: "insufficient_scope",
+        error_description: "Your roles are not granted the permission this tool requires.",
+        scope: "mcp.write",
+      }),
+    });
   });
 
   it("refuses a mapped call when the scope is missing, even when the roles allow (the ceiling)", () => {
@@ -533,7 +572,14 @@ describe("policyFloorChallenge (OCP-7)", () => {
         policy,
         requirements,
       }),
-    ).toBe(`Bearer error="insufficient_scope", scope="mcp.write"`);
+    ).toEqual({
+      wwwAuthenticate: `Bearer error="insufficient_scope", scope="mcp.write"`,
+      body: JSON.stringify({
+        error: "insufficient_scope",
+        error_description: "Your roles are not granted the permission this tool requires.",
+        scope: "mcp.write",
+      }),
+    });
   });
 
   it("includes the resource metadata in the challenge when known", () => {
@@ -546,7 +592,15 @@ describe("policyFloorChallenge (OCP-7)", () => {
         requirements,
         resourceMetadata: PRM_URL,
       }),
-    ).toBe(`Bearer error="insufficient_scope", scope="mcp.write", resource_metadata="${PRM_URL}"`);
+    ).toEqual({
+      wwwAuthenticate: `Bearer error="insufficient_scope", scope="mcp.write", resource_metadata="${PRM_URL}"`,
+      body: JSON.stringify({
+        error: "insufficient_scope",
+        error_description: "Your roles are not granted the permission this tool requires.",
+        scope: "mcp.write",
+        resource_metadata: PRM_URL,
+      }),
+    });
   });
 
   it("is a no-op when no policy is configured — the back-compatible default (scope ceiling only)", () => {
@@ -596,7 +650,14 @@ describe("policyFloorChallenge (OCP-7)", () => {
         policy,
         requirements,
       }),
-    ).toBe(`Bearer error="insufficient_scope", scope="mcp.write"`);
+    ).toEqual({
+      wwwAuthenticate: `Bearer error="insufficient_scope", scope="mcp.write"`,
+      body: JSON.stringify({
+        error: "insufficient_scope",
+        error_description: "Your roles are not granted the permission this tool requires.",
+        scope: "mcp.write",
+      }),
+    });
   });
 
   it("materializes the roles once so every tool in a batch is checked against them (no drained iterator)", () => {
@@ -611,5 +672,31 @@ describe("policyFloorChallenge (OCP-7)", () => {
         requirements,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("refusalBody", () => {
+  it("serializes the OAuth error + description, omitting an absent scope and metadata", () => {
+    expect(refusalBody({ error: "invalid_token", description: "The access token is invalid." })).toBe(
+      JSON.stringify({ error: "invalid_token", error_description: "The access token is invalid." }),
+    );
+  });
+
+  it("includes the scope and resource_metadata when given", () => {
+    expect(
+      refusalBody({
+        error: "insufficient_scope",
+        description: "needs the write scope",
+        scope: "mcp:write",
+        resourceMetadata: PRM_URL,
+      }),
+    ).toBe(
+      JSON.stringify({
+        error: "insufficient_scope",
+        error_description: "needs the write scope",
+        scope: "mcp:write",
+        resource_metadata: PRM_URL,
+      }),
+    );
   });
 });

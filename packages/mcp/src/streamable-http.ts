@@ -243,7 +243,7 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
           decision.wwwAuthenticate === undefined
             ? {}
             : { "www-authenticate": decision.wwwAuthenticate },
-        body: "",
+        body: decision.body,
       };
     }
 
@@ -268,7 +268,11 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
     });
 
     if (denial !== undefined) {
-      return { status: 403, headers: { "www-authenticate": denial }, body: "" };
+      return {
+        status: 403,
+        headers: { "www-authenticate": denial.wwwAuthenticate },
+        body: denial.body,
+      };
     }
 
     // Policy floor (OCP-7): refuse a tool whose permission the subject's roles do not hold —
@@ -284,7 +288,11 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
     });
 
     if (floorDenial !== undefined) {
-      return { status: 403, headers: { "www-authenticate": floorDenial }, body: "" };
+      return {
+        status: 403,
+        headers: { "www-authenticate": floorDenial.wwwAuthenticate },
+        body: floorDenial.body,
+      };
     }
 
     return runStreamableHttp(runContext, tools, c.req, serverInfo);

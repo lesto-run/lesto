@@ -368,6 +368,27 @@ export function insufficientScopeChallenge(options: {
   });
 }
 
+/**
+ * The machine-legible refusal BODY served on a `401`/`403`, complementing the `WWW-Authenticate`
+ * header. The `@modelcontextprotocol/sdk` transport surfaces the response BODY (not the header) in
+ * the error it throws, so without this an agent sees an opaque failure; with it, it sees the OAuth
+ * `error` code, a human `error_description`, and the `scope`/permission to step up to — enough to
+ * self-correct. It mirrors the header and leaks nothing the header does not (RFC 6750 §3).
+ */
+export function refusalBody(reason: {
+  error: string;
+  description: string;
+  scope?: string;
+  resourceMetadata?: string;
+}): string {
+  return JSON.stringify({
+    error: reason.error,
+    error_description: reason.description,
+    ...(reason.scope === undefined ? {} : { scope: reason.scope }),
+    ...(reason.resourceMetadata === undefined ? {} : { resource_metadata: reason.resourceMetadata }),
+  });
+}
+
 /** The RS's verdict on an inbound HTTP request, before any tool runs. */
 export type McpHttpGateDecision =
   | {
@@ -375,6 +396,8 @@ export type McpHttpGateDecision =
       kind: "reject";
       status: number;
       wwwAuthenticate?: string;
+      /** The agent-visible refusal reason (the OAuth error JSON — see {@link refusalBody}). */
+      body: string;
     }
   | {
       /** Proceed: the authenticated session + the {@link McpMode} its scopes unlock. */
@@ -422,7 +445,14 @@ export async function gateMcpHttpRequest(
   options: McpHttpGateOptions,
 ): Promise<McpHttpGateDecision> {
   if (!isOriginAllowed(options.origin, options.allowedOrigins)) {
-    return { kind: "reject", status: 403 };
+    return {
+      kind: "reject",
+      status: 403,
+      body: refusalBody({
+        error: "access_denied",
+        description: "Cross-site origin not allowed (the DNS-rebinding guard).",
+      }),
+    };
   }
 
   const token = bearerFromAuthorization(options.authorization);
@@ -432,6 +462,11 @@ export async function gateMcpHttpRequest(
       kind: "reject",
       status: 401,
       wwwAuthenticate: bearerChallenge({ resourceMetadata: options.resourceMetadata }),
+      body: refusalBody({
+        error: "invalid_request",
+        description: "Authorization required: present a Bearer access token.",
+        resourceMetadata: options.resourceMetadata,
+      }),
     };
   }
 
@@ -444,6 +479,11 @@ export async function gateMcpHttpRequest(
       wwwAuthenticate: bearerChallenge({
         resourceMetadata: options.resourceMetadata,
         invalidToken: true,
+      }),
+      body: refusalBody({
+        error: "invalid_token",
+        description: "The access token is invalid or expired.",
+        resourceMetadata: options.resourceMetadata,
       }),
     };
   }
@@ -508,14 +548,23 @@ export function scopeCeilingChallenge(options: {
   mode: McpMode;
   destructiveTools: ReadonlySet<string>;
   writeScope: string;
-}): string | undefined {
+}): { wwwAuthenticate: string; body: string } | undefined {
   if (options.mode === "operator") return undefined;
 
   const callsDestructive = toolsCallNames(options.message).some((name) =>
     options.destructiveTools.has(name),
   );
 
-  return callsDestructive ? insufficientScopeChallenge({ scope: options.writeScope }) : undefined;
+  if (!callsDestructive) return undefined;
+
+  return {
+    wwwAuthenticate: insufficientScopeChallenge({ scope: options.writeScope }),
+    body: refusalBody({
+      error: "insufficient_scope",
+      description: "This tool requires a broader token scope.",
+      scope: options.writeScope,
+    }),
+  };
 }
 
 /** The scope + permission a single tool demands — the per-tool half of the OCP-7 floor. */
@@ -561,7 +610,7 @@ export function policyFloorChallenge(options: {
   policy: Policy<string, string> | undefined;
   requirements: ReadonlyMap<string, ToolRequirement>;
   resourceMetadata?: string;
-}): string | undefined {
+}): { wwwAuthenticate: string; body: string } | undefined {
   // No policy configured → the floor is off; the scope ceiling is the only gate (back-compat).
   if (options.policy === undefined) return undefined;
 
@@ -587,12 +636,22 @@ export function policyFloorChallenge(options: {
 
     if (!permitted) {
       // Name the permission the action required, for the client to surface or step up to.
-      return insufficientScopeChallenge({
-        scope: requirement.permission,
-        ...(options.resourceMetadata === undefined
-          ? {}
-          : { resourceMetadata: options.resourceMetadata }),
-      });
+      return {
+        wwwAuthenticate: insufficientScopeChallenge({
+          scope: requirement.permission,
+          ...(options.resourceMetadata === undefined
+            ? {}
+            : { resourceMetadata: options.resourceMetadata }),
+        }),
+        body: refusalBody({
+          error: "insufficient_scope",
+          description: "Your roles are not granted the permission this tool requires.",
+          scope: requirement.permission,
+          ...(options.resourceMetadata === undefined
+            ? {}
+            : { resourceMetadata: options.resourceMetadata }),
+        }),
+      };
     }
   }
 

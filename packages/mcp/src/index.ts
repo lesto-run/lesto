@@ -50,6 +50,7 @@ export {
   mcpModeForScopes,
   policyFloorChallenge,
   protectedResourceMetadata,
+  refusalBody,
   scopeCeilingChallenge,
 } from "./http";
 export type {
