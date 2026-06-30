@@ -2887,7 +2887,9 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
       audit: (record) => void audited.push(record),
       devState,
     };
-    const handle = await startMcpHttpServer(devContext, { token: "dev-token", port: 0 });
+    // A real minted token clears the construction-time length floor (MIN_DEV_TOKEN_LENGTH).
+    const devToken = "dev-token-".repeat(4);
+    const handle = await startMcpHttpServer(devContext, { token: devToken, port: 0 });
 
     const base = `http://127.0.0.1:${handle.port}/`;
     const call = (name: string, extraHeaders: Record<string, string> = {}): Promise<Response> =>
@@ -2896,7 +2898,7 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
         headers: {
           "content-type": "application/json",
           accept: "application/json, text/event-stream",
-          "x-lesto-dev-token": "dev-token",
+          "x-lesto-dev-token": devToken,
           ...extraHeaders,
         },
         body: JSON.stringify({

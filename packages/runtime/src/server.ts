@@ -1608,7 +1608,7 @@ function defaultLogError(message: string, error: unknown): void {
  * `logRequest` sink overrides this wholesale; the {@link AccessEntry} it receives
  * is unchanged.
  */
-function defaultLogRequest(entry: AccessEntry): void {
+export function defaultLogRequest(entry: AccessEntry): void {
   console.log(
     JSON.stringify({
       level: "info",

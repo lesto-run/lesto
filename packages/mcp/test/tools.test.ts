@@ -144,6 +144,8 @@ describe("buildTools", () => {
   it("returns the Lesto tools with stable names, descriptions, and input schemas", () => {
     const tools = buildTools(context());
 
+    // No `devState` here, so the three dev tools are not built (they exist only under
+    // `lesto dev` — see the dev-tools describe block); this is the base, non-dev set.
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_routes",
       "handle_request",
@@ -155,9 +157,6 @@ describe("buildTools", () => {
       "create_content_entry",
       "update_content_entry",
       "delete_content_entry",
-      "get_dev_diagnostics",
-      "get_recent_requests",
-      "tail_logs",
     ]);
 
     for (const tool of tools) {
@@ -288,25 +287,35 @@ describe("dev introspection tools (ADR 0032 Phase 1)", () => {
     expect(calls.logs).toEqual([50]);
   });
 
-  it("each dev tool refuses with MCP_DEV_STATE_UNAVAILABLE when no reader is wired", async () => {
-    const ctx = context(); // no devState — not `lesto dev`
-    const tools = buildTools(ctx);
+  it("does not build the dev tools when no reader is wired — they cannot exist off `lesto dev`", () => {
+    const names = new Set(buildTools(context()).map((tool) => tool.name)); // no devState
 
     for (const name of ["get_dev_diagnostics", "get_recent_requests", "tail_logs"]) {
-      await expect(dispatch(ctx, tools, name, {})).rejects.toMatchObject({
-        code: "MCP_DEV_STATE_UNAVAILABLE",
-      });
+      expect(names.has(name)).toBe(false);
     }
   });
 
-  it("audits both a successful dev dispatch and the unavailable refusal", async () => {
+  it("builds exactly the three dev tools when a reader is wired", () => {
+    const { ctx } = devContext();
+    const names = new Set(buildTools(ctx).map((tool) => tool.name));
+
+    for (const name of ["get_dev_diagnostics", "get_recent_requests", "tail_logs"]) {
+      expect(names.has(name)).toBe(true);
+    }
+  });
+
+  it("audits a successful dev dispatch — and an unknown-tool refusal off `lesto dev`", async () => {
     const { ctx } = devContext();
     await dispatch(ctx, buildTools(ctx), "tail_logs", {});
 
     expect(audited.at(-1)).toMatchObject({ tool: "tail_logs", outcome: "ok" });
 
+    // Off `lesto dev` the dev tools were never built, so dispatching one is an unknown
+    // tool — still audited (there is no un-audited path), now a MCP_UNKNOWN_TOOL refusal.
     const bare = context();
-    await dispatch(bare, buildTools(bare), "get_dev_diagnostics", {}).catch(() => {});
+    await expect(dispatch(bare, buildTools(bare), "get_dev_diagnostics", {})).rejects.toMatchObject(
+      { code: "MCP_UNKNOWN_TOOL" },
+    );
 
     expect(audited.at(-1)).toMatchObject({ tool: "get_dev_diagnostics", outcome: "error" });
   });

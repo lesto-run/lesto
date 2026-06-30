@@ -29,7 +29,7 @@ import type { RuntimeEntry } from "@lesto/content-core";
 import { buildStaticSites } from "@lesto/sites";
 import type { OutputSink, Site } from "@lesto/sites";
 
-import { dispatchSitesDev } from "@lesto/runtime";
+import { defaultLogRequest, dispatchSitesDev } from "@lesto/runtime";
 import type { AccessEntry, serve, StaticReader } from "@lesto/runtime";
 
 import { planDeploy, rollback, shipRelease, shipStatic } from "@lesto/deploy";
@@ -1684,10 +1684,18 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
       ...(tracing === undefined ? {} : tracing.serveOptions),
       // Feed each served request into the dev-state ring (ADR 0032 Phase 1) so
       // `get_recent_requests` can read it. Only when a ring is wired — absent it, the
-      // default structured access log is left untouched (unchanged behaviour).
+      // default structured access log is left untouched (unchanged behaviour). The feed
+      // is ADDITIVE: it also emits the runtime's structured access line, because a custom
+      // `logRequest` REPLACES the default wholesale — so a bare ring feed would silently
+      // drop the per-request dev console output that observability relies on.
       ...(devState === undefined
         ? {}
-        : { logRequest: (entry: AccessEntry) => devState.recordRequest(entry) }),
+        : {
+            logRequest: (entry: AccessEntry) => {
+              devState.recordRequest(entry);
+              defaultLogRequest(entry);
+            },
+          }),
     },
   );
 

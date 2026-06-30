@@ -16,10 +16,10 @@ export type McpErrorCode =
   /** The optional content peers aren't installed, so the content tools can't load. */
   | "MCP_CONTENT_PACKAGES_MISSING"
   | "MCP_CONTENT_STORE_UNAVAILABLE"
-  /** A dev introspection tool ran on a server with no live-dev-state reader wired (not `lesto dev`). */
-  | "MCP_DEV_STATE_UNAVAILABLE"
   /** A loopback dev MCP request carried a foreign Origin/Host or a missing/wrong session token. */
   | "MCP_DEV_ORIGIN_REJECTED"
+  /** The loopback dev MCP server was stood up without a strong enough per-session token. */
+  | "MCP_DEV_TOKEN_REQUIRED"
   | "MCP_OPERATOR_REQUIRED"
   /** A Resource Server was built without the non-empty `resource` its audience guard needs. */
   | "MCP_RESOURCE_REQUIRED";

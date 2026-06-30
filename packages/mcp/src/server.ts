@@ -28,6 +28,7 @@ import { buildTools, dispatch } from "./tools";
 import type { ContentModules, LestoMcpContext, LestoTool } from "./tools";
 import { buildResources, listResources, readResource } from "./resources";
 import {
+  assertDevToken,
   gateDevRequest,
   headerValue,
   loopbackAllowlist,
@@ -240,6 +241,10 @@ export function startMcpHttpServer(
   context: LestoMcpContext,
   options: { token: string; port?: number; host?: string },
 ): Promise<McpHttpServerHandle> {
+  // The per-session token is the real control a loopback bind lacks; refuse an empty or
+  // too-short one up front (covered `assertDevToken`) rather than serving a weak gate.
+  assertDevToken(options.token);
+
   const host = options.host ?? "127.0.0.1";
 
   // The allowlist depends on the bound port; set once `listen` resolves, before any

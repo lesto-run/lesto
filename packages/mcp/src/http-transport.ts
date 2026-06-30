@@ -18,8 +18,57 @@
  * retrofit (Inc 4c), so there is one validation, not two.
  */
 
+import { timingSafeEqual } from "node:crypto";
+
+import { McpError } from "./errors";
 import type { McpErrorCode } from "./errors";
 import { isOriginAllowed } from "./http";
+
+/**
+ * The shortest per-session dev token the loopback transport will stand up with.
+ *
+ * The token — not the `127.0.0.1` bind — is the real access control: a same-origin
+ * browser tab passes the Origin/Host guard but cannot know a minted token, so a blank
+ * or guessable token is the one hole left open. 32 characters is the floor a real minted
+ * token (e.g. 32 random bytes, hex-encoded) clears many times over.
+ */
+export const MIN_DEV_TOKEN_LENGTH = 32;
+
+/**
+ * Reject an empty or too-short per-session dev token at construction.
+ *
+ * The dev command mints the token; this is the loud, up-front guard that a
+ * misconfiguration (an empty string, a truncated value) can never quietly weaken the
+ * gate at request time — mirroring {@link createBearerAuthenticator}'s empty-`resource`
+ * guard, which refuses a vacuous audience check rather than honoring it. Lives in the
+ * covered core (not the excluded socket bind) so the guard itself is tested.
+ */
+export function assertDevToken(token: string): void {
+  if (token.length < MIN_DEV_TOKEN_LENGTH) {
+    throw new McpError(
+      "MCP_DEV_TOKEN_REQUIRED",
+      `The loopback dev MCP server needs a per-session token of at least ${MIN_DEV_TOKEN_LENGTH} characters; the loopback bind is not the control.`,
+      { minLength: MIN_DEV_TOKEN_LENGTH },
+    );
+  }
+}
+
+/**
+ * Does the presented token match the session token, in constant time?
+ *
+ * A naive `!==` leaks the token's length-of-common-prefix through timing. The risk is
+ * low on loopback, but {@link timingSafeEqual} is a cheap drop-in. It throws on a length
+ * mismatch, so guard length first — a length difference is already a non-match, and the
+ * token's length is not the secret. An absent token never matches.
+ */
+function tokenMatches(provided: string | undefined, expected: string): boolean {
+  if (provided === undefined) return false;
+
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 /** The loopback origins + hosts a dev server at `port` accepts — `127.0.0.1` and `localhost`. */
 export function loopbackAllowlist(port: number): {
@@ -126,7 +175,7 @@ export function gateDevRequest(options: {
     return rejectDev("a foreign Host");
   }
 
-  if (options.token !== options.security.token) {
+  if (!tokenMatches(options.token, options.security.token)) {
     return rejectDev("a missing or wrong session token");
   }
 

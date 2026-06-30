@@ -22,7 +22,13 @@ export type { RawRequest } from "./request";
 export { applyResponse } from "./response";
 export type { WritableResponse } from "./response";
 
-export { serve, closeWithDrain, DEFAULT_SECURITY_HEADERS, RECOMMENDED_CSP } from "./server";
+export {
+  serve,
+  closeWithDrain,
+  defaultLogRequest,
+  DEFAULT_SECURITY_HEADERS,
+  RECOMMENDED_CSP,
+} from "./server";
 export type {
   Server,
   ServeOptions,

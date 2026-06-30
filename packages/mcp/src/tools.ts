@@ -177,9 +177,13 @@ export interface LestoMcpContext {
 
   /**
    * The live-dev-state reader (ADR 0032 Phase 1) the dev introspection tools read.
-   * Injected ONLY by `lesto dev` (the bin wires the ring); absent on every other
-   * server, where the three dev tools are present but inert and refuse with
-   * `MCP_DEV_STATE_UNAVAILABLE`. See {@link McpDevStateReader}.
+   * Injected ONLY by `lesto dev` (the bin wires the ring). Its PRESENCE is what builds
+   * the three dev tools (`get_dev_diagnostics`, `get_recent_requests`, `tail_logs`):
+   * absent — on every non-dev server, including the remote OAuth transport — the tools
+   * are never built, so they cannot be advertised, listed, or reached. The dev surface
+   * is gated at BUILD time, not refused at call time, so a DevError stack (absolute fs
+   * paths), an access-log path, or a dev log line can never leak off `lesto dev`. See
+   * {@link McpDevStateReader}.
    */
   devState?: McpDevStateReader;
 
@@ -305,24 +309,66 @@ function requireContentDb(context: LestoMcpContext): SqlDatabase {
   return context.contentDb;
 }
 
-/** The live-dev-state reader, or a clear refusal on a server that is not `lesto dev`. */
-function requireDevState(context: LestoMcpContext): McpDevStateReader {
-  if (context.devState === undefined) {
-    throw new McpError(
-      "MCP_DEV_STATE_UNAVAILABLE",
-      "The dev introspection tools are only available under `lesto dev`.",
-    );
-  }
-
-  return context.devState;
-}
-
 /** How many entries the bounded dev introspection tools return when no `limit` is given. */
 const DEFAULT_DEV_TAIL = 50;
 
 /** The `limit` from a dev tool's input, defaulting when absent or non-numeric. */
 function devTailLimit(input: Record<string, unknown>): number {
   return typeof input.limit === "number" ? input.limit : DEFAULT_DEV_TAIL;
+}
+
+/**
+ * The dev-loop introspection tools (ADR 0032 Phase 1), bound to a live `reader`.
+ *
+ * Built ONLY when `buildTools` is handed a `devState` reader — i.e. under `lesto dev`.
+ * The handlers close over the non-null `reader`, so the tools simply do not EXIST on a
+ * server with no reader (every non-dev / remote server): they can never be advertised
+ * or reached, rather than existing-and-refusing. That build-time gate — not a runtime
+ * check, and not the absence of a flag — is what keeps DevError stacks, access-log
+ * paths, and dev log lines from ever leaking off the dev process. Read-only and audited
+ * like every other dispatch.
+ */
+function buildDevTools(reader: McpDevStateReader): LestoTool[] {
+  const getDevDiagnostics: LestoTool = {
+    name: "get_dev_diagnostics",
+    description:
+      "Report the current dev build/reload error, or null when the last change succeeded.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+    destructive: false,
+    handler: () => Promise.resolve(reader.getDiagnostics() ?? null),
+  };
+
+  const getRecentRequests: LestoTool = {
+    name: "get_recent_requests",
+    description:
+      "List the most recently served requests from the live dev access log (optionally capped by limit).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number" },
+      },
+    },
+    destructive: false,
+    handler: (input) => Promise.resolve(reader.recentRequests(devTailLimit(input))),
+  };
+
+  const tailLogs: LestoTool = {
+    name: "tail_logs",
+    description: "Return the most recent dev log lines (optionally capped by limit).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number" },
+      },
+    },
+    destructive: false,
+    handler: (input) => Promise.resolve(reader.recentLogs(devTailLimit(input))),
+  };
+
+  return [getDevDiagnostics, getRecentRequests, tailLogs];
 }
 
 /**
@@ -719,49 +765,6 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
     },
   };
 
-  // The dev-loop introspection tools (ADR 0032 Phase 1) — read-only, audited like
-  // every dispatch, and inert (refusing `MCP_DEV_STATE_UNAVAILABLE`) on any server
-  // that is not `lesto dev`, where no `devState` reader is wired.
-  const getDevDiagnostics: LestoTool = {
-    name: "get_dev_diagnostics",
-    description:
-      "Report the current dev build/reload error, or null when the last change succeeded.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-    },
-    destructive: false,
-    handler: () => Promise.resolve(requireDevState(context).getDiagnostics() ?? null),
-  };
-
-  const getRecentRequests: LestoTool = {
-    name: "get_recent_requests",
-    description:
-      "List the most recently served requests from the live dev access log (optionally capped by limit).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        limit: { type: "number" },
-      },
-    },
-    destructive: false,
-    handler: (input) =>
-      Promise.resolve(requireDevState(context).recentRequests(devTailLimit(input))),
-  };
-
-  const tailLogs: LestoTool = {
-    name: "tail_logs",
-    description: "Return the most recent dev log lines (optionally capped by limit).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        limit: { type: "number" },
-      },
-    },
-    destructive: false,
-    handler: (input) => Promise.resolve(requireDevState(context).recentLogs(devTailLimit(input))),
-  };
-
   return [
     listRoutes,
     handleRequest,
@@ -773,9 +776,11 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
     createContentEntry,
     updateContentEntry,
     deleteContentEntry,
-    getDevDiagnostics,
-    getRecentRequests,
-    tailLogs,
+    // The dev-loop introspection tools (ADR 0032 Phase 1) exist ONLY when a live-dev-state
+    // reader is wired — i.e. under `lesto dev`. Absent it they are never built, so a
+    // non-dev / remote server can neither advertise nor reach them: the dev surface is
+    // gated at build time, never present-and-refusing (see {@link buildDevTools}).
+    ...(context.devState === undefined ? [] : buildDevTools(context.devState)),
   ];
 }
 

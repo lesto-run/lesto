@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertDevToken,
   gateDevRequest,
   headerValue,
   isHostAllowed,
   loopbackAllowlist,
+  MIN_DEV_TOKEN_LENGTH,
   nodeHeadersToWeb,
   parseDevBody,
 } from "../src/http-transport";
@@ -102,8 +104,33 @@ describe("gateDevRequest", () => {
       code: "MCP_DEV_ORIGIN_REJECTED",
       reason: "a missing or wrong session token",
     });
+    // A different-LENGTH wrong token short-circuits before the constant-time compare.
     expect(gateDevRequest({ ...ok, token: "guessed" })).toMatchObject({
       reason: "a missing or wrong session token",
     });
+    // A SAME-length wrong token exercises the constant-time compare itself returning false.
+    expect(gateDevRequest({ ...ok, token: "session-tokeX" })).toMatchObject({
+      reason: "a missing or wrong session token",
+    });
+  });
+});
+
+describe("assertDevToken", () => {
+  it("accepts a token at or above the minimum length", () => {
+    expect(() => assertDevToken("x".repeat(MIN_DEV_TOKEN_LENGTH))).not.toThrow();
+  });
+
+  it("rejects an empty or too-short token with MCP_DEV_TOKEN_REQUIRED", () => {
+    for (const weak of ["", "x".repeat(MIN_DEV_TOKEN_LENGTH - 1)]) {
+      let caught: unknown;
+
+      try {
+        assertDevToken(weak);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toMatchObject({ code: "MCP_DEV_TOKEN_REQUIRED" });
+    }
   });
 });
