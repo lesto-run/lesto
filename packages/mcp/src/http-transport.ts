@@ -181,3 +181,54 @@ export function gateDevRequest(options: {
 
   return { kind: "accept" };
 }
+
+/** The loopback hostnames the dev servers bind — `127.0.0.1` / `localhost` (the dev servers bind v4 loopback, not `::1`). */
+const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
+
+/**
+ * Is this `Origin` a loopback page on ANY port (`http://127.0.0.1:5173`,
+ * `http://localhost:8080`)?
+ *
+ * Unlike the dev MCP transport's same-port allowlist, the live-reload WS's legitimate
+ * client is the dev app PAGE — served from the dev SERVER's (dynamic) port, not the reload
+ * port — so its `Origin` is a loopback host on an arbitrary port and must be matched on the
+ * HOSTNAME, port-agnostically. A foreign origin (including a DNS-rebinding name pointed at
+ * loopback, whose `Origin` stays the foreign name) or one that does not parse is refused.
+ */
+function isLoopbackOrigin(origin: string): boolean {
+  let hostname: string;
+
+  try {
+    hostname = new URL(origin).hostname;
+  } catch {
+    return false;
+  }
+
+  return LOOPBACK_HOSTNAMES.has(hostname);
+}
+
+/**
+ * May this WebSocket upgrade onto the live-reload socket proceed — the DNS-rebinding /
+ * browser-tab CSRF guard retrofitted onto the reload WS (ADR 0032 Inc 4c)?
+ *
+ * The reload WS leaks reload + error-overlay payloads (local source paths, stack frames) to
+ * any tab that connects, and (unlike the dev MCP transport) carries no token — so this
+ * Origin/Host allowlist is its only control. Its legitimate client is the dev app served
+ * from the dev server's (dynamic) port, so the `Origin` is matched on the loopback HOSTNAME
+ * ({@link isLoopbackOrigin}, any port) while the `Host` is matched on the reload server's own
+ * loopback authority (port-specific, via {@link loopbackAllowlist} + the covered
+ * {@link isHostAllowed}). An absent `Origin` is a non-browser client (no rebinding risk) and
+ * passes; a foreign `Origin`, or a foreign/absent `Host`, is refused. Shares the Inc 4a
+ * Host-allowlist logic — there is one validation, not a second copy in the bin.
+ */
+export function isLiveReloadUpgradeAllowed(options: {
+  origin: string | undefined;
+  host: string | undefined;
+  port: number;
+}): boolean {
+  const originOk = options.origin === undefined || isLoopbackOrigin(options.origin);
+
+  const hostOk = isHostAllowed(options.host, loopbackAllowlist(options.port).allowedHosts);
+
+  return originOk && hostOk;
+}

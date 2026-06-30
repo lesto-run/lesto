@@ -38,7 +38,7 @@ import type { ClientSchema } from "@lesto/env";
 
 import { createApp } from "@lesto/kernel";
 
-import { startMcpHttpServer } from "@lesto/mcp";
+import { isLiveReloadUpgradeAllowed, startMcpHttpServer } from "@lesto/mcp";
 import type { LestoMcpContext, McpAuditRecord } from "@lesto/mcp";
 
 import { createDevState } from "./dev-state";
@@ -713,9 +713,28 @@ const buildLiveReload = (): {
       // payloads (local source paths, stack frames). The app is loopback-only, so the
       // page can only ever be reached at localhost — the WS never needs to be wider.
       hostname: "127.0.0.1",
-      fetch(_request: unknown, srv: { upgrade: (request: unknown) => boolean }) {
-        // Every request to this port is a WS upgrade; a non-upgrade gets a 426.
-        if (srv.upgrade(_request)) return undefined;
+      fetch(
+        request: { headers: { get: (name: string) => string | null } },
+        srv: { upgrade: (request: unknown) => boolean },
+      ) {
+        // DNS-rebinding / browser-tab CSRF guard (ADR 0032 Inc 4c): the reload WS leaks
+        // reload + error-overlay payloads (local source paths, stack frames) to any tab
+        // that connects and carries no token, so a foreign-Origin/Host upgrade is refused —
+        // only a loopback page passes. The validation is the covered
+        // `isLiveReloadUpgradeAllowed` (shares the dev MCP transport's Host allowlist); the
+        // bin holds none of it.
+        if (
+          !isLiveReloadUpgradeAllowed({
+            origin: request.headers.get("origin") ?? undefined,
+            host: request.headers.get("host") ?? undefined,
+            port: LIVE_RELOAD_PORT,
+          })
+        ) {
+          return new Response("forbidden", { status: 403 });
+        }
+
+        // Every loopback request to this port is a WS upgrade; a non-upgrade gets a 426.
+        if (srv.upgrade(request)) return undefined;
 
         return new Response("expected a websocket upgrade", { status: 426 });
       },

@@ -36,7 +36,12 @@ export type { LestoResource } from "./resources";
 
 // The loopback dev MCP transport's covered security core (ADR 0032 Phase 1) — the
 // Origin/Host allowlist + per-session-token gate, reused by the live-reload WS retrofit.
-export { gateDevRequest, isHostAllowed, loopbackAllowlist } from "./http-transport";
+export {
+  gateDevRequest,
+  isHostAllowed,
+  isLiveReloadUpgradeAllowed,
+  loopbackAllowlist,
+} from "./http-transport";
 export type { DevMcpGateDecision, DevMcpSecurity } from "./http-transport";
 
 export {

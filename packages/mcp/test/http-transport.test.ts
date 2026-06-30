@@ -5,6 +5,7 @@ import {
   gateDevRequest,
   headerValue,
   isHostAllowed,
+  isLiveReloadUpgradeAllowed,
   loopbackAllowlist,
   MIN_DEV_TOKEN_LENGTH,
   nodeHeadersToWeb,
@@ -132,5 +133,71 @@ describe("assertDevToken", () => {
 
       expect(caught).toMatchObject({ code: "MCP_DEV_TOKEN_REQUIRED" });
     }
+  });
+});
+
+describe("isLiveReloadUpgradeAllowed", () => {
+  const reloadPort = 35729;
+
+  it("allows a loopback page (127.0.0.1 / localhost) on ANY port — the dev server's dynamic port", () => {
+    // The page is served from the dev SERVER's port (5173), not the reload port (35729),
+    // so the Origin is a loopback host on a different port and must still pass.
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: "http://127.0.0.1:5173",
+        host: `127.0.0.1:${reloadPort}`,
+        port: reloadPort,
+      }),
+    ).toBe(true);
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: "http://localhost:8080",
+        host: `localhost:${reloadPort}`,
+        port: reloadPort,
+      }),
+    ).toBe(true);
+  });
+
+  it("allows a non-browser client with no Origin (no rebinding risk)", () => {
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: undefined,
+        host: `127.0.0.1:${reloadPort}`,
+        port: reloadPort,
+      }),
+    ).toBe(true);
+  });
+
+  it("refuses a foreign Origin even on a loopback Host (the browser-tab CSRF vector)", () => {
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: "https://evil.example",
+        host: `127.0.0.1:${reloadPort}`,
+        port: reloadPort,
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses a malformed Origin", () => {
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: "not a url",
+        host: `127.0.0.1:${reloadPort}`,
+        port: reloadPort,
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses a foreign or absent Host (the DNS-rebinding name, or a missing Host)", () => {
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: undefined,
+        host: `evil.example:${reloadPort}`,
+        port: reloadPort,
+      }),
+    ).toBe(false);
+    expect(
+      isLiveReloadUpgradeAllowed({ origin: undefined, host: undefined, port: reloadPort }),
+    ).toBe(false);
   });
 });
