@@ -1057,21 +1057,40 @@ if (command === "eval") {
 
   // The real judge: a current-Claude LLM judge over the Anthropic transport, built
   // through the ONE lazy `@lesto/ai` import. Resolved lazily inside the seam so a
-  // no-evals run (the opt-in floor) never imports `@lesto/ai` and never needs a key.
+  // no-evals run (the opt-in floor) never imports `@lesto/ai` and never needs a key —
+  // and memoized, so a multi-eval run imports + instantiates the model/judge once, not
+  // once per eval.
+  let scoreCase: JudgeLike | undefined;
+
   const judge: JudgeLike = async (input, output) => {
-    const { createAnthropic, createLlmJudge } = await import("@lesto/ai");
+    if (scoreCase === undefined) {
+      const { createAnthropic, createLlmJudge } = await import("@lesto/ai");
 
-    const model = createAnthropic({ apiKey: readEnv("ANTHROPIC_API_KEY") ?? "" });
+      const model = createAnthropic({ apiKey: readEnv("ANTHROPIC_API_KEY") ?? "" });
 
-    return createLlmJudge({ model, rubric: "Score the output 0..1 against the case." })(
-      input,
-      output,
-    );
+      scoreCase = createLlmJudge({ model, rubric: "Score the output 0..1 against the case." });
+    }
+
+    return scoreCase(input, output);
   };
 
-  const exit = await runEval(commandArgs, { loadEvals, judge, out: console.log });
+  // `runEval` THROWS a coded `CLI_EVAL_FAILED` when a gate fails (the structured WHY).
+  // Catch it here so a failing gate exits 1 with a clean one-line message — not an ugly
+  // unhandled-rejection stack trace — mirroring the central CliError handling the `run`
+  // core gives every other command. Any other throw is a real fault: surface it.
+  try {
+    const exit = await runEval(commandArgs, { loadEvals, judge, out: console.log });
 
-  process.exit(exit);
+    process.exit(exit);
+  } catch (error) {
+    if (error instanceof CliError && error.code === "CLI_EVAL_FAILED") {
+      console.error(error.message);
+
+      process.exit(1);
+    }
+
+    throw error;
+  }
 }
 
 // The project-rooted filesystem seam every `generate` flavor shares: an `exists`

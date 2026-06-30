@@ -137,8 +137,9 @@ async function scoreOne(declared: DeclaredEval, judge: JudgeLike): Promise<EvalR
  *
  * Gathers the declarations via the injected loader and, when there are any, runs
  * them SERIALLY — printing a `pass`/`fail` line per eval (a failing line names the
- * code) and a final tally. Returns `0` iff every eval passed; the first failure
- * makes the exit non-zero, so a CI step fails loudly.
+ * code) and a final tally. Returns `0` when every eval passed; a failure THROWS a
+ * coded `CLI_EVAL_FAILED` (the structured WHY) which the bin turns into a non-zero
+ * exit, so a CI step fails loudly.
  *
  * The opt-in floor: NO declared evals → no output, exit `0`. An app that has not
  * written an eval is never auto-failed by wiring this command into CI.
