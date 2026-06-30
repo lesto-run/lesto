@@ -9,6 +9,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { watch } from "node:fs";
 import { createServer as createNetServer } from "node:net";
@@ -37,6 +38,10 @@ import type { ClientSchema } from "@lesto/env";
 
 import { createApp } from "@lesto/kernel";
 
+import { startMcpHttpServer } from "@lesto/mcp";
+import type { LestoMcpContext, McpAuditRecord } from "@lesto/mcp";
+
+import { createDevState } from "./dev-state";
 import { declaresIslandDevPeer, run } from "./run";
 import type {
   BuildHook,
@@ -1078,6 +1083,49 @@ const islandDev =
     ? (request: { dialect: UiDialect }) => buildIslandDev(request.dialect)
     : undefined;
 
+// The DEV-ONLY MCP control plane (ADR 0032 Phase 1), stood up ONLY for `dev` — exactly
+// like the live-reload socket. The bin creates the bounded dev-state ring (the watcher
+// fills it; the dev tools read it), `runDev` feeds it, and the `startDevMcp` seam below
+// stands the loopback server up over it. No ring, no seam, and so no loopback socket is
+// ever constructed for serve/build/deploy.
+const devState = command === "dev" ? createDevState() : undefined;
+
+// Stand the loopback dev MCP server up over the live app + the SAME ring. Bin-owned and
+// irreducible (coverage-excluded): mint a per-session token (the real control a 127.0.0.1
+// bind lacks — 64 hex chars, well over MIN_DEV_TOKEN_LENGTH), bind the socket via
+// `startMcpHttpServer`, and log the URL + token to STDERR so they never corrupt the dev
+// server's stdout. `runDev` owns the decision to call this (dev, after the app loads, with
+// a live ring); here is only the wiring.
+const startDevMcp: CliDeps["startDevMcp"] =
+  command === "dev"
+    ? async ({ app, routes, devState: ring }) => {
+        const token = randomBytes(32).toString("hex");
+
+        const context: LestoMcpContext = {
+          app,
+          routes,
+          // Read-only: the dev surface exposes introspection + route listing, never a
+          // driven request or a content write (those need the deliberate operator mode).
+          mode: "read-only",
+          devState: ring,
+          // Every dev dispatch is audited to stderr — governance is never bypassed, and
+          // the loopback transport leaves stdout to the dev server.
+          audit: (record: McpAuditRecord) =>
+            console.error(
+              `lesto dev mcp.audit tool=${record.tool} outcome=${record.outcome} duration_ms=${record.durationMs}`,
+            ),
+        };
+
+        const handle = await startMcpHttpServer(context, { token });
+
+        console.error(
+          `lesto dev: MCP control plane on http://127.0.0.1:${handle.port}/ (x-lesto-dev-token: ${token})`,
+        );
+
+        return { close: () => handle.close() };
+      }
+    : undefined;
+
 const code = await run(argv, {
   loadApp,
   serve,
@@ -1103,6 +1151,8 @@ const code = await run(argv, {
   regenerateRoutes,
   ...(liveReload === undefined ? {} : { liveReload }),
   ...(islandDev === undefined ? {} : { islandDev }),
+  ...(devState === undefined ? {} : { devState }),
+  ...(startDevMcp === undefined ? {} : { startDevMcp }),
   uploader: nodeUploader,
   releaseStore,
   now: Date.now,

@@ -2840,6 +2840,39 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
     expect(capture.options()?.logRequest).toBeUndefined();
   });
 
+  it("stands the dev MCP server up via the injected seam — once, with the live app/routes/ring — then closes it on shutdown", async () => {
+    const devState = createDevState();
+    const close = vi.fn(() => Promise.resolve());
+    const startDevMcp = vi.fn((_params: Parameters<NonNullable<CliDeps["startDevMcp"]>>[0]) =>
+      Promise.resolve({ close }),
+    );
+    const installShutdown = vi.fn();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(5173),
+        loadSites: () => Promise.resolve(sites),
+        devState,
+        startDevMcp,
+        installShutdown,
+      }),
+    );
+
+    // Called once, after the app loaded, with the live app + routes + the SAME ring runDev
+    // fills — so the app boots once (no double-boot) and the server reads what the watcher writes.
+    expect(startDevMcp).toHaveBeenCalledTimes(1);
+    const params = startDevMcp.mock.calls[0]![0];
+    expect(typeof params.app.handle).toBe("function");
+    expect(Array.isArray(params.routes)).toBe(true);
+    expect(params.devState).toBe(devState);
+
+    // The handle's `close` is wired into the dev shutdown drain.
+    const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
+    await drain();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   // THE COMMITTED QA GATE (ADR 0032 Phase 1 Inc 6): drive `runDev` to fill the ring,
   // stand a REAL loopback dev MCP server over that same ring, and read it back over the
   // wire — proving the end-to-end (runDev fills → MCP reads) path plus the security gate

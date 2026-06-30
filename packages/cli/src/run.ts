@@ -16,7 +16,7 @@
 import type { PublicEnvDefine } from "@lesto/assets";
 
 import { createApp } from "@lesto/kernel";
-import type { LestoAppConfig, KernelDatabase } from "@lesto/kernel";
+import type { App, LestoAppConfig, KernelDatabase } from "@lesto/kernel";
 import { currentRequestSpan } from "@lesto/web";
 import type { HandleOptions, LestoResponse, UiDialect } from "@lesto/web";
 
@@ -35,7 +35,7 @@ import type { AccessEntry, serve, StaticReader } from "@lesto/runtime";
 import { planDeploy, rollback, shipRelease, shipStatic } from "@lesto/deploy";
 import type { ReleaseStore, ShipDeps } from "@lesto/deploy";
 
-import type { DevState } from "./dev-state";
+import type { DevState, DevStateReader } from "./dev-state";
 import { CliError } from "./errors";
 import { parsePort, parseStringFlag } from "./flags";
 
@@ -494,6 +494,24 @@ export interface CliDeps {
    * that reads it, the core only feeds it.
    */
   devState?: DevState;
+
+  /**
+   * Stand the DEV-ONLY loopback MCP server up over the live dev state (ADR 0032 Phase 1).
+   *
+   * Injected by the bin ONLY on the `dev` path. `runDev` calls it ONCE, after the app has
+   * loaded, with the live `app` + `routes` + the dev-state ring — so the app boots exactly
+   * once (the seam never re-loads it: no double-boot) and the bin owns only the irreducible
+   * parts (mint the per-session token, bind the loopback socket via `startMcpHttpServer`,
+   * log the URL + token to stderr). The DECISION of WHEN to stand it up — `dev`, after the
+   * app loads, only when a ring is wired — lives HERE in the covered core; the seam is the
+   * uncovered wiring. Absent (every non-`dev` command, or a `dev` run with the seam off) →
+   * no dev MCP server. The returned handle's `close()` is wired into the dev shutdown.
+   */
+  startDevMcp?: (params: {
+    app: App;
+    routes: readonly { method: string; pattern: string }[];
+    devState: DevStateReader;
+  }) => Promise<{ close: () => Promise<void> }>;
 
   /**
    * Build the dev-only island Fast-Refresh server for the app's dialect, or resolve
@@ -1699,12 +1717,23 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
     },
   );
 
+  // Stand the DEV-ONLY loopback MCP server up over the SAME ring (ADR 0032 Phase 1), now
+  // that the app has loaded — the bin injects `startDevMcp` ONLY on the dev path, so no
+  // socket is ever bound for serve/build/deploy. The decision of WHEN (dev, post-load,
+  // with a live ring) is this covered core's; the seam owns the irreducible token mint +
+  // loopback socket bind + stderr URL/token log. Its handle is closed in the shutdown below.
+  const devMcp =
+    devState !== undefined && deps.startDevMcp !== undefined
+      ? await deps.startDevMcp({ app, routes: config.app.routes(), devState })
+      : undefined;
+
   deps.installShutdown?.(async () => {
     await server.close();
 
     stopRoutes?.();
     deps.liveReload?.close();
     await islandDev?.close();
+    await devMcp?.close();
     tracing?.stopInterval();
   });
 
