@@ -208,13 +208,38 @@ gate-exempt** (no `test:cov`); `@lesto/ui-generate` declares `test:cov` and is g
    100% on touched packages; gate + typecheck green.
 
 7. **Docs: label the surface PREVIEW** — `[docs]`
-   Files: `docs/adr/0033-in-preview-ai-surface.md` (already written), a dev-loop doc/README note.
+   Files: `docs/adr/0033-in-preview-ai-surface.md` (already written), this dev-loop doc note (below).
    State plainly that the in-preview AI surface is dev-only and PREVIEW; do **not** imply
    a hosted product, "Lesto Cloud", or a v0/Bolt competitor (`messaging.md:77`); do not
    claim AI quality (gated by ADR 0035's evals). Frame the differentiator as
    "edits your real local codebase with DB + trace + schema context."
    Acceptance: doc copy passes the claims guardrail (no Cloud/hosted/quality claim, the
    PREVIEW label present); no code coverage impact (docs-only); one conventional commit.
+
+## Dev-loop doc note — in-preview AI surface status (PREVIEW · dev-only · inspect-only)
+
+A short, citable note for any dev-loop reader (and any public copy that mentions this
+surface). It mirrors the binding label at the top of **ADR 0033**:
+
+- **PREVIEW.** The surface composes `@lesto/ai` / `@lesto/ui-generate` and is labelled
+  PREVIEW everywhere it is mentioned. "Preview" is a label, not a coverage waiver — only
+  `@lesto/ai` is gate-exempt (no `test:cov`); `@lesto/ui-generate` and the `@lesto/cli`
+  overlay code are held to the full 100% gate.
+- **Dev-only.** It is injected **only** by `runDev` (a second sibling `<script>` beside
+  the live-reload overlay) and is **never** present in a `serve` / `build` / `deploy`
+  artifact — grep-asserted, no production code path. It is a DX layer over the local
+  inner loop, nothing more.
+- **Inspect-only (Phase 1).** Phase 1 **explains and diagnoses** — it assembles a
+  redacted, read-only full-stack context snapshot and renders the agent's reply. It
+  **mutates nothing**: the only "out" edge is a fail-closed, allowlist-gated bridge to
+  the dev MCP server. **Acting** (issuing an edit) is a later, separately-gated phase
+  (Phase 2 — Deferred), not part of the committed surface.
+- **The honest differentiator** is exactly what a hosted prompt-to-app tool cannot do:
+  it **edits your real local codebase with DB + trace + schema context** — the live DB
+  schema, the last request's trace id, and the handler `file:line` already in hand.
+- **What this is NOT** (the claims guardrail, `docs/brand/messaging.md:77`): **not** a
+  hosted product, **not** "Lesto Cloud", **not** a v0/Bolt/Lovable competitor — and we
+  make **no** AI quality/accuracy claim (gated by ADR 0035's evals, not yet proven).
 
 ## Layering invariants
 

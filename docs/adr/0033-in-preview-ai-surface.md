@@ -1,5 +1,15 @@
 # ADR 0033 — In-preview AI surface (Cmd-K chat, fix-this, point-and-describe on the live preview)
 
+> **Label (binding for all public copy): PREVIEW · dev-only · inspect-only (Phase 1).**
+> This surface is **PREVIEW**, is **never injected by a production command**
+> (`serve`/`build`/`deploy`) — it only exists under `lesto dev` — and in Phase 1 is
+> **inspect-only**: it explains and diagnoses; it issues **no** edits (acting is a later,
+> gated phase). The honest differentiator is that it **edits your real local codebase
+> with DB + trace + schema context** — context only the framework that owns the stack can
+> assemble. It is **not** a hosted product, **not** "Lesto Cloud", and **not** a
+> v0/Bolt/Lovable-style competitor (`docs/brand/messaging.md:77`). We make **no** AI
+> quality/accuracy claim — quality is gated by ADR 0035's evals, not asserted here.
+
 - **Status:** Accepted (ratified 2026-06-23). The committed **build-now** is
   **Phase 1**, and it is **inspect-only**: a single, dev-only browser-injected overlay
   seam (a Cmd-K chat panel + an "Ask Claude to fix" button on the *existing* dev error
