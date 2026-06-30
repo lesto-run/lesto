@@ -136,7 +136,7 @@ describe("add mcp-auth", () => {
     expect(governance).toContain("status: 405");
   });
 
-  it("prints next steps after a real run, including the jose dependency hint", async () => {
+  it("prints next steps after a real run, including the one-line mount", async () => {
     await runAdd(["mcp-auth"], depsWith());
 
     const joined = lines.join("\n");
@@ -146,8 +146,59 @@ describe("add mcp-auth", () => {
     expect(joined).toContain("verify.ts");
     expect(joined).toContain("rolesOf");
     expect(joined).toContain("buildGovernedMcp");
-    expect(joined).toContain("bun add jose");
+    expect(joined).toContain("app.route(buildGovernedMcp(app).api)");
     expect(joined).toContain("examples/mcp-auth-openauth");
+  });
+});
+
+describe("add mcp-auth jose dependency", () => {
+  it("adds jose to an existing package.json that lacks it", async () => {
+    existing.set("package.json", JSON.stringify({ name: "my-app", dependencies: { zod: "^4.0.0" } }));
+
+    await runAdd(["mcp-auth"], depsWith());
+
+    const pkg = JSON.parse(contentsAt("package.json") ?? "{}") as {
+      dependencies: Record<string, string>;
+    };
+    expect(pkg.dependencies.jose).toBeDefined();
+    expect(pkg.dependencies.zod).toBe("^4.0.0"); // existing deps preserved
+    expect(lines.join("\n")).toContain("added jose to package.json");
+  });
+
+  it("adds jose to a package.json that has no dependencies block at all", async () => {
+    existing.set("package.json", JSON.stringify({ name: "my-app" }));
+
+    await runAdd(["mcp-auth"], depsWith());
+
+    const pkg = JSON.parse(contentsAt("package.json") ?? "{}") as {
+      dependencies: Record<string, string>;
+    };
+    expect(pkg.dependencies.jose).toBeDefined();
+  });
+
+  it("leaves package.json untouched when jose is already present", async () => {
+    existing.set("package.json", JSON.stringify({ dependencies: { jose: "^6.0.0" } }));
+
+    await runAdd(["mcp-auth"], depsWith());
+
+    expect(contentsAt("package.json")).toBeUndefined(); // never written
+    expect(lines.join("\n")).toContain("jose: already in package.json");
+  });
+
+  it("notes the missing package.json rather than failing", async () => {
+    await runAdd(["mcp-auth"], depsWith()); // no package.json in `existing`
+
+    expect(contentsAt("package.json")).toBeUndefined();
+    expect(lines.join("\n")).toContain("no package.json here");
+  });
+
+  it("on --dry-run, says it would add jose and writes nothing", async () => {
+    existing.set("package.json", JSON.stringify({ dependencies: {} }));
+
+    await runAdd(["mcp-auth", "--dry-run"], depsWith());
+
+    expect(contentsAt("package.json")).toBeUndefined();
+    expect(lines.join("\n")).toContain("would add jose to package.json");
   });
 });
 
@@ -191,7 +242,8 @@ describe("add mcp-auth --dry-run", () => {
 
     expect(code).toBe(0);
     expect(written).toEqual([]);
-    expect(lines).toEqual(MCP_AUTH_FILES.map((path) => `would write ${path}`));
+    // The file-plan lines (the jose note follows; no package.json in this fixture).
+    expect(lines.slice(0, 3)).toEqual(MCP_AUTH_FILES.map((path) => `would write ${path}`));
     // A dry run wrote nothing, so it prints no next-steps.
     expect(lines.join("\n")).not.toContain("Next steps:");
   });
@@ -201,7 +253,7 @@ describe("add mcp-auth --dry-run", () => {
 
     await runAdd(["mcp-auth", "--dry-run"], depsWith());
 
-    expect(lines).toEqual([
+    expect(lines.slice(0, 3)).toEqual([
       "would write app/mcp/config.ts",
       "would write app/mcp/verify.ts",
       "would skip app/mcp/governance.ts",

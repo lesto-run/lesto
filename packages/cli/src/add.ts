@@ -337,9 +337,9 @@ const MCP_AUTH_NEXT_STEPS: readonly string[] = [
   `  1. Fill in the TODOs in ${MCP_AUTH_DIR}/config.ts (issuer, jwksUrl, resource, baseUrl).`,
   `  2. Adjust ${MCP_AUTH_DIR}/verify.ts for your issuer's signing alg + claim shape (RS256 by default).`,
   `  3. Wire rolesOf in ${MCP_AUTH_DIR}/governance.ts to your real user store.`,
-  `  4. Mount the governed app: import { buildGovernedMcp } from "./${MCP_AUTH_DIR}/governance"`,
-  "     and compose its `.api` onto your lesto.app.ts (or serve it directly).",
-  "  5. Add the `jose` dependency: `bun add jose`.",
+  `  4. Mount it onto your lesto.app.ts (one line; see the mount note in ${MCP_AUTH_DIR}/governance.ts):`,
+  `         import { buildGovernedMcp } from "./${MCP_AUTH_DIR}/governance";`,
+  "         app.route(buildGovernedMcp(app).api);   // pass your booted app so handle_request drives it",
   "",
   "See examples/mcp-auth-openauth for a full, runnable issuer + RS + agent.",
 ];
@@ -362,6 +362,41 @@ type Integration = (typeof INTEGRATIONS)[number];
 const NEXT_STEPS: Readonly<Record<Integration, readonly string[]>> = {
   "mcp-auth": MCP_AUTH_NEXT_STEPS,
 };
+
+/** The `jose` version the generated verifier (JWKS via `jose`) is written against. */
+const JOSE_VERSION = "^6.2.3";
+
+/**
+ * Add `jose` — the generated verifier's only runtime dependency — to the app's `package.json`,
+ * idempotently, so the scaffold is one fewer manual step. Parses + re-serializes (2-space, the
+ * bun/npm default) and appends `jose` after the existing deps; an already-present `jose`, a
+ * missing `package.json`, and a dry run each print a line and write nothing.
+ */
+async function ensureJose(deps: AddDeps, dryRun: boolean): Promise<void> {
+  if (!(await deps.exists("package.json"))) {
+    deps.out("note: no package.json here — add jose yourself (`bun add jose`).");
+
+    return;
+  }
+
+  const pkg = JSON.parse(await deps.read("package.json")) as { dependencies?: Record<string, string> };
+
+  if (pkg.dependencies?.jose !== undefined) {
+    deps.out("jose: already in package.json");
+
+    return;
+  }
+
+  if (dryRun) {
+    deps.out("would add jose to package.json");
+
+    return;
+  }
+
+  pkg.dependencies = { ...(pkg.dependencies ?? {}), jose: JOSE_VERSION };
+  await deps.write("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
+  deps.out("added jose to package.json — run your installer to fetch it");
+}
 
 /** True iff `value` names an integration this CLI implements today. */
 function isIntegration(value: string | undefined): value is Integration {
@@ -436,6 +471,10 @@ export async function runAdd(args: readonly string[], deps: AddDeps): Promise<nu
 
     deps.out(`wrote ${file.path}`);
   }
+
+  // Add the generated verifier's one runtime dependency (jose) to package.json — idempotent, and
+  // dry-run-aware. Done here (not a printed TODO) so the scaffold is one fewer manual step.
+  await ensureJose(deps, dryRun);
 
   // The next steps are printed on a real run only — a dry run wrote nothing, so there is
   // nothing yet to configure or mount.
