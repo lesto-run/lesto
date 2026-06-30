@@ -8,5 +8,5 @@
     "jsx": "react-jsx"
   },
 
-  "include": ["idp", "mcp", "test", "agent.ts", "alchemy.run.ts"]
+  "include": ["idp", "mcp", "test", "agent.ts", "token.ts", "alchemy.run.ts"]
 }

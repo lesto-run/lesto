@@ -8,6 +8,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "agent": "bun agent.ts",
+    "token": "bun token.ts",
     "deploy": "bun alchemy.run.ts",
     "destroy": "bun alchemy.run.ts --destroy"
   },
