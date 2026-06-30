@@ -22,14 +22,21 @@
  * binds are stripped before the high-entropy token sweep, so a stripped path token
  * isn't double-flagged):
  *   1. Absolute filesystem paths → `<path>` (POSIX `/Users…`/`/home…`/any
- *      `/seg/seg…`, and Windows `C:\…`), so no machine/home path escapes.
+ *      `/seg/seg…`, Windows `C:\…`, and UNC `\\host\share\…`), so no machine/home
+ *      path or internal share name escapes.
  *   2. SQL bind values → the query SHAPE only: a quoted literal becomes `?`, a bare
  *      numeric literal in a value position becomes `?`.
  *   3. Env/secret-shaped tokens → `<redacted>`: `KEY=`/`SECRET=`/`TOKEN=`/`PASSWORD=`
- *      assignments, `Bearer <token>` headers, connection-string credentials, and
- *      long high-entropy hex/base64 runs.
+ *      assignments, `Bearer <token>` headers, connection-string credentials, AWS
+ *      access-key ids (`AKIA…`/`ASIA…`, which sit below the entropy floor), and long
+ *      high-entropy hex/base64 runs.
  *   4. Raw browser-console lines are DROPPED entirely in Phase 1 (their structured
  *      ingest is a deferred phase that must re-pass this stage).
+ *
+ * This is DEFENSE IN DEPTH on a dev-only, inspect-only PREVIEW surface, not a perfect
+ * exfiltration guard: it scrubs the common, high-signal secret/path SHAPES. Broadening
+ * to the long tail of vendor key prefixes and sub-entropy-floor tokens is tracked
+ * separately (it wants its own test-vector corpus).
  */
 
 /** The open dev error the overlay holds — the same shape `run.ts` broadcasts. */
@@ -108,6 +115,13 @@ const BIND_PLACEHOLDER = "?";
 const ABSOLUTE_PATH = /(?:[A-Za-z]:\\[^\s:?*"<>|]+|\/(?:[\w.@%~+[\]-]+\/)+[\w.@%~+[\]-]+)/g;
 
 /**
+ * A Windows UNC path (`\\server\share\dir\file`) — distinct from the drive path above
+ * and missed by it. UNC paths leak internal network topology (the server + share
+ * names), so they collapse to `<path>` too. Requires at least the `\\host\share` head.
+ */
+const UNC_PATH = /\\\\[^\s\\?*"<>|]+\\[^\s?*"<>|]+/g;
+
+/**
  * `KEY=`/`SECRET=`/`TOKEN=`/`PASSWORD=`/`PWD=` style assignments — the value (to the
  * next whitespace, quote, or separator) is the secret. Case-insensitive; the key name
  * is kept so the shape stays legible (`API_KEY=<redacted>`).
@@ -117,8 +131,21 @@ const ENV_ASSIGNMENT = /\b([A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PWD))\s*[=:]\s
 /** `Bearer <token>` / `Basic <token>` authorization headers. */
 const BEARER_TOKEN = /\b(Bearer|Basic)\s+[\w.~+/=-]+/gi;
 
-/** `scheme://user:password@host` connection-string credentials — strip the userinfo. */
-const CONNECTION_CREDENTIALS = /([a-z][\w+.-]*:\/\/)[^/@\s:]+:[^/@\s]+@/gi;
+/**
+ * `scheme://user:password@host` connection-string credentials — strip the userinfo.
+ * The password class allows `@` (matching greedily to the LAST `@` before the host) so
+ * a password that itself contains `@` (`user:p@ss@host`) doesn't truncate the match and
+ * leak `ss@host`; the `:password` requirement keeps a path-`@` (`https://h/a@b`) from
+ * being mistaken for credentials.
+ */
+const CONNECTION_CREDENTIALS = /([a-z][\w+.-]*:\/\/)[^/\s:@]+:[^/\s]+@/gi;
+
+/**
+ * An AWS access-key id — `AKIA`/`ASIA` + 16 upper-alphanumerics (20 chars total). It
+ * sits BELOW the 24-char high-entropy floor, so the generic sweep misses it, yet its
+ * prefix is unambiguous (zero false positives) and it routinely rides in stack traces.
+ */
+const AWS_ACCESS_KEY = /\bA(?:KIA|SIA)[0-9A-Z]{16}\b/g;
 
 /**
  * A long high-entropy run — a 24+ char hex or base64url token (env secrets, signing
@@ -144,7 +171,7 @@ const SQL_NUMERIC_LITERAL = /([=(,]\s*)\d+(\.\d+)?\b/g;
  * stay useful. A Windows or POSIX absolute path collapses to `<path>`.
  */
 export function stripAbsolutePaths(input: string): string {
-  return input.replace(ABSOLUTE_PATH, PATH_PLACEHOLDER);
+  return input.replace(ABSOLUTE_PATH, PATH_PLACEHOLDER).replace(UNC_PATH, PATH_PLACEHOLDER);
 }
 
 /**
@@ -160,14 +187,15 @@ export function stripSqlBindValues(input: string): string {
 
 /**
  * Redact env/secret-shaped tokens: `KEY=…` assignments, `Bearer …` headers,
- * connection-string credentials, and long high-entropy runs all collapse to
- * `<redacted>` (assignments keep their key name for legibility).
+ * connection-string credentials, AWS access-key ids, and long high-entropy runs all
+ * collapse to `<redacted>` (assignments keep their key name for legibility).
  */
 export function stripSecretTokens(input: string): string {
   return input
     .replace(ENV_ASSIGNMENT, (_match, key: string) => `${key}=${SECRET_PLACEHOLDER}`)
     .replace(BEARER_TOKEN, (_match, scheme: string) => `${scheme} ${SECRET_PLACEHOLDER}`)
     .replace(CONNECTION_CREDENTIALS, (_match, scheme: string) => `${scheme}${SECRET_PLACEHOLDER}@`)
+    .replace(AWS_ACCESS_KEY, SECRET_PLACEHOLDER)
     .replace(HIGH_ENTROPY, SECRET_PLACEHOLDER);
 }
 

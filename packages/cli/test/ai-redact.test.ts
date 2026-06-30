@@ -27,6 +27,10 @@ describe("stripAbsolutePaths", () => {
     expect(stripAbsolutePaths(String.raw`C:\Users\dev\project\page.tsx`)).toBe("<path>");
   });
 
+  it("collapses a Windows UNC path (\\\\server\\share\\…) to <path> — internal topology", () => {
+    expect(stripAbsolutePaths(String.raw`\\fileserver\admin$\secrets\db.json`)).toBe("<path>");
+  });
+
   it("leaves a single-segment URL path (e.g. a route) untouched", () => {
     // `/posts` is one segment — a route, not a filesystem path — so it survives.
     expect(stripAbsolutePaths("GET /posts 200")).toBe("GET /posts 200");
@@ -85,6 +89,30 @@ describe("stripSecretTokens", () => {
   it("redacts connection-string credentials, keeping the scheme and host", () => {
     expect(stripSecretTokens("postgres://app:s3cr3t@db.internal/main")).toBe(
       "postgres://<redacted>@db.internal/main",
+    );
+  });
+
+  it("redacts userinfo even when the password itself contains an @ (no truncation leak)", () => {
+    // The password `p@ss` carries an `@`; a first-`@`-anchored match would leak
+    // `ss@hostname`. The greedy-to-last-`@` class strips the whole userinfo.
+    expect(stripSecretTokens("postgresql://user:p@ss@hostname:5432/db")).toBe(
+      "postgresql://<redacted>@hostname:5432/db",
+    );
+  });
+
+  it("does NOT mistake a path-@ (no userinfo colon) for credentials", () => {
+    // `https://host/a@b` has no `:password@`, so the userinfo rule must not fire.
+    expect(stripSecretTokens("https://host.example/a@b")).toBe("https://host.example/a@b");
+  });
+
+  it("redacts an AWS access-key id that sits below the high-entropy floor", () => {
+    // `AKIAIOSFODNN7EXAMPLE` is 20 chars — under the 24-char entropy sweep — but its
+    // prefix is unambiguous, so it is redacted by the explicit AWS pattern.
+    expect(stripSecretTokens("config error for AKIAIOSFODNN7EXAMPLE")).toBe(
+      "config error for <redacted>",
+    );
+    expect(stripSecretTokens("temp creds ASIAY34FZKBOKMUTVV7A here")).toBe(
+      "temp creds <redacted> here",
     );
   });
 
