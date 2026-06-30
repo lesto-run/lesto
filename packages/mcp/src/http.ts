@@ -373,7 +373,8 @@ export function insufficientScopeChallenge(options: {
  * header. The `@modelcontextprotocol/sdk` transport surfaces the response BODY (not the header) in
  * the error it throws, so without this an agent sees an opaque failure; with it, it sees the OAuth
  * `error` code, a human `error_description`, and the `scope`/permission to step up to — enough to
- * self-correct. It mirrors the header and leaks nothing the header does not (RFC 6750 §3).
+ * self-correct. It complements the `WWW-Authenticate` challenge and never discloses more than the
+ * header does (RFC 6750 §3) — for a missing token it adds only the description the bare 401 omits.
  */
 export function refusalBody(reason: {
   error: string;

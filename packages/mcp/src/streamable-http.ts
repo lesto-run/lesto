@@ -239,10 +239,12 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
     if (decision.kind === "reject") {
       return {
         status: decision.status,
-        headers:
-          decision.wwwAuthenticate === undefined
+        headers: {
+          "content-type": "application/json",
+          ...(decision.wwwAuthenticate === undefined
             ? {}
-            : { "www-authenticate": decision.wwwAuthenticate },
+            : { "www-authenticate": decision.wwwAuthenticate }),
+        },
         body: decision.body,
       };
     }
@@ -270,7 +272,7 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
     if (denial !== undefined) {
       return {
         status: 403,
-        headers: { "www-authenticate": denial.wwwAuthenticate },
+        headers: { "content-type": "application/json", "www-authenticate": denial.wwwAuthenticate },
         body: denial.body,
       };
     }
@@ -290,7 +292,10 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
     if (floorDenial !== undefined) {
       return {
         status: 403,
-        headers: { "www-authenticate": floorDenial.wwwAuthenticate },
+        headers: {
+          "content-type": "application/json",
+          "www-authenticate": floorDenial.wwwAuthenticate,
+        },
         body: floorDenial.body,
       };
     }
