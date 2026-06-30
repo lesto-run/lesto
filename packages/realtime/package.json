@@ -5,6 +5,10 @@
   "description": "Lesto's realtime transport (ADR 0040) — the cross-process topic bus + SSE fan-out behind the in-process @lesto/pubsub hub. This package holds the pure cores: the resume-cursor replay ring and the transport seam.",
   "type": "module",
   "private": true,
+  "dependencies": {
+    "@lesto/pubsub": "workspace:*",
+    "@lesto/web": "workspace:*"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",

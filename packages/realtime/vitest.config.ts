@@ -7,7 +7,13 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/index.ts"],
+      exclude: [
+        "src/index.ts",
+        // Pure wiring: the real `pg.Client` factory. Every transport decision is
+        // tested in `pg-transport.ts` against the `PgListenClient` seam; this needs
+        // `pg` installed and a live socket. (Mirrors `@lesto/pg`'s `pg-driver.ts`.)
+        "src/pg-client.ts",
+      ],
       thresholds: {
         lines: 100,
         functions: 100,

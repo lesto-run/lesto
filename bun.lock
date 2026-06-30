@@ -884,6 +884,10 @@
     "packages/realtime": {
       "name": "@lesto/realtime",
       "version": "0.0.0",
+      "dependencies": {
+        "@lesto/pubsub": "workspace:*",
+        "@lesto/web": "workspace:*",
+      },
     },
     "packages/router": {
       "name": "@lesto/router",
