@@ -346,6 +346,14 @@ export function isCompressibleType(headers: Record<string, string | string[]>): 
 
   const type = contentType.toLowerCase();
 
+  // `text/event-stream` (SSE — ADR 0040's realtime fan-out) matches the `text/`
+  // prefix but must NEVER be compressed: the on-the-fly zlib transform buffers
+  // without a per-frame `Z_SYNC_FLUSH`, so frames are held back and never reach
+  // `EventSource` — SSE is broken out of the box under the default-on compression.
+  // The frames are tiny anyway, so there is nothing to gain. Excluded explicitly
+  // here (route-independent), before the allowlist check.
+  if (type.startsWith("text/event-stream")) return false;
+
   return COMPRESSIBLE_TYPES.some((prefix) => type.startsWith(prefix));
 }
 

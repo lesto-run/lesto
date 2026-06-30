@@ -456,6 +456,14 @@ describe("isCompressibleType", () => {
     expect(isCompressibleType({})).toBe(false);
   });
 
+  it("rejects text/event-stream so SSE frames are never buffered by a zlib transform (ADR 0040)", () => {
+    // `text/event-stream` matches the `text/` prefix but MUST stay uncompressed:
+    // the on-the-fly transform buffers without a per-frame flush, so a compressed
+    // SSE stream would never deliver frames to `EventSource`. Excluded explicitly.
+    expect(isCompressibleType({ "content-type": "text/event-stream" })).toBe(false);
+    expect(isCompressibleType({ "content-type": "text/event-stream; charset=utf-8" })).toBe(false);
+  });
+
   it("reads a multi-valued content-type by joining it", () => {
     // A (degenerate) list content-type is collapsed before the prefix check.
     expect(isCompressibleType({ "content-type": ["text/html"] })).toBe(true);

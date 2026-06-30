@@ -33,6 +33,7 @@ export type {
   Server,
   ServeOptions,
   HealthOptions,
+  LiveStreamOptions,
   AccessEntry,
   EtagConfig,
   InboundTrace,

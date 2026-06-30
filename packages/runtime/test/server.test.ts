@@ -18,7 +18,10 @@ import {
   ifNoneMatch,
   installProcessSafetyNet,
   isHealthProbe,
+  isLongLivedStream,
   probeReady,
+  streamBucketKey,
+  streamLimiter,
   readBody,
   requestAbortSignal,
   requestCancellation,
@@ -161,6 +164,119 @@ function rawRequest(port: number, raw: string): Promise<{ statusLine: string }> 
     socket.on("error", reject);
     socket.on("close", () => resolve({ statusLine: buf.split("\r\n")[0] ?? "" }));
   });
+}
+
+/** A held connection to a long-lived (SSE) endpoint — its head, first chunk, and a client-side close. */
+interface OpenStream {
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  /** Resolves with the first body chunk the server flushes (the SSE first byte). */
+  firstChunk(): Promise<string>;
+  /** Hang up the client end (mirrors a browser closing an `EventSource`). */
+  close(): void;
+}
+
+/**
+ * Open a streaming request and resolve once the response HEAD arrives — WITHOUT
+ * waiting for `end` (a held stream never ends until torn down), so a test can
+ * inspect the live connection and close it by hand. A buffered response (a 503
+ * refusal) still resolves here; its body rides the first chunk.
+ */
+function openStream(
+  port: number,
+  options: { method?: string; path: string; headers?: Record<string, string> },
+): Promise<OpenStream> {
+  return new Promise((resolve) => {
+    const req = httpRequest(
+      {
+        host: "127.0.0.1",
+        port,
+        method: options.method ?? "GET",
+        path: options.path,
+        headers: { ...options.headers },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        let waiter: ((chunk: string) => void) | undefined;
+
+        res.on("data", (chunk: Buffer) => {
+          if (waiter !== undefined) {
+            waiter(chunk.toString("utf8"));
+            waiter = undefined;
+
+            return;
+          }
+
+          chunks.push(chunk);
+        });
+
+        resolve({
+          status: res.statusCode ?? 0,
+          headers: res.headers,
+          firstChunk: () =>
+            new Promise<string>((r) => {
+              if (chunks.length > 0) {
+                r(Buffer.concat(chunks).toString("utf8"));
+
+                return;
+              }
+
+              waiter = r;
+            }),
+          close: () => req.destroy(),
+        });
+      },
+    );
+
+    // Destroying the client socket surfaces an ECONNRESET on the request; it is
+    // the intended teardown, not a test failure, so swallow it after the head.
+    req.on("error", () => {});
+
+    req.end();
+  });
+}
+
+/**
+ * A streaming SSE app: a `GET /` is an ordinary (ending) response, and any OTHER
+ * path is a held SSE stream — mirroring a real app that mounts the live endpoint
+ * at one route and serves normal routes elsewhere (so a "normal" request in a test
+ * actually completes rather than hanging on the stream). The stream enqueues one
+ * frame at first byte and holds the connection open, closing only when
+ * `context.signal` fires (client disconnect). `onAbort` records the abort reason
+ * so a test can prove teardown keyed off `RUNTIME_CLIENT_DISCONNECTED`, never a
+ * handler timeout.
+ */
+function sseApp(onAbort?: (reason: unknown) => void): App {
+  return {
+    migrationsApplied: [],
+    handle: async (_method, path) => {
+      // An ordinary route that ends — used to prove a held stream left the
+      // in-flight slot free.
+      if (path === "/") return { status: 200, headers: {}, body: "ok" };
+
+      const signal = currentContext()?.signal;
+
+      return {
+        status: 200,
+        headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(": connected\n\n"));
+
+            signal?.addEventListener("abort", () => {
+              onAbort?.(signal.reason);
+
+              try {
+                controller.close();
+              } catch {
+                // Already closed/errored — teardown is idempotent.
+              }
+            });
+          },
+        }),
+      } as unknown as LestoResponse;
+    },
+  };
 }
 
 describe("serve", () => {
@@ -1915,6 +2031,367 @@ describe("isHealthProbe", () => {
   it("honors custom live/ready paths", () => {
     expect(isHealthProbe("GET", "/livez", { livePath: "/livez" })).toBe(true);
     expect(isHealthProbe("GET", "/ready", { readyPath: "/ready" })).toBe(true);
+  });
+});
+
+describe("isLongLivedStream", () => {
+  it("matches exactly a GET on the reserved live path", () => {
+    expect(isLongLivedStream("GET", "/__lesto/live", "/__lesto/live")).toBe(true);
+
+    // `EventSource` only ever issues a GET; a non-GET at the same path (or any
+    // other path) is NOT a stream and falls through to the ordinary gated path.
+    expect(isLongLivedStream("POST", "/__lesto/live", "/__lesto/live")).toBe(false);
+    expect(isLongLivedStream("HEAD", "/__lesto/live", "/__lesto/live")).toBe(false);
+    expect(isLongLivedStream("GET", "/api", "/__lesto/live")).toBe(false);
+  });
+
+  it("honors a custom live-stream path", () => {
+    expect(isLongLivedStream("GET", "/sse", "/sse")).toBe(true);
+    expect(isLongLivedStream("GET", "/__lesto/live", "/sse")).toBe(false);
+  });
+});
+
+describe("streamLimiter", () => {
+  it("admits up to the global ceiling, refuses past it, and frees a slot on release", () => {
+    const limiter = streamLimiter(2, 100);
+
+    expect(limiter.tryAcquire("a")).toBe(true);
+    expect(limiter.tryAcquire("b")).toBe(true);
+    expect(limiter.active()).toBe(2);
+
+    // The global ceiling is hit even though no single IP is at its own cap.
+    expect(limiter.tryAcquire("c")).toBe(false);
+
+    limiter.release("a");
+
+    expect(limiter.active()).toBe(1);
+    expect(limiter.tryAcquire("c")).toBe(true); // the freed global slot is reusable
+  });
+
+  it("refuses past the per-IP ceiling while the global pool still has room", () => {
+    const limiter = streamLimiter(10, 1);
+
+    expect(limiter.tryAcquire("1.2.3.4")).toBe(true);
+    // Same IP, per-IP cap reached — refused though 9 global slots remain free.
+    expect(limiter.tryAcquire("1.2.3.4")).toBe(false);
+    // A different IP is unaffected: the per-IP bucket is keyed, not shared.
+    expect(limiter.tryAcquire("5.6.7.8")).toBe(true);
+    expect(limiter.active()).toBe(2);
+  });
+
+  it("prunes a per-IP bucket to zero on release so distinct-IP churn stays bounded", () => {
+    const limiter = streamLimiter(10, 2);
+
+    limiter.tryAcquire("ip");
+    limiter.tryAcquire("ip"); // held = 2
+
+    limiter.release("ip"); // held = 2 → 1 (the decrement branch)
+    expect(limiter.tryAcquire("ip")).toBe(true); // held = 1 → 2, under the per-IP cap
+
+    // Two more releases: the first decrements to 1, the last drops the entry
+    // entirely (the delete branch) so the bucket map stays bounded by live IPs.
+    limiter.release("ip");
+    limiter.release("ip");
+    expect(limiter.active()).toBe(0);
+    expect(limiter.tryAcquire("ip")).toBe(true); // a fresh acquire re-creates the entry
+  });
+
+  it("release never underflows the global count and ignores an unknown key", () => {
+    const limiter = streamLimiter(1, 1);
+
+    limiter.release("never-acquired"); // global guard + unknown-key guard, both no-ops
+
+    expect(limiter.active()).toBe(0);
+    expect(limiter.tryAcquire("x")).toBe(true);
+  });
+});
+
+describe("streamBucketKey", () => {
+  it("uses the resolved IP, or a single sentinel bucket when none resolved", () => {
+    expect(streamBucketKey("1.2.3.4")).toBe("1.2.3.4");
+    // No socket peer → one shared anonymous bucket, never a key of `undefined`.
+    expect(streamBucketKey(undefined)).toBe("-");
+  });
+});
+
+describe("serve — long-lived stream (ADR 0040)", () => {
+  it("holds an SSE stream open, never compresses it, and does not take an in-flight slot", async () => {
+    const entries: AccessEntry[] = [];
+
+    // maxInFlightRequests: 1 — if a held stream took an in-flight slot, a
+    // concurrent normal request would be shed 503. It must NOT.
+    server = await serve(sseApp(), {
+      port: 0,
+      maxInFlightRequests: 1,
+      logRequest: (entry) => entries.push(entry),
+    });
+
+    const stream = await openStream(server.port, {
+      path: "/__lesto/live",
+      headers: { "accept-encoding": "gzip, br" },
+    });
+
+    expect(stream.status).toBe(200);
+    expect(stream.headers["content-type"]).toBe("text/event-stream");
+
+    // SSE is excluded from compression even when the client offers gzip+br, or the
+    // zlib transform would buffer frames and `EventSource` would receive nothing.
+    expect(stream.headers["content-encoding"]).toBeUndefined();
+    expect(await stream.firstChunk()).toContain(": connected");
+
+    // The single in-flight slot is still free — a normal request is served, proving
+    // the held stream bypassed the in-flight gate.
+    const normal = await makeRequest(server.port, { method: "GET", path: "/" });
+    expect(normal.status).toBe(200);
+
+    // The stream was access-logged at FIRST BYTE (while still open) with the gauge.
+    const streamEntry = entries.find((e) => e.path === "/__lesto/live");
+    expect(streamEntry).toMatchObject({ method: "GET", status: 200, activeStreams: 1 });
+
+    stream.close();
+  });
+
+  it("bounds held streams by a dedicated global semaphore, refusing a coded 503 over the ceiling", async () => {
+    const entries: AccessEntry[] = [];
+
+    server = await serve(sseApp(), {
+      port: 0,
+      liveStream: { maxConcurrent: 1 },
+      logRequest: (entry) => entries.push(entry),
+    });
+
+    const first = await openStream(server.port, { path: "/__lesto/live" });
+    expect(first.status).toBe(200);
+    await first.firstChunk();
+
+    // The global stream ceiling (1) is reached — the second is refused with a 503.
+    const refused = await makeRequest(server.port, { method: "GET", path: "/__lesto/live" });
+    expect(refused.status).toBe(503);
+    expect(refused.body).toBe("Service Unavailable");
+
+    // The refusal is on the access log (visible backstop): 503, ms 0, no handler ran.
+    const refusedEntry = entries.find((e) => e.status === 503);
+    expect(refusedEntry).toMatchObject({ path: "/__lesto/live", status: 503, ms: 0 });
+
+    // (Slot reuse after release is proven deterministically by the streamLimiter
+    // unit test; the integration path only needs the ceiling-refusal here.)
+    first.close();
+  });
+
+  it("bounds held streams per client IP (the anonymous-flood backstop)", async () => {
+    // Global room for 5, but at most 1 per IP. From loopback (one IP) the second
+    // stream is refused on the per-IP cap, not the global one.
+    server = await serve(sseApp(), {
+      port: 0,
+      liveStream: { maxConcurrent: 5, maxPerIp: 1 },
+    });
+
+    const first = await openStream(server.port, { path: "/__lesto/live" });
+    expect(first.status).toBe(200);
+    await first.firstChunk();
+
+    const refused = await makeRequest(server.port, { method: "GET", path: "/__lesto/live" });
+    expect(refused.status).toBe(503);
+
+    first.close();
+  });
+
+  it("exempts a held stream from handlerTimeoutMs and tears down only on client disconnect", async () => {
+    let abortReason: unknown;
+
+    let resolveAborted!: () => void;
+    const aborted = new Promise<void>((resolve) => {
+      resolveAborted = resolve;
+    });
+
+    const app = sseApp((reason) => {
+      abortReason = reason;
+      resolveAborted();
+    });
+
+    // A tiny handler timeout: a normal handler would be guillotined at 20ms. The
+    // stream must outlive it.
+    server = await serve(app, { port: 0, handlerTimeoutMs: 20 });
+
+    const stream = await openStream(server.port, { path: "/__lesto/live" });
+    expect(stream.status).toBe(200);
+    await stream.firstChunk();
+
+    // Wait well past the handler timeout; the stream is still open (no 503, the
+    // connection was not torn down by the deadline).
+    await new Promise((r) => setTimeout(r, 60));
+
+    // Now the client hangs up — teardown fires with the DISCONNECT reason, never a
+    // timeout (no `abortTimeout` is wired on the stream path).
+    stream.close();
+    await aborted;
+
+    expect(abortReason).toBeInstanceOf(RuntimeError);
+    expect((abortReason as RuntimeError).code).toBe("RUNTIME_CLIENT_DISCONNECTED");
+  });
+
+  it("answers a handler error on the stream path with a coded status, logged once", async () => {
+    const entries: AccessEntry[] = [];
+    const errors: Array<{ message: string; error: unknown }> = [];
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => {
+        throw new Error("stream handler blew up");
+      },
+    };
+
+    server = await serve(app, {
+      port: 0,
+      logRequest: (entry) => entries.push(entry),
+      logError: (message, error) => errors.push({ message, error }),
+    });
+
+    const refused = await makeRequest(server.port, { method: "GET", path: "/__lesto/live" });
+
+    // A plain throw maps to 500: ours to explain, so it is logged via logError…
+    expect(refused.status).toBe(500);
+    expect(errors.some((e) => e.message === "unhandled error serving request")).toBe(true);
+
+    // …and the error path still emits exactly one access line, carrying the gauge.
+    const entry = entries.find((e) => e.path === "/__lesto/live");
+    expect(entry).toMatchObject({ status: 500, activeStreams: expect.any(Number) });
+    expect(entries.filter((e) => e.path === "/__lesto/live")).toHaveLength(1);
+  });
+
+  it("maps a coded refusal on the stream path to its status without logError (a 4xx is the client's)", async () => {
+    const errors: unknown[] = [];
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => {
+        // A coded client error (413) — statusForError maps it, and it is NOT ours
+        // to explain, so logError must stay silent (the `status === 500` false arm).
+        throw new RuntimeError("RUNTIME_BODY_TOO_LARGE", "too big");
+      },
+    };
+
+    server = await serve(app, { port: 0, logError: (_m, e) => errors.push(e) });
+
+    const refused = await makeRequest(server.port, { method: "GET", path: "/__lesto/live" });
+
+    expect(refused.status).toBe(413);
+    expect(errors).toHaveLength(0);
+  });
+
+  it("reports a mid-stream truncation through logError (the access line already went out)", async () => {
+    const entries: AccessEntry[] = [];
+    const errors: Array<{ message: string; error: unknown }> = [];
+
+    // A stream that flushes a frame, then errors mid-flight — truncated AFTER the
+    // first-byte access line, so the truncation can only be surfaced via logError.
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () =>
+        ({
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(": connected\n\n"));
+              controller.error(new Error("producer blew up"));
+            },
+          }),
+        }) as unknown as LestoResponse,
+    };
+
+    server = await serve(app, {
+      port: 0,
+      logRequest: (entry) => entries.push(entry),
+      logError: (message, error) => errors.push({ message, error }),
+    });
+
+    await makeRequest(server.port, { method: "GET", path: "/__lesto/live" }).catch(() => {});
+
+    // The first-byte access line went out (status 200, with the gauge)…
+    const entry = entries.find((e) => e.path === "/__lesto/live");
+    expect(entry).toMatchObject({ status: 200, activeStreams: 1 });
+
+    // …and the truncation rode logError, not the (already-emitted) access line.
+    expect(errors.some((e) => e.message === "response body truncated mid-stream")).toBe(true);
+  });
+
+  it("compresses a non-SSE compressible stream on the live path on the fly", async () => {
+    // The live path's stream handling is general, not SSE-only: a compressible
+    // stream body (text/html) with Accept-Encoding is gzipped through the
+    // transform — exercising the stream-encoding arm the SSE type opts out of.
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () =>
+        ({
+          status: 200,
+          headers: { "content-type": "text/html" },
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("<p>live</p>"));
+              controller.close();
+            },
+          }),
+        }) as unknown as LestoResponse,
+    };
+
+    server = await serve(app, { port: 0 });
+
+    const response = await makeRequestRaw(server.port, {
+      method: "GET",
+      path: "/__lesto/live",
+      headers: { "accept-encoding": "gzip" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-encoding"]).toBe("gzip");
+    expect(gunzipSync(response.body).toString("utf8")).toBe("<p>live</p>");
+  });
+
+  it("emits the active-stream gauge on the default JSON access line", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    server = await serve(sseApp(), { port: 0, newRequestId: () => "stream-id" });
+
+    const stream = await openStream(server.port, { path: "/__lesto/live" });
+    await stream.firstChunk();
+
+    // The default structured sink ran; its first-byte line carries `active_streams`.
+    const line = JSON.parse(logSpy.mock.calls[0]?.[0] as string);
+    expect(line).toMatchObject({
+      event: "http.access",
+      active_streams: 1,
+      request_id: "stream-id",
+    });
+
+    logSpy.mockRestore();
+    stream.close();
+  });
+
+  it("honors a custom live-stream path and disabling the special handling", async () => {
+    // liveStream: false — the reserved path is NOT special; the app handles it as
+    // an ordinary GET (gated, buffered, ends normally).
+    const app: App = {
+      migrationsApplied: [],
+      handle: async (_method, path) => ({ status: 200, headers: {}, body: `fell-through:${path}` }),
+    };
+
+    server = await serve(app, { port: 0, liveStream: false });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/__lesto/live" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toBe("fell-through:/__lesto/live");
+
+    await server.close();
+
+    // A custom path: a GET there is the stream; the default path is now ordinary.
+    server = await serve(sseApp(), { port: 0, liveStream: { path: "/sse" } });
+
+    const stream = await openStream(server.port, { path: "/sse" });
+    expect(stream.status).toBe(200);
+    expect(stream.headers["content-type"]).toBe("text/event-stream");
+    stream.close();
   });
 });
 

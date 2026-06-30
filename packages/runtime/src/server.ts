@@ -150,6 +150,33 @@ export interface AccessEntry {
    * `lesto.response.truncated`.
    */
   readonly truncated?: boolean;
+
+  /**
+   * The number of long-lived streams held open at the instant this access line
+   * was emitted — the active-stream gauge (ADR 0040). A held stream logs at FIRST
+   * BYTE (not at teardown, hours later), carrying this gauge, so a fleet of live
+   * connections is visible in the log the moment each opens. Present only on a
+   * long-lived-stream access line; absent on every ordinary request.
+   */
+  readonly activeStreams?: number;
+}
+
+/** Tuning for the long-lived-stream endpoint (ADR 0040 — see {@link ServeOptions.liveStream}). */
+export interface LiveStreamOptions {
+  /** The reserved live-stream path a `GET` is recognized at. Defaults to `/__lesto/live`. */
+  readonly path?: string;
+
+  /**
+   * The global ceiling on concurrent held streams — the dedicated backstop that
+   * replaces the in-flight gate for streams. Defaults to 10,000.
+   */
+  readonly maxConcurrent?: number;
+
+  /**
+   * The per-client-IP ceiling on concurrent held streams — the anonymous-flood
+   * backstop, so one source cannot drain the global pool. Defaults to 100.
+   */
+  readonly maxPerIp?: number;
 }
 
 export interface ServeOptions {
@@ -291,6 +318,26 @@ export interface ServeOptions {
   readonly compress?: false;
 
   /**
+   * The long-lived streaming endpoint — ADR 0040's SSE realtime fan-out, mounted
+   * by the app at `/__lesto/live`. On by default.
+   *
+   * A `GET` on its path is recognized as a held stream BEFORE admission (a route
+   * predicate, like the health-probe bypass), so it does **not** consume an
+   * in-flight slot — a held SSE connection that took one would occupy it for its
+   * whole life and self-DoS the node at the in-flight cap. It is bounded instead
+   * by a dedicated global stream semaphore plus a per-client-IP ceiling (the
+   * anonymous-flood backstop); over either is a coded 503. The handler is also
+   * exempt from `handlerTimeoutMs` (a live stream must outlive it) and the access
+   * line is logged at first byte with an active-stream gauge.
+   *
+   * Pass `false` to disable the special handling (the reserved path then falls
+   * through the ordinary gate), or an object to override the path and the
+   * ceilings. The per-PRINCIPAL connection cap lives in the SSE handler itself,
+   * where the principal is resolved — not here.
+   */
+  readonly liveStream?: false | LiveStreamOptions;
+
+  /**
    * Whom to believe about the client IP and protocol (see {@link TrustProxy}).
    *
    * Default: `false` — trust nothing. The client IP is the socket's own peer
@@ -407,6 +454,24 @@ const DEFAULT_MAX_IN_FLIGHT_REQUESTS = 1_000;
 
 const DEFAULT_LIVE_PATH = "/health";
 const DEFAULT_READY_PATH = "/readyz";
+
+/**
+ * The reserved path the long-lived-stream (SSE) realtime fan-out is mounted at
+ * (ADR 0040). A `GET` here is recognized as a held stream BEFORE admission, so it
+ * is exempt from the in-flight gate and bounded by its own stream semaphore.
+ */
+const DEFAULT_LIVE_STREAM_PATH = "/__lesto/live";
+
+/**
+ * Default ceilings for held streams. The global cap is the dedicated backstop the
+ * in-flight gate (1,000) no longer provides for streams — generous, aligned with
+ * the connection cap, since a stream IS a connection. The per-IP cap is the
+ * anonymous-flood backstop: one client IP can hold at most this many streams, so
+ * a single source cannot drain the global pool (a browser opens at most a handful
+ * of SSE per origin, so 100 leaves ample room for many tabs).
+ */
+const DEFAULT_MAX_CONCURRENT_STREAMS = 10_000;
+const DEFAULT_MAX_STREAMS_PER_IP = 100;
 
 /**
  * The method and path of an incoming request.
@@ -847,6 +912,92 @@ export function concurrencyLimiter(max: number): ConcurrencyLimiter {
   };
 }
 
+/**
+ * Bounds long-lived streams (ADR 0040) two ways at once — a GLOBAL ceiling and a
+ * PER-KEY (client-IP) ceiling — and exposes a live gauge.
+ *
+ * A held stream is exempt from the in-flight gate ({@link ConcurrencyLimiter}): it
+ * would otherwise occupy an in-flight slot for its whole life and self-DoS the
+ * node at the in-flight cap (~1k idle users). That exemption removes the only
+ * global backstop, so streams get their OWN dedicated semaphore here. The per-key
+ * ceiling is the anonymous-flood backstop — keyed on the resolved client IP, it
+ * stops one source from draining the whole global pool (a single shared cap would
+ * either let one IP hold every slot, or — keyed on the lone anonymous principal —
+ * throttle every anonymous user at once). The per-PRINCIPAL cap, which needs the
+ * resolved principal, lives in the app-wired SSE handler, not here.
+ *
+ * {@link active} is the gauge the access log stamps at first byte, so a held
+ * stream is visible in the log the moment it opens rather than only at teardown.
+ */
+export interface StreamLimiter {
+  /** Admit a stream for `key` (the client IP), or return `false` at the global or per-key ceiling. */
+  tryAcquire(key: string): boolean;
+
+  /** Free a stream's slot for `key` once it tears down. */
+  release(key: string): void;
+
+  /** The number of streams currently held open — the active-stream gauge. */
+  active(): number;
+}
+
+/**
+ * The per-client-IP bucket key for the stream limiter: the resolved client IP, or
+ * a single sentinel `"-"` bucket when no IP resolved (no socket peer). Pure and
+ * exported so the resolved/unresolved branches are unit-testable without a socket.
+ * An unresolved-IP stream is rare (a real TCP peer always has an address), but it
+ * must share ONE anonymous bucket rather than key on `undefined`.
+ */
+export function streamBucketKey(ip: string | undefined): string {
+  return ip ?? "-";
+}
+
+/** A {@link StreamLimiter} bounded at `maxGlobal` total and `maxPerKey` per client IP. */
+export function streamLimiter(maxGlobal: number, maxPerKey: number): StreamLimiter {
+  let global = 0;
+
+  // Per-key counts, pruned to zero on release so a churn of one-shot IPs can't
+  // grow the map without bound.
+  const perKey = new Map<string, number>();
+
+  return {
+    tryAcquire(key: string): boolean {
+      if (global >= maxGlobal) return false;
+
+      const held = perKey.get(key) ?? 0;
+
+      if (held >= maxPerKey) return false;
+
+      global += 1;
+      perKey.set(key, held + 1);
+
+      return true;
+    },
+
+    release(key: string): void {
+      // Guard underflow: `release` only follows a successful `tryAcquire` (the
+      // stream's `finally`), so neither branch trips in normal flow.
+      if (global > 0) global -= 1;
+
+      const held = perKey.get(key);
+
+      if (held === undefined) return;
+
+      // Drop the entry at zero so the map stays bounded by LIVE distinct IPs.
+      if (held <= 1) {
+        perKey.delete(key);
+
+        return;
+      }
+
+      perKey.set(key, held - 1);
+    },
+
+    active(): number {
+      return global;
+    },
+  };
+}
+
 /** The slice of a node server {@link drainServer} drives — fakeable in a test. */
 export interface ClosableServer {
   close(callback: () => void): void;
@@ -927,6 +1078,11 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
   const drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
   const logError = options.logError ?? defaultLogError;
 
+  // The long-lived-stream endpoint, on by default; `false` disables it (the
+  // reserved path then falls through the ordinary gate). Its dedicated limiter is
+  // minted once here, shared across every connection like the in-flight gate.
+  const liveStreamOptions = options.liveStream === false ? undefined : (options.liveStream ?? {});
+
   const deps: HandleDeps = {
     maxBodyBytes: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
     maxJsonBodyBytes: options.maxJsonBodyBytes ?? DEFAULT_MAX_JSON_BODY_BYTES,
@@ -944,6 +1100,17 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
     logError,
     now: options.now ?? Date.now,
     concurrency: concurrencyLimiter(options.maxInFlightRequests ?? DEFAULT_MAX_IN_FLIGHT_REQUESTS),
+    ...(liveStreamOptions === undefined
+      ? {}
+      : {
+          liveStream: {
+            path: liveStreamOptions.path ?? DEFAULT_LIVE_STREAM_PATH,
+            limiter: streamLimiter(
+              liveStreamOptions.maxConcurrent ?? DEFAULT_MAX_CONCURRENT_STREAMS,
+              liveStreamOptions.maxPerIp ?? DEFAULT_MAX_STREAMS_PER_IP,
+            ),
+          },
+        }),
     ...(options.tracer === undefined ? {} : { tracer: options.tracer }),
     ...(options.parseTraceparent === undefined
       ? {}
@@ -1046,6 +1213,13 @@ interface HandleDeps {
 
   /** Bounds requests in flight at once; sheds a 503 past the cap. */
   readonly concurrency: ConcurrencyLimiter;
+
+  /**
+   * The long-lived-stream endpoint (its reserved path + dedicated limiter), or
+   * absent when disabled. A `GET` on `path` bypasses the in-flight gate and is
+   * admitted under `limiter` instead (ADR 0040).
+   */
+  readonly liveStream?: { readonly path: string; readonly limiter: StreamLimiter };
 
   /** Mints one span per request, or absent for the zero-overhead default. */
   readonly tracer?: RequestTracer;
@@ -1273,6 +1447,17 @@ async function handle(
     return handleAdmitted(app, req, res, deps, line, path);
   }
 
+  // A long-lived stream (SSE) is recognized as a ROUTE PREDICATE here, BEFORE the
+  // in-flight gate — exactly like the health-probe bypass above. It must not take
+  // an in-flight slot: a held connection would occupy one for its whole life and
+  // self-DoS the node at the in-flight cap (ADR 0040). `handleStream` admits it
+  // instead under its own dedicated stream semaphore. Recognizing it as a
+  // predicate (not a response flag) keeps the in-flight `finally` release
+  // unconditional below — a flag flipped mid-response would double-free the slot.
+  if (deps.liveStream !== undefined && isLongLivedStream(line.method, path, deps.liveStream.path)) {
+    return handleStream(app, req, res, deps, line, path, deps.liveStream);
+  }
+
   // Shed before any work when too many requests are already in flight: a
   // request-volume flood is answered with the cheapest possible 503 — no context,
   // no body read — so it cannot push the node past its in-flight budget. The shed
@@ -1310,6 +1495,18 @@ export function isHealthProbe(method: string, path: string, health: HealthOption
     path === (health.livePath ?? DEFAULT_LIVE_PATH) ||
     path === (health.readyPath ?? DEFAULT_READY_PATH)
   );
+}
+
+/**
+ * True iff this is a long-lived streaming request — a `GET` on the reserved live
+ * path (ADR 0040's SSE fan-out). Decided as a route predicate BEFORE admission,
+ * like {@link isHealthProbe}, so a held stream never takes an in-flight slot.
+ * `EventSource` always issues a `GET`, so a non-GET at the same path (or any other
+ * path) falls through to the ordinary gated path. Exported so the predicate is
+ * unit-testable without a socket.
+ */
+export function isLongLivedStream(method: string, path: string, livePath: string): boolean {
+  return method === "GET" && path === livePath;
 }
 
 /** The request path proper, run only after a concurrency slot is acquired (or a probe). */
@@ -1518,6 +1715,157 @@ async function handleAdmitted(
 }
 
 /**
+ * Drive a long-lived streaming request (an SSE connection on the reserved live
+ * path) and never throw — the streaming counterpart of {@link handleAdmitted},
+ * built for the ways ADR 0040 says a held stream differs from a normal request:
+ *
+ *   - **No in-flight slot.** Admission is the dedicated {@link StreamLimiter}
+ *     (global + per-client-IP), NOT `deps.concurrency`. A stream that held an
+ *     in-flight slot for hours would self-DoS the node at the in-flight cap. Over
+ *     either ceiling is the cheapest possible coded 503 — no context run, no
+ *     dispatch — logged like the in-flight shed so the backstop firing is visible.
+ *   - **No handler timeout.** `app.handle` is dispatched WITHOUT {@link withTimeout}:
+ *     a live stream must outlive `handlerTimeoutMs`. The handler's contract is to
+ *     return its `ReadableStream` promptly and use `context.signal` purely for
+ *     teardown, which fires only on client disconnect (`RUNTIME_CLIENT_DISCONNECTED`),
+ *     never a timeout — there is no `abortTimeout` wired on this path.
+ *   - **Logged at first byte.** The access line is emitted the instant the response
+ *     is produced — carrying the live {@link StreamLimiter.active} gauge — not at
+ *     teardown hours later, so a held stream is visible in the log for its whole
+ *     life. (A mid-stream truncation, which happens after first byte, is still
+ *     surfaced through `logError`; it can no longer ride the already-emitted line.)
+ *   - **No span.** A held stream does not fit the per-request span model (it would
+ *     hold one `http.request` span open for hours); its observability is the
+ *     first-byte access line + the active-stream gauge.
+ *
+ * `text/event-stream` is never compressed (excluded in `isCompressibleType`), so
+ * the negotiated {@link compressResponse} leaves an SSE body untouched.
+ */
+async function handleStream(
+  app: App,
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: HandleDeps,
+  line: { method: string; url: string },
+  path: string,
+  liveStream: { path: string; limiter: StreamLimiter },
+): Promise<void> {
+  const context = establishContext(req, deps.trustProxy, deps.newRequestId());
+
+  const requestId = context.requestId;
+
+  // The per-IP bucket key is the resolved client IP — the anonymous-flood
+  // backstop. An unresolved IP (no socket peer) shares one sentinel bucket.
+  const ipKey = streamBucketKey(context.ip);
+
+  // Admit under the dedicated stream semaphore, NOT the in-flight gate. Over the
+  // global ceiling OR this IP's ceiling is a cheap coded 503, recorded on the
+  // access log (ms 0, no slot taken) so the backstop is visible.
+  if (!liveStream.limiter.tryAcquire(ipKey)) {
+    respondWithError(res, 503, deps.securityHeaders, requestId);
+    deps.logRequest({ method: line.method, path, status: 503, ms: 0, requestId });
+
+    return;
+  }
+
+  // Publish a per-request abort signal: a held stream reads `context.signal` to
+  // tear down when the client hangs up (`RUNTIME_CLIENT_DISCONNECTED`). The
+  // deadline half is deliberately never wired here — the stream is timeout-exempt.
+  const cancellation = requestCancellation(res);
+
+  context.signal = cancellation.signal;
+
+  return runWithContext(context, async () => {
+    const start = deps.now();
+
+    const method = line.method;
+    let status = 500;
+
+    // One access line per request, carrying the live active-stream gauge. It is
+    // emitted at FIRST BYTE on the success path (so a held stream is visible the
+    // instant it opens, not at teardown hours later) and at the failure on the
+    // error path. The two never both fire: everything that can throw runs BEFORE
+    // the first-byte log, and `applyResponse` for a stream never rejects — so a
+    // `catch` means we had not yet logged.
+    const logStream = (): void => {
+      deps.logRequest({
+        method,
+        path,
+        status,
+        ms: deps.now() - start,
+        requestId,
+        activeStreams: liveStream.limiter.active(),
+      });
+    };
+
+    const onTruncated = (reason: unknown): void => {
+      // The access line already went out at first byte, so a truncation cannot
+      // ride it — surface it like an unhandled error so it is not swallowed.
+      deps.logError("response body truncated mid-stream", reason);
+    };
+
+    try {
+      // A GET stream carries no body to read; dispatch straight through with an
+      // empty body. NO `withTimeout` — the long-lived kind is exempt from
+      // `handlerTimeoutMs`, so a stream that lives for hours is never guillotined.
+      const request = toLestoRequest({
+        method: line.method,
+        url: line.url,
+        headers: req.headers,
+        body: "",
+      });
+
+      const response = await app.handle(request.method, request.path, {
+        query: request.query,
+        headers: request.headers,
+        body: request.body,
+      });
+
+      const hardened = withRequestId(
+        withSecurityHeaders(response, deps.securityHeaders),
+        requestId,
+      );
+
+      status = hardened.status;
+
+      // SSE (`text/event-stream`) is excluded from compression, so this no-ops on
+      // a live stream; a non-SSE body at this path is negotiated as usual.
+      const encoded = compressResponse(
+        hardened,
+        firstHeader(req.headers["accept-encoding"]),
+        deps.compress,
+      );
+
+      // Log at FIRST BYTE — before awaiting the stream's lifetime — with the live
+      // active-stream gauge, so a held stream is visible in the log immediately.
+      logStream();
+
+      // Awaiting resolves only once the stream is fully flushed or torn down, so
+      // the `finally` frees the dedicated slot exactly when the connection ends.
+      await applyResponse(res, encoded.response, {
+        onTruncated,
+        ...(encoded.streamEncoding === undefined ? {} : { streamEncoding: encoded.streamEncoding }),
+      });
+    } catch (error) {
+      status = statusForError(error);
+
+      // A 500 is ours to explain in the log; client errors (4xx) are not.
+      if (status === 500) {
+        deps.logError("unhandled error serving request", error);
+      }
+
+      respondWithError(res, status, deps.securityHeaders, requestId);
+
+      logStream();
+    } finally {
+      // Free the dedicated stream slot the instant the connection ends, so the
+      // gauge and both ceilings reflect reality the moment a stream closes.
+      liveStream.limiter.release(ipKey);
+    }
+  });
+}
+
+/**
  * Merge an `X-Request-Id` echo onto a response, without disturbing a header the
  * app set itself.
  *
@@ -1619,6 +1967,7 @@ export function defaultLogRequest(entry: AccessEntry): void {
       ms: entry.ms,
       request_id: entry.requestId,
       ...(entry.truncated === true ? { truncated: true } : {}),
+      ...(entry.activeStreams === undefined ? {} : { active_streams: entry.activeStreams }),
     }),
   );
 }
