@@ -183,7 +183,10 @@ client-side.
 
 - The **initial snapshot** for a shape at an LSN is an idempotent, **CDN-cacheable** HTTP response
   (same shape + same LSN ⇒ same bytes ⇒ cacheable/`ETag`-able) — many clients opening the same public
-  shape share one cached snapshot.
+  shape share one cached snapshot. **Caveat (review must pin this down):** byte-identical responses
+  require a **deterministic row order** — a `SELECT` without `ORDER BY` may return rows in a different
+  order across executions (planner/stats/vacuum), defeating the cache. A shape definition must therefore
+  carry a total ordering (e.g. `ORDER BY` a unique key); the snapshot serializer enforces it.
 - The **live tail** is a long-lived stream that **reuses ADR 0040's runtime response kind**
   (`handleStream` / `isLongLivedStream`, `packages/runtime/src/server.ts`): no in-flight slot, no
   compression-buffering, bounded by the dedicated stream semaphore + per-IP cap. The Tier 4 endpoint
@@ -197,7 +200,10 @@ client-side.
 - **v0 (dogfood, dev-loop parity):** **single table + simple equality/range filters**, with
   **SQLite-local polling/triggers standing in for logical replication** so the dev loop on SQLite
   matches the prod shape (the `docs/PERF-SECURITY-2026.md` v0 line). In-memory client store, online-
-  only, last-write-wins. Proves `live()` end-to-end on the gallery.
+  only, last-write-wins. Proves `live()` end-to-end on the gallery. **Cursor parity is API-only, not
+  semantic:** SQLite has no LSN, so v0 **resyncs on every reconnect** (no precise replay) — the `live()`
+  *surface* is identical to prod, but the resume guarantee is the coarse floor until the v1
+  logical-replication LSN lands. The dev/prod delta is stated, not hidden.
 - **v1 (the real engine):** Postgres logical-replication tap, the shape engine with per-row predicate
   authz + re-auth, OPFS-SQLite durable store, offline mutation log + reconcile, cross-tab leader.
 - **vNext:** multi-table / joined shapes, Yjs/Loro per-field CRDTs, edge fan-out (a Durable Object
