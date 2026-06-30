@@ -114,6 +114,16 @@ export class PostgresTransport implements Transport {
 
   #closed = false;
 
+  /**
+   * Whether a reconnect is already in flight. A dropped connection can fire `error`
+   * MORE THAN ONCE (the socket errors, then errors again on teardown), and the old
+   * client's `error` listener is still wired while the new one connects — so without
+   * this guard two `error`s would launch overlapping reconnects that each mint a
+   * client and overwrite `#client`, orphaning (and leaking) the first and bumping
+   * the generation twice (an avoidable double-resync). One reconnect at a time.
+   */
+  #reconnecting = false;
+
   constructor(options: PostgresTransportOptions) {
     this.#createClient = options.createClient;
     this.#channel = options.channel ?? DEFAULT_CHANNEL;
@@ -206,23 +216,36 @@ export class PostgresTransport implements Transport {
     void this.#reconnect();
   }
 
-  /** End the old client, back off, then re-open and re-`LISTEN` (bumping generation). */
+  /**
+   * Run ONE reconnect session — end the old client, back off, re-open and
+   * re-`LISTEN` (bumping the generation), retrying until it succeeds or the
+   * transport closes. The `#reconnecting` guard makes overlapping `error` events
+   * collapse to a single session (no orphaned clients, no double generation bump).
+   */
   async #reconnect(): Promise<void> {
-    if (this.#closed) return;
+    if (this.#reconnecting || this.#closed) return;
 
-    await this.#endClient();
-    await this.#delay(this.#reconnectMs);
-
-    // A `close` may have raced the backoff — do not resurrect a closed transport.
-    if (this.#closed) return;
+    this.#reconnecting = true;
 
     try {
-      await this.#openAndListen(true);
-    } catch (error) {
-      // The reconnect itself failed (DB still down) — report and try again.
-      this.#onError(error);
+      for (;;) {
+        await this.#endClient();
+        await this.#delay(this.#reconnectMs);
 
-      void this.#reconnect();
+        // A `close` may have raced the backoff — do not resurrect a closed transport.
+        if (this.#closed) return;
+
+        try {
+          await this.#openAndListen(true);
+
+          return; // reconnected + re-LISTENed
+        } catch (error) {
+          // The reconnect itself failed (DB still down) — report and loop to retry.
+          this.#onError(error);
+        }
+      }
+    } finally {
+      this.#reconnecting = false;
     }
   }
 

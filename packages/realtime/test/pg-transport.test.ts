@@ -226,6 +226,48 @@ describe("PostgresTransport — reconnect", () => {
     await transport.close();
   });
 
+  it("collapses overlapping error events into a single reconnect (no orphaned client, one generation bump)", async () => {
+    const clients: FakePgClient[] = [];
+    const bumpGeneration = vi.fn();
+    let releaseDelay!: () => void;
+
+    const transport = new PostgresTransport({
+      createClient: () => {
+        const client = new FakePgClient();
+        clients.push(client);
+
+        return client;
+      },
+      bumpGeneration,
+      // A backoff held open so a SECOND error lands while the first reconnect is
+      // mid-flight (the exact race the guard closes).
+      delay: () =>
+        new Promise<void>((resolve) => {
+          releaseDelay = resolve;
+        }),
+    });
+
+    await transport.start();
+    expect(clients).toHaveLength(1);
+
+    // Two errors in quick succession — the second must NOT launch a second reconnect.
+    clients[0]!.emitError(new Error("reset"));
+    clients[0]!.emitError(new Error("reset again"));
+    await flush();
+
+    // Both errors collapsed into ONE in-flight reconnect session, still awaiting backoff.
+    releaseDelay();
+    await flush();
+
+    // Exactly one fresh client was minted and the generation bumped exactly once —
+    // not two clients (one orphaned) and not a double bump.
+    expect(clients).toHaveLength(2);
+    expect(clients[1]!.connected).toBe(true);
+    expect(bumpGeneration).toHaveBeenCalledOnce();
+
+    await transport.close();
+  });
+
   it("does not resurrect a transport that was closed during the reconnect backoff", async () => {
     const clients: FakePgClient[] = [];
     let releaseDelay!: () => void;
