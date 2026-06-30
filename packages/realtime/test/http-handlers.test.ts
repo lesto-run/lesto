@@ -285,6 +285,49 @@ describe("openLiveStream", () => {
     expect(hub.subscriberCount("t")).toBe(0);
   });
 
+  it("severs the stream (fail-closed) when re-auth throws or rejects", async () => {
+    // A synchronous throw severs (fail-closed), never escaping the timer callback.
+    const hubThrows = new PubSub();
+    const timersThrows = fakeTimers();
+    openLiveStream({
+      hub: hubThrows,
+      ring: ring(),
+      authorizedTopics: ["t"],
+      since: undefined,
+      signal: undefined,
+      heartbeatMs: 1000,
+      maxQueue: 16,
+      timers: timersThrows.seam,
+      revalidate: () => {
+        throw new Error("session lookup blew up");
+      },
+    });
+    expect(hubThrows.subscriberCount("t")).toBe(1);
+    timersThrows.intervals[1]!.cb();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(hubThrows.subscriberCount("t")).toBe(0);
+
+    // An async rejection also fails closed.
+    const hubRejects = new PubSub();
+    const timersRejects = fakeTimers();
+    openLiveStream({
+      hub: hubRejects,
+      ring: ring(),
+      authorizedTopics: ["t"],
+      since: undefined,
+      signal: undefined,
+      heartbeatMs: 1000,
+      maxQueue: 16,
+      timers: timersRejects.seam,
+      revalidate: () => Promise.reject(new Error("revocation check failed")),
+    });
+    timersRejects.intervals[1]!.cb();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(hubRejects.subscriberCount("t")).toBe(0);
+  });
+
   it("keeps the stream alive when periodic re-auth passes", async () => {
     const hub = new PubSub();
     const timers = fakeTimers();

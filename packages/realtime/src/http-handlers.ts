@@ -198,17 +198,26 @@ export function openLiveStream(config: LiveStreamConfig): ReadableStream<string>
         });
 
         // Periodic re-auth (optional): a revoked/expired session is severed.
+        // `revalidate` is app code, so it may throw SYNCHRONOUSLY or reject — both
+        // must FAIL CLOSED (sever the stream), never escape the timer callback as an
+        // uncaught exception/rejection. Calling it inside `.then(() => …)` funnels a
+        // sync throw into the rejection path, and the `.catch` tears down on either.
         if (config.revalidate !== undefined) {
           const revalidate = config.revalidate;
 
           timerHandles.push({
             kind: "interval",
             handle: timers.setInterval(() => {
-              void Promise.resolve(revalidate()).then((ok) => {
-                if (!ok) teardown();
-
-                return ok;
-              });
+              void (async () => {
+                try {
+                  // `await` makes a SYNCHRONOUS throw from `revalidate()` land in
+                  // this `catch` too, not just an async rejection.
+                  if (!(await revalidate())) teardown();
+                } catch {
+                  // A revalidation error is treated as "no longer valid" — sever.
+                  teardown();
+                }
+              })();
             }, config.reauthMs ?? DEFAULT_REAUTH_MS),
           });
         }
