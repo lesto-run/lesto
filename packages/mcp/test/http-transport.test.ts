@@ -139,6 +139,14 @@ describe("assertDevToken", () => {
 describe("isLiveReloadUpgradeAllowed", () => {
   const reloadPort = 35729;
 
+  // A real minted token (32 bytes → 64 hex chars), well over MIN_DEV_TOKEN_LENGTH.
+  const expectedToken = "abcd1234".repeat(8);
+
+  // The upgrade URL the legitimate injected client opens — token in the query, since a
+  // browser WebSocket cannot set headers.
+  const tokenUrl = (token: string = expectedToken): string =>
+    `http://127.0.0.1:${reloadPort}/?token=${token}`;
+
   it("allows a loopback page (127.0.0.1 / localhost) on ANY port — the dev server's dynamic port", () => {
     // The page is served from the dev SERVER's port (5173), not the reload port (35729),
     // so the Origin is a loopback host on a different port and must still pass.
@@ -147,6 +155,8 @@ describe("isLiveReloadUpgradeAllowed", () => {
         origin: "http://127.0.0.1:5173",
         host: `127.0.0.1:${reloadPort}`,
         port: reloadPort,
+        url: tokenUrl(),
+        expectedToken,
       }),
     ).toBe(true);
     expect(
@@ -154,16 +164,20 @@ describe("isLiveReloadUpgradeAllowed", () => {
         origin: "http://localhost:8080",
         host: `localhost:${reloadPort}`,
         port: reloadPort,
+        url: tokenUrl(),
+        expectedToken,
       }),
     ).toBe(true);
   });
 
-  it("allows a non-browser client with no Origin (no rebinding risk)", () => {
+  it("allows a non-browser client with no Origin (no rebinding risk) that presents the token", () => {
     expect(
       isLiveReloadUpgradeAllowed({
         origin: undefined,
         host: `127.0.0.1:${reloadPort}`,
         port: reloadPort,
+        url: tokenUrl(),
+        expectedToken,
       }),
     ).toBe(true);
   });
@@ -174,6 +188,8 @@ describe("isLiveReloadUpgradeAllowed", () => {
         origin: "https://evil.example",
         host: `127.0.0.1:${reloadPort}`,
         port: reloadPort,
+        url: tokenUrl(),
+        expectedToken,
       }),
     ).toBe(false);
   });
@@ -184,6 +200,8 @@ describe("isLiveReloadUpgradeAllowed", () => {
         origin: "not a url",
         host: `127.0.0.1:${reloadPort}`,
         port: reloadPort,
+        url: tokenUrl(),
+        expectedToken,
       }),
     ).toBe(false);
   });
@@ -194,10 +212,96 @@ describe("isLiveReloadUpgradeAllowed", () => {
         origin: undefined,
         host: `evil.example:${reloadPort}`,
         port: reloadPort,
+        url: tokenUrl(),
+        expectedToken,
       }),
     ).toBe(false);
     expect(
-      isLiveReloadUpgradeAllowed({ origin: undefined, host: undefined, port: reloadPort }),
+      isLiveReloadUpgradeAllowed({
+        origin: undefined,
+        host: undefined,
+        port: reloadPort,
+        url: tokenUrl(),
+        expectedToken,
+      }),
     ).toBe(false);
+  });
+
+  it("refuses a co-resident loopback origin that omits the token (the gap the allowlist alone leaves)", () => {
+    // A hostile page on another localhost port IS a loopback Origin, so it clears the
+    // Origin/Host allowlist — but it cannot read the cross-origin dev HTML, so it cannot know
+    // the token. No `?token=` → refused.
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: "http://localhost:1234",
+        host: `127.0.0.1:${reloadPort}`,
+        port: reloadPort,
+        url: `http://127.0.0.1:${reloadPort}/`,
+        expectedToken,
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses a WRONG token even from a loopback page", () => {
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: "http://127.0.0.1:5173",
+        host: `127.0.0.1:${reloadPort}`,
+        port: reloadPort,
+        url: tokenUrl("not-the-minted-token-".repeat(3)),
+        expectedToken,
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses an absent or unparseable URL (no token to present)", () => {
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: undefined,
+        host: `127.0.0.1:${reloadPort}`,
+        port: reloadPort,
+        url: undefined,
+        expectedToken,
+      }),
+    ).toBe(false);
+    // An absolute-but-malformed URL throws inside `new URL` even with the loopback base
+    // (an incomplete IPv6 host) — the parse-failure path yields no token, so it is refused.
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: undefined,
+        host: `127.0.0.1:${reloadPort}`,
+        port: reloadPort,
+        url: "http://[",
+        expectedToken,
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses a vacuous (too-short) expected token outright — never a weaker gate", () => {
+    // Even a perfectly loopback request with a matching empty/short token is refused, so a
+    // misconfigured mint can never stand a gate up that an empty `?token=` would clear.
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: undefined,
+        host: `127.0.0.1:${reloadPort}`,
+        port: reloadPort,
+        url: `http://127.0.0.1:${reloadPort}/?token=`,
+        expectedToken: "",
+      }),
+    ).toBe(false);
+  });
+
+  it("resolves the token from a RELATIVE upgrade URL too (path-only, no authority)", () => {
+    // Defense in depth: if the socket layer ever delivers a path-relative URL, the token still
+    // parses against the loopback base.
+    expect(
+      isLiveReloadUpgradeAllowed({
+        origin: "http://127.0.0.1:5173",
+        host: `127.0.0.1:${reloadPort}`,
+        port: reloadPort,
+        url: `/?token=${expectedToken}`,
+        expectedToken,
+      }),
+    ).toBe(true);
   });
 });

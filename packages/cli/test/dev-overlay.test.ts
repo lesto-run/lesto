@@ -27,6 +27,9 @@ function overlay(): HTMLElement | null {
   return document.getElementById(OVERLAY_ID);
 }
 
+/** The minted live-reload token the injected client presents in the WS upgrade URL. */
+const TOKEN = "live-reload-token-".repeat(3);
+
 /** Run the injected client and return its socket + the `location.reload` spy + url. */
 function mountClient(port = 35729): {
   socket: FakeSocket;
@@ -56,7 +59,7 @@ function mountClient(port = 35729): {
     "document",
     "addEventListener",
     "setTimeout",
-    devReloadClientScript(port),
+    devReloadClientScript(port, TOKEN),
   );
 
   exec(location, FakeWebSocket, document, window.addEventListener.bind(window), setTimeout);
@@ -85,8 +88,10 @@ describe("dev error-overlay client", () => {
     delete (window as unknown as Record<string, unknown>)[REFRESH_GLOBAL];
   });
 
-  it("connects to the live-reload port it was built with", () => {
-    expect(mountClient(41234).url).toBe("ws://127.0.0.1:41234");
+  it("connects to the live-reload port it was built with, presenting the token in the URL", () => {
+    // The browser WS API can't set headers, so the per-session token rides in the upgrade
+    // URL's query — what the reload server gates the co-resident-loopback vector on.
+    expect(mountClient(41234).url).toBe(`ws://127.0.0.1:41234/?token=${TOKEN}`);
   });
 
   it("paints a full-screen overlay on an error frame, with source/message/stack as text", () => {

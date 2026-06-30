@@ -208,27 +208,66 @@ function isLoopbackOrigin(origin: string): boolean {
 }
 
 /**
+ * The `token` query parameter of a live-reload upgrade URL, or `undefined` when it is
+ * absent or the URL does not parse.
+ *
+ * The browser WebSocket API cannot set request headers, so the injected reload client
+ * presents the per-session token in the upgrade URL's query string instead — this reads it
+ * back out. A relative URL (`/?token=…`) is resolved against a loopback base so it still
+ * parses; an absolute one (Bun delivers `http://127.0.0.1:<port>/?token=…`) ignores the base.
+ */
+function liveReloadTokenFromUrl(url: string | undefined): string | undefined {
+  if (url === undefined) return undefined;
+
+  try {
+    return new URL(url, "http://127.0.0.1").searchParams.get("token") ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * May this WebSocket upgrade onto the live-reload socket proceed — the DNS-rebinding /
- * browser-tab CSRF guard retrofitted onto the reload WS (ADR 0032 Inc 4c)?
+ * browser-tab CSRF guard retrofitted onto the reload WS (ADR 0032 Inc 4c), now also
+ * token-gated (Inc 4c follow-up)?
  *
  * The reload WS leaks reload + error-overlay payloads (local source paths, stack frames) to
- * any tab that connects, and (unlike the dev MCP transport) carries no token — so this
- * Origin/Host allowlist is its only control. Its legitimate client is the dev app served
- * from the dev server's (dynamic) port, so the `Origin` is matched on the loopback HOSTNAME
- * ({@link isLoopbackOrigin}, any port) while the `Host` is matched on the reload server's own
- * loopback authority (port-specific, via {@link loopbackAllowlist} + the covered
- * {@link isHostAllowed}). An absent `Origin` is a non-browser client (no rebinding risk) and
- * passes; a foreign `Origin`, or a foreign/absent `Host`, is refused. Shares the Inc 4a
- * Host-allowlist logic — there is one validation, not a second copy in the bin.
+ * any tab that connects. The Origin/Host allowlist refuses a foreign or rebinding origin, but
+ * it does NOT refuse a CO-RESIDENT hostile loopback origin: a malicious page on another
+ * `localhost:<otherPort>` is itself a loopback `Origin` ({@link isLoopbackOrigin}) and so
+ * passes the allowlist. The per-session `token` — embedded only in the cross-origin dev HTML
+ * that page cannot fetch — is the control that closes that gap, exactly as it is for the dev
+ * MCP transport. Because the browser WebSocket API cannot send headers, the client carries the
+ * token in the upgrade URL's query (read by {@link liveReloadTokenFromUrl}) and it is compared
+ * constant-time. A too-short `expectedToken` is refused outright so a misconfigured mint can
+ * never stand a vacuous gate up (mirroring {@link assertDevToken}).
+ *
+ * Its legitimate client is the dev app served from the dev server's (dynamic) port, so the
+ * `Origin` is matched on the loopback HOSTNAME ({@link isLoopbackOrigin}, any port) while the
+ * `Host` is matched on the reload server's own loopback authority (port-specific, via
+ * {@link loopbackAllowlist} + the covered {@link isHostAllowed}). An absent `Origin` is a
+ * non-browser client (no rebinding risk) and passes the Origin check, but it must still present
+ * the token. A foreign `Origin`, a foreign/absent `Host`, or a missing/wrong token is refused.
+ * Shares the Inc 4a Host-allowlist + the token-compare logic — one validation, no bin copy.
  */
 export function isLiveReloadUpgradeAllowed(options: {
   origin: string | undefined;
   host: string | undefined;
   port: number;
+  /** The upgrade request's URL — carries the `?token=` the injected client presents. */
+  url: string | undefined;
+  /** The per-session token the dev command minted; the upgrade must present it verbatim. */
+  expectedToken: string;
 }): boolean {
+  // A vacuous (empty/short) expected token would let an empty presented token match — refuse
+  // it up front so the gate is never weaker than the dev MCP transport's token floor.
+  if (options.expectedToken.length < MIN_DEV_TOKEN_LENGTH) return false;
+
   const originOk = options.origin === undefined || isLoopbackOrigin(options.origin);
 
   const hostOk = isHostAllowed(options.host, loopbackAllowlist(options.port).allowedHosts);
 
-  return originOk && hostOk;
+  const tokenOk = tokenMatches(liveReloadTokenFromUrl(options.url), options.expectedToken);
+
+  return originOk && hostOk && tokenOk;
 }

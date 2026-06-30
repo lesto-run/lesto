@@ -26,9 +26,15 @@
  * Every dynamic field is written via `textContent` (never `innerHTML`), so an error
  * string that contains markup is inert — no escaping, no injection. `Esc` dismisses a
  * shown overlay. Inlined as one `<script>` so no asset fetch is needed and it runs the
- * moment the document parses; `port` is the only value interpolated into the source.
+ * moment the document parses; `port` and `token` are the only values interpolated in.
+ *
+ * `token` is the per-session live-reload token the dev command minted (ADR 0032). The
+ * browser WebSocket API cannot set request headers, so the client presents it in the
+ * upgrade URL's query (`?token=…`); the reload server refuses an upgrade that omits it, which
+ * is what keeps a CO-RESIDENT hostile loopback origin — itself an allowed loopback Origin —
+ * from reading the reload + error-overlay payloads. The token is hex (URL-safe).
  */
-export function devReloadClientScript(port: number): string {
+export function devReloadClientScript(port: number, token: string): string {
   return `(()=>{try{
 const ID="__lesto_dev_overlay__";
 const clear=()=>{const el=document.getElementById(ID);if(el)el.remove();};
@@ -49,7 +55,7 @@ card.appendChild(hint);o.appendChild(card);(document.body||document.documentElem
 addEventListener("keydown",(e)=>{if(e.key==="Escape")clear();});
 const swap=()=>{const l=document.querySelector('link[rel="stylesheet"][href="/styles.css"],link[rel="stylesheet"][href^="/styles.css?"]');if(l)l.setAttribute("href","/styles.css?t="+Date.now());};
 const pageSwap=()=>{const r=window.__lestoDevRefreshPage;if(typeof r==="function")Promise.resolve().then(r).catch(()=>location.reload());else location.reload();};
-const c=()=>{const s=new WebSocket("ws://"+location.hostname+":${port}");
+const c=()=>{const s=new WebSocket("ws://"+location.hostname+":${port}/?token=${token}");
 s.onmessage=(e)=>{let d;try{d=JSON.parse(e.data);}catch{location.reload();return;}if(d&&d.type==="error")show(d);else if(d&&d.type==="style-update")swap();else if(d&&d.type==="page-swap")pageSwap();else location.reload();};
 s.onclose=()=>setTimeout(c,1000);};c();
 }catch{}})();`;

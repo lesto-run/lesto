@@ -698,6 +698,13 @@ const buildLiveReload = (): {
 } => {
   const sockets = new Set<{ send: (data: string) => void }>();
 
+  // The per-session live-reload token (ADR 0032 Inc 4c follow-up): the control a loopback
+  // bind — and even the Origin/Host allowlist — lacks against a CO-RESIDENT hostile localhost
+  // origin (itself an allowed loopback Origin). 32 random bytes, hex-encoded (64 chars), well
+  // over `MIN_DEV_TOKEN_LENGTH`. It rides into the injected client (presented in the upgrade
+  // URL's query, since a browser WS cannot set headers) and is required by the gate below.
+  const token = randomBytes(32).toString("hex");
+
   // `Bun` is the runtime this bin is spawned under (the shebang + the e2e). Typed
   // loosely here (no `@types/bun` in this package) — it is irreducible wiring.
   const bun = (globalThis as { Bun?: BunLike }).Bun;
@@ -714,20 +721,24 @@ const buildLiveReload = (): {
       // page can only ever be reached at localhost — the WS never needs to be wider.
       hostname: "127.0.0.1",
       fetch(
-        request: { headers: { get: (name: string) => string | null } },
+        request: { url: string; headers: { get: (name: string) => string | null } },
         srv: { upgrade: (request: unknown) => boolean },
       ) {
-        // DNS-rebinding / browser-tab CSRF guard (ADR 0032 Inc 4c): the reload WS leaks
-        // reload + error-overlay payloads (local source paths, stack frames) to any tab
-        // that connects and carries no token, so a foreign-Origin/Host upgrade is refused —
-        // only a loopback page passes. The validation is the covered
-        // `isLiveReloadUpgradeAllowed` (shares the dev MCP transport's Host allowlist); the
-        // bin holds none of it.
+        // DNS-rebinding / browser-tab CSRF guard + per-session token (ADR 0032 Inc 4c): the
+        // reload WS leaks reload + error-overlay payloads (local source paths, stack frames) to
+        // any tab that connects, so a foreign-Origin/Host upgrade — OR one that omits the
+        // minted token — is refused. The token closes the co-resident-loopback gap the
+        // Origin/Host allowlist alone can't (a hostile `localhost:<otherPort>` page IS a
+        // loopback origin); it travels in the upgrade URL's query because a browser WS cannot
+        // set headers. The validation is the covered `isLiveReloadUpgradeAllowed` (shares the
+        // dev MCP transport's Host allowlist + token compare); the bin holds none of it.
         if (
           !isLiveReloadUpgradeAllowed({
             origin: request.headers.get("origin") ?? undefined,
             host: request.headers.get("host") ?? undefined,
             port: LIVE_RELOAD_PORT,
+            url: request.url,
+            expectedToken: token,
           })
         ) {
           return new Response("forbidden", { status: 403 });
@@ -760,7 +771,7 @@ const buildLiveReload = (): {
   // `reload` message (or a dropped connection) reload the page, on an `error` message
   // paint the overlay. Extracted to a pure builder so its DOM rendering is unit-tested
   // against a fake socket — this bin injects exactly that tested output.
-  const script = devReloadClientScript(LIVE_RELOAD_PORT);
+  const script = devReloadClientScript(LIVE_RELOAD_PORT, token);
 
   return {
     script,
@@ -1121,8 +1132,18 @@ const startDevMcp: CliDeps["startDevMcp"] =
         const token = randomBytes(32).toString("hex");
 
         const context: LestoMcpContext = {
-          app,
-          routes,
+          // LIVE accessors, not snapshots: `runDev` swaps the forwarder's app on a hot route
+          // reload, and these thunks read that same source — so `list_routes` over the dev MCP
+          // plane reflects a newly added route without a restart. The MCP context fields are
+          // read per dispatch (`list_routes` calls `context.routes`), so reading them through a
+          // getter keeps the plane current. Defined as getters so the shape stays a plain
+          // `LestoMcpContext` (the handlers read `.app`/`.routes`, unaware of the indirection).
+          get app() {
+            return app();
+          },
+          get routes() {
+            return routes();
+          },
           // Read-only: the dev surface exposes introspection + route listing, never a
           // driven request or a content write (those need the deliberate operator mode).
           mode: "read-only",

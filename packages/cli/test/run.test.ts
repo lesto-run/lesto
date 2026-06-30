@@ -2859,18 +2859,111 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
       }),
     );
 
-    // Called once, after the app loaded, with the live app + routes + the SAME ring runDev
+    // Called once, after the app loaded, with LIVE app + routes thunks + the SAME ring runDev
     // fills — so the app boots once (no double-boot) and the server reads what the watcher writes.
     expect(startDevMcp).toHaveBeenCalledTimes(1);
     const params = startDevMcp.mock.calls[0]![0];
-    expect(typeof params.app.handle).toBe("function");
-    expect(Array.isArray(params.routes)).toBe(true);
+    expect(typeof params.app().handle).toBe("function");
+    expect(Array.isArray(params.routes())).toBe(true);
     expect(params.devState).toBe(devState);
 
     // The handle's `close` is wired into the dev shutdown drain.
     const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
     await drain();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the dev MCP LIVE route/app thunks so a hot reload keeps list_routes current (L-eef18974)", async () => {
+    let onChange: (() => void) | undefined;
+    let captured: Parameters<NonNullable<CliDeps["startDevMcp"]>>[0] | undefined;
+
+    // The re-loaded config adds a route the boot app did not have.
+    const reloadedConfig = (): LestoAppConfig => {
+      const base = buildConfig();
+      base.app.get("/brand-new", (c) => c.json({ fresh: true }));
+
+      return base;
+    };
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(5173),
+        loadSites: () => Promise.resolve(sites),
+        devState: createDevState(),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        reloadApp: () => Promise.resolve(reloadedConfig()),
+        startDevMcp: (params) => {
+          captured = params;
+
+          return Promise.resolve({ close: () => Promise.resolve() });
+        },
+      }),
+    );
+
+    // The boot snapshot: `/brand-new` is not yet a route, and the live app 404s it.
+    expect(captured?.routes().some((route) => route.pattern === "/brand-new")).toBe(false);
+    expect((await captured!.app().handle("GET", "/brand-new")).status).toBe(404);
+
+    // A hot route reload swaps the forwarder's app; the SAME thunks now read the new set.
+    onChange?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(captured?.routes().some((route) => route.pattern === "/brand-new")).toBe(true);
+    expect((await captured!.app().handle("GET", "/brand-new")).status).toBe(200);
+  });
+
+  it("tears the already-started dev server + watchers down if startDevMcp rejects (L-6e3d5e67)", async () => {
+    const serverClose = vi.fn(() => Promise.resolve());
+    const stopRoutes = vi.fn();
+    const reloadClose = vi.fn();
+    const installShutdown = vi.fn();
+
+    // Tracing on so the flush interval exists and must be stopped on the failure path.
+    const env = { LESTO_OTLP_URL: "http://collector.example/v1/traces" };
+
+    let caught: unknown;
+
+    try {
+      await run(
+        ["dev"],
+        depsWith({
+          env,
+          serve: () => Promise.resolve({ port: 5173, close: serverClose }),
+          loadSites: () => Promise.resolve(sites),
+          devState: createDevState(),
+          watchRoutes: () => stopRoutes,
+          liveReload: {
+            script: "x",
+            notify: () => undefined,
+            notifyError: () => undefined,
+            notifyStyleUpdate: () => undefined,
+            notifyPageSwap: () => undefined,
+            close: reloadClose,
+          },
+          startDevMcp: () => Promise.reject(new Error("EADDRINUSE: reload port busy")),
+          installShutdown,
+        }),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    // The rejection propagates (the dev boot fails loudly)…
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain("EADDRINUSE");
+
+    // …after tearing every already-started resource down, so nothing is stranded.
+    expect(serverClose).toHaveBeenCalledTimes(1);
+    expect(stopRoutes).toHaveBeenCalledTimes(1);
+    expect(reloadClose).toHaveBeenCalledTimes(1);
+
+    // The shutdown hook is never reached, since teardown already ran on the failure path.
+    expect(installShutdown).not.toHaveBeenCalled();
   });
 
   // THE COMMITTED QA GATE (ADR 0032 Phase 1 Inc 6): drive `runDev` to fill the ring,

@@ -499,17 +499,22 @@ export interface CliDeps {
    * Stand the DEV-ONLY loopback MCP server up over the live dev state (ADR 0032 Phase 1).
    *
    * Injected by the bin ONLY on the `dev` path. `runDev` calls it ONCE, after the app has
-   * loaded, with the live `app` + `routes` + the dev-state ring — so the app boots exactly
-   * once (the seam never re-loads it: no double-boot) and the bin owns only the irreducible
-   * parts (mint the per-session token, bind the loopback socket via `startMcpHttpServer`,
-   * log the URL + token to stderr). The DECISION of WHEN to stand it up — `dev`, after the
-   * app loads, only when a ring is wired — lives HERE in the covered core; the seam is the
-   * uncovered wiring. Absent (every non-`dev` command, or a `dev` run with the seam off) →
-   * no dev MCP server. The returned handle's `close()` is wired into the dev shutdown.
+   * loaded, with LIVE accessors for the `app` + `routes` + the dev-state ring — so the app
+   * boots exactly once (the seam never re-loads it: no double-boot) and the bin owns only the
+   * irreducible parts (mint the per-session token, bind the loopback socket via
+   * `startMcpHttpServer`, log the URL + token to stderr). The DECISION of WHEN to stand it up
+   * — `dev`, after the app loads, only when a ring is wired — lives HERE in the covered core;
+   * the seam is the uncovered wiring. Absent (every non-`dev` command, or a `dev` run with the
+   * seam off) → no dev MCP server. The returned handle's `close()` is wired into the dev shutdown.
+   *
+   * `app` and `routes` are THUNKS, not snapshots: a hot route reload swaps the live forwarder's
+   * app in place (see {@link runDev}), and these read that same live source — so `list_routes`
+   * (and the route contract resources) over the dev MCP plane reflect a newly added route
+   * WITHOUT a restart, instead of serving the boot-time snapshot forever.
    */
   startDevMcp?: (params: {
-    app: App;
-    routes: readonly { method: string; pattern: string }[];
+    app: () => App;
+    routes: () => readonly { method: string; pattern: string }[];
     devState: DevStateReader;
   }) => Promise<{ close: () => Promise<void> }>;
 
@@ -1629,14 +1634,19 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   }
 
   // The live server fronts a FORWARDING handle, not the app's handle directly: a
-  // watched route change re-loads the app and points `activeHandle` at the new one,
+  // watched route change re-loads the app and points `activeApp` at the new one,
   // so a route ADD shows on the next request WITHOUT a server restart (the prior
   // limitation: `applyDiscoveredRoutes` ran once in `loadApp`). The forwarder reads
-  // `activeHandle` per request, so the swap is atomic and needs no socket churn.
-  let activeHandle = app.handle;
+  // `activeApp.handle` per request, so the swap is atomic and needs no socket churn.
+  //
+  // `activeApp` + `activeRoutes` are also what the dev MCP plane introspects (it gets
+  // thunks reading these — ADR 0032), so a hot reload keeps `list_routes` current with the
+  // forwarder instead of pinning it to the boot-time route snapshot.
+  let activeApp = app;
+  let activeRoutes = config.app.routes();
 
   const forward = (method: string, path: string, options?: HandleOptions): Promise<LestoResponse> =>
-    activeHandle(method, path, options);
+    activeApp.handle(method, path, options);
 
   // When Vite owns islands, every dev HTML response is run through its
   // `transformIndexHtml` FIRST — injecting the Vite client + the Fast-Refresh
@@ -1673,9 +1683,15 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // the browser. A failure in any step is reported, not fatal — the dev server
   // stays up so the next save can fix it.
   const onRouteChange = async (): Promise<void> => {
-    const { handle, error } = await refreshRoutes(deps, devLog);
+    const { reloaded, error } = await refreshRoutes(deps, devLog);
 
-    if (handle !== undefined) activeHandle = handle;
+    // The reloaded app + its routes move together — nesting them under `reloaded` makes that
+    // a TYPE-enforced invariant, not a documented one — so the forwarder AND the dev MCP's
+    // live view both point at the new app in one atomic swap.
+    if (reloaded !== undefined) {
+      activeApp = reloaded.app;
+      activeRoutes = reloaded.routes;
+    }
 
     // A failure pushes the overlay INSTEAD of reloading — a reload would just re-paint
     // the stale app and hide that the save did not take. A clean refresh with an overlay
@@ -1717,24 +1733,48 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
     },
   );
 
-  // Stand the DEV-ONLY loopback MCP server up over the SAME ring (ADR 0032 Phase 1), now
-  // that the app has loaded — the bin injects `startDevMcp` ONLY on the dev path, so no
-  // socket is ever bound for serve/build/deploy. The decision of WHEN (dev, post-load,
-  // with a live ring) is this covered core's; the seam owns the irreducible token mint +
-  // loopback socket bind + stderr URL/token log. Its handle is closed in the shutdown below.
-  const devMcp =
-    devState !== undefined && deps.startDevMcp !== undefined
-      ? await deps.startDevMcp({ app, routes: config.app.routes(), devState })
-      : undefined;
-
-  deps.installShutdown?.(async () => {
+  // The dev teardown, run on graceful shutdown AND if the dev MCP fails to bind (below) — so
+  // a rejected `startDevMcp` never strands the already-listening server, the watchers, or the
+  // trace-flush interval. Drains the server FIRST (its `onDrain` flushes the last span batch)
+  // before stopping the cadence, the same order `serve` keeps.
+  const teardown = async (): Promise<void> => {
     await server.close();
 
     stopRoutes?.();
     deps.liveReload?.close();
     await islandDev?.close();
-    await devMcp?.close();
     tracing?.stopInterval();
+  };
+
+  // Stand the DEV-ONLY loopback MCP server up over the SAME ring (ADR 0032 Phase 1), now
+  // that the app has loaded — the bin injects `startDevMcp` ONLY on the dev path, so no
+  // socket is ever bound for serve/build/deploy. The decision of WHEN (dev, post-load,
+  // with a live ring) is this covered core's; the seam owns the irreducible token mint +
+  // loopback socket bind + stderr URL/token log. It is handed LIVE `app`/`routes` thunks
+  // (reading the same forwarder source a hot reload swaps), so the dev tools never go stale.
+  //
+  // If it REJECTS (a bound loopback port, a refused token), tear the already-started dev
+  // server + watchers down before re-throwing — otherwise the listening socket and the flush
+  // interval would leak, since the `installShutdown` below would never be reached.
+  let devMcp: { close: () => Promise<void> } | undefined;
+
+  if (devState !== undefined && deps.startDevMcp !== undefined) {
+    try {
+      devMcp = await deps.startDevMcp({
+        app: () => activeApp,
+        routes: () => activeRoutes,
+        devState,
+      });
+    } catch (cause) {
+      await teardown();
+
+      throw cause;
+    }
+  }
+
+  deps.installShutdown?.(async () => {
+    await teardown();
+    await devMcp?.close();
   });
 
   deps.out(`dev server on http://127.0.0.1:${server.port}`);
@@ -1742,13 +1782,19 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   return 0;
 }
 
-/** A bound app dispatch handle — what the dev server's forwarder points at. */
-type AppHandle = (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse>;
+/** The routes a re-loaded config declares — the surface `list_routes` reports. */
+type AppRoutes = readonly { method: string; pattern: string }[];
 
 /**
  * Process one watched route change: refresh the edge manifest and re-load the app,
- * returning the re-loaded app's `handle` (or `undefined` when nothing re-loaded) plus
- * the `error` to surface as a dev overlay (or `undefined` when every step succeeded).
+ * returning the re-loaded app under `reloaded` (its new `app` + `routes` together, or
+ * absent when nothing re-loaded) plus the `error` to surface as a dev overlay (or
+ * absent when every step succeeded).
+ *
+ * `app` and `routes` are nested under one optional `reloaded` so the "they move
+ * together" invariant is enforced by the TYPE — there is no representable state with
+ * one set and the other not — and the caller points the live forwarder AND the dev
+ * MCP's view at the new app in one atomic swap.
  *
  * The two halves are kept SEPARATE per the plan: `regenerateRoutes` refreshes the
  * EDGE manifest (`routes.gen.ts`, the Worker's static-import map), while `reloadApp`
@@ -1763,7 +1809,7 @@ type AppHandle = (method: string, path: string, options?: HandleOptions) => Prom
 async function refreshRoutes(
   deps: CliDeps,
   log: (line: string) => void,
-): Promise<{ handle: AppHandle | undefined; error: DevError | undefined }> {
+): Promise<{ reloaded?: { app: App; routes: AppRoutes }; error?: DevError }> {
   if (deps.regenerateRoutes !== undefined) {
     try {
       const result = await deps.regenerateRoutes();
@@ -1777,22 +1823,23 @@ async function refreshRoutes(
     }
   }
 
-  if (deps.reloadApp === undefined) return { handle: undefined, error: undefined };
+  if (deps.reloadApp === undefined) return {};
 
   try {
     const config = await deps.reloadApp();
 
-    // `createApp` rebuilds the dispatch (and re-runs migrations idempotently) over
-    // the re-scanned routes; its handle is what the forwarder swaps to.
+    // `createApp` rebuilds the dispatch (and re-runs migrations idempotently) over the
+    // re-scanned routes; its `handle` is what the forwarder swaps to, while `config.app.routes()`
+    // is the fresh route set the dev MCP's `list_routes` then reports.
     const app = await createApp(config);
 
-    return { handle: app.handle, error: undefined };
+    return { reloaded: { app, routes: config.app.routes() } };
   } catch (cause) {
     // A syntax error in a just-saved route file would otherwise crash the dev server;
     // keep the prior app live and surface the overlay so the next save recovers.
     log(`app reload failed: ${rebuildErrorMessage(cause)}`);
 
-    return { handle: undefined, error: devError("app-reload", cause) };
+    return { error: devError("app-reload", cause) };
   }
 }
 
