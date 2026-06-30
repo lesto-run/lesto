@@ -881,6 +881,10 @@
         "@lesto/web": "workspace:*",
       },
     },
+    "packages/realtime": {
+      "name": "@lesto/realtime",
+      "version": "0.0.0",
+    },
     "packages/router": {
       "name": "@lesto/router",
       "version": "0.1.1",
@@ -1480,6 +1484,8 @@
     "@lesto/queue": ["@lesto/queue@workspace:packages/queue"],
 
     "@lesto/ratelimit": ["@lesto/ratelimit@workspace:packages/ratelimit"],
+
+    "@lesto/realtime": ["@lesto/realtime@workspace:packages/realtime"],
 
     "@lesto/router": ["@lesto/router@workspace:packages/router"],
 
