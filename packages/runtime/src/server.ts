@@ -1837,13 +1837,6 @@ async function handleStream(
     return;
   }
 
-  // This connection is admitted and will be HELD: drain any request body now so it
-  // cannot sit unread in the socket buffer for the stream's whole life (see
-  // {@link drainBody}). Fire-and-forget — never awaited, so a slow/dribbled body
-  // cannot delay the stream from opening. Done only after admission (a refused 503
-  // closes its own socket, like the in-flight shed, so there is nothing to hold).
-  drainBody(req);
-
   // Publish a per-request abort signal: a held stream reads `context.signal` to
   // tear down when the client hangs up (`RUNTIME_CLIENT_DISCONNECTED`). The
   // deadline half is deliberately never wired here — the stream is timeout-exempt.
@@ -1881,6 +1874,16 @@ async function handleStream(
     };
 
     try {
+      // This connection is admitted and will be HELD: drain any request body so it
+      // cannot sit unread in the socket buffer for the stream's whole life (see
+      // {@link drainBody}). Fire-and-forget — never awaited, so a slow/dribbled body
+      // cannot delay the stream opening. Kept INSIDE the try so that on the off-chance
+      // `resume()` throws, the `catch` answers and the `finally` still releases the
+      // dedicated stream slot — a leak otherwise, since the slot was acquired above.
+      // (A refused 503 never reaches here; it closes its own socket, like the in-flight
+      // shed, so there is nothing unread to hold.)
+      drainBody(req);
+
       // A GET stream carries no body to read; dispatch straight through with an
       // empty body.
       const request = toLestoRequest({
