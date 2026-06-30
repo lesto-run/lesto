@@ -2064,8 +2064,41 @@ function printUsage(deps: CliDeps): void {
  * a hard error (a stable `CLI_UNKNOWN_COMMAND`); help and the empty command are
  * a soft success that prints usage.
  */
+/**
+ * Refuse to proceed if a DEV-ONLY surface is wired on a non-`dev` command (ADR 0032 Inc 5).
+ *
+ * The bin constructs the dev-state ring + the dev MCP seam ONLY on the `command === "dev"`
+ * path, so in normal operation a `serve`/`build`/`deploy` run carries neither. This is the
+ * structural sentinel behind that guard: if either dev-only seam (`startDevMcp` or its
+ * `devState` ring) is ever present on a non-`dev` command — a mis-copied app dev entry, a
+ * refactor that leaks the wiring — it throws `DEV_ONLY_SURFACE_IN_PRODUCTION` BEFORE any
+ * command runs, so the loopback MCP control plane can never be mounted in production. `dev`
+ * itself is the one command allowed to carry them.
+ */
+export function assertDevOnly(
+  command: string | undefined,
+  surfaces: { startDevMcp?: unknown; devState?: unknown },
+): void {
+  if (command === "dev") return;
+
+  if (surfaces.startDevMcp !== undefined || surfaces.devState !== undefined) {
+    throw new CliError(
+      "DEV_ONLY_SURFACE_IN_PRODUCTION",
+      `The dev-only MCP control plane is wired on the "${command ?? ""}" command; it must run only under \`lesto dev\`, never in a production build.`,
+      { command },
+    );
+  }
+}
+
 export async function run(argv: readonly string[], deps: CliDeps): Promise<number> {
   const [command, ...args] = argv;
+
+  // The structural dev-only sentinel (ADR 0032 Inc 5): a dev-only surface must NEVER reach
+  // a production build. The bin only constructs the dev MCP seam for `command === "dev"`;
+  // this is the defense in depth behind that guard — even a mis-copied app entry or a future
+  // refactor that wires `startDevMcp`/`devState` on a serve/build/deploy run is refused here,
+  // before any command runs, rather than mounting a preview surface in production.
+  assertDevOnly(command, deps);
 
   if (command === "routes") return runRoutes(deps);
 

@@ -20,6 +20,8 @@ export type CliErrorCode =
   | "CLI_CONTENT_PACKAGES_MISSING"
   | "CLI_DEPLOY_INCOMPLETE_REMOTE"
   | "CLI_DEPLOY_UNHEALTHY"
+  /** A dev-only surface (the loopback MCP control plane) was wired on a non-`dev` command (ADR 0032 Inc 5). */
+  | "DEV_ONLY_SURFACE_IN_PRODUCTION"
   | "CLI_GENERATE_BAD_FIELD"
   | "CLI_GENERATE_BAD_NAME"
   | "CLI_GENERATE_BAD_ROUTE"
