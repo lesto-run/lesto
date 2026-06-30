@@ -1,8 +1,16 @@
 # ADR 0042 — Local-first sync (Tier 4 `lesto.live`): auth-scoped **data shapes** over Postgres logical replication → an OPFS-SQLite client store with optimistic offline writes
 
-- **Status:** **Proposed** (drafted 2026-06-30). Pending the two-lens review (red-team +
-  chief-architect) every substrate ADR goes through before ratification — this is a large,
-  security-sensitive surface and must not be ratified unreviewed.
+- **Status:** **Accepted** (ratified 2026-06-30 after the two-lens review — red-team +
+  chief-architect, grounded in the cited seams — see *Reviews*). The review endorsed the core
+  decision (the clean topics-vs-data split, the shape as the unit of sync, the LSN cursor, and
+  reuse of ADR 0040's long-lived-stream kind) and surfaced **decision-affecting findings — all
+  bounded edits within the design, now folded into this draft**: the security-critical per-row
+  authorization model gained three sharpenings (parameter-level authz, the `REPLICA IDENTITY FULL`
+  old-image requirement that delete-from-shape silently depends on, and an explicit
+  session-vs-membership revocation split); the resume cursor gained Postgres **system identity** (a
+  failover/restore is the LSN-level twin of the cross-node false-continuity bug ADR 0040's round-2
+  review caught); and the re-auth interval + client-side LSN persistence were specified. The build
+  is gated on the adversarial multi-tenant **acceptance matrix** below.
 - **Date:** 2026-06-30.
 - **Deciders:** tech lead + owner (scope was locked at the 2026-06-27 tech-lead intro — see
   *Context*).
@@ -73,6 +81,13 @@ builder** the app already uses: `db.select().from(messages).where(eq(messages.ro
 Local-first becomes **a property of the substrate, not a bolted-on service.** That is the thing no
 app framework can coherently match, and the reason this is worth a hard, separate ADR.
 
+(Precisely — a chief-architect honesty note from the review: `live()` lives on a **client-capable
+surface of the builder that shares the server builder's query AST and types**; the server,
+pool-bound builder has no browser runtime, so the moat is "one query language, one AST, one set of
+types across both runtimes", not literally one object instance straddling client and server. The
+strategic claim is undiminished: an app framework that merely *consumes* an external sync service
+cannot offer `live()` as a first-class method on its own ORM.)
+
 ## Decision
 
 ### `live()` is a method on the ORM query — the shape is the unit of sync
@@ -87,10 +102,11 @@ const messages = db.select().from(messagesTable).where(eq(messagesTable.roomId, 
 
 `live()` does not execute a one-shot `SELECT`; it **registers a shape** with the server's shape
 engine and returns a reactive handle backed by the **local store**. The same SQL the builder would
-have sent is the shape's definition — so the shape's `WHERE` is both the *sync filter* (which rows
-stream) and, crucially, the *authorization boundary* (see below). This is the moat claim made
-concrete: the developer writes one ORM query and gets a synced, offline-capable, locally-queryable
-result, with no socket code and no second query language.
+have sent is the shape's definition — so the shape's `WHERE` is the *sync filter* (which rows stream),
+and its **bound parameters** are *separately authorized* at subscribe time (the security-critical
+distinction sharpened in review — see below). This is the moat claim made concrete: the developer
+writes one ORM query and gets a synced, offline-capable, locally-queryable result, with no socket code
+and no second query language.
 
 ### The wire carries auth-scoped **row data and diffs**, keyed by the commit **LSN**
 
@@ -100,11 +116,29 @@ Unlike ADR 0040's `(topic, cursor)`, the Tier 4 wire carries:
 2. a **change stream** — inserts/updates/deletes to those rows, each stamped with the Postgres
    **commit LSN** as the authoritative, fleet-global, commit-ordered cursor.
 
-The LSN is what ADR 0040 could *not* use (Postgres `LISTEN/NOTIFY` exposes no usable global
-sequence, forcing ADR 0040's node-local `(instanceId, generation, index)` cursor + resync-by-
-default). **Logical replication exposes the LSN directly**, so Tier 4 gets a sound, fleet-global
-resume cursor for free: a client reconnecting presents its last-applied LSN and the server replays
-the changes since it (or re-snapshots if the LSN has aged past the slot's retention).
+The LSN is what ADR 0040 could *not* use: Postgres `LISTEN/NOTIFY` provides **no persistent global
+resume sequence** — `NOTIFY` is delivered to *live* listeners in commit order (ADR 0040 relies on
+exactly that), but a listener that was disconnected cannot ask for "every change after sequence N",
+so ADR 0040 falls back to a node-local `(instanceId, generation, index)` cursor + resync-by-default.
+**Logical replication exposes the commit LSN directly** as a persistent, replayable, commit-ordered
+position, so Tier 4 gets a sound, fleet-global resume cursor: a client reconnecting presents its
+last-applied LSN and the server replays the changes since it (or re-snapshots if the LSN has aged
+past the slot's retention).
+
+**The resume cursor is `(systemId, LSN)`, not a bare LSN** (a red-team finding — the database-identity
+lesson, the LSN-level twin of ADR 0040's round-2 "the cursor needs node identity" fix). An LSN is
+only meaningful within one WAL timeline; after a failover to a promoted replica or a restore from
+backup the WAL position space changes, so a bare stored LSN would be a **false continuity proof** —
+the client would "resume" against a different timeline and silently miss or misapply changes. The
+cursor therefore carries the Postgres **system identifier / timeline**; on reconnect to a database
+whose `systemId` differs from the cursor's, the client **re-snapshots** rather than replays.
+
+**The snapshot↔tail boundary must not gap.** A snapshot taken at LSN `X` and a live tail starting at
+LSN `Y` must together deliver every change in `(X, Y]` exactly once: the tail backfills from the slot
+from `X`, it does not start "now". This couples snapshot freshness to slot retention (see the
+CDN-snapshot caveat under *Transport*): a snapshot cached longer than the slot's WAL retention is
+**un-bridgeable** and forces a fresh snapshot — a real, designed-for tension between snapshot
+cacheability and resumability, not a bug.
 
 ### The change source is Postgres **logical replication**, not `LISTEN/NOTIFY`
 
@@ -112,9 +146,10 @@ A **dedicated logical-replication connection** (a replication slot + `pgoutput`/
 streams *every* committed change with its row image and LSN — beside the pool, never from it (a
 replication connection is special and long-lived, the same discipline as ADR 0040's dedicated
 `LISTEN` client, `adapter.ts`). `LISTEN/NOTIFY` is rejected here for the same reasons it was *right*
-for ADR 0040 and *wrong* here: it carries no row data, no ordering usable as a cursor, and an 8 KB
-payload cap. Logical replication is the substrate's real "what changed, with the data, in commit
-order" feed — exactly what a sync engine needs.
+for ADR 0040 and *wrong* here: it carries no row data, no persistent resume sequence usable as a
+cursor (it is commit-ordered to live listeners but not replayable for a reconnecting one), and an
+8 KB payload cap. Logical replication is the substrate's real "what changed, with the data, in commit
+order, replayably" feed — exactly what a sync engine needs.
 
 ### Per-row authorization — the hard problem ADR 0027 sidestepped, solved by **shape predicates**
 
@@ -122,20 +157,42 @@ Shipping rows means the server must decide, for **every changed row**, whether *
 see it. This is the per-row push-authz problem ADR 0027 avoided by shipping topics. Tier 4 confronts
 it directly with a layered model:
 
-- **The shape's `WHERE` is the authorization predicate.** A principal subscribes to a shape; the
-  server only ever evaluates and streams rows that satisfy that shape's predicate **for that
-  principal** (the principal's id/org/tenant is bound into the predicate parameters server-side,
-  never client-supplied). A shape a principal is not allowed to open is refused at subscribe time
-  via the existing authz seam (`can()` / a net-new shape-authz check, the Tier-4 analogue of ADR
-  0040's `L-85655d2c`).
+- **The shape's `WHERE` is the *sync filter*; its bound parameters are *separately authorized*.** A
+  principal subscribes to a parameterized shape — `messages WHERE room_id = :roomId`. The principal's
+  own id/org/tenant is bound into the predicate **server-side, never client-supplied**, and the server
+  only ever evaluates and streams rows that satisfy the predicate for that principal. **But the
+  predicate filtering rows to `:roomId` is NOT by itself authorization** — `:roomId` is a client-chosen
+  capability, so the subscribe-time check must authorize the *concrete bound parameters* (may this
+  principal open `room_id = 999`?), not merely the shape *template* (may this principal use the
+  `messages` shape?). A shape whose bound parameters resolve to another tenant's resource is refused at
+  subscribe time via the existing authz seam (`can()` / a net-new shape-authz check over the *bound*
+  shape, the Tier-4 analogue of ADR 0040's `L-85655d2c`). Conflating "the WHERE is the authz predicate"
+  with "the WHERE *and its client-supplied arguments* are authorized" is the sharpest leak vector (a
+  red-team finding); the acceptance matrix gates it explicitly.
 - **A changed row is matched against every active shape's predicate before it is sent**, and only to
   the connections whose principal authorizes that shape. A row that moves *out* of a shape (an update
-  that fails the predicate) is sent as a **delete-from-shape** (the client removes it), and a row
-  that moves *in* is an insert — so the client's local slice stays exactly the authorized set, with
-  no leakage of rows the principal lost access to.
-- **Re-authorization is continuous, not connect-time-only** (the ADR 0040 lesson): a long-lived sync
-  connection re-resolves session validity on an interval and is severed on revocation/expiry, and
-  membership-changing writes (a user removed from a room) propagate as delete-from-shape.
+  that fails the predicate) is sent as a **delete-from-shape** (the client removes it), a row that
+  moves *in* is an insert, and a row that stays is an update — so the client's local slice stays
+  exactly the authorized set, with no leakage of rows the principal lost access to. **This requires the
+  row's OLD image on UPDATE/DELETE, which Postgres emits only under `REPLICA IDENTITY FULL`** (a
+  red-team finding): with the default replica identity the stream carries only the primary key of the
+  old tuple, so a predicate over a *non-key* column (`room_id`, `owner_id`, `status` — i.e. almost
+  every shape) cannot tell a row left the shape, and the row would silently **remain** in the client's
+  store — a row the principal lost access to, now leaked and durably persisted in OPFS. Every table
+  backing a shape whose predicate references non-PK columns therefore **must run `REPLICA IDENTITY
+  FULL`** (a migration-time requirement and operational dependency, below); the shape engine validates
+  this at shape-registration time and **refuses** a shape whose table cannot supply the old image its
+  predicate needs, rather than silently leaking.
+- **Re-authorization is continuous, not connect-time-only** (the ADR 0040 lesson), along **two
+  distinct paths with different latencies** (a sharpening from the review): (1) *session* validity
+  (logout, token expiry, an admin revoking a session) is re-resolved on a periodic interval —
+  **default 60s, reusing ADR 0040's `DEFAULT_REAUTH_MS`** via the same `@lesto/realtime` machinery —
+  and the stream is severed on failure, bounded further by a connection TTL; (2) *authorization-data*
+  changes (a user removed from a room, a row's `owner_id` reassigned) propagate **promptly,
+  sub-interval**, as a delete-from-shape carried by the replication stream itself. The interval is a
+  security parameter and is **more** sensitive here than for ephemeral reactivity: until the next
+  re-auth a revoked session keeps receiving rows it then **durably persists** to OPFS, so the default
+  is deliberately tight and the TTL bounds the worst case.
 - **Row-level filtering happens in the app/shape engine, where the principal lives — never in the
   database's replication output** (the replication stream is the full, unfiltered change feed; the
   shape engine is the authorization point). This keeps authz in one auditable place and off the DB.
@@ -152,23 +209,37 @@ uses server-side:
 - **Opt-in: OPFS-SQLite** (`sqlite-wasm` over the Origin Private File System) — a real durable SQLite
   the app queries locally, surviving reload and enabling offline reads. `navigator.storage.persist()`
   requests durable storage so the browser does not evict it under pressure.
+- **The last-applied `(systemId, LSN)` cursor persists *with* the rows, atomically** (specified in the
+  review — the resume linchpin). Resume hinges on the client knowing exactly which changes it has
+  already applied, so the cursor is a **single-row meta table inside the same OPFS-SQLite database**,
+  updated in the **same transaction** as each applied change-batch — a crash then leaves a consistent
+  `(rows, cursor)` pair, never rows-ahead-of-cursor (a missed change on resume) or cursor-ahead-of-rows
+  (a silently dropped change). For the **in-memory** default the cursor is just a variable, lost on
+  reload → a full re-snapshot on next open, which is correct (an in-memory store has no durable rows to
+  resume). Only the **leader tab** (below) writes the store and the cursor; followers never persist one.
+  The read-your-writes rule — "never accept a snapshot older than an LSN already applied" — reads this
+  persisted cursor.
 
 `live()`'s reactive handle re-runs its query against the local store whenever the store changes, so a
 component re-renders from local data with no network round-trip. The existing `QueryClient`
 (`data-client.ts:86`) sits **above** the store as the in-component cache; the store is the durable
 tier beneath it.
 
-### Optimistic **offline writes**, reconciled through the existing ORM/queue
+### Optimistic **offline writes**, reconciled through the existing mutation path
 
 A write while live is **applied to the local store immediately** (optimistic) and appended to a
-**local mutation log**. When online, the log is drained through the **existing typed-mutation / queue
-path** (`@lesto/queue`, the app's authorized `POST` mutations) — *not* a bespoke sync-write server,
-so every write still passes the app's validation and authorization. The server's authoritative result
-(via the replication stream) **reconciles** the optimistic local state: a confirmed write is a no-op,
-a rejected write is rolled back locally, and a conflicting write resolves by **last-write-wins by
-default**, with **Yjs/Loro per-field CRDTs as an opt-in later** (deliberately not v1 — most apps do
+**local mutation log**. When online, the log is drained by **replaying each entry as the app's normal
+authorized `POST` mutation** — the same validation, authorization, and CSRF every online write passes
+— *not* a bespoke sync-write server and *not* a direct client→queue channel (the precision the review
+asked for: the server-side `@lesto/queue` is reached only *through* those authorized mutations, exactly
+as an online request would; the client never enqueues a job itself). Each optimistic row carries a
+**client-generated id** so the server's authoritative echo (via the replication stream) can be
+**correlated** back to the optimistic row rather than landing as a duplicate insert — the reconciliation
+linchpin a last-write-wins model needs. That echo then reconciles the local state: a confirmed write is
+a no-op, a rejected write is rolled back locally, and a conflicting write resolves by **last-write-wins
+by default**, with **Yjs/Loro per-field CRDTs as an opt-in later** (deliberately not v1 — most apps do
 not need field-level merge, and CRDTs are a large surface). The reconciliation point is the ORM, the
-moat again: the same models, the same queue, the same auth.
+moat again: the same models, the same authorized mutations, the same auth.
 
 ### Cross-tab: one leader syncs, the rest mirror
 
@@ -183,10 +254,13 @@ client-side.
 
 - The **initial snapshot** for a shape at an LSN is an idempotent, **CDN-cacheable** HTTP response
   (same shape + same LSN ⇒ same bytes ⇒ cacheable/`ETag`-able) — many clients opening the same public
-  shape share one cached snapshot. **Caveat (review must pin this down):** byte-identical responses
+  shape share one cached snapshot. **Caveat (pinned down in review):** byte-identical responses
   require a **deterministic row order** — a `SELECT` without `ORDER BY` may return rows in a different
   order across executions (planner/stats/vacuum), defeating the cache. A shape definition must therefore
-  carry a total ordering (e.g. `ORDER BY` a unique key); the snapshot serializer enforces it.
+  carry a total ordering (e.g. `ORDER BY` a unique key); the snapshot serializer enforces it. **And its
+  LSN must stay bridgeable from the live slot** (see *the snapshot↔tail boundary*, above): a snapshot
+  cached longer than the slot's WAL retention is un-bridgeable and forces a fresh snapshot, so
+  cacheability is bounded by retention — a deliberate tension, surfaced in the review.
 - The **live tail** is a long-lived stream that **reuses ADR 0040's runtime response kind**
   (`handleStream` / `isLongLivedStream`, `packages/runtime/src/server.ts`): no in-flight slot, no
   compression-buffering, bounded by the dedicated stream semaphore + per-IP cap. The Tier 4 endpoint
@@ -203,7 +277,11 @@ client-side.
   only, last-write-wins. Proves `live()` end-to-end on the gallery. **Cursor parity is API-only, not
   semantic:** SQLite has no LSN, so v0 **resyncs on every reconnect** (no precise replay) — the `live()`
   *surface* is identical to prod, but the resume guarantee is the coarse floor until the v1
-  logical-replication LSN lands. The dev/prod delta is stated, not hidden.
+  logical-replication LSN lands. The dev/prod delta is stated, not hidden. **v0 also deliberately does
+  NOT exercise the security-critical path** (a review honesty note): single-table simple filters,
+  online-only, last-write-wins means no delete-from-shape-on-membership-change, no offline reconcile,
+  and no `REPLICA IDENTITY` mechanic (SQLite has none). So a green v0 proves the `live()` *surface* and
+  the dev loop — **not** the per-row authorization matrix, which is a v1 gate (below).
 - **v1 (the real engine):** Postgres logical-replication tap, the shape engine with per-row predicate
   authz + re-auth, OPFS-SQLite durable store, offline mutation log + reconcile, cross-tab leader.
 - **vNext:** multi-table / joined shapes, Yjs/Loro per-field CRDTs, edge fan-out (a Durable Object
@@ -230,9 +308,10 @@ client-side.
 1. **Extend the ADR 0040 topic bus to carry rows.** Re-introduces per-row push authz, violates ADR
    0027's no-data invariant, and forfeits the LSN (the topic bus has no global cursor). The clean
    split — topics for reactivity, a separate data wire for local-first — is the whole point.
-2. **`LISTEN/NOTIFY` as the change source.** No row data, no usable global cursor, 8 KB cap. Right for
-   ADR 0040 (topics), wrong for Tier 4 (data + ordering). Logical replication is the substrate's real
-   change feed.
+2. **`LISTEN/NOTIFY` as the change source.** No row data, no persistent global resume sequence usable
+   as a cursor (commit-ordered to live listeners, but not replayable for a reconnecting one), 8 KB cap.
+   Right for ADR 0040 (topics), wrong for Tier 4 (data + a replayable cursor). Logical replication is
+   the substrate's real change feed.
 3. **Consume an external sync service (Electric/Zero/PowerSync) as a dependency.** Forfeits the moat:
    the differentiator is `live()` being a method on the *same ORM* over the *same* Postgres, with the
    *same* auth and queue — not a second system bolted alongside. (Their designs are studied and
@@ -250,26 +329,39 @@ client-side.
 ## Consequences
 
 - Lesto gains a **substrate-native local-first** capability no app framework can match: `live()` on
-  the ORM, auth-scoped, offline-capable, reconciled through the existing queue — the stated moat.
+  the ORM, auth-scoped, offline-capable, reconciled through the existing authorized mutations — the
+  stated moat.
 - A new server **shape engine** (logical-replication tap + per-shape/per-principal row authz) and a
   client **`@lesto/live`** store + sync client; the runtime long-lived-stream kind and the
   `@lesto/realtime` SSE machinery are **reused**, not rebuilt.
 - The hardest new risk is **per-row authorization correctness** (a row leaking across a shape
   boundary, or a membership change not propagating as a delete-from-shape) — it must be the focus of
   the review and carry an adversarial, multi-tenant test matrix as an acceptance gate.
-- A second operational dependency on Postgres (a replication slot — disk retention, slot-lag
-  monitoring) that the deployment guide must cover; SQLite remains dev/single-node via the v0
-  poll/trigger stand-in.
+- **A second operational dependency on Postgres, with a production-outage footgun** (elevated by the
+  review). A logical replication slot pins WAL until its consumer (the shape engine) acknowledges it,
+  so a **stalled or dead shape-engine consumer accumulates WAL unboundedly and can fill the database
+  disk — a hard outage**. The shape engine is the slot's single consumer and must consume continuously,
+  bound its own lag, and on its own death **drop the slot** rather than let WAL pile up (a crash-only
+  slot is a liability, not durability). Plus **`REPLICA IDENTITY FULL`** on every shape-backing table
+  (above) — a migration-time requirement that also raises WAL volume (the full old row is logged on
+  every UPDATE/DELETE). The deployment guide must cover slot-lag alerting, the disk-pressure runbook,
+  and the replica-identity migration. SQLite remains dev/single-node via the v0 poll/trigger stand-in.
 - Clear separation preserved: ADR 0027/0040 own *reactivity* (topics, no data); this ADR owns
   *local-first* (auth-scoped data). The `docs/brand/messaging.md` guardrail (`L-e819c686`) — claim
   "live queries" now, "local-first" only when this lands — is upheld.
 
 ## Acceptance criteria (the bar, when built)
 
-- **Shape authz:** an adversarial multi-tenant matrix — a principal opening another tenant's shape is
-  refused; a row that updates *out* of a principal's shape is delivered as delete-from-shape (never
-  silently retained); a revoked session's sync stream is severed; a membership change propagates as a
-  removal. **This matrix is the gate.**
+- **Shape authz (the gate):** an adversarial multi-tenant matrix — (a) a principal opening a shape
+  whose **bound parameters resolve to another tenant's resource** is refused at subscribe time (not just
+  "another tenant's *template*" — the parameter is the capability); (b) a row that updates *out* of a
+  principal's shape is delivered as **delete-from-shape and never silently retained**, proven
+  specifically on a predicate over a **non-PK column** under **`REPLICA IDENTITY FULL`**, plus a test
+  that the engine *refuses* a shape whose table cannot supply the old image its predicate needs; (c) a
+  membership change (removed from a room) propagates as a removal sub-interval via the replication
+  stream; (d) a revoked *session* is severed within the re-auth interval + TTL; (e) on reconnect to a
+  database with a different `systemId` (failover/restore) the client re-snapshots rather than replaying
+  a false-continuity LSN. **This matrix is the gate.**
 - **Sound resume:** a reconnect from a stale LSN replays exactly the missed changes, or re-snapshots
   when the LSN aged past slot retention — never silently misses a change (the Tier-4 analogue of ADR
   0040's missed-message guarantee, now LSN-exact).
@@ -281,9 +373,77 @@ client-side.
   prod logical-replication path, proven by one `examples/` app that runs locally and deploys
   (gallery-as-QA-gate).
 
-## Review
+## Reviews
 
-**Not yet reviewed.** Like every substrate ADR (0027, 0040, 0028…), this must pass a **red-team +
-chief-architect** two-lens review grounded in the cited seams before ratification — with particular
-adversarial focus on the per-row/per-shape authorization model (consequence + acceptance gate above),
-which is the new, security-sensitive heart of the design. Draft only.
+### 2026-06-30 — red-team + chief-architect, grounded in the cited seams → ratified
+
+Both lenses verified the cited code (every file:line in *Touches* confirmed: `queries.ts:150`
+`SelectBuilder`, `pg/adapter.ts:102/114` the `BEGIN`/`COMMIT` bracket, `authz/principal.ts:91`
+`getPrincipal`, `authz/guard.ts:94` `can`, `ui/data-client.ts:86/210/244` the `QueryClient` +
+`registerTopics`/`invalidateTopic`, `runtime/server.ts` `isLongLivedStream`/`handleStream`,
+`realtime/http-handlers.ts` `DEFAULT_REAUTH_MS = 60_000`). The **core decision was endorsed**: the
+clean topics-vs-data split (reactivity stays no-data per ADR 0027/0040; local-first gets its own data
+wire), the shape as the unit of sync, logical-replication-with-LSN over `LISTEN/NOTIFY`, reuse of ADR
+0040's long-lived-stream kind, and the scope discipline (single-table v1, no CRDT v1, no bespoke
+write server, no Service-Worker background-sync). **Verdicts:** chief-architect **RATIFY-WITH-CHANGES**;
+red-team **REVISE** (decision-affecting findings, all bounded edits within the design). This draft is
+the revision — every finding below is **folded in**. The build is then gated on the acceptance matrix.
+
+**Red-team — the per-row/per-shape authorization heart (decision-affecting, all folded):**
+
+- **Parameter authorization, not just template authorization.** "The WHERE is the authorization
+  predicate" conflated the *sync filter* with *authorization*. `messages WHERE room_id = :roomId`
+  filters rows to `:roomId`, but `:roomId` is a **client-chosen capability** — so the subscribe-time
+  check must authorize the *concrete bound parameter* (may this principal open `room_id = 999`,
+  belonging to another tenant?), not merely "may this principal use the `messages` template". **Fixed**
+  in the authz Decision + acceptance matrix (a) — the sharpest leak vector, now explicit.
+- **`delete-from-shape` silently depends on `REPLICA IDENTITY FULL`.** Detecting that a row moved *out*
+  of a shape needs the row's **OLD image**; under Postgres's default replica identity the stream carries
+  only the old **primary key**, so a predicate over a non-PK column (`room_id`, `owner_id`, `status` —
+  almost every shape) cannot tell the row left, and it **silently remains** in the client's OPFS store —
+  a leaked, now-durable row. **Fixed**: `REPLICA IDENTITY FULL` is required on shape-backing tables, the
+  shape engine refuses a shape whose table cannot supply the old image, and this is an explicit
+  operational dependency + acceptance-matrix item (b). This is the single most important technical
+  correction — the "membership change not propagating" risk grounded in the actual Postgres mechanic.
+- **The resume cursor needs database identity.** A bare LSN is a **false continuity proof** across a
+  failover/restore (a new WAL timeline) — the LSN-level twin of the cross-node bug ADR 0040's round-2
+  review caught. **Fixed**: the cursor is `(systemId, LSN)`; a differing `systemId` forces a re-snapshot
+  (acceptance matrix (e)).
+- **Session-revocation vs authorization-data-change are two paths with different latencies.** The
+  re-auth interval (now specified: **60s default**, reusing `DEFAULT_REAUTH_MS`) catches *session*
+  revocation coarsely; *membership* changes propagate **promptly** as delete-from-shape over the
+  replication stream. The interval is *more* sensitive here than for reactivity because a revoked
+  session's rows are **durably persisted** before the next re-auth. **Fixed** in the authz Decision.
+- **Client-side LSN persistence (the resume linchpin) was unspecified.** **Fixed**: the `(systemId,
+  LSN)` cursor is a single-row meta table in the same OPFS-SQLite DB, written in the **same transaction**
+  as each applied batch (no rows-ahead/cursor-ahead corruption); in-memory default loses it → re-snapshot;
+  only the leader tab persists it.
+- **Snapshot↔tail must not gap, and CDN-TTL is bounded by slot retention.** **Fixed**: the tail backfills
+  `(X, Y]` from the slot; a snapshot cached past slot retention is un-bridgeable and forces a fresh
+  snapshot — surfaced as a designed tension, not a bug.
+
+**Chief-architect — coherence, build-ability, operational risk (folded):**
+
+- **`live()` "on the same builder" is a client twin sharing the AST**, not one object instance
+  straddling client/server (the server builder is pool-bound, no browser runtime). **Fixed** as an
+  honesty note in the moat paragraph; the strategic claim is undiminished.
+- **"Reconcile through the queue" was loose.** Offline writes replay as the app's **authorized `POST`
+  mutations** (same validation/authz/CSRF); `@lesto/queue` is reached only *through* those, never a
+  direct client→queue channel. Each optimistic row needs a **client-generated id** to correlate the
+  replication echo (else a duplicate insert). **Fixed** in the offline-writes Decision.
+- **Logical-replication slot = production-outage footgun.** A stalled/dead consumer pins WAL → fills the
+  DB disk. **Elevated** in Consequences: the shape engine must bound its lag and drop its slot on death;
+  the deployment guide owns slot-lag alerting + the disk-pressure runbook.
+- **v0 does not exercise the security-critical path** (online-only, single-table, no `REPLICA IDENTITY`
+  in SQLite). **Fixed**: a green v0 proves the `live()` surface + dev loop, **not** the authz matrix —
+  stated in Phasing so v0 success is not mistaken for security evidence.
+
+**Phrasing fix (folded):** `LISTEN/NOTIFY` "no ordering"/"no usable global sequence" → **"no persistent
+global resume sequence"** (NOTIFY *is* commit-ordered to live listeners — ADR 0040 depends on that — it
+just isn't replayable for a reconnecting one); the old wording contradicted ADR 0040.
+
+**Deciders' sign-off:** the two-lens review is recorded and its decision-affecting findings folded;
+final ratification rests with tech-lead + owner. No finding was design-blocking — each was a bounded
+edit, now in the draft — so the ADR is marked Accepted with the **adversarial multi-tenant authz matrix
+as the build-time acceptance gate** (its `REPLICA IDENTITY FULL` + parameter-authz + `systemId`-resume
+items are the must-pass cases).
