@@ -47,12 +47,20 @@ import type { BearerSession, ToolRequirement } from "./http";
 export interface McpHttpServerOptions {
   /**
    * The tool context, MINUS the per-request `mode`/`resolvePrincipal` this transport sets
-   * from each request's token. Carries the app, routes, audit sink, and optional content
-   * seams — everything connection-constant. Unlike the stdio `startMcpServer`, this path
-   * injects NO default `loadContent`: a server that wants the content tools must supply
-   * `context.loadContent` itself (absent it, the content tools refuse, coded).
+   * from each request's token — and MINUS `devState`. Carries the app, routes, audit sink,
+   * and optional content seams — everything connection-constant. Unlike the stdio
+   * `startMcpServer`, this path injects NO default `loadContent`: a server that wants the
+   * content tools must supply `context.loadContent` itself (absent it, the content tools
+   * refuse, coded).
+   *
+   * `devState` is excluded STRUCTURALLY (ADR 0032): the dev introspection tools are built
+   * only when a `devState` reader is present (`buildTools`), so dropping it from the type
+   * makes "the remote OAuth transport can never advertise/reach `get_dev_diagnostics` /
+   * `get_recent_requests` / `tail_logs`" a compile-time guarantee — a remote caller cannot
+   * even pass a reader that would leak DevError stacks (absolute fs paths) or access-log
+   * paths to a read-scoped bearer.
    */
-  context: Omit<LestoMcpContext, "mode" | "resolvePrincipal">;
+  context: Omit<LestoMcpContext, "mode" | "resolvePrincipal" | "devState">;
 
   /** Validate a bearer token and bind it to a session — a configured `createBearerAuthenticator`. */
   authenticate: (token: string) => Promise<BearerSession | undefined>;
