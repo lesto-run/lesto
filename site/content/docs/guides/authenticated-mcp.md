@@ -210,6 +210,53 @@ scouting board; a **viewer** (`mcp:read`) is refused that destructive write
 With `ANTHROPIC_API_KEY` set, Claude is handed the same tools and scouts
 autonomously — under the exact same governance on every call.
 
+## Step 5 — connect an off-the-shelf MCP client
+
+You can drive the running server from the **MCP Inspector** (or any client that
+takes a manual bearer) — no code. First mint a token; the example ships a helper:
+
+```sh
+bun run token.ts operator   # prints a bearer (use `viewer` for a read-only one)
+```
+
+Then launch the Inspector and point it at the server:
+
+```sh
+npx @modelcontextprotocol/inspector
+```
+
+- **Transport:** `Streamable HTTP`
+- **URL:** `https://<your-rs>/mcp`
+- **Authentication:** paste the token as the **Bearer Token** (or add a header
+  `Authorization: Bearer <token>`). Then **Connect** → the `Tools` tab lists
+  `handle_request`, `list_routes`, …; call `handle_request` with `{ "method":
+  "GET", "path": "/standings", "query": { "league": "AL", "season": "2024" } }`.
+
+Or with `curl` (the server is stateless — no `initialize` handshake required):
+
+```sh
+curl -s "$RS/mcp" -H "authorization: Bearer $TOKEN" \
+  -H "content-type: application/json" -H "accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"handle_request",
+       "arguments":{"method":"GET","path":"/standings","query":{"league":"AL","season":"2024"}}}}'
+```
+
+> **Present the token yourself — don't use the client's "Log in" flow.** The fully
+> automatic OAuth flow (Claude Desktop / Cursor "connect and authorize") expects the
+> issuer to support **Dynamic Client Registration** so the client can self-register.
+> The demo issuer doesn't advertise a `registration_endpoint` yet (that's
+> [ADR 0040](https://github.com/lesto-run/lesto/blob/main/docs/adr)), and its demo
+> providers have no login UI — so auto-connect won't complete. Supplying a bearer
+> (above) sidesteps that; a refusal now carries a JSON body naming the missing
+> `scope`/permission, so the client surfaces *why*, not an opaque error.
+
+**Local dev (stdio).** For the loopback dev-loop, `lesto mcp` serves the control
+plane over stdio — point a desktop client at it with an `mcpServers` entry:
+
+```json
+{ "mcpServers": { "lesto": { "command": "lesto", "args": ["mcp"] } } }
+```
+
 ## Notes & gotchas
 
 - **The RS is issuer-agnostic — keep it that way.** Do all JWKS/signature work in
