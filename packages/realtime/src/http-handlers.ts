@@ -148,7 +148,18 @@ export function openLiveStream(config: LiveStreamConfig): ReadableStream<string>
 
     torn = true;
 
-    for (const off of unsubscribes) off();
+    // Guard each unsubscribe: `off()` is a `Set.delete` today and cannot throw,
+    // but teardown is the LAST line of defense and must run to completion. A throw
+    // from one `off()` must not strand the timer-clears and `connection.close()`
+    // below — that would leak a live heartbeat interval + an unclosed connection.
+    for (const off of unsubscribes) {
+      try {
+        off();
+      } catch {
+        // A failed unsubscribe is swallowed so cleanup continues; the worst case
+        // is a stale subscription whose connection is already being closed.
+      }
+    }
 
     for (const { kind, handle } of timerHandles) {
       if (kind === "interval") timers.clearInterval(handle);

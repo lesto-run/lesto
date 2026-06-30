@@ -180,6 +180,40 @@ describe("openLiveStream", () => {
     expect(timers.intervals).toHaveLength(0);
   });
 
+  it("tears down to completion even when an unsubscribe throws (clears timers, never escapes)", () => {
+    const timers = fakeTimers();
+    const aborter = new AbortController();
+
+    // A hub whose `off()` throws: teardown must CONTAIN it and still reach the
+    // timer-clears + `connection.close()`, not strand them behind the throw (a
+    // leaked heartbeat interval). `off()` cannot throw with the real PubSub today,
+    // so this proves the defense-in-depth guard, not a live bug.
+    const throwingHub = {
+      subscribe: () => () => {
+        throw new Error("unsubscribe blew up");
+      },
+    } as unknown as PubSub;
+
+    openLiveStream({
+      hub: throwingHub,
+      ring: ring(),
+      authorizedTopics: ["t"],
+      since: undefined,
+      signal: aborter.signal,
+      heartbeatMs: 1000,
+      maxQueue: 16,
+      timers: timers.seam,
+    });
+
+    // The heartbeat interval is armed before the disconnect.
+    expect(timers.intervals).toHaveLength(1);
+
+    // Disconnect → teardown. The throwing `off()` is swallowed, so teardown runs to
+    // completion: the heartbeat interval is still cleared (the bug would skip it).
+    expect(() => aborter.abort()).not.toThrow();
+    expect(timers.intervals).toHaveLength(0);
+  });
+
   it("tears down at once if the signal was already aborted before setup", () => {
     const hub = new PubSub();
     const timers = fakeTimers();
