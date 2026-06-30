@@ -56,6 +56,8 @@ import { CliError } from "./errors";
 import { WRANGLER_DEPLOY_ARGS, WRANGLER_ROLLBACK_MESSAGE, wranglerRollbackArgs } from "./wrangler";
 import { runMcp, startMcpServer } from "./mcp";
 import { runOpenApi } from "./openapi";
+import { runEval } from "./eval";
+import type { DeclaredEval, JudgeLike } from "./eval";
 import { runGenerate } from "./generate";
 import type { GenerateIO } from "./generate";
 import { runAdd } from "./add";
@@ -1025,6 +1027,49 @@ if (command === "openapi") {
     write: (path, contents) => writeFile(path, contents, "utf8"),
     out: console.log,
   });
+
+  process.exit(exit);
+}
+
+// `eval` (PREVIEW) runs the app's declared evals as a gate (ADR 0021's evals hook).
+// It lives here, before the shared `run` core, because — like `mcp`/`openapi` — it
+// brings a dependency the rest of the CLI does not: `@lesto/ai`. That dependency is
+// reached ONLY through the LAZY `await import("@lesto/ai")` below, so it never enters
+// `@lesto/cli`'s eager graph and the package needs no `@lesto/ai` entry (the
+// `@lesto/styles` precedent). The covered core (`runEval`) sees only the structural
+// `loadEvals` + `judge` seams; here is the real wiring.
+if (command === "eval") {
+  // The app's declared evals live in `lesto.evals.ts` at the project root, mirroring
+  // `lesto.sites.ts`/`lesto.content.ts` — its default export is the `DeclaredEval[]`.
+  // ABSENT is the PREVIEW opt-in floor: no evals file → no evals → `runEval` exits 0
+  // (never an auto-fail). The probe-first guard matches `loadSites`: the bin's jiti
+  // loader HANGS on a missing-module `import()` rather than throwing, so we check the
+  // file exists before importing it.
+  const evalsPath = join(projectRoot, "lesto.evals.ts");
+
+  const loadEvals = async (): Promise<readonly DeclaredEval[]> => {
+    if (!(await dirExists(evalsPath))) return [];
+
+    const module = (await import(evalsPath)) as { default: readonly DeclaredEval[] };
+
+    return module.default;
+  };
+
+  // The real judge: a current-Claude LLM judge over the Anthropic transport, built
+  // through the ONE lazy `@lesto/ai` import. Resolved lazily inside the seam so a
+  // no-evals run (the opt-in floor) never imports `@lesto/ai` and never needs a key.
+  const judge: JudgeLike = async (input, output) => {
+    const { createAnthropic, createLlmJudge } = await import("@lesto/ai");
+
+    const model = createAnthropic({ apiKey: readEnv("ANTHROPIC_API_KEY") ?? "" });
+
+    return createLlmJudge({ model, rubric: "Score the output 0..1 against the case." })(
+      input,
+      output,
+    );
+  };
+
+  const exit = await runEval(commandArgs, { loadEvals, judge, out: console.log });
 
   process.exit(exit);
 }

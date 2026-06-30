@@ -49,5 +49,9 @@ export const CLI_COMMANDS: readonly CliCommandDescriptor[] = [
   { name: "content:delete", summary: "Delete a content entry from the store" },
   { name: "mcp", summary: "Run the MCP control-plane server over stdio" },
   { name: "openapi", summary: "Emit the application's OpenAPI document" },
+  {
+    name: "eval",
+    summary: "PREVIEW: run the app's declared evals as a gate (non-zero exit on failure)",
+  },
   { name: "help", summary: "Show the usage help" },
 ];
