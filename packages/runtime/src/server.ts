@@ -600,6 +600,34 @@ export function readBody(req: BodyStream, maxBytes: number): Promise<string> {
 }
 
 /**
+ * The narrow slice of a request body {@link drainBody} touches — a `Readable`'s
+ * `resume()`. Narrow on purpose, so a fake satisfies it without a live socket.
+ */
+export interface DrainableBody {
+  resume(): void;
+}
+
+/**
+ * Drain and discard a request body without buffering it.
+ *
+ * The long-lived-stream path ({@link handleStream}) never READS its request body —
+ * an SSE `GET` carries none by contract. But a client MAY legally attach one, and
+ * an unread body then sits in the socket's receive buffer for the stream's whole
+ * life. TCP backpressure caps that at ~one socket buffer (so this is hygiene, not
+ * a DoS), yet over the global stream ceiling it is a needless amplification — so we
+ * drain it: `resume()` puts the body into flowing mode and throws every chunk on
+ * the floor, so the kernel buffer empties and nothing accumulates on our heap.
+ *
+ * Fire-and-forget BY DESIGN — we must NOT `await` the body's `end` here: a
+ * dribbled/slow body would hang the stream's opening behind a body no one reads.
+ * We only let it flow; we never wait for it (unlike {@link readBody}, which the
+ * ordinary path awaits because it needs the bytes).
+ */
+export function drainBody(req: DrainableBody): void {
+  req.resume();
+}
+
+/**
  * Race a promise against a deadline.
  *
  * On overrun we reject with a coded {@link RuntimeError} (mapped to a 503) and
@@ -837,6 +865,59 @@ export function compressResponse(
     : "identity";
 
   return { response: encodeBuffered(response, body, encoding) };
+}
+
+/**
+ * Harden a handler's response into the bytes we put on the wire: merge the default
+ * security headers UNDER it (the app's own headers win) and echo the `X-Request-Id`
+ * so a client and the server logs share one correlation id. The single place both
+ * serving paths ({@link handleAdmitted}, {@link handleStream}) turn a handler's
+ * response into a hardened one, so a future change to what "hardened" means lands
+ * once. Kept separate from {@link writeNegotiated} because the 304 fast path needs
+ * these hardened headers WITHOUT a body encoding (a bodiless 304 must not carry a
+ * `Content-Encoding`), so hardening must be callable before that split.
+ */
+function hardenResponse(
+  response: AnyLestoResponse,
+  securityHeaders: Record<string, string> | false,
+  requestId: string,
+): AnyLestoResponse {
+  return withRequestId(withSecurityHeaders(response, securityHeaders), requestId);
+}
+
+/**
+ * Negotiate an already-hardened response's content encoding and write it to the
+ * socket — the shared tail both serving paths run once they hold a response to
+ * deliver (the ordinary path after its ETag/304 split, the stream path after its
+ * limiter admission). Compresses per the request's `Accept-Encoding` (a buffered
+ * body up front with an accurate `Content-Length`; a stream through a zlib transform
+ * {@link applyResponse} inserts), then awaits delivery so the caller's access line
+ * describes the real outcome — a buffered body resolves at once, a stream only once
+ * fully flushed or torn down (a mid-stream truncation routed to `onTruncated`).
+ *
+ * `beforeFirstByte`, when given, fires AFTER compression (the last step that can
+ * throw) and BEFORE the body is flushed: the stream path passes its first-byte
+ * access log here, so a throw in compression still lands in the caller's `catch`
+ * (which logs) without the line being logged twice, while a held stream is visible
+ * in the log the instant it opens. The ordinary path passes no hook — it logs once
+ * in its own `finally`.
+ */
+async function writeNegotiated(
+  res: ServerResponse,
+  hardened: AnyLestoResponse,
+  acceptEncoding: string | undefined,
+  compress: boolean,
+  onTruncated: (reason: unknown) => void,
+  beforeFirstByte?: () => void,
+): Promise<void> {
+  const encoded = compressResponse(hardened, acceptEncoding, compress);
+
+  beforeFirstByte?.();
+
+  await applyResponse(res, encoded.response, {
+    onTruncated,
+    ...(encoded.streamEncoding === undefined ? {} : { streamEncoding: encoded.streamEncoding }),
+  });
 }
 
 /** The socket-level timeouts {@link applyServerLimits} sets — the slice it writes. */
@@ -1634,10 +1715,7 @@ async function handleAdmitted(
       // back verbatim, closing the trace loop).
       const tagged = withEtag(response, deps.etag);
 
-      const hardened = withRequestId(
-        withSecurityHeaders(tagged.response, deps.securityHeaders),
-        requestId,
-      );
+      const hardened = hardenResponse(tagged.response, deps.securityHeaders, requestId);
 
       // A conditional GET whose validator still matches gets a bodiless 304: the
       // client already holds these bytes. We echo the same headers (ETag and all)
@@ -1649,28 +1727,19 @@ async function handleAdmitted(
       } else {
         status = hardened.status;
 
-        // Negotiate compression from the client's `Accept-Encoding` (after the
-        // 304 split, so a not-modified response stays bodiless). A buffered body
-        // is compressed up front and gains an accurate `Content-Length`; a stream
-        // is compressed through a zlib transform `applyResponse` inserts. The ETag
-        // above was computed over the uncompressed body, and `Vary: Accept-Encoding`
-        // keeps a shared cache from cross-serving codings.
-        const encoded = compressResponse(
+        // Negotiate compression and write the body (the shared `writeNegotiated`
+        // tail). It runs AFTER the 304 split, so a not-modified response stays
+        // bodiless and never carries a body encoding. The ETag above was computed
+        // over the uncompressed body, and `Vary: Accept-Encoding` keeps a shared
+        // cache from cross-serving codings. Awaiting delivery makes the access
+        // entry and span below describe the real outcome (truncation included).
+        await writeNegotiated(
+          res,
           hardened,
           firstHeader(req.headers["accept-encoding"]),
           deps.compress,
-        );
-
-        // Await delivery: a buffered body resolves synchronously (nothing to
-        // wait on), but a STREAMED body resolves only once it is fully flushed or
-        // torn down — so the access entry and span below describe the real
-        // outcome, including a mid-stream truncation, rather than racing it.
-        await applyResponse(res, encoded.response, {
           onTruncated,
-          ...(encoded.streamEncoding === undefined
-            ? {}
-            : { streamEncoding: encoded.streamEncoding }),
-        });
+        );
       }
     } catch (error) {
       status = statusForError(error);
@@ -1768,6 +1837,13 @@ async function handleStream(
     return;
   }
 
+  // This connection is admitted and will be HELD: drain any request body now so it
+  // cannot sit unread in the socket buffer for the stream's whole life (see
+  // {@link drainBody}). Fire-and-forget — never awaited, so a slow/dribbled body
+  // cannot delay the stream from opening. Done only after admission (a refused 503
+  // closes its own socket, like the in-flight shed, so there is nothing to hold).
+  drainBody(req);
+
   // Publish a per-request abort signal: a held stream reads `context.signal` to
   // tear down when the client hangs up (`RUNTIME_CLIENT_DISCONNECTED`). The
   // deadline half is deliberately never wired here — the stream is timeout-exempt.
@@ -1834,31 +1910,27 @@ async function handleStream(
         cancellation.abortTimeout,
       );
 
-      const hardened = withRequestId(
-        withSecurityHeaders(response, deps.securityHeaders),
-        requestId,
-      );
+      const hardened = hardenResponse(response, deps.securityHeaders, requestId);
 
       status = hardened.status;
 
-      // SSE (`text/event-stream`) is excluded from compression, so this no-ops on
-      // a live stream; a non-SSE body at this path is negotiated as usual.
-      const encoded = compressResponse(
+      // Negotiate encoding + write through the shared `writeNegotiated` tail. SSE
+      // (`text/event-stream`) is excluded from compression so it no-ops here; a
+      // non-SSE body at this path is negotiated as usual. `logStream` is passed as
+      // the `beforeFirstByte` hook: it fires AFTER compression (the last step that
+      // can throw) and BEFORE the body is flushed — so a held stream is logged the
+      // instant it opens with the live active-stream gauge, yet a compression throw
+      // still lands in `catch` (logging exactly once, never twice). Awaiting
+      // resolves only once the stream is fully flushed or torn down, so the
+      // `finally` frees the dedicated slot exactly when the connection ends.
+      await writeNegotiated(
+        res,
         hardened,
         firstHeader(req.headers["accept-encoding"]),
         deps.compress,
-      );
-
-      // Log at FIRST BYTE — before awaiting the stream's lifetime — with the live
-      // active-stream gauge, so a held stream is visible in the log immediately.
-      logStream();
-
-      // Awaiting resolves only once the stream is fully flushed or torn down, so
-      // the `finally` frees the dedicated slot exactly when the connection ends.
-      await applyResponse(res, encoded.response, {
         onTruncated,
-        ...(encoded.streamEncoding === undefined ? {} : { streamEncoding: encoded.streamEncoding }),
-      });
+        logStream,
+      );
     } catch (error) {
       status = statusForError(error);
 

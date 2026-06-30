@@ -12,6 +12,7 @@ import {
   closeWithDrain,
   concurrencyLimiter,
   compressResponse,
+  drainBody,
   drainServer,
   establishContext,
   healthResponse,
@@ -43,6 +44,7 @@ import type {
   AbortableResponse,
   BodyStream,
   ClosableServer,
+  DrainableBody,
   DrainTimers,
   ServerLimits,
 } from "../src/server";
@@ -184,7 +186,7 @@ interface OpenStream {
  */
 function openStream(
   port: number,
-  options: { method?: string; path: string; headers?: Record<string, string> },
+  options: { method?: string; path: string; headers?: Record<string, string>; body?: string },
 ): Promise<OpenStream> {
   return new Promise((resolve) => {
     const req = httpRequest(
@@ -193,7 +195,12 @@ function openStream(
         port,
         method: options.method ?? "GET",
         path: options.path,
-        headers: { ...options.headers },
+        headers: {
+          ...(options.body === undefined
+            ? {}
+            : { "content-length": Buffer.byteLength(options.body) }),
+          ...options.headers,
+        },
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -231,6 +238,8 @@ function openStream(
     // Destroying the client socket surfaces an ECONNRESET on the request; it is
     // the intended teardown, not a test failure, so swallow it after the head.
     req.on("error", () => {});
+
+    if (options.body !== undefined) req.write(options.body);
 
     req.end();
   });
@@ -1461,6 +1470,26 @@ describe("readBody", () => {
   });
 });
 
+describe("drainBody", () => {
+  it("puts the body into flowing mode (resume) without awaiting it", () => {
+    let resumed = 0;
+
+    const body: DrainableBody = {
+      resume: () => {
+        resumed += 1;
+      },
+    };
+
+    // Returns synchronously (no promise to await) and resumes exactly once — the
+    // fire-and-forget drain the held-stream path uses so an unread body never
+    // sits buffered for the stream's life.
+    const result = drainBody(body);
+
+    expect(result).toBeUndefined();
+    expect(resumed).toBe(1);
+  });
+});
+
 describe("respondWithError", () => {
   it("writes a fresh status and safe body when headers have not been sent", () => {
     const calls: Array<{ status: number; headers: Record<string, string | string[]> }> = [];
@@ -2147,6 +2176,25 @@ describe("serve — long-lived stream (ADR 0040)", () => {
     // The stream was access-logged at FIRST BYTE (while still open) with the gauge.
     const streamEntry = entries.find((e) => e.path === "/__lesto/live");
     expect(streamEntry).toMatchObject({ method: "GET", status: 200, activeStreams: 1 });
+
+    stream.close();
+  });
+
+  it("drains a request body sent on the held-stream GET without blocking the stream", async () => {
+    server = await serve(sseApp(), { port: 0 });
+
+    // A GET on the live path that (unusually but legally) carries a body. The body
+    // is DRAINED, not read — the stream still opens and flushes its first byte, so
+    // the unread body neither blocks production nor sits buffered for the stream's
+    // life. A 64 KiB body is larger than a typical socket buffer, so `resume()`
+    // genuinely has bytes to flow rather than an already-empty stream.
+    const stream = await openStream(server.port, {
+      path: "/__lesto/live",
+      body: "x".repeat(64 * 1024),
+    });
+
+    expect(stream.status).toBe(200);
+    expect(await stream.firstChunk()).toContain(": connected");
 
     stream.close();
   });
