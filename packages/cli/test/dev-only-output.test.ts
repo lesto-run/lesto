@@ -43,14 +43,21 @@ describe("assertDevOnly", () => {
         caught = error;
       }
 
-      expect(caught).toMatchObject({ code: "DEV_ONLY_SURFACE_IN_PRODUCTION" });
+      expect(caught).toMatchObject({ code: "CLI_DEV_SURFACE_IN_PRODUCTION" });
     }
   });
 
-  it("refuses a non-dev command that carries ONLY the devState ring", () => {
-    expect(() => assertDevOnly("build", { devState: createDevState() })).toThrow(
-      /must run only under `lesto dev`/,
-    );
+  it("refuses a non-dev command that carries ANY single dev surface (ring, live reload, or island dev)", () => {
+    // Each dev-only surface alone trips the sentinel — not just the MCP seam.
+    const surfaces = [
+      { devState: createDevState() },
+      { liveReload: { script: "", notify() {}, close() {} } },
+      { islandDev: () => undefined },
+    ];
+
+    for (const surface of surfaces) {
+      expect(() => assertDevOnly("build", surface)).toThrow(/must run only under `lesto dev`/);
+    }
   });
 });
 
@@ -64,7 +71,7 @@ describe("the dev MCP surface never reaches a production command", () => {
       const deps = { startDevMcp, devState: createDevState() } as unknown as CliDeps;
 
       await expect(run([command], deps)).rejects.toMatchObject({
-        code: "DEV_ONLY_SURFACE_IN_PRODUCTION",
+        code: "CLI_DEV_SURFACE_IN_PRODUCTION",
       });
 
       // It threw at the gate — the dev MCP server was never mounted.

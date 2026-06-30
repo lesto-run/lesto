@@ -221,7 +221,7 @@ injected live-state reader; the bin owns the socket and the process.
 4. **A structural dev-only sentinel + output test.** Beyond the construction guard, add a
    **runtime sentinel** that makes the RCE-shaped + transport surfaces refuse to register
    outside dev: the `/__lesto/open` route (Phase 2) and the MCP transport mount are wired
-   through a `assertDevOnly()` guard that throws a coded `DEV_ONLY_SURFACE_IN_PRODUCTION`
+   through a `assertDevOnly()` guard that throws a coded `CLI_DEV_SURFACE_IN_PRODUCTION`
    error if reached on a `serve`/`build`/`deploy` path — so a hand-wired or mis-copied app
    dev entry **cannot** mount them in prod even if it bypasses the `command === "dev"`
    branch. A **structural test asserts `serve()`/`build()`/`deploy()` output contains NO

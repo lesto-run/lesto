@@ -2065,26 +2065,37 @@ function printUsage(deps: CliDeps): void {
  * a soft success that prints usage.
  */
 /**
- * Refuse to proceed if a DEV-ONLY surface is wired on a non-`dev` command (ADR 0032 Inc 5).
+ * Refuse to proceed if ANY dev-only surface is wired on a non-`dev` command (ADR 0032 Inc 5).
  *
- * The bin constructs the dev-state ring + the dev MCP seam ONLY on the `command === "dev"`
- * path, so in normal operation a `serve`/`build`/`deploy` run carries neither. This is the
- * structural sentinel behind that guard: if either dev-only seam (`startDevMcp` or its
- * `devState` ring) is ever present on a non-`dev` command — a mis-copied app dev entry, a
- * refactor that leaks the wiring — it throws `DEV_ONLY_SURFACE_IN_PRODUCTION` BEFORE any
- * command runs, so the loopback MCP control plane can never be mounted in production. `dev`
- * itself is the one command allowed to carry them.
+ * The bin constructs every dev-only surface — the live-reload WS, the island Fast-Refresh
+ * server, and the dev MCP seam + its `devState` ring — ONLY on the `command === "dev"` path,
+ * so in normal operation a `serve`/`build`/`deploy` run carries none. This is the structural
+ * sentinel behind that guard: if any of them is present on a non-`dev` command — a mis-copied
+ * app dev entry, a refactor that leaks the wiring — it throws `CLI_DEV_SURFACE_IN_PRODUCTION`
+ * BEFORE any command runs, so a preview surface (each of which leaks local source paths /
+ * stack frames, or — for the MCP plane — DevError stacks and access-log paths) can never be
+ * mounted in production. `dev` is the one command allowed to carry them.
  */
 export function assertDevOnly(
   command: string | undefined,
-  surfaces: { startDevMcp?: unknown; devState?: unknown },
+  surfaces: {
+    startDevMcp?: unknown;
+    devState?: unknown;
+    liveReload?: unknown;
+    islandDev?: unknown;
+  },
 ): void {
   if (command === "dev") return;
 
-  if (surfaces.startDevMcp !== undefined || surfaces.devState !== undefined) {
+  if (
+    surfaces.startDevMcp !== undefined ||
+    surfaces.devState !== undefined ||
+    surfaces.liveReload !== undefined ||
+    surfaces.islandDev !== undefined
+  ) {
     throw new CliError(
-      "DEV_ONLY_SURFACE_IN_PRODUCTION",
-      `The dev-only MCP control plane is wired on the "${command ?? ""}" command; it must run only under \`lesto dev\`, never in a production build.`,
+      "CLI_DEV_SURFACE_IN_PRODUCTION",
+      `A dev-only surface is wired on the "${command ?? ""}" command; the dev preview surfaces must run only under \`lesto dev\`, never in a production build.`,
       { command },
     );
   }
@@ -2093,11 +2104,11 @@ export function assertDevOnly(
 export async function run(argv: readonly string[], deps: CliDeps): Promise<number> {
   const [command, ...args] = argv;
 
-  // The structural dev-only sentinel (ADR 0032 Inc 5): a dev-only surface must NEVER reach
-  // a production build. The bin only constructs the dev MCP seam for `command === "dev"`;
-  // this is the defense in depth behind that guard — even a mis-copied app entry or a future
-  // refactor that wires `startDevMcp`/`devState` on a serve/build/deploy run is refused here,
-  // before any command runs, rather than mounting a preview surface in production.
+  // The structural dev-only sentinel (ADR 0032 Inc 5): a dev-only surface must NEVER reach a
+  // production build. The bin constructs the live-reload WS, the island Fast-Refresh server,
+  // and the dev MCP seam only for `command === "dev"`; this is the defense in depth behind
+  // that guard — even a mis-copied app entry or a future refactor that leaks any of those
+  // onto a serve/build/deploy run is refused here, before any command runs.
   assertDevOnly(command, deps);
 
   if (command === "routes") return runRoutes(deps);

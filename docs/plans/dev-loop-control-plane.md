@@ -198,7 +198,7 @@ build (enforced by a structural dev-only sentinel + an output test, Inc 5).
    "never in a production build" claim rests on.
    **Structural dev-only sentinel:** the MCP-transport mount and (later) the `/__lesto/open`
    route are wired through an `assertDevOnly()` guard that throws a coded
-   `DEV_ONLY_SURFACE_IN_PRODUCTION` if reached on a `serve`/`build`/`deploy` path — so a
+   `CLI_DEV_SURFACE_IN_PRODUCTION` if reached on a `serve`/`build`/`deploy` path — so a
    hand-wired or mis-copied app dev entry cannot mount them in prod even if it bypasses the
    `command === "dev"` branch.
    **Output test:** assert the `serve()` / `build()` / `deploy()` produced output (route
