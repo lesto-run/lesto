@@ -1806,8 +1806,7 @@ async function handleStream(
 
     try {
       // A GET stream carries no body to read; dispatch straight through with an
-      // empty body. NO `withTimeout` — the long-lived kind is exempt from
-      // `handlerTimeoutMs`, so a stream that lives for hours is never guillotined.
+      // empty body.
       const request = toLestoRequest({
         method: line.method,
         url: line.url,
@@ -1815,11 +1814,25 @@ async function handleStream(
         body: "",
       });
 
-      const response = await app.handle(request.method, request.path, {
-        query: request.query,
-        headers: request.headers,
-        body: request.body,
-      });
+      // `withTimeout` bounds ONLY response PRODUCTION — the time the handler may
+      // take to RETURN its `ReadableStream` — not the stream's lifetime. It
+      // resolves (and clears the timer) the instant `app.handle` returns the
+      // response object, so a well-behaved stream that then lives for hours is
+      // never guillotined (the long-lived exemption). But a handler that hangs
+      // BEFORE returning its stream would otherwise hold a dedicated stream slot
+      // forever — a slot leak that, repeated, DoSes the endpoint — so the
+      // production phase keeps the deadline as defense-in-depth (ADR 0040): on
+      // overrun `abortTimeout` fires `context.signal` with `RUNTIME_HANDLER_TIMEOUT`
+      // and the dispatch is freed with a 503, the slot released in `finally`.
+      const response = await withTimeout(
+        app.handle(request.method, request.path, {
+          query: request.query,
+          headers: request.headers,
+          body: request.body,
+        }),
+        deps.handlerTimeoutMs,
+        cancellation.abortTimeout,
+      );
 
       const hardened = withRequestId(
         withSecurityHeaders(response, deps.securityHeaders),

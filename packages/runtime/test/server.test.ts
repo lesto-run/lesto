@@ -2230,6 +2230,51 @@ describe("serve — long-lived stream (ADR 0040)", () => {
     expect((abortReason as RuntimeError).code).toBe("RUNTIME_CLIENT_DISCONNECTED");
   });
 
+  it("bounds response PRODUCTION on the stream path: a handler that hangs before returning its stream is 503'd and its slot freed", async () => {
+    // The handler never returns its stream (hangs during production). The stream
+    // path is exempt from the timeout for the stream's LIFETIME, but NOT for the
+    // production phase — otherwise a hung handler holds a dedicated stream slot
+    // forever. The deadline fires `context.signal` with the timeout reason, 503s
+    // the request, and frees the slot.
+    let abortReason: unknown;
+    const entries: AccessEntry[] = [];
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: () =>
+        new Promise(() => {
+          const signal = currentContext()?.signal;
+
+          signal?.addEventListener("abort", () => {
+            abortReason = signal.reason;
+          });
+        }),
+    };
+
+    // Only one stream slot, so proving a SECOND request is still ADMITTED proves
+    // the first one's slot was released on timeout.
+    server = await serve(app, {
+      port: 0,
+      handlerTimeoutMs: 20,
+      liveStream: { maxConcurrent: 1 },
+      logRequest: (entry) => entries.push(entry),
+    });
+
+    const first = await makeRequest(server.port, { method: "GET", path: "/__lesto/live" });
+    expect(first.status).toBe(503);
+    expect((abortReason as RuntimeError | undefined)?.code).toBe("RUNTIME_HANDLER_TIMEOUT");
+
+    const second = await makeRequest(server.port, { method: "GET", path: "/__lesto/live" });
+    expect(second.status).toBe(503);
+
+    // An ADMITTED stream logs with the active-stream gauge (the timeout path); a
+    // limiter REFUSAL logs without it (ms 0). Both stream attempts carry the gauge,
+    // proving the first slot was freed and the second was admitted — not refused.
+    const streamEntries = entries.filter((e) => e.path === "/__lesto/live");
+    expect(streamEntries).toHaveLength(2);
+    expect(streamEntries.every((e) => e.activeStreams !== undefined)).toBe(true);
+  });
+
   it("answers a handler error on the stream path with a coded status, logged once", async () => {
     const entries: AccessEntry[] = [];
     const errors: Array<{ message: string; error: unknown }> = [];
