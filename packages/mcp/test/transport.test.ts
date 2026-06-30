@@ -284,6 +284,13 @@ describe("createMcpHttpHandlers — per-tool policy floor (OCP-7)", () => {
     const res = must(await handlers.rpc(callHandleRequest("op"), noop));
 
     expect(res.status).toBe(200);
+    // The tool's object result is ALSO returned as `structuredContent` — a client reads the
+    // object directly, no double-parse — and the text block carries the same serialized JSON.
+    const result = (JSON.parse(res.body as string) as { result: Record<string, unknown> }).result;
+    expect(result.structuredContent).toEqual({ status: 200, headers: {}, body: "" });
+    expect(JSON.parse((result.content as { text: string }[])[0].text)).toEqual(
+      result.structuredContent,
+    );
   });
 
   it("(b) refuses a subject WITH the write scope but WITHOUT the role — even in operator mode (403)", async () => {
@@ -308,5 +315,8 @@ describe("createMcpHttpHandlers — per-tool policy floor (OCP-7)", () => {
     const res = must(await handlers.rpc(c, noop));
 
     expect(res.status).toBe(200);
+    // `list_routes` returns an ARRAY — no object form — so it stays text-only (no structuredContent).
+    const result = (JSON.parse(res.body as string) as { result: Record<string, unknown> }).result;
+    expect(result.structuredContent).toBeUndefined();
   });
 });

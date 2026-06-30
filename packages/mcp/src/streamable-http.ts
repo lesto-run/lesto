@@ -178,7 +178,18 @@ async function runStreamableHttp(
       request.params.arguments ?? {},
     );
 
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    // Serialize once for the text block — back-compat, every client can read it. When the tool's
+    // result is a JSON object, ALSO return it as `structuredContent` so a client reads the object
+    // directly (`result.structuredContent`) instead of parsing the text (MCP 2025-06-18). Spec
+    // guidance: the text IS the serialized structured result, so they always agree. Arrays/
+    // primitives (e.g. `list_routes`) have no object form and stay text-only — still one parse.
+    const text = JSON.stringify(result);
+    const isObject = result !== null && typeof result === "object" && !Array.isArray(result);
+
+    return {
+      content: [{ type: "text" as const, text }],
+      ...(isObject ? { structuredContent: result as Record<string, unknown> } : {}),
+    };
   });
 
   // Stateless: a fresh transport per request, JSON responses (no SSE). Omitting

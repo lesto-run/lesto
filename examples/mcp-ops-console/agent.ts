@@ -66,8 +66,11 @@ async function call(
   if (opts.body !== undefined) args.body = opts.body;
 
   const result = await client.callTool({ name: "handle_request", arguments: args }, CallToolResultSchema);
-  // handle_request returns the app's `{ status, headers, body }`; `body` is itself a JSON string.
-  const wrapped = JSON.parse((result.content as { text: string }[])[0]?.text ?? "{}") as {
+  // handle_request returns the app's `{ status, headers, body }` as `structuredContent` — read it
+  // directly, no parsing the text envelope (falls back to the text for an older server). The app's
+  // `body` is itself a JSON string, so that one parse remains.
+  const wrapped = (result.structuredContent ??
+    JSON.parse((result.content as { text: string }[])[0]?.text ?? "{}")) as {
     status: number;
     body: string;
   };
