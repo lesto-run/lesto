@@ -125,13 +125,18 @@ position, so Tier 4 gets a sound, fleet-global resume cursor: a client reconnect
 last-applied LSN and the server replays the changes since it (or re-snapshots if the LSN has aged
 past the slot's retention).
 
-**The resume cursor is `(systemId, LSN)`, not a bare LSN** (a red-team finding — the database-identity
-lesson, the LSN-level twin of ADR 0040's round-2 "the cursor needs node identity" fix). An LSN is
-only meaningful within one WAL timeline; after a failover to a promoted replica or a restore from
-backup the WAL position space changes, so a bare stored LSN would be a **false continuity proof** —
-the client would "resume" against a different timeline and silently miss or misapply changes. The
-cursor therefore carries the Postgres **system identifier / timeline**; on reconnect to a database
-whose `systemId` differs from the cursor's, the client **re-snapshots** rather than replays.
+**The resume cursor is `(systemId, timelineId, LSN)`, not a bare LSN** (a red-team finding, sharpened
+in review — the database-identity lesson, the LSN-level twin of ADR 0040's round-2 "the cursor needs
+node identity" fix). An LSN is only meaningful within one WAL timeline on one cluster, and the two
+identities are **distinct** — a review precision, do not conflate them: the **system identifier**
+(`pg_control_system()`, fixed at initdb) is **constant** across a failover or restore and so catches a
+pointer at a *different cluster*; the **WAL timeline id** **increments on every failover/promotion**
+(and changes on PITR) and so catches a *same-cluster* failover that a constant `systemId` would miss.
+After either event the WAL position space the LSN indexes has diverged, so a bare stored LSN would be
+a **false continuity proof** — the client would "resume" against a different timeline and silently miss
+or misapply changes. The cursor therefore carries **both**, and on reconnect replay is allowed only
+when **`systemId` AND `timelineId` both match** the live database's; on any mismatch the client
+**re-snapshots** rather than replays.
 
 **The snapshot↔tail boundary must not gap.** A snapshot taken at LSN `X` and a live tail starting at
 LSN `Y` must together deliver every change in `(X, Y]` exactly once: the tail backfills from the slot
@@ -209,7 +214,7 @@ uses server-side:
 - **Opt-in: OPFS-SQLite** (`sqlite-wasm` over the Origin Private File System) — a real durable SQLite
   the app queries locally, surviving reload and enabling offline reads. `navigator.storage.persist()`
   requests durable storage so the browser does not evict it under pressure.
-- **The last-applied `(systemId, LSN)` cursor persists *with* the rows, atomically** (specified in the
+- **The last-applied `(systemId, timelineId, LSN)` cursor persists *with* the rows, atomically** (specified in the
   review — the resume linchpin). Resume hinges on the client knowing exactly which changes it has
   already applied, so the cursor is a **single-row meta table inside the same OPFS-SQLite database**,
   updated in the **same transaction** as each applied change-batch — a crash then leaves a consistent
@@ -359,9 +364,11 @@ client-side.
   specifically on a predicate over a **non-PK column** under **`REPLICA IDENTITY FULL`**, plus a test
   that the engine *refuses* a shape whose table cannot supply the old image its predicate needs; (c) a
   membership change (removed from a room) propagates as a removal sub-interval via the replication
-  stream; (d) a revoked *session* is severed within the re-auth interval + TTL; (e) on reconnect to a
-  database with a different `systemId` (failover/restore) the client re-snapshots rather than replaying
-  a false-continuity LSN. **This matrix is the gate.**
+  stream; (d) a revoked *session* is severed within the re-auth interval + TTL; (e) on reconnect where
+  **either** the `systemId` **or** the `timelineId` differs from the live database's — including a
+  *same-cluster failover* (timeline increments, `systemId` unchanged), the case a `systemId`-only check
+  would miss — the client re-snapshots rather than replaying a false-continuity LSN. **This matrix is
+  the gate.**
 - **Sound resume:** a reconnect from a stale LSN replays exactly the missed changes, or re-snapshots
   when the LSN aged past slot retention — never silently misses a change (the Tier-4 analogue of ADR
   0040's missed-message guarantee, now LSN-exact).
@@ -405,17 +412,20 @@ the revision — every finding below is **folded in**. The build is then gated o
   shape engine refuses a shape whose table cannot supply the old image, and this is an explicit
   operational dependency + acceptance-matrix item (b). This is the single most important technical
   correction — the "membership change not propagating" risk grounded in the actual Postgres mechanic.
-- **The resume cursor needs database identity.** A bare LSN is a **false continuity proof** across a
-  failover/restore (a new WAL timeline) — the LSN-level twin of the cross-node bug ADR 0040's round-2
-  review caught. **Fixed**: the cursor is `(systemId, LSN)`; a differing `systemId` forces a re-snapshot
-  (acceptance matrix (e)).
+- **The resume cursor needs database identity — both cluster *and* timeline.** A bare LSN is a **false
+  continuity proof** across a failover/restore — the LSN-level twin of the cross-node bug ADR 0040's
+  round-2 review caught. **Fixed, then sharpened by a claims-accuracy lens** (the first draft's
+  `(systemId, LSN)` was insufficient — `systemId` is *constant* across a same-cluster failover, so it
+  alone would miss the commonest case): the cursor is `(systemId, timelineId, LSN)` — `systemId`
+  (fixed at initdb) catches a *different cluster*, `timelineId` (increments on failover/PITR) catches a
+  *same-cluster failover*; replay requires **both** to match, else re-snapshot (acceptance matrix (e)).
 - **Session-revocation vs authorization-data-change are two paths with different latencies.** The
   re-auth interval (now specified: **60s default**, reusing `DEFAULT_REAUTH_MS`) catches *session*
   revocation coarsely; *membership* changes propagate **promptly** as delete-from-shape over the
   replication stream. The interval is *more* sensitive here than for reactivity because a revoked
   session's rows are **durably persisted** before the next re-auth. **Fixed** in the authz Decision.
 - **Client-side LSN persistence (the resume linchpin) was unspecified.** **Fixed**: the `(systemId,
-  LSN)` cursor is a single-row meta table in the same OPFS-SQLite DB, written in the **same transaction**
+  timelineId, LSN)` cursor is a single-row meta table in the same OPFS-SQLite DB, written in the **same transaction**
   as each applied batch (no rows-ahead/cursor-ahead corruption); in-memory default loses it → re-snapshot;
   only the leader tab persists it.
 - **Snapshot↔tail must not gap, and CDN-TTL is bounded by slot retention.** **Fixed**: the tail backfills
