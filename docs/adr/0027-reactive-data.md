@@ -109,6 +109,11 @@ A server mutation `publish`es an invalidation **topic** to `@lesto/pubsub` (now
 `LISTEN/NOTIFY`-backed) **on commit, not before** — Postgres `NOTIFY` is delivered at
 commit by default; the in-process/SQLite path must sequence the publish *after* the write
 commits, so a subscriber's refetch cannot race the writer and re-cache pre-write state.
+This ordering is a **caller convention, not a framework hook**: `db.transaction()` resolves
+only after `COMMIT` (`packages/pg/src/adapter.ts`) and a single-statement auto-commit write
+resolves when it lands, so `await`ing the write *is* the barrier — publish on the next line.
+A post-commit DB seam was considered and **cut as over-reach** (ADR 0040 review): a dropped
+publish is resync-recoverable, so no outbox or hook is warranted.
 The fan-out delivers the topic to subscribed browsers — **authorizing each subscription
 against the connection's principal** (see *Secure*) — and the client's topic → keys
 registry (Phase 1) invalidates the matching keys → `useQuery` refetches through its
