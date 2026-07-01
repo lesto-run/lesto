@@ -91,6 +91,24 @@
         "zod": "^4.0.0",
       },
     },
+    "examples/hmr-check": {
+      "name": "@lesto/example-hmr-check",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/cli": "workspace:*",
+        "@lesto/db": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/ui": "workspace:*",
+        "@lesto/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+        "react": "^19",
+        "react-dom": "^19",
+      },
+      "devDependencies": {
+        "@lesto/island-dev": "workspace:*",
+      },
+    },
     "examples/island-fast-refresh": {
       "name": "@lesto/example-island-fast-refresh",
       "version": "0.0.0",
@@ -798,6 +816,13 @@
         "@lesto/web": "workspace:*",
       },
     },
+    "packages/live-protocol": {
+      "name": "@lesto/live-protocol",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/errors": "workspace:*",
+      },
+    },
     "packages/mail": {
       "name": "@lesto/mail",
       "version": "0.0.0",
@@ -1447,6 +1472,8 @@
 
     "@lesto/example-estate": ["@lesto/example-estate@workspace:examples/estate"],
 
+    "@lesto/example-hmr-check": ["@lesto/example-hmr-check@workspace:examples/hmr-check"],
+
     "@lesto/example-island-fast-refresh": ["@lesto/example-island-fast-refresh@workspace:examples/island-fast-refresh"],
 
     "@lesto/example-mailing-lists": ["@lesto/example-mailing-lists@workspace:examples/mailing-lists"],
@@ -1478,6 +1505,8 @@
     "@lesto/island-dev": ["@lesto/island-dev@workspace:packages/island-dev"],
 
     "@lesto/kernel": ["@lesto/kernel@workspace:packages/kernel"],
+
+    "@lesto/live-protocol": ["@lesto/live-protocol@workspace:packages/live-protocol"],
 
     "@lesto/mail": ["@lesto/mail@workspace:packages/mail"],
 
