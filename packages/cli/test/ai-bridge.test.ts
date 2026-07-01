@@ -6,7 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CliError } from "../src/errors";
 import { dispatchAiTurn, READ_TOOL_ALLOWLIST } from "../src/ai-bridge";
-import type { AiBridgeDeps } from "../src/ai-bridge";
+import type { AiBridgeDeps, AiTurn } from "../src/ai-bridge";
+import { redactContext } from "../src/ai-redact";
 
 /**
  * The in-preview AI dispatch bridge (ADR 0033 Inc 3) — the fail-closed Phase-1 boundary.
@@ -22,15 +23,20 @@ const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
 /** The one allowlisted read-only tool the Phase-1 bridge forwards. */
 const ALLOWED = READ_TOOL_ALLOWLIST[0];
 
+// A turn's `input` is the BRANDED `RedactedContext` — the only way to obtain one is to run a
+// payload through `redactContext`, so the type system alone forbids handing the bridge an
+// un-redacted payload. The tests build their inputs the one sanctioned way.
+const redacted = redactContext({ route: "/posts" });
+
 describe("dispatchAiTurn", () => {
   it("forwards an allowlisted read tool to the injected seam and returns its result", async () => {
     const dispatchDevTool = vi.fn(() => Promise.resolve({ collections: ["posts"] }));
 
-    const result = await dispatchAiTurn({ dispatchDevTool }, { tool: ALLOWED, input: { q: 1 } });
+    const result = await dispatchAiTurn({ dispatchDevTool }, { tool: ALLOWED, input: redacted });
 
     expect(result).toEqual({ collections: ["posts"] });
     // The exact turn (tool + redacted input) is what the seam receives.
-    expect(dispatchDevTool).toHaveBeenCalledWith({ tool: ALLOWED, input: { q: 1 } });
+    expect(dispatchDevTool).toHaveBeenCalledWith({ tool: ALLOWED, input: redacted });
   });
 
   it("refuses a WRITE-shaped tool with CLI_DEV_MCP_UNAVAILABLE even when a write-capable seam is injected", async () => {
@@ -74,6 +80,20 @@ describe("dispatchAiTurn", () => {
 
     expect(error.code).toBe("CLI_DEV_MCP_UNAVAILABLE");
     expect(error.details).toMatchObject({ tool: "frobnicate" });
+  });
+
+  it("REJECTS an un-redacted payload at COMPILE time (the redactor-bypass guard)", () => {
+    // A raw, un-redacted context (an absolute path in `handlerLocation`) is structurally an
+    // `AiContextPayload` but is NOT the branded `RedactedContext`, so the type system refuses
+    // it as a turn's input — the model can never receive a non-redacted payload. If the brand
+    // were ever dropped, this line would compile and `@ts-expect-error` would fail the build.
+    // @ts-expect-error — unbranded (un-redacted) payload is not assignable to `RedactedContext`.
+    const bypass: AiTurn = {
+      tool: ALLOWED,
+      input: { route: "/x", handlerLocation: "/Users/me/app.ts:3" },
+    };
+
+    expect(bypass.tool).toBe(ALLOWED);
   });
 
   it("names no @lesto/mcp import — the dispatch is an injected seam only (layering invariant)", () => {

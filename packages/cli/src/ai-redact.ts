@@ -81,8 +81,25 @@ export interface AiContextPayload {
   readonly consoleLines?: readonly string[];
 }
 
-/** The redacted payload — same fields, scrubbed; `consoleLines` is always gone. */
+/**
+ * The phantom brand that makes {@link RedactedContext} a NOMINAL type: it exists only in the
+ * type system (never at runtime), and the sole value that carries it is {@link redactContext}'s
+ * return (via the one sanctioned cast at that boundary). So a raw {@link AiContextPayload} —
+ * structurally identical but unbranded — is NOT assignable where a `RedactedContext` is required.
+ */
+declare const redactedBrand: unique symbol;
+
+/**
+ * The redacted payload — same fields, scrubbed; `consoleLines` is always gone. BRANDED so it
+ * cannot be forged: the AI bridge requires this type as a turn's input, and the only way to
+ * obtain one is to run a payload through {@link redactContext}. This is the type-level guard
+ * the ADR promises — the model can never receive a non-redacted payload (a compile error, not
+ * a convention).
+ */
 export interface RedactedContext {
+  /** Phantom brand — type-only, never present at runtime; see {@link redactedBrand}. */
+  readonly [redactedBrand]: true;
+
   readonly route: string;
 
   readonly handlerLocation?: string;
@@ -259,5 +276,9 @@ export function redactContext(payload: AiContextPayload): RedactedContext {
   }
 
   // `consoleLines` is intentionally never copied — Phase 1 drops raw console output.
-  return redacted;
+  //
+  // The ONE sanctioned cast to the branded `RedactedContext`: this function IS the redaction
+  // boundary, so it is the only place allowed to mint the type. The brand is phantom (type-only),
+  // so the runtime object is exactly `redacted` — no symbol key is ever added.
+  return redacted as RedactedContext;
 }

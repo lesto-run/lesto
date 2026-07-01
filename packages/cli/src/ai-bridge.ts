@@ -23,6 +23,7 @@
  */
 
 import { CliError } from "./errors";
+import type { RedactedContext } from "./ai-redact";
 
 /**
  * The POSITIVE allowlist of read-only dev tool names a Phase-1 turn may reach. This is the
@@ -32,13 +33,20 @@ import { CliError } from "./errors";
  */
 export const READ_TOOL_ALLOWLIST = ["list_content_collections"] as const;
 
-/** One dev AI turn: the named dev tool to run and its (already-redacted) input. */
+/** One dev AI turn: the named dev tool to run and its redacted input. */
 export interface AiTurn {
   /** The dev tool the turn wants to run — checked against {@link READ_TOOL_ALLOWLIST}. */
   readonly tool: string;
 
-  /** The redacted input forwarded to the tool when the turn is allowed; the bridge never inspects it. */
-  readonly input?: unknown;
+  /**
+   * The input forwarded to the tool when the turn is allowed. Typed as the BRANDED
+   * {@link RedactedContext} — not `unknown` — so the compiler forbids a caller from handing the
+   * bridge a raw {@link import("./ai-redact").AiContextPayload}: the only value that satisfies
+   * this type is {@link import("./ai-redact").redactContext}'s output, so a turn can never carry
+   * a non-redacted payload out to the model (the ADR's redactor-bypass guard, enforced at
+   * compile time). The bridge itself never inspects it.
+   */
+  readonly input?: RedactedContext;
 }
 
 /** The injected seams the bridge dispatches through — no `@lesto/mcp` import, only this shape. */
