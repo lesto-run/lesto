@@ -53,6 +53,14 @@ export type LiveServerErrorCode =
    */
   | "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT"
   /**
+   * A shape's table is in the JS table allowlist but does **not exist in the live database**, so the
+   * replica-identity catalog probe cannot resolve it. Distinct from `LIVE_SERVER_UNKNOWN_TABLE` (the
+   * shape named a table the engine's registry never had): here the registry has it, but Postgres does
+   * not. Wraps the driver's raw `relation "…" does not exist` (SQLSTATE `42P01`) so `subscribe`'s
+   * error contract stays coded, not a leaked driver error (fix: create the table / correct the name).
+   */
+  | "LIVE_SERVER_TABLE_NOT_IN_DATABASE"
+  /**
    * A replication `update`/`delete` did not carry a **full** old row image (its old-tuple marker was
    * key-only or absent) for a shape whose predicate reads a non-key column — the runtime counterpart
    * to the registration-time `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` guard. Even a shape that

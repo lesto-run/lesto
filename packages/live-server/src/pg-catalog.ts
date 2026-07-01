@@ -20,6 +20,7 @@
 
 import { createRequire } from "node:module";
 
+import { LiveServerError } from "./errors";
 import type { PgReplicationConfig } from "./pg-replication-client";
 
 /** The slice of a raw `pg.Client` this probe drives — typed structurally to avoid a `pg` type dep. */
@@ -62,6 +63,20 @@ export function createReplicaIdentityProbe(
       );
 
       return rows[0]?.relreplident === "f";
+    } catch (error) {
+      // A table in the JS allowlist but absent from the live DB makes the `regclass` cast raise a raw
+      // `relation "…" does not exist` (SQLSTATE 42P01). Re-throw it as a coded LiveServerError so the
+      // engine's error contract never leaks a driver error out of `subscribe`. (Fail-closed already —
+      // this only replaces the error's shape, not the outcome.)
+      if ((error as { code?: string }).code === "42P01") {
+        throw new LiveServerError(
+          "LIVE_SERVER_TABLE_NOT_IN_DATABASE",
+          `Table "${tableName}" is registered but does not exist in the database, so its replica identity cannot be probed.`,
+          { table: tableName },
+        );
+      }
+
+      throw error;
     } finally {
       await client.end();
     }
