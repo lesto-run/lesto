@@ -131,6 +131,13 @@ function applyChange(entry: ShapeEntry, change: ShapeChange): void {
  * and onto {@link ChangeSource}'s incremental feed — both are bundled so opting in requires both the
  * feed and the catalog probe that guards each shape's replica identity (TypeScript enforces the
  * pair, so the guard can never be forgotten).
+ *
+ * **Precondition — `@lesto/db`-managed tables (ADR 0042, L-85a7660d).** Every shape-backing table on
+ * this path must be defined through `@lesto/db` (`createTableSql`), so its `boolean`/`timestamp`
+ * columns store as `INTEGER` and the replication tail's text-encoded values coerce byte-identically to
+ * the v0 snapshot read. A **native pg** `boolean`/`timestamptz` column (raw DDL, a pre-existing table)
+ * would silently desync snapshot vs. tail — see {@link createImageCoercer}. Not enforced at runtime;
+ * treat it as an operational contract of using the replication source.
  */
 export interface ReplicationSourceConfig {
   /**

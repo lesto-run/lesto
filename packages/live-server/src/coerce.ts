@@ -22,6 +22,18 @@
  * identically. There is no native-`boolean` `"t"/"f"` or timestamp-string to reparse: the storage
  * model makes the text encoding line up.
  *
+ * **PRECONDITION — `@lesto/db`-defined tables only (ADR 0042, L-85a7660d).** Wire parity holds
+ * *because* `@lesto/db` stores `boolean`/`timestamp` as `INTEGER` (see above). It does **not** hold
+ * for a shape whose backing table has a **native pg** `boolean` or `timestamptz` column — one created
+ * outside `createTableSql` (raw DDL, a pre-existing table). `pgoutput` would then emit `'t'`/`'f'` or
+ * an ISO timestamp string, and `coerceCell('boolean', 't')` = `Number('t')` = `NaN` (falsey),
+ * `coerceCell('timestamp', <str>)` = `new Date(NaN)` = `NaN` — while the v0 read path (node-postgres
+ * type parsers) returns a correct `true`/`Date`. That is a **silent per-cell desync** between the
+ * snapshot (v0) and the live tail (v1), not an authorization leak. This coercer therefore assumes
+ * every shape-backing table is `@lesto/db`-managed with the expected `INTEGER`/`TEXT`/`REAL` storage;
+ * a native-typed column is out of scope (a registration-time storage-type check is a possible future
+ * hardening — deferred here as (a) documentation, per the task).
+ *
  * **TOAST caveat (documented, ADR 0042 red-team F4).** Under a non-`FULL` replica identity, an
  * update omits an unchanged-TOAST column from both images; if that column is merely *projected*
  * (not part of the predicate — those are guarded to `FULL` at registration), the coerced row ships
