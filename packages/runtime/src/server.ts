@@ -163,8 +163,16 @@ export interface AccessEntry {
 
 /** Tuning for the long-lived-stream endpoint (ADR 0040 — see {@link ServeOptions.liveStream}). */
 export interface LiveStreamOptions {
-  /** The reserved live-stream path a `GET` is recognized at. Defaults to `/__lesto/live`. */
+  /** The reserved topic-stream path a `GET` is recognized at (ADR 0040). Defaults to `/__lesto/live`. */
   readonly path?: string;
+
+  /**
+   * The reserved local-first **data**-stream path a `GET` is recognized at (ADR 0042
+   * Tier 4). A second held-stream endpoint beside {@link path}, sharing the same stream
+   * semaphore + per-IP ceiling. Defaults to `/__lesto/live-data`. Both paths are
+   * recognized by default — an app mounts a handler at whichever it uses.
+   */
+  readonly dataPath?: string;
 
   /**
    * The global ceiling on concurrent held streams — the dedicated backstop that
@@ -318,8 +326,9 @@ export interface ServeOptions {
   readonly compress?: false;
 
   /**
-   * The long-lived streaming endpoint — ADR 0040's SSE realtime fan-out, mounted
-   * by the app at `/__lesto/live`. On by default.
+   * The long-lived streaming endpoints — ADR 0040's SSE topic fan-out (mounted by the
+   * app at `/__lesto/live`) and ADR 0042's local-first data stream (`/__lesto/live-data`).
+   * Both reserved paths are on by default.
    *
    * A `GET` on its path is recognized as a held stream BEFORE admission (a route
    * predicate, like the health-probe bypass), so it does **not** consume an
@@ -461,6 +470,14 @@ const DEFAULT_READY_PATH = "/readyz";
  * is exempt from the in-flight gate and bounded by its own stream semaphore.
  */
 const DEFAULT_LIVE_STREAM_PATH = "/__lesto/live";
+
+/**
+ * The reserved path the local-first **data** stream is mounted at (ADR 0042 Tier 4).
+ * A second long-lived-stream endpoint beside the ADR 0040 topic fan-out: same held-
+ * stream handling (no in-flight slot, no compression, its own semaphore), a different
+ * wire — it carries auth-scoped row data, not invalidation topics.
+ */
+const DEFAULT_LIVE_DATA_PATH = "/__lesto/live-data";
 
 /**
  * Default ceilings for held streams. The global cap is the dedicated backstop the
@@ -1185,7 +1202,13 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
       ? {}
       : {
           liveStream: {
-            path: liveStreamOptions.path ?? DEFAULT_LIVE_STREAM_PATH,
+            // Both reserved held-stream paths — the ADR 0040 topic fan-out and the
+            // ADR 0042 local-first data stream — are recognized by default and share
+            // one stream semaphore + per-IP ceiling.
+            paths: [
+              liveStreamOptions.path ?? DEFAULT_LIVE_STREAM_PATH,
+              liveStreamOptions.dataPath ?? DEFAULT_LIVE_DATA_PATH,
+            ],
             limiter: streamLimiter(
               liveStreamOptions.maxConcurrent ?? DEFAULT_MAX_CONCURRENT_STREAMS,
               liveStreamOptions.maxPerIp ?? DEFAULT_MAX_STREAMS_PER_IP,
@@ -1300,7 +1323,7 @@ interface HandleDeps {
    * absent when disabled. A `GET` on `path` bypasses the in-flight gate and is
    * admitted under `limiter` instead (ADR 0040).
    */
-  readonly liveStream?: { readonly path: string; readonly limiter: StreamLimiter };
+  readonly liveStream?: { readonly paths: readonly string[]; readonly limiter: StreamLimiter };
 
   /** Mints one span per request, or absent for the zero-overhead default. */
   readonly tracer?: RequestTracer;
@@ -1535,7 +1558,7 @@ async function handle(
   // instead under its own dedicated stream semaphore. Recognizing it as a
   // predicate (not a response flag) keeps the in-flight `finally` release
   // unconditional below — a flag flipped mid-response would double-free the slot.
-  if (deps.liveStream !== undefined && isLongLivedStream(line.method, path, deps.liveStream.path)) {
+  if (deps.liveStream !== undefined && isLongLivedStream(line.method, path, deps.liveStream.paths)) {
     return handleStream(app, req, res, deps, line, path, deps.liveStream);
   }
 
@@ -1579,15 +1602,19 @@ export function isHealthProbe(method: string, path: string, health: HealthOption
 }
 
 /**
- * True iff this is a long-lived streaming request — a `GET` on the reserved live
- * path (ADR 0040's SSE fan-out). Decided as a route predicate BEFORE admission,
- * like {@link isHealthProbe}, so a held stream never takes an in-flight slot.
- * `EventSource` always issues a `GET`, so a non-GET at the same path (or any other
- * path) falls through to the ordinary gated path. Exported so the predicate is
- * unit-testable without a socket.
+ * True iff this is a long-lived streaming request — a `GET` on one of the reserved
+ * live paths (ADR 0040's topic SSE fan-out and ADR 0042's local-first data stream).
+ * Decided as a route predicate BEFORE admission, like {@link isHealthProbe}, so a held
+ * stream never takes an in-flight slot. `EventSource` always issues a `GET`, so a
+ * non-GET at a reserved path (or any other path) falls through to the ordinary gated
+ * path. Exported so the predicate is unit-testable without a socket.
  */
-export function isLongLivedStream(method: string, path: string, livePath: string): boolean {
-  return method === "GET" && path === livePath;
+export function isLongLivedStream(
+  method: string,
+  path: string,
+  livePaths: readonly string[],
+): boolean {
+  return method === "GET" && livePaths.includes(path);
 }
 
 /** The request path proper, run only after a concurrency slot is acquired (or a probe). */
@@ -1817,7 +1844,7 @@ async function handleStream(
   deps: HandleDeps,
   line: { method: string; url: string },
   path: string,
-  liveStream: { path: string; limiter: StreamLimiter },
+  liveStream: { limiter: StreamLimiter },
 ): Promise<void> {
   const context = establishContext(req, deps.trustProxy, deps.newRequestId());
 

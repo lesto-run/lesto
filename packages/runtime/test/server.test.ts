@@ -2078,19 +2078,27 @@ describe("isHealthProbe", () => {
 });
 
 describe("isLongLivedStream", () => {
-  it("matches exactly a GET on the reserved live path", () => {
-    expect(isLongLivedStream("GET", "/__lesto/live", "/__lesto/live")).toBe(true);
+  it("matches a GET on any reserved live path", () => {
+    expect(isLongLivedStream("GET", "/__lesto/live", ["/__lesto/live"])).toBe(true);
 
-    // `EventSource` only ever issues a GET; a non-GET at the same path (or any
+    // `EventSource` only ever issues a GET; a non-GET at a reserved path (or any
     // other path) is NOT a stream and falls through to the ordinary gated path.
-    expect(isLongLivedStream("POST", "/__lesto/live", "/__lesto/live")).toBe(false);
-    expect(isLongLivedStream("HEAD", "/__lesto/live", "/__lesto/live")).toBe(false);
-    expect(isLongLivedStream("GET", "/api", "/__lesto/live")).toBe(false);
+    expect(isLongLivedStream("POST", "/__lesto/live", ["/__lesto/live"])).toBe(false);
+    expect(isLongLivedStream("HEAD", "/__lesto/live", ["/__lesto/live"])).toBe(false);
+    expect(isLongLivedStream("GET", "/api", ["/__lesto/live"])).toBe(false);
+  });
+
+  it("recognizes each of several reserved paths (topics + local-first data)", () => {
+    const paths = ["/__lesto/live", "/__lesto/live-data"];
+
+    expect(isLongLivedStream("GET", "/__lesto/live", paths)).toBe(true);
+    expect(isLongLivedStream("GET", "/__lesto/live-data", paths)).toBe(true);
+    expect(isLongLivedStream("GET", "/__lesto/other", paths)).toBe(false);
   });
 
   it("honors a custom live-stream path", () => {
-    expect(isLongLivedStream("GET", "/sse", "/sse")).toBe(true);
-    expect(isLongLivedStream("GET", "/__lesto/live", "/sse")).toBe(false);
+    expect(isLongLivedStream("GET", "/sse", ["/sse"])).toBe(true);
+    expect(isLongLivedStream("GET", "/__lesto/live", ["/sse"])).toBe(false);
   });
 });
 
@@ -2496,6 +2504,18 @@ describe("serve — long-lived stream (ADR 0040)", () => {
     server = await serve(sseApp(), { port: 0, liveStream: { path: "/sse" } });
 
     const stream = await openStream(server.port, { path: "/sse" });
+    expect(stream.status).toBe(200);
+    expect(stream.headers["content-type"]).toBe("text/event-stream");
+    stream.close();
+  });
+
+  it("recognizes the local-first data path as a held stream by default (ADR 0042)", async () => {
+    // No custom config: `/__lesto/live-data` is a reserved held-stream path alongside
+    // `/__lesto/live`, so a GET there is streamed (never gated/buffered).
+    server = await serve(sseApp(), { port: 0 });
+
+    const stream = await openStream(server.port, { path: "/__lesto/live-data" });
+
     expect(stream.status).toBe(200);
     expect(stream.headers["content-type"]).toBe("text/event-stream");
     stream.close();
