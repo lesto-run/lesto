@@ -40,7 +40,9 @@ const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
 /**
  * The dev-MCP/loopback-transport strings that must never appear in the shipped client
  * bundle: the three dev tool names, the dev-session token header, the loopback transport
- * entry, the AI-overlay dev endpoint, and the stderr banner the bin logs on boot.
+ * entry, the AI-overlay dev endpoint, the AI overlay client's own root id (so the
+ * dev-only "Ask Claude" overlay script itself can never ride into production — ADR 0033
+ * L-d43dde63), and the stderr banner the bin logs on boot.
  */
 const FORBIDDEN_STRINGS = [
   "get_dev_diagnostics",
@@ -49,6 +51,7 @@ const FORBIDDEN_STRINGS = [
   "x-lesto-dev-token",
   "startMcpHttpServer",
   "__lesto_dev_ai",
+  "__lesto_ai_overlay__",
   "MCP control plane",
 ] as const;
 

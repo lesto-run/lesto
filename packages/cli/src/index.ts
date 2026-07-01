@@ -32,6 +32,14 @@ export type {
 export { createDevState, DEFAULT_DEV_RING_CAPACITY } from "./dev-state";
 export type { DevState, DevStateReader, DevStateWriter } from "./dev-state";
 
+// The in-preview AI overlay client string (ADR 0033 Phase 1). Exported for the SAME
+// reason as `createDevState`: the estate overlay dogfood (L-d43dde63) drives `run`'s dev
+// path itself and needs the EXACT script the bin bakes into the `aiOverlay` seam, so it
+// paints the real overlay rather than reaching into an internal module or asserting a
+// sentinel. Dev-only by construction — `runDev` is the only code path that injects it.
+export { aiOverlayClientScript } from "./ai-overlay";
+export type { AiOverlayOptions } from "./ai-overlay";
+
 export { runMcp } from "./mcp";
 export type { McpDeps } from "./mcp";
 

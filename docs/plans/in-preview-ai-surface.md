@@ -186,26 +186,31 @@ gate-exempt** (no `test:cov`); `@lesto/ui-generate` declares `test:cov` and is g
    dependency); both-scripts-present + round-trip + not-available + no-prod-injection
    branches covered; coverage 100%; gate + typecheck green.
 
-6b. **Dogfood in `examples/estate` (conditional on estate adopting the CLI dev path)** — `[per gallery-as-QA-gate; conditional]`
-   Files: `examples/estate/dev.ts` (the dev **bin** that builds the dev wiring — NOT
-   `lesto.app.ts`, the app-config factory, which is the wrong layer for `CliDeps` seams),
-   `examples/estate/test/*` (a dev-injection assertion).
-   Estate's dev.ts today is a bespoke `dispatchSitesDev` + `serve` + poll-reload entry
-   that does **not** go through `runDev`/`CliDeps`. Two honest options, pick one and state
-   it: **(a)** migrate estate's dev bin onto the CLI `runDev` path (an explicit, separate
-   prerequisite — it swaps estate's entire dev mechanism, so it is NOT folded into this
-   increment), then provide the `aiOverlay` + `dispatchDevTool` seams there; or **(b)**
-   keep this increment **deferred** behind that migration and let Inc 6a be the binding
-   gate. Do **not** leave acceptance on an "if/where estate adopts" conditional. When (a)
-   lands: the `dispatchDevTool` seam points at ADR 0032's dev MCP server when present,
-   otherwise the inspect-only state; assert the dev HTML carries the AI overlay
-   `<script>` and that estate builds/deploys with **no** AI overlay in the production
-   artifact.
-   Acceptance: **either** estate dev (post-migration) injects + paints the overlay locally
-   with the prod artifact carrying no AI overlay script (grep-assert) and seam wiring in
-   `examples/estate/dev.ts` not `lesto.app.ts` (grep-assert); **or** this increment is
-   explicitly marked deferred-pending-estate-migration with Inc 6a as the gate; coverage
-   100% on touched packages; gate + typecheck green.
+6b. **Dogfood in `examples/estate` via the CLI dev path** — `[per gallery-as-QA-gate]` — **DONE (L-d43dde63).**
+   Files: `examples/estate/test/ai-overlay.dogfood.test.ts` (new — the overlay dogfood),
+   `examples/estate/test/prod-no-dev-mcp.test.ts` (the prod grep-gate, strengthened),
+   `packages/cli/src/index.ts` (export `aiOverlayClientScript` for the dogfood, mirroring
+   the `createDevState` precedent), `examples/estate/lesto.app.ts` (stale-doc fix).
+   **Resolution of the original either/or:** option **(a)** was taken, but the honest form
+   the migration actually landed in (Inc 8 · `L-cfd434f4`) is **not** a bespoke
+   `examples/estate/dev.ts` — estate adopted the framework's own `lesto dev`
+   (`package.json` — `bun --bun lesto dev`), so the `aiOverlay` + `startDevMcp`→
+   `dispatchDevTool` seams are wired by the **CLI bin**, and estate carries **no** dev
+   entry of its own. So "seam wiring lives in `dev.ts` not `lesto.app.ts`" resolves to the
+   stronger invariant **the app-config layer carries no dev wiring at all** — grep-asserted
+   against `lesto.app.ts`. The dogfood drives estate's REAL app through `run(["dev"])` with
+   the same `aiOverlay` + in-process `dispatch(context, tools, "describe_app", {})` wiring
+   the bin performs, and asserts: (1) a real estate route's dev HTML carries the injected AI
+   overlay `<script>` (the exact `aiOverlayClientScript` string); (2) a same-origin,
+   token-gated chat turn round-trips a read-only `describe_app` inspect over estate's real
+   routes (its `/mls` map comes back), audited; (3) on teardown the dispatch seam is cleared
+   and a turn fails closed to the inspect-only "not available" reply. The prod gate
+   (`prod-no-dev-mcp.test.ts`) grep-asserts the shipped artifact carries neither the
+   `__lesto_dev_ai` endpoint nor the overlay client's `__lesto_ai_overlay__` root id.
+   Acceptance: estate dev injects + paints the overlay locally; the prod artifact carries no
+   AI overlay script (grep-assert); no dev-seam wiring in `lesto.app.ts` (grep-assert);
+   coverage unaffected (estate has no `test:cov`; the CLI change is the coverage-excluded
+   `index.ts`); gate + typecheck green. **All green.**
 
 7. **Docs: label the surface PREVIEW** — `[docs]`
    Files: `docs/adr/0033-in-preview-ai-surface.md` (already written), this dev-loop doc note (below).
