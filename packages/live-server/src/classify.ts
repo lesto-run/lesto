@@ -1,0 +1,142 @@
+/**
+ * Per-row **delete-from-shape classification** (ADR 0042 Tier 4, v1 Inc2) — the heart of
+ * per-row authorization for the logical-replication change source.
+ *
+ * The v0 engine detects change by *set-diffing* full poll snapshots ({@link file://./diff.ts}).
+ * The v1 change source ({@link file://./replication.ts}) instead delivers **incremental** changes
+ * with the row's OLD and NEW images, so change is applied one row at a time. For each active shape
+ * a changed row is classified by whether it was in the shape *before* and whether it is in *after*
+ * — the **in/out/stay** decision (ADR 0042, "per-row authorization"):
+ *
+ * | matched OLD? | matches NEW? | result                                    |
+ * |:------------:|:------------:|-------------------------------------------|
+ * |      —       |     yes      | `insert` (a new row entered the shape)    |
+ * |      —       |      no      | *(nothing — never in this client's slice)*|
+ * |     yes      |     yes      | `update` (stayed; ship the new row)       |
+ * |      no      |     yes      | `insert` (an update moved it *in*)        |
+ * |     yes      |      no      | `delete` (an update moved it *out*) ⇐ the **delete-from-shape** that stops a leak |
+ * |      no      |      no      | *(nothing — outside the slice both times)*|
+ * |     yes      |      —       | `delete` (the row was deleted from the table) |
+ *
+ * The **delete-from-shape** row (in ⇒ out) is the security-load-bearing case: without it a row the
+ * principal lost access to (an update reassigning `owner_id`/`room_id`, a membership revoke) would
+ * silently **persist** in the client's local store. Emitting the `delete` removes it, keeping the
+ * client slice exactly the authorized set.
+ *
+ * **This depends on a full OLD image.** Evaluating `matchesShape(OLD)` over a predicate on a
+ * **non-key** column needs that column's old value, which Postgres emits only under
+ * `REPLICA IDENTITY FULL` (else the old image is the primary key only). {@link predicateNeedsOldImage}
+ * + {@link assertReplicaIdentity} are the registration-time guard that **refuses** such a shape
+ * unless its table supplies the old image — never a silent leak (ADR 0042 *Consequences*). Whether
+ * the table has `REPLICA IDENTITY FULL` is a catalog fact (`pg_class.relreplident = 'f'`) the engine
+ * supplies; this module owns the *decision*, not the lookup.
+ *
+ * **Coercion is injected.** A replication image is raw and, from `pgoutput`, **text-encoded**
+ * (`room_id` arrives `"42"`, a boolean `"t"`, a timestamp a string). `matchesShape` compares against
+ * typed filter values (`42`), so an image must be projected to the shape's columns and coerced to
+ * the shape's scalar types *before* classification. That coercion needs the table's column kinds, so
+ * it is an injected {@link ImageCoercer} seam — the engine provides a `@lesto/db`-backed one; a test
+ * provides a trivial one. This module stays pure protocol logic, DB- and decoder-agnostic.
+ */
+
+import { matchesShape, rowKey } from "@lesto/live-protocol";
+import type { Row, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
+
+import { LiveServerError } from "./errors";
+import type { ReplicationChange, RowImage } from "./replication";
+
+/**
+ * Project a raw replication {@link RowImage} to the shape's typed, wire-form {@link Row}: keep the
+ * shape's columns, coerce each to the shape's scalar type (e.g. `pgoutput` text `"42"` → `42`), and
+ * normalize to wire form (a `Date` → epoch-ms). Injected so this module needs no `@lesto/db` handle.
+ */
+export type ImageCoercer = (image: RowImage) => Row;
+
+/**
+ * Whether a shape's predicate needs the row's **full** old image to classify a delete-from-shape.
+ * True iff any filter is over a column other than the shape's key: the old image always carries the
+ * key, so a key-only predicate is decidable from a key-only old image, but a predicate on any other
+ * column can only be evaluated on the old row under `REPLICA IDENTITY FULL`.
+ */
+export function predicateNeedsOldImage(def: ShapeDefinition): boolean {
+  return def.where.some((filter) => filter.column !== def.key);
+}
+
+/**
+ * The registration-time guard: **refuse** a shape whose predicate needs the old image
+ * ({@link predicateNeedsOldImage}) when its table is not `REPLICA IDENTITY FULL`. Rather than serve
+ * it and silently fail to emit delete-from-shape (a durable leak into the client's OPFS store), the
+ * engine rejects it with a coded error so the operator fixes the table's replica identity. A
+ * key-only predicate (or a table that already supplies the full old image) passes.
+ */
+export function assertReplicaIdentity(def: ShapeDefinition, hasFullReplicaIdentity: boolean): void {
+  if (predicateNeedsOldImage(def) && !hasFullReplicaIdentity) {
+    throw new LiveServerError(
+      "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT",
+      `Shape on "${def.table}" filters a non-key column, so classifying a row that leaves the shape needs the full old row image — set REPLICA IDENTITY FULL on "${def.table}".`,
+      { table: def.table, key: def.key },
+    );
+  }
+}
+
+/**
+ * Merge a NEW image over the OLD, filling any column the stream did not transmit. `pgoutput` marks
+ * an **unchanged-TOAST** column as absent (a `undefined` value) rather than resend a large value; the
+ * current value of such a column IS its old value, so the merged image is the true post-update row
+ * (and what `matchesShape(NEW)` and the shipped row must see).
+ */
+function mergeNewOverOld(next: RowImage, prev: RowImage): RowImage {
+  const merged: RowImage = { ...prev };
+
+  for (const [column, value] of Object.entries(next)) {
+    if (value !== undefined) merged[column] = value;
+  }
+
+  return merged;
+}
+
+/**
+ * Classify one {@link ReplicationChange} against one active shape, producing the {@link ShapeChange}
+ * to fan to that shape's subscribers, or `undefined` when the change does not affect this shape's
+ * authorized set. `coerce` projects + type-coerces the raw image (see {@link ImageCoercer}); it is
+ * assumed the engine has already validated the shape's replica identity ({@link assertReplicaIdentity}),
+ * so a non-key predicate can trust the old image is complete.
+ */
+export function classifyChange(
+  def: ShapeDefinition,
+  change: ReplicationChange,
+  coerce: ImageCoercer,
+): ShapeChange | undefined {
+  if (change.op === "insert") {
+    const row = coerce(change.newImage);
+
+    return matchesShape(def, row) ? { op: "insert", key: rowKey(row, def.key), row } : undefined;
+  }
+
+  if (change.op === "delete") {
+    const row = coerce(change.oldImage);
+
+    // A deleted row only needs removing from the client if it was in the shape to begin with.
+    return matchesShape(def, row) ? { op: "delete", key: rowKey(row, def.key) } : undefined;
+  }
+
+  // An update: classify by shape membership before vs after.
+  const oldRow = coerce(change.oldImage);
+  const newRow = coerce(mergeNewOverOld(change.newImage, change.oldImage));
+  const wasIn = matchesShape(def, oldRow);
+  const isIn = matchesShape(def, newRow);
+
+  if (isIn) {
+    // Stayed in, or moved in — either way the client needs the current row. (A key change would
+    // strand the old key, but the shape key is the primary key; a PK update is out of scope.)
+    return { op: wasIn ? "update" : "insert", key: rowKey(newRow, def.key), row: newRow };
+  }
+
+  if (wasIn) {
+    // Moved OUT — the delete-from-shape: remove the row the principal no longer sees.
+    return { op: "delete", key: rowKey(oldRow, def.key) };
+  }
+
+  // Outside the shape both before and after — nothing to tell this client.
+  return undefined;
+}

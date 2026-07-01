@@ -44,7 +44,14 @@ export type LiveServerErrorCode =
    * swallowed: a silently-undropped slot is the disk-fill outage this module exists to prevent, so
    * the deployment's slot-lag alerting + disk-pressure runbook must act on it.
    */
-  | "LIVE_SERVER_REPLICATION_SLOT_DROP_TIMEOUT";
+  | "LIVE_SERVER_REPLICATION_SLOT_DROP_TIMEOUT"
+  /**
+   * A shape filters a **non-key** column, but its table is not `REPLICA IDENTITY FULL`, so the
+   * replication stream cannot supply the old row image needed to classify a row that leaves the
+   * shape — serving it would silently fail to emit delete-from-shape and leak the row into the
+   * client's durable store. Refused at registration (fix: `ALTER TABLE … REPLICA IDENTITY FULL`).
+   */
+  | "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT";
 
 /** Anything the shape engine can refuse to register or serve. */
 export class LiveServerError extends LestoError<LiveServerErrorCode> {
