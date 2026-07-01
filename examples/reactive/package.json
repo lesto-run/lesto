@@ -1,0 +1,19 @@
+{
+  "name": "@lesto/example-reactive",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Live queries end-to-end: a mutation on one client refetches a useQuery on every OTHER client, over the ADR 0040 SSE fan-out — with per-subscription authorization (a viewer of a room it cannot see learns nothing, not even change-timing). The multi-client e2e liveness gate for ADR 0027 Phase 2.",
+  "type": "module",
+  "scripts": {
+    "serve": "bun run serve.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/kernel": "workspace:*",
+    "@lesto/pubsub": "workspace:*",
+    "@lesto/realtime": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*"
+  }
+}

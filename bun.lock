@@ -202,6 +202,17 @@
         "zod": "^4.0.0",
       },
     },
+    "examples/reactive": {
+      "name": "@lesto/example-reactive",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/kernel": "workspace:*",
+        "@lesto/pubsub": "workspace:*",
+        "@lesto/realtime": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/web": "workspace:*",
+      },
+    },
     "examples/tailwind": {
       "name": "@lesto/example-tailwind",
       "version": "0.0.0",
@@ -1436,7 +1447,6 @@
 
     "@lesto/example-estate": ["@lesto/example-estate@workspace:examples/estate"],
 
-
     "@lesto/example-island-fast-refresh": ["@lesto/example-island-fast-refresh@workspace:examples/island-fast-refresh"],
 
     "@lesto/example-mailing-lists": ["@lesto/example-mailing-lists@workspace:examples/mailing-lists"],
@@ -1448,6 +1458,8 @@
     "@lesto/example-mcp-server": ["@lesto/example-mcp-server@workspace:examples/mcp-server"],
 
     "@lesto/example-queue-dashboard": ["@lesto/example-queue-dashboard@workspace:examples/queue-dashboard"],
+
+    "@lesto/example-reactive": ["@lesto/example-reactive@workspace:examples/reactive"],
 
     "@lesto/example-tailwind": ["@lesto/example-tailwind@workspace:examples/tailwind"],
 
