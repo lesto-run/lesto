@@ -2,8 +2,8 @@
  * The real `pg` logical-replication client for the Tier-4 change source (ADR 0042) — the
  * coverage-excluded socket wiring. Every DECISION the source makes (reconnect/backoff, the slot
  * lifecycle, identity stamping, error routing) is tested in `replication.ts` against the
- * {@link PgReplicationClient} seam, and the pure message decoders are tested against **real
- * captured bytes** in `pgoutput.ts` / `wal2json.ts`; what remains here is the irreducible
+ * {@link PgReplicationClient} seam, and the pure message decoder is tested against **real
+ * captured bytes** in `pgoutput.ts`; what remains here is the irreducible
  * replication-protocol wiring — the copy-data stream, its `XLogData` framing, and standby-status
  * (LSN acknowledgement) feedback — which has nothing to exercise but a live Postgres WAL stream.
  *
@@ -23,11 +23,15 @@
  *     keepalive.
  *   - the `XLogData` (`'w'`, 25-byte header) / keepalive (`'k'`) framing was right.
  *
- * **Decoder / plugin.** Default is **`pgoutput`** — built into core Postgres (no server extension),
- * so it runs on managed providers where `wal2json` is absent (the shakeout confirmed
- * `debezium/postgres` ships no `wal2json`). `wal2json` stays selectable where the extension is
- * installed; its decoder is unit-tested but was not live-validated here (no plugin in the env).
- * pgoutput needs a **publication** (a deployment/migration concern, like the slot and REPLICA
+ * **Decoder.** **`pgoutput`** — built into core Postgres (no server extension), so it runs on
+ * managed providers where a third-party plugin is absent (the shakeout confirmed
+ * `debezium/postgres` ships no `wal2json`). It is the only decoder: `pgoutput` is a strict
+ * superset of what any deployment needs (core in every PG ≥ 10), so a second plugin only added an
+ * unproven code path AND a value-encoding split — `pgoutput` decodes column values as **text**
+ * (`"42"`), where `wal2json` would pass native JSON (`42`), breaking the single {@link DecodedChange}
+ * contract Inc2's engine relies on. A future alternate decoder is a small re-add *behind the
+ * {@link PgReplicationClient} seam*, with its own live shakeout and a contract that it stringify to
+ * match. pgoutput needs a **publication** (a deployment/migration concern, like the slot and REPLICA
  * IDENTITY FULL) naming the tables to stream; this client references it, it does not create it.
  *
  * **Operational requirements** (ADR 0042 *Consequences*):
@@ -43,19 +47,15 @@ import { createRequire } from "node:module";
 import { LiveServerError } from "./errors";
 import { createPgOutputDecoder } from "./pgoutput";
 import type { DecodedChange, PgReplicationClient, SystemIdentity } from "./replication";
-import { decodeWal2JsonChange, type Wal2JsonChange } from "./wal2json";
 
 /** Connection config for the dedicated replication client — a libpq URL or field set. */
 export type PgReplicationConfig =
   | string
   | { readonly connectionString?: string; readonly [key: string]: unknown };
 
-/** Tuning for the real client: the output plugin and (for pgoutput) the publication to stream. */
+/** Tuning for the real client. */
 export interface PgReplicationClientOptions {
-  /** The logical-decoding output plugin. Defaults to `pgoutput` (core, portable). */
-  readonly plugin?: "pgoutput" | "wal2json";
-
-  /** The publication naming the tables pgoutput streams (a deployment concern). Defaults to `lesto_publication`. */
+  /** The publication naming the tables `pgoutput` streams (a deployment concern). Defaults to `lesto_publication`. */
   readonly publication?: string;
 }
 
@@ -114,7 +114,6 @@ export function createPgReplicationClientFactory(
   config: PgReplicationConfig,
   options: PgReplicationClientOptions = {},
 ): () => PgReplicationClient {
-  const plugin = options.plugin ?? "pgoutput";
   const publication = options.publication ?? "lesto_publication";
 
   return () => {
@@ -130,7 +129,7 @@ export function createPgReplicationClientFactory(
 
     let changeListener: ((change: DecodedChange) => void) | undefined;
     let errorListener: ((error: unknown) => void) | undefined;
-    const decoder = plugin === "pgoutput" ? createPgOutputDecoder() : undefined;
+    const decoder = createPgOutputDecoder();
     let lastLsn = 0n; // the high-water WAL position we have applied — acknowledged to the server
 
     /** Acknowledge `lastLsn` so the slot advances its confirmed position (else WAL pins forever). */
@@ -145,25 +144,7 @@ export function createPgReplicationClientFactory(
       raw.connection.sendCopyFromChunk(status);
     }
 
-    /** Decode one XLogData payload into zero or more changes (pgoutput: 0–1; wal2json: 0–N). */
-    function decodePayload(payload: Buffer): DecodedChange[] {
-      if (decoder !== undefined) {
-        const change = decoder.decode(payload);
-
-        return change === undefined ? [] : [change];
-      }
-
-      // wal2json: the payload is a JSON transaction batch with a commit `nextlsn` and `change[]`.
-      const batch = JSON.parse(payload.toString("utf8")) as {
-        nextlsn?: string;
-        change?: readonly Wal2JsonChange[];
-      };
-      const commitLSN = batch.nextlsn ?? "0/0";
-
-      return (batch.change ?? []).map((change) => decodeWal2JsonChange(change, commitLSN));
-    }
-
-    /** One copy-data frame: acknowledge its LSN, and (for an XLogData frame) decode + emit changes. */
+    /** One copy-data frame: acknowledge its LSN, and (for an XLogData frame) decode + emit a change. */
     function onCopyData(bytes: Buffer): void {
       // This runs synchronously from node-postgres's `copyData` listener, so a throw (a decoder
       // refusal, or a RangeError on a truncated/garbage frame) would escape UNCAUGHT into the
@@ -186,8 +167,9 @@ export function createPgReplicationClientFactory(
         const walStart = bytes.readBigUInt64BE(1);
         if (walStart > lastLsn) lastLsn = walStart;
 
-        for (const change of decodePayload(bytes.subarray(XLOG_DATA_HEADER_BYTES)))
-          changeListener?.(change);
+        // pgoutput decodes each XLogData payload to 0–1 changes (a control message → none).
+        const change = decoder.decode(bytes.subarray(XLOG_DATA_HEADER_BYTES));
+        if (change !== undefined) changeListener?.(change);
 
         sendStandbyStatus(); // advance the slot past what we just applied
       } catch (error) {
@@ -207,8 +189,8 @@ export function createPgReplicationClientFactory(
       },
 
       async createSlot(slot: string): Promise<void> {
-        // A logical slot with the configured output plugin; persists until dropped.
-        await raw.query(`CREATE_REPLICATION_SLOT ${slot} LOGICAL ${plugin}`);
+        // A logical slot decoded by `pgoutput` (core); persists until dropped.
+        await raw.query(`CREATE_REPLICATION_SLOT ${slot} LOGICAL pgoutput`);
       },
 
       async dropSlot(slot: string): Promise<void> {
@@ -264,12 +246,8 @@ export function createPgReplicationClientFactory(
         }
 
         const lsn = startLsn ?? "0/0"; // `0/0` lets the server resume from the slot's confirmed position.
-        // pgoutput needs its proto version + the publication naming the streamed tables; wal2json
-        // needs include-lsn so each batch carries its commit position (the Inc4 cursor).
-        const pluginOptions =
-          plugin === "pgoutput"
-            ? `(proto_version '1', publication_names '${publication}')`
-            : `("include-lsn" 'on')`;
+        // pgoutput needs its proto version + the publication naming the streamed tables.
+        const pluginOptions = `(proto_version '1', publication_names '${publication}')`;
 
         // START_REPLICATION streams — its query promise never resolves — so wire the copy-data sink
         // and resolve when the server confirms replication has started. A command error rejects; a

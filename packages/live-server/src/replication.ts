@@ -3,8 +3,8 @@
  * production replacement for the v0 full-table poll ({@link file://./engine.ts}) as the
  * engine's change feed.
  *
- * A **dedicated** logical-replication connection (a replication slot + `pgoutput`/`wal2json`
- * decoding) streams *every* committed change with its row image and commit LSN — **beside**
+ * A **dedicated** logical-replication connection (a replication slot + `pgoutput` decoding)
+ * streams *every* committed change with its row image and commit LSN — **beside**
  * the pool, never from it (the same discipline as ADR 0040's dedicated `LISTEN` client,
  * `@lesto/realtime`'s `pg-transport.ts`): a replication connection is special and long-lived,
  * and pulling it from the query pool would pin a pooled slot for the process's life.
@@ -27,8 +27,8 @@
  * identity stamping, error routing — driven against an injected {@link PgReplicationClient}
  * seam so every branch is unit-reachable without a live Postgres. It is **decoder-agnostic**:
  * it consumes already-decoded {@link DecodedChange}s from the seam (exactly as
- * `pg-transport.ts` consumes decoded `PgNotification`s); the actual `pgoutput`/`wal2json`
- * binary/JSON decode lives ONLY in the thin, coverage-excluded real client
+ * `pg-transport.ts` consumes decoded `PgNotification`s); the actual `pgoutput`
+ * binary decode lives ONLY in the thin, coverage-excluded real client
  * ({@link file://./pg-replication-client.ts}).
  *
  * Resume (Inc4) is not implemented here, but the source carries its *inputs*: it captures the

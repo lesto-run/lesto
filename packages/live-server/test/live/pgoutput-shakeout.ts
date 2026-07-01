@@ -82,7 +82,7 @@ try {
 
   const changes: ReplicationChange[] = [];
   const source = createPgReplicationSource({
-    createClient: createPgReplicationClientFactory(URL, { plugin: "pgoutput", publication: PUB }),
+    createClient: createPgReplicationClientFactory(URL, { publication: PUB }),
     slot: SLOT,
   });
   source.onError((error) => console.log("source error:", (error as Error)?.message));
