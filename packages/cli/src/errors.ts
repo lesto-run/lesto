@@ -20,6 +20,8 @@ export type CliErrorCode =
   | "CLI_CONTENT_PACKAGES_MISSING"
   | "CLI_DEPLOY_INCOMPLETE_REMOTE"
   | "CLI_DEPLOY_UNHEALTHY"
+  /** The in-preview AI bridge (ADR 0033 Inc 3) refused a turn: its tool is not on the positive read-only allowlist, or the dev MCP seam is not wired — inspect-only, fail-closed. */
+  | "CLI_DEV_MCP_UNAVAILABLE"
   /** A dev-only surface (live reload, island Fast Refresh, or the loopback MCP plane) was wired on a non-`dev` command (ADR 0032 Inc 5). */
   | "CLI_DEV_SURFACE_IN_PRODUCTION"
   /** PREVIEW `lesto eval` gate: one or more of the app's declared evals failed (`details` carries the failed/total counts). */
