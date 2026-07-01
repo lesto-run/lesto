@@ -25,7 +25,8 @@
  *
  * **This depends on a full OLD image.** Evaluating `matchesShape(OLD)` over a predicate on a
  * **non-key** column needs that column's old value, which Postgres emits only under
- * `REPLICA IDENTITY FULL` (else the old image is the primary key only). {@link predicateNeedsOldImage}
+ * `REPLICA IDENTITY FULL` (else the old image is the primary key only, or — for an unchanged-key
+ * `DEFAULT` update — absent entirely). {@link predicateNeedsOldImage}
  * + {@link assertReplicaIdentity} are the registration-time guard that **refuses** such a shape
  * unless its table supplies the old image — never a silent leak (ADR 0042 *Consequences*). Whether
  * the table has `REPLICA IDENTITY FULL` is a catalog fact (`pg_class.relreplident = 'f'`) the engine
@@ -54,9 +55,11 @@ export type ImageCoercer = (image: RowImage) => Row;
 
 /**
  * Whether a shape's predicate needs the row's **full** old image to classify a delete-from-shape.
- * True iff any filter is over a column other than the shape's key: the old image always carries the
- * key, so a key-only predicate is decidable from a key-only old image, but a predicate on any other
- * column can only be evaluated on the old row under `REPLICA IDENTITY FULL`.
+ * True iff any filter is over a column other than the shape's key. A key-only (or filterless)
+ * predicate needs *nothing* from the old image: the key is immutable, so an update cannot move such
+ * a row across the shape boundary without changing the key (which the classifier refuses), and when
+ * a key change *does* happen even a `DEFAULT` table emits the old key. A predicate on any non-key
+ * column, by contrast, can only be evaluated on the old row under `REPLICA IDENTITY FULL`.
  */
 export function predicateNeedsOldImage(def: ShapeDefinition): boolean {
   return def.where.some((filter) => filter.column !== def.key);
@@ -127,6 +130,16 @@ function mergeNewOverOld(next: RowImage, prev: RowImage): RowImage {
 }
 
 /**
+ * Whether the change actually carried an old row image. `pgoutput` sends **no** old tuple for a
+ * `REPLICA IDENTITY DEFAULT` update whose key did not change (the decoder then leaves `oldImage`
+ * empty); a key tuple (a key change) or a full old row (`FULL`) leaves it populated. Emptiness is
+ * the signal that the old image must not be coerced (it would fabricate a NaN-keyed row).
+ */
+function hasOldImage(oldImage: RowImage): boolean {
+  return Object.keys(oldImage).length !== 0;
+}
+
+/**
  * Classify one {@link ReplicationChange} against one active shape, producing the {@link ShapeChange}
  * to fan to that shape's subscribers, or `undefined` when the change does not affect this shape's
  * authorized set. `coerce` projects + type-coerces the raw image (see {@link ImageCoercer}); it is
@@ -152,8 +165,17 @@ export function classifyChange(
   }
 
   // An update: classify by shape membership before vs after.
-  const oldRow = coerce(change.oldImage);
   const newRow = coerce(mergeNewOverOld(change.newImage, change.oldImage));
+
+  // A `REPLICA IDENTITY DEFAULT` update whose (immutable) key did NOT change carries **no old
+  // tuple** — `oldImage` is empty. Coercing `{}` would fabricate a NaN-keyed row, so `wasIn`
+  // (and the key-change guard) would read garbage: a key-only/filterless shape's plain update
+  // would misfire (a spurious `LIVE_SERVER_PRIMARY_KEY_CHANGED`, or an `insert` for a row already
+  // present). Since the key is immutable, an absent old image means membership cannot have changed
+  // — so classify against the NEW row. When an old image IS present (a key change under DEFAULT
+  // sends a key tuple; every update under FULL sends the old row), trust it. A predicate that needs
+  // the old image never reaches here with one missing: the engine's guard refuses that at the door.
+  const oldRow = hasOldImage(change.oldImage) ? coerce(change.oldImage) : newRow;
   const wasIn = matchesShape(def, oldRow);
   const isIn = matchesShape(def, newRow);
 

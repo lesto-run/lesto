@@ -524,6 +524,36 @@ describe("replication change source — the v1 change path", () => {
     e.stop();
   });
 
+  it("delivers a plain update for a filterless shape on a DEFAULT table (empty old image, no false PK-change)", async () => {
+    await insert(1, "hi", 100);
+    const src = fakeSource();
+    const errors: unknown[] = [];
+    const sink = collector();
+    // A filterless shape needs no old image, so a non-FULL table is fine.
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      onError: (error) => errors.push(error),
+      replication: { source: src.source, replicaIdentity: fullFor() },
+    });
+    await e.subscribe(room1Shape({ where: [] }), sink.onChange);
+
+    // DEFAULT + unchanged key → pgoutput sends NO old tuple → oldImage is `{}`.
+    src.emit({
+      op: "update",
+      table: "messages",
+      oldImage: {},
+      newImage: { id: "1", room_id: "1", body: "edited", created_at: "100" },
+      ...STAMP,
+    });
+
+    expect(errors).toEqual([]); // no spurious LIVE_SERVER_PRIMARY_KEY_CHANGED
+    expect(sink.changes).toEqual([
+      { op: "update", key: "1", row: { id: 1, roomId: 1, body: "edited", createdAt: 100 } },
+    ]);
+    e.stop();
+  });
+
   it("ignores a change for a table with no active shape", async () => {
     const src = fakeSource();
     const sink = collector();

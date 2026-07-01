@@ -279,6 +279,48 @@ describe("classifyChange — update (the in/out/stay matrix)", () => {
   });
 });
 
+describe("classifyChange — update with an ABSENT old image (REPLICA IDENTITY DEFAULT, key unchanged)", () => {
+  // pgoutput sends NO old tuple for a DEFAULT update whose key did not change → oldImage is `{}`.
+  // Coercing that would fabricate a NaN key; membership can't have changed (the key is immutable),
+  // so the classifier must derive `wasIn` from the NEW row and emit a plain `update`.
+  const emptyOldUpdate = (newImage: RowImage): ReplicationChange => ({
+    op: "update",
+    table: "messages",
+    oldImage: {},
+    newImage,
+    ...stamp,
+  });
+
+  it("emits an update (not a spurious PRIMARY_KEY_CHANGED) for a filterless shape", () => {
+    const def = shape([]); // filterless: always in-shape — the most basic 'sync this table' case
+    const change = emptyOldUpdate({ id: "5", room_id: "9", body: "edited" });
+
+    expect(classifyChange(def, change, coercer(def))).toEqual({
+      op: "update",
+      key: "5",
+      row: { id: 5, room_id: 9, body: "edited" },
+    });
+  });
+
+  it("emits an update (not an insert) for a key-only-predicate shape whose row stays in", () => {
+    const def = shape([{ column: "id", op: "eq", value: 5 }]);
+    const change = emptyOldUpdate({ id: "5", room_id: "9", body: "edited" });
+
+    expect(classifyChange(def, change, coercer(def))).toEqual({
+      op: "update",
+      key: "5",
+      row: { id: 5, room_id: 9, body: "edited" },
+    });
+  });
+
+  it("emits nothing for a key-only-predicate shape whose row is outside (both before and after)", () => {
+    const def = shape([{ column: "id", op: "eq", value: 5 }]);
+    const change = emptyOldUpdate({ id: "7", room_id: "9", body: "edited" });
+
+    expect(classifyChange(def, change, coercer(def))).toBeUndefined();
+  });
+});
+
 describe("prepareShapeClassifier — the guarded entry point", () => {
   it("refuses to bind a non-key-predicate shape without REPLICA IDENTITY FULL (the guard cannot be skipped)", () => {
     expect(() => prepareShapeClassifier(shape(), false, coercer(shape()))).toThrow(LiveServerError);
