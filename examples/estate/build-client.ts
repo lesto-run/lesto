@@ -3,11 +3,12 @@
  *
  *   bun build-client.ts --outfile out/client.js [--minify] [--production] [--preact]
  *
- * This is the one build step both `dev.ts` and `src/production.ts` shell out to,
- * so there is a single source of truth for how `/client.js` is produced. They
- * spawn it (via `execFileSync`) rather than import it, which keeps those files
- * plain node-typed and vitest-importable — the Bun-only `Bun.build` API lives
- * here alone, behind a process boundary.
+ * This is the build step `src/production.ts` shells out to, so there is a single
+ * source of truth for how the deployed `/client.js` is produced. It spawns this
+ * (via `execFileSync`) rather than importing it, which keeps that file plain
+ * node-typed and vitest-importable — the Bun-only `Bun.build` API lives here
+ * alone, behind a process boundary. (Local `lesto dev` no longer uses this path:
+ * it bundles `app/islands/` through the framework's own synthesized entry.)
  *
  * Why `Bun.build` and not the `bun build` CLI: aliasing `react` to
  * `preact/compat` for the CLIENT bundle needs a resolver plugin, and the CLI has

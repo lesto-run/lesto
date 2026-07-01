@@ -25,6 +25,13 @@ export type {
   ServeLimitsEnv,
 } from "./run";
 
+// The dev-state ring the `dev` command's MCP control plane reads (ADR 0032 Phase 1).
+// Exported so an app that drives `run`'s dev path itself — the estate dogfood
+// (L-cfd434f4) — can build the same bounded ring the bin wires, rather than reaching
+// into an internal module. `createDevState` is the only way to satisfy `CliDeps.devState`.
+export { createDevState, DEFAULT_DEV_RING_CAPACITY } from "./dev-state";
+export type { DevState, DevStateReader, DevStateWriter } from "./dev-state";
+
 export { runMcp } from "./mcp";
 export type { McpDeps } from "./mcp";
 

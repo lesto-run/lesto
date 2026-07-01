@@ -1,14 +1,17 @@
 /**
  * Regenerate `src/routes.gen.ts` from `app/routes/` via the Lesto codegen
- * (`generateRouteManifest`) — the ONE source for estate's file routes, on Node
- * (serve/dev) and the edge (worker). estate hand-wires nothing.
+ * (`generateRouteManifest`) — the ONE source for estate's file routes on the
+ * production Node path (serve) and the edge (worker). estate hand-wires nothing.
  *
  * Run as a PRE-STEP before each entry (`bun src/regenerate-routes.ts && bun
  * serve.ts`, etc.), never imported for its side effect. It must be a separate
- * process: `serve.ts`/`dev.ts` statically import `routes.gen.ts` at module load —
- * before any of their own code runs — so a regen inside them would always be too
- * late. Running it first means the entry then imports a fresh manifest, so
- * "drop a file under app/routes/ → it routes" holds on the next start.
+ * process: `serve.ts` (through `src/production.ts`) and `worker.ts` statically
+ * import `routes.gen.ts` at module load — before any of their own code runs — so a
+ * regen inside them would always be too late. Running it first means the entry then
+ * imports a fresh manifest, so "drop a file under app/routes/ → it routes" holds on
+ * the next start. (`lesto dev` needs no pre-step of its own — it re-scans
+ * `app/routes/` at boot and on every save — but the `dev` script still runs it so
+ * the committed edge manifest stays in sync.)
  */
 
 import { readdir, writeFile } from "node:fs/promises";

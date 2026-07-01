@@ -17,17 +17,25 @@ One origin means one cookie: the session set by `/mls` is seen by the static
 **Local development** — live render, instant edits, real island hydration:
 
 ```bash
-bun run examples/estate/dev.ts        # or, in a real project: lesto dev
+bun run dev        # from examples/estate — runs `lesto dev` under bun
 ```
 
-`dev.ts` bundles the island client to `out/client.js`, then serves _every_ zone
-**live** through the app's own `handle` (no prerender) on one port. It also
-watches `src/` and `client.tsx`: edits to pages **and** island code rebuild the
-bundle automatically, and the browser reloads itself (served HTML carries a tiny
-script that polls `/__lesto/version`). Open
+The `dev` script is the framework's own `lesto dev` (estate no longer ships a
+hand-rolled dev loop): it loads `lesto.app.ts`, bundles the island client from
+`app/islands/` to `out/client.js`, and serves _every_ zone **live** through the
+app's own `handle` (no prerender) on one port. Editing a page or an island
+rebuilds and reloads the open browser over a dev-only WebSocket; editing a route
+file re-scans `app/routes/` so a new route appears with no restart. Open
 `http://127.0.0.1:3000` in a browser: the header shows "Sign in"; go to `/mls`
 and sign in; back on `/`, the `My Account` island has hydrated and greets you —
 one origin, one cookie.
+
+`lesto dev` also stands up the **dev MCP control plane** (ADR 0032) on a loopback
+port — it prints the URL and a per-session `x-lesto-dev-token` to stderr on boot.
+An agent (or `curl`) can call `get_dev_diagnostics` to read the current build/reload
+error, `get_recent_requests` to read the live access log, and `tail_logs` to read
+the dev-loop activity — the agent-native dev loop, dogfooded on this app. The plane
+is **dev-only**: `bun run build` / `deploy` (below) never mount it.
 
 **Production shape** — prerender then path-mount:
 
@@ -170,8 +178,9 @@ wrangler deploy                      # ship the Worker (worker.ts) + the static 
 The deploy **fails closed**: `SESSION_SECRET` is mandatory. With it unset, the
 Worker throws on the first request rather than signing sessions with a committed
 key — the committed fallback secret and the passwordless `?as=` demo sign-in are
-reachable **only** under an explicit `LESTO_DEMO=1` binding (which `serve.ts` /
-`dev.ts` set for you locally, and a real deploy never sets). This is the
+reachable **only** under an explicit `LESTO_DEMO=1` binding (which `serve.ts` and
+`lesto.app.ts` — the config `lesto dev` loads — set for you locally, and a real
+deploy never sets). This is the
 framework's pattern for every secret-bearing Worker: production is the default,
 demo is the loud opt-in.
 
@@ -184,9 +193,12 @@ demo is the loud opt-in.
 
 `build.ts` runs the same assembly `serve.ts` does (`buildProductionSite`),
 leaving `out/marketing/` with the prerendered pages and `client.js` beside them
-— which is what `wrangler.jsonc` binds as the `ASSETS` static site. (estate runs
-in-process, so it has no `lesto.app.ts` and there is no global `lesto` command to
-invoke — `bun run build.ts` is its build entry.)
+— which is what `wrangler.jsonc` binds as the `ASSETS` static site. estate keeps
+a bespoke `build.ts` because production does two things the bare `lesto build`
+doesn't: prerender the static marketing zone and bundle the **Preact** island
+client (the deployed Worker SSRs through Preact). Its `lesto.app.ts` is the
+canonical app config all the same — that is what `lesto dev` loads — so dev runs
+through the framework command while the production build stays bespoke.
 
 `wrangler.jsonc` is already written (by `@lesto/cloudflare`'s `wranglerConfig`):
 `main` → `worker.ts`, `nodejs_compat` on (for the `node:crypto` HMAC), and
@@ -200,8 +212,10 @@ session across both.
 
 ## Notes
 
-- The browser bundle is produced by `bun build client.tsx` (see `dev.ts`); any
-  bundler works. Without it, pages degrade gracefully to the island's signed-out
+- The production browser bundle is produced from `client.tsx` by
+  `src/production.ts` (the Preact client the deploy ships); `lesto dev` bundles the
+  same islands from `app/islands/` via the framework's synthesized entry. Either
+  way, without a bundle the pages degrade gracefully to the island's signed-out
   fallback (progressive enhancement).
 - Promoting the client `resolveSession` helper into a shared framework package
   is a natural next step.
