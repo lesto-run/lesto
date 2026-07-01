@@ -153,7 +153,10 @@ describe("add mcp-auth", () => {
 
 describe("add mcp-auth jose dependency", () => {
   it("adds jose to an existing package.json that lacks it", async () => {
-    existing.set("package.json", JSON.stringify({ name: "my-app", dependencies: { zod: "^4.0.0" } }));
+    existing.set(
+      "package.json",
+      JSON.stringify({ name: "my-app", dependencies: { zod: "^4.0.0" } }),
+    );
 
     await runAdd(["mcp-auth"], depsWith());
 

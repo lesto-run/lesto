@@ -379,7 +379,9 @@ async function ensureJose(deps: AddDeps, dryRun: boolean): Promise<void> {
     return;
   }
 
-  const pkg = JSON.parse(await deps.read("package.json")) as { dependencies?: Record<string, string> };
+  const pkg = JSON.parse(await deps.read("package.json")) as {
+    dependencies?: Record<string, string>;
+  };
 
   if (pkg.dependencies?.jose !== undefined) {
     deps.out("jose: already in package.json");
@@ -393,7 +395,7 @@ async function ensureJose(deps: AddDeps, dryRun: boolean): Promise<void> {
     return;
   }
 
-  pkg.dependencies = { ...(pkg.dependencies ?? {}), jose: JOSE_VERSION };
+  pkg.dependencies = { ...pkg.dependencies, jose: JOSE_VERSION };
   await deps.write("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
   deps.out("added jose to package.json — run your installer to fetch it");
 }

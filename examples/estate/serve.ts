@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { serve } from "@lesto/runtime";
 import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
 import { currentRequestSpan } from "@lesto/web";
-import type { CurrentSpan } from "@lesto/observability";
+import type { CurrentSpan, TracesEnv } from "@lesto/observability";
 
 import { buildProductionSite } from "./src/production";
 import { env } from "./src/env";
@@ -51,7 +51,10 @@ async function main(): Promise<void> {
   //
   // This is estate-as-the-OTLP-reference: the SAME `tracesFromEnv` + seam wiring
   // a production Lesto app uses, dogfooded on a real app.
-  const traces = tracesFromEnv(process.env, {
+  // `tracesFromEnv` reads only the `LESTO_OTLP_*` keys — a `TracesEnv` — from the
+  // environment; `process.env` (a `ProcessEnv` index type) carries them but does not
+  // structurally match the weak `TracesEnv`, so narrow it at the boundary.
+  const traces = tracesFromEnv(process.env as TracesEnv, {
     currentSpan: currentRequestSpan as CurrentSpan,
   });
 
