@@ -348,7 +348,10 @@ export function hydrateQueryClient(
 ): void {
   if (typeof window === "undefined") return;
 
-  const primed = window.__lestoData;
+  // The parse-time primer stores its in-flight promises here (declared globally by the
+  // hydration runtime). Read it through a local shape so this isomorphic core stays
+  // self-contained — it never depends on that ambient augmentation being in scope.
+  const primed = (window as { __lestoData?: Record<string, Promise<unknown>> }).__lestoData;
 
   if (primed === undefined) return;
 
