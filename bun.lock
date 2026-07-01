@@ -823,6 +823,15 @@
         "@lesto/errors": "workspace:*",
       },
     },
+    "packages/live-server": {
+      "name": "@lesto/live-server",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/db": "workspace:*",
+        "@lesto/errors": "workspace:*",
+        "@lesto/live-protocol": "workspace:*",
+      },
+    },
     "packages/mail": {
       "name": "@lesto/mail",
       "version": "0.0.0",
@@ -1507,6 +1516,8 @@
     "@lesto/kernel": ["@lesto/kernel@workspace:packages/kernel"],
 
     "@lesto/live-protocol": ["@lesto/live-protocol@workspace:packages/live-protocol"],
+
+    "@lesto/live-server": ["@lesto/live-server@workspace:packages/live-server"],
 
     "@lesto/mail": ["@lesto/mail@workspace:packages/mail"],
 

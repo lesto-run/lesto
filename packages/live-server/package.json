@@ -1,0 +1,27 @@
+{
+  "name": "@lesto/live-server",
+  "version": "0.0.0",
+  "license": "MIT",
+  "description": "Lesto local-first sync (ADR 0042 Tier 4) — the server shape engine. Runs shapes against the ORM, detects per-row inserts/updates/delete-from-shape, and fans authorized row data to subscribers. v0 uses a SQLite full-table poll standing in for Postgres logical replication.",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@lesto/db": "workspace:*",
+    "@lesto/errors": "workspace:*",
+    "@lesto/live-protocol": "workspace:*"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  }
+}
