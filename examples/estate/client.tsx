@@ -6,17 +6,19 @@
  * `data-lesto-island-mount` scripts `defineIsland` emitted, then finds each marked
  * shell and mounts the real client component.
  *
- * This is the CANONICAL synthesized shape (ADR 0011 Increment 2): one client
- * entry point that registers exactly the islands declared under `app/islands/`
- * (one `defineIsland` default-export per file) and hands them to
- * `hydrateDocumentIslands`. It is what `@lesto/assets`' `synthesizeEntry` would
- * generate from the same `app/islands/` convention — estate keeps it checked in
- * (its bespoke worker path bundles this file directly) so the source is
- * inspectable, but its content matches the framework's synthesized entry byte for
- * byte in shape: import the defaults, `.defineClient(Island.island)`, hydrate.
+ * This follows the CANONICAL synthesized shape (ADR 0011 Increment 2): one client
+ * entry point that registers island `defineIsland` default-exports and hands them
+ * to `hydrateDocumentIslands`, the same shape `@lesto/assets`' `synthesizeEntry`
+ * emits. estate keeps it checked in because its bespoke PRODUCTION worker path
+ * bundles this file directly (as Preact) and the source is inspectable.
  *
- * Bundle this to `/client.js`; until then the pages degrade gracefully to their
- * fallbacks.
+ * It is NOT identical to the framework's synthesized entry, though — it is the
+ * hand-curated PRODUCTION client: it registers only the three deferred (`ssr: false`)
+ * islands the Preact-compat alias can safely hydrate (so `save-note`, server-rendered
+ * under Preact, is deliberately omitted) and it adds `enableSoftNav` below. Local
+ * `lesto dev` does NOT use this file — it synthesizes its own React entry over all of
+ * `app/islands/` — so dev and prod are not byte-for-byte equivalent yet (see README
+ * Notes). Bundle this to `/client.js`; until then the pages degrade to their fallbacks.
  */
 
 import { Registry } from "@lesto/ui";

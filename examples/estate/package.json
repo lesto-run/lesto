@@ -17,7 +17,6 @@
     "@lesto/admin": "workspace:*",
     "@lesto/auth": "workspace:*",
     "@lesto/authz": "workspace:*",
-    "@lesto/cli": "workspace:*",
     "@lesto/client": "workspace:*",
     "@lesto/cloudflare": "workspace:*",
     "@lesto/csrf": "workspace:*",
@@ -25,7 +24,6 @@
     "@lesto/env": "workspace:*",
     "@lesto/flags": "workspace:*",
     "@lesto/identity": "workspace:*",
-    "@lesto/mcp": "workspace:*",
     "@lesto/migrate": "workspace:*",
     "@lesto/observability": "workspace:*",
     "@lesto/ratelimit": "workspace:*",
@@ -43,5 +41,9 @@
     "react": "^19",
     "react-dom": "^19",
     "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@lesto/cli": "workspace:*",
+    "@lesto/mcp": "workspace:*"
   }
 }

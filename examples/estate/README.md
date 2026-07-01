@@ -212,10 +212,17 @@ session across both.
 
 ## Notes
 
-- The production browser bundle is produced from `client.tsx` by
-  `src/production.ts` (the Preact client the deploy ships); `lesto dev` bundles the
-  same islands from `app/islands/` via the framework's synthesized entry. Either
-  way, without a bundle the pages degrade gracefully to the island's signed-out
-  fallback (progressive enhancement).
+- **Dev and production build the island client differently today** (a known gap,
+  tracked): production is a **Preact** bundle from estate's checked-in `client.tsx`
+  (via `src/production.ts`) — it registers only the three deferred (`ssr: false`)
+  islands the Preact-compat alias can safely hydrate and adds `enableSoftNav` (the
+  `/lab` soft-navigation demo). Local `lesto dev` instead uses the framework's
+  **React** synthesized entry over **all** of `app/islands/` (so it also hydrates
+  `save-note`, which prod leaves server-only under Preact) and does **not** enable
+  soft-nav. So the deployed demo keeps soft-nav while local dev gains the SaveNote
+  island — they are not yet byte-for-byte equivalent. Reconciling them (add soft-nav
+  to the synthesized entry, or migrate production onto `lesto build`) is the follow-up.
+  Either way, without a bundle the pages degrade gracefully to the island's
+  signed-out fallback (progressive enhancement).
 - Promoting the client `resolveSession` helper into a shared framework package
   is a natural next step.

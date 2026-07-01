@@ -3,12 +3,11 @@
  *
  * estate's local dev now runs through the framework's own `lesto dev` (see
  * `package.json` — `bun --bun lesto dev`, no hand-rolled dev loop), so the dev MCP
- * server actually appears on estate's dev path. This test proves the agent-native
- * dev loop end-to-end on estate's REAL app: it drives `run(["dev"])` with estate's
- * real `lesto.app.ts` config + a real dev-state ring, stands a REAL loopback MCP
- * server over that ring (exactly what the `lesto dev` bin wires), and reads the
- * three dev tools back over the wire.
+ * server actually appears on estate's dev path. This test drives estate's REAL app
+ * through `run(["dev"])` — estate's `lesto.app.ts` config + a real dev-state ring —
+ * and reads the dev MCP surface back over a real loopback transport:
  *
+ *   - `list_routes`         → estate's REAL routes (proves its config flows through runDev).
  *   - `get_recent_requests` → the access-log entry `serve`'s `logRequest` seam fed.
  *   - `tail_logs`           → the route-refresh dev-loop line.
  *   - `get_dev_diagnostics` → the `DevError` a failed route re-load recorded.
@@ -17,12 +16,15 @@
  * before any dispatch) and that every accepted call was audited — the governance
  * the control plane is built around.
  *
- * In-process by design (estate's whole suite is): the only socket is the loopback
- * MCP server on `127.0.0.1:0`, torn down on the captured shutdown drain. The live
- * `bun --bun lesto dev` path (real bin, real token mint, stderr URL) is verified by
- * hand against a running server; this is its deterministic regression gate, the
- * sibling of the committed CLI gate (`packages/cli/test/run.test.ts`) pointed at
- * estate's real app instead of a fake config.
+ * SCOPE (deliberately honest): this is an IN-PROCESS gate (estate's whole suite is) —
+ * the only socket is the loopback MCP server on `127.0.0.1:0`, torn down on the
+ * captured shutdown drain. It exercises `runDev`'s ring-filling + the real loopback
+ * transport + the dev tools over estate's real app, complementing the CLI's own gate
+ * (`packages/cli/test/run.test.ts`). It does NOT drive the `dev` npm script or the
+ * bin's `startDevMcp` wiring (token mint, stderr banner) — those are coverage-excluded
+ * and verified LIVE by hand (`bun --bun lesto dev` → curl the three tools). So it is
+ * NOT a substitute for the live-bin smoke; it is the deterministic regression gate for
+ * the surface estate now depends on.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -182,6 +184,14 @@ describe("estate `lesto dev` — the dev MCP control plane, dogfooded end-to-end
         }),
       });
 
+    // list_routes → estate's REAL routes, proving its `lesto.app.ts` config (not a fake)
+    // actually flowed through `runDev` into the live MCP context (the `routes` thunk).
+    const routes = (await toolResult(await call("list_routes"))) as {
+      method: string;
+      pattern: string;
+    }[];
+    expect(routes.some((route) => route.pattern.startsWith("/mls"))).toBe(true);
+
     // get_recent_requests → the access entry the serve seam fed the ring.
     const requests = (await toolResult(await call("get_recent_requests"))) as {
       requestId: string;
@@ -204,6 +214,7 @@ describe("estate `lesto dev` — the dev MCP control plane, dogfooded end-to-end
 
     // Every accepted call was audited; the rejected one never reached dispatch.
     expect(audited.map((record) => record.tool)).toEqual([
+      "list_routes",
       "get_recent_requests",
       "tail_logs",
       "get_dev_diagnostics",
