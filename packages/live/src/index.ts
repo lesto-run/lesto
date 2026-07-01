@@ -30,6 +30,12 @@ export type {
 export { createLiveQuery } from "./live-query";
 export type { CreateLiveQueryOptions, LiveQuery } from "./live-query";
 
+export { live } from "./builder";
+export type { LiveQueryBuilder } from "./builder";
+
+export { LiveClientError } from "./errors";
+export type { LiveClientErrorCode } from "./errors";
+
 // Re-export the protocol types that appear in this package's public surface, so a consumer
 // binds to `@lesto/live` alone (a typed `live()` still mints the `ShapeDefinition`).
 export type { Row, RowKey, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";

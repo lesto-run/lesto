@@ -130,6 +130,18 @@
         "@lesto/island-dev": "workspace:*",
       },
     },
+    "examples/live": {
+      "name": "@lesto/example-live",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/db": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/live-protocol": "workspace:*",
+        "@lesto/live-server": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/web": "workspace:*",
+      },
+    },
     "examples/mailing-lists": {
       "name": "@lesto/example-mailing-lists",
       "version": "0.0.0",
@@ -816,6 +828,15 @@
         "@lesto/web": "workspace:*",
       },
     },
+    "packages/live": {
+      "name": "@lesto/live",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/db": "workspace:*",
+        "@lesto/errors": "workspace:*",
+        "@lesto/live-protocol": "workspace:*",
+      },
+    },
     "packages/live-protocol": {
       "name": "@lesto/live-protocol",
       "version": "0.0.0",
@@ -1486,6 +1507,8 @@
 
     "@lesto/example-island-fast-refresh": ["@lesto/example-island-fast-refresh@workspace:examples/island-fast-refresh"],
 
+    "@lesto/example-live": ["@lesto/example-live@workspace:examples/live"],
+
     "@lesto/example-mailing-lists": ["@lesto/example-mailing-lists@workspace:examples/mailing-lists"],
 
     "@lesto/example-mcp-auth-openauth": ["@lesto/example-mcp-auth-openauth@workspace:examples/mcp-auth-openauth"],
@@ -1515,6 +1538,8 @@
     "@lesto/island-dev": ["@lesto/island-dev@workspace:packages/island-dev"],
 
     "@lesto/kernel": ["@lesto/kernel@workspace:packages/kernel"],
+
+    "@lesto/live": ["@lesto/live@workspace:packages/live"],
 
     "@lesto/live-protocol": ["@lesto/live-protocol@workspace:packages/live-protocol"],
 
