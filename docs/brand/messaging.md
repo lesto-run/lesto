@@ -73,7 +73,8 @@ the claim. ARCHITECTURE.md is the internal source of truth for status.
 | Workflows | "Resumable step memoization." **Not** "durable, crash-safe workflows" — automatic resume-after-crash is post-1.0. |
 | Content / CMS | "A content engine: schema-driven collections, markdown/MDX, store + CLI + MCP." Search/embeddings/prose/seo tooling and most components are **preview** — label them. **No** "visual CMS / Studio editor" claim; it isn't in the v1 surface. |
 | Plugins / themes / extensibility | **Do not claim.** Designed but deferred post-1.0 (ADR 0014). May say "an extensibility model is on the roadmap." |
-| Realtime / pub-sub over the wire | DB-backed pub/sub ships; Postgres `LISTEN/NOTIFY` realtime is roadmap — don't imply live sockets. |
+| Realtime / reactive live queries | **Shipped — claim precisely.** Server-pushed invalidation drives live `useQuery`: a write publishes an invalidation *topic* (a key string, **never row data**) over Postgres `LISTEN/NOTIFY`, fanned out to the browser over SSE; subscribers drop the key and refetch through the authorized endpoint. Say "reactive data / live queries." **Not** "we stream your data to the browser" (the wire carries topics, not rows) and **not** "local-first / offline" (that's the next row). DB-backed pub/sub also ships. |
+| Local-first / sync engine (`live()`) | **Preview — do NOT claim "local-first", "offline", or "we sync data to the client" yet.** The `live()` query builder exists and syncs single-table rows to the browser over SSE (v0), but it is online-only, simple eq/range filters, a SQLite full-table poll standing in for logical replication, an in-memory client store, and it does **not** yet enforce the per-row authorization matrix. The real product — Postgres logical replication, OPFS-SQLite durable store, offline writes, per-row authz — is the committed next epic (ADR 0042). May say "a local-first sync engine is in active development." |
 | "Lesto Cloud" / managed hosting | **Do not claim.** Future commercial layer, unscoped. |
 | Agent / MCP control plane | **The wedge — claim it confidently, but precisely.** Real MCP control-plane tools today: publish/edit content (`create_content_entry`/`update_content_entry`/`query_content`), generate UI (`generate_ui`), and inspect/drive the running app (`list_routes`/`handle_request`). **Schema migrations are NOT an MCP tool yet** (CLI/code only) — do not imply "migrate the schema from Claude." Say "operate your app — content, UI, requests — from Claude/ChatGPT." |
 
@@ -107,7 +108,9 @@ it as such in public copy too.
 - ✅ "Lesto runs the same app on a Node server and the Cloudflare edge."
 - ✅ "No Redis — the queue, cache, and pub/sub live on the database."
 - ✅ "Operate it from Claude over MCP."
+- ✅ "Reactive live queries: a write invalidates a topic, subscribers refetch over SSE — no polling."
 - ❌ "The fastest framework ever built." (unproven, and we don't talk like that)
+- ❌ "Local-first, offline-capable data sync." (preview — `live()` v0 is online-only and proves the API, not the replication/security story)
 - ❌ "A full visual CMS." (not shipped)
 - ❌ "Durable, crash-proof workflows." (post-1.0)
 - ❌ Any benchmark number we haven't actually measured and published.
