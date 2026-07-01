@@ -8,8 +8,9 @@
  *   - {@link diffRows} / {@link projectRow} / {@link normalizeWire} — the pure change /
  *     projection / wire-normalization core, decoupled from the poll and the database.
  *
- * The HTTP handler that streams this over the runtime's long-lived-stream kind (the
- * `GET /__lesto/live-data` endpoint) is a separate increment.
+ *   - {@link createLiveDataHttpHandlers} — the app-mounted `GET /__lesto/live-data`
+ *     handler that streams a shape's snapshot + change tail over the runtime's
+ *     long-lived-stream kind; {@link ShapeConnection} is its tested outbound core.
  */
 
 export { LiveServerError } from "./errors";
@@ -26,3 +27,15 @@ export type {
   ShapeSubscription,
   TimerSeam,
 } from "./engine";
+
+export { ShapeConnection } from "./connection";
+export type { FrameController, ShapeConnectionOptions } from "./connection";
+
+export { createLiveDataHttpHandlers, openShapeStream, subscribeSource } from "./http-handlers";
+export type {
+  LiveDataHttpHandlers,
+  LiveDataHttpOptions,
+  ShapeStreamConfig,
+  ShapeStreamSource,
+  StreamTimers,
+} from "./http-handlers";

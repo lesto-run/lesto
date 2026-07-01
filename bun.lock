@@ -830,6 +830,7 @@
         "@lesto/db": "workspace:*",
         "@lesto/errors": "workspace:*",
         "@lesto/live-protocol": "workspace:*",
+        "@lesto/web": "workspace:*",
       },
     },
     "packages/mail": {
