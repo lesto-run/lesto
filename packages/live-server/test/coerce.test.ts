@@ -15,12 +15,7 @@ import type { Db, SqlDatabase } from "@lesto/db";
 import { validateShapeDefinition } from "@lesto/live-protocol";
 import type { Row, ShapeDefinition } from "@lesto/live-protocol";
 
-import {
-  createImageCoercer,
-  normalizeWire,
-  projectRow,
-  requiredOldImageColumns,
-} from "../src/index";
+import { createImageCoercer, normalizeWire, projectRow } from "../src/index";
 import type { RowImage } from "../src/index";
 
 // A table exercising every column KIND, plus the camelCase(JS key) ↔ snake_case(SQL name) split
@@ -137,39 +132,5 @@ describe("createImageCoercer", () => {
 
     // The whole point: both change sources produce the SAME scalars for the SAME row.
     expect(v1Wire).toEqual(v0Wire);
-  });
-});
-
-describe("requiredOldImageColumns", () => {
-  it("returns the SQL names of the key + filter columns when the predicate needs the old image", () => {
-    // roomId is a non-key filter → the old image must carry both id (key) and room_id (filter).
-    expect(requiredOldImageColumns(def, rows)).toEqual(["id", "room_id"]);
-  });
-
-  it("dedups the key when a filter is also on the key column", () => {
-    const keyAndNonKey = validateShapeDefinition({
-      ...def,
-      where: [
-        { column: "id", op: "gt", value: 0 },
-        { column: "roomId", op: "eq", value: 1 },
-      ],
-    });
-
-    expect(requiredOldImageColumns(keyAndNonKey, rows)).toEqual(["id", "room_id"]);
-  });
-
-  it("requires nothing of the old image for a key-only predicate (decidable from the new image)", () => {
-    const keyOnly = validateShapeDefinition({
-      ...def,
-      where: [{ column: "id", op: "eq", value: 5 }],
-    });
-
-    expect(requiredOldImageColumns(keyOnly, rows)).toEqual([]);
-  });
-
-  it("requires nothing of the old image for a filterless shape (always in the shape)", () => {
-    const filterless = validateShapeDefinition({ ...def, where: [] });
-
-    expect(requiredOldImageColumns(filterless, rows)).toEqual([]);
   });
 });

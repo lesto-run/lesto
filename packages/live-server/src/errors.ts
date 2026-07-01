@@ -53,14 +53,16 @@ export type LiveServerErrorCode =
    */
   | "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT"
   /**
-   * A replication change's **old image** is missing a column the shape's predicate needs (its key
-   * or a filter column) — the runtime counterpart to the registration-time
-   * `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` guard. Even a shape that passed that guard can be
-   * undermined if its table is `ALTER`ed `FULL`→`DEFAULT` *after* registration: Postgres then emits
-   * a key-only old image, evaluating the predicate on the absent column would misclassify a
-   * delete-from-shape, and the row would silently persist in the client's store. Detected per
-   * change and thrown loudly (routed to the engine's error sink) rather than dropped in silence —
-   * fix by restoring `REPLICA IDENTITY FULL` on the table.
+   * A replication `update`/`delete` did not carry a **full** old row image (its old-tuple marker was
+   * key-only or absent) for a shape whose predicate reads a non-key column — the runtime counterpart
+   * to the registration-time `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` guard. Even a shape that
+   * passed that guard can be undermined if its table is `ALTER`ed `FULL`→`DEFAULT` *after*
+   * registration: Postgres then emits a key-only old tuple (non-identity columns nulled), evaluating
+   * the predicate on it would misclassify a delete-from-shape, and the row would silently persist in
+   * the client's store. Keyed on the decoder's old-tuple marker (not the image's cell values, which
+   * cannot tell a key-tuple null from a genuine one), detected per change and thrown loudly (routed
+   * to the engine's error sink) rather than dropped in silence — fix by restoring
+   * `REPLICA IDENTITY FULL` on the table.
    */
   | "LIVE_SERVER_OLD_IMAGE_INCOMPLETE"
   /**

@@ -64,11 +64,12 @@ describe("createPgOutputDecoder — real captured frames", () => {
       table: "messages",
       commitLSN: "0/1A563A0",
       oldImage: { id: "1", room_id: "42", body: "hello" },
+      oldImageKind: "full", // an 'O' tuple under REPLICA IDENTITY FULL
       newImage: { id: "1", room_id: "99", body: "hello" },
     });
   });
 
-  it("decodes a delete to oldImage-only", () => {
+  it("decodes a delete to oldImage-only, marked full ('O' under REPLICA IDENTITY FULL)", () => {
     const decoder = createPgOutputDecoder();
     decoder.decode(BEGIN);
     decoder.decode(RELATION);
@@ -78,6 +79,7 @@ describe("createPgOutputDecoder — real captured frames", () => {
       table: "messages",
       commitLSN: "0/1A563A0",
       oldImage: { id: "1", room_id: "99", body: "hello" },
+      oldImageKind: "full",
     });
   });
 
@@ -152,12 +154,13 @@ describe("createPgOutputDecoder — synthesized tuple kinds (null / unchanged-TO
       op: "update",
       table: "t",
       commitLSN: "0/0",
-      oldImage: { a: "1", b: null },
+      oldImage: { a: "1", b: null }, // b's 'n' → a null value, NOT distinguishable from a real null…
+      oldImageKind: "key", // …which is exactly why the 'K' MARKER, not the value, is what's trusted
       newImage: { a: "2", b: "x" },
     });
   });
 
-  it("handles an update with NO old tuple (default replica identity, unchanged key) — oldImage stays empty", () => {
+  it("handles an update with NO old tuple (default replica identity, unchanged key) — oldImage empty, marked 'none'", () => {
     const decoder = createPgOutputDecoder();
     decoder.decode(rel());
 
@@ -169,7 +172,24 @@ describe("createPgOutputDecoder — synthesized tuple kinds (null / unchanged-TO
       table: "t",
       commitLSN: "0/0",
       oldImage: {},
+      oldImageKind: "none",
       newImage: { a: "2", b: "x" },
+    });
+  });
+
+  it("marks a delete's old tuple 'key' when it is key-only ('K' under DEFAULT — the downgrade DELETE leak the marker catches)", () => {
+    const decoder = createPgOutputDecoder();
+    decoder.decode(rel());
+
+    // 'D' + oid + 'K' + old[ a='t'"1" (the key), b='n' (a nulled non-identity column) ]
+    const del = frame("44", "00000064", "4b" /* 'K' */, "0002", textCol("1"), "6e" /* b = 'n' */);
+
+    expect(decoder.decode(del)).toEqual({
+      op: "delete",
+      table: "t",
+      commitLSN: "0/0",
+      oldImage: { a: "1", b: null }, // b reads null by value — the marker is the only sound signal
+      oldImageKind: "key",
     });
   });
 });

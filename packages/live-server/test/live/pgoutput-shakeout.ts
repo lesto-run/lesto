@@ -237,11 +237,15 @@ try {
   });
   engineSource.onError((error) => console.log("engine source error:", (error as Error)?.message));
 
+  const engineErrors: unknown[] = [];
   const engine = createShapeEngine({
     db,
     tables: [fullTable, defaultTable],
     replication: { source: engineSource, replicaIdentity: createReplicaIdentityProbe(URL) },
-    onError: (error) => console.log("engine error:", (error as Error)?.message),
+    onError: (error) => {
+      engineErrors.push(error);
+      console.log("engine error:", (error as Error)?.message);
+    },
   });
 
   await engineSource.start();
@@ -280,6 +284,34 @@ try {
       "delete-from-shape fires end-to-end on a FULL table",
       shapeChanges.some((change) => change.op === "delete"),
       shapeChanges,
+    );
+
+    // 3) FULL→DEFAULT downgrade AFTER registration (the L-08619e99 leak, live): a DELETE now sends a
+    //    key-only ('K') old tuple with room_id nulled — value-indistinguishable from a real null. The
+    //    marker guard must throw OLD_IMAGE_INCOMPLETE (routed to onError), never silently drop the
+    //    delete-from-shape. The shakeout never exercised a live downgrade before this.
+    await admin.query("INSERT INTO shakeout_full (room_id, body) VALUES (1, 'downgrade')");
+    await poll(() => shapeChanges.some((change) => change.op === "insert"));
+    check(
+      "the downgrade row entered the shape (a real row to leak)",
+      shapeChanges.some((change) => change.op === "insert"),
+      shapeChanges,
+    );
+
+    await admin.query("ALTER TABLE shakeout_full REPLICA IDENTITY DEFAULT");
+    await admin.query("DELETE FROM shakeout_full WHERE body = 'downgrade'");
+    await poll(() =>
+      engineErrors.some(
+        (e) => (e as { code?: string }).code === "LIVE_SERVER_OLD_IMAGE_INCOMPLETE",
+      ),
+    );
+
+    check(
+      "FULL→DEFAULT downgrade DELETE throws OLD_IMAGE_INCOMPLETE (not a silent delete-from-shape drop)",
+      engineErrors.some(
+        (e) => (e as { code?: string }).code === "LIVE_SERVER_OLD_IMAGE_INCOMPLETE",
+      ),
+      engineErrors.map((e) => (e as { code?: string }).code),
     );
   } finally {
     engine.stop();

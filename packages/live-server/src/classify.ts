@@ -44,7 +44,7 @@ import { matchesShape, rowKey } from "@lesto/live-protocol";
 import type { Row, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
 
 import { LiveServerError } from "./errors";
-import type { ReplicationChange, RowImage } from "./replication";
+import type { OldImageKind, ReplicationChange, RowImage } from "./replication";
 
 /**
  * Project a raw replication {@link RowImage} to the shape's typed, wire-form {@link Row}: keep the
@@ -83,33 +83,31 @@ export function assertReplicaIdentity(def: ShapeDefinition, hasFullReplicaIdenti
 }
 
 /**
- * The runtime old-image completeness guard — the per-change twin of {@link assertReplicaIdentity}.
+ * The runtime old-image completeness guard — the per-change twin of {@link assertReplicaIdentity},
+ * keyed on the pgoutput old-tuple {@link OldImageKind} **marker**.
  *
  * The registration guard proves a non-key-predicate shape's table *was* `REPLICA IDENTITY FULL`
  * when the shape registered. But replica identity is mutable: a table `ALTER`ed `FULL`→`DEFAULT`
- * afterward starts emitting a **key-only** (or absent) old image, and classifying a row that leaves
- * the shape on the now-missing filter column would silently misfire the delete-from-shape — the row
- * persisting in the client's durable store is exactly the leak the classifier exists to stop. So on
- * every `update`/`delete`, before trusting the old image, assert it still carries every column the
- * predicate needs — `requiredColumns` are those columns' **SQL names** (the engine resolves them
- * from the table; a shape whose predicate does not need the old image passes an empty list, so this
- * is a no-op for it). A column that is `undefined` — `pgoutput`'s unchanged-TOAST marker, or simply
- * absent from a key-only tuple — fails; a genuine `null` (a real, transmitted value) passes. Throws
- * a coded {@link LiveServerError} so a durable leak surfaces as a loud, routed error.
+ * afterward starts emitting a **key-only** (`'key'`) or **absent** (`'none'`) old image, and
+ * classifying a row that leaves the shape on the now-missing filter column would silently misfire
+ * the delete-from-shape — the row persisting in the client's durable store is exactly the leak the
+ * classifier exists to stop. So on every `update`/`delete` for a shape whose predicate needs the old
+ * image, require the marker to be `'full'`.
+ *
+ * **Why the marker, not the cell values.** A `'K'` tuple sends its non-identity columns as `null`,
+ * which `readTuple` decodes to a genuine `null` — *value-indistinguishable* from a real transmitted
+ * `null`. A prior value-based check (`oldImage[col] === undefined`) therefore MISSED a `'K'`-tuple
+ * `DELETE`/PK-change (the null passed the check, then `matchesShape(null)` read false and dropped the
+ * delete-from-shape — the leak). The old-tuple marker is the only sound discriminator, so this guard
+ * trusts it. Throws a coded {@link LiveServerError} so a durable leak surfaces as a loud, routed error.
  */
-export function assertOldImageComplete(
-  def: ShapeDefinition,
-  requiredColumns: readonly string[],
-  oldImage: RowImage,
-): void {
-  for (const column of requiredColumns) {
-    if (oldImage[column] === undefined) {
-      throw new LiveServerError(
-        "LIVE_SERVER_OLD_IMAGE_INCOMPLETE",
-        `A replication change on "${def.table}" omitted column "${column}" from its old image, so a row leaving the shape cannot be classified — restore REPLICA IDENTITY FULL on "${def.table}".`,
-        { table: def.table, column },
-      );
-    }
+export function assertOldImageComplete(def: ShapeDefinition, oldImageKind: OldImageKind): void {
+  if (oldImageKind !== "full") {
+    throw new LiveServerError(
+      "LIVE_SERVER_OLD_IMAGE_INCOMPLETE",
+      `A replication change on "${def.table}" carried a ${oldImageKind === "none" ? "missing" : "key-only"} old image, so a row leaving the shape cannot be classified — restore REPLICA IDENTITY FULL on "${def.table}".`,
+      { table: def.table, oldImageKind },
+    );
   }
 }
 
@@ -207,17 +205,25 @@ export function classifyChange(
 }
 
 /**
- * Bind a shape to a **guarded** per-change classifier — the intended entry point, so the
- * replica-identity guard cannot be forgotten.
+ * Bind a shape to a **guarded** per-change classifier — the single intended entry point, so
+ * *neither* the registration guard *nor* its per-change runtime twin can be forgotten.
  *
  * `classifyChange` trusts that the shape's table can supply the old image its predicate needs; if a
- * caller skips {@link assertReplicaIdentity}, the classifier reads an incomplete old image and
- * *silently* stops emitting delete-from-shape — a durable authorization leak (the exact failure this
- * module exists to prevent). This factory runs the guard once at registration and returns a bound
- * `(change) => ShapeChange | undefined` that is **unobtainable without having passed it**, so the
- * hot path cannot fail open. The engine stores the returned closure per shape and calls it per
- * change; `hasFullReplicaIdentity` is the table's catalog fact (`pg_class.relreplident = 'f'`), and
- * `coerce` is the `@lesto/db`-backed {@link ImageCoercer} for that shape's table.
+ * caller skips the guards, the classifier reads an incomplete old image and *silently* stops emitting
+ * delete-from-shape — a durable authorization leak (the exact failure this module exists to prevent).
+ * This factory folds **both** guards into the bound closure it returns:
+ *   - {@link assertReplicaIdentity} once at registration — refuse a non-key-predicate shape whose
+ *     table is not `REPLICA IDENTITY FULL` (`hasFullReplicaIdentity` is the catalog fact
+ *     `pg_class.relreplident = 'f'`).
+ *   - {@link assertOldImageComplete} per `update`/`delete` — the runtime re-check that `FULL` is
+ *     *still* in effect (a table `ALTER`ed `FULL`→`DEFAULT` after registration would start sending a
+ *     key-only old image and leak), skipped for a shape whose predicate does not read the old image.
+ *
+ * The returned `(change) => ShapeChange | undefined` is **unobtainable without having passed the
+ * registration guard**, and it self-applies the runtime guard, so the hot path cannot fail open —
+ * closing the gap where a direct caller of this public entry point previously lost the runtime guard
+ * that lived only in the engine's glue. The engine stores the returned closure per shape and calls it
+ * per change; `coerce` is the `@lesto/db`-backed {@link ImageCoercer} for that shape's table.
  */
 export function prepareShapeClassifier(
   def: ShapeDefinition,
@@ -226,5 +232,14 @@ export function prepareShapeClassifier(
 ): (change: ReplicationChange) => ShapeChange | undefined {
   assertReplicaIdentity(def, hasFullReplicaIdentity);
 
-  return (change) => classifyChange(def, change, coerce);
+  const needsOldImage = predicateNeedsOldImage(def);
+
+  return (change) => {
+    // An insert carries no old image; an update/delete on a non-key-predicate shape must arrive with
+    // a FULL old tuple even if the table was ALTERed away from REPLICA IDENTITY FULL after
+    // registration — else the marker guard throws (loud, routed) rather than drop a delete-from-shape.
+    if (needsOldImage && change.op !== "insert") assertOldImageComplete(def, change.oldImageKind);
+
+    return classifyChange(def, change, coerce);
+  };
 }

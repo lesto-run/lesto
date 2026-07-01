@@ -71,11 +71,30 @@ export interface SystemIdentity {
 }
 
 /**
+ * Which old row image a decoded `update`/`delete` actually carried — the pgoutput **old-tuple
+ * marker**, and the *sound* discriminator for delete-from-shape classification:
+ *   - `'full'` — an `'O'` tuple: the COMPLETE pre-change row, emitted only under `REPLICA IDENTITY FULL`.
+ *   - `'key'`  — a `'K'` tuple: the key columns only (`REPLICA IDENTITY DEFAULT`/`USING INDEX`); the
+ *                non-identity columns are transmitted as `null`, so a non-key predicate MUST NOT trust them.
+ *   - `'none'` — no old tuple at all (a `DEFAULT` update whose immutable key did not change).
+ *
+ * The marker is load-bearing because a **value-based** null check cannot tell a `'K'`-tuple's null
+ * non-identity column from a genuine transmitted `null`: under `DEFAULT`, `readTuple` decodes those
+ * omitted columns to `null` (not `undefined`), so a non-key filter would silently read `null`,
+ * misclassify the row as out-of-shape, and drop a delete-from-shape (a durable leak). The classifier
+ * therefore keys its runtime old-image guard on this marker, not on the image's cell values. A
+ * `delete` is never `'none'` (it always carries an old tuple); `'none'` is an `update`-only kind.
+ */
+export type OldImageKind = "full" | "key" | "none";
+
+/**
  * One change as the replication client decodes it off the WAL stream, **before** the source
  * stamps system identity. Modeled precisely per operation: an `insert` has only a `newImage`,
  * a `delete` has only an `oldImage`, an `update` has **both** (the old image is what
  * delete-from-shape classification needs, and Postgres emits it only under
- * `REPLICA IDENTITY FULL` — see the real client).
+ * `REPLICA IDENTITY FULL` — see the real client). An `update`/`delete` additionally carries the
+ * old tuple's {@link OldImageKind} marker — the decoder's honest record of *which* old image the
+ * stream sent, so the classifier can refuse an insufficient one rather than trust a null-filled key tuple.
  */
 export type DecodedChange =
   | {
@@ -90,12 +109,14 @@ export type DecodedChange =
       readonly commitLSN: string;
       readonly newImage: RowImage;
       readonly oldImage: RowImage;
+      readonly oldImageKind: OldImageKind;
     }
   | {
       readonly op: "delete";
       readonly table: string;
       readonly commitLSN: string;
       readonly oldImage: RowImage;
+      readonly oldImageKind: OldImageKind;
     };
 
 /**

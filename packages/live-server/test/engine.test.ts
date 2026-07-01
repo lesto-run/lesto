@@ -10,6 +10,7 @@ import { createShapeEngine, LiveServerError } from "../src/index";
 import type {
   ChangeHandler,
   ChangeSource,
+  OldImageKind,
   ReplicationChange,
   RowImage,
   ShapeEngine,
@@ -363,11 +364,23 @@ describe("replication change source — the v1 change path", () => {
     newImage,
     ...STAMP,
   });
-  const upd = (oldImage: RowImage, newImage: RowImage): ReplicationChange => ({
+  const upd = (
+    oldImage: RowImage,
+    newImage: RowImage,
+    oldImageKind: OldImageKind = "full",
+  ): ReplicationChange => ({
     op: "update",
     table: "messages",
     oldImage,
     newImage,
+    oldImageKind,
+    ...STAMP,
+  });
+  const del = (oldImage: RowImage, oldImageKind: OldImageKind = "full"): ReplicationChange => ({
+    op: "delete",
+    table: "messages",
+    oldImage,
+    oldImageKind,
     ...STAMP,
   });
 
@@ -497,7 +510,7 @@ describe("replication change source — the v1 change path", () => {
     e.stop();
   });
 
-  it("routes LIVE_SERVER_OLD_IMAGE_INCOMPLETE to onError when an update's old image lost a filter column", async () => {
+  it("routes LIVE_SERVER_OLD_IMAGE_INCOMPLETE to onError when an update's old tuple went key-only", async () => {
     await insert(1, "hi", 100);
     const src = fakeSource();
     const errors: unknown[] = [];
@@ -510,15 +523,43 @@ describe("replication change source — the v1 change path", () => {
     });
     await e.subscribe(room1Shape(), sink.onChange);
 
-    // FULL was ALTERed away after registration: the old image is now key-only (room_id absent).
+    // FULL was ALTERed away after registration: the old tuple is now key-only ('K'), so its
+    // non-key columns (room_id) arrive as null — value-indistinguishable from a real null. Only the
+    // marker catches it: the update must NOT be applied on the null-filled old image.
     src.emit(
       upd(
-        { id: "1", room_id: undefined, body: "hi", created_at: "100" },
+        { id: "1", room_id: null, body: null, created_at: null },
         { id: "1", room_id: "2", body: "x", created_at: "100" },
+        "key",
       ),
     );
 
     expect(sink.changes).toEqual([]); // the change is NOT silently applied
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as LiveServerError).code).toBe("LIVE_SERVER_OLD_IMAGE_INCOMPLETE");
+    e.stop();
+  });
+
+  it("refuses a FULL→DEFAULT-downgrade DELETE (key-only old tuple) instead of dropping the delete-from-shape (the leak)", async () => {
+    await insert(1, "hi", 100); // a room-1 row is in the client's slice
+    const src = fakeSource();
+    const errors: unknown[] = [];
+    const sink = collector();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      onError: (error) => errors.push(error),
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    const sub = await e.subscribe(room1Shape(), sink.onChange);
+    expect((sub.snapshot as Row[]).map((r) => r.id)).toEqual([1]);
+
+    // The table was downgraded FULL→DEFAULT after registration; a DELETE now sends a 'K' tuple with
+    // room_id nulled. The old value-based guard passed it (null ≠ undefined) → matchesShape(null)
+    // false → the delete-from-shape was DROPPED and the row leaked. The marker refuses it loudly.
+    src.emit(del({ id: "1", room_id: null, body: null, created_at: null }, "key"));
+
+    expect(sink.changes).toEqual([]); // NOT silently dropped
     expect(errors).toHaveLength(1);
     expect((errors[0] as LiveServerError).code).toBe("LIVE_SERVER_OLD_IMAGE_INCOMPLETE");
     e.stop();
@@ -538,11 +579,12 @@ describe("replication change source — the v1 change path", () => {
     });
     await e.subscribe(room1Shape({ where: [] }), sink.onChange);
 
-    // DEFAULT + unchanged key → pgoutput sends NO old tuple → oldImage is `{}`.
+    // DEFAULT + unchanged key → pgoutput sends NO old tuple → oldImage is `{}`, marker 'none'.
     src.emit({
       op: "update",
       table: "messages",
       oldImage: {},
+      oldImageKind: "none",
       newImage: { id: "1", room_id: "1", body: "edited", created_at: "100" },
       ...STAMP,
     });

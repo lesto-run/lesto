@@ -38,8 +38,8 @@ import {
 import type { Cursor, Row, RowKey, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
 import type { Db, Table } from "@lesto/db";
 
-import { assertOldImageComplete, prepareShapeClassifier } from "./classify";
-import { createImageCoercer, requiredOldImageColumns } from "./coerce";
+import { prepareShapeClassifier } from "./classify";
+import { createImageCoercer } from "./coerce";
 import { diffRows, normalizeWire, projectRow } from "./diff";
 import { LiveServerError } from "./errors";
 import type { ChangeSource, ReplicationChange } from "./replication";
@@ -302,30 +302,20 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
   // ---------------------------------------------------------------------------
 
   /**
-   * Build a shape's bound replication classifier: the `@lesto/db`-backed coercer + the guarded
-   * `prepareShapeClassifier` (which throws `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` here if the
-   * shape needs the old image but the table is not `FULL`), wrapped with the per-change old-image
-   * completeness re-check. Awaits the catalog probe, so it runs at subscribe, off the change path.
+   * Build a shape's bound replication classifier: the `@lesto/db`-backed coercer handed to the
+   * guarded `prepareShapeClassifier`, which folds in BOTH guards — the registration-time replica
+   * identity check (throws `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` here if the shape needs the
+   * old image but the table is not `FULL`) and, in the closure it returns, the per-change old-image
+   * completeness re-check (`LIVE_SERVER_OLD_IMAGE_INCOMPLETE` on a post-registration `FULL`→`DEFAULT`
+   * downgrade). Awaits the catalog probe, so it runs at subscribe, off the change path.
    */
   async function buildClassifier(
     def: ShapeDefinition,
     table: Table,
   ): Promise<(change: ReplicationChange) => ShapeChange | undefined> {
     const hasFullReplicaIdentity = await replication!.replicaIdentity(def.table);
-    const classify = prepareShapeClassifier(
-      def,
-      hasFullReplicaIdentity,
-      createImageCoercer(def, table),
-    );
-    const requiredOldColumns = requiredOldImageColumns(def, table);
 
-    return (change) => {
-      // An insert carries no old image; update/delete must still carry the predicate's columns even
-      // if the table was ALTERed away from FULL after registration (else a leak — see the guard).
-      if (change.op !== "insert") assertOldImageComplete(def, requiredOldColumns, change.oldImage);
-
-      return classify(change);
-    };
+    return prepareShapeClassifier(def, hasFullReplicaIdentity, createImageCoercer(def, table));
   }
 
   /**

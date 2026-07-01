@@ -217,6 +217,7 @@ describe("createPgReplicationSource — change decode + identity stamping", () =
       commitLSN: "0/2",
       newImage: { id: 1, roomId: 2 },
       oldImage: { id: 1, roomId: 1 },
+      oldImageKind: "full",
     });
 
     expect(sink.changes).toEqual([
@@ -228,13 +229,14 @@ describe("createPgReplicationSource — change decode + identity stamping", () =
         timelineId: 1,
         newImage: { id: 1, roomId: 2 },
         oldImage: { id: 1, roomId: 1 },
+        oldImageKind: "full",
       },
     ]);
 
     await source.stop();
   });
 
-  it("shapes a delete as oldImage-only, stamped", async () => {
+  it("shapes a delete as oldImage-only, stamped, carrying the old-tuple marker", async () => {
     const { createClient, clients } = tracking();
     const source = createPgReplicationSource({ createClient });
     const sink = collector();
@@ -246,6 +248,7 @@ describe("createPgReplicationSource — change decode + identity stamping", () =
       table: "messages",
       commitLSN: "0/3",
       oldImage: { id: 1, roomId: 1 },
+      oldImageKind: "full",
     });
 
     expect(sink.changes[0]).toEqual({
@@ -255,6 +258,7 @@ describe("createPgReplicationSource — change decode + identity stamping", () =
       systemId: "sys-1",
       timelineId: 1,
       oldImage: { id: 1, roomId: 1 },
+      oldImageKind: "full",
     });
     // A delete has no new image.
     expect(sink.changes[0]).not.toHaveProperty("newImage");
@@ -290,6 +294,7 @@ describe("createPgReplicationSource — change decode + identity stamping", () =
       table: "orders",
       commitLSN: "0/3",
       oldImage: { id: 7 },
+      oldImageKind: "full",
     });
 
     expect(a.changes).toHaveLength(3);

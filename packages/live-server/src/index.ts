@@ -13,11 +13,11 @@
  *   - {@link prepareShapeClassifier} — the v1 per-row **delete-from-shape** classifier, bound to a
  *     shape behind its `REPLICA IDENTITY FULL` guard so it cannot fail open: it applies a
  *     replication change's old/new images to the shape (in/out/stay) → a `ShapeChange` (Inc2).
- *     {@link predicateNeedsOldImage} / {@link assertReplicaIdentity} are the guard primitives, and
- *     {@link assertOldImageComplete} is the per-change runtime re-check.
+ *     {@link predicateNeedsOldImage} / {@link assertReplicaIdentity} are the registration guard
+ *     primitives, and {@link assertOldImageComplete} is the per-change old-tuple-marker runtime re-check.
  *   - {@link createImageCoercer} — the `@lesto/db`-backed coercer that projects a raw `pgoutput`
  *     image to a shape's typed wire row (reusing `coerceCell` + `normalizeWire` for byte-parity with
- *     the v0 read path); {@link requiredOldImageColumns} is the old-image completeness key set.
+ *     the v0 read path).
  *   - {@link createReplicaIdentityProbe} — the real (pg) `relreplident = 'f'` catalog probe backing
  *     the engine's `replicaIdentity` seam. These are wired into {@link createShapeEngine} via its
  *     `replication` option: the engine consumes the change source in place of the poll (Inc2).
@@ -41,7 +41,7 @@ export {
 } from "./classify";
 export type { ImageCoercer } from "./classify";
 
-export { createImageCoercer, requiredOldImageColumns } from "./coerce";
+export { createImageCoercer } from "./coerce";
 
 export { createReplicaIdentityProbe } from "./pg-catalog";
 
@@ -60,6 +60,7 @@ export type {
   ChangeHandler,
   ChangeSource,
   DecodedChange,
+  OldImageKind,
   PgReplicationClient,
   PgReplicationSource,
   PgReplicationSourceOptions,

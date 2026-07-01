@@ -43,7 +43,6 @@ import type { Row, ShapeDefinition } from "@lesto/live-protocol";
 
 import type { ImageCoercer } from "./classify";
 import { normalizeWire } from "./diff";
-import { predicateNeedsOldImage } from "./classify";
 import type { RowImage } from "./replication";
 
 /** One projected column: the shape's JS key, its SQL name (the image is keyed by it), its kind. */
@@ -83,24 +82,4 @@ export function createImageCoercer(def: ShapeDefinition, table: Table): ImageCoe
 
     return normalizeWire(row);
   };
-}
-
-/**
- * The SQL column names the **old image must carry** for a shape's delete-from-shape classification
- * to be sound — the shape's key plus every filter column, but **only** when the predicate actually
- * needs the old image ({@link predicateNeedsOldImage}). A key-only/filterless shape decides
- * membership from the new image (or is always-in), so it requires nothing of the old image and this
- * returns `[]`.
- *
- * The engine feeds this to {@link assertOldImageComplete} per change: it is the runtime re-check
- * that `REPLICA IDENTITY FULL` (asserted once at registration) is *still* in effect — a table
- * `ALTER`ed `FULL`→`DEFAULT` after registration would start sending a key-only old image, and
- * evaluating the predicate on it would silently misclassify a delete-from-shape into a leak.
- */
-export function requiredOldImageColumns(def: ShapeDefinition, table: Table): readonly string[] {
-  if (!predicateNeedsOldImage(def)) return [];
-
-  const keys = new Set<string>([def.key, ...def.where.map((filter) => filter.column)]);
-
-  return [...keys].map((key) => table.byKey[key]!.name);
 }

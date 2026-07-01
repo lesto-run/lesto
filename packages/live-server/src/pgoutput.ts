@@ -26,7 +26,7 @@
  */
 
 import { LiveServerError } from "./errors";
-import type { DecodedChange, RowImage } from "./replication";
+import type { DecodedChange, OldImageKind, RowImage } from "./replication";
 
 /** Format a 64-bit WAL position as the canonical Postgres `HI/LO` upper-hex LSN string. */
 function formatLsn(lsn: bigint): string {
@@ -187,12 +187,16 @@ export function createPgOutputDecoder(): PgOutputDecoder {
         case 0x55 /* 'U' Update */: {
           const { table, columns } = relation(reader.uint32());
           let oldImage: RowImage = {};
+          let oldImageKind: OldImageKind = "none";
           let marker = reader.uint8();
 
           // An optional old tuple: 'O' (full old row, only under REPLICA IDENTITY FULL) or 'K'
-          // (key columns only). Absent under the default replica identity — then oldImage stays {}
-          // and the engine's registration-time catalog guard is what prevents a silent leak.
+          // (key columns only). Absent under the default replica identity when the key did not
+          // change — then oldImage stays {} and the marker stays 'none'. The marker (not the
+          // decoded cell values) is what the classifier's runtime guard trusts: a 'K' tuple fills
+          // its non-identity columns with null, indistinguishable by value from a genuine null.
           if (marker === 0x4f /* 'O' */ || marker === 0x4b /* 'K' */) {
+            oldImageKind = marker === 0x4f ? "full" : "key";
             oldImage = readTuple(reader, columns);
             marker = reader.uint8();
           }
@@ -200,15 +204,16 @@ export function createPgOutputDecoder(): PgOutputDecoder {
           // `marker` is now 'N' — the new tuple.
           const newImage = readTuple(reader, columns);
 
-          return { op: "update", table, commitLSN, newImage, oldImage };
+          return { op: "update", table, commitLSN, newImage, oldImage, oldImageKind };
         }
 
         case 0x44 /* 'D' Delete */: {
           const { table, columns } = relation(reader.uint32());
-          reader.uint8(); // 'O' (full old row) or 'K' (key only) — the deleted row's old image
+          // 'O' (full old row) or 'K' (key only) — a delete always carries one, never absent.
+          const oldImageKind: OldImageKind = reader.uint8() === 0x4f /* 'O' */ ? "full" : "key";
           const oldImage = readTuple(reader, columns);
 
-          return { op: "delete", table, commitLSN, oldImage };
+          return { op: "delete", table, commitLSN, oldImage, oldImageKind };
         }
 
         default:
