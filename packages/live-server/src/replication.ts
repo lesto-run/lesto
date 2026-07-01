@@ -31,12 +31,15 @@
  * binary/JSON decode lives ONLY in the thin, coverage-excluded real client
  * ({@link file://./pg-replication-client.ts}).
  *
- * Resume (Inc4) is not implemented here, but the source is built to carry it: it captures the
+ * Resume (Inc4) is not implemented here, but the source carries its *inputs*: it captures the
  * connection's `(systemId, timelineId)` from `IDENTIFY_SYSTEM` and stamps **both** on every
  * change (they are distinct — `systemId` is constant across failover/restore and catches a
  * *different cluster*; `timelineId` increments on failover/promotion and catches a
- * *same-cluster* failover), and it accepts a `startLsn` so Inc4 can build LSN-exact replay on
- * top without touching this file.
+ * *same-cluster* failover), and it accepts a `startLsn` so replay can start from a client's
+ * last-applied position. Inc1 thus exposes the failover *signal* (the stamped identity changes)
+ * and the replay *entry point* (`startLsn`); Inc1 does **not** implement the *reaction* — the
+ * replay-vs-re-snapshot decision, and the reconnect state machine's response to a slot that did
+ * not survive a failover, are Inc4's, and they extend the reconnect logic in this file.
  */
 
 import { LiveServerError } from "./errors";
@@ -96,37 +99,14 @@ export type DecodedChange =
     };
 
 /**
- * A fully-decoded, identity-stamped change event — the source's public output. It is a
- * {@link DecodedChange} plus the connection's {@link SystemIdentity}; `commitLSN` +
- * `systemId` + `timelineId` are exactly what Inc4's LSN-exact resume keys on, so all three
- * are captured and stamped on **every** emitted change.
+ * A fully-decoded, identity-stamped change event — the source's public output: a
+ * {@link DecodedChange} intersected with the connection's {@link SystemIdentity}. The
+ * intersection distributes over the per-op union, so every variant keeps its exact op→image
+ * correlation (insert=newImage, delete=oldImage, update=both) and additionally carries
+ * `systemId` + `timelineId`. Those two plus `commitLSN` are exactly what Inc4's LSN-exact
+ * resume keys on, so all three are stamped on **every** emitted change.
  */
-export type ReplicationChange =
-  | {
-      readonly op: "insert";
-      readonly table: string;
-      readonly commitLSN: string;
-      readonly systemId: string;
-      readonly timelineId: number;
-      readonly newImage: RowImage;
-    }
-  | {
-      readonly op: "update";
-      readonly table: string;
-      readonly commitLSN: string;
-      readonly systemId: string;
-      readonly timelineId: number;
-      readonly newImage: RowImage;
-      readonly oldImage: RowImage;
-    }
-  | {
-      readonly op: "delete";
-      readonly table: string;
-      readonly commitLSN: string;
-      readonly systemId: string;
-      readonly timelineId: number;
-      readonly oldImage: RowImage;
-    };
+export type ReplicationChange = DecodedChange & SystemIdentity;
 
 /**
  * The narrow slice of a real replication client the source drives — narrow on purpose so a
@@ -218,6 +198,12 @@ export interface PgReplicationSourceOptions {
    * The LSN to `START_REPLICATION` from. Omitted, replication resumes from the slot's own
    * confirmed position. This is the seam Inc4's LSN-exact resume drives; the source only
    * forwards it (it implements no replay logic itself).
+   *
+   * **Security note for Inc4:** a replication-protocol command cannot bind parameters, so a real
+   * client interpolates this straight into `START_REPLICATION` (see `pg-replication-client.ts`).
+   * In Inc1 `startLsn` is trusted config; once Inc4 makes it **client-presented**, it MUST be
+   * format-validated (`<hex>/<hex>`) at the boundary before it reaches the seam — the real client
+   * validates it, but a custom `PgReplicationClient` must not skip that check.
    */
   readonly startLsn?: string;
 
@@ -272,6 +258,16 @@ class PgLogicalReplicationSource implements PgReplicationSource {
 
   /** `stop` has been called — terminal (the slot is dropped, the source cannot resume). */
   #stopped = false;
+
+  /**
+   * Whether streaming has been established at least once (the first `start` reached
+   * `START_REPLICATION`). Until then, a client `error` event is the CALLER's to handle via the
+   * rejected `start()` promise — a background reconnect before the first success would (pre-slot)
+   * re-`START` a slot that was never created and loop forever, or (post-slot) resurrect a source
+   * the caller already discarded, leaking a WAL-pinning slot. So {@link #onClientError} only
+   * reconnects once this is set.
+   */
+  #connected = false;
 
   /**
    * Whether a reconnect is already in flight. A dropped connection can fire `error` MORE THAN
@@ -366,12 +362,21 @@ class PgLogicalReplicationSource implements PgReplicationSource {
 
     await client.connect();
 
+    // A stop() can race ANY await here (a SIGTERM during a slow connect/identify/createSlot).
+    // stop() already dropped the slot + ended the client it saw, but THIS local client may have
+    // raced past it — so after each await, bail if stopped, tearing down exactly what this call
+    // built. Without the re-check a stopped source could still reach `createSlot` below and
+    // orphan a WAL-pinning slot stop() had already decided not to drop (the disk-fill footgun).
+    if (await this.#abortIfStopped(client, false)) return;
+
     // IDENTIFY_SYSTEM before anything streams: its `(systemId, timelineId)` stamps every change
     // this connection decodes. Re-read on EVERY connect so a reconnect that crossed a failover
     // captures the NEW timeline (the same-cluster failover Inc4's resume must not miss).
     const identity = await client.identifySystem();
 
     this.#identity = identity;
+
+    if (await this.#abortIfStopped(client, false)) return;
 
     // Create the slot on the FIRST start only; it persists in Postgres across reconnects
     // (re-`CREATE`ing an existing slot errors). This is the WAL-pinning resource the source
@@ -381,6 +386,10 @@ class PgLogicalReplicationSource implements PgReplicationSource {
       this.#slotCreated = true;
     }
 
+    // A stop() that raced the createSlot above ran its own drop while the slot did not yet exist
+    // (a no-op) — so drop it here, on this client, rather than orphan it.
+    if (await this.#abortIfStopped(client, !isReconnect)) return;
+
     // Only now, with identity known, wire the change sink — so every decoded change is stamped
     // with THIS connection's identity, closing the window on an unstamped change.
     client.on("change", (change) => this.#emitChange(change, identity));
@@ -388,6 +397,36 @@ class PgLogicalReplicationSource implements PgReplicationSource {
     // Resume from the caller's LSN if given (Inc4), else from the slot's confirmed position —
     // the tail never starts "now" and gaps over `(snapshot, tail]`.
     await client.startReplication(this.#slot, this.#startLsn);
+
+    // Streaming is established: only NOW may a later connection error trigger a background
+    // reconnect (see {@link #connected}).
+    this.#connected = true;
+  }
+
+  /**
+   * If `stop()` ran while `#openAndStart` was mid-flight, tear THIS connection down and report
+   * the abort so the open unwinds. Drops the slot it just created (only `stop()` can't, because
+   * at the moment it ran the slot did not yet exist) and ends the client — both best-effort,
+   * routed not thrown, so a degraded teardown still completes.
+   */
+  async #abortIfStopped(client: PgReplicationClient, createdSlot: boolean): Promise<boolean> {
+    if (!this.#stopped) return false;
+
+    if (createdSlot) {
+      try {
+        await client.dropSlot(this.#slot);
+      } catch (error) {
+        this.#routeError(error);
+      }
+    }
+
+    try {
+      await client.end();
+    } catch (error) {
+      this.#routeError(error);
+    }
+
+    return true;
   }
 
   /** Stamp the connection's identity onto a decoded change and fan it, unfiltered, to every sink. */
@@ -406,16 +445,29 @@ class PgLogicalReplicationSource implements PgReplicationSource {
     for (const handler of this.#changeHandlers) handler(change);
   }
 
-  /** Report a source error to every registered sink — never thrown back out of a callback. */
+  /**
+   * Report a source error to every registered sink. A sink must not break the source, so a
+   * throwing handler is swallowed — otherwise it would escape into the driver's EventEmitter
+   * (this runs from a client `error`-event callback) or reject the fire-and-forget
+   * `void #reconnect()` as an unhandled rejection.
+   */
   #routeError(error: unknown): void {
-    for (const handler of this.#errorHandlers) handler(error);
+    for (const handler of this.#errorHandlers) {
+      try {
+        handler(error);
+      } catch {
+        // A broken error sink cannot be allowed to crash the source's event loop.
+      }
+    }
   }
 
   /** A client error tears the connection down and schedules a reconnect. */
   #onClientError(error: unknown): void {
     this.#routeError(error);
 
-    void this.#reconnect();
+    // Only reconnect once streaming was established (see {@link #connected}); a failure during
+    // the first start is surfaced to the caller as a rejected `start()`, never a hidden loop.
+    if (this.#connected) void this.#reconnect();
   }
 
   /**

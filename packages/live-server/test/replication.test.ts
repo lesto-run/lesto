@@ -566,3 +566,197 @@ describe("createPgReplicationSource — defaults", () => {
     await source.stop();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Review hardening (red-team findings on 1e52054): a client `error` during the FIRST start must
+// not launch a background reconnect (Finding A — else a zombie loop or an orphaned WAL-pinning
+// slot the caller never sees), a stop() racing the first open must not orphan a slot (Finding B),
+// and a throwing error sink must not crash the source. The fake couples connect/query failures to
+// an error event and drives stop() from inside an await, reproducing interleavings a live `pg`
+// exhibits but the happy-path fake did not.
+// ---------------------------------------------------------------------------
+
+describe("createPgReplicationSource — first-start error does not spawn a hidden reconnect", () => {
+  it("a client error BEFORE the slot is created leaves only the rejected start() — no background reconnect", async () => {
+    const { createClient, clients } = tracking((client, index) => {
+      if (index === 0) {
+        client.connectImpl = async () => {
+          client.connected = true;
+          // A real socket failure rejects the in-flight command AND emits an error event.
+          client.emitError(new Error("socket died mid-connect"));
+          throw new Error("connect failed");
+        };
+      }
+    });
+    const onError = vi.fn();
+    const source = createPgReplicationSource({ createClient, delay: async () => {} });
+    source.onError(onError);
+
+    await expect(source.start()).rejects.toThrow("connect failed");
+    await flush();
+
+    // No second client: streaming was never established, so the error did not reconnect.
+    expect(clients).toHaveLength(1);
+    expect(clients[0]!.createdSlots).toEqual([]);
+    expect(onError).toHaveBeenCalledOnce();
+  });
+
+  it("a client error AFTER the slot is created does not resurrect the source; stop() drops the orphan", async () => {
+    const { createClient, clients } = tracking((client, index) => {
+      if (index === 0) {
+        client.startReplication = async () => {
+          // The slot exists by now; the stream fails and the socket also errors.
+          client.emitError(new Error("stream failed after CREATE_SLOT"));
+          throw new Error("start replication failed");
+        };
+      }
+    });
+    const onError = vi.fn();
+    const source = createPgReplicationSource({ createClient, delay: async () => {} });
+    source.onError(onError);
+
+    await expect(source.start()).rejects.toThrow("start replication failed");
+    await flush();
+
+    expect(clients).toHaveLength(1); // no reconnect resurrected the discarded source
+    expect(clients[0]!.createdSlots).toEqual([DEFAULT_SLOT]);
+
+    // The slot the failed start created is cleanable — stop() drops it rather than orphan WAL.
+    await source.stop();
+    expect(clients[0]!.droppedSlots).toEqual([DEFAULT_SLOT]);
+  });
+});
+
+describe("createPgReplicationSource — a stop() racing the first open never orphans a slot", () => {
+  it("stop during the first connect aborts before CREATE_SLOT (no slot created)", async () => {
+    let source!: ReturnType<typeof createPgReplicationSource>;
+    const { createClient, clients } = tracking((client, index) => {
+      if (index === 0) {
+        client.connectImpl = async () => {
+          client.connected = true;
+          await source.stop(); // a SIGTERM lands during a slow connect
+        };
+      }
+    });
+    source = createPgReplicationSource({ createClient, delay: async () => {} });
+
+    await source.start(); // resolves cleanly on the now-stopped source
+    await flush();
+
+    expect(clients[0]!.createdSlots).toEqual([]);
+    expect(clients[0]!.ended).toBe(true);
+    expect(clients).toHaveLength(1);
+  });
+
+  it("stop during IDENTIFY_SYSTEM aborts before CREATE_SLOT (no slot created)", async () => {
+    let source!: ReturnType<typeof createPgReplicationSource>;
+    const { createClient, clients } = tracking((client, index) => {
+      if (index === 0) {
+        client.identifySystem = async () => {
+          await source.stop();
+          return client.identity;
+        };
+      }
+    });
+    source = createPgReplicationSource({ createClient, delay: async () => {} });
+
+    await source.start();
+    await flush();
+
+    expect(clients[0]!.createdSlots).toEqual([]);
+    expect(clients[0]!.ended).toBe(true);
+    expect(clients).toHaveLength(1);
+  });
+
+  it("stop just after CREATE_SLOT drops the slot it created and never starts replication", async () => {
+    let source!: ReturnType<typeof createPgReplicationSource>;
+    const { createClient, clients } = tracking((client, index) => {
+      if (index === 0) {
+        const realCreate = client.createSlot.bind(client);
+        client.createSlot = async (slot: string) => {
+          await realCreate(slot); // records the slot as created
+          await source.stop(); // ...then stop races before START_REPLICATION
+        };
+      }
+    });
+    source = createPgReplicationSource({ createClient, delay: async () => {} });
+
+    await source.start();
+    await flush();
+
+    expect(clients[0]!.createdSlots).toEqual([DEFAULT_SLOT]);
+    expect(clients[0]!.droppedSlots).toEqual([DEFAULT_SLOT]); // the abort dropped it — no orphan
+    expect(clients[0]!.replications).toEqual([]); // never reached START_REPLICATION
+    expect(clients).toHaveLength(1);
+  });
+
+  it("a failed drop during a stop-raced open is best-effort — attempted, swallowed, still ends the client", async () => {
+    let source!: ReturnType<typeof createPgReplicationSource>;
+    // The drop attempted by the abort throws; because stop() already ran (and cleared its sinks),
+    // the failure has nowhere to route — it must be swallowed, never thrown, and the client still ends.
+    const dropSpy = vi.fn(async () => {
+      throw new Error("drop failed mid-open");
+    });
+    const { createClient, clients } = tracking((client, index) => {
+      if (index === 0) {
+        client.dropSlotImpl = dropSpy;
+        const realCreate = client.createSlot.bind(client);
+        client.createSlot = async (slot: string) => {
+          await realCreate(slot);
+          await source.stop();
+        };
+      }
+    });
+    source = createPgReplicationSource({ createClient, delay: async () => {} });
+
+    await expect(source.start()).resolves.toBeUndefined();
+    await flush();
+
+    expect(dropSpy).toHaveBeenCalledWith(DEFAULT_SLOT); // the abort attempted the drop
+    expect(clients[0]!.ended).toBe(true); // end still runs after a failed drop
+  });
+
+  it("routes an end failure during a stop-raced open through onError (never thrown)", async () => {
+    let source!: ReturnType<typeof createPgReplicationSource>;
+    const onError = vi.fn();
+    const { createClient } = tracking((client, index) => {
+      if (index === 0) {
+        client.endImpl = async () => {
+          throw new Error("end failed mid-open");
+        };
+        client.connectImpl = async () => {
+          client.connected = true;
+          await source.stop();
+        };
+      }
+    });
+    source = createPgReplicationSource({ createClient, delay: async () => {} });
+    source.onError(onError);
+
+    await expect(source.start()).resolves.toBeUndefined();
+    await flush();
+
+    expect(onError).toHaveBeenCalled();
+  });
+});
+
+describe("createPgReplicationSource — a throwing error sink cannot crash the source", () => {
+  it("swallows a throwing onError handler and still runs the others", async () => {
+    const { createClient, clients } = tracking();
+    const good = vi.fn();
+    const source = createPgReplicationSource({ createClient, delay: async () => {} });
+    source.onError(() => {
+      throw new Error("bad sink");
+    });
+    source.onError(good);
+
+    await source.start();
+
+    expect(() => clients[0]!.emitError(new Error("boom"))).not.toThrow();
+    await flush();
+
+    expect(good).toHaveBeenCalledWith(expect.any(Error));
+
+    await source.stop();
+  });
+});

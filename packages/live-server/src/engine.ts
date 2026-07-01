@@ -9,7 +9,9 @@
  * where the principal's shape lives, never the database's output* (ADR 0042). It then
  * diffs that set against the last one and emits inserts / updates / delete-from-shape.
  * This is O(table) per tick — the deliberate v0 coarse floor; v1 replaces the poll with a
- * `pgoutput` replication tap keyed by commit LSN, but the engine's diff + authz seam are
+ * Postgres logical-replication tap (`pgoutput`/`wal2json`) keyed by commit LSN (the change
+ * source now exists — {@link file://./replication.ts}), and consumes its old/new row images to
+ * classify delete-from-shape (Inc2), but the engine's authz seam ({@link matchesShape}) is
  * unchanged.
  *
  * Safety: a shape names its table and columns as **strings**, so the engine validates
