@@ -47,12 +47,13 @@ describe("assertDevOnly", () => {
     }
   });
 
-  it("refuses a non-dev command that carries ANY single dev surface (ring, live reload, or island dev)", () => {
+  it("refuses a non-dev command that carries ANY single dev surface (ring, live reload, island dev, or AI overlay)", () => {
     // Each dev-only surface alone trips the sentinel — not just the MCP seam.
     const surfaces = [
       { devState: createDevState() },
       { liveReload: { script: "", notify() {}, close() {} } },
       { islandDev: () => undefined },
+      { aiOverlay: { script: "" } },
     ];
 
     for (const surface of surfaces) {
