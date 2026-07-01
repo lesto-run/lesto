@@ -340,12 +340,15 @@ class PgLogicalReplicationSource implements PgReplicationSource {
     this.#stopped = true;
     this.#changeHandlers.clear();
 
-    // Drop the slot FIRST (the load-bearing outage-avoidance step — release the pinned WAL),
-    // then end the connection. Both best-effort: a failure is routed, never thrown, so a
-    // degraded stop (e.g. the connection already dead) still runs to completion. A dead
-    // connection cannot drop the slot, leaving it orphaned — the runbook's disk-pressure case.
-    await this.#dropSlot();
+    // END the streaming connection FIRST, then drop the slot. A logical slot cannot be dropped on
+    // its own active streaming connection — a same-connection `DROP_REPLICATION_SLOT` deadlocks
+    // against the running COPY (proven by the live shakeout, L-4b7edd48) — and the slot must be
+    // INACTIVE to drop. Ending the stream releases the slot; the real client's `dropSlot` then
+    // runs on a FRESH connection. Both best-effort: a failure is routed, never thrown, so a
+    // degraded stop still completes. (A hard crash that skips `stop()` still orphans the slot —
+    // the runbook's disk-pressure case — which is why the deployment also owns slot-lag alerting.)
     await this.#endClient();
+    await this.#dropSlot();
 
     this.#errorHandlers.clear();
     this.#client = undefined;

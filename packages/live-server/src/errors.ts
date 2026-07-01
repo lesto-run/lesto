@@ -31,7 +31,13 @@ export type LiveServerErrorCode =
    * terminal: it DROPS the slot (releasing pinned WAL), so the source cannot be resumed —
    * a fresh source (and a fresh snapshot) is required.
    */
-  | "LIVE_SERVER_REPLICATION_STOPPED";
+  | "LIVE_SERVER_REPLICATION_STOPPED"
+  /**
+   * The `pgoutput` stream delivered a change for a relation whose `Relation` message was never
+   * seen — a protocol violation (pgoutput always announces a relation before its first change),
+   * so the change cannot be decoded (no column names) rather than guessed.
+   */
+  | "LIVE_SERVER_REPLICATION_UNKNOWN_RELATION";
 
 /** Anything the shape engine can refuse to register or serve. */
 export class LiveServerError extends LestoError<LiveServerErrorCode> {

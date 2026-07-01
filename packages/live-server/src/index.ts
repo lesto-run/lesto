@@ -46,6 +46,13 @@ export type {
   SystemIdentity,
 } from "./replication";
 
+// The real (pg) replication client factory — the production `createClient` for the source. Its
+// default `pgoutput` decoder is validated end-to-end against a live Postgres slot
+// (`test/live/pgoutput-shakeout.ts`, L-4b7edd48); the pure decoders it drives are unit-tested
+// against real captured bytes. The `pg` peer is loaded lazily, so importing this stays free.
+export { createPgReplicationClientFactory } from "./pg-replication-client";
+export type { PgReplicationClientOptions, PgReplicationConfig } from "./pg-replication-client";
+
 export { ShapeConnection } from "./connection";
 export type { FrameController, ShapeConnectionOptions } from "./connection";
 
