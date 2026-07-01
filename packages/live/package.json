@@ -1,0 +1,26 @@
+{
+  "name": "@lesto/live",
+  "version": "0.0.0",
+  "license": "MIT",
+  "description": "Lesto local-first sync (ADR 0042 Tier 4) — the browser client: an in-memory keyed store, the GET /__lesto/live-data SSE consumer, and a framework-agnostic LiveQuery handle (subscribe/getSnapshot) that keeps an auth-scoped shape in sync. v0 = in-memory, online-only, resync-on-reconnect.",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@lesto/errors": "workspace:*",
+    "@lesto/live-protocol": "workspace:*"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "format": "oxfmt src test",
+    "format:check": "oxfmt --check src test"
+  }
+}
