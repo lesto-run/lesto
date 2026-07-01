@@ -29,9 +29,23 @@ import type { RedactedContext } from "./ai-redact";
  * The POSITIVE allowlist of read-only dev tool names a Phase-1 turn may reach. This is the
  * whole security boundary: a name absent here is refused before the seam runs. Kept as a
  * `const` tuple so the set is legible and greppable; extend it only with a genuinely
- * read-only tool (a mutating tool belongs to Phase 2's attributed gate, not here).
+ * read-only tool (a mutating tool belongs to Phase 2's attributed gate, not here). Both
+ * entries are read-only ADR-0034 contract tools — `describe_app` (routes + OpenAPI + schema
+ * + collections) and `list_content_collections` — so Phase 1 still has no mutation path.
  */
-export const READ_TOOL_ALLOWLIST = ["list_content_collections"] as const;
+export const READ_TOOL_ALLOWLIST = ["list_content_collections", "describe_app"] as const;
+
+/**
+ * The single read-only tool the Phase-1 in-preview overlay actually runs to inspect the
+ * running app (the free-text prompt is not yet parsed into a tool choice, so one fixed
+ * inspect tool answers every turn). `describe_app` is the richest contract tool AND it
+ * DEGRADES gracefully on a content-less app (collections → `[]`, schema/OpenAPI → defaults,
+ * `packages/mcp/src/resources.ts`), so the overlay lights up on ANY `lesto dev` app —
+ * estate included, which ships no content peer. Typed as a MEMBER of {@link READ_TOOL_ALLOWLIST}
+ * so the security boundary is compiler-enforced: the tool the overlay runs can never drift
+ * off the allowlist.
+ */
+export const DEV_INSPECT_TOOL: (typeof READ_TOOL_ALLOWLIST)[number] = "describe_app";
 
 /** One dev AI turn: the named dev tool to run and its redacted input. */
 export interface AiTurn {

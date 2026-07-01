@@ -39,7 +39,7 @@ import type { DevState, DevStateReader } from "./dev-state";
 import { CliError } from "./errors";
 import { timingSafeEqual } from "node:crypto";
 
-import { dispatchAiTurn, READ_TOOL_ALLOWLIST } from "./ai-bridge";
+import { DEV_INSPECT_TOOL, dispatchAiTurn } from "./ai-bridge";
 import type { AiTurn } from "./ai-bridge";
 import { assembleContext } from "./ai-context";
 import { redactContext, redactString } from "./ai-redact";
@@ -1495,7 +1495,7 @@ async function handleAiTurn(
   try {
     const result = await dispatchAiTurn(
       overlay.dispatchDevTool === undefined ? {} : { dispatchDevTool: overlay.dispatchDevTool },
-      { tool: READ_TOOL_ALLOWLIST[0], input },
+      { tool: DEV_INSPECT_TOOL, input },
     );
     return aiReply(
       200,

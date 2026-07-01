@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { CliError } from "../src/errors";
-import { dispatchAiTurn, READ_TOOL_ALLOWLIST } from "../src/ai-bridge";
+import { DEV_INSPECT_TOOL, dispatchAiTurn, READ_TOOL_ALLOWLIST } from "../src/ai-bridge";
 import type { AiBridgeDeps, AiTurn } from "../src/ai-bridge";
 import { redactContext } from "../src/ai-redact";
 
@@ -37,6 +37,20 @@ describe("dispatchAiTurn", () => {
     expect(result).toEqual({ collections: ["posts"] });
     // The exact turn (tool + redacted input) is what the seam receives.
     expect(dispatchDevTool).toHaveBeenCalledWith({ tool: ALLOWED, input: redacted });
+  });
+
+  it("forwards the overlay's fixed inspect tool (DEV_INSPECT_TOOL), which is on the allowlist", async () => {
+    // The tool the Phase-1 overlay actually runs must be a permitted read tool, or every turn
+    // would fail closed. The type pins it to a `READ_TOOL_ALLOWLIST` member; this proves it reaches
+    // the seam at runtime too.
+    expect(READ_TOOL_ALLOWLIST).toContain(DEV_INSPECT_TOOL);
+
+    const dispatchDevTool = vi.fn(() => Promise.resolve({ routes: [] }));
+
+    const result = await dispatchAiTurn({ dispatchDevTool }, { tool: DEV_INSPECT_TOOL });
+
+    expect(result).toEqual({ routes: [] });
+    expect(dispatchDevTool).toHaveBeenCalledWith({ tool: DEV_INSPECT_TOOL });
   });
 
   it("refuses a WRITE-shaped tool with CLI_DEV_MCP_UNAVAILABLE even when a write-capable seam is injected", async () => {

@@ -3263,9 +3263,10 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a + L-69d76e71 harde
     });
 
     expect(response.status).toBe(200);
-    // Only the positive-allowlist read tool is ever dispatched, the assembled + redacted route
-    // flows through as its input, and the read-only result is reflected back into the reply.
-    expect(turns.map((turn) => turn.tool)).toEqual(["list_content_collections"]);
+    // The overlay runs the fixed inspect tool (`describe_app`, an allowlisted read-only contract
+    // tool), the assembled + redacted route flows through as its input, and the read-only result
+    // is reflected back into the reply.
+    expect(turns.map((turn) => turn.tool)).toEqual(["describe_app"]);
     expect(turns[0]?.input?.route).toBe("/posts");
     const reply = await replyOf(response);
     expect(reply).toContain("what collections exist?");
