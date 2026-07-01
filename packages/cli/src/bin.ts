@@ -53,7 +53,6 @@ import type {
 } from "./run";
 import { devReloadClientScript } from "./dev-overlay";
 import { aiOverlayClientScript } from "./ai-overlay";
-import type { AiTurn } from "./ai-bridge";
 import { CliError } from "./errors";
 import { WRANGLER_DEPLOY_ARGS, WRANGLER_ROLLBACK_MESSAGE, wranglerRollbackArgs } from "./wrangler";
 import { runMcp, startMcpServer } from "./mcp";
@@ -1176,19 +1175,14 @@ const liveReload = command === "dev" ? buildLiveReload() : undefined;
 // serves it), so client and server agree by construction and a forged local request (which cannot
 // read the injected token) is refused.
 //
-// `dispatchDevTool` is the LIVE read-tool dispatch (ADR 0033 Inc 6b, L-e7ea34e3): it forwards an
-// already-allowlisted turn to `devToolDispatch` — the in-process dispatch the dev MCP server sets
-// once it is up (below). Absent it (the server not yet bound, or a non-dev command), it fails
-// CLOSED with the same `CLI_DEV_MCP_UNAVAILABLE` the bridge's own missing-seam arm raises, which
-// the overlay renders as its inspect-only "not available" state. So the overlay lights up exactly
-// when the governed dev MCP plane is running, and never mutates (the bridge's positive read-only
-// allowlist runs BEFORE this seam — `ai-bridge.ts`).
+// The overlay is built with NO `dispatchDevTool` — the live read-tool dispatch (ADR 0033 Inc 6b,
+// L-e7ea34e3) is set IN PLACE by `startDevMcp` once the loopback dev MCP server is up (and cleared
+// on teardown). While it is absent (server not yet bound, torn down, or a non-dev command), the
+// bridge's OWN missing-seam arm (`dispatchAiTurn`) fails closed → the overlay's tested inspect-only
+// "not available" reply. So the overlay lights up exactly when the governed dev MCP plane is
+// running, the production fail-closed path IS the tested bridge branch (not a bin duplicate), and
+// it never mutates (the positive read-only allowlist runs before the seam — `ai-bridge.ts`).
 const DEV_AI_ENDPOINT = "/__lesto_dev_ai";
-
-// Set by `startDevMcp` (below) once the loopback dev MCP server is bound, and cleared on its
-// teardown. A module-level ref because the `aiOverlay` seam is built before `run()` while the
-// dev MCP context (live app/routes/ring) only exists inside `runDev`; both are bin-owned wiring.
-let devToolDispatch: ((turn: AiTurn) => Promise<unknown>) | undefined;
 
 const buildAiOverlay = (): NonNullable<CliDeps["aiOverlay"]> => {
   const token = randomBytes(32).toString("hex");
@@ -1197,16 +1191,6 @@ const buildAiOverlay = (): NonNullable<CliDeps["aiOverlay"]> => {
     script: aiOverlayClientScript({ endpoint: DEV_AI_ENDPOINT, token }),
     endpoint: DEV_AI_ENDPOINT,
     token,
-    // Fail CLOSED until the dev MCP server wires `devToolDispatch`; the coded error is the one
-    // `handleAiTurn` maps to the overlay's inspect-only "not available" reply.
-    dispatchDevTool: (turn) =>
-      devToolDispatch === undefined
-        ? Promise.reject(
-            new CliError("CLI_DEV_MCP_UNAVAILABLE", "the dev MCP server is not available", {
-              tool: turn.tool,
-            }),
-          )
-        : devToolDispatch(turn),
   };
 };
 // Mirrors the `liveReload` / `islandDev` builders above: a dev-only factory behind the `dev` gate.
@@ -1265,13 +1249,19 @@ const startDevMcp: CliDeps["startDevMcp"] =
 
         const handle = await startMcpHttpServer(context, { token });
 
-        // Wire the in-preview AI overlay's LIVE dispatch (ADR 0033 Inc 6b): the same governed,
-        // audited tool set the loopback transport serves, run IN-PROCESS over the SAME live context
-        // (so `describe_app` reflects a hot-reloaded route). The turn's tool is already
-        // allowlist-checked by the bridge before this runs, and `dispatch` audits every call — so
-        // the overlay is exactly an in-process read-only client of the governed dev MCP plane.
+        // Wire the in-preview AI overlay's LIVE dispatch (ADR 0033 Inc 6b) IN PLACE on the overlay
+        // seam: the same governed, audited tool set the loopback transport serves, run IN-PROCESS
+        // over the SAME live context (so `describe_app` reflects a hot-reloaded route). The turn's
+        // tool is already allowlist-checked by the bridge before this runs, and `dispatch` audits
+        // every call — so the overlay is exactly an in-process read-only client of the governed dev
+        // MCP plane. Setting it here (rather than a wrapping closure) keeps the bridge's OWN
+        // missing-seam arm as the tested production fail-closed path. `{}` args on purpose: the
+        // Phase-1 `DEV_INSPECT_TOOL` (`describe_app`) is input-less; the turn's redacted page
+        // context is carried for future ACTING tools, not read-tool arguments.
         const tools = buildTools(context);
-        devToolDispatch = (turn) => dispatch(context, tools, turn.tool, {});
+        if (aiOverlay !== undefined) {
+          aiOverlay.dispatchDevTool = (turn) => dispatch(context, tools, turn.tool, {});
+        }
 
         console.error(
           `lesto dev: MCP control plane on http://127.0.0.1:${handle.port}/ (x-lesto-dev-token: ${token})`,
@@ -1279,9 +1269,9 @@ const startDevMcp: CliDeps["startDevMcp"] =
 
         return {
           close: async () => {
-            // Drop the overlay's dispatch first, so a turn racing teardown fails closed rather
-            // than dispatching against a torn-down context.
-            devToolDispatch = undefined;
+            // Clear the overlay's dispatch first, so a turn racing teardown fails closed (the
+            // bridge's missing-seam arm) rather than dispatching against a torn-down context.
+            if (aiOverlay !== undefined) aiOverlay.dispatchDevTool = undefined;
 
             await handle.close();
           },

@@ -236,12 +236,19 @@ export interface AiOverlay {
   readonly token: string;
 
   /**
-   * The dev MCP read-tool dispatch seam (ADR 0032), injected by the bin ONLY when the loopback dev
-   * MCP server can run an allowlisted read tool in-process. Absent → {@link dispatchAiTurn} fails
-   * closed and the overlay renders its inspect-only "not available" reply (Phase 1's stub state,
-   * until the estate dogfood wires a live dispatch). Only ever handed an already-allowlisted turn.
+   * The dev MCP read-tool dispatch seam (ADR 0032/0033 Inc 6b). The bin SETS this — in place —
+   * once the loopback dev MCP server is up (and CLEARS it on teardown), to an in-process dispatch
+   * of an allowlisted read tool over the live dev MCP context. It is deliberately MUTABLE (not
+   * injected at build) because the overlay is constructed before the dev MCP context exists; while
+   * it is absent (server not yet up, or torn down) {@link dispatchAiTurn}'s own missing-seam arm
+   * fails closed and the overlay renders its inspect-only "not available" reply — so the production
+   * fail-closed path is the SAME tested branch, not a duplicate. Only ever handed an
+   * already-allowlisted turn (the positive allowlist runs first).
+   *
+   * Explicitly `| undefined` (not just optional) so the bin can CLEAR it on teardown under
+   * `exactOptionalPropertyTypes` — the seam is set and unset over the dev server's lifetime.
    */
-  readonly dispatchDevTool?: (turn: AiTurn) => Promise<unknown>;
+  dispatchDevTool?: ((turn: AiTurn) => Promise<unknown>) | undefined;
 }
 
 /**
@@ -1497,6 +1504,13 @@ async function handleAiTurn(
       overlay.dispatchDevTool === undefined ? {} : { dispatchDevTool: overlay.dispatchDevTool },
       { tool: DEV_INSPECT_TOOL, input },
     );
+    // The tool RESULT is reflected verbatim (only stringified). Safe for `DEV_INSPECT_TOOL`
+    // (`describe_app` returns app STRUCTURE — routes/OpenAPI/schema — no secrets, and the reply
+    // goes only to the same-origin, token-gated dev browser, never to an LLM in Phase 1). INVARIANT
+    // for growth (ADR 0033): any tool added to `READ_TOOL_ALLOWLIST` whose output could carry live
+    // request/content data must have its output redacted here first — `redactString` can't be reused
+    // wholesale (it collapses multi-segment route paths to `<path>`); a structure-aware redactor is
+    // the follow-up. Today's allowlist is structure-only, so the leg is safe.
     return aiReply(
       200,
       `Inspect-only (Phase 1). You asked: "${safePrompt}". Read-only result: ${safeStringify(result)}. Acting is Phase 2 (deferred).`,
