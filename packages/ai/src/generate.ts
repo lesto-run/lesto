@@ -33,6 +33,9 @@ import type { GenerateOptions, GenerateResult, StreamDelta } from "./types";
  * `StopReason`; a thrown provider error marks the span `error` with the `AiError` code. The
  * span is opened AFTER the call resolves because the minimal {@link AgentSpan} seam has no
  * `setAttribute`, so the parsed `Usage`/`StopReason` can only ride in the start-time bag.
+ * A consequence is that this span is a point-in-time RECORD (start ≈ end), not a duration
+ * wrapper — it carries the token/stop-reason attributes, not the call's latency. Emitting a
+ * duration-bearing span needs a richer seam (open-before + populate-after) and is a follow-up.
  * Absent a tracer this is the exact original send — no span, no overhead.
  */
 export async function generateText(options: GenerateOptions): Promise<GenerateResult> {
@@ -76,6 +79,12 @@ export async function generateText(options: GenerateOptions): Promise<GenerateRe
  * `ReadableStream` pipes straight to the client response (`waitUntil` keeps the
  * generation alive past the first byte). Throws `AI_HTTP_ERROR` on a non-2xx and
  * `AI_STREAM_MALFORMED` on an unparseable frame.
+ *
+ * NOTE (ADR 0031 Phase 2): an injected `options.tracer` is intentionally NOT instrumented on
+ * the streaming path — no `ai.generate` span is emitted here. A streaming span spans the whole
+ * SSE lifetime (open → last frame → close), which the non-streamed record-after-the-call shape
+ * does not fit; it is deferred (see `agent-observable-runtime.md`). Passing a tracer is a
+ * harmless no-op, called out here so a caller expecting streaming spans is not silently surprised.
  */
 export async function* streamText(options: GenerateOptions): AsyncIterable<StreamDelta> {
   const request = options.model.buildStreamRequest(options);
