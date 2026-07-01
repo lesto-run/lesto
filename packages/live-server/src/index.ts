@@ -10,10 +10,11 @@
  *   - {@link createPgReplicationSource} — the v1 Postgres logical-replication change source
  *     (a dedicated slot, keyed by commit LSN + system identity), the production replacement
  *     for the v0 poll as the change feed (Inc1).
- *   - {@link classifyChange} — the v1 per-row **delete-from-shape** classifier: applies a
- *     replication change's old/new images to a shape (in/out/stay) → a `ShapeChange` (Inc2).
- *     {@link predicateNeedsOldImage} / {@link assertReplicaIdentity} are its registration-time
- *     `REPLICA IDENTITY FULL` guard. Wiring these into the engine's change path is the next step.
+ *   - {@link prepareShapeClassifier} — the v1 per-row **delete-from-shape** classifier, bound to a
+ *     shape behind its `REPLICA IDENTITY FULL` guard so it cannot fail open: it applies a
+ *     replication change's old/new images to the shape (in/out/stay) → a `ShapeChange` (Inc2).
+ *     {@link predicateNeedsOldImage} / {@link assertReplicaIdentity} are the guard primitives.
+ *     Wiring these into the engine's change path (with a `@lesto/db`-backed coercer) is the next step.
  *
  *   - {@link createLiveDataHttpHandlers} — the app-mounted `GET /__lesto/live-data`
  *     handler that streams a shape's snapshot + change tail over the runtime's
@@ -26,7 +27,7 @@ export type { LiveServerErrorCode } from "./errors";
 export { diffRows, normalizeWire, projectRow } from "./diff";
 export type { DiffResult } from "./diff";
 
-export { assertReplicaIdentity, classifyChange, predicateNeedsOldImage } from "./classify";
+export { assertReplicaIdentity, predicateNeedsOldImage, prepareShapeClassifier } from "./classify";
 export type { ImageCoercer } from "./classify";
 
 export { createShapeEngine } from "./engine";

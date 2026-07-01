@@ -127,9 +127,21 @@ export function classifyChange(
   const isIn = matchesShape(def, newRow);
 
   if (isIn) {
-    // Stayed in, or moved in — either way the client needs the current row. (A key change would
-    // strand the old key, but the shape key is the primary key; a PK update is out of scope.)
-    return { op: wasIn ? "update" : "insert", key: rowKey(newRow, def.key), row: newRow };
+    const newKey = rowKey(newRow, def.key);
+
+    // A row that STAYED in the shape must keep its key: keying the store by the key, a changed key
+    // would leave the old row stranded under its old key (a stale duplicate the client never
+    // removes). A v1 shape assumes an immutable primary key — refuse loudly rather than strand.
+    if (wasIn && rowKey(oldRow, def.key) !== newKey) {
+      throw new LiveServerError(
+        "LIVE_SERVER_PRIMARY_KEY_CHANGED",
+        `A row in shape on "${def.table}" changed its key "${def.key}"; a v1 shape assumes an immutable key.`,
+        { table: def.table, key: def.key },
+      );
+    }
+
+    // Stayed in (update) or moved in (insert) — either way the client needs the current row.
+    return { op: wasIn ? "update" : "insert", key: newKey, row: newRow };
   }
 
   if (wasIn) {
@@ -139,4 +151,27 @@ export function classifyChange(
 
   // Outside the shape both before and after — nothing to tell this client.
   return undefined;
+}
+
+/**
+ * Bind a shape to a **guarded** per-change classifier — the intended entry point, so the
+ * replica-identity guard cannot be forgotten.
+ *
+ * `classifyChange` trusts that the shape's table can supply the old image its predicate needs; if a
+ * caller skips {@link assertReplicaIdentity}, the classifier reads an incomplete old image and
+ * *silently* stops emitting delete-from-shape — a durable authorization leak (the exact failure this
+ * module exists to prevent). This factory runs the guard once at registration and returns a bound
+ * `(change) => ShapeChange | undefined` that is **unobtainable without having passed it**, so the
+ * hot path cannot fail open. The engine stores the returned closure per shape and calls it per
+ * change; `hasFullReplicaIdentity` is the table's catalog fact (`pg_class.relreplident = 'f'`), and
+ * `coerce` is the `@lesto/db`-backed {@link ImageCoercer} for that shape's table.
+ */
+export function prepareShapeClassifier(
+  def: ShapeDefinition,
+  hasFullReplicaIdentity: boolean,
+  coerce: ImageCoercer,
+): (change: ReplicationChange) => ShapeChange | undefined {
+  assertReplicaIdentity(def, hasFullReplicaIdentity);
+
+  return (change) => classifyChange(def, change, coerce);
 }

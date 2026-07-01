@@ -51,7 +51,14 @@ export type LiveServerErrorCode =
    * shape — serving it would silently fail to emit delete-from-shape and leak the row into the
    * client's durable store. Refused at registration (fix: `ALTER TABLE … REPLICA IDENTITY FULL`).
    */
-  | "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT";
+  | "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT"
+  /**
+   * A replication update changed a row's **key** column. A shape keys its client store by the key,
+   * and a v1 shape assumes an immutable primary key, so a key change would strand the row under its
+   * old key (a stale duplicate) rather than move it. Refused loudly rather than silently stranding;
+   * multi-frame key migration (delete-old + insert-new) is out of scope for v1.
+   */
+  | "LIVE_SERVER_PRIMARY_KEY_CHANGED";
 
 /** Anything the shape engine can refuse to register or serve. */
 export class LiveServerError extends LestoError<LiveServerErrorCode> {

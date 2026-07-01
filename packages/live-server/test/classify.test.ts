@@ -4,11 +4,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertReplicaIdentity,
-  classifyChange,
   predicateNeedsOldImage,
+  prepareShapeClassifier,
   LiveServerError,
 } from "../src/index";
 import type { ImageCoercer } from "../src/index";
+// `classifyChange` is deliberately NOT on the public barrel (callers go through the guarded
+// `prepareShapeClassifier`); the pure function is imported from the module for direct unit coverage.
+import { classifyChange } from "../src/classify";
 import type { ReplicationChange, RowImage } from "../src/replication";
 
 // A shape over `messages(id pk, room_id, body)`, filtering the NON-key column room_id = 1.
@@ -204,6 +207,75 @@ describe("classifyChange — update (the in/out/stay matrix)", () => {
       op: "update",
       key: "5",
       row: { id: 5, room_id: 1, body: "b" },
+    });
+  });
+
+  it("refuses a key change on a row that stays in the shape (would strand the old key)", () => {
+    const change = update(
+      { id: "5", room_id: "1", body: "a" },
+      { id: "6", room_id: "1", body: "a" },
+    );
+    expect(() => classifyChange(def, change, coerce)).toThrow(LiveServerError);
+    try {
+      classifyChange(def, change, coerce);
+    } catch (error) {
+      expect((error as LiveServerError).code).toBe("LIVE_SERVER_PRIMARY_KEY_CHANGED");
+    }
+  });
+
+  it("does NOT refuse a differing key when the row was OUT before (moved in — no stale entry)", () => {
+    // out→in: old key is irrelevant (never in the store), so a differing key is a plain insert.
+    const change = update(
+      { id: "5", room_id: "2", body: "a" },
+      { id: "6", room_id: "1", body: "a" },
+    );
+    expect(classifyChange(def, change, coerce)).toEqual({
+      op: "insert",
+      key: "6",
+      row: { id: 6, room_id: 1, body: "a" },
+    });
+  });
+});
+
+describe("prepareShapeClassifier — the guarded entry point", () => {
+  it("refuses to bind a non-key-predicate shape without REPLICA IDENTITY FULL (the guard cannot be skipped)", () => {
+    expect(() => prepareShapeClassifier(shape(), false, coercer(shape()))).toThrow(LiveServerError);
+    try {
+      prepareShapeClassifier(shape(), false, coercer(shape()));
+    } catch (error) {
+      expect((error as LiveServerError).code).toBe("LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT");
+    }
+  });
+
+  it("binds a guarded classifier that delegates to classifyChange when the guard passes", () => {
+    const def = shape();
+    const classify = prepareShapeClassifier(def, true, coercer(def));
+    const change: ReplicationChange = {
+      op: "insert",
+      table: "messages",
+      newImage: { id: "5", room_id: "1", body: "hi" },
+      ...stamp,
+    };
+    expect(classify(change)).toEqual({
+      op: "insert",
+      key: "5",
+      row: { id: 5, room_id: 1, body: "hi" },
+    });
+  });
+
+  it("binds a key-only-predicate shape regardless of replica identity", () => {
+    const def = shape([{ column: "id", op: "eq", value: 5 }]);
+    const classify = prepareShapeClassifier(def, false, coercer(def));
+    const change: ReplicationChange = {
+      op: "insert",
+      table: "messages",
+      newImage: { id: "5", room_id: "9", body: "hi" },
+      ...stamp,
+    };
+    expect(classify(change)).toEqual({
+      op: "insert",
+      key: "5",
+      row: { id: 5, room_id: 9, body: "hi" },
     });
   });
 });
