@@ -3113,7 +3113,7 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
         loadApp: () => Promise.resolve(htmlConfig()),
         loadSites: () => Promise.resolve(sites),
         liveReload: reloadSeam("RELOAD();"),
-        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai" },
+        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai", token: "dev-token" },
       }),
     );
 
@@ -3144,7 +3144,7 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
           }),
         loadSites: () => Promise.resolve(sites),
         liveReload: reloadSeam("RELOAD();"),
-        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai" },
+        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai", token: "dev-token" },
       }),
     );
 
@@ -3164,7 +3164,7 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
         serve: capture.serve,
         loadApp: () => Promise.resolve(htmlConfig()),
         loadSites: () => Promise.resolve(sites),
-        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai" },
+        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai", token: "dev-token" },
       }),
     );
 
@@ -3183,7 +3183,7 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
         serve: capture.serve,
         loadApp: () => Promise.resolve(htmlConfig()),
         loadSites: () => Promise.resolve(sites),
-        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai" },
+        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai", token: "dev-token" },
       }),
     );
 
@@ -3198,7 +3198,9 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
       await expect(
         run(
           [command],
-          depsWith({ aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai" } }),
+          depsWith({
+            aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai", token: "dev-token" },
+          }),
         ),
       ).rejects.toMatchObject({ code: "CLI_DEV_SURFACE_IN_PRODUCTION" });
     }
@@ -3221,10 +3223,15 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
   });
 });
 
-describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a)", () => {
+describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a + L-69d76e71 hardening)", () => {
   const endpoint = "/__lesto_dev_ai";
   const script = "AIOVERLAY();";
-  const sameOrigin = { origin: "http://localhost:5173", host: "localhost:5173" };
+  const token = "dev-token-".repeat(4); // 40 chars, like a real minted 32-byte-hex token
+  const authed = {
+    origin: "http://localhost:5173",
+    host: "localhost:5173",
+    "x-lesto-dev-token": token,
+  };
 
   // Boot `runDev` with an AI overlay seam and hand back the outermost handle the server fronts —
   // the one `withAiEndpoint` wraps — so a test can POST a turn straight at it. The app is the
@@ -3249,16 +3256,17 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a)", () => {
       return Promise.resolve({ collections: ["posts", "pages"] });
     };
 
-    const served = await bootHandle({ script, endpoint, dispatchDevTool });
+    const served = await bootHandle({ script, endpoint, token, dispatchDevTool });
     const response = await served.handle("POST", endpoint, {
-      headers: sameOrigin,
+      headers: authed,
       body: { prompt: "what collections exist?", route: "/posts" },
     });
 
     expect(response.status).toBe(200);
-    // Only the positive-allowlist read tool is ever dispatched, and the read-only result is
-    // reflected back into the reply the overlay renders.
+    // Only the positive-allowlist read tool is ever dispatched, the assembled + redacted route
+    // flows through as its input, and the read-only result is reflected back into the reply.
     expect(turns.map((turn) => turn.tool)).toEqual(["list_content_collections"]);
+    expect(turns[0]?.input?.route).toBe("/posts");
     const reply = await replyOf(response);
     expect(reply).toContain("what collections exist?");
     expect(reply).toContain("posts");
@@ -3268,11 +3276,12 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a)", () => {
     const served = await bootHandle({
       script,
       endpoint,
+      token,
       dispatchDevTool: () => Promise.resolve({ ok: true }),
     });
 
     const response = await served.handle("POST", endpoint, {
-      headers: sameOrigin,
+      headers: authed,
       body: { prompt: "my key AKIAIOSFODNN7EXAMPLE ok?", route: "/" },
     });
 
@@ -3286,6 +3295,7 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a)", () => {
     const served = await bootHandle({
       script,
       endpoint,
+      token,
       dispatchDevTool: (turn) => {
         turns.push(turn);
 
@@ -3294,7 +3304,7 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a)", () => {
     });
 
     const response = await served.handle("POST", endpoint, {
-      headers: sameOrigin,
+      headers: authed,
       body: { prompt: "hello" },
     });
 
@@ -3302,11 +3312,31 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a)", () => {
     expect(turns).toHaveLength(1);
   });
 
-  it("fails closed to the inspect-only 'not available' reply when no dispatch seam is wired", async () => {
-    const served = await bootHandle({ script, endpoint });
+  it("never throws on a non-serializable tool result — renders a placeholder instead of a 500", async () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    const served = await bootHandle({
+      script,
+      endpoint,
+      token,
+      dispatchDevTool: () => Promise.resolve(circular),
+    });
 
     const response = await served.handle("POST", endpoint, {
-      headers: sameOrigin,
+      headers: authed,
+      body: { prompt: "x", route: "/" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await replyOf(response)).toContain("(unserializable result)");
+  });
+
+  it("fails closed to the inspect-only 'not available' reply when no dispatch seam is wired", async () => {
+    const served = await bootHandle({ script, endpoint, token });
+
+    const response = await served.handle("POST", endpoint, {
+      headers: authed,
       body: { prompt: "why is /posts a 404?", route: "/posts" },
     });
 
@@ -3315,46 +3345,101 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a)", () => {
   });
 
   it("rejects a body without a string prompt as a 400", async () => {
-    const served = await bootHandle({ script, endpoint });
+    const served = await bootHandle({ script, endpoint, token });
 
     for (const body of [{ route: "/" }, "not-json", { prompt: 42 }, null]) {
-      const response = await served.handle("POST", endpoint, { headers: sameOrigin, body });
+      const response = await served.handle("POST", endpoint, { headers: authed, body });
 
       expect(response.status).toBe(400);
     }
   });
 
-  it("refuses a cross-site Origin before assembling or dispatching anything (CSRF guard)", async () => {
+  it("requires the per-session dev token — absent, wrong-length, and wrong all refuse (403)", async () => {
     const dispatchDevTool = vi.fn((): Promise<unknown> => Promise.resolve({}));
-    const served = await bootHandle({ script, endpoint, dispatchDevTool });
+    const served = await bootHandle({ script, endpoint, token, dispatchDevTool });
+    const body = { prompt: "x", route: "/" };
+    const originHost = { origin: "http://localhost:5173", host: "localhost:5173" };
 
-    const response = await served.handle("POST", endpoint, {
-      headers: { origin: "https://evil.example", host: "localhost:5173" },
-      body: { prompt: "exfiltrate", route: "/" },
+    // Absent token header: same-origin passes, the token gate refuses.
+    const noToken = await served.handle("POST", endpoint, { headers: originHost, body });
+    expect(noToken.status).toBe(403);
+
+    // Wrong length: fails the length guard before `timingSafeEqual` is ever called.
+    const shortToken = await served.handle("POST", endpoint, {
+      headers: { ...originHost, "x-lesto-dev-token": "short" },
+      body,
     });
+    expect(shortToken.status).toBe(403);
 
-    expect(response.status).toBe(403);
+    // Right length, wrong value: fails the constant-time compare.
+    const wrongToken = await served.handle("POST", endpoint, {
+      headers: { ...originHost, "x-lesto-dev-token": "z".repeat(token.length) },
+      body,
+    });
+    expect(wrongToken.status).toBe(403);
+
+    expect(dispatchDevTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses a cross-site, cross-scheme, or cross-port Origin before the token check or dispatch", async () => {
+    const dispatchDevTool = vi.fn((): Promise<unknown> => Promise.resolve({}));
+    const served = await bootHandle({ script, endpoint, token, dispatchDevTool });
+    const body = { prompt: "exfiltrate", route: "/" };
+
+    // Cross-site host, even with a valid token — same-origin runs first.
+    const crossSite = await served.handle("POST", endpoint, {
+      headers: {
+        origin: "https://evil.example",
+        host: "localhost:5173",
+        "x-lesto-dev-token": token,
+      },
+      body,
+    });
+    expect(crossSite.status).toBe(403);
+
+    // Same host:port but https — a cross-scheme Origin is not the app's own http page.
+    const crossScheme = await served.handle("POST", endpoint, {
+      headers: {
+        origin: "https://localhost:5173",
+        host: "localhost:5173",
+        "x-lesto-dev-token": token,
+      },
+      body,
+    });
+    expect(crossScheme.status).toBe(403);
+
+    // Same http scheme, different port — host mismatch (a co-resident app on another port).
+    const otherPort = await served.handle("POST", endpoint, {
+      headers: {
+        origin: "http://localhost:9999",
+        host: "localhost:5173",
+        "x-lesto-dev-token": token,
+      },
+      body,
+    });
+    expect(otherPort.status).toBe(403);
+
     expect(dispatchDevTool).not.toHaveBeenCalled();
   });
 
   it("refuses a missing Origin, a missing Host, an unparseable Origin, and a headerless request", async () => {
-    const served = await bootHandle({ script, endpoint });
+    const served = await bootHandle({ script, endpoint, token });
     const body = { prompt: "x", route: "/" };
 
     const missingOrigin = await served.handle("POST", endpoint, {
-      headers: { host: "localhost:5173" },
+      headers: { host: "localhost:5173", "x-lesto-dev-token": token },
       body,
     });
     expect(missingOrigin.status).toBe(403);
 
     const missingHost = await served.handle("POST", endpoint, {
-      headers: { origin: "http://localhost:5173" },
+      headers: { origin: "http://localhost:5173", "x-lesto-dev-token": token },
       body,
     });
     expect(missingHost.status).toBe(403);
 
     const badOrigin = await served.handle("POST", endpoint, {
-      headers: { origin: "::not-a-url::", host: "localhost:5173" },
+      headers: { origin: "::not-a-url::", host: "localhost:5173", "x-lesto-dev-token": token },
       body,
     });
     expect(badOrigin.status).toBe(403);
@@ -3365,14 +3450,14 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a)", () => {
   });
 
   it("passes a non-endpoint request straight through to the app (GET and POST)", async () => {
-    const served = await bootHandle({ script, endpoint });
+    const served = await bootHandle({ script, endpoint, token });
 
-    const get = await served.handle("GET", "/posts", { headers: sameOrigin });
+    const get = await served.handle("GET", "/posts", { headers: authed });
     expect(get.status).toBe(200);
     expect(await drainBody(get.body)).toContain("posts");
 
     const post = await served.handle("POST", "/posts", {
-      headers: sameOrigin,
+      headers: authed,
       body: { title: "hi" },
     });
     expect(post.status).toBe(201);
@@ -3382,11 +3467,12 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a)", () => {
     const served = await bootHandle({
       script,
       endpoint,
+      token,
       dispatchDevTool: () => Promise.reject(new Error("boom")),
     });
 
     await expect(
-      served.handle("POST", endpoint, { headers: sameOrigin, body: { prompt: "x", route: "/" } }),
+      served.handle("POST", endpoint, { headers: authed, body: { prompt: "x", route: "/" } }),
     ).rejects.toThrow("boom");
   });
 
@@ -3394,11 +3480,12 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a)", () => {
     const served = await bootHandle({
       script,
       endpoint,
+      token,
       dispatchDevTool: () => Promise.reject(new CliError("CLI_UNKNOWN_COMMAND", "nope")),
     });
 
     await expect(
-      served.handle("POST", endpoint, { headers: sameOrigin, body: { prompt: "x", route: "/" } }),
+      served.handle("POST", endpoint, { headers: authed, body: { prompt: "x", route: "/" } }),
     ).rejects.toBeInstanceOf(CliError);
   });
 });

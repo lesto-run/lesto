@@ -37,6 +37,8 @@ import type { ReleaseStore, ShipDeps } from "@lesto/deploy";
 
 import type { DevState, DevStateReader } from "./dev-state";
 import { CliError } from "./errors";
+import { timingSafeEqual } from "node:crypto";
+
 import { dispatchAiTurn, READ_TOOL_ALLOWLIST } from "./ai-bridge";
 import type { AiTurn } from "./ai-bridge";
 import { assembleContext } from "./ai-context";
@@ -223,6 +225,15 @@ export interface AiOverlay {
    * server route agree by construction.
    */
   readonly endpoint: string;
+
+  /**
+   * The per-session dev token the bin mints and bakes into {@link script} (mirroring the live-reload
+   * WS, ADR 0032 Inc 4c). The same-origin guard stops a browser tab, but a local NON-browser process
+   * can forge `Origin`/`Host` — it cannot know a freshly minted token. {@link handleAiTurn} requires
+   * the request to present it (header `x-lesto-dev-token`), constant-time compared. Load-bearing once
+   * a live dispatch seam is wired; harmless (still same-origin-gated) while fail-closed.
+   */
+  readonly token: string;
 
   /**
    * The dev MCP read-tool dispatch seam (ADR 0032), injected by the bin ONLY when the loopback dev
@@ -1459,8 +1470,16 @@ async function handleAiTurn(
   overlay: AiOverlay,
   options: HandleOptions | undefined,
 ): Promise<LestoResponse> {
-  if (!isSameOriginDevRequest(options?.headers)) {
+  const headers = options?.headers;
+
+  if (!isSameOriginDevRequest(headers)) {
     return aiReply(403, "The in-preview AI endpoint answers same-origin dev requests only.");
+  }
+
+  // The per-session token is the real control: the same-origin guard stops a browser tab, but a
+  // local non-browser process can forge Origin/Host — it cannot know the freshly minted token.
+  if (!devTokenMatches(headers?.["x-lesto-dev-token"], overlay.token)) {
+    return aiReply(403, "The in-preview AI endpoint requires the current dev session token.");
   }
 
   const turn = readAiTurnBody(options?.body);
@@ -1480,7 +1499,7 @@ async function handleAiTurn(
     );
     return aiReply(
       200,
-      `Inspect-only (Phase 1). You asked: "${safePrompt}". Read-only result: ${JSON.stringify(result)}. Acting is Phase 2 (deferred).`,
+      `Inspect-only (Phase 1). You asked: "${safePrompt}". Read-only result: ${safeStringify(result)}. Acting is Phase 2 (deferred).`,
     );
   } catch (error) {
     // The bridge's fail-closed refusal (no dispatch seam wired) is the overlay's inspect-only "not
@@ -1507,6 +1526,33 @@ function aiReply(status: number, reply: string): LestoResponse {
 }
 
 /**
+ * Stringify a read-only tool result for the reply, without letting a non-serializable result (a
+ * cyclic object, a `BigInt`) throw out of the handler and 500 the dev server. Phase 1's one tool
+ * returns plain names, but a future tool is injected — so the reply is defensive by construction.
+ */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "(unserializable result)";
+  }
+}
+
+/**
+ * Constant-time compare of a presented dev token against the session token (mirrors the dev MCP
+ * transport's `tokenMatches`). An absent or wrong-length token fails without leaking length via
+ * timing — `timingSafeEqual` throws on unequal lengths, so the length guard runs first.
+ */
+function devTokenMatches(provided: string | undefined, expected: string): boolean {
+  if (provided === undefined) return false;
+
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
  * Narrow the parsed request body to a Phase-1 turn: a string `prompt` (required) and the browser
  * `route` (optional, defaulted). The runtime has already `JSON.parse`d an `application/json` body
  * into a value (`@lesto/runtime`'s `parseBody`), so this only validates shape — a non-object body,
@@ -1523,8 +1569,9 @@ function readAiTurnBody(body: unknown): { prompt: string; route: string } | unde
 
 /**
  * True iff the request may reach the AI endpoint: a same-origin dev POST. A browser sends `Origin`
- * on every POST, so a present-and-matching Origin (its host equals the `Host` header) is the app's
- * own page; a foreign, unparseable, or absent Origin (or a missing Host) is refused. Dev-only
+ * on every POST, so a present-and-matching Origin (http scheme, host equal to the `Host` header) is
+ * the app's own page; a foreign, cross-scheme, unparseable, or absent Origin (or a missing Host) is
+ * refused. Dev-only
  * defense in depth, so that once a live dispatch seam is wired (the estate dogfood) no cross-site
  * page can drive the endpoint.
  */
@@ -1534,7 +1581,11 @@ function isSameOriginDevRequest(headers: Record<string, string> | undefined): bo
   if (origin === undefined || host === undefined) return false;
 
   try {
-    return new URL(origin).host === host;
+    const url = new URL(origin);
+
+    // `lesto dev` binds plain http on loopback, so same-origin requires the scheme to match too: a
+    // cross-scheme Origin on the same host:port is not the app's own page.
+    return url.protocol === "http:" && url.host === host;
   } catch {
     return false;
   }

@@ -11,18 +11,18 @@
  * Behaviour:
  *   - `Cmd-K` / `Ctrl-K` toggles a fixed chat panel (built lazily on first open);
  *   - a submitted prompt POSTs `{ prompt, route }` (the message plus the page's current
- *     `location.pathname`, the one browser-observable context field) to the configured
- *     relative dev endpoint (the dev bridge, Inc 6a) and renders the read-only `reply` —
- *     INSPECT-ONLY: the client
+ *     `location.pathname`, the one browser-observable context field) — with the per-session dev
+ *     token as the `x-lesto-dev-token` header — to the configured relative dev endpoint (the dev
+ *     bridge, Inc 6a) and renders the read-only `reply` — INSPECT-ONLY: the client
  *     owns no capability, it only shows what the server says;
  *   - absent a configured endpoint the panel paints a fail-loud "dev MCP server not
  *     available" notice with no input, so a misconfigured dev run reads plainly instead of
  *     silently swallowing a chat turn.
  *
  * Every dynamic field is written via `textContent` (never `innerHTML`), so a reply that
- * contains markup is inert — no escaping, no injection. Inlined as one `<script>`; the
- * only value interpolated into the source is the endpoint, embedded via `JSON.stringify`
- * so it is always a safe string literal (or `null`).
+ * contains markup is inert — no escaping, no injection. Inlined as one `<script>`; the only values
+ * interpolated into the source are the endpoint and the per-session token, each embedded via
+ * `JSON.stringify` so they are always safe string literals.
  */
 
 /** What the injector hands the overlay builder — the dev bridge endpoint, when one exists. */
@@ -32,6 +32,13 @@ export interface AiOverlayOptions {
    * the overlay paints an inspect-only "dev MCP server not available" state (fail-loud).
    */
   readonly endpoint?: string;
+
+  /**
+   * The per-session dev token, presented as the `x-lesto-dev-token` header on the chat POST so the
+   * server (`handleAiTurn`) can constant-time compare it. Absent → an empty header, so the server's
+   * token check fails and the turn is refused — a misconfigured build fails closed, never open.
+   */
+  readonly token?: string;
 }
 
 /**
@@ -44,10 +51,12 @@ export interface AiOverlayOptions {
  */
 export function aiOverlayClientScript(options: AiOverlayOptions = {}): string {
   const endpoint = JSON.stringify(options.endpoint ?? null);
+  const token = JSON.stringify(options.token ?? "");
 
   return `(()=>{try{
 const ID="__lesto_ai_overlay__";
 const EP=${endpoint};
+const TOK=${token};
 const sty=(el,css)=>el.setAttribute("style",css);
 let root;let logEl;let open=false;
 const addMsg=(role,text)=>{
@@ -58,7 +67,7 @@ m.appendChild(who);m.appendChild(body);logEl.appendChild(m);logEl.scrollTop=logE
 const send=async(prompt)=>{
 addMsg("you",prompt);
 try{
-const r=await fetch(EP,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({prompt,route:document.location.pathname})});
+const r=await fetch(EP,{method:"POST",headers:{"content-type":"application/json","x-lesto-dev-token":TOK},body:JSON.stringify({prompt,route:document.location.pathname})});
 if(!r.ok){addMsg("lesto","request failed ("+r.status+")");return;}
 const d=await r.json();addMsg("lesto",d&&typeof d.reply==="string"?d.reply:"(no reply)");
 }catch{addMsg("lesto","request failed");}};

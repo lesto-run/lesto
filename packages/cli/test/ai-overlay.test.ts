@@ -27,7 +27,10 @@ function panel(): HTMLElement | null {
  * don't accumulate listeners across the file — a later Cmd-K can't wake an earlier mount.
  * The returned target is where {@link keydown} dispatches the toggle chord.
  */
-function mount(options: { endpoint?: string }, fetchImpl: typeof fetch): EventTarget {
+function mount(
+  options: { endpoint?: string; token?: string },
+  fetchImpl: typeof fetch,
+): EventTarget {
   const target = new EventTarget();
   const exec = new Function(
     "document",
@@ -114,7 +117,7 @@ describe("in-preview AI overlay client", () => {
 
   it("POSTs a prompt and renders the read-only reply as textContent", async () => {
     const fetchImpl = stubFetch({ reply: "Add a route for /posts/:id" });
-    const target = mount({ endpoint: "/__lesto_dev_ai" }, fetchImpl);
+    const target = mount({ endpoint: "/__lesto_dev_ai", token: "sesh-token" }, fetchImpl);
 
     keydown(target, "k", { metaKey: true });
     await ask("why is /posts/1 a 404?");
@@ -125,10 +128,14 @@ describe("in-preview AI overlay client", () => {
     expect(text).toContain("why is /posts/1 a 404?");
     expect(text).toContain("Add a route for /posts/:id");
 
-    // It POSTed the prompt as JSON to the configured relative endpoint.
+    // It POSTed the prompt as JSON to the configured relative endpoint, presenting the per-session
+    // dev token as the `x-lesto-dev-token` header (the server constant-time compares it).
     expect(fetchImpl).toHaveBeenCalledWith(
       "/__lesto_dev_ai",
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "x-lesto-dev-token": "sesh-token" }),
+      }),
     );
   });
 
