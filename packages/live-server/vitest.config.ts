@@ -8,7 +8,14 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/index.ts"],
+      exclude: [
+        "src/index.ts",
+        // Pure wiring: the real `pg` logical-replication client. Every change-source
+        // decision is tested in `replication.ts` against the `PgReplicationClient` seam;
+        // this needs `pg` installed and a live WAL stream. (Mirrors `@lesto/realtime`'s
+        // `pg-client.ts` and `@lesto/pg`'s `pg-driver.ts`.)
+        "src/pg-replication-client.ts",
+      ],
       thresholds: {
         lines: 100,
         functions: 100,

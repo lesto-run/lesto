@@ -3,10 +3,14 @@
  *
  *   - {@link createShapeEngine} — runs registered shapes against the ORM and fans an
  *     initial snapshot + a change tail (insert / update / delete-from-shape) to
- *     subscribers. v0 detects change by a full-table poll ({@link diffRows} the core);
- *     v1 swaps the poll for a Postgres logical-replication tap keyed by commit LSN.
+ *     subscribers. v0 detects change by a full-table poll ({@link diffRows} the core).
  *   - {@link diffRows} / {@link projectRow} / {@link normalizeWire} — the pure change /
  *     projection / wire-normalization core, decoupled from the poll and the database.
+ *
+ *   - {@link createPgReplicationSource} — the v1 Postgres logical-replication change source
+ *     (a dedicated slot, keyed by commit LSN + system identity), the production replacement
+ *     for the v0 poll as the change feed. Inc1 ships the tap itself; swapping the engine to
+ *     consume it (delete-from-shape via old/new images) is Inc2.
  *
  *   - {@link createLiveDataHttpHandlers} — the app-mounted `GET /__lesto/live-data`
  *     handler that streams a shape's snapshot + change tail over the runtime's
@@ -27,6 +31,20 @@ export type {
   ShapeSubscription,
   TimerSeam,
 } from "./engine";
+
+export { createPgReplicationSource, DEFAULT_SLOT } from "./replication";
+export type {
+  ChangeHandler,
+  ChangeSource,
+  DecodedChange,
+  PgReplicationClient,
+  PgReplicationSource,
+  PgReplicationSourceOptions,
+  ReplicationChange,
+  RowImage,
+  SourceErrorHandler,
+  SystemIdentity,
+} from "./replication";
 
 export { ShapeConnection } from "./connection";
 export type { FrameController, ShapeConnectionOptions } from "./connection";
