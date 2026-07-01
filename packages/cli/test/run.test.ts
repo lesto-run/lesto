@@ -29,6 +29,7 @@ import {
 } from "../src/index";
 import type { BuildHook, BuildHookContext, CliDeps, DevError, ReleaseTarget } from "../src/index";
 import { createDevState } from "../src/dev-state";
+import type { AiTurn } from "../src/ai-bridge";
 import { startMcpHttpServer } from "@lesto/mcp";
 import type { LestoMcpContext, McpAuditRecord } from "@lesto/mcp";
 
@@ -3112,7 +3113,7 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
         loadApp: () => Promise.resolve(htmlConfig()),
         loadSites: () => Promise.resolve(sites),
         liveReload: reloadSeam("RELOAD();"),
-        aiOverlay: { script: "AIOVERLAY();" },
+        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai" },
       }),
     );
 
@@ -3143,7 +3144,7 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
           }),
         loadSites: () => Promise.resolve(sites),
         liveReload: reloadSeam("RELOAD();"),
-        aiOverlay: { script: "AIOVERLAY();" },
+        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai" },
       }),
     );
 
@@ -3163,7 +3164,7 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
         serve: capture.serve,
         loadApp: () => Promise.resolve(htmlConfig()),
         loadSites: () => Promise.resolve(sites),
-        aiOverlay: { script: "AIOVERLAY();" },
+        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai" },
       }),
     );
 
@@ -3182,7 +3183,7 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
         serve: capture.serve,
         loadApp: () => Promise.resolve(htmlConfig()),
         loadSites: () => Promise.resolve(sites),
-        aiOverlay: { script: "AIOVERLAY();" },
+        aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai" },
       }),
     );
 
@@ -3195,7 +3196,10 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
   it("is dev-only: serve / build / deploy refuse the AI overlay seam (CLI_DEV_SURFACE_IN_PRODUCTION)", async () => {
     for (const command of ["serve", "build", "deploy"]) {
       await expect(
-        run([command], depsWith({ aiOverlay: { script: "AIOVERLAY();" } })),
+        run(
+          [command],
+          depsWith({ aiOverlay: { script: "AIOVERLAY();", endpoint: "/__lesto_dev_ai" } }),
+        ),
       ).rejects.toMatchObject({ code: "CLI_DEV_SURFACE_IN_PRODUCTION" });
     }
   });
@@ -3214,6 +3218,188 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
     // …and this feature pulls in no new runtime package (the seam carries a plain string).
     expect(source).not.toContain('from "@lesto/ai"');
     expect(source).not.toContain('from "@lesto/mcp"');
+  });
+});
+
+describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a)", () => {
+  const endpoint = "/__lesto_dev_ai";
+  const script = "AIOVERLAY();";
+  const sameOrigin = { origin: "http://localhost:5173", host: "localhost:5173" };
+
+  // Boot `runDev` with an AI overlay seam and hand back the outermost handle the server fronts —
+  // the one `withAiEndpoint` wraps — so a test can POST a turn straight at it. The app is the
+  // default `buildConfig` (its `GET /posts` / `POST /posts` routes stand in for pass-through).
+  async function bootHandle(overlay: NonNullable<CliDeps["aiOverlay"]>): Promise<App> {
+    const capture = capturingServe();
+    await run(["dev"], depsWith({ serve: capture.serve, aiOverlay: overlay }));
+
+    return capture.app();
+  }
+
+  /** Read a `{ reply }` JSON body back to its `reply` string. */
+  async function replyOf(response: { body: unknown }): Promise<string> {
+    return (JSON.parse(await drainBody(response.body)) as { reply: string }).reply;
+  }
+
+  it("round-trips a chat turn through a wired read-tool dispatch and reflects the result", async () => {
+    const turns: AiTurn[] = [];
+    const dispatchDevTool = (turn: AiTurn): Promise<unknown> => {
+      turns.push(turn);
+
+      return Promise.resolve({ collections: ["posts", "pages"] });
+    };
+
+    const served = await bootHandle({ script, endpoint, dispatchDevTool });
+    const response = await served.handle("POST", endpoint, {
+      headers: sameOrigin,
+      body: { prompt: "what collections exist?", route: "/posts" },
+    });
+
+    expect(response.status).toBe(200);
+    // Only the positive-allowlist read tool is ever dispatched, and the read-only result is
+    // reflected back into the reply the overlay renders.
+    expect(turns.map((turn) => turn.tool)).toEqual(["list_content_collections"]);
+    const reply = await replyOf(response);
+    expect(reply).toContain("what collections exist?");
+    expect(reply).toContain("posts");
+  });
+
+  it("redacts a secret pasted into the prompt before it can leave the process (L-7fd1b91e)", async () => {
+    const served = await bootHandle({
+      script,
+      endpoint,
+      dispatchDevTool: () => Promise.resolve({ ok: true }),
+    });
+
+    const response = await served.handle("POST", endpoint, {
+      headers: sameOrigin,
+      body: { prompt: "my key AKIAIOSFODNN7EXAMPLE ok?", route: "/" },
+    });
+
+    const reply = await replyOf(response);
+    expect(reply).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(reply).toContain("<redacted>");
+  });
+
+  it("defaults an absent route to an empty context but still dispatches a valid turn", async () => {
+    const turns: AiTurn[] = [];
+    const served = await bootHandle({
+      script,
+      endpoint,
+      dispatchDevTool: (turn) => {
+        turns.push(turn);
+
+        return Promise.resolve({});
+      },
+    });
+
+    const response = await served.handle("POST", endpoint, {
+      headers: sameOrigin,
+      body: { prompt: "hello" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(turns).toHaveLength(1);
+  });
+
+  it("fails closed to the inspect-only 'not available' reply when no dispatch seam is wired", async () => {
+    const served = await bootHandle({ script, endpoint });
+
+    const response = await served.handle("POST", endpoint, {
+      headers: sameOrigin,
+      body: { prompt: "why is /posts a 404?", route: "/posts" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await replyOf(response)).toContain("not available");
+  });
+
+  it("rejects a body without a string prompt as a 400", async () => {
+    const served = await bootHandle({ script, endpoint });
+
+    for (const body of [{ route: "/" }, "not-json", { prompt: 42 }, null]) {
+      const response = await served.handle("POST", endpoint, { headers: sameOrigin, body });
+
+      expect(response.status).toBe(400);
+    }
+  });
+
+  it("refuses a cross-site Origin before assembling or dispatching anything (CSRF guard)", async () => {
+    const dispatchDevTool = vi.fn((): Promise<unknown> => Promise.resolve({}));
+    const served = await bootHandle({ script, endpoint, dispatchDevTool });
+
+    const response = await served.handle("POST", endpoint, {
+      headers: { origin: "https://evil.example", host: "localhost:5173" },
+      body: { prompt: "exfiltrate", route: "/" },
+    });
+
+    expect(response.status).toBe(403);
+    expect(dispatchDevTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses a missing Origin, a missing Host, an unparseable Origin, and a headerless request", async () => {
+    const served = await bootHandle({ script, endpoint });
+    const body = { prompt: "x", route: "/" };
+
+    const missingOrigin = await served.handle("POST", endpoint, {
+      headers: { host: "localhost:5173" },
+      body,
+    });
+    expect(missingOrigin.status).toBe(403);
+
+    const missingHost = await served.handle("POST", endpoint, {
+      headers: { origin: "http://localhost:5173" },
+      body,
+    });
+    expect(missingHost.status).toBe(403);
+
+    const badOrigin = await served.handle("POST", endpoint, {
+      headers: { origin: "::not-a-url::", host: "localhost:5173" },
+      body,
+    });
+    expect(badOrigin.status).toBe(403);
+
+    // No options at all — the `options?.headers` / `options?.body` absent path.
+    const noOptions = await served.handle("POST", endpoint);
+    expect(noOptions.status).toBe(403);
+  });
+
+  it("passes a non-endpoint request straight through to the app (GET and POST)", async () => {
+    const served = await bootHandle({ script, endpoint });
+
+    const get = await served.handle("GET", "/posts", { headers: sameOrigin });
+    expect(get.status).toBe(200);
+    expect(await drainBody(get.body)).toContain("posts");
+
+    const post = await served.handle("POST", "/posts", {
+      headers: sameOrigin,
+      body: { title: "hi" },
+    });
+    expect(post.status).toBe(201);
+  });
+
+  it("propagates a non-fail-closed dispatch error instead of masking it as unavailable", async () => {
+    const served = await bootHandle({
+      script,
+      endpoint,
+      dispatchDevTool: () => Promise.reject(new Error("boom")),
+    });
+
+    await expect(
+      served.handle("POST", endpoint, { headers: sameOrigin, body: { prompt: "x", route: "/" } }),
+    ).rejects.toThrow("boom");
+  });
+
+  it("propagates a CliError of a DIFFERENT code (branch on the code, not the type)", async () => {
+    const served = await bootHandle({
+      script,
+      endpoint,
+      dispatchDevTool: () => Promise.reject(new CliError("CLI_UNKNOWN_COMMAND", "nope")),
+    });
+
+    await expect(
+      served.handle("POST", endpoint, { headers: sameOrigin, body: { prompt: "x", route: "/" } }),
+    ).rejects.toBeInstanceOf(CliError);
   });
 });
 

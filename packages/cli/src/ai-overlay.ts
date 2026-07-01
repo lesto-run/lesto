@@ -10,8 +10,10 @@
  *
  * Behaviour:
  *   - `Cmd-K` / `Ctrl-K` toggles a fixed chat panel (built lazily on first open);
- *   - a submitted prompt POSTs `{ prompt }` to the configured relative dev endpoint (the
- *     dev MCP bridge, Inc 3) and renders the read-only `reply` — INSPECT-ONLY: the client
+ *   - a submitted prompt POSTs `{ prompt, route }` (the message plus the page's current
+ *     `location.pathname`, the one browser-observable context field) to the configured
+ *     relative dev endpoint (the dev bridge, Inc 6a) and renders the read-only `reply` —
+ *     INSPECT-ONLY: the client
  *     owns no capability, it only shows what the server says;
  *   - absent a configured endpoint the panel paints a fail-loud "dev MCP server not
  *     available" notice with no input, so a misconfigured dev run reads plainly instead of
@@ -56,7 +58,7 @@ m.appendChild(who);m.appendChild(body);logEl.appendChild(m);logEl.scrollTop=logE
 const send=async(prompt)=>{
 addMsg("you",prompt);
 try{
-const r=await fetch(EP,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({prompt})});
+const r=await fetch(EP,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({prompt,route:document.location.pathname})});
 if(!r.ok){addMsg("lesto","request failed ("+r.status+")");return;}
 const d=await r.json();addMsg("lesto",d&&typeof d.reply==="string"?d.reply:"(no reply)");
 }catch{addMsg("lesto","request failed");}};

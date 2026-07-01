@@ -52,6 +52,7 @@ import type {
   ReleaseTarget,
 } from "./run";
 import { devReloadClientScript } from "./dev-overlay";
+import { aiOverlayClientScript } from "./ai-overlay";
 import { CliError } from "./errors";
 import { WRANGLER_DEPLOY_ARGS, WRANGLER_ROLLBACK_MESSAGE, wranglerRollbackArgs } from "./wrangler";
 import { runMcp, startMcpServer } from "./mcp";
@@ -1169,6 +1170,17 @@ if (command === "add") {
 // rides into `run` for the dev loop to drive.
 const liveReload = command === "dev" ? buildLiveReload() : undefined;
 
+// The in-preview AI overlay (ADR 0033) — dev-only. ONE endpoint constant is baked into BOTH the
+// client script (where a chat turn POSTs) and the seam (where `runDev` serves it), so client and
+// server agree by construction. No `dispatchDevTool` is wired yet: the bridge fails closed and the
+// overlay shows its inspect-only "not available" state until the estate dogfood (L-cfd434f4)
+// provides a live loopback read-tool dispatch.
+const DEV_AI_ENDPOINT = "/__lesto_dev_ai";
+const aiOverlay =
+  command === "dev"
+    ? { script: aiOverlayClientScript({ endpoint: DEV_AI_ENDPOINT }), endpoint: DEV_AI_ENDPOINT }
+    : undefined;
+
 // The Vite island Fast-Refresh server is wired ONLY for `dev` (DX-parity R2). A
 // factory, not a built value: the dialect it needs is config-derived, resolved inside
 // the dev loop, which calls this with it. Off for every other command.
@@ -1254,6 +1266,7 @@ const code = await run(argv, {
   reloadApp,
   regenerateRoutes,
   ...(liveReload === undefined ? {} : { liveReload }),
+  ...(aiOverlay === undefined ? {} : { aiOverlay }),
   ...(islandDev === undefined ? {} : { islandDev }),
   ...(devState === undefined ? {} : { devState }),
   ...(startDevMcp === undefined ? {} : { startDevMcp }),

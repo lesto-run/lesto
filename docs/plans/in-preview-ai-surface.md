@@ -166,8 +166,8 @@ gate-exempt** (no `test:cov`); `@lesto/ui-generate` declares `test:cov` and is g
    grep-assert no `innerHTML`; the existing overlay tests still pass unchanged; coverage
    100%; gate + typecheck green.
 
-6a. **The real committable gate: a deterministic `runDev` injection + round-trip integration test** — `[commit gate — must-fix: buildability]`
-   Files: `packages/cli/test/run.integration.test.ts` (new).
+6a. **The real committable gate: a deterministic `runDev` injection + round-trip integration test** — `[commit gate — must-fix: buildability]` — **DONE.** The dev endpoint (`withAiEndpoint`/`handleAiTurn` in `run.ts`) ties the redactor + assembler + fail-closed bridge into one `POST /__lesto_dev_ai` round-trip; the bin wires the `aiOverlay` seam **fail-closed** (no `dispatchDevTool` yet). The free-text prompt is redacted here too (`L-7fd1b91e`), and a same-origin/CSRF guard makes the endpoint safe before a live dispatch is wired. The real loopback read-tool dispatch is deferred to the estate dogfood (`L-cfd434f4`, 6b). Tests live in `run.test.ts` beside the Inc-2 injection tests (not a separate file), 100% covered.
+   Files: `packages/cli/src/run.ts`, `packages/cli/src/bin.ts`, `packages/cli/src/ai-overlay.ts`, `packages/cli/test/run.test.ts`.
    The review showed `examples/estate/dev.ts` runs a **bespoke** dev loop (it imports
    `dispatchSitesDev` + `serve` from `@lesto/runtime` and appends its **own**
    poll-`/__lesto/version` reload script — `dev.ts:29,94,117); it never calls the CLI's

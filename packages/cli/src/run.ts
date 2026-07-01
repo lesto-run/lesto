@@ -37,6 +37,10 @@ import type { ReleaseStore, ShipDeps } from "@lesto/deploy";
 
 import type { DevState, DevStateReader } from "./dev-state";
 import { CliError } from "./errors";
+import { dispatchAiTurn, READ_TOOL_ALLOWLIST } from "./ai-bridge";
+import type { AiTurn } from "./ai-bridge";
+import { assembleContext } from "./ai-context";
+import { redactContext, redactString } from "./ai-redact";
 import { parsePort, parseStringFlag } from "./flags";
 
 /** The default port for `serve`/`dev` when no `--port` flag is given. */
@@ -199,16 +203,34 @@ export interface LiveReload {
 }
 
 /**
- * The dev-only in-preview AI overlay channel (ADR 0033 Inc 2) — a pre-built client `script`
- * the core injects as a second trailing `<script>` beside the live-reload one. The bin builds
- * the script (via `aiOverlayClientScript`, the dispatch endpoint baked in); the core only
- * decides WHEN to inject it (dev HTML responses, on the `dev` path). Structurally a peer of
- * {@link LiveReload}'s `script`, deliberately its OWN one-field shape so the covered core
- * never depends on the overlay builder — only on the string the bin hands it.
+ * The dev-only in-preview AI surface (ADR 0033) — the pre-built client `script` the core injects
+ * as a second trailing `<script>` beside the live-reload one, PLUS the reserved same-origin
+ * `endpoint` the core answers a chat turn on ({@link handleAiTurn}: `redactString` the prompt →
+ * `assembleContext` → `redactContext` → {@link dispatchAiTurn} through the injected
+ * {@link AiOverlay.dispatchDevTool} seam). The bin builds the script (via `aiOverlayClientScript`,
+ * this endpoint baked in) and decides WHETHER to wire a dispatch; the core decides WHEN to inject
+ * and OWNS the orchestration — but imports no `@lesto/mcp` (the dispatch is an injected seam, the
+ * `generateUi?` precedent).
  */
 export interface AiOverlay {
   /** The AI overlay client JS injected into every dev HTML response as a trailing `<script>`. */
   readonly script: string;
+
+  /**
+   * The reserved, same-origin dev path the overlay POSTs a chat turn to (e.g. `/__lesto_dev_ai`).
+   * `runDev` intercepts a `POST` to exactly this path — ABOVE site routing — and answers it with
+   * {@link handleAiTurn}; the bin bakes the SAME string into {@link script} so the client and the
+   * server route agree by construction.
+   */
+  readonly endpoint: string;
+
+  /**
+   * The dev MCP read-tool dispatch seam (ADR 0032), injected by the bin ONLY when the loopback dev
+   * MCP server can run an allowlisted read tool in-process. Absent → {@link dispatchAiTurn} fails
+   * closed and the overlay renders its inspect-only "not available" reply (Phase 1's stub state,
+   * until the estate dogfood wires a live dispatch). Only ever handed an already-allowlisted turn.
+   */
+  readonly dispatchDevTool?: (turn: AiTurn) => Promise<unknown>;
 }
 
 /**
@@ -1402,6 +1424,122 @@ function appendToBody(body: LestoResponse["body"], tag: string): LestoResponse["
   return transformed as unknown as LestoResponse["body"];
 }
 
+/**
+ * Wrap a dev handle so a `POST` to the overlay's reserved {@link AiOverlay.endpoint} — and only
+ * that exact method+path — is answered by the in-preview AI bridge ({@link handleAiTurn}) BEFORE
+ * site routing sees it; every other request passes through untouched. Composed OUTERMOST in
+ * `runDev` (above island routing and the site dispatcher) because the endpoint is a reserved dev
+ * path, not an app route.
+ */
+function withAiEndpoint(
+  handle: (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse>,
+  overlay: AiOverlay,
+): (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse> {
+  return (method, path, options) =>
+    method === "POST" && path === overlay.endpoint
+      ? handleAiTurn(overlay, options)
+      : handle(method, path, options);
+}
+
+/**
+ * Answer one in-preview AI chat turn (ADR 0033 Phase 1, increment 6a — the dev endpoint that ties
+ * the assembled context, the redactor, and the fail-closed bridge into one round-trip).
+ *
+ * Inspect-only and defensive at every step: it refuses a cross-site request (a same-origin fetch
+ * carries the dev server's own `Origin`; a foreign page's POST carries a foreign one), rejects a
+ * body that is not `{ prompt: string }`, and runs BOTH the free-text prompt (through
+ * {@link redactString}) and the assembled page context (through {@link redactContext}) before
+ * either could reach a model — so a secret or absolute path a developer pastes into the chat box
+ * comes back `<redacted>`, never verbatim. The turn is dispatched through {@link dispatchAiTurn}'s
+ * positive read-tool allowlist; absent an injected {@link AiOverlay.dispatchDevTool} seam the
+ * bridge fails closed and the reply is the inspect-only "not available" notice. Acting (a mutation)
+ * does not exist in Phase 1.
+ */
+async function handleAiTurn(
+  overlay: AiOverlay,
+  options: HandleOptions | undefined,
+): Promise<LestoResponse> {
+  if (!isSameOriginDevRequest(options?.headers)) {
+    return aiReply(403, "The in-preview AI endpoint answers same-origin dev requests only.");
+  }
+
+  const turn = readAiTurnBody(options?.body);
+  if (turn === undefined) {
+    return aiReply(400, 'The in-preview AI endpoint expects a JSON body: { "prompt": string }.');
+  }
+
+  // Redact BOTH legs before dispatch: the developer's free-text prompt (their own input, but it
+  // may carry a pasted secret) and the assembled page context (paths, SQL bind values, tokens).
+  const safePrompt = redactString(turn.prompt);
+  const input = redactContext(assembleContext({ route: turn.route }));
+
+  try {
+    const result = await dispatchAiTurn(
+      overlay.dispatchDevTool === undefined ? {} : { dispatchDevTool: overlay.dispatchDevTool },
+      { tool: READ_TOOL_ALLOWLIST[0], input },
+    );
+    return aiReply(
+      200,
+      `Inspect-only (Phase 1). You asked: "${safePrompt}". Read-only result: ${JSON.stringify(result)}. Acting is Phase 2 (deferred).`,
+    );
+  } catch (error) {
+    // The bridge's fail-closed refusal (no dispatch seam wired) is the overlay's inspect-only "not
+    // available" state — surfaced as a normal reply, not an HTTP error. Branch on the CODE, never
+    // the message; any other failure is a real bug and propagates.
+    if (error instanceof CliError && error.code === "CLI_DEV_MCP_UNAVAILABLE") {
+      return aiReply(
+        200,
+        `Inspect-only (Phase 1). You asked: "${safePrompt}". The dev MCP server is not available, so I can't inspect your app yet. Acting is Phase 2 (deferred).`,
+      );
+    }
+
+    throw error;
+  }
+}
+
+/** A JSON `{ reply }` response — the shape the overlay client renders as `textContent` (Inc 1). */
+function aiReply(status: number, reply: string): LestoResponse {
+  return {
+    status,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reply }),
+  };
+}
+
+/**
+ * Narrow the parsed request body to a Phase-1 turn: a string `prompt` (required) and the browser
+ * `route` (optional, defaulted). The runtime has already `JSON.parse`d an `application/json` body
+ * into a value (`@lesto/runtime`'s `parseBody`), so this only validates shape — a non-object body,
+ * or a missing/non-string `prompt`, yields `undefined` (answered as a 400).
+ */
+function readAiTurnBody(body: unknown): { prompt: string; route: string } | undefined {
+  if (typeof body !== "object" || body === null) return undefined;
+
+  const record = body as Record<string, unknown>;
+  if (typeof record.prompt !== "string") return undefined;
+
+  return { prompt: record.prompt, route: typeof record.route === "string" ? record.route : "" };
+}
+
+/**
+ * True iff the request may reach the AI endpoint: a same-origin dev POST. A browser sends `Origin`
+ * on every POST, so a present-and-matching Origin (its host equals the `Host` header) is the app's
+ * own page; a foreign, unparseable, or absent Origin (or a missing Host) is refused. Dev-only
+ * defense in depth, so that once a live dispatch seam is wired (the estate dogfood) no cross-site
+ * page can drive the endpoint.
+ */
+function isSameOriginDevRequest(headers: Record<string, string> | undefined): boolean {
+  const origin = headers?.["origin"];
+  const host = headers?.["host"];
+  if (origin === undefined || host === undefined) return false;
+
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
 /** The optional peer an app installs to enable the Vite island Fast-Refresh dev path. */
 const ISLAND_DEV_PEER = "@lesto/island-dev";
 
@@ -1708,7 +1846,12 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // — and before the production-shaped `readAsset`, so the dev entry is the
   // Vite-transformed one, never a stale Bun bundle. Everything else falls through to
   // the app exactly as before. Absent island dev server → the app dispatch verbatim.
-  const rootHandle = islandDev === undefined ? dispatch : withIslandRouting(dispatch, islandDev);
+  let rootHandle = islandDev === undefined ? dispatch : withIslandRouting(dispatch, islandDev);
+
+  // The in-preview AI endpoint (ADR 0033 Inc 6a) is a RESERVED dev path, not an app route, so it
+  // is intercepted ABOVE site routing — outermost, on the handle the server fronts. Absent the
+  // seam, the handle is untouched (unchanged behaviour).
+  if (deps.aiOverlay !== undefined) rootHandle = withAiEndpoint(rootHandle, deps.aiOverlay);
 
   // Watch `app/routes/` (Workstream 3). On a debounced change: refresh the EDGE
   // manifest (`routes.gen.ts`), re-load the app so a NEW route is live without a
