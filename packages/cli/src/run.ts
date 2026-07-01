@@ -199,6 +199,19 @@ export interface LiveReload {
 }
 
 /**
+ * The dev-only in-preview AI overlay channel (ADR 0033 Inc 2) — a pre-built client `script`
+ * the core injects as a second trailing `<script>` beside the live-reload one. The bin builds
+ * the script (via `aiOverlayClientScript`, the dispatch endpoint baked in); the core only
+ * decides WHEN to inject it (dev HTML responses, on the `dev` path). Structurally a peer of
+ * {@link LiveReload}'s `script`, deliberately its OWN one-field shape so the covered core
+ * never depends on the overlay builder — only on the string the bin hands it.
+ */
+export interface AiOverlay {
+  /** The AI overlay client JS injected into every dev HTML response as a trailing `<script>`. */
+  readonly script: string;
+}
+
+/**
  * The dev-only island bundler (`@lesto/island-dev`) — a Vite middleware server with
  * React/Preact Fast Refresh, so a saved island re-renders in place keeping its state
  * instead of a full reload (DX-parity R2, the "HMR" task). The bin lazy-imports it
@@ -484,6 +497,17 @@ export interface CliDeps {
    * behaviour). The bin owns the socket; the core decides WHEN to inject and notify.
    */
   liveReload?: LiveReload;
+
+  /**
+   * The dev-only in-preview AI overlay (ADR 0033 Inc 2) — its client `script`, injected as a
+   * SECOND trailing `<script>` beside the live-reload one on every dev HTML response (through
+   * the same {@link withTrailingScript} append path, never modifying the reload script). The
+   * bin builds the script (the dev-MCP dispatch endpoint baked in via `aiOverlayClientScript`),
+   * so the covered core only decides WHEN to inject — `dev` only, never `serve`/`build`/`deploy`
+   * (a dev-only surface, so {@link assertDevOnly} refuses it off the `dev` path). Absent → no
+   * overlay (unchanged behaviour).
+   */
+  aiOverlay?: AiOverlay;
 
   /**
    * The live-dev-state ring (ADR 0032 Phase 1) — the bounded record the dev MCP
@@ -1314,17 +1338,18 @@ function fileNoun(count: number): string {
 }
 
 /**
- * Wrap a dev handle so every `text/html` response carries the live-reload client
- * script — the seam that makes a saved page reload the open browser.
+ * Wrap a dev handle so every `text/html` response carries a trailing `<script>` — the one
+ * append path BOTH dev client scripts ride: the live-reload client (a saved page reloads the
+ * open browser) and, composed on top, the dev-only in-preview AI overlay (ADR 0033 Inc 2).
  *
- * The script is appended as a trailing `<script>` after the document; a browser
- * executes a trailing script fine, so this needs no HTML parsing and never touches
- * the page's own streaming (it adds one final chunk). A non-HTML response (JSON, an
- * asset, a redirect) passes through untouched. The body may be a string (buffered
- * Preact / a plain response) or a `ReadableStream` (React streaming) — each is
- * handled without buffering the stream.
+ * The script is appended as a trailing `<script>` after the document; a browser executes a
+ * trailing script fine, so this needs no HTML parsing and never touches the page's own
+ * streaming (it adds one final chunk). A non-HTML response (JSON, an asset, a redirect)
+ * passes through untouched. The body may be a string (buffered Preact / a plain response) or
+ * a `ReadableStream` (React streaming) — each is handled without buffering the stream.
+ * Composing two of these appends two sibling `<script>` tags in wrap order.
  */
-function withLiveReload(
+function withTrailingScript(
   handle: (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse>,
   script: string,
 ): (method: string, path: string, options?: HandleOptions) => Promise<LestoResponse> {
@@ -1655,10 +1680,18 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // the existing reload channel for server-driven signals.
   const htmlHandle = islandDev === undefined ? forward : withIslandDevHtml(forward, islandDev);
 
-  // With live reload on, every dev HTML response carries the reload client script,
-  // so a saved file reloads the open browser over the WebSocket the bin runs.
-  const devHandle =
-    deps.liveReload === undefined ? htmlHandle : withLiveReload(htmlHandle, deps.liveReload.script);
+  // Append the dev client scripts as trailing siblings, through the one `withTrailingScript`
+  // path. First the live-reload client (a saved file reloads the open browser over the WS the
+  // bin runs); then — dev-only, when the seam is wired — the in-preview AI overlay as a SECOND
+  // sibling `<script>` (ADR 0033 Inc 2), never modifying the reload script. Absent either seam,
+  // that rider is skipped; absent both, the handle is untouched.
+  let devHandle = htmlHandle;
+
+  if (deps.liveReload !== undefined)
+    devHandle = withTrailingScript(devHandle, deps.liveReload.script);
+
+  if (deps.aiOverlay !== undefined)
+    devHandle = withTrailingScript(devHandle, deps.aiOverlay.script);
 
   // Tolerate an app with no declared sites (a missing `lesto.sites.ts`, which the
   // bin's loader resolves to `[]`): dispatch every path straight to the app, so a
@@ -2115,8 +2148,9 @@ function printUsage(deps: CliDeps): void {
  * Refuse to proceed if ANY dev-only surface is wired on a non-`dev` command (ADR 0032 Inc 5).
  *
  * The bin constructs every dev-only surface — the live-reload WS, the island Fast-Refresh
- * server, and the dev MCP seam + its `devState` ring — ONLY on the `command === "dev"` path,
- * so in normal operation a `serve`/`build`/`deploy` run carries none. This is the structural
+ * server, the dev MCP seam + its `devState` ring, and the in-preview AI overlay — ONLY on the
+ * `command === "dev"` path, so in normal operation a `serve`/`build`/`deploy` run carries none.
+ * This is the structural
  * sentinel behind that guard: if any of them is present on a non-`dev` command — a mis-copied
  * app dev entry, a refactor that leaks the wiring — it throws `CLI_DEV_SURFACE_IN_PRODUCTION`
  * BEFORE any command runs, so a preview surface (each of which leaks local source paths /
@@ -2130,6 +2164,7 @@ export function assertDevOnly(
     devState?: unknown;
     liveReload?: unknown;
     islandDev?: unknown;
+    aiOverlay?: unknown;
   },
 ): void {
   if (command === "dev") return;
@@ -2138,7 +2173,8 @@ export function assertDevOnly(
     surfaces.startDevMcp !== undefined ||
     surfaces.devState !== undefined ||
     surfaces.liveReload !== undefined ||
-    surfaces.islandDev !== undefined
+    surfaces.islandDev !== undefined ||
+    surfaces.aiOverlay !== undefined
   ) {
     throw new CliError(
       "CLI_DEV_SURFACE_IN_PRODUCTION",

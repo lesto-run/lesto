@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -3067,6 +3071,149 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
     } finally {
       await handle.close();
     }
+  });
+});
+
+// A live-reload seam whose injected script is a recognizable marker (module scope: it
+// captures nothing from the describe).
+function reloadSeam(script: string): NonNullable<CliDeps["liveReload"]> {
+  return {
+    script,
+    notify: () => undefined,
+    notifyError: () => undefined,
+    notifyStyleUpdate: () => undefined,
+    notifyPageSwap: () => undefined,
+    close: () => undefined,
+  };
+}
+
+describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
+  const sites: readonly Site[] = [{ name: "app", render: "dynamic", basePath: "/" }];
+
+  // A config whose `/` answers with a string HTML doc and `/posts` with JSON, so both the
+  // HTML-append and the non-HTML passthrough arms are exercised.
+  function htmlConfig(): LestoAppConfig {
+    return {
+      db: adapt(database),
+      app: lesto()
+        .get("/", (c) => c.html("<html><head></head><body>hi</body></html>"))
+        .get("/posts", (c) => c.json({ ok: true })),
+      migrations,
+    };
+  }
+
+  it("appends the AI overlay as a SECOND sibling <script>, after the live-reload one", async () => {
+    const capture = capturingServe();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadApp: () => Promise.resolve(htmlConfig()),
+        loadSites: () => Promise.resolve(sites),
+        liveReload: reloadSeam("RELOAD();"),
+        aiOverlay: { script: "AIOVERLAY();" },
+      }),
+    );
+
+    const html = await drainBody((await capture.app().handle("GET", "/")).body);
+
+    // Both scripts ride the same append path, as two distinct trailing <script> tags…
+    expect(html).toContain("<script>RELOAD();</script>");
+    expect(html).toContain("<script>AIOVERLAY();</script>");
+    // …with the AI overlay appended AFTER the reload script (a second sibling).
+    expect(html.indexOf("AIOVERLAY();")).toBeGreaterThan(html.indexOf("RELOAD();"));
+  });
+
+  it("appends the AI overlay to a STREAMED html body too", async () => {
+    const capture = capturingServe();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadApp: () =>
+          Promise.resolve({
+            ...htmlConfig(),
+            app: lesto().get("/stream", () => ({
+              status: 200,
+              headers: { "content-type": "text/html; charset=utf-8" },
+              body: streamBody() as unknown as string,
+            })),
+          }),
+        loadSites: () => Promise.resolve(sites),
+        liveReload: reloadSeam("RELOAD();"),
+        aiOverlay: { script: "AIOVERLAY();" },
+      }),
+    );
+
+    const html = await drainBody((await capture.app().handle("GET", "/stream")).body);
+
+    expect(html).toContain("streamed");
+    expect(html).toContain("<script>RELOAD();</script>");
+    expect(html).toContain("<script>AIOVERLAY();</script>");
+  });
+
+  it("injects the AI overlay independently of live reload (seam present, no live reload)", async () => {
+    const capture = capturingServe();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadApp: () => Promise.resolve(htmlConfig()),
+        loadSites: () => Promise.resolve(sites),
+        aiOverlay: { script: "AIOVERLAY();" },
+      }),
+    );
+
+    const html = await drainBody((await capture.app().handle("GET", "/")).body);
+
+    expect(html).toContain("<script>AIOVERLAY();</script>");
+    expect(html).not.toContain("RELOAD();");
+  });
+
+  it("leaves a non-HTML (JSON) response untouched by the AI overlay", async () => {
+    const capture = capturingServe();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadApp: () => Promise.resolve(htmlConfig()),
+        loadSites: () => Promise.resolve(sites),
+        aiOverlay: { script: "AIOVERLAY();" },
+      }),
+    );
+
+    const body = await drainBody((await capture.app().handle("GET", "/posts")).body);
+
+    expect(body).not.toContain("AIOVERLAY();");
+    expect(body).toContain("ok");
+  });
+
+  it("is dev-only: serve / build / deploy refuse the AI overlay seam (CLI_DEV_SURFACE_IN_PRODUCTION)", async () => {
+    for (const command of ["serve", "build", "deploy"]) {
+      await expect(
+        run([command], depsWith({ aiOverlay: { script: "AIOVERLAY();" } })),
+      ).rejects.toMatchObject({ code: "CLI_DEV_SURFACE_IN_PRODUCTION" });
+    }
+  });
+
+  it("keeps the overlay BUILDER out of the covered core and adds no new runtime package import", () => {
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "src", "run.ts"),
+      "utf8",
+    );
+
+    // The core consumes only the pre-built `script` string via the seam — the builder
+    // (`aiOverlayClientScript`) lives in the bin (dev-only) and is never CALLED here. Match
+    // the call form (name + `(`), so the doc-comment prose that cites the builder by name
+    // doesn't false-trip (the same idiom the mcp layering greps use).
+    expect(source).not.toContain("aiOverlayClientScript(");
+    // …and this feature pulls in no new runtime package (the seam carries a plain string).
+    expect(source).not.toContain('from "@lesto/ai"');
+    expect(source).not.toContain('from "@lesto/mcp"');
   });
 });
 
