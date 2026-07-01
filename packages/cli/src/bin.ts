@@ -1177,9 +1177,7 @@ const liveReload = command === "dev" ? buildLiveReload() : undefined;
 // and the overlay shows its inspect-only "not available" state until the estate dogfood
 // (L-cfd434f4) provides a live loopback read-tool dispatch.
 const DEV_AI_ENDPOINT = "/__lesto_dev_ai";
-const aiOverlay = ((): CliDeps["aiOverlay"] => {
-  if (command !== "dev") return undefined;
-
+const buildAiOverlay = (): NonNullable<CliDeps["aiOverlay"]> => {
   const token = randomBytes(32).toString("hex");
 
   return {
@@ -1187,7 +1185,9 @@ const aiOverlay = ((): CliDeps["aiOverlay"] => {
     endpoint: DEV_AI_ENDPOINT,
     token,
   };
-})();
+};
+// Mirrors the `liveReload` / `islandDev` builders above: a dev-only factory behind the `dev` gate.
+const aiOverlay = command === "dev" ? buildAiOverlay() : undefined;
 
 // The Vite island Fast-Refresh server is wired ONLY for `dev` (DX-parity R2). A
 // factory, not a built value: the dialect it needs is config-derived, resolved inside

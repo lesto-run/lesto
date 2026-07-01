@@ -3226,7 +3226,7 @@ describe("run dev — in-preview AI overlay injection (ADR 0033 Inc 2)", () => {
 describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a + L-69d76e71 hardening)", () => {
   const endpoint = "/__lesto_dev_ai";
   const script = "AIOVERLAY();";
-  const token = "dev-token-".repeat(4); // 40 chars, like a real minted 32-byte-hex token
+  const token = "dev-token-".repeat(4); // 40 chars; length is irrelevant to the compare (a real minted token is 64 hex chars)
   const authed = {
     origin: "http://localhost:5173",
     host: "localhost:5173",

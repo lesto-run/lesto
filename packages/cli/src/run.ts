@@ -1539,9 +1539,11 @@ function safeStringify(value: unknown): string {
 }
 
 /**
- * Constant-time compare of a presented dev token against the session token (mirrors the dev MCP
- * transport's `tokenMatches`). An absent or wrong-length token fails without leaking length via
- * timing — `timingSafeEqual` throws on unequal lengths, so the length guard runs first.
+ * Constant-time compare of a presented dev token against the session token. DUPLICATED from
+ * `@lesto/mcp`'s `tokenMatches` on purpose: this file must not runtime-import `@lesto/mcp` (the
+ * grep-asserted layering invariant — the dev-MCP dispatch is an injected seam), and a 6-line
+ * compare is too small to warrant a shared package. An absent or wrong-length token fails without
+ * leaking length via timing — `timingSafeEqual` throws on unequal lengths, so the guard runs first.
  */
 function devTokenMatches(provided: string | undefined, expected: string): boolean {
   if (provided === undefined) return false;
