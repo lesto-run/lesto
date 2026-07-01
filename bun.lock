@@ -837,6 +837,16 @@
         "@lesto/errors": "workspace:*",
         "@lesto/live-protocol": "workspace:*",
       },
+      "devDependencies": {
+        "react": "^19",
+        "react-dom": "^19",
+      },
+      "peerDependencies": {
+        "react": "^19",
+      },
+      "optionalPeers": [
+        "react",
+      ],
     },
     "packages/live-protocol": {
       "name": "@lesto/live-protocol",
