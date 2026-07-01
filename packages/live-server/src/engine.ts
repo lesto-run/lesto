@@ -344,6 +344,10 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
         if (shapeChange === undefined) continue;
 
         applyChange(entry, shapeChange);
+        // TODO(Inc4, L-85e3eb10): the tail cursor is a monotonic integer; `change.commitLSN` (the
+        // real WAL position, carried on every ReplicationChange) is DISCARDED here. Inc4's LSN-exact
+        // resume must thread it into the cursor so a reconnecting client can `START_REPLICATION` from
+        // its last-applied LSN and de-dup the seed↔tail overlap (the unfenced window seeded above).
         entry.cursor += 1;
         const cursor = String(entry.cursor);
 
@@ -378,6 +382,17 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
         // Seed the shape's current set BEFORE publishing the entry, so a concurrent poll tick /
         // source change never sees a half-seeded shape. (A rare concurrent first-subscribe of the
         // same shape could seed twice; benign — the later entry simply wins.)
+        //
+        // UNFENCED seed↔tail window (ADR 0042 Inc4 territory, L-85e3eb10): on the replication path
+        // this snapshot is a point-in-time `db.all()` taken at subscribe, while the source streams
+        // from the slot's OWN confirmed LSN — with no fence between the two. A change committing
+        // between this read's snapshot point and the entry being published (`shapes.set` below, after
+        // which `onSourceChange` starts matching this shape) can be LOST (the tail delivered it while
+        // no matching shape existed yet) or double-applied. Benign for keyed inserts within a session
+        // (a re-insert overwrites by key; the classifier is idempotent per key), but the shape can
+        // diverge until re-subscribe. The full fix is Inc4's LSN-exact resume: capture the snapshot's
+        // LSN, `START_REPLICATION` from it, and de-dup the overlap — `replication.ts` already carries
+        // `commitLSN`/`systemId`/`timelineId` per change for exactly this. Not closed here (v1).
         const seeded = await fetchRows(validated, table);
         entry = {
           def: validated,
