@@ -82,10 +82,19 @@ function setRefreshHook(hook: (() => Promise<void>) | undefined): void {
   (window as unknown as Record<string, unknown>)[REFRESH_GLOBAL] = hook;
 }
 
+// The AI-bridge hook the in-preview AI surface installs (ADR 0033 Inc 5); its PRESENCE is
+// what makes the error overlay's "Ask Claude to fix" button appear. Absent → no button.
+const ASK_GLOBAL = "__lestoAskClaude";
+
+function setAskHook(hook: ((error: unknown) => void) | undefined): void {
+  (window as unknown as Record<string, unknown>)[ASK_GLOBAL] = hook;
+}
+
 describe("dev error-overlay client", () => {
   afterEach(() => {
     overlay()?.remove();
     delete (window as unknown as Record<string, unknown>)[REFRESH_GLOBAL];
+    delete (window as unknown as Record<string, unknown>)[ASK_GLOBAL];
   });
 
   it("connects to the live-reload port it was built with, presenting the token in the URL", () => {
@@ -250,5 +259,64 @@ describe("dev error-overlay client", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // ADR 0033 Inc 5 — the "Ask Claude to fix" button on the error overlay (inspect-only).
+
+  it("paints an 'Ask Claude to fix' button when the AI hook is installed", () => {
+    setAskHook(vi.fn());
+
+    const { socket } = mountClient();
+    send(socket, { type: "error", source: "app-reload", message: "boom" });
+
+    const button = overlay()?.querySelector("button");
+
+    expect(button).not.toBeNull();
+    expect(button?.textContent).toBe("Ask Claude to fix");
+  });
+
+  it("hands the UNMODIFIED DevError to the AI hook on click (server redacts, not the browser)", () => {
+    const ask = vi.fn();
+    setAskHook(ask);
+
+    const { socket } = mountClient();
+    // A stack with an absolute path: the button forwards it verbatim — redaction is the
+    // loopback endpoint's job (the branded RedactedContext guard), not the browser's.
+    const error = {
+      type: "error",
+      source: "app-reload",
+      message: "boom",
+      stack: "at /Users/me/app.ts:3:7",
+    };
+    send(socket, error);
+
+    overlay()
+      ?.querySelector("button")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(ask).toHaveBeenCalledTimes(1);
+    // The exact DevError the overlay holds (source/message/stack) is handed over unmodified.
+    expect(ask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "app-reload",
+        message: "boom",
+        stack: "at /Users/me/app.ts:3:7",
+      }),
+    );
+  });
+
+  it("omits the button when no AI hook is installed (the surface is not configured)", () => {
+    setAskHook(undefined);
+
+    const { socket } = mountClient();
+    send(socket, { type: "error", source: "app-reload", message: "boom" });
+
+    expect(overlay()?.querySelector("button")).toBeNull();
+  });
+
+  it("renders the button via textContent — the shipped script names no innerHTML", () => {
+    // The button (like every dynamic field) is written via textContent, so a markup-bearing
+    // error can never inject through it. Asserted on the generated script (jsdom-safe).
+    expect(devReloadClientScript(35729, "tok")).not.toContain("innerHTML");
   });
 });

@@ -23,6 +23,15 @@
  *   - anything else (a `{type:"reload"}`, or a malformed frame) → `location.reload()`;
  *   - a dropped connection → retry every second (so a dev-server restart reloads too).
  *
+ * The error overlay also grows an "Ask Claude to fix" button (ADR 0033 Inc 5), but ONLY when
+ * the in-preview AI surface is configured — signalled at runtime by a `window.__lestoAskClaude`
+ * hook the AI overlay installs (the same decoupled-hook shape as `__lestoDevRefreshPage`). The
+ * button hands the UNMODIFIED `DevError` the overlay already holds (`{source, message, stack?}`)
+ * to that hook — zero new error-capture path. Redaction of the stack's absolute paths + secrets
+ * is the SERVER's job (the hook POSTs to the loopback dev endpoint, which runs `redactContext`
+ * before the external model — the branded `RedactedContext` guard); the button issues NO edit
+ * (inspect-only in Phase 1 — acting is a later, separately-gated phase).
+ *
  * Every dynamic field is written via `textContent` (never `innerHTML`), so an error
  * string that contains markup is inert — no escaping, no injection. `Esc` dismisses a
  * shown overlay. Inlined as one `<script>` so no asset fetch is needed and it runs the
@@ -51,7 +60,10 @@ card.appendChild(tag);card.appendChild(msg);
 if(d.stack){const pre=document.createElement("pre");sty(pre,"white-space:pre-wrap;color:#d4d4d8;background:rgba(255,255,255,.06);padding:16px;border-radius:8px;overflow:auto;margin:0;");pre.textContent=d.stack;card.appendChild(pre);}
 const hint=document.createElement("div");sty(hint,"margin-top:18px;color:#8a8a93;");
 hint.textContent="Fix and save — this clears on the next successful build. Press Esc to dismiss.";
-card.appendChild(hint);o.appendChild(card);(document.body||document.documentElement).appendChild(o);};
+card.appendChild(hint);
+const ask=window.__lestoAskClaude;
+if(typeof ask==="function"){const btn=document.createElement("button");sty(btn,"margin-top:16px;background:#4f46e5;color:#fff;border:0;border-radius:8px;padding:9px 14px;font:inherit;cursor:pointer;");btn.textContent="Ask Claude to fix";btn.addEventListener("click",()=>{ask(d);});card.appendChild(btn);}
+o.appendChild(card);(document.body||document.documentElement).appendChild(o);};
 addEventListener("keydown",(e)=>{if(e.key==="Escape")clear();});
 const swap=()=>{const l=document.querySelector('link[rel="stylesheet"][href="/styles.css"],link[rel="stylesheet"][href^="/styles.css?"]');if(l)l.setAttribute("href","/styles.css?t="+Date.now());};
 const pageSwap=()=>{const r=window.__lestoDevRefreshPage;if(typeof r==="function")Promise.resolve().then(r).catch(()=>location.reload());else location.reload();};
