@@ -91,6 +91,36 @@ export interface StreamDelta {
  */
 export type Transport = (request: Request) => Promise<Response>;
 
+/**
+ * A live agent span (ADR 0031 Phase 2, PREVIEW) — the minimal, structural surface
+ * `@lesto/ai` drives: mark the outcome, then close it. It is deliberately narrower than
+ * an `@lesto/observability` `Span` (no `setAttribute`) so the emitter stays trivial and
+ * dependency-free; every attribute is fixed at {@link AgentTracer.startSpan} time.
+ */
+export interface AgentSpan {
+  /** Mark the span's outcome — `"error"` when the call threw, `"ok"` when it returned. */
+  setStatus(status: "unset" | "ok" | "error"): void;
+
+  /** Close the span. Called exactly once, on both the success and error paths. */
+  end(): void;
+}
+
+/**
+ * The injected tracer seam (ADR 0031 Phase 2, PREVIEW) — the ONE telemetry edge, injected
+ * exactly like {@link Transport}: the pure core opens a flat-attribute span per model call
+ * (`ai.generate`) and per tool run (`ai.tool`) and never reaches for a global.
+ *
+ * `startSpan` takes a FLAT attribute bag on purpose. A real `@lesto/observability` `Tracer`
+ * does NOT satisfy this shape directly — its `startSpan(name, options)` takes a
+ * `StartSpanOptions` object whose attributes live under `options.attributes`, so handing it
+ * a flat bag as the 2nd arg would silently DROP every attribute. The app therefore ADAPTS
+ * the `Tracer` to this seam (parenting each span on the in-flight request span — ADR 0031
+ * Inc 4). Absent the seam, span emission is a clean no-op and the core is byte-unchanged.
+ */
+export interface AgentTracer {
+  startSpan(name: string, attributes: Record<string, unknown>): AgentSpan;
+}
+
 /** Options shared by `generateText` and `streamText`. */
 export interface GenerateOptions {
   readonly model: LanguageModel;
@@ -104,6 +134,11 @@ export interface GenerateOptions {
   readonly maxTokens?: number;
   /** Tools the model may call, as a name→spec map. */
   readonly tools?: ToolSet;
+  /**
+   * An optional injected tracer (PREVIEW). Present → `generateText` opens one `ai.generate`
+   * span per model call; absent → no telemetry, unchanged behaviour. Injected, never global.
+   */
+  readonly tracer?: AgentTracer;
 }
 
 /** A tool the model can call: its schema (sent to the model) and its executor (the caller's code). */

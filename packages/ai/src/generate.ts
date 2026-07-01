@@ -8,6 +8,16 @@
  * fake transport with no network.
  */
 
+import { AiError } from "./errors";
+import {
+  AI_ERROR_CODE_ATTR,
+  AI_GENERATE_SPAN,
+  AI_MODEL_ATTR,
+  AI_STOP_REASON_ATTR,
+  AI_USAGE_INPUT_TOKENS_ATTR,
+  AI_USAGE_OUTPUT_TOKENS_ATTR,
+} from "./spans";
+
 import type { GenerateOptions, GenerateResult, StreamDelta } from "./types";
 
 /**
@@ -17,12 +27,44 @@ import type { GenerateOptions, GenerateResult, StreamDelta } from "./types";
  *
  * Returns the assembled text, any tool calls, the stop reason, and token usage.
  * Throws `AI_HTTP_ERROR` (coded, status in `details`) on a non-2xx.
+ *
+ * When an `AgentTracer` is injected (ADR 0031 Phase 2, PREVIEW), each call records one
+ * `ai.generate` span carrying the model id and — on success — the parsed `Usage` and
+ * `StopReason`; a thrown provider error marks the span `error` with the `AiError` code. The
+ * span is opened AFTER the call resolves because the minimal {@link AgentSpan} seam has no
+ * `setAttribute`, so the parsed `Usage`/`StopReason` can only ride in the start-time bag.
+ * Absent a tracer this is the exact original send — no span, no overhead.
  */
 export async function generateText(options: GenerateOptions): Promise<GenerateResult> {
-  const request = options.model.buildRequest(options);
-  const response = await options.model.transport(request);
+  const { tracer } = options;
 
-  return options.model.parseResponse(response);
+  try {
+    const request = options.model.buildRequest(options);
+    const response = await options.model.transport(request);
+    const result = await options.model.parseResponse(response);
+
+    const span = tracer?.startSpan(AI_GENERATE_SPAN, {
+      [AI_MODEL_ATTR]: options.modelId ?? options.model.defaultModelId,
+      [AI_USAGE_INPUT_TOKENS_ATTR]: result.usage.inputTokens,
+      [AI_USAGE_OUTPUT_TOKENS_ATTR]: result.usage.outputTokens,
+      [AI_STOP_REASON_ATTR]: result.stopReason,
+    });
+    span?.setStatus("ok");
+    span?.end();
+
+    return result;
+  } catch (error) {
+    // The coded provider failure (`AI_HTTP_ERROR`) — or any other throw — is recorded on an
+    // errored span before it propagates, so a failed generation is visible on the trace too.
+    const span = tracer?.startSpan(AI_GENERATE_SPAN, {
+      [AI_MODEL_ATTR]: options.modelId ?? options.model.defaultModelId,
+      ...(error instanceof AiError ? { [AI_ERROR_CODE_ATTR]: error.code } : {}),
+    });
+    span?.setStatus("error");
+    span?.end();
+
+    throw error;
+  }
 }
 
 /**

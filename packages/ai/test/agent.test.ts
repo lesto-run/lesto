@@ -3,8 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import { runAgent } from "../src/agent";
 import { createAnthropic } from "../src/anthropic";
 import { AiError } from "../src/errors";
+import {
+  AI_ERROR_CODE_ATTR,
+  AI_GENERATE_SPAN,
+  AI_TOOL_NAME_ATTR,
+  AI_TOOL_SPAN,
+} from "../src/spans";
 
 import { jsonResponse, scriptedTransport, textMessage, toolUseMessage } from "./fake-transport";
+import { recordingTracer } from "./fake-tracer";
 
 import type { ToolSet } from "../src/types";
 
@@ -136,6 +143,80 @@ describe("runAgent", () => {
 
     expect(error).toBeInstanceOf(AiError);
     expect((error as AiError).code).toBe("AI_INVALID_OPTION");
+  });
+
+  it("emits ai.generate per model turn and ai.tool per tool run, on one trace (PREVIEW)", async () => {
+    const { transport } = scriptedTransport([
+      jsonResponse(toolUseMessage("call-1", "getWeather", { city: "Rome" })),
+      jsonResponse(textMessage("It's sunny in Rome.")),
+    ]);
+    const model = createAnthropic({ apiKey: "sk-test", transport });
+    const { tracer, spans } = recordingTracer();
+
+    await runAgent({
+      model,
+      messages: [{ role: "user", content: "Weather in Rome?" }],
+      tools: weatherTools(async () => "sunny, 24C"),
+      tracer,
+    });
+
+    // Turn 1 generation, its tool run, then turn 2 generation — one connected sub-tree.
+    expect(spans.map((span) => span.name)).toEqual([
+      AI_GENERATE_SPAN,
+      AI_TOOL_SPAN,
+      AI_GENERATE_SPAN,
+    ]);
+    const toolSpan = spans[1];
+    expect(toolSpan?.attributes).toEqual({ [AI_TOOL_NAME_ATTR]: "getWeather" });
+    expect(toolSpan?.status).toBe("ok");
+    expect(toolSpan?.ended).toBe(true);
+    expect(spans.every((span) => span.ended)).toBe(true);
+  });
+
+  it("records a hallucinated tool as an errored ai.tool span carrying AI_TOOL_NOT_FOUND", async () => {
+    const { transport } = scriptedTransport([jsonResponse(toolUseMessage("c", "ghostTool", {}))]);
+    const model = createAnthropic({ apiKey: "sk-test", transport });
+    const { tracer, spans } = recordingTracer();
+
+    const error = await runAgent({
+      model,
+      messages: [{ role: "user", content: "x" }],
+      tools: weatherTools(async () => "r"),
+      tracer,
+    }).catch((e: unknown) => e);
+
+    expect((error as AiError).code).toBe("AI_TOOL_NOT_FOUND");
+    // The model turn span, then the errored tool span for the unregistered name + its code.
+    expect(spans.map((span) => span.name)).toEqual([AI_GENERATE_SPAN, AI_TOOL_SPAN]);
+    expect(spans[1]?.status).toBe("error");
+    expect(spans[1]?.attributes).toEqual({
+      [AI_TOOL_NAME_ATTR]: "ghostTool",
+      [AI_ERROR_CODE_ATTR]: "AI_TOOL_NOT_FOUND",
+    });
+    expect(spans[1]?.ended).toBe(true);
+  });
+
+  it("marks the ai.tool span error when the tool executor itself throws, then propagates", async () => {
+    const { transport } = scriptedTransport([
+      jsonResponse(toolUseMessage("c", "getWeather", { city: "Rome" })),
+    ]);
+    const model = createAnthropic({ apiKey: "sk-test", transport });
+    const { tracer, spans } = recordingTracer();
+
+    const boom = new Error("provider down");
+    const error = await runAgent({
+      model,
+      messages: [{ role: "user", content: "x" }],
+      tools: weatherTools(() => Promise.reject(boom)),
+      tracer,
+    }).catch((e: unknown) => e);
+
+    expect(error).toBe(boom);
+    const toolSpan = spans.find((span) => span.name === AI_TOOL_SPAN);
+    expect(toolSpan?.status).toBe("error");
+    // An executor's own throw is not necessarily a coded AiError, so only the name is recorded.
+    expect(toolSpan?.attributes).toEqual({ [AI_TOOL_NAME_ATTR]: "getWeather" });
+    expect(toolSpan?.ended).toBe(true);
   });
 
   it("treats a tool_use stop with no tool calls as completion", async () => {

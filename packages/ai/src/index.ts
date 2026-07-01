@@ -46,6 +46,8 @@ export type { Eval, EvalResult, JudgeOptions } from "./evals";
 
 // Shared vocabulary
 export type {
+  AgentSpan,
+  AgentTracer,
   GenerateOptions,
   GenerateResult,
   LanguageModel,
@@ -59,6 +61,21 @@ export type {
   Transport,
   Usage,
 } from "./types";
+
+// The AI/agent span vocabulary (ADR 0031 Phase 2, PREVIEW) — re-stated from
+// `@lesto/observability`'s `agent-vocabulary` so a consumer (the estate AI route) can
+// build the `Tracer`→`AgentTracer` adapter and assert the emitted span names/attributes
+// without `@lesto/ai` taking an observability dependency.
+export {
+  AI_ERROR_CODE_ATTR,
+  AI_GENERATE_SPAN,
+  AI_MODEL_ATTR,
+  AI_STOP_REASON_ATTR,
+  AI_TOOL_NAME_ATTR,
+  AI_TOOL_SPAN,
+  AI_USAGE_INPUT_TOKENS_ATTR,
+  AI_USAGE_OUTPUT_TOKENS_ATTR,
+} from "./spans";
 
 // Errors carry codes
 export { AiError, LestoError } from "./errors";
