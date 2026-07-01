@@ -29,6 +29,8 @@ import {
 import type { Identity } from "@lesto/identity";
 
 import { sessionSource } from "./session-source";
+import { buildAssistantRoutes } from "./assistant";
+import type { AssistantAuth, AssistantWiring } from "./assistant";
 import { EstateLayout } from "./ui/layout";
 import { HomePage, AboutPage, MlsPage } from "./pages";
 import { StyleGuidePage } from "./styleguide";
@@ -74,6 +76,7 @@ function sessionUser(email: string): SessionResponseUser {
 export function buildEstateRoutes(
   identity: Identity,
   rolesOf: PrincipalResolverOptions["rolesOf"],
+  assistant?: AssistantWiring,
 ): Lesto {
   /** The current user (an Identity model), or undefined when signed out. */
   const currentUser = async (c: Context): Promise<{ email: string } | undefined> => {
@@ -97,6 +100,17 @@ export function buildEstateRoutes(
     const demoId = DEMO_ACCOUNTS.find((d) => d.email === user.email)?.id;
 
     return { userId: demoId ?? user.email };
+  };
+
+  /**
+   * The AI concierge's auth seam (ADR 0031 Inc 4): resolve the caller from the
+   * durable {@link Identity} — the read that produces the `db.query` leg of the
+   * dogfood trace — and hand the assistant route a minimal `{ id, name }`.
+   */
+  const authenticateAssistant: AssistantAuth = async (c) => {
+    const user = await currentUser(c);
+
+    return user === undefined ? undefined : { id: user.email, name: displayNameFor(user.email) };
   };
 
   return (
@@ -299,6 +313,11 @@ export function buildEstateRoutes(
           throw error;
         }
       })
+      // The AI concierge (ADR 0031 Inc 4): the first `@lesto/ai` route consumer.
+      // An authed `runAgent` loop grounded in the MLS `searchListings` tool; with
+      // the injected tracer wired (serve.ts), its `ai.generate`/`ai.tool` spans
+      // land on the request trace — the in-request agent join, dogfooded.
+      .route(buildAssistantRoutes({ authenticate: authenticateAssistant, ...(assistant ?? {}) }))
       // The /lab feature-demo zone (SSR + CSR fetch, async data, flags, authz,
       // DB-driven content over portable SQLite). The lab's admin gate + CRUD read
       // their principal from the SAME identity session minted by `/mls` sign-in, and

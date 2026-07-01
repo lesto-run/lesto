@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@lesto/admin": "workspace:*",
+    "@lesto/ai": "workspace:*",
     "@lesto/auth": "workspace:*",
     "@lesto/authz": "workspace:*",
     "@lesto/client": "workspace:*",

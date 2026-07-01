@@ -26,6 +26,7 @@ import { currentRequestSpan } from "@lesto/web";
 import type { CurrentSpan, TracesEnv } from "@lesto/observability";
 
 import { buildProductionSite } from "./src/production";
+import { agentTracerFrom, resolveAssistantModel } from "./src/assistant";
 import { env } from "./src/env";
 
 // Running the estate example locally IS the public demo, so default it into demo
@@ -62,11 +63,24 @@ async function main(): Promise<void> {
     console.log("OTLP tracing on → spans flush to LESTO_OTLP_URL");
   }
 
+  // The AI concierge's wiring (ADR 0031 Inc 4): a real Anthropic model when
+  // `ANTHROPIC_API_KEY` is set, else the committed local demo model — so the
+  // route (and its trace) works with zero secrets. When tracing is on, the
+  // `Tracer`→`AgentTracer` adapter parents the `ai.generate`/`ai.tool` spans on
+  // the in-flight request span, so an agent run rides the SAME trace as the
+  // request that drove it.
+  const apiKey = process.env["ANTHROPIC_API_KEY"];
+  const assistant = {
+    model: resolveAssistantModel(apiKey === undefined ? {} : { apiKey }),
+    ...(traces === undefined ? {} : { tracer: agentTracerFrom(traces.tracer) }),
+  };
+
   // Prerender + bundle the client + build the front-door dispatch — the same
   // assembly the integration test exercises (src/production.ts). The tracer's
   // seams ride into the app so db/identity/mail/client-error events become spans.
   const { dispatch, manifest } = await buildProductionSite(OUT, ROOT, {
     ...(traces === undefined ? {} : { seams: traces.seams }),
+    assistant,
   });
 
   for (const site of manifest) {

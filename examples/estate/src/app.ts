@@ -33,6 +33,7 @@ import { fromRequestMiddleware, lesto } from "@lesto/web";
 import type { TraceSeams } from "@lesto/observability";
 
 import { buildEstateRoutes } from "./controllers";
+import type { AssistantWiring } from "./assistant";
 import { buildIdentity } from "./identity";
 
 /**
@@ -51,7 +52,11 @@ const NODE_RATE_LIMIT = { capacity: 60, refillPerSecond: 10 } as const;
  * boots. Returning a factory (not a singleton) is what keeps every test world
  * isolated.
  */
-export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promise<LestoAppConfig> {
+export async function buildAppConfig(
+  secret?: string,
+  seams?: TraceSeams,
+  assistant?: AssistantWiring,
+): Promise<LestoAppConfig> {
   const { identity, handle, rolesOf } = await buildIdentity(secret, seams);
 
   // Zero-token, header-based CSRF on every state-changing request, plus a
@@ -72,7 +77,7 @@ export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promi
       }).map(fromRequestMiddleware),
     )
     .client("/client.js")
-    .route(buildEstateRoutes(identity, rolesOf));
+    .route(buildEstateRoutes(identity, rolesOf, assistant));
 
   // The client-error beacon sink (operability-dx item 3): a hydration failure in
   // a real browser POSTs to `/__lesto/client-errors`, and this wires that beacon to
@@ -102,6 +107,10 @@ export async function buildAppConfig(secret?: string, seams?: TraceSeams): Promi
 }
 
 /** Boot the app the kernel way: `createApp` over a fresh config. */
-export async function buildApp(secret?: string, seams?: TraceSeams): Promise<App> {
-  return createApp(await buildAppConfig(secret, seams));
+export async function buildApp(
+  secret?: string,
+  seams?: TraceSeams,
+  assistant?: AssistantWiring,
+): Promise<App> {
+  return createApp(await buildAppConfig(secret, seams, assistant));
 }

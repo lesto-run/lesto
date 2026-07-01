@@ -29,6 +29,7 @@ import type { LestoResponse } from "@lesto/web";
 import type { TraceSeams } from "@lesto/observability";
 
 import { buildApp } from "./app";
+import type { AssistantWiring } from "./assistant";
 import sites from "../lesto.sites";
 
 /** The dispatcher a server fronts: `(method, path, options?) -> response`. */
@@ -76,6 +77,15 @@ export interface ProductionBuildOptions {
    * (a static build, a unit test) runs untraced.
    */
   readonly seams?: TraceSeams;
+
+  /**
+   * The AI concierge's wiring (ADR 0031 Inc 4) — the injected model and the
+   * `ai.*`-span tracer. `serve.ts` builds these from the env (a real model when
+   * `ANTHROPIC_API_KEY` is set, else the local demo model) and the OTLP `Traces`.
+   * Absent (the static prerender build, a unit test) the route defaults to the
+   * local demo model, untraced.
+   */
+  readonly assistant?: AssistantWiring;
 }
 
 /**
@@ -89,7 +99,7 @@ export async function buildProductionSite(
   projectRoot: string,
   options: ProductionBuildOptions = {},
 ): Promise<ProductionSite> {
-  const app = await buildApp(options.secret, options.seams);
+  const app = await buildApp(options.secret, options.seams, options.assistant);
 
   const handle = app.handle.bind(app);
 

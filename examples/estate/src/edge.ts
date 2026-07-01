@@ -23,6 +23,8 @@ import { clearSessionCookie, readSessionToken, sessionCookie } from "@lesto/iden
 import type { ServerRenderer } from "@lesto/ui/server";
 
 import { sessionSource } from "./session-source";
+import { buildAssistantRoutes } from "./assistant";
+import type { AssistantAuth } from "./assistant";
 import { EstateLayout } from "./ui/layout";
 import { HomePage, MlsPage } from "./pages";
 import { buildLabRoutes } from "./lab";
@@ -120,6 +122,19 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Lest
     return claim === undefined ? undefined : USERS.get(claim.userId);
   };
 
+  /**
+   * The AI concierge's auth seam on the edge (ADR 0031 Inc 4): resolve the caller
+   * from the stateless signed token. The edge twin wires no `db.query`/`ai.*`
+   * tracer (it mints spans only at the transport, like every other edge route),
+   * so the concierge here runs the committed local demo model untraced — the
+   * node path (`serve.ts`) is where the in-request agent join is traced + tested.
+   */
+  const authenticateAssistant: AssistantAuth = async (c) => {
+    const user = currentUser(c.header("cookie"));
+
+    return user === undefined ? undefined : { id: user.id, name: user.name };
+  };
+
   const app = lesto()
     // The node twin's origin-check CSRF posture, PLUS per-isolate rate limiting
     // the edge adds on top — both wrap every route (and every 404), applied
@@ -202,6 +217,11 @@ export function buildEdgeApp(secret: string, options: EdgeAppOptions = {}): Lest
 
       return c.json({ user, saved: LISTINGS.slice(0, 2) });
     })
+    // The AI concierge (ADR 0031 Inc 4), on the edge too: the same `runAgent`
+    // route as node, over the committed local demo model — so the deployed public
+    // demo answers with zero secrets. Untraced here by design (the edge wires no
+    // span seams into the app); the node path traces + asserts the agent join.
+    .route(buildAssistantRoutes({ authenticate: authenticateAssistant }))
     // The /lab feature-demo zone, on the edge too (DB-driven content over D1).
     // The lab's admin gate + CRUD resolve their principal from the SAME signed
     // session cookie the edge `/mls` sign-in mints — the user id IS the role key,

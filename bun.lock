@@ -63,6 +63,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@lesto/admin": "workspace:*",
+        "@lesto/ai": "workspace:*",
         "@lesto/auth": "workspace:*",
         "@lesto/authz": "workspace:*",
         "@lesto/client": "workspace:*",
