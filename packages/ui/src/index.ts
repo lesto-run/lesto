@@ -94,6 +94,22 @@ export type {
   RevalidationEnvironment,
 } from "./data-client";
 
+// The realtime consumer (ADR 0027 Phase 2 over the ADR 0040 transport): `connectLive`
+// opens the app's `GET /__lesto/live` SSE stream and drives `QueryClient.invalidateTopic`
+// so a mounted `useQuery` goes LIVE — a peer's write refetches it. `useLive` is the
+// island hook that holds the subscription for the component's lifetime. The wire carries
+// a topic, never row data (the ADR 0027 invariant), so this stays in the isomorphic core
+// (SSR-safe: `EventSource` is touched only from a client effect); it drives the
+// `QueryClient` seam and reads an `EventSource`, taking NO `@lesto/realtime` dependency.
+export { browserLiveEnvironment, connectLive, useLive } from "./live";
+export type {
+  ConnectLiveOptions,
+  LiveEnvironment,
+  LiveEventSource,
+  LiveMessageEvent,
+  UseLiveOptions,
+} from "./live";
+
 // The audited seam for inlining island JSON into a `<script>`: escapes the
 // breakout characters `JSON.stringify` leaves raw. ALL island-manifest emission
 // MUST go through this — never a bare stringify or a `String.replace` splice.
