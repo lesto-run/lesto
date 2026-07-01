@@ -94,15 +94,29 @@ function makeRequest(
       (res) => {
         const chunks: Buffer[] = [];
 
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        let settled = false;
 
-        res.on("end", () =>
+        const settle = (): void => {
+          if (settled) return;
+
+          settled = true;
+
           resolve({
             status: res.statusCode ?? 0,
             headers: res.headers,
             body: Buffer.concat(chunks).toString("utf8"),
-          }),
-        );
+          });
+        };
+
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+        res.on("end", settle);
+
+        // A truncated response (the server destroyed the socket mid-body) reaches the
+        // client as a `close` WITHOUT an `end` — now that a streamed head is flushed
+        // ahead of any body byte, the head is already in hand, so settle with whatever
+        // partial body arrived rather than hanging waiting for an `end` that never comes.
+        res.on("close", settle);
       },
     );
 

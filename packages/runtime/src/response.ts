@@ -37,6 +37,14 @@ export interface WritableResponse {
   on(event: "error", listener: (error: Error) => void): unknown;
 
   destroy(error?: Error): void;
+
+  /**
+   * Flush the response head to the socket now, ahead of any body byte — node
+   * otherwise buffers the head until the first `write`/`end`. Optional: only the
+   * stream arm calls it (see {@link applyResponse}), so a fake exercising the
+   * buffered arms need not provide it, and the call is a no-op when absent.
+   */
+  flushHeaders?(): void;
 }
 
 /** A `LestoBody` that is the Web/global `ReadableStream` — the stream arm. */
@@ -550,6 +558,13 @@ export function applyResponse(
   }
 
   if (isReadableStream(body)) {
+    // Flush the head to the socket immediately, before the first frame. A held
+    // stream (SSE, ADR 0040) may emit NOTHING until its first real event or the
+    // heartbeat seconds later; without this, node buffers the head until then and
+    // the client's `EventSource`/`fetch` hangs "connecting" the whole time. A
+    // buffered response never needs it — `end` flushes the head with the body.
+    res.flushHeaders?.();
+
     const compressor =
       options.streamEncoding === undefined ? undefined : streamCompressor(options.streamEncoding);
 
