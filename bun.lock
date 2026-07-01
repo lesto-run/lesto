@@ -136,6 +136,7 @@
       "dependencies": {
         "@lesto/db": "workspace:*",
         "@lesto/kernel": "workspace:*",
+        "@lesto/live": "workspace:*",
         "@lesto/live-protocol": "workspace:*",
         "@lesto/live-server": "workspace:*",
         "@lesto/runtime": "workspace:*",
