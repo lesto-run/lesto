@@ -86,12 +86,11 @@ describe("dispatchAiTurn", () => {
     // A raw, un-redacted context (an absolute path in `handlerLocation`) is structurally an
     // `AiContextPayload` but is NOT the branded `RedactedContext`, so the type system refuses
     // it as a turn's input — the model can never receive a non-redacted payload. If the brand
-    // were ever dropped, this line would compile and `@ts-expect-error` would fail the build.
+    // were ever dropped, the assignment below would compile and `@ts-expect-error` would fail
+    // the build. (The directive must sit DIRECTLY above the erroring line — keep it one line.)
+    const raw = { route: "/x", handlerLocation: "/Users/me/app.ts:3" };
     // @ts-expect-error — unbranded (un-redacted) payload is not assignable to `RedactedContext`.
-    const bypass: AiTurn = {
-      tool: ALLOWED,
-      input: { route: "/x", handlerLocation: "/Users/me/app.ts:3" },
-    };
+    const bypass: AiTurn = { tool: ALLOWED, input: raw };
 
     expect(bypass.tool).toBe(ALLOWED);
   });
