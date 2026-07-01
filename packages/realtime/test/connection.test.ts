@@ -42,7 +42,7 @@ describe("LiveConnection.open", () => {
     const controller = new FakeController();
     const conn = new LiveConnection({ ring: ringWith(), controller, onOverflow: () => {} });
 
-    conn.open(undefined);
+    conn.open(undefined, []);
 
     expect(controller.frames).toEqual([]);
   });
@@ -53,7 +53,7 @@ describe("LiveConnection.open", () => {
     const conn = new LiveConnection({ ring, controller, onOverflow: () => {} });
 
     // A cursor from this node/generation at index 0 → topics a, b were missed.
-    conn.open({ instanceId: "node-a", generation: 0, index: 0 });
+    conn.open({ instanceId: "node-a", generation: 0, index: 0 }, ["a", "b"]);
 
     expect(controller.frames).toEqual([
       "event: invalidate\ndata: a\nid: node-a.0.2\n\n",
@@ -61,12 +61,24 @@ describe("LiveConnection.open", () => {
     ]);
   });
 
+  it("replays only the authorized topics — a reconnect never leaks another tenant's topic", () => {
+    // Both topics share the ONE process-global ring, but this client is authorized
+    // for org:1:posts only; org:2:secret must never be replayed to it.
+    const ring = ringWith("org:1:posts", "org:2:secret");
+    const controller = new FakeController();
+    const conn = new LiveConnection({ ring, controller, onOverflow: () => {} });
+
+    conn.open({ instanceId: "node-a", generation: 0, index: 0 }, ["org:1:posts"]);
+
+    expect(controller.frames).toEqual(["event: invalidate\ndata: org:1:posts\nid: node-a.0.2\n\n"]);
+  });
+
   it("resyncs when the cursor is from a different node", () => {
     const ring = ringWith("a", "b");
     const controller = new FakeController();
     const conn = new LiveConnection({ ring, controller, onOverflow: () => {} });
 
-    conn.open({ instanceId: "other-node", generation: 0, index: 0 });
+    conn.open({ instanceId: "other-node", generation: 0, index: 0 }, ["a", "b"]);
 
     expect(controller.frames).toEqual(["event: resync\ndata: \nid: node-a.0.2\n\n"]);
   });

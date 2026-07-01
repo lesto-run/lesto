@@ -75,19 +75,26 @@ export class LiveConnection {
   }
 
   /**
-   * Emit the initial frames for a freshly opened connection, reconciling its
-   * resume cursor against the process ring:
+   * Emit the initial frames for a freshly opened connection, reconciling its resume
+   * cursor against the process ring — restricted to this connection's
+   * `authorizedTopics`:
    *
    *   - **No cursor** (a brand-new client, no `Last-Event-ID`): nothing was missed
    *     — emit nothing. The client fetches on mount and then rides live deliveries.
    *   - **A cursor that proves continuity** (same process, generation, within the
-   *     ring): emit one `invalidate` per missed topic — precise replay.
+   *     ring): emit one `invalidate` per missed topic THIS connection is authorized
+   *     for — precise, tenant-scoped replay.
    *   - **Anything else** (different node, prior generation, evicted): one `resync`
    *     — the always-correct floor.
    *
-   * Returns nothing; the frames are enqueued through the controller.
+   * The ring is process-GLOBAL — it holds every tenant's topics in one order — so the
+   * replay MUST be intersected with the authorized set. Without it, a reconnect would
+   * emit (and thereby disclose the name of, and spuriously invalidate) a topic the
+   * client never subscribed to and is not allowed to see. Live {@link deliver} is
+   * already scoped (the hub subscription is per authorized topic); this closes the
+   * same hole on the replay leg. Returns nothing; frames go through the controller.
    */
-  open(since: Cursor | undefined): void {
+  open(since: Cursor | undefined, authorizedTopics: readonly string[]): void {
     if (since === undefined) return;
 
     const reconcile = this.#ring.reconcile(since);
@@ -98,7 +105,11 @@ export class LiveConnection {
       return;
     }
 
+    const authorized = new Set(authorizedTopics);
+
     for (const topic of reconcile.topics) {
+      if (!authorized.has(topic)) continue;
+
       this.#emit(invalidateFrame(topic, encodeCursor(this.#ring.cursor())));
     }
   }

@@ -120,7 +120,7 @@ describe("openLiveStream", () => {
     const stream = openLiveStream({
       hub,
       ring: r,
-      authorizedTopics: [],
+      authorizedTopics: ["a", "b"],
       since: { instanceId: "node-a", generation: 0, index: 0 },
       signal: undefined,
       heartbeatMs: 1000,
@@ -481,6 +481,34 @@ describe("createRealtimeHttpHandlers", () => {
     expect(hub.subscriberCount("org:2:secret")).toBe(0);
   });
 
+  it("does not replay another tenant's topic from the global ring on reconnect", async () => {
+    // The ONE process-global ring holds both tenants' writes, in order.
+    const r = ring();
+    r.record("org:1:posts");
+    r.record("org:2:secret");
+
+    const { live } = createRealtimeHttpHandlers<{ org: string }>({
+      hub: new PubSub(),
+      ring: r,
+      resolvePrincipal: () => ({ org: "1" }),
+      authorizeTopic: (p, topic) => topic.startsWith(`org:${p.org}:`),
+      timers: fakeTimers().seam,
+    });
+
+    // org-1 reconnects from before both writes, subscribing to its own topic. The
+    // replay must NOT disclose (or invalidate) org:2:secret, which shares the ring.
+    const response = await callLive(
+      live,
+      fakeContext({
+        query: { topics: "org:1:posts" },
+        headers: { "last-event-id": "node-a.0.0" },
+      }),
+    );
+    const frames = await drain(response.body as ReadableStream<string>);
+
+    expect(frames).toEqual(["event: invalidate\ndata: org:1:posts\nid: node-a.0.2\n\n"]);
+  });
+
   it("resumes from a Last-Event-ID header, then an explicit lastEventId query", async () => {
     const r = ring();
     r.record("a");
@@ -493,16 +521,20 @@ describe("createRealtimeHttpHandlers", () => {
       timers: fakeTimers().seam,
     });
 
-    // Header path: a cursor at index 0 → topic "a" was missed → an invalidate frame.
+    // Header path: a cursor at index 0, subscribed to "a" → topic "a" was missed →
+    // an invalidate frame (replay is scoped to the subscribed/authorized topics).
     const fromHeader = await callLive(
       live,
-      fakeContext({ headers: { "last-event-id": "node-a.0.0" } }),
+      fakeContext({ query: { topics: "a" }, headers: { "last-event-id": "node-a.0.0" } }),
     );
     const headerFrames = await drain(fromHeader.body as ReadableStream<string>);
     expect(headerFrames).toEqual(["event: invalidate\ndata: a\nid: node-a.0.1\n\n"]);
 
     // Query fallback when no header: an unparseable/foreign cursor → resync.
-    const fromQuery = await callLive(live, fakeContext({ query: { lastEventId: "other.0.0" } }));
+    const fromQuery = await callLive(
+      live,
+      fakeContext({ query: { topics: "a", lastEventId: "other.0.0" } }),
+    );
     const queryFrames = await drain(fromQuery.body as ReadableStream<string>);
     expect(queryFrames).toEqual(["event: resync\ndata: \nid: node-a.0.1\n\n"]);
   });

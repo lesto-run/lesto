@@ -190,8 +190,9 @@ export function openLiveStream(config: LiveStreamConfig): ReadableStream<string>
           return;
         }
 
-        // Emit the initial replay/resync for the resume cursor.
-        connection.open(since);
+        // Emit the initial replay/resync for the resume cursor — scoped to the
+        // authorized topics so a reconnect never replays another tenant's topic.
+        connection.open(since, authorizedTopics);
 
         // Subscribe each authorized topic; the hub message IS the ring-assigned cursor.
         for (const topic of authorizedTopics) {
