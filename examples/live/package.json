@@ -1,0 +1,20 @@
+{
+  "name": "@lesto/example-live",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local-first live() end-to-end (ADR 0042 Tier 4 v0): an auth-scoped shape streams row data to multiple clients over GET /__lesto/live-data, and a mutation on one client appears on every other — the multi-client e2e liveness gate for Tier-4 v0.",
+  "type": "module",
+  "scripts": {
+    "serve": "bun run serve.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/db": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/live-protocol": "workspace:*",
+    "@lesto/live-server": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*"
+  }
+}
