@@ -250,6 +250,30 @@ describe("useLive", () => {
     expect(sources).toHaveLength(2);
   });
 
+  it("distinguishes topic sets a space-join would collide (unambiguous key)", () => {
+    const { env, sources } = fakeLive();
+    const client = new QueryClient();
+
+    let setTopics!: (topics: string[]) => void;
+
+    function Probe(): null {
+      const [topics, setter] = useState<string[]>(["a b"]);
+      setTopics = setter;
+      useLive(topics, { environment: env, client });
+
+      return null;
+    }
+
+    mount(createElement(Probe));
+    expect(sources).toHaveLength(1);
+
+    // `["a b"]` and `["a", "b"]` share a SPACE-joined key but are different sets — the
+    // comma-joined key keeps them distinct, so this reopens the stream.
+    act(() => setTopics(["a", "b"]));
+    expect(sources).toHaveLength(2);
+    expect(sources[0]!.closed).toBe(true);
+  });
+
   it("threads path + onError through and holds without an explicit client", () => {
     const onError = vi.fn();
     const { env, sources } = fakeLive();

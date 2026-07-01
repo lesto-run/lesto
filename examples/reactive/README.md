@@ -63,7 +63,13 @@ function Room({ room }: { room: string }) {
 
 `useLive` opens `GET /__lesto/live?topics=room:<room>`, receives the `invalidate`/`resync` frames,
 and drives `invalidateTopic` on the shared `QueryClient` — exactly what the vanilla demo page does by
-hand. `EventSource` handles reconnect and the resume cursor (`Last-Event-ID`) natively.
+hand (which also hand-builds its query strings; `useQuery`/`useLive` encode for you). `EventSource`
+handles reconnect and the resume cursor (`Last-Event-ID`) natively.
+
+> **Call `useLive` once, high in a view.** Unlike `useQuery` (deduped by key), each `useLive` opens
+> its own `EventSource`. Subscribe to all of a view's topics in one call at the top — not once per
+> list row — so you don't exhaust the browser's per-origin connection budget or the server's per-IP
+> stream cap. (A shared, topic-multiplexing connection is a planned follow-up.)
 
 ## Single-node vs a fleet
 

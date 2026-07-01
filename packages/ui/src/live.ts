@@ -151,13 +151,26 @@ export type UseLiveOptions = Omit<ConnectLiveOptions, "topics">;
  * SSR-safe: the connection is opened from an effect (never during render), so a
  * server render neither touches `EventSource` nor holds a stream. Pair it with a
  * `useQuery` reading the same topics and the query goes live.
+ *
+ * **One connection per call — call it ONCE, high in a view.** Unlike `useQuery` (which
+ * dedupes by key), each `useLive` opens its OWN `EventSource`. Calling it in many
+ * components — e.g. once per list row — opens many streams and can exhaust the browser's
+ * per-origin connection budget and the server's per-IP stream cap. Subscribe to every
+ * topic a view needs in a single `useLive` at the top of that view.
+ *
+ * **Options are read when the subscription opens and must be STABLE across renders.**
+ * Only a change to the topic SET reopens the stream; a new `client`/`path`/`environment`/
+ * `onError` identity on a later render is ignored. Pass a stable `client` (not
+ * `new QueryClient()` per render) — the same expectation `useQuery` has of its `client`.
  */
 export function useLive(topics: readonly string[], options?: UseLiveOptions): void {
   // Topics through a ref so the effect re-runs only when the SET changes (keyed by
-  // `topicsKey`), not on every render's fresh array identity — mirrors `useQuery`.
+  // `topicsKey`), not on every render's fresh array identity. Joined on "," — the wire
+  // delimiter a topic can never contain — so the key is unambiguous (a space-joined key
+  // would collide `["a b"]` with `["a", "b"]`).
   const topicsRef = useRef(topics);
   topicsRef.current = topics;
-  const topicsKey = topics.join(" ");
+  const topicsKey = topics.join(",");
 
   // The latest options through a ref, so a new `client`/`onError` closure identity
   // does not tear down and reopen the stream — only a topic-set change does.
