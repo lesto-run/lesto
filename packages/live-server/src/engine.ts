@@ -39,7 +39,7 @@ import type { Cursor, Row, RowKey, ShapeChange, ShapeDefinition } from "@lesto/l
 import type { Db, Table } from "@lesto/db";
 
 import { prepareShapeClassifier } from "./classify";
-import { createImageCoercer } from "./coerce";
+import { createImageCoercer, requiredOldImageColumns } from "./coerce";
 import { diffRows, normalizeWire, projectRow } from "./diff";
 import { LiveServerError } from "./errors";
 import type { ChangeSource, ReplicationChange } from "./replication";
@@ -309,12 +309,14 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
   // ---------------------------------------------------------------------------
 
   /**
-   * Build a shape's bound replication classifier: the `@lesto/db`-backed coercer handed to the
-   * guarded `prepareShapeClassifier`, which folds in BOTH guards — the registration-time replica
-   * identity check (throws `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` here if the shape needs the
-   * old image but the table is not `FULL`) and, in the closure it returns, the per-change old-image
-   * completeness re-check (`LIVE_SERVER_OLD_IMAGE_INCOMPLETE` on a post-registration `FULL`→`DEFAULT`
-   * downgrade). Awaits the catalog probe, so it runs at subscribe, off the change path.
+   * Build a shape's bound replication classifier: the `@lesto/db`-backed coercer + the shape's
+   * required old-image SQL columns, handed to the guarded `prepareShapeClassifier`, which folds in
+   * BOTH guards — the registration-time replica identity check (throws
+   * `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` here if the shape needs the old image but the table is
+   * not `FULL`) and, in the closure it returns, the per-change old-image completeness re-check
+   * (`LIVE_SERVER_OLD_IMAGE_INCOMPLETE` on a post-registration `FULL`→`DEFAULT` downgrade, or on an
+   * unchanged external-TOAST predicate column absent from an otherwise-`FULL` old image). Awaits the
+   * catalog probe, so it runs at subscribe, off the change path.
    */
   async function buildClassifier(
     def: ShapeDefinition,
@@ -322,7 +324,12 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
   ): Promise<(change: ReplicationChange) => ShapeChange | undefined> {
     const hasFullReplicaIdentity = await replication!.replicaIdentity(def.table);
 
-    return prepareShapeClassifier(def, hasFullReplicaIdentity, createImageCoercer(def, table));
+    return prepareShapeClassifier(
+      def,
+      hasFullReplicaIdentity,
+      createImageCoercer(def, table),
+      requiredOldImageColumns(def, table),
+    );
   }
 
   /**

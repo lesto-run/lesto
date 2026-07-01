@@ -565,6 +565,31 @@ describe("replication change source — the v1 change path", () => {
     e.stop();
   });
 
+  it("refuses a FULL DELETE whose predicate column is an unchanged external-TOAST 'u' (marker still full)", async () => {
+    await insert(1, "hi", 100);
+    const src = fakeSource();
+    const errors: unknown[] = [];
+    const sink = collector();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      onError: (error) => errors.push(error),
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    const sub = await e.subscribe(room1Shape(), sink.onChange);
+    expect((sub.snapshot as Row[]).map((r) => r.id)).toEqual([1]);
+
+    // Under FULL the old-tuple marker is 'full', but an unchanged externally-TOASTed room_id is still
+    // sent as 'u' → undefined. The marker check passes; only the column-presence check catches it.
+    // A silent drop here would leak the row — so it must route OLD_IMAGE_INCOMPLETE, not delete.
+    src.emit(del({ id: "1", room_id: undefined, body: "hi", created_at: "100" }, "full"));
+
+    expect(sink.changes).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as LiveServerError).code).toBe("LIVE_SERVER_OLD_IMAGE_INCOMPLETE");
+    e.stop();
+  });
+
   it("delivers a plain update for a filterless shape on a DEFAULT table (empty old image, no false PK-change)", async () => {
     await insert(1, "hi", 100);
     const src = fakeSource();

@@ -83,31 +83,53 @@ export function assertReplicaIdentity(def: ShapeDefinition, hasFullReplicaIdenti
 }
 
 /**
- * The runtime old-image completeness guard — the per-change twin of {@link assertReplicaIdentity},
- * keyed on the pgoutput old-tuple {@link OldImageKind} **marker**.
+ * The runtime old-image completeness guard — the per-change twin of {@link assertReplicaIdentity}.
+ * It runs **two complementary checks**, because neither alone is sound; a shape whose predicate needs
+ * the old image ({@link predicateNeedsOldImage}) is served only when BOTH pass on every `update`/`delete`.
  *
- * The registration guard proves a non-key-predicate shape's table *was* `REPLICA IDENTITY FULL`
- * when the shape registered. But replica identity is mutable: a table `ALTER`ed `FULL`→`DEFAULT`
- * afterward starts emitting a **key-only** (`'key'`) or **absent** (`'none'`) old image, and
- * classifying a row that leaves the shape on the now-missing filter column would silently misfire
- * the delete-from-shape — the row persisting in the client's durable store is exactly the leak the
- * classifier exists to stop. So on every `update`/`delete` for a shape whose predicate needs the old
- * image, require the marker to be `'full'`.
+ * **1. The old-tuple {@link OldImageKind} marker must be `'full'`.** The registration guard proves the
+ * table *was* `REPLICA IDENTITY FULL` when the shape registered, but replica identity is mutable: a
+ * table `ALTER`ed `FULL`→`DEFAULT` afterward starts emitting a **key-only** (`'key'`) or **absent**
+ * (`'none'`) old image. A `'K'` tuple sends its non-identity columns as `null`, which `readTuple`
+ * decodes to a genuine `null` — *value-indistinguishable* from a real transmitted `null` — so a
+ * value-only check MISSES it (the null passes, `matchesShape(null)` reads false, the delete-from-shape
+ * is dropped, the row leaks). Only the **marker** catches a downgrade.
  *
- * **Why the marker, not the cell values.** A `'K'` tuple sends its non-identity columns as `null`,
- * which `readTuple` decodes to a genuine `null` — *value-indistinguishable* from a real transmitted
- * `null`. A prior value-based check (`oldImage[col] === undefined`) therefore MISSED a `'K'`-tuple
- * `DELETE`/PK-change (the null passed the check, then `matchesShape(null)` read false and dropped the
- * delete-from-shape — the leak). The old-tuple marker is the only sound discriminator, so this guard
- * trusts it. Throws a coded {@link LiveServerError} so a durable leak surfaces as a loud, routed error.
+ * **2. Every required old column must be a transmitted value (not `undefined`).** `FULL` guarantees a
+ * column is *included* in the old tuple, but NOT that its value is *sent*: an **unchanged, externally
+ * TOASTed** (`>~2KB`) column is emitted as pgoutput's `'u'` (`readTuple` → `undefined`) even under
+ * `FULL`, because the reorder buffer only detoasts the NEW tuple. So a `'full'`-marked old tuple can
+ * still omit a predicate column — `matchesShape` would then read `undefined`/`NaN` and drop a
+ * delete-from-shape. Only the **value** check catches that. `requiredColumns` are the predicate's key +
+ * filter columns as **SQL names** ({@link requiredOldImageColumns}); a genuine `null` (a real value)
+ * passes, only `undefined` fails.
+ *
+ * Throws a coded {@link LiveServerError} so either kind of durable leak surfaces as a loud, routed error.
  */
-export function assertOldImageComplete(def: ShapeDefinition, oldImageKind: OldImageKind): void {
+export function assertOldImageComplete(
+  def: ShapeDefinition,
+  oldImageKind: OldImageKind,
+  requiredColumns: readonly string[],
+  oldImage: RowImage,
+): void {
+  // (1) coarse — the whole old tuple: a 'K' downgrade (null-filled non-key columns) or an absent tuple.
   if (oldImageKind !== "full") {
     throw new LiveServerError(
       "LIVE_SERVER_OLD_IMAGE_INCOMPLETE",
-      `A replication change on "${def.table}" carried a ${oldImageKind === "none" ? "missing" : "key-only"} old image, so a row leaving the shape cannot be classified — restore REPLICA IDENTITY FULL on "${def.table}".`,
+      `A replication change on "${def.table}" carried ${oldImageKind === "none" ? "no old image" : "a key-only old image"}, so a row leaving the shape cannot be classified — restore REPLICA IDENTITY FULL on "${def.table}".`,
       { table: def.table, oldImageKind },
     );
+  }
+
+  // (2) fine — a specific column absent from an otherwise-FULL tuple (unchanged external-TOAST → 'u').
+  for (const column of requiredColumns) {
+    if (oldImage[column] === undefined) {
+      throw new LiveServerError(
+        "LIVE_SERVER_OLD_IMAGE_INCOMPLETE",
+        `A replication change on "${def.table}" omitted column "${column}" from its old image (an unchanged external-TOAST value is not transmitted even under REPLICA IDENTITY FULL), so a row leaving the shape cannot be classified.`,
+        { table: def.table, column },
+      );
+    }
   }
 }
 
@@ -215,9 +237,11 @@ export function classifyChange(
  *   - {@link assertReplicaIdentity} once at registration — refuse a non-key-predicate shape whose
  *     table is not `REPLICA IDENTITY FULL` (`hasFullReplicaIdentity` is the catalog fact
  *     `pg_class.relreplident = 'f'`).
- *   - {@link assertOldImageComplete} per `update`/`delete` — the runtime re-check that `FULL` is
- *     *still* in effect (a table `ALTER`ed `FULL`→`DEFAULT` after registration would start sending a
- *     key-only old image and leak), skipped for a shape whose predicate does not read the old image.
+ *   - {@link assertOldImageComplete} per `update`/`delete` — the runtime re-check (marker + per-column
+ *     presence) that a usable old image is *still* being delivered (a `FULL`→`DEFAULT` downgrade, or an
+ *     unchanged external-TOAST predicate column, would otherwise leak), skipped for a shape whose
+ *     predicate does not read the old image. `requiredOldColumns` are that shape's key + filter columns
+ *     as SQL names ({@link requiredOldImageColumns}) — the value check's target set.
  *
  * The returned `(change) => ShapeChange | undefined` is **unobtainable without having passed the
  * registration guard**, and it self-applies the runtime guard, so the hot path cannot fail open —
@@ -229,16 +253,20 @@ export function prepareShapeClassifier(
   def: ShapeDefinition,
   hasFullReplicaIdentity: boolean,
   coerce: ImageCoercer,
+  requiredOldColumns: readonly string[],
 ): (change: ReplicationChange) => ShapeChange | undefined {
   assertReplicaIdentity(def, hasFullReplicaIdentity);
 
   const needsOldImage = predicateNeedsOldImage(def);
 
   return (change) => {
-    // An insert carries no old image; an update/delete on a non-key-predicate shape must arrive with
-    // a FULL old tuple even if the table was ALTERed away from REPLICA IDENTITY FULL after
-    // registration — else the marker guard throws (loud, routed) rather than drop a delete-from-shape.
-    if (needsOldImage && change.op !== "insert") assertOldImageComplete(def, change.oldImageKind);
+    // An insert carries no old image; an update/delete on a non-key-predicate shape must arrive with a
+    // usable FULL old image — the guard throws (loud, routed) rather than drop a delete-from-shape if
+    // the table was ALTERed away from FULL after registration, or a predicate column came through as
+    // an unchanged external-TOAST 'u'. A key-only/filterless shape needs no old image, so it is skipped.
+    if (needsOldImage && change.op !== "insert") {
+      assertOldImageComplete(def, change.oldImageKind, requiredOldColumns, change.oldImage);
+    }
 
     return classifyChange(def, change, coerce);
   };

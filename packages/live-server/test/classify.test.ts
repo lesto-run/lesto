@@ -79,18 +79,30 @@ describe("assertReplicaIdentity", () => {
   });
 });
 
-describe("assertOldImageComplete — the per-change old-tuple-marker runtime guard (F1b)", () => {
-  it("passes when the old tuple is FULL ('O' under REPLICA IDENTITY FULL)", () => {
-    expect(() => assertOldImageComplete(shape(), "full")).not.toThrow();
+describe("assertOldImageComplete — the per-change runtime guard (marker + column presence, F1b)", () => {
+  const required = ["id", "room_id"] as const;
+
+  it("passes when the tuple is FULL and every required column is a transmitted value", () => {
+    expect(() =>
+      assertOldImageComplete(shape(), "full", required, { id: "5", room_id: "1", body: "hi" }),
+    ).not.toThrow();
   });
 
-  it("throws OLD_IMAGE_INCOMPLETE when the old tuple is key-only ('K' after a FULL→DEFAULT downgrade)", () => {
+  it("passes when a required column is a genuine null (a real, transmitted value — only undefined fails)", () => {
+    expect(() =>
+      assertOldImageComplete(shape(), "full", required, { id: "5", room_id: null }),
+    ).not.toThrow();
+  });
+
+  it("throws (marker) when the old tuple is key-only ('K' after a FULL→DEFAULT downgrade)", () => {
     // The exact leak the value-based check MISSED: a 'K' tuple's non-key columns arrive as null, so
     // a value check (room_id === undefined) passed and the delete-from-shape was dropped. The marker
-    // is the sound discriminator, so a key-only image is refused loudly.
-    expect(() => assertOldImageComplete(shape(), "key")).toThrow(LiveServerError);
+    // is the sound discriminator, so a key-only image is refused loudly — before the column loop.
+    expect(() => assertOldImageComplete(shape(), "key", required, { id: "5", room_id: null })).toThrow(
+      LiveServerError,
+    );
     try {
-      assertOldImageComplete(shape(), "key");
+      assertOldImageComplete(shape(), "key", required, { id: "5", room_id: null });
     } catch (error) {
       expect((error as LiveServerError).code).toBe("LIVE_SERVER_OLD_IMAGE_INCOMPLETE");
       expect((error as LiveServerError).details).toMatchObject({
@@ -100,12 +112,30 @@ describe("assertOldImageComplete — the per-change old-tuple-marker runtime gua
     }
   });
 
-  it("throws OLD_IMAGE_INCOMPLETE when no old tuple was sent ('none' — a DEFAULT update)", () => {
-    expect(() => assertOldImageComplete(shape(), "none")).toThrow(LiveServerError);
+  it("throws (marker) when no old tuple was sent ('none' — a DEFAULT update)", () => {
+    expect(() => assertOldImageComplete(shape(), "none", [], {})).toThrow(LiveServerError);
     try {
-      assertOldImageComplete(shape(), "none");
+      assertOldImageComplete(shape(), "none", [], {});
     } catch (error) {
       expect((error as LiveServerError).details).toMatchObject({ oldImageKind: "none" });
+    }
+  });
+
+  it("throws (column presence) when a required column is undefined in an otherwise-FULL tuple (unchanged external-TOAST 'u')", () => {
+    // FULL guarantees the column is IN the tuple, not that its value was sent: an unchanged externally
+    // TOASTed value arrives as 'u' → undefined even under FULL (marker still 'full'). Only this check
+    // catches it — the marker passed. A silent drop here would be the exact leak the guard prevents.
+    expect(() =>
+      assertOldImageComplete(shape(), "full", required, { id: "5", room_id: undefined }),
+    ).toThrow(LiveServerError);
+    try {
+      assertOldImageComplete(shape(), "full", required, { id: "5", room_id: undefined });
+    } catch (error) {
+      expect((error as LiveServerError).code).toBe("LIVE_SERVER_OLD_IMAGE_INCOMPLETE");
+      expect((error as LiveServerError).details).toMatchObject({
+        table: "messages",
+        column: "room_id",
+      });
     }
   });
 });
@@ -319,10 +349,15 @@ describe("classifyChange — update with an ABSENT old image (REPLICA IDENTITY D
 });
 
 describe("prepareShapeClassifier — the guarded entry point", () => {
+  // The non-key (room_id) shape's required old-image columns; the engine derives these from the table.
+  const REQ = ["id", "room_id"] as const;
+
   it("refuses to bind a non-key-predicate shape without REPLICA IDENTITY FULL (the guard cannot be skipped)", () => {
-    expect(() => prepareShapeClassifier(shape(), false, coercer(shape()))).toThrow(LiveServerError);
+    expect(() => prepareShapeClassifier(shape(), false, coercer(shape()), REQ)).toThrow(
+      LiveServerError,
+    );
     try {
-      prepareShapeClassifier(shape(), false, coercer(shape()));
+      prepareShapeClassifier(shape(), false, coercer(shape()), REQ);
     } catch (error) {
       expect((error as LiveServerError).code).toBe("LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT");
     }
@@ -330,7 +365,7 @@ describe("prepareShapeClassifier — the guarded entry point", () => {
 
   it("binds a guarded classifier that delegates to classifyChange when the guard passes", () => {
     const def = shape();
-    const classify = prepareShapeClassifier(def, true, coercer(def));
+    const classify = prepareShapeClassifier(def, true, coercer(def), REQ);
     const change: ReplicationChange = {
       op: "insert",
       table: "messages",
@@ -346,7 +381,7 @@ describe("prepareShapeClassifier — the guarded entry point", () => {
 
   it("binds a key-only-predicate shape regardless of replica identity", () => {
     const def = shape([{ column: "id", op: "eq", value: 5 }]);
-    const classify = prepareShapeClassifier(def, false, coercer(def));
+    const classify = prepareShapeClassifier(def, false, coercer(def), []);
     const change: ReplicationChange = {
       op: "insert",
       table: "messages",
@@ -360,11 +395,11 @@ describe("prepareShapeClassifier — the guarded entry point", () => {
     });
   });
 
-  // The folded runtime guard: the bound closure self-applies assertOldImageComplete per change, so
-  // the guard is no longer forgettable engine glue — a direct caller of the public entry point gets it.
-  describe("folds the per-change old-image marker guard (chief-arch convergence)", () => {
+  // The folded runtime guard: the bound closure self-applies assertOldImageComplete (marker + column
+  // presence) per change, so the guard is no longer forgettable engine glue — a direct caller gets it.
+  describe("folds the per-change old-image guard (chief-arch convergence)", () => {
     const def = shape(); // non-key predicate on room_id → needs the FULL old image
-    const classify = prepareShapeClassifier(def, true, coercer(def));
+    const classify = prepareShapeClassifier(def, true, coercer(def), REQ);
 
     it("throws OLD_IMAGE_INCOMPLETE on an update whose old tuple went key-only (FULL→DEFAULT downgrade)", () => {
       const change: ReplicationChange = {
@@ -408,9 +443,29 @@ describe("prepareShapeClassifier — the guarded entry point", () => {
       expect(() => classify(change)).toThrow(LiveServerError);
     });
 
-    it("does NOT apply the marker guard to a key-only-predicate shape (it needs no old image)", () => {
+    it("throws OLD_IMAGE_INCOMPLETE on a FULL DELETE whose predicate column is an unchanged external-TOAST 'u' (marker still full)", () => {
+      // The regression the red-team + protocol reviewers converged on: FULL marks the tuple 'full' but
+      // an unchanged externally-TOASTed room_id arrives as 'u' → undefined. The marker check passes;
+      // only the column-presence check catches it — else matchesShape(undefined) drops a delete → leak.
+      const change: ReplicationChange = {
+        op: "delete",
+        table: "messages",
+        oldImage: { id: "5", room_id: undefined, body: "kept" },
+        oldImageKind: "full",
+        ...stamp,
+      };
+      expect(() => classify(change)).toThrow(LiveServerError);
+      try {
+        classify(change);
+      } catch (error) {
+        expect((error as LiveServerError).code).toBe("LIVE_SERVER_OLD_IMAGE_INCOMPLETE");
+        expect((error as LiveServerError).details).toMatchObject({ column: "room_id" });
+      }
+    });
+
+    it("does NOT apply the old-image guard to a key-only-predicate shape (it needs no old image)", () => {
       const keyOnly = shape([{ column: "id", op: "eq", value: 5 }]);
-      const classifyKeyOnly = prepareShapeClassifier(keyOnly, false, coercer(keyOnly));
+      const classifyKeyOnly = prepareShapeClassifier(keyOnly, false, coercer(keyOnly), []);
       // A key-only 'K' update: the guard is skipped, and classifyChange decides from the new row.
       const change: ReplicationChange = {
         op: "update",

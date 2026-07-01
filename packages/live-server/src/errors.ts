@@ -61,16 +61,19 @@ export type LiveServerErrorCode =
    */
   | "LIVE_SERVER_TABLE_NOT_IN_DATABASE"
   /**
-   * A replication `update`/`delete` did not carry a **full** old row image (its old-tuple marker was
-   * key-only or absent) for a shape whose predicate reads a non-key column — the runtime counterpart
-   * to the registration-time `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` guard. Even a shape that
-   * passed that guard can be undermined if its table is `ALTER`ed `FULL`→`DEFAULT` *after*
-   * registration: Postgres then emits a key-only old tuple (non-identity columns nulled), evaluating
-   * the predicate on it would misclassify a delete-from-shape, and the row would silently persist in
-   * the client's store. Keyed on the decoder's old-tuple marker (not the image's cell values, which
-   * cannot tell a key-tuple null from a genuine one), detected per change and thrown loudly (routed
-   * to the engine's error sink) rather than dropped in silence — fix by restoring
-   * `REPLICA IDENTITY FULL` on the table.
+   * A replication `update`/`delete` did not deliver a usable old row image for a shape whose predicate
+   * reads a non-key column — the runtime counterpart to the registration-time
+   * `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` guard, covering two ways a shape that passed that guard
+   * can still be undermined: (1) the table was `ALTER`ed `FULL`→`DEFAULT` *after* registration, so
+   * Postgres emits a key-only old tuple (non-identity columns nulled — caught by the old-tuple marker,
+   * since a null is value-indistinguishable from a genuine one); or (2) a predicate column is an
+   * unchanged, externally-TOASTed value, which pgoutput omits as `'u'` (unchanged) *even under*
+   * `REPLICA IDENTITY FULL` (the reorder buffer detoasts only the new tuple) — caught by a
+   * per-column presence check. Either way, evaluating the predicate on the missing column would
+   * misclassify a delete-from-shape and the row would silently persist in the client's store, so it is
+   * detected per change and thrown loudly (routed to the engine's error sink) rather than dropped in
+   * silence — fix by restoring `REPLICA IDENTITY FULL` (case 1) or narrowing the shape's predicate off
+   * the large TOASTed column (case 2).
    */
   | "LIVE_SERVER_OLD_IMAGE_INCOMPLETE"
   /**
