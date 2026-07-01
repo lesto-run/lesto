@@ -40,6 +40,7 @@
 
 import { createRequire } from "node:module";
 
+import { LiveServerError } from "./errors";
 import { createPgOutputDecoder } from "./pgoutput";
 import type { DecodedChange, PgReplicationClient, SystemIdentity } from "./replication";
 import { decodeWal2JsonChange, type Wal2JsonChange } from "./wal2json";
@@ -88,6 +89,18 @@ const XLOG_DATA_HEADER_BYTES = 1 + 8 + 8 + 8;
 /** Milliseconds between the Unix epoch and the Postgres epoch (2000-01-01), for the status clock. */
 const PG_EPOCH_MS = 946_684_800_000n;
 
+/** The bounded slot-drop retry: poll `SLOT_DROP_ATTEMPTS` times, `SLOT_DROP_POLL_MS` apart (~2s). */
+const SLOT_DROP_ATTEMPTS = 40;
+const SLOT_DROP_POLL_MS = 50;
+
+/**
+ * How long `START_REPLICATION` may take to begin streaming before `start()` rejects. The command
+ * accepted-but-then-silent case (a partition after send, a wedged walsender) would otherwise hang
+ * the source forever; a reject lets the caller / reconnect loop recover. Generous — start is
+ * near-instant in practice.
+ */
+const REPLICATION_START_TIMEOUT_MS = 30_000;
+
 /**
  * Build a factory that mints a fresh dedicated logical-replication client from `config`.
  *
@@ -116,6 +129,7 @@ export function createPgReplicationClientFactory(
     const raw = new Client({ ...base, replication: "database" });
 
     let changeListener: ((change: DecodedChange) => void) | undefined;
+    let errorListener: ((error: unknown) => void) | undefined;
     const decoder = plugin === "pgoutput" ? createPgOutputDecoder() : undefined;
     let lastLsn = 0n; // the high-water WAL position we have applied — acknowledged to the server
 
@@ -151,26 +165,34 @@ export function createPgReplicationClientFactory(
 
     /** One copy-data frame: acknowledge its LSN, and (for an XLogData frame) decode + emit changes. */
     function onCopyData(bytes: Buffer): void {
-      if (bytes.length === 0) return;
+      // This runs synchronously from node-postgres's `copyData` listener, so a throw (a decoder
+      // refusal, or a RangeError on a truncated/garbage frame) would escape UNCAUGHT into the
+      // driver's EventEmitter and can crash the process. Route it to the error sink instead, and
+      // do NOT advance the ack past a frame we could not apply (so a reconnect re-reads it).
+      try {
+        if (bytes.length === 0) return;
 
-      const lead = bytes[0];
+        const lead = bytes[0];
 
-      if (lead === KEEPALIVE) {
-        const walEnd = bytes.readBigUInt64BE(1);
-        if (walEnd > lastLsn) lastLsn = walEnd;
-        if (bytes.readUInt8(17) === 1) sendStandbyStatus(); // the server asked for a reply
-        return;
+        if (lead === KEEPALIVE) {
+          const walEnd = bytes.readBigUInt64BE(1);
+          if (walEnd > lastLsn) lastLsn = walEnd;
+          if (bytes.readUInt8(17) === 1) sendStandbyStatus(); // the server asked for a reply
+          return;
+        }
+
+        if (lead !== XLOG_DATA) return; // an unknown frame — nothing to decode
+
+        const walStart = bytes.readBigUInt64BE(1);
+        if (walStart > lastLsn) lastLsn = walStart;
+
+        for (const change of decodePayload(bytes.subarray(XLOG_DATA_HEADER_BYTES)))
+          changeListener?.(change);
+
+        sendStandbyStatus(); // advance the slot past what we just applied
+      } catch (error) {
+        errorListener?.(error);
       }
-
-      if (lead !== XLOG_DATA) return; // an unknown frame — nothing to decode
-
-      const walStart = bytes.readBigUInt64BE(1);
-      if (walStart > lastLsn) lastLsn = walStart;
-
-      for (const change of decodePayload(bytes.subarray(XLOG_DATA_HEADER_BYTES)))
-        changeListener?.(change);
-
-      sendStandbyStatus(); // advance the slot past what we just applied
     }
 
     return {
@@ -200,7 +222,7 @@ export function createPgReplicationClientFactory(
         await admin.connect();
 
         try {
-          for (let attempt = 0; attempt < 40; attempt++) {
+          for (let attempt = 0; attempt < SLOT_DROP_ATTEMPTS; attempt++) {
             const { rows } = await admin.query(
               "SELECT active FROM pg_replication_slots WHERE slot_name = $1",
               [slot],
@@ -218,8 +240,17 @@ export function createPgReplicationClientFactory(
               "SELECT pg_terminate_backend(active_pid) FROM pg_replication_slots WHERE slot_name = $1 AND active_pid IS NOT NULL",
               [slot],
             );
-            await new Promise((resolve) => setTimeout(resolve, 50));
+            await new Promise((resolve) => setTimeout(resolve, SLOT_DROP_POLL_MS));
           }
+
+          // The slot stayed active for the whole bounded retry. Do NOT return quietly — a
+          // silently-undropped slot pins WAL and is the disk-fill outage this module owns. Throw a
+          // coded error so the source routes it to its error sink (`#dropSlot` catches + reports).
+          throw new LiveServerError(
+            "LIVE_SERVER_REPLICATION_SLOT_DROP_TIMEOUT",
+            `Could not drop replication slot "${slot}": still active after ${SLOT_DROP_ATTEMPTS} attempts (~${(SLOT_DROP_ATTEMPTS * SLOT_DROP_POLL_MS) / 1000}s); its WAL will accumulate.`,
+            { slot },
+          );
         } finally {
           await admin.end();
         }
@@ -241,17 +272,39 @@ export function createPgReplicationClientFactory(
             : `("include-lsn" 'on')`;
 
         // START_REPLICATION streams — its query promise never resolves — so wire the copy-data sink
-        // and resolve when the server confirms replication has started. A command error rejects.
+        // and resolve when the server confirms replication has started. A command error rejects; a
+        // bounded timeout rejects the accepted-but-then-silent case so `start()` can't hang forever.
         return new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            reject(
+              new Error(`START_REPLICATION did not begin within ${REPLICATION_START_TIMEOUT_MS}ms`),
+            );
+          }, REPLICATION_START_TIMEOUT_MS);
+          (timer as { unref?: () => void }).unref?.(); // a pending start must not keep the process alive
+
           raw.connection.on("copyData", (message) => onCopyData(message.chunk));
-          raw.connection.once("replicationStart", () => resolve());
-          raw.query(`START_REPLICATION SLOT ${slot} LOGICAL ${lsn} ${pluginOptions}`).catch(reject);
+          raw.connection.once("replicationStart", () => {
+            clearTimeout(timer);
+            resolve();
+          });
+          raw
+            .query(`START_REPLICATION SLOT ${slot} LOGICAL ${lsn} ${pluginOptions}`)
+            .catch((error: unknown) => {
+              clearTimeout(timer);
+              reject(error as Error);
+            });
         });
       },
 
       on(event: "change" | "error", listener: (arg: never) => void): unknown {
-        if (event === "change") changeListener = listener as (change: DecodedChange) => void;
-        else raw.on("error", listener as (...args: readonly unknown[]) => void);
+        if (event === "change") {
+          changeListener = listener as (change: DecodedChange) => void;
+        } else {
+          // Capture the error sink so a decode failure in `onCopyData` can route to it too (not
+          // only a raw socket error), then wire the same listener to the driver's error event.
+          errorListener = listener as (error: unknown) => void;
+          raw.on("error", listener as (...args: readonly unknown[]) => void);
+        }
 
         return this;
       },

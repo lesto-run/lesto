@@ -37,7 +37,14 @@ export type LiveServerErrorCode =
    * seen — a protocol violation (pgoutput always announces a relation before its first change),
    * so the change cannot be decoded (no column names) rather than guessed.
    */
-  | "LIVE_SERVER_REPLICATION_UNKNOWN_RELATION";
+  | "LIVE_SERVER_REPLICATION_UNKNOWN_RELATION"
+  /**
+   * `stop()` could not drop the replication slot within its bounded retry — the walsender did not
+   * release it in time, so the slot (and its pinned WAL) is left in place. Surfaced, never
+   * swallowed: a silently-undropped slot is the disk-fill outage this module exists to prevent, so
+   * the deployment's slot-lag alerting + disk-pressure runbook must act on it.
+   */
+  | "LIVE_SERVER_REPLICATION_SLOT_DROP_TIMEOUT";
 
 /** Anything the shape engine can refuse to register or serve. */
 export class LiveServerError extends LestoError<LiveServerErrorCode> {
