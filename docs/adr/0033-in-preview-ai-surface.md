@@ -21,7 +21,15 @@
   consumer**: 0033 Phase 1 is *inert* without 0032's read-only dev MCP server (it has
   nothing to dispatch to), so the Phase-1 commit does **not** land until 0032 Phase 1
   ships a wired read-only dispatch the overlay can round-trip against — until then the
-  overlay only ever paints the not-available state. **Phase 2** (acting — issuing a
+  overlay only ever paints the not-available state. **(Update, 2026-07-01 · L-e7ea34e3 ·
+  `bd37ef9`): that dispatch is now WIRED.** After ADR 0032 Phase 1 shipped the loopback dev
+  MCP server (and it was dogfooded onto `examples/estate` via `lesto dev`, L-cfd434f4), the
+  bin now injects `dispatchDevTool` — an in-process, audited dispatch over the SAME governed
+  dev MCP context — so the overlay round-trips a real **`describe_app`** turn (routes + OpenAPI
+  + schema + collections; degrades to empty on a content-less app, so it lights up on estate).
+  The fixed inspect tool is `DEV_INSPECT_TOOL` (`ai-bridge.ts`), a compiler-pinned member of
+  the positive read-only allowlist (now `list_content_collections` + `describe_app`); acting
+  stays Phase 2. Verified LIVE against estate `lesto dev`. **Phase 2** (acting — issuing a
   governed mutation from a chat turn / fix-this: content writes, an edit-file verb,
   `/__lesto/open`) is designed here and **gated on ADR 0032** committing an operator-mode
   escalation + the editor-jump/edit verbs, since 0032's *committed* Phase 1 ships three
