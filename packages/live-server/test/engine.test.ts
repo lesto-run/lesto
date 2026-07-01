@@ -7,7 +7,14 @@ import { LiveProtocolError } from "@lesto/live-protocol";
 import type { Cursor, Row, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
 
 import { createShapeEngine, LiveServerError } from "../src/index";
-import type { ShapeEngine, TimerSeam } from "../src/index";
+import type {
+  ChangeHandler,
+  ChangeSource,
+  ReplicationChange,
+  RowImage,
+  ShapeEngine,
+  TimerSeam,
+} from "../src/index";
 
 // ---------------------------------------------------------------------------
 // Test rig: an in-memory SQLite adapted to `SqlDatabase` (async terminals), plus a
@@ -311,6 +318,226 @@ describe("fan-out + lifecycle", () => {
     real.stop();
     sub.unsubscribe();
     expect(real.activeShapes).toBe(0);
+  });
+});
+
+/** A hand-driven {@link ChangeSource}: `emit` fires a change at every wired sink. */
+function fakeSource(): {
+  source: ChangeSource;
+  emit(change: ReplicationChange): void;
+  subscribers(): number;
+} {
+  const handlers = new Set<ChangeHandler>();
+
+  return {
+    source: {
+      start: async () => {},
+      onChange: (handler) => {
+        handlers.add(handler);
+
+        return () => {
+          handlers.delete(handler);
+        };
+      },
+      onError: () => () => {},
+      stop: async () => {},
+    },
+    emit: (change) => {
+      for (const handler of handlers) handler(change);
+    },
+    subscribers: () => handlers.size,
+  };
+}
+
+/** A `replicaIdentity` seam reporting FULL only for the named tables. */
+const fullFor =
+  (...names: string[]) =>
+  async (table: string): Promise<boolean> =>
+    names.includes(table);
+
+describe("replication change source — the v1 change path", () => {
+  const STAMP = { commitLSN: "0/1", systemId: "sys", timelineId: 1 } as const;
+  const ins = (newImage: RowImage): ReplicationChange => ({
+    op: "insert",
+    table: "messages",
+    newImage,
+    ...STAMP,
+  });
+  const upd = (oldImage: RowImage, newImage: RowImage): ReplicationChange => ({
+    op: "update",
+    table: "messages",
+    oldImage,
+    newImage,
+    ...STAMP,
+  });
+
+  it("consumes the source instead of polling — the poll timer never starts, stop() detaches the sink", async () => {
+    const src = fakeSource();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      timers: timers.seam,
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+
+    await e.subscribe(room1Shape(), () => {});
+
+    expect(timers.running()).toBe(false); // no poll loop on the replication path
+    expect(src.subscribers()).toBe(1);
+
+    e.stop();
+    expect(src.subscribers()).toBe(0); // stop() detaches the change sink
+  });
+
+  it("delivers an insert (typed wire row) when a replication insert enters the shape", async () => {
+    const src = fakeSource();
+    const sink = collector();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    await e.subscribe(room1Shape(), sink.onChange);
+
+    src.emit(ins({ id: "1", room_id: "1", body: "hi", created_at: "100" }));
+
+    expect(sink.changes).toEqual([
+      { op: "insert", key: "1", row: { id: 1, roomId: 1, body: "hi", createdAt: 100 } },
+    ]);
+    expect(sink.cursors).toEqual(["1"]);
+    e.stop();
+  });
+
+  it("delivers nothing for a replication insert that does not enter the shape", async () => {
+    const src = fakeSource();
+    const sink = collector();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    await e.subscribe(room1Shape(), sink.onChange);
+
+    src.emit(ins({ id: "1", room_id: "2", body: "hi", created_at: "100" }));
+
+    expect(sink.changes).toEqual([]);
+    e.stop();
+  });
+
+  it("delivers a delete-from-shape when a replication update moves a row OUT (the leak-stopper)", async () => {
+    await insert(1, "hi", 100); // seed a matching row into the snapshot
+    const src = fakeSource();
+    const sink = collector();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    const sub = await e.subscribe(room1Shape(), sink.onChange);
+    expect((sub.snapshot as Row[]).map((r) => r.id)).toEqual([1]);
+
+    // Under FULL the old image is complete; room_id 1 → 2 leaves the shape → delete-from-shape.
+    src.emit(
+      upd(
+        { id: "1", room_id: "1", body: "hi", created_at: "100" },
+        { id: "1", room_id: "2", body: "hi", created_at: "100" },
+      ),
+    );
+
+    expect(sink.changes).toEqual([{ op: "delete", key: "1" }]);
+    e.stop();
+  });
+
+  it("keeps the shape's row set current so a later subscriber's snapshot includes a replicated insert", async () => {
+    const src = fakeSource();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    await e.subscribe(room1Shape(), () => {});
+
+    src.emit(ins({ id: "1", room_id: "1", body: "hi", created_at: "100" }));
+
+    const late = await e.subscribe(room1Shape(), () => {});
+    expect((late.snapshot as Row[]).map((r) => r.id)).toEqual([1]);
+    e.stop();
+  });
+
+  it("refuses a non-key-predicate shape when its table is not REPLICA IDENTITY FULL (registration guard)", async () => {
+    const src = fakeSource();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      replication: { source: src.source, replicaIdentity: fullFor() /* messages NOT full */ },
+    });
+
+    await expect(e.subscribe(room1Shape(), () => {})).rejects.toMatchObject({
+      code: "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT",
+    });
+    e.stop();
+  });
+
+  it("allows a key-only-predicate shape without FULL and tails it (no old image needed)", async () => {
+    const src = fakeSource();
+    const sink = collector();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      replication: { source: src.source, replicaIdentity: fullFor() },
+    });
+    await e.subscribe(room1Shape({ where: [{ column: "id", op: "eq", value: 1 }] }), sink.onChange);
+
+    src.emit(ins({ id: "1", room_id: "9", body: "hi", created_at: "100" }));
+
+    // The predicate is id=1 (met), so the row enters — carrying its real roomId (9), not filtered on.
+    expect(sink.changes).toEqual([
+      { op: "insert", key: "1", row: { id: 1, roomId: 9, body: "hi", createdAt: 100 } },
+    ]);
+    e.stop();
+  });
+
+  it("routes LIVE_SERVER_OLD_IMAGE_INCOMPLETE to onError when an update's old image lost a filter column", async () => {
+    await insert(1, "hi", 100);
+    const src = fakeSource();
+    const errors: unknown[] = [];
+    const sink = collector();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      onError: (error) => errors.push(error),
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    await e.subscribe(room1Shape(), sink.onChange);
+
+    // FULL was ALTERed away after registration: the old image is now key-only (room_id absent).
+    src.emit(
+      upd(
+        { id: "1", room_id: undefined, body: "hi", created_at: "100" },
+        { id: "1", room_id: "2", body: "x", created_at: "100" },
+      ),
+    );
+
+    expect(sink.changes).toEqual([]); // the change is NOT silently applied
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as LiveServerError).code).toBe("LIVE_SERVER_OLD_IMAGE_INCOMPLETE");
+    e.stop();
+  });
+
+  it("ignores a change for a table with no active shape", async () => {
+    const src = fakeSource();
+    const sink = collector();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    await e.subscribe(room1Shape(), sink.onChange);
+
+    src.emit({ op: "insert", table: "other_table", newImage: { id: "9" }, ...STAMP });
+
+    expect(sink.changes).toEqual([]);
+    e.stop();
   });
 });
 

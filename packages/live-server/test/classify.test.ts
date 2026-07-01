@@ -3,6 +3,7 @@ import type { Row, ShapeDefinition } from "@lesto/live-protocol";
 import { describe, expect, it } from "vitest";
 
 import {
+  assertOldImageComplete,
   assertReplicaIdentity,
   predicateNeedsOldImage,
   prepareShapeClassifier,
@@ -75,6 +76,47 @@ describe("assertReplicaIdentity", () => {
   it("allows a key-only-predicate shape regardless of replica identity", () => {
     const keyOnly = shape([{ column: "id", op: "eq", value: 7 }]);
     expect(() => assertReplicaIdentity(keyOnly, false)).not.toThrow();
+  });
+});
+
+describe("assertOldImageComplete — the per-change runtime guard (F1b)", () => {
+  it("passes when every required column is present in the old image", () => {
+    expect(() =>
+      assertOldImageComplete(shape(), ["id", "room_id"], { id: "5", room_id: "1", body: "hi" }),
+    ).not.toThrow();
+  });
+
+  it("passes when a required column is a genuine null (a real, transmitted value)", () => {
+    // null (pgoutput 'n') is a real value the predicate can evaluate — only `undefined` is missing.
+    expect(() =>
+      assertOldImageComplete(shape(), ["id", "room_id"], { id: "5", room_id: null }),
+    ).not.toThrow();
+  });
+
+  it("is a no-op when no columns are required (a key-only / filterless shape)", () => {
+    expect(() => assertOldImageComplete(shape([]), [], {})).not.toThrow();
+  });
+
+  it("throws when a required column is undefined (unchanged-TOAST 'u' in the old image)", () => {
+    expect(() =>
+      assertOldImageComplete(shape(), ["id", "room_id"], { id: "5", room_id: undefined }),
+    ).toThrow(LiveServerError);
+    try {
+      assertOldImageComplete(shape(), ["id", "room_id"], { id: "5", room_id: undefined });
+    } catch (error) {
+      expect((error as LiveServerError).code).toBe("LIVE_SERVER_OLD_IMAGE_INCOMPLETE");
+      expect((error as LiveServerError).details).toMatchObject({
+        table: "messages",
+        column: "room_id",
+      });
+    }
+  });
+
+  it("throws when a required column is absent entirely (a key-only old tuple after FULL→DEFAULT)", () => {
+    // The FULL→DEFAULT leak: an update's old tuple went key-only, so room_id never arrives.
+    expect(() => assertOldImageComplete(shape(), ["id", "room_id"], { id: "5" })).toThrow(
+      LiveServerError,
+    );
   });
 });
 

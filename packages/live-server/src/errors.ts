@@ -53,6 +53,17 @@ export type LiveServerErrorCode =
    */
   | "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT"
   /**
+   * A replication change's **old image** is missing a column the shape's predicate needs (its key
+   * or a filter column) — the runtime counterpart to the registration-time
+   * `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` guard. Even a shape that passed that guard can be
+   * undermined if its table is `ALTER`ed `FULL`→`DEFAULT` *after* registration: Postgres then emits
+   * a key-only old image, evaluating the predicate on the absent column would misclassify a
+   * delete-from-shape, and the row would silently persist in the client's store. Detected per
+   * change and thrown loudly (routed to the engine's error sink) rather than dropped in silence —
+   * fix by restoring `REPLICA IDENTITY FULL` on the table.
+   */
+  | "LIVE_SERVER_OLD_IMAGE_INCOMPLETE"
+  /**
    * A replication update changed a row's **key** column. A shape keys its client store by the key,
    * and a v1 shape assumes an immutable primary key, so a key change would strand the row under its
    * old key (a stale duplicate) rather than move it. Refused loudly rather than silently stranding;

@@ -51,8 +51,13 @@ import { bind } from "./values";
  *
  * `null` always stays `null` (a nullable boolean/timestamp does not become
  * `false`/`Invalid Date`).
+ *
+ * Exported because it is the *canonical* text→typed cell rule: any second reader of the
+ * same storage columns must produce byte-identical scalars. `@lesto/live-server`'s Tier-4
+ * logical-replication change source coerces `pgoutput`'s text-encoded images through this
+ * exact function so a replicated row is indistinguishable from a `db.all()` one (ADR 0042).
  */
-function coerceCell(kind: ColumnKind | undefined, value: unknown): unknown {
+export function coerceCell(kind: ColumnKind | undefined, value: unknown): unknown {
   if (value === null) return null;
 
   switch (kind) {

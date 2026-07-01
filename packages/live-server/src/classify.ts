@@ -80,6 +80,37 @@ export function assertReplicaIdentity(def: ShapeDefinition, hasFullReplicaIdenti
 }
 
 /**
+ * The runtime old-image completeness guard — the per-change twin of {@link assertReplicaIdentity}.
+ *
+ * The registration guard proves a non-key-predicate shape's table *was* `REPLICA IDENTITY FULL`
+ * when the shape registered. But replica identity is mutable: a table `ALTER`ed `FULL`→`DEFAULT`
+ * afterward starts emitting a **key-only** (or absent) old image, and classifying a row that leaves
+ * the shape on the now-missing filter column would silently misfire the delete-from-shape — the row
+ * persisting in the client's durable store is exactly the leak the classifier exists to stop. So on
+ * every `update`/`delete`, before trusting the old image, assert it still carries every column the
+ * predicate needs — `requiredColumns` are those columns' **SQL names** (the engine resolves them
+ * from the table; a shape whose predicate does not need the old image passes an empty list, so this
+ * is a no-op for it). A column that is `undefined` — `pgoutput`'s unchanged-TOAST marker, or simply
+ * absent from a key-only tuple — fails; a genuine `null` (a real, transmitted value) passes. Throws
+ * a coded {@link LiveServerError} so a durable leak surfaces as a loud, routed error.
+ */
+export function assertOldImageComplete(
+  def: ShapeDefinition,
+  requiredColumns: readonly string[],
+  oldImage: RowImage,
+): void {
+  for (const column of requiredColumns) {
+    if (oldImage[column] === undefined) {
+      throw new LiveServerError(
+        "LIVE_SERVER_OLD_IMAGE_INCOMPLETE",
+        `A replication change on "${def.table}" omitted column "${column}" from its old image, so a row leaving the shape cannot be classified — restore REPLICA IDENTITY FULL on "${def.table}".`,
+        { table: def.table, column },
+      );
+    }
+  }
+}
+
+/**
  * Merge a NEW image over the OLD, filling any column the stream did not transmit. `pgoutput` marks
  * an **unchanged-TOAST** column as absent (a `undefined` value) rather than resend a large value; the
  * current value of such a column IS its old value, so the merged image is the true post-update row

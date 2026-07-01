@@ -24,6 +24,12 @@
 
 import { createRequire } from "node:module";
 
+import { createDb, defineTable, integer, text } from "@lesto/db";
+import type { SqlDatabase } from "@lesto/db";
+import type { ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
+
+import { createShapeEngine } from "../../src/engine";
+import { createReplicaIdentityProbe } from "../../src/pg-catalog";
 import { createPgReplicationClientFactory } from "../../src/pg-replication-client";
 import { createPgReplicationSource } from "../../src/replication";
 import type { ReplicationChange } from "../../src/replication";
@@ -32,6 +38,10 @@ const URL =
   process.env.LESTO_LIVE_PG_URL ?? "postgresql://postgres:postgres@localhost:55432/lesto_live";
 const SLOT = "lesto_shakeout";
 const PUB = "lesto_shakeout_pub";
+// The engine phase (Inc2 wiring) uses its own slot/publication + two tables so it never collides
+// with the raw-decoder phase above.
+const ENGINE_SLOT = "lesto_shakeout_engine";
+const ENGINE_PUB = "lesto_shakeout_engine_pub";
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail?: unknown): void => {
@@ -41,7 +51,10 @@ const check = (label: string, ok: boolean, detail?: unknown): void => {
 
 interface AdminClient {
   connect(): Promise<void>;
-  query(sql: string): Promise<{ rows: ReadonlyArray<Record<string, unknown>> }>;
+  query(
+    sql: string,
+    params?: readonly unknown[],
+  ): Promise<{ rows: ReadonlyArray<Record<string, unknown>> }>;
   end(): Promise<void>;
 }
 
@@ -51,18 +64,56 @@ const admin = new Client(URL);
 await admin.connect();
 
 const cleanup = async (): Promise<void> => {
-  await admin
-    .query(
-      `SELECT pg_terminate_backend(active_pid) FROM pg_replication_slots WHERE slot_name='${SLOT}' AND active_pid IS NOT NULL`,
-    )
-    .catch(() => {});
-  await admin
-    .query(
-      `SELECT pg_drop_replication_slot('${SLOT}') FROM pg_replication_slots WHERE slot_name='${SLOT}'`,
-    )
-    .catch(() => {});
+  for (const slot of [SLOT, ENGINE_SLOT]) {
+    await admin
+      .query(
+        `SELECT pg_terminate_backend(active_pid) FROM pg_replication_slots WHERE slot_name='${slot}' AND active_pid IS NOT NULL`,
+      )
+      .catch(() => {});
+    await admin
+      .query(
+        `SELECT pg_drop_replication_slot('${slot}') FROM pg_replication_slots WHERE slot_name='${slot}'`,
+      )
+      .catch(() => {});
+  }
   await admin.query(`DROP PUBLICATION IF EXISTS ${PUB}`).catch(() => {});
+  await admin.query(`DROP PUBLICATION IF EXISTS ${ENGINE_PUB}`).catch(() => {});
   await admin.query("DROP TABLE IF EXISTS shakeout_messages").catch(() => {});
+  await admin.query("DROP TABLE IF EXISTS shakeout_full").catch(() => {});
+  await admin.query("DROP TABLE IF EXISTS shakeout_default").catch(() => {});
+};
+
+/** Translate `?` placeholders to `$n` for parity with the real `@lesto/pg` adapter. */
+const translate = (sql: string): string => {
+  let n = 0;
+
+  return sql.replace(/\?/g, () => `$${++n}`);
+};
+
+/**
+ * A minimal {@link SqlDatabase} over the admin `pg` connection, just enough for the engine's
+ * parameterless snapshot read (`SELECT … FROM <table>`).
+ */
+const makeSqlDb = (client: AdminClient): SqlDatabase => {
+  const db: SqlDatabase = {
+    exec: async (sql) => {
+      await client.query(sql);
+    },
+    prepare: (sql) => ({
+      run: async (params = []) => {
+        await client.query(translate(sql), params as unknown[]);
+
+        return { changes: 0 };
+      },
+      get: async (params = []) => (await client.query(translate(sql), params as unknown[])).rows[0],
+      all: async (params = []) => [
+        ...(await client.query(translate(sql), params as unknown[])).rows,
+      ],
+    }),
+    transaction: async (fn) => fn(db),
+  };
+
+  return db;
 };
 
 const poll = async (predicate: () => boolean, timeoutMs = 8000): Promise<void> => {
@@ -70,6 +121,15 @@ const poll = async (predicate: () => boolean, timeoutMs = 8000): Promise<void> =
   while (!predicate() && Date.now() < deadline)
     await new Promise((resolve) => setTimeout(resolve, 25));
 };
+
+// A room-1 shape (filters the NON-key room_id, so it needs the old image → REPLICA IDENTITY FULL).
+const room1 = (table: string): ShapeDefinition => ({
+  table,
+  key: "id",
+  columns: ["id", "roomId", "body"],
+  where: [{ column: "roomId", op: "eq", value: 1 }],
+  orderBy: undefined,
+});
 
 try {
   await cleanup();
@@ -146,6 +206,85 @@ try {
     `SELECT count(*)::int AS n FROM pg_replication_slots WHERE slot_name='${SLOT}'`,
   );
   check("stop() dropped the slot (no orphaned WAL pin)", rows[0]?.n === 0, rows[0]);
+
+  // -------------------------------------------------------------------------
+  // Engine phase (ADR 0042 Inc2 wiring): the shape engine consuming the LIVE source, exercising
+  // the registration guard (a non-key shape on a non-FULL table is refused) and delete-from-shape
+  // end-to-end on a FULL table — the parts no unit test can reach without a live REPLICA IDENTITY.
+  // -------------------------------------------------------------------------
+  console.log("\nengine phase: shape engine over the live source");
+
+  await admin.query("CREATE TABLE shakeout_full (id serial primary key, room_id int, body text)");
+  await admin.query("ALTER TABLE shakeout_full REPLICA IDENTITY FULL");
+  // shakeout_default keeps REPLICA IDENTITY DEFAULT on purpose — the guard must refuse a non-key shape on it.
+  await admin.query(
+    "CREATE TABLE shakeout_default (id serial primary key, room_id int, body text)",
+  );
+  await admin.query(`CREATE PUBLICATION ${ENGINE_PUB} FOR TABLE shakeout_full, shakeout_default`);
+
+  const columns = {
+    id: integer("id").primaryKey(),
+    roomId: integer("room_id"),
+    body: text("body"),
+  };
+  const fullTable = defineTable("shakeout_full", columns);
+  const defaultTable = defineTable("shakeout_default", columns);
+
+  const db = createDb(makeSqlDb(admin), { dialect: "postgres" });
+  const engineSource = createPgReplicationSource({
+    createClient: createPgReplicationClientFactory(URL, { publication: ENGINE_PUB }),
+    slot: ENGINE_SLOT,
+  });
+  engineSource.onError((error) => console.log("engine source error:", (error as Error)?.message));
+
+  const engine = createShapeEngine({
+    db,
+    tables: [fullTable, defaultTable],
+    replication: { source: engineSource, replicaIdentity: createReplicaIdentityProbe(URL) },
+    onError: (error) => console.log("engine error:", (error as Error)?.message),
+  });
+
+  await engineSource.start();
+
+  try {
+    // 1) The registration guard: a non-key-predicate shape on a non-FULL table is refused.
+    let refusalCode: string | undefined;
+    try {
+      await engine.subscribe(room1("shakeout_default"), () => {});
+    } catch (error) {
+      refusalCode = (error as { code?: string }).code;
+    }
+    check(
+      "refuses a non-key-predicate shape on a non-FULL table",
+      refusalCode === "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT",
+      refusalCode,
+    );
+
+    // 2) delete-from-shape end-to-end on a FULL table: seed a room-1 row, then move it OUT.
+    await admin.query("INSERT INTO shakeout_full (room_id, body) VALUES (1, 'stay')");
+
+    const shapeChanges: ShapeChange[] = [];
+    const sub = await engine.subscribe(room1("shakeout_full"), (change) =>
+      shapeChanges.push(change),
+    );
+    check(
+      "seeded snapshot contains the room-1 row",
+      sub.snapshot.length === 1 && (sub.snapshot[0] as { roomId?: number }).roomId === 1,
+      sub.snapshot,
+    );
+
+    await admin.query("UPDATE shakeout_full SET room_id = 2 WHERE body = 'stay'");
+    await poll(() => shapeChanges.some((change) => change.op === "delete"));
+
+    check(
+      "delete-from-shape fires end-to-end on a FULL table",
+      shapeChanges.some((change) => change.op === "delete"),
+      shapeChanges,
+    );
+  } finally {
+    engine.stop();
+    await engineSource.stop();
+  }
 } finally {
   await cleanup();
   await admin.end();

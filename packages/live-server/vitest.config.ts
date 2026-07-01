@@ -15,6 +15,10 @@ export default defineConfig({
         // this needs `pg` installed and a live WAL stream. (Mirrors `@lesto/realtime`'s
         // `pg-client.ts` and `@lesto/pg`'s `pg-driver.ts`.)
         "src/pg-replication-client.ts",
+        // Pure wiring: the real `pg` catalog probe for the replica-identity guard. The engine's
+        // use of its boolean is tested against the injected `replicaIdentity` seam; the query
+        // itself needs a live Postgres. Coverage-excluded like the replication client.
+        "src/pg-catalog.ts",
       ],
       thresholds: {
         lines: 100,

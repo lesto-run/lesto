@@ -61,7 +61,7 @@ export type { Dialect } from "./ddl";
 export { and, eq, gt, gte, inList, isNotNull, isNull, like, lt, lte, ne, or } from "./conditions";
 export type { Condition } from "./conditions";
 
-export { createDb } from "./queries";
+export { coerceCell, createDb } from "./queries";
 export type { Db, DbOptions, JoinQuery, QueryEvent, SelectQuery } from "./queries";
 
 export type { SqlDatabase, SqlStatement } from "./sql";
