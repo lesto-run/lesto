@@ -1558,7 +1558,10 @@ async function handle(
   // instead under its own dedicated stream semaphore. Recognizing it as a
   // predicate (not a response flag) keeps the in-flight `finally` release
   // unconditional below — a flag flipped mid-response would double-free the slot.
-  if (deps.liveStream !== undefined && isLongLivedStream(line.method, path, deps.liveStream.paths)) {
+  if (
+    deps.liveStream !== undefined &&
+    isLongLivedStream(line.method, path, deps.liveStream.paths)
+  ) {
     return handleStream(app, req, res, deps, line, path, deps.liveStream);
   }
 
