@@ -23,7 +23,9 @@ async function main(): Promise<void> {
 
   const server = await serve(booted.app, { port: PORT, host: "127.0.0.1" });
 
-  console.log(`Live demo on http://127.0.0.1:${server.port} — shapes stream at /__lesto/live-data.`);
+  console.log(
+    `Live demo on http://127.0.0.1:${server.port} — shapes stream at /__lesto/live-data.`,
+  );
 
   process.on("SIGINT", () => {
     booted.engine.stop();
