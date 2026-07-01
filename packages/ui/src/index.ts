@@ -77,6 +77,7 @@ export type { SourceResolver } from "./data-resolve";
 export {
   browserRevalidationEnvironment,
   defaultQueryClient,
+  hydrateQueryClient,
   QueryClient,
   serializeQueryKey,
   useMutation,

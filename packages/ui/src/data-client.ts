@@ -158,29 +158,29 @@ export class QueryClient {
 
     this.#publish(key, { status: "loading", data: previous?.data });
 
-    const promise = fetcher().then(
-      (data) => {
-        this.#inflight.delete(key);
-        this.#publish(key, { status: "success", data });
+    return this.#track(key, fetcher());
+  }
 
-        return data;
-      },
-      (error: unknown) => {
-        this.#inflight.delete(key);
-        this.#publish(key, { status: "error", error });
+  /**
+   * Seed `key` from an ALREADY-in-flight request — the parse-time data primer
+   * (`window.__lestoData[source]`; see {@link hydrateQueryClient}). Registers the
+   * promise as `key`'s in-flight request so a `useQuery(key)` that mounts during
+   * hydration DEDUPES its own fetch onto it (no second network request) and paints
+   * the value the instant the parse-time fetch lands — no `JS → fetch → data`
+   * waterfall.
+   *
+   * Unlike {@link fetch} it does NOT remember the promise as the refetch fetcher: a
+   * one-shot primer must never be replayed by {@link invalidate} (that would re-serve
+   * the pre-write value); the real fetcher is recorded when the reader mounts. A
+   * no-op if `key` is already loading (a request is in flight) or already holds a
+   * value — priming never clobbers live state.
+   */
+  prime(key: string, promise: Promise<unknown>): void {
+    if (this.#inflight.has(key) || this.getSnapshot(key).status === "success") return;
 
-        throw error;
-      },
-    );
+    this.#publish(key, { status: "loading", data: this.#snapshots.get(key)?.data });
 
-    this.#inflight.set(key, promise);
-
-    // A deduped caller may never attach a handler; swallow the rejection on the
-    // STORED branch so it raises no `unhandledrejection`. The error is already on
-    // the snapshot, and a direct awaiter still sees the re-thrown rejection above.
-    promise.catch(() => {});
-
-    return promise;
+    this.#track(key, promise);
   }
 
   /**
@@ -280,6 +280,36 @@ export class QueryClient {
     return at === undefined ? true : this.#now() - at >= staleTimeMs;
   }
 
+  /**
+   * Wire a request `promise` into `key`'s lifecycle: settle it to `success`/`error`,
+   * clear the in-flight slot, and store it for dedupe. Shared by {@link fetch} (which
+   * also remembers the fetcher) and {@link prime} (which does not). The STORED branch
+   * swallows its rejection so a deduped caller that never attaches a handler raises no
+   * `unhandledrejection`; a direct awaiter still sees the re-thrown rejection.
+   */
+  #track(key: string, promise: Promise<unknown>): Promise<unknown> {
+    const tracked = promise.then(
+      (data) => {
+        this.#inflight.delete(key);
+        this.#publish(key, { status: "success", data });
+
+        return data;
+      },
+      (error: unknown) => {
+        this.#inflight.delete(key);
+        this.#publish(key, { status: "error", error });
+
+        throw error;
+      },
+    );
+
+    this.#inflight.set(key, tracked);
+
+    tracked.catch(() => {});
+
+    return tracked;
+  }
+
   /** Publish a new snapshot for `key`, stamp its fetch time on success, and notify subscribers. */
   #publish(key: string, snapshot: QuerySnapshot<unknown>): void {
     this.#snapshots.set(key, snapshot);
@@ -294,6 +324,40 @@ export class QueryClient {
 
 /** The cache every hook shares unless given its own `client` — the common case. */
 export const defaultQueryClient = new QueryClient();
+
+/**
+ * Seed a {@link QueryClient} from the parse-time data primer, so a `useQuery(key)`
+ * that mounts during hydration paints the server-fetched value with no second request
+ * and no `JS → fetch → data` waterfall.
+ *
+ * The primer (`dataPrimerScript`, ADR 0010) kicks each `defineDataSource` fetch at
+ * HTML-parse time and stores the in-flight PROMISE on `window.__lestoData[source]`.
+ * This hands each such promise to {@link QueryClient.prime}, so the matching
+ * `useQuery` dedupes its mount-time fetch onto the already-running request.
+ *
+ * `sourceToKey` names the correspondence from a primer source name to the `useQuery`
+ * key its reader passes: the keyspaces are decoupled by design (a source name, a
+ * `@lesto/client` `"METHOD /path"`, and a `useQuery` key are independent), so the
+ * caller — which knows both — declares the mapping. Sources that were not primed are
+ * skipped. A no-op on the server (no `window`) and when nothing was primed; safe to
+ * call once during client setup, before mounting islands.
+ */
+export function hydrateQueryClient(
+  client: QueryClient,
+  sourceToKey: Readonly<Record<string, QueryKey>>,
+): void {
+  if (typeof window === "undefined") return;
+
+  const primed = window.__lestoData;
+
+  if (primed === undefined) return;
+
+  for (const [source, key] of Object.entries(sourceToKey)) {
+    const promise = primed[source];
+
+    if (promise !== undefined) client.prime(serializeQueryKey(key), promise);
+  }
+}
 
 /**
  * The focus / online / timer events that drive background revalidation, injected so

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   browserRevalidationEnvironment,
   defaultQueryClient,
+  hydrateQueryClient,
   QueryClient,
   serializeQueryKey,
   useMutation,
@@ -896,5 +897,144 @@ describe("browserRevalidationEnvironment", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("QueryClient — prime (SSR seeding from the parse-time primer)", () => {
+  it("seeds a key from an in-flight promise: loading, then success — and does NOT remember it as the fetcher", async () => {
+    const client = new QueryClient();
+    const primer = deferred<string>();
+
+    client.prime("k", primer.promise);
+    // The primed key shows loading (the parse-time fetch is still in flight), no data.
+    expect(client.getSnapshot("k")).toEqual({ status: "loading", data: undefined });
+
+    primer.resolve("Ada");
+    await Promise.resolve();
+    expect(client.getSnapshot("k")).toEqual({ status: "success", data: "Ada" });
+
+    // A one-shot primer must never be REPLAYED by invalidate: prime left no fetcher,
+    // so invalidating the key (no mounted reader) resets it to idle, not to stale data.
+    expect(client.invalidate("k")).toBeUndefined();
+    expect(client.getSnapshot("k")).toEqual({ status: "idle" });
+  });
+
+  it("lets a useQuery that mounts on a primed key issue no request of its own", async () => {
+    const client = new QueryClient();
+    const primer = deferred<string>();
+    const fetcher = vi.fn(() => Promise.resolve("from-fetcher"));
+
+    client.prime("GET /session", primer.promise);
+    // The reader mounts while the primer is still in flight: it observes the `loading`
+    // snapshot, so its mount effect kicks no fetch — the primer's result is its value.
+    probeQuery("GET /session", fetcher, { client });
+    await flush();
+    expect(fetcher).not.toHaveBeenCalled();
+
+    primer.resolve("from-primer");
+    await flush();
+    expect(client.getSnapshot("GET /session")).toEqual({ status: "success", data: "from-primer" });
+  });
+
+  it("is a no-op when the key already holds a value (never clobbers live state)", () => {
+    const client = new QueryClient();
+    const primer = deferred<string>();
+    client.setData("k", "existing");
+
+    client.prime("k", primer.promise);
+
+    // Untouched: still the existing success value, not dropped back to loading.
+    expect(client.getSnapshot("k")).toEqual({ status: "success", data: "existing" });
+  });
+
+  it("is a no-op when a request is already in flight (the live fetch wins)", async () => {
+    const client = new QueryClient();
+    const inflight = deferred<string>();
+    const primer = deferred<string>();
+
+    void client.fetch("k", () => inflight.promise);
+    client.prime("k", primer.promise); // ignored — a fetch is already in flight
+
+    inflight.resolve("from-fetch");
+    await Promise.resolve();
+    expect(client.getSnapshot("k")).toEqual({ status: "success", data: "from-fetch" });
+
+    // The ignored primer never becomes the value, even after it later resolves.
+    primer.resolve("from-primer");
+    await Promise.resolve();
+    expect(client.getSnapshot("k")).toEqual({ status: "success", data: "from-fetch" });
+  });
+
+  it("routes a rejected primer to the error snapshot, and can re-prime after an error", async () => {
+    const client = new QueryClient();
+    const first = deferred<string>();
+
+    client.prime("k", first.promise);
+    first.reject(new Error("gone"));
+    await Promise.resolve();
+    expect(client.getSnapshot("k")).toMatchObject({ status: "error" });
+
+    // Re-prime is allowed once the failed attempt settled (not in flight, no value) —
+    // this also exercises priming a key that already carries a (non-success) snapshot.
+    const second = deferred<string>();
+    client.prime("k", second.promise);
+    expect(client.getSnapshot("k")).toEqual({ status: "loading", data: undefined });
+
+    second.resolve("recovered");
+    await Promise.resolve();
+    expect(client.getSnapshot("k")).toEqual({ status: "success", data: "recovered" });
+  });
+});
+
+describe("hydrateQueryClient", () => {
+  afterEach(() => {
+    // Unstub BEFORE touching window (a stubbed `undefined` window can't be indexed).
+    vi.unstubAllGlobals();
+    delete window.__lestoData;
+  });
+
+  it("seeds only the primed sources, mapping each source name to its useQuery key", async () => {
+    const client = new QueryClient();
+    const session = deferred<string>();
+    const items = deferred<string[]>();
+    window.__lestoData = { session: session.promise, items: items.promise };
+
+    hydrateQueryClient(client, {
+      session: "GET /session",
+      items: ["items", 3], // a tuple key is serialized exactly as useQuery serializes it
+      missing: "GET /missing", // mapped but not primed → skipped
+    });
+
+    // Primed sources are now in flight under their mapped keys...
+    expect(client.getSnapshot("GET /session").status).toBe("loading");
+    expect(client.getSnapshot(serializeQueryKey(["items", 3])).status).toBe("loading");
+    // ...and an unprimed mapped source is left untouched.
+    expect(client.getSnapshot("GET /missing")).toEqual({ status: "idle" });
+
+    session.resolve("Ada");
+    items.resolve(["a", "b"]);
+    await Promise.resolve();
+    expect(client.getSnapshot("GET /session")).toEqual({ status: "success", data: "Ada" });
+    expect(client.getSnapshot(serializeQueryKey(["items", 3]))).toEqual({
+      status: "success",
+      data: ["a", "b"],
+    });
+  });
+
+  it("is a no-op when the primer never ran (window present, no __lestoData)", () => {
+    const client = new QueryClient();
+    delete window.__lestoData;
+
+    hydrateQueryClient(client, { session: "GET /session" });
+
+    expect(client.getSnapshot("GET /session")).toEqual({ status: "idle" });
+  });
+
+  it("is a no-op on the server (no window)", () => {
+    const client = new QueryClient();
+    vi.stubGlobal("window", undefined);
+
+    expect(() => hydrateQueryClient(client, { session: "GET /session" })).not.toThrow();
+    expect(client.getSnapshot("GET /session")).toEqual({ status: "idle" });
   });
 });
