@@ -67,7 +67,8 @@ join** are **deferred**, each on a real consumer/seam.
    `packages/observability/src/index.ts`, `packages/observability/test/agent-vocabulary.test.ts` (new).
    Export value-level `const` span names (`AI_GENERATE_SPAN = "ai.generate"`, `AI_TOOL_SPAN`,
    `MCP_TOOL_SPAN`) and attribute keys (`ai.model`, `ai.usage.input_tokens`,
-   `ai.usage.output_tokens`, `ai.stop_reason`, `ai.tool.name`, `mcp.tool`, `mcp.input_hash`,
+   `ai.usage.output_tokens`, `ai.stop_reason`, `ai.streaming` (added later, L-1cbabfc0),
+   `ai.tool.name`, `mcp.tool`, `mcp.input_hash`,
    `mcp.outcome`, `mcp.duration_ms`), plus a pure `mcpAuditToSpanAttributes(record)` that maps a
    **structural** `{ tool; inputHash; outcome; durationMs }` value onto the `mcp.*` attribute bag.
    It takes the structural shape — NOT an imported `McpAuditRecord` — so `@lesto/observability`

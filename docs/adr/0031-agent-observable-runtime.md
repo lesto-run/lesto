@@ -117,7 +117,7 @@ pipeline, no new exporter, no parallel telemetry path. The only genuinely new ar
 
 | Concern | Resolution via the existing child-span mechanism |
 |---|---|
-| **One LLM call** | `ai.generate` span: attributes `ai.model`, `ai.usage.input_tokens`, `ai.usage.output_tokens`, `ai.stop_reason`; status `error` on a coded `AiError`. |
+| **One LLM call** | `ai.generate` span: attributes `ai.model`, `ai.streaming` (`false` one-shot / `true` streamed; L-1cbabfc0), `ai.usage.input_tokens`, `ai.usage.output_tokens`, `ai.stop_reason` (the `ai.usage.*`/`ai.stop_reason` are absent on a streamed span — `ai.streaming = true` marks that expected); status `error` on a coded `AiError`. |
 | **One model tool call** | `ai.tool` child span (of the `ai.generate` that requested it): attribute `ai.tool.name`; status from whether the tool threw. |
 | **One MCP governed action** | `mcp.tool` span built from the data the `McpAuditRecord` already carries: `mcp.tool`, `mcp.input_hash`, `mcp.outcome`, `mcp.duration_ms`. |
 
