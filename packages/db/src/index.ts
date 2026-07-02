@@ -66,5 +66,7 @@ export type { Db, DbOptions, JoinQuery, QueryEvent, SelectQuery } from "./querie
 
 export type { SqlDatabase, SqlStatement } from "./sql";
 
+export { adaptSyncSqlite } from "./sync-sqlite";
+
 export { DbError, LestoError } from "./errors";
 export type { DbErrorCode } from "./errors";

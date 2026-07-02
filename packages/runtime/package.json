@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@lesto/csrf": "workspace:*",
+    "@lesto/db": "workspace:*",
     "@lesto/errors": "workspace:*",
     "@lesto/kernel": "workspace:*",
     "@lesto/queue": "workspace:*",

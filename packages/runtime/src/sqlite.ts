@@ -22,16 +22,19 @@
  * the untestable wiring in `./sqlite-drivers` (excluded from coverage, like
  * `bin.ts`); everything decided here is covered.
  *
- * Transactions are serialized FIFO over the one shared connection: each
- * `transaction()` enqueues onto an internal promise chain and only `BEGIN`s once
- * the previous span has fully settled, so concurrent transactions (steady-state
- * once the rate-limit store runs one per request) never collide on the second
- * `BEGIN`. Nested transactions compose flat — an inner `tx.transaction(...)` runs
- * its callback on the same span rather than re-enqueuing (which would deadlock).
- * Cross-*process* SQLite writers remain out of scope: SQLite is the single-node
- * dev default; fleets run Postgres.
+ * Transactions are serialized FIFO over the one shared connection via `@lesto/db`'s
+ * {@link adaptSyncSqlite} — the one tested copy of the manual `BEGIN`…`COMMIT`/`ROLLBACK`
+ * adapter this driver shares with `@lesto/live`'s OPFS-SQLite driver (both wrap a
+ * synchronous, single-connection SQLite engine the same way). Each `transaction()` enqueues
+ * onto an internal promise chain and only `BEGIN`s once the previous span has fully settled,
+ * so concurrent transactions (steady-state once the rate-limit store runs one per request)
+ * never collide on the second `BEGIN`. Nested transactions compose flat — an inner
+ * `tx.transaction(...)` runs its callback on the same span rather than re-enqueuing (which
+ * would deadlock). Cross-*process* SQLite writers remain out of scope: SQLite is the
+ * single-node dev default; fleets run Postgres.
  */
 
+import { adaptSyncSqlite } from "@lesto/db";
 import type { KernelDatabase } from "@lesto/kernel";
 
 import { RuntimeError } from "./errors";
@@ -113,63 +116,10 @@ export async function openSqlite(
     },
   };
 
-  // The FIFO chain: every transaction enqueues its BEGIN…COMMIT/ROLLBACK span
-  // onto this promise so the next one cannot `BEGIN` until the previous span has
-  // fully settled. Without it, two concurrent `transaction()` calls on the single
-  // shared connection interleave at the `await fn(...)` microtask boundary and
-  // the second `BEGIN` throws "cannot start a transaction within a transaction".
-  let chain: Promise<unknown> = Promise.resolve();
-
-  const db: KernelDatabase = {
-    ...statements,
-
-    // Single-connection (SQLite) FIFO transaction. Each call appends its span to
-    // `chain` and waits for the previous span to settle before `BEGIN`, so spans
-    // never overlap on the one connection. A rolled-back (rejected) span must not
-    // poison the queue: the sequencing link swallows the previous link's rejection
-    // (`.then(noop, noop)`) purely to gate the next BEGIN, while the caller still
-    // receives a promise that rejects with the original error.
-    transaction: async <T>(fn: (tx: KernelDatabase) => Promise<T>): Promise<T> => {
-      const run = chain.then(async () => {
-        raw.exec("BEGIN");
-
-        try {
-          // The tx-scoped handle shares the one connection's `exec`/`prepare`.
-          // A nested `transaction` runs `inner` FLAT on this same span — SQLite
-          // has no nested BEGIN, so composing flat (rather than re-enqueuing,
-          // which would deadlock against the chain this span already holds)
-          // matches the shape `createPgDatabase` uses (pg adapter.ts:107–110).
-          const tx: KernelDatabase = {
-            ...statements,
-            transaction: (inner) => inner(tx),
-          };
-
-          const out = await fn(tx);
-
-          raw.exec("COMMIT");
-
-          return out;
-        } catch (error) {
-          try {
-            raw.exec("ROLLBACK");
-          } catch {
-            // Best-effort: a failed rollback must not mask the original error.
-          }
-
-          throw error;
-        }
-      });
-
-      // Gate the next span on this one settling, but never let its rejection
-      // poison the chain — sequencing only cares that the span ENDED.
-      chain = run.then(
-        () => undefined,
-        () => undefined,
-      );
-
-      return run;
-    },
-  };
+  // `KernelDatabase` is an alias of `@lesto/db`'s `SqlDatabase` (kernel.ts), so the shared
+  // adapter's return type lines up with no cast. See {@link adaptSyncSqlite} for the
+  // FIFO/rollback/flat-nesting invariants this connection now shares with the OPFS driver.
+  const db: KernelDatabase = adaptSyncSqlite(statements);
 
   return { db, close: () => raw.close() };
 }

@@ -10,20 +10,45 @@
  * It is **coverage-excluded, browser-only wiring** — the same category as `@lesto/runtime`'s
  * `sqlite-drivers.ts` and `bin.ts`: it cannot run under Node/vitest (no OPFS, no WASM worker),
  * so the logic that decides anything lives in the tested {@link createSqliteLiveStore} and the
- * `SqlDatabase`-shaped adapters, while this file only constructs and shims the engine. Everything
- * that matters — the atomic rows+cursor transaction — is exercised there against a real SQLite.
+ * `SqlDatabase`-shaped adapters, while this file only constructs the oo1 handle and shims its
+ * synchronous `exec`/`prepare` surface. The manual `BEGIN`…`COMMIT`/`ROLLBACK` FIFO transaction
+ * that surface needs is no longer duplicated (and no longer coverage-excluded) here: `adapt()`
+ * hands the shimmed `exec`/`prepare` pair to `@lesto/db`'s {@link adaptSyncSqlite}, the one
+ * tested copy `@lesto/runtime`'s `openSqlite` shares. Everything that matters — the atomic
+ * rows+cursor transaction — is exercised there against a real SQLite, PLUS the FIFO/rollback/
+ * flat-nesting invariants are now covered directly by `adaptSyncSqlite`'s own suite.
  *
  * `@sqlite.org/sqlite-wasm` is an **optional peer dependency**: only an app that opts into the
  * durable store installs it. Its surface is declared with the local interfaces below (not pulled
  * from the package's own types, which a `@lesto/live` consumer need not have installed), and it is
  * reached through a dynamic `import` whose specifier is typed as a bare `string` — so a downstream
- * `tsc` does not try to resolve the optional peer. NOTE: a `const: string` specifier can also
- * defeat a *bundler*'s static analysis (esbuild/Rollup/Vite may not pre-wire `import(variable)`);
- * an app that opts in may need `optimizeDeps.exclude`/a `@vite-ignore`-style hint. This is
- * browser-only wiring with no example consumer yet — the round-trip must be proven in the Inc6
- * gallery example (tracked) before it is relied on.
+ * `tsc` does not try to resolve the optional peer.
+ *
+ * PROVEN (Inc6, `examples/live-durable`, a real `vite build` against the peer actually
+ * installed): a *bundler* does defeat this the same way `tsc` is meant to be defeated, and WORSE
+ * than a warning — production Rollup/Vite silently drops the import with **no diagnostic at
+ * all**. A side-by-side `vite build` of the identical `import(...)` with a literal string
+ * specifier bundles `@sqlite.org/sqlite-wasm` in full (its JS plus the `sqlite3.wasm` /
+ * worker/proxy assets it needs — ~1.1 MB); the same call through this file's non-literal
+ * `SQLITE_WASM_MODULE` variable produces a build that is missing all of it — the emitted chunk
+ * still contains the literal source text `import(SQLITE_WASM_MODULE)`, an unresolved BARE
+ * specifier a browser's native ESM loader cannot resolve (no relative path, no import map), so
+ * it throws at runtime — and Rollup emits zero warning either way (confirmed with an `onwarn`
+ * hook that logs every warning: none fire). Neither of the two mitigations one might reach for
+ * changes this: `import(/* @vite-ignore *\/ SQLITE_WASM_MODULE)` (present below) only silences
+ * Vite's *dev-time* "cannot analyze this dynamic import" console warning — the production build
+ * output is byte-identical with or without it — and `optimizeDeps.exclude` only steers the dev
+ * server's esbuild dependency SCAN, which never runs during `vite build` at all. Both are
+ * genuinely inert here; kept anyway as the standard, honest signal of intent (see
+ * `examples/live-durable/vite.config.ts` and its README for the full experiment). An app that
+ * needs this durable path production-bundled must arrange for `@sqlite.org/sqlite-wasm` to
+ * resolve at runtime by some means outside this file — e.g. its own literal
+ * `import("@sqlite.org/sqlite-wasm")` elsewhere plus a matching import map, or a fork of this
+ * loader — since a literal specifier here would re-open the exact `tsc` requirement this file
+ * exists to avoid for a consumer that has not installed the peer.
  */
 
+import { adaptSyncSqlite } from "@lesto/db";
 import { LestoError } from "@lesto/errors";
 import type { SqlDatabase, SqlStatement } from "@lesto/db";
 
@@ -86,9 +111,13 @@ export class OpfsSqliteError extends LestoError<"LIVE_OPFS_UNAVAILABLE"> {
 }
 
 // The optional peer's specifier, typed as a bare `string` so `tsc` will not resolve it at
-// type-check time (no error for a consumer that has not installed it). Caveat: this can also hide
-// the specifier from a bundler's static analysis — an opting-in app may need to exclude/ignore it
-// (see the module doc); to be proven in the Inc6 example.
+// type-check time (no error for a consumer that has not installed it). PROVEN in the Inc6
+// example (see the module doc): the same non-literal shape that protects `tsc` also makes
+// Rollup/Vite skip bundling this import ENTIRELY — silently, with no warning — so `dist/` never
+// gets `@sqlite.org/sqlite-wasm`'s code, and the shipped `import(SQLITE_WASM_MODULE)` call is
+// left as an unresolvable bare specifier that throws in a real browser. `optimizeDeps.exclude`
+// and `@vite-ignore` do not change this (see the module doc for why); there is no bundler flag
+// that fixes it from this side of the seam.
 const SQLITE_WASM_MODULE: string = "@sqlite.org/sqlite-wasm";
 
 /**
@@ -106,7 +135,9 @@ export async function openOpfsSqliteDatabase(
   let raw: OoDatabase;
 
   try {
-    const module = (await import(SQLITE_WASM_MODULE)) as { default: Sqlite3InitModule };
+    const module = (await import(/* @vite-ignore */ SQLITE_WASM_MODULE)) as {
+      default: Sqlite3InitModule;
+    };
     const sqlite3 = await module.default();
     const pool = await sqlite3.installOpfsSAHPoolVfs({ name: vfsName });
 
@@ -125,14 +156,14 @@ export async function openOpfsSqliteDatabase(
   return { db: adapt(raw), close: () => raw.close() };
 }
 
-/** The empty settle handler for the transaction FIFO — a rolled-back span needs no follow-up. */
-const noop = (): void => {};
-
 /**
  * Adapt a synchronous oo1 handle to the async {@link SqlDatabase} seam. The terminals return
- * resolved promises (SQLite is in-process, so there is no real latency) and `transaction` runs a
- * manual `BEGIN…COMMIT/ROLLBACK` span over the one connection, FIFO-serialized so an async
- * callback cannot interleave a second `BEGIN` — the shape `@lesto/runtime`'s `openSqlite` uses.
+ * resolved promises (SQLite is in-process, so there is no real latency); `transaction` (the
+ * manual `BEGIN…COMMIT/ROLLBACK` span, FIFO-serialized so an async callback cannot interleave a
+ * second `BEGIN`) is `@lesto/db`'s shared {@link adaptSyncSqlite} — the same tested helper
+ * `@lesto/runtime`'s `openSqlite` builds its transaction on. This moves what used to be
+ * coverage-excluded transaction logic into that helper's own 100%-covered suite; only the
+ * oo1-specific `exec`/`prepare` shim below remains untestable browser wiring.
  */
 function adapt(raw: OoDatabase): SqlDatabase {
   const statements: Pick<SqlDatabase, "exec" | "prepare"> = {
@@ -163,38 +194,5 @@ function adapt(raw: OoDatabase): SqlDatabase {
     }),
   };
 
-  let chain: Promise<unknown> = Promise.resolve();
-
-  const db: SqlDatabase = {
-    ...statements,
-
-    transaction: async <T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<T> => {
-      const run = chain.then(async () => {
-        raw.exec("BEGIN");
-
-        try {
-          const tx: SqlDatabase = { ...statements, transaction: (inner) => inner(tx) };
-          const out = await fn(tx);
-
-          raw.exec("COMMIT");
-
-          return out;
-        } catch (error) {
-          try {
-            raw.exec("ROLLBACK");
-          } catch {
-            // Best-effort: a failed rollback must not mask the original error.
-          }
-
-          throw error;
-        }
-      });
-
-      chain = run.then(noop, noop);
-
-      return run;
-    },
-  };
-
-  return db;
+  return adaptSyncSqlite(statements);
 }
