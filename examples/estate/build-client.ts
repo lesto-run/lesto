@@ -36,14 +36,20 @@ import { basename, dirname, join } from "node:path";
 import type { BunPlugin } from "bun";
 
 /**
- * The React specifiers we redirect when `--preact` is set. Most go straight to
- * Preact's compat layer; `react-dom` goes to a local shim that adds the React 19
- * resource hints (`preload`, `preinit`, …) Preact omits but `@lesto/ui`'s barrel
- * imports — see `preact-react-dom-shim.ts` for why those are inert on the client.
+ * The React specifiers we redirect when `--preact` is set — each goes to Preact's
+ * compat layer. There is deliberately NO bare `react-dom` entry: the React 19
+ * resource hints that once forced one (`preload`, `preinit`, …) live in
+ * `@lesto/ui`'s `resources.ts`, which moved off the isomorphic `@lesto/ui` barrel
+ * onto the `@lesto/ui/server` subpath — the surface the SSR WORKER imports for
+ * `preactServerRenderer`, never this client entry. So the client graph no longer
+ * references bare `react-dom` (the `--preact` bundle is byte-identical with the
+ * entry gone), and a stray future `react-dom` import in client code is now an
+ * honest unresolved-module error rather than a silently-shimmed no-op. The
+ * `preact-react-dom-shim.ts` no-op it used to point at survives only for the
+ * worker's Preact build — see that shim's header and `wrangler.jsonc`.
  */
 const PREACT_ALIAS: Readonly<Record<string, string>> = {
   react: "preact/compat",
-  "react-dom": "./preact-react-dom-shim.ts",
   // `react-dom/client` exposes `createRoot`/`hydrateRoot`; Preact mirrors them
   // under `preact/compat/client`, the only specifier that is not just compat.
   "react-dom/client": "preact/compat/client",

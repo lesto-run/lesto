@@ -33,11 +33,15 @@
 		},
 	],
 	// Preact by default on the edge (ADR 0007/0008): the worker bundle resolves
-	// every React specifier to Preact's compat layer — the same alias set
-	// `build-client.ts --preact` applies to the client bundle, so the SSR'd markup
-	// and the shipped client speak one dialect. `worker.ts` completes the pair by
-	// rendering through `preactServerRenderer`. The shims satisfy the react-dom
-	// imports `@lesto/ui`'s barrel carries but the worker never invokes.
+	// every React specifier to Preact's compat layer, and `worker.ts` renders
+	// through `preactServerRenderer`, so the SSR'd markup and the shipped client
+	// speak one dialect. This set is a SUPERSET of `build-client.ts --preact`'s
+	// client alias — it adds the `react-dom` and `react-dom/server` shims, because
+	// the worker imports the `@lesto/ui/server` surface (for `preactServerRenderer`)
+	// whose barrel drags `resources.ts` (bare-`react-dom` resource hints) and the
+	// page renderers (`react-dom/server`) into the graph. The client bundle never
+	// imports that server surface, so it needs neither shim. The worker resolves
+	// both but invokes neither on this Preact path — inert no-ops.
 	"alias": {
 		"react": "preact/compat",
 		"react-dom/client": "preact/compat/client",

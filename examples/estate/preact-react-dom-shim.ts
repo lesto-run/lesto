@@ -1,20 +1,25 @@
 /**
- * The `react-dom` shim for the OPT-IN `--preact` client bundle.
+ * The `react-dom` shim for the OPT-IN `--preact` build of estate's SSR WORKER.
  *
  * Preact's `preact/compat` covers React's component API, but NOT React 19's
  * server resource-hint exports (`preload`, `preinit`, `preinitModule`,
- * `preconnect`, `prefetchDNS`). `@lesto/ui`'s barrel pulls `resources.ts`, which
- * imports those names from `react-dom`, into the client graph — so a bare
- * `react-dom` -> `preact/compat` alias fails the bundle with "no matching export"
- * before any tree-shaking runs.
+ * `preconnect`, `prefetchDNS`). `@lesto/ui/server`'s barrel pulls `resources.ts`,
+ * which imports those names from bare `react-dom`, into the worker graph —
+ * `worker.ts` imports `@lesto/ui/server` for `preactServerRenderer` — so a bare
+ * `react-dom` -> `preact/compat` alias fails the worker bundle with "no matching
+ * export" before any tree-shaking runs. This shim re-exports everything Preact's
+ * compat provides and adds the five missing hints as no-ops, so the import
+ * resolves.
  *
- * Those hints are a SERVER concern: they tell `react-dom/server` to emit
- * `<link rel=preload>` markup during render. They are never called on the client,
- * least of all by a deferred island that mounts fresh with `createRoot`. So this
- * shim re-exports everything Preact's compat provides and adds the five missing
- * hints as no-ops — present so the import resolves, inert because the client
- * never invokes them. This is loaded only when `--preact` is set; the default
- * React build imports the real `react-dom` and is untouched.
+ * Those hints tell `react-dom/server` to emit `<link rel=preload>` markup during a
+ * React render; under Preact's `preact-render-to-string` renderer they have no
+ * wiring, and estate calls none of them, so the no-ops are inert, not lossy. Only
+ * the worker aliases `react-dom` here (`wrangler.jsonc`), because only the worker
+ * imports the `@lesto/ui/server` surface that drags `resources.ts` in. The CLIENT
+ * bundle (`build-client.ts --preact`) no longer references bare `react-dom` at all
+ * — `resources.ts` moved off the isomorphic `@lesto/ui` barrel the client imports
+ * — so `build-client.ts` dropped its `react-dom` alias entry. The default React
+ * build (worker and client) imports the real `react-dom` and is untouched.
  */
 
 export * from "preact/compat";
