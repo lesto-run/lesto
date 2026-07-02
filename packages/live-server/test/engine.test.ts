@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDb, createTableSql, defineTable, eq, integer, text, timestamp } from "@lesto/db";
 import type { Db, SqlDatabase } from "@lesto/db";
@@ -651,6 +651,108 @@ describe("replication change source — the v1 change path", () => {
     src.emit({ op: "insert", table: "other_table", newImage: { id: "9" }, ...STAMP });
 
     expect(sink.changes).toEqual([]);
+    e.stop();
+  });
+
+  // L-802b3e7b — a classifier throw (or a dropped malformed-LSN change) happens BEFORE
+  // applyChange/ring.record, so the engine's OWN rows + replay ring are left missing the change: the
+  // shape is diverged server-side, not merely on the client. Confining the error to `onError` leaves
+  // it silently stale until the client happens to reconnect. The engine now DROPS the diverged shape
+  // (rows + ring + classifier) and fires each subscriber's onResync, so it purges + re-snapshots and
+  // any re-subscribe re-seeds from the DB.
+  it("DROPS a shape whose classifier throws, routes onError, and fires the subscriber's onResync (L-802b3e7b)", async () => {
+    await insert(1, "hi", 100); // a room-1 row is in the shape
+    const src = fakeSource();
+    const errors: unknown[] = [];
+    const sink = collector();
+    const onResync = vi.fn();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      onError: (error) => errors.push(error),
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    await e.subscribe(room1Shape(), sink.onChange, undefined, onResync);
+    expect(e.activeShapes).toBe(1);
+
+    // A row STAYING in room 1 but changing its key (id 1 → 2) → LIVE_SERVER_PRIMARY_KEY_CHANGED,
+    // thrown BEFORE the change is applied. The engine's rows + ring never saw it → diverged.
+    src.emit(
+      upd(
+        { id: "1", room_id: "1", body: "hi", created_at: "100" },
+        { id: "2", room_id: "1", body: "hi", created_at: "100" },
+      ),
+    );
+
+    expect((errors[0] as LiveServerError).code).toBe("LIVE_SERVER_PRIMARY_KEY_CHANGED");
+    expect(onResync).toHaveBeenCalledTimes(1); // the subscriber is told to purge + re-snapshot
+    expect(sink.changes).toEqual([]); // never a partial/garbled change
+    expect(e.activeShapes).toBe(0); // the diverged entry is gone — never left to re-serve the leak
+
+    // A re-subscribe re-seeds from the DB (the row is still there — only a replication event fired)
+    // and re-runs the replica-identity guard against a fresh probe.
+    const resubscribe = await e.subscribe(room1Shape(), () => {});
+    expect((resubscribe.snapshot as Row[]).map((r) => r.id)).toEqual([1]);
+    expect(e.activeShapes).toBe(1);
+    e.stop();
+  });
+
+  it("a malformed-LSN change DROPS every shape on its table and fires each onResync (L-802b3e7b)", async () => {
+    const src = fakeSource();
+    const errors: unknown[] = [];
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      onError: (error) => errors.push(error),
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    // Two DISTINCT shapes on the same table (room-1 filtered + filterless) → two entries.
+    const onResyncA = vi.fn();
+    const onResyncB = vi.fn();
+    await e.subscribe(room1Shape(), () => {}, undefined, onResyncA);
+    await e.subscribe(room1Shape({ where: [] }), () => {}, undefined, onResyncB);
+    expect(e.activeShapes).toBe(2);
+
+    // A malformed commit LSN: the change is dropped entirely, so BOTH shapes on `messages` are now
+    // missing it → both drop and both subscribers are told to resync.
+    src.emit({
+      ...ins({ id: "1", room_id: "1", body: "hi", created_at: "100" }),
+      commitLSN: "nope",
+    });
+
+    expect((errors[0] as LiveServerError).code).toBe("LIVE_SERVER_INVALID_LSN");
+    expect(onResyncA).toHaveBeenCalledTimes(1);
+    expect(onResyncB).toHaveBeenCalledTimes(1);
+    expect(e.activeShapes).toBe(0);
+    e.stop();
+  });
+
+  it("a malformed-LSN change on ANOTHER table leaves this table's shape intact (drop is table-scoped)", async () => {
+    const src = fakeSource();
+    const errors: unknown[] = [];
+    const sink = collector();
+    const onResync = vi.fn();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      onError: (error) => errors.push(error),
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    await e.subscribe(room1Shape(), sink.onChange, undefined, onResync);
+
+    // Malformed LSN, but for a DIFFERENT table — this shape lost nothing, so it must NOT be dropped.
+    src.emit({
+      op: "insert",
+      table: "other_table",
+      newImage: { id: "9" },
+      commitLSN: "nope",
+      systemId: "sys",
+      timelineId: 1,
+    });
+
+    expect((errors[0] as LiveServerError).code).toBe("LIVE_SERVER_INVALID_LSN");
+    expect(onResync).not.toHaveBeenCalled();
+    expect(e.activeShapes).toBe(1); // untouched
     e.stop();
   });
 });

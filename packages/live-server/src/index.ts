@@ -61,6 +61,7 @@ export type {
   ShapeEngine,
   ShapeEngineOptions,
   ShapeResume,
+  ShapeResyncListener,
   ShapeSubscription,
   TimerSeam,
 } from "./engine";

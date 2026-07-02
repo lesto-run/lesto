@@ -538,3 +538,42 @@ not build: an exact commit-LSN source for a write, a keepalive-fed engine-global
 (extending `ChangeSource` to surface `'k'` keepalives), per-connection/per-principal confirm addressing,
 and durable held-overlay persistence keyed by mutation id — the last of which this amendment already
 lands (the `held` column), so the interim advances vNext rather than fighting it.
+
+### 2026-07-02 — amendment: a classification error resyncs the shape; the `resync` frame is resume-breaking (`L-802b3e7b`)
+
+The `REPLICA IDENTITY` guards above (acceptance (b), the `L-5c46b49b` key-column amendment) **refuse** an
+unsafe shape at registration. But a shape can pass registration and *then* throw on a live change — a
+`FULL`→`DEFAULT` downgrade (`LIVE_SERVER_OLD_IMAGE_INCOMPLETE`), a refused key change
+(`LIVE_SERVER_PRIMARY_KEY_CHANGED`), an unchanged external-TOAST predicate column, or a malformed commit
+LSN. The engine confined each such throw to `onError` and moved on, but that is **not enough**: the throw
+happens *before* the change is applied to the shape's server-side `rows` and recorded in its replay ring,
+so the engine's OWN view is now missing the change — the shape is diverged **server-side**, not merely on
+the client, and it stays silently stale until the client happens to reconnect. This shares the
+classification-error path with the same **purge + resync + sever** posture already mandated for a re-auth
+failure (Decision: continuous re-authorization).
+
+Two corrections, both load-bearing:
+
+- **Drop the diverged shape, don't just frame it.** A `resync` frame alone would be theater: a racing (or
+  subsequent) re-subscribe reuses the still-alive diverged entry and re-serves the leak from
+  `[...rows.values()]`. So the engine now **removes the shape entry first** (rows + ring + classifier),
+  then fans an `onResync` to every subscriber. A re-subscribe re-seeds from the DB (`fetchRows`) and
+  re-runs the replica-identity guard against a fresh catalog probe — so a *persistent* misconfiguration
+  (a real `FULL`→`DEFAULT`) converts "throw-and-diverge-forever" into the loud coded
+  `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` (the refuse-don't-leak posture), while a *transient* failure
+  (a key change, a TOAST omission) succeeds on re-subscribe and the DB snapshot converges by construction.
+  A dropped **malformed-LSN** change applies the same drop to *every* shape on that table (each is missing
+  it); `onError` is kept for both (these demand operator attention).
+
+- **The `resync` frame is now resume-breaking.** `ShapeConnection.resync()` previously stamped its `id:`
+  with the connection's last-delivered cursor. That is a **false continuity proof**: the frame says "your
+  slice is gone" while its `id:` says "you are LSN-continuous", so the client's `EventSource` reconnects
+  with `Last-Event-ID` = that real cursor and **replays missed changes onto the just-emptied slice** — a
+  silent, durable, *strictly-worse* divergence. Every `resync` (re-auth purge, backpressure overflow,
+  shape-drop) now carries a constant **non-resumable sentinel** (`v0:resync`, which `decodeResumeCursor`
+  maps to `undefined` → the re-snapshot floor). `resync()` takes no cursor argument, so the hole cannot be
+  reintroduced by construction. This also fixes a pre-existing latent bug on the **backpressure-overflow**
+  path, which stamped a real cursor for the same replay-onto-dropped-slice reason.
+
+Scope: the **v1** replication path only — the v0 poll self-heals every tick (it re-reads and diffs the
+whole table), so its `runTick` catch is unchanged.

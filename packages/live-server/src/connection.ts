@@ -13,6 +13,8 @@
 import { changeFrame, commentFrame, resyncFrame, snapshotFrame } from "@lesto/live-protocol";
 import type { Cursor, Row, ShapeChange } from "@lesto/live-protocol";
 
+import { RESYNC_CURSOR } from "./resume";
+
 /**
  * The slice of a `ReadableStreamDefaultController<string>` a connection writes through —
  * narrow on purpose so a fake drives every branch, and a real controller satisfies it
@@ -73,7 +75,7 @@ export class ShapeConnection {
     if (this.#closed) return;
 
     if (this.#isFull()) {
-      this.#dropToResync(cursor);
+      this.#dropToResync();
 
       return;
     }
@@ -100,11 +102,17 @@ export class ShapeConnection {
    * shape/session re-auth failure must purge what was already delivered, not merely stop
    * delivering more of it — closing the socket alone leaves stale rows in the client's
    * durable store). A no-op once already closed, so a caller racing {@link close} is safe.
+   *
+   * The frame is stamped with the non-resumable {@link RESYNC_CURSOR}, never a real position: a
+   * resync means "your slice is gone", and a real `id:` here would let the client's reconnect prove
+   * LSN-continuity and replay missed changes onto the emptied slice — a durable, strictly-worse
+   * divergence (L-802b3e7b). Taking no cursor argument makes that hole unreconstructable by
+   * construction.
    */
-  resync(cursor: Cursor): void {
+  resync(): void {
     if (this.#closed) return;
 
-    this.#emit(resyncFrame(cursor));
+    this.#emit(resyncFrame(RESYNC_CURSOR));
     this.#closed = true;
     this.#safeClose();
   }
@@ -121,8 +129,8 @@ export class ShapeConnection {
   }
 
   /** A slow client's buffer is full → final `resync`, close, and signal overflow. */
-  #dropToResync(cursor: Cursor): void {
-    this.resync(cursor);
+  #dropToResync(): void {
+    this.resync();
     this.#onOverflow();
   }
 

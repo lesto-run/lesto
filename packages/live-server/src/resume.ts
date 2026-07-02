@@ -37,6 +37,17 @@ import type { SystemIdentity } from "./replication";
 const RESUME_VERSION = "v1";
 
 /**
+ * The cursor stamped on every `resync` frame — a deliberately **non-resumable** sentinel. A resync
+ * says "your local slice is gone; drop it and re-snapshot", so its `id:` must NOT let the client's
+ * next reconnect prove LSN-continuity: a real cursor there would make an `EventSource` reconnect
+ * `Last-Event-ID`-continuous and replay missed changes onto the just-emptied slice (a durable,
+ * strictly-worse divergence — L-802b3e7b). It carries the `v0:` prefix so {@link decodeResumeCursor}
+ * returns `undefined` for it (only 2 colon-parts, never 4), forcing the always-correct re-snapshot
+ * floor. The frame and its `id:` then AGREE: both say "you are not continuous — re-snapshot".
+ */
+export const RESYNC_CURSOR = "v0:resync";
+
+/**
  * A Postgres LSN is `<hex>/<hex>` (high 32 bits `/` low 32 bits). A client-presented cursor is
  * untrusted, so its LSN must match this before it is compared or trusted — the same guard the
  * real client applies before splicing an LSN into `START_REPLICATION` (`pg-replication-client.ts`).

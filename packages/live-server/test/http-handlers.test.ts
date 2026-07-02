@@ -68,13 +68,14 @@ function fakeStreamTimers() {
   return { seam, intervalCbs, timeoutCbs, cleared };
 }
 
-/** A hand-fed source: capture `onChange`, expose `fire` to push a change. */
+/** A hand-fed source: capture `onChange`/`onResync`, expose `fire`/`resync` to drive them. */
 function fakeSource(
   snapshot: readonly Row[] = [{ id: 1, body: "hi" }],
   cursor: Cursor = "c0",
   resume?: ShapeResume,
 ) {
   let deliver: ((change: ShapeChange, cursor: Cursor) => void) | undefined;
+  let notifyResync: (() => void) | undefined;
   const close = vi.fn();
 
   const source: ShapeStreamSource = {
@@ -84,10 +85,18 @@ function fakeSource(
     onChange: (next) => {
       deliver = next;
     },
+    onResync: (notify) => {
+      notifyResync = notify;
+    },
     close,
   };
 
-  return { source, close, fire: (c: ShapeChange, cur: Cursor) => deliver?.(c, cur) };
+  return {
+    source,
+    close,
+    fire: (c: ShapeChange, cur: Cursor) => deliver?.(c, cur),
+    resync: () => notifyResync?.(),
+  };
 }
 
 /** Read the next enqueued frame, or `undefined` at end-of-stream. */
@@ -107,10 +116,12 @@ const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve
 function stubEngine(): {
   engine: ShapeEngine;
   fire: ShapeChangeListener;
+  fireResync: () => void;
   unsub: () => void;
   since: () => ResumeCursor | undefined;
 } {
   let captured: ShapeChangeListener | undefined;
+  let capturedResync: (() => void) | undefined;
   let capturedSince: ResumeCursor | undefined;
   const unsub = vi.fn();
 
@@ -119,8 +130,10 @@ function stubEngine(): {
       shape: ShapeDefinition,
       onChange: ShapeChangeListener,
       since?: ResumeCursor,
+      onResync?: () => void,
     ) => {
       captured = onChange;
+      capturedResync = onResync;
       capturedSince = since;
 
       return {
@@ -135,7 +148,13 @@ function stubEngine(): {
     stop: () => {},
   } as ShapeEngine;
 
-  return { engine, fire: (c, cur) => captured?.(c, cur), unsub, since: () => capturedSince };
+  return {
+    engine,
+    fire: (c, cur) => captured?.(c, cur),
+    fireResync: () => capturedResync?.(),
+    unsub,
+    since: () => capturedSince,
+  };
 }
 
 /** A stub engine whose subscribe returns a fixed snapshot (and an optional resume decision). */
@@ -207,6 +226,31 @@ describe("subscribeSource — the snapshot→tail bridge", () => {
 
     source.close();
     expect(unsub).toHaveBeenCalledTimes(1);
+  });
+
+  it("latches a resync fired in the subscribe→attach gap, delivering it when onResync attaches", async () => {
+    const { engine, fireResync } = stubEngine();
+    const source = await subscribeSource(engine, def);
+
+    // The engine drops the diverged shape BEFORE the stream wires its resync sink — mirroring the
+    // change buffer, the signal is latched, not lost.
+    fireResync();
+
+    const seen: string[] = [];
+    source.onResync?.(() => seen.push("resync"));
+
+    expect(seen).toEqual(["resync"]);
+  });
+
+  it("forwards a resync fired AFTER onResync attaches", async () => {
+    const { engine, fireResync } = stubEngine();
+    const source = await subscribeSource(engine, def);
+
+    const seen: string[] = [];
+    source.onResync?.(() => seen.push("resync"));
+    fireResync();
+
+    expect(seen).toEqual(["resync"]);
   });
 });
 
@@ -353,7 +397,7 @@ describe("openShapeStream", () => {
     expect(await readFrame(reader)).toBe(
       `event: snapshot\ndata: {"rows":[{"id":1,"body":"hi"}]}\nid: c0\n\n`,
     );
-    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c1\n\n");
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: v0:resync\n\n");
     expect(await readFrame(reader)).toBeUndefined(); // closed
     expect(src.close).toHaveBeenCalledTimes(1);
   });
@@ -386,7 +430,7 @@ describe("openShapeStream", () => {
     expect(src.close).toHaveBeenCalledTimes(1); // torn once — the second teardown no-ops
     // A failed re-auth must PURGE the client's durable slice, not merely close the socket —
     // else every row already delivered would sit stranded in the client's store.
-    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c0\n\n");
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: v0:resync\n\n");
     expect(await readFrame(reader)).toBeUndefined(); // then closed
   });
 
@@ -410,10 +454,10 @@ describe("openShapeStream", () => {
     timers.intervalCbs[1]!();
     await flush();
     expect(src.close).toHaveBeenCalledTimes(1);
-    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c0\n\n");
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: v0:resync\n\n");
   });
 
-  it("stamps the resync-purge with the LAST DELIVERED cursor, not the stale snapshot cursor", async () => {
+  it("stamps the resync-purge with the NON-RESUMABLE sentinel, never the last-delivered cursor (L-802b3e7b)", async () => {
     const timers = fakeStreamTimers();
     const src = fakeSource();
     let valid = true;
@@ -430,14 +474,96 @@ describe("openShapeStream", () => {
     const reader = stream.getReader();
     await readFrame(reader); // snapshot at cursor "c0"
 
-    src.fire({ op: "insert", key: "9", row: { id: 9 } }, "c1");
-    await readFrame(reader); // the delivered change, at cursor "c1"
+    src.fire({ op: "insert", key: "9", row: { id: 9 } }, "v1:sysA:1:0/40");
+    await readFrame(reader); // the delivered change, at a real RESUMABLE cursor
 
     valid = false;
     timers.intervalCbs[1]!(); // re-auth fails
     await flush();
 
-    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c1\n\n");
+    // Even though the client last saw a real, resumable cursor, the purge carries the sentinel —
+    // a real cursor here would let the reconnect prove continuity and replay missed changes onto
+    // the just-purged slice (a durable, strictly-worse divergence — L-802b3e7b).
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: v0:resync\n\n");
+  });
+
+  it("purges the client's slice and tears down when the engine drops the shape (a source resync)", async () => {
+    const timers = fakeStreamTimers();
+    const src = fakeSource();
+
+    const stream = openShapeStream({
+      source: src.source,
+      signal: undefined,
+      heartbeatMs: 1000,
+      maxQueue: 16,
+      timers: timers.seam,
+    });
+    const reader = stream.getReader();
+    await readFrame(reader); // snapshot
+
+    // The engine dropped the diverged shape (a classifier throw / malformed-LSN change) and signaled
+    // resync through the source. The connection purges the client's slice (a resync frame) then tears
+    // down — the client reconnects and re-subscribes to a fresh snapshot.
+    src.resync();
+
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: v0:resync\n\n");
+    expect(await readFrame(reader)).toBeUndefined(); // torn down
+    expect(src.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("tolerates a source that surfaces no resync channel (onResync optional)", async () => {
+    const timers = fakeStreamTimers();
+    // A bare source WITHOUT onResync — the wiring must optional-chain past it, not throw.
+    const bare: ShapeStreamSource = {
+      snapshot: [{ id: 1, body: "hi" }],
+      cursor: "c0",
+      onChange: () => {},
+      close: () => {},
+    };
+
+    const stream = openShapeStream({
+      source: bare,
+      signal: undefined,
+      heartbeatMs: 1000,
+      maxQueue: 16,
+      timers: timers.seam,
+    });
+    const reader = stream.getReader();
+
+    expect(await readFrame(reader)).toContain(`"rows":[{"id":1,"body":"hi"}]`);
+    await reader.cancel();
+  });
+
+  it("bails before registering timers when the source resyncs synchronously on attach (the subscribe→attach latch)", async () => {
+    const timers = fakeStreamTimers();
+    const close = vi.fn();
+    // `subscribeSource` latches a resync fired before the stream attached, so wiring onResync can
+    // purge + tear down SYNCHRONOUSLY during start() — modeled here by an onResync that fires at once.
+    const latched: ShapeStreamSource = {
+      snapshot: [{ id: 1, body: "hi" }],
+      cursor: "c0",
+      onChange: () => {},
+      onResync: (notify) => notify(),
+      close,
+    };
+
+    const stream = openShapeStream({
+      source: latched,
+      signal: undefined,
+      heartbeatMs: 1000,
+      maxQueue: 16,
+      timers: timers.seam,
+      revalidate: () => true, // would register a SECOND interval — must NOT, since start() bailed
+    });
+    const reader = stream.getReader();
+
+    expect(await readFrame(reader)).toContain(`"rows":[{"id":1,"body":"hi"}]`); // snapshot
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: v0:resync\n\n"); // purge
+    expect(await readFrame(reader)).toBeUndefined(); // torn down
+    // The guard fired: NO heartbeat/re-auth intervals were registered after teardown (else they'd
+    // leak — a re-auth interval polling a dead connection forever).
+    expect(timers.intervalCbs).toHaveLength(0);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("severs at the connection TTL", async () => {
@@ -749,7 +875,7 @@ describe("createLiveDataHttpHandlers", () => {
     timers.intervalCbs[1]!();
     await flush();
 
-    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c0\n\n");
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: v0:resync\n\n");
     expect(await readFrame(reader)).toBeUndefined(); // then closed — never left open
   });
 });
@@ -831,7 +957,7 @@ describe("ADR 0042 acceptance matrix — the Inc3 gate", () => {
     timers.intervalCbs[1]!(); // the NEXT re-auth tick — no later than one `reauthMs`
     await flush();
 
-    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c0\n\n");
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: v0:resync\n\n");
     expect(await readFrame(reader)).toBeUndefined(); // severed — bounded by a single interval
   });
 

@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { ShapeChange } from "@lesto/live-protocol";
 
-import { compareLsn, decodeResumeCursor, encodeResumeCursor, ShapeReplayRing } from "../src/resume";
+import {
+  compareLsn,
+  decodeResumeCursor,
+  encodeResumeCursor,
+  RESYNC_CURSOR,
+  ShapeReplayRing,
+} from "../src/resume";
 import type { SystemIdentity } from "../src/replication";
 
 // ---------------------------------------------------------------------------
@@ -24,6 +30,13 @@ describe("encodeResumeCursor / decodeResumeCursor", () => {
 
   it("rejects a v0 (poll-path) cursor — it can never resume", () => {
     expect(decodeResumeCursor("v0:5")).toBeUndefined();
+  });
+
+  it("the resync sentinel is non-resumable — it decodes to `undefined`, forcing a re-snapshot (L-802b3e7b)", () => {
+    // The frame every `resync` is stamped with. Decoding it to `undefined` is the load-bearing
+    // property: a reconnect presenting it proves NO continuity and re-snapshots, so a purged slice
+    // is never replayed onto. (It is a `v0:`-prefixed 2-part token, so it can never be 4-part valid.)
+    expect(decodeResumeCursor(RESYNC_CURSOR)).toBeUndefined();
   });
 
   it("rejects a wrong version prefix", () => {

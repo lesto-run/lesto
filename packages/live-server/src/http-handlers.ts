@@ -114,6 +114,15 @@ export interface ShapeStreamSource {
   /** Begin routing changes (any buffered first, then live) to `deliver`. */
   onChange(deliver: (change: ShapeChange, cursor: Cursor) => void): void;
 
+  /**
+   * Register the connection's resync sink — invoked (at most once) when the engine DROPS this shape
+   * because its server-side view diverged (a classifier throw / a malformed-LSN change): the
+   * connection must purge the client's slice and tear down. A resync that fired in the
+   * subscribe→attach gap is latched and delivered on registration (mirroring the change buffer).
+   * Absent when the underlying source surfaces no resync channel (a test double).
+   */
+  onResync?(notify: () => void): void;
+
   /** Stop the underlying engine subscription. */
   close(): void;
 }
@@ -136,6 +145,12 @@ export async function subscribeSource(
   const buffered: Array<[ShapeChange, Cursor]> = [];
   let deliver: ((change: ShapeChange, cursor: Cursor) => void) | undefined;
 
+  // Latch a resync the engine may fire in the subscribe→attach gap (the engine can drop a diverged
+  // shape the instant after subscribe, before `openShapeStream` wires `onResync`) — exactly as
+  // `buffered` latches a change in that same window. `notifyResync` is the stream's sink once set.
+  let resyncSignaled = false;
+  let notifyResync: (() => void) | undefined;
+
   const sub = await engine.subscribe(
     def,
     (change, cursor) => {
@@ -143,6 +158,10 @@ export async function subscribeSource(
       else deliver(change, cursor);
     },
     since,
+    () => {
+      resyncSignaled = true;
+      notifyResync?.();
+    },
   );
 
   return {
@@ -155,6 +174,12 @@ export async function subscribeSource(
       for (const [change, cursor] of buffered) next(change, cursor);
 
       buffered.length = 0;
+    },
+    onResync(notify) {
+      notifyResync = notify;
+
+      // Deliver a resync that fired before this sink attached (the subscribe→attach gap).
+      if (resyncSignaled) notify();
     },
     close: sub.unsubscribe,
   };
@@ -179,8 +204,9 @@ export interface ShapeStreamConfig {
 
   /**
    * A periodic re-authorization; returning `false` (or throwing) purges the client's
-   * durable slice (a `resync` frame, stamped with the connection's last-delivered cursor)
-   * and THEN tears the stream down — never merely closes the socket.
+   * durable slice (a `resync` frame, carrying the non-resumable resync sentinel so the client's
+   * reconnect re-snapshots rather than replaying onto a purged slice) and THEN tears the stream
+   * down — never merely closes the socket.
    *
    * Optional at THIS (transport) layer — a direct `openShapeStream` caller may omit it and get
    * no re-auth interval. The app-facing {@link createLiveDataHttpHandlers} ALWAYS supplies one
@@ -248,11 +274,6 @@ export function openShapeStream(config: ShapeStreamConfig): ReadableStream<strin
           return;
         }
 
-        // The most recent cursor this connection has actually delivered — the resync-purge
-        // path (below) stamps its frame with it, so a purge lands at the client's true
-        // current position rather than the stale snapshot cursor.
-        let lastCursor = config.source.cursor;
-
         // Initial send (ADR 0042 Inc4): a resuming client that proved continuity gets ONLY its
         // missed changes replayed (no snapshot — it keeps its local slice); everyone else gets the
         // full snapshot (a fresh client, or the re-snapshot floor, whose `snapshot` frame replaces
@@ -261,7 +282,6 @@ export function openShapeStream(config: ShapeStreamConfig): ReadableStream<strin
 
         if (resume.kind === "replay") {
           for (const { change, cursor } of resume.changes) {
-            lastCursor = cursor;
             connection.deliver(change, cursor);
           }
         } else {
@@ -269,9 +289,24 @@ export function openShapeStream(config: ShapeStreamConfig): ReadableStream<strin
         }
 
         config.source.onChange((change, cursor) => {
-          lastCursor = cursor;
           connection?.deliver(change, cursor);
         });
+
+        // The engine dropped this shape (its server-side view diverged): purge the client's durable
+        // slice (a `resync` frame — closing the socket alone would leave stale rows behind) and tear
+        // down. The client reconnects WITHOUT a resumable cursor (the resync frame is non-resumable)
+        // and re-subscribes to a fresh snapshot. Same purge-then-teardown shape as a re-auth failure.
+        config.source.onResync?.(() => {
+          connection?.resync();
+          teardown();
+        });
+
+        // `subscribeSource` LATCHES a resync fired in the subscribe→attach gap, so wiring the sink
+        // above can synchronously purge + tear down. If it did, bail before registering the heartbeat
+        // / re-auth / TTL timers — otherwise they'd be created AFTER teardown cleared the timer list
+        // and leak (a re-auth interval polling a dead connection forever). Mirrors the aborted-signal
+        // early return above.
+        if (torn) return;
 
         // Heartbeat: hold the stream open past intermediary idle timeouts.
         timerHandles.push({
@@ -300,7 +335,7 @@ export function openShapeStream(config: ShapeStreamConfig): ReadableStream<strin
                   // fall through to the same purge-then-teardown as an explicit `false`
                 }
 
-                connection?.resync(lastCursor);
+                connection?.resync();
                 teardown();
               })();
             }, config.reauthMs ?? DEFAULT_REAUTH_MS),

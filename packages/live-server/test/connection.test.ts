@@ -59,7 +59,7 @@ describe("ShapeConnection", () => {
     expect(frames).toEqual([": ping\n\n"]);
   });
 
-  it("resync() emits a final resync frame and closes, WITHOUT signaling onOverflow", () => {
+  it("resync() emits a final NON-RESUMABLE resync frame and closes, WITHOUT signaling onOverflow", () => {
     // The public primitive the handler drives on de-authorization (ADR 0042 (c)/(d)) — distinct
     // from the internal overflow path, which additionally signals onOverflow so the handler tears
     // its own timers/subscription down. A revocation already runs its own teardown right after.
@@ -67,9 +67,12 @@ describe("ShapeConnection", () => {
     const onOverflow = vi.fn();
     const conn = new ShapeConnection({ controller, onOverflow });
 
-    conn.resync("c7");
+    conn.resync();
 
-    expect(frames).toEqual(["event: resync\ndata: \nid: c7\n\n"]);
+    // The frame carries the `v0:resync` sentinel, NEVER a real cursor: a resync says "your slice is
+    // gone", so its id: must decode to `undefined` on reconnect and force a re-snapshot rather than
+    // an LSN-continuous replay onto the purged slice (L-802b3e7b). resync() takes no cursor at all.
+    expect(frames).toEqual(["event: resync\ndata: \nid: v0:resync\n\n"]);
     expect(conn.closed).toBe(true);
     expect(state.closed).toBe(true);
     expect(onOverflow).not.toHaveBeenCalled();
@@ -80,7 +83,7 @@ describe("ShapeConnection", () => {
     const conn = new ShapeConnection({ controller, onOverflow: () => {} });
 
     conn.close();
-    conn.resync("c7");
+    conn.resync();
 
     expect(frames).toEqual([]);
   });
@@ -93,7 +96,9 @@ describe("ShapeConnection", () => {
     state.desiredSize = 0; // high-water mark reached
     conn.deliver(insert, "c9");
 
-    expect(frames).toEqual(["event: resync\ndata: \nid: c9\n\n"]);
+    // The overflow purge carries the sentinel too — the "c9" the change would have used never
+    // leaks onto the resync frame (else a reconnect would replay onto the dropped slice).
+    expect(frames).toEqual(["event: resync\ndata: \nid: v0:resync\n\n"]);
     expect(conn.closed).toBe(true);
     expect(state.closed).toBe(true);
     expect(onOverflow).toHaveBeenCalledTimes(1);
@@ -107,7 +112,7 @@ describe("ShapeConnection", () => {
     const conn = new ShapeConnection({ controller, onOverflow });
     conn.deliver(insert, "c9");
 
-    expect(frames).toEqual(["event: resync\ndata: \nid: c9\n\n"]);
+    expect(frames).toEqual(["event: resync\ndata: \nid: v0:resync\n\n"]);
     expect(onOverflow).toHaveBeenCalledTimes(1);
   });
 

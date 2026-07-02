@@ -84,6 +84,16 @@ const realTimers: TimerSeam = {
 /** A subscriber's per-change callback — one authorized change, stamped with its cursor. */
 export type ShapeChangeListener = (change: ShapeChange, cursor: Cursor) => void;
 
+/**
+ * A subscriber's resync callback — fired (at most once) when the engine DROPS this shape because its
+ * own server-side view diverged: a classifier throw (a refused key change, an incomplete old image)
+ * or a dropped malformed-LSN change leaves the engine's `rows` and replay ring missing a change, so
+ * the shape can no longer be trusted to tail or replay. The subscriber must purge its durable slice
+ * and re-snapshot (a fresh subscribe re-seeds from the DB). Distinct from `onChange`, which only ever
+ * carries an authorized incremental change. See {@link ShapeEngine.subscribe}'s `onResync` param.
+ */
+export type ShapeResyncListener = () => void;
+
 /** One replayed change on resume — the change plus the cursor to re-stamp its frame with. */
 export interface ReplayChange {
   readonly change: ShapeChange;
@@ -139,11 +149,16 @@ export interface ShapeEngine {
    * `undefined` for a fresh subscribe. When it proves continuity against the shape's replay ring
    * (v1 path only), the returned {@link ShapeSubscription.resume} carries the exact missed changes
    * to replay; otherwise it says `snapshot` (the re-snapshot floor).
+   *
+   * `onResync` (optional) is invoked if the engine later DROPS this shape because its server-side
+   * view diverged (a classifier throw, a malformed-LSN change) — the subscriber must purge its slice
+   * and re-snapshot. See {@link ShapeResyncListener}.
    */
   subscribe(
     def: ShapeDefinition,
     onChange: ShapeChangeListener,
     since?: ResumeCursor,
+    onResync?: ShapeResyncListener,
   ): Promise<ShapeSubscription>;
 
   /** The number of distinct shapes currently being polled (introspection / tests). */
@@ -153,13 +168,19 @@ export interface ShapeEngine {
   stop(): void;
 }
 
+/** One subscriber to a shape: its change sink, plus an optional resync sink (a shape-drop signal). */
+interface ShapeSubscriber {
+  readonly onChange: ShapeChangeListener;
+  readonly onResync: ShapeResyncListener | undefined;
+}
+
 /** One live shape: its definition, table, keyed authorized rows, cursor, and subscribers. */
 interface ShapeEntry {
   readonly def: ShapeDefinition;
   readonly table: Table;
   rows: Map<RowKey, Row>;
   cursor: number;
-  readonly subscribers: Set<ShapeChangeListener>;
+  readonly subscribers: Set<ShapeSubscriber>;
 
   /**
    * The shape's bound replication classifier — present only on the v1 change-source path, built
@@ -387,7 +408,7 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
     const cursor = pollCursor(entry);
 
     for (const change of changes) {
-      for (const subscriber of entry.subscribers) subscriber(change, cursor);
+      for (const subscriber of entry.subscribers) subscriber.onChange(change, cursor);
     }
   }
 
@@ -459,11 +480,31 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
   }
 
   /**
+   * Drop a shape whose server-side view has diverged and tell its subscribers to resync. A
+   * classifier throw (a refused key change, an incomplete old image) or a dropped malformed-LSN
+   * change happens BEFORE `applyChange`/`ring.record`, so the engine's OWN `rows` and replay ring
+   * are left missing that change — the entry itself is diverged, not merely the client's slice. A
+   * `resync` frame alone would be theater: a racing (or subsequent) re-subscribe would reuse the
+   * still-alive diverged entry and re-serve the leak from `[...rows.values()]`. So remove the entry
+   * FIRST — any re-subscribe then re-seeds from the DB (`fetchRows`) and re-runs the replica-identity
+   * guard (a persistent misconfiguration surfaces as the loud registration error; a transient failure
+   * converges) — THEN fan the resync so every subscriber purges its durable slice and re-snapshots.
+   * (ADR 0042, L-802b3e7b.)
+   */
+  function dropShape(id: string, entry: ShapeEntry): void {
+    shapes.delete(id);
+    if (shapes.size === 0) stopPolling();
+
+    for (const subscriber of entry.subscribers) subscriber.onResync?.();
+  }
+
+  /**
    * The source's change sink: for every active shape on the change's table, classify the change and
    * — if it affects that shape — apply it, record it in the shape's replay ring, stamp it with a
-   * resumable `(systemId, timelineId, LSN)` cursor, and fan it. Each shape is guarded independently
-   * (a coercion/completeness/key-change throw routes to `onError` and is confined to that shape) so
-   * one misconfigured shape can never wedge the shared feed.
+   * resumable `(systemId, timelineId, LSN)` cursor, and fan it. Each shape is guarded independently:
+   * a coercion/completeness/key-change throw routes to `onError` AND drops the diverged shape
+   * (subscribers resync) — confined to that shape, so one misconfigured shape can never wedge the
+   * shared feed nor leave its own subscribers silently stale.
    */
   function onSourceChange(change: ReplicationChange): void {
     // Reject a malformed commit LSN at ingest, before it can enter any shape's replay ring: a bad
@@ -479,6 +520,13 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
         ),
       );
 
+      // The change is dropped entirely, so every shape on its table is now missing it — the same
+      // server-side divergence a classifier throw causes. Drop each so its subscribers re-snapshot
+      // rather than diverge silently until they happen to reconnect.
+      for (const [id, entry] of shapes) {
+        if (entry.def.table === change.table) dropShape(id, entry);
+      }
+
       return;
     }
 
@@ -487,7 +535,7 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
     // cluster/timeline the moment any change has flowed.
     liveIdentity = { systemId: change.systemId, timelineId: change.timelineId };
 
-    for (const entry of shapes.values()) {
+    for (const [id, entry] of shapes) {
       if (entry.def.table !== change.table) continue;
 
       try {
@@ -507,9 +555,14 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
         entry.ring!.record(identity, change.commitLSN, shapeChange);
         const cursor = encodeResumeCursor({ ...identity, lsn: change.commitLSN });
 
-        for (const subscriber of entry.subscribers) subscriber(shapeChange, cursor);
+        for (const subscriber of entry.subscribers) subscriber.onChange(shapeChange, cursor);
       } catch (error) {
+        // The classifier threw BEFORE applyChange/ring.record ran, so this shape's rows AND ring are
+        // now missing the change: the entry is diverged. Route the error to the operator, then drop
+        // the shape so its subscribers purge + re-snapshot and any re-subscribe re-seeds from the DB
+        // — never leave the diverged entry alive to re-serve the leak (L-802b3e7b).
         onError?.(error);
+        dropShape(id, entry);
       }
     }
   }
@@ -534,7 +587,7 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
   const detachSource = replication?.source.onChange(onSourceChange);
 
   return {
-    async subscribe(def, onChange, since) {
+    async subscribe(def, onChange, since, onResync) {
       // Two gates: the protocol's structural trust boundary (key ∈ columns, scalar
       // values, a total order), then the engine's registry check (real table/columns,
       // unique key). Only then does anything touch the database.
@@ -592,7 +645,8 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
       }
 
       const active = entry;
-      active.subscribers.add(onChange);
+      const subscriber: ShapeSubscriber = { onChange, onResync };
+      active.subscribers.add(subscriber);
 
       const snapshot = [...active.rows.values()].toSorted((a, b) => compareRows(validated, a, b));
 
@@ -608,7 +662,7 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
         const current = shapes.get(id);
         if (current === undefined) return;
 
-        current.subscribers.delete(onChange);
+        current.subscribers.delete(subscriber);
 
         if (current.subscribers.size === 0) {
           shapes.delete(id);
