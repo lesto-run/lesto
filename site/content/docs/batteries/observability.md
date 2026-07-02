@@ -137,6 +137,53 @@ RUM is bounded by design: sessions are sampled (10% by default), and a browser
 span carries only timing numbers, same-origin paths, and vital values — never a
 query string, a cross-origin URL, or a header.
 
+## Agent and LLM spans (preview)
+
+The trace reaches the agent tier too. When a request calls the preview
+[`@lesto/ai`](/batteries/ai) — `generateText` for one model call, `runAgent` for
+a bounded tool loop — each model call becomes an `ai.generate` span and each tool
+run an `ai.tool` span, carrying the model id, the token usage, and the stop
+reason as **attributes**. So one HTTP request that calls an LLM produces
+`http.request → ai.generate → ai.tool` on a single trace, one trace id — agent
+and LLM calls appear on the same trace as the request that drove them, not on a
+separate dashboard.
+
+The wiring is an injected seam, not magic: `@lesto/ai` takes **no** dependency on
+`@lesto/observability`. It accepts an `AgentTracer` (`startSpan(name, attributes)`),
+and the app adapts its `Tracer` to it — parenting each span on the in-flight
+request span, so the agent run rides the request's trace instead of rooting its
+own:
+
+```ts
+// the app adapts its Tracer to @lesto/ai's AgentTracer, parenting on the request span
+const agentTracer = {
+  startSpan: (name, attributes) => {
+    const span = tracer.startSpan(name, { parent: currentRequestSpan(), attributes });
+    return { setStatus: (s) => span.setStatus(s), end: () => span.end() };
+  },
+};
+
+await runAgent({ model, tools, messages, tracer: agentTracer }); // → ai.generate + ai.tool spans
+```
+
+The `examples/estate` concierge route (`POST /mls/api/assistant`) is the dogfood:
+run its node server with `LESTO_OTLP_URL` set and the join shows up in your
+collector, asserted end-to-end in `examples/estate/test/ai-trace.dogfood.test.ts`.
+
+> [!NOTE]
+> **Preview, and traces only — still.** The `ai.*` spans ride the preview
+> `@lesto/ai` package. The token counts on them are span **attributes**, not a
+> metrics or cost pipeline — there is no counter, no spend dashboard, and no
+> queryable span store; the spans ship to your OTLP collector like every other
+> span.
+
+The **MCP control plane** is a separate story. A governed tool action
+(`@lesto/mcp`) can emit its own `mcp.tool` span, but that span is **standalone** —
+the MCP server dispatches over stdio, outside any HTTP request, so there is no
+request span to parent on. Joining MCP activity onto a request trace needs a new
+span-minting seam that has **not** shipped, so Lesto does not claim MCP actions
+appear on your request trace today.
+
 ## Notes and gotchas
 
 - **Traces only.** This package is distributed tracing and nothing else in v1 —

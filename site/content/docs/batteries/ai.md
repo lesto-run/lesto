@@ -100,6 +100,18 @@ produced. Validating a tool's `input` against its schema before acting is your
 boundary concern (the same Zod-at-the-edge story as the rest of Lesto); the loop
 passes the model's arguments through untouched.
 
+## Tracing (preview)
+
+`generateText` and `runAgent` take an optional injected `tracer` (an `AgentTracer`:
+`startSpan(name, attributes)`). When an app wires it, each model call emits an
+`ai.generate` span and each tool run an `ai.tool` span — model id, token usage,
+and stop reason as attributes — and, parented on the in-flight request span, they
+ride the **same trace as the request that drove them**. `@lesto/ai` takes no
+`@lesto/observability` dependency; the seam is injected exactly like the model's
+transport, so the pure loop stays testable with a fake tracer. See
+[Observability → Agent and LLM spans](/batteries/observability) for the adapter
+and the estate dogfood. Absent a tracer, span emission is a clean no-op.
+
 ## Retrieval
 
 Lesto owns the *seam*, not a vector database. `VectorStore` is an interface; the

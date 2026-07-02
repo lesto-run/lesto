@@ -170,6 +170,16 @@ join** are **deferred**, each on a real consumer/seam.
    of scope** (Deferred); estate MAY add the Inc 2 `onSpan` thunk to show the standalone `mcp.tool`
    span exists, but **asserts no `mcp.tool → http.request` join**. Feature is not done until the AI
    trace shows up locally AND on a real deploy (gallery-as-QA-gate).
+   > **Reconciled at build (2026-07-01, L-fbe9cbda → L-a3700b06):** the AI-span *join* is a **node /
+   > local-OTLP** story — `serve.ts` wires the `AgentTracer` adapter and the join is asserted in
+   > `examples/estate/test/ai-trace.dogfood.test.ts`. estate's only *deploy* target is the
+   > Cloudflare Worker (`worker.ts` → `buildEdgeApp`), which is **transport-spans-only by design**
+   > (no seams wired into the app — the edge emits no `db.query` child spans either), so the deployed
+   > concierge **answers but is untraced**. The honest bar is therefore "the agent trace is
+   > demonstrated locally; the edge deploy answers the same route untraced" — not "the AI trace shows
+   > up on a real deploy." The docs (ARCHITECTURE.md §7, `site/content/docs/batteries/observability.md`)
+   > state it this way. Wiring edge AI tracing is possible (`worker.ts` already builds `Traces` +
+   > `currentRequestSpan`) but contradicts the deliberate edge posture, so it is intentionally not done.
    Acceptance: an estate test (or integration leg) asserts the `ai.generate`/`ai.tool` spans carry
    the in-flight `http.request` span as parent (the in-request join, now real because the route
    exists); estate builds, typechecks, and deploys; `ws:typecheck` + serial coverage gate green;
