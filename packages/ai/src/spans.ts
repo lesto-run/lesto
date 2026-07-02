@@ -4,7 +4,7 @@
  * These value-level constants MUST equal the canonical ones in `@lesto/observability`'s
  * `agent-vocabulary.ts` (`AI_GENERATE_SPAN = "ai.generate"`, `AI_TOOL_SPAN`, `AI_MODEL_ATTR`,
  * `AI_USAGE_INPUT_TOKENS_ATTR`, `AI_USAGE_OUTPUT_TOKENS_ATTR`, `AI_STOP_REASON_ATTR`,
- * `AI_TOOL_NAME_ATTR`). They are RE-STATED here rather than imported so `@lesto/ai` stays the
+ * `AI_STREAMING_ATTR`, `AI_TOOL_NAME_ATTR`). They are RE-STATED here rather than imported so `@lesto/ai` stays the
  * dependency-free model layer it is — the layering line is that `@lesto/ai` gains no
  * `@lesto/observability` edge (ADR 0031). The estate consumer (Inc 4), which legitimately
  * depends on observability, is the seam that asserts the two vocabularies agree.
@@ -31,6 +31,14 @@ export const AI_USAGE_OUTPUT_TOKENS_ATTR = "ai.usage.output_tokens";
 
 /** Attribute: why the model stopped this turn (the `StopReason`). */
 export const AI_STOP_REASON_ATTR = "ai.stop_reason";
+
+/**
+ * Attribute: whether this `ai.generate` span wraps a streamed (`streamText` → `true`) or one-shot
+ * (`generateText` → `false`) call. Set on EVERY span so a trace query can segment the two, and so
+ * a span missing `ai.usage.*`/`ai.stop_reason` reads as expected on a stream (`true`) rather than
+ * a bug on a one-shot (`false`). Equals `AI_STREAMING_ATTR` in observability.
+ */
+export const AI_STREAMING_ATTR = "ai.streaming";
 
 /** Attribute: the tool name a `runAgent` turn invoked (the `ToolCall.name`). */
 export const AI_TOOL_NAME_ATTR = "ai.tool.name";

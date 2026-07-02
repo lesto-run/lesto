@@ -105,11 +105,14 @@ export type Transport = (request: Request) => Promise<Response>;
 export interface AgentSpan {
   /**
    * Populate attributes learned after the span opened — the parsed `Usage`/`StopReason` once a
-   * generation completes, or the `AiError` code once it fails. **Optional:** a minimal tracer
-   * that only wants a span's name, duration, and status may omit it, in which case those
-   * after-the-fact attributes are simply not recorded (the app's real adapter implements it).
+   * generation completes, or the `AiError` code once it fails. **Required** (L-97b980a4): every
+   * tracer must accept the bag, because a missing `setAttributes` would drop usage/stop-reason/
+   * error-code silently — a permanently-untestable gap, indistinguishable from a tracer that
+   * simply forgot. A tracer that genuinely wants to ignore the after-the-fact attributes writes
+   * an explicit one-line no-op (`setAttributes() {}`) — visible in code, not a silent interface
+   * hole. (Its faults are still isolated: `generateText`/`streamText` wrap each call in `safely`.)
    */
-  setAttributes?(attributes: Record<string, unknown>): void;
+  setAttributes(attributes: Record<string, unknown>): void;
 
   /** Mark the span's outcome — `"error"` when the call threw, `"ok"` when it returned. */
   setStatus(status: "unset" | "ok" | "error"): void;

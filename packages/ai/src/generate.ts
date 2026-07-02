@@ -14,6 +14,7 @@ import {
   AI_GENERATE_SPAN,
   AI_MODEL_ATTR,
   AI_STOP_REASON_ATTR,
+  AI_STREAMING_ATTR,
   AI_USAGE_INPUT_TOKENS_ATTR,
   AI_USAGE_OUTPUT_TOKENS_ATTR,
 } from "./spans";
@@ -45,10 +46,12 @@ function safely(fn: () => void): void {
  * Throws `AI_HTTP_ERROR` (coded, status in `details`) on a non-2xx.
  *
  * When an `AgentTracer` is injected (ADR 0031 Phase 2, PREVIEW), each call emits one
- * `ai.generate` span. The span is opened **before** the model call — with the one attribute
- * known up front, the model id — so it wraps the request build, the transport round-trip, and
- * the parse: it carries the call's **real duration**, not a point-in-time record. The parsed
- * `Usage`/`StopReason` (or, on failure, the `AiError` code) are populated **after** the call via
+ * `ai.generate` span carrying `ai.streaming = false` (the flag that segments one-shot calls from
+ * `streamText`'s streamed spans — L-1cbabfc0). The span is opened **before** the model call —
+ * with the attributes known up front, the model id and the streaming flag — so it wraps the
+ * request build, the transport round-trip, and the parse: it carries the call's **real
+ * duration**, not a point-in-time record. The parsed `Usage`/`StopReason` (or, on failure, the
+ * `AiError` code) are populated **after** the call via
  * {@link import("./types").AgentSpan.setAttributes}, then the span is marked `ok`/`error` and closed — each
  * telemetry call isolated by {@link safely} so a broken tracer can't affect the returned result
  * or the thrown error. Absent a tracer this is the exact original send — no span, no overhead.
@@ -56,11 +59,13 @@ function safely(fn: () => void): void {
 export async function generateText(options: GenerateOptions): Promise<GenerateResult> {
   const { tracer } = options;
 
-  // Open BEFORE the call so the span carries the generation's real latency; the model id is the
-  // only attribute known up front. A minimal tracer without `setAttributes` still gets the span,
-  // its duration, and its status — just not the after-the-fact token/stop-reason attributes.
+  // Open BEFORE the call so the span carries the generation's real latency. The two attributes
+  // known up front: the model id, and `ai.streaming = false` — the explicit flag that lets a
+  // trace query segment one-shot from streamed calls and tells a missing-usage span apart from a
+  // regression here (a non-streamed span with no usage is a bug; a streamed one is expected).
   const span = tracer?.startSpan(AI_GENERATE_SPAN, {
     [AI_MODEL_ATTR]: options.modelId ?? options.model.defaultModelId,
+    [AI_STREAMING_ATTR]: false,
   });
 
   try {
@@ -69,7 +74,7 @@ export async function generateText(options: GenerateOptions): Promise<GenerateRe
     const result = await options.model.parseResponse(response);
 
     safely(() => {
-      span?.setAttributes?.({
+      span?.setAttributes({
         [AI_USAGE_INPUT_TOKENS_ATTR]: result.usage.inputTokens,
         [AI_USAGE_OUTPUT_TOKENS_ATTR]: result.usage.outputTokens,
         [AI_STOP_REASON_ATTR]: result.stopReason,
@@ -83,7 +88,7 @@ export async function generateText(options: GenerateOptions): Promise<GenerateRe
     // The coded provider failure (`AI_HTTP_ERROR`) — or any other throw — is recorded on the
     // already-open span before it propagates, so a failed generation is visible on the trace too.
     safely(() => {
-      if (error instanceof AiError) span?.setAttributes?.({ [AI_ERROR_CODE_ATTR]: error.code });
+      if (error instanceof AiError) span?.setAttributes({ [AI_ERROR_CODE_ATTR]: error.code });
       span?.setStatus("error");
     });
     safely(() => span?.end());
@@ -105,12 +110,15 @@ export async function generateText(options: GenerateOptions): Promise<GenerateRe
  * When an `AgentTracer` is injected (ADR 0031 Phase 2, PREVIEW), one `ai.generate` span brackets
  * the **whole stream lifetime** — opened on the first pull, before the request goes out, and
  * closed once the generator terminates — so it carries the streamed generation's real duration.
- * It carries the model id and outcome: `"ok"` only on a full, uninterrupted drain; a thrown error
- * marks it `"error"` with the `AiError` code. An early `for-await` `break` (which the language
- * closes via `IteratorClose` — every caller in this codebase uses `for-await`) still ends the
- * span, but leaves its status `"unset"` — an honest "we don't know", not a fabricated success.
- * Unlike the non-streamed path it records no `Usage`/`StopReason` (the delta stream yields text
- * only, not a final token count). **Caveat:** a consumer that manually pulls the iterator
+ * It carries the model id, `ai.streaming = true` (the flag that segments streamed from one-shot
+ * spans — L-1cbabfc0), and its outcome: `"ok"` only on a full, uninterrupted drain; a thrown
+ * error marks it `"error"` with the `AiError` code. An early `for-await` `break` (which the
+ * language closes via `IteratorClose` — every caller in this codebase uses `for-await`) still
+ * ends the span, but leaves its status `"unset"` — an honest "we don't know", not a fabricated
+ * success. Unlike the non-streamed path it records no `Usage`/`StopReason` (the delta stream
+ * yields text only, not a final token count — so `ai.streaming = true` is what marks that absence
+ * expected rather than a bug; recovering the counts from Anthropic's `message_delta` frame is a
+ * deferred parser change, L-1cbabfc0). **Caveat:** a consumer that manually pulls the iterator
  * (`.next()`) and abandons it without draining or calling `.return()` bypasses `IteratorClose`
  * entirely — the generator stays suspended and the span never closes or exports. Absent a tracer
  * this is the exact original stream — no span, no overhead.
@@ -120,6 +128,7 @@ export async function* streamText(options: GenerateOptions): AsyncIterable<Strea
 
   const span = tracer?.startSpan(AI_GENERATE_SPAN, {
     [AI_MODEL_ATTR]: options.modelId ?? options.model.defaultModelId,
+    [AI_STREAMING_ATTR]: true,
   });
 
   try {
@@ -131,7 +140,7 @@ export async function* streamText(options: GenerateOptions): AsyncIterable<Strea
     safely(() => span?.setStatus("ok"));
   } catch (error) {
     safely(() => {
-      if (error instanceof AiError) span?.setAttributes?.({ [AI_ERROR_CODE_ATTR]: error.code });
+      if (error instanceof AiError) span?.setAttributes({ [AI_ERROR_CODE_ATTR]: error.code });
       span?.setStatus("error");
     });
 

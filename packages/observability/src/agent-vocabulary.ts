@@ -37,6 +37,15 @@ export const AI_USAGE_OUTPUT_TOKENS_ATTR = "ai.usage.output_tokens";
 /** Attribute key: why the model stopped (the `StopReason`). */
 export const AI_STOP_REASON_ATTR = "ai.stop_reason";
 
+/**
+ * Attribute key: whether the span wraps a streamed (`streamText`) or one-shot (`generateText`)
+ * model call — a boolean set on EVERY `ai.generate` span (L-1cbabfc0). It exists so a trace query
+ * can segment streamed vs one-shot latency, and so a span missing `ai.usage.*`/`ai.stop_reason`
+ * is read correctly: expected on a streamed span (`true`), a regression on a one-shot one
+ * (`false`), never an undocumented implicit "this was streamed" signal.
+ */
+export const AI_STREAMING_ATTR = "ai.streaming";
+
 /** Attribute key: the name of the tool a `runAgent` turn invoked. */
 export const AI_TOOL_NAME_ATTR = "ai.tool.name";
 

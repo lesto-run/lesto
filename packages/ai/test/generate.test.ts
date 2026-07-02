@@ -8,6 +8,7 @@ import {
   AI_GENERATE_SPAN,
   AI_MODEL_ATTR,
   AI_STOP_REASON_ATTR,
+  AI_STREAMING_ATTR,
   AI_USAGE_INPUT_TOKENS_ATTR,
   AI_USAGE_OUTPUT_TOKENS_ATTR,
 } from "../src/spans";
@@ -55,9 +56,11 @@ describe("generateText — ai.generate span (ADR 0031 Phase 2, PREVIEW)", () => 
     expect(span?.name).toBe(AI_GENERATE_SPAN);
     expect(span?.status).toBe("ok");
     expect(span?.ended).toBe(true);
-    // The attribute bag carries the data the call already had — the model id and the parsed usage.
+    // The attribute bag carries the data the call already had — the model id, `ai.streaming =
+    // false` (this is the one-shot path), and the parsed usage/stop reason.
     expect(span?.attributes).toEqual({
       [AI_MODEL_ATTR]: model.defaultModelId,
+      [AI_STREAMING_ATTR]: false,
       [AI_USAGE_INPUT_TOKENS_ATTR]: result.usage.inputTokens,
       [AI_USAGE_OUTPUT_TOKENS_ATTR]: result.usage.outputTokens,
       [AI_STOP_REASON_ATTR]: result.stopReason,
@@ -126,6 +129,7 @@ describe("generateText — ai.generate span (ADR 0031 Phase 2, PREVIEW)", () => 
     expect(spans[0]?.ended).toBe(true);
     expect(spans[0]?.attributes).toEqual({
       [AI_MODEL_ATTR]: model.defaultModelId,
+      [AI_STREAMING_ATTR]: false,
       [AI_ERROR_CODE_ATTR]: "AI_HTTP_ERROR",
     });
   });
@@ -160,6 +164,7 @@ describe("generateText — ai.generate span (ADR 0031 Phase 2, PREVIEW)", () => 
     // Had the adapter passed the bag flat, `.attributes` would be undefined — the trap.
     expect(shaped.spans[0]?.attributes).toEqual({
       [AI_MODEL_ATTR]: model.defaultModelId,
+      [AI_STREAMING_ATTR]: false,
       [AI_USAGE_INPUT_TOKENS_ATTR]: result.usage.inputTokens,
       [AI_USAGE_OUTPUT_TOKENS_ATTR]: result.usage.outputTokens,
       [AI_STOP_REASON_ATTR]: result.stopReason,
@@ -215,9 +220,13 @@ describe("streamText — ai.generate span (ADR 0031 Phase 2, PREVIEW)", () => {
     expect(deltas).toEqual(["a", "b"]);
     expect(spans).toHaveLength(1);
     expect(spans[0]?.name).toBe(AI_GENERATE_SPAN);
-    // The streamed span carries the model id + outcome — but no post-hoc Usage/StopReason (the
-    // delta stream yields text only), so its attribute bag is just the model id.
-    expect(spans[0]?.attributes).toEqual({ [AI_MODEL_ATTR]: model.defaultModelId });
+    // The streamed span carries the model id + `ai.streaming = true` + outcome — but no post-hoc
+    // Usage/StopReason (the delta stream yields text only), so the streaming flag is what marks
+    // that absence expected rather than a one-shot regression.
+    expect(spans[0]?.attributes).toEqual({
+      [AI_MODEL_ATTR]: model.defaultModelId,
+      [AI_STREAMING_ATTR]: true,
+    });
     expect(spans[0]?.status).toBe("ok");
     expect(spans[0]?.ended).toBe(true);
   });
@@ -243,6 +252,7 @@ describe("streamText — ai.generate span (ADR 0031 Phase 2, PREVIEW)", () => {
     expect(spans[0]?.status).toBe("error");
     expect(spans[0]?.attributes).toEqual({
       [AI_MODEL_ATTR]: model.defaultModelId,
+      [AI_STREAMING_ATTR]: true,
       [AI_ERROR_CODE_ATTR]: "AI_HTTP_ERROR",
     });
     expect(spans[0]?.ended).toBe(true);
@@ -281,6 +291,46 @@ describe("streamText — ai.generate span (ADR 0031 Phase 2, PREVIEW)", () => {
   });
 });
 
+describe("ai.streaming segments streamed vs non-streamed spans (L-1cbabfc0)", () => {
+  it("both call shapes emit the SAME span name but OPPOSITE ai.streaming flags", async () => {
+    // Both paths open `ai.generate`; without the flag a trace query couldn't tell a one-shot from
+    // a stream, and a one-shot missing usage (a regression) would look identical to a normal
+    // streamed span. The explicit boolean on every span is what makes the two segmentable.
+    const oneShotModel = createAnthropic({
+      apiKey: "sk-test",
+      transport: constantTransport(jsonResponse(textMessage("x"))).transport,
+    });
+    const streamedModel = createAnthropic({
+      apiKey: "sk-test",
+      transport: constantTransport(
+        sseResponse([
+          'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"x"}}\n\n',
+        ]),
+      ).transport,
+    });
+
+    const oneShot = recordingTracer();
+    await generateText({
+      model: oneShotModel,
+      messages: [{ role: "user", content: "go" }],
+      tracer: oneShot.tracer,
+    });
+
+    const streamed = recordingTracer();
+    for await (const _ of streamText({
+      model: streamedModel,
+      messages: [{ role: "user", content: "go" }],
+      tracer: streamed.tracer,
+    })) {
+      // drain
+    }
+
+    expect(oneShot.spans[0]?.name).toBe(streamed.spans[0]?.name); // same span name…
+    expect(oneShot.spans[0]?.attributes[AI_STREAMING_ATTR]).toBe(false); // …opposite flags.
+    expect(streamed.spans[0]?.attributes[AI_STREAMING_ATTR]).toBe(true);
+  });
+});
+
 describe("telemetry isolation — a broken tracer never masks the real result (ADR 0031 Phase 2)", () => {
   it("generateText still returns the real result when setStatus/end throw on the success path", async () => {
     const { transport } = constantTransport(jsonResponse(textMessage("still works.")));
@@ -316,6 +366,9 @@ describe("telemetry isolation — a broken tracer never masks the real result (A
 
     const brokenTracer = {
       startSpan: () => ({
+        setAttributes: () => {
+          throw new Error("boom: broken tracer");
+        },
         setStatus: () => {
           throw new Error("boom: broken tracer");
         },
@@ -345,6 +398,9 @@ describe("telemetry isolation — a broken tracer never masks the real result (A
     let endCalled = false;
     const brokenTracer = {
       startSpan: () => ({
+        setAttributes: () => {
+          throw new Error("boom: broken tracer");
+        },
         setStatus: () => {
           throw new Error("boom: broken tracer");
         },
