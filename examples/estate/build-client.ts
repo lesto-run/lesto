@@ -36,27 +36,27 @@ import { basename, dirname, join } from "node:path";
 import type { BunPlugin } from "bun";
 
 /**
- * The React specifiers we redirect when `--preact` is set — each goes to Preact's
- * compat layer. There is deliberately NO bare `react-dom` entry: the React 19
- * resource hints that once forced one (`preload`, `preinit`, …) live in
- * `@lesto/ui`'s `resources.ts`, which moved off the isomorphic `@lesto/ui` barrel
- * onto the `@lesto/ui/server` subpath — the surface the SSR WORKER imports for
- * `preactServerRenderer`, never this client entry. So the client graph no longer
- * references bare `react-dom` (the `--preact` bundle is byte-identical with the
- * entry gone), and a stray future `react-dom` import in client code is now an
- * honest unresolved-module error rather than a silently-shimmed no-op. The
- * `preact-react-dom-shim.ts` no-op it used to point at survives only for the
- * worker's Preact build — see that shim's header and `wrangler.jsonc`.
+ * The React specifiers we redirect when `--preact` is set — each resolves to
+ * Preact's compat layer. There is deliberately NO `react-dom` or `react-dom/server`
+ * entry: both once had to be shimmed because `@lesto/ui`'s isomorphic barrel dragged
+ * server-only concerns into the client graph — the page renderers (`render.tsx`/
+ * `stream.tsx` -> `react-dom/server`) and the React 19 resource hints (`resources.ts`
+ * -> bare `react-dom`). The `@lesto/ui` barrel split moved the renderers behind the
+ * `@lesto/ui/server` subpath, and commit `0f2c627` moved `resources.ts` there too, so
+ * this client entry now reaches neither specifier. The `--preact` bundle is
+ * byte-identical with both entries gone, matching the framework's own `@lesto/assets`
+ * `PREACT_ALIAS`, which carries neither. The two inert shim FILES survive only for the
+ * worker's Preact build, which imports `@lesto/ui/server` and so still drags both in —
+ * see `preact-react-dom-{shim,server-shim}.ts` and `wrangler.jsonc`. (estate declares
+ * `react-dom` as a dependency, so a stray bare `react-dom` import in client code would
+ * silently resolve to the real, heavy module under this alias — not fail loud — which
+ * is a reason to keep the two specifiers off the client graph in the first place.)
  */
 const PREACT_ALIAS: Readonly<Record<string, string>> = {
   react: "preact/compat",
   // `react-dom/client` exposes `createRoot`/`hydrateRoot`; Preact mirrors them
   // under `preact/compat/client`, the only specifier that is not just compat.
   "react-dom/client": "preact/compat/client",
-  // `react-dom/server` is dragged in by `@lesto/ui`'s barrel but never runs on the
-  // client; the real module's top-level bootstrap throws once React is aliased
-  // away, so we point it at an inert stub (see the server shim for why).
-  "react-dom/server": "./preact-react-dom-server-shim.ts",
   // `jsx: react-jsx` (the estate tsconfig) emits automatic-runtime imports.
   "react/jsx-runtime": "preact/jsx-runtime",
   "react/jsx-dev-runtime": "preact/jsx-runtime",
