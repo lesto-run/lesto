@@ -321,13 +321,16 @@ asserting any `mcp.tool → http.request` join**.
 - **`ai.embed` / retrieval spans** — `@lesto/ai`'s `VectorStore`/`retrieve` seam
   (`ai/src/index.ts:32-41`) could emit spans, but there is no consumer wiring retrieval into a
   request path yet (RAG is preview-of-preview). Gate: a real estate retrieval route.
-- **Streaming-span lifecycle.** `streamText` yields deltas over time (`generate.ts:38-43`); a
-  span that stays open across an SSE stream (first-byte vs. last-byte) is a richer model than the
-  point-in-time `ai.generate` Phase 2 ships. This is also where `AI_STREAM_MALFORMED` becomes a
-  real span status — it is thrown only on the streaming path (`generate.ts:36-43`,
-  `errors.ts:16-17`), so it belongs to this deferred streaming span, not to Phase 2's
-  point-in-time `ai.generate`. Gate: a real streaming agent surface that needs the open-window
-  timing (ADR 0033's in-preview chat is the likely first consumer).
+- **Streaming-span lifecycle** — *was* deferred here; **SHIPPED** (L-1013f457 duration-bearing
+  spans + L-3c7b03b8 streamed usage recovery), recorded so it is not re-derived as open.
+  `streamText` opens one `ai.generate` span **before** the request and closes it in a `finally`
+  once the generator terminates, so it brackets the whole SSE stream's real duration — the
+  open-window model, not point-in-time (the duration-bearing work made the non-streamed
+  `ai.generate` open-window too). `AI_STREAM_MALFORMED` (and any other streaming-path throw) is
+  recorded as the span's `error` status with the `AiError` code; the final `Usage`/`StopReason`
+  ride in from Anthropic's `message_start`/`message_delta` frames (absent only on a torn stream,
+  which `ai.streaming = true` marks expected). An early `for-await` `break` closes the span with
+  status `"unset"` — an honest "we don't know".
 - **Eval/guardrail spans.** `@lesto/ai`'s `guard`/`createLlmJudge` (`ai/src/index.ts:43-45`)
   could emit `ai.eval` spans, but eval grading belongs to ADR 0035's evals-in-CI, not the
   request trace. Gate: ADR 0035's eval harness deciding it wants per-eval spans.
