@@ -42,3 +42,26 @@ export type {
 // (`preact-render-to-string`), present only when an adopter chooses Preact, so a
 // default React server never drags Preact's renderer into its build.
 export { preactServerRenderer } from "./server-preact";
+
+// Resource hints + LCP/modulepreload conventions over React 19's native APIs.
+// These import the resource functions from bare `react-dom` and only emit markup
+// during an SSR render (an SSR document-head concern, never called client-side),
+// so they live behind this server subpath — off the isomorphic barrel — to keep
+// `react-dom` out of the client/island bundle's import graph entirely.
+export {
+  lcpImage,
+  modulePreload,
+  preconnect,
+  prefetchDNS,
+  preinit,
+  preinitModule,
+  preload,
+} from "./resources";
+export type {
+  LcpImageProps,
+  PreconnectOptions,
+  PreinitModuleOptions,
+  PreinitOptions,
+  PreloadOptions,
+  ResourceRegistrar,
+} from "./resources";

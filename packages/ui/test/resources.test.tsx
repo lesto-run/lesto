@@ -9,8 +9,8 @@ import {
   preinit,
   preinitModule,
   preload,
-} from "../src/index";
-import type { ResourceRegistrar } from "../src/index";
+} from "../src/server";
+import type { ResourceRegistrar } from "../src/server";
 
 // ---------------------------------------------------------------------------
 // A recording registrar: prove each helper forwards href + options to the right

@@ -121,26 +121,13 @@ export type {
 // `#lesto-islands` manifest.
 export { serializeManifest, serializeScriptJson } from "./serialize";
 
-// Resource hints + LCP/modulepreload conventions over React 19's native APIs.
-// Server-safe: the `react-dom` resource functions are isomorphic and only emit
-// markup during an SSR render.
-export {
-  lcpImage,
-  modulePreload,
-  preconnect,
-  prefetchDNS,
-  preinit,
-  preinitModule,
-  preload,
-} from "./resources";
-export type {
-  LcpImageProps,
-  PreconnectOptions,
-  PreinitModuleOptions,
-  PreinitOptions,
-  PreloadOptions,
-  ResourceRegistrar,
-} from "./resources";
+// Resource hints + LCP/modulepreload conventions over React 19's native APIs
+// (`lcpImage`/`modulePreload`/`preconnect`/…) are an SSR document-head concern and
+// import the resource functions from bare `react-dom`, so they are NOT re-exported
+// here — they live behind the `@lesto/ui/server` subpath. Keeping them off this
+// isomorphic barrel means the client/island bundle never even references
+// `react-dom`, so a stray future re-export can't drag it in (defense-in-depth over
+// the `sideEffects:false` tree-shake that already drops the unused symbols).
 
 // Document metadata helpers + the dedup convention React's hoist-without-dedupe
 // leaves to the framework. Pure: React elements / data in, data out.
