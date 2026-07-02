@@ -598,11 +598,17 @@ const loadIslandDevPeer = async () => {
   try {
     return await import("@lesto/island-dev");
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
-      const missing = /Cannot find (?:package|module) '([^']+)'/.exec(error.message)?.[1];
-
-      if (missing === "@lesto/island-dev") return undefined;
-    }
+    // Classify with the SHARED cross-runtime classifier (as `loadSites`/`loadBuildHook`
+    // and `rethrowUnlessMissingContentPeer` do), NOT the old `instanceof Error` +
+    // `ERR_MODULE_NOT_FOUND`-only gate: under Bun a missing peer throws a `ResolveMessage`
+    // that is NOT `instanceof Error`, and under node/jiti a real `Error` carrying `code:
+    // "MODULE_NOT_FOUND"` (NOT the ESM `ERR_MODULE_NOT_FOUND`) — either shape slipped past
+    // the old gate and surfaced a raw crash instead of tolerantly degrading to the Bun
+    // island path. Swallow ONLY "the `@lesto/island-dev` specifier itself is absent"; a
+    // genuine error INSIDE an installed peer (a broken transitive, a removed
+    // `@lesto/assets` export, a bad publish) resolves to a different specifier (or none)
+    // and rethrows — a dev who installed it for Fast Refresh must not silently get nothing.
+    if (missingModuleSpecifier(error) === "@lesto/island-dev") return undefined;
 
     throw error;
   }

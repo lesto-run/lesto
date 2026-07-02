@@ -4593,6 +4593,54 @@ describe("missingModuleSpecifier — cross-runtime module-not-found classifier",
     expect(bunShape?.startsWith("@lesto/content-")).toBe(true);
     expect(jitiShape?.startsWith("@lesto/content-")).toBe(true);
   });
+
+  // L-365bef9d: the bin's `loadIslandDevPeer` (the optional `@lesto/island-dev` Fast-Refresh
+  // peer) is the exact twin of the content-peer loader — it lazily `import()`s the bare peer
+  // specifier and, when it is not installed, must degrade to the Bun island path rather than
+  // crash `lesto dev`. Routing its catch through this SHARED classifier (replacing the old
+  // `instanceof Error` + `ERR_MODULE_NOT_FOUND`-only gate) makes it recognize the miss under
+  // BOTH runtime shapes: the Bun `ResolveMessage` (NOT `instanceof Error`, `ERR_MODULE_NOT_FOUND`)
+  // AND the node/jiti `Error` (`MODULE_NOT_FOUND`). The old gate matched neither on `node`
+  // (jiti's `MODULE_NOT_FOUND`) nor on Bun's non-`Error` shape → a raw rethrow instead of the
+  // tolerant `undefined` fallback. A `@lesto/island-dev` specifier surfacing from EITHER shape
+  // proves the exact-equality check `loadIslandDevPeer` gates on (`=== "@lesto/island-dev"`) fires.
+  it("recognizes a missing @lesto/island-dev peer under BOTH runtime codes (the tolerant-degrade path)", () => {
+    // Bun: a ResolveMessage-shaped miss (NOT instanceof Error) with ERR_MODULE_NOT_FOUND,
+    // in Bun's real `module … from '<importer>'` wording (verified against Bun 1.3.x).
+    const bunShape = missingModuleSpecifier({
+      code: "ERR_MODULE_NOT_FOUND",
+      message: "Cannot find module '@lesto/island-dev' from '/app/src/bin.ts'",
+    });
+
+    // jiti (node): a real Error from the CJS resolver with MODULE_NOT_FOUND — the shape the
+    // old `ERR_MODULE_NOT_FOUND`-only gate silently dropped, rethrowing a raw crash.
+    const jitiShape = missingModuleSpecifier(
+      Object.assign(new Error("Cannot find module '@lesto/island-dev'"), {
+        code: "MODULE_NOT_FOUND",
+      }),
+    );
+
+    // Both extract exactly `@lesto/island-dev` → `loadIslandDevPeer`'s equality check fires →
+    // `undefined` (the Bun island fallback), not a raw rethrow that crashes the dev boot.
+    expect(bunShape).toBe("@lesto/island-dev");
+    expect(jitiShape).toBe("@lesto/island-dev");
+  });
+
+  // The guardrail on that exact-equality gate: a MISSING TRANSITIVE inside an INSTALLED
+  // `@lesto/island-dev` (a broken sub-dependency, a removed `@lesto/assets` export) resolves to
+  // a DIFFERENT specifier — so `loadIslandDevPeer`'s `=== "@lesto/island-dev"` is false and the
+  // error rethrows (fail loud), never masked as "peer absent". A dev who installed it for Fast
+  // Refresh must not silently get nothing when its own graph is broken.
+  it("extracts the TRANSITIVE specifier (not the island-dev peer) when a sub-dependency is missing", () => {
+    const transitive = missingModuleSpecifier(
+      Object.assign(new Error("Cannot find package '@lesto/assets' imported from /app/island-dev.js"), {
+        code: "ERR_MODULE_NOT_FOUND",
+      }),
+    );
+
+    expect(transitive).toBe("@lesto/assets");
+    expect(transitive === "@lesto/island-dev").toBe(false);
+  });
 });
 
 // The self-module predicate `loadSites`/`loadBuildHook` use to tell an absent OPTIONAL
