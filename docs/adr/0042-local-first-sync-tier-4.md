@@ -189,15 +189,24 @@ it directly with a layered model:
   this at shape-registration time and **refuses** a shape whose table cannot supply the old image its
   predicate needs, rather than silently leaking.
 - **Re-authorization is continuous, not connect-time-only** (the ADR 0040 lesson), along **two
-  distinct paths with different latencies** (a sharpening from the review): (1) *session* validity
-  (logout, token expiry, an admin revoking a session) is re-resolved on a periodic interval —
-  **default 60s, reusing ADR 0040's `DEFAULT_REAUTH_MS`** via the same `@lesto/realtime` machinery —
-  and the stream is severed on failure, bounded further by a connection TTL; (2) *authorization-data*
-  changes (a user removed from a room, a row's `owner_id` reassigned) propagate **promptly,
-  sub-interval**, as a delete-from-shape carried by the replication stream itself. The interval is a
-  security parameter and is **more** sensitive here than for ephemeral reactivity: until the next
-  re-auth a revoked session keeps receiving rows it then **durably persists** to OPFS, so the default
-  is deliberately tight and the TTL bounds the worst case.
+  distinct paths with different latencies, split by WHERE the authorizing value lives** (a sharpening
+  from the review, corrected again by the Inc3 build): (1) *session validity AND the bound shape's
+  authorization* are both re-resolved on a periodic interval — **default 60s, reusing ADR 0040's
+  `DEFAULT_REAUTH_MS`** via the same `@lesto/realtime`-style machinery — and a failure of EITHER purges
+  the client's durable slice (a `resync` frame) before severing the stream, bounded further by a
+  connection TTL. This interval is what catches an *authorization-data* change in a relation **separate**
+  from the streamed table (a user removed from a room via a `room_members`-style join) — the streamed
+  row itself never changes, so nothing about it can appear on the replication feed; only re-invoking the
+  bound-shape authz check observes the revocation. (2) An authorization-data change **on the streamed
+  row's own columns** (a `room_id` a shape filters on, an `owner_id` reassigned) propagates
+  **sub-interval, promptly**, as an ordinary delete-from-shape carried by the replication stream itself
+  — no interval wait needed, because the row's own change *is* the signal. Conflating these two — as an
+  earlier draft of this ADR did, promising "sub-interval" uniformly — overstated what a single-table
+  replication classifier can observe; a cross-relation membership change is real but interval-bounded,
+  and the interval is a security parameter more sensitive here than for ephemeral reactivity: until the
+  next re-auth a revoked-but-still-connected session keeps receiving rows it then **durably persists**
+  to OPFS, so the default is deliberately tight and the TTL bounds the worst case, and a severance
+  purges rather than merely disconnects.
 - **Row-level filtering happens in the app/shape engine, where the principal lives — never in the
   database's replication output** (the replication stream is the full, unfiltered change feed; the
   shape engine is the authorization point). This keeps authz in one auditable place and off the DB.
@@ -359,12 +368,24 @@ client-side.
 
 - **Shape authz (the gate):** an adversarial multi-tenant matrix — (a) a principal opening a shape
   whose **bound parameters resolve to another tenant's resource** is refused at subscribe time (not just
-  "another tenant's *template*" — the parameter is the capability); (b) a row that updates *out* of a
+  "another tenant's *template*" — the parameter is the capability), and this authorization is
+  **continuous**: the bound shape is re-authorized on the re-auth interval for the connection's whole
+  life, not merely once at subscribe; (b) a row that updates *out* of a
   principal's shape is delivered as **delete-from-shape and never silently retained**, proven
   specifically on a predicate over a **non-PK column** under **`REPLICA IDENTITY FULL`**, plus a test
   that the engine *refuses* a shape whose table cannot supply the old image its predicate needs; (c) a
-  membership change (removed from a room) propagates as a removal sub-interval via the replication
-  stream; (d) a revoked *session* is severed within the re-auth interval + TTL; (e) on reconnect where
+  membership change (removed from a room) is caught by ONE of two mechanisms depending on where the
+  authorizing value lives — an authorization column **on the streamed row itself** (`owner_id`
+  reassigned, a `room_id` a shape filters on) propagates **sub-interval**, as an ordinary
+  delete-from-shape carried by the replication stream (the row's own change *is* the signal); a
+  membership relation **separate** from the streamed table (a `room_members`-style join) cannot be
+  observed by that stream at all — the row being filtered on never itself changes — so it is instead
+  caught at the next **re-auth interval tick** (≤ `reauthMs`), which purges the client's durable slice
+  (a `resync` frame) before severing, never merely closing the socket and leaving already-delivered rows
+  stranded on disk. (A true sub-interval *push*-revocation for the cross-relation case — a dedicated
+  wire signal severing one subscription the instant membership changes, rather than waiting for the next
+  tick — is deliberately deferred as a purely additive follow-up, not required for this gate.); (d) a
+  revoked *session* is severed within the re-auth interval + TTL; (e) on reconnect where
   **either** the `systemId` **or** the `timelineId` differs from the live database's — including a
   *same-cluster failover* (timeline increments, `systemId` unchanged), the case a `systemId`-only check
   would miss — the client re-snapshots rather than replaying a false-continuity LSN. **This matrix is
