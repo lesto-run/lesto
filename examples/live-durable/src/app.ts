@@ -109,9 +109,18 @@ export async function buildApp(options: { handle: KernelDatabase }): Promise<Boo
           .get();
 
         return c.json({ note }, 201);
-      } catch {
-        // Duplicate id → the original already landed; a replay is a no-op success, not a failure.
-        return c.json({ ok: true }, 200);
+      } catch (error) {
+        // ONLY a duplicate id is an idempotent no-op success (the original already landed — an
+        // at-least-once replay). Any OTHER error is a real failure and must surface as a 5xx, so
+        // the client classifies it as "retry" and KEEPS the write — never a false "ok" that would
+        // drop a write the server never actually stored.
+        const message = error instanceof Error ? error.message : String(error);
+
+        if (/unique|constraint|primary key|duplicate/i.test(message)) {
+          return c.json({ ok: true }, 200);
+        }
+
+        return c.json({ error: message }, 500);
       }
     })
 

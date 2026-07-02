@@ -38,6 +38,20 @@
  * overlay, so an offline write is visible again before the network reconnects — then a `flush`
  * drains it. Against a non-durable (in-memory) store the queue is session-only: the same surface,
  * without the survives-reload guarantee.
+ *
+ * ## Delivery is AT-LEAST-ONCE — the replayed mutation must be idempotent
+ *
+ * The durable `remove` on ack is enqueued behind the store's write chain, not awaited, so a reload
+ * in the narrow window between a write's ack and its log entry's durable removal will re-hydrate and
+ * REPLAY that already-accepted write. This is deliberate — exactly-once across a crash needs a
+ * distributed commit the client cannot have — so the contract is **at-least-once**, and the replayed
+ * mutation must be idempotent. The client-generated primary key is what makes it so: the server's
+ * insert lands under the same key (an upsert / conflict-ignore), and the echo settles the optimistic
+ * row rather than duplicating it. A mutation whose id is NOT the row's own key must carry its own
+ * idempotency key. Symmetrically, a write is durable only once the store's writes settle (await the
+ * durable store's `whenIdle`), NOT synchronously at `submit` return — a crash within that sub-`whenIdle`
+ * window loses an un-persisted offline write, the same async-persist window the durable row/cursor
+ * writes have.
  */
 
 import type { LiveStore, OutboxEntry } from "./store";
@@ -229,8 +243,14 @@ export function createLiveMutations(options: LiveMutationsOptions): LiveMutation
       };
 
       queue.push(entry);
-      store.applyOptimistic(mutation.optimistic);
+
+      // Durably log BEFORE applying the optimistic overlay. `applyOptimistic` notifies subscribers
+      // synchronously, and a subscriber that submits from inside that notification would otherwise
+      // enqueue ITS durable append ahead of this one — inverting submission order in the log, which
+      // `hydrate` replays by `rowid`. Appending first keeps the persisted order = submission order.
+      // (The two are independent — an in-memory overlay vs a durable table — so the order is free.)
       store.outbox?.append(entry);
+      store.applyOptimistic(mutation.optimistic);
 
       // Fire-and-forget: online this sends now; offline the seam returns `"retry"` and it stays.
       // (A caller wanting to await the drain calls `flush()`, which returns the same in-flight run.)

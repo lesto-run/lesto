@@ -278,6 +278,32 @@ describe("createLiveMutations — optimistic offline writes (Inc6)", () => {
       expect(store3.outbox?.load()).toEqual([]);
     });
 
+    it("preserves submission order in the durable log when a subscriber re-submits during the notification", async () => {
+      // The re-entrant path: a store subscriber (a UI render, say) submits a SECOND write from
+      // inside the FIRST write's optimistic-apply notification. The durable append must be enqueued
+      // BEFORE that notification, else the re-entrant submit's append lands ahead of the first's —
+      // inverting the log order, which `hydrate` replays by rowid.
+      const db = freshDb();
+      const store = await createSqliteLiveStore({ def, db });
+      const seam = fakeSubmitter();
+      seam.set("retry"); // stay "offline" so nothing is removed — we inspect the persisted order
+      const mutations = createLiveMutations({ store, submit: seam.submit, newId: seqId() });
+
+      let reentered = false;
+      store.subscribe(() => {
+        if (reentered) return;
+        reentered = true;
+        mutations.submit({ name: "second", optimistic: insert("b", 2) });
+      });
+
+      mutations.submit({ name: "first", optimistic: insert("a", 1) });
+      await mutations.flush();
+      await store.whenIdle();
+
+      const reloaded = await createSqliteLiveStore({ def, db });
+      expect(reloaded.outbox?.load().map((e) => e.name)).toEqual(["first", "second"]);
+    });
+
     it("an acked write is removed from the durable log", async () => {
       const db = freshDb();
       const store = await createSqliteLiveStore({ def, db });
