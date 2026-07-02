@@ -2,8 +2,8 @@ import { serializeShapeDefinition } from "@lesto/live-protocol";
 import type { ShapeDefinition } from "@lesto/live-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createLiveQuery } from "../src/index";
-import type { LiveEnvironment, LiveEventSource, LiveMessageEvent } from "../src/index";
+import { createLiveQuery, createLiveStore, LiveClientError } from "../src/index";
+import type { LiveEnvironment, LiveEventSource, LiveMessageEvent, LiveStore } from "../src/index";
 
 const def: ShapeDefinition = {
   table: "posts",
@@ -128,5 +128,66 @@ describe("createLiveQuery", () => {
 
     query.disconnect();
     expect(instances[0]!.closed).toBe(true);
+  });
+
+  describe("def/store shape guard", () => {
+    // A shape that serializes (and therefore `shapeId`s) differently from `def` — a different
+    // table entirely, so there is no risk of an accidental hash collision muddying the test.
+    const otherDef: ShapeDefinition = { ...def, table: "comments" };
+
+    it("throws LIVE_STORE_SHAPE_MISMATCH when the store was built from a different shape", () => {
+      const store = createLiveStore(otherDef);
+
+      expect(() => createLiveQuery(def, { store })).toThrow(LiveClientError);
+
+      try {
+        createLiveQuery(def, { store });
+      } catch (error) {
+        expect((error as LiveClientError).code).toBe("LIVE_STORE_SHAPE_MISMATCH");
+      }
+    });
+
+    it("passes when the store's shape matches def", () => {
+      const { env, sources } = fakeLive();
+      const store = createLiveStore(def);
+
+      // No throw, and the subscription opens exactly as it would with the default store.
+      const query = createLiveQuery(def, { store, environment: env });
+      expect(sources[0]!.url).toBe(expectedUrl("/__lesto/live-data"));
+
+      query.disconnect();
+    });
+
+    it("is unaffected on the default path (no store passed)", () => {
+      const { env, sources } = fakeLive();
+
+      // `createLiveQuery` builds its own store from THIS `def`, so `shapeId` trivially matches —
+      // no throw, same behavior as before the guard existed.
+      const query = createLiveQuery(def, { environment: env });
+      expect(sources[0]!.url).toBe(expectedUrl("/__lesto/live-data"));
+
+      query.disconnect();
+    });
+
+    it("skips the guard entirely when the store does not expose a shapeId (duck-typed check)", () => {
+      const { env, sources } = fakeLive();
+
+      // No hand-rolled `LiveStore` exists elsewhere in the repo, but the field is OPTIONAL on
+      // the interface precisely so a store like this — one that never populates it — is not
+      // forced to grow it, and is not mistakenly flagged as a mismatch either.
+      const bareStore: LiveStore = {
+        applySnapshot: () => {},
+        applyChange: () => {},
+        applyResync: () => {},
+        getRows: () => [],
+        getCursor: () => undefined,
+        subscribe: () => () => {},
+      };
+
+      const query = createLiveQuery(def, { store: bareStore, environment: env });
+      expect(sources[0]!.url).toBe(expectedUrl("/__lesto/live-data"));
+
+      query.disconnect();
+    });
   });
 });

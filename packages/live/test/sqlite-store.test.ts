@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import Database from "better-sqlite3";
+import { adaptSyncSqlite } from "@lesto/db";
 import type { SqlDatabase } from "@lesto/db";
 import type { ShapeDefinition } from "@lesto/live-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,8 +14,10 @@ import { createSqliteLiveStore } from "../src/index";
  * A real `SqlDatabase` over better-sqlite3 (the repo's canonical test engine), so these tests
  * exercise genuine SQLite atomicity — the store's whole guarantee. It is deliberately NOT built
  * on `@lesto/runtime`'s `openSqlite`: importing that barrel drags the JSX renderer into this
- * non-JSX package's typecheck. The FIFO transaction shim mirrors `openSqlite`'s so an async
- * write callback cannot interleave a second `BEGIN` on the one connection.
+ * non-JSX package's typecheck. The engine-specific `exec`/`prepare` pair is wrapped by the shared
+ * {@link adaptSyncSqlite} — the same FIFO `BEGIN`…`COMMIT`/`ROLLBACK` adapter `openSqlite` and the
+ * OPFS driver both use — so an async write callback cannot interleave a second `BEGIN` on the one
+ * connection, and this fixture is now one caller of the transaction logic covered in `@lesto/db`.
  */
 function openTestDb(filename = ":memory:"): { db: SqlDatabase; close: () => void } {
   const raw = new Database(filename);
@@ -34,42 +37,7 @@ function openTestDb(filename = ":memory:"): { db: SqlDatabase; close: () => void
     },
   };
 
-  let chain: Promise<unknown> = Promise.resolve();
-
-  const db: SqlDatabase = {
-    ...statements,
-    transaction: async (fn) => {
-      const run = chain.then(async () => {
-        raw.exec("BEGIN");
-
-        try {
-          const tx: SqlDatabase = { ...statements, transaction: (inner) => inner(tx) };
-          const out = await fn(tx);
-
-          raw.exec("COMMIT");
-
-          return out;
-        } catch (error) {
-          try {
-            raw.exec("ROLLBACK");
-          } catch {
-            /* best-effort: a failed rollback must not mask the original error */
-          }
-
-          throw error;
-        }
-      });
-
-      chain = run.then(
-        () => undefined,
-        () => undefined,
-      );
-
-      return run;
-    },
-  };
-
-  return { db, close: () => raw.close() };
+  return { db: adaptSyncSqlite(statements), close: () => raw.close() };
 }
 
 // A shape ordered by `rank` ascending (the key `id` is the final tiebreak), matching the
@@ -435,6 +403,132 @@ describe("createSqliteLiveStore — durable rows + cursor", () => {
     await store.whenIdle();
   });
 });
+
+describe("createSqliteLiveStore — hydration runs inside the write FIFO", () => {
+  it("a hydration issued while a write transaction is open does not interleave into that open span", async () => {
+    const db = freshDb();
+    const log: string[] = [];
+    const entered = deferred<void>();
+    const release = deferred<void>();
+
+    // Shape A's connection: gate its cursor-write statement so its transaction stays open
+    // (BEGIN executed, COMMIT withheld) until the test explicitly releases it — simulating "a
+    // write transaction in flight" for as long as the test needs.
+    const dbA = withCallLog(db, log, "A", {
+      sqlIncludes: "lesto_live_cursor",
+      onEnter: () => entered.resolve(),
+      release: release.promise,
+    });
+    const dbB = withCallLog(db, log, "B");
+
+    const storeA = await createSqliteLiveStore({ def, db: dbA });
+
+    // Fire A's write. It reaches, then pauses on, the gated cursor UPSERT — its transaction is
+    // now genuinely open (a real BEGIN has run on the shared connection, no COMMIT yet).
+    storeA.applyChange({ op: "insert", key: "a", row: { id: "a", rank: 1 } }, "v1:s:1:1");
+    await entered.promise;
+
+    // Hydrate a SECOND shape over the very same shared connection while A's write transaction
+    // is still open. Before the Task 3 fix, this shape's schema install + reads ran as bare
+    // `db.exec` / `db.prepare` calls with no FIFO queuing, so they could run immediately — right
+    // here, spliced into A's open span. After the fix they are wrapped in their own single
+    // `db.transaction` span, which shares A's connection-level FIFO chain (`openTestDb`'s
+    // `chain`, mirroring the real adapters) and cannot even begin until A's transaction settles.
+    const otherDef: ShapeDefinition = { ...def, table: "comments" };
+    const hydrateB = createSqliteLiveStore({ def: otherDef, db: dbB });
+
+    // Give any wrongly-unserialized hydration code every chance to run before A is released.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Structural, not timing-dependent: B cannot have logged anything yet, because a properly
+    // FIFO'd hydration transaction cannot start while the chain is still parked on A's open one.
+    expect(log.some((entry) => entry.startsWith("B:"))).toBe(false);
+
+    release.resolve();
+    await storeA.whenIdle();
+    await hydrateB;
+
+    // B's very first logged statement happened strictly after A's gated write resumed (and, by
+    // construction of `db.transaction`, after A's COMMIT) — never spliced into the middle of it.
+    const resumeIndex = log.indexOf("A:gate-resume");
+    const firstBIndex = log.findIndex((entry) => entry.startsWith("B:"));
+
+    expect(resumeIndex).toBeGreaterThanOrEqual(0);
+    expect(firstBIndex).toBeGreaterThan(resumeIndex);
+  });
+});
+
+/** A promise plus its externally-callable `resolve` — for hand-synchronizing a paused async step. */
+function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+
+  return { promise, resolve };
+}
+
+/**
+ * Wrap a real `SqlDatabase` so every `exec` / `prepare().run|get|all` call — whether issued at
+ * the top level or from inside a `transaction` span — appends a `"<label>:<op>"` entry to `log`,
+ * in real execution order. When `gate` is given, the FIRST `run()` call whose SQL includes
+ * `gate.sqlIncludes` logs `"<label>:gate-enter"`, invokes `gate.onEnter()`, then awaits
+ * `gate.release` before logging `"<label>:gate-resume"` and actually running — pausing an
+ * otherwise-ordinary write mid-transaction so a test can prove a concurrent `db.transaction`
+ * call (e.g. another shape's hydration) cannot interleave into it. Deliberately does not gate a
+ * `get`/`all` (a read), so hydration's own SELECTs — which also touch `lesto_live_cursor` — are
+ * never mistaken for the write this is meant to pause.
+ */
+function withCallLog(
+  db: SqlDatabase,
+  log: string[],
+  label: string,
+  gate?: { sqlIncludes: string; onEnter: () => void; release: Promise<void> },
+): SqlDatabase {
+  let gated = false;
+
+  const wrap = (target: SqlDatabase): SqlDatabase => ({
+    exec: async (sql) => {
+      log.push(`${label}:exec`);
+
+      return target.exec(sql);
+    },
+    prepare: (sql) => {
+      const stmt = target.prepare(sql);
+
+      return {
+        run: async (params) => {
+          if (!gated && gate !== undefined && sql.includes(gate.sqlIncludes)) {
+            gated = true;
+            log.push(`${label}:gate-enter`);
+            gate.onEnter();
+            await gate.release;
+            log.push(`${label}:gate-resume`);
+          } else {
+            log.push(`${label}:run`);
+          }
+
+          return stmt.run(params);
+        },
+        get: async (params) => {
+          log.push(`${label}:get`);
+
+          return stmt.get(params);
+        },
+        all: async (params) => {
+          log.push(`${label}:all`);
+
+          return stmt.all(params);
+        },
+      };
+    },
+    transaction: (fn) => target.transaction((tx) => fn(wrap(tx))),
+  });
+
+  return wrap(db);
+}
 
 /**
  * Wrap a real `SqlDatabase` so the `lesto_live_cursor` UPSERT throws while `shouldFail()` — the

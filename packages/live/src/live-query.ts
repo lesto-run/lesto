@@ -5,12 +5,22 @@
  * triple — exactly the shape React's `useSyncExternalStore(subscribe, getSnapshot)` wants,
  * with no React dependency here. The typed `live()` builder that mints the `def` is a later
  * increment in this package; the `useLiveQuery` React binding lands in `@lesto/ui`.
+ *
+ * `def` and `options.store` are two independent inputs — a caller may hand in an
+ * already-opened durable store built from its OWN `def` earlier (e.g. across a reload). If the
+ * two disagree, the store's rows are keyed/sorted/filtered by one shape while this call
+ * subscribes and reads by another — silently wrong. {@link createLiveQuery} guards against that
+ * by comparing `shapeId(def)` to the store's own `shapeId` (populated by both
+ * {@link createLiveStore} and {@link createSqliteLiveStore}) whenever the store exposes one,
+ * throwing `LIVE_STORE_SHAPE_MISMATCH` rather than silently subscribing to the wrong shape.
  */
 
+import { shapeId } from "@lesto/live-protocol";
 import type { Row, ShapeDefinition } from "@lesto/live-protocol";
 
 import { connectLiveData } from "./consumer";
 import type { LiveEnvironment, LiveMessageEvent } from "./consumer";
+import { LiveClientError } from "./errors";
 import { createLiveStore } from "./store";
 import type { LiveStore } from "./store";
 
@@ -60,6 +70,25 @@ export function createLiveQuery<R extends Row = Row>(
   options?: CreateLiveQueryOptions,
 ): LiveQuery<R> {
   const store = options?.store ?? createLiveStore(def);
+
+  // A duck-typed check, not a required field: `LiveStore.shapeId` is optional (see `./store`),
+  // so a store that does not expose one (none exist in this repo today, but the field is
+  // deliberately non-breaking for a future hand-rolled one) skips the guard entirely rather
+  // than being forced to grow it. Both stores this package ships DO populate it, so the
+  // default no-`store` path above — which always builds its store from this very `def` — can
+  // never mismatch, and only a caller-supplied store can trip this.
+  if (store.shapeId !== undefined) {
+    const expected = shapeId(def);
+
+    if (store.shapeId !== expected) {
+      throw new LiveClientError(
+        "LIVE_STORE_SHAPE_MISMATCH",
+        `createLiveQuery's def (shape "${expected}") does not match the store it was given ` +
+          `(shape "${store.shapeId}") — the store was built from a different ShapeDefinition.`,
+        { defShapeId: expected, storeShapeId: store.shapeId },
+      );
+    }
+  }
 
   const disconnect = connectLiveData({
     def,

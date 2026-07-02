@@ -22,10 +22,21 @@
  * A UI reads the store through `useSyncExternalStore`, which is synchronous, so `getRows()`
  * cannot `await` SQLite. The store therefore keeps an in-memory **mirror** (`rowsByKey`) that a
  * mutation updates synchronously — instant local reads, and the same stable-reference
- * `getRows()` cache the in-memory store documents — while the durable write is enqueued behind
- * it. The mirror is the live read model; SQLite is the durability tier that survives reload.
- * On open we hydrate the mirror (and the cursor) from SQLite, so a reload paints the last
- * persisted slice before the network reconnects.
+ * `getRows()` cache the in-memory store documents (both now delegate to the shared
+ * {@link createReadModel}) — while the durable write is enqueued behind it. The mirror is the
+ * live read model's row source; SQLite is the durability tier that survives reload. On open we
+ * hydrate the mirror (and the cursor) from SQLite, so a reload paints the last persisted slice
+ * before the network reconnects.
+ *
+ * ## Hydration runs inside the same transactional FIFO as every write
+ *
+ * The schema install (`CREATE TABLE IF NOT EXISTS`) and the two hydration `SELECT`s run inside
+ * a single {@link SqlDatabase.transaction} span, exactly like every later write. This matters
+ * because several shapes can share one OPFS database (the default single `lesto-live.sqlite3`):
+ * `SqlDatabase.transaction` pins one connection and serializes on its FIFO chain, so opening
+ * shape B while shape A has a write transaction in flight queues B's schema install + reads
+ * behind A's commit, instead of letting them run as bare `exec`/`prepare` calls that could
+ * interleave into A's open `BEGIN..COMMIT` span on the shared connection.
  *
  * ## Write ordering + failure
  *
@@ -39,10 +50,11 @@
  * graceful teardown and deterministic tests.
  */
 
-import { compareRows, rowKey, shapeId } from "@lesto/live-protocol";
+import { rowKey, shapeId } from "@lesto/live-protocol";
 import type { Cursor, Row, RowKey, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
 import type { SqlDatabase } from "@lesto/db";
 
+import { createReadModel } from "./read-model";
 import type { LiveStore } from "./store";
 
 /** A durable {@link LiveStore} plus a hook to await its outstanding durable writes. */
@@ -84,6 +96,41 @@ const SCHEMA_SQL =
   "shape TEXT NOT NULL, key TEXT NOT NULL, row TEXT NOT NULL, PRIMARY KEY (shape, key));" +
   "CREATE TABLE IF NOT EXISTS lesto_live_cursor (shape TEXT PRIMARY KEY, cursor TEXT);";
 
+/** What hydration reads back out of SQLite before the store is usable. */
+interface Hydrated {
+  readonly rowsByKey: Map<RowKey, Row>;
+  readonly cursor: Cursor | undefined;
+}
+
+/**
+ * Install the schema (idempotently) and read back this shape's persisted rows + cursor, all in
+ * one `db.transaction` span — see the module doc's "Hydration runs inside the same transactional
+ * FIFO as every write" section for why this must not run as bare `exec`/`prepare` calls.
+ */
+async function hydrate(db: SqlDatabase, shape: string): Promise<Hydrated> {
+  return db.transaction(async (tx) => {
+    await tx.exec(SCHEMA_SQL);
+
+    const rowsByKey = new Map<RowKey, Row>();
+
+    const persistedRows = (await tx
+      .prepare("SELECT key, row FROM lesto_live_rows WHERE shape = ?")
+      .all([shape])) as ReadonlyArray<{ key: string; row: string }>;
+
+    for (const { key, row } of persistedRows) {
+      rowsByKey.set(key as RowKey, JSON.parse(row) as Row);
+    }
+
+    // A cleared cursor is a row DELETE, never a stored NULL, so the column is always non-null
+    // when present — a missing row (fresh open / post-resync) is simply `undefined`.
+    const persistedCursor = (await tx
+      .prepare("SELECT cursor FROM lesto_live_cursor WHERE shape = ?")
+      .get([shape])) as { cursor: string } | undefined;
+
+    return { rowsByKey, cursor: persistedCursor?.cursor };
+  });
+}
+
 /**
  * Build the durable OPFS-SQLite store for a shape. Awaits the schema install and hydrates the
  * in-memory mirror + cursor from any previously-persisted slice, so the returned store is
@@ -96,41 +143,16 @@ export async function createSqliteLiveStore(
   const { def, db, onError } = options;
   const shape = shapeId(def);
 
-  await db.exec(SCHEMA_SQL);
-
   // Hydrate the read model from durability. A reload lands here with the last persisted slice.
-  const rowsByKey = new Map<RowKey, Row>();
+  const { rowsByKey, cursor: hydratedCursor } = await hydrate(db, shape);
 
-  const persistedRows = (await db
-    .prepare("SELECT key, row FROM lesto_live_rows WHERE shape = ?")
-    .all([shape])) as ReadonlyArray<{ key: string; row: string }>;
+  // The shared read model owns the sorted-cache, the listeners, and the cursor — identical
+  // contract to the in-memory store: `getRows()` returns the SAME array between mutations so
+  // `useSyncExternalStore` stops re-rendering. It reads `rowsByKey` fresh (via the thunk), so
+  // this store's clear-and-refill mutation strategy below is invisible to it.
+  const readModel = createReadModel(def, () => rowsByKey.values());
 
-  for (const { key, row } of persistedRows) {
-    rowsByKey.set(key as RowKey, JSON.parse(row) as Row);
-  }
-
-  // A cleared cursor is a row DELETE, never a stored NULL, so the column is always non-null
-  // when present — a missing row (fresh open / post-resync) is simply `undefined`.
-  const persistedCursor = (await db
-    .prepare("SELECT cursor FROM lesto_live_cursor WHERE shape = ?")
-    .get([shape])) as { cursor: string } | undefined;
-
-  let cursor: Cursor | undefined = persistedCursor?.cursor;
-
-  // The lazy sorted-snapshot cache — identical contract to the in-memory store: `getRows()`
-  // returns the SAME array between mutations so `useSyncExternalStore` stops re-rendering.
-  let cache: readonly Row[] = [];
-  let dirty = true;
-
-  const listeners = new Set<() => void>();
-
-  // Every mutation dirties the read cache and notifies subscribers — one place, so a mirror
-  // update can never skip either.
-  const mutated = (): void => {
-    dirty = true;
-
-    for (const listener of listeners) listener();
-  };
+  readModel.setCursor(hydratedCursor);
 
   const report = onError ?? noop;
 
@@ -251,48 +273,33 @@ export async function createSqliteLiveStore(
       rowsByKey.clear();
       for (const [key, row] of next) rowsByKey.set(key, row);
 
-      cursor = nextCursor;
+      readModel.setCursor(nextCursor);
       persistSnapshot(rows, nextCursor);
-      mutated();
+      readModel.mutated();
     },
 
     applyChange(change, nextCursor) {
       if (change.op === "delete") rowsByKey.delete(change.key);
       else rowsByKey.set(change.key, change.row);
 
-      cursor = nextCursor;
+      readModel.setCursor(nextCursor);
       persistChange(change, nextCursor);
-      mutated();
+      readModel.mutated();
     },
 
     applyResync() {
       rowsByKey.clear();
-      cursor = undefined;
+      readModel.setCursor(undefined);
       // Clear rows AND cursor together — the durable floor mirrors the in-memory floor.
       persistSnapshot([], undefined);
-      mutated();
+      readModel.mutated();
     },
 
-    getRows() {
-      if (dirty) {
-        cache = [...rowsByKey.values()].toSorted((a, b) => compareRows(def, a, b));
-        dirty = false;
-      }
+    getRows: readModel.getRows,
+    getCursor: readModel.getCursor,
+    subscribe: readModel.subscribe,
 
-      return cache;
-    },
-
-    getCursor() {
-      return cursor;
-    },
-
-    subscribe(listener) {
-      listeners.add(listener);
-
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    shapeId: shape,
 
     whenIdle() {
       return writeChain;

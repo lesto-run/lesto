@@ -9,14 +9,21 @@
  * in the shape's total order ({@link compareRows}) — the same order the server snapshotted
  * in, so the client's view matches byte-for-byte.
  *
- * The one non-obvious contract: `getRows()` returns a **stable array reference** between
- * mutations. A UI bound through `useSyncExternalStore` compares the snapshot by identity to
- * decide whether to re-render; handing back a fresh array on every read would loop it
- * forever. So the sorted array is cached and only recomputed after a mutation dirties it.
+ * The sorted-cache + dirty flag, the listener bookkeeping, and the cursor variable are NOT
+ * owned here — they live in the shared {@link createReadModel} (`./read-model`), which this
+ * store and {@link createSqliteLiveStore} both compose, so the one non-obvious contract
+ * (`getRows()` returns a **stable array reference** between mutations — a UI bound through
+ * `useSyncExternalStore` compares the snapshot by identity to decide whether to re-render, and
+ * handing back a fresh array on every read would loop it forever) has exactly one
+ * implementation. This module owns only `rowsByKey` and the three mutation methods that drive
+ * it: `applySnapshot` swaps in a fresh `Map` so a bad row (a missing key throws in
+ * {@link rowKey}) leaves the previous state intact, never half-applied.
  */
 
-import { compareRows, rowKey } from "@lesto/live-protocol";
+import { rowKey, shapeId } from "@lesto/live-protocol";
 import type { Cursor, Row, RowKey, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
+
+import { createReadModel } from "./read-model";
 
 /**
  * The client-side view of one shape: mutate it from the wire, read it from a UI.
@@ -65,6 +72,17 @@ export interface LiveStore {
 
   /** Register a listener fired after every mutation; returns its unsubscribe. */
   subscribe(listener: () => void): () => void;
+
+  /**
+   * The stable id ({@link shapeId}) of the shape this store was built for. Optional so a
+   * hand-rolled `LiveStore` (none exist in this repo today) need not populate it — but both
+   * {@link createLiveStore} and {@link createSqliteLiveStore} always do. `createLiveQuery`
+   * reads it (when present) to guard against a `def`/store shape mismatch: a caller-supplied
+   * store built from a DIFFERENT `ShapeDefinition` than the `def` it is paired with, which
+   * would otherwise key/sort/subscribe by one shape while the store holds rows for another —
+   * silently.
+   */
+  readonly shapeId?: string;
 }
 
 /**
@@ -76,26 +94,10 @@ export function createLiveStore(def: ShapeDefinition): LiveStore {
   // The authorized set, keyed by row identity so a `change` is an O(1) set/delete.
   let rowsByKey = new Map<RowKey, Row>();
 
-  // The lazily-recomputed sorted snapshot and its dirty flag. `getRows()` recomputes only
-  // when a mutation has dirtied it, so between mutations it returns the SAME array — the
-  // identity stability `useSyncExternalStore` needs to stop re-rendering.
-  let cache: readonly Row[] = [];
-  let dirty = true;
-
-  // The last applied frame's cursor. In-memory it is "just a variable" (ADR 0042): lost on
-  // reload, so a fresh open re-snapshots — correct, since an in-memory slice has no durable
-  // rows to resume against.
-  let cursor: Cursor | undefined;
-
-  const listeners = new Set<() => void>();
-
-  // After every mutation: the cache is stale and every subscriber must be told. Kept in
-  // one place so no mutation can update state without also invalidating + notifying.
-  const mutated = (): void => {
-    dirty = true;
-
-    for (const listener of listeners) listener();
-  };
+  // The shared read model owns the sorted-cache, the listeners, and the cursor. It reads
+  // `rowsByKey` fresh (via the thunk) every time it recomputes, so swapping in a whole new map
+  // below is invisible to it.
+  const readModel = createReadModel(def, () => rowsByKey.values());
 
   return {
     applySnapshot(rows, nextCursor) {
@@ -106,8 +108,8 @@ export function createLiveStore(def: ShapeDefinition): LiveStore {
       for (const row of rows) next.set(rowKey(row, def.key), row);
 
       rowsByKey = next;
-      cursor = nextCursor;
-      mutated();
+      readModel.setCursor(nextCursor);
+      readModel.mutated();
     },
 
     applyChange(change, nextCursor) {
@@ -116,35 +118,20 @@ export function createLiveStore(def: ShapeDefinition): LiveStore {
       if (change.op === "delete") rowsByKey.delete(change.key);
       else rowsByKey.set(change.key, change.row);
 
-      cursor = nextCursor;
-      mutated();
+      readModel.setCursor(nextCursor);
+      readModel.mutated();
     },
 
     applyResync() {
       rowsByKey = new Map();
-      cursor = undefined;
-      mutated();
+      readModel.setCursor(undefined);
+      readModel.mutated();
     },
 
-    getRows() {
-      if (dirty) {
-        cache = [...rowsByKey.values()].toSorted((a, b) => compareRows(def, a, b));
-        dirty = false;
-      }
+    getRows: readModel.getRows,
+    getCursor: readModel.getCursor,
+    subscribe: readModel.subscribe,
 
-      return cache;
-    },
-
-    getCursor() {
-      return cursor;
-    },
-
-    subscribe(listener) {
-      listeners.add(listener);
-
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    shapeId: shapeId(def),
   };
 }
