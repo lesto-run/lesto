@@ -185,7 +185,7 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
   api
     .get("/.well-known/oauth-protected-resource", handlers.metadata)
     .post("/mcp", handlers.rpc)
-    .get("/mcp", () => ({ status: 405, headers: { allow: "POST" }, body: "" }));
+    .get("/mcp", handlers.noStream);
 
   return { api, resource, audit, board };
 }
