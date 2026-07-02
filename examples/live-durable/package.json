@@ -1,0 +1,25 @@
+{
+  "name": "@lesto/example-live-durable",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The durable OPFS-SQLite client store end-to-end (ADR 0042 Tier 4 v1 Inc5/Inc6): openOpfsSqliteDatabase() -> createSqliteLiveStore() -> createLiveQuery(), bundled through a real Vite production build — the gallery-as-QA-gate proof that the optional @sqlite.org/sqlite-wasm peer's dynamic import survives a bundler, not just tsc.",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "serve": "bun run serve.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/db": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/live": "workspace:*",
+    "@lesto/live-protocol": "workspace:*",
+    "@lesto/live-server": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "@sqlite.org/sqlite-wasm": "3.46.1-build5"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0"
+  }
+}

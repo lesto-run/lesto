@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lesto live() — durable OPFS-SQLite store</title>
+  </head>
+  <body>
+    <h1>Lesto local-first <code>live()</code> — durable OPFS-SQLite store (ADR 0042 Tier 4 v1)</h1>
+    <p>
+      Notes persist to <code>@sqlite.org/sqlite-wasm</code> over OPFS. Reload this page (even
+      offline) and the last synced notes repaint instantly, before the live stream reconnects —
+      that instant repaint is the durable store's whole point.
+    </p>
+    <ul id="notes"></ul>
+    <form id="add-form">
+      <input id="note-text" placeholder="a note" autocomplete="off" />
+      <button type="submit">Add</button>
+    </form>
+    <p id="status"></p>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
