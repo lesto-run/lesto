@@ -22,6 +22,15 @@
  * The wire here carries auth-scoped ROW DATA, never a topic — the deliberate ADR 0042 vs
  * ADR 0027/0040 split, and the reason this example drives `/__lesto/live-data` (not
  * `/__lesto/live`) and stays independent of `@lesto/live` (the browser store).
+ *
+ * `test/live.test.ts` extends this into the full Tier-4 v1 Inc3 acceptance-matrix dogfood
+ * (ADR 0042, `L-f50f94d1`, the gallery-as-QA-gate for that increment): (a) cross-tenant
+ * bound-parameter refusal (above); (c) BOTH membership-revocation mechanisms — an on-row
+ * authorization column (`list`, which the shape itself filters on) reassigned away delivers a
+ * sub-interval delete-from-shape with no re-auth wait, while `revokeMembership` mutates the
+ * SEPARATE `MEMBERSHIP` relation the replication stream cannot observe, caught only at the next
+ * re-auth interval tick — which purges the client's slice (a `resync` frame), not merely closes
+ * the socket.
  */
 
 import {
@@ -65,12 +74,22 @@ export interface Principal {
 /**
  * The demo tenancy. `home` is a PUBLIC list anyone (even anonymous) may see; `work` is
  * members-only, and only `alice` is a member. A real app reads membership from its own
- * tables; a small map stands in here.
+ * tables (a `room_members`-style join, separate from `todos`); a small MUTABLE map stands in
+ * here — mutable specifically so {@link revokeMembership} can dogfood ADR 0042 acceptance (c)'s
+ * cross-relation case: a membership change this relation carries is invisible to the `todos`
+ * replication stream (no `todos` row changes when membership does), so it can only be caught by
+ * re-invoking `authorizeShape` on the re-auth interval — never sub-interval, unlike an on-row
+ * authorization column (see {@link authorizeShape} and the acceptance-matrix tests in
+ * `test/live.test.ts`).
  */
 const PUBLIC_LISTS: ReadonlySet<string> = new Set(["home"]);
-const MEMBERSHIP: Readonly<Record<string, ReadonlySet<string>>> = {
+const MEMBERSHIP: Record<string, Set<string>> = {
   alice: new Set(["work"]),
   bob: new Set<string>(),
+  // `carol` exists solely for the acceptance-matrix (c) cross-relation dogfood in
+  // `test/live.test.ts` (`revokeMembership`) — deliberately decoupled from `alice`'s
+  // membership, which OTHER tests depend on staying intact regardless of test order.
+  carol: new Set(["work"]),
 };
 
 /** Resolve a `?user=` value into its principal (its private-list membership). */
@@ -78,6 +97,17 @@ export function principalOf(user: string | undefined): Principal {
   const lists = user === undefined ? new Set<string>() : (MEMBERSHIP[user] ?? new Set<string>());
 
   return { user, lists };
+}
+
+/**
+ * Revoke `user`'s membership in `list` — simulating an admin removing someone from a private
+ * list through whatever surface a real app would use (an admin panel, another user's action).
+ * The demo's ONLY mutation of the separate membership relation; nothing about any `todos` row
+ * changes when this runs, which is exactly why the replication stream cannot observe it (ADR
+ * 0042 acceptance (c), cross-relation case) — only a later `authorizeShape` re-check can.
+ */
+export function revokeMembership(user: string, list: string): void {
+  MEMBERSHIP[user]?.delete(list);
 }
 
 /** May this principal SEE `list`? (public, or a member) — the one rule reads/writes/shapes share. */
@@ -114,7 +144,11 @@ export interface Booted {
 }
 
 /** Boot the live app: the shape stream, the gated read + write, and the demo page. */
-export async function buildApp(options: { handle: KernelDatabase }): Promise<Booted> {
+export async function buildApp(options: {
+  handle: KernelDatabase;
+  /** The re-auth interval — overridden in tests so acceptance (c)/(d) don't wait 60s. */
+  reauthMs?: number;
+}): Promise<Booted> {
   // Wrap the kernel's handle in the typed ORM — the SAME handle the mutation writes through
   // and the engine polls, so one sqlite connection carries both (the write the poll observes).
   const db = createDb(options.handle);
@@ -140,6 +174,10 @@ export async function buildApp(options: { handle: KernelDatabase }): Promise<Boo
     onDenied: (principal, reason) => {
       denied.push({ user: principal.user, reason });
     },
+    // authorizeShape is re-invoked on this interval REGARDLESS (ADR 0042 acceptance (a)/(c)/(d) —
+    // continuous, not connect-time-only), so a membership revoked via `revokeMembership` (a
+    // relation the `todos` replication stream can't observe) is caught within this bound.
+    ...(options.reauthMs === undefined ? {} : { reauthMs: options.reauthMs }),
   });
 
   const api = lesto()
