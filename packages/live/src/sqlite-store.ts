@@ -415,7 +415,8 @@ export async function createSqliteLiveStore(
 
       readModel.setCursor(nextCursor);
       // Each snapshotted row is a potential echo — settle a held optimistic write for its key in
-      // this same mutation, so the swap to the authoritative row is atomic (no flash).
+      // this same mutation, so the swap to the authoritative row is atomic (no flash). Settles one
+      // held write per key; a rare second held write to the same key waits for its own echo/grace.
       for (const row of rows) readModel.settleEcho(rowKey(row, def.key));
       persistSnapshot(rows, nextCursor);
       readModel.mutated();

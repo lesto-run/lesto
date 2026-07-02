@@ -150,7 +150,9 @@ export interface LiveStore {
   /**
    * Register a listener fired with a mutation id when a HELD optimistic entry is cleared by its
    * authorized echo (see {@link applyChange}). The outbox (`./outbox`) uses it to drop the reconciled
-   * durable log row. Returns its unsubscribe.
+   * durable log row. Returns its unsubscribe. It fires DURING the echo's store mutation, *before* the
+   * `mutated()` notification, so a listener must only reconcile side state (as the outbox does) and
+   * must NOT read {@link getRows} synchronously — the sorted view is dirtied but not yet recomputed.
    */
   onEchoSettled(listener: (mutationId: string) => void): () => void;
 
@@ -215,7 +217,8 @@ export function createLiveStore(def: ShapeDefinition): LiveStore {
       rowsByKey = next;
       readModel.setCursor(nextCursor);
       // Each snapshotted row is a potential echo — settle a held optimistic write for its key in
-      // this same mutation, so the swap to the authoritative row is atomic (no flash).
+      // this same mutation, so the swap to the authoritative row is atomic (no flash). Settles one
+      // held write per key; a rare second held write to the same key waits for its own echo/grace.
       for (const row of rows) readModel.settleEcho(rowKey(row, def.key));
       readModel.mutated();
     },

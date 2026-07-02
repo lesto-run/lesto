@@ -279,9 +279,13 @@ client-side.
   (`handleStream` / `isLongLivedStream`, `packages/runtime/src/server.ts`): no in-flight slot, no
   compression-buffering, bounded by the dedicated stream semaphore + per-IP cap. The Tier 4 endpoint
   is app-mounted exactly like `@lesto/realtime`'s SSE handler, reading the principal from context.
-- **Read-your-writes / replica lag** is handled by the LSN: a client never accepts a snapshot older
-  than an LSN it has already applied, and an optimistic write is held until the replication stream
-  confirms it at a `>=` LSN.
+- **Read-your-writes / replica lag.** A client never accepts a snapshot older than an LSN it has
+  already applied. An optimistic write is **held over the authorized set until its authoritative echo
+  lands** — the shipped interim is a client-side sticky overlay (hold on ack, clear on the echo for the
+  same key, with a bounded grace timer backstopping the never-echoed case; see the 2026-07-02
+  sticky-overlay amendment, `L-436724ba`). The **LSN-exact hold** (keep the overlay until the stream
+  confirms at a `>=` LSN) is the vNext refinement, **deferred** — it needs an exact commit-LSN source
+  for a write and a keepalive-fed applied-LSN watermark the current engine does not expose.
 
 ### Phasing
 
@@ -507,3 +511,30 @@ caught loudly (`LIVE_SERVER_PRIMARY_KEY_CHANGED`) and a delete keys by the uniqu
 stranded. Acceptance (b) is extended above. (A future `REPLICA IDENTITY USING INDEX` over the unique
 index could carry the unique key AS the identity and relax this to that column alone — deliberately not
 built; a follow-up.)
+
+### 2026-07-02 — amendment: read-your-writes ships as a client-side sticky overlay; LSN-exact hold → vNext (`L-436724ba`)
+
+The design bullet above framed read-your-writes as "held until the replication stream confirms it at a
+`>=` LSN." Two independent adversarial reviews found that **LSN-exact confirm is not buildable on the
+current engine** and rejected it: Postgres exposes no exact self-commit LSN to a SQL session
+(`XactLastCommitEnd` is C-only; `pg_current_wal_insert_lsn()` post-commit is an upper bound), and the
+mutation route boundary has no DB handle; the engine has no **global applied-LSN watermark** (the replay
+ring's `latestLsn` is per-shape and advances only on in-shape changes, and `ChangeSource.onChange`
+surfaces decoded row changes, not pgoutput `'k'` keepalives), so on a quiescent shape a `>=`-LSN confirm
+never fires and the overlay is held open indefinitely — the exact leak the feature exists to close.
+
+The **shipped interim** (`@lesto/live`, no protocol/server/mutation-contract change) is a **client-side
+sticky overlay**: on ack the optimistic entry is marked `held` (kept shown, flagged durably on
+`lesto_live_outbox`, dropped from the replay queue); it clears atomically when its authoritative echo — an
+authorized `change`/`snapshot` for the same key — is applied (same store mutation, so no read-your-writes
+flash), **or** when a bounded grace timer expires (the never-echoed backstop: a write filtered out of the
+shape, or a resync/reconnect in the gap). A reject clears immediately; a reload rebuilds a held entry as
+held **without** re-submitting it. Its worst case is exactly the pre-fix behavior (a late-cleared row),
+never incorrectness — with one narrow, bounded exception: a held overlay masks a *concurrent third-party*
+update to the same key for at most the grace window, which the LSN-exact hold would close.
+
+The **LSN-exact hold is deferred to the vNext edge-DO bundle**, gated on prerequisites this interim does
+not build: an exact commit-LSN source for a write, a keepalive-fed engine-global applied-LSN watermark
+(extending `ChangeSource` to surface `'k'` keepalives), per-connection/per-principal confirm addressing,
+and durable held-overlay persistence keyed by mutation id — the last of which this amendment already
+lands (the `held` column), so the interim advances vNext rather than fighting it.

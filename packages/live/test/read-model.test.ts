@@ -246,6 +246,35 @@ describe("createReadModel", () => {
       expect(model.getRows()).toEqual([{ id: "a", rank: 3 }]);
     });
 
+    it("with two held writes to one key, the first echo clears the older held without changing the view", () => {
+      const map = rowsMap([{ id: "a", rank: 1 }]);
+      const model = createReadModel(def, () => map.values());
+      const settled: string[] = [];
+      model.onEchoSettled((id) => settled.push(id));
+
+      // Two writes to key `a`, BOTH acked (held) before either echo lands — the case the flat,
+      // insertion-ordered overlay is chosen to handle without an intermediate-value flash.
+      model.setOptimistic("m1", { op: "update", key: "a", row: { id: "a", rank: 2 } });
+      model.holdOptimistic("m1");
+      model.setOptimistic("m2", { op: "update", key: "a", row: { id: "a", rank: 3 } });
+      model.holdOptimistic("m2");
+      model.mutated();
+      expect(model.getRows()).toEqual([{ id: "a", rank: 3 }]); // newest held wins
+
+      // m1's echo lands first → clears the OLDER held (m1); m2 (newer, still held) keeps the view
+      // pinned at rank 3, so the older write's echo never flashes an intermediate value.
+      model.settleEcho("a");
+      model.mutated();
+      expect(settled).toEqual(["m1"]);
+      expect(model.getRows()).toEqual([{ id: "a", rank: 3 }]);
+
+      // m2's echo lands → clears the last held entry, revealing the authorized row.
+      model.settleEcho("a");
+      model.mutated();
+      expect(settled).toEqual(["m1", "m2"]);
+      expect(model.getRows()).toEqual([{ id: "a", rank: 1 }]);
+    });
+
     it("settleEcho is a no-op when only a pending (unheld) entry targets the key", () => {
       const map = rowsMap([{ id: "a", rank: 1 }]);
       const model = createReadModel(def, () => map.values());

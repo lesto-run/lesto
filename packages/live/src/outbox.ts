@@ -29,11 +29,14 @@
  *     held optimistic row and its authoritative twin are the same value, so nothing visibly changes.
  *     That is the fix: pre-`L-436724ba` the overlay cleared on ack, leaving a window where the row was
  *     sourced from neither tier (a flash); now it is held across the gap. The store notifies us via
- *     {@link LiveStore.onEchoSettled} so we drop the reconciled durable row and cancel the grace timer.
+ *     {@link LiveStore.onEchoSettled} so we drop the reconciled durable row; the grace timer is left to
+ *     fire and no-op (it is defused, not cancelled — see {@link ScheduleGrace}).
  *   - **grace** (the echo never comes — e.g. the write does not match the shape's filter, or under
  *     resync/reconnect) → the grace timer fires and clears the held overlay + durable row. This is the
  *     bounded backstop: its worst case (a lagging echo cleared a beat early) is exactly the pre-fix
- *     behavior, never incorrectness. A true LSN-exact hold is the ADR 0042 vNext refinement.
+ *     behavior, never incorrectness. The one way a held write is briefly *worse* than clear-on-ack: it
+ *     masks a concurrent third-party write to the same key until the echo or grace clears it (≤ the
+ *     grace window) — the residual the ADR 0042 vNext LSN-exact hold closes.
  *   - **reject** (`"rejected"` — the server refused it) → drop the queue + log entry and clear the
  *     overlay immediately. Because the overlay is purely additive over the authorized set, clearing
  *     it IS the rollback: the authorized row (which never carried the edit) shows through again.
