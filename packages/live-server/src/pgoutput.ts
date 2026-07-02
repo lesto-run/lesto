@@ -76,6 +76,17 @@ class Reader {
   /** A NUL-terminated C string. */
   cstring(): string {
     const end = this.buf.indexOf(0, this.#offset);
+
+    // No terminator before the frame ended: `indexOf` returns -1, and `toString(_, _, -1)` would
+    // yield '' while rewinding the cursor to 0 — silently corrupting every later read. Refuse.
+    if (end === -1) {
+      throw new LiveServerError(
+        "LIVE_SERVER_REPLICATION_MALFORMED_FRAME",
+        `pgoutput frame ended before a C string's NUL terminator (offset ${this.#offset}).`,
+        { offset: this.#offset },
+      );
+    }
+
     const value = this.buf.toString("utf8", this.#offset, end);
     this.#offset = end + 1;
 
@@ -83,8 +94,20 @@ class Reader {
   }
 
   bytes(length: number): Buffer {
-    const value = this.buf.subarray(this.#offset, this.#offset + length);
-    this.#offset += length;
+    const end = this.#offset + length;
+
+    // A `subarray` past the buffer's end CLAMPS silently — the truncation surfaces only as a bare
+    // `RangeError` on the next read. Bound-check here so an overlong length prefix is a coded error.
+    if (end > this.buf.length) {
+      throw new LiveServerError(
+        "LIVE_SERVER_REPLICATION_MALFORMED_FRAME",
+        `pgoutput frame claims a ${length}-byte value at offset ${this.#offset} but only ${this.buf.length - this.#offset} byte(s) remain.`,
+        { offset: this.#offset, length, remaining: this.buf.length - this.#offset },
+      );
+    }
+
+    const value = this.buf.subarray(this.#offset, end);
+    this.#offset = end;
 
     return value;
   }
@@ -201,7 +224,16 @@ export function createPgOutputDecoder(): PgOutputDecoder {
             marker = reader.uint8();
           }
 
-          // `marker` is now 'N' — the new tuple.
+          // The marker MUST now be 'N' (the new tuple). Any other byte means the cursor is
+          // misaligned — assuming 'N' and reading on would decode garbage, so refuse it loudly.
+          if (marker !== 0x4e /* 'N' */) {
+            throw new LiveServerError(
+              "LIVE_SERVER_REPLICATION_MALFORMED_FRAME",
+              `pgoutput Update expected the new-tuple 'N' marker but read byte 0x${marker.toString(16)}.`,
+              { marker },
+            );
+          }
+
           const newImage = readTuple(reader, columns);
 
           return { op: "update", table, commitLSN, newImage, oldImage, oldImageKind };

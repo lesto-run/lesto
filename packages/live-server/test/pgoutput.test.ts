@@ -193,3 +193,47 @@ describe("createPgOutputDecoder — synthesized tuple kinds (null / unchanged-TO
     });
   });
 });
+
+describe("createPgOutputDecoder — malformed / truncated frames (defense-in-depth on the DB wire)", () => {
+  // A minimal Relation for `t(a)`, OID 100, so a change can resolve its columns.
+  const rel = (): Uint8Array =>
+    frame("52", "00000064", cstr("public"), cstr("t"), "64", "0001", `01${cstr("a")}00000017ffffffff`);
+
+  const codeOf = (fn: () => unknown): string => {
+    try {
+      fn();
+    } catch (error) {
+      expect(error).toBeInstanceOf(LiveServerError);
+      return (error as LiveServerError).code;
+    }
+    throw new Error("expected a throw, got none");
+  };
+
+  it("(a) refuses a C string with no NUL terminator instead of silently rewinding the cursor", () => {
+    const decoder = createPgOutputDecoder();
+    // 'R' + oid + "public" WITHOUT its trailing NUL — cstring's indexOf(0) finds none.
+    const truncated = frame("52", "00000064", Buffer.from("public").toString("hex"));
+
+    expect(codeOf(() => decoder.decode(truncated))).toBe("LIVE_SERVER_REPLICATION_MALFORMED_FRAME");
+  });
+
+  it("(b) refuses a tuple column whose length prefix overruns the frame instead of clamping the subarray", () => {
+    const decoder = createPgOutputDecoder();
+    decoder.decode(rel());
+
+    // 'I' + oid + 'N' + 1 col + 't' + length 0x000000ff (255) but only 2 bytes supplied.
+    const insert = frame("49", "00000064", "4e", "0001", "74", "000000ff", "3132");
+
+    expect(codeOf(() => decoder.decode(insert))).toBe("LIVE_SERVER_REPLICATION_MALFORMED_FRAME");
+  });
+
+  it("(c) refuses an Update whose post-OID marker is neither 'O'/'K'/'N' instead of assuming 'N'", () => {
+    const decoder = createPgOutputDecoder();
+    decoder.decode(rel());
+
+    // 'U' + oid + 0x58 ('X') — not an old-tuple 'O'/'K', and not the new-tuple 'N'.
+    const update = frame("55", "00000064", "58");
+
+    expect(codeOf(() => decoder.decode(update))).toBe("LIVE_SERVER_REPLICATION_MALFORMED_FRAME");
+  });
+});

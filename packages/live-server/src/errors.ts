@@ -90,7 +90,17 @@ export type LiveServerErrorCode =
    * left to enter a shape's replay ring would later crash an unrelated reconnect's LSN comparison
    * (a cross-connection blast radius), so it is dropped loudly here rather than poisoning resume.
    */
-  | "LIVE_SERVER_INVALID_LSN";
+  | "LIVE_SERVER_INVALID_LSN"
+  /**
+   * A `pgoutput` message could not be decoded because its bytes are malformed or truncated: a C string
+   * with no NUL terminator, a tuple column whose length prefix runs past the end of the frame, or an
+   * Update marker that is neither `'O'`/`'K'`/`'N'`. The happy-path byte math is traced against real
+   * captured fixtures, so this is a corrupt DB wire (or a seam that mis-stripped the `XLogData` header),
+   * not a decoder bug. Each such condition would otherwise misalign the cursor and silently corrupt
+   * every later read of the message, so it is caught at the byte boundary and thrown loudly — routed to
+   * the engine's error sink — rather than emitting a garbled change. Defense-in-depth on the DB wire.
+   */
+  | "LIVE_SERVER_REPLICATION_MALFORMED_FRAME";
 
 /** Anything the shape engine can refuse to register or serve. */
 export class LiveServerError extends LestoError<LiveServerErrorCode> {
