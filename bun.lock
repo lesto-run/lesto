@@ -860,11 +860,12 @@
         "@lesto/live-protocol": "workspace:*",
       },
       "devDependencies": {
+        "@sqlite.org/sqlite-wasm": "3.46.1-build5",
         "react": "^19",
         "react-dom": "^19",
       },
       "peerDependencies": {
-        "@sqlite.org/sqlite-wasm": "^3.46.0",
+        "@sqlite.org/sqlite-wasm": "^3.46.1-build5",
         "react": "^19",
       },
       "optionalPeers": [

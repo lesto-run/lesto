@@ -20,36 +20,22 @@
  *
  * `@sqlite.org/sqlite-wasm` is an **optional peer dependency**: only an app that opts into the
  * durable store installs it. Its surface is declared with the local interfaces below (not pulled
- * from the package's own types, which a `@lesto/live` consumer need not have installed), and it is
- * reached through a dynamic `import` whose specifier is typed as a bare `string` — so a downstream
- * `tsc` does not try to resolve the optional peer.
+ * from the package's own types), and it is reached through a **literal** dynamic
+ * `import("@sqlite.org/sqlite-wasm")` so a real bundler statically wires the peer into the build.
  *
- * PROVEN (Inc6, `examples/live-durable`, a real `vite build` against the peer actually
- * installed): a *bundler* does defeat this the same way `tsc` is meant to be defeated, and WORSE
- * than a warning — production Rollup/Vite silently drops the import with **no diagnostic at
- * all**. A side-by-side `vite build` of the identical `import(...)` with a literal string
- * specifier bundles `@sqlite.org/sqlite-wasm` in full (its JS plus the `sqlite3.wasm` /
- * worker/proxy assets it needs — ~1.1 MB); the same call through this file's non-literal
- * `SQLITE_WASM_MODULE` variable produces a build that is missing all of it — the emitted chunk
- * still contains an un-analyzable dynamic `import()` of the (minified) `SQLITE_WASM_MODULE`
- * variable — an unresolved BARE specifier a browser's native ESM loader cannot resolve, so
- * it throws at runtime — and Rollup emits zero warning either way (confirmed with an `onwarn`
- * hook that logs every warning: none fire). Neither of the two mitigations one might reach for
- * changes this: `import(/* @vite-ignore *\/ SQLITE_WASM_MODULE)` (present below) only silences
- * Vite's *dev-time* "cannot analyze this dynamic import" console warning — the production build
- * output is byte-identical with or without it — and `optimizeDeps.exclude` only steers the dev
- * server's esbuild dependency SCAN, which never runs during `vite build` at all. Both are
- * genuinely inert here; kept anyway as the standard, honest signal of intent (see
- * `examples/live-durable/vite.config.ts` and its README for the full experiment). The clean fix
- * is not taken yet (tracked, `L-4ed8e591`): the leading candidate is library-side — a dedicated
- * opt-in SUBPATH export (e.g. `@lesto/live/opfs`) that reaches the peer through a LITERAL
- * `import("@sqlite.org/sqlite-wasm")` (a literal bundles it in full, per the side-by-side above),
- * kept OUT of the main barrel so a peer-less consumer importing `@lesto/live` never pulls this
- * module (and its literal) into its `tsc`/bundler graph, while an opt-in app that imports the
- * subpath has the peer installed and resolves it cleanly. Only a raw literal in THIS
- * barrel-exported file would re-open the `tsc` requirement for a peer-less consumer; a separate
- * subpath does not. (An app can alternatively resolve it app-side: its own literal import plus an
- * import map.)
+ * That literal is why this engine lives behind the opt-in **`@lesto/live/opfs`** subpath and is
+ * NOT re-exported from the main `@lesto/live` barrel. The split resolves a tension the Inc6
+ * example (`examples/live-durable`, L-f5bffa40 → L-4ed8e591) proved is real: a NON-literal
+ * specifier (a `const: string`, the earlier shape) keeps `tsc` from resolving the optional peer
+ * for a peer-less consumer — but a bundler defeats it the same way, and WORSE than a warning:
+ * production Rollup/Vite silently drops the import with no diagnostic, so `dist/` never gets the
+ * ~1.1 MB engine and the call throws at runtime (`@vite-ignore`/`optimizeDeps.exclude` do not fix
+ * the production build). A literal fixes the bundler but would re-open the `tsc` requirement — IF
+ * it sat in the main barrel. Keeping it on a dedicated subpath dissolves both: a consumer
+ * importing `@lesto/live` never pulls this module (or its literal) into its `tsc`/bundler graph,
+ * while an app that imports `@lesto/live/opfs` has installed the peer, so the literal resolves for
+ * its `tsc` AND bundles for its build. This package also declares the peer as a `devDependency`,
+ * so its OWN typecheck resolves the literal without the incidental install.
  */
 
 import { adaptSyncSqlite } from "@lesto/db";
@@ -114,16 +100,6 @@ export class OpfsSqliteError extends LestoError<"LIVE_OPFS_UNAVAILABLE"> {
   }
 }
 
-// The optional peer's specifier, typed as a bare `string` so `tsc` will not resolve it at
-// type-check time (no error for a consumer that has not installed it). PROVEN in the Inc6
-// example (see the module doc): the same non-literal shape that protects `tsc` also makes
-// Rollup/Vite skip bundling this import ENTIRELY — silently, with no warning — so `dist/` never
-// gets `@sqlite.org/sqlite-wasm`'s code, and the shipped `import(SQLITE_WASM_MODULE)` call is
-// left as an unresolvable bare specifier that throws in a real browser. `optimizeDeps.exclude`
-// and `@vite-ignore` do not change this (see the module doc for why); there is no bundler flag
-// that fixes it from this side of the seam.
-const SQLITE_WASM_MODULE: string = "@sqlite.org/sqlite-wasm";
-
 /**
  * Open the durable OPFS-SQLite database for the client store, requesting persistent storage so
  * the browser does not evict the slice under pressure. Dynamically imports the optional
@@ -139,7 +115,11 @@ export async function openOpfsSqliteDatabase(
   let raw: OoDatabase;
 
   try {
-    const module = (await import(/* @vite-ignore */ SQLITE_WASM_MODULE)) as {
+    // A LITERAL specifier so a bundler statically wires the optional peer into the build (a
+    // non-literal was silently dropped — the Inc6 finding, L-4ed8e591; see the module doc). Cast
+    // through `unknown`: this driver binds only the minimal oo1 surface declared above, not the
+    // peer's own (far larger) types.
+    const module = (await import("@sqlite.org/sqlite-wasm")) as unknown as {
       default: Sqlite3InitModule;
     };
     const sqlite3 = await module.default();

@@ -2,15 +2,16 @@ import { defineConfig } from "vite";
 
 /**
  * The client bundle for the durable OPFS-SQLite `live()` round-trip (ADR 0042 Tier 4, v1
- * Inc5/Inc6). This is the ONE piece of config this example exists to exercise: `src/main.ts`
- * imports `@lesto/live`'s `openOpfsSqliteDatabase`, which reaches the optional
- * `@sqlite.org/sqlite-wasm` peer through a dynamic `import(SQLITE_WASM_MODULE)` whose specifier
- * is typed as a bare `string` (so `tsc` never tries to resolve the optional peer). A `vite build`
- * against this config is the proof that a real bundler still wires that import correctly with
- * the peer installed — see `README.md` for what this build found.
+ * Inc5/Inc6). `src/main.ts` imports `openOpfsSqliteDatabase` from the opt-in `@lesto/live/opfs`
+ * subpath, which reaches the optional `@sqlite.org/sqlite-wasm` peer through a LITERAL
+ * `import("@sqlite.org/sqlite-wasm")` — so a real `vite build` statically wires the engine into
+ * `dist/` (the fix for the Inc6 finding that a non-literal specifier was silently dropped;
+ * L-f5bffa40 → L-4ed8e591, see `README.md`).
  */
 export default defineConfig({
   optimizeDeps: {
+    // The wasm/worker engine must not go through the dev server's esbuild pre-bundle scan (it
+    // ships its own worker + `.wasm` asset loading) — the standard exclusion for sqlite-wasm.
     exclude: ["@sqlite.org/sqlite-wasm"],
   },
   build: {

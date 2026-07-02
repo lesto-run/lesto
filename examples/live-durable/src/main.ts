@@ -15,7 +15,8 @@
  * reconnects. A non-durable (in-memory) store would paint nothing until the first snapshot.
  */
 
-import { createLiveQuery, createSqliteLiveStore, openOpfsSqliteDatabase } from "@lesto/live";
+import { createLiveQuery, createSqliteLiveStore } from "@lesto/live";
+import { openOpfsSqliteDatabase } from "@lesto/live/opfs";
 
 import { notesShape } from "./schema";
 

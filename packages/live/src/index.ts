@@ -8,7 +8,9 @@
  *     stable-reference cache (the `useSyncExternalStore` contract).
  *   - {@link createSqliteLiveStore} — the opt-in **durable** store (ADR 0042 v1 Inc5): the same
  *     surface backed by SQLite, persisting the row batch AND the resume cursor atomically so the
- *     slice survives reload; {@link openOpfsSqliteDatabase} is its browser OPFS engine.
+ *     slice survives reload. Its browser OPFS engine (`openOpfsSqliteDatabase`) is the separate
+ *     opt-in `@lesto/live/opfs` subpath — kept off this barrel so a consumer that never opts into
+ *     the durable store never pulls the optional `@sqlite.org/sqlite-wasm` peer into its graph.
  *   - {@link connectLiveData} — the `GET /__lesto/live-data` SSE consumer that drives a
  *     store, over an injectable `EventSource` seam (SSR-safe, test-fakeable).
  *   - {@link createLiveQuery} — the `{ subscribe, getSnapshot, disconnect }` handle that
@@ -24,9 +26,6 @@ export type { LiveStore } from "./store";
 
 export { createSqliteLiveStore } from "./sqlite-store";
 export type { CreateSqliteLiveStoreOptions, SqliteLiveStore } from "./sqlite-store";
-
-export { openOpfsSqliteDatabase, OpfsSqliteError } from "./opfs-sqlite";
-export type { OpenOpfsSqlite, OpenOpfsSqliteOptions } from "./opfs-sqlite";
 
 export { browserLiveEnvironment, connectLiveData, DEFAULT_LIVE_DATA_PATH } from "./consumer";
 export type {
