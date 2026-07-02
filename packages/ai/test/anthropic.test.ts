@@ -329,6 +329,66 @@ describe("parseStream", () => {
     expect(cancelled).toBe(true);
   });
 
+  it("swallows a REJECTING cancel() on an early break — the clean break still completes", async () => {
+    // The finally does `reader.cancel().catch(() => {})`; if the underlying source's cancel throws,
+    // that rejection must NOT escape to the consumer and turn a clean break into a thrown error.
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"a"}}\n\n',
+          ),
+        );
+      },
+      cancel() {
+        throw new Error("cancel boom"); // → reader.cancel() rejects
+      },
+    });
+    const model = createAnthropic({ apiKey: "sk-test" });
+    const response = new Response(body, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+
+    let broke = false;
+    for await (const delta of model.parseStream(response)) {
+      expect(delta.text).toBe("a");
+      broke = true;
+      break; // if the rejecting cancel escaped the finally, this loop would throw instead
+    }
+
+    expect(broke).toBe(true);
+  });
+
+  it("a rejecting cancel() does not mask a mid-stream AI_STREAM_MALFORMED", async () => {
+    // The real error must win: a cleanup-time cancel rejection in the finally must not replace the
+    // AiError the parse threw.
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode("data: {not json}\n\n")); // → AI_STREAM_MALFORMED
+      },
+      cancel() {
+        throw new Error("cancel boom");
+      },
+    });
+    const model = createAnthropic({ apiKey: "sk-test" });
+    const response = new Response(body, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+
+    const error = await (async () => {
+      for await (const _ of model.parseStream(response)) {
+        // drain — the malformed frame throws on the first pull
+      }
+    })().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AiError);
+    expect((error as AiError).code).toBe("AI_STREAM_MALFORMED");
+  });
+
   it("returns just the stop reason when message_delta carries one but no usage", async () => {
     const model = createAnthropic({ apiKey: "sk-test" });
 
