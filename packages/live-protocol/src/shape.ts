@@ -258,13 +258,26 @@ function ordered(cell: unknown, value: FilterValue): number | undefined {
   return 0;
 }
 
-/** Evaluate one filter against a cell — `eq`/`ne` are exact (`Object.is`), the rest ordered. */
+/**
+ * SQL 3-valued logic: a comparison where either operand is NULL yields NULL — never TRUE — so both
+ * `eq` and `ne` require the cell AND the bound value to be present (non-null) before they can hold.
+ * (A row column may be null/undefined; a `FilterValue` may itself be null.) This keeps the JS predicate
+ * faithful to a SQL-rendered snapshot's `WHERE col = v` / `col <> v`, both of which EXCLUDE nulls:
+ * without it, `ne` would INCLUDE a null cell and `eq NULL` would MATCH null cells — the exact divergence
+ * that would leak a row present incrementally but absent from an authoritative SQL snapshot (`ordered`
+ * already applies the same rule to `gt`/`gte`/`lt`/`lte`).
+ */
+function present(cell: unknown, value: FilterValue): boolean {
+  return cell !== null && cell !== undefined && value !== null;
+}
+
+/** Evaluate one filter against a cell — `eq`/`ne` are exact (`Object.is`, NULL-guarded), the rest ordered. */
 function matchesFilter(filter: Filter, cell: unknown): boolean {
   switch (filter.op) {
     case "eq":
-      return Object.is(cell, filter.value);
+      return present(cell, filter.value) && Object.is(cell, filter.value);
     case "ne":
-      return !Object.is(cell, filter.value);
+      return present(cell, filter.value) && !Object.is(cell, filter.value);
     case "gt": {
       const cmp = ordered(cell, filter.value);
 

@@ -170,11 +170,30 @@ describe("matchesShape — the per-row predicate (AND of conjuncts)", () => {
     expect(matchesShape(ne, { id: 1, roomId: 1 })).toBe(false);
   });
 
-  it("eq matches a null bound value against a null cell", () => {
-    const def = messagesShape({ where: [{ column: "roomId", op: "eq", value: null }] });
+  it("eq / ne follow SQL 3-valued logic: a NULL on either side is never a match", () => {
+    // SQL `col = v` / `col <> v` are both NULL (never TRUE) when either operand is NULL, so both
+    // EXCLUDE — matching a SQL-rendered snapshot's WHERE, which the CDN-snapshot path re-renders. A
+    // first-class-NULL `Object.is` would instead INCLUDE a null cell under `ne` and match null cells
+    // under `eq null`, leaking a row present incrementally but absent from the authoritative snapshot.
+    const eq = messagesShape({ where: [{ column: "roomId", op: "eq", value: 1 }] });
+    const ne = messagesShape({ where: [{ column: "roomId", op: "ne", value: 1 }] });
 
-    expect(matchesShape(def, { id: 1, roomId: null })).toBe(true);
-    expect(matchesShape(def, { id: 1, roomId: 1 })).toBe(false);
+    // A NULL cell: `= 1` excludes, and `<> 1` ALSO excludes (not includes).
+    expect(matchesShape(eq, { id: 1, roomId: null })).toBe(false);
+    expect(matchesShape(ne, { id: 1, roomId: null })).toBe(false);
+
+    // A missing column (an undefined cell) is likewise never a match under eq/ne.
+    expect(matchesShape(eq, { id: 1 })).toBe(false);
+    expect(matchesShape(ne, { id: 1 })).toBe(false);
+
+    // A NULL bound value matches nothing — `col = NULL` / `col <> NULL` are never TRUE in SQL (a
+    // future `IS NULL` op, not `eq null`, would express null membership). Present and null cells alike.
+    const eqNull = messagesShape({ where: [{ column: "roomId", op: "eq", value: null }] });
+    const neNull = messagesShape({ where: [{ column: "roomId", op: "ne", value: null }] });
+
+    expect(matchesShape(eqNull, { id: 1, roomId: 1 })).toBe(false);
+    expect(matchesShape(eqNull, { id: 1, roomId: null })).toBe(false);
+    expect(matchesShape(neNull, { id: 1, roomId: 1 })).toBe(false);
   });
 
   it("gt / gte / lt / lte compare in order", () => {
