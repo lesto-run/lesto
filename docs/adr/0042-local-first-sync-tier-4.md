@@ -542,13 +542,14 @@ lands (the `held` column), so the interim advances vNext rather than fighting it
 ### 2026-07-02 — amendment: a classification error resyncs the shape; the `resync` frame is resume-breaking (`L-802b3e7b`)
 
 The `REPLICA IDENTITY` guards above (acceptance (b), the `L-5c46b49b` key-column amendment) **refuse** an
-unsafe shape at registration. But a shape can pass registration and *then* throw on a live change — a
-`FULL`→`DEFAULT` downgrade (`LIVE_SERVER_OLD_IMAGE_INCOMPLETE`), a refused key change
-(`LIVE_SERVER_PRIMARY_KEY_CHANGED`), an unchanged external-TOAST predicate column, or a malformed commit
-LSN. The engine confined each such throw to `onError` and moved on, but that is **not enough**: the throw
-happens *before* the change is applied to the shape's server-side `rows` and recorded in its replay ring,
-so the engine's OWN view is now missing the change — the shape is diverged **server-side**, not merely on
-the client, and it stays silently stale until the client happens to reconnect. This shares the
+unsafe shape at registration. But a shape can pass registration and *then* fail on a live change — a
+classifier throw (a `FULL`→`DEFAULT` downgrade `LIVE_SERVER_OLD_IMAGE_INCOMPLETE`, a refused key change
+`LIVE_SERVER_PRIMARY_KEY_CHANGED`, an unchanged external-TOAST predicate column), or — rejected at *ingest*,
+before any classifier runs — a malformed commit LSN. The engine confined each such failure to `onError` and
+moved on, but that is **not enough**: the change never reaches the shape's server-side `rows` or its replay
+ring (a classifier throws before `applyChange`/`ring.record`; an ingest-rejected change is dropped for every
+shape on its table), so the engine's OWN view is now missing it — the shape is diverged **server-side**, not
+merely on the client, and it stays silently stale until the client happens to reconnect. This shares the
 classification-error path with the same **purge + resync + sever** posture already mandated for a re-auth
 failure (Decision: continuous re-authorization).
 

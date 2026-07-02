@@ -4,7 +4,8 @@
  *
  * Unlike `@lesto/realtime`'s codec, this wire carries **auth-scoped row data**, not an
  * invalidation topic (the deliberate ADR 0042 vs ADR 0027/0040 split). Each frame is one
- * SSE event, and its `id:` is the resume cursor echoed back as `Last-Event-ID`:
+ * SSE event, and its `id:` is the resume cursor echoed back as `Last-Event-ID` (a `resync`'s `id:`
+ * is deliberately a NON-RESUMABLE token — see {@link resyncFrame}):
  *
  *   - `snapshot` — the shape's initial authorized row set at a known cursor.
  *   - `change`   — one insert / update / delete-from-shape stamped with the commit cursor.
@@ -63,7 +64,13 @@ export function changeFrame(change: ShapeChange, cursor: Cursor): string {
   return `event: change\ndata: ${JSON.stringify(change)}\nid: ${cursor}\n\n`;
 }
 
-/** A `resync` frame: "drop your local slice and re-snapshot". Carries the current cursor. */
+/**
+ * A `resync` frame: "drop your local slice and re-snapshot". Its `id:` must be a **non-resumable**
+ * cursor — a reconnecting `EventSource` echoes the last `id:` as `Last-Event-ID`, so a real resume
+ * position here would make it replay the missed changes onto the just-purged slice (a durable, worse
+ * divergence). The live-server caller stamps a dedicated sentinel that decodes to "no continuity"
+ * (`RESYNC_CURSOR`, L-802b3e7b); this codec only enforces the cursor is a valid single SSE line.
+ */
 export function resyncFrame(cursor: Cursor): string {
   assertCursor(cursor);
 

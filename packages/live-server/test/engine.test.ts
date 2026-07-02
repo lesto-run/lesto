@@ -755,6 +755,69 @@ describe("replication change source — the v1 change path", () => {
     expect(e.activeShapes).toBe(1); // untouched
     e.stop();
   });
+
+  it("isolates a throwing onResync — routes it to onError, still notifies the other subscribers, never wedges the feed", async () => {
+    const src = fakeSource();
+    const errors: unknown[] = [];
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      onError: (error) => errors.push(error),
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    const boom = new Error("resync sink blew up");
+    const onResyncThrows = vi.fn(() => {
+      throw boom;
+    });
+    const onResyncOk = vi.fn();
+    // Two subscribers on ONE shape (same entry); the first's resync sink throws.
+    await e.subscribe(room1Shape(), () => {}, undefined, onResyncThrows);
+    await e.subscribe(room1Shape(), () => {}, undefined, onResyncOk);
+    expect(e.activeShapes).toBe(1);
+
+    // A malformed LSN drops the shape → both resync sinks run. The throwing one must NOT stop the
+    // sibling nor escape the change feed (dropShape runs OUTSIDE the per-shape try).
+    expect(() =>
+      src.emit({
+        ...ins({ id: "1", room_id: "1", body: "hi", created_at: "100" }),
+        commitLSN: "nope",
+      }),
+    ).not.toThrow();
+
+    expect(onResyncThrows).toHaveBeenCalledTimes(1);
+    expect(onResyncOk).toHaveBeenCalledTimes(1); // the sibling was still notified
+    expect(errors).toContain(boom); // the throw was routed to onError, not silently lost
+    expect(e.activeShapes).toBe(0);
+
+    // The feed survives — a subsequent change doesn't throw (the read loop wasn't wedged).
+    expect(() =>
+      src.emit(ins({ id: "2", room_id: "1", body: "yo", created_at: "200" })),
+    ).not.toThrow();
+    e.stop();
+  });
+
+  it("swallows a throwing onResync when no onError sink is configured (still never wedges the feed)", async () => {
+    const src = fakeSource();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    const onResyncThrows = vi.fn(() => {
+      throw new Error("resync sink blew up");
+    });
+    await e.subscribe(room1Shape(), () => {}, undefined, onResyncThrows);
+
+    // No onError sink: the throw is swallowed inside dropShape (`onError?.` no-ops) and never escapes.
+    expect(() =>
+      src.emit({
+        ...ins({ id: "1", room_id: "1", body: "hi", created_at: "100" }),
+        commitLSN: "nope",
+      }),
+    ).not.toThrow();
+    expect(onResyncThrows).toHaveBeenCalledTimes(1);
+    e.stop();
+  });
 });
 
 // ---------------------------------------------------------------------------

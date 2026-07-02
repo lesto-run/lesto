@@ -495,7 +495,17 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
     shapes.delete(id);
     if (shapes.size === 0) stopPolling();
 
-    for (const subscriber of entry.subscribers) subscriber.onResync?.();
+    for (const subscriber of entry.subscribers) {
+      // Isolate each resync sink like the `onChange` fan-out: `dropShape` runs from
+      // `onSourceChange`'s catch AND its invalid-LSN branch — OUTSIDE the per-shape try — so a
+      // throwing sink would escape the change feed and wedge every shape's tail, breaking this
+      // module's "one shape can never wedge the shared feed" invariant. Route it to `onError`.
+      try {
+        subscriber.onResync?.();
+      } catch (error) {
+        onError?.(error);
+      }
+    }
   }
 
   /**
@@ -557,10 +567,11 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
 
         for (const subscriber of entry.subscribers) subscriber.onChange(shapeChange, cursor);
       } catch (error) {
-        // The classifier threw BEFORE applyChange/ring.record ran, so this shape's rows AND ring are
-        // now missing the change: the entry is diverged. Route the error to the operator, then drop
-        // the shape so its subscribers purge + re-snapshot and any re-subscribe re-seeds from the DB
-        // — never leave the diverged entry alive to re-serve the leak (L-802b3e7b).
+        // The reachable throw here is the classifier's (a refused key change / incomplete old image);
+        // it runs BEFORE applyChange/ring.record, so this shape's rows AND ring are missing the change
+        // — the entry is diverged. Route the error to the operator, then drop the shape so its
+        // subscribers purge + re-snapshot and any re-subscribe re-seeds from the DB — never leave the
+        // diverged entry alive to re-serve the leak (L-802b3e7b).
         onError?.(error);
         dropShape(id, entry);
       }

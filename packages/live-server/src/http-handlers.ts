@@ -119,7 +119,10 @@ export interface ShapeStreamSource {
    * because its server-side view diverged (a classifier throw / a malformed-LSN change): the
    * connection must purge the client's slice and tear down. A resync that fired in the
    * subscribe→attach gap is latched and delivered on registration (mirroring the change buffer).
-   * Absent when the underlying source surfaces no resync channel (a test double).
+   *
+   * Optional ONLY so a test double may omit it — every PRODUCTION source MUST wire this, else a
+   * dropped shape silently reverts to a frozen slice until the connection's TTL (the original bug,
+   * one layer up). `subscribeSource` (the sole production source) always provides it.
    */
   onResync?(notify: () => void): void;
 
