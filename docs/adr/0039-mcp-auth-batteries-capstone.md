@@ -15,6 +15,11 @@
   It introduces **no new crypto**. This ADR has itself been through a 2-lens
   (red-team + chief-architect) panel — see *Reviews* — and the build still inherits ADR
   0029's hard gate (vetted libs + a dedicated adversarial + `security-review`).
+  **Amended 2026-07-02** — the wedge now ships a *real* interim issuer via OpenAuth on a
+  Worker (`L-0706ea00`), and this ADR's "in-house AS committed up front" stance is
+  **re-opened as an open question** (build the from-scratch first-party AS vs. wrap/recommend
+  OpenAuth long-term); see ADR 0029 *Amendment (2026-07-02)*. No strategy call is resolved
+  here — only the reopening is recorded, so the two ADRs do not silently contradict.
 - **Date:** 2026-06-24 (revised same day after the panel)
 - **Deciders:** tech lead + owner
 - **Builds on / touches / amends:** **amends ADR 0029 §Discovery+clients** (client
