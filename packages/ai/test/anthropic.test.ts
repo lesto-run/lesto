@@ -292,6 +292,43 @@ describe("parseStream", () => {
     expect(final).toEqual({ usage: { inputTokens: 10, outputTokens: 20 }, stopReason: "end_turn" });
   });
 
+  it("cancels the upstream body when the consumer breaks early (no leaked reader)", async () => {
+    // A stream the consumer abandons mid-way: parseStream locks a reader on response.body, so its
+    // `finally` must cancel the body on an early break — otherwise the reader + its socket leak.
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"a"}}\n\n',
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(
+            'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"b"}}\n\n',
+          ),
+        );
+        // Deliberately NOT closed — an open SSE stream the consumer walks away from.
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const model = createAnthropic({ apiKey: "sk-test" });
+    const response = new Response(body, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+
+    for await (const delta of model.parseStream(response)) {
+      expect(delta.text).toBe("a");
+      break; // early break → the generator's return() runs the finally → reader.cancel()
+    }
+
+    expect(cancelled).toBe(true);
+  });
+
   it("returns just the stop reason when message_delta carries one but no usage", async () => {
     const model = createAnthropic({ apiKey: "sk-test" });
 

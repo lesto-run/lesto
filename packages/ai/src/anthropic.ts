@@ -209,62 +209,71 @@ export async function* parseStream(
     if (meta.stopReason !== undefined) stopReason = meta.stopReason;
   };
 
-  // Read chunks, accumulate, and emit one delta per complete `\n\n`-terminated
-  // frame. A partial frame stays in the buffer until the next chunk completes it,
-  // so a token split across two network reads is never lost or double-counted.
-  for (;;) {
-    const { done, value } = await reader.read();
-
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    let boundary = buffer.indexOf("\n\n");
-
-    while (boundary !== -1) {
-      const frame = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-
-      const parsed = parseFrame(frame);
-
-      if (parsed?.kind === "text") yield { text: parsed.text };
-      else if (parsed?.kind === "meta") absorb(parsed);
-
-      boundary = buffer.indexOf("\n\n");
-    }
-  }
-
-  // Flush a final frame the stream closed WITHOUT a trailing blank line — recovering a
-  // complete-but-unterminated last delta the loop's `\n\n` scan would otherwise drop.
-  // Unlike a mid-stream frame, this trailing remainder can also be a TORN frame from an
-  // aborted/dropped connection (incomplete JSON): tolerate that quietly — the stream just
-  // ended early, so end with the deltas already yielded rather than raising
-  // AI_STREAM_MALFORMED on a truncation. A malformed frame mid-stream still throws (above).
-  buffer += decoder.decode();
-
-  let last: ParsedFrame | undefined;
   try {
-    last = parseFrame(buffer);
-  } catch {
-    last = undefined;
+    // Read chunks, accumulate, and emit one delta per complete `\n\n`-terminated
+    // frame. A partial frame stays in the buffer until the next chunk completes it,
+    // so a token split across two network reads is never lost or double-counted.
+    for (;;) {
+      const { done, value } = await reader.read();
+
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      let boundary = buffer.indexOf("\n\n");
+
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+
+        const parsed = parseFrame(frame);
+
+        if (parsed?.kind === "text") yield { text: parsed.text };
+        else if (parsed?.kind === "meta") absorb(parsed);
+
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+
+    // Flush a final frame the stream closed WITHOUT a trailing blank line — recovering a
+    // complete-but-unterminated last delta the loop's `\n\n` scan would otherwise drop.
+    // Unlike a mid-stream frame, this trailing remainder can also be a TORN frame from an
+    // aborted/dropped connection (incomplete JSON): tolerate that quietly — the stream just
+    // ended early, so end with the deltas already yielded rather than raising
+    // AI_STREAM_MALFORMED on a truncation. A malformed frame mid-stream still throws (above).
+    buffer += decoder.decode();
+
+    let last: ParsedFrame | undefined;
+    try {
+      last = parseFrame(buffer);
+    } catch {
+      last = undefined;
+    }
+
+    if (last?.kind === "text") yield { text: last.text };
+    else if (last?.kind === "meta") absorb(last);
+
+    // Surface the final accounting as the generator's RETURN value (`streamText` reads it via
+    // `yield*`). `usage` is reported ONLY when BOTH counts genuinely arrived — never a fabricated
+    // zero: a stream torn after `message_start` (input seen) but before `message_delta` (output
+    // lost) reports no usage, exactly the "never received" case `ai.streaming = true` marks as
+    // expected. When nothing meaningful arrived at all, the whole value is `undefined`.
+    if (inputTokens !== undefined && outputTokens !== undefined) {
+      return {
+        usage: { inputTokens, outputTokens },
+        ...(stopReason === undefined ? {} : { stopReason }),
+      };
+    }
+
+    return stopReason === undefined ? undefined : { stopReason };
+  } finally {
+    // Release the reader / cancel the upstream body on EVERY exit — a normal drain, a thrown
+    // frame, AND an early `for-await` `break` (which resumes the generator here via its
+    // `return()`). Without this the locked reader and its underlying socket leak whenever a
+    // consumer stops early — a common pattern for streamed output. `cancel()` on an
+    // already-closed stream is a no-op; swallow any rejection so cleanup never masks the result.
+    await reader.cancel().catch(() => {});
   }
-
-  if (last?.kind === "text") yield { text: last.text };
-  else if (last?.kind === "meta") absorb(last);
-
-  // Surface the final accounting as the generator's RETURN value (`streamText` reads it via
-  // `yield*`). `usage` is reported ONLY when BOTH counts genuinely arrived — never a fabricated
-  // zero: a stream torn after `message_start` (input seen) but before `message_delta` (output
-  // lost) reports no usage, exactly the "never received" case `ai.streaming = true` marks as
-  // expected. When nothing meaningful arrived at all, the whole value is `undefined`.
-  if (inputTokens !== undefined && outputTokens !== undefined) {
-    return {
-      usage: { inputTokens, outputTokens },
-      ...(stopReason === undefined ? {} : { stopReason }),
-    };
-  }
-
-  return stopReason === undefined ? undefined : { stopReason };
 }
 
 /**
