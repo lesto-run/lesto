@@ -51,8 +51,15 @@ export interface OutboxPersistence {
   /** The persisted entries in submission order — read once at store open, before any write. */
   load(): readonly OutboxEntry[];
 
-  /** Durably append one entry (enqueued on the store's write chain). */
-  append(entry: OutboxEntry): void;
+  /**
+   * Durably append one entry (enqueued on the store's write chain). The returned promise is a
+   * **per-write durability signal**: it resolves once THIS entry has settled on the chain (committed,
+   * or — on the rare durable-write failure — reported to the store's `onError`), so a caller can await
+   * one write reaching disk without awaiting the whole store's `whenIdle`. Like `whenIdle`, it never
+   * rejects; a failure surfaces through `onError` (the in-memory queue stays authoritative for the
+   * session). See {@link SubmitHandle.durable} (`./outbox`), which surfaces it per submit.
+   */
+  append(entry: OutboxEntry): Promise<void>;
 
   /** Durably remove the entry with `id` (enqueued on the store's write chain). */
   remove(id: string): void;

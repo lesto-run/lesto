@@ -52,6 +52,18 @@
  * durable store's `whenIdle`), NOT synchronously at `submit` return — a crash within that sub-`whenIdle`
  * window loses an un-persisted offline write, the same async-persist window the durable row/cursor
  * writes have.
+ *
+ * ## The submit → durable window: `whenIdle` vs the per-write signal
+ *
+ * That window (submit returns, the durable append lands a beat later) is closable at two granularities.
+ * The store-level {@link LiveStore.outbox}-backed `whenIdle` waits for *every* queued write to settle —
+ * the right, simple tool for teardown and tests. For an app that wants a stronger per-write "saved"
+ * confirmation without stalling on unrelated in-flight writes, {@link LiveMutations.submit} also hands
+ * back a {@link SubmitHandle.durable} promise that resolves once THIS entry's append reaches the durable
+ * log. Both share the store's contract: they resolve whether the durable write committed or failed-and-
+ * was-reported (a failure surfaces via the store's `onError`, never as a rejection), and against a
+ * non-durable (in-memory) store there is no durable tier, so `durable` is already-resolved — the write
+ * is as durable as it will get the instant it is made (session memory).
  */
 
 import type { LiveStore, OutboxEntry } from "./store";
@@ -104,6 +116,26 @@ export interface SubmitMutation {
   readonly id?: string;
 }
 
+/** What {@link LiveMutations.submit} hands back: the queued entry's id plus a per-write durability signal. */
+export interface SubmitHandle {
+  /**
+   * The queued entry's client mutation id (the log's ordering + idempotency key) — available
+   * synchronously, e.g. to correlate a later ack or to key UI. Equals a supplied {@link SubmitMutation.id}
+   * or the freshly minted one.
+   */
+  readonly id: string;
+
+  /**
+   * Resolves once THIS write has reached the durable outbox log — the per-write analog of the durable
+   * store's `whenIdle`, scoped to one entry so an app can confirm a single write is "saved" without
+   * awaiting every unrelated in-flight write. Resolves whether the durable append committed or failed-
+   * and-was-reported (a failure surfaces through {@link LiveMutationsOptions.onError} on a durable store,
+   * never as a rejection). Against a non-durable store it is already-resolved — there is no durable tier,
+   * so the write is as durable as it will get the instant it is made.
+   */
+  readonly durable: Promise<void>;
+}
+
 /** What {@link createLiveMutations} accepts. */
 export interface LiveMutationsOptions {
   /** The store whose optimistic overlay the writes drive, and whose durable outbox persists them. */
@@ -129,11 +161,13 @@ export interface LiveMutationsOptions {
 /** The outbox handle: submit optimistic writes, drain them, and read the pending count. */
 export interface LiveMutations {
   /**
-   * Apply an optimistic write, durably enqueue it, and try to drain immediately. Returns the entry
-   * id. Online, the write replays at once; offline, the {@link MutationSubmitter} returns `"retry"`
-   * and the entry stays queued (and shown optimistically) until {@link flush} succeeds.
+   * Apply an optimistic write, durably enqueue it, and try to drain immediately. Returns a
+   * {@link SubmitHandle} — the entry `id` (synchronous) plus a `durable` promise that resolves when
+   * this write reaches the durable log. Online, the write replays at once; offline, the
+   * {@link MutationSubmitter} returns `"retry"` and the entry stays queued (and shown optimistically)
+   * until {@link flush} succeeds.
    */
-  submit(mutation: SubmitMutation): string;
+  submit(mutation: SubmitMutation): SubmitHandle;
 
   /**
    * Drain the pending queue in submission order through the {@link MutationSubmitter}, settling each
@@ -249,14 +283,18 @@ export function createLiveMutations(options: LiveMutationsOptions): LiveMutation
       // enqueue ITS durable append ahead of this one — inverting submission order in the log, which
       // `hydrate` replays by `rowid`. Appending first keeps the persisted order = submission order.
       // (The two are independent — an in-memory overlay vs a durable table — so the order is free.)
-      store.outbox?.append(entry);
+      //
+      // Capture the append's per-write durability signal for the handle. A non-durable store has no
+      // `outbox`, so there is nothing to persist — `durable` resolves at once (as durable as it gets).
+      const durable = store.outbox?.append(entry) ?? Promise.resolve();
+
       store.applyOptimistic(mutation.optimistic);
 
       // Fire-and-forget: online this sends now; offline the seam returns `"retry"` and it stays.
       // (A caller wanting to await the drain calls `flush()`, which returns the same in-flight run.)
       void flush();
 
-      return id;
+      return { id, durable };
     },
 
     flush,

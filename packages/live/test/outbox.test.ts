@@ -90,7 +90,7 @@ describe("createLiveMutations — optimistic offline writes (Inc6)", () => {
     const seam = fakeSubmitter();
     const mutations = createLiveMutations({ store, submit: seam.submit, newId: seqId() });
 
-    const id = mutations.submit({
+    const { id } = mutations.submit({
       name: "addPost",
       input: { text: "b" },
       optimistic: insert("b", 2),
@@ -226,8 +226,8 @@ describe("createLiveMutations — optimistic offline writes (Inc6)", () => {
     seam.set("retry"); // keep them queued so nothing drains mid-assert
     const mutations = createLiveMutations({ store, submit: seam.submit });
 
-    const a = mutations.submit({ name: "n", optimistic: insert("a", 1) });
-    const b = mutations.submit({ name: "n", optimistic: insert("b", 2) });
+    const { id: a } = mutations.submit({ name: "n", optimistic: insert("a", 1) });
+    const { id: b } = mutations.submit({ name: "n", optimistic: insert("b", 2) });
 
     expect(typeof a).toBe("string");
     expect(a).not.toBe(b); // crypto.randomUUID — distinct per submit
@@ -239,8 +239,21 @@ describe("createLiveMutations — optimistic offline writes (Inc6)", () => {
     seam.set("retry");
     const mutations = createLiveMutations({ store, submit: seam.submit, newId: seqId() });
 
-    const id = mutations.submit({ id: "explicit-1", name: "n", optimistic: insert("a", 1) });
+    const { id } = mutations.submit({ id: "explicit-1", name: "n", optimistic: insert("a", 1) });
     expect(id).toBe("explicit-1");
+  });
+
+  it("resolves the per-write durable signal at once against a non-durable store", async () => {
+    // No `outbox` capability → nothing to persist → `durable` is already-resolved (the write is as
+    // durable as it will ever get: session memory). It must never hang a `saved`-confirmation await.
+    const store = createLiveStore(def);
+    const seam = fakeSubmitter();
+    seam.set("retry");
+    const mutations = createLiveMutations({ store, submit: seam.submit, newId: seqId() });
+
+    const { durable } = mutations.submit({ name: "n", optimistic: insert("a", 1) });
+
+    await expect(durable).resolves.toBeUndefined();
   });
 
   describe("durability (a durable store)", () => {
@@ -302,6 +315,27 @@ describe("createLiveMutations — optimistic offline writes (Inc6)", () => {
 
       const reloaded = await createSqliteLiveStore({ def, db });
       expect(reloaded.outbox?.load().map((e) => e.name)).toEqual(["first", "second"]);
+    });
+
+    it("the per-write durable signal resolves once THIS entry is on disk (no whole-store whenIdle)", async () => {
+      const db = freshDb();
+      const store = await createSqliteLiveStore({ def, db });
+      const seam = fakeSubmitter();
+      seam.set("retry"); // stay offline so the entry is not drained/removed before we inspect it
+      const mutations = createLiveMutations({ store, submit: seam.submit, newId: seqId() });
+
+      const { id, durable } = mutations.submit({
+        name: "addPost",
+        input: { text: "b" },
+        optimistic: insert("b", 2),
+      });
+
+      // Await ONLY this write's signal — not `store.whenIdle()`. A fresh store over the same engine
+      // must now hydrate the entry, proving the append committed by the time `durable` resolved.
+      await durable;
+
+      const reloaded = await createSqliteLiveStore({ def, db });
+      expect(reloaded.outbox?.load().map((e) => e.id)).toEqual([id]);
     });
 
     it("an acked write is removed from the durable log", async () => {

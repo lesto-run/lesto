@@ -39,6 +39,7 @@ export type {
   LiveMutationsOptions,
   MutationOutcome,
   MutationSubmitter,
+  SubmitHandle,
   SubmitMutation,
 } from "./outbox";
 

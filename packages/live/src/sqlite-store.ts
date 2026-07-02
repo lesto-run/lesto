@@ -273,7 +273,12 @@ export async function createSqliteLiveStore(
   // mirrors the mutation client's own `JSON.stringify(input ?? null)`, so a no-arg mutation's
   // `undefined` round-trips to `null` exactly as its replayed `POST` body would. An `INSERT OR
   // REPLACE` (upsert on the (shape, id) PK) keeps a resubmit of the same id idempotent.
-  const persistOutboxAppend = (entry: OutboxEntry): void => {
+  //
+  // Returns the chain tail *after* enqueuing this append — the per-write durability signal: it
+  // resolves once THIS entry has settled (the chain is FIFO, so the tail read here ends exactly at
+  // this write, and a later `remove` extends a fresh promise without disturbing it). Never rejects,
+  // exactly like `whenIdle` (`runRaw` reports a failure and continues).
+  const persistOutboxAppend = (entry: OutboxEntry): Promise<void> => {
     enqueueRaw(async (tx) => {
       await tx
         .prepare(
@@ -289,6 +294,8 @@ export async function createSqliteLiveStore(
           JSON.stringify(entry.optimistic),
         ]);
     });
+
+    return writeChain;
   };
 
   // Durably remove one outbox entry (its mutation was acked or rejected).
