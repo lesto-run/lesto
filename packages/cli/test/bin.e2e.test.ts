@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -23,6 +23,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  *   - `dev`              — boots every site live, answers a request, exits 0 on SIGTERM
  *   - `deploy --release` — prerenders + ships a versioned release, exits 0
  *   - `rollback --to`    — flips the live pointer to a prior release, exits 0
+ *
+ * ONE test breaks that Bun mold on purpose: `content:new` under **node + jiti** against
+ * a fixture where the optional `@lesto/content-*` peers are GENUINELY absent. Every test
+ * above spawns `bun` (never the `node bin/lesto.mjs` jiti loader) AND runs with the peers
+ * PRESENT, so nothing else exercises the UNGUARDED optional-peer path — the one that
+ * relies on a missing bare-package `import()` THROWING (not hanging). See that test.
  *
  * No shell: every argument is an array element, so nothing is interpolated into a
  * command string. Build artifacts (`--out` / `--dist`) are redirected to a temp
@@ -136,6 +142,85 @@ function waitForLine(
       return undefined;
     });
   });
+}
+
+/**
+ * Build a THROWAWAY project OUTSIDE the workspace whose optional `@lesto/content-*`
+ * peers are GENUINELY absent — the state an outside `npm i @lesto/cli` (without the
+ * content packages) leaves. In the monorepo, `node`/`bun` resolve `@lesto/content-*`
+ * from the workspace install by walking UP to the repo's `node_modules`, so a fixture
+ * anywhere INSIDE the repo always finds them; only a tree with NO repo ancestor (an
+ * `os.tmpdir()` dir) can make the specifier unresolvable.
+ *
+ * The bin's TypeScript source is COPIED in, not symlinked: the copied `bin.ts` — the
+ * one file that `import()`s `@lesto/content-*` — must resolve that specifier from THIS
+ * fixture's `node_modules`. A symlinked `bin.ts` would resolve by realpath back into the
+ * workspace, where the peers ARE installed, defeating the isolation. Every OTHER
+ * dependency (the eager `@lesto/*` graph, `jose`) is symlinked from the workspace install
+ * so it still resolves — each escaping to the repo for its own transitive deps — while
+ * the two content peers are deliberately omitted.
+ */
+async function buildContentlessNodeFixture(): Promise<string> {
+  const fixture = await mkdtemp(join(tmpdir(), "lesto-cli-nopeer-"));
+  const repoNodeModules = join(here, "..", "..", "..", "node_modules");
+
+  await cp(join(here, "..", "src"), join(fixture, "src"), { recursive: true });
+  await mkdir(join(fixture, "bin"), { recursive: true });
+  await cp(join(here, "..", "bin", "lesto.mjs"), join(fixture, "bin", "lesto.mjs"));
+
+  const nodeModules = join(fixture, "node_modules");
+  await mkdir(join(nodeModules, "@lesto"), { recursive: true });
+
+  for (const entry of await readdir(repoNodeModules)) {
+    if (entry.startsWith(".")) continue;
+
+    if (entry === "@lesto") {
+      // The one scope that can't be whole-symlinked: it holds the content peers we must
+      // OMIT, so link its packages one at a time and skip `content-core`/`content-store`.
+      for (const pkg of await readdir(join(repoNodeModules, "@lesto"))) {
+        if (pkg === "content-core" || pkg === "content-store") continue;
+
+        await symlink(join(repoNodeModules, "@lesto", pkg), join(nodeModules, "@lesto", pkg));
+      }
+    } else {
+      await symlink(join(repoNodeModules, entry), join(nodeModules, entry));
+    }
+  }
+
+  return fixture;
+}
+
+/**
+ * Spawn the bin under **node + jiti** (the `node bin/lesto.mjs` loader path, NOT the
+ * `bun` the rest of the suite uses) with a hard watchdog. Returns the usual result plus
+ * `timedOut`: if the child does not close on its own within `timeoutMs`, it is SIGKILLed
+ * and `timedOut` is `true` — so a HANG fails an assertion loudly instead of stalling the
+ * suite until its outer timeout. `node` (not `process.execPath`) is spawned deliberately:
+ * the suite itself may run under Bun, and the point of this test is the jiti loader.
+ */
+async function runNodeBinBounded(
+  fixture: string,
+  args: readonly string[],
+  timeoutMs: number,
+): Promise<SpawnResult & { timedOut: boolean }> {
+  const child = spawn("node", [join(fixture, "bin", "lesto.mjs"), ...args], {
+    cwd: fixture,
+    // jiti's transform cache never affects module RESOLUTION (the behavior under test);
+    // disabling it keeps the run hermetic (no shared `{TMP}/jiti` write) with no downside.
+    env: { ...process.env, JITI_FS_CACHE: "false" },
+  });
+
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, timeoutMs);
+
+  const result = await collect(child);
+
+  clearTimeout(timer);
+
+  return { ...result, timedOut };
 }
 
 let workspace: string;
@@ -545,4 +630,48 @@ describe("bin e2e", () => {
       await rm(project, { recursive: true, force: true });
     }
   }, 90_000);
+
+  it("content:new under node+jiti with the content peers ABSENT: fails loud with the coded hint and TERMINATES (no hang)", async () => {
+    // The UNGUARDED optional-peer path. `loadContentCore`/`loadContentStore` deliberately
+    // carry NO dir-probe (unlike `loadSites`/`loadBuildHook`): they import a bare PACKAGE and
+    // rely on the `import()` THROWING — not hanging — when the peer is absent, then map the miss
+    // to the coded `CLI_CONTENT_PACKAGES_MISSING` hint. That reliance is (a) empirically pinned
+    // to jiti's resolver (a future bump that made a missing bare-package `import()` HANG would
+    // wedge `lesto content:*` forever, silently — CI would never catch it), and (b) exercised by
+    // NO other e2e: every sibling spawns `bun` (never the `node bin/lesto.mjs` jiti loader) AND
+    // runs with the peers PRESENT. This is the sole guard on BOTH — the node+jiti loader path
+    // AND a genuinely missing peer.
+    //
+    // `content:new` is the minimal trigger: it reaches `loadContentCore` DIRECTLY, with no
+    // `loadApp`/db first (unlike `content:build`/`content:delete`), so the fixture needs no app
+    // config — only the peers absent. The hard watchdog inside `runNodeBinBounded` is what turns
+    // "does not hang" from a prose claim into a checked assertion.
+    const fixture = await buildContentlessNodeFixture();
+
+    try {
+      const result = await runNodeBinBounded(
+        fixture,
+        ["content:new", "posts", "Hello World"],
+        30_000,
+      );
+
+      // (1) It TERMINATED on its own — the regression the loader's comment asserts. A hang (a
+      // future jiti/Bun bump whose missing bare-package `import()` never settles) trips the
+      // watchdog, flipping this to `true` and failing here instead of stalling the suite.
+      expect(result.timedOut, "the bin HUNG on the absent content peer instead of throwing").toBe(
+        false,
+      );
+
+      // (2) ...and it failed LOUD with the coded hint, not a raw MODULE_NOT_FOUND crash the user
+      // can't act on, nor a silent success. The output carries both the error CODE and the
+      // actionable install line.
+      const output = `${result.stdout}${result.stderr}`;
+
+      expect(result.code, output).not.toBe(0);
+      expect(output).toContain("CLI_CONTENT_PACKAGES_MISSING");
+      expect(output).toContain("npm i @lesto/content-core @lesto/content-store");
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

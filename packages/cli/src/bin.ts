@@ -829,14 +829,11 @@ const CONTENT_PACKAGES_HINT =
 // Convert ONLY "the content peer itself isn't installed" into the hint; rethrow anything
 // else — a real error INSIDE an installed content package (e.g. its own undeclared
 // transitive dep) must NOT be masked as "go install it", which would send the operator
-// down the wrong path. The message embeds the IMPORTER's path (`Cannot find package
-// '<missing>' imported from '<importer>'`), so we classify on the extracted MISSING
-// specifier — not the whole message, which would also match the importer path of a
-// missing transitive dep. `missingModuleSpecifier` is the ONE shared classifier
-// `loadSites`/`loadBuildHook` also route through; it spans BOTH runtime error shapes —
-// the Bun `ResolveMessage` (`ERR_MODULE_NOT_FOUND`) AND the jiti `Error`
-// (`MODULE_NOT_FOUND`) — so the hint now surfaces under `node`'s jiti loader too, not
-// only under Bun (the prior `ERR_MODULE_NOT_FOUND`-only test silently dropped it there).
+// down the wrong path. Classify on the EXTRACTED specifier, not the whole message: the
+// message embeds the IMPORTER's path (`… imported from '<importer>'`), which would also
+// match a missing TRANSITIVE dep of an installed peer. `missingModuleSpecifier` is the one
+// shared classifier `loadSites`/`loadBuildHook` also route through — see its JSDoc for WHY
+// it spans both the Bun and node/jiti error shapes (so the hint surfaces under either).
 function rethrowUnlessMissingContentPeer(error: unknown): never {
   const missing = missingModuleSpecifier(error);
 
@@ -852,12 +849,12 @@ function rethrowUnlessMissingContentPeer(error: unknown): never {
 //
 // NO dir-probe guard here, unlike `loadSites`/`loadBuildHook`: those probe a PROJECT
 // FILE's existence before importing, but these import a bare PACKAGE specifier and rely
-// on the `import()` THROWING when the optional peer is absent. That reliance is sound —
-// EMPIRICALLY, jiti's `import()` of a missing PACKAGE throws a real `Error`
-// (`code: "MODULE_NOT_FOUND"`) within a few ms, it does NOT hang (verified against jiti
-// 2.7.0 and the real bin); Bun likewise throws its `ResolveMessage`. The hang the
-// project-file loaders guard against was specific to a missing project FILE path
-// (L-3f1c6bdb), not a bare package specifier — so no probe is needed on this path.
+// on the `import()` THROWING — not hanging — when the optional peer is absent (then
+// `rethrowUnlessMissingContentPeer` maps the miss to the coded hint). The hang the
+// project-file loaders guard against (L-3f1c6bdb) was specific to a missing project FILE
+// path, NOT a bare package — a missing package throws promptly under both runtimes (see
+// `missingModuleSpecifier`'s JSDoc for the shapes + version pin). `bin.e2e.test.ts` pins
+// that throws-not-hangs assumption on the node+jiti loader as a regression guard.
 const loadContentCore = async () => {
   try {
     return await import("@lesto/content-core/build");
