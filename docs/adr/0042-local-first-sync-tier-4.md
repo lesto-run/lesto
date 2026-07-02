@@ -262,7 +262,9 @@ server fan-out cost). **Web Locks** elect a single **leader tab** that owns the 
 writes the (shared, OPFS) store; **BroadcastChannel** fans store-change notifications to follower
 tabs, which re-query the shared local store. Leader failover is automatic when the lock releases (the
 leader tab closes). This mirrors ADR 0040's "one connection, many consumers" but moved entirely
-client-side.
+client-side. **As built (`L-e970a392`), followers do not open the store — the single-owner OPFS VFS
+forbids it — so the leader RELAYS its rendered slice over BroadcastChannel and followers mirror it
+in memory; see the 2026-07-02 cross-tab amendment.**
 
 ### Transport: a CDN-cacheable snapshot + a live tail on the long-lived-stream kind
 
@@ -578,3 +580,37 @@ Two corrections, both load-bearing:
 
 Scope: the **v1** replication path only — the v0 poll self-heals every tick (it re-reads and diffs the
 whole table), so its `runTick` catch is unchanged.
+
+### 2026-07-02 — amendment: cross-tab as-built — the leader RELAYS its rendered slice; followers never open the store (`L-e970a392`)
+
+Inc7 (`@lesto/live`'s `createCrossTabLiveQuery` + the reusable `electLeader` Web Locks primitive) implements
+"one leader syncs, the rest mirror". Building it surfaced one correction to the Decision text above, which
+said followers "**re-query the shared local store**". They cannot: the durable store is OPFS-SQLite over the
+**SyncAccessHandle Pool VFS** (`packages/live/src/opfs-sqlite.ts`), which takes an *exclusive*, per-origin
+handle — **only one tab can hold the store open at a time**. So the faithful realization of "the rest mirror"
+is: the **leader owns the single durable copy** and **broadcasts its rendered `getRows()` slice** (the
+authorized rows already merged with the optimistic overlay) over BroadcastChannel on every change; each
+follower drives a plain **in-memory** store from those broadcasts. This *strengthens* the ADR's "followers
+never persist" (only the leader writes OPFS) and gives followers the leader's exact read-your-writes view for
+free — a follower mirrors optimistic edits with no extra plumbing, because they are already in the leader's
+rendered rows. A late-joining follower gets the current slice via a one-shot `hello` handshake (it asks; the
+leader re-broadcasts), so a tab opened during a quiet period is never left blank.
+
+Two properties worth pinning down:
+
+- **Failover RESUMES, it does not re-snapshot.** A promoted follower already holds the last-broadcast view;
+  it seeds a fresh (empty) leader store with it so the swap shows no flash, then opens the one connection —
+  which resumes from that view's cursor (`connectLiveData` seeds `?lastEventId=`, the Inc5 linchpin), so the
+  server replays only what was missed. A durable leader store that hydrated its **own** persisted slice is
+  left authoritative (not seeded over). This is the concrete payoff of persisting the cursor atomically with
+  the rows: leadership handoff is cheap.
+- **The relay is a whole-slice broadcast per change** — O(rows) structured-clone traffic between tabs. Fine
+  for the bounded per-user shapes local-first targets; a **frame-diff relay** (broadcast the individual
+  `change`, not the re-rendered slice) is the noted vNext refinement, deliberately out of Inc7.
+
+Both browser primitives (Web Locks, BroadcastChannel) are reached through an injected
+`CrossTabEnvironment` seam, so importing `@lesto/live` stays SSR-safe and the whole coordinator is
+test-fakeable with an in-process lock queue + message bus. The result is the same `LiveQuery` handle
+`createLiveQuery` returns, so `@lesto/live/react`'s `useLiveQuery(() => createCrossTabLiveQuery(def, opts),
+deps)` binds it with no new hook. The end-to-end multi-tab acceptance (Inc8, `L-b1501de9`) exercises the
+durable leader store + the shared-OPFS outbox under real failover.

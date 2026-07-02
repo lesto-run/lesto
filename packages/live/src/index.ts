@@ -19,6 +19,11 @@
  *     applied to the store optimistically and durably logged, then replayed on reconnect through
  *     the app's normal authorized mutation `POST` (an injected seam); a server-rejected write rolls
  *     back locally, and against a durable store the log survives reload.
+ *   - {@link createCrossTabLiveQuery} — cross-tab coordination (ADR 0042 v1 Inc7): a Web Locks
+ *     **leader** ({@link electLeader}) elects one tab to hold the connection + store, and a
+ *     BroadcastChannel fans that leader's rendered slice to follower tabs, which mirror it without a
+ *     connection of their own. Leadership fails over automatically on tab close. Returns the same
+ *     {@link LiveQuery} handle, so `useLiveQuery` binds it unchanged.
  *
  * Unlike `@lesto/ui`'s topic-driven `connectLive` (ADR 0027/0040), this wire carries
  * auth-scoped ROW DATA — the deliberate ADR 0042 split. No React/preact dependency lives
@@ -54,6 +59,17 @@ export type {
 
 export { createLiveQuery } from "./live-query";
 export type { CreateLiveQueryOptions, LiveQuery } from "./live-query";
+
+export { electLeader } from "./leader";
+export type { ElectLeaderOptions, LeaderElection, RequestLock } from "./leader";
+
+export { browserCrossTabEnvironment, createCrossTabLiveQuery } from "./cross-tab";
+export type {
+  BroadcastChannelSeam,
+  CreateCrossTabLiveQueryOptions,
+  CrossTabEnvironment,
+  LeaderStore,
+} from "./cross-tab";
 
 export { live } from "./builder";
 export type { LiveQueryBuilder } from "./builder";
