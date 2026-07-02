@@ -402,6 +402,166 @@ describe("createCrossTabLiveQuery", () => {
     await tick();
 
     expect(b.live.sources).toHaveLength(1);
+
+    // The failed tab RECOVERS as a follower — its `acting` was reset on the throw, so it mirrors the
+    // new leader's broadcasts rather than becoming a zombie that ignores them.
+    emitSnapshot(b, [{ id: "x", rank: 1 }]);
+    expect(a.query.getSnapshot()).toEqual([{ id: "x", rank: 1 }]);
+  });
+
+  it("abandons the half-built term when disconnect() lands during the async store open", async () => {
+    const h = harness();
+    const dispose = vi.fn();
+
+    // Gate the leader-store open so we can disconnect mid-`await createLeaderStore()`.
+    let openLeaderStore!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      openLeaderStore = resolve;
+    });
+    const createLeaderStore = async (): Promise<LeaderStore> => {
+      await opened;
+
+      return { store: createLiveStore(def), dispose };
+    };
+
+    const a = h.spawn({ createLeaderStore });
+
+    // The lock is granted and `onLeadership` is parked at the await; disconnect before the store opens.
+    a.query.disconnect();
+    openLeaderStore();
+    await tick();
+
+    // The half-built term was abandoned: no connection opened, and the just-created store was disposed.
+    expect(a.live.sources).toHaveLength(0);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("abandons the half-built term with a dispose-less store during the async open", async () => {
+    const h = harness();
+
+    let openLeaderStore!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      openLeaderStore = resolve;
+    });
+    // No `dispose` — the in-memory-shaped store; exercises the bail's dispose-absent path.
+    const createLeaderStore = async (): Promise<LeaderStore> => {
+      await opened;
+
+      return { store: createLiveStore(def) };
+    };
+
+    const a = h.spawn({ createLeaderStore });
+
+    a.query.disconnect();
+    openLeaderStore();
+    await tick();
+
+    expect(a.live.sources).toHaveLength(0);
+  });
+
+  it("reports a rejecting dispose to onError instead of leaking an unhandled rejection", async () => {
+    const h = harness();
+    const onError = vi.fn();
+    const boom = new Error("OPFS close failed");
+    const createLeaderStore = (): LeaderStore => ({
+      store: createLiveStore(def),
+      dispose: () => Promise.reject(boom),
+    });
+
+    const a = h.spawn({ onError, createLeaderStore });
+
+    await tick();
+
+    a.query.disconnect();
+    await tick();
+
+    expect(onError).toHaveBeenCalledWith(boom);
+  });
+
+  it("reports a publish (structured-clone) failure to onError without aborting frame processing", async () => {
+    // A channel whose `postMessage` throws on a snapshot (an unclonable optimistic row would do this
+    // in a real browser) but not on the `hello` handshake, so construction still succeeds.
+    const requestLock = fakeLocks();
+    const { openChannel } = broadcastBus();
+    const environment: CrossTabEnvironment = {
+      requestLock,
+      openChannel(name) {
+        const inner = openChannel(name);
+
+        return {
+          ...inner,
+          postMessage: (message) => {
+            if ((message as { t?: string }).t === "snapshot") throw new Error("DataCloneError");
+
+            inner.postMessage(message);
+          },
+        };
+      },
+    };
+
+    const onError = vi.fn();
+    const live = fakeLive();
+    const query = createCrossTabLiveQuery(def, {
+      environment,
+      liveEnvironment: live.env,
+      onError,
+    });
+
+    await tick();
+
+    // The leader's initial `publish()` throws inside the store notification; it is caught and reported,
+    // and the frame still applied (the store is not left half-updated).
+    live.sources[0]!.emit("snapshot", JSON.stringify({ rows: [{ id: "x", rank: 1 }] }));
+    expect(onError).toHaveBeenCalled();
+    expect(query.getSnapshot()).toEqual([{ id: "x", rank: 1 }]);
+
+    query.disconnect();
+  });
+
+  it("resumes from the cursor when the promoted follower's mirrored view is empty-but-cursored", async () => {
+    const h = harness();
+    const a = h.spawn();
+
+    await tick();
+
+    const b = h.spawn();
+
+    await tick();
+
+    // The leader reaches an EMPTY slice at an advanced cursor (every row deleted), and the follower
+    // mirrors that (0 rows, real cursor).
+    emitSnapshot(a, [], "v1:sysA:1:77");
+    expect(b.query.getSnapshot()).toEqual([]);
+
+    a.query.disconnect();
+    await tick();
+
+    // The promoted follower seeds the cursor even with no rows, so it RESUMES rather than re-snapshots.
+    expect(b.live.sources[0]!.url).toContain(`lastEventId=${encodeURIComponent("v1:sysA:1:77")}`);
+  });
+
+  it("ignores a malformed / wrong-shape frame delivered to a follower", async () => {
+    const h = harness();
+    const a = h.spawn();
+
+    await tick();
+
+    const b = h.spawn();
+
+    await tick();
+
+    emitSnapshot(a, [{ id: "x", rank: 1 }]);
+    expect(b.query.getSnapshot()).toEqual([{ id: "x", rank: 1 }]);
+
+    // A rogue peer posts junk on the follower's channel: a bad `t`, and a snapshot with a non-array
+    // `rows`. Both are ignored (the narrowing guard), so the follower keeps its last good slice and
+    // `applySnapshot` never throws on malformed data.
+    const rogue = h.openChannel(`lesto-live:${shapeId(def)}`);
+
+    rogue.postMessage({ t: "bogus" });
+    rogue.postMessage({ t: "snapshot", rows: 42, cursor: "" });
+
+    expect(b.query.getSnapshot()).toEqual([{ id: "x", rank: 1 }]);
   });
 
   it("routes the leader's connection through a custom path", async () => {

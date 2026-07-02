@@ -30,6 +30,18 @@
  * left authoritative (not seeded over). This is why the store persists the cursor atomically with the
  * rows (Inc5): it is the linchpin that makes leadership handoff cheap.
  *
+ * ## Known limitation: a FROZEN leader stalls the origin (no heartbeat, by design)
+ *
+ * Failover is free ONLY on tab destruction — the browser releases a held Web Lock when its tab is
+ * destroyed. It does NOT release the lock when a background tab is merely **frozen** (Page Lifecycle
+ * `freeze`, tab-freezing / efficiency mode) or **bfcached**: the page is alive but paused, so it keeps
+ * the lock while its event loop is suspended — it stops draining SSE and stops broadcasting, yet no
+ * follower is promoted. A foreground follower then goes stale until the frozen tab is resumed or
+ * destroyed. This is the accepted cost of the deliberately heartbeat-free design; closing it (release
+ * on `freeze`, re-contend on `resume`) is a tracked follow-up (`L-e970a392` review). Interactive tabs
+ * — the common multi-tab case — are not frozen, so this bites only a leader left backgrounded long
+ * enough for the browser to freeze it.
+ *
  * ## Seams, SSR-safety, and the React binding
  *
  * Both browser primitives are reached through an injected {@link CrossTabEnvironment} — Web Locks via
@@ -211,6 +223,16 @@ export function createCrossTabLiveQuery<R extends Row = Row>(
   let leaderDispose: (() => void | Promise<void>) | undefined;
   let acting = false; // true from the instant leadership is won through its teardown
 
+  // Run a store `dispose` (flush + close its OPFS handle) without ever surfacing a rejection: a
+  // dispose that throws synchronously OR returns a rejecting promise must not become an unhandled
+  // rejection — `Promise.resolve().then(dispose)` folds both into one promise, and the failure is
+  // reported to `onError` (best-effort, exactly like the store's own durable-write failures).
+  const settleDispose = (dispose: () => void | Promise<void>): void => {
+    void Promise.resolve()
+      .then(dispose)
+      .catch((error: unknown) => options.onError?.(error));
+  };
+
   const stopLeading = (): void => {
     acting = false;
     leaderPublish = undefined;
@@ -223,7 +245,7 @@ export function createCrossTabLiveQuery<R extends Row = Row>(
 
     leaderDispose = undefined;
     // Best-effort, possibly-async release of the durable store (flush + close its OPFS handle).
-    if (dispose !== undefined) void Promise.resolve(dispose());
+    if (dispose !== undefined) settleDispose(dispose);
   };
 
   channel.addEventListener("message", (event) => {
@@ -236,9 +258,12 @@ export function createCrossTabLiveQuery<R extends Row = Row>(
       // `leaderPublish` is undefined). Covers a tab that joined during a quiet period, when no
       // change has broadcast the slice yet.
       leaderPublish?.();
-    } else if (!acting) {
+    } else if (message.t === "snapshot" && Array.isArray(message.rows) && !acting) {
       // A follower applies the leader's rendered slice verbatim. The leader ignores snapshots (it
       // never receives its own, and there is only ever one leader), so this is guarded on `!acting`.
+      // The `t`/`rows` shape is re-checked (not just trusted from the cast) so a malformed frame — or,
+      // if an app shares one `channelName` across shapes, a DIFFERENT shape's frame — is ignored
+      // rather than fed to `applySnapshot`, where a bad `rows` would throw uncaught in this handler.
       current.applySnapshot(message.rows, message.cursor);
     }
   });
@@ -254,29 +279,60 @@ export function createCrossTabLiveQuery<R extends Row = Row>(
     onLeadership: async () => {
       acting = true;
 
-      const { store, dispose } = await createLeaderStore();
+      // Building the leader store is the one async step, and `createLeaderStore` (a durable OPFS
+      // open) can BOTH be slow and throw. Two hazards live in that window, so guard both:
+      //   - a throw (OPFS quota / private mode / a transient failure) must not leave `acting` stuck
+      //     `true` — that would wedge this tab as a zombie whose `!acting` message guard drops every
+      //     future leader broadcast — so tear down and rethrow (electLeader reports + frees the lock);
+      //   - a `disconnect()` landing during the open (`stopLeading` already ran → `acting` is now
+      //     `false`) must abandon the half-built term: release the just-opened store and open NOTHING,
+      //     rather than `setStore`/`publish` onto a closed channel + leak the OPFS handle.
+      let store: LiveStore;
+      let dispose: (() => void | Promise<void>) | undefined;
+
+      try {
+        ({ store, dispose } = await createLeaderStore());
+      } catch (error) {
+        acting = false;
+        throw error;
+      }
+
+      if (!acting) {
+        if (dispose !== undefined) settleDispose(dispose);
+
+        return;
+      }
 
       leaderDispose = dispose;
 
-      // Seed a fresh (empty) leader store with the follower view we already hold, so the swap shows
-      // no flash and the connection resumes from that view's cursor. A durable store that hydrated
-      // its own slice is left authoritative — not seeded over.
-      if (store.getRows().length === 0) {
-        const seedRows = current.getRows();
+      // Everything below runs synchronously (no further await), so a `disconnect()` cannot interleave
+      // between the `!acting` check above and the `return` — the term is set up atomically.
 
-        if (seedRows.length > 0) store.applySnapshot(seedRows, current.getCursor());
-      }
+      // Seed a genuinely-fresh leader store with the follower view we already hold, so the swap shows
+      // no flash and the connection resumes from that view's cursor. Freshness is "no cursor of its
+      // own" (`getCursor() === undefined`), NOT "no rows": a durable store that hydrated an EMPTY
+      // slice at a real cursor (every row deleted) must be left authoritative — seeding it over would
+      // clobber its persisted cursor. Seeding an empty follower view is still worth it: it carries the
+      // cursor, so an empty-but-advanced shape resumes rather than re-snapshotting.
+      if (store.getCursor() === undefined)
+        store.applySnapshot(current.getRows(), current.getCursor());
 
       setStore(store);
 
       // Broadcast the leader's rendered slice on every change, and once now so existing followers
-      // (and a just-promoted term) converge immediately.
+      // (and a just-promoted term) converge immediately. A row an app put in the optimistic overlay
+      // may not be structured-cloneable; a `postMessage` throw must not propagate out of the store's
+      // change notification (this runs inside `store.subscribe`) and abort frame processing.
       const publish = (): void => {
-        channel.postMessage({
-          t: "snapshot",
-          rows: store.getRows(),
-          cursor: store.getCursor(),
-        } satisfies CrossTabMessage);
+        try {
+          channel.postMessage({
+            t: "snapshot",
+            rows: store.getRows(),
+            cursor: store.getCursor(),
+          } satisfies CrossTabMessage);
+        } catch (error) {
+          options.onError?.(error);
+        }
       };
 
       leaderPublish = publish;
