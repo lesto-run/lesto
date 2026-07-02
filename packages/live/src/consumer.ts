@@ -33,23 +33,27 @@ export const DEFAULT_LIVE_DATA_PATH = "/__lesto/live-data";
  * **The cursor is forwarded, never interpreted.** The native `EventSource` carries the frame's
  * cursor as `MessageEvent.lastEventId` and transparently echoes it back as the reconnect
  * `Last-Event-ID` header — the *in-session* resume that needs no help from us. ADR 0042 Inc5
- * adds the *cross-reload* half: {@link connectLiveData} hands `lastEventId` straight to the
- * store so a durable store can persist it atomically with the rows (the read-your-writes
- * linchpin). The one invariant preserved from Inc4: this module treats the cursor as an
- * **opaque round-tripped string** — it forwards it and never reads, compares, or parses it. The
- * server (`@lesto/live-server`'s `encodeResumeCursor`, and the poll path's `pollCursor`) owns
- * the token's shape, which is exactly why Inc4 could upgrade the wire from a `v0:` counter to a
- * `v1:(systemId, timelineId, LSN)` token additively. Do not add cursor *parsing/comparison*
- * here — that interpretation belongs server-side, and keeping it out is what let the wire
- * evolve without a client change.
+ * adds the *cross-reload* half: {@link connectLiveData} forwards `lastEventId` to the store (so a
+ * durable store persists it atomically with the rows) AND seeds it back into the subscribe URL on
+ * a cold reload (the `?lastEventId=` resume seam) — the read-your-writes linchpin. The invariant
+ * preserved from Inc4: this module treats the cursor as an **opaque round-tripped string** — it
+ * forwards/echoes it and never **compares or parses** it. (Inc4 enforced this by *omitting* the
+ * field so any read was a compile error; forwarding it necessarily reads it, so the guarantee is
+ * now a convention — kept because no comparison/parsing appears anywhere in the client.) The
+ * server (`@lesto/live-server`'s `encodeResumeCursor`, and the poll path's `pollCursor`) owns the
+ * token's shape, which is exactly why Inc4 could upgrade the wire from a `v0:` counter to a
+ * `v1:(systemId, timelineId, LSN)` token additively. Do not add cursor parsing/comparison here —
+ * that interpretation belongs server-side, and keeping it out is what let the wire evolve without
+ * a client change.
  */
 export interface LiveMessageEvent {
   readonly data: string;
 
   /**
-   * The frame's opaque resume cursor (the SSE `id:` line). Present on every `snapshot`/`change`
-   * frame our server emits; the empty string on a frame with no `id:` (e.g. a bare `error`
-   * event forwarded to `onError`). Forwarded to the store verbatim, never parsed here.
+   * The frame's opaque resume cursor (the SSE `id:` line), non-empty on every `snapshot`/`change`
+   * frame our server emits (`assertCursor`). Forwarded to the store verbatim, never parsed here. A
+   * bare `error` event (also forwarded, to `onError`) is a plain `Event` with no `id:`, so at
+   * runtime this is `undefined` there — an `onError` handler must not rely on it.
    */
   readonly lastEventId: string;
 }
@@ -135,8 +139,17 @@ export function connectLiveData(options: ConnectLiveDataOptions): () => void {
   const path = options.path ?? DEFAULT_LIVE_DATA_PATH;
   const environment = options.environment ?? browserLiveEnvironment;
 
+  // Resume-after-reload: seed the subscribe URL with the store's persisted cursor when it has one
+  // (a durable store that survived a reload). A fresh `EventSource` sends no `Last-Event-ID` header
+  // on its first connect, so the server's `?lastEventId=` query fallback is the ONLY way a reloaded
+  // client resumes from where it left off — the server replays the missed changes onto the durable
+  // slice, or re-snapshots if the cursor is too old / non-resumable (`v0:`). In-session reconnects
+  // still use the fresher native header (the server prefers it), so this stale seed only bites on a
+  // cold reload — exactly right. The cursor is forwarded opaquely; we never parse it.
+  const cursor = store.getCursor();
   const source = environment.open(
-    `${path}?shape=${encodeURIComponent(serializeShapeDefinition(def))}`,
+    `${path}?shape=${encodeURIComponent(serializeShapeDefinition(def))}` +
+      (cursor ? `&lastEventId=${encodeURIComponent(cursor)}` : ""),
   );
 
   // A `snapshot` frame carries the shape's whole authorized row set — replace the slice, stamped

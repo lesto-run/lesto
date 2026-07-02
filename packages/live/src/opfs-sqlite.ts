@@ -17,7 +17,11 @@
  * durable store installs it. Its surface is declared with the local interfaces below (not pulled
  * from the package's own types, which a `@lesto/live` consumer need not have installed), and it is
  * reached through a dynamic `import` whose specifier is typed as a bare `string` — so a downstream
- * `tsc` does not try to resolve the optional peer, while a bundler still sees the literal to wire.
+ * `tsc` does not try to resolve the optional peer. NOTE: a `const: string` specifier can also
+ * defeat a *bundler*'s static analysis (esbuild/Rollup/Vite may not pre-wire `import(variable)`);
+ * an app that opts in may need `optimizeDeps.exclude`/a `@vite-ignore`-style hint. This is
+ * browser-only wiring with no example consumer yet — the round-trip must be proven in the Inc6
+ * gallery example (tracked) before it is relied on.
  */
 
 import { LestoError } from "@lesto/errors";
@@ -82,8 +86,9 @@ export class OpfsSqliteError extends LestoError<"LIVE_OPFS_UNAVAILABLE"> {
 }
 
 // The optional peer's specifier, typed as a bare `string` so `tsc` will not resolve it at
-// type-check time (no error for a consumer that has not installed it); the literal is still
-// present for a bundler to discover and wire.
+// type-check time (no error for a consumer that has not installed it). Caveat: this can also hide
+// the specifier from a bundler's static analysis — an opting-in app may need to exclude/ignore it
+// (see the module doc); to be proven in the Inc6 example.
 const SQLITE_WASM_MODULE: string = "@sqlite.org/sqlite-wasm";
 
 /**

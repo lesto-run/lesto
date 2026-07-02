@@ -54,9 +54,12 @@ export interface LiveStore {
   getRows(): readonly Row[];
 
   /**
-   * The cursor of the last applied frame, or `undefined` before the first frame / after a
-   * resync. The read-your-writes rule ("never accept a snapshot older than an LSN already
-   * applied") reads this; the durable store returns the value that survived a reload.
+   * The cursor of the last applied frame, or `undefined` before the first frame / after a resync.
+   * {@link connectLiveData} reads it at connect time to seed the `?lastEventId=` resume — on a cold
+   * reload of a durable store this is the value that survived (read right after hydration, so it
+   * equals the persisted cursor). Note during a live session it tracks the in-memory (optimistic)
+   * position, which a durable store's persisted cursor may briefly lag while a write is in flight
+   * or the tier is frozen; the connect-time read is unaffected (it happens once, post-hydration).
    */
   getCursor(): Cursor | undefined;
 

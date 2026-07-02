@@ -307,6 +307,86 @@ describe("createSqliteLiveStore — durable rows + cursor", () => {
     await expect(store.whenIdle()).resolves.toBeUndefined();
   });
 
+  it("a throwing onError does not wedge the write chain (whenIdle still resolves, tier still recovers)", async () => {
+    const db = freshDb();
+    let fail = true;
+    const onError = vi.fn(() => {
+      throw new Error("onError blew up");
+    });
+
+    const store = await createSqliteLiveStore({
+      def,
+      db: withFaultyCursorWrite(db, () => fail),
+      onError,
+    });
+
+    store.applyChange({ op: "insert", key: "a", row: { id: "a", rank: 1 } }, "v1:s:1:1");
+    // Contract: whenIdle NEVER rejects — even when the failure handler itself throws.
+    await expect(store.whenIdle()).resolves.toBeUndefined();
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // The chain was not stranded by the throw: a full-slice write still thaws, and a later
+    // incremental write lands.
+    fail = false;
+    store.applySnapshot([{ id: "d", rank: 4 }], "v1:s:1:9");
+    await store.whenIdle();
+    store.applyChange({ op: "insert", key: "e", row: { id: "e", rank: 5 } }, "v1:s:1:10");
+    await store.whenIdle();
+
+    expect((await createSqliteLiveStore({ def, db })).getRows()).toEqual([
+      { id: "d", rank: 4 },
+      { id: "e", rank: 5 },
+    ]);
+  });
+
+  it("a snapshot carrying a duplicate key is last-wins durably, not a frozen tier", async () => {
+    const db = freshDb();
+    const store = await createSqliteLiveStore({ def, db });
+
+    // The mirror dedups (a Map, last-wins); the durable upsert must match rather than throw a PK
+    // violation that would freeze the tier and diverge durable from mirror on the same input.
+    store.applySnapshot(
+      [
+        { id: "a", rank: 1 },
+        { id: "a", rank: 9 },
+      ],
+      "v1:s:1:1",
+    );
+    await store.whenIdle();
+    expect(store.getRows()).toEqual([{ id: "a", rank: 9 }]);
+    expect((await createSqliteLiveStore({ def, db })).getRows()).toEqual([{ id: "a", rank: 9 }]);
+
+    // Not frozen: a later incremental write still lands.
+    store.applyChange({ op: "insert", key: "b", row: { id: "b", rank: 2 } }, "v1:s:1:2");
+    await store.whenIdle();
+    // Sorted by the shape's `rank` asc: b (2) then a (9).
+    expect((await createSqliteLiveStore({ def, db })).getRows()).toEqual([
+      { id: "b", rank: 2 },
+      { id: "a", rank: 9 },
+    ]);
+  });
+
+  it("isolates two shapes on the SAME table by shapeId", async () => {
+    const db = freshDb();
+    const shapeLo: ShapeDefinition = { ...def, where: [{ column: "rank", op: "lt", value: 10 }] };
+    const shapeHi: ShapeDefinition = { ...def, where: [{ column: "rank", op: "gte", value: 10 }] };
+
+    const lo = await createSqliteLiveStore({ def: shapeLo, db });
+    const hi = await createSqliteLiveStore({ def: shapeHi, db });
+    lo.applySnapshot([{ id: "a", rank: 1 }], "v1:s:1:1");
+    hi.applySnapshot([{ id: "b", rank: 20 }], "v1:s:1:2");
+    await lo.whenIdle();
+    await hi.whenIdle();
+
+    // Each shape reloads only its own rows + cursor, even sharing one table in the shared tables.
+    const loReload = await createSqliteLiveStore({ def: shapeLo, db });
+    const hiReload = await createSqliteLiveStore({ def: shapeHi, db });
+    expect(loReload.getRows()).toEqual([{ id: "a", rank: 1 }]);
+    expect(loReload.getCursor()).toBe("v1:s:1:1");
+    expect(hiReload.getRows()).toEqual([{ id: "b", rank: 20 }]);
+    expect(hiReload.getCursor()).toBe("v1:s:1:2");
+  });
+
   it("a malformed snapshot (a row missing its key) leaves the durable slice intact", async () => {
     const db = freshDb();
 

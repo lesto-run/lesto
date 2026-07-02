@@ -112,6 +112,31 @@ describe("connectLiveData", () => {
     expect(sources[0]!.closed).toBe(true);
   });
 
+  it("seeds ?lastEventId= from the store's persisted cursor (resume-after-reload)", () => {
+    // A durable store that survived a reload reports its persisted cursor; the consumer seeds it
+    // into the subscribe URL so the server resumes from it (a fresh EventSource sends no header).
+    const store = createLiveStore(def);
+    store.applySnapshot([], "v1:sysA:1:100");
+
+    const { env, sources } = fakeLive();
+    connectLiveData({ def, store, environment: env });
+
+    expect(sources[0]!.url).toBe(
+      `${expectedUrl(DEFAULT_LIVE_DATA_PATH)}&lastEventId=${encodeURIComponent("v1:sysA:1:100")}`,
+    );
+  });
+
+  it("omits ?lastEventId= when the store has no cursor (fresh in-memory / empty cursor)", () => {
+    // A fresh store (no cursor) subscribes without a resume seed — the server sends a full snapshot.
+    const store = createLiveStore(def);
+    store.applySnapshot([], ""); // an empty cursor is falsy → also omitted
+
+    const { env, sources } = fakeLive();
+    connectLiveData({ def, store, environment: env });
+
+    expect(sources[0]!.url).toBe(expectedUrl(DEFAULT_LIVE_DATA_PATH));
+  });
+
   it("applies a change frame and drops the slice on a resync frame", () => {
     const store = createLiveStore(def);
     const { env, sources } = fakeLive();

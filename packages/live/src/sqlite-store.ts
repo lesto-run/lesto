@@ -163,7 +163,15 @@ export async function createSqliteLiveStore(
       if (replaces) frozen = false;
     } catch (error) {
       frozen = true;
-      report(error);
+
+      // A caller's `onError` that itself throws must never wedge the chain: an unhandled rejection
+      // here would strand every later write (including the full-slice write meant to thaw the tier)
+      // and reject `whenIdle`, which is contracted never to reject.
+      try {
+        report(error);
+      } catch {
+        // Swallow: the write already rolled back atomically; the report is best-effort.
+      }
     }
   };
 
@@ -178,7 +186,13 @@ export async function createSqliteLiveStore(
     enqueue(async (tx) => {
       await tx.prepare("DELETE FROM lesto_live_rows WHERE shape = ?").run([shape]);
 
-      const insert = tx.prepare("INSERT INTO lesto_live_rows (shape, key, row) VALUES (?, ?, ?)");
+      // Upsert (not a plain INSERT) so a snapshot carrying a duplicate key is last-wins — matching
+      // the mirror's `Map`, which dedups silently; a plain INSERT would throw on the PK and freeze
+      // the tier, diverging the durable slice from the mirror on the very same input.
+      const insert = tx.prepare(
+        "INSERT INTO lesto_live_rows (shape, key, row) VALUES (?, ?, ?) " +
+          "ON CONFLICT(shape, key) DO UPDATE SET row = excluded.row",
+      );
 
       for (const row of rows) {
         await insert.run([shape, rowKey(row, def.key), JSON.stringify(row)]);
