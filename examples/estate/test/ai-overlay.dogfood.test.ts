@@ -44,6 +44,7 @@ import type { App } from "@lesto/kernel";
 import type { LestoResponse } from "@lesto/web";
 
 import appConfig from "../lesto.app";
+import { inertDeps } from "./dev-harness";
 
 /** The reserved same-origin dev path the overlay POSTs a chat turn to (the bin's constant). */
 const DEV_AI_ENDPOINT = "/__lesto_dev_ai";
@@ -79,35 +80,6 @@ function capturingServe(): { serve: CliDeps["serve"]; app: () => App } {
 
       return captured;
     },
-  };
-}
-
-/** The required-but-unused `CliDeps` fields for a `dev` run (never reached off the dev path). */
-function inertDeps(): Omit<CliDeps, "loadApp" | "serve" | "loadSites" | "out"> {
-  return {
-    buildContent: () => Promise.resolve([]),
-    persistEntries: () => Promise.resolve({ persisted: 0 }),
-    pruneEntries: () => Promise.resolve({ deleted: 0 }),
-    deleteEntry: () => Promise.resolve({ deleted: 0 }),
-    createEntry: () => Promise.resolve(),
-    sink: () => () => Promise.resolve(),
-    uploader: () => ({
-      read: () => Promise.resolve(new Uint8Array()),
-      put: () => Promise.resolve(),
-    }),
-    releaseStore: () => ({
-      read: () => Promise.resolve(new Uint8Array()),
-      put: () => Promise.resolve(),
-      setCurrent: () => Promise.resolve(),
-      getCurrent: () => Promise.resolve(undefined),
-      listReleases: () => Promise.resolve([]),
-    }),
-    now: () => 0,
-    cloudflare: {
-      deploy: () => Promise.resolve({ url: undefined }),
-      rollback: () => Promise.resolve(),
-    },
-    checkHealth: () => Promise.resolve(true),
   };
 }
 

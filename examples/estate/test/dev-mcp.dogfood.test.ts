@@ -36,6 +36,7 @@ import type { LestoMcpContext, McpAuditRecord } from "@lesto/mcp";
 import type { App } from "@lesto/kernel";
 
 import appConfig from "../lesto.app";
+import { inertDeps } from "./dev-harness";
 
 /** The per-session token the loopback transport gates on (over MIN_DEV_TOKEN_LENGTH). */
 const DEV_TOKEN = "estate-dev-token-".repeat(4);
@@ -69,35 +70,6 @@ function capturingServe(): {
   }) as unknown as CliDeps["serve"];
 
   return { serve, logRequest: () => captured?.logRequest };
-}
-
-/** The required-but-unused `CliDeps` fields for a `dev` run (never reached off the dev path). */
-function inertDeps(): Omit<CliDeps, "loadApp" | "serve" | "loadSites" | "out"> {
-  return {
-    buildContent: () => Promise.resolve([]),
-    persistEntries: () => Promise.resolve({ persisted: 0 }),
-    pruneEntries: () => Promise.resolve({ deleted: 0 }),
-    deleteEntry: () => Promise.resolve({ deleted: 0 }),
-    createEntry: () => Promise.resolve(),
-    sink: () => () => Promise.resolve(),
-    uploader: () => ({
-      read: () => Promise.resolve(new Uint8Array()),
-      put: () => Promise.resolve(),
-    }),
-    releaseStore: () => ({
-      read: () => Promise.resolve(new Uint8Array()),
-      put: () => Promise.resolve(),
-      setCurrent: () => Promise.resolve(),
-      getCurrent: () => Promise.resolve(undefined),
-      listReleases: () => Promise.resolve([]),
-    }),
-    now: () => 0,
-    cloudflare: {
-      deploy: () => Promise.resolve({ url: undefined }),
-      rollback: () => Promise.resolve(),
-    },
-    checkHealth: () => Promise.resolve(true),
-  };
 }
 
 let drain: (() => Promise<void>) | undefined;
