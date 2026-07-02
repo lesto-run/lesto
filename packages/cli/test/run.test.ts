@@ -4524,14 +4524,28 @@ describe("missingModuleSpecifier — cross-runtime module-not-found classifier",
     ).toBeUndefined();
   });
 
-  it("extracts the specifier under Node/ESM & Bun's ERR_MODULE_NOT_FOUND (`Cannot find package … imported from …`)", () => {
-    // Bun's `ResolveMessage` is NOT `instanceof Error` — a bare object with the two
-    // reliable fields is the faithful stand-in. The importer path after the specifier
-    // must be ignored (only the quoted specifier is returned).
+  it("extracts the specifier under Node/ESM's ERR_MODULE_NOT_FOUND (`Cannot find package … imported from …`)", () => {
+    // Node throws a real Error naming the missing PACKAGE, then the (UNquoted) importer
+    // path — only the first quoted specifier is returned. (Real Node wording, verified.)
+    expect(
+      missingModuleSpecifier(
+        Object.assign(
+          new Error("Cannot find package '@lesto/content-core' imported from /app/bin.ts"),
+          { code: "ERR_MODULE_NOT_FOUND" },
+        ),
+      ),
+    ).toBe("@lesto/content-core");
+  });
+
+  it("extracts the specifier under Bun's ERR_MODULE_NOT_FOUND (`Cannot find module … from …`, NOT instanceof Error)", () => {
+    // Bun's `ResolveMessage` is NOT `instanceof Error` (a bare object with the two reliable
+    // fields is the faithful stand-in) and uses `module … from '<importer>'` wording —
+    // distinct from Node's `package … imported from …`. The regex spans both; the importer
+    // is ignored. (Real Bun 1.3.x wording, verified.)
     expect(
       missingModuleSpecifier({
         code: "ERR_MODULE_NOT_FOUND",
-        message: "Cannot find package '@lesto/content-core' imported from '/app/bin.ts'",
+        message: "Cannot find module '@lesto/content-core' from '/app/bin.ts'",
       }),
     ).toBe("@lesto/content-core");
   });
@@ -4560,10 +4574,11 @@ describe("missingModuleSpecifier — cross-runtime module-not-found classifier",
   // reached (rather than the raw error rethrown — the gap the old `ERR_MODULE_NOT_FOUND`-only
   // test left open under `node`'s jiti loader), and that a missing peer never hangs.
   it("recognizes a missing @lesto/content-* peer under BOTH runtime codes (the coded-hint path)", () => {
-    // Bun: a ResolveMessage-shaped miss (NOT instanceof Error) with ERR_MODULE_NOT_FOUND.
+    // Bun: a ResolveMessage-shaped miss (NOT instanceof Error) with ERR_MODULE_NOT_FOUND,
+    // in Bun's real `module … from '<importer>'` wording (verified against Bun 1.3.x).
     const bunShape = missingModuleSpecifier({
       code: "ERR_MODULE_NOT_FOUND",
-      message: "Cannot find package '@lesto/content-core/build' imported from '/app/src/bin.ts'",
+      message: "Cannot find module '@lesto/content-core/build' from '/app/src/bin.ts'",
     });
 
     // jiti: a real Error from the CJS resolver with MODULE_NOT_FOUND.
