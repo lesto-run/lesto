@@ -253,16 +253,18 @@ export async function* parseStream(
   else if (last?.kind === "meta") absorb(last);
 
   // Surface the final accounting as the generator's RETURN value (`streamText` reads it via
-  // `yield*`). Undefined when the stream ended before Anthropic reported ANY of it — an honest
-  // "never received", the case `ai.streaming = true` marks as expected on the span.
-  if (inputTokens === undefined && outputTokens === undefined && stopReason === undefined) {
-    return undefined;
+  // `yield*`). `usage` is reported ONLY when BOTH counts genuinely arrived — never a fabricated
+  // zero: a stream torn after `message_start` (input seen) but before `message_delta` (output
+  // lost) reports no usage, exactly the "never received" case `ai.streaming = true` marks as
+  // expected. When nothing meaningful arrived at all, the whole value is `undefined`.
+  if (inputTokens !== undefined && outputTokens !== undefined) {
+    return {
+      usage: { inputTokens, outputTokens },
+      ...(stopReason === undefined ? {} : { stopReason }),
+    };
   }
 
-  return {
-    usage: { inputTokens: inputTokens ?? 0, outputTokens: outputTokens ?? 0 },
-    ...(stopReason === undefined ? {} : { stopReason }),
-  };
+  return stopReason === undefined ? undefined : { stopReason };
 }
 
 /**

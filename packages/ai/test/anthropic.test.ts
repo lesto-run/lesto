@@ -258,6 +258,38 @@ describe("parseStream", () => {
     expect(final).toBeUndefined();
   });
 
+  it("returns undefined — NOT a fabricated zero — when torn after message_start but before message_delta", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    // The most likely torn shape: input arrived on message_start, then the connection dropped
+    // before message_delta delivered the output count. Reporting `outputTokens: 0` here would be a
+    // fabricated zero for a stream that DID emit text — so usage is withheld entirely.
+    const frames = [
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":15}}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}\n\n',
+    ];
+
+    const { texts, final } = await collectStream(model.parseStream(sseResponse(frames)));
+
+    expect(texts).toEqual(["partial"]);
+    expect(final).toBeUndefined();
+  });
+
+  it("returns just the stop reason when message_delta carries one but no usage", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    // A message_delta with a stop_reason but no usage block: report the stop reason we did get,
+    // withhold usage (never fabricated) — the `{ stopReason }`-only return.
+    const frames = [
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"x"}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n\n',
+    ];
+
+    const { final } = await collectStream(model.parseStream(sseResponse(frames)));
+
+    expect(final).toEqual({ stopReason: "max_tokens" });
+  });
+
   it("reassembles a frame split across two network reads", async () => {
     const model = createAnthropic({ apiKey: "sk-test" });
 

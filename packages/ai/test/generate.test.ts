@@ -427,8 +427,13 @@ describe("telemetry isolation — a broken tracer never masks the real result (A
   });
 
   it("streamText still yields every delta and ends the (broken) span when setAttributes/setStatus/end throw", async () => {
+    // A message_delta is included so the streamed success path DOES call `setAttributes` (with the
+    // recovered usage/stop-reason) — proving the new attribute-setting call is isolated by `safely`
+    // too, not just the status/end calls.
     const frames = [
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":2}}}\n\n',
       'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"a"}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
     ];
     const { transport } = constantTransport(sseResponse(frames));
     const model = createAnthropic({ apiKey: "sk-test", transport });
