@@ -19,7 +19,7 @@ export type LiveClientErrorCode =
   /** The table has no primary-key column, so `live()` cannot identify its rows. */
   | "LIVE_NO_KEY"
   /**
-   * `createLiveQuery(def, { store })` was handed a store whose `shapeId` (when it exposes one)
+   * `createLiveQuery(def, { store })` was handed a store whose `shapeId`
    * disagrees with `shapeId(def)` — the store was built from a different `ShapeDefinition` than
    * the `def` passed alongside it.
    */

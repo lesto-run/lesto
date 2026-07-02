@@ -3,7 +3,7 @@ import type { ShapeDefinition } from "@lesto/live-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createLiveQuery, createLiveStore, LiveClientError } from "../src/index";
-import type { LiveEnvironment, LiveEventSource, LiveMessageEvent, LiveStore } from "../src/index";
+import type { LiveEnvironment, LiveEventSource, LiveMessageEvent } from "../src/index";
 
 const def: ShapeDefinition = {
   table: "posts",
@@ -164,31 +164,6 @@ describe("createLiveQuery", () => {
       // `createLiveQuery` builds its own store from THIS `def`, so `shapeId` trivially matches —
       // no throw, same behavior as before the guard existed.
       const query = createLiveQuery(def, { environment: env });
-      expect(sources[0]!.url).toBe(expectedUrl("/__lesto/live-data"));
-
-      query.disconnect();
-    });
-
-    it("skips the guard entirely when the store does not expose a shapeId (duck-typed check)", () => {
-      const { env, sources } = fakeLive();
-
-      // No hand-rolled `LiveStore` exists elsewhere in the repo, but the field is OPTIONAL on
-      // the interface precisely so a store like this — one that never populates it — is not
-      // forced to grow it, and is not mistakenly flagged as a mismatch either.
-      const bareStore: LiveStore = {
-        applySnapshot: () => {},
-        applyChange: () => {},
-        applyResync: () => {},
-        applyOptimistic: () => {},
-        holdOptimistic: () => {},
-        clearOptimistic: () => {},
-        onEchoSettled: () => () => {},
-        getRows: () => [],
-        getCursor: () => undefined,
-        subscribe: () => () => {},
-      };
-
-      const query = createLiveQuery(def, { store: bareStore, environment: env });
       expect(sources[0]!.url).toBe(expectedUrl("/__lesto/live-data"));
 
       query.disconnect();

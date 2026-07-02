@@ -173,15 +173,14 @@ export interface LiveStore {
   subscribe(listener: () => void): () => void;
 
   /**
-   * The stable id ({@link shapeId}) of the shape this store was built for. Optional so a
-   * hand-rolled `LiveStore` (none exist in this repo today) need not populate it — but both
-   * {@link createLiveStore} and {@link createSqliteLiveStore} always do. `createLiveQuery`
-   * reads it (when present) to guard against a `def`/store shape mismatch: a caller-supplied
+   * The stable id ({@link shapeId}) of the shape this store was built for — both
+   * {@link createLiveStore} and {@link createSqliteLiveStore} always populate it.
+   * `createLiveQuery` reads it to guard against a `def`/store shape mismatch: a caller-supplied
    * store built from a DIFFERENT `ShapeDefinition` than the `def` it is paired with, which
    * would otherwise key/sort/subscribe by one shape while the store holds rows for another —
    * silently.
    */
-  readonly shapeId?: string;
+  readonly shapeId: string;
 
   /**
    * The durable outbox, when this store has one — {@link createSqliteLiveStore} exposes it (the
