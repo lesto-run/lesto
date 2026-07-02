@@ -1270,6 +1270,13 @@ async function runBuild(args: readonly string[], deps: CliDeps): Promise<number>
 
   const selected = selectTarget(sites, target);
 
+  // Refuse a multi-static build that shares island/CSS assets BEFORE any side effect
+  // (cleaning, bundling): each static site is served from its own `out/<name>/`, but the
+  // client + styles build into ONE tree, so shipping several at once would silently orphan
+  // those assets from every site's served root — a broken hydration/styles deploy found
+  // only at runtime. Fail loud with the working path instead (`--target <name>`).
+  await assertNoMultiStaticAssetCollision(deps, config, selected);
+
   // Clear each selected static site's output dir first: the sink only writes, so a
   // route removed since the last build would otherwise leave a stale orphan the
   // deploy still ships. Cleaning per-site (not the whole output root) keeps a
@@ -1336,6 +1343,50 @@ function assetRootFor(selected: readonly Site[], outDir: string): string {
 /** The static sites among the selected set — the ones a build prerenders and cleans. */
 function staticTargetsOf(selected: readonly Site[]): readonly Site[] {
   return selected.filter((site) => site.render === "static");
+}
+
+/**
+ * Refuse a build that would place ONE island/CSS bundle across SEVERAL static sites.
+ *
+ * A static site is served from its own `out/<name>/` subtree (its wrangler
+ * `assets.directory`), so its client + styles belong there — which {@link assetRootFor}
+ * does for a lone static target. With 2+ static targets there is no single such root, and
+ * the shared bundle would land loose in `out/`, orphaned from every site's served tree: the
+ * build succeeds but hydration and styles 404 at runtime. Per-site placement (a copy into
+ * each `out/<name>/`, plus the matching deploy topology) is a design task of its own
+ * (tracked separately); until then this fails LOUD with the working alternative — build each
+ * static site on its own with `--target <name>` (a single static target places its assets
+ * correctly).
+ *
+ * It fires ONLY when there is actually a shared asset to misplace — islands present, or a
+ * CSS entry — so a multi-static project of plain prerendered HTML still builds unaffected.
+ */
+async function assertNoMultiStaticAssetCollision(
+  deps: CliDeps,
+  config: LestoAppConfig,
+  selected: readonly Site[],
+): Promise<void> {
+  if (staticTargetsOf(selected).length <= 1) return;
+
+  // Key on what the APP has, not whether the builder seam is wired (it always is in
+  // production; it is optional only for test injection): an `app/islands/` dir or a CSS
+  // entry is a shared bundle that a 2+ static build would misplace.
+  const hasClient = deps.hasIslandsDir !== undefined && (await deps.hasIslandsDir());
+  const hasStyles =
+    deps.cssEntryExists !== undefined && (await deps.cssEntryExists(cssEntryOf(config)));
+
+  if (!hasClient && !hasStyles) return;
+
+  const names = staticTargetsOf(selected).map((site) => site.name);
+
+  throw new CliError(
+    "CLI_MULTI_STATIC_ASSETS_UNSUPPORTED",
+    `Cannot build ${names.length} static sites (${names.join(", ")}) that share the project's ` +
+      "island/CSS bundle in one pass: each is served from its own out/<name>/, so the shared " +
+      "client/styles would be orphaned. Build each static site on its own with " +
+      "`lesto build --target <name>`.",
+    { staticSites: names, hasClient, hasStyles },
+  );
 }
 
 /**

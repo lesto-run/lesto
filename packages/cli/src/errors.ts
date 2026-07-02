@@ -31,6 +31,8 @@ export type CliErrorCode =
   | "CLI_GENERATE_BAD_ROUTE"
   | "CLI_GENERATE_MISSING_ARGS"
   | "CLI_GENERATE_UNKNOWN_GENERATOR"
+  /** `lesto build` selected 2+ static sites that share the project's one island/CSS bundle: each is served from its own `out/<name>/`, so the shared client/styles would be orphaned. Build each with `--target <name>` until per-site placement is designed. */
+  | "CLI_MULTI_STATIC_ASSETS_UNSUPPORTED"
   | "CLI_ROLLBACK_MISSING_VERSION"
   | "CLI_STYLES_BUILD_FAILED"
   | "CLI_UNKNOWN_COMMAND"

@@ -952,14 +952,15 @@ describe("run build — island client assets", () => {
     expect(built).toEqual([{ outDir: "out/marketing", mode: "production", dialect: "react" }]);
   });
 
-  it("builds client assets into the output root when several static sites are selected", async () => {
+  it("refuses a multi-static build that shares the island bundle (L-0d58f58c — would orphan the assets)", async () => {
     const built: Array<{ outDir: string }> = [];
 
-    await run(
+    // Two static sites, each served from its OWN out/<name>/, but ONE shared island bundle:
+    // building it loose in out/ would 404 from both sites at runtime. The build must refuse
+    // loudly, BEFORE any asset is written, and point at the working `--target` per-site path.
+    const error = await run(
       ["build"],
       depsWith({
-        // Two static sites (no pages to render — the client build runs before
-        // prerender, so empty pages still exercise the multi-site asset-root path).
         loadSites: () => Promise.resolve([staticSite("a", []), staticSite("b", [])]),
         sink: recordingSink().sink,
         hasIslandsDir: () => Promise.resolve(true),
@@ -969,10 +970,48 @@ describe("run build — island client assets", () => {
           return Promise.resolve();
         },
       }),
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(CliError);
+    expect((error as CliError).code).toBe("CLI_MULTI_STATIC_ASSETS_UNSUPPORTED");
+    expect((error as CliError).details["staticSites"]).toEqual(["a", "b"]);
+    expect(built).toEqual([]); // it failed before building (or cleaning) anything
+  });
+
+  it("refuses a multi-static build that shares only a CSS bundle (no islands) too", async () => {
+    // The same orphaning hazard reaches styles.css: two static sites, no islands, but a
+    // shared CSS entry — the compiled styles would land loose in out/, unreachable from
+    // either site's served tree. The guard fires on the styles half too.
+    const error = await run(
+      ["build"],
+      depsWith({
+        loadSites: () => Promise.resolve([staticSite("a", []), staticSite("b", [])]),
+        sink: recordingSink().sink,
+        cssEntryExists: () => Promise.resolve(true),
+      }),
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(CliError);
+    expect((error as CliError).code).toBe("CLI_MULTI_STATIC_ASSETS_UNSUPPORTED");
+    expect((error as CliError).details).toMatchObject({ hasClient: false, hasStyles: true });
+  });
+
+  it("still builds a multi-static project that has NO shared island/CSS assets", async () => {
+    // No islands and no CSS entry → nothing to orphan, so the guard does NOT fire and the
+    // prerender-only multi-static build proceeds unaffected.
+    const code = await run(
+      ["build"],
+      depsWith({
+        // Empty page sets (like the sibling multi-static tests) so the case exercises the
+        // guard — which runs before prerender — without driving the real render pipeline.
+        loadSites: () => Promise.resolve([staticSite("a", []), staticSite("b", [])]),
+        sink: recordingSink().sink,
+        hasIslandsDir: () => Promise.resolve(false),
+        cssEntryExists: () => Promise.resolve(false),
+      }),
     );
 
-    // No single static target → assets stay at the output root, not a site subdir.
-    expect(built.map((b) => b.outDir)).toEqual(["out"]);
+    expect(code).toBe(0);
   });
 
   it("builds client assets into the output root when no static site is selected", async () => {
