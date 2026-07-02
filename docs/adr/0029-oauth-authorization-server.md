@@ -15,7 +15,11 @@
   must pass before any flow code is written** (asymmetric signing + JWKS on a real
   Cloudflare Worker *and* Node are unproven in this codebase). The build must also clear
   a dedicated adversarial review and a `security-review`. Revised 2026-06-20 after a
-  3-lens adversarial panel — see *Reviews*.
+  3-lens adversarial panel — see *Reviews*. **Amended 2026-07-02** — the agent-native MCP
+  wedge ships a *real* OAuth issuer via **OpenAuth** on a Cloudflare Worker as its
+  **interim** Authorization Server (`L-0706ea00`), and whether this from-scratch
+  first-party AS is still worth building vs. wrapping/recommending OpenAuth is **re-opened
+  as an open question**; see *Amendment (2026-07-02)* below.
 - **Date:** 2026-06-20
 - **Deciders:** tech lead + owner
 - **Builds on / touches:** ADR 0030 (OAuth *client* / social sign-in — ships first;
@@ -249,3 +253,54 @@ integration/sequencing/runtime), grounded in the repo. Resulting changes:
   It deliberately follows the demanded value (ADR 0028 Phase 1) and sequences last.
 - The first-party choice keeps the auth stack self-contained while the library mandate
   bounds the forever-cost; `better-auth` / external-IdP remain recorded fallbacks.
+
+## Amendment (2026-07-02) — OpenAuth as the wedge's interim real issuer
+
+An ADR-level decision surfaced **2026-06-25**: the agent-native MCP wedge (epic
+`L-ac59114b`, capstone ADR 0039) needed a *real* OAuth issuer to prove the
+authenticated-production-MCP-server battery end-to-end, and blocking that proof on this
+from-scratch `@lesto/oauth-server` — the largest, most security-sensitive, deepest
+subsystem in the effort (the Phase 0 crypto spike plus the ~8-deep chain ADR 0039 counts)
+— was the wrong trade for the wedge's timeline. The decision: ship a real issuer **via a
+proven, batteries-included standards library — OpenAuth on a Cloudflare Worker** (tracked
+as `L-0706ea00`), adopted as the **interim Authorization Server**. This **reaffirms and
+sharpens** the earlier 2026-06-24 steer to *defer* the from-scratch AS: the deferral now
+has a concrete, shipping replacement rather than a gap. It records the pivot on top of the
+original Decision above — that decision text is unchanged and still describes the
+first-party build *if* it is undertaken.
+
+- **(a) The pivot — wrap/recommend a standards OAuth server NOW.** The wedge no longer
+  waits on first-party crypto to demonstrate an authenticated MCP server. OpenAuth (ES256
+  JWTs, JWKS discovery, RFC 8414 metadata) runs as a Cloudflare Worker and issues the real
+  access tokens the MCP Resource Server validates. The wedge example is
+  `examples/mcp-auth-openauth/` (its issuer under `idp/`, the RS adapter at
+  `mcp/verify.ts`); OpenAuth's issuer signing keys are persisted in a single Durable
+  Object (Cloudflare-KV eventual consistency is unviable for a JWKS). This is the
+  recommended path for a site owner who wants an authenticated production MCP server
+  *today*: wrap — or simply recommend — a vetted OAuth server rather than hand-roll one.
+- **(b) The re-opened question — is a from-scratch `@lesto`-native AS still worth it?**
+  ADR 0039 committed the in-house AS "up front" as the headline "zero external service"
+  battery. With a proven library now covering the wedge, that commitment is **re-opened as
+  an open question**, not cancelled: does a hand-rolled first-party AS earn its
+  greenfield-crypto build plus the forever spec/CVE/rotation cost (this ADR's *Context*)
+  over **wrapping OpenAuth as a first-party battery**, or simply **recommending it**,
+  long-term? The honest ledger of §*Alternatives considered* gains a fourth entry — a
+  maintained OAuth-server *library* (OpenAuth). Like the mandated `jose`/OAuth-substrate
+  posture, it is a library dependency, not a runtime third-party IdP, so it does **not**
+  violate the self-contained-stack thesis. No decision is recorded here; the from-scratch
+  build is **an open question, not a commitment**, pending that call.
+- **(c) The integration contract (so any future first-party AS is a drop-in).** Whatever
+  issues the tokens, the Resource Server depends on **one** contract, behind the **same
+  `verify.ts` seam** — `VerifyAccessToken(token) → { subject, audience, scopes }` from
+  `@lesto/mcp`, the seam ADR 0028 §Phase 3b and ADR 0039 D3 already specify. The canonical
+  shape is: a **JWT access token**, verified **offline via JWKS discovery** (the issuer's
+  `jwks_uri`; ES256/RS256 per the issuer's `alg` allow-list — never `none`, never HMAC
+  against a JWKS key), with **`aud` = the resource identifier** (the confused-deputy bound)
+  and **`scope` claims** (the RS ceiling). OpenAuth is the *interim* fit, not a perfect
+  one, and the seam absorbs the gap: OpenAuth 0.4.x ships no RFC 8707 resource indicators
+  (its `aud` is the *client id*, so the RS is configured with `resource = <that client
+  id>`) and no OAuth `scope` claim (the grant's scopes ride in `properties.scopes`) —
+  `mcp/verify.ts` maps both onto the RS contract. A future first-party AS (this ADR's
+  `@lesto/oauth-server`, *if* it is built) that stamps the resource into `aud` and emits a
+  real `scope` claim is a **cleaner drop-in behind the identical seam — no RS rework**,
+  which is the whole reason the RS is kept issuer-agnostic.
