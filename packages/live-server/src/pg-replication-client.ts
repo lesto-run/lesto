@@ -2,10 +2,14 @@
  * The real `pg` logical-replication client for the Tier-4 change source (ADR 0042) — the
  * coverage-excluded socket wiring. Every DECISION the source makes (reconnect/backoff, the slot
  * lifecycle, identity stamping, error routing) is tested in `replication.ts` against the
- * {@link PgReplicationClient} seam, and the pure message decoder is tested against **real
- * captured bytes** in `pgoutput.ts`; what remains here is the irreducible
- * replication-protocol wiring — the copy-data stream, its `XLogData` framing, and standby-status
- * (LSN acknowledgement) feedback — which has nothing to exercise but a live Postgres WAL stream.
+ * {@link PgReplicationClient} seam; the pure message decoder is tested against **real captured
+ * bytes** in `pgoutput.ts`; and the pure *byte codecs* — the outbound standby-status (LSN
+ * acknowledgement) encoder and the inbound copy-data / `XLogData` frame dispatcher — are extracted
+ * to the covered {@link buildStandbyStatus}/{@link parseCopyDataFrame} in `replication-frames.ts`,
+ * unit-tested against exact bytes like the decode side. What remains here is the irreducible
+ * `pg` wiring — opening the client, listening on `raw.connection`, and pushing/pulling copy-data
+ * chunks — which has nothing to exercise but a live Postgres WAL stream (validated by the live
+ * shakeout, `test/live/pgoutput-shakeout.ts`).
  *
  * `pg` is an **optional peer**: a deployment using the Postgres change source installs it. It is
  * loaded lazily inside the factory (never imported at module top) so an app on the SQLite v0 poll
@@ -46,6 +50,7 @@ import { createRequire } from "node:module";
 
 import { LiveServerError } from "./errors";
 import { createPgOutputDecoder } from "./pgoutput";
+import { buildStandbyStatus, PG_EPOCH_MS, parseCopyDataFrame } from "./replication-frames";
 import type { DecodedChange, PgReplicationClient, SystemIdentity } from "./replication";
 
 /** Connection config for the dedicated replication client — a libpq URL or field set. */
@@ -81,13 +86,6 @@ interface RawPgClient {
 /** A Postgres LSN is `<hex>/<hex>`; a client-presented resume position MUST match before it is
  * spliced into `START_REPLICATION` (a replication command cannot bind parameters). */
 const LSN_PATTERN = /^[0-9A-Fa-f]+\/[0-9A-Fa-f]+$/;
-
-const XLOG_DATA = 0x77; // 'w' — an XLogData frame: 'w' + Int64 walStart + Int64 walEnd + Int64 time + payload
-const KEEPALIVE = 0x6b; // 'k' — a primary keepalive: 'k' + Int64 walEnd + Int64 time + Byte replyRequested
-const XLOG_DATA_HEADER_BYTES = 1 + 8 + 8 + 8;
-
-/** Milliseconds between the Unix epoch and the Postgres epoch (2000-01-01), for the status clock. */
-const PG_EPOCH_MS = 946_684_800_000n;
 
 /** The bounded slot-drop retry: poll `SLOT_DROP_ATTEMPTS` times, `SLOT_DROP_POLL_MS` apart (~2s). */
 const SLOT_DROP_ATTEMPTS = 40;
@@ -134,14 +132,8 @@ export function createPgReplicationClientFactory(
 
     /** Acknowledge `lastLsn` so the slot advances its confirmed position (else WAL pins forever). */
     function sendStandbyStatus(): void {
-      const status = Buffer.alloc(1 + 8 + 8 + 8 + 8 + 1);
-      status[0] = 0x72; // 'r' — Standby Status Update
-      status.writeBigUInt64BE(lastLsn, 1); // last WAL byte received
-      status.writeBigUInt64BE(lastLsn, 9); // last WAL byte flushed
-      status.writeBigUInt64BE(lastLsn, 17); // last WAL byte applied
-      status.writeBigUInt64BE((BigInt(Date.now()) - PG_EPOCH_MS) * 1000n, 25); // clock, µs since PG epoch
-      status[33] = 0; // no immediate reply requested
-      raw.connection.sendCopyFromChunk(status);
+      const clockUs = (BigInt(Date.now()) - PG_EPOCH_MS) * 1000n; // µs since the PG epoch
+      raw.connection.sendCopyFromChunk(buildStandbyStatus(lastLsn, clockUs));
     }
 
     /** One copy-data frame: acknowledge its LSN, and (for an XLogData frame) decode + emit a change. */
@@ -151,24 +143,20 @@ export function createPgReplicationClientFactory(
       // driver's EventEmitter and can crash the process. Route it to the error sink instead, and
       // do NOT advance the ack past a frame we could not apply (so a reconnect re-reads it).
       try {
-        if (bytes.length === 0) return;
+        const frame = parseCopyDataFrame(bytes);
 
-        const lead = bytes[0];
-
-        if (lead === KEEPALIVE) {
-          const walEnd = bytes.readBigUInt64BE(1);
-          if (walEnd > lastLsn) lastLsn = walEnd;
-          if (bytes.readUInt8(17) === 1) sendStandbyStatus(); // the server asked for a reply
+        if (frame.kind === "keepalive") {
+          if (frame.walEnd > lastLsn) lastLsn = frame.walEnd;
+          if (frame.replyRequested) sendStandbyStatus(); // the server asked for a reply
           return;
         }
 
-        if (lead !== XLOG_DATA) return; // an unknown frame — nothing to decode
+        if (frame.kind === "other") return; // an empty or unknown frame — nothing to decode
 
-        const walStart = bytes.readBigUInt64BE(1);
-        if (walStart > lastLsn) lastLsn = walStart;
+        if (frame.walStart > lastLsn) lastLsn = frame.walStart;
 
         // pgoutput decodes each XLogData payload to 0–1 changes (a control message → none).
-        const change = decoder.decode(bytes.subarray(XLOG_DATA_HEADER_BYTES));
+        const change = decoder.decode(frame.payload);
         if (change !== undefined) changeListener?.(change);
 
         sendStandbyStatus(); // advance the slot past what we just applied

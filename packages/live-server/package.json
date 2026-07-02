@@ -20,6 +20,7 @@
   "scripts": {
     "test": "vitest run",
     "test:cov": "vitest run --coverage",
+    "shakeout:pgoutput": "bun test/live/pgoutput-shakeout.ts",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src test",
     "format": "oxfmt src test",
