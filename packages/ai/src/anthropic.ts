@@ -304,7 +304,11 @@ function parseFrame(frame: string): ParsedFrame | undefined {
     return { kind: "text", text: event.delta.text };
   }
 
-  // The prompt (input) token count arrives up front on `message_start`.
+  // The prompt (input) token count arrives up front on `message_start`. Its `usage` ALSO carries a
+  // small INITIAL `output_tokens` (typically 1–4) — deliberately ignored: the authoritative final
+  // cumulative output count lands on `message_delta` below. Reading it here would defeat the
+  // torn-stream guard (a stream cut after `message_start` would report a misleadingly-tiny output
+  // instead of withholding usage), so `message_start` contributes input tokens only.
   if (event.type === "message_start") {
     const inputTokens = event.message?.usage?.input_tokens;
     return inputTokens === undefined ? { kind: "meta" } : { kind: "meta", inputTokens };

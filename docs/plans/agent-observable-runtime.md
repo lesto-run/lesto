@@ -256,8 +256,9 @@ Folded into the bar block above; restated at the increment where each is load-be
   run, not literally at the first response byte) and closed once the generator terminates (last
   frame, an error, or an early `for-await` `break`, always via a `finally`). The streamed span
   carries the model id + duration + outcome (`"unset"` on an early break, not a fabricated `"ok"`),
-  not tokens (the delta stream yields text only — a future increment could recover this from
-  Anthropic's `message_delta` SSE frame, currently unparsed). `@lesto/ai` stays observability-free;
+  and — since L-3c7b03b8 — the tokens + stop reason too, recovered from Anthropic's
+  `message_start`/`message_delta` frames (`parseStream` returns them; absent only on a torn
+  stream). `@lesto/ai` stays observability-free;
   the estate `Tracer`→`AgentTracer` adapter maps `setAttributes` → `setAttribute`. Every telemetry
   call is wrapped in a swallow-on-throw helper (`safely`) so a broken tracer can never mask a
   call's real result or crash an otherwise-successful generation.

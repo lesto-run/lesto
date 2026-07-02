@@ -35,8 +35,9 @@ export const AI_STOP_REASON_ATTR = "ai.stop_reason";
 /**
  * Attribute: whether this `ai.generate` span wraps a streamed (`streamText` → `true`) or one-shot
  * (`generateText` → `false`) call. Set on EVERY span so a trace query can segment the two, and so
- * a span missing `ai.usage.*`/`ai.stop_reason` reads as expected on a stream (`true`) rather than
- * a bug on a one-shot (`false`). Equals `AI_STREAMING_ATTR` in observability.
+ * a span missing `ai.usage.*`/`ai.stop_reason` reads as expected on a *torn* stream (`true`; a
+ * complete stream carries them, recovered from `message_delta`) rather than a bug on a one-shot
+ * (`false`). Equals `AI_STREAMING_ATTR` in observability.
  */
 export const AI_STREAMING_ATTR = "ai.streaming";
 

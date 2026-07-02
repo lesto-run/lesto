@@ -262,10 +262,11 @@ describe("parseStream", () => {
     const model = createAnthropic({ apiKey: "sk-test" });
 
     // The most likely torn shape: input arrived on message_start, then the connection dropped
-    // before message_delta delivered the output count. Reporting `outputTokens: 0` here would be a
-    // fabricated zero for a stream that DID emit text — so usage is withheld entirely.
+    // before message_delta delivered the final output count. message_start carries a small INITIAL
+    // output_tokens (2 here) that is deliberately ignored — using it would report a misleadingly
+    // tiny {15, 2} for a stream that streamed more; usage is withheld entirely instead.
     const frames = [
-      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":15}}}\n\n',
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":15,"output_tokens":2}}}\n\n',
       'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}\n\n',
     ];
 
@@ -273,6 +274,22 @@ describe("parseStream", () => {
 
     expect(texts).toEqual(["partial"]);
     expect(final).toBeUndefined();
+  });
+
+  it("ignores message_start's initial output_tokens — the final uses message_delta's cumulative count", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    // message_start reports output_tokens: 2 (the initial count); message_delta reports the
+    // authoritative cumulative 20. The returned final must reflect 20, never message_start's 2.
+    const frames = [
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":2}}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20}}\n\n',
+    ];
+
+    const { final } = await collectStream(model.parseStream(sseResponse(frames)));
+
+    expect(final).toEqual({ usage: { inputTokens: 10, outputTokens: 20 }, stopReason: "end_turn" });
   });
 
   it("returns just the stop reason when message_delta carries one but no usage", async () => {

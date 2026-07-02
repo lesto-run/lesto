@@ -41,8 +41,9 @@ export const AI_STOP_REASON_ATTR = "ai.stop_reason";
  * Attribute key: whether the span wraps a streamed (`streamText`) or one-shot (`generateText`)
  * model call — a boolean set on EVERY `ai.generate` span (L-1cbabfc0). It exists so a trace query
  * can segment streamed vs one-shot latency, and so a span missing `ai.usage.*`/`ai.stop_reason`
- * is read correctly: expected on a streamed span (`true`), a regression on a one-shot one
- * (`false`), never an undocumented implicit "this was streamed" signal.
+ * is read correctly: expected on a *torn* streamed span (`true`; a complete stream carries them,
+ * recovered from `message_delta`), a regression on a one-shot one (`false`), never an
+ * undocumented implicit "this was streamed" signal.
  */
 export const AI_STREAMING_ATTR = "ai.streaming";
 
