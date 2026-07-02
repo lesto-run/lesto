@@ -44,7 +44,12 @@ thin driver (mail transport, object storage, OAuth). So:
   interface; the real `wrangler`-spawning impl lives in the coverage-excluded `bin`
   wiring, so the orchestration (build → deploy → health-gate → rollback-on-failure)
   is tested at 100% with an injected fake and no real binary.
-- **Reject the IaC frameworks (option 1).**
+- **Reject the IaC frameworks (option 1).** *(Amendment 2026-07-02, ADR 0044:* this rejection is
+  scoped to **`lesto deploy`** — the *product's* deploy battery, one Worker per app. It does **not**
+  govern the **repo's own** multi-resource infrastructure — cooperating-Worker examples and the live
+  benchmark edge worker, whose deploy is a resource *graph* `wrangler.jsonc` cannot express — for
+  which ADR 0044 adopts Alchemy as a convention **beside** wrangler. The seam here is untouched; see
+  `docs/adr/0044-deploy-iac-convention-alchemy.md`.)*
 - **Keep the direct-API client (option 2) as a deferred *implementation of the same
   interface*** — a drop-in the day the **agent control plane** needs binary-free
   programmatic deploy. The seam means that swap never touches `runDeploy`.
