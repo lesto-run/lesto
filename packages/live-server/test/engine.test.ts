@@ -154,7 +154,7 @@ describe("subscribe — snapshot + registry validation", () => {
     const sub = await engine.subscribe(room1Shape(), () => {});
 
     expect(sub.shapeId).toMatch(/^messages:/);
-    expect(sub.cursor).toBe("0");
+    expect(sub.cursor).toBe("v0:0"); // opaque, versioned — see engine.ts mintCursor
     expect((sub.snapshot as Row[]).map((r) => r.body)).toEqual(["first", "second"]);
     // Only room-1 rows, and the timestamp is folded to epoch-ms on the wire.
     expect(sub.snapshot[0]).toEqual({ id: 1, roomId: 1, body: "first", createdAt: 100 });
@@ -203,7 +203,7 @@ describe("poll — the change tail", () => {
     expect(sink.changes).toEqual([
       { op: "insert", key: "1", row: { id: 1, roomId: 1, body: "hi", createdAt: 100 } },
     ]);
-    expect(sink.cursors).toEqual(["1"]);
+    expect(sink.cursors).toEqual(["v0:1"]);
   });
 
   it("delivers an update when a row changes, and nothing when it does not", async () => {
@@ -259,7 +259,7 @@ describe("fan-out + lifecycle", () => {
     const subB = await engine.subscribe(room1Shape(), b.onChange);
 
     expect(engine.activeShapes).toBe(1); // same shape reused
-    expect(subB.cursor).toBe("0");
+    expect(subB.cursor).toBe("v0:0");
 
     await insert(1, "hi", 100);
     timers.fire();
@@ -417,7 +417,7 @@ describe("replication change source — the v1 change path", () => {
     expect(sink.changes).toEqual([
       { op: "insert", key: "1", row: { id: 1, roomId: 1, body: "hi", createdAt: 100 } },
     ]);
-    expect(sink.cursors).toEqual(["1"]);
+    expect(sink.cursors).toEqual(["v0:1"]);
     e.stop();
   });
 

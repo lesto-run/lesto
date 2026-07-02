@@ -127,6 +127,22 @@ function applyChange(entry: ShapeEntry, change: ShapeChange): void {
 }
 
 /**
+ * The single site that turns a shape's internal `cursor` counter into the wire-facing
+ * {@link Cursor}. The **only** contract the wire cursor makes today is opacity: the client
+ * never parses it, only round-trips it (via `EventSource`'s `Last-Event-ID`), and the server
+ * never reads it back on reconnect — every subscribe re-snapshots (ADR 0042 acceptance (e),
+ * the safe floor pending Inc4's LSN-exact resume, `L-6841d65d`). Versioning it now (`v0:`) is
+ * cheap insurance against that contract ever being violated by accident: it removes the
+ * temptation for future code to treat the cursor as a bare monotonic integer (a numeric
+ * comparison, a resume-position parse), which is the one thing that would turn Inc4's move to
+ * a `(systemId, timelineId, LSN)` token into a breaking wire change instead of an additive one.
+ * All three cursor-mint sites in this file MUST go through this helper, never `String(n)` directly.
+ */
+function mintCursor(entry: ShapeEntry): Cursor {
+  return `v0:${entry.cursor}`;
+}
+
+/**
  * The v1 logical-replication change-source seam. Providing it switches the engine off the v0 poll
  * and onto {@link ChangeSource}'s incremental feed — both are bundled so opting in requires both the
  * feed and the catalog probe that guards each shape's replica identity (TypeScript enforces the
@@ -264,7 +280,7 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
     if (changes.length === 0) return;
 
     entry.cursor += 1;
-    const cursor = String(entry.cursor);
+    const cursor = mintCursor(entry);
 
     for (const change of changes) {
       for (const subscriber of entry.subscribers) subscriber(change, cursor);
@@ -351,12 +367,14 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
         if (shapeChange === undefined) continue;
 
         applyChange(entry, shapeChange);
-        // TODO(Inc4, L-85e3eb10): the tail cursor is a monotonic integer; `change.commitLSN` (the
-        // real WAL position, carried on every ReplicationChange) is DISCARDED here. Inc4's LSN-exact
-        // resume must thread it into the cursor so a reconnecting client can `START_REPLICATION` from
-        // its last-applied LSN and de-dup the seed↔tail overlap (the unfenced window seeded above).
+        // TODO(Inc4, L-85e3eb10): `change.commitLSN` (the real WAL position, carried on every
+        // ReplicationChange) is DISCARDED here in favor of a plain counter. Inc4's LSN-exact resume
+        // must thread it into the minted cursor (`mintCursor`) so a reconnecting client can
+        // `START_REPLICATION` from its last-applied LSN and de-dup the seed↔tail overlap (the
+        // unfenced window seeded above) — that upgrade is additive because the cursor is already an
+        // opaque, versioned token no caller parses (see `mintCursor`'s doc comment).
         entry.cursor += 1;
-        const cursor = String(entry.cursor);
+        const cursor = mintCursor(entry);
 
         for (const subscriber of entry.subscribers) subscriber(shapeChange, cursor);
       } catch (error) {
@@ -436,7 +454,7 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
         }
       };
 
-      return { shapeId: id, snapshot, cursor: String(active.cursor), unsubscribe };
+      return { shapeId: id, snapshot, cursor: mintCursor(active), unsubscribe };
     },
 
     get activeShapes() {

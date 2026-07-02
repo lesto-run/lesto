@@ -29,6 +29,17 @@ export const DEFAULT_LIVE_DATA_PATH = "/__lesto/live-data";
  * The slice of an SSE message event this consumer reads — just its `data`. A `snapshot`
  * carries the row set here, a `change` one row op; narrow on purpose so a fake satisfies it
  * without a real `EventSource`.
+ *
+ * **Deliberately excludes `id`/`lastEventId` — the wire cursor is opaque to this module.**
+ * The native `EventSource` DOES carry the frame's cursor as `MessageEvent.lastEventId` and
+ * transparently echoes it back as the reconnect `Last-Event-ID` header — but every handler in
+ * {@link connectLiveData} is written against this narrower type, so TypeScript refuses any
+ * attempt to read, compare, or parse the cursor here (a compile error, not a convention). The
+ * server (`@lesto/live-server`'s `mintCursor`) mints a versioned, opaque token specifically so
+ * neither side ever needs to treat it as more than a round-tripped string — the property that
+ * keeps a future resume upgrade (ADR 0042 Inc4, LSN-exact resume) additive rather than a
+ * breaking wire change. Do not widen this interface to add `id`/`lastEventId` without a strong
+ * reason; doing so would remove the one thing enforcing that invariant at compile time.
  */
 export interface LiveMessageEvent {
   readonly data: string;
