@@ -913,3 +913,86 @@ describe("poll safety", () => {
     e.stop();
   });
 });
+
+// ---------------------------------------------------------------------------
+// L-5c46b49b — a shape keyed on a UNIQUE **non-primary-key** column, end-to-end through the engine.
+// resolveTable accepts a `primaryKey || unique` key, but the old-image guard formerly only forced
+// REPLICA IDENTITY FULL for a non-key FILTER — so a unique-non-PK-keyed, filterless shape registered
+// on a DEFAULT table and then leaked: an update changing the unique key stranded the old row (no old
+// key under DEFAULT), and a plain DELETE carried only the PK (missing the client's key → the row
+// survived). The fix threads `keyIsPrimaryKey` into the guard so such a shape is refused unless FULL.
+// ---------------------------------------------------------------------------
+// `id` is the PK; `slug` is a UNIQUE non-PK column — a legitimate `resolveTable` key that the old
+// guard mis-classified as needing no old image.
+const articles = defineTable("articles", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  slug: text("slug").notNull().unique(),
+  body: text("body").notNull(),
+});
+
+// Filterless AND keyed on the unique non-PK column — the exact config that formerly leaked.
+const slugShape = (): ShapeDefinition => ({
+  table: "articles",
+  key: "slug",
+  columns: ["id", "slug", "body"],
+  where: [],
+  orderBy: { column: "slug", direction: "asc" },
+});
+
+describe("replication — a UNIQUE non-PK shape key is fail-closed (L-5c46b49b)", () => {
+  const STAMP = { commitLSN: "0/1", systemId: "sys", timelineId: 1 } as const;
+
+  let aRaw: Database.Database;
+  let aDb: Db;
+  let src: ReturnType<typeof fakeSource>;
+
+  beforeEach(async () => {
+    aRaw = new Database(":memory:");
+    aDb = createDb(adapt(aRaw));
+    await aDb.exec(createTableSql(articles));
+    src = fakeSource();
+  });
+
+  afterEach(() => aRaw.close());
+
+  it("REFUSES registration when the table is not REPLICA IDENTITY FULL (the DELETE-leak / update-strand fix)", async () => {
+    const e = createShapeEngine({
+      db: aDb,
+      tables: [articles],
+      replication: { source: src.source, replicaIdentity: fullFor() /* articles NOT full */ },
+    });
+
+    await expect(e.subscribe(slugShape(), () => {})).rejects.toMatchObject({
+      code: "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT",
+    });
+    e.stop();
+  });
+
+  it("registers under FULL, and an update CHANGING the unique key fires PRIMARY_KEY_CHANGED (never a stale duplicate)", async () => {
+    await aDb.insert(articles).values({ slug: "old", body: "b" }).run(); // seed a matching row
+    const errors: unknown[] = [];
+    const e = createShapeEngine({
+      db: aDb,
+      tables: [articles],
+      replication: { source: src.source, replicaIdentity: fullFor("articles") },
+      onError: (error) => errors.push(error),
+    });
+    const sub = await e.subscribe(slugShape(), () => {});
+    expect((sub.snapshot as Row[]).map((r) => r.slug)).toEqual(["old"]);
+
+    // Under FULL the old image carries the unique key, so a change to it is caught loudly rather than
+    // stranding the "old"-keyed row. (Under DEFAULT no old key is emitted → the pre-fix silent strand.)
+    src.emit({
+      op: "update",
+      table: "articles",
+      oldImage: { id: "1", slug: "old", body: "b" },
+      newImage: { id: "1", slug: "new", body: "b" },
+      oldImageKind: "full",
+      ...STAMP,
+    });
+
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as LiveServerError).code).toBe("LIVE_SERVER_PRIMARY_KEY_CHANGED");
+    e.stop();
+  });
+});

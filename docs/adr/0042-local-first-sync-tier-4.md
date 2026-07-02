@@ -373,7 +373,13 @@ client-side.
   life, not merely once at subscribe; (b) a row that updates *out* of a
   principal's shape is delivered as **delete-from-shape and never silently retained**, proven
   specifically on a predicate over a **non-PK column** under **`REPLICA IDENTITY FULL`**, plus a test
-  that the engine *refuses* a shape whose table cannot supply the old image its predicate needs; (c) a
+  that the engine *refuses* a shape whose table cannot supply the old image it needs — **including a
+  shape whose *key* is a UNIQUE non-PK column** (`slug`, `email`), not only a shape whose *filter* is
+  non-PK (the 2026-07-02 amendment, `L-5c46b49b`): under `REPLICA IDENTITY DEFAULT` the old tuple is
+  the *primary key* only, so a change to that unique key would strand the old row (no old key emitted)
+  and an ordinary delete would carry only the PK (missing the client's key → the row survives), both
+  silent OPFS leaks — so such a shape is refused at registration unless the table is `REPLICA IDENTITY
+  FULL`; (c) a
   membership change (removed from a room) is caught by ONE of two mechanisms depending on where the
   authorizing value lives — an authorization column **on the streamed row itself** (`owner_id`
   reassigned, a `room_id` a shape filters on) propagates **sub-interval**, as an ordinary
@@ -478,3 +484,26 @@ final ratification rests with tech-lead + owner. No finding was design-blocking 
 edit, now in the draft — so the ADR is marked Accepted with the **adversarial multi-tenant authz matrix
 as the build-time acceptance gate** (its `REPLICA IDENTITY FULL` + parameter-authz + `systemId`-resume
 items are the must-pass cases).
+
+### 2026-07-02 — amendment: the old-image requirement covers the shape's KEY column, not just its filter columns (`L-5c46b49b`)
+
+The `REPLICA IDENTITY FULL` analysis above (the red-team finding, acceptance (b)) reasoned about a
+predicate over a **non-PK filter** column, but missed the symmetric case of the shape's **key** itself.
+The shape engine identifies rows by any key that is **primary-key *or* unique**, so a shape may key on a
+**UNIQUE non-PK** column (`slug`, `email`) — yet under `REPLICA IDENTITY DEFAULT` the replica-identity
+key is the **primary key**, so the old tuple never carries the shape's key. Two silent, durable leaks
+follow: (i) an update that changes the unique key but not the PK emits **no old key**, so the
+key-change guard cannot fire and the old row is **stranded** under its old key (a stale duplicate the
+client never removes); and (ii) an ordinary DELETE carries a `'K'` tuple = the PK only, **not** the
+unique key the client store is keyed by, so the delete targets a key the client never held and the real
+row **survives** — leaked into OPFS. The registration guard's old-image predicate was
+`some(filter.column !== key)`, which is false for a filterless or key-only unique-non-PK shape, so it
+was served and leaked. The fix threads the catalog fact `keyIsPrimaryKey`
+(`table.byKey[def.key].primaryKey`) into the guard: a shape whose key is not the table's primary key
+now needs the full old image just as a non-key filter does, and is **refused at registration** off a
+non-FULL table with the same `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` error (a second message arm).
+Under FULL the whole old row — including the unique key's old value — is emitted, so a key change is
+caught loudly (`LIVE_SERVER_PRIMARY_KEY_CHANGED`) and a delete keys by the unique key correctly, never
+stranded. Acceptance (b) is extended above. (A future `REPLICA IDENTITY USING INDEX` over the unique
+index could carry the unique key AS the identity and relax this to that column alone — deliberately not
+built; a follow-up.)

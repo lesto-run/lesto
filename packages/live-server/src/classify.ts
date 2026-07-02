@@ -24,9 +24,10 @@
  * client slice exactly the authorized set.
  *
  * **This depends on a full OLD image.** Evaluating `matchesShape(OLD)` over a predicate on a
- * **non-key** column needs that column's old value, which Postgres emits only under
- * `REPLICA IDENTITY FULL` (else the old image is the primary key only, or — for an unchanged-key
- * `DEFAULT` update — absent entirely). {@link predicateNeedsOldImage}
+ * **non-key** column — or recovering the old value of a shape **key that is a UNIQUE non-PK column**
+ * (so a key change / delete is keyed correctly rather than stranded) — needs that value in the old
+ * tuple, which Postgres emits only under `REPLICA IDENTITY FULL` (else the old image is the
+ * *primary key* only, or — for an unchanged-PK `DEFAULT` update — absent entirely). {@link predicateNeedsOldImage}
  * + {@link assertReplicaIdentity} are the registration-time guard that **refuses** such a shape
  * unless its table supplies the old image — never a silent leak (ADR 0042 *Consequences*). Whether
  * the table has `REPLICA IDENTITY FULL` is a catalog fact (`pg_class.relreplident = 'f'`) the engine
@@ -54,32 +55,62 @@ import type { OldImageKind, ReplicationChange, RowImage } from "./replication";
 export type ImageCoercer = (image: RowImage) => Row;
 
 /**
- * Whether a shape's predicate needs the row's **full** old image to classify a delete-from-shape.
- * True iff any filter is over a column other than the shape's key. A key-only (or filterless)
- * predicate needs *nothing* from the old image: the key is immutable, so an update cannot move such
- * a row across the shape boundary without changing the key (which the classifier refuses), and when
- * a key change *does* happen even a `DEFAULT` table emits the old key. A predicate on any non-key
- * column, by contrast, can only be evaluated on the old row under `REPLICA IDENTITY FULL`.
+ * Whether a shape's predicate needs the row's **full** old image to classify a delete-from-shape —
+ * or an identity change *within* the shape — soundly. True iff EITHER:
+ *
+ *   - **any filter is over a column other than the shape's key** — that column's old value is needed
+ *     to evaluate `matchesShape(OLD)`, and a `DEFAULT` table omits it (the old tuple is the key only); or
+ *   - **the shape's key is not the table's PRIMARY KEY** — a UNIQUE non-PK key (`slug`, `email`). Under
+ *     `REPLICA IDENTITY DEFAULT` the replica-identity key IS the primary key, so the old tuple never
+ *     carries the shape's key: (i) an update that changes the unique key but not the PK emits **no old
+ *     key** — the key-change guard can't fire, so the old row is stranded under its old key (a stale
+ *     duplicate); and (ii) an ordinary DELETE carries a `'K'` tuple = the PK only, NOT the unique key
+ *     the client store is keyed by, so the delete targets a key the client never held and the real row
+ *     survives. Both are silent, durable leaks. Only the full old image (`REPLICA IDENTITY FULL`, which
+ *     emits the whole old row) carries the unique key's old value. (A future `REPLICA IDENTITY USING
+ *     INDEX <unique-index>` could carry the unique key AS the identity and relax this to just that
+ *     column — deliberately NOT implemented here; a follow-up.)
+ *
+ * A **primary-key**-keyed, key-only (or filterless) predicate needs *nothing* from the old image: the
+ * primary key is immutable and IS the replica-identity key, so an update cannot move such a row across
+ * the shape boundary without changing the key (which the classifier refuses), and when a key change
+ * *does* happen even a `DEFAULT` table emits the old key.
+ *
+ * `keyIsPrimaryKey` is the catalog fact `table.byKey[def.key].primaryKey` — JS schema, not the
+ * live-DB replica-identity probe.
  */
-export function predicateNeedsOldImage(def: ShapeDefinition): boolean {
-  return def.where.some((filter) => filter.column !== def.key);
+export function predicateNeedsOldImage(def: ShapeDefinition, keyIsPrimaryKey: boolean): boolean {
+  return !keyIsPrimaryKey || def.where.some((filter) => filter.column !== def.key);
 }
 
 /**
  * The registration-time guard: **refuse** a shape whose predicate needs the old image
  * ({@link predicateNeedsOldImage}) when its table is not `REPLICA IDENTITY FULL`. Rather than serve
- * it and silently fail to emit delete-from-shape (a durable leak into the client's OPFS store), the
- * engine rejects it with a coded error so the operator fixes the table's replica identity. A
- * key-only predicate (or a table that already supplies the full old image) passes.
+ * it and silently fail to emit delete-from-shape — or strand a row whose UNIQUE non-PK key changed —
+ * (a durable leak into the client's OPFS store), the engine rejects it with a coded error so the
+ * operator fixes the table's replica identity. A primary-key-keyed, key-only predicate (or a table
+ * that already supplies the full old image) passes. `keyIsPrimaryKey` is the catalog fact
+ * `table.byKey[def.key].primaryKey`.
  */
-export function assertReplicaIdentity(def: ShapeDefinition, hasFullReplicaIdentity: boolean): void {
-  if (predicateNeedsOldImage(def) && !hasFullReplicaIdentity) {
-    throw new LiveServerError(
-      "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT",
-      `Shape on "${def.table}" filters a non-key column, so classifying a row that leaves the shape needs the full old row image — set REPLICA IDENTITY FULL on "${def.table}".`,
-      { table: def.table, key: def.key },
-    );
-  }
+export function assertReplicaIdentity(
+  def: ShapeDefinition,
+  keyIsPrimaryKey: boolean,
+  hasFullReplicaIdentity: boolean,
+): void {
+  if (!predicateNeedsOldImage(def, keyIsPrimaryKey) || hasFullReplicaIdentity) return;
+
+  // Name the arm that applies so the operator's fix is unambiguous. The non-PK-key arm is the more
+  // fundamental of the two (the key itself cannot be recovered from a DEFAULT old tuple), so it wins
+  // when both hold.
+  const reason = !keyIsPrimaryKey
+    ? `keys on "${def.key}", which is UNIQUE but not the table's primary key; REPLICA IDENTITY FULL is required so a key change can be seen and the old row is never stranded, and so a delete carries the unique key (not only the primary key)`
+    : `filters a non-key column`;
+
+  throw new LiveServerError(
+    "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT",
+    `Shape on "${def.table}" ${reason}, so classifying a row that leaves the shape — or changes its key within it — needs the full old row image; set REPLICA IDENTITY FULL on "${def.table}".`,
+    { table: def.table, key: def.key },
+  );
 }
 
 /**
@@ -234,9 +265,10 @@ export function classifyChange(
  * caller skips the guards, the classifier reads an incomplete old image and *silently* stops emitting
  * delete-from-shape — a durable authorization leak (the exact failure this module exists to prevent).
  * This factory folds **both** guards into the bound closure it returns:
- *   - {@link assertReplicaIdentity} once at registration — refuse a non-key-predicate shape whose
- *     table is not `REPLICA IDENTITY FULL` (`hasFullReplicaIdentity` is the catalog fact
- *     `pg_class.relreplident = 'f'`).
+ *   - {@link assertReplicaIdentity} once at registration — refuse a shape that needs the old image
+ *     (a non-key-predicate filter, OR a key that is not the table's primary key — `keyIsPrimaryKey`
+ *     is the catalog fact `table.byKey[def.key].primaryKey`) whose table is not `REPLICA IDENTITY
+ *     FULL` (`hasFullReplicaIdentity` is the catalog fact `pg_class.relreplident = 'f'`).
  *   - {@link assertOldImageComplete} per `update`/`delete` — the runtime re-check (marker + per-column
  *     presence) that a usable old image is *still* being delivered (a `FULL`→`DEFAULT` downgrade, or an
  *     unchanged external-TOAST predicate column, would otherwise leak), skipped for a shape whose
@@ -251,13 +283,14 @@ export function classifyChange(
  */
 export function prepareShapeClassifier(
   def: ShapeDefinition,
+  keyIsPrimaryKey: boolean,
   hasFullReplicaIdentity: boolean,
   coerce: ImageCoercer,
   requiredOldColumns: readonly string[],
 ): (change: ReplicationChange) => ShapeChange | undefined {
-  assertReplicaIdentity(def, hasFullReplicaIdentity);
+  assertReplicaIdentity(def, keyIsPrimaryKey, hasFullReplicaIdentity);
 
-  const needsOldImage = predicateNeedsOldImage(def);
+  const needsOldImage = predicateNeedsOldImage(def, keyIsPrimaryKey);
 
   return (change) => {
     // An insert carries no old image; an update/delete on a non-key-predicate shape must arrive with a

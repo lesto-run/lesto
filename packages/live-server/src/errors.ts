@@ -46,10 +46,15 @@ export type LiveServerErrorCode =
    */
   | "LIVE_SERVER_REPLICATION_SLOT_DROP_TIMEOUT"
   /**
-   * A shape filters a **non-key** column, but its table is not `REPLICA IDENTITY FULL`, so the
-   * replication stream cannot supply the old row image needed to classify a row that leaves the
-   * shape — serving it would silently fail to emit delete-from-shape and leak the row into the
-   * client's durable store. Refused at registration (fix: `ALTER TABLE … REPLICA IDENTITY FULL`).
+   * A shape needs the row's full old image, but its table is not `REPLICA IDENTITY FULL`, so the
+   * replication stream cannot supply it — serving the shape would silently corrupt the client's
+   * durable store. Two arms trigger this: (1) the shape **filters a non-key column** (the old value
+   * is needed to tell a row left the shape → a dropped delete-from-shape leaks the row); or (2) the
+   * shape's **key is a UNIQUE non-primary-key column** (`slug`, `email`) — under `REPLICA IDENTITY
+   * DEFAULT` the old tuple is the *primary key* only, never the shape's key, so an update changing
+   * that key strands the old row under its old key AND a delete carries a key the client store never
+   * held (missing the row → it survives). Refused at registration (fix: `ALTER TABLE … REPLICA
+   * IDENTITY FULL`; a future `REPLICA IDENTITY USING INDEX` over the unique index could relax arm 2).
    */
   | "LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT"
   /**

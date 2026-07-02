@@ -101,9 +101,11 @@ export function createImageCoercer(def: ShapeDefinition, table: Table): ImageCoe
 /**
  * The SQL column names the **old image must carry as transmitted values** for a shape's
  * delete-from-shape classification to be sound — the shape's key plus every filter column, but **only**
- * when the predicate actually needs the old image ({@link predicateNeedsOldImage}). A key-only/filterless
- * shape decides membership from the new image (or is always-in), so it requires nothing of the old image
- * and this returns `[]`.
+ * when the predicate actually needs the old image ({@link predicateNeedsOldImage}). A primary-key-keyed,
+ * key-only/filterless shape decides membership from the new image (or is always-in), so it requires
+ * nothing of the old image and this returns `[]`. A UNIQUE **non-PK**-keyed shape always needs the old
+ * image (to recover its key's old value), so its key column is required here — `keyIsPrimaryKey` is read
+ * from the table (`byKey[def.key].primaryKey`).
  *
  * The engine feeds this to {@link assertOldImageComplete} per change as the value-presence check that
  * complements the old-tuple marker: the marker catches a `FULL`→`DEFAULT` downgrade (a null-filled key
@@ -111,7 +113,10 @@ export function createImageCoercer(def: ShapeDefinition, table: Table): ImageCoe
  * externally-TOASTed value pgoutput emits as `'u'` (→ `undefined`) even under `REPLICA IDENTITY FULL`.
  */
 export function requiredOldImageColumns(def: ShapeDefinition, table: Table): readonly string[] {
-  if (!predicateNeedsOldImage(def)) return [];
+  // `resolveTable` has already validated `def.key ∈ table`, so `byKey[def.key]` is present here.
+  const keyIsPrimaryKey = table.byKey[def.key]!.primaryKey;
+
+  if (!predicateNeedsOldImage(def, keyIsPrimaryKey)) return [];
 
   const keys = new Set<string>([def.key, ...def.where.map((filter) => filter.column)]);
 

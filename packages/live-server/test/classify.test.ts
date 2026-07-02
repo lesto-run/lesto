@@ -25,6 +25,19 @@ const shape = (where: ShapeDefinition["where"] = [{ column: "room_id", op: "eq",
     orderBy: undefined,
   });
 
+// A shape keyed on `room_id`, standing in for a UNIQUE **non-primary-key** shape key (`slug`/`email`)
+// — the L-5c46b49b fail-closed case. `keyIsPrimaryKey` is passed `false` to the guards for this shape;
+// under REPLICA IDENTITY DEFAULT the old tuple would be the PK (`id`) only, never `room_id`, so a key
+// change strands the old row and a delete misses it — the guard must refuse it off a non-FULL table.
+const uniqueKeyShape = (where: ShapeDefinition["where"] = []) =>
+  validateShapeDefinition({
+    table: "messages",
+    key: "room_id",
+    columns: ["id", "room_id", "body"],
+    where,
+    orderBy: undefined,
+  });
+
 // A coercer standing in for the engine's `@lesto/db`-backed one: project the shape's columns and
 // coerce pgoutput's text integers to numbers (the real coercer keys off the column kind).
 const coercer =
@@ -46,16 +59,22 @@ const coercer =
 const stamp = { commitLSN: "0/1", systemId: "sys", timelineId: 1 } as const;
 
 describe("predicateNeedsOldImage", () => {
-  it("is true when a filter references a non-key column", () => {
-    expect(predicateNeedsOldImage(shape())).toBe(true);
+  it("is true when a filter references a non-key column (PK key)", () => {
+    expect(predicateNeedsOldImage(shape(), true)).toBe(true);
   });
 
-  it("is false when every filter is over the key column (a key-only old image suffices)", () => {
-    expect(predicateNeedsOldImage(shape([{ column: "id", op: "eq", value: 7 }]))).toBe(false);
+  it("is false when every filter is over the PK key column (a key-only old image suffices)", () => {
+    expect(predicateNeedsOldImage(shape([{ column: "id", op: "eq", value: 7 }]), true)).toBe(false);
   });
 
-  it("is false for a filterless shape", () => {
-    expect(predicateNeedsOldImage(shape([]))).toBe(false);
+  it("is false for a filterless PK-keyed shape", () => {
+    expect(predicateNeedsOldImage(shape([]), true)).toBe(false);
+  });
+
+  it("is true when the key is a UNIQUE non-PK column, even filterless (the missing arm — L-5c46b49b)", () => {
+    // keyIsPrimaryKey=false: the old value of a non-PK key cannot be recovered from a DEFAULT old
+    // tuple, so the shape needs the FULL old image regardless of its filters (here, none).
+    expect(predicateNeedsOldImage(uniqueKeyShape([]), false)).toBe(true);
   });
 });
 
@@ -65,21 +84,41 @@ describe("predicateNeedsOldImage", () => {
 // matrix" for the full letter-by-letter gate.
 describe("assertReplicaIdentity", () => {
   it("refuses a non-key-predicate shape when the table is not REPLICA IDENTITY FULL", () => {
-    expect(() => assertReplicaIdentity(shape(), false)).toThrow(LiveServerError);
+    expect(() => assertReplicaIdentity(shape(), true, false)).toThrow(LiveServerError);
     try {
-      assertReplicaIdentity(shape(), false);
+      assertReplicaIdentity(shape(), true, false);
     } catch (error) {
       expect((error as LiveServerError).code).toBe("LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT");
     }
   });
 
   it("allows a non-key-predicate shape when the table IS REPLICA IDENTITY FULL", () => {
-    expect(() => assertReplicaIdentity(shape(), true)).not.toThrow();
+    expect(() => assertReplicaIdentity(shape(), true, true)).not.toThrow();
   });
 
-  it("allows a key-only-predicate shape regardless of replica identity", () => {
+  it("allows a PK-keyed key-only-predicate shape regardless of replica identity", () => {
     const keyOnly = shape([{ column: "id", op: "eq", value: 7 }]);
-    expect(() => assertReplicaIdentity(keyOnly, false)).not.toThrow();
+    expect(() => assertReplicaIdentity(keyOnly, true, false)).not.toThrow();
+  });
+
+  // L-5c46b49b: the missing arm. A shape keyed on a UNIQUE non-PK column (here room_id), even
+  // filterless, MUST be refused off a non-FULL table — else an update changing the unique key strands
+  // the old row (no old key emitted under DEFAULT) and a delete carries only the PK (missing the
+  // client's key → the row survives). Both are silent, durable OPFS leaks; fail closed.
+  it("refuses a UNIQUE non-PK-keyed shape when the table is not FULL (the update-strand / DELETE-leak fix)", () => {
+    const def = uniqueKeyShape([]);
+    expect(() => assertReplicaIdentity(def, false, false)).toThrow(LiveServerError);
+    try {
+      assertReplicaIdentity(def, false, false);
+    } catch (error) {
+      expect((error as LiveServerError).code).toBe("LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT");
+      // The message names the non-PK-key arm so the operator's fix is unambiguous.
+      expect((error as LiveServerError).message).toContain("not the table's primary key");
+    }
+  });
+
+  it("allows a UNIQUE non-PK-keyed shape when the table IS REPLICA IDENTITY FULL", () => {
+    expect(() => assertReplicaIdentity(uniqueKeyShape([]), false, true)).not.toThrow();
   });
 });
 
@@ -357,19 +396,75 @@ describe("prepareShapeClassifier — the guarded entry point", () => {
   const REQ = ["id", "room_id"] as const;
 
   it("refuses to bind a non-key-predicate shape without REPLICA IDENTITY FULL (the guard cannot be skipped)", () => {
-    expect(() => prepareShapeClassifier(shape(), false, coercer(shape()), REQ)).toThrow(
+    expect(() => prepareShapeClassifier(shape(), true, false, coercer(shape()), REQ)).toThrow(
       LiveServerError,
     );
     try {
-      prepareShapeClassifier(shape(), false, coercer(shape()), REQ);
+      prepareShapeClassifier(shape(), true, false, coercer(shape()), REQ);
     } catch (error) {
       expect((error as LiveServerError).code).toBe("LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT");
     }
   });
 
+  // L-5c46b49b (c) — the DELETE-leak variant is prevented by REFUSING the unsafe config at
+  // registration: a shape keyed on a UNIQUE non-PK column (room_id) off a non-FULL table cannot bind,
+  // so the classifier that would emit a PK-keyed delete the client store never held is never created.
+  // (Under FULL, the delete IS bound and keys by the unique key — see the delete test below.)
+  it("refuses to bind a UNIQUE non-PK-keyed shape without REPLICA IDENTITY FULL (fail-closed — no DELETE leak / update strand)", () => {
+    const def = uniqueKeyShape([]);
+    expect(() => prepareShapeClassifier(def, false, false, coercer(def), ["room_id"])).toThrow(
+      LiveServerError,
+    );
+    try {
+      prepareShapeClassifier(def, false, false, coercer(def), ["room_id"]);
+    } catch (error) {
+      expect((error as LiveServerError).code).toBe("LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT");
+    }
+  });
+
+  // L-5c46b49b (b) — the update-key-change strand. Before the fix this shape registered without FULL
+  // and an update changing the unique key emitted a plain `update` under the NEW key, leaving the OLD
+  // row stranded. With the fix it is only servable under FULL, where the real old image lets the
+  // existing key-change guard fire (loud, never stranded).
+  it("under FULL, a UNIQUE non-PK key that changes value fires PRIMARY_KEY_CHANGED (was: silently stranded)", () => {
+    const def = uniqueKeyShape([]);
+    const classify = prepareShapeClassifier(def, false, true, coercer(def), ["room_id"]);
+    const change: ReplicationChange = {
+      op: "update",
+      table: "messages",
+      oldImage: { id: "5", room_id: "1", body: "a" },
+      newImage: { id: "5", room_id: "2", body: "a" }, // the unique key changed 1 → 2
+      oldImageKind: "full",
+      ...stamp,
+    };
+    expect(() => classify(change)).toThrow(LiveServerError);
+    try {
+      classify(change);
+    } catch (error) {
+      expect((error as LiveServerError).code).toBe("LIVE_SERVER_PRIMARY_KEY_CHANGED");
+    }
+  });
+
+  // The sound delete path a non-FULL DEFAULT table could NOT provide: under FULL the old image carries
+  // the unique key, so the delete-from-shape is keyed by it (room_id=7) — exactly what the client store
+  // holds. (Under DEFAULT the old tuple is the PK only, so the delete would miss → the guard above
+  // refuses that config so this can never happen unsafely.)
+  it("under FULL, a DELETE of a UNIQUE non-PK-keyed row keys by the unique key (no leak)", () => {
+    const def = uniqueKeyShape([]);
+    const classify = prepareShapeClassifier(def, false, true, coercer(def), ["room_id"]);
+    const change: ReplicationChange = {
+      op: "delete",
+      table: "messages",
+      oldImage: { id: "5", room_id: "7", body: "a" },
+      oldImageKind: "full",
+      ...stamp,
+    };
+    expect(classify(change)).toEqual({ op: "delete", key: "7" });
+  });
+
   it("binds a guarded classifier that delegates to classifyChange when the guard passes", () => {
     const def = shape();
-    const classify = prepareShapeClassifier(def, true, coercer(def), REQ);
+    const classify = prepareShapeClassifier(def, true, true, coercer(def), REQ);
     const change: ReplicationChange = {
       op: "insert",
       table: "messages",
@@ -383,9 +478,9 @@ describe("prepareShapeClassifier — the guarded entry point", () => {
     });
   });
 
-  it("binds a key-only-predicate shape regardless of replica identity", () => {
+  it("binds a PK-keyed key-only-predicate shape regardless of replica identity", () => {
     const def = shape([{ column: "id", op: "eq", value: 5 }]);
-    const classify = prepareShapeClassifier(def, false, coercer(def), []);
+    const classify = prepareShapeClassifier(def, true, false, coercer(def), []);
     const change: ReplicationChange = {
       op: "insert",
       table: "messages",
@@ -403,7 +498,7 @@ describe("prepareShapeClassifier — the guarded entry point", () => {
   // presence) per change, so the guard is no longer forgettable engine glue — a direct caller gets it.
   describe("folds the per-change old-image guard (chief-arch convergence)", () => {
     const def = shape(); // non-key predicate on room_id → needs the FULL old image
-    const classify = prepareShapeClassifier(def, true, coercer(def), REQ);
+    const classify = prepareShapeClassifier(def, true, true, coercer(def), REQ);
 
     it("throws OLD_IMAGE_INCOMPLETE on an update whose old tuple went key-only (FULL→DEFAULT downgrade)", () => {
       const change: ReplicationChange = {
@@ -469,7 +564,7 @@ describe("prepareShapeClassifier — the guarded entry point", () => {
 
     it("does NOT apply the old-image guard to a key-only-predicate shape (it needs no old image)", () => {
       const keyOnly = shape([{ column: "id", op: "eq", value: 5 }]);
-      const classifyKeyOnly = prepareShapeClassifier(keyOnly, false, coercer(keyOnly), []);
+      const classifyKeyOnly = prepareShapeClassifier(keyOnly, true, false, coercer(keyOnly), []);
       // A key-only 'K' update: the guard is skipped, and classifyChange decides from the new row.
       const change: ReplicationChange = {
         op: "update",

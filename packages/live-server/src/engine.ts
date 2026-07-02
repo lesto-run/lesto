@@ -432,8 +432,9 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
    * Build a shape's bound replication classifier: the `@lesto/db`-backed coercer + the shape's
    * required old-image SQL columns, handed to the guarded `prepareShapeClassifier`, which folds in
    * BOTH guards — the registration-time replica identity check (throws
-   * `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` here if the shape needs the old image but the table is
-   * not `FULL`) and, in the closure it returns, the per-change old-image completeness re-check
+   * `LIVE_SERVER_REPLICA_IDENTITY_INSUFFICIENT` here if the shape needs the old image — a non-key
+   * filter, OR a key that is a UNIQUE non-primary-key column, `keyIsPrimaryKey` below — but the table
+   * is not `FULL`) and, in the closure it returns, the per-change old-image completeness re-check
    * (`LIVE_SERVER_OLD_IMAGE_INCOMPLETE` on a post-registration `FULL`→`DEFAULT` downgrade, or on an
    * unchanged external-TOAST predicate column absent from an otherwise-`FULL` old image). Awaits the
    * catalog probe, so it runs at subscribe, off the change path.
@@ -443,9 +444,14 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
     table: Table,
   ): Promise<(change: ReplicationChange) => ShapeChange | undefined> {
     const hasFullReplicaIdentity = await replication!.replicaIdentity(def.table);
+    // `resolveTable` proved `def.key ∈ table` before this runs, so `byKey[def.key]` is present. A key
+    // that is UNIQUE but not the primary key needs the FULL old image just as a non-key filter does
+    // (see predicateNeedsOldImage) — thread the catalog fact so the registration guard sees it.
+    const keyIsPrimaryKey = table.byKey[def.key]!.primaryKey;
 
     return prepareShapeClassifier(
       def,
+      keyIsPrimaryKey,
       hasFullReplicaIdentity,
       createImageCoercer(def, table),
       requiredOldImageColumns(def, table),
