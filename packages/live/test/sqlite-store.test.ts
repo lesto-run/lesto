@@ -435,8 +435,14 @@ describe("createSqliteLiveStore — durable offline-write outbox (Inc6)", () => 
     const reloaded = await createSqliteLiveStore({ def, db });
 
     expect(reloaded.outbox?.load()).toEqual([
-      { id: "m1", name: "addPost", input: { rank: 1 }, optimistic: insert("x", 1) },
-      { id: "m2", name: "delPost", input: null, optimistic: { op: "delete", key: "y" } },
+      { id: "m1", name: "addPost", input: { rank: 1 }, optimistic: insert("x", 1), held: false },
+      {
+        id: "m2",
+        name: "delPost",
+        input: null,
+        optimistic: { op: "delete", key: "y" },
+        held: false,
+      },
     ]);
   });
 
@@ -475,6 +481,7 @@ describe("createSqliteLiveStore — durable offline-write outbox (Inc6)", () => 
         name: "n2",
         input: 2,
         optimistic: { op: "update", key: "x", row: { id: "x", rank: 9 } },
+        held: false,
       },
     ]);
   });
@@ -504,7 +511,7 @@ describe("createSqliteLiveStore — durable offline-write outbox (Inc6)", () => 
     store.applySnapshot([{ id: "a", rank: 1 }], "v1:s:1:1");
     await store.whenIdle();
 
-    store.applyOptimistic(insert("b", 2));
+    store.applyOptimistic("m1", insert("b", 2));
     expect(store.getRows()).toEqual([
       { id: "a", rank: 1 },
       { id: "b", rank: 2 },
@@ -517,7 +524,7 @@ describe("createSqliteLiveStore — durable offline-write outbox (Inc6)", () => 
     const reloaded = await createSqliteLiveStore({ def, db });
     expect(reloaded.getRows()).toEqual([{ id: "a", rank: 1 }]);
 
-    store.clearOptimistic("b");
+    store.clearOptimistic("m1");
     expect(store.getRows()).toEqual([{ id: "a", rank: 1 }]);
   });
 
@@ -570,6 +577,45 @@ describe("createSqliteLiveStore — durable offline-write outbox (Inc6)", () => 
     store.outbox?.append({ id: "m1", name: "n", input: 1, optimistic: insert("x", 1) });
 
     await expect(store.whenIdle()).resolves.toBeUndefined();
+  });
+
+  it("markHeld flips an entry to held; a reload rebuilds only that one as held (L-436724ba)", async () => {
+    const db = freshDb();
+    const store = await createSqliteLiveStore({ def, db });
+
+    store.outbox?.append({ id: "m1", name: "n", input: 1, optimistic: insert("x", 1) });
+    store.outbox?.append({ id: "m2", name: "n", input: 2, optimistic: insert("z", 2) });
+    store.outbox?.markHeld("m1"); // m1 acked → held; m2 still pending
+    await store.whenIdle();
+
+    const reloaded = await createSqliteLiveStore({ def, db });
+    expect(reloaded.outbox?.load()).toEqual([
+      { id: "m1", name: "n", input: 1, optimistic: insert("x", 1), held: true },
+      { id: "m2", name: "n", input: 2, optimistic: insert("z", 2), held: false },
+    ]);
+  });
+
+  it("adds the `held` column to a pre-L-436724ba outbox table (idempotent migration)", async () => {
+    const db = freshDb();
+
+    // A database created before `held` existed: the original Inc6 outbox schema, no `held` column.
+    await db.exec(
+      "CREATE TABLE lesto_live_outbox (shape TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, " +
+        "input TEXT NOT NULL, optimistic TEXT NOT NULL, PRIMARY KEY (shape, id));",
+    );
+
+    // Opening the store migrates the table (adds `held`), so the outbox works end to end — an append
+    // + markHeld + reload round-trips the new column that the old schema lacked.
+    const store = await createSqliteLiveStore({ def, db });
+    store.outbox?.append({ id: "m1", name: "n", input: 1, optimistic: insert("x", 1) });
+    store.outbox?.markHeld("m1");
+    await store.whenIdle();
+
+    // Re-opening finds the column already present — the migration is a no-op the second time.
+    const reloaded = await createSqliteLiveStore({ def, db });
+    expect(reloaded.outbox?.load()).toEqual([
+      { id: "m1", name: "n", input: 1, optimistic: insert("x", 1), held: true },
+    ]);
   });
 });
 

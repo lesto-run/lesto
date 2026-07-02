@@ -124,7 +124,7 @@ describe("createReadModel", () => {
       const model = createReadModel(def, () => map.values());
 
       // A new row not in the authorized set — shown immediately, sorted into place by `rank`.
-      model.setOptimistic({ op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      model.setOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } });
       model.mutated();
 
       expect(model.getRows()).toEqual([
@@ -138,7 +138,7 @@ describe("createReadModel", () => {
       const map = rowsMap([{ id: "a", rank: 5 }]);
       const model = createReadModel(def, () => map.values());
 
-      model.setOptimistic({ op: "update", key: "a", row: { id: "a", rank: 9 } });
+      model.setOptimistic("m1", { op: "update", key: "a", row: { id: "a", rank: 9 } });
       model.mutated();
 
       expect(model.getRows()).toEqual([{ id: "a", rank: 9 }]);
@@ -151,7 +151,7 @@ describe("createReadModel", () => {
       ]);
       const model = createReadModel(def, () => map.values());
 
-      model.setOptimistic({ op: "delete", key: "a" });
+      model.setOptimistic("m1", { op: "delete", key: "a" });
       model.mutated();
 
       expect(model.getRows()).toEqual([{ id: "b", rank: 2 }]);
@@ -161,22 +161,24 @@ describe("createReadModel", () => {
       const map = rowsMap([{ id: "a", rank: 5 }]);
       const model = createReadModel(def, () => map.values());
 
-      model.setOptimistic({ op: "update", key: "a", row: { id: "a", rank: 9 } });
+      model.setOptimistic("m1", { op: "update", key: "a", row: { id: "a", rank: 9 } });
       model.mutated();
       expect(model.getRows()).toEqual([{ id: "a", rank: 9 }]);
 
       // Clearing the overlay reveals the untouched authorized row again — the rollback.
-      model.clearOptimistic("a");
+      model.clearOptimistic("m1");
       model.mutated();
       expect(model.getRows()).toEqual([{ id: "a", rank: 5 }]);
     });
 
-    it("re-setting the same key replaces the pending overlay entry", () => {
+    it("a newer write to the same key wins the merged view (both entries coexist by id)", () => {
       const map = rowsMap([{ id: "a", rank: 1 }]);
       const model = createReadModel(def, () => map.values());
 
-      model.setOptimistic({ op: "update", key: "a", row: { id: "a", rank: 2 } });
-      model.setOptimistic({ op: "update", key: "a", row: { id: "a", rank: 3 } });
+      // Two independent in-flight writes to the SAME row key — kept as separate entries (keyed by
+      // mutation id, not row key). Insertion order is submission order, so the newer one wins.
+      model.setOptimistic("m1", { op: "update", key: "a", row: { id: "a", rank: 2 } });
+      model.setOptimistic("m2", { op: "update", key: "a", row: { id: "a", rank: 3 } });
       model.mutated();
 
       expect(model.getRows()).toEqual([{ id: "a", rank: 3 }]);
@@ -192,13 +194,111 @@ describe("createReadModel", () => {
       const first = model.getRows();
       expect(model.getRows()).toBe(first);
 
-      model.setOptimistic({ op: "insert", key: "b", row: { id: "b", rank: 2 } });
-      model.clearOptimistic("b");
+      model.setOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      model.clearOptimistic("m1");
       model.mutated();
 
       const afterEmptyAgain = model.getRows();
       expect(afterEmptyAgain).toEqual([{ id: "a", rank: 1 }]);
       expect(model.getRows()).toBe(afterEmptyAgain);
+    });
+  });
+
+  describe("held overlay + echo settlement (L-436724ba)", () => {
+    it("holdOptimistic is invisible to getRows and a no-op on an unknown id", () => {
+      const map = rowsMap([{ id: "a", rank: 1 }]);
+      const model = createReadModel(def, () => map.values());
+
+      model.setOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      model.mutated();
+      const shown = model.getRows();
+
+      // Marking held renders identically to a pending entry, so it dirties nothing — the same array
+      // reference comes back (no needless re-render), and the row is still shown.
+      model.holdOptimistic("m1");
+      expect(model.getRows()).toBe(shown);
+      expect(shown).toEqual([
+        { id: "a", rank: 1 },
+        { id: "b", rank: 2 },
+      ]);
+
+      // Holding an id with no pending entry (already echo-cleared) is a tolerated no-op.
+      model.holdOptimistic("ghost");
+      expect(model.getRows()).toBe(shown);
+    });
+
+    it("settleEcho drops the oldest held entry for a key, notifies, and leaves a newer pending write", () => {
+      const map = rowsMap([{ id: "a", rank: 1 }]);
+      const model = createReadModel(def, () => map.values());
+      const settled: string[] = [];
+      model.onEchoSettled((id) => settled.push(id));
+
+      model.setOptimistic("m1", { op: "update", key: "a", row: { id: "a", rank: 2 } });
+      model.holdOptimistic("m1"); // acked, awaiting echo
+      model.setOptimistic("m2", { op: "update", key: "a", row: { id: "a", rank: 3 } }); // newer, pending
+      model.mutated();
+      expect(model.getRows()).toEqual([{ id: "a", rank: 3 }]); // newest wins
+
+      // The echo for `a` settles the OLDEST held entry (m1), reports it, and leaves m2 showing.
+      model.settleEcho("a");
+      model.mutated();
+      expect(settled).toEqual(["m1"]);
+      expect(model.getRows()).toEqual([{ id: "a", rank: 3 }]);
+    });
+
+    it("settleEcho is a no-op when only a pending (unheld) entry targets the key", () => {
+      const map = rowsMap([{ id: "a", rank: 1 }]);
+      const model = createReadModel(def, () => map.values());
+      const settled: string[] = [];
+      model.onEchoSettled((id) => settled.push(id));
+
+      model.setOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } }); // pending, not held
+      model.mutated();
+
+      model.settleEcho("b"); // no held entry for `b` → nothing settled
+      model.mutated();
+      expect(settled).toEqual([]);
+      expect(model.getRows()).toEqual([
+        { id: "a", rank: 1 },
+        { id: "b", rank: 2 },
+      ]);
+    });
+
+    it("settleEcho ignores a held entry for a different key", () => {
+      const map = rowsMap([{ id: "a", rank: 1 }]);
+      const model = createReadModel(def, () => map.values());
+      const settled: string[] = [];
+      model.onEchoSettled((id) => settled.push(id));
+
+      model.setOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      model.holdOptimistic("m1");
+      model.mutated();
+
+      model.settleEcho("zzz"); // no entry targets `zzz`
+      model.mutated();
+      expect(settled).toEqual([]);
+      expect(model.getRows()).toEqual([
+        { id: "a", rank: 1 },
+        { id: "b", rank: 2 },
+      ]);
+    });
+
+    it("onEchoSettled stops notifying after unsubscribe", () => {
+      const map = rowsMap([{ id: "a", rank: 1 }]);
+      const model = createReadModel(def, () => map.values());
+      const listener = vi.fn();
+      const off = model.onEchoSettled(listener);
+
+      model.setOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      model.holdOptimistic("m1");
+      model.settleEcho("b");
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      off();
+      model.setOptimistic("m2", { op: "insert", key: "c", row: { id: "c", rank: 3 } });
+      model.holdOptimistic("m2");
+      model.settleEcho("c");
+      expect(listener).toHaveBeenCalledTimes(1);
     });
   });
 });

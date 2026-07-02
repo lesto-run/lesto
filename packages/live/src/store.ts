@@ -40,26 +40,45 @@ export interface OutboxEntry {
 }
 
 /**
+ * A persisted outbox entry as {@link OutboxPersistence.load} reads it back — an {@link OutboxEntry}
+ * plus its durable `held` state (`L-436724ba`). A `held` entry is one the server already accepted
+ * (acked); on reload the outbox rebuilds its overlay WITHOUT re-queuing it for replay, so a
+ * server-accepted write is never re-submitted. A pending entry (`held: false`) is re-queued to drain.
+ */
+export interface LoadedOutboxEntry extends OutboxEntry {
+  readonly held: boolean;
+}
+
+/**
  * A durable home for the outbox — the OPFS half of "an offline write survives reload" (ADR 0042
  * Inc6). {@link createSqliteLiveStore} implements it over its SQLite FIFO chain; the in-memory
  * store has none (its outbox is session-only). The outbox module (`./outbox`) drives it: it
  * {@link load}s the persisted log once at open (rebuilding the overlay), {@link append}s on submit,
- * and {@link remove}s on ack/reject. Writes are enqueued (fire-and-forget); await the store's
- * `whenIdle` for durability in a test or before teardown.
+ * flips an acked entry to held with {@link markHeld}, and {@link remove}s it once its echo lands (or
+ * it is rejected). Writes are enqueued (fire-and-forget); await the store's `whenIdle` for
+ * durability in a test or before teardown.
  */
 export interface OutboxPersistence {
-  /** The persisted entries in submission order — read once at store open, before any write. */
-  load(): readonly OutboxEntry[];
+  /** The persisted entries in submission order, each with its `held` state — read once at store open. */
+  load(): readonly LoadedOutboxEntry[];
 
   /**
-   * Durably append one entry (enqueued on the store's write chain). The returned promise is a
-   * **per-write durability signal**: it resolves once THIS entry has settled on the chain (committed,
-   * or — on the rare durable-write failure — reported to the store's `onError`), so a caller can await
-   * one write reaching disk without awaiting the whole store's `whenIdle`. Like `whenIdle`, it never
-   * rejects; a failure surfaces through `onError` (the in-memory queue stays authoritative for the
-   * session). See {@link SubmitHandle.durable} (`./outbox`), which surfaces it per submit.
+   * Durably append one entry, `held: false` (enqueued on the store's write chain). The returned
+   * promise is a **per-write durability signal**: it resolves once THIS entry has settled on the
+   * chain (committed, or — on the rare durable-write failure — reported to the store's `onError`), so
+   * a caller can await one write reaching disk without awaiting the whole store's `whenIdle`. Like
+   * `whenIdle`, it never rejects; a failure surfaces through `onError` (the in-memory queue stays
+   * authoritative for the session). See {@link SubmitHandle.durable} (`./outbox`), which surfaces it
+   * per submit.
    */
   append(entry: OutboxEntry): Promise<void>;
+
+  /**
+   * Durably flip the entry `id` to `held` — the server acked it, so it must survive reload as
+   * accepted (rebuilt into the overlay, not re-queued for replay) until its echo lands. Enqueued on
+   * the store's write chain.
+   */
+  markHeld(id: string): void;
 
   /** Durably remove the entry with `id` (enqueued on the store's write chain). */
   remove(id: string): void;
@@ -86,7 +105,9 @@ export interface LiveStore {
 
   /**
    * Apply one change: `insert`/`update` set the row, `delete` (from-shape) removes it, and
-   * either way advances the local cursor to the change's commit `cursor`.
+   * either way advances the local cursor to the change's commit `cursor`. This is also a write's
+   * **authoritative echo** — so applying it atomically settles a held optimistic entry for the same
+   * key (`L-436724ba`), swapping the held row for its now-authoritative twin with no visible flash.
    */
   applyChange(change: ShapeChange, cursor?: Cursor): void;
 
@@ -103,19 +124,35 @@ export interface LiveStore {
 
   /**
    * Overlay an optimistic (not-yet-confirmed) write on top of the authorized set — shown locally
-   * the instant it is made, even offline (ADR 0042 Inc6). An `insert`/`update` sets the row, a
-   * `delete` removes it; keyed by the change's `key`. Does NOT touch the authorized set or the
-   * cursor (both are wire-only) — the overlay is purely additive, so {@link clearOptimistic} is a
-   * complete rollback. The outbox (`./outbox`) is the sole caller and the overlay's source of truth.
+   * the instant it is made, even offline (ADR 0042 Inc6). Keyed by client mutation `id` (so two
+   * in-flight writes to one row coexist); an `insert`/`update` sets the row, a `delete` removes it.
+   * Does NOT touch the authorized set or the cursor (both are wire-only) — the overlay is purely
+   * additive, so dropping the entry is a complete rollback. The outbox (`./outbox`) is the sole
+   * caller and the overlay's source of truth.
    */
-  applyOptimistic(change: ShapeChange): void;
+  applyOptimistic(id: string, change: ShapeChange): void;
 
   /**
-   * Drop the optimistic overlay entry for `key` — the write was confirmed (its authorized echo now
-   * carries the truth, correlated by the shared client-generated primary key) or rejected (roll
-   * back to the authorized row, which never carried the edit). A no-op when none is pending.
+   * Mark the optimistic entry `id` **held** — the server acked the write, but its authoritative echo
+   * lands over the wire ≤ poll/replication-interval later. Holding keeps it shown across that gap so
+   * there is no read-your-writes flash (`L-436724ba`); {@link applyChange}/{@link applySnapshot}
+   * clear it when the echo arrives. Invisible to {@link getRows}, so no re-render fires. A no-op when
+   * none is pending.
    */
-  clearOptimistic(key: RowKey): void;
+  holdOptimistic(id: string): void;
+
+  /**
+   * Drop the optimistic overlay entry `id` outright — the outbox's rollback path (a server reject, or
+   * the never-echoed grace-timer backstop). A no-op when none is pending.
+   */
+  clearOptimistic(id: string): void;
+
+  /**
+   * Register a listener fired with a mutation id when a HELD optimistic entry is cleared by its
+   * authorized echo (see {@link applyChange}). The outbox (`./outbox`) uses it to drop the reconciled
+   * durable log row. Returns its unsubscribe.
+   */
+  onEchoSettled(listener: (mutationId: string) => void): () => void;
 
   /** The rows in the shape's total order — a stable reference until the next mutation. */
   getRows(): readonly Row[];
@@ -177,6 +214,9 @@ export function createLiveStore(def: ShapeDefinition): LiveStore {
 
       rowsByKey = next;
       readModel.setCursor(nextCursor);
+      // Each snapshotted row is a potential echo — settle a held optimistic write for its key in
+      // this same mutation, so the swap to the authoritative row is atomic (no flash).
+      for (const row of rows) readModel.settleEcho(rowKey(row, def.key));
       readModel.mutated();
     },
 
@@ -187,6 +227,10 @@ export function createLiveStore(def: ShapeDefinition): LiveStore {
       else rowsByKey.set(change.key, change.row);
 
       readModel.setCursor(nextCursor);
+      // The change IS this key's authoritative echo — settle a held optimistic write for it here,
+      // in the same mutation, so its held row is replaced by the identical authoritative one with
+      // no intervening frame where the row is sourced from neither tier.
+      readModel.settleEcho(change.key);
       readModel.mutated();
     },
 
@@ -196,15 +240,22 @@ export function createLiveStore(def: ShapeDefinition): LiveStore {
       readModel.mutated();
     },
 
-    applyOptimistic(change) {
-      readModel.setOptimistic(change);
+    applyOptimistic(id, change) {
+      readModel.setOptimistic(id, change);
       readModel.mutated();
     },
 
-    clearOptimistic(key) {
-      readModel.clearOptimistic(key);
+    holdOptimistic(id) {
+      // Held is invisible to `getRows` (a held entry renders like a pending one), so no `mutated`.
+      readModel.holdOptimistic(id);
+    },
+
+    clearOptimistic(id) {
+      readModel.clearOptimistic(id);
       readModel.mutated();
     },
+
+    onEchoSettled: readModel.onEchoSettled,
 
     getRows: readModel.getRows,
     getCursor: readModel.getCursor,

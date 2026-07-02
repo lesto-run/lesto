@@ -59,6 +59,11 @@
  * independent table, and a frozen tier must never silently drop a durable offline write. The
  * optimistic *view* of those writes is not persisted separately — it is rebuilt into the read
  * model's overlay from this log on reload, so the log is the single source of truth.
+ *
+ * Each outbox row carries a `held` flag (`L-436724ba`): an acked-but-not-yet-echoed write is flipped
+ * to `held` (it must not replay again, but must still survive reload as an accepted write) and is
+ * removed only once its authoritative echo lands (or it is rejected / grace-expires). The column is
+ * added to a pre-`L-436724ba` table by an idempotent `ALTER TABLE` at hydration — see {@link hydrate}.
  */
 
 import { rowKey, shapeId } from "@lesto/live-protocol";
@@ -66,7 +71,7 @@ import type { Cursor, Row, RowKey, ShapeChange, ShapeDefinition } from "@lesto/l
 import type { SqlDatabase } from "@lesto/db";
 
 import { createReadModel } from "./read-model";
-import type { LiveStore, OutboxEntry } from "./store";
+import type { LiveStore, LoadedOutboxEntry, OutboxEntry } from "./store";
 
 /** A durable {@link LiveStore} plus a hook to await its outstanding durable writes. */
 export interface SqliteLiveStore extends LiveStore {
@@ -113,13 +118,29 @@ const SCHEMA_SQL =
   "CREATE TABLE IF NOT EXISTS lesto_live_cursor (shape TEXT PRIMARY KEY, cursor TEXT);" +
   "CREATE TABLE IF NOT EXISTS lesto_live_outbox (" +
   "shape TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, input TEXT NOT NULL, " +
-  "optimistic TEXT NOT NULL, PRIMARY KEY (shape, id));";
+  "optimistic TEXT NOT NULL, held INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (shape, id));";
+
+/**
+ * Add the `held` column (`L-436724ba`) to a `lesto_live_outbox` table created before it existed —
+ * `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so the fresh-schema column above
+ * only lands for a brand-new database. Idempotent: reads the live columns first and only alters when
+ * `held` is absent, so re-opening an already-migrated (or fresh) database does nothing.
+ */
+async function migrateOutboxHeld(tx: SqlDatabase): Promise<void> {
+  const columns = (await tx
+    .prepare("PRAGMA table_info(lesto_live_outbox)")
+    .all([])) as ReadonlyArray<{ name: string }>;
+
+  if (!columns.some((column) => column.name === "held")) {
+    await tx.exec("ALTER TABLE lesto_live_outbox ADD COLUMN held INTEGER NOT NULL DEFAULT 0");
+  }
+}
 
 /** What hydration reads back out of SQLite before the store is usable. */
 interface Hydrated {
   readonly rowsByKey: Map<RowKey, Row>;
   readonly cursor: Cursor | undefined;
-  readonly outbox: readonly OutboxEntry[];
+  readonly outbox: readonly LoadedOutboxEntry[];
 }
 
 /**
@@ -131,6 +152,7 @@ interface Hydrated {
 async function hydrate(db: SqlDatabase, shape: string): Promise<Hydrated> {
   return db.transaction(async (tx) => {
     await tx.exec(SCHEMA_SQL);
+    await migrateOutboxHeld(tx);
 
     const rowsByKey = new Map<RowKey, Row>();
 
@@ -150,23 +172,26 @@ async function hydrate(db: SqlDatabase, shape: string): Promise<Hydrated> {
 
     // The pending offline writes, in submission order (`rowid`) — replayed on reconnect. `input`
     // and `optimistic` are the JSON the writer stored (see `persistOutboxAppend`); parse them back
-    // to the `OutboxEntry` shape the outbox module rebuilds its queue + overlay from.
+    // to the `LoadedOutboxEntry` shape the outbox module rebuilds its queue + overlay from, carrying
+    // each row's `held` state (SQLite stores the flag as 0/1).
     const persistedOutbox = (await tx
       .prepare(
-        "SELECT id, name, input, optimistic FROM lesto_live_outbox WHERE shape = ? ORDER BY rowid",
+        "SELECT id, name, input, optimistic, held FROM lesto_live_outbox WHERE shape = ? ORDER BY rowid",
       )
       .all([shape])) as ReadonlyArray<{
       id: string;
       name: string;
       input: string;
       optimistic: string;
+      held: number;
     }>;
 
-    const outbox = persistedOutbox.map<OutboxEntry>((entry) => ({
+    const outbox = persistedOutbox.map<LoadedOutboxEntry>((entry) => ({
       id: entry.id,
       name: entry.name,
       input: JSON.parse(entry.input) as unknown,
       optimistic: JSON.parse(entry.optimistic) as ShapeChange,
+      held: entry.held !== 0,
     }));
 
     return { rowsByKey, cursor: persistedCursor?.cursor, outbox };
@@ -282,9 +307,10 @@ export async function createSqliteLiveStore(
     enqueueRaw(async (tx) => {
       await tx
         .prepare(
-          "INSERT INTO lesto_live_outbox (shape, id, name, input, optimistic) VALUES (?, ?, ?, ?, ?) " +
+          "INSERT INTO lesto_live_outbox (shape, id, name, input, optimistic, held) " +
+            "VALUES (?, ?, ?, ?, ?, 0) " +
             "ON CONFLICT(shape, id) DO UPDATE SET name = excluded.name, input = excluded.input, " +
-            "optimistic = excluded.optimistic",
+            "optimistic = excluded.optimistic, held = excluded.held",
         )
         .run([
           shape,
@@ -298,7 +324,17 @@ export async function createSqliteLiveStore(
     return writeChain;
   };
 
-  // Durably remove one outbox entry (its mutation was acked or rejected).
+  // Durably flip one outbox entry to `held` — its mutation was acked, so it must survive reload as
+  // accepted (rebuilt into the overlay, not re-queued for replay) until its echo lands (`L-436724ba`).
+  const persistOutboxMarkHeld = (id: string): void => {
+    enqueueRaw(async (tx) => {
+      await tx
+        .prepare("UPDATE lesto_live_outbox SET held = 1 WHERE shape = ? AND id = ?")
+        .run([shape, id]);
+    });
+  };
+
+  // Durably remove one outbox entry (its held write's echo landed, or it was rejected).
   const persistOutboxRemove = (id: string): void => {
     enqueueRaw(async (tx) => {
       await tx.prepare("DELETE FROM lesto_live_outbox WHERE shape = ? AND id = ?").run([shape, id]);
@@ -378,6 +414,9 @@ export async function createSqliteLiveStore(
       for (const [key, row] of next) rowsByKey.set(key, row);
 
       readModel.setCursor(nextCursor);
+      // Each snapshotted row is a potential echo — settle a held optimistic write for its key in
+      // this same mutation, so the swap to the authoritative row is atomic (no flash).
+      for (const row of rows) readModel.settleEcho(rowKey(row, def.key));
       persistSnapshot(rows, nextCursor);
       readModel.mutated();
     },
@@ -387,6 +426,9 @@ export async function createSqliteLiveStore(
       else rowsByKey.set(change.key, change.row);
 
       readModel.setCursor(nextCursor);
+      // The change IS this key's authoritative echo — settle a held optimistic write for it here,
+      // so its held row is replaced by the identical authoritative one with no read-your-writes flash.
+      readModel.settleEcho(change.key);
       persistChange(change, nextCursor);
       readModel.mutated();
     },
@@ -401,17 +443,24 @@ export async function createSqliteLiveStore(
       readModel.mutated();
     },
 
-    applyOptimistic(change) {
+    applyOptimistic(id, change) {
       // Overlay only — the authorized rows/cursor are wire-only, and durability of the optimistic
       // view comes from the outbox log (rebuilt into the overlay on reload), not the rows table.
-      readModel.setOptimistic(change);
+      readModel.setOptimistic(id, change);
       readModel.mutated();
     },
 
-    clearOptimistic(key) {
-      readModel.clearOptimistic(key);
+    holdOptimistic(id) {
+      // Held is invisible to `getRows` (a held entry renders like a pending one), so no `mutated`.
+      readModel.holdOptimistic(id);
+    },
+
+    clearOptimistic(id) {
+      readModel.clearOptimistic(id);
       readModel.mutated();
     },
+
+    onEchoSettled: readModel.onEchoSettled,
 
     getRows: readModel.getRows,
     getCursor: readModel.getCursor,
@@ -419,11 +468,13 @@ export async function createSqliteLiveStore(
 
     shapeId: shape,
 
-    // The durable outbox (ADR 0042 Inc6): `load` returns what hydration read (submission order),
-    // `append`/`remove` enqueue on the FIFO chain outside the rows freeze (see `enqueueRaw`).
+    // The durable outbox (ADR 0042 Inc6): `load` returns what hydration read (submission order + each
+    // row's `held` state), `append`/`markHeld`/`remove` enqueue on the FIFO chain outside the rows
+    // freeze (see `enqueueRaw`).
     outbox: {
       load: () => hydratedOutbox,
       append: persistOutboxAppend,
+      markHeld: persistOutboxMarkHeld,
       remove: persistOutboxRemove,
     },
 

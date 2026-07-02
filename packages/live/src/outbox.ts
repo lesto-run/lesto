@@ -12,31 +12,40 @@
  * `POST`) into it, so `@lesto/live` grows no dependency on the client and the whole drain is
  * test-fakeable.
  *
- * ## The lifecycle: overlay ⟺ pending queue
+ * ## The lifecycle: submit → drain → held → cleared (`L-436724ba`)
  *
- * The store's optimistic overlay (`./read-model`) and this module's pending queue have ONE shared
- * lifetime, which is what makes the model easy to reason about:
+ * The store's optimistic overlay (`./read-model`) and this module's pending queue share a lifetime,
+ * but an acked write does NOT clear immediately — it is held until its echo, which is what closes the
+ * read-your-writes flash:
  *
- *   - **submit** → apply the optimistic change to the overlay, append the entry to the queue AND
- *     the durable log, then try to drain.
- *   - **ack** (`"ok"` — the server accepted the write) → drop the queue + log entry and clear the
- *     overlay. The server's authoritative echo arrives over the normal replication wire and lands
- *     in the AUTHORIZED set under the SAME client-generated primary key — so clearing the overlay
- *     reveals that echo rather than a duplicate (the ADR's correlation linchpin). *Read-your-writes
- *     caveat:* the overlay clears on ack, so between ack and the echo landing there is a ≤ poll/
- *     replication-interval window where the row is briefly sourced from neither tier; a true
- *     LSN-hold (keep the overlay until the echo confirms at a `>=` LSN) is the ADR's vNext
- *     refinement, deliberately not v1.
+ *   - **submit** → apply the optimistic change to the overlay (a `pending` entry), append the entry
+ *     to the queue AND the durable log, then try to drain.
+ *   - **ack** (`"ok"` — the server accepted the write) → drop it from the drain QUEUE (it must never
+ *     replay), but do NOT clear the overlay: mark the entry **held** ({@link LiveStore.holdOptimistic}
+ *     + {@link OutboxPersistence.markHeld}) and arm a grace timer. The write stays SHOWN. The server's
+ *     authoritative echo arrives over the normal replication wire ≤ poll/replication-interval later,
+ *     landing in the AUTHORIZED set under the SAME client-generated primary key; when it applies,
+ *     {@link LiveStore.applyChange}/`applySnapshot` clears the held entry IN THAT SAME MUTATION — the
+ *     held optimistic row and its authoritative twin are the same value, so nothing visibly changes.
+ *     That is the fix: pre-`L-436724ba` the overlay cleared on ack, leaving a window where the row was
+ *     sourced from neither tier (a flash); now it is held across the gap. The store notifies us via
+ *     {@link LiveStore.onEchoSettled} so we drop the reconciled durable row and cancel the grace timer.
+ *   - **grace** (the echo never comes — e.g. the write does not match the shape's filter, or under
+ *     resync/reconnect) → the grace timer fires and clears the held overlay + durable row. This is the
+ *     bounded backstop: its worst case (a lagging echo cleared a beat early) is exactly the pre-fix
+ *     behavior, never incorrectness. A true LSN-exact hold is the ADR 0042 vNext refinement.
  *   - **reject** (`"rejected"` — the server refused it) → drop the queue + log entry and clear the
- *     overlay. Because the overlay is purely additive over the authorized set, clearing it IS the
- *     rollback: the authorized row (which never carried the edit) shows through again.
+ *     overlay immediately. Because the overlay is purely additive over the authorized set, clearing
+ *     it IS the rollback: the authorized row (which never carried the edit) shows through again.
  *   - **retry** (`"retry"` — transport failed / still offline) → keep the entry (and the overlay)
  *     and stop draining, preserving order; the next {@link LiveMutations.flush} retries it.
  *
  * On reload the durable log is the single source of truth: {@link createLiveMutations} reads it
  * back ({@link LiveStore.outbox}`.load()`) and re-applies each entry's optimistic change to the
- * overlay, so an offline write is visible again before the network reconnects — then a `flush`
- * drains it. Against a non-durable (in-memory) store the queue is session-only: the same surface,
+ * overlay, so an offline write is visible again before the network reconnects. A **held** entry
+ * rebuilds as held (shown, but NOT re-queued — the server already accepted it) with a fresh grace
+ * timer; a pending entry is re-queued, and a `flush` drains it. Against a non-durable (in-memory)
+ * store the queue is session-only: the same surface (including hold-until-echo within the session),
  * without the survives-reload guarantee.
  *
  * ## Delivery is AT-LEAST-ONCE — the replayed mutation must be idempotent
@@ -92,6 +101,22 @@ export type MutationOutcome = "ok" | "rejected" | "retry";
  * cannot wedge the drain.
  */
 export type MutationSubmitter = (name: string, input: unknown) => Promise<MutationOutcome>;
+
+/**
+ * The injected timer seam behind the held-overlay grace backstop (`L-436724ba`): schedule `cb` to run
+ * after `ms`. Fire-and-forget by design — an un-fired timer is harmless (the callback is idempotent),
+ * so there is deliberately no cancel handle. Defaults to `setTimeout`; a test injects a fake that
+ * captures the callback to fire deterministically.
+ */
+export type ScheduleGrace = (cb: () => void, ms: number) => void;
+
+/**
+ * How long a held (acked, not-yet-echoed) write stays shown before the grace backstop clears it — a
+ * few seconds, comfortably past a healthy poll/replication interval so the echo normally wins the
+ * race, short enough that a never-echoed write does not linger. Overridable via
+ * {@link LiveMutationsOptions.graceMs}.
+ */
+export const DEFAULT_GRACE_MS = 5_000;
 
 /** One optimistic write handed to {@link LiveMutations.submit}. */
 export interface SubmitMutation {
@@ -156,6 +181,19 @@ export interface LiveMutationsOptions {
    * Injected so a test gets deterministic ids.
    */
   readonly newId?: () => string;
+
+  /**
+   * How long a held (acked) write stays shown before the grace backstop clears it, in ms. Defaults
+   * to {@link DEFAULT_GRACE_MS}. The echo normally clears the entry first; this only bites when no
+   * echo ever lands (a filtered write, or a resync/reconnect in the gap).
+   */
+  readonly graceMs?: number;
+
+  /**
+   * The timer seam behind the grace backstop — defaults to `setTimeout`. Injected so a test fires the
+   * grace deterministically without real time. See {@link ScheduleGrace}.
+   */
+  readonly schedule?: ScheduleGrace;
 }
 
 /** The outbox handle: submit optimistic writes, drain them, and read the pending count. */
@@ -185,21 +223,71 @@ export interface LiveMutations {
 /** The default client mutation id — a UUID, unique within a session (see {@link LiveMutationsOptions.newId}). */
 const defaultNewId = (): string => globalThis.crypto.randomUUID();
 
+/** The default grace timer — a fire-and-forget `setTimeout` (see {@link ScheduleGrace}). */
+const defaultSchedule: ScheduleGrace = (cb, ms) => {
+  setTimeout(cb, ms);
+};
+
 /**
  * Build the offline-write outbox over a store and an authorized-mutation seam. On construction it
- * rehydrates any durably-persisted pending writes (rebuilding the optimistic overlay) so an offline
- * write survives reload; the caller drains them with a {@link LiveMutations.flush} once online.
+ * rehydrates any durably-persisted writes (rebuilding the optimistic overlay, holding the acked ones)
+ * so an offline write survives reload; the caller drains the pending ones with a
+ * {@link LiveMutations.flush} once online.
  */
 export function createLiveMutations(options: LiveMutationsOptions): LiveMutations {
-  const { store, submit, onError, newId = defaultNewId } = options;
+  const {
+    store,
+    submit,
+    onError,
+    newId = defaultNewId,
+    graceMs = DEFAULT_GRACE_MS,
+    schedule = defaultSchedule,
+  } = options;
 
-  // The pending queue, front = oldest. Rehydrated from durability first: re-apply each persisted
-  // write's optimistic change so a reload paints the offline write before the network reconnects.
+  // The pending queue, front = oldest — writes still awaiting an ack.
   const queue: OutboxEntry[] = [];
 
+  // Ids of HELD writes (acked, awaiting their echo). Tracked so the grace backstop knows which are
+  // still outstanding and skips one already reconciled by its echo — see `onGrace` / `onEchoSettled`.
+  const heldIds = new Set<string>();
+
+  // The never-echoed backstop: the grace window elapsed with no authoritative echo, so drop the held
+  // overlay (revealing the authorized truth — the write simply is not in this shape) and its durable
+  // row. A no-op once the echo already reconciled the write (its id left `heldIds`), so a late-firing
+  // timer is harmless — which is why the timer needs no cancel handle.
+  const onGrace = (id: string): void => {
+    if (!heldIds.has(id)) return;
+
+    heldIds.delete(id);
+    store.clearOptimistic(id);
+    store.outbox?.remove(id);
+  };
+
+  // Hold a just-acked write until its echo: track it and arm the grace backstop.
+  const hold = (id: string): void => {
+    heldIds.add(id);
+    schedule(() => onGrace(id), graceMs);
+  };
+
+  // The echo landed: the store already cleared the held overlay atomically (`settleEcho`) and told us
+  // here — so drop the now-reconciled durable row. The grace timer, if still pending, no-ops above.
+  store.onEchoSettled((id) => {
+    heldIds.delete(id);
+    store.outbox?.remove(id);
+  });
+
+  // Rehydrate from durability: re-apply each persisted write's optimistic change so a reload paints it
+  // before the network reconnects. A HELD entry (the server already accepted it) rebuilds as held with
+  // a fresh grace timer and is NOT re-queued — it must not replay; a pending entry is re-queued to drain.
   for (const entry of store.outbox?.load() ?? []) {
-    queue.push(entry);
-    store.applyOptimistic(entry.optimistic);
+    store.applyOptimistic(entry.id, entry.optimistic);
+
+    if (entry.held) {
+      store.holdOptimistic(entry.id);
+      hold(entry.id);
+    } else {
+      queue.push(entry);
+    }
   }
 
   // One drain at a time. The GUARD is the boolean `draining` (set/cleared synchronously around the
@@ -211,13 +299,22 @@ export function createLiveMutations(options: LiveMutationsOptions): LiveMutation
   let draining = false;
   let current: Promise<void> = Promise.resolve();
 
-  // Settle the front entry — it was acked (echo carries the truth) or rejected (roll back). Either
-  // way drop it from the queue + durable log and clear its overlay. Only the front is ever settled
+  // Settle the front entry after its verdict. On **ack** the server accepted it: drop it from the
+  // drain queue (it must never replay) but HOLD the overlay + durable row until its echo lands — the
+  // read-your-writes fix (`L-436724ba`). On **reject** roll it back now: clear the overlay and the
+  // durable row (the additive overlay makes clearing it the rollback). Only the front is ever settled
   // (FIFO), and a concurrent `submit` only ever appends, so `shift()` removes exactly this entry.
-  const settle = (entry: OutboxEntry): void => {
+  const settle = (entry: OutboxEntry, outcome: "ok" | "rejected"): void => {
     queue.shift();
-    store.outbox?.remove(entry.id);
-    store.clearOptimistic(entry.optimistic.key);
+
+    if (outcome === "ok") {
+      store.holdOptimistic(entry.id);
+      store.outbox?.markHeld(entry.id);
+      hold(entry.id);
+    } else {
+      store.clearOptimistic(entry.id);
+      store.outbox?.remove(entry.id);
+    }
   };
 
   const drainLoop = async (): Promise<void> => {
@@ -245,9 +342,9 @@ export function createLiveMutations(options: LiveMutationsOptions): LiveMutation
         // and shown optimistically; a later `flush` retries from here.
         if (outcome === "retry") return;
 
-        // "ok" (accepted — the echo lands under the same key) or "rejected" (rolled back): settle it
-        // and continue to the next queued write.
-        settle(entry);
+        // "ok" (accepted — held until the echo lands under the same key) or "rejected" (rolled back):
+        // settle it and continue to the next queued write.
+        settle(entry, outcome);
       }
     } finally {
       draining = false;
@@ -288,7 +385,7 @@ export function createLiveMutations(options: LiveMutationsOptions): LiveMutation
       // `outbox`, so there is nothing to persist — `durable` resolves at once (as durable as it gets).
       const durable = store.outbox?.append(entry) ?? Promise.resolve();
 
-      store.applyOptimistic(mutation.optimistic);
+      store.applyOptimistic(id, mutation.optimistic);
 
       // Fire-and-forget: online this sends now; offline the seam returns `"retry"` and it stays.
       // (A caller wanting to await the drain calls `flush()`, which returns the same in-flight run.)

@@ -31,14 +31,15 @@ export type { LiveStore } from "./store";
 export { createSqliteLiveStore } from "./sqlite-store";
 export type { CreateSqliteLiveStoreOptions, SqliteLiveStore } from "./sqlite-store";
 
-export type { OutboxEntry, OutboxPersistence } from "./store";
+export type { LoadedOutboxEntry, OutboxEntry, OutboxPersistence } from "./store";
 
-export { createLiveMutations } from "./outbox";
+export { createLiveMutations, DEFAULT_GRACE_MS } from "./outbox";
 export type {
   LiveMutations,
   LiveMutationsOptions,
   MutationOutcome,
   MutationSubmitter,
+  ScheduleGrace,
   SubmitHandle,
   SubmitMutation,
 } from "./outbox";

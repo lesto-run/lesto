@@ -112,7 +112,7 @@ describe("createLiveStore", () => {
       store.subscribe(listener);
 
       store.applySnapshot([{ id: "a", rank: 1 }]);
-      store.applyOptimistic({ op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      store.applyOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } });
 
       expect(store.getRows()).toEqual([
         { id: "a", rank: 1 },
@@ -125,10 +125,10 @@ describe("createLiveStore", () => {
       const store = createLiveStore(def);
 
       store.applySnapshot([{ id: "a", rank: 1 }]);
-      store.applyOptimistic({ op: "update", key: "a", row: { id: "a", rank: 9 } });
+      store.applyOptimistic("m1", { op: "update", key: "a", row: { id: "a", rank: 9 } });
       expect(store.getRows()).toEqual([{ id: "a", rank: 9 }]);
 
-      store.clearOptimistic("a");
+      store.clearOptimistic("m1");
       expect(store.getRows()).toEqual([{ id: "a", rank: 1 }]);
     });
 
@@ -136,7 +136,7 @@ describe("createLiveStore", () => {
       const store = createLiveStore(def);
 
       store.applySnapshot([{ id: "a", rank: 1 }], "v1:s:1:1");
-      store.applyOptimistic({ op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      store.applyOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } });
 
       // A local write must not advance (or clear) the resume cursor — that tracks the authorized
       // stream position only, so a reconnect still resumes from the last server frame.
@@ -147,7 +147,7 @@ describe("createLiveStore", () => {
       const store = createLiveStore(def);
 
       store.applySnapshot([{ id: "a", rank: 1 }]);
-      store.applyOptimistic({ op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      store.applyOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } });
 
       // The wire resync drops the authorized slice but must not roll back an unrelated offline write.
       store.applyResync();
@@ -158,6 +158,67 @@ describe("createLiveStore", () => {
       const store = createLiveStore(def);
 
       expect(store.outbox).toBeUndefined();
+    });
+  });
+
+  describe("held overlay + echo settlement (L-436724ba)", () => {
+    it("holdOptimistic keeps the acked write shown without a re-render", () => {
+      const store = createLiveStore(def);
+      store.applySnapshot([{ id: "a", rank: 1 }]);
+      store.applyOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } });
+
+      const listener = vi.fn();
+      store.subscribe(listener);
+      store.holdOptimistic("m1");
+
+      // Held is invisible to the view — no subscriber fires — but the write stays shown.
+      expect(listener).not.toHaveBeenCalled();
+      expect(store.getRows()).toEqual([
+        { id: "a", rank: 1 },
+        { id: "b", rank: 2 },
+      ]);
+    });
+
+    it("applyChange settles a held optimistic entry atomically and notifies onEchoSettled", () => {
+      const store = createLiveStore(def);
+      const settled: string[] = [];
+      store.onEchoSettled((id) => settled.push(id));
+
+      store.applySnapshot([{ id: "a", rank: 1 }]);
+      store.applyOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      store.holdOptimistic("m1");
+
+      // The authoritative echo for `b` lands — the held entry clears in the SAME mutation, so the
+      // view never drops `b` (it was held) and never double-shows it (same value): zero flash.
+      store.applyChange({ op: "insert", key: "b", row: { id: "b", rank: 2 } });
+
+      expect(settled).toEqual(["m1"]);
+      expect(store.getRows()).toEqual([
+        { id: "a", rank: 1 },
+        { id: "b", rank: 2 },
+      ]);
+    });
+
+    it("applySnapshot settles a held optimistic entry for a snapshotted key", () => {
+      const store = createLiveStore(def);
+      const settled: string[] = [];
+      store.onEchoSettled((id) => settled.push(id));
+
+      store.applySnapshot([{ id: "a", rank: 1 }]);
+      store.applyOptimistic("m1", { op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      store.holdOptimistic("m1");
+
+      // A fresh snapshot that carries `b` is its echo — the held entry clears.
+      store.applySnapshot([
+        { id: "a", rank: 1 },
+        { id: "b", rank: 2 },
+      ]);
+
+      expect(settled).toEqual(["m1"]);
+      expect(store.getRows()).toEqual([
+        { id: "a", rank: 1 },
+        { id: "b", rank: 2 },
+      ]);
     });
   });
 });
