@@ -26,6 +26,39 @@ import type { Cursor, Row, RowKey, ShapeChange, ShapeDefinition } from "@lesto/l
 import { createReadModel } from "./read-model";
 
 /**
+ * One pending client write in the outbox (ADR 0042 Tier 4, v1 Inc6): the app mutation to replay
+ * ({@link name}/{@link input} — the SAME authorized `POST` an online write makes) plus the
+ * {@link optimistic} change shown locally until it is confirmed or rolled back. The {@link id} is a
+ * client-generated mutation id — the log's ordering + idempotency key, distinct from the row's own
+ * (also client-generated) primary key that the optimistic change is keyed by.
+ */
+export interface OutboxEntry {
+  readonly id: string;
+  readonly name: string;
+  readonly input: unknown;
+  readonly optimistic: ShapeChange;
+}
+
+/**
+ * A durable home for the outbox — the OPFS half of "an offline write survives reload" (ADR 0042
+ * Inc6). {@link createSqliteLiveStore} implements it over its SQLite FIFO chain; the in-memory
+ * store has none (its outbox is session-only). The outbox module (`./outbox`) drives it: it
+ * {@link load}s the persisted log once at open (rebuilding the overlay), {@link append}s on submit,
+ * and {@link remove}s on ack/reject. Writes are enqueued (fire-and-forget); await the store's
+ * `whenIdle` for durability in a test or before teardown.
+ */
+export interface OutboxPersistence {
+  /** The persisted entries in submission order — read once at store open, before any write. */
+  load(): readonly OutboxEntry[];
+
+  /** Durably append one entry (enqueued on the store's write chain). */
+  append(entry: OutboxEntry): void;
+
+  /** Durably remove the entry with `id` (enqueued on the store's write chain). */
+  remove(id: string): void;
+}
+
+/**
  * The client-side view of one shape: mutate it from the wire, read it from a UI.
  *
  * Every mutation carries the frame's opaque **resume cursor** ({@link Cursor}) — the
@@ -54,8 +87,28 @@ export interface LiveStore {
    * Drop the local slice AND its cursor, then await the next snapshot — the always-correct
    * floor on a resync. Clearing the cursor is deliberate: a resync abandons the local
    * position, so the next snapshot re-establishes both rows and cursor from scratch.
+   *
+   * Note the optimistic overlay is deliberately NOT cleared here: a resync abandons the
+   * *authorized* position, but a still-pending offline write is unrelated server state that must
+   * survive to be replayed — the outbox owns clearing it (on ack/reject), never the wire.
    */
   applyResync(): void;
+
+  /**
+   * Overlay an optimistic (not-yet-confirmed) write on top of the authorized set — shown locally
+   * the instant it is made, even offline (ADR 0042 Inc6). An `insert`/`update` sets the row, a
+   * `delete` removes it; keyed by the change's `key`. Does NOT touch the authorized set or the
+   * cursor (both are wire-only) — the overlay is purely additive, so {@link clearOptimistic} is a
+   * complete rollback. The outbox (`./outbox`) is the sole caller and the overlay's source of truth.
+   */
+  applyOptimistic(change: ShapeChange): void;
+
+  /**
+   * Drop the optimistic overlay entry for `key` — the write was confirmed (its authorized echo now
+   * carries the truth, correlated by the shared client-generated primary key) or rejected (roll
+   * back to the authorized row, which never carried the edit). A no-op when none is pending.
+   */
+  clearOptimistic(key: RowKey): void;
 
   /** The rows in the shape's total order — a stable reference until the next mutation. */
   getRows(): readonly Row[];
@@ -83,6 +136,14 @@ export interface LiveStore {
    * silently.
    */
   readonly shapeId?: string;
+
+  /**
+   * The durable outbox, when this store has one — {@link createSqliteLiveStore} exposes it (the
+   * OPFS half of "an offline write survives reload"), the in-memory store does not. Optional so the
+   * outbox module (`./outbox`) degrades to a session-only queue against a non-durable store rather
+   * than requiring one.
+   */
+  readonly outbox?: OutboxPersistence;
 }
 
 /**
@@ -125,6 +186,16 @@ export function createLiveStore(def: ShapeDefinition): LiveStore {
     applyResync() {
       rowsByKey = new Map();
       readModel.setCursor(undefined);
+      readModel.mutated();
+    },
+
+    applyOptimistic(change) {
+      readModel.setOptimistic(change);
+      readModel.mutated();
+    },
+
+    clearOptimistic(key) {
+      readModel.clearOptimistic(key);
       readModel.mutated();
     },
 

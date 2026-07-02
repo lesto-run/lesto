@@ -1,33 +1,64 @@
 /**
- * The durable `live()` round-trip, end to end (ADR 0042 Tier 4, v1 Inc5/Inc6 dogfood):
+ * The durable, OFFLINE-CAPABLE `live()` round-trip, end to end (ADR 0042 Tier 4, v1 Inc5/Inc6):
  *
  *   openOpfsSqliteDatabase()  ->  createSqliteLiveStore({ def, db })  ->  createLiveQuery(def, { store })
+ *                                                              \->  createLiveMutations({ store, submit })
  *
- * `openOpfsSqliteDatabase` boots `@sqlite.org/sqlite-wasm` over OPFS (the peer this bundle
- * exists to prove wires correctly — see the module doc on `packages/live/src/opfs-sqlite.ts`
- * and this example's `README.md`). `createSqliteLiveStore` wraps that connection in the
- * durable `LiveStore` — every mutation mirrors in memory AND persists rows + the resume
- * cursor atomically. `createLiveQuery` opens the `GET /__lesto/live-data` subscription
- * against it, so a peer's write (via the form below, `POST /notes`) streams in live.
+ * `openOpfsSqliteDatabase` boots `@sqlite.org/sqlite-wasm` over OPFS (the peer this bundle exists to
+ * prove wires correctly — see `packages/live/src/opfs-sqlite.ts`). `createSqliteLiveStore` wraps it
+ * in the durable `LiveStore` (rows + resume cursor persisted atomically), and — new in Inc6 — a
+ * durable outbox. `createLiveMutations` is that outbox: a write is applied to the store
+ * OPTIMISTICALLY (shown at once, even offline) and durably logged, then replayed on reconnect as the
+ * app's NORMAL authorized `POST /notes` — the same endpoint an online write hits, no bespoke sync
+ * channel. A server-rejected write rolls back locally.
  *
- * The durability payoff is the FIRST paint: on a reload, `render()` below paints whatever
- * `createSqliteLiveStore` hydrated from the OPFS-persisted slice — before the network
- * reconnects. A non-durable (in-memory) store would paint nothing until the first snapshot.
+ * Two payoffs to see by hand:
+ *   1. Durable first paint — on reload `render()` paints whatever the store hydrated from OPFS
+ *      before the network reconnects.
+ *   2. Offline writes — go offline (DevTools → Network → Offline), add a note (it appears
+ *      instantly and, on reload, is STILL there — the outbox persisted it), then go back online and
+ *      watch it drain to the server and reconcile as the authoritative row under the same id.
  */
 
-import { createLiveQuery, createSqliteLiveStore } from "@lesto/live";
+import { createLiveMutations, createLiveQuery, createSqliteLiveStore } from "@lesto/live";
+import type { MutationOutcome } from "@lesto/live";
 import { openOpfsSqliteDatabase } from "@lesto/live/opfs";
 
 import { notesShape } from "./schema";
 
 // Extends `Row` (`Record<string, unknown>`) rather than just declaring these fields, so it
 // satisfies `createLiveQuery`'s `R extends Row` bound while still giving `.text` etc. a real
-// type at the call sites below.
+// type at the call sites below. `id` is the client-generated uuid (see `schema.ts`).
 interface NoteRow extends Record<string, unknown> {
-  readonly id: number;
+  readonly id: string;
   readonly text: string;
   readonly done: boolean;
   readonly createdAt: number;
+}
+
+/**
+ * Replay one queued write as the app's authorized `POST /notes`, classifying the result the way
+ * the outbox needs (ADR 0042 Inc6): a 2xx is `"ok"` (accepted — the echo carries the truth), a 4xx
+ * is `"rejected"` (the server refused it — roll back), and a thrown/`fetch` failure or a 5xx is
+ * `"retry"` (offline / transient — keep it queued and try again on reconnect).
+ */
+async function postNote(_name: string, input: unknown): Promise<MutationOutcome> {
+  let response: Response;
+
+  try {
+    response = await fetch("/notes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  } catch {
+    return "retry"; // the network never answered — the ordinary offline case
+  }
+
+  if (response.ok) return "ok";
+
+  // 4xx → the server refused this write; replaying it would only be refused again. 5xx → transient.
+  return response.status >= 400 && response.status < 500 ? "rejected" : "retry";
 }
 
 async function main(): Promise<void> {
@@ -57,6 +88,14 @@ async function main(): Promise<void> {
     store,
   });
 
+  // The offline-write outbox over the SAME durable store: it rehydrates any writes made offline in
+  // a prior session (re-showing them) and replays every pending write through `postNote` on drain.
+  const mutations = createLiveMutations({
+    store,
+    submit: postNote,
+    onError: (error) => setStatus(`Replay error (write kept, will retry): ${String(error)}`),
+  });
+
   const render = (): void => {
     list.replaceChildren(
       ...query.getSnapshot().map((note) => {
@@ -69,11 +108,15 @@ async function main(): Promise<void> {
     );
   };
 
-  // Paint immediately from whatever the durable store hydrated (a prior session's persisted
-  // slice survives reload) — before the live stream below has reconnected.
+  // Paint immediately from whatever the durable store hydrated — the authorized slice AND any
+  // offline writes the outbox just re-applied — before the live stream below has reconnected.
   render();
-  setStatus(`Ready — ${query.getSnapshot().length} note(s) loaded from the durable store.`);
+  setStatus(`Ready — ${query.getSnapshot().length} note(s) loaded (${mutations.pending()} pending).`);
   query.subscribe(render);
+
+  // Drain now (an offline write from a prior session may be waiting) and on every reconnect.
+  void mutations.flush();
+  window.addEventListener("online", () => void mutations.flush());
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -84,11 +127,19 @@ async function main(): Promise<void> {
 
     input.value = "";
 
-    void fetch("/notes", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
-    }).catch((error: unknown) => setStatus(`Could not reach the server: ${String(error)}`));
+    // The client mints the row id — the correlation key the server's echo settles under. Submit
+    // applies it optimistically (shown at once, even offline), durably logs it, and tries to drain.
+    const id = globalThis.crypto.randomUUID();
+
+    mutations.submit({
+      name: "notes",
+      input: { id, text },
+      optimistic: {
+        op: "insert",
+        key: id,
+        row: { id, text, done: false, createdAt: Date.now() },
+      },
+    });
   });
 }
 

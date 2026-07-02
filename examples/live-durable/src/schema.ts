@@ -7,12 +7,18 @@
  * `packages/live/src/builder.ts`).
  */
 
-import { boolean, defineTable, integer, text, timestamp } from "@lesto/db";
+import { boolean, defineTable, text, timestamp } from "@lesto/db";
 import type { ShapeDefinition } from "@lesto/live-protocol";
 
-/** The `notes` table — a single, un-tenanted list (this example has no auth). */
+/**
+ * The `notes` table — a single, un-tenanted list (this example has no auth). Its primary key is a
+ * CLIENT-generated id (a uuid the browser mints on submit), NOT a server auto-increment: that is
+ * the ADR 0042 Inc6 correlation linchpin — an optimistic offline write and the server's later
+ * authoritative echo (over the live stream) share one key, so the echo settles under the optimistic
+ * row rather than landing as a duplicate insert.
+ */
 export const notes = defineTable("notes", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+  id: text("id").primaryKey(),
   text: text("text").notNull(),
   done: boolean("done").notNull().default(false),
   createdAt: timestamp("created_at").notNull(),

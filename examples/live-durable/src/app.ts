@@ -87,21 +87,32 @@ export async function buildApp(options: { handle: KernelDatabase }): Promise<Boo
     // as a long-lived stream, so the held connection takes no in-flight slot.
     .get("/__lesto/live-data", handlers.liveData)
 
-    // The one mutation: insert a note. No topic to publish and no fan-out to trigger — the
-    // engine's next poll tick observes the new row and streams the insert to every client.
+    // The one mutation: insert a note under a CLIENT-supplied id (the Inc6 correlation key). No
+    // topic to publish and no fan-out to trigger — the engine's next poll tick observes the new row
+    // and streams the insert (keyed by that same id) to every client, settling the optimistic row.
+    // Replaying the outbox is at-least-once, so a write whose original already landed (its ack was
+    // lost) is replayed with the same id: the PK-conflict is caught and reported as idempotent
+    // success (a real app would use a proper upsert), never a spurious error that rolls the write
+    // back — draining the outbox more than once must be safe.
     .post("/notes", async (c) => {
-      const body = (c.req.body ?? {}) as { text?: unknown };
+      const body = (c.req.body ?? {}) as { id?: unknown; text?: unknown };
+      const id = String(body.id ?? "").trim();
       const text = String(body.text ?? "").trim();
 
-      if (text === "") return c.json({ error: "empty" }, 400);
+      if (id === "" || text === "") return c.json({ error: "id and text are required" }, 400);
 
-      const note = await db
-        .insert(notes)
-        .values({ text, done: false, createdAt: new Date() })
-        .returning()
-        .get();
+      try {
+        const note = await db
+          .insert(notes)
+          .values({ id, text, done: false, createdAt: new Date() })
+          .returning()
+          .get();
 
-      return c.json({ note }, 201);
+        return c.json({ note }, 201);
+      } catch {
+        // Duplicate id → the original already landed; a replay is a no-op success, not a failure.
+        return c.json({ ok: true }, 200);
+      }
     })
 
     // The built client bundle — `/` is `dist/index.html`, everything else is read straight out

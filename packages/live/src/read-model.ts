@@ -16,6 +16,16 @@
  *     one place, so a mutation can never dirty the cache without also notifying subscribers (or
  *     vice versa).
  *   - The cursor variable + {@link ReadModel.getCursor} + {@link ReadModel.setCursor}.
+ *   - The **optimistic overlay** (ADR 0042 Tier 4, v1 Inc6) + {@link ReadModel.setOptimistic} /
+ *     {@link ReadModel.clearOptimistic}. An offline (or in-flight) write is shown *over* the
+ *     authorized set: {@link ReadModel.getRows} merges the wire-driven authorized rows with the
+ *     overlay (an optimistic `insert`/`update` sets a row, a `delete` removes one), overlay-wins-
+ *     by-key, before sorting. The authorized tier ({@link createReadModel}'s `getRowsSnapshot`
+ *     source) stays untouched — driven ONLY by the wire — so the overlay is purely additive and a
+ *     rollback is just `clearOptimistic` (the authorized row, which never carried the optimistic
+ *     edit, shows through again). The overlay is derived state: its single source of truth is the
+ *     outbox (`./outbox`), which sets an entry on submit and clears it on the mutation's ack/reject,
+ *     and rebuilds the whole overlay from the durable log on reload — so nothing here is persisted.
  *
  * What it deliberately does NOT own: `rowsByKey`, the keyed row map. The two stores drive that
  * map through different mechanisms — {@link createLiveStore} swaps in a fresh `Map` on every
@@ -28,8 +38,8 @@
  * they got there.
  */
 
-import { compareRows } from "@lesto/live-protocol";
-import type { Cursor, Row, ShapeDefinition } from "@lesto/live-protocol";
+import { compareRows, rowKey } from "@lesto/live-protocol";
+import type { Cursor, Row, RowKey, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
 
 /**
  * The shared read/subscribe/cursor surface both `LiveStore` implementations delegate to. A
@@ -52,6 +62,21 @@ export interface ReadModel {
    * Pure bookkeeping — call {@link mutated} separately to dirty the cache and notify.
    */
   setCursor(cursor: Cursor | undefined): void;
+
+  /**
+   * Overlay one optimistic change (an `insert`/`update` sets the row, a `delete` removes it) on
+   * top of the authorized set — the local, not-yet-confirmed view of a write (ADR 0042 Inc6). Keyed
+   * by the change's `key`, so re-submitting the same key replaces the pending entry. Pure
+   * bookkeeping — call {@link mutated} after, exactly like {@link setCursor}.
+   */
+  setOptimistic(change: ShapeChange): void;
+
+  /**
+   * Drop the optimistic overlay entry for `key` — the write was confirmed (its authorized echo now
+   * carries the truth) or rejected (roll back to the authorized row). A no-op when none is pending.
+   * Pure bookkeeping — call {@link mutated} after.
+   */
+  clearOptimistic(key: RowKey): void;
 
   /** Register a listener fired after every {@link mutated} call; returns its unsubscribe. */
   subscribe(listener: () => void): () => void;
@@ -81,12 +106,37 @@ export function createReadModel(
 
   let cursor: Cursor | undefined;
 
+  // The optimistic overlay (ADR 0042 Inc6): pending client writes keyed by row identity, merged
+  // over the authorized set in `getRows`. Empty in the overwhelmingly common case — kept out of the
+  // merge fast-path below so a store with no in-flight writes sorts exactly as it did pre-Inc6.
+  const overlay = new Map<RowKey, ShapeChange>();
+
   const listeners = new Set<() => void>();
 
   return {
     getRows() {
       if (dirty) {
-        cache = [...getRowsSnapshot()].toSorted((a, b) => compareRows(def, a, b));
+        // Fast path: no pending optimistic writes → sort the authorized rows verbatim, the exact
+        // pre-Inc6 behavior (and the only path every non-writing consumer ever takes).
+        if (overlay.size === 0) {
+          cache = [...getRowsSnapshot()].toSorted((a, b) => compareRows(def, a, b));
+        } else {
+          // Merge the overlay over the authorized set, overlay-wins-by-key: build the authorized
+          // rows into a keyed map (their keys are always present — they came from the wire keyed),
+          // then apply each pending change (a `delete` removes, an `insert`/`update` sets), and sort
+          // the result in the shape's total order — the same order a later authorized echo lands in.
+          const merged = new Map<RowKey, Row>();
+
+          for (const row of getRowsSnapshot()) merged.set(rowKey(row, def.key), row);
+
+          for (const [key, change] of overlay) {
+            if (change.op === "delete") merged.delete(key);
+            else merged.set(key, change.row);
+          }
+
+          cache = [...merged.values()].toSorted((a, b) => compareRows(def, a, b));
+        }
+
         dirty = false;
       }
 
@@ -99,6 +149,14 @@ export function createReadModel(
 
     setCursor(nextCursor) {
       cursor = nextCursor;
+    },
+
+    setOptimistic(change) {
+      overlay.set(change.key, change);
+    },
+
+    clearOptimistic(key) {
+      overlay.delete(key);
     },
 
     subscribe(listener) {

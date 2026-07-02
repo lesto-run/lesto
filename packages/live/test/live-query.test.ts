@@ -179,6 +179,8 @@ describe("createLiveQuery", () => {
         applySnapshot: () => {},
         applyChange: () => {},
         applyResync: () => {},
+        applyOptimistic: () => {},
+        clearOptimistic: () => {},
         getRows: () => [],
         getCursor: () => undefined,
         subscribe: () => () => {},

@@ -48,6 +48,17 @@
  * pair and thaws the tier. The failure is surfaced to `onError` so the app can force that resync.
  * {@link SqliteLiveStore.whenIdle} resolves once the currently-queued writes have settled — for
  * graceful teardown and deterministic tests.
+ *
+ * ## The offline-write outbox (Inc6)
+ *
+ * A third table, `lesto_live_outbox`, durably holds pending client writes made while offline (or
+ * simply in flight) — the OPFS half of "an offline write survives reload". It is driven by the
+ * outbox module (`./outbox`) through the {@link LiveStore.outbox} capability this store exposes,
+ * NOT by the wire. Its writes share the FIFO chain (so they serialize on the one connection and
+ * `whenIdle` awaits them) but bypass the rows/cursor freeze (`enqueueRaw`): the outbox is an
+ * independent table, and a frozen tier must never silently drop a durable offline write. The
+ * optimistic *view* of those writes is not persisted separately — it is rebuilt into the read
+ * model's overlay from this log on reload, so the log is the single source of truth.
  */
 
 import { rowKey, shapeId } from "@lesto/live-protocol";
@@ -55,7 +66,7 @@ import type { Cursor, Row, RowKey, ShapeChange, ShapeDefinition } from "@lesto/l
 import type { SqlDatabase } from "@lesto/db";
 
 import { createReadModel } from "./read-model";
-import type { LiveStore } from "./store";
+import type { LiveStore, OutboxEntry } from "./store";
 
 /** A durable {@link LiveStore} plus a hook to await its outstanding durable writes. */
 export interface SqliteLiveStore extends LiveStore {
@@ -90,22 +101,32 @@ export interface CreateSqliteLiveStoreOptions {
 /** The empty settle handler for the write chain — a rolled-back write needs no follow-up. */
 const noop = (): void => {};
 
-/** The two tables the durable store owns — created idempotently, shared across shapes by `shape` key. */
+/**
+ * The three tables the durable store owns — created idempotently, shared across shapes by `shape`
+ * key. `lesto_live_outbox` is the offline-write log (ADR 0042 Inc6): one row per pending mutation,
+ * ordered by insertion (`rowid`), so a write made offline survives reload and is replayed on
+ * reconnect through the app's normal authorized mutation `POST` (see `./outbox`).
+ */
 const SCHEMA_SQL =
   "CREATE TABLE IF NOT EXISTS lesto_live_rows (" +
   "shape TEXT NOT NULL, key TEXT NOT NULL, row TEXT NOT NULL, PRIMARY KEY (shape, key));" +
-  "CREATE TABLE IF NOT EXISTS lesto_live_cursor (shape TEXT PRIMARY KEY, cursor TEXT);";
+  "CREATE TABLE IF NOT EXISTS lesto_live_cursor (shape TEXT PRIMARY KEY, cursor TEXT);" +
+  "CREATE TABLE IF NOT EXISTS lesto_live_outbox (" +
+  "shape TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, input TEXT NOT NULL, " +
+  "optimistic TEXT NOT NULL, PRIMARY KEY (shape, id));";
 
 /** What hydration reads back out of SQLite before the store is usable. */
 interface Hydrated {
   readonly rowsByKey: Map<RowKey, Row>;
   readonly cursor: Cursor | undefined;
+  readonly outbox: readonly OutboxEntry[];
 }
 
 /**
- * Install the schema (idempotently) and read back this shape's persisted rows + cursor, all in
- * one `db.transaction` span — see the module doc's "Hydration runs inside the same transactional
- * FIFO as every write" section for why this must not run as bare `exec`/`prepare` calls.
+ * Install the schema (idempotently) and read back this shape's persisted rows + cursor + outbox,
+ * all in one `db.transaction` span — see the module doc's "Hydration runs inside the same
+ * transactional FIFO as every write" section for why this must not run as bare `exec`/`prepare`
+ * calls.
  */
 async function hydrate(db: SqlDatabase, shape: string): Promise<Hydrated> {
   return db.transaction(async (tx) => {
@@ -127,7 +148,28 @@ async function hydrate(db: SqlDatabase, shape: string): Promise<Hydrated> {
       .prepare("SELECT cursor FROM lesto_live_cursor WHERE shape = ?")
       .get([shape])) as { cursor: string } | undefined;
 
-    return { rowsByKey, cursor: persistedCursor?.cursor };
+    // The pending offline writes, in submission order (`rowid`) — replayed on reconnect. `input`
+    // and `optimistic` are the JSON the writer stored (see `persistOutboxAppend`); parse them back
+    // to the `OutboxEntry` shape the outbox module rebuilds its queue + overlay from.
+    const persistedOutbox = (await tx
+      .prepare(
+        "SELECT id, name, input, optimistic FROM lesto_live_outbox WHERE shape = ? ORDER BY rowid",
+      )
+      .all([shape])) as ReadonlyArray<{
+      id: string;
+      name: string;
+      input: string;
+      optimistic: string;
+    }>;
+
+    const outbox = persistedOutbox.map<OutboxEntry>((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      input: JSON.parse(entry.input) as unknown,
+      optimistic: JSON.parse(entry.optimistic) as ShapeChange,
+    }));
+
+    return { rowsByKey, cursor: persistedCursor?.cursor, outbox };
   });
 }
 
@@ -143,8 +185,10 @@ export async function createSqliteLiveStore(
   const { def, db, onError } = options;
   const shape = shapeId(def);
 
-  // Hydrate the read model from durability. A reload lands here with the last persisted slice.
-  const { rowsByKey, cursor: hydratedCursor } = await hydrate(db, shape);
+  // Hydrate the read model from durability. A reload lands here with the last persisted slice AND
+  // the pending offline writes (`hydratedOutbox`), which the outbox module reads back via
+  // `outbox.load()` to rebuild its queue and re-apply the optimistic overlay before reconnect.
+  const { rowsByKey, cursor: hydratedCursor, outbox: hydratedOutbox } = await hydrate(db, shape);
 
   // The shared read model owns the sorted-cache, the listeners, and the cursor — identical
   // contract to the in-memory store: `getRows()` returns the SAME array between mutations so
@@ -199,6 +243,59 @@ export async function createSqliteLiveStore(
 
   const enqueue = (work: (tx: SqlDatabase) => Promise<void>, replaces: boolean): void => {
     writeChain = writeChain.then(() => runWrite(work, replaces));
+  };
+
+  // Run one outbox write. Like `runWrite` but with NO `frozen` gate and no freeze-on-failure: the
+  // outbox is an independent table whose consistency does not interact with the (rows, cursor)
+  // atomicity the freeze protects, and a frozen tier must NOT silently drop a durable offline write
+  // — that would lose it across a reload, the one thing this log exists to prevent. A failure is
+  // reported (the in-memory queue stays authoritative for the session), never frozen. A throwing
+  // `onError` must not wedge the chain, same as `runWrite`.
+  const runRaw = async (work: (tx: SqlDatabase) => Promise<void>): Promise<void> => {
+    try {
+      await db.transaction((tx) => work(tx));
+    } catch (error) {
+      try {
+        report(error);
+      } catch {
+        // Swallow: the write rolled back atomically; the report is best-effort.
+      }
+    }
+  };
+
+  // Enqueue an outbox write on the SAME FIFO chain (so it serializes on the one pinned connection
+  // and `whenIdle` awaits it), outside the rows/cursor freeze — see {@link runRaw}.
+  const enqueueRaw = (work: (tx: SqlDatabase) => Promise<void>): void => {
+    writeChain = writeChain.then(() => runRaw(work));
+  };
+
+  // Durably append one outbox entry. `input` and `optimistic` are stored as JSON — `input ?? null`
+  // mirrors the mutation client's own `JSON.stringify(input ?? null)`, so a no-arg mutation's
+  // `undefined` round-trips to `null` exactly as its replayed `POST` body would. An `INSERT OR
+  // REPLACE` (upsert on the (shape, id) PK) keeps a resubmit of the same id idempotent.
+  const persistOutboxAppend = (entry: OutboxEntry): void => {
+    enqueueRaw(async (tx) => {
+      await tx
+        .prepare(
+          "INSERT INTO lesto_live_outbox (shape, id, name, input, optimistic) VALUES (?, ?, ?, ?, ?) " +
+            "ON CONFLICT(shape, id) DO UPDATE SET name = excluded.name, input = excluded.input, " +
+            "optimistic = excluded.optimistic",
+        )
+        .run([
+          shape,
+          entry.id,
+          entry.name,
+          JSON.stringify(entry.input ?? null),
+          JSON.stringify(entry.optimistic),
+        ]);
+    });
+  };
+
+  // Durably remove one outbox entry (its mutation was acked or rejected).
+  const persistOutboxRemove = (id: string): void => {
+    enqueueRaw(async (tx) => {
+      await tx.prepare("DELETE FROM lesto_live_outbox WHERE shape = ? AND id = ?").run([shape, id]);
+    });
   };
 
   // Persist a whole-slice replacement (a snapshot / a resync) with its cursor, atomically:
@@ -290,8 +387,22 @@ export async function createSqliteLiveStore(
     applyResync() {
       rowsByKey.clear();
       readModel.setCursor(undefined);
-      // Clear rows AND cursor together — the durable floor mirrors the in-memory floor.
+      // Clear rows AND cursor together — the durable floor mirrors the in-memory floor. The outbox
+      // is untouched: a resync abandons the authorized slice, but a pending offline write is
+      // unrelated state that must still be replayed (the outbox owns clearing it, not the wire).
       persistSnapshot([], undefined);
+      readModel.mutated();
+    },
+
+    applyOptimistic(change) {
+      // Overlay only — the authorized rows/cursor are wire-only, and durability of the optimistic
+      // view comes from the outbox log (rebuilt into the overlay on reload), not the rows table.
+      readModel.setOptimistic(change);
+      readModel.mutated();
+    },
+
+    clearOptimistic(key) {
+      readModel.clearOptimistic(key);
       readModel.mutated();
     },
 
@@ -300,6 +411,14 @@ export async function createSqliteLiveStore(
     subscribe: readModel.subscribe,
 
     shapeId: shape,
+
+    // The durable outbox (ADR 0042 Inc6): `load` returns what hydration read (submission order),
+    // `append`/`remove` enqueue on the FIFO chain outside the rows freeze (see `enqueueRaw`).
+    outbox: {
+      load: () => hydratedOutbox,
+      append: persistOutboxAppend,
+      remove: persistOutboxRemove,
+    },
 
     whenIdle() {
       return writeChain;

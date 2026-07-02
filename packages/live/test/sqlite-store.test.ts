@@ -5,7 +5,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { adaptSyncSqlite } from "@lesto/db";
 import type { SqlDatabase } from "@lesto/db";
-import type { ShapeDefinition } from "@lesto/live-protocol";
+import type { ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createSqliteLiveStore } from "../src/index";
@@ -49,6 +49,13 @@ const def: ShapeDefinition = {
   where: [],
   orderBy: { column: "rank", direction: "asc" },
 };
+
+/** An `insert` change for the durable-outbox tests below (the row's id IS its key). */
+const insert = (key: string, rank: number): ShapeChange => ({
+  op: "insert",
+  key,
+  row: { id: key, rank },
+});
 
 // Every opened engine, torn down after each test so no connection leaks between them.
 const opened: Array<() => void> = [];
@@ -404,6 +411,168 @@ describe("createSqliteLiveStore — durable rows + cursor", () => {
   });
 });
 
+describe("createSqliteLiveStore — durable offline-write outbox (Inc6)", () => {
+  it("persists appended entries and reloads them in submission order", async () => {
+    const db = freshDb();
+    const store = await createSqliteLiveStore({ def, db });
+
+    store.outbox?.append({
+      id: "m1",
+      name: "addPost",
+      input: { rank: 1 },
+      optimistic: insert("x", 1),
+    });
+    // A no-arg mutation's `undefined` input round-trips to `null` — exactly what its replayed POST
+    // body would carry (the mutation client also serializes `input ?? null`).
+    store.outbox?.append({
+      id: "m2",
+      name: "delPost",
+      input: undefined,
+      optimistic: { op: "delete", key: "y" },
+    });
+    await store.whenIdle();
+
+    const reloaded = await createSqliteLiveStore({ def, db });
+
+    expect(reloaded.outbox?.load()).toEqual([
+      { id: "m1", name: "addPost", input: { rank: 1 }, optimistic: insert("x", 1) },
+      { id: "m2", name: "delPost", input: null, optimistic: { op: "delete", key: "y" } },
+    ]);
+  });
+
+  it("removes an entry durably, leaving the rest in order", async () => {
+    const db = freshDb();
+    const store = await createSqliteLiveStore({ def, db });
+
+    store.outbox?.append({ id: "m1", name: "n", input: 1, optimistic: insert("x", 1) });
+    store.outbox?.append({ id: "m2", name: "n", input: 2, optimistic: insert("z", 2) });
+    await store.whenIdle();
+
+    store.outbox?.remove("m1");
+    await store.whenIdle();
+
+    const reloaded = await createSqliteLiveStore({ def, db });
+    expect(reloaded.outbox?.load().map((e) => e.id)).toEqual(["m2"]);
+  });
+
+  it("a resubmit of the same id upserts rather than duplicating", async () => {
+    const db = freshDb();
+    const store = await createSqliteLiveStore({ def, db });
+
+    store.outbox?.append({ id: "m1", name: "n", input: 1, optimistic: insert("x", 1) });
+    store.outbox?.append({
+      id: "m1",
+      name: "n2",
+      input: 2,
+      optimistic: { op: "update", key: "x", row: { id: "x", rank: 9 } },
+    });
+    await store.whenIdle();
+
+    const reloaded = await createSqliteLiveStore({ def, db });
+    expect(reloaded.outbox?.load()).toEqual([
+      {
+        id: "m1",
+        name: "n2",
+        input: 2,
+        optimistic: { op: "update", key: "x", row: { id: "x", rank: 9 } },
+      },
+    ]);
+  });
+
+  it("isolates the outbox per shape, and whenIdle awaits the outbox writes", async () => {
+    const db = freshDb();
+    const other: ShapeDefinition = { ...def, table: "comments" };
+    const posts = await createSqliteLiveStore({ def, db });
+    const comments = await createSqliteLiveStore({ def: other, db });
+
+    posts.outbox?.append({ id: "p1", name: "n", input: null, optimistic: insert("p", 1) });
+    comments.outbox?.append({ id: "c1", name: "n", input: null, optimistic: insert("c", 1) });
+    await posts.whenIdle();
+    await comments.whenIdle();
+
+    expect((await createSqliteLiveStore({ def, db })).outbox?.load().map((e) => e.id)).toEqual([
+      "p1",
+    ]);
+    expect(
+      (await createSqliteLiveStore({ def: other, db })).outbox?.load().map((e) => e.id),
+    ).toEqual(["c1"]);
+  });
+
+  it("applyOptimistic overlays the durable store WITHOUT persisting to the rows tier", async () => {
+    const db = freshDb();
+    const store = await createSqliteLiveStore({ def, db });
+    store.applySnapshot([{ id: "a", rank: 1 }], "v1:s:1:1");
+    await store.whenIdle();
+
+    store.applyOptimistic(insert("b", 2));
+    expect(store.getRows()).toEqual([
+      { id: "a", rank: 1 },
+      { id: "b", rank: 2 },
+    ]);
+    await store.whenIdle();
+
+    // The optimistic row is overlay-only: the durable ROWS table still holds just the authorized
+    // snapshot (durability of the write comes from the outbox log, rebuilt into the overlay on
+    // reload — not the rows tier). With no outbox entry, a reload does not resurrect it.
+    const reloaded = await createSqliteLiveStore({ def, db });
+    expect(reloaded.getRows()).toEqual([{ id: "a", rank: 1 }]);
+
+    store.clearOptimistic("b");
+    expect(store.getRows()).toEqual([{ id: "a", rank: 1 }]);
+  });
+
+  it("an outbox write bypasses the rows/cursor freeze — a frozen tier never drops an offline write", async () => {
+    const db = freshDb();
+    let fail = true;
+    const onError = vi.fn();
+    const store = await createSqliteLiveStore({
+      def,
+      db: withFaultyCursorWrite(db, () => fail),
+      onError,
+    });
+
+    // Freeze the rows tier with a failed incremental write.
+    store.applyChange(insert("a", 1), "v1:s:1:1");
+    await store.whenIdle();
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // While frozen, a durable outbox append MUST still land (it touches neither rows nor cursor, so
+    // it cannot violate the (rows, cursor) invariant the freeze protects) — losing it would defeat
+    // the whole "an offline write survives reload" guarantee.
+    store.outbox?.append({ id: "m1", name: "n", input: 1, optimistic: insert("x", 1) });
+    await store.whenIdle();
+
+    fail = false;
+    const reloaded = await createSqliteLiveStore({ def, db });
+    expect(reloaded.outbox?.load().map((e) => e.id)).toEqual(["m1"]);
+  });
+
+  it("a failed outbox write is reported and never rejects whenIdle", async () => {
+    const onError = vi.fn();
+    const store = await createSqliteLiveStore({
+      def,
+      db: withFaultyWrite(freshDb(), "lesto_live_outbox", () => true),
+      onError,
+    });
+
+    store.outbox?.append({ id: "m1", name: "n", input: 1, optimistic: insert("x", 1) });
+
+    await expect(store.whenIdle()).resolves.toBeUndefined();
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("swallows a failed outbox write when no onError is given (no unhandled rejection)", async () => {
+    const store = await createSqliteLiveStore({
+      def,
+      db: withFaultyWrite(freshDb(), "lesto_live_outbox", () => true),
+    });
+
+    store.outbox?.append({ id: "m1", name: "n", input: 1, optimistic: insert("x", 1) });
+
+    await expect(store.whenIdle()).resolves.toBeUndefined();
+  });
+});
+
 describe("createSqliteLiveStore — hydration runs inside the write FIFO", () => {
   it("a hydration issued while a write transaction is open does not interleave into that open span", async () => {
     const db = freshDb();
@@ -531,22 +700,27 @@ function withCallLog(
 }
 
 /**
- * Wrap a real `SqlDatabase` so the `lesto_live_cursor` UPSERT throws while `shouldFail()` — the
- * torn-write fault. The wrap reaches into the transaction's `tx` handle (that is where the
- * store's cursor write runs), so the surrounding real transaction rolls back atomically.
+ * Wrap a real `SqlDatabase` so any prepared statement whose SQL includes `sqlMatch` throws on
+ * `run()` while `shouldFail()` — a targeted write fault. The wrap reaches into the transaction's
+ * `tx` handle (where the store's writes run), so the surrounding real transaction rolls back
+ * atomically. {@link withFaultyCursorWrite} is the `"lesto_live_cursor"` specialization.
  */
-function withFaultyCursorWrite(db: SqlDatabase, shouldFail: () => boolean): SqlDatabase {
+function withFaultyWrite(
+  db: SqlDatabase,
+  sqlMatch: string,
+  shouldFail: () => boolean,
+): SqlDatabase {
   const wrapPrepare =
     (target: SqlDatabase): SqlDatabase["prepare"] =>
     (sql) => {
       const stmt = target.prepare(sql);
 
-      if (!sql.includes("lesto_live_cursor")) return stmt;
+      if (!sql.includes(sqlMatch)) return stmt;
 
       return {
         ...stmt,
         run: async (params) => {
-          if (shouldFail()) throw new Error("boom: cursor write failed");
+          if (shouldFail()) throw new Error(`boom: ${sqlMatch} write failed`);
 
           return stmt.run(params);
         },
@@ -567,4 +741,9 @@ function withFaultyCursorWrite(db: SqlDatabase, shouldFail: () => boolean): SqlD
         return fn(wrappedTx);
       }),
   };
+}
+
+/** The `"lesto_live_cursor"` specialization of {@link withFaultyWrite} — the torn-write fault. */
+function withFaultyCursorWrite(db: SqlDatabase, shouldFail: () => boolean): SqlDatabase {
+  return withFaultyWrite(db, "lesto_live_cursor", shouldFail);
 }

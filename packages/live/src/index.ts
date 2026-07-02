@@ -15,6 +15,10 @@
  *     store, over an injectable `EventSource` seam (SSR-safe, test-fakeable).
  *   - {@link createLiveQuery} — the `{ subscribe, getSnapshot, disconnect }` handle that
  *     wires the two together, ready for a React `useSyncExternalStore` binding elsewhere.
+ *   - {@link createLiveMutations} — the offline-write **outbox** (ADR 0042 v1 Inc6): a write is
+ *     applied to the store optimistically and durably logged, then replayed on reconnect through
+ *     the app's normal authorized mutation `POST` (an injected seam); a server-rejected write rolls
+ *     back locally, and against a durable store the log survives reload.
  *
  * Unlike `@lesto/ui`'s topic-driven `connectLive` (ADR 0027/0040), this wire carries
  * auth-scoped ROW DATA — the deliberate ADR 0042 split. No React/preact dependency lives
@@ -26,6 +30,17 @@ export type { LiveStore } from "./store";
 
 export { createSqliteLiveStore } from "./sqlite-store";
 export type { CreateSqliteLiveStoreOptions, SqliteLiveStore } from "./sqlite-store";
+
+export type { OutboxEntry, OutboxPersistence } from "./store";
+
+export { createLiveMutations } from "./outbox";
+export type {
+  LiveMutations,
+  LiveMutationsOptions,
+  MutationOutcome,
+  MutationSubmitter,
+  SubmitMutation,
+} from "./outbox";
 
 export { browserLiveEnvironment, connectLiveData, DEFAULT_LIVE_DATA_PATH } from "./consumer";
 export type {

@@ -104,4 +104,60 @@ describe("createLiveStore", () => {
     store.applyResync();
     expect(store.getCursor()).toBeUndefined();
   });
+
+  describe("optimistic overlay (Inc6)", () => {
+    it("applyOptimistic shows a write over the authorized set and notifies", () => {
+      const store = createLiveStore(def);
+      const listener = vi.fn();
+      store.subscribe(listener);
+
+      store.applySnapshot([{ id: "a", rank: 1 }]);
+      store.applyOptimistic({ op: "insert", key: "b", row: { id: "b", rank: 2 } });
+
+      expect(store.getRows()).toEqual([
+        { id: "a", rank: 1 },
+        { id: "b", rank: 2 },
+      ]);
+      expect(listener).toHaveBeenCalledTimes(2); // snapshot + optimistic
+    });
+
+    it("clearOptimistic rolls the write back to the authorized row", () => {
+      const store = createLiveStore(def);
+
+      store.applySnapshot([{ id: "a", rank: 1 }]);
+      store.applyOptimistic({ op: "update", key: "a", row: { id: "a", rank: 9 } });
+      expect(store.getRows()).toEqual([{ id: "a", rank: 9 }]);
+
+      store.clearOptimistic("a");
+      expect(store.getRows()).toEqual([{ id: "a", rank: 1 }]);
+    });
+
+    it("the optimistic overlay does NOT touch the authorized cursor (wire-only)", () => {
+      const store = createLiveStore(def);
+
+      store.applySnapshot([{ id: "a", rank: 1 }], "v1:s:1:1");
+      store.applyOptimistic({ op: "insert", key: "b", row: { id: "b", rank: 2 } });
+
+      // A local write must not advance (or clear) the resume cursor — that tracks the authorized
+      // stream position only, so a reconnect still resumes from the last server frame.
+      expect(store.getCursor()).toBe("v1:s:1:1");
+    });
+
+    it("a resync leaves a pending optimistic write intact (the outbox owns clearing it)", () => {
+      const store = createLiveStore(def);
+
+      store.applySnapshot([{ id: "a", rank: 1 }]);
+      store.applyOptimistic({ op: "insert", key: "b", row: { id: "b", rank: 2 } });
+
+      // The wire resync drops the authorized slice but must not roll back an unrelated offline write.
+      store.applyResync();
+      expect(store.getRows()).toEqual([{ id: "b", rank: 2 }]);
+    });
+
+    it("the in-memory store exposes no durable outbox (session-only writes)", () => {
+      const store = createLiveStore(def);
+
+      expect(store.outbox).toBeUndefined();
+    });
+  });
 });

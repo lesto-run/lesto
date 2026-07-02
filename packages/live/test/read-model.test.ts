@@ -114,4 +114,91 @@ describe("createReadModel", () => {
     expect(a).toHaveBeenCalledTimes(2);
     expect(b).toHaveBeenCalledTimes(1);
   });
+
+  describe("optimistic overlay (Inc6)", () => {
+    it("merges an optimistic insert over the authorized set, in total order", () => {
+      const map = rowsMap([
+        { id: "a", rank: 1 },
+        { id: "c", rank: 3 },
+      ]);
+      const model = createReadModel(def, () => map.values());
+
+      // A new row not in the authorized set — shown immediately, sorted into place by `rank`.
+      model.setOptimistic({ op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      model.mutated();
+
+      expect(model.getRows()).toEqual([
+        { id: "a", rank: 1 },
+        { id: "b", rank: 2 },
+        { id: "c", rank: 3 },
+      ]);
+    });
+
+    it("an optimistic update overrides the authorized row for that key (overlay wins)", () => {
+      const map = rowsMap([{ id: "a", rank: 5 }]);
+      const model = createReadModel(def, () => map.values());
+
+      model.setOptimistic({ op: "update", key: "a", row: { id: "a", rank: 9 } });
+      model.mutated();
+
+      expect(model.getRows()).toEqual([{ id: "a", rank: 9 }]);
+    });
+
+    it("an optimistic delete removes the authorized row from the merged view", () => {
+      const map = rowsMap([
+        { id: "a", rank: 1 },
+        { id: "b", rank: 2 },
+      ]);
+      const model = createReadModel(def, () => map.values());
+
+      model.setOptimistic({ op: "delete", key: "a" });
+      model.mutated();
+
+      expect(model.getRows()).toEqual([{ id: "b", rank: 2 }]);
+    });
+
+    it("clearOptimistic rolls back to the authorized row (a purely additive overlay)", () => {
+      const map = rowsMap([{ id: "a", rank: 5 }]);
+      const model = createReadModel(def, () => map.values());
+
+      model.setOptimistic({ op: "update", key: "a", row: { id: "a", rank: 9 } });
+      model.mutated();
+      expect(model.getRows()).toEqual([{ id: "a", rank: 9 }]);
+
+      // Clearing the overlay reveals the untouched authorized row again — the rollback.
+      model.clearOptimistic("a");
+      model.mutated();
+      expect(model.getRows()).toEqual([{ id: "a", rank: 5 }]);
+    });
+
+    it("re-setting the same key replaces the pending overlay entry", () => {
+      const map = rowsMap([{ id: "a", rank: 1 }]);
+      const model = createReadModel(def, () => map.values());
+
+      model.setOptimistic({ op: "update", key: "a", row: { id: "a", rank: 2 } });
+      model.setOptimistic({ op: "update", key: "a", row: { id: "a", rank: 3 } });
+      model.mutated();
+
+      expect(model.getRows()).toEqual([{ id: "a", rank: 3 }]);
+    });
+
+    it("with an empty overlay, getRows is byte-identical to the pre-Inc6 sort fast-path", () => {
+      // The overlay-empty branch must not perturb the stable-reference contract: repeated reads
+      // hand back the SAME array, and a set-then-clear that leaves the overlay empty again keeps
+      // that fast-path (no lingering merged copy).
+      const map = rowsMap([{ id: "a", rank: 1 }]);
+      const model = createReadModel(def, () => map.values());
+
+      const first = model.getRows();
+      expect(model.getRows()).toBe(first);
+
+      model.setOptimistic({ op: "insert", key: "b", row: { id: "b", rank: 2 } });
+      model.clearOptimistic("b");
+      model.mutated();
+
+      const afterEmptyAgain = model.getRows();
+      expect(afterEmptyAgain).toEqual([{ id: "a", rank: 1 }]);
+      expect(model.getRows()).toBe(afterEmptyAgain);
+    });
+  });
 });
