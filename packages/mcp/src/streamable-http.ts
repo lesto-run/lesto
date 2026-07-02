@@ -123,6 +123,15 @@ export interface McpHttpHandlers {
 
   /** The MCP Streamable-HTTP endpoint — mount at the server's MCP path (POST). */
   rpc: Handler;
+
+  /**
+   * The GET handler for the MCP path — mount at the server's MCP path (GET). The MCP
+   * Streamable-HTTP transport lets a client open an optional server→client SSE stream with a
+   * GET to the endpoint; this stateless JSON Resource Server offers none, so it answers `405`
+   * with `Allow: POST` — the spec-correct "no SSE here" a real `StreamableHTTPClientTransport`
+   * reads cleanly, rather than a `404` it would surface as a transport error.
+   */
+  noStream: Handler;
 }
 
 /** The advertised identity when the caller supplies none. */
@@ -245,6 +254,11 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
     body: metadataBody,
   });
 
+  // A real `StreamableHTTPClientTransport` probes GET on the MCP path for the optional
+  // server→client SSE stream; this stateless JSON RS offers none, so answer 405 (`Allow: POST`)
+  // — the client reads a clean "no SSE here" instead of a 404 it surfaces as a transport error.
+  const noStream: Handler = () => ({ status: 405, headers: { allow: "POST" }, body: "" });
+
   const rpc: Handler = async (c) => {
     const decision = await gateMcpHttpRequest({
       origin: c.header("origin"),
@@ -322,5 +336,5 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
     return runStreamableHttp(runContext, tools, c.req, serverInfo);
   };
 
-  return { metadata, rpc };
+  return { metadata, rpc, noStream };
 }

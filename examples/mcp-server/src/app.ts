@@ -175,11 +175,9 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
   api.get("/.well-known/oauth-protected-resource", handlers.metadata).post("/mcp", handlers.rpc);
 
   // A real MCP client (StreamableHTTPClientTransport) probes GET /mcp for an optional
-  // server→client SSE stream. This stateless JSON server offers none, so answer 405 (with
-  // `Allow: POST`) — the spec-correct "no SSE here" the client reads cleanly, rather than a
-  // 404 it would surface as a transport error. (Worth promoting into `createMcpHttpHandlers`
-  // itself so every Lesto MCP server is real-client-clean by default — see the follow-up task.)
-  api.get("/mcp", () => ({ status: 405, headers: { allow: "POST" }, body: "" }));
+  // server→client SSE stream; this stateless JSON server offers none → 405 (`Allow: POST`),
+  // the clean "no SSE here" the client reads instead of a 404 it surfaces as a transport error.
+  api.get("/mcp", handlers.noStream);
 
   booted = await createApp({ db: options.handle, app: api });
 

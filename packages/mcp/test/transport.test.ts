@@ -172,6 +172,14 @@ describe("createMcpHttpHandlers (end to end, in process)", () => {
     });
   });
 
+  it("answers the GET SSE probe with 405 Allow: POST (real-client clean, empty body)", async () => {
+    const res = must(await handlers.noStream(post(undefined, {}), noop));
+
+    expect(res.status).toBe(405);
+    expect((res.headers as Record<string, string>).allow).toBe("POST");
+    expect(res.body).toBe("");
+  });
+
   it("answers tools/list for an authenticated request with the live tool set", async () => {
     const c = post(
       { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
