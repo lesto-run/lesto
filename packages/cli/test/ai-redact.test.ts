@@ -137,9 +137,12 @@ describe("stripSecretTokens", () => {
       "github_pat_11ABCDEFG0123456789_abcdefghij", // GitHub fine-grained PAT
       "glpat-0123456789abcdefABCD", // GitLab PAT
       "xoxb-1234567890-abcdefGHIJ", // Slack bot token
+      "xapp-1-A01234567-abcdefGHIJ", // Slack app-level token
       `AIza${"D".repeat(35)}`, // Google API key
       "ya29.A0ARrdaM-0123456789abcdefghij", // Google OAuth token
-      "sk-proj-0123456789abcdefABCDEFGHIJ", // OpenAI project key
+      "sk-proj-0123456789abcdefABCDEFGHIJ", // OpenAI project key (contiguous body)
+      "sk-ant-api03-Rm9v0hy-Nq_2fXk3wZ", // Anthropic key (body carries -/_)
+      "sk-0123456789abcdefABCDEFGHIJ", // OpenAI classic key
       "npm_0123456789abcdefABCDEFabcdef0123", // npm automation token
       "SG.0123456789abcdefABCDE.0123456789abcdefABCDEFGHIJ", // SendGrid
       "dop_v1_0123456789abcdef0123456789abcdef0123456789abcdef0123456789", // DigitalOcean
@@ -285,10 +288,11 @@ describe("redactToolOutput", () => {
     expect(redactToolOutput("Bearer abc.def.ghi")).toBe("Bearer <redacted>");
   });
 
-  it("leaves a non-plain object (Date) intact rather than flattening it to {}", () => {
+  it("leaves a toJSON-bearing object (Date) intact rather than walking it to {}", () => {
     const when = new Date(0);
     const out = redactToolOutput({ createdAt: when }) as { createdAt: Date };
 
+    // Date has `toJSON`, so JSON.stringify renders it — the walk must not flatten its (empty) own keys.
     expect(out.createdAt).toBe(when);
   });
 
@@ -311,5 +315,40 @@ describe("redactToolOutput", () => {
     // the reply path's `safeStringify` still reports it unserializable.
     expect(out.label).toBe("Bearer <redacted>");
     expect(() => JSON.stringify(out)).toThrow();
+  });
+
+  it("scrubs a class instance's own enumerable string props (not passed raw to JSON.stringify)", () => {
+    class Row {
+      authorization = "Bearer abc.def.ghi";
+      apiKey = "sk_live_51H8xYz0123456789abcdEFGH";
+    }
+
+    const out = redactToolOutput({ row: new Row() }) as {
+      row: { authorization: string; apiKey: string };
+    };
+
+    // A class instance has no `toJSON`, so it is WALKED — its own enumerable props are exactly what
+    // JSON.stringify would emit, so a secret there must be scrubbed, not handed back raw.
+    expect(out.row.authorization).toBe("Bearer <redacted>");
+    expect(out.row.apiKey).not.toContain("sk_live_");
+  });
+
+  it("redacts a SHARED (aliased) node at EVERY occurrence — a DAG is not a cycle (L-01d526da red-team)", () => {
+    const shared = {
+      authorization: "Bearer abc.def.ghi",
+      note: "key sk_live_51H8xYz0123456789abcdEFGH",
+    };
+
+    const out = redactToolOutput({ first: shared, second: shared }) as {
+      first: { authorization: string; note: string };
+      second: { authorization: string; note: string };
+    };
+
+    // JSON.stringify does NOT throw on a DAG, so a raw second occurrence would ship the secret
+    // straight into the reply. Both occurrences must be independently scrubbed.
+    for (const row of [out.first, out.second]) {
+      expect(row.authorization).toBe("Bearer <redacted>");
+      expect(row.note).not.toContain("sk_live_");
+    }
   });
 });

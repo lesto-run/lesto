@@ -184,10 +184,12 @@ const VENDOR_SECRET = new RegExp(
     String.raw`\bgh[pousr]_[0-9A-Za-z]{20,}`, // GitHub PAT / OAuth / user / server / refresh
     String.raw`\bgithub_pat_[0-9A-Za-z_]{20,}`, // GitHub fine-grained PAT
     String.raw`\bglpat-[0-9A-Za-z_-]{16,}`, // GitLab personal access token
-    String.raw`\bxox[baprs]-[0-9A-Za-z-]{10,}`, // Slack bot / user / app / refresh token
+    String.raw`\bxox[baprs]-[0-9A-Za-z-]{10,}`, // Slack bot / user / app-config / refresh token
+    String.raw`\bxapp-[0-9A-Za-z-]{10,}`, // Slack app-level token
     String.raw`\bAIza[0-9A-Za-z_-]{35}`, // Google API key
     String.raw`\bya29\.[0-9A-Za-z_-]{20,}`, // Google OAuth access token
-    String.raw`\bsk-(?:proj-|ant-)?[0-9A-Za-z]{20,}`, // OpenAI / Anthropic (contiguous body → slug-safe)
+    String.raw`\bsk-(?:proj-|ant-)[0-9A-Za-z_-]{20,}`, // OpenAI/Anthropic proj/ant keys (body carries -/_)
+    String.raw`\bsk-[0-9A-Za-z]{20,}`, // OpenAI classic key (contiguous body → slug-safe)
     String.raw`\bnpm_[0-9A-Za-z]{20,}`, // npm automation token
     String.raw`\bSG\.[0-9A-Za-z_-]{20,}\.[0-9A-Za-z_-]{20,}`, // SendGrid API key
     String.raw`\bdo[opr]_v1_[0-9a-f]{20,}`, // DigitalOcean token
@@ -346,13 +348,6 @@ function redactOutputString(input: string): string {
   return stripKnownSecretShapes(stripSqlBindValues(input));
 }
 
-/** A value is a plain JSON object iff its prototype is `Object.prototype` or null. */
-function isPlainObject(value: object): boolean {
-  const proto = Object.getPrototypeOf(value) as unknown;
-
-  return proto === Object.prototype || proto === null;
-}
-
 /** Walk one node of a tool result, redacting string leaves; `seen` breaks reference cycles. */
 function redactOutputValue(value: unknown, seen: WeakSet<object>): unknown {
   if (typeof value === "string") return redactOutputString(value);
@@ -360,36 +355,53 @@ function redactOutputValue(value: unknown, seen: WeakSet<object>): unknown {
   // Non-object leaves (number/boolean/undefined/bigint/symbol) carry no secret text — pass through.
   if (value === null || typeof value !== "object") return value;
 
-  // A cycle: stop recursing and hand back the node as-is. The reply path's `safeStringify`
-  // still reports the (unchanged) cycle as unserializable — this guard only prevents a stack blow.
+  // An object that serializes itself via `toJSON` (Date, URL, …) is reflected as-is: `JSON.stringify`
+  // will call that `toJSON`, so walking its own enumerable keys would discard what actually ships.
+  // EVERYTHING else — a plain object, a CLASS INSTANCE, a Map/Set — falls into the walk, because a
+  // class instance's own enumerable props are exactly what `JSON.stringify` emits, so a string leaf
+  // there MUST be scrubbed, not handed back raw (Map/Set have no own enumerable props → render `{}`).
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function") return value;
+
+  // PATH-scoped cycle guard: `seen` holds only the CURRENT path's ancestors (note the `delete` below,
+  // after the node's subtree is walked). A true cycle re-enters an ancestor and stops here — staying
+  // cyclic so the reply's `safeStringify` drops it. A merely SHARED/aliased node (a DAG, which
+  // `JSON.stringify` does NOT throw on) sits on a different path, so it is redacted at EVERY
+  // occurrence — never returned raw on its second visit, which would ship a secret the redactor
+  // already recognized on the first.
   if (seen.has(value)) return value;
   seen.add(value);
 
-  if (Array.isArray(value)) return value.map((item) => redactOutputValue(item, seen));
+  let walked: unknown;
+  if (Array.isArray(value)) {
+    walked = value.map((item) => redactOutputValue(item, seen));
+  } else {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) out[key] = redactOutputValue(entry, seen);
+    walked = out;
+  }
 
-  // A non-plain object (Date, Map, class instance) is left intact for `safeStringify` to render —
-  // walking its own-keys would silently drop its data (e.g. a Date's entries are empty).
-  if (!isPlainObject(value)) return value;
+  seen.delete(value);
 
-  const out: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) out[key] = redactOutputValue(entry, seen);
-
-  return out;
+  return walked;
 }
 
 /**
  * Redact a dev-tool RESULT before it is reflected into the overlay reply (ADR 0033,
  * L-01d526da). Phase 1's one inspect tool (`describe_app`) returns app STRUCTURE only, so
- * nothing leaks today — but this is the guard that must exist BEFORE a data-bearing read tool
- * (recent-requests, tail-logs, content reads) is added to the bridge's `READ_TOOL_ALLOWLIST`,
- * so growing that allowlist is a one-line change, not a security review.
+ * nothing leaks today — this is the guard that must exist BEFORE a data-bearing read tool
+ * (recent-requests, tail-logs, content reads) is added to the bridge's `READ_TOOL_ALLOWLIST`.
+ * Adding such a tool is NOT free: this stage deliberately drops path-collapse AND the high-entropy
+ * sweep (to keep routes intact), so a tool whose output can carry filesystem paths or OPAQUE
+ * prefix-less secrets still needs a threat-model pass here — especially once a later phase routes
+ * output to an external LLM (Phase 1's reply is same-origin, token-gated, dev-browser-only).
  *
  * Structure-aware and structure-preserving: it walks arbitrary JSON, scrubs every STRING leaf
  * through {@link redactOutputString} (secret + SQL-bind sweeps, but not path-collapse — routes
- * survive), and leaves object keys, array shapes, and non-string leaves untouched. Pure and
- * total like the rest of this module: it neither reads the world nor throws (reference cycles
- * are broken, so a pathological result cannot blow the stack — the reply's `safeStringify`
- * still renders a cyclic result as unserializable).
+ * survive), and leaves object keys, array shapes, and non-string leaves untouched. A SHARED
+ * (aliased) node is redacted at every occurrence, and a CLASS INSTANCE's own enumerable props are
+ * scrubbed like a plain object's. Pure and total like the rest of this module: it neither reads
+ * the world nor throws (reference cycles are broken, so a pathological result cannot blow the
+ * stack — the reply's `safeStringify` still renders a cyclic result as unserializable).
  */
 export function redactToolOutput(value: unknown): unknown {
   return redactOutputValue(value, new WeakSet());

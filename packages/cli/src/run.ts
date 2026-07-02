@@ -1567,9 +1567,11 @@ async function handleAiTurn(
     // scrubs any secret-shaped token / SQL bind a string leaf carries but preserves routes and
     // structure (unlike `redactString`, which would collapse `describe_app`'s multi-segment route
     // paths to `<path>`). Today's allowlist (`describe_app`) returns structure only, so nothing
-    // needs stripping; the guard is what lets a data-bearing read tool join `READ_TOOL_ALLOWLIST`
-    // (ADR 0033, L-01d526da) without a new redaction step. The reply also stays same-origin,
-    // token-gated, and never reaches an LLM in Phase 1.
+    // needs stripping. `redactToolOutput` is the guard a future data-bearing read tool relies on —
+    // but adding one is NOT free: it drops path-collapse + the high-entropy sweep to keep routes,
+    // so a tool that can emit filesystem paths or opaque prefix-less secrets needs a threat-model
+    // pass there (ADR 0033, L-01d526da). The reply also stays same-origin, token-gated, and never
+    // reaches an LLM in Phase 1.
     return aiReply(
       200,
       `Inspect-only (Phase 1). You asked: "${safePrompt}". Read-only result: ${safeStringify(redactToolOutput(result))}. Acting is Phase 2 (deferred).`,
