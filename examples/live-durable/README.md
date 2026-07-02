@@ -1,7 +1,8 @@
 # Durable `live()` — OPFS-SQLite store (ADR 0042 Tier 4, v1 Inc5/Inc6)
 
-The end-to-end round trip for the durable client store, bundled through a real Vite
-production build:
+The durable client store's intended end-to-end round trip — and, as it turned out, the
+reproduction of a bundler defect that currently blocks it in a production build (tracked as
+`L-4ed8e591`; see [The bundler finding](#the-bundler-finding-the-crux-of-this-example)):
 
 ```ts
 const { db } = await openOpfsSqliteDatabase();
@@ -12,10 +13,17 @@ const query = createLiveQuery(notesShape, { store });
 `openOpfsSqliteDatabase` (`@lesto/live`) boots `@sqlite.org/sqlite-wasm` over the Origin
 Private File System; `createSqliteLiveStore` wraps that connection in a `LiveStore` that
 mirrors every mutation in memory AND persists the row batch + resume cursor atomically;
-`createLiveQuery` opens the `GET /__lesto/live-data` subscription against it. Add a note,
-reload the page (even offline), and it repaints **instantly** from the OPFS-persisted slice
-— before the live stream reconnects. That instant repaint is the whole point of the durable
-tier; a plain in-memory store would paint nothing until the first snapshot arrived.
+`createLiveQuery` opens the `GET /__lesto/live-data` subscription against it. The intended
+demo: add a note, reload the page (even offline), and it repaints **instantly** from the
+OPFS-persisted slice — before the live stream reconnects. That instant repaint is the whole
+point of the durable tier; a plain in-memory store would paint nothing until the first
+snapshot arrived.
+
+> **⚠️ As bundled by the documented `bun run build` below, this demo does NOT work yet.** The
+> production build silently drops the SQLite engine (the finding below), so
+> `openOpfsSqliteDatabase` throws and the durable store never opens. Reproducing that defect is
+> what this example proves today; the instant-repaint demo lands once `L-4ed8e591` fixes the
+> bundler wiring (or via the app-side import-map workaround described below).
 
 `src/schema.ts` defines the one `notes` table and its bound shape and is imported by BOTH
 `src/main.ts` (the client) and `src/app.ts` (the server) — one schema, two runtimes, the ADR
@@ -32,10 +40,11 @@ bun run serve                      # boots the API + serves dist/ on :3000
 
 Then open **http://127.0.0.1:3000 in a real browser** (OPFS needs one — there is no Node/Bun
 OPFS implementation, which is also why this file has no vitest suite; `packages/live`'s
-`opfs-sqlite.ts` is coverage-excluded for the same reason). Add a note, then reload: the note
-is still there instantly. This live round-trip — the actual browser session — is the one
-piece of this task this sandbox cannot execute; everything above the fold (the build) is
-what it proved instead.
+`opfs-sqlite.ts` is coverage-excluded for the same reason). **With the committed build the
+durable store fails to open** (the bundler finding below), so the reload-persists round trip is
+what this example is DESIGNED to show and will show once `L-4ed8e591` lands — not what the
+committed `dist/` does today. What the build DID prove is the bundler defect itself; that
+browser round-trip is also the one piece this sandbox cannot execute.
 
 ## The bundler finding (the crux of this example)
 
@@ -94,13 +103,16 @@ Both are kept anyway as the honest, standard signal of intent — but this READM
 `packages/live/src/opfs-sqlite.ts`'s module doc say plainly that they do not fix production
 bundling, rather than imply they do.
 
-**What would actually fix it**, if an app needs this durable path production-bundled: make
-`@sqlite.org/sqlite-wasm` resolvable at runtime by a means outside `opfs-sqlite.ts` — e.g.
-the app's own literal `import("@sqlite.org/sqlite-wasm")` elsewhere in its bundle plus a
-matching import map, or a fork of the loader with a literal specifier (which reopens the
-exact `tsc` requirement on the peer that the current, non-literal form exists to avoid). That
-is an application-level or `@lesto/live`-API-level decision beyond this hardening pass —
-tracked, not solved, here.
+**What would actually fix it** (tracked as `L-4ed8e591`, not solved here). The leading
+candidate is library-side: expose the durable engine as a dedicated opt-in **subpath export**
+(e.g. `@lesto/live/opfs`) that reaches the peer through a **literal**
+`import("@sqlite.org/sqlite-wasm")`. A literal bundles the peer in full (the side-by-side above
+proves that); keeping it OUT of the main `@lesto/live` barrel means a peer-less consumer
+importing `@lesto/live` never pulls the literal into its `tsc`/bundler graph, while an opt-in
+app that imports the subpath has already installed the peer and resolves it cleanly. Only a raw
+literal in a barrel-exported file reopens the `tsc` requirement — a separate subpath does not.
+Alternatively an app can resolve it app-side: its own literal `import("@sqlite.org/sqlite-wasm")`
+plus a matching import map.
 
 ## Peer-version note
 

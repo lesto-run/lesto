@@ -18,10 +18,11 @@
  *   - The cursor variable + {@link ReadModel.getCursor} + {@link ReadModel.setCursor}.
  *
  * What it deliberately does NOT own: `rowsByKey`, the keyed row map. The two stores drive that
- * map through genuinely different strategies — {@link createLiveStore} swaps in a fresh `Map` on
- * every snapshot (so a bad row throws before any state is touched), while
- * {@link createSqliteLiveStore} clears and refills one long-lived mirror `Map` that a durable
- * write also persists — and this module has no business knowing or caring which. Instead each
+ * map through different mechanisms — {@link createLiveStore} swaps in a fresh `Map` on every
+ * snapshot (so a bad row throws before any state is touched), while {@link createSqliteLiveStore}
+ * clears and refills one long-lived mirror `Map` that a durable write also persists. Both are
+ * build-then-commit, so unifying them behind a map-owning read model is possible but out of scope;
+ * keeping the map in the stores is the conservative cut, and this module need not know which. Each
  * store hands in a `getRowsSnapshot` thunk over its OWN map, read fresh every time the cache is
  * dirtied, so `getRows()` always sorts the CURRENT rows via {@link compareRows} regardless of how
  * they got there.

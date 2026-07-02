@@ -31,8 +31,8 @@
  * specifier bundles `@sqlite.org/sqlite-wasm` in full (its JS plus the `sqlite3.wasm` /
  * worker/proxy assets it needs — ~1.1 MB); the same call through this file's non-literal
  * `SQLITE_WASM_MODULE` variable produces a build that is missing all of it — the emitted chunk
- * still contains the literal source text `import(SQLITE_WASM_MODULE)`, an unresolved BARE
- * specifier a browser's native ESM loader cannot resolve (no relative path, no import map), so
+ * still contains an un-analyzable dynamic `import()` of the (minified) `SQLITE_WASM_MODULE`
+ * variable — an unresolved BARE specifier a browser's native ESM loader cannot resolve, so
  * it throws at runtime — and Rollup emits zero warning either way (confirmed with an `onwarn`
  * hook that logs every warning: none fire). Neither of the two mitigations one might reach for
  * changes this: `import(/* @vite-ignore *\/ SQLITE_WASM_MODULE)` (present below) only silences
@@ -40,12 +40,16 @@
  * output is byte-identical with or without it — and `optimizeDeps.exclude` only steers the dev
  * server's esbuild dependency SCAN, which never runs during `vite build` at all. Both are
  * genuinely inert here; kept anyway as the standard, honest signal of intent (see
- * `examples/live-durable/vite.config.ts` and its README for the full experiment). An app that
- * needs this durable path production-bundled must arrange for `@sqlite.org/sqlite-wasm` to
- * resolve at runtime by some means outside this file — e.g. its own literal
- * `import("@sqlite.org/sqlite-wasm")` elsewhere plus a matching import map, or a fork of this
- * loader — since a literal specifier here would re-open the exact `tsc` requirement this file
- * exists to avoid for a consumer that has not installed the peer.
+ * `examples/live-durable/vite.config.ts` and its README for the full experiment). The clean fix
+ * is not taken yet (tracked, `L-4ed8e591`): the leading candidate is library-side — a dedicated
+ * opt-in SUBPATH export (e.g. `@lesto/live/opfs`) that reaches the peer through a LITERAL
+ * `import("@sqlite.org/sqlite-wasm")` (a literal bundles it in full, per the side-by-side above),
+ * kept OUT of the main barrel so a peer-less consumer importing `@lesto/live` never pulls this
+ * module (and its literal) into its `tsc`/bundler graph, while an opt-in app that imports the
+ * subpath has the peer installed and resolves it cleanly. Only a raw literal in THIS
+ * barrel-exported file would re-open the `tsc` requirement for a peer-less consumer; a separate
+ * subpath does not. (An app can alternatively resolve it app-side: its own literal import plus an
+ * import map.)
  */
 
 import { adaptSyncSqlite } from "@lesto/db";
