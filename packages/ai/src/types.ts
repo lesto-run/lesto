@@ -98,9 +98,9 @@ export type Transport = (request: Request) => Promise<Response>;
  * dependency-free.
  *
  * The span is opened BEFORE the model call (so it carries the call's real duration), with the
- * one attribute known up front — the model id — fixed at {@link AgentTracer.startSpan} time. The
- * attributes learned only AFTER the call (the parsed `Usage`/`StopReason` on success, the
- * `AiError` code on failure) ride in via {@link setAttributes}.
+ * two attributes known up front — the model id and `ai.streaming` — fixed at
+ * {@link AgentTracer.startSpan} time. The attributes learned only AFTER the call (the parsed
+ * `Usage`/`StopReason` on success, the `AiError` code on failure) ride in via {@link setAttributes}.
  */
 export interface AgentSpan {
   /**

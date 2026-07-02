@@ -60,9 +60,11 @@ export async function generateText(options: GenerateOptions): Promise<GenerateRe
   const { tracer } = options;
 
   // Open BEFORE the call so the span carries the generation's real latency. The two attributes
-  // known up front: the model id, and `ai.streaming = false` — the explicit flag that lets a
-  // trace query segment one-shot from streamed calls and tells a missing-usage span apart from a
-  // regression here (a non-streamed span with no usage is a bug; a streamed one is expected).
+  // known up front: the model id, and `ai.streaming = false`. Setting the flag on the one-shot
+  // path too (not just streamText) keeps it present on EVERY `ai.generate` span, so a query
+  // segments the two with an affirmative predicate (`ai.streaming = false`) instead of leaning on
+  // attribute-absence — and a missing-usage span reads unambiguously: a bug here, expected on a
+  // stream.
   const span = tracer?.startSpan(AI_GENERATE_SPAN, {
     [AI_MODEL_ATTR]: options.modelId ?? options.model.defaultModelId,
     [AI_STREAMING_ATTR]: false,
@@ -118,7 +120,7 @@ export async function generateText(options: GenerateOptions): Promise<GenerateRe
  * success. Unlike the non-streamed path it records no `Usage`/`StopReason` (the delta stream
  * yields text only, not a final token count — so `ai.streaming = true` is what marks that absence
  * expected rather than a bug; recovering the counts from Anthropic's `message_delta` frame is a
- * deferred parser change, L-1cbabfc0). **Caveat:** a consumer that manually pulls the iterator
+ * deferred parser change, L-3c7b03b8). **Caveat:** a consumer that manually pulls the iterator
  * (`.next()`) and abandons it without draining or calling `.return()` bypasses `IteratorClose`
  * entirely — the generator stays suspended and the span never closes or exports. Absent a tracer
  * this is the exact original stream — no span, no overhead.

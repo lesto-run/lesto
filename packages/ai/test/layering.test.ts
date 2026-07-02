@@ -20,6 +20,7 @@ import {
   AI_GENERATE_SPAN,
   AI_MODEL_ATTR,
   AI_STOP_REASON_ATTR,
+  AI_STREAMING_ATTR,
   AI_TOOL_NAME_ATTR,
   AI_TOOL_SPAN,
   AI_USAGE_INPUT_TOKENS_ATTR,
@@ -73,6 +74,7 @@ describe("@lesto/ai stays dependency-free of @lesto/observability", () => {
     expect(AI_USAGE_INPUT_TOKENS_ATTR).toBe("ai.usage.input_tokens");
     expect(AI_USAGE_OUTPUT_TOKENS_ATTR).toBe("ai.usage.output_tokens");
     expect(AI_STOP_REASON_ATTR).toBe("ai.stop_reason");
+    expect(AI_STREAMING_ATTR).toBe("ai.streaming");
     expect(AI_TOOL_NAME_ATTR).toBe("ai.tool.name");
     // A preview @lesto/ai-local attribute (not in the shared vocabulary).
     expect(AI_ERROR_CODE_ATTR).toBe("ai.error_code");

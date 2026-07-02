@@ -325,14 +325,18 @@ describe("ai.streaming segments streamed vs non-streamed spans (L-1cbabfc0)", ()
       // drain
     }
 
-    expect(oneShot.spans[0]?.name).toBe(streamed.spans[0]?.name); // same span name…
-    expect(oneShot.spans[0]?.attributes[AI_STREAMING_ATTR]).toBe(false); // …opposite flags.
+    // Pin the name on each span explicitly (not span-to-span, which would pass vacuously if both
+    // were absent): both open the SAME `ai.generate` name…
+    expect(oneShot.spans[0]?.name).toBe(AI_GENERATE_SPAN);
+    expect(streamed.spans[0]?.name).toBe(AI_GENERATE_SPAN);
+    // …and are told apart ONLY by opposite ai.streaming flags — the whole point of the attribute.
+    expect(oneShot.spans[0]?.attributes[AI_STREAMING_ATTR]).toBe(false);
     expect(streamed.spans[0]?.attributes[AI_STREAMING_ATTR]).toBe(true);
   });
 });
 
 describe("telemetry isolation — a broken tracer never masks the real result (ADR 0031 Phase 2)", () => {
-  it("generateText still returns the real result when setStatus/end throw on the success path", async () => {
+  it("generateText still returns the real result when setAttributes/setStatus/end throw on the success path", async () => {
     const { transport } = constantTransport(jsonResponse(textMessage("still works.")));
     const model = createAnthropic({ apiKey: "sk-test", transport });
 
@@ -388,7 +392,7 @@ describe("telemetry isolation — a broken tracer never masks the real result (A
     expect((error as AiError).code).toBe("AI_HTTP_ERROR");
   });
 
-  it("streamText still yields every delta and ends the (broken) span when setStatus/end throw", async () => {
+  it("streamText still yields every delta and ends the (broken) span when setAttributes/setStatus/end throw", async () => {
     const frames = [
       'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"a"}}\n\n',
     ];

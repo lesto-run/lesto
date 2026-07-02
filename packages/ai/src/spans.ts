@@ -4,9 +4,9 @@
  * These value-level constants MUST equal the canonical ones in `@lesto/observability`'s
  * `agent-vocabulary.ts` (`AI_GENERATE_SPAN = "ai.generate"`, `AI_TOOL_SPAN`, `AI_MODEL_ATTR`,
  * `AI_USAGE_INPUT_TOKENS_ATTR`, `AI_USAGE_OUTPUT_TOKENS_ATTR`, `AI_STOP_REASON_ATTR`,
- * `AI_STREAMING_ATTR`, `AI_TOOL_NAME_ATTR`). They are RE-STATED here rather than imported so `@lesto/ai` stays the
- * dependency-free model layer it is — the layering line is that `@lesto/ai` gains no
- * `@lesto/observability` edge (ADR 0031). The estate consumer (Inc 4), which legitimately
+ * `AI_STREAMING_ATTR`, `AI_TOOL_NAME_ATTR`). They are RE-STATED here rather than imported so
+ * `@lesto/ai` stays the dependency-free model layer it is — the layering line is that `@lesto/ai`
+ * gains no `@lesto/observability` edge (ADR 0031). The estate consumer (Inc 4), which legitimately
  * depends on observability, is the seam that asserts the two vocabularies agree.
  *
  * The names are structural strings that land on the emitted span; the app's `Tracer` adapter
