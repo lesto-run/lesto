@@ -6,24 +6,30 @@
  * `POST /mls/api/assistant` is an authenticated route: a signed-in visitor asks a
  * natural-language question, and a bounded `runAgent` loop answers it, grounding
  * every reply in the live MLS through a `searchListings` tool. Wired with the
- * `Tracer`→`AgentTracer` adapter below, one such request produces
- * `http.request → ai.generate → ai.tool → db.query` on ONE trace, in the OTLP
+ * `Tracer`→`AgentTracer` adapter below, one such request puts `ai.generate` and
+ * `ai.tool` spans on the SAME trace as its `http.request` span, in the OTLP
  * collector estate already exports to — the "agent and LLM calls appear on the
- * same trace as your request" claim, made real on a real app.
+ * same trace as your request" claim, made real on a real app. (The illustrative
+ * `http.request → ai.generate → ai.tool → db.query` chain is one FLAT trace, not
+ * a nesting: each `ai.*` span parents directly on the request span, and the
+ * `db.query` leg is the authed identity read this route makes, not a tool query.)
  *
  * The route is provider-agnostic by construction: the model is injected. The
- * committed default is a deterministic {@link localAssistantModel} so the demo —
- * and the `lesto dev` loop, and the edge deploy — works with zero secrets and
- * still emits the full span tree; set `ANTHROPIC_API_KEY` and the SAME route
- * talks to a real Claude model instead (see {@link resolveAssistantModel}). This
- * mirrors estate's demo-mode ethos: safe, self-contained defaults, real wiring.
+ * committed default is a deterministic {@link localAssistantModel}, a REAL
+ * `LanguageModel` with no network, so the demo — and the `lesto dev` loop, and
+ * the edge deploy — answers with zero secrets; set `ANTHROPIC_API_KEY` and the
+ * SAME route talks to a real Claude model instead (see {@link resolveAssistantModel}).
+ * The span tree emits wherever a tracer is wired (the OTLP demo, and the node
+ * tracing test); the `lesto dev` loop and the edge deploy run the route untraced.
+ * This mirrors estate's demo-mode ethos: safe, self-contained defaults, real wiring.
  *
  * Layering (ADR 0031 Inc 4): the AI spans route through the app's ordinary
  * `Tracer` — the adapter here parents each on `currentRequestSpan` — NOT through
  * `traces.seams`, a closed `TraceSeams` set with no `ai.*` member. estate is the
  * seam that legitimately depends on BOTH `@lesto/ai` and `@lesto/observability`;
- * neither package depends on the other (the vocabularies are re-stated, asserted
- * equal here at the consumer).
+ * neither package depends on the other. The two packages RE-STATE the shared span
+ * vocabulary rather than import across the layer; the estate test is where they
+ * are asserted equal (it imports both and compares the constants).
  */
 
 import { currentRequestSpan, lesto } from "@lesto/web";
@@ -327,19 +333,33 @@ export function buildAssistantRoutes(deps: AssistantDeps): Lesto {
 
     if (prompt === "") return c.json({ error: "a prompt is required" }, 400);
 
-    const result = await runAgent({
-      model,
-      tools: ASSISTANT_TOOLS,
-      messages: [{ role: "user", content: prompt }],
-      system: ASSISTANT_SYSTEM,
-      maxSteps: 4,
-      ...(deps.tracer === undefined ? {} : { tracer: deps.tracer }),
-    });
+    try {
+      const result = await runAgent({
+        model,
+        tools: ASSISTANT_TOOLS,
+        // Name the visitor so a real model answers by name; the local demo model
+        // ignores the system prompt, so this leaves its deterministic output intact.
+        messages: [{ role: "user", content: prompt }],
+        system: `${ASSISTANT_SYSTEM} You are speaking with ${user.name}.`,
+        maxSteps: 4,
+        ...(deps.tracer === undefined ? {} : { tracer: deps.tracer }),
+      });
 
-    return c.json({
-      answer: result.text,
-      steps: result.steps.map((step) => step.toolCalls.map((call) => call.name)),
-      usage: result.usage,
-    });
+      return c.json({
+        answer: result.text,
+        steps: result.steps.map((step) => step.toolCalls.map((call) => call.name)),
+        usage: result.usage,
+      });
+    } catch (error) {
+      // A recoverable model/agent failure (the coded `AiError` — an upstream 429/529,
+      // a bad key, an over-budget loop) degrades to a shaped 503, not a bare 500. The
+      // errored `ai.generate` span already recorded it on the trace; anything else
+      // (a bug) propagates. This path matters on the real-model deploy, not the demo.
+      if (error instanceof AiError) {
+        return c.json({ error: "the assistant is unavailable, please try again" }, 503);
+      }
+
+      throw error;
+    }
   });
 }
