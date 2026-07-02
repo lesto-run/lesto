@@ -1332,6 +1332,12 @@ function joinOut(outDir: string, name: string): string {
  * (`<outDir>/<name>`), else the output root. A static site is served from its own
  * `out/<name>/` subtree, so its assets belong there; with zero or several static
  * targets there is no single such root, so the output root stands.
+ *
+ * KNOWN LIMITATION (tracked in L-c141cc32): with a lone static site + dynamic zones that
+ * ALSO ship islands, the shared bundle lands in the static site's `out/<name>/`, out of
+ * reach of a dynamic zone served from the output root — the same multi-site asset-placement
+ * gap the 2+ static case now refuses (`assertNoMultiStaticAssetCollision`). No example mixes
+ * these today; the real fix is per-site placement + the deploy topology, deferred there.
  */
 function assetRootFor(selected: readonly Site[], outDir: string): string {
   const staticTargets = staticTargetsOf(selected);
@@ -1366,7 +1372,9 @@ async function assertNoMultiStaticAssetCollision(
   config: LestoAppConfig,
   selected: readonly Site[],
 ): Promise<void> {
-  if (staticTargetsOf(selected).length <= 1) return;
+  const staticTargets = staticTargetsOf(selected);
+
+  if (staticTargets.length <= 1) return;
 
   // Key on what the APP has, not whether the builder seam is wired (it always is in
   // production; it is optional only for test injection): an `app/islands/` dir or a CSS
@@ -1377,7 +1385,7 @@ async function assertNoMultiStaticAssetCollision(
 
   if (!hasClient && !hasStyles) return;
 
-  const names = staticTargetsOf(selected).map((site) => site.name);
+  const names = staticTargets.map((site) => site.name);
 
   throw new CliError(
     "CLI_MULTI_STATIC_ASSETS_UNSUPPORTED",
