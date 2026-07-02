@@ -800,6 +800,46 @@ describe("LSN-exact resume (Inc4) — replay-or-re-snapshot on reconnect", () =>
     expect(sub.cursor).toBe("v1:sysA:1:0/0");
     e.stop();
   });
+
+  it("rejects a change with a malformed commit LSN at ingest — routes to onError, never poisons the ring", async () => {
+    const src = fakeSource();
+    const errors: unknown[] = [];
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      onError: (error) => errors.push(error),
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    const sink = collector();
+    await e.subscribe(room1Shape(), sink.onChange);
+
+    src.emit(ins(1, 1, "not-an-lsn"));
+
+    expect(sink.changes).toEqual([]); // dropped, not delivered
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as LiveServerError).code).toBe("LIVE_SERVER_INVALID_LSN");
+
+    // The bad change returned BEFORE stamping liveIdentity, so a later subscribe still gets the
+    // non-resumable v0 cursor — proof the ring was never touched.
+    const late = await e.subscribe(room1Shape(), () => {});
+    expect(late.cursor).toBe("v0:0");
+    e.stop();
+  });
+
+  it("drops a malformed-LSN change without throwing when no onError sink is configured", async () => {
+    const src = fakeSource();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      replication: { source: src.source, replicaIdentity: fullFor("messages") },
+    });
+    const sink = collector();
+    await e.subscribe(room1Shape(), sink.onChange);
+
+    expect(() => src.emit(ins(1, 1, "bad"))).not.toThrow();
+    expect(sink.changes).toEqual([]);
+    e.stop();
+  });
 });
 
 describe("poll safety", () => {

@@ -43,7 +43,7 @@ import { createImageCoercer, requiredOldImageColumns } from "./coerce";
 import { diffRows, normalizeWire, projectRow } from "./diff";
 import { LiveServerError } from "./errors";
 import type { ChangeSource, ReplicationChange, SystemIdentity } from "./replication";
-import { encodeResumeCursor, ShapeReplayRing } from "./resume";
+import { encodeResumeCursor, isValidLsn, ShapeReplayRing } from "./resume";
 import type { ResumeCursor } from "./resume";
 
 /** The default full-table poll interval — 1s, tight enough to feel live in the dev loop. */
@@ -460,6 +460,22 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
    * one misconfigured shape can never wedge the shared feed.
    */
   function onSourceChange(change: ReplicationChange): void {
+    // Reject a malformed commit LSN at ingest, before it can enter any shape's replay ring: a bad
+    // LSN there would later throw in `compareLsn`'s `BigInt` parse on an UNRELATED reconnect's
+    // reconcile (a cross-connection crash). The real `pgoutput` client always formats a valid LSN;
+    // a custom `PgReplicationClient` that does not is a contract violation, surfaced loudly here.
+    if (!isValidLsn(change.commitLSN)) {
+      onError?.(
+        new LiveServerError(
+          "LIVE_SERVER_INVALID_LSN",
+          `Replication change carried a malformed commit LSN "${change.commitLSN}".`,
+          { lsn: change.commitLSN, table: change.table },
+        ),
+      );
+
+      return;
+    }
+
     // Capture the live database's identity from every change (Inc1 stamps it), even one that
     // matches no active shape — so a fresh shape's snapshot cursor is anchored to the current
     // cluster/timeline the moment any change has flowed.

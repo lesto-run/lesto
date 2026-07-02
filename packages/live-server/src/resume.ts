@@ -47,6 +47,16 @@ const LSN_PATTERN = /^[0-9A-Fa-f]+\/[0-9A-Fa-f]+$/;
 const TIMELINE_PATTERN = /^\d+$/;
 
 /**
+ * True iff `lsn` is a well-formed Postgres LSN (`<hex>/<hex>`). Guards both the untrusted client
+ * cursor (in {@link decodeResumeCursor}) and, at the engine's replication ingest, the commit LSN a
+ * {@link PgReplicationClient} decoded — so a malformed value can never reach {@link compareLsn}
+ * (whose `BigInt` parse would otherwise throw).
+ */
+export function isValidLsn(lsn: string): boolean {
+  return LSN_PATTERN.test(lsn);
+}
+
+/**
  * The `(systemId, timelineId, LSN)` resume cursor, decoded. It is exactly {@link SystemIdentity}
  * (the database identity the LSN is meaningful within) plus the commit LSN of the last change the
  * client applied — everything a reconnect needs to decide replay-vs-re-snapshot.
@@ -85,7 +95,7 @@ export function decodeResumeCursor(token: string | undefined): ResumeCursor | un
   if (version !== RESUME_VERSION) return undefined;
   if (systemId === "") return undefined;
   if (!TIMELINE_PATTERN.test(timeline)) return undefined;
-  if (!LSN_PATTERN.test(lsn)) return undefined;
+  if (!isValidLsn(lsn)) return undefined;
 
   return { systemId, timelineId: Number(timeline), lsn };
 }

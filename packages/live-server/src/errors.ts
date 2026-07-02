@@ -82,7 +82,15 @@ export type LiveServerErrorCode =
    * old key (a stale duplicate) rather than move it. Refused loudly rather than silently stranding;
    * multi-frame key migration (delete-old + insert-new) is out of scope for v1.
    */
-  | "LIVE_SERVER_PRIMARY_KEY_CHANGED";
+  | "LIVE_SERVER_PRIMARY_KEY_CHANGED"
+  /**
+   * A replication change carried a malformed commit LSN (not `<hex>/<hex>`) — a contract violation
+   * by the {@link PgReplicationClient} seam (the real `pgoutput` client always formats a valid LSN,
+   * but a custom client could not). Rejected at ingest, routed to the engine's error sink: a bad LSN
+   * left to enter a shape's replay ring would later crash an unrelated reconnect's LSN comparison
+   * (a cross-connection blast radius), so it is dropped loudly here rather than poisoning resume.
+   */
+  | "LIVE_SERVER_INVALID_LSN";
 
 /** Anything the shape engine can refuse to register or serve. */
 export class LiveServerError extends LestoError<LiveServerErrorCode> {
