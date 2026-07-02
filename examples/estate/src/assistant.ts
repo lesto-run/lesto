@@ -285,6 +285,9 @@ export function agentTracerFrom(tracer: Tracer): AgentTracer {
       });
 
       return {
+        setAttributes: (attributes) => {
+          for (const [key, value] of Object.entries(attributes)) span.setAttribute(key, value);
+        },
         setStatus: (status) => {
           span.setStatus(status);
         },

@@ -92,12 +92,25 @@ export interface StreamDelta {
 export type Transport = (request: Request) => Promise<Response>;
 
 /**
- * A live agent span (ADR 0031 Phase 2, PREVIEW) — the minimal, structural surface
- * `@lesto/ai` drives: mark the outcome, then close it. It is deliberately narrower than
- * an `@lesto/observability` `Span` (no `setAttribute`) so the emitter stays trivial and
- * dependency-free; every attribute is fixed at {@link AgentTracer.startSpan} time.
+ * A live agent span (ADR 0031 Phase 2, PREVIEW) — the small, structural surface `@lesto/ai`
+ * drives: open it, populate attributes learned along the way, mark the outcome, then close it.
+ * Deliberately narrower than an `@lesto/observability` `Span`, so the emitter stays trivial and
+ * dependency-free.
+ *
+ * The span is opened BEFORE the model call (so it carries the call's real duration), with the
+ * one attribute known up front — the model id — fixed at {@link AgentTracer.startSpan} time. The
+ * attributes learned only AFTER the call (the parsed `Usage`/`StopReason` on success, the
+ * `AiError` code on failure) ride in via {@link setAttributes}.
  */
 export interface AgentSpan {
+  /**
+   * Populate attributes learned after the span opened — the parsed `Usage`/`StopReason` once a
+   * generation completes, or the `AiError` code once it fails. **Optional:** a minimal tracer
+   * that only wants a span's name, duration, and status may omit it, in which case those
+   * after-the-fact attributes are simply not recorded (the app's real adapter implements it).
+   */
+  setAttributes?(attributes: Record<string, unknown>): void;
+
   /** Mark the span's outcome — `"error"` when the call threw, `"ok"` when it returned. */
   setStatus(status: "unset" | "ok" | "error"): void;
 

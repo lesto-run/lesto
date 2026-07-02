@@ -246,6 +246,12 @@ Folded into the bar block above; restated at the increment where each is load-be
   activity panel need this and have **no producer in this plan**. Gate: whichever ADR commits a
   bounded dev-only span ring (natural home: 0032's access-log ring).
 - **`ai.embed` / retrieval spans** — gated on a real estate retrieval (RAG) route.
-- **Streaming-span lifecycle** (open-window first-byte→last-byte for `streamText`) — gated on a
-  real streaming agent surface (likely ADR 0033's in-preview chat).
+- **~~Streaming-span lifecycle~~ (open-window first-byte→last-byte for `streamText`) — SHIPPED
+  2026-07-01 (L-1013f457).** The `AgentSpan` seam gained an optional `setAttributes` (open-before /
+  populate-after), so `generateText`'s `ai.generate` span now carries the call's real duration
+  (opened before the request, usage/stop-reason populated after) and `streamText` brackets the
+  whole stream with one `ai.generate` span (open on first pull → last frame → close, in a
+  `finally` so an early break or throw still closes it). The streamed span carries the model id +
+  duration + outcome, not tokens (the delta stream yields text only). `@lesto/ai` stays
+  observability-free; the estate `Tracer`→`AgentTracer` adapter maps `setAttributes` → `setAttribute`.
 - **Eval / guardrail spans** (`ai.eval`) — gated on ADR 0035's evals-in-CI wanting per-eval spans.

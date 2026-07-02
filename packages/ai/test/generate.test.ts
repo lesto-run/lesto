@@ -64,6 +64,33 @@ describe("generateText — ai.generate span (ADR 0031 Phase 2, PREVIEW)", () => 
     });
   });
 
+  it("opens the span BEFORE the model call, so it brackets (times) the whole call", async () => {
+    // The duration-bearing shape: the span must already be open — and NOT yet ended — when the
+    // transport runs, proving it wraps the request/transport/parse rather than being a
+    // point-in-time record written after the call resolves.
+    const { tracer, spans } = recordingTracer();
+    let openWhenCalled = false;
+    let endedWhenCalled = true;
+
+    const model = createAnthropic({
+      apiKey: "sk-test",
+      transport: async () => {
+        openWhenCalled = spans.length === 1 && spans[0]?.name === AI_GENERATE_SPAN;
+        endedWhenCalled = spans[0]?.ended ?? true;
+
+        return jsonResponse(textMessage("timed."));
+      },
+    });
+
+    await generateText({ model, messages: [{ role: "user", content: "go" }], tracer });
+
+    expect(openWhenCalled).toBe(true);
+    expect(endedWhenCalled).toBe(false);
+    // …and it still closed cleanly, with the usage/stop-reason populated after the call.
+    expect(spans[0]?.ended).toBe(true);
+    expect(spans[0]?.attributes[AI_STOP_REASON_ATTR]).toBeDefined();
+  });
+
   it("records the modelId override (not the model default) on the span", async () => {
     const { transport } = constantTransport(jsonResponse(textMessage("x")));
     const model = createAnthropic({ apiKey: "sk-test", transport });
@@ -160,5 +187,76 @@ describe("streamText", () => {
 
     const sent = (await requests[0]?.json()) as Record<string, unknown>;
     expect(sent["stream"]).toBe(true);
+  });
+});
+
+describe("streamText — ai.generate span (ADR 0031 Phase 2, PREVIEW)", () => {
+  const twoFrames = [
+    'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"a"}}\n\n',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"b"}}\n\n',
+  ];
+
+  it("brackets the whole stream with one span: open before, still open mid-stream, ok + ended after", async () => {
+    const { transport } = constantTransport(sseResponse(twoFrames));
+    const model = createAnthropic({ apiKey: "sk-test", transport });
+    const { tracer, spans } = recordingTracer();
+
+    const deltas: string[] = [];
+    for await (const delta of streamText({
+      model,
+      messages: [{ role: "user", content: "x" }],
+      tracer,
+    })) {
+      // The span is open for the whole stream — not yet ended while frames are still arriving.
+      expect(spans[0]?.ended).toBe(false);
+      deltas.push(delta.text);
+    }
+
+    expect(deltas).toEqual(["a", "b"]);
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.name).toBe(AI_GENERATE_SPAN);
+    // The streamed span carries the model id + outcome — but no post-hoc Usage/StopReason (the
+    // delta stream yields text only), so its attribute bag is just the model id.
+    expect(spans[0]?.attributes).toEqual({ [AI_MODEL_ATTR]: model.defaultModelId });
+    expect(spans[0]?.status).toBe("ok");
+    expect(spans[0]?.ended).toBe(true);
+  });
+
+  it("marks the stream span error with the AiError code and still ends it, on a non-2xx", async () => {
+    const { transport } = constantTransport(jsonResponse({ error: "boom" }, 500));
+    const model = createAnthropic({ apiKey: "sk-test", transport });
+    const { tracer, spans } = recordingTracer();
+
+    const error = await (async () => {
+      for await (const _ of streamText({
+        model,
+        messages: [{ role: "user", content: "x" }],
+        tracer,
+      })) {
+        // drain — the throw comes on the first pull
+      }
+    })().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AiError);
+    expect((error as AiError).code).toBe("AI_HTTP_ERROR");
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.status).toBe("error");
+    expect(spans[0]?.attributes).toEqual({
+      [AI_MODEL_ATTR]: model.defaultModelId,
+      [AI_ERROR_CODE_ATTR]: "AI_HTTP_ERROR",
+    });
+    expect(spans[0]?.ended).toBe(true);
+  });
+
+  it("is a clean no-op when no tracer is injected", async () => {
+    const { transport } = constantTransport(sseResponse(twoFrames));
+    const model = createAnthropic({ apiKey: "sk-test", transport });
+
+    const deltas: string[] = [];
+    for await (const delta of streamText({ model, messages: [{ role: "user", content: "x" }] })) {
+      deltas.push(delta.text);
+    }
+
+    expect(deltas).toEqual(["a", "b"]);
   });
 });

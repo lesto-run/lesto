@@ -28,26 +28,30 @@ import type { GenerateOptions, GenerateResult, StreamDelta } from "./types";
  * Returns the assembled text, any tool calls, the stop reason, and token usage.
  * Throws `AI_HTTP_ERROR` (coded, status in `details`) on a non-2xx.
  *
- * When an `AgentTracer` is injected (ADR 0031 Phase 2, PREVIEW), each call records one
- * `ai.generate` span carrying the model id and — on success — the parsed `Usage` and
- * `StopReason`; a thrown provider error marks the span `error` with the `AiError` code. The
- * span is opened AFTER the call resolves because the minimal {@link AgentSpan} seam has no
- * `setAttribute`, so the parsed `Usage`/`StopReason` can only ride in the start-time bag.
- * A consequence is that this span is a point-in-time RECORD (start ≈ end), not a duration
- * wrapper — it carries the token/stop-reason attributes, not the call's latency. Emitting a
- * duration-bearing span needs a richer seam (open-before + populate-after) and is a follow-up.
- * Absent a tracer this is the exact original send — no span, no overhead.
+ * When an `AgentTracer` is injected (ADR 0031 Phase 2, PREVIEW), each call emits one
+ * `ai.generate` span. The span is opened **before** the model call — with the one attribute
+ * known up front, the model id — so it wraps the request build, the transport round-trip, and
+ * the parse: it carries the call's **real duration**, not a point-in-time record. The parsed
+ * `Usage`/`StopReason` (or, on failure, the `AiError` code) are populated **after** the call via
+ * {@link AgentSpan.setAttributes}, then the span is marked `ok`/`error` and closed. Absent a
+ * tracer this is the exact original send — no span, no overhead.
  */
 export async function generateText(options: GenerateOptions): Promise<GenerateResult> {
   const { tracer } = options;
+
+  // Open BEFORE the call so the span carries the generation's real latency; the model id is the
+  // only attribute known up front. A minimal tracer without `setAttributes` still gets the span,
+  // its duration, and its status — just not the after-the-fact token/stop-reason attributes.
+  const span = tracer?.startSpan(AI_GENERATE_SPAN, {
+    [AI_MODEL_ATTR]: options.modelId ?? options.model.defaultModelId,
+  });
 
   try {
     const request = options.model.buildRequest(options);
     const response = await options.model.transport(request);
     const result = await options.model.parseResponse(response);
 
-    const span = tracer?.startSpan(AI_GENERATE_SPAN, {
-      [AI_MODEL_ATTR]: options.modelId ?? options.model.defaultModelId,
+    span?.setAttributes?.({
       [AI_USAGE_INPUT_TOKENS_ATTR]: result.usage.inputTokens,
       [AI_USAGE_OUTPUT_TOKENS_ATTR]: result.usage.outputTokens,
       [AI_STOP_REASON_ATTR]: result.stopReason,
@@ -57,12 +61,9 @@ export async function generateText(options: GenerateOptions): Promise<GenerateRe
 
     return result;
   } catch (error) {
-    // The coded provider failure (`AI_HTTP_ERROR`) — or any other throw — is recorded on an
-    // errored span before it propagates, so a failed generation is visible on the trace too.
-    const span = tracer?.startSpan(AI_GENERATE_SPAN, {
-      [AI_MODEL_ATTR]: options.modelId ?? options.model.defaultModelId,
-      ...(error instanceof AiError ? { [AI_ERROR_CODE_ATTR]: error.code } : {}),
-    });
+    // The coded provider failure (`AI_HTTP_ERROR`) — or any other throw — is recorded on the
+    // already-open span before it propagates, so a failed generation is visible on the trace too.
+    if (error instanceof AiError) span?.setAttributes?.({ [AI_ERROR_CODE_ATTR]: error.code });
     span?.setStatus("error");
     span?.end();
 
@@ -80,15 +81,37 @@ export async function generateText(options: GenerateOptions): Promise<GenerateRe
  * generation alive past the first byte). Throws `AI_HTTP_ERROR` on a non-2xx and
  * `AI_STREAM_MALFORMED` on an unparseable frame.
  *
- * NOTE (ADR 0031 Phase 2): an injected `options.tracer` is intentionally NOT instrumented on
- * the streaming path — no `ai.generate` span is emitted here. A streaming span spans the whole
- * SSE lifetime (open → last frame → close), which the non-streamed record-after-the-call shape
- * does not fit; it is deferred (see `agent-observable-runtime.md`). Passing a tracer is a
- * harmless no-op, called out here so a caller expecting streaming spans is not silently surprised.
+ * When an `AgentTracer` is injected (ADR 0031 Phase 2, PREVIEW), one `ai.generate` span brackets
+ * the **whole stream lifetime** — opened before the request on the first pull, closed after the
+ * last frame (or on an early break / error) — so it carries the streamed generation's real
+ * duration. It carries the model id and outcome; unlike the non-streamed path it records no
+ * `Usage`/`StopReason` (the delta stream yields text only, not a final token count). A thrown
+ * error marks the span `error` with the `AiError` code. Absent a tracer this is the exact
+ * original stream — no span, no overhead.
  */
 export async function* streamText(options: GenerateOptions): AsyncIterable<StreamDelta> {
-  const request = options.model.buildStreamRequest(options);
-  const response = await options.model.transport(request);
+  const { tracer } = options;
 
-  yield* options.model.parseStream(response);
+  // Opened on the first pull (async generators are lazy), before the request goes out, and closed
+  // in `finally` — so the span spans open → last frame → close, even on an early `break` (which
+  // runs the generator's `return()` → the `finally`) or a mid-stream throw. No leak either way.
+  const span = tracer?.startSpan(AI_GENERATE_SPAN, {
+    [AI_MODEL_ATTR]: options.modelId ?? options.model.defaultModelId,
+  });
+
+  try {
+    const request = options.model.buildStreamRequest(options);
+    const response = await options.model.transport(request);
+
+    yield* options.model.parseStream(response);
+
+    span?.setStatus("ok");
+  } catch (error) {
+    if (error instanceof AiError) span?.setAttributes?.({ [AI_ERROR_CODE_ATTR]: error.code });
+    span?.setStatus("error");
+
+    throw error;
+  } finally {
+    span?.end();
+  }
 }
