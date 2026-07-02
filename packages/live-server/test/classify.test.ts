@@ -59,6 +59,10 @@ describe("predicateNeedsOldImage", () => {
   });
 });
 
+// ADR 0042 acceptance (b), the "refuse-unsupported-shape" half: a shape whose table cannot
+// supply the old image its predicate needs must be REFUSED at registration, not served and
+// silently fail to emit delete-from-shape. See http-handlers.test.ts's "ADR 0042 acceptance
+// matrix" for the full letter-by-letter gate.
 describe("assertReplicaIdentity", () => {
   it("refuses a non-key-predicate shape when the table is not REPLICA IDENTITY FULL", () => {
     expect(() => assertReplicaIdentity(shape(), false)).toThrow(LiveServerError);

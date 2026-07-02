@@ -29,6 +29,17 @@ const def: ShapeDefinition = {
   orderBy: undefined,
 };
 
+/** A shape bound to one concrete room id — the CONCRETE parameter, not a reusable template. */
+function roomShape(roomId: number): ShapeDefinition {
+  return {
+    table: "messages",
+    key: "id",
+    columns: ["id", "roomId", "body"],
+    where: [{ column: "roomId", op: "eq", value: roomId }],
+    orderBy: undefined,
+  };
+}
+
 /** A controllable stream-timer seam — the test fires each registered timer by hand. */
 function fakeStreamTimers() {
   const intervalCbs: Array<() => void> = [];
@@ -617,4 +628,136 @@ describe("createLiveDataHttpHandlers", () => {
     expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c0\n\n");
     expect(await readFrame(reader)).toBeUndefined(); // then closed — never left open
   });
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0042 acceptance matrix — the Tier-4 v1 Inc3 gate (L-f50f94d1)
+//
+// Named, discoverable letter-by-letter (docs/adr/0042-local-first-sync-tier-4.md, the
+// "Acceptance" section). (b) and (c)'s on-row case are proven at the classifier/engine layer
+// (Inc2 + the L-08619e99 marker+column-presence fix) — cross-referenced below rather than
+// duplicated. Everything reachable only through the HTTP handler (bound-parameter authz,
+// continuous re-auth, reconnect safety) is proven here.
+// ---------------------------------------------------------------------------
+
+describe("ADR 0042 acceptance matrix — the Inc3 gate", () => {
+  const shapeParam = JSON.stringify(def);
+
+  // (b) delete-from-shape on a non-PK predicate under REPLICA IDENTITY FULL, plus
+  // refuse-unsupported-shape: this module has no replication/classifier seam to exercise, so
+  // this letter is satisfied entirely by the dedicated coverage in classify.test.ts
+  // (assertOldImageComplete, prepareShapeClassifier's registration guard) and engine.test.ts
+  // (the replication change-source suite) — proven end-to-end by the L-08619e99 marker +
+  // column-presence guard. Not duplicated here.
+
+  it("(a) refuses a shape whose BOUND parameter resolves to another tenant's resource — not merely the template", async () => {
+    // Same table, same columns (the "template") for both requests — only the bound `roomId`
+    // differs. `authorizeShape` here authorizes room 1 (the caller's own) and refuses room 999
+    // (another tenant's): proof the check is on the concrete parameter, not "may this principal
+    // use the messages shape at all" (which both requests would pass identically).
+    const onDenied = vi.fn();
+    const { liveData } = createLiveDataHttpHandlers({
+      engine: engineReturning([{ id: 1, body: "hi" }]),
+      resolvePrincipal: () => "u1",
+      authorizeShape: (_, shape) => shape.where[0]?.value === 1,
+      onDenied,
+    });
+
+    const ownRoom = await liveData(fakeContext({ shape: JSON.stringify(roomShape(1)) }), noopNext);
+    expect(ownRoom!.status).toBe(200);
+
+    const otherTenant = await liveData(
+      fakeContext({ shape: JSON.stringify(roomShape(999)) }),
+      noopNext,
+    );
+    expect(otherTenant!.status).toBe(403);
+    expect(onDenied).toHaveBeenCalledWith("u1", "forbidden");
+  });
+
+  // (c) on-row case: an authorization column ON the streamed row (e.g. `owner_id`) leaving the
+  // shape propagates SUB-INTERVAL as an ordinary delete-from-shape — see engine.test.ts's
+  // "delivers a delete-from-shape when a row is updated OUT of the shape" (poll path) and
+  // "delivers a delete-from-shape when a replication update moves a row OUT (the leak-stopper)"
+  // (v1 replication path). No interval involved; not duplicated here.
+  //
+  // (c) cross-relation case: a membership change in a SEPARATE relation (a `room_members`-style
+  // join) cannot be observed by the replication stream, so it is caught at the next re-auth
+  // tick — proven above by "purges the client's slice and severs when authorizeShape starts
+  // refusing mid-connection (revoked cross-relation authz, ADR 0042 (c))", which IS this
+  // criterion's mechanism (mandatory `authorizeShape` re-invocation → resync-purge → teardown).
+
+  it("(d) a revoked SESSION (bound shape still authorized) is severed within the re-auth interval, bounded by reauthMs", async () => {
+    const timers = fakeStreamTimers();
+    let sessionValid = true;
+
+    const { liveData } = createLiveDataHttpHandlers({
+      engine: engineReturning([{ id: 1 }]),
+      resolvePrincipal: () => "u1",
+      authorizeShape: () => true, // the bound shape stays authorized throughout
+      revalidate: () => sessionValid, // only the SESSION is revoked
+      reauthMs: 500,
+      timers: timers.seam,
+    });
+
+    const response = await liveData(fakeContext({ shape: shapeParam }), noopNext);
+    const reader = (response!.body as ReadableStream<string>).getReader();
+    await readFrame(reader); // snapshot
+
+    sessionValid = false; // e.g. logout / an admin killing the session
+    timers.intervalCbs[1]!(); // the NEXT re-auth tick — no later than one `reauthMs`
+    await flush();
+
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c0\n\n");
+    expect(await readFrame(reader)).toBeUndefined(); // severed — bounded by a single interval
+  });
+
+  it("(e) a reconnect always re-subscribes to a FRESH, complete snapshot — a row deleted while disconnected never reappears", async () => {
+    // Simulates "offline, then reconnect": the underlying data changed between two `liveData`
+    // calls for the identical shape (id 2 was deleted while the client was away). There is no
+    // resume/replay path in this engine — the safe floor ADR 0042 (e) requires until Inc4's
+    // LSN-exact resume (L-6841d65d) lands — so the second connection's snapshot must be the
+    // FULL current set, never a stale carry-over that still includes the deleted row.
+    let currentRows: Row[] = [
+      { id: 1, body: "a" },
+      { id: 2, body: "b" },
+    ];
+    const engine = {
+      subscribe: async (shape: ShapeDefinition) => ({
+        shapeId: shapeId(shape),
+        snapshot: currentRows,
+        cursor: "v0:0",
+        unsubscribe: () => {},
+      }),
+      activeShapes: 1,
+      stop: () => {},
+    } as unknown as ShapeEngine;
+
+    const { liveData } = createLiveDataHttpHandlers({
+      engine,
+      resolvePrincipal: () => "u1",
+      authorizeShape: () => true,
+    });
+
+    const first = await liveData(fakeContext({ shape: shapeParam }), noopNext);
+    const firstReader = (first!.body as ReadableStream<string>).getReader();
+    expect(await readFrame(firstReader)).toContain(`"id":2`);
+    await firstReader.cancel();
+
+    currentRows = [{ id: 1, body: "a" }]; // id 2 deleted while "disconnected"
+
+    const reconnect = await liveData(fakeContext({ shape: shapeParam }), noopNext);
+    const reconnectReader = (reconnect!.body as ReadableStream<string>).getReader();
+    const snapshotFrame = await readFrame(reconnectReader);
+
+    expect(snapshotFrame).not.toContain(`"id":2`); // purged, not stale-carried
+    expect(snapshotFrame).toContain(`"id":1`);
+    await reconnectReader.cancel();
+  });
+
+  // (e) the opacity guard: no server code anywhere parses or compares a minted cursor as a
+  // number — see engine.test.ts's cursor assertions (the exact `"v0:N"` format, minted through
+  // the single `mintCursor` helper) and `@lesto/live`'s `consumer.ts`, whose `LiveMessageEvent`
+  // interface structurally excludes `id`/`lastEventId` so the client cannot read it even if
+  // tempted (a compile error, not a convention). This is what keeps Inc4's LSN-exact resume
+  // (`L-6841d65d`) an additive wire change rather than a breaking one.
 });

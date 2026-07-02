@@ -224,6 +224,9 @@ describe("poll — the change tail", () => {
     ]);
   });
 
+  // ADR 0042 acceptance (c), on-row case (v0 poll): an on-row authorization column leaving the
+  // shape propagates a delete-from-shape without waiting for any interval — see the acceptance
+  // matrix in http-handlers.test.ts for the full letter-by-letter gate.
   it("delivers a delete-from-shape when a row is updated OUT of the shape", async () => {
     await insert(1, "hi", 100);
     const sink = collector();
@@ -437,6 +440,10 @@ describe("replication change source — the v1 change path", () => {
     e.stop();
   });
 
+  // ADR 0042 acceptance (b) + (c) on-row case (v1 replication): a non-PK-predicate delete-from-shape
+  // under REPLICA IDENTITY FULL — the exact leak the L-08619e99 marker+column-presence guard closes
+  // (classify.test.ts's assertOldImageComplete + prepareShapeClassifier suites prove the guard
+  // itself). See http-handlers.test.ts's "ADR 0042 acceptance matrix" for the full letter-by-letter gate.
   it("delivers a delete-from-shape when a replication update moves a row OUT (the leak-stopper)", async () => {
     await insert(1, "hi", 100); // seed a matching row into the snapshot
     const src = fakeSource();
