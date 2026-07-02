@@ -55,6 +55,7 @@ export type {
   Role,
   StopReason,
   StreamDelta,
+  StreamFinal,
   ToolCall,
   ToolSet,
   ToolSpec,

@@ -43,6 +43,7 @@ import type {
   LanguageModel,
   Message,
   StreamDelta,
+  StreamFinal,
   ToolSet,
   ToolSpec,
   Transport,
@@ -225,7 +226,7 @@ export function localAssistantModel(): LanguageModel {
     parseResponse: async (response) => JSON.parse(await response.text()) as GenerateResult,
     // The concierge never streams (it uses `runAgent`/`generateText`); a stream
     // request is an honest, coded refusal rather than a silent empty stream.
-    parseStream(): AsyncIterable<StreamDelta> {
+    parseStream(): AsyncGenerator<StreamDelta, StreamFinal | undefined> {
       throw new AiError("AI_INVALID_OPTION", "the local demo model does not support streaming.");
     },
   };

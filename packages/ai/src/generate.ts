@@ -117,10 +117,12 @@ export async function generateText(options: GenerateOptions): Promise<GenerateRe
  * error marks it `"error"` with the `AiError` code. An early `for-await` `break` (which the
  * language closes via `IteratorClose` — every caller in this codebase uses `for-await`) still
  * ends the span, but leaves its status `"unset"` — an honest "we don't know", not a fabricated
- * success. Unlike the non-streamed path it records no `Usage`/`StopReason` (the delta stream
- * yields text only, not a final token count — so `ai.streaming = true` is what marks that absence
- * expected rather than a bug; recovering the counts from Anthropic's `message_delta` frame is a
- * deferred parser change, L-3c7b03b8). **Caveat:** a consumer that manually pulls the iterator
+ * success. Like the non-streamed path it also records the final `Usage`/`StopReason` when the
+ * provider reports them — Anthropic sends them on its terminal `message_start`/`message_delta`
+ * frames, which `parseStream` folds into its RETURN value and this reads via `yield*` (L-3c7b03b8).
+ * A torn or interrupted stream that never delivered them leaves the span without those attributes
+ * — the case `ai.streaming = true` marks as expected rather than a one-shot regression. **Caveat:**
+ * a consumer that manually pulls the iterator
  * (`.next()`) and abandons it without draining or calling `.return()` bypasses `IteratorClose`
  * entirely — the generator stays suspended and the span never closes or exports. Absent a tracer
  * this is the exact original stream — no span, no overhead.
@@ -137,9 +139,21 @@ export async function* streamText(options: GenerateOptions): AsyncIterable<Strea
     const request = options.model.buildStreamRequest(options);
     const response = await options.model.transport(request);
 
-    yield* options.model.parseStream(response);
+    // `yield*` forwards every text delta to the consumer AND evaluates to the stream's final
+    // accounting (the generator's return value) — so the streamed span gets the same
+    // usage/stop-reason the non-streamed path records, without the delta stream changing shape.
+    const final = yield* options.model.parseStream(response);
 
-    safely(() => span?.setStatus("ok"));
+    safely(() => {
+      const attributes: Record<string, unknown> = {};
+      if (final?.usage !== undefined) {
+        attributes[AI_USAGE_INPUT_TOKENS_ATTR] = final.usage.inputTokens;
+        attributes[AI_USAGE_OUTPUT_TOKENS_ATTR] = final.usage.outputTokens;
+      }
+      if (final?.stopReason !== undefined) attributes[AI_STOP_REASON_ATTR] = final.stopReason;
+      if (Object.keys(attributes).length > 0) span?.setAttributes(attributes);
+      span?.setStatus("ok");
+    });
   } catch (error) {
     safely(() => {
       if (error instanceof AiError) span?.setAttributes({ [AI_ERROR_CODE_ATTR]: error.code });

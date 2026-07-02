@@ -11,7 +11,26 @@ import {
   toolUseMessage,
 } from "./fake-transport";
 
-import type { GenerateOptions } from "../src/types";
+import type { GenerateOptions, StreamDelta, StreamFinal } from "../src/types";
+
+/**
+ * Drain a `parseStream` generator to completion, returning both the yielded text and the RETURN
+ * value (the {@link StreamFinal}) — which a `for-await` loop discards, so the tests that assert
+ * the final accounting iterate by hand.
+ */
+async function collectStream(
+  stream: AsyncGenerator<StreamDelta, StreamFinal | undefined>,
+): Promise<{ texts: string[]; final: StreamFinal | undefined }> {
+  const texts: string[] = [];
+  let next = await stream.next();
+
+  while (!next.done) {
+    texts.push(next.value.text);
+    next = await stream.next();
+  }
+
+  return { texts, final: next.value };
+}
 
 const baseOptions = (model: ReturnType<typeof createAnthropic>): GenerateOptions => ({
   model,
@@ -193,6 +212,50 @@ describe("parseStream", () => {
     }
 
     expect(deltas).toEqual(["Hel", "lo"]);
+  });
+
+  it("folds message_start + message_delta into the returned final usage/stop reason (not yielded)", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    // input tokens ride on message_start; the final output count + stop reason on message_delta.
+    const frames = [
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":12}}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ];
+
+    const { texts, final } = await collectStream(model.parseStream(sseResponse(frames)));
+
+    // The meta frames are folded in, NOT surfaced as text deltas — the consumer still sees text only.
+    expect(texts).toEqual(["Hi"]);
+    expect(final).toEqual({ usage: { inputTokens: 12, outputTokens: 7 }, stopReason: "end_turn" });
+  });
+
+  it("returns usage without a stop reason when message_delta carries a null stop_reason", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    const frames = [
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":9}}\n\n',
+    ];
+
+    const { final } = await collectStream(model.parseStream(sseResponse(frames)));
+
+    expect(final).toEqual({ usage: { inputTokens: 3, outputTokens: 9 } });
+  });
+
+  it("returns undefined when the stream ends before any usage/stop-reason frame (torn stream)", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    const frames = [
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"x"}}\n\n',
+    ];
+
+    const { texts, final } = await collectStream(model.parseStream(sseResponse(frames)));
+
+    expect(texts).toEqual(["x"]);
+    expect(final).toBeUndefined();
   });
 
   it("reassembles a frame split across two network reads", async () => {

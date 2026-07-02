@@ -81,6 +81,23 @@ export interface StreamDelta {
 }
 
 /**
+ * The final accounting a streamed generation carries once it finishes — the counterpart to a
+ * non-streamed {@link GenerateResult}'s `usage`/`stopReason`, surfaced as the async generator's
+ * RETURN value (not a yielded {@link StreamDelta}, so the text-delta stream a consumer iterates is
+ * unchanged). A provider assembles it from its terminal stream frames (Anthropic's `message_start`
+ * + `message_delta`); `streamText` reads it via `yield*` to populate the `ai.generate` span.
+ *
+ * Both fields are optional: a torn or aborted stream that closed before the provider sent them
+ * yields `undefined` for the whole value — an honest "never received", not a fabricated zero.
+ */
+export interface StreamFinal {
+  /** Token accounting for the finished stream, once the provider reports it. */
+  readonly usage?: Usage;
+  /** Why the model stopped, once the provider reports it. */
+  readonly stopReason?: StopReason;
+}
+
+/**
  * The injected HTTP transport — the one thing that varies (ADR 0006).
  *
  * The pure core assembles a `Request` and hands it here; a real call uses global
@@ -191,8 +208,13 @@ export interface LanguageModel {
   buildStreamRequest(options: GenerateOptions): Request;
   /** Parse a non-streamed provider response into a normalized result. */
   parseResponse(response: Response): Promise<GenerateResult>;
-  /** Parse a streamed provider response into normalized text deltas. */
-  parseStream(response: Response): AsyncIterable<StreamDelta>;
+  /**
+   * Parse a streamed provider response into normalized text deltas, RETURNING the final
+   * {@link StreamFinal} (usage/stop reason) once the stream completes — or `undefined` if the
+   * stream ended before the provider reported it. The yielded values are text deltas only; the
+   * final accounting rides on the generator's return value so a `for-await` consumer is unaffected.
+   */
+  parseStream(response: Response): AsyncGenerator<StreamDelta, StreamFinal | undefined>;
   /** The transport this model sends over (injected; defaults to `fetch`). */
   readonly transport: Transport;
 }

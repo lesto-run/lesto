@@ -220,12 +220,46 @@ describe("streamText — ai.generate span (ADR 0031 Phase 2, PREVIEW)", () => {
     expect(deltas).toEqual(["a", "b"]);
     expect(spans).toHaveLength(1);
     expect(spans[0]?.name).toBe(AI_GENERATE_SPAN);
-    // The streamed span carries the model id + `ai.streaming = true` + outcome — but no post-hoc
-    // Usage/StopReason (the delta stream yields text only), so the streaming flag is what marks
-    // that absence expected rather than a one-shot regression.
+    // These `twoFrames` carry NO message_delta, so no usage/stop-reason is recovered — the span
+    // has just the model id + `ai.streaming = true`. That flag is what marks the absence expected
+    // rather than a one-shot regression (the next test drives a stream that DOES report them).
     expect(spans[0]?.attributes).toEqual({
       [AI_MODEL_ATTR]: model.defaultModelId,
       [AI_STREAMING_ATTR]: true,
+    });
+    expect(spans[0]?.status).toBe("ok");
+    expect(spans[0]?.ended).toBe(true);
+  });
+
+  it("records the streamed final usage + stop reason on the span (recovered from message_delta)", async () => {
+    // A stream that DOES report the accounting: input on message_start, output + stop on
+    // message_delta. The span then carries the same usage/stop-reason the non-streamed path does,
+    // alongside ai.streaming = true — closing the gap the flag alone only marked (L-3c7b03b8).
+    const frames = [
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":8}}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n\n',
+    ];
+    const { transport } = constantTransport(sseResponse(frames));
+    const model = createAnthropic({ apiKey: "sk-test", transport });
+    const { tracer, spans } = recordingTracer();
+
+    const deltas: string[] = [];
+    for await (const delta of streamText({
+      model,
+      messages: [{ role: "user", content: "x" }],
+      tracer,
+    })) {
+      deltas.push(delta.text);
+    }
+
+    expect(deltas).toEqual(["hi"]);
+    expect(spans[0]?.attributes).toEqual({
+      [AI_MODEL_ATTR]: model.defaultModelId,
+      [AI_STREAMING_ATTR]: true,
+      [AI_USAGE_INPUT_TOKENS_ATTR]: 8,
+      [AI_USAGE_OUTPUT_TOKENS_ATTR]: 4,
+      [AI_STOP_REASON_ATTR]: "end_turn",
     });
     expect(spans[0]?.status).toBe("ok");
     expect(spans[0]?.ended).toBe(true);
