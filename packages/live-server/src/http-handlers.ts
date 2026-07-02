@@ -153,10 +153,15 @@ export interface ShapeStreamConfig {
    * A periodic re-authorization; returning `false` (or throwing) purges the client's
    * durable slice (a `resync` frame, stamped with the connection's last-delivered cursor)
    * and THEN tears the stream down — never merely closes the socket.
+   *
+   * Optional at THIS (transport) layer — a direct `openShapeStream` caller may omit it and get
+   * no re-auth interval. The app-facing {@link createLiveDataHttpHandlers} ALWAYS supplies one
+   * (composing the mandatory `authorizeShape` re-check with the app's optional session check), so
+   * every real live connection is continuously re-authorized regardless.
    */
   readonly revalidate?: () => boolean | Promise<boolean>;
 
-  /** The re-auth interval in ms (only when {@link revalidate} is set). */
+  /** The re-auth interval in ms — applies only when {@link revalidate} is set (default 60s). */
   readonly reauthMs?: number;
 
   /** A hard cap on connection lifetime in ms; absent → unbounded. */
@@ -233,12 +238,14 @@ export function openShapeStream(config: ShapeStreamConfig): ReadableStream<strin
           handle: config.timers.setInterval(() => connection?.heartbeat(), config.heartbeatMs),
         });
 
-        // Periodic re-auth (optional): a revoked/expired session, or a shape/parameter
-        // authorization that no longer holds, is severed. `revalidate` is app code, so a
-        // SYNCHRONOUS throw or a rejection both FAIL CLOSED (tear down), never escaping the
-        // timer callback as an uncaught exception. A failure PURGES first: closing the
-        // socket alone would leave every row already delivered sitting in the client's
-        // durable store — the resync frame is what tells it to drop that slice.
+        // Periodic re-auth: a revoked/expired session, or a shape/parameter authorization that no
+        // longer holds, is severed. Optional at this transport layer (a direct caller may omit it),
+        // but `createLiveDataHttpHandlers` ALWAYS supplies one — so in every app-mounted stream this
+        // branch is taken and the bound shape is re-authorized on the interval. `revalidate` is app
+        // code, so a SYNCHRONOUS throw or a rejection both FAIL CLOSED (tear down), never escaping the
+        // timer callback as an uncaught exception. A failure PURGES first: closing the socket alone
+        // would leave every row already delivered sitting in the client's durable store — the resync
+        // frame is what tells it to drop that slice.
         if (config.revalidate !== undefined) {
           const revalidate = config.revalidate;
 
