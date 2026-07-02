@@ -5,7 +5,13 @@ import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createLiveQuery } from "../src/index";
-import type { LiveEnvironment, LiveQuery, Row, ShapeDefinition } from "../src/index";
+import type {
+  LiveEnvironment,
+  LiveMessageEvent,
+  LiveQuery,
+  Row,
+  ShapeDefinition,
+} from "../src/index";
 import { useLiveQuery } from "../src/react";
 
 const def: ShapeDefinition = {
@@ -20,7 +26,7 @@ const def: ShapeDefinition = {
 function fakeEnv() {
   const sources: Array<{
     url: string;
-    listeners: Map<string, (event: { data: string }) => void>;
+    listeners: Map<string, (event: LiveMessageEvent) => void>;
     closed: boolean;
   }> = [];
 
@@ -28,7 +34,7 @@ function fakeEnv() {
     open(url) {
       const source = {
         url,
-        listeners: new Map<string, (event: { data: string }) => void>(),
+        listeners: new Map<string, (event: LiveMessageEvent) => void>(),
         closed: false,
       };
       sources.push(source);
@@ -46,7 +52,7 @@ function fakeEnv() {
     environment,
     sources,
     emit: (index: number, type: string, data: string) =>
-      sources[index]?.listeners.get(type)?.({ data }),
+      sources[index]?.listeners.get(type)?.({ data, lastEventId: "" }),
   };
 }
 

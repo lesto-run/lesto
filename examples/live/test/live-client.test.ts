@@ -13,7 +13,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { live } from "@lesto/live";
-import type { LiveEnvironment } from "@lesto/live";
+import type { LiveEnvironment, LiveMessageEvent } from "@lesto/live";
 import { openSqlite, serve } from "@lesto/runtime";
 import type { Server } from "@lesto/runtime";
 
@@ -47,7 +47,7 @@ function nodeSseEnvironment(): LiveEnvironment {
   return {
     open(url) {
       const controller = new AbortController();
-      const listeners = new Map<string, (event: { data: string }) => void>();
+      const listeners = new Map<string, (event: LiveMessageEvent) => void>();
 
       void (async () => {
         const response = await fetch(url, {
@@ -75,6 +75,7 @@ function nodeSseEnvironment(): LiveEnvironment {
 
               let event = "message";
               let data = "";
+              let lastEventId = "";
 
               for (const line of raw.split("\n")) {
                 if (line === "" || line.startsWith(":")) continue;
@@ -85,9 +86,12 @@ function nodeSseEnvironment(): LiveEnvironment {
 
                 if (field === "event") event = val;
                 else if (field === "data") data = data === "" ? val : `${data}\n${val}`;
+                // Round-trip the frame's cursor (SSE `id:`) the way a native EventSource would,
+                // so the consumer can forward it to the store.
+                else if (field === "id") lastEventId = val;
               }
 
-              listeners.get(event)?.({ data });
+              listeners.get(event)?.({ data, lastEventId });
             }
           }
         } catch {

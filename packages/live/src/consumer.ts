@@ -26,24 +26,32 @@ import type { LiveStore } from "./store";
 export const DEFAULT_LIVE_DATA_PATH = "/__lesto/live-data";
 
 /**
- * The slice of an SSE message event this consumer reads — just its `data`. A `snapshot`
- * carries the row set here, a `change` one row op; narrow on purpose so a fake satisfies it
- * without a real `EventSource`.
+ * The slice of an SSE message event this consumer reads — its `data` and its `lastEventId`
+ * (the frame's resume cursor). A `snapshot` carries the row set in `data`, a `change` one row
+ * op; narrow on purpose so a fake satisfies it without a real `EventSource`.
  *
- * **Deliberately excludes `id`/`lastEventId` — the wire cursor is opaque to this module.**
- * The native `EventSource` DOES carry the frame's cursor as `MessageEvent.lastEventId` and
- * transparently echoes it back as the reconnect `Last-Event-ID` header — but every handler in
- * {@link connectLiveData} is written against this narrower type, so TypeScript refuses any
- * attempt to read, compare, or parse the cursor here (a compile error, not a convention). The
- * server (`@lesto/live-server`'s `encodeResumeCursor`, and the poll path's `pollCursor`) mints a
- * versioned, opaque token specifically so neither side ever needs to treat it as more than a
- * round-tripped string — the property that let ADR 0042 Inc4's LSN-exact resume upgrade the wire
- * from the `v0:` counter to a `v1:(systemId, timelineId, LSN)` token additively rather than as a
- * breaking wire change. Do not widen this interface to add `id`/`lastEventId` without a strong
- * reason; doing so would remove the one thing enforcing that invariant at compile time.
+ * **The cursor is forwarded, never interpreted.** The native `EventSource` carries the frame's
+ * cursor as `MessageEvent.lastEventId` and transparently echoes it back as the reconnect
+ * `Last-Event-ID` header — the *in-session* resume that needs no help from us. ADR 0042 Inc5
+ * adds the *cross-reload* half: {@link connectLiveData} hands `lastEventId` straight to the
+ * store so a durable store can persist it atomically with the rows (the read-your-writes
+ * linchpin). The one invariant preserved from Inc4: this module treats the cursor as an
+ * **opaque round-tripped string** — it forwards it and never reads, compares, or parses it. The
+ * server (`@lesto/live-server`'s `encodeResumeCursor`, and the poll path's `pollCursor`) owns
+ * the token's shape, which is exactly why Inc4 could upgrade the wire from a `v0:` counter to a
+ * `v1:(systemId, timelineId, LSN)` token additively. Do not add cursor *parsing/comparison*
+ * here — that interpretation belongs server-side, and keeping it out is what let the wire
+ * evolve without a client change.
  */
 export interface LiveMessageEvent {
   readonly data: string;
+
+  /**
+   * The frame's opaque resume cursor (the SSE `id:` line). Present on every `snapshot`/`change`
+   * frame our server emits; the empty string on a frame with no `id:` (e.g. a bare `error`
+   * event forwarded to `onError`). Forwarded to the store verbatim, never parsed here.
+   */
+  readonly lastEventId: string;
 }
 
 /**
@@ -131,20 +139,21 @@ export function connectLiveData(options: ConnectLiveDataOptions): () => void {
     `${path}?shape=${encodeURIComponent(serializeShapeDefinition(def))}`,
   );
 
-  // A `snapshot` frame carries the shape's whole authorized row set — replace the slice.
+  // A `snapshot` frame carries the shape's whole authorized row set — replace the slice, stamped
+  // at the frame's cursor (forwarded opaquely) so a durable store persists rows + position atomically.
   source.addEventListener("snapshot", (event) => {
     try {
-      store.applySnapshot(decodeSnapshotData(event.data).rows);
+      store.applySnapshot(decodeSnapshotData(event.data).rows, event.lastEventId);
     } catch {
       store.applyResync();
       onError?.(event);
     }
   });
 
-  // A `change` frame carries one insert / update / delete-from-shape — apply it.
+  // A `change` frame carries one insert / update / delete-from-shape — apply it at its commit cursor.
   source.addEventListener("change", (event) => {
     try {
-      store.applyChange(decodeChangeData(event.data));
+      store.applyChange(decodeChangeData(event.data), event.lastEventId);
     } catch {
       store.applyResync();
       onError?.(event);

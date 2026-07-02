@@ -847,9 +847,11 @@
         "react-dom": "^19",
       },
       "peerDependencies": {
+        "@sqlite.org/sqlite-wasm": "^3.46.0",
         "react": "^19",
       },
       "optionalPeers": [
+        "@sqlite.org/sqlite-wasm",
         "react",
       ],
     },

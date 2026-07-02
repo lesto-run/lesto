@@ -89,4 +89,19 @@ describe("createLiveStore", () => {
     // Unsubscribed: no further notifications.
     expect(listener).toHaveBeenCalledTimes(3);
   });
+
+  it("tracks the last applied cursor as a variable (undefined before the first frame + after resync)", () => {
+    const store = createLiveStore(def);
+    expect(store.getCursor()).toBeUndefined();
+
+    store.applySnapshot([{ id: "a", rank: 1 }], "v1:s:1:1");
+    expect(store.getCursor()).toBe("v1:s:1:1");
+
+    store.applyChange({ op: "insert", key: "b", row: { id: "b", rank: 2 } }, "v1:s:1:2");
+    expect(store.getCursor()).toBe("v1:s:1:2");
+
+    // A resync abandons the local position — the cursor is cleared, not carried forward.
+    store.applyResync();
+    expect(store.getCursor()).toBeUndefined();
+  });
 });

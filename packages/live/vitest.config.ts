@@ -2,8 +2,9 @@ import { defineConfig } from "vitest/config";
 
 // The bar is non-negotiable: 100% coverage, enforced in CI by these thresholds.
 // The SSE consumer's only browser touch — the default `browserLiveEnvironment` — is
-// covered by stubbing the global `EventSource` (vi.stubGlobal), so nothing of OURS is
-// excluded but the barrel.
+// covered by stubbing the global `EventSource` (vi.stubGlobal). The only OURS excluded
+// (beyond the barrel) is `opfs-sqlite.ts`, the browser-only WASM/OPFS engine wiring — see
+// the `exclude` note below.
 //
 // `@lesto/live-protocol` is excluded for a tooling reason, not a coverage one: Vitest's
 // coverage `isIncluded` matches the `include` glob with picomatch `contains: true`
@@ -18,7 +19,11 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/index.ts", "**/live-protocol/**"],
+      // `opfs-sqlite.ts` is coverage-excluded like `@lesto/runtime`'s `sqlite-drivers.ts`: it is
+      // browser-only wiring (dynamic-imports `@sqlite.org/sqlite-wasm`, constructs an OPFS VFS)
+      // that cannot run under Node/vitest. Everything it decides — the atomic rows+cursor
+      // transaction — is tested in `sqlite-store.ts` against `openSqlite`.
+      exclude: ["src/index.ts", "src/opfs-sqlite.ts", "**/live-protocol/**"],
       thresholds: {
         lines: 100,
         functions: 100,

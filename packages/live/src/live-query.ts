@@ -12,6 +12,7 @@ import type { Row, ShapeDefinition } from "@lesto/live-protocol";
 import { connectLiveData } from "./consumer";
 import type { LiveEnvironment, LiveMessageEvent } from "./consumer";
 import { createLiveStore } from "./store";
+import type { LiveStore } from "./store";
 
 /**
  * A live view of one shape's rows. `subscribe`/`getSnapshot` are the
@@ -40,6 +41,13 @@ export interface CreateLiveQueryOptions {
 
   /** Notified of a stream error or a corrupt frame that forced a resync (informational). */
   readonly onError?: (event: LiveMessageEvent) => void;
+
+  /**
+   * The store to drive. Defaults to a fresh in-memory {@link createLiveStore}; pass an
+   * already-opened durable {@link createSqliteLiveStore} to opt into OPFS-SQLite persistence
+   * (it is async to build, so the caller awaits it and hands it in here).
+   */
+  readonly store?: LiveStore;
 }
 
 /**
@@ -51,7 +59,7 @@ export function createLiveQuery<R extends Row = Row>(
   def: ShapeDefinition,
   options?: CreateLiveQueryOptions,
 ): LiveQuery<R> {
-  const store = createLiveStore(def);
+  const store = options?.store ?? createLiveStore(def);
 
   const disconnect = connectLiveData({
     def,

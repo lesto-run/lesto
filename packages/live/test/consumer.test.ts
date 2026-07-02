@@ -27,7 +27,7 @@ const expectedUrl = (path: string): string =>
 interface FakeSource extends LiveEventSource {
   url: string;
   closed: boolean;
-  emit(type: string, data: string): void;
+  emit(type: string, data: string, lastEventId?: string): void;
 }
 
 function fakeLive(): { env: LiveEnvironment; sources: FakeSource[] } {
@@ -44,7 +44,7 @@ function fakeLive(): { env: LiveEnvironment; sources: FakeSource[] } {
         close: () => {
           source.closed = true;
         },
-        emit: (type, data) => listeners.get(type)?.({ data }),
+        emit: (type, data, lastEventId = "") => listeners.get(type)?.({ data, lastEventId }),
       };
 
       sources.push(source);
@@ -172,7 +172,7 @@ describe("connectLiveData", () => {
     expect(sources[0]!.url).toBe(expectedUrl("/data"));
 
     sources[0]!.emit("error", "");
-    expect(onError).toHaveBeenCalledWith({ data: "" });
+    expect(onError).toHaveBeenCalledWith({ data: "", lastEventId: "" });
   });
 
   it("uses the browser EventSource when no environment is given", () => {
@@ -186,6 +186,7 @@ describe("connectLiveData", () => {
     // Fire the native event through the wrapper the default environment registered.
     instances[0]!.listeners.get("snapshot")!({
       data: JSON.stringify({ rows: [{ id: "a", rank: 1 }] }),
+      lastEventId: "",
     });
     expect(store.getRows()).toEqual([{ id: "a", rank: 1 }]);
 

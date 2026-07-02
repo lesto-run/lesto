@@ -37,7 +37,7 @@ function fakeEnv() {
   return {
     environment,
     urls,
-    emit: (type: string, data: string) => listeners.get(type)?.({ data }),
+    emit: (type: string, data: string) => listeners.get(type)?.({ data, lastEventId: "" }),
     isClosed: () => closed,
   };
 }

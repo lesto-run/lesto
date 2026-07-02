@@ -20,7 +20,7 @@ const expectedUrl = (path: string): string =>
 interface FakeSource extends LiveEventSource {
   url: string;
   closed: boolean;
-  emit(type: string, data: string): void;
+  emit(type: string, data: string, lastEventId?: string): void;
 }
 
 function fakeLive(): { env: LiveEnvironment; sources: FakeSource[] } {
@@ -37,7 +37,7 @@ function fakeLive(): { env: LiveEnvironment; sources: FakeSource[] } {
         close: () => {
           source.closed = true;
         },
-        emit: (type, data) => listeners.get(type)?.({ data }),
+        emit: (type, data, lastEventId = "") => listeners.get(type)?.({ data, lastEventId }),
       };
 
       sources.push(source);

@@ -2,7 +2,7 @@
   "name": "@lesto/live",
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Lesto local-first sync (ADR 0042 Tier 4) — the browser client: an in-memory keyed store, the GET /__lesto/live-data SSE consumer, and a framework-agnostic LiveQuery handle (subscribe/getSnapshot) that keeps an auth-scoped shape in sync. v0 = in-memory, online-only, resync-on-reconnect.",
+  "description": "Lesto local-first sync (ADR 0042 Tier 4) — the browser client: an in-memory keyed store (default) or an opt-in durable OPFS-SQLite store that persists rows + the LSN cursor atomically and survives reload, the GET /__lesto/live-data SSE consumer, and a framework-agnostic LiveQuery handle (subscribe/getSnapshot) that keeps an auth-scoped shape in sync.",
   "type": "module",
   "private": true,
   "dependencies": {
@@ -21,9 +21,13 @@
     }
   },
   "peerDependencies": {
+    "@sqlite.org/sqlite-wasm": "^3.46.0",
     "react": "^19"
   },
   "peerDependenciesMeta": {
+    "@sqlite.org/sqlite-wasm": {
+      "optional": true
+    },
     "react": {
       "optional": true
     }

@@ -1,11 +1,14 @@
 /**
  * @lesto/live — the browser client for local-first sync (ADR 0042 Tier 4, v0).
  *
- * Three framework-agnostic pieces that turn a bound shape into a live, in-memory slice:
+ * Framework-agnostic pieces that turn a bound shape into a live slice:
  *
- *   - {@link createLiveStore} — the in-memory keyed store: `snapshot`/`change`/`resync`
- *     mutate it, {@link LiveStore.getRows} reads it in the shape's total order behind a
+ *   - {@link createLiveStore} — the in-memory keyed store (the default): `snapshot`/`change`/
+ *     `resync` mutate it, {@link LiveStore.getRows} reads it in the shape's total order behind a
  *     stable-reference cache (the `useSyncExternalStore` contract).
+ *   - {@link createSqliteLiveStore} — the opt-in **durable** store (ADR 0042 v1 Inc5): the same
+ *     surface backed by SQLite, persisting the row batch AND the resume cursor atomically so the
+ *     slice survives reload; {@link openOpfsSqliteDatabase} is its browser OPFS engine.
  *   - {@link connectLiveData} — the `GET /__lesto/live-data` SSE consumer that drives a
  *     store, over an injectable `EventSource` seam (SSR-safe, test-fakeable).
  *   - {@link createLiveQuery} — the `{ subscribe, getSnapshot, disconnect }` handle that
@@ -18,6 +21,12 @@
 
 export { createLiveStore } from "./store";
 export type { LiveStore } from "./store";
+
+export { createSqliteLiveStore } from "./sqlite-store";
+export type { CreateSqliteLiveStoreOptions, SqliteLiveStore } from "./sqlite-store";
+
+export { openOpfsSqliteDatabase, OpfsSqliteError } from "./opfs-sqlite";
+export type { OpenOpfsSqlite, OpenOpfsSqliteOptions } from "./opfs-sqlite";
 
 export { browserLiveEnvironment, connectLiveData, DEFAULT_LIVE_DATA_PATH } from "./consumer";
 export type {
@@ -38,4 +47,4 @@ export type { LiveClientErrorCode } from "./errors";
 
 // Re-export the protocol types that appear in this package's public surface, so a consumer
 // binds to `@lesto/live` alone (a typed `live()` still mints the `ShapeDefinition`).
-export type { Row, RowKey, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
+export type { Cursor, Row, RowKey, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";

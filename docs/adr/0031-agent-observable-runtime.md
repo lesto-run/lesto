@@ -245,8 +245,9 @@ mechanism is sound, but "joins correctly" is true only once wired, not today.
    `Usage` it parses, `ai.stop_reason` from `StopReason`); status `error` (and the `AiError`
    code in the span) when the provider call throws the coded `AI_HTTP_ERROR` it raises
    (`generate.ts:19-26`, `errors.ts:13-25`). (`AI_STREAM_MALFORMED` cannot arise here — it is
-   thrown only by `streamText`/`parseStream` (`generate.ts:36-43`), which Phase 2 does not
-   instrument; it belongs to the deferred streaming span.) Because the seam parents on the
+   thrown only by `streamText`/`parseStream`, which records it on `streamText`'s own `ai.generate`
+   span: the streaming-span lifecycle, once deferred, is now SHIPPED — see the Deferred entry.)
+   Because the seam parents on the
    in-flight request span — and `runAgent`/`generateText` run inside an HTTP route handler **once
    a route is wired to call them** (where `currentRequestSpan()` is set) — an `ai.generate`
    becomes a child of `http.request`. This is the path that **will** join correctly once wired
@@ -327,7 +328,7 @@ asserting any `mcp.tool → http.request` join**.
   once the generator terminates, so it brackets the whole SSE stream's real duration — the
   open-window model, not point-in-time (the duration-bearing work made the non-streamed
   `ai.generate` open-window too). `AI_STREAM_MALFORMED` (and any other streaming-path throw) is
-  recorded as the span's `error` status with the `AiError` code; the final `Usage`/`StopReason`
+  recorded as the span's `error` status (with the `AiError` code when the throw is coded); the final `Usage`/`StopReason`
   ride in from Anthropic's `message_start`/`message_delta` frames (absent only on a torn stream,
   which `ai.streaming = true` marks expected). An early `for-await` `break` closes the span with
   status `"unset"` — an honest "we don't know".
@@ -454,5 +455,5 @@ asserting any `mcp.tool → http.request` join**.
   `@lesto/ai` package and are labelled preview in any public copy, exactly as `@lesto/ai` itself
   is — the claim is "agent and LLM calls appear on the same trace," not a metrics/eval product.
 - Slow iteration upheld: the smallest sound primitive (one injected dispatch seam + one shared
-  vocabulary) is committed; the preview AI spans and the richer streaming/embed/eval spans are
+  vocabulary) is committed; the preview AI spans and the richer embed/eval spans are
   designed-or-deferred behind their real consumers, not scheduled.
