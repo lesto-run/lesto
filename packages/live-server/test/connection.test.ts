@@ -59,6 +59,32 @@ describe("ShapeConnection", () => {
     expect(frames).toEqual([": ping\n\n"]);
   });
 
+  it("resync() emits a final resync frame and closes, WITHOUT signaling onOverflow", () => {
+    // The public primitive the handler drives on de-authorization (ADR 0042 (c)/(d)) — distinct
+    // from the internal overflow path, which additionally signals onOverflow so the handler tears
+    // its own timers/subscription down. A revocation already runs its own teardown right after.
+    const { controller, frames, state } = fakeController();
+    const onOverflow = vi.fn();
+    const conn = new ShapeConnection({ controller, onOverflow });
+
+    conn.resync("c7");
+
+    expect(frames).toEqual(["event: resync\ndata: \nid: c7\n\n"]);
+    expect(conn.closed).toBe(true);
+    expect(state.closed).toBe(true);
+    expect(onOverflow).not.toHaveBeenCalled();
+  });
+
+  it("resync() is a no-op once already closed", () => {
+    const { controller, frames } = fakeController();
+    const conn = new ShapeConnection({ controller, onOverflow: () => {} });
+
+    conn.close();
+    conn.resync("c7");
+
+    expect(frames).toEqual([]);
+  });
+
   it("drops a slow client to a resync + close + onOverflow when the buffer is full", () => {
     const { controller, frames, state } = fakeController();
     const onOverflow = vi.fn();

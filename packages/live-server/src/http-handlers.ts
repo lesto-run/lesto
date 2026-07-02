@@ -11,14 +11,22 @@
  * query (`?shape=<json>`, the protocol's trust boundary), **authorizes the bound shape**
  * (the parameter-level authz seam — a shape whose parameters resolve to another tenant's
  * resource is refused at subscribe time), then subscribes to the shape engine and streams
- * the snapshot + change tail over a long-lived `ReadableStream`. It heart-beats, optionally
- * re-authorizes the session on an interval / bounds the lifetime, and tears everything down
- * on `context.signal` disconnect. Every OUTBOUND decision is delegated to the tested
- * {@link ShapeConnection}; this file is the composition over a `ReadableStream` + timers.
+ * the snapshot + change tail over a long-lived `ReadableStream`. It heart-beats, bounds the
+ * lifetime, and tears everything down on `context.signal` disconnect. Every OUTBOUND
+ * decision is delegated to the tested {@link ShapeConnection}; this file is the
+ * composition over a `ReadableStream` + timers.
  *
- * v0 note: this endpoint proves the `live()` surface and the dev loop; it is NOT the
- * per-row authorization gate (that is the v1 adversarial matrix — see ADR 0042). In v0 a
- * refused shape returns a plain 403, which is an existence side-channel the v1 model closes.
+ * **Re-authorization is continuous, not connect-time-only** (ADR 0042 acceptance (a)/(c)/(d)):
+ * the bound shape is re-authorized on the re-auth interval (`reauthMs`, default 60s) for
+ * the connection's whole life, not merely once at subscribe — because a session can stay
+ * valid while the principal's authorization to the bound parameter is revoked (a
+ * cross-relation membership change the replication stream cannot observe, since it only
+ * sees the streamed table's own row changes). A failure PURGES the client's durable slice
+ * (a `resync` frame) before tearing the stream down, never merely closes the socket — a
+ * closed connection alone would leave every row already delivered sitting in the client's
+ * store. An on-row authorization column (e.g. `owner_id`) stays sub-interval via the
+ * ordinary delete-from-shape classifier; the interval is the backstop for everything a row's
+ * own columns cannot express.
  */
 
 import { parseShapeDefinition } from "@lesto/live-protocol";
@@ -141,7 +149,11 @@ export interface ShapeStreamConfig {
   /** The timer seam (injected for tests). */
   readonly timers: StreamTimers;
 
-  /** A periodic session re-authorization; returning `false` (or throwing) tears down. */
+  /**
+   * A periodic re-authorization; returning `false` (or throwing) purges the client's
+   * durable slice (a `resync` frame, stamped with the connection's last-delivered cursor)
+   * and THEN tears the stream down — never merely closes the socket.
+   */
   readonly revalidate?: () => boolean | Promise<boolean>;
 
   /** The re-auth interval in ms (only when {@link revalidate} is set). */
@@ -203,9 +215,17 @@ export function openShapeStream(config: ShapeStreamConfig): ReadableStream<strin
           return;
         }
 
+        // The most recent cursor this connection has actually delivered — the resync-purge
+        // path (below) stamps its frame with it, so a purge lands at the client's true
+        // current position rather than the stale snapshot cursor.
+        let lastCursor = config.source.cursor;
+
         // Snapshot first, then the change tail flows through the same connection.
         connection.snapshot(config.source.snapshot, config.source.cursor);
-        config.source.onChange((change, cursor) => connection?.deliver(change, cursor));
+        config.source.onChange((change, cursor) => {
+          lastCursor = cursor;
+          connection?.deliver(change, cursor);
+        });
 
         // Heartbeat: hold the stream open past intermediary idle timeouts.
         timerHandles.push({
@@ -213,9 +233,12 @@ export function openShapeStream(config: ShapeStreamConfig): ReadableStream<strin
           handle: config.timers.setInterval(() => connection?.heartbeat(), config.heartbeatMs),
         });
 
-        // Periodic re-auth (optional): a revoked/expired session is severed. `revalidate`
-        // is app code, so a SYNCHRONOUS throw or a rejection both FAIL CLOSED (tear down),
-        // never escaping the timer callback as an uncaught exception.
+        // Periodic re-auth (optional): a revoked/expired session, or a shape/parameter
+        // authorization that no longer holds, is severed. `revalidate` is app code, so a
+        // SYNCHRONOUS throw or a rejection both FAIL CLOSED (tear down), never escaping the
+        // timer callback as an uncaught exception. A failure PURGES first: closing the
+        // socket alone would leave every row already delivered sitting in the client's
+        // durable store — the resync frame is what tells it to drop that slice.
         if (config.revalidate !== undefined) {
           const revalidate = config.revalidate;
 
@@ -224,10 +247,13 @@ export function openShapeStream(config: ShapeStreamConfig): ReadableStream<strin
             handle: config.timers.setInterval(() => {
               void (async () => {
                 try {
-                  if (!(await revalidate())) teardown();
+                  if (await revalidate()) return;
                 } catch {
-                  teardown();
+                  // fall through to the same purge-then-teardown as an explicit `false`
                 }
+
+                connection?.resync(lastCursor);
+                teardown();
               })();
             }, config.reauthMs ?? DEFAULT_REAUTH_MS),
           });
@@ -265,6 +291,11 @@ export interface LiveDataHttpOptions<P> {
    * Authorize the **bound** shape for the principal — the parameter-level authz seam. A
    * shape whose bound parameters resolve to another tenant's resource must be refused
    * here (ADR 0042 acceptance matrix (a)). Return `false` to refuse.
+   *
+   * Called at subscribe, AND again on every re-auth tick (`reauthMs`) for the connection's
+   * whole life — never merely once. A re-check that starts returning `false` (a room
+   * membership revoked, a resource reassigned to another tenant) purges the client's
+   * durable slice and severs the stream (ADR 0042 acceptance (c)/(d)).
    */
   readonly authorizeShape: (principal: P, shape: ShapeDefinition) => boolean | Promise<boolean>;
 
@@ -274,10 +305,15 @@ export interface LiveDataHttpOptions<P> {
   /** Per-connection outbound buffer bound. Defaults to 256. */
   readonly maxQueue?: number;
 
-  /** Periodic session re-auth; `false` severs the stream. */
+  /**
+   * An ADDITIONAL periodic check layered on top of the always-on `authorizeShape` re-check
+   * (e.g. a session/token-revocation lookup beyond bound-shape authorization); `false`
+   * severs the stream. The re-auth interval runs regardless of whether this is supplied —
+   * `authorizeShape` alone is enough to gate a shape-level revocation.
+   */
   readonly revalidate?: (principal: P) => boolean | Promise<boolean>;
 
-  /** Re-auth interval in ms (only when {@link revalidate} is set). Defaults to 60s. */
+  /** Re-auth interval in ms — the shape is always re-authorized on this tick. Defaults to 60s. */
   readonly reauthMs?: number;
 
   /** Hard connection-lifetime cap in ms. Absent → unbounded. */
@@ -370,9 +406,18 @@ export function createLiveDataHttpHandlers<P>(
       heartbeatMs,
       maxQueue,
       timers,
-      ...(options.revalidate === undefined
-        ? {}
-        : { revalidate: () => options.revalidate!(principal) }),
+      // Always re-check the bound shape on the re-auth interval — not merely the app's
+      // optional session check (below). A session can stay valid while the principal's
+      // AUTHORIZATION to this bound parameter is revoked (removed from a room, a
+      // cross-relation membership change the replication stream cannot see on this table's
+      // own rows — ADR 0042 acceptance (c)/(d)); only re-invoking `authorizeShape` catches
+      // that. It always runs (never conditional on the app supplying `revalidate`), so
+      // "removed from a room" is bounded by `reauthMs`, not left unbounded.
+      revalidate: async () => {
+        if (!(await options.authorizeShape(principal, def))) return false;
+
+        return options.revalidate === undefined ? true : options.revalidate(principal);
+      },
       ...(options.reauthMs === undefined ? {} : { reauthMs: options.reauthMs }),
       ...(options.maxConnectionMs === undefined
         ? {}

@@ -98,9 +98,9 @@ describe("assertOldImageComplete — the per-change runtime guard (marker + colu
     // The exact leak the value-based check MISSED: a 'K' tuple's non-key columns arrive as null, so
     // a value check (room_id === undefined) passed and the delete-from-shape was dropped. The marker
     // is the sound discriminator, so a key-only image is refused loudly — before the column loop.
-    expect(() => assertOldImageComplete(shape(), "key", required, { id: "5", room_id: null })).toThrow(
-      LiveServerError,
-    );
+    expect(() =>
+      assertOldImageComplete(shape(), "key", required, { id: "5", room_id: null }),
+    ).toThrow(LiveServerError);
     try {
       assertOldImageComplete(shape(), "key", required, { id: "5", room_id: null });
     } catch (error) {

@@ -300,14 +300,17 @@ describe("openShapeStream", () => {
     expect(src.close).not.toHaveBeenCalled();
 
     valid = false;
-    timers.intervalCbs[1]!(); // re-auth fails → teardown
+    timers.intervalCbs[1]!(); // re-auth fails → resync-purge, then teardown
     timers.intervalCbs[1]!(); // a second firing re-enters teardown, which is idempotent
     await flush();
     expect(src.close).toHaveBeenCalledTimes(1); // torn once — the second teardown no-ops
-    expect(await readFrame(reader)).toBeUndefined();
+    // A failed re-auth must PURGE the client's durable slice, not merely close the socket —
+    // else every row already delivered would sit stranded in the client's store.
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c0\n\n");
+    expect(await readFrame(reader)).toBeUndefined(); // then closed
   });
 
-  it("fails closed when re-auth throws", async () => {
+  it("fails closed when re-auth throws — still purges before tearing down", async () => {
     const timers = fakeStreamTimers();
     const src = fakeSource();
 
@@ -327,6 +330,34 @@ describe("openShapeStream", () => {
     timers.intervalCbs[1]!();
     await flush();
     expect(src.close).toHaveBeenCalledTimes(1);
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c0\n\n");
+  });
+
+  it("stamps the resync-purge with the LAST DELIVERED cursor, not the stale snapshot cursor", async () => {
+    const timers = fakeStreamTimers();
+    const src = fakeSource();
+    let valid = true;
+
+    const stream = openShapeStream({
+      source: src.source,
+      signal: undefined,
+      heartbeatMs: 1000,
+      maxQueue: 16,
+      timers: timers.seam,
+      revalidate: () => valid,
+      reauthMs: 500,
+    });
+    const reader = stream.getReader();
+    await readFrame(reader); // snapshot at cursor "c0"
+
+    src.fire({ op: "insert", key: "9", row: { id: 9 } }, "c1");
+    await readFrame(reader); // the delivered change, at cursor "c1"
+
+    valid = false;
+    timers.intervalCbs[1]!(); // re-auth fails
+    await flush();
+
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c1\n\n");
   });
 
   it("severs at the connection TTL", async () => {
@@ -532,5 +563,58 @@ describe("createLiveDataHttpHandlers", () => {
     expect(revalidate).toHaveBeenCalledWith("u1");
 
     await reader.cancel();
+  });
+
+  it("re-auths the bound shape on the interval even when no app `revalidate` is supplied (ADR 0042 (a)/(c)/(d))", async () => {
+    const timers = fakeStreamTimers();
+    const authorizeShape = vi.fn(() => true);
+
+    const { liveData } = createLiveDataHttpHandlers({
+      engine: engineReturning([{ id: 1 }]),
+      resolvePrincipal: () => "u1",
+      authorizeShape,
+      timers: timers.seam,
+    });
+
+    const response = await liveData(fakeContext({ shape: shapeParam }), noopNext);
+    const reader = (response!.body as ReadableStream<string>).getReader();
+    await readFrame(reader); // snapshot
+
+    // The re-auth interval registers REGARDLESS of an app-supplied `revalidate` — the
+    // always-on `authorizeShape` re-check is enough on its own.
+    expect(timers.intervalCbs).toHaveLength(2); // heartbeat + re-auth
+    expect(authorizeShape).toHaveBeenCalledTimes(1); // just the initial subscribe so far
+
+    timers.intervalCbs[1]!();
+    await flush();
+    expect(authorizeShape).toHaveBeenCalledTimes(2); // re-checked on the tick
+
+    await reader.cancel();
+  });
+
+  it("purges the client's slice and severs when authorizeShape starts refusing mid-connection (revoked cross-relation authz, ADR 0042 (c))", async () => {
+    const timers = fakeStreamTimers();
+    let authorized = true;
+
+    const { liveData } = createLiveDataHttpHandlers({
+      engine: engineReturning([{ id: 1 }]),
+      resolvePrincipal: () => "u1",
+      authorizeShape: () => authorized,
+      timers: timers.seam,
+    });
+
+    const response = await liveData(fakeContext({ shape: shapeParam }), noopNext);
+    const reader = (response!.body as ReadableStream<string>).getReader();
+    await readFrame(reader); // snapshot
+
+    // The principal's SESSION stays valid (no app `revalidate` is even supplied); only the
+    // bound shape's authorization is revoked — e.g. removed from a room via a separate
+    // membership relation the replication stream on this table cannot observe.
+    authorized = false;
+    timers.intervalCbs[1]!();
+    await flush();
+
+    expect(await readFrame(reader)).toBe("event: resync\ndata: \nid: c0\n\n");
+    expect(await readFrame(reader)).toBeUndefined(); // then closed — never left open
   });
 });

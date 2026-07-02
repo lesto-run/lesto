@@ -94,6 +94,22 @@ export class ShapeConnection {
   }
 
   /**
+   * Emit a final `resync` frame — instructing the client to drop its durable slice and
+   * re-fetch a fresh snapshot — then close. The shared primitive behind backpressure
+   * overflow ({@link deliver}) and behind the handler's own de-authorization path (a
+   * shape/session re-auth failure must purge what was already delivered, not merely stop
+   * delivering more of it — closing the socket alone leaves stale rows in the client's
+   * durable store). A no-op once already closed, so a caller racing {@link close} is safe.
+   */
+  resync(cursor: Cursor): void {
+    if (this.#closed) return;
+
+    this.#emit(resyncFrame(cursor));
+    this.#closed = true;
+    this.#safeClose();
+  }
+
+  /**
    * Close the connection's controller exactly once. The handler calls this on
    * `context.signal` disconnect / TTL / revocation; overflow calls it internally.
    */
@@ -106,9 +122,7 @@ export class ShapeConnection {
 
   /** A slow client's buffer is full → final `resync`, close, and signal overflow. */
   #dropToResync(cursor: Cursor): void {
-    this.#emit(resyncFrame(cursor));
-    this.#closed = true;
-    this.#safeClose();
+    this.resync(cursor);
     this.#onOverflow();
   }
 
