@@ -1,9 +1,10 @@
 /**
  * `@lesto/ui/server` — the server-render half of the engine.
  *
- * Everything here imports `react-dom/server` (or its Preact twin,
- * `preact-render-to-string`) directly or transitively: the buffered and streamed
- * page renderers and the two server-render dialects. It is split out of the core
+ * Everything here pulls in the `react-dom` family directly or transitively:
+ * `react-dom/server` (or its Preact twin, `preact-render-to-string`) for the
+ * buffered and streamed page renderers and the two server-render dialects, plus
+ * bare `react-dom` for the React 19 resource-hint helpers. It is split out of the core
  * `@lesto/ui` barrel for one load-bearing reason — a CLIENT bundle that imports
  * `@lesto/ui` (for `Registry`, `defineIsland`, the island/data tokens) must NEVER
  * drag `react-dom/server` into the browser graph. React's `react-dom/server` is
