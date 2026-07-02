@@ -27,6 +27,11 @@ import {
   parseStringFlag,
   run,
 } from "../src/index";
+// `isMissingSelfModule` / `missingModuleSpecifier` are the shared import-error classifier
+// the bin's loaders route through — pure helpers exported from the core (`run.ts`), imported
+// here directly (they are internal to the CLI's own wiring, not part of the package's public
+// barrel like `declaresIslandDevPeer`/`run`).
+import { isMissingSelfModule, missingModuleSpecifier } from "../src/run";
 import type { BuildHook, BuildHookContext, CliDeps, DevError, ReleaseTarget } from "../src/index";
 import { createDevState } from "../src/dev-state";
 import type { AiTurn } from "../src/ai-bridge";
@@ -4490,5 +4495,125 @@ describe("declaresIslandDevPeer — the island Fast-Refresh opt-in gate", () => 
 
   it("is false when a dependency map is null rather than an object", () => {
     expect(declaresIslandDevPeer({ dependencies: null })).toBe(false);
+  });
+});
+
+// The shared import-error classifier the bin's optional-module loaders route through
+// (`loadSites`/`loadBuildHook` via `isMissingSelfModule`, the content-peer hint via
+// `missingModuleSpecifier`). It must span BOTH runtime shapes the bin runs under: the Bun
+// `ResolveMessage` (NOT `instanceof Error`, `code: "ERR_MODULE_NOT_FOUND"`) AND the jiti
+// `Error` (`code: "MODULE_NOT_FOUND"`, empirically confirmed against jiti 2.7.0).
+describe("missingModuleSpecifier — cross-runtime module-not-found classifier", () => {
+  it("is undefined for a non-object / null error (no code or message to read)", () => {
+    expect(missingModuleSpecifier(undefined)).toBeUndefined();
+    expect(missingModuleSpecifier(null)).toBeUndefined();
+    expect(missingModuleSpecifier("Cannot find module 'x'")).toBeUndefined();
+  });
+
+  it("is undefined when the error object carries no `code`", () => {
+    expect(missingModuleSpecifier({ message: "Cannot find module 'x'" })).toBeUndefined();
+  });
+
+  it("is undefined when the error object carries no `message`", () => {
+    expect(missingModuleSpecifier({ code: "MODULE_NOT_FOUND" })).toBeUndefined();
+  });
+
+  it("is undefined for an unrelated error code", () => {
+    expect(
+      missingModuleSpecifier({ code: "ERR_SYNTAX", message: "Cannot find module 'x'" }),
+    ).toBeUndefined();
+  });
+
+  it("extracts the specifier under Node/ESM & Bun's ERR_MODULE_NOT_FOUND (`Cannot find package … imported from …`)", () => {
+    // Bun's `ResolveMessage` is NOT `instanceof Error` — a bare object with the two
+    // reliable fields is the faithful stand-in. The importer path after the specifier
+    // must be ignored (only the quoted specifier is returned).
+    expect(
+      missingModuleSpecifier({
+        code: "ERR_MODULE_NOT_FOUND",
+        message: "Cannot find package '@lesto/content-core' imported from '/app/bin.ts'",
+      }),
+    ).toBe("@lesto/content-core");
+  });
+
+  it("extracts the specifier under jiti's MODULE_NOT_FOUND (a real Error from the CJS resolver)", () => {
+    const error = Object.assign(new Error("Cannot find module '/proj/lesto.sites.ts'"), {
+      code: "MODULE_NOT_FOUND",
+    });
+
+    expect(missingModuleSpecifier(error)).toBe("/proj/lesto.sites.ts");
+  });
+
+  it("is undefined when the code matches but the message has no extractable specifier", () => {
+    expect(
+      missingModuleSpecifier({ code: "MODULE_NOT_FOUND", message: "the graph is broken" }),
+    ).toBeUndefined();
+  });
+
+  // Task 2 (L-c87b7e68): the bin's OPTIONAL-PEER content loaders (`loadContentCore` /
+  // `loadContentStore`) have NO dir-probe guard — they rely on `import()` THROWING when the
+  // peer is absent, then `rethrowUnlessMissingContentPeer` classifies the miss into the coded
+  // `CLI_CONTENT_PACKAGES_MISSING` hint. EMPIRICALLY, jiti's `import()` of a missing PACKAGE
+  // THROWS within a few ms (it does NOT hang) — as a real `Error` with `code:
+  // "MODULE_NOT_FOUND"`, NOT the ESM `ERR_MODULE_NOT_FOUND`. So the classifier must recognize
+  // BOTH shapes; a `@lesto/content-*` specifier surfacing from EITHER proves the hint path is
+  // reached (rather than the raw error rethrown — the gap the old `ERR_MODULE_NOT_FOUND`-only
+  // test left open under `node`'s jiti loader), and that a missing peer never hangs.
+  it("recognizes a missing @lesto/content-* peer under BOTH runtime codes (the coded-hint path)", () => {
+    // Bun: a ResolveMessage-shaped miss (NOT instanceof Error) with ERR_MODULE_NOT_FOUND.
+    const bunShape = missingModuleSpecifier({
+      code: "ERR_MODULE_NOT_FOUND",
+      message: "Cannot find package '@lesto/content-core/build' imported from '/app/src/bin.ts'",
+    });
+
+    // jiti: a real Error from the CJS resolver with MODULE_NOT_FOUND.
+    const jitiShape = missingModuleSpecifier(
+      Object.assign(new Error("Cannot find module '@lesto/content-store'"), {
+        code: "MODULE_NOT_FOUND",
+      }),
+    );
+
+    // Both extract a `@lesto/content-*` specifier → `rethrowUnlessMissingContentPeer`'s
+    // `startsWith("@lesto/content-")` fires → the coded hint, not a hang or a raw rethrow.
+    expect(bunShape?.startsWith("@lesto/content-")).toBe(true);
+    expect(jitiShape?.startsWith("@lesto/content-")).toBe(true);
+  });
+});
+
+// The self-module predicate `loadSites`/`loadBuildHook` use to tell an absent OPTIONAL
+// file (tolerate) from a real failure inside a present one (fail loud). The match is
+// ABSOLUTE-PATH equality, NOT a bare suffix — the red-team P2 tightening.
+describe("isMissingSelfModule — absolute-path equality (not a bare suffix)", () => {
+  const SELF = "/proj/lesto.sites.ts";
+
+  it("is true when the missing specifier IS the self file (delete-between-probe-and-import)", () => {
+    const error = { code: "ERR_MODULE_NOT_FOUND", message: `Cannot find module '${SELF}'` };
+
+    expect(isMissingSelfModule(error, SELF)).toBe(true);
+  });
+
+  it("normalises before comparing, so a `.`/`..`-laden path to the same file still matches", () => {
+    const error = {
+      code: "MODULE_NOT_FOUND",
+      message: "Cannot find module '/proj/sub/../lesto.sites.ts'",
+    };
+
+    expect(isMissingSelfModule(error, SELF)).toBe(true);
+  });
+
+  it("is FALSE for a transitive dep whose specifier merely ENDS in the self basename", () => {
+    // The footgun the tightening closes: a real, MISSING transitive import
+    // `./nested/lesto.sites.ts` — a bare `endsWith("lesto.sites.ts")` would have
+    // false-swallowed it as "no sites"; absolute-path equality rethrows it (fail loud).
+    const error = {
+      code: "MODULE_NOT_FOUND",
+      message: "Cannot find module '/proj/nested/lesto.sites.ts'",
+    };
+
+    expect(isMissingSelfModule(error, SELF)).toBe(false);
+  });
+
+  it("is false when the error is not a missing-module error at all", () => {
+    expect(isMissingSelfModule({ code: "ERR_SYNTAX", message: "bad token" }, SELF)).toBe(false);
   });
 });

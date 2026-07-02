@@ -38,6 +38,7 @@ import type { ReleaseStore, ShipDeps } from "@lesto/deploy";
 import type { DevState, DevStateReader } from "./dev-state";
 import { CliError } from "./errors";
 import { timingSafeEqual } from "node:crypto";
+import { resolve } from "node:path";
 
 import { DEV_INSPECT_TOOL, dispatchAiTurn } from "./ai-bridge";
 import type { AiTurn } from "./ai-bridge";
@@ -1695,6 +1696,65 @@ export function declaresIslandDevPeer(packageJson: unknown): boolean {
   const pkg = packageJson as { dependencies?: unknown; devDependencies?: unknown };
 
   return listsIslandDevPeer(pkg.dependencies) || listsIslandDevPeer(pkg.devDependencies);
+}
+
+/**
+ * The specifier a module-not-found `import()` failure could not resolve — or
+ * `undefined` when `error` is not a missing-module error at all. The one shared
+ * classifier the bin's optional-module loaders route through
+ * ({@link isMissingSelfModule} for `lesto.sites.ts` / `lesto.build.ts`, and the
+ * content-peer hint for `@lesto/content-*`), so the divergent per-loader logic lives
+ * in exactly one covered place.
+ *
+ * The `lesto` bin runs under TWO runtimes and each throws a DIFFERENT shape for a
+ * missing `import()`, so this DUCK-TYPES on `code` + `message` rather than gating on
+ * `instanceof Error`:
+ *
+ *   - Bun (native — how `lesto dev` and the e2e spawn it): a `ResolveMessage` that is
+ *     NOT an `Error` instance (only its `.code` / `.message` are reliable), with
+ *     `code === "ERR_MODULE_NOT_FOUND"`.
+ *   - Node via jiti (`bin/lesto.mjs` — how an outside `npm` install runs it): a real
+ *     `Error` from jiti's CJS resolver with `code === "MODULE_NOT_FOUND"` — NOT the
+ *     ESM `ERR_MODULE_NOT_FOUND` (empirically confirmed against jiti 2.7.0 and the
+ *     real bin). Accepting ONLY `ERR_MODULE_NOT_FOUND` — the prior shape — silently
+ *     dropped the classification under jiti, so a missing content peer surfaced a raw
+ *     crash instead of the coded hint; accepting BOTH codes closes that gap.
+ *
+ * We pull the missing specifier out of the message (`Cannot find package|module
+ * '<specifier>' [imported from '<importer>']`). Returning the SPECIFIER — not matching
+ * the whole message — is what lets a caller tell an absent SELF module from a missing
+ * TRANSITIVE one, whose message embeds the IMPORTER's path (which itself often ends in
+ * the self filename).
+ */
+export function missingModuleSpecifier(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error) || !("message" in error)) {
+    return undefined;
+  }
+
+  const code = (error as { code?: unknown }).code;
+
+  if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") return undefined;
+
+  return /Cannot find (?:package|module) '([^']+)'/.exec(
+    String((error as { message: unknown }).message),
+  )?.[1];
+}
+
+/**
+ * Whether an `import()` failure is the OPTIONAL self-module at `filename` being
+ * ABSENT — the tolerated "no such file" case — as opposed to any real error a present
+ * file raises: a syntax error, or (the footgun) a missing TRANSITIVE import it pulls in.
+ *
+ * The match is ABSOLUTE-PATH equality (`resolve(missing) === resolve(filename)`), not a
+ * bare `endsWith` suffix: a genuine dependency whose specifier merely ENDS in
+ * `lesto.sites.ts` / `lesto.build.ts` (e.g. `import "./nested/lesto.sites.ts"`) must
+ * NOT be mistaken for the self file and false-swallowed as "no sites / no hook". Only
+ * the self file resolves to `filename` itself. Shared by `loadSites` + `loadBuildHook`.
+ */
+export function isMissingSelfModule(error: unknown, filename: string): boolean {
+  const missing = missingModuleSpecifier(error);
+
+  return missing !== undefined && resolve(missing) === resolve(filename);
 }
 
 /**

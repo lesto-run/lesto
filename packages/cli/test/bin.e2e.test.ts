@@ -493,4 +493,56 @@ describe("bin e2e", () => {
       await rm(project, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("build: proceeds siteless when lesto.sites.ts is absent, and fails loud on a syntax error or a missing transitive import in it", async () => {
+    // `loadSites`' import-error classifier is coverage-excluded in the bin (mocked in
+    // `run.test.ts`), so — like the `loadBuildHook` twin above — this e2e is the sole guard
+    // on the real wiring: swallow ONLY the absent sites file (→ build proceeds with no
+    // sites), but rethrow a real error inside an EXISTING one — a syntax error, OR a missing
+    // TRANSITIVE import — so a real bug is never masked as "no sites". The last case is the
+    // absolute-path tightening: the Bun `ResolveMessage` for a missing `./missing.ts` embeds
+    // the IMPORTER path (`… from '…/lesto.sites.ts'`), which a bare-suffix message match would
+    // false-swallow; anchoring on the extracted specifier fails it loud. A COPY of the
+    // committed fixture (a complete buildable app) in the repo scratch root, so its `@lesto/*`
+    // imports resolve.
+    const project = await mkdtempInRepo("sites-load-");
+
+    try {
+      await cp(fixtureDir, project, { recursive: true });
+
+      // (a) NO `lesto.sites.ts` at all → the build runs to a clean exit, siteless (the
+      // dirExists probe short-circuits; the import is never attempted — no hang, no crash).
+      await rm(join(project, "lesto.sites.ts"));
+
+      const siteless = await runBinIn(project, ["build", "--out", "out"]);
+
+      expect(siteless.code, siteless.stderr).toBe(0);
+
+      // (b) A `lesto.sites.ts` that exists but has a SYNTAX ERROR must fail the build loudly,
+      // naming the offending file — never swallowed as "no sites".
+      await writeFile(join(project, "lesto.sites.ts"), 'export default [ { name: "x" ::: \n');
+
+      const broken = await runBinIn(project, ["build", "--out", "out"]);
+
+      expect(broken.code).not.toBe(0);
+      expect(`${broken.stdout}${broken.stderr}`).toContain("lesto.sites.ts");
+
+      // (c) A `lesto.sites.ts` that exists but imports a MISSING TRANSITIVE module must ALSO
+      // fail loud — the footgun the absolute-path tightening closes (the importer path in the
+      // error message must not false-swallow it as the absent sites file).
+      await writeFile(
+        join(project, "lesto.sites.ts"),
+        'import "./missing-transitive.ts";\n' +
+          'import { defineSites } from "@lesto/sites";\n' +
+          'export default defineSites([{ name: "app", render: "static", basePath: "/", pages: ["/posts"] }]);\n',
+      );
+
+      const transitive = await runBinIn(project, ["build", "--out", "out"]);
+
+      expect(transitive.code).not.toBe(0);
+      expect(`${transitive.stdout}${transitive.stderr}`).toContain("missing-transitive");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }, 90_000);
 });

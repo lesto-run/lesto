@@ -42,7 +42,7 @@ import { buildTools, dispatch, isLiveReloadUpgradeAllowed, startMcpHttpServer } 
 import type { LestoMcpContext, McpAuditRecord } from "@lesto/mcp";
 
 import { createDevState } from "./dev-state";
-import { declaresIslandDevPeer, run } from "./run";
+import { declaresIslandDevPeer, isMissingSelfModule, missingModuleSpecifier, run } from "./run";
 import type {
   BuildHook,
   CliDeps,
@@ -823,17 +823,19 @@ const CONTENT_PACKAGES_HINT =
 // Convert ONLY "the content peer itself isn't installed" into the hint; rethrow anything
 // else — a real error INSIDE an installed content package (e.g. its own undeclared
 // transitive dep) must NOT be masked as "go install it", which would send the operator
-// down the wrong path. Node's `ERR_MODULE_NOT_FOUND` message embeds the IMPORTER's path
-// (`Cannot find package '<missing>' imported from '<importer>'`), so we classify on the
-// extracted MISSING specifier — not the whole message, which would also match the importer
-// path of a missing transitive dep. Mirrors `loadSites` anchoring on its exact filename.
+// down the wrong path. The message embeds the IMPORTER's path (`Cannot find package
+// '<missing>' imported from '<importer>'`), so we classify on the extracted MISSING
+// specifier — not the whole message, which would also match the importer path of a
+// missing transitive dep. `missingModuleSpecifier` is the ONE shared classifier
+// `loadSites`/`loadBuildHook` also route through; it spans BOTH runtime error shapes —
+// the Bun `ResolveMessage` (`ERR_MODULE_NOT_FOUND`) AND the jiti `Error`
+// (`MODULE_NOT_FOUND`) — so the hint now surfaces under `node`'s jiti loader too, not
+// only under Bun (the prior `ERR_MODULE_NOT_FOUND`-only test silently dropped it there).
 function rethrowUnlessMissingContentPeer(error: unknown): never {
-  if (error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
-    const missing = /Cannot find (?:package|module) '([^']+)'/.exec(error.message)?.[1];
+  const missing = missingModuleSpecifier(error);
 
-    if (missing?.startsWith("@lesto/content-")) {
-      throw new CliError("CLI_CONTENT_PACKAGES_MISSING", CONTENT_PACKAGES_HINT);
-    }
+  if (missing?.startsWith("@lesto/content-")) {
+    throw new CliError("CLI_CONTENT_PACKAGES_MISSING", CONTENT_PACKAGES_HINT);
   }
 
   throw error;
@@ -841,6 +843,15 @@ function rethrowUnlessMissingContentPeer(error: unknown): never {
 
 // The literal import specifiers stay (a variable specifier would infer `any`), so the
 // resolved module types still flow to the lazy `runPipeline`/`persistEntries` calls below.
+//
+// NO dir-probe guard here, unlike `loadSites`/`loadBuildHook`: those probe a PROJECT
+// FILE's existence before importing, but these import a bare PACKAGE specifier and rely
+// on the `import()` THROWING when the optional peer is absent. That reliance is sound —
+// EMPIRICALLY, jiti's `import()` of a missing PACKAGE throws a real `Error`
+// (`code: "MODULE_NOT_FOUND"`) within a few ms, it does NOT hang (verified against jiti
+// 2.7.0 and the real bin); Bun likewise throws its `ResolveMessage`. The hang the
+// project-file loaders guard against was specific to a missing project FILE path
+// (L-3f1c6bdb), not a bare package specifier — so no probe is needed on this path.
 const loadContentCore = async () => {
   try {
     return await import("@lesto/content-core/build");
@@ -928,13 +939,13 @@ const loadSites = async (): Promise<readonly Site[]> => {
 
     return defineSites(module.default);
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ERR_MODULE_NOT_FOUND") {
-      // The file existed at the probe but a module it imports is missing — only the
-      // sites file itself being absent is tolerated (handled above); a missing
-      // transitive import is a real error. (A delete between probe and import lands
-      // here too, and returning empty is the right tolerant answer.)
-      if ((error as { message: string }).message.includes("lesto.sites.ts")) return [];
-    }
+    // The file existed at the probe but its import failed. Tolerate ONLY the sites file
+    // ITSELF being absent (a delete between probe and import) — that is the documented
+    // empty-sites case; a syntax error, or a missing TRANSITIVE import, is a real bug
+    // that must fail loud. `isMissingSelfModule` matches by ABSOLUTE-PATH equality across
+    // both the Bun (`ResolveMessage`) and jiti (`MODULE_NOT_FOUND`) error shapes, so a
+    // transitive whose specifier merely ends in `lesto.sites.ts` is not false-swallowed.
+    if (isMissingSelfModule(error, SITES_PATH)) return [];
 
     throw error;
   }
@@ -958,43 +969,15 @@ const loadBuildHook = async (): Promise<BuildHook | undefined> => {
 
     return module.default;
   } catch (error) {
-    if (isMissingBuildHook(error)) return undefined;
+    // Same classifier as `loadSites`: tolerate ONLY the hook file itself being absent
+    // (→ no hook); a syntax error or a missing transitive import inside an existing file
+    // must fail the build LOUD. Absolute-path equality across both the Bun `ResolveMessage`
+    // and the jiti `MODULE_NOT_FOUND` error shapes (see `isMissingSelfModule`).
+    if (isMissingSelfModule(error, BUILD_HOOK_PATH)) return undefined;
 
     throw error;
   }
 };
-
-// Classify an `import()` failure as "the hook file itself is absent" (→ no hook) vs.
-// any real error inside an existing file (a syntax error, a missing transitive import),
-// which must fail the build LOUD. Two cross-runtime hazards drive the exact shape here:
-//
-//   1. NOT `instanceof Error`: under Bun a missing-module import throws a `ResolveMessage`
-//      that is NOT an `Error` instance (only its `code`/`message` are reliable), so gating
-//      on `instanceof Error` would mis-rethrow an absent hook as a fatal build failure. We
-//      duck-type on `code` + `message` instead, which holds under both Node and Bun.
-//   2. Classify on the MISSING SPECIFIER, not the whole message: a missing TRANSITIVE
-//      import's message embeds the IMPORTER's path (`Cannot find module '<dep>' from
-//      '<importer>'`), so an importer of `lesto.build.ts` would match a naive
-//      `message.includes("lesto.build.ts")` and wrongly be swallowed. Anchoring on the
-//      extracted missing specifier — only the absent hook FILE names `lesto.build.ts` as
-//      the missing module — rethrows a transitive miss. (Mirrors `rethrowUnlessMissingContentPeer`.)
-function isMissingBuildHook(error: unknown): boolean {
-  if (
-    typeof error !== "object" ||
-    error === null ||
-    !("code" in error) ||
-    (error as { code?: unknown }).code !== "ERR_MODULE_NOT_FOUND" ||
-    !("message" in error)
-  ) {
-    return false;
-  }
-
-  const missing = /Cannot find (?:package|module) '([^']+)'/.exec(
-    String((error as { message: unknown }).message),
-  )?.[1];
-
-  return missing !== undefined && missing.endsWith("lesto.build.ts");
-}
 
 // Remove the output dir before a build, so a route deleted since the last build leaves
 // no orphan the deploy still ships (the sink only writes). `force` tolerates the first
