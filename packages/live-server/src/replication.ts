@@ -31,15 +31,16 @@
  * binary decode lives ONLY in the thin, coverage-excluded real client
  * ({@link file://./pg-replication-client.ts}).
  *
- * Resume (Inc4) is not implemented here, but the source carries its *inputs*: it captures the
+ * Resume (Inc4) does not live here, but the source carries its *inputs*: it captures the
  * connection's `(systemId, timelineId)` from `IDENTIFY_SYSTEM` and stamps **both** on every
  * change (they are distinct — `systemId` is constant across failover/restore and catches a
  * *different cluster*; `timelineId` increments on failover/promotion and catches a
  * *same-cluster* failover), and it accepts a `startLsn` so replay can start from a client's
  * last-applied position. Inc1 thus exposes the failover *signal* (the stamped identity changes)
- * and the replay *entry point* (`startLsn`); Inc1 does **not** implement the *reaction* — the
- * replay-vs-re-snapshot decision, and the reconnect state machine's response to a slot that did
- * not survive a failover, are Inc4's, and they extend the reconnect logic in this file.
+ * and the replay *entry point* (`startLsn`). Inc4's *reaction* — the per-client replay-vs-re-snapshot
+ * decision — lives in the shape engine + its per-shape replay ring ({@link file://./resume.ts}),
+ * NOT here: this single shared slot streams the full feed once for every shape, so a reconnecting
+ * client replays from the engine's ring, not from a per-client `START_REPLICATION`.
  */
 
 import { LiveServerError } from "./errors";

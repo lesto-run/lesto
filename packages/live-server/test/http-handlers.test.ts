@@ -10,9 +10,12 @@ import {
   openShapeStream,
   subscribeSource,
 } from "../src/index";
+import { encodeResumeCursor } from "../src/index";
 import type {
+  ResumeCursor,
   ShapeChangeListener,
   ShapeEngine,
+  ShapeResume,
   ShapeStreamSource,
   StreamTimers,
 } from "../src/index";
@@ -66,13 +69,18 @@ function fakeStreamTimers() {
 }
 
 /** A hand-fed source: capture `onChange`, expose `fire` to push a change. */
-function fakeSource(snapshot: readonly Row[] = [{ id: 1, body: "hi" }], cursor: Cursor = "c0") {
+function fakeSource(
+  snapshot: readonly Row[] = [{ id: 1, body: "hi" }],
+  cursor: Cursor = "c0",
+  resume?: ShapeResume,
+) {
   let deliver: ((change: ShapeChange, cursor: Cursor) => void) | undefined;
   const close = vi.fn();
 
   const source: ShapeStreamSource = {
     snapshot,
     cursor,
+    ...(resume === undefined ? {} : { resume }),
     onChange: (next) => {
       deliver = next;
     },
@@ -92,31 +100,55 @@ async function readFrame(reader: ReadableStreamDefaultReader<string>): Promise<s
 const insert: ShapeChange = { op: "insert", key: "2", row: { id: 2, body: "yo" } };
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
-/** A stub engine that captures the change listener so a test can fire changes by hand. */
-function stubEngine(): { engine: ShapeEngine; fire: ShapeChangeListener; unsub: () => void } {
+/**
+ * A stub engine that captures the change listener (so a test can fire changes by hand) and the
+ * reconnect cursor the handler threaded in (so a test can assert `Last-Event-ID` was decoded).
+ */
+function stubEngine(): {
+  engine: ShapeEngine;
+  fire: ShapeChangeListener;
+  unsub: () => void;
+  since: () => ResumeCursor | undefined;
+} {
   let captured: ShapeChangeListener | undefined;
+  let capturedSince: ResumeCursor | undefined;
   const unsub = vi.fn();
 
   const engine = {
-    subscribe: async (shape: ShapeDefinition, onChange: ShapeChangeListener) => {
+    subscribe: async (
+      shape: ShapeDefinition,
+      onChange: ShapeChangeListener,
+      since?: ResumeCursor,
+    ) => {
       captured = onChange;
+      capturedSince = since;
 
-      return { shapeId: shapeId(shape), snapshot: [{ id: 1 }], cursor: "c0", unsubscribe: unsub };
+      return {
+        shapeId: shapeId(shape),
+        snapshot: [{ id: 1 }],
+        cursor: "c0",
+        resume: { kind: "snapshot" } as ShapeResume,
+        unsubscribe: unsub,
+      };
     },
     activeShapes: 1,
     stop: () => {},
   } as ShapeEngine;
 
-  return { engine, fire: (c, cur) => captured?.(c, cur), unsub };
+  return { engine, fire: (c, cur) => captured?.(c, cur), unsub, since: () => capturedSince };
 }
 
-/** A stub engine whose subscribe returns a fixed snapshot (no live changes). */
-function engineReturning(snapshot: readonly Row[]): ShapeEngine {
+/** A stub engine whose subscribe returns a fixed snapshot (and an optional resume decision). */
+function engineReturning(
+  snapshot: readonly Row[],
+  resume: ShapeResume = { kind: "snapshot" },
+): ShapeEngine {
   return {
     subscribe: async (shape: ShapeDefinition) => ({
       shapeId: shapeId(shape),
       snapshot,
       cursor: "c0",
+      resume,
       unsubscribe: () => {},
     }),
     activeShapes: 1,
@@ -124,10 +156,15 @@ function engineReturning(snapshot: readonly Row[]): ShapeEngine {
   } as ShapeEngine;
 }
 
-/** A minimal fake context: query params + optional abort signal. */
-function fakeContext(query: Record<string, string>, signal?: AbortSignal): Context {
+/** A minimal fake context: query params + optional request headers + optional abort signal. */
+function fakeContext(
+  query: Record<string, string>,
+  signal?: AbortSignal,
+  headers: Record<string, string> = {},
+): Context {
   return {
     query: (name: string) => query[name],
+    header: (name: string) => headers[name],
     signal,
   } as unknown as Context;
 }
@@ -202,6 +239,38 @@ describe("openShapeStream", () => {
 
     await reader.cancel();
     expect(src.close).toHaveBeenCalled();
+  });
+
+  it("on resume, replays ONLY the missed changes (no snapshot), then tails live changes (Inc4)", async () => {
+    const timers = fakeStreamTimers();
+    // A resuming client that proved continuity: the engine handed back a `replay`, not a snapshot.
+    const missed: ShapeResume = {
+      kind: "replay",
+      changes: [{ change: insert, cursor: "v1:sysA:1:0/20" }],
+    };
+    const src = fakeSource([{ id: 1, body: "hi" }], "v1:sysA:1:0/10", missed);
+
+    const stream = openShapeStream({
+      source: src.source,
+      signal: undefined,
+      heartbeatMs: 1000,
+      maxQueue: 16,
+      timers: timers.seam,
+    });
+    const reader = stream.getReader();
+
+    // The FIRST frame is the missed change, NOT a snapshot — the client keeps its local slice.
+    expect(await readFrame(reader)).toBe(
+      `event: change\ndata: {"op":"insert","key":"2","row":{"id":2,"body":"yo"}}\nid: v1:sysA:1:0/20\n\n`,
+    );
+
+    // Then the live tail flows through the same connection.
+    src.fire({ op: "delete", key: "9" }, "v1:sysA:1:0/30");
+    expect(await readFrame(reader)).toBe(
+      `event: change\ndata: {"op":"delete","key":"9"}\nid: v1:sysA:1:0/30\n\n`,
+    );
+
+    await reader.cancel();
   });
 
   it("heartbeats on the interval", async () => {
@@ -437,6 +506,61 @@ describe("createLiveDataHttpHandlers", () => {
     const reader = (response!.body as ReadableStream<string>).getReader();
     expect(await readFrame(reader)).toContain(`"rows":[{"id":1,"body":"hi"}]`);
     await reader.cancel();
+  });
+
+  it("decodes the Last-Event-ID header and threads the resume cursor to the engine (Inc4)", async () => {
+    const stub = stubEngine();
+    const { liveData } = createLiveDataHttpHandlers({
+      engine: stub.engine,
+      resolvePrincipal: () => "u1",
+      authorizeShape: () => true,
+    });
+
+    const cursor: ResumeCursor = { systemId: "sysA", timelineId: 1, lsn: "0/20" };
+    const response = await liveData(
+      fakeContext({ shape: shapeParam }, undefined, {
+        "last-event-id": encodeResumeCursor(cursor),
+      }),
+      noopNext,
+    );
+
+    expect(stub.since()).toEqual(cursor);
+    await (response!.body as ReadableStream<string>).cancel();
+  });
+
+  it("falls back to ?lastEventId= for a non-EventSource client (Inc4)", async () => {
+    const stub = stubEngine();
+    const { liveData } = createLiveDataHttpHandlers({
+      engine: stub.engine,
+      resolvePrincipal: () => "u1",
+      authorizeShape: () => true,
+    });
+
+    const cursor: ResumeCursor = { systemId: "sysA", timelineId: 7, lsn: "3/AB" };
+    const response = await liveData(
+      fakeContext({ shape: shapeParam, lastEventId: encodeResumeCursor(cursor) }),
+      noopNext,
+    );
+
+    expect(stub.since()).toEqual(cursor);
+    await (response!.body as ReadableStream<string>).cancel();
+  });
+
+  it("ignores a malformed resume cursor — the engine sees `undefined` (re-snapshot floor, Inc4)", async () => {
+    const stub = stubEngine();
+    const { liveData } = createLiveDataHttpHandlers({
+      engine: stub.engine,
+      resolvePrincipal: () => "u1",
+      authorizeShape: () => true,
+    });
+
+    const response = await liveData(
+      fakeContext({ shape: shapeParam }, undefined, { "last-event-id": "v0:5" }),
+      noopNext,
+    );
+
+    expect(stub.since()).toBeUndefined();
+    await (response!.body as ReadableStream<string>).cancel();
   });
 
   it("400s a missing shape parameter", async () => {
@@ -711,12 +835,20 @@ describe("ADR 0042 acceptance matrix — the Inc3 gate", () => {
     expect(await readFrame(reader)).toBeUndefined(); // severed — bounded by a single interval
   });
 
-  it("(e) a reconnect always re-subscribes to a FRESH, complete snapshot — a row deleted while disconnected never reappears", async () => {
-    // Simulates "offline, then reconnect": the underlying data changed between two `liveData`
-    // calls for the identical shape (id 2 was deleted while the client was away). There is no
-    // resume/replay path in this engine — the safe floor ADR 0042 (e) requires until Inc4's
-    // LSN-exact resume (L-6841d65d) lands — so the second connection's snapshot must be the
-    // FULL current set, never a stale carry-over that still includes the deleted row.
+  // (e) LSN-exact resume, now landed (Inc4, L-6841d65d). The replay-or-re-snapshot DECISION lives
+  // in the engine + replay ring — proven in engine.test.ts's "LSN-exact resume" suite (replay of
+  // exactly the missed changes; re-snapshot on a systemId mismatch, on a same-cluster
+  // timelineId-incremented failover, and on an LSN aged past the retained window) and in resume.ts
+  // (the ring unit tests). Here we prove the HTTP-handler wiring: the `Last-Event-ID` decode + thread
+  // (the three "resume cursor" tests above), the replay SEND path (openShapeStream's "replays ONLY
+  // the missed changes"), and — below — that a reconnect WITHOUT a resumable cursor still re-snapshots.
+
+  it("(e) a reconnect without a resumable cursor re-subscribes to a FRESH, complete snapshot — a row deleted while disconnected never reappears", async () => {
+    // Simulates "offline, then reconnect" with no Last-Event-ID (or a v0/aged cursor → the engine
+    // returns `resume: snapshot`): the underlying data changed between two `liveData` calls for the
+    // identical shape (id 2 was deleted while the client was away). The re-snapshot must be the FULL
+    // current set — its `snapshot` frame REPLACES the client's slice — never a stale carry-over that
+    // still includes the deleted row.
     let currentRows: Row[] = [
       { id: 1, body: "a" },
       { id: 2, body: "b" },
@@ -726,6 +858,7 @@ describe("ADR 0042 acceptance matrix — the Inc3 gate", () => {
         shapeId: shapeId(shape),
         snapshot: currentRows,
         cursor: "v0:0",
+        resume: { kind: "snapshot" } as ShapeResume,
         unsubscribe: () => {},
       }),
       activeShapes: 1,
@@ -754,10 +887,11 @@ describe("ADR 0042 acceptance matrix — the Inc3 gate", () => {
     await reconnectReader.cancel();
   });
 
-  // (e) the opacity guard: no server code anywhere parses or compares a minted cursor as a
-  // number — see engine.test.ts's cursor assertions (the exact `"v0:N"` format, minted through
-  // the single `mintCursor` helper) and `@lesto/live`'s `consumer.ts`, whose `LiveMessageEvent`
-  // interface structurally excludes `id`/`lastEventId` so the client cannot read it even if
-  // tempted (a compile error, not a convention). This is what keeps Inc4's LSN-exact resume
-  // (`L-6841d65d`) an additive wire change rather than a breaking one.
+  // (e) the opacity guard: the wire cursor is minted/parsed ONLY on the server — the poll path's
+  // `v0:` counter (engine.test.ts) and Inc4's `v1:<systemId>:<timelineId>:<lsn>` token
+  // (resume.test.ts's codec + the engine's cursor assertions). `@lesto/live`'s `consumer.ts` keeps
+  // it opaque to the client: its `LiveMessageEvent` interface structurally excludes `id`/`lastEventId`
+  // so the client cannot read it even if tempted (a compile error, not a convention) — the browser's
+  // `EventSource` round-trips it as `Last-Event-ID` untouched. That opacity is what let Inc4's move
+  // from `v0:` to a `(systemId, timelineId, LSN)` token be an ADDITIVE wire change, not a breaking one.
 });

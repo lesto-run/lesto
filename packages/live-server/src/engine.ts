@@ -42,10 +42,23 @@ import { prepareShapeClassifier } from "./classify";
 import { createImageCoercer, requiredOldImageColumns } from "./coerce";
 import { diffRows, normalizeWire, projectRow } from "./diff";
 import { LiveServerError } from "./errors";
-import type { ChangeSource, ReplicationChange } from "./replication";
+import type { ChangeSource, ReplicationChange, SystemIdentity } from "./replication";
+import { encodeResumeCursor, ShapeReplayRing } from "./resume";
+import type { ResumeCursor } from "./resume";
 
 /** The default full-table poll interval — 1s, tight enough to feel live in the dev loop. */
 const DEFAULT_POLL_MS = 1000;
+
+/** The default per-shape replay-ring window — the engine-side stand-in for the slot's WAL retention. */
+const DEFAULT_REPLAY_MAX_ENTRIES = 1024;
+const DEFAULT_REPLAY_MAX_AGE_MS = 300_000;
+
+/**
+ * The LSN sentinel a v1 snapshot cursor uses before any change has flowed through a shape — its
+ * baseline "you are caught up to here". A reconnect from `0/0` replays the whole retained ring
+ * (idempotently), which is sound; once real changes flow the baseline advances to the latest LSN.
+ */
+const LSN_BASE = "0/0";
 
 /**
  * The timer seam — injected so a test drives ticks deterministically; defaults to a real,
@@ -71,6 +84,27 @@ const realTimers: TimerSeam = {
 /** A subscriber's per-change callback — one authorized change, stamped with its cursor. */
 export type ShapeChangeListener = (change: ShapeChange, cursor: Cursor) => void;
 
+/** One replayed change on resume — the change plus the cursor to re-stamp its frame with. */
+export interface ReplayChange {
+  readonly change: ShapeChange;
+  readonly cursor: Cursor;
+}
+
+/**
+ * How a connection should be brought up to date, decided from the reconnect cursor it presented
+ * (ADR 0042 Inc4, LSN-exact resume):
+ *
+ *   - **`snapshot`** — send the full authorized snapshot. A fresh client (no cursor), or a
+ *     re-snapshot: a cursor from a different cluster/timeline, aged past the ring, or a v0 (poll)
+ *     stream. The client's `snapshot` frame authoritatively REPLACES its local slice, so a row it
+ *     lost access to while away never lingers.
+ *   - **`replay`** — send ONLY the missed changes (no snapshot); the client keeps its local slice
+ *     and applies them, catching up LSN-exactly with no full re-fetch.
+ */
+export type ShapeResume =
+  | { readonly kind: "snapshot" }
+  | { readonly kind: "replay"; readonly changes: readonly ReplayChange[] };
+
 /** What {@link ShapeEngine.subscribe} hands back: the initial snapshot + a way to stop. */
 export interface ShapeSubscription {
   /** The shape's stable id (its subscribe/cache key). */
@@ -81,6 +115,13 @@ export interface ShapeSubscription {
 
   /** The cursor the snapshot was taken at; the change tail continues from here. */
   readonly cursor: Cursor;
+
+  /**
+   * How to reconcile the presented reconnect cursor: send the {@link snapshot}, or replay exactly
+   * the missed changes. `{ kind: "snapshot" }` when no resumable cursor was presented (a fresh
+   * client, or the coarse re-snapshot floor).
+   */
+  readonly resume: ShapeResume;
 
   /** Detach this subscriber; the shape stops being polled once its last subscriber leaves. */
   unsubscribe(): void;
@@ -93,8 +134,17 @@ export interface ShapeEngine {
    * the shape's current authorized row set, and return the snapshot plus a change
    * subscription. Rejects (a coded {@link LiveServerError}) an unknown table/column or a
    * non-unique key column.
+   *
+   * `since` is the decoded reconnect cursor a resuming client presented (its `Last-Event-ID`), or
+   * `undefined` for a fresh subscribe. When it proves continuity against the shape's replay ring
+   * (v1 path only), the returned {@link ShapeSubscription.resume} carries the exact missed changes
+   * to replay; otherwise it says `snapshot` (the re-snapshot floor).
    */
-  subscribe(def: ShapeDefinition, onChange: ShapeChangeListener): Promise<ShapeSubscription>;
+  subscribe(
+    def: ShapeDefinition,
+    onChange: ShapeChangeListener,
+    since?: ResumeCursor,
+  ): Promise<ShapeSubscription>;
 
   /** The number of distinct shapes currently being polled (introspection / tests). */
   readonly activeShapes: number;
@@ -118,6 +168,13 @@ interface ShapeEntry {
    * affect this shape. Absent on the v0 poll path.
    */
   readonly classify?: ((change: ReplicationChange) => ShapeChange | undefined) | undefined;
+
+  /**
+   * The shape's per-shape replay ring — present only on the v1 change-source path (Inc4). It
+   * retains recently delivered changes keyed by commit LSN so a reconnecting client can replay
+   * exactly what it missed. Absent on the v0 poll path (SQLite has no LSN → resync-on-reconnect).
+   */
+  readonly ring?: ShapeReplayRing | undefined;
 }
 
 /** Apply one classified change to a shape's keyed set so a later subscriber's snapshot is current. */
@@ -127,19 +184,43 @@ function applyChange(entry: ShapeEntry, change: ShapeChange): void {
 }
 
 /**
- * The single site that turns a shape's internal `cursor` counter into the wire-facing
- * {@link Cursor}. The **only** contract the wire cursor makes today is opacity: the client
- * never parses it, only round-trips it (via `EventSource`'s `Last-Event-ID`), and the server
- * never reads it back on reconnect — every subscribe re-snapshots (ADR 0042 acceptance (e),
- * the safe floor pending Inc4's LSN-exact resume, `L-6841d65d`). Versioning it now (`v0:`) is
- * cheap insurance against that contract ever being violated by accident: it removes the
- * temptation for future code to treat the cursor as a bare monotonic integer (a numeric
- * comparison, a resume-position parse), which is the one thing that would turn Inc4's move to
- * a `(systemId, timelineId, LSN)` token into a breaking wire change instead of an additive one.
- * All three cursor-mint sites in this file MUST go through this helper, never `String(n)` directly.
+ * The **v0 (poll-path)** wire cursor: the shape's internal monotonic counter, versioned so it can
+ * never be mistaken for a resumable position. SQLite has no LSN, so the poll path cannot prove
+ * continuity — a `v0:` cursor {@link decodeResumeCursor}-decodes to `undefined`, forcing the coarse
+ * re-snapshot floor (ADR 0042 acceptance (e)) on every reconnect. The `v0:` prefix is the guardrail
+ * that kept Inc4's move to a `(systemId, timelineId, LSN)` token an *additive* wire change: because
+ * nothing ever treated the cursor as a bare integer, the v1 `encodeResumeCursor` slots in beside it.
+ * The v1 (replication) path mints its resumable cursor through {@link encodeResumeCursor} instead.
  */
-function mintCursor(entry: ShapeEntry): Cursor {
+function pollCursor(entry: ShapeEntry): Cursor {
   return `v0:${entry.cursor}`;
+}
+
+/**
+ * Reconcile a reconnect cursor against a shape's replay ring. No cursor (a fresh client), or the
+ * v0 poll path (no ring), → `snapshot`. Otherwise the ring decides: replay exactly the missed
+ * changes — each re-stamped with its own LSN cursor so the client's `Last-Event-ID` keeps
+ * advancing — or `snapshot`, the re-snapshot floor (a different cluster/timeline, or an LSN aged
+ * past the retained window). Because the ring proved `since`'s identity matches, the replayed
+ * cursors reuse it.
+ */
+function resumeFor(entry: ShapeEntry, since: ResumeCursor | undefined): ShapeResume {
+  if (since === undefined || entry.ring === undefined) return { kind: "snapshot" };
+
+  const reconcile = entry.ring.reconcile(since);
+
+  if (reconcile.kind === "resync") return { kind: "snapshot" };
+
+  const changes = reconcile.changes.map((item) => ({
+    change: item.change,
+    cursor: encodeResumeCursor({
+      systemId: since.systemId,
+      timelineId: since.timelineId,
+      lsn: item.lsn,
+    }),
+  }));
+
+  return { kind: "replay", changes };
 }
 
 /**
@@ -171,6 +252,17 @@ export interface ReplicationSourceConfig {
    * `createReplicaIdentityProbe`.
    */
   readonly replicaIdentity: (tableName: string) => Promise<boolean>;
+
+  /**
+   * The per-shape replay-ring window (Inc4) — the engine-side stand-in for the replication slot's
+   * WAL retention. A reconnect within it replays its missed changes; one from before it (evicted)
+   * re-snapshots. `maxEntries` defaults to 1024, `maxAgeMs` to 5 minutes, `now` to `Date.now`.
+   */
+  readonly replay?: {
+    readonly maxEntries?: number;
+    readonly maxAgeMs?: number;
+    readonly now?: () => number;
+  };
 }
 
 /** Options for {@link createShapeEngine}. */
@@ -213,11 +305,23 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
   const timers = options.timers ?? realTimers;
 
+  const replayMaxEntries = replication?.replay?.maxEntries ?? DEFAULT_REPLAY_MAX_ENTRIES;
+  const replayMaxAgeMs = replication?.replay?.maxAgeMs ?? DEFAULT_REPLAY_MAX_AGE_MS;
+  const replayNow = replication?.replay?.now ?? Date.now;
+
   const tableMap = new Map<string, Table>(options.tables.map((table) => [table.tableName, table]));
   const shapes = new Map<string, ShapeEntry>();
 
   let pollHandle: unknown;
   let ticking = false;
+
+  /**
+   * The live database's identity, captured from the replication feed (every change is stamped with
+   * it — Inc1). It anchors a fresh shape's v1 snapshot cursor: a reconnecting client compares its
+   * cursor's `(systemId, timelineId)` against this to decide replay-vs-re-snapshot. `undefined`
+   * until the first change flows (on the poll path it stays `undefined`, and the v0 cursor is used).
+   */
+  let liveIdentity: SystemIdentity | undefined;
 
   /** Validate a shape against the registry, returning its (real) table or throwing. */
   function resolveTable(def: ShapeDefinition): Table {
@@ -280,7 +384,7 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
     if (changes.length === 0) return;
 
     entry.cursor += 1;
-    const cursor = mintCursor(entry);
+    const cursor = pollCursor(entry);
 
     for (const change of changes) {
       for (const subscriber of entry.subscribers) subscriber(change, cursor);
@@ -350,11 +454,17 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
 
   /**
    * The source's change sink: for every active shape on the change's table, classify the change and
-   * — if it affects that shape — apply it, advance the cursor, and fan it. Each shape is guarded
-   * independently (a coercion/completeness/key-change throw routes to `onError` and is confined to
-   * that shape) so one misconfigured shape can never wedge the shared feed.
+   * — if it affects that shape — apply it, record it in the shape's replay ring, stamp it with a
+   * resumable `(systemId, timelineId, LSN)` cursor, and fan it. Each shape is guarded independently
+   * (a coercion/completeness/key-change throw routes to `onError` and is confined to that shape) so
+   * one misconfigured shape can never wedge the shared feed.
    */
   function onSourceChange(change: ReplicationChange): void {
+    // Capture the live database's identity from every change (Inc1 stamps it), even one that
+    // matches no active shape — so a fresh shape's snapshot cursor is anchored to the current
+    // cluster/timeline the moment any change has flowed.
+    liveIdentity = { systemId: change.systemId, timelineId: change.timelineId };
+
     for (const entry of shapes.values()) {
       if (entry.def.table !== change.table) continue;
 
@@ -367,14 +477,13 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
         if (shapeChange === undefined) continue;
 
         applyChange(entry, shapeChange);
-        // TODO(Inc4, L-85e3eb10): `change.commitLSN` (the real WAL position, carried on every
-        // ReplicationChange) is DISCARDED here in favor of a plain counter. Inc4's LSN-exact resume
-        // must thread it into the minted cursor (`mintCursor`) so a reconnecting client can
-        // `START_REPLICATION` from its last-applied LSN and de-dup the seed↔tail overlap (the
-        // unfenced window seeded above) — that upgrade is additive because the cursor is already an
-        // opaque, versioned token no caller parses (see `mintCursor`'s doc comment).
-        entry.cursor += 1;
-        const cursor = mintCursor(entry);
+
+        // Inc4: stamp the real commit LSN + system identity onto the cursor (no longer a discarded
+        // counter), and retain the change in the shape's replay ring so a reconnecting client can
+        // replay it LSN-exactly. The ring resets itself if `identity` crossed a failover.
+        const identity = { systemId: change.systemId, timelineId: change.timelineId };
+        entry.ring!.record(identity, change.commitLSN, shapeChange);
+        const cursor = encodeResumeCursor({ ...identity, lsn: change.commitLSN });
 
         for (const subscriber of entry.subscribers) subscriber(shapeChange, cursor);
       } catch (error) {
@@ -383,12 +492,27 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
     }
   }
 
+  /**
+   * The wire cursor a subscribe hands back with its snapshot. On the v1 path, anchor it to the live
+   * identity + the shape's latest applied LSN (or the `0/0` baseline before any change), so a
+   * reconnecting client can prove continuity against the ring. Before any change has revealed the
+   * identity — and on the whole poll path — fall back to the (non-resumable) v0 cursor, which safely
+   * forces a re-snapshot on reconnect.
+   */
+  function snapshotCursor(entry: ShapeEntry): Cursor {
+    if (entry.ring !== undefined && liveIdentity !== undefined) {
+      return encodeResumeCursor({ ...liveIdentity, lsn: entry.ring.latestLsn() ?? LSN_BASE });
+    }
+
+    return pollCursor(entry);
+  }
+
   // Subscribe to the feed once, for the engine's life: the sink is a no-op until a shape registers,
   // and `stop()` detaches it. (The source's own start/stop + slot lifecycle is the caller's.)
   const detachSource = replication?.source.onChange(onSourceChange);
 
   return {
-    async subscribe(def, onChange) {
+    async subscribe(def, onChange, since) {
       // Two gates: the protocol's structural trust boundary (key ∈ columns, scalar
       // values, a total order), then the engine's registry check (real table/columns,
       // unique key). Only then does anything touch the database.
@@ -404,20 +528,31 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
         // registration guard), so a rejected `subscribe` never seeds a shape it cannot safely tail.
         const classify = replication ? await buildClassifier(validated, table) : undefined;
 
+        // The v1 replay ring (Inc4): retains recently delivered changes keyed by commit LSN so a
+        // reconnecting client can replay LSN-exactly. Only on the replication path — the poll path
+        // has no LSN, so it always re-snapshots on reconnect (the safe v0 floor).
+        const ring = replication
+          ? new ShapeReplayRing({
+              maxEntries: replayMaxEntries,
+              maxAgeMs: replayMaxAgeMs,
+              now: replayNow,
+            })
+          : undefined;
+
         // Seed the shape's current set BEFORE publishing the entry, so a concurrent poll tick /
         // source change never sees a half-seeded shape. (A rare concurrent first-subscribe of the
         // same shape could seed twice; benign — the later entry simply wins.)
         //
-        // UNFENCED seed↔tail window (ADR 0042 Inc4 territory, L-85e3eb10): on the replication path
-        // this snapshot is a point-in-time `db.all()` taken at subscribe, while the source streams
-        // from the slot's OWN confirmed LSN — with no fence between the two. A change committing
-        // between this read's snapshot point and the entry being published (`shapes.set` below, after
-        // which `onSourceChange` starts matching this shape) can be LOST (the tail delivered it while
-        // no matching shape existed yet) or double-applied. Benign for keyed inserts within a session
-        // (a re-insert overwrites by key; the classifier is idempotent per key), but the shape can
-        // diverge until re-subscribe. The full fix is Inc4's LSN-exact resume: capture the snapshot's
-        // LSN, `START_REPLICATION` from it, and de-dup the overlap — `replication.ts` already carries
-        // `commitLSN`/`systemId`/`timelineId` per change for exactly this. Not closed here (v1).
+        // UNFENCED seed↔tail window (ADR 0042, L-85e3eb10): on the replication path this snapshot is
+        // a point-in-time `db.all()` taken at subscribe, while the source streams from the slot's OWN
+        // confirmed LSN — with no fence between the two. A change committing between this read's
+        // snapshot point and the entry being published (`shapes.set` below, after which
+        // `onSourceChange` starts matching this shape) can be LOST or double-applied. Benign for keyed
+        // inserts within a session (a re-insert overwrites by key; the classifier is idempotent per
+        // key), but the shape can diverge until re-subscribe. Inc4 delivers the RESUME machinery
+        // (the `(systemId, timelineId, LSN)` cursor + replay ring below) so a reconnect never
+        // silently misses; a fully-fenced snapshot LSN (capture `pg_current_wal_lsn()` and
+        // `START_REPLICATION` from it) is the remaining real-client coordination, tracked separately.
         const seeded = await fetchRows(validated, table);
         entry = {
           def: validated,
@@ -426,6 +561,7 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
           cursor: 0,
           subscribers: new Set(),
           classify,
+          ring,
         };
         shapes.set(id, entry);
 
@@ -437,6 +573,10 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
       active.subscribers.add(onChange);
 
       const snapshot = [...active.rows.values()].toSorted((a, b) => compareRows(validated, a, b));
+
+      // Reconcile the reconnect cursor against the ring BEFORE returning: replay the missed changes,
+      // or fall back to the full snapshot (a fresh client, or the re-snapshot floor).
+      const resume = resumeFor(active, since);
 
       let done = false;
       const unsubscribe = (): void => {
@@ -454,7 +594,7 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
         }
       };
 
-      return { shapeId: id, snapshot, cursor: mintCursor(active), unsubscribe };
+      return { shapeId: id, snapshot, cursor: snapshotCursor(active), resume, unsubscribe };
     },
 
     get activeShapes() {

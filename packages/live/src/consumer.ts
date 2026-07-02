@@ -35,9 +35,10 @@ export const DEFAULT_LIVE_DATA_PATH = "/__lesto/live-data";
  * transparently echoes it back as the reconnect `Last-Event-ID` header — but every handler in
  * {@link connectLiveData} is written against this narrower type, so TypeScript refuses any
  * attempt to read, compare, or parse the cursor here (a compile error, not a convention). The
- * server (`@lesto/live-server`'s `mintCursor`) mints a versioned, opaque token specifically so
- * neither side ever needs to treat it as more than a round-tripped string — the property that
- * keeps a future resume upgrade (ADR 0042 Inc4, LSN-exact resume) additive rather than a
+ * server (`@lesto/live-server`'s `encodeResumeCursor`, and the poll path's `pollCursor`) mints a
+ * versioned, opaque token specifically so neither side ever needs to treat it as more than a
+ * round-tripped string — the property that let ADR 0042 Inc4's LSN-exact resume upgrade the wire
+ * from the `v0:` counter to a `v1:(systemId, timelineId, LSN)` token additively rather than as a
  * breaking wire change. Do not widen this interface to add `id`/`lastEventId` without a strong
  * reason; doing so would remove the one thing enforcing that invariant at compile time.
  */

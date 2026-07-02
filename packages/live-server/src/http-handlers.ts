@@ -16,6 +16,15 @@
  * decision is delegated to the tested {@link ShapeConnection}; this file is the
  * composition over a `ReadableStream` + timers.
  *
+ * **LSN-exact resume** (ADR 0042 Inc4, `L-6841d65d`): a reconnecting `EventSource` echoes its
+ * last `id:` as `Last-Event-ID`. The handler decodes it to a `(systemId, timelineId, LSN)` cursor
+ * and the engine reconciles it against the shape's replay ring — replaying EXACTLY the missed
+ * changes when continuity holds (same cluster + timeline, LSN still retained), or re-snapshotting
+ * otherwise (a different cluster/timeline — including a same-cluster failover — or an LSN aged past
+ * the retained window). A replay sends only the missed `change` frames, so the client keeps its
+ * local slice; a re-snapshot sends the full snapshot, which replaces it. On the v0 poll path (no
+ * LSN) every reconnect re-snapshots — the safe coarse floor.
+ *
  * **Re-authorization is continuous, not connect-time-only** (ADR 0042 acceptance (a)/(c)/(d)):
  * the bound shape is re-authorized on the re-auth interval (`reauthMs`, default 60s) for
  * the connection's whole life, not merely once at subscribe — because a session can stay
@@ -36,7 +45,9 @@ import type { Context, Handler } from "@lesto/web";
 import { ShapeConnection } from "./connection";
 import type { FrameController } from "./connection";
 import { LiveServerError } from "./errors";
-import type { ShapeEngine } from "./engine";
+import type { ShapeEngine, ShapeResume } from "./engine";
+import { decodeResumeCursor } from "./resume";
+import type { ResumeCursor } from "./resume";
 
 /**
  * The timer seam — injected so a test fires intervals/timeouts deterministically; defaults
@@ -93,6 +104,13 @@ export interface ShapeStreamSource {
 
   readonly cursor: Cursor;
 
+  /**
+   * How to bring a reconnecting client up to date (ADR 0042 Inc4): `snapshot` (send the full
+   * snapshot — a fresh client or the re-snapshot floor) or `replay` (send ONLY the missed changes,
+   * so the client keeps its local slice). Absent → treated as `snapshot`.
+   */
+  readonly resume?: ShapeResume;
+
   /** Begin routing changes (any buffered first, then live) to `deliver`. */
   onChange(deliver: (change: ShapeChange, cursor: Cursor) => void): void;
 
@@ -105,22 +123,32 @@ export interface ShapeStreamSource {
  * ready so the snapshot→tail boundary never gaps. The engine's registry validation runs
  * here (before the stream opens), so an unknown table/column surfaces as a caught error
  * the handler maps to a 4xx — not a 200 stream that immediately dies.
+ *
+ * `since` is the decoded reconnect cursor (from `Last-Event-ID`); the engine reconciles it against
+ * the shape's replay ring and hands back a {@link ShapeStreamSource.resume} of `replay` (the exact
+ * missed changes) or `snapshot`.
  */
 export async function subscribeSource(
   engine: ShapeEngine,
   def: ShapeDefinition,
+  since?: ResumeCursor,
 ): Promise<ShapeStreamSource> {
   const buffered: Array<[ShapeChange, Cursor]> = [];
   let deliver: ((change: ShapeChange, cursor: Cursor) => void) | undefined;
 
-  const sub = await engine.subscribe(def, (change, cursor) => {
-    if (deliver === undefined) buffered.push([change, cursor]);
-    else deliver(change, cursor);
-  });
+  const sub = await engine.subscribe(
+    def,
+    (change, cursor) => {
+      if (deliver === undefined) buffered.push([change, cursor]);
+      else deliver(change, cursor);
+    },
+    since,
+  );
 
   return {
     snapshot: sub.snapshot,
     cursor: sub.cursor,
+    resume: sub.resume,
     onChange(next) {
       deliver = next;
 
@@ -225,8 +253,21 @@ export function openShapeStream(config: ShapeStreamConfig): ReadableStream<strin
         // current position rather than the stale snapshot cursor.
         let lastCursor = config.source.cursor;
 
-        // Snapshot first, then the change tail flows through the same connection.
-        connection.snapshot(config.source.snapshot, config.source.cursor);
+        // Initial send (ADR 0042 Inc4): a resuming client that proved continuity gets ONLY its
+        // missed changes replayed (no snapshot — it keeps its local slice); everyone else gets the
+        // full snapshot (a fresh client, or the re-snapshot floor, whose `snapshot` frame replaces
+        // the client's slice). Then the live change tail flows through the same connection.
+        const resume = config.source.resume ?? { kind: "snapshot" };
+
+        if (resume.kind === "replay") {
+          for (const { change, cursor } of resume.changes) {
+            lastCursor = cursor;
+            connection.deliver(change, cursor);
+          }
+        } else {
+          connection.snapshot(config.source.snapshot, config.source.cursor);
+        }
+
         config.source.onChange((change, cursor) => {
           lastCursor = cursor;
           connection?.deliver(change, cursor);
@@ -392,11 +433,16 @@ export function createLiveDataHttpHandlers<P>(
       return errorResponse(403, "LIVE_DATA_FORBIDDEN", "You are not authorized for this shape.");
     }
 
+    // The resume cursor (ADR 0042 Inc4): `Last-Event-ID` (EventSource's native reconnect header),
+    // falling back to an explicit `?lastEventId=` for a non-EventSource client. A malformed or v0
+    // cursor decodes to `undefined`, forcing the coarse re-snapshot floor.
+    const since = decodeResumeCursor(c.header("last-event-id") ?? c.query("lastEventId"));
+
     // Subscribe BEFORE opening the stream so a registry error (unknown table/column,
     // non-unique key) is a clean 400, not a 200 stream that dies on first byte.
     let source: ShapeStreamSource;
     try {
-      source = await subscribeSource(options.engine, def);
+      source = await subscribeSource(options.engine, def, since);
     } catch (error) {
       if (error instanceof LiveServerError) {
         options.onDenied?.(principal, error.code);

@@ -26,6 +26,13 @@
  *   - {@link createLiveDataHttpHandlers} — the app-mounted `GET /__lesto/live-data`
  *     handler that streams a shape's snapshot + change tail over the runtime's
  *     long-lived-stream kind; {@link ShapeConnection} is its tested outbound core.
+ *
+ *   - {@link encodeResumeCursor} / {@link decodeResumeCursor} / {@link ShapeReplayRing} — LSN-exact
+ *     resume (Inc4): the `(systemId, timelineId, LSN)` cursor and the per-shape replay ring behind
+ *     "a reconnect replays EXACTLY the missed changes, or re-snapshots on a failover/restore or an
+ *     LSN aged past retention — never silently misses a change". Wired into {@link createShapeEngine}
+ *     (the replication path stamps + retains changes) and {@link createLiveDataHttpHandlers} (which
+ *     decodes `Last-Event-ID` and replays or re-snapshots accordingly).
  */
 
 export { LiveServerError } from "./errors";
@@ -48,13 +55,21 @@ export { createReplicaIdentityProbe } from "./pg-catalog";
 
 export { createShapeEngine } from "./engine";
 export type {
+  ReplayChange,
   ReplicationSourceConfig,
   ShapeChangeListener,
   ShapeEngine,
   ShapeEngineOptions,
+  ShapeResume,
   ShapeSubscription,
   TimerSeam,
 } from "./engine";
+
+// LSN-exact resume (Inc4): the `(systemId, timelineId, LSN)` cursor codec + the per-shape replay
+// ring behind "a reconnect replays EXACTLY the missed changes, or re-snapshots". The wire cursor
+// stays opaque to the client — encode/decode live only here, on the server.
+export { compareLsn, decodeResumeCursor, encodeResumeCursor, ShapeReplayRing } from "./resume";
+export type { ReplayItem, ResumeCursor, RingReconcile, ShapeReplayRingOptions } from "./resume";
 
 export { createPgReplicationSource, DEFAULT_SLOT } from "./replication";
 export type {

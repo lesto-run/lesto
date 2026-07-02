@@ -6,7 +6,7 @@ import type { Db, SqlDatabase } from "@lesto/db";
 import { LiveProtocolError } from "@lesto/live-protocol";
 import type { Cursor, Row, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
 
-import { createShapeEngine, LiveServerError } from "../src/index";
+import { createShapeEngine, decodeResumeCursor, LiveServerError } from "../src/index";
 import type {
   ChangeHandler,
   ChangeSource,
@@ -14,6 +14,7 @@ import type {
   ReplicationChange,
   RowImage,
   ShapeEngine,
+  ShapeResume,
   TimerSeam,
 } from "../src/index";
 
@@ -101,6 +102,13 @@ function fakeTimers(): { seam: TimerSeam; fire(): void; running(): boolean } {
 /** Drain the microtask + macrotask queue so an async poll tick settles. */
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
+/** Assert a resume decision is a `replay` and narrow it. */
+const asReplay = (resume: ShapeResume): Extract<ShapeResume, { kind: "replay" }> => {
+  expect(resume.kind).toBe("replay");
+
+  return resume as Extract<ShapeResume, { kind: "replay" }>;
+};
+
 let raw: Database.Database;
 let db: Db;
 let timers: ReturnType<typeof fakeTimers>;
@@ -154,7 +162,7 @@ describe("subscribe — snapshot + registry validation", () => {
     const sub = await engine.subscribe(room1Shape(), () => {});
 
     expect(sub.shapeId).toMatch(/^messages:/);
-    expect(sub.cursor).toBe("v0:0"); // opaque, versioned — see engine.ts mintCursor
+    expect(sub.cursor).toBe("v0:0"); // opaque, versioned — poll path, see engine.ts pollCursor
     expect((sub.snapshot as Row[]).map((r) => r.body)).toEqual(["first", "second"]);
     // Only room-1 rows, and the timestamp is folded to epoch-ms on the wire.
     expect(sub.snapshot[0]).toEqual({ id: 1, roomId: 1, body: "first", createdAt: 100 });
@@ -420,7 +428,9 @@ describe("replication change source — the v1 change path", () => {
     expect(sink.changes).toEqual([
       { op: "insert", key: "1", row: { id: 1, roomId: 1, body: "hi", createdAt: 100 } },
     ]);
-    expect(sink.cursors).toEqual(["v0:1"]);
+    // Inc4: the replication tail stamps the resumable `(systemId, timelineId, LSN)` cursor
+    // (no longer a bare `v0:` counter) from the change's commit LSN + system identity.
+    expect(sink.cursors).toEqual(["v1:sys:1:0/1"]);
     e.stop();
   });
 
@@ -641,6 +651,153 @@ describe("replication change source — the v1 change path", () => {
     src.emit({ op: "insert", table: "other_table", newImage: { id: "9" }, ...STAMP });
 
     expect(sink.changes).toEqual([]);
+    e.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0042 acceptance "sound resume" + matrix (e) — Tier-4 v1 Inc4 (L-6841d65d).
+// A reconnect replays EXACTLY the missed changes, or re-snapshots (a failover/restore, or an LSN
+// aged past retention) — never silently misses a change. Proven end-to-end through `subscribe`.
+// ---------------------------------------------------------------------------
+
+describe("LSN-exact resume (Inc4) — replay-or-re-snapshot on reconnect", () => {
+  const STAMP = { systemId: "sysA", timelineId: 1 } as const;
+  const ins = (id: number, roomId: number, lsn: string): ReplicationChange => ({
+    op: "insert",
+    table: "messages",
+    newImage: { id: String(id), room_id: String(roomId), body: `b${id}`, created_at: "100" },
+    commitLSN: lsn,
+    ...STAMP,
+  });
+
+  /** A replication engine (with an optional replay-window override) plus its hand-fed source. */
+  function replEngine(replay?: { maxEntries?: number; maxAgeMs?: number; now?: () => number }) {
+    const src = fakeSource();
+    const e = createShapeEngine({
+      db,
+      tables: [messages],
+      replication: {
+        source: src.source,
+        replicaIdentity: fullFor("messages"),
+        ...(replay === undefined ? {} : { replay }),
+      },
+    });
+
+    return { src, e };
+  }
+
+  it("a fresh subscribe (no cursor) resolves to a full snapshot", async () => {
+    const { e } = replEngine();
+
+    const sub = await e.subscribe(room1Shape(), () => {});
+
+    expect(sub.resume).toEqual({ kind: "snapshot" });
+    e.stop();
+  });
+
+  it("replays EXACTLY the missed changes for a reconnect within the retained window", async () => {
+    const { src, e } = replEngine();
+    const sink = collector();
+    await e.subscribe(room1Shape(), sink.onChange); // subscriber #1 keeps the shape (+ ring) alive
+    src.emit(ins(1, 1, "0/10"));
+    src.emit(ins(2, 1, "0/20"));
+    src.emit(ins(3, 1, "0/30"));
+
+    // The client applied through 0/20 (its Last-Event-ID) then reconnected.
+    const since = decodeResumeCursor(sink.cursors[1] as string);
+    const sub = await e.subscribe(room1Shape(), () => {}, since);
+
+    const replay = asReplay(sub.resume);
+    // Inclusive of the client's own 0/20 (a keyed re-apply is idempotent) + everything after.
+    expect(replay.changes.map((c) => c.cursor)).toEqual(["v1:sysA:1:0/20", "v1:sysA:1:0/30"]);
+    expect(replay.changes.map((c) => c.change.key)).toEqual(["2", "3"]);
+    e.stop();
+  });
+
+  it("re-snapshots a reconnect from a DIFFERENT cluster (systemId mismatch)", async () => {
+    const { src, e } = replEngine();
+    await e.subscribe(room1Shape(), () => {});
+    src.emit(ins(1, 1, "0/10")); // establishes identity sysA/1
+
+    const sub = await e.subscribe(room1Shape(), () => {}, {
+      systemId: "sysB",
+      timelineId: 1,
+      lsn: "0/10",
+    });
+
+    expect(sub.resume).toEqual({ kind: "snapshot" });
+    e.stop();
+  });
+
+  it("re-snapshots a reconnect across a SAME-cluster failover (timelineId incremented, systemId unchanged)", async () => {
+    const { src, e } = replEngine();
+    await e.subscribe(room1Shape(), () => {});
+    src.emit(ins(1, 1, "0/10"));
+
+    // systemId still matches — a `systemId`-only check would wrongly replay — but the WAL timeline moved.
+    const sub = await e.subscribe(room1Shape(), () => {}, {
+      systemId: "sysA",
+      timelineId: 2,
+      lsn: "0/10",
+    });
+
+    expect(sub.resume).toEqual({ kind: "snapshot" });
+    e.stop();
+  });
+
+  it("re-snapshots a reconnect whose LSN aged past the retained window", async () => {
+    const { src, e } = replEngine({ maxEntries: 1 }); // the ring holds a single change
+    const sink = collector();
+    await e.subscribe(room1Shape(), sink.onChange);
+    src.emit(ins(1, 1, "0/10"));
+    src.emit(ins(2, 1, "0/20")); // evicts 0/10 → it aged out of the window
+
+    const since = decodeResumeCursor(sink.cursors[0] as string); // 0/10, now evicted
+    const sub = await e.subscribe(room1Shape(), () => {}, since);
+
+    expect(sub.resume).toEqual({ kind: "snapshot" });
+    e.stop();
+  });
+
+  it("the v0 poll path always re-snapshots on reconnect (no LSN ring)", async () => {
+    // The module `engine` is the poll engine — it has no replay ring, so any cursor re-snapshots.
+    const sub = await engine.subscribe(room1Shape(), () => {}, {
+      systemId: "x",
+      timelineId: 1,
+      lsn: "0/1",
+    });
+
+    expect(sub.resume).toEqual({ kind: "snapshot" });
+    expect(sub.cursor).toBe("v0:0"); // the poll snapshot cursor stays the non-resumable v0 token
+  });
+
+  it("anchors the snapshot cursor to the live identity + latest LSN once a change has flowed", async () => {
+    const { src, e } = replEngine();
+    await e.subscribe(room1Shape(), () => {});
+
+    // Before any change the identity is unknown → the v0 cursor (which forces a reconnect resync).
+    const early = await e.subscribe(room1Shape(), () => {});
+    expect(early.cursor).toBe("v0:0");
+
+    src.emit(ins(1, 1, "0/10"));
+
+    const late = await e.subscribe(room1Shape(), () => {});
+    expect(late.cursor).toBe("v1:sysA:1:0/10");
+    e.stop();
+  });
+
+  it("uses the `0/0` baseline LSN when a change revealed the identity but not for this shape yet", async () => {
+    const { src, e } = replEngine();
+    await e.subscribe(room1Shape(), () => {});
+
+    // A change on the same table that does NOT enter room-1 (room_id 2): it reveals the live
+    // identity but never touches this shape's ring, so the ring stays empty.
+    src.emit(ins(9, 2, "0/10"));
+
+    const sub = await e.subscribe(room1Shape(), () => {});
+    // Identity known (sysA/1) but no LSN applied to THIS shape → the `0/0` baseline.
+    expect(sub.cursor).toBe("v1:sysA:1:0/0");
     e.stop();
   });
 });
