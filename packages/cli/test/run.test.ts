@@ -3312,6 +3312,31 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a + L-69d76e71 harde
     expect(reply).toContain("posts");
   });
 
+  it("scrubs a secret in the tool RESULT before it hits the reply, keeping routes intact (L-01d526da)", async () => {
+    const served = await bootHandle({
+      script,
+      endpoint,
+      token,
+      // A future data-bearing read tool could echo a secret AND a route; the result is redacted
+      // structure-aware — the secret is stripped, the long multi-segment route is preserved.
+      dispatchDevTool: () =>
+        Promise.resolve({
+          routes: ["/api/v2/organizations/settings"],
+          note: "deployed with sk_live_51H8xYz0123456789abcdEFGH",
+        }),
+    });
+
+    const response = await served.handle("POST", endpoint, {
+      headers: authed,
+      body: { prompt: "inspect", route: "/" },
+    });
+
+    const reply = await replyOf(response);
+    expect(reply).not.toContain("sk_live_");
+    expect(reply).toContain("<redacted>");
+    expect(reply).toContain("/api/v2/organizations/settings");
+  });
+
   it("redacts a secret pasted into the prompt before it can leave the process (L-7fd1b91e)", async () => {
     const served = await bootHandle({
       script,

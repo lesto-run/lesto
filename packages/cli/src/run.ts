@@ -42,7 +42,7 @@ import { timingSafeEqual } from "node:crypto";
 import { DEV_INSPECT_TOOL, dispatchAiTurn } from "./ai-bridge";
 import type { AiTurn } from "./ai-bridge";
 import { assembleContext } from "./ai-context";
-import { redactContext, redactString } from "./ai-redact";
+import { redactContext, redactString, redactToolOutput } from "./ai-redact";
 import { parsePort, parseStringFlag } from "./flags";
 
 /** The default port for `serve`/`dev` when no `--port` flag is given. */
@@ -1563,16 +1563,16 @@ async function handleAiTurn(
       overlay.dispatchDevTool === undefined ? {} : { dispatchDevTool: overlay.dispatchDevTool },
       { tool: DEV_INSPECT_TOOL, input },
     );
-    // The tool RESULT is reflected verbatim (only stringified). Safe for `DEV_INSPECT_TOOL`
-    // (`describe_app` returns app STRUCTURE — routes/OpenAPI/schema — no secrets, and the reply
-    // goes only to the same-origin, token-gated dev browser, never to an LLM in Phase 1). INVARIANT
-    // for growth (ADR 0033): any tool added to `READ_TOOL_ALLOWLIST` whose output could carry live
-    // request/content data must have its output redacted here first — `redactString` can't be reused
-    // wholesale (it collapses multi-segment route paths to `<path>`); a structure-aware redactor is
-    // the follow-up. Today's allowlist is structure-only, so the leg is safe.
+    // The tool RESULT passes the structure-aware `redactToolOutput` before it is reflected — it
+    // scrubs any secret-shaped token / SQL bind a string leaf carries but preserves routes and
+    // structure (unlike `redactString`, which would collapse `describe_app`'s multi-segment route
+    // paths to `<path>`). Today's allowlist (`describe_app`) returns structure only, so nothing
+    // needs stripping; the guard is what lets a data-bearing read tool join `READ_TOOL_ALLOWLIST`
+    // (ADR 0033, L-01d526da) without a new redaction step. The reply also stays same-origin,
+    // token-gated, and never reaches an LLM in Phase 1.
     return aiReply(
       200,
-      `Inspect-only (Phase 1). You asked: "${safePrompt}". Read-only result: ${safeStringify(result)}. Acting is Phase 2 (deferred).`,
+      `Inspect-only (Phase 1). You asked: "${safePrompt}". Read-only result: ${safeStringify(redactToolOutput(result))}. Acting is Phase 2 (deferred).`,
     );
   } catch (error) {
     // The bridge's fail-closed refusal (no dispatch seam wired) is the overlay's inspect-only "not

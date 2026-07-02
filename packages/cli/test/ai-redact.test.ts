@@ -4,6 +4,7 @@ import {
   type AiContextPayload,
   redactContext,
   redactString,
+  redactToolOutput,
   stripAbsolutePaths,
   stripSecretTokens,
   stripSqlBindValues,
@@ -125,6 +126,40 @@ describe("stripSecretTokens", () => {
   it("leaves a short ordinary identifier untouched", () => {
     expect(stripSecretTokens("requestId abc123")).toBe("requestId abc123");
   });
+
+  it("redacts known vendor key prefixes, several below the entropy floor (L-1cf49931)", () => {
+    // A bare token (not an assignment, so ENV_ASSIGNMENT is not what catches it) per vendor.
+    const vendorKeys = [
+      "sk_live_51H8xYz0123456789abcdEFGH", // Stripe secret
+      "sk_test_ABCdef0123456789ghijklmn", // Stripe test
+      "whsec_0123456789abcdefABCDEFGH", // Stripe webhook signing secret
+      "ghp_0123456789abcdefABCDEFabcdef012345", // GitHub PAT
+      "github_pat_11ABCDEFG0123456789_abcdefghij", // GitHub fine-grained PAT
+      "glpat-0123456789abcdefABCD", // GitLab PAT
+      "xoxb-1234567890-abcdefGHIJ", // Slack bot token
+      `AIza${"D".repeat(35)}`, // Google API key
+      "ya29.A0ARrdaM-0123456789abcdefghij", // Google OAuth token
+      "sk-proj-0123456789abcdefABCDEFGHIJ", // OpenAI project key
+      "npm_0123456789abcdefABCDEFabcdef0123", // npm automation token
+      "SG.0123456789abcdefABCDE.0123456789abcdefABCDEFGHIJ", // SendGrid
+      "dop_v1_0123456789abcdef0123456789abcdef0123456789abcdef0123456789", // DigitalOcean
+    ];
+
+    for (const key of vendorKeys) {
+      const out = stripSecretTokens(`deployed with ${key} today`);
+
+      expect(out, key).not.toContain(key);
+      expect(out, key).toBe("deployed with <redacted> today");
+    }
+  });
+
+  it("leaves ordinary words and short vendor-shaped fragments untouched (no false positives)", () => {
+    // `skip`/`reset` are plain words; `github_repo` is not `github_pat_`; `sk-abc` lacks the
+    // 20+ contiguous body a real key carries — none may be mistaken for a secret.
+    expect(stripSecretTokens("skip reset github_repo sk-abc")).toBe(
+      "skip reset github_repo sk-abc",
+    );
+  });
 });
 
 describe("redactString", () => {
@@ -195,5 +230,86 @@ describe("redactContext", () => {
 
     expect(out.devError).toEqual({ source: "client-rebuild", message: "esbuild at <path> failed" });
     expect(out.devError).not.toHaveProperty("stack");
+  });
+});
+
+/**
+ * The structure-aware OUTPUT redactor (ADR 0033, L-01d526da) — the guard on a dev-tool RESULT
+ * before it is reflected into the overlay reply. It must scrub secret/SQL leaves while leaving
+ * routes and structure intact (unlike the context redactor, which collapses paths), so a
+ * data-bearing read tool can safely join the bridge's allowlist later.
+ */
+describe("redactToolOutput", () => {
+  it("preserves routes and structure — a describe_app-shaped result survives intact", () => {
+    const result = {
+      routes: [
+        { pattern: "/blog/:slug", kind: "page" },
+        // A long multi-segment route is itself a 24+ run in the entropy sweep's `/`-class; the
+        // output redactor must NOT run that sweep, so the route survives whole.
+        { pattern: "/api/v2/organizations/settings" },
+      ],
+      openapi: { version: "3.1.0" },
+      collections: ["posts", "pages"],
+      count: 3,
+      ok: true,
+      nothing: null,
+    };
+
+    expect(redactToolOutput(result)).toEqual(result);
+  });
+
+  it("scrubs a secret-shaped token in a string leaf but keeps the surrounding structure", () => {
+    const out = redactToolOutput({
+      requests: [{ path: "/api/orders", authorization: "Bearer abc.def.ghi" }],
+      note: "shipped with sk_live_51H8xYz0123456789abcdEFGH",
+    }) as { requests: { path: string; authorization: string }[]; note: string };
+
+    expect(out.requests[0]?.path).toBe("/api/orders");
+    expect(out.requests[0]?.authorization).toBe("Bearer <redacted>");
+    expect(out.note).not.toContain("sk_live_");
+    expect(out.note).toContain("<redacted>");
+  });
+
+  it("reduces a SQL string leaf to its bind-free shape", () => {
+    const out = redactToolOutput({ lastQuery: "SELECT * FROM users WHERE email = 'a@b.com'" }) as {
+      lastQuery: string;
+    };
+
+    expect(out.lastQuery).toBe("SELECT * FROM users WHERE email = ?");
+  });
+
+  it("passes non-string leaves and a top-level primitive through untouched", () => {
+    expect(redactToolOutput(42)).toBe(42);
+    expect(redactToolOutput(null)).toBeNull();
+    expect(redactToolOutput(undefined)).toBeUndefined();
+    expect(redactToolOutput("Bearer abc.def.ghi")).toBe("Bearer <redacted>");
+  });
+
+  it("leaves a non-plain object (Date) intact rather than flattening it to {}", () => {
+    const when = new Date(0);
+    const out = redactToolOutput({ createdAt: when }) as { createdAt: Date };
+
+    expect(out.createdAt).toBe(when);
+  });
+
+  it("walks a null-prototype object (Object.create(null)) like a plain one", () => {
+    const bag = Object.create(null) as Record<string, unknown>;
+    bag.token = "Bearer abc.def.ghi";
+
+    const out = redactToolOutput(bag) as Record<string, unknown>;
+
+    expect(out.token).toBe("Bearer <redacted>");
+  });
+
+  it("does not blow the stack on a cyclic result — the cycle survives for safeStringify to catch", () => {
+    const cyclic: Record<string, unknown> = { label: "Bearer abc.def.ghi" };
+    cyclic.self = cyclic;
+
+    const out = redactToolOutput(cyclic) as Record<string, unknown>;
+
+    // The reachable string leaf is still scrubbed, the walk terminates, and the cycle is intact so
+    // the reply path's `safeStringify` still reports it unserializable.
+    expect(out.label).toBe("Bearer <redacted>");
+    expect(() => JSON.stringify(out)).toThrow();
   });
 });

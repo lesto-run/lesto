@@ -34,9 +34,12 @@
  *      ingest is a deferred phase that must re-pass this stage).
  *
  * This is DEFENSE IN DEPTH on a dev-only, inspect-only PREVIEW surface, not a perfect
- * exfiltration guard: it scrubs the common, high-signal secret/path SHAPES. Broadening
- * to the long tail of vendor key prefixes and sub-entropy-floor tokens is tracked
- * separately (it wants its own test-vector corpus).
+ * exfiltration guard: it scrubs the common, high-signal secret/path SHAPES, including an
+ * explicit list of vendor key prefixes that sit BELOW the generic entropy floor
+ * ({@link VENDOR_SECRET}). The genuinely long tail beyond that list stays entropy-gated.
+ * The SAME secret + SQL sweep also guards a dev-tool RESULT before it is reflected into the
+ * overlay reply — {@link redactToolOutput}, which is structure-aware (it does NOT collapse
+ * route paths the way the context redactor does, so `describe_app`'s routes survive).
  */
 
 /** The open dev error the overlay holds — the same shape `run.ts` broadcasts. */
@@ -165,6 +168,34 @@ const CONNECTION_CREDENTIALS = /([a-z][\w+.-]*:\/\/)[^/\s:@]+:[^/\s]+@/gi;
 const AWS_ACCESS_KEY = /\bA(?:KIA|SIA)[0-9A-Z]{16}\b/g;
 
 /**
+ * Known VENDOR secret shapes worth catching by explicit, near-zero-false-positive prefix —
+ * several sit BELOW the 24-char {@link HIGH_ENTROPY} floor (short test keys) and all are more
+ * legible caught by name than left to the entropy heuristic. Each arm is anchored on an
+ * unambiguous prefix and requires a long, mostly-contiguous body, so an ordinary hyphenated
+ * slug (`sk-really-long-component-name`) — which lacks a 20+ CONTIGUOUS alphanumeric run — does
+ * not match. Runs BEFORE the generic entropy sweep so a prefixed key collapses as one unit; the
+ * entropy sweep backstops any high-entropy tail an arm does not fully span. The long tail beyond
+ * this list stays entropy-gated, and over-redaction is the safe direction on this surface.
+ */
+const VENDOR_SECRET = new RegExp(
+  [
+    String.raw`\b[srp]k_(?:live|test)_[0-9A-Za-z]{16,}`, // Stripe secret / restricted / publishable
+    String.raw`\bwhsec_[0-9A-Za-z]{16,}`, // Stripe webhook signing secret
+    String.raw`\bgh[pousr]_[0-9A-Za-z]{20,}`, // GitHub PAT / OAuth / user / server / refresh
+    String.raw`\bgithub_pat_[0-9A-Za-z_]{20,}`, // GitHub fine-grained PAT
+    String.raw`\bglpat-[0-9A-Za-z_-]{16,}`, // GitLab personal access token
+    String.raw`\bxox[baprs]-[0-9A-Za-z-]{10,}`, // Slack bot / user / app / refresh token
+    String.raw`\bAIza[0-9A-Za-z_-]{35}`, // Google API key
+    String.raw`\bya29\.[0-9A-Za-z_-]{20,}`, // Google OAuth access token
+    String.raw`\bsk-(?:proj-|ant-)?[0-9A-Za-z]{20,}`, // OpenAI / Anthropic (contiguous body → slug-safe)
+    String.raw`\bnpm_[0-9A-Za-z]{20,}`, // npm automation token
+    String.raw`\bSG\.[0-9A-Za-z_-]{20,}\.[0-9A-Za-z_-]{20,}`, // SendGrid API key
+    String.raw`\bdo[opr]_v1_[0-9a-f]{20,}`, // DigitalOcean token
+  ].join("|"),
+  "g",
+);
+
+/**
  * A long high-entropy run — a 24+ char hex or base64url token (env secrets, signing
  * keys, opaque bearer values that escaped the patterns above). The 24-char floor is
  * what separates a secret from an ordinary identifier/word, so this never eats a
@@ -203,17 +234,32 @@ export function stripSqlBindValues(input: string): string {
 }
 
 /**
- * Redact env/secret-shaped tokens: `KEY=…` assignments, `Bearer …` headers,
- * connection-string credentials, AWS access-key ids, and long high-entropy runs all
- * collapse to `<redacted>` (assignments keep their key name for legibility).
+ * The DETERMINISTIC secret shapes: `KEY=…` assignments, `Bearer …` headers, connection-string
+ * credentials, known vendor key prefixes ({@link VENDOR_SECRET}), and AWS access-key ids — each
+ * collapses to `<redacted>` (assignments keep their key name for legibility). Every arm is
+ * anchored on an explicit shape, so — unlike the generic {@link HIGH_ENTROPY} sweep, whose class
+ * spans `/` — NONE of them matches a long route/URL path. This is the subset
+ * {@link redactToolOutput} reuses to strip a secret from a tool result's string leaf while
+ * leaving that result's routes intact.
  */
-export function stripSecretTokens(input: string): string {
+function stripKnownSecretShapes(input: string): string {
   return input
     .replace(ENV_ASSIGNMENT, (_match, key: string) => `${key}=${SECRET_PLACEHOLDER}`)
     .replace(BEARER_TOKEN, (_match, scheme: string) => `${scheme} ${SECRET_PLACEHOLDER}`)
     .replace(CONNECTION_CREDENTIALS, (_match, scheme: string) => `${scheme}${SECRET_PLACEHOLDER}@`)
-    .replace(AWS_ACCESS_KEY, SECRET_PLACEHOLDER)
-    .replace(HIGH_ENTROPY, SECRET_PLACEHOLDER);
+    .replace(VENDOR_SECRET, SECRET_PLACEHOLDER)
+    .replace(AWS_ACCESS_KEY, SECRET_PLACEHOLDER);
+}
+
+/**
+ * Redact env/secret-shaped tokens for the context payload: the deterministic shapes above run
+ * first ({@link stripKnownSecretShapes}, so a below-floor prefixed key is caught by its shape,
+ * not missed by the heuristic), then the generic {@link HIGH_ENTROPY} sweep catches any long
+ * opaque tail left over. The context redactor runs this AFTER {@link stripAbsolutePaths}, so the
+ * entropy sweep never sees a filesystem path — that matters because its class spans `/`.
+ */
+export function stripSecretTokens(input: string): string {
+  return stripKnownSecretShapes(input).replace(HIGH_ENTROPY, SECRET_PLACEHOLDER);
 }
 
 /**
@@ -281,4 +327,70 @@ export function redactContext(payload: AiContextPayload): RedactedContext {
   // boundary, so it is the only place allowed to mint the type. The brand is phantom (type-only),
   // so the runtime object is exactly `redacted` — no symbol key is ever added.
   return redacted as RedactedContext;
+}
+
+/**
+ * Redact one string leaf of a dev-tool RESULT. Unlike {@link redactString}, it strips only the
+ * SQL binds and the DETERMINISTIC secret shapes ({@link stripKnownSecretShapes}) — deliberately
+ * NOT {@link stripAbsolutePaths} and NOT the generic {@link HIGH_ENTROPY} sweep. Both of those
+ * would destroy the signal a tool result exists to surface: a result's multi-segment paths are
+ * app ROUTES (`/blog/:slug`, `/api/v2/users/:id`) — legitimate structure, not a filesystem leak
+ * — and a long route (`/api/v2/organizations/settings`) is itself a 24+ char run in the entropy
+ * sweep's `/`-spanning class, so it too would collapse to `<redacted>`. The named/structured
+ * shapes catch the real output risk (a secret-shaped token or SQL bind a future data-bearing
+ * read tool could echo) without touching routes; the untamed high-entropy tail is out of scope
+ * here — over-redacting routes is worse, and the reply is same-origin, token-gated, and never
+ * reaches an LLM in Phase 1.
+ */
+function redactOutputString(input: string): string {
+  return stripKnownSecretShapes(stripSqlBindValues(input));
+}
+
+/** A value is a plain JSON object iff its prototype is `Object.prototype` or null. */
+function isPlainObject(value: object): boolean {
+  const proto = Object.getPrototypeOf(value) as unknown;
+
+  return proto === Object.prototype || proto === null;
+}
+
+/** Walk one node of a tool result, redacting string leaves; `seen` breaks reference cycles. */
+function redactOutputValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (typeof value === "string") return redactOutputString(value);
+
+  // Non-object leaves (number/boolean/undefined/bigint/symbol) carry no secret text — pass through.
+  if (value === null || typeof value !== "object") return value;
+
+  // A cycle: stop recursing and hand back the node as-is. The reply path's `safeStringify`
+  // still reports the (unchanged) cycle as unserializable — this guard only prevents a stack blow.
+  if (seen.has(value)) return value;
+  seen.add(value);
+
+  if (Array.isArray(value)) return value.map((item) => redactOutputValue(item, seen));
+
+  // A non-plain object (Date, Map, class instance) is left intact for `safeStringify` to render —
+  // walking its own-keys would silently drop its data (e.g. a Date's entries are empty).
+  if (!isPlainObject(value)) return value;
+
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) out[key] = redactOutputValue(entry, seen);
+
+  return out;
+}
+
+/**
+ * Redact a dev-tool RESULT before it is reflected into the overlay reply (ADR 0033,
+ * L-01d526da). Phase 1's one inspect tool (`describe_app`) returns app STRUCTURE only, so
+ * nothing leaks today — but this is the guard that must exist BEFORE a data-bearing read tool
+ * (recent-requests, tail-logs, content reads) is added to the bridge's `READ_TOOL_ALLOWLIST`,
+ * so growing that allowlist is a one-line change, not a security review.
+ *
+ * Structure-aware and structure-preserving: it walks arbitrary JSON, scrubs every STRING leaf
+ * through {@link redactOutputString} (secret + SQL-bind sweeps, but not path-collapse — routes
+ * survive), and leaves object keys, array shapes, and non-string leaves untouched. Pure and
+ * total like the rest of this module: it neither reads the world nor throws (reference cycles
+ * are broken, so a pathological result cannot blow the stack — the reply's `safeStringify`
+ * still renders a cyclic result as unserializable).
+ */
+export function redactToolOutput(value: unknown): unknown {
+  return redactOutputValue(value, new WeakSet());
 }
