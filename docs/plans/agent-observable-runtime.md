@@ -246,12 +246,18 @@ Folded into the bar block above; restated at the increment where each is load-be
   activity panel need this and have **no producer in this plan**. Gate: whichever ADR commits a
   bounded dev-only span ring (natural home: 0032's access-log ring).
 - **`ai.embed` / retrieval spans** — gated on a real estate retrieval (RAG) route.
-- **~~Streaming-span lifecycle~~ (open-window first-byte→last-byte for `streamText`) — SHIPPED
-  2026-07-01 (L-1013f457).** The `AgentSpan` seam gained an optional `setAttributes` (open-before /
-  populate-after), so `generateText`'s `ai.generate` span now carries the call's real duration
-  (opened before the request, usage/stop-reason populated after) and `streamText` brackets the
-  whole stream with one `ai.generate` span (open on first pull → last frame → close, in a
-  `finally` so an early break or throw still closes it). The streamed span carries the model id +
-  duration + outcome, not tokens (the delta stream yields text only). `@lesto/ai` stays
-  observability-free; the estate `Tracer`→`AgentTracer` adapter maps `setAttributes` → `setAttribute`.
+- **~~Streaming-span lifecycle~~ (open-window for `streamText`) — SHIPPED 2026-07-01
+  (L-1013f457), with the window drawn SLIGHTLY wider than the original "first-byte→last-byte"
+  framing: the `AgentSpan` seam gained an optional `setAttributes` (open-before / populate-after),
+  so `generateText`'s `ai.generate` span now carries the call's real duration (opened before the
+  request, usage/stop-reason populated after) and `streamText` brackets the whole stream with one
+  `ai.generate` span — opened on the **first pull** (before `buildStreamRequest`/`transport` even
+  run, not literally at the first response byte) and closed once the generator terminates (last
+  frame, an error, or an early `for-await` `break`, always via a `finally`). The streamed span
+  carries the model id + duration + outcome (`"unset"` on an early break, not a fabricated `"ok"`),
+  not tokens (the delta stream yields text only — a future increment could recover this from
+  Anthropic's `message_delta` SSE frame, currently unparsed). `@lesto/ai` stays observability-free;
+  the estate `Tracer`→`AgentTracer` adapter maps `setAttributes` → `setAttribute`. Every telemetry
+  call is wrapped in a swallow-on-throw helper (`safely`) so a broken tracer can never mask a
+  call's real result or crash an otherwise-successful generation.
 - **Eval / guardrail spans** (`ai.eval`) — gated on ADR 0035's evals-in-CI wanting per-eval spans.

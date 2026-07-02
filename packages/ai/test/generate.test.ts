@@ -259,4 +259,130 @@ describe("streamText — ai.generate span (ADR 0031 Phase 2, PREVIEW)", () => {
 
     expect(deltas).toEqual(["a", "b"]);
   });
+
+  it("an early for-await break still ends the span (via IteratorClose), leaving status unset", async () => {
+    const { transport } = constantTransport(sseResponse(twoFrames));
+    const model = createAnthropic({ apiKey: "sk-test", transport });
+    const { tracer, spans } = recordingTracer();
+
+    for await (const delta of streamText({
+      model,
+      messages: [{ role: "user", content: "x" }],
+      tracer,
+    })) {
+      expect(delta.text).toBe("a");
+      break; // for-await's IteratorClose forces the generator's return() → the finally.
+    }
+
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.ended).toBe(true);
+    // Never reached "ok" (the break skipped it) — an honest "we don't know", not a fabricated success.
+    expect(spans[0]?.status).toBe("unset");
+  });
+});
+
+describe("telemetry isolation — a broken tracer never masks the real result (ADR 0031 Phase 2)", () => {
+  it("generateText still returns the real result when setStatus/end throw on the success path", async () => {
+    const { transport } = constantTransport(jsonResponse(textMessage("still works.")));
+    const model = createAnthropic({ apiKey: "sk-test", transport });
+
+    const brokenTracer = {
+      startSpan: () => ({
+        setAttributes: () => {
+          throw new Error("boom: broken tracer");
+        },
+        setStatus: () => {
+          throw new Error("boom: broken tracer");
+        },
+        end: () => {
+          throw new Error("boom: broken tracer");
+        },
+      }),
+    };
+
+    const result = await generateText({
+      model,
+      messages: [{ role: "user", content: "go" }],
+      tracer: brokenTracer,
+    });
+
+    // The broken tracer's throws were swallowed — the real result still comes back, not an error.
+    expect(result.text).toBe("still works.");
+  });
+
+  it("generateText still throws the ORIGINAL AiError, not a tracer fault, when the tracer breaks on the error path", async () => {
+    const { transport } = constantTransport(jsonResponse({ error: "boom" }, 500));
+    const model = createAnthropic({ apiKey: "sk-test", transport });
+
+    const brokenTracer = {
+      startSpan: () => ({
+        setStatus: () => {
+          throw new Error("boom: broken tracer");
+        },
+        end: () => {
+          throw new Error("boom: broken tracer");
+        },
+      }),
+    };
+
+    const error = await generateText({
+      model,
+      messages: [{ role: "user", content: "go" }],
+      tracer: brokenTracer,
+    }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AiError);
+    expect((error as AiError).code).toBe("AI_HTTP_ERROR");
+  });
+
+  it("streamText still yields every delta and ends the (broken) span when setStatus/end throw", async () => {
+    const frames = [
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"a"}}\n\n',
+    ];
+    const { transport } = constantTransport(sseResponse(frames));
+    const model = createAnthropic({ apiKey: "sk-test", transport });
+
+    let endCalled = false;
+    const brokenTracer = {
+      startSpan: () => ({
+        setStatus: () => {
+          throw new Error("boom: broken tracer");
+        },
+        end: () => {
+          endCalled = true;
+          throw new Error("boom: broken tracer");
+        },
+      }),
+    };
+
+    const deltas: string[] = [];
+    for await (const delta of streamText({
+      model,
+      messages: [{ role: "user", content: "x" }],
+      tracer: brokenTracer,
+    })) {
+      deltas.push(delta.text);
+    }
+
+    expect(deltas).toEqual(["a"]);
+    expect(endCalled).toBe(true);
+  });
+});
+
+describe("the attribute-drop trap, proven directly on observabilityShapedTracer", () => {
+  it("a post-hoc setAttribute still records after a dropped start bag — but the dropped attribute stays gone", () => {
+    const shaped = observabilityShapedTracer();
+
+    // Simulates a BROKEN Tracer→AgentTracer adapter that dropped the start-time bag entirely
+    // (e.g. it called `tracer.startSpan(name)` with no options) — the exact failure mode
+    // `agentTracerAdapter` (the documented recipe) avoids by always nesting under `attributes`.
+    const span = shaped.tracer.startSpan(AI_GENERATE_SPAN);
+    span.setAttribute(AI_STOP_REASON_ATTR, "end_turn");
+
+    // The post-hoc attribute recorded (materializing a fresh bag)...
+    expect(shaped.spans[0]?.attributes).toEqual({ [AI_STOP_REASON_ATTR]: "end_turn" });
+    // ...but `ai.model`, which only ever rides in the START bag, is provably gone — the drop this
+    // double exists to make visible.
+    expect(shaped.spans[0]?.attributes).not.toHaveProperty(AI_MODEL_ATTR);
+  });
 });

@@ -21,6 +21,22 @@ import {
 import type { GenerateOptions, GenerateResult, StreamDelta } from "./types";
 
 /**
+ * Run a telemetry side effect on a span, swallowing any throw it raises.
+ *
+ * A tracer is observability, never governance: a broken `AgentTracer` (a throwing
+ * `setAttributes`/`setStatus`/`end`) must not mask a call's real result or turn a
+ * successful generation into a thrown error. Mirrors `@lesto/mcp`'s `onSpan` swallow
+ * (ADR 0031 Inc 2) — the same discipline applied to this seam.
+ */
+function safely(fn: () => void): void {
+  try {
+    fn();
+  } catch {
+    // Telemetry fault: deliberately swallowed, never surfaced to the caller.
+  }
+}
+
+/**
  * Generate a single, non-streamed completion.
  *
  *   const { text } = await generateText({ model, messages });
@@ -33,8 +49,9 @@ import type { GenerateOptions, GenerateResult, StreamDelta } from "./types";
  * known up front, the model id — so it wraps the request build, the transport round-trip, and
  * the parse: it carries the call's **real duration**, not a point-in-time record. The parsed
  * `Usage`/`StopReason` (or, on failure, the `AiError` code) are populated **after** the call via
- * {@link AgentSpan.setAttributes}, then the span is marked `ok`/`error` and closed. Absent a
- * tracer this is the exact original send — no span, no overhead.
+ * {@link import("./types").AgentSpan.setAttributes}, then the span is marked `ok`/`error` and closed — each
+ * telemetry call isolated by {@link safely} so a broken tracer can't affect the returned result
+ * or the thrown error. Absent a tracer this is the exact original send — no span, no overhead.
  */
 export async function generateText(options: GenerateOptions): Promise<GenerateResult> {
   const { tracer } = options;
@@ -51,21 +68,25 @@ export async function generateText(options: GenerateOptions): Promise<GenerateRe
     const response = await options.model.transport(request);
     const result = await options.model.parseResponse(response);
 
-    span?.setAttributes?.({
-      [AI_USAGE_INPUT_TOKENS_ATTR]: result.usage.inputTokens,
-      [AI_USAGE_OUTPUT_TOKENS_ATTR]: result.usage.outputTokens,
-      [AI_STOP_REASON_ATTR]: result.stopReason,
+    safely(() => {
+      span?.setAttributes?.({
+        [AI_USAGE_INPUT_TOKENS_ATTR]: result.usage.inputTokens,
+        [AI_USAGE_OUTPUT_TOKENS_ATTR]: result.usage.outputTokens,
+        [AI_STOP_REASON_ATTR]: result.stopReason,
+      });
+      span?.setStatus("ok");
     });
-    span?.setStatus("ok");
-    span?.end();
+    safely(() => span?.end());
 
     return result;
   } catch (error) {
     // The coded provider failure (`AI_HTTP_ERROR`) — or any other throw — is recorded on the
     // already-open span before it propagates, so a failed generation is visible on the trace too.
-    if (error instanceof AiError) span?.setAttributes?.({ [AI_ERROR_CODE_ATTR]: error.code });
-    span?.setStatus("error");
-    span?.end();
+    safely(() => {
+      if (error instanceof AiError) span?.setAttributes?.({ [AI_ERROR_CODE_ATTR]: error.code });
+      span?.setStatus("error");
+    });
+    safely(() => span?.end());
 
     throw error;
   }
@@ -82,19 +103,21 @@ export async function generateText(options: GenerateOptions): Promise<GenerateRe
  * `AI_STREAM_MALFORMED` on an unparseable frame.
  *
  * When an `AgentTracer` is injected (ADR 0031 Phase 2, PREVIEW), one `ai.generate` span brackets
- * the **whole stream lifetime** — opened before the request on the first pull, closed after the
- * last frame (or on an early break / error) — so it carries the streamed generation's real
- * duration. It carries the model id and outcome; unlike the non-streamed path it records no
- * `Usage`/`StopReason` (the delta stream yields text only, not a final token count). A thrown
- * error marks the span `error` with the `AiError` code. Absent a tracer this is the exact
- * original stream — no span, no overhead.
+ * the **whole stream lifetime** — opened on the first pull, before the request goes out, and
+ * closed once the generator terminates — so it carries the streamed generation's real duration.
+ * It carries the model id and outcome: `"ok"` only on a full, uninterrupted drain; a thrown error
+ * marks it `"error"` with the `AiError` code. An early `for-await` `break` (which the language
+ * closes via `IteratorClose` — every caller in this codebase uses `for-await`) still ends the
+ * span, but leaves its status `"unset"` — an honest "we don't know", not a fabricated success.
+ * Unlike the non-streamed path it records no `Usage`/`StopReason` (the delta stream yields text
+ * only, not a final token count). **Caveat:** a consumer that manually pulls the iterator
+ * (`.next()`) and abandons it without draining or calling `.return()` bypasses `IteratorClose`
+ * entirely — the generator stays suspended and the span never closes or exports. Absent a tracer
+ * this is the exact original stream — no span, no overhead.
  */
 export async function* streamText(options: GenerateOptions): AsyncIterable<StreamDelta> {
   const { tracer } = options;
 
-  // Opened on the first pull (async generators are lazy), before the request goes out, and closed
-  // in `finally` — so the span spans open → last frame → close, even on an early `break` (which
-  // runs the generator's `return()` → the `finally`) or a mid-stream throw. No leak either way.
   const span = tracer?.startSpan(AI_GENERATE_SPAN, {
     [AI_MODEL_ATTR]: options.modelId ?? options.model.defaultModelId,
   });
@@ -105,13 +128,18 @@ export async function* streamText(options: GenerateOptions): AsyncIterable<Strea
 
     yield* options.model.parseStream(response);
 
-    span?.setStatus("ok");
+    safely(() => span?.setStatus("ok"));
   } catch (error) {
-    if (error instanceof AiError) span?.setAttributes?.({ [AI_ERROR_CODE_ATTR]: error.code });
-    span?.setStatus("error");
+    safely(() => {
+      if (error instanceof AiError) span?.setAttributes?.({ [AI_ERROR_CODE_ATTR]: error.code });
+      span?.setStatus("error");
+    });
 
     throw error;
   } finally {
-    span?.end();
+    // Always runs — a normal finish, a thrown error, AND an early `for-await` `break` (which
+    // forces the generator's `return()`, skipping the `try` body's remaining statements straight
+    // to here) — so the span closes on every path, even the one that sets no status at all.
+    safely(() => span?.end());
   }
 }

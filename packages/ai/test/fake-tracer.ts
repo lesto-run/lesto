@@ -102,7 +102,8 @@ export function observabilityShapedTracer(): {
         setAttribute(key, value) {
           // A real `Span` merges into its own bag. If the start bag was DROPPED (the trap — a flat
           // 2nd arg leaves `options.attributes` undefined), materialize so post-hoc attrs still
-          // record — but `ai.model` is then missing, which is exactly what the trap test catches.
+          // record — but `ai.model` (which only ever rides in the start bag) is then provably
+          // missing, proven directly in generate.test.ts's "attribute-drop trap" suite.
           const bag = record.attributes ?? (record.attributes = {});
           bag[key] = value;
         },
