@@ -445,10 +445,10 @@
       },
       "peerDependencies": {
         "@lesto/content-mdx": "workspace:*",
-        "react": ">=18",
-        "react-dom": ">=18",
-        "svelte": ">=4",
-        "vue": ">=3",
+        "react": "^19",
+        "react-dom": "^19",
+        "svelte": "^4",
+        "vue": "^3",
       },
       "optionalPeers": [
         "@lesto/content-mdx",
