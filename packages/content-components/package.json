@@ -54,10 +54,10 @@
   },
   "peerDependencies": {
     "@lesto/content-mdx": "workspace:*",
-    "react": ">=18",
-    "react-dom": ">=18",
-    "vue": ">=3",
-    "svelte": ">=4"
+    "react": "^19",
+    "react-dom": "^19",
+    "vue": "^3",
+    "svelte": "^4"
   },
   "peerDependenciesMeta": {
     "@lesto/content-mdx": {
