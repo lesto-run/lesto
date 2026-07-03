@@ -188,8 +188,9 @@ that stamps the resource into `aud` — only the verifier changes, not the batte
    storage, so an in-memory store regenerates them per process.
 3. **Wire `rolesOf`** to your identity service (the demo maps an email → role).
 4. **Declare your own domain tools.** This console's actions are `@lesto/mcp` domain tools
-   (`defineDomainTool`, ADR 0043), each with its own `requires.permission`; a production server keeps
-   `handle_request` omitted so an agent reaches only the actions you declare.
+   (`defineDomainTool`, ADR 0043) — each governed *write* with its own `requires.permission` (the
+   reads carry none, governed by the scope ceiling alone); a production server keeps `handle_request`
+   omitted so an agent reaches only the actions you declare.
 
 The issuer is configuration. When a first-party `@lesto` Authorization Server lands (ADR 0029), you
 point the verifier at its JWKS and the Resource Server is unchanged.

@@ -1,7 +1,17 @@
 # ADR 0043 — App-defined domain MCP tools (a per-tool policy floor the app owns, so the tool SET is open)
 
+> **Post-implementation note (2026-07-03):** this ADR was authored *before* the build and its
+> `file:line` citations reflect the **pre-implementation** tree; the feature then shipped in
+> `@lesto/mcp` (`a043b07`) and rewrote those files, so the line numbers below no longer resolve and
+> the "acceptance oracle" (the dormant `governance.ts` `toolPolicy` fixture) was *replaced* by real
+> `defineDomainTool` domain tools + `opsPolicy` — there is no `toolPolicy` / `console:operate` /
+> `handle_request`-in-`toolPermissions` in the shipped example. For the as-built surface see the code
+> and `examples/mcp-ops-console/test/{integration,edge}.test.ts` (the four-identity matrix live on
+> both substrates). The design decisions (D1–D5, D2.1–2.4) all shipped as written.
+
 - **Status:** **Accepted** (2026-07-03, chief-architect governance panel — verdict *ratify with
-  amendments*; every cited `file:line` seam spot-checked accurate). It opens the closed part of
+  amendments*; every cited `file:line` seam spot-checked accurate at authoring — see the
+  post-implementation note above). It opens the closed part of
   the OCP-7 floor: the *floor* is already per-tool and sound (`packages/mcp/src/http.ts`
   `policyFloorChallenge`, `:607-660`), but the *tool set* is closed
   (`packages/mcp/src/tools.ts` `buildTools`, `:538,768-785`), so every app write collapses onto

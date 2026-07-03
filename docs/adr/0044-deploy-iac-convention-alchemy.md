@@ -17,11 +17,13 @@
   state-backend API name. **Lock-in discipline:** the Alchemy dep is pinned caret on a `0.x`
   (`^0.93.x` → patch-only); a minor/major bump is a deliberate, reviewed act, not an automatic
   update.
-- **Implementation status (2026-07-03): IMPLEMENTED + proven LIVE.** Inc1 (both examples on the
-  DO-backed `CloudflareStateStore`, deploy→destroy across clean/shared state), Inc2 (the benchmark
-  `lesto-bench-edge` worker adopted via `adopt: true`, `wrangler.jsonc` retired to
-  deploy-authority-only + made the drift-guard source, `start-edge.mjs` → `workerd` re-verified), and
-  Inc3 (`.github/workflows/deploy-examples.yml`, secret-gated) are all done. Inc2 uncovered — and a
+- **Implementation status (2026-07-03): IMPLEMENTED, proven live SINGLE-machine.** Inc1 (both
+  examples on the DO-backed `CloudflareStateStore`; a live deploy→`--destroy` over the DO store, with
+  zero local state — the literal *two-machine* adoption is argued-by-construction, not yet run) and
+  Inc2 (the benchmark `lesto-bench-edge` worker adopted via `adopt: true`, `wrangler.jsonc` retired to
+  deploy-authority-only + made the drift-guard source, `start-edge.mjs` → `workerd` re-verified) are
+  done and live-verified. Inc3 (`.github/workflows/deploy-examples.yml`, secret-gated) is in place;
+  its green-deploy path runs the first time `main` is pushed with both secrets present. Inc2 uncovered — and a
   fable chief-architect panel resolved — that the benchmark's zero-dep/non-workspace design had
   already been broken by Bun 1.3 isolated installs; the fix was to make `benchmarks/apps/lesto` a
   workspace member (byte-identical measured code, still outside every `@lesto/*` gate). Full record:
