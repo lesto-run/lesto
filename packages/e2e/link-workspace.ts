@@ -106,11 +106,26 @@ function pickStoreEntry(
   prefix: string,
   matches: readonly string[],
 ): string {
-  if (matches.length === 1) return matches[0] as string;
-
   // `<name>@<version>+<peerhash>` → the semver `<version>` (build metadata is not precedence).
   const versionOf = (entry: string): string => entry.slice(prefix.length).split("+")[0] ?? "";
   const wanted = majorPredicate(range);
+
+  // A lone match is used as-is (nothing to disambiguate), but still WARN if its major misses the
+  // declared range — an app pinning `foo: ^5` against a store holding only `foo@4` would otherwise
+  // link major 4 silently. Warn (not throw): a lone mismatch is the app's own declaration problem,
+  // and a hard throw here could break an otherwise-working reconstruction over a benign skew.
+  if (matches.length === 1) {
+    const lone = matches[0] as string;
+    if (wanted.constrained && !wanted.test(majorOf(versionOf(lone)))) {
+      console.warn(
+        `link-workspace: "${dep}" — the store's only version (${lone.slice(prefix.length)}) does ` +
+          `not satisfy the declared range "${range ?? "(none)"}"; linking it anyway. Pin "${dep}" ` +
+          `to a matching version if this is wrong.`,
+      );
+    }
+    return lone;
+  }
+
   const satisfying = wanted.constrained
     ? matches.filter((entry) => wanted.test(majorOf(versionOf(entry))))
     : [];
@@ -125,8 +140,12 @@ function pickStoreEntry(
     );
   }
 
-  // Highest satisfying version wins; a version tie (peer-hash variants of the SAME version —
-  // e.g. two `react-dom@19.2.7+…`) breaks on the entry name so the pick stays deterministic.
+  // Highest satisfying version wins; a version tie breaks on the entry name so the pick stays
+  // deterministic. CAVEAT: peer-hash variants of the SAME version (e.g. two `react-dom@19.2.7+…`)
+  // can nest DIFFERENT peer majors (one → react 19, one → react 18) — a lexical tiebreak is
+  // deterministic but NOT peer-aware, so it could pick a variant wired to the wrong peer. Not
+  // reachable today (every such dep is covered by the pass-1 root sweep before this runs); the
+  // peer-aware fix is tracked as a follow-up (see the link-workspace hardening task).
   return satisfying.toSorted(
     (a, b) => compareVersionDesc(versionOf(a), versionOf(b)) || (a < b ? -1 : a > b ? 1 : 0),
   )[0] as string;
@@ -171,6 +190,10 @@ function majorPredicate(range: string | undefined): {
 
   const predicates: ((major: number) => boolean)[] = [];
   for (const alternative of alternatives) {
+    // A compound/hyphen range (`>=18 <20`, `1.2.3 - 2.0.0`) has internal whitespace we would
+    // otherwise mis-read (the `>=` arm drops the ceiling; the exact arm sees only the low end).
+    // Refuse to guess a major from it — route to the loud, unconstrained path instead.
+    if (/\s/.test(alternative)) return unconstrained;
     if (
       alternative === "*" ||
       alternative === "x" ||
