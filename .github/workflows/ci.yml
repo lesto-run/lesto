@@ -29,6 +29,13 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Drift guard for bun 1.3.5's ISOLATED layout: the repo-root node_modules must
+      # hold only the ~16 externals — NO `@lesto/*`, `jiti`, or `pg` hoisted to root.
+      # Several jobs (scaffold, cf-dry, replication) depend on that shape, so assert it
+      # here right after install and fail fast if a future bun bump re-hoists to root.
+      - name: Assert isolated node_modules layout (no @lesto at root)
+        run: bun scripts/assert-isolated-node-modules.mjs
+
       - name: Typecheck
         run: bun run ws:typecheck
 
@@ -429,8 +436,13 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Install pg at the REPO ROOT (not the examples/live-capstone subtree): the
+      # replication client (packages/live-server/src/pg-replication-client.ts) does a
+      # createRequire-rooted `require("pg")` that resolves from packages/live-server and
+      # CANNOT walk up into the example subtree — installing it under the example would
+      # leave the acceptance run crashing with `Cannot find package 'pg'`. Landing pg in
+      # root node_modules makes it reachable from packages/live-server AND packages/pg.
       - name: Install the pg driver (an optional peer of the Postgres change source)
-        working-directory: examples/live-capstone
         run: bun add pg
 
       # Verify the client bundles — the OPFS engine's LITERAL dynamic import must survive a real
@@ -581,11 +593,14 @@ jobs:
       - name: Scaffold a fresh app (create-lesto --local)
         run: bun packages/create-lesto/src/bin.ts cf-dry-app --local --no-install
 
-      # Link the scaffolded app's node_modules at the repo's installed workspace
-      # node_modules — the publish-equivalent of `bun install` while the @lesto/*
-      # packages are unpublished (the same trick packages/e2e's scaffold-loop uses).
-      - name: Link workspace node_modules into the scaffolded app
-        run: ln -s "$GITHUB_WORKSPACE/node_modules" cf-dry-app/node_modules
+      # Reconstruct the scaffolded app's node_modules via the shared helper: the
+      # externals plus the `@lesto` scope that bun 1.3.5's ISOLATED layout no longer
+      # hoists to the repo root. A bare symlink to root would resolve ZERO `@lesto/*`
+      # (the next `lesto build` would die with `Cannot find module '@lesto/db'`), so
+      # this is the publish-equivalent of `bun install` while the @lesto/* packages
+      # are unpublished (the same helper packages/e2e's scaffold-loop uses).
+      - name: Reconstruct the scaffolded app's node_modules (externals + @lesto scope)
+        run: bun packages/e2e/link-workspace.ts cf-dry-app
 
       - name: Build the static site + island client (lesto build)
         working-directory: cf-dry-app
