@@ -9,3 +9,14 @@
 # find nothing and exit 0 instead of masquerading as the project's test command.
 [test]
 root = "tools/no-bun-native-tests"
+
+# [install] pins the node_modules LAYOUT. bun defaults `configVersion: 1` lockfiles
+# (this repo's, since `8c2209c`) to the ISOLATED linker — the repo root holds only the
+# shared externals and every `@lesto/*` package resolves from the member that DECLARES
+# it, with no hoisted `@lesto` scope at the root. That default was an implicit
+# consequence of a lockfile field; pinning it here makes it an EXPLICIT, drift-proof
+# decision (ADR 0045) so a future lockfile regen or bun bump can't silently re-hoist.
+# `scripts/assert-isolated-node-modules.mjs` fails CI if this pin is ever removed or the
+# root regrows an `@lesto` scope.
+[install]
+linker = "isolated"
