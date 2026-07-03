@@ -53,9 +53,13 @@ const CREATE_LESTO_BIN = join(REPO_ROOT, "packages", "create-lesto", "src", "bin
 const PORT_PUBLISHED = 4190;
 const PORT_TREE = 4191;
 
-// Serial + one worker: each block scaffolds once and shares a single `lesto dev`; parallel
-// workers would re-scaffold and fight for the port. `beforeAll`/`afterAll` bracket each block.
-test.describe.configure({ mode: "serial" });
+// Each block is its OWN serial group (the `configure` lives INSIDE each describe, not here at
+// file scope): a block scaffolds once and shares a single `lesto dev` across its tests, so its
+// tests must run in order in one worker. Crucially they are NOT one file-wide serial chain —
+// leg (a) is a frozen published-0.1.1 snapshot whose failures are registry weather / bit-rot with
+// no repo-side fix, and a file-wide chain would let an (a) failure SKIP all of leg (b), the leg
+// that actually guards the current tree (`3fd4941`/`53cdbfc`). `--workers=1` (in the `test:scaffold-real`
+// script) keeps the two independent groups from running their heavy installs in parallel.
 
 /** Run a command to completion, rejecting on a non-zero exit (captures stderr for the message). */
 function run(command: string, args: string[], cwd: string): Promise<void> {
@@ -114,6 +118,8 @@ async function assertPreactClient(appDir: string): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 test.describe("real-registry install — published 0.1.1, hoisted layout @published-hoisted", () => {
+  test.describe.configure({ mode: "serial" });
+
   let workspace: string;
   let appDir: string;
   let dev: ChildProcess | undefined;
@@ -239,6 +245,8 @@ async function pinAppToTarballs(appDir: string, overrides: Record<string, string
 }
 
 test.describe("current-tree reconstruction — non-hoisting (isolated) linker @tree-isolated", () => {
+  test.describe.configure({ mode: "serial" });
+
   let workspace: string;
   let appDir: string;
   let islandFile: string;
@@ -258,7 +266,7 @@ test.describe("current-tree reconstruction — non-hoisting (isolated) linker @t
 
     // Scaffold via the IN-REPO create-lesto (default published `^0.x` pins) — the working-tree
     // scaffold, which declares @lesto/observability + @lesto/island-dev + @prefresh/* (the fixes).
-    await run("bun", [CREATE_LESTO_BIN, "tree-app", "--no-install", "--no-git"], workspace);
+    await run("bun", [CREATE_LESTO_BIN, "tree-app", "--yes", "--no-install", "--no-git"], workspace);
 
     // Repin the whole `@lesto/*` graph onto the tarballs, then install under the ISOLATED linker.
     await pinAppToTarballs(appDir, overrides);
@@ -287,11 +295,18 @@ test.describe("current-tree reconstruction — non-hoisting (isolated) linker @t
   test("the isolated install pins every @lesto/* at a packed tarball, not the registry", async () => {
     // The `overrides` guarantee: bun resolved the `@lesto/*` graph from the tarballs, never the
     // registry. If a future bun ignored overrides (or a dep were left unpinned) it would silently
-    // pull published 0.1.1 — so assert the lockfile carries tarball refs and no registry @lesto.
+    // pull published 0.1.1 — so assert against bun 1.3.5's lockfile RESOLUTION-KEY grammar: a
+    // registry resolution keys as `"<name>@<version>"` (e.g. `"@lesto/errors@0.1.1"`), a tarball as
+    // `"<name>@<abs-path>.tgz"`. (An earlier `.not.toMatch(/registry\.npmjs\.org/)` was vacuous —
+    // bun.lock records NO registry URLs — and a bare `.toContain(".tgz")` is satisfied by the app's
+    // own `file:` dep RANGES regardless of what resolved. The quoted-key `@`-boundary below is what
+    // actually distinguishes resolved-from-tarball from resolved-from-registry.)
     const lock = await readFile(join(appDir, "bun.lock"), "utf8");
 
-    expect(lock).toContain(".tgz");
-    expect(lock).not.toMatch(/registry\.npmjs\.org\/@lesto/);
+    // ≥1 `@lesto/*` actually RESOLVED to a tarball (a registry-only leak would leave none).
+    expect(lock).toMatch(/"@lesto\/[^"]*@[^"]*\.tgz"/);
+    // …and NONE resolved to a registry `@<version>` key (the silent-substitution failure mode).
+    expect(lock).not.toMatch(/"@lesto\/[^"]*@\d/);
   });
 
   test("the isolated build is the Preact bundle, never react-dom/server", async () => {

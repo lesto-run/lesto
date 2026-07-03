@@ -31,6 +31,14 @@ import type { IslandFile } from "../src/synthesize";
  * `LESTO_PACKAGES` in `packages/create-lesto/src/templates.ts`. Keep in sync if that list
  * changes; the subset invariant below is what makes a drift between "what the entry imports"
  * and "what the scaffold declares" a red unit test rather than a masked install failure.
+ *
+ * KNOWN GAP (fail-open in ONE direction): this catches the ADD direction — a new bare import
+ * with no matching declared package goes red (the exact `3fd4941` shape). It does NOT catch the
+ * REMOVE direction: if `LESTO_PACKAGES` ever drops a package `synthesizeEntry` still imports while
+ * this mirror keeps it, the subset check stays green and only the nightly e2e catches the break.
+ * Closing that needs the mirror mechanically tied to the real list (relocate to create-lesto's
+ * test suite against the real `LESTO_PACKAGES`, or a `readFileSync` cross-check) — tracked as a
+ * follow-up; the mirror is a deliberate stopgap because `@lesto/assets` must not depend on create-lesto.
  */
 const SCAFFOLD_DECLARED_PACKAGES: ReadonlySet<string> = new Set([
   "@lesto/cli",

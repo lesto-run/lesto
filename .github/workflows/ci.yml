@@ -9,12 +9,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Nightly + on-demand triggers for the release-gated `scaffold-real-install` job below (a real
-  # npm-registry install that must NOT gate every PR — see that job's `if`). Existing jobs also run
-  # on these events, a benign nightly full-suite health check; nothing here changes their PR/push behavior.
-  schedule:
-    - cron: "0 7 * * *"
-  workflow_dispatch:
 
 # A newer push to the same ref supersedes an in-flight run.
 concurrency:
@@ -661,42 +655,3 @@ jobs:
 
       - name: Pack → scaffold from tarballs → install + boot under node
         run: bun run test:pack-boot
-
-  # The REAL-install scaffold smoke (L-e00589b8) — RELEASE-GATED / nightly ONLY (the `if` below),
-  # never on a PR: it does a REAL `bun install` resolving `@lesto/*` from the npm registry (published
-  # 0.1.1) AND packs the current tree to tarballs, so it depends on registry state and must not block
-  # PRs. Unlike `scaffold-loop` (which link-workspaces the whole @lesto scope + store, so exercises
-  # NO registry resolution or linker LAYOUT), this proves the two layouts a real user hits — both legs
-  # live in `scaffold-real-install.spec.ts`: (a) a HOISTED registry install of the published 0.1.1
-  # closure, and (b) a NON-HOISTING (isolated) install of the CURRENT tree packed to tarballs, the leg
-  # that would have caught the `@lesto/observability/rum` + `@prefresh/*` bare-import breaks (fixed by
-  # `3fd4941` / `53cdbfc`) which a hoisting layout silently masks. Needs a chromium binary (browser
-  # hydrate) + Node 22 on PATH, like the other e2e jobs; a green run is the standing proof a fresh
-  # scaffold installs, builds, hydrates, and Fast-Refreshes off a real install under both layouts.
-  scaffold-real-install:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.5"
-
-      - name: Set up Node 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Install Playwright browser
-        working-directory: packages/e2e
-        run: bunx playwright install --with-deps chromium
-
-      # Both legs (hoisted registry + isolated current-tree), serial in one spec.
-      - name: Real-registry (published 0.1.1) + non-hoisting (current-tree) scaffold install smoke
-        working-directory: packages/e2e
-        run: bun run test:scaffold-real

@@ -1,0 +1,59 @@
+# The REAL-install scaffold smoke (L-e00589b8) — its OWN workflow, nightly + on-demand ONLY,
+# never a blocking PR gate. It does a REAL `bun install` resolving `@lesto/*` from the npm registry
+# (published 0.1.1) AND packs the current tree to tarballs, so it depends on registry state and is
+# too slow/flaky-by-network to gate every PR. Unlike `scaffold-loop` in ci.yml (which link-workspaces
+# the whole @lesto scope + store, exercising NO registry resolution or linker LAYOUT), this proves
+# the two layouts a real user actually hits — both legs live in `scaffold-real-install.spec.ts`:
+# (a) a HOISTED registry install of the published 0.1.1 closure, and (b) a NON-HOISTING (isolated)
+# install of the CURRENT tree packed to tarballs — the leg that would have caught the
+# `@lesto/observability/rum` + `@prefresh/*` bare-import breaks (`3fd4941` / `53cdbfc`) a hoisting
+# layout silently masks. A green run is the standing proof a fresh scaffold installs, builds,
+# hydrates, and Fast-Refreshes off a real install under both layouts.
+#
+# Deliberately a SEPARATE workflow, not a gated job in ci.yml: a `schedule`/`workflow_dispatch`
+# trigger on ci.yml's shared `on:` would drop the run into ci's `ci-${{ github.ref }}` concurrency
+# group, where the 07:00 nightly and a concurrent push-to-main cancel each other (this repo pushes
+# to main around the clock). Its own file + own concurrency group keeps both signals intact — the
+# same shape `benchmarks.yml` uses.
+name: Scaffold real-install smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly, 07:00 UTC — a standing canary on real-registry + non-hoisting install, not a gate.
+    - cron: "0 7 * * *"
+
+concurrency:
+  group: scaffold-real-install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scaffold-real-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+
+      # The app runs under bun/bunx; Node is here only for the playwright shim, matching the runner
+      # baseline the other e2e jobs ride. Pinned so a runner-image node bump can't drift this canary.
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browser
+        working-directory: packages/e2e
+        run: bunx playwright install --with-deps chromium
+
+      # Both legs (hoisted published-0.1.1 registry install + isolated current-tree tarball install),
+      # each its own serial group, run sequentially via `--workers=1` (in the test:scaffold-real script).
+      - name: Real-registry (published 0.1.1) + non-hoisting (current-tree) scaffold install smoke
+        working-directory: packages/e2e
+        run: bun run test:scaffold-real
