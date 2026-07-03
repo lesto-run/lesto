@@ -40,6 +40,7 @@ export {
   LESTO_DEV_PACKAGES,
   LESTO_PACKAGES,
   packageJson,
+  PREFRESH_DEPS,
   readme,
   routeLayout,
   routePage,

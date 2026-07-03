@@ -19,6 +19,7 @@ import {
   LESTO_DEV_PACKAGES,
   LESTO_PACKAGES,
   packageJson,
+  PREFRESH_DEPS,
   SHADCN_DEPS,
   publishedRangePin,
   readme,
@@ -444,6 +445,23 @@ describe("templates", () => {
 
       // ...and NOT in the runtime deps — it is a dev-only bundler, unused by `lesto build`.
       expect(parsed.dependencies[pkg]).toBeUndefined();
+    }
+  });
+
+  it("declares the @prefresh Fast-Refresh runtime in devDependencies (preact dialect hot-reloads)", () => {
+    const parsed = JSON.parse(packageJson("acme", fakePin)) as {
+      dependencies: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
+
+    // Asserted against the PREFRESH_DEPS source of truth (like SHADCN_DEPS / LESTO_PACKAGES),
+    // so adding or re-pinning one can't drift the manifest out from under the test. These are
+    // what `@lesto/island-dev`'s `@prefresh/vite` resolves from the app root for Preact Fast
+    // Refresh; without them a `lesto dev` island edit full-reloads instead of preserving state.
+    for (const [dep, range] of Object.entries(PREFRESH_DEPS)) {
+      expect(parsed.devDependencies[dep]).toBe(range);
+      // Dev-only Fast-Refresh runtime — never a production `lesto build` dep.
+      expect(parsed.dependencies[dep]).toBeUndefined();
     }
   });
 

@@ -59,6 +59,33 @@ export const LESTO_PACKAGES = [
  */
 export const LESTO_DEV_PACKAGES = ["@lesto/island-dev"] as const;
 
+/**
+ * The Preact Fast-Refresh runtime a scaffolded app ships in `devDependencies` so that
+ * {@link LESTO_DEV_PACKAGES}'s `@lesto/island-dev` actually hot-reloads islands.
+ *
+ * The scaffold's `ui.dialect` is `"preact"`, so on `lesto dev` `@lesto/island-dev` loads
+ * `@prefresh/vite` (the Preact half of the Fast-Refresh plugin pair — see its `dialect.ts`).
+ * `@prefresh/vite` pins `@prefresh/core` + `@prefresh/utils` into Vite's
+ * `optimizeDeps.include` and injects a browser preamble that imports them — and Vite
+ * resolves `optimizeDeps` entries from the APP (project) root, NOT from `@prefresh/vite`'s
+ * own location. So the app must carry them itself; without the declaration, editing an
+ * island falls back to a full reload instead of preserving `useState`. This is the exact
+ * break `examples/island-fast-refresh` hit and fixed by declaring these same two.
+ *
+ * They are DEV-ONLY (the Fast-Refresh runtime is never in a production `lesto build`) and
+ * plain npm packages (NOT `@lesto/*`), so — like {@link SHADCN_DEPS} — they sit in
+ * `devDependencies`, pinned to the ranges `@prefresh/vite` itself depends on.
+ *
+ * We do NOT declare `@lesto/observability` (the RUM half of that example's fix): it is
+ * already a runtime dependency of the scaffold's `@lesto/assets`/`@lesto/web`/`@lesto/cli`,
+ * so a standalone (non-monorepo) `bun install` hoists it transitively — the example needed
+ * it directly only under bun's workspace ISOLATED layout, which a scaffolded app is not.
+ */
+export const PREFRESH_DEPS = {
+  "@prefresh/core": "^1.5.0",
+  "@prefresh/utils": "^1.2.0",
+} as const;
+
 /** Every `@lesto/*` package the scaffold pins — runtime ({@link LESTO_PACKAGES}) or dev ({@link LESTO_DEV_PACKAGES}). */
 export type LestoPackage = (typeof LESTO_PACKAGES)[number] | (typeof LESTO_DEV_PACKAGES)[number];
 
@@ -136,7 +163,9 @@ export function toPackageName(name: string): string {
  *
  * `devDependencies` carries {@link LESTO_DEV_PACKAGES} — `@lesto/island-dev`, so every new
  * app gets Vite Fast Refresh on `lesto dev` by default (it activates only because the app
- * declares it). It is dev-only (heavy Vite graph, unused by `lesto build`), hence a devDep.
+ * declares it) — plus {@link PREFRESH_DEPS}, the `@prefresh/*` runtime that Preact
+ * Fast Refresh resolves from the app root. Both are dev-only (heavy Vite graph, unused by
+ * `lesto build`), hence devDeps.
  */
 export function packageJson(name: string, lestoDep: LestoDepResolver): string {
   const lestoDeps = Object.fromEntries(LESTO_PACKAGES.map((pkg) => [pkg, lestoDep(pkg)]));
@@ -186,6 +215,10 @@ export function packageJson(name: string, lestoDep: LestoDepResolver): string {
 
     devDependencies: {
       ...lestoDevDeps,
+      // The Preact Fast-Refresh runtime `@lesto/island-dev`'s `@prefresh/vite` needs the
+      // app to carry (Vite resolves it from the app root). Without it, `lesto dev`
+      // full-reloads an island edit instead of preserving state. See PREFRESH_DEPS.
+      ...PREFRESH_DEPS,
     },
   };
 
