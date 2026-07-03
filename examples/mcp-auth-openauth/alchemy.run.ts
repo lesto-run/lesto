@@ -28,7 +28,13 @@ import { CLIENT_ID, getAccessToken } from "./idp/dance";
 // The store encrypts its secrets under `ALCHEMY_STATE_TOKEN`, which MUST be the SAME value across
 // every adopting environment (ADR D4) or a second machine can read the state but not decrypt it.
 const app = await alchemy("lesto-mcp-auth-openauth", {
-  stateStore: (scope) => new CloudflareStateStore(scope),
+  // `ALCHEMY_STATE_FORCE_UPDATE=1` re-keys the shared state worker's STATE_TOKEN binding to the
+  // current `ALCHEMY_STATE_TOKEN` — the one-time move a token rotation needs (see
+  // docs/runbooks/rotate-alchemy-state-token.md). Unset in normal deploys, so this is inert.
+  stateStore: (scope) =>
+    new CloudflareStateStore(scope, {
+      forceUpdate: process.env.ALCHEMY_STATE_FORCE_UPDATE === "1",
+    }),
 });
 
 // OpenAuth's ES256 signing keys + auth state live in a single Durable Object (the `OpenAuthKeyStore`

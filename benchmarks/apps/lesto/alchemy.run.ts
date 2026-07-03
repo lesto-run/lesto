@@ -68,7 +68,13 @@ if (process.argv.includes("--destroy") && (process.env.ALCHEMY_STAGE ?? "") !== 
 // Shared, DO-backed deploy state (ADR 0044 D5) under the one shared `ALCHEMY_STATE_TOKEN` (D4), so
 // CI and a second machine adopt the same resource rather than orphaning it.
 const app = await alchemy("lesto-bench", {
-  stateStore: (scope) => new CloudflareStateStore(scope),
+  // `ALCHEMY_STATE_FORCE_UPDATE=1` re-keys the shared state worker's STATE_TOKEN binding to the
+  // current `ALCHEMY_STATE_TOKEN` — the one-time move a token rotation needs (see
+  // docs/runbooks/rotate-alchemy-state-token.md). Unset in normal deploys, so this is inert.
+  stateStore: (scope) =>
+    new CloudflareStateStore(scope, {
+      forceUpdate: process.env.ALCHEMY_STATE_FORCE_UPDATE === "1",
+    }),
 });
 
 // `name` is the LITERAL existing name (no `${stage}` suffix) because we are ADOPTING the resource
