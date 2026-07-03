@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, symlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -38,6 +39,38 @@ export async function linkWorkspaceInto(appDir: string, repoRoot: string): Promi
     if (name.startsWith("@lesto/")) {
       await linkIfAbsent(join(repoRoot, "packages", dir.name), join(nodeModules, name));
     }
+  }
+
+  // The scaffolded app ALSO declares third-party peers (tailwindcss, tw-animate-css, clsx,
+  // lucide-react, …) that bun's isolated layout nests under the DECLARING package rather
+  // than the repo root — so the sweep above misses them and `lesto build` dies resolving
+  // e.g. `tailwindcss`. Link each app-declared dep the sweep didn't already cover straight
+  // from bun's content-addressed `.bun` store, by name (its own transitive deps resolve by
+  // realpath through the store).
+  const store = join(repoRoot, "node_modules", ".bun");
+  const storeEntries = existsSync(store) ? await readdir(store) : [];
+  const manifest = await readManifest(join(appDir, "package.json"));
+  const declared = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies });
+  for (const dep of declared) {
+    if (dep.startsWith("@lesto/")) continue;
+    if (existsSync(join(nodeModules, dep))) continue; // the root sweep already covered it
+    // store dirs are `<name>@<version>` (a scoped `/` encoded as `+`); `@` guards the prefix.
+    const prefix = `${dep.replace("/", "+")}@`;
+    const hit = storeEntries.find((entry) => entry.startsWith(prefix));
+    if (hit === undefined) continue;
+    if (dep.includes("/")) await mkdir(join(nodeModules, dirname(dep)), { recursive: true });
+    await linkIfAbsent(join(store, hit, "node_modules", dep), join(nodeModules, dep));
+  }
+}
+
+/** The app's package.json dep sets, or empty if it has none yet (defensive). */
+async function readManifest(
+  path: string,
+): Promise<{ dependencies?: Record<string, string>; devDependencies?: Record<string, string> }> {
+  try {
+    return JSON.parse(await readFile(path, "utf8")) as Record<string, never>;
+  } catch {
+    return {};
   }
 }
 
