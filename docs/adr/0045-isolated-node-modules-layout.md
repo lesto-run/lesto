@@ -66,3 +66,16 @@ declaring package" as a discipline the guard *assists*, not one the linker fully
   isolation for the un-hoisted `@lesto/*` scope, narrowing — not fully closing — the "works hoisted,
   breaks published" gap (see *Scope of the guarantee* above: workspace members still walk up to root
   for third-party deps, so declaring them remains the developer's responsibility).
+- **Manifest-honesty (amendment, 2026-07-03).** The same drift guard now also enforces the class of
+  latent dishonesty the layout flip surfaced one CI job at a time: (a) every external
+  framework/runtime peer (`react`, `react-dom`, `vue`, `svelte`, `pg`, …; not `@lesto/*` or
+  `workspace:*`) must be a **bounded** range that does not reach past its **tested major** (its own
+  devDependency, else the CI-installed pin) — an unbounded `>=X`/`*` peer advertises untested,
+  possibly nonexistent future majors and now **fails** here; and (b) `react` must share a major with
+  `react-dom` wherever both are declared, since a split pair throws at client render. The precipitating
+  fix: `@lesto/pg` and `@lesto/live-server` narrowed their `pg` peer `">=8"` → `"^8"` (npm `pg` latest
+  is 8.x — pg 9 does not exist; CI installs `pg@^8`). Per chief-architect review this is a plain
+  fail-on-unbounded rule with **no wider-than-tested escape hatch** (no live deliberate-wide case
+  remains after the `pg` narrow). The `react`/`react-dom` lockstep invariant previously documented as a
+  prose comment in `packages/content-components/vitest.config.ts` is graduated into the guard, with the
+  comment shrunk to a pointer.

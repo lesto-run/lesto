@@ -3,9 +3,9 @@ import { defineConfig } from "vitest/config";
 // The bar is non-negotiable: 100% coverage, enforced in CI by these thresholds.
 // A line we cannot reach is a line we should not have written.
 //
-// react and react-dom must share a major: a mixed pair (react@18 with
-// react-dom@19) throws at client render — "Objects are not valid as a React
-// child" — so keep this package's two devDep pins in lockstep.
+// react/react-dom major lockstep (a split pair throws at client render) is
+// enforced repo-wide by scripts/assert-isolated-node-modules.mjs
+// (assertReactLockstep) — keep this package's two devDep pins on one major.
 
 export default defineConfig({
   test: {

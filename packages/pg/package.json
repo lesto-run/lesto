@@ -26,7 +26,7 @@
     "@lesto/db": "workspace:*"
   },
   "peerDependencies": {
-    "pg": ">=8"
+    "pg": "^8"
   },
   "peerDependenciesMeta": {
     "pg": {
