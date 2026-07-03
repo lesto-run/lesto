@@ -4633,9 +4633,12 @@ describe("missingModuleSpecifier — cross-runtime module-not-found classifier",
   // Refresh must not silently get nothing when its own graph is broken.
   it("extracts the TRANSITIVE specifier (not the island-dev peer) when a sub-dependency is missing", () => {
     const transitive = missingModuleSpecifier(
-      Object.assign(new Error("Cannot find package '@lesto/assets' imported from /app/island-dev.js"), {
-        code: "ERR_MODULE_NOT_FOUND",
-      }),
+      Object.assign(
+        new Error("Cannot find package '@lesto/assets' imported from /app/island-dev.js"),
+        {
+          code: "ERR_MODULE_NOT_FOUND",
+        },
+      ),
     );
 
     expect(transitive).toBe("@lesto/assets");

@@ -677,7 +677,9 @@ describe("policyFloorChallenge (OCP-7)", () => {
 
 describe("refusalBody", () => {
   it("serializes the OAuth error + description, omitting an absent scope and metadata", () => {
-    expect(refusalBody({ error: "invalid_token", description: "The access token is invalid." })).toBe(
+    expect(
+      refusalBody({ error: "invalid_token", description: "The access token is invalid." }),
+    ).toBe(
       JSON.stringify({ error: "invalid_token", error_description: "The access token is invalid." }),
     );
   });

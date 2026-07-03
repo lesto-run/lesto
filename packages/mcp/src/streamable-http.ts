@@ -137,6 +137,11 @@ export interface McpHttpHandlers {
 /** The advertised identity when the caller supplies none. */
 const DEFAULT_SERVER_INFO = { name: "@lesto/mcp", version: "0.0.0" } as const;
 
+// A real `StreamableHTTPClientTransport` probes GET on the MCP path for the optional
+// server→client SSE stream; this stateless JSON RS offers none, so answer 405 (`Allow: POST`)
+// — the client reads a clean "no SSE here" instead of a 404 it surfaces as a transport error.
+const noStream: Handler = () => ({ status: 405, headers: { allow: "POST" }, body: "" });
+
 /** Reconstruct a Web `Request` from a normalized {@link LestoRequest} for the SDK transport. */
 function toFetchRequest(req: LestoRequest): Request {
   // The body is handed to the transport via `parsedBody`, so a bodyless Request is enough;
@@ -253,11 +258,6 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
     headers: { "content-type": "application/json" },
     body: metadataBody,
   });
-
-  // A real `StreamableHTTPClientTransport` probes GET on the MCP path for the optional
-  // server→client SSE stream; this stateless JSON RS offers none, so answer 405 (`Allow: POST`)
-  // — the client reads a clean "no SSE here" instead of a 404 it surfaces as a transport error.
-  const noStream: Handler = () => ({ status: 405, headers: { allow: "POST" }, body: "" });
 
   const rpc: Handler = async (c) => {
     const decision = await gateMcpHttpRequest({

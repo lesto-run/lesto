@@ -386,7 +386,9 @@ export function refusalBody(reason: {
     error: reason.error,
     error_description: reason.description,
     ...(reason.scope === undefined ? {} : { scope: reason.scope }),
-    ...(reason.resourceMetadata === undefined ? {} : { resource_metadata: reason.resourceMetadata }),
+    ...(reason.resourceMetadata === undefined
+      ? {}
+      : { resource_metadata: reason.resourceMetadata }),
   });
 }
 

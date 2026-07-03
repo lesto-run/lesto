@@ -4,6 +4,12 @@
   "compilerOptions": {
     "rootDir": ".",
     "types": ["node"],
+
+    // Consuming `@lesto/ui`'s browser client runtime (`hydrateQueryClient`,
+    // `browserRevalidationEnvironment`) pulls its DOM references into this project's
+    // typecheck, so the DOM lib joins ES2023 — matching `@lesto/ui`'s own tsconfig.
+    "lib": ["ES2023", "DOM"],
+
     "jsx": "react-jsx"
   },
 

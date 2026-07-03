@@ -88,7 +88,9 @@ for (const backend of BACKENDS) {
     const budget = BUDGET_GZIP_BYTES[dialect];
     const ok = size <= budget;
 
-    console.log(`${ok ? "✓" : "✗"} ${backend.label} ${dialect}: ${kb(size)} gzip (budget ${kb(budget)})`);
+    console.log(
+      `${ok ? "✓" : "✗"} ${backend.label} ${dialect}: ${kb(size)} gzip (budget ${kb(budget)})`,
+    );
 
     if (!ok) {
       failures.push(

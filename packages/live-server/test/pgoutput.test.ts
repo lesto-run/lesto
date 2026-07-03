@@ -32,6 +32,17 @@ const UPDATE = hex(
 const DELETE = hex("44000040104f000374000000013174000000023939740000000568656c6c6f");
 const COMMIT = hex("43000000000001a563a00000000001a563d00002f8900e0b0ff0");
 
+// Invoke `fn`, assert it threw a `LiveServerError`, and return that error's code.
+const codeOf = (fn: () => unknown): string => {
+  try {
+    fn();
+  } catch (error) {
+    expect(error).toBeInstanceOf(LiveServerError);
+    return (error as LiveServerError).code;
+  }
+  throw new Error("expected a throw, got none");
+};
+
 describe("createPgOutputDecoder — real captured frames", () => {
   it("Begin stamps the transaction commit LSN; Relation + control frames yield no change", () => {
     const decoder = createPgOutputDecoder();
@@ -197,17 +208,15 @@ describe("createPgOutputDecoder — synthesized tuple kinds (null / unchanged-TO
 describe("createPgOutputDecoder — malformed / truncated frames (defense-in-depth on the DB wire)", () => {
   // A minimal Relation for `t(a)`, OID 100, so a change can resolve its columns.
   const rel = (): Uint8Array =>
-    frame("52", "00000064", cstr("public"), cstr("t"), "64", "0001", `01${cstr("a")}00000017ffffffff`);
-
-  const codeOf = (fn: () => unknown): string => {
-    try {
-      fn();
-    } catch (error) {
-      expect(error).toBeInstanceOf(LiveServerError);
-      return (error as LiveServerError).code;
-    }
-    throw new Error("expected a throw, got none");
-  };
+    frame(
+      "52",
+      "00000064",
+      cstr("public"),
+      cstr("t"),
+      "64",
+      "0001",
+      `01${cstr("a")}00000017ffffffff`,
+    );
 
   it("(a) refuses a C string with no NUL terminator instead of silently rewinding the cursor", () => {
     const decoder = createPgOutputDecoder();

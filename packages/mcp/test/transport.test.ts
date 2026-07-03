@@ -296,7 +296,7 @@ describe("createMcpHttpHandlers — per-tool policy floor (OCP-7)", () => {
     // object directly, no double-parse — and the text block carries the same serialized JSON.
     const result = (JSON.parse(res.body as string) as { result: Record<string, unknown> }).result;
     expect(result.structuredContent).toEqual({ status: 200, headers: {}, body: "" });
-    expect(JSON.parse((result.content as { text: string }[])[0].text)).toEqual(
+    expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toEqual(
       result.structuredContent,
     );
   });
