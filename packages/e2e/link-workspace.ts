@@ -96,11 +96,13 @@ export async function linkWorkspaceInto(appDir: string, repoRoot: string): Promi
  * `matches.find(...)` picked whichever version the filesystem listed first — a coin flip.
  * With `zod@3` and `zod@4` both in the store it returned `zod@3` even for an app declaring
  * `zod: ^4` (a wrong-MAJOR link that only stayed hidden because the root install happened to
- * cover zod first). So: a lone match is used as-is; with several, keep the ones whose major
- * satisfies the app's declared range and take the highest, and REFUSE (throw) when the range
- * pins no major or matches none — a loud, deterministic failure beats a silent wrong pick.
+ * cover zod first). So: keep the entries whose major satisfies the app's declared range and
+ * take the highest, and REFUSE (throw) when the range pins a major that none of them satisfy.
+ * A lone match is held to the SAME check — a store with only `zod@3` for an app declaring `^4`
+ * fails loud here rather than silently linking the wrong major. A loud, deterministic failure
+ * beats a silent wrong pick.
  */
-function pickStoreEntry(
+export function pickStoreEntry(
   dep: string,
   range: string | undefined,
   prefix: string,
@@ -110,17 +112,19 @@ function pickStoreEntry(
   const versionOf = (entry: string): string => entry.slice(prefix.length).split("+")[0] ?? "";
   const wanted = majorPredicate(range);
 
-  // A lone match is used as-is (nothing to disambiguate), but still WARN if its major misses the
-  // declared range — an app pinning `foo: ^5` against a store holding only `foo@4` would otherwise
-  // link major 4 silently. Warn (not throw): a lone mismatch is the app's own declaration problem,
-  // and a hard throw here could break an otherwise-working reconstruction over a benign skew.
+  // A lone match has nothing to disambiguate, but it is held to the SAME range check the
+  // multi-match path enforces: an app pinning `foo: ^5` against a store holding only `foo@4`
+  // FAILS LOUD here rather than silently linking major 4 (a single entry is not a licence to
+  // skip the check — that was the F1-shape residual). A range that pins no major (`*`,
+  // `workspace:*`, …) has nothing to be wrong about, so the lone entry links as-is.
   if (matches.length === 1) {
     const lone = matches[0] as string;
     if (wanted.constrained && !wanted.test(majorOf(versionOf(lone)))) {
-      console.warn(
-        `link-workspace: "${dep}" — the store's only version (${lone.slice(prefix.length)}) does ` +
-          `not satisfy the declared range "${range ?? "(none)"}"; linking it anyway. Pin "${dep}" ` +
-          `to a matching version if this is wrong.`,
+      throw new Error(
+        `link-workspace: cannot pick a version for "${dep}" — the bun store has only ` +
+          `${lone.slice(prefix.length)} and the app's declared range "${range ?? "(none)"}" ` +
+          `does not accept its major. Pin "${dep}" to a version the store provides, or declare ` +
+          `the wanted major on a workspace package so bun fetches it.`,
       );
     }
     return lone;
@@ -157,7 +161,7 @@ function majorOf(version: string): number {
 }
 
 /** Order two versions high→low by numeric [major, minor, patch] (build metadata already stripped). */
-function compareVersionDesc(a: string, b: string): number {
+export function compareVersionDesc(a: string, b: string): number {
   const pa = a.split(".").map((n) => Number.parseInt(n, 10) || 0);
   const pb = b.split(".").map((n) => Number.parseInt(n, 10) || 0);
   for (let i = 0; i < 3; i++) {
@@ -175,7 +179,7 @@ function compareVersionDesc(a: string, b: string): number {
  * reported `constrained: false`, which forces the ambiguous-multi-match case to fail loud rather
  * than guess.
  */
-function majorPredicate(range: string | undefined): {
+export function majorPredicate(range: string | undefined): {
   test: (major: number) => boolean;
   constrained: boolean;
 } {
@@ -232,7 +236,7 @@ function majorPredicate(range: string | undefined): {
  * scope is a symlink, replace it with a real dir that re-links what it pointed at, so every
  * later write stays inside this app. (Absent scope → just create it; already real → nothing to do.)
  */
-async function ensureRealScopeDir(scopePath: string): Promise<void> {
+export async function ensureRealScopeDir(scopePath: string): Promise<void> {
   let stats;
   try {
     stats = await lstat(scopePath);
