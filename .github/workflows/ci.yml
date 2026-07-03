@@ -36,6 +36,13 @@ jobs:
       - name: Assert isolated node_modules layout (no @lesto at root)
         run: bun scripts/assert-isolated-node-modules.mjs
 
+      # The drift guard's OWN unit suite and link-workspace's semver/store units run nowhere else:
+      # `scripts/` is not a workspace package and `lesto-e2e` declares no `test:cov`, so the
+      # coverage gate never sweeps them. Run them here so a regression in the guard's honesty
+      # checks or the store-pick logic goes red instead of shipping green.
+      - name: Unit-test the drift guard + link-workspace helper
+        run: bunx vitest run scripts/assert-isolated-node-modules.test.mjs packages/e2e/link-workspace.test.ts
+
       - name: Typecheck
         run: bun run ws:typecheck
 
