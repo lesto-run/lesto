@@ -462,7 +462,10 @@ async function main(): Promise<void> {
     await store.whenIdle();
     await closeStore();
 
-    // ---- 8. Reload rebuild (real durable store, no live echo — deterministic) --------------------
+    // ---- 8. Reload rebuild (real store logic over Node SQLite, no live echo — deterministic) ------
+    // NB: this reopens the store over `openSqlite` (Node has no OPFS), so it exercises the store's
+    // rehydration LOGIC, not the browser OPFS engine — that engine is covered by the browser smoke
+    // (L-2e410682) and the recorded evidence run. The logic above the handle is identical either way.
     // 8a: a PENDING offline write survives reload and re-queues.
     const pendingFile = tmpFile();
     tmpFiles.push(pendingFile);

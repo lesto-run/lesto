@@ -1,0 +1,6 @@
+Total messages: 2 (Errors: 1, Warnings: 1)
+Returning 3 messages for level "info"
+
+[WARNING] Ignoring inability to install OPFS sqlite3_vfs: Cannot install OPFS: Missing SharedArrayBuffer and/or Atomics. The server must emit the COOP/COEP response headers to enable those. See https://sqlite.org/wasm/doc/trunk/persistence.md#coop-coep @ http://127.0.0.1:3000/assets/index-DYKmgGKX.js:3
+[WARNING] Ignoring inability to install OPFS sqlite3_vfs: Cannot install OPFS: Missing SharedArrayBuffer and/or Atomics. The server must emit the COOP/COEP response headers to enable those. See https://sqlite.org/wasm/doc/trunk/persistence.md#coop-coep @ http://127.0.0.1:3000/assets/index-DYKmgGKX.js:3
+[ERROR] Failed to load resource: the server responded with a status of 403 (Forbidden) @ http://127.0.0.1:3000/__lesto/live-data?shape=%7B%22table%22%3A%22messages%22%2C%22key%22%3A%22id%22%2C%22columns%22%3A%5B%22id%22%2C%22roomId%22%2C%22author%22%2C%22body%22%2C%22createdAt%22%5D%2C%22where%22%3A%5B%7B%22column%22%3A%22roomId%22%2C%22op%22%3A%22eq%22%2C%22value%22%3A%22engineering%22%7D%5D%2C%22orderBy%22%3A%7B%22column%22%3A%22createdAt%22%2C%22direction%22%3A%22asc%22%7D%7D:0

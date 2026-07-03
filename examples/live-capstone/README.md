@@ -88,16 +88,26 @@ alerting probe (`ops/slot-lag-check.ts`), and the disk-pressure recovery runbook
 
 OPFS-SQLite and the cross-tab primitives need a real browser — there is no Node/Bun OPFS, and vitest
 cannot drive Web Locks / BroadcastChannel across tabs. So, exactly like `examples/live-durable`, the
-browser session is manual; the automated gate proves the server/wire half (below). After `bun run
-serve`, in a real browser:
+browser session is manual; the automated gate proves the server/wire half (below). The durable engine
+runs in a **dedicated Worker** (`@lesto/live/opfs` → `opfs-worker.ts`), because OPFS's
+`createSyncAccessHandle` is Worker-only in every browser (booting it on the main thread was the Inc9
+P0 — see [`evidence/`](./evidence/README.md)). After `bun run serve`, in a real browser:
 
 1. **Durable first paint** — send a message, reload: it repaints instantly from OPFS before the stream
-   reconnects.
-2. **Offline writes** — DevTools → Network → Offline, send a message (it appears at once and, on
-   reload, is STILL there — the outbox persisted it), go back online, watch it drain to `POST
-/messages` and reconcile under its client-generated id.
+   reconnects. (To prove OPFS is the source and not the wire, block the server's data routes and
+   reload — it still paints; see the evidence.)
+2. **Offline writes** — DevTools → Network → Offline, send a message (it appears at once; the outbox
+   persisted it to OPFS), go back online, watch it drain to `POST /messages` and reconcile under its
+   client-generated id.
 3. **Cross-tab** — open a second tab on the same `?room=`: a follower mirrors the leader with no
    connection of its own. Close the leader tab; the follower is promoted and resumes the stream.
+
+> **Recorded run:** [`evidence/`](./evidence/README.md) holds a real Chromium 149 execution of this
+> checklist (screenshots + notes) as the epic-closure evidence (`L-aa9779f5`) — including the airtight
+> "block the server, still paints from OPFS" durability proof and two honest boundaries (a
+> fully-offline *reload* needs a service-worker shell cache this example doesn't ship; the status
+> line's message count is a cosmetic snapshot-timing artifact). The CI regression gate for this class
+> is the headless-browser smoke `L-2e410682`.
 
 > **Known boundary (`L-f5a4f807`, a filed child of this capstone):** the offline outbox lives on the
 > LEADER's store, so a FOLLOWER tab's send takes the plain authorized `POST` and is **not queued** —
@@ -122,8 +132,11 @@ on the real replication path and asserts, over real SSE sockets + a real `POST`:
 6. (e) resume replays from a live cursor, and re-snapshots on a `systemId` OR `timelineId` mismatch;
 7. offline reconcile through the **real** `@lesto/live` store + outbox + consumer — no read-your-writes
    flash, durable outbox row removed on echo;
-8. reload rebuild over the real durable store — a pending write re-queues, a held (acked) write rebuilds
-   as held (this leg also re-exercises `@lesto/live`'s unit-covered outbox rehydration, end-to-end);
+8. reload rebuild over the real store logic — a pending write re-queues, a held (acked) write rebuilds
+   as held (this leg also re-exercises `@lesto/live`'s unit-covered outbox rehydration, end-to-end).
+   NB: legs 7–8 run the store over **Node SQLite** (`openSqlite`) — Node has no OPFS, so the OPFS
+   *engine* itself is not exercised here; that is the browser's job (`evidence/`, `L-2e410682`). The
+   store logic above OPFS is identical on either handle, which is why this leg is meaningful;
 9. a server-rejected (403) write rolls back locally and never lands on the server;
 10. an at-least-once duplicate-id replay is idempotent (no duplicate row);
 11. `stop()` drops the WAL-pinning slot.

@@ -222,7 +222,8 @@ uses server-side:
 - **Default: in-memory** (a structured store) — zero setup, lost on reload, fine for live views.
 - **Opt-in: OPFS-SQLite** (`sqlite-wasm` over the Origin Private File System) — a real durable SQLite
   the app queries locally, surviving reload and enabling offline reads. `navigator.storage.persist()`
-  requests durable storage so the browser does not evict it under pressure.
+  requests durable storage so the browser does not evict it under pressure. *(As-built correction: the
+  engine runs in a dedicated Worker, not the main thread — see the 2026-07-03 amendment.)*
 - **The last-applied `(systemId, timelineId, LSN)` cursor persists *with* the rows, atomically** (specified in the
   review — the resume linchpin). Resume hinges on the client knowing exactly which changes it has
   already applied, so the cursor is a **single-row meta table inside the same OPFS-SQLite database**,
@@ -614,3 +615,32 @@ test-fakeable with an in-process lock queue + message bus. The result is the sam
 `createLiveQuery` returns, so `@lesto/live/react`'s `useLiveQuery(() => createCrossTabLiveQuery(def, opts),
 deps)` binds it with no new hook. The end-to-end multi-tab acceptance (Inc8, `L-b1501de9`) exercises the
 durable leader store + the shared-OPFS outbox under real failover.
+
+### 2026-07-03 — errata: the OPFS engine MUST run in a dedicated Worker (Inc9 P0, `L-565a4b33`)
+
+The **first real-browser run** of the Inc8 capstone (`examples/live-capstone`, evidence task
+`L-aa9779f5`) found the durable store DOA in every browser. As-built through Inc8,
+`packages/live/src/opfs-sqlite.ts` booted `sqlite-wasm` + `installOpfsSAHPoolVfs` **on the main
+thread**. SAHPool's precondition requires `FileSystemFileHandle.prototype.createSyncAccessHandle`,
+which is `[Exposed=DedicatedWorker]` — **Worker-only in Chrome and Safari alike** — so the install
+rejected with "Missing required OPFS APIs." Because `OpfsSqliteError` was caught nowhere, every tab
+failed leadership and the app rendered no data. The bun/PG acceptance gate could not catch this: Node
+has no OPFS, so its store legs run over `openSqlite` and never touch the OPFS engine. This is why the
+epic was **reopened** and the closure rule tightened: *a deliverable whose runtime is browser-only
+cannot close on a Node gate alone — it needs at least one recorded real-browser run.*
+
+**Fix (Inc9):** the engine moves into a dedicated Worker (`packages/live/src/opfs-worker.ts`, loaded
+via the `@lesto/live/opfs` subpath's `new Worker(new URL("./opfs-worker.ts", import.meta.url), { type:
+"module" })`), where `createSyncAccessHandle` exists. The main thread drives it over a
+request-id-correlated `postMessage` RPC (`opfs-rpc.ts`) shaped exactly like the pre-Inc9 sync
+`exec`/`prepare` pair, wrapped by the **unchanged** `adaptSyncSqlite` — so the store/outbox/cursor
+layers above the handle are untouched (the seam was already async). The RPC client is unit-tested
+against a fake port pair; the two irreducibly-browser halves (the `new Worker` spawn and the
+worker-side sqlite binding) stay coverage-excluded, but now with a **replacement gate**: the
+headless-browser smoke `L-2e410682` boots the real engine end-to-end in CI. Rejected: the
+`sqlite3-worker1` promiser — it does not open SAHPool, and its fallback "opfs" VFS needs
+SharedArrayBuffer → COOP/COEP, the header burden SAHPool was chosen to avoid. Two honest boundaries the
+evidence records: a *fully-offline reload* still needs the app shell cached (no service worker ships in
+the examples — a follow-up), and OPFS's Worker-only sync handle means the durable engine has **no
+main-thread fallback** (so an OPFS-open failure should degrade loudly rather than wedge leadership —
+the filed `S2` decision).

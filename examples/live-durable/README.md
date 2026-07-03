@@ -11,12 +11,16 @@ const query = createLiveQuery(notesShape, { store });
 ```
 
 `openOpfsSqliteDatabase` (`@lesto/live/opfs`) boots `@sqlite.org/sqlite-wasm` over the Origin
-Private File System; `createSqliteLiveStore` wraps that connection in a `LiveStore` that
-mirrors every mutation in memory AND persists the row batch + resume cursor atomically;
-`createLiveQuery` opens the `GET /__lesto/live-data` subscription against it. The payoff: add a
-note, reload the page (even offline), and it repaints **instantly** from the OPFS-persisted
-slice — before the live stream reconnects. That instant repaint is the whole point of the
-durable tier; a plain in-memory store would paint nothing until the first snapshot arrived.
+Private File System **inside a dedicated Worker** (OPFS's `createSyncAccessHandle` is Worker-only in
+every browser — booting it on the main thread was the Inc9 P0); `createSqliteLiveStore` wraps that
+connection in a `LiveStore` that mirrors every mutation in memory AND persists the row batch + resume
+cursor atomically; `createLiveQuery` opens the `GET /__lesto/live-data` subscription against it. The
+payoff: add a note, reload the page, and it repaints **instantly** from the OPFS-persisted slice —
+before the live stream reconnects. That instant repaint is the whole point of the durable tier; a
+plain in-memory store would paint nothing until the first snapshot arrived. (A *fully-offline* reload
+also needs the app shell cached — this example ships no service worker, so cold-start offline is a
+follow-up; the data itself is durable regardless. The capstone's `evidence/` records the airtight
+"block the wire, still paints from OPFS" proof of that durability.)
 
 `src/schema.ts` defines the one `notes` table and its bound shape and is imported by BOTH
 `src/main.ts` (the client) and `src/app.ts` (the server) — one schema, two runtimes, the ADR
@@ -32,11 +36,13 @@ bun run serve                      # boots the API + serves dist/ on :3000
 ```
 
 Then open **http://127.0.0.1:3000 in a real browser** (OPFS needs one — there is no Node/Bun
-OPFS implementation, which is also why this file has no vitest suite; `packages/live`'s
-`opfs-sqlite.ts` is coverage-excluded for the same reason). Add a note, then reload: the note is
-still there instantly, painted from the durable slice. That browser session is the one piece
-this repo's sandbox cannot execute; the `vite build` — which now emits `sqlite3.wasm` and the
-worker chunks (see below) — is what it verifies here.
+OPFS implementation, which is also why this file has no vitest suite; `packages/live`'s browser-only
+`opfs-sqlite.ts` + `opfs-worker.ts` are coverage-excluded for the same reason — while the RPC client
+that drives the worker, `opfs-rpc.ts`, IS unit-tested, so no browser wiring is excluded without its
+logic covered elsewhere). Add a note, then reload: the note is still there instantly, painted from the
+durable slice. That browser session is the one piece this repo's sandbox cannot execute; the `vite
+build` — which now emits `sqlite3.wasm` and the worker chunks (including the OPFS engine worker, see
+below) — is what it verifies here.
 
 ## The bundler finding (why this example exists)
 
