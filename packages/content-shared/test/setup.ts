@@ -19,7 +19,15 @@
  * sanitizing nothing. Under Node (this suite's default environment) the sanitizer is
  * supported, so this returns `""`; if it ever threw (a DOM-less runtime), the warm-up
  * failing loud is the correct signal — the suite could not sanitize anyway.
+ *
+ * `markdown.ts` has the SAME shape of cost the old 30s timeout was also hiding: its first
+ * call lazy-`import`s a second heavy graph (unified/remark-parse/unist-util-visit/
+ * mdast-util-to-string/github-slugger). `extractHeadings("")` pulls that whole set (the
+ * superset of `extractPlainText`'s) once per worker, so dropping the timeout doesn't just
+ * shift the flake window from the sanitizer to the first markdown test.
  */
+import { extractHeadings } from "../src/markdown.js";
 import { sanitizeHtml } from "../src/sanitize.js";
 
 sanitizeHtml("");
+await extractHeadings("");
