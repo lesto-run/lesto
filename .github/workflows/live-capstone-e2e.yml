@@ -1,0 +1,52 @@
+name: live-capstone-e2e
+
+# The Tier-4 v1 capstone's headless-browser REGRESSION GATE (ADR 0042, `L-2e410682`).
+#
+# The bun-run acceptance gate in `ci.yml` (`live-capstone-acceptance`) drives the server/wire half over
+# real Postgres logical replication, but bun has no OPFS / Web Locks / BroadcastChannel — so it cannot
+# reach the durable-store + cross-tab guarantees. The first real-browser run found a P0 it structurally
+# could not catch (the durable OPFS store booted on the main thread, DOA in every browser — Inc9,
+# `L-565a4b33`). This job is the missing browser guard: it boots the REAL built bundle in a REAL
+# Chromium via Playwright and asserts durable first paint, offline drain, and cross-tab failover — the
+# test that would have caught the Inc9 class.
+#
+# It is its OWN workflow (not a job in `ci.yml`) for the same reason `benchmarks.yml` / `deploy-examples.yml`
+# are separate: a distinct concern (a browser dependency) with its own lifecycle, and it needs NO Postgres
+# service — the capstone's dev SQLite-poll source drives all four checklist steps (they live above the
+# change source), so this is a plain build-and-serve run. The spec (`packages/e2e/live-capstone-opfs.spec.ts`)
+# owns its own build + server in `beforeAll`, so this workflow only installs deps + the browser and runs it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same ref supersedes an in-flight run.
+concurrency:
+  group: live-capstone-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capstone-browser-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browser
+        working-directory: packages/e2e
+        run: bunx playwright install --with-deps chromium
+
+      # The spec builds the capstone client bundle and serves it (dev SQLite poll, no Postgres) itself,
+      # then drives it in Chromium: durable OPFS first paint, offline write + drain, cross-tab failover.
+      - name: Capstone OPFS + cross-tab browser e2e (dev SQLite-poll path, no Postgres)
+        working-directory: packages/e2e
+        run: bunx playwright test live-capstone-opfs.spec.ts
