@@ -1,0 +1,22 @@
+# Scoped to examples/live-capstone/Dockerfile ONLY (BuildKit reads `<dockerfile>.dockerignore` next to
+# the Dockerfile before the repo-root .dockerignore). Keeps this image's repo-root build context lean
+# WITHOUT changing the root app image's context — same convention as benchmarks/Dockerfile.dockerignore.
+# The image installs deps and builds the bundle fresh, so local installs/build artifacts must never ship.
+node_modules
+**/node_modules
+.git
+var
+coverage
+**/coverage
+dist
+**/dist
+build
+**/build
+.next
+**/.next
+.svelte-kit
+**/.svelte-kit
+.claude
+.playwright-mcp
+.devcontainer
+*.png

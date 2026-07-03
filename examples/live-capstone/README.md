@@ -79,6 +79,11 @@ deployment still owns slot-lag alerting + the disk-pressure runbook (ADR 0042 _C
 fan-out (a Durable Object holding shapes for a key range) is the ADR's deferred vNext. The v0 poll path
 has no such constraint.
 
+**[`DEPLOY.md`](./DEPLOY.md)** is the concrete host for that story — the first long-lived Lesto deploy
+target (reusable framework infra, not capstone-only): a `Dockerfile` + `fly.toml` for a single
+long-lived Fly/Render/Railway machine on a `wal_level=logical` Postgres, the `bun run slot-lag`
+alerting probe (`ops/slot-lag-check.ts`), and the disk-pressure recovery runbook.
+
 ## The manual browser checklist (the one piece the sandbox cannot run)
 
 OPFS-SQLite and the cross-tab primitives need a real browser — there is no Node/Bun OPFS, and vitest

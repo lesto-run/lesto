@@ -26,6 +26,11 @@ import { capstoneTables } from "./src/schema";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
+// Bind loopback by default (a local `bun run serve` should never be reachable off the box), but let a
+// container override it: a Fly/Render/Railway machine only receives traffic if the process listens on
+// the machine's interface, not `127.0.0.1` — so the Dockerfile sets `HOST=0.0.0.0`. See DEPLOY.md.
+const HOST = process.env.HOST ?? "127.0.0.1";
+
 async function main(): Promise<void> {
   const sourceConfig = resolveSourceConfig(process.env);
 
@@ -46,10 +51,10 @@ async function main(): Promise<void> {
   // live feed. The engine seeds each shape's snapshot from the pool; the source carries the tail.
   await booted.source?.start();
 
-  const server = await serve(booted.app, { port: PORT, host: "127.0.0.1" });
+  const server = await serve(booted.app, { port: PORT, host: HOST });
 
   console.log(
-    `Capstone (${sourceConfig.kind}) on http://127.0.0.1:${server.port} — shapes stream at ` +
+    `Capstone (${sourceConfig.kind}) on http://${HOST}:${server.port} — shapes stream at ` +
       `/__lesto/live-data. ${sourceConfig.kind === "poll" ? "Set LESTO_LIVE_SOURCE=pg + LESTO_LIVE_PG_URL for the real replication path." : ""}`,
   );
 

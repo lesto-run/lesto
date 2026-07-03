@@ -8,5 +8,5 @@
     "jsx": "react-jsx"
   },
 
-  "include": ["src", "test", "serve.ts", "vite.config.ts"]
+  "include": ["src", "test", "ops", "serve.ts", "vite.config.ts"]
 }
