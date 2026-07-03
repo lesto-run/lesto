@@ -20,8 +20,8 @@ import type { KernelDatabase } from "@lesto/kernel";
 import { openPostgres } from "@lesto/pg";
 import { openSqlite, serve } from "@lesto/runtime";
 
-import { buildApp, CAPSTONE_PUBLICATION, resolveSourceConfig } from "./src/app";
-import { setupPgSchema } from "./src/pg-setup";
+import { buildApp, CAPSTONE_PUBLICATION, CAPSTONE_SLOT, resolveSourceConfig } from "./src/app";
+import { cleanPg, setupPgSchema } from "./src/pg-setup";
 import { capstoneTables } from "./src/schema";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -33,7 +33,11 @@ async function main(): Promise<void> {
   // preconditions before the source's slot references the publication.
   const { handle, close } =
     sourceConfig.kind === "pg"
-      ? await openPgHandle(sourceConfig.url, sourceConfig.publication ?? CAPSTONE_PUBLICATION)
+      ? await openPgHandle(
+          sourceConfig.url,
+          sourceConfig.publication ?? CAPSTONE_PUBLICATION,
+          sourceConfig.slot ?? CAPSTONE_SLOT,
+        )
       : await openSqliteHandle();
 
   const booted = await buildApp({ handle, source: sourceConfig });
@@ -49,14 +53,24 @@ async function main(): Promise<void> {
       `/__lesto/live-data. ${sourceConfig.kind === "poll" ? "Set LESTO_LIVE_SOURCE=pg + LESTO_LIVE_PG_URL for the real replication path." : ""}`,
   );
 
+  // Guard against a double signal (SIGINT then SIGTERM) re-entering teardown, and `.catch` the chain
+  // so a failing `stop()`/`close()` still exits (never a hang until SIGKILL, nor an unhandled rejection).
+  let shuttingDown = false;
   const shutdown = (): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
     booted.engine.stop();
 
     void Promise.resolve()
       .then(() => booted.source?.stop()) // drop the WAL-pinning slot
       .then(() => server.close())
       .then(close)
-      .then(() => process.exit(0));
+      .then(() => process.exit(0))
+      .catch((error: unknown) => {
+        console.error("shutdown failed:", error);
+        process.exit(1);
+      });
   };
 
   process.on("SIGINT", shutdown);
@@ -70,9 +84,14 @@ interface OpenHandle {
 }
 
 /** Open a Postgres handle and run the app-owned bootstrap (tables + REPLICA IDENTITY FULL + publication). */
-async function openPgHandle(url: string, publication: string): Promise<OpenHandle> {
+async function openPgHandle(url: string, publication: string, slot: string): Promise<OpenHandle> {
   const { db, close } = await openPostgres({ connectionString: url });
 
+  // Self-heal a slot a prior HARD CRASH left orphaned: `start()` would otherwise fail on
+  // `CREATE_REPLICATION_SLOT` ("already exists"), and an orphaned slot pins WAL (the disk-fill footgun
+  // ADR 0042 makes the deployment own). Safe to drop-then-recreate here — a fresh serve resumes no
+  // client state (a connecting client re-snapshots), so the pre-crash slot position is not needed.
+  await cleanPg(db, { slots: [slot] });
   await setupPgSchema(db, { tables: capstoneTables, publication });
 
   return { handle: db, close };

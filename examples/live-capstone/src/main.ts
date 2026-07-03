@@ -174,9 +174,19 @@ async function main(): Promise<void> {
     }
 
     // Follower: no local durable store to write through, so take the plain authorized `POST` path.
-    // The write still lands everywhere via the leader's echo — just without a follower-local instant
-    // paint (the `L-f5a4f807` boundary documented above).
-    void postMessage(user, "messages", { id, room, body });
+    // A follower send is NOT queued — online it lands everywhere via the leader's echo (no
+    // follower-local instant paint), but offline / on a 4xx it FAILS NOW, so surface that rather than
+    // silently drop the text (the `L-f5a4f807` boundary documented above; a real app would relay the
+    // write to the leader's outbox).
+    void (async () => {
+      const outcome = await postMessage(user, "messages", { id, room, body });
+
+      if (outcome !== "ok") {
+        setStatus(
+          `follower send ${outcome} — not queued (offline sends need the leader tab): "${body}"`,
+        );
+      }
+    })();
   });
 }
 

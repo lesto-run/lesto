@@ -4,8 +4,12 @@ ONE multi-tenant local-first app that proves the whole of Tier-4 v1 **together**
 `live()` surface** on two change sources — the epic-closing gallery-as-QA gate (`L-b1501de9`).
 
 ```ts
-// one query language, one authz seam, one mutation path — two runtimes and two change sources
-const messages = db.select().from(messagesTable).where(eq(messagesTable.roomId, room)).live();
+// the shipped live() moat method — one query language / one AST / one row type, two runtimes.
+// src/schema.ts mints this exact shape; src/main.ts opens it with .query() via createCrossTabLiveQuery.
+const messages = live(messagesTable)
+  .where(messagesTable.roomId, "eq", room)
+  .orderBy(messagesTable.createdAt, "asc")
+  .query(); //  LiveQuery<Message> — reads the local store, stays in sync, writable offline
 ```
 
 What this app puts under one roof (no earlier increment combined all three):
@@ -31,8 +35,18 @@ The app runs on either change source, selected by one **fail-closed** env seam
 | resume                      | re-snapshots every reconnect (coarse floor)                 | LSN-exact replay, or re-snapshot on failover |
 | everything above the source | **identical** — the same `live()`, authz, and mutation path | **identical**                                |
 
-`LESTO_LIVE_SOURCE=pg` without `LESTO_LIVE_PG_URL` is a **loud boot error**, never a silent fall back
-to the dev poll — a prod deploy that quietly ran the stand-in would fake the parity claim.
+`LESTO_LIVE_SOURCE=pg` without `LESTO_LIVE_PG_URL` (and, symmetrically, a URL set while the source is
+`poll`) is a **loud boot error**, never a silent fall back to the dev poll — a prod deploy that quietly
+ran the stand-in would fake the parity claim.
+
+**Two honest deltas the "identical above the source" row does NOT hide** (the app code is the same
+file; these live in the change source, per ADR 0042 _Phasing_): (1) the `REPLICA IDENTITY FULL` /
+unique-non-PK registration guards exist only on the **pg** path — a shape that subscribes fine on the
+dev poll can be _refused at prod boot_ if its table can't supply the old image (fail-closed, never a
+leak, but a boot surprise to know about). (2) The replication path's **snapshot↔tail boundary is
+unfenced** (`L-85e3eb10`): a change committing in the tiny window between a subscribe-time snapshot read
+and the entry going live can be lost or double-applied until the next reconnect (which re-snapshots and
+heals). Both are tracked residuals of v1, not regressions.
 
 ## Run it
 
@@ -47,9 +61,9 @@ bun run serve                   # http://127.0.0.1:3000
 docker run -d --name lesto-pg -e POSTGRES_PASSWORD=postgres -p 55432:5432 \
   -e POSTGRES_INITDB_ARGS="-c wal_level=logical -c max_replication_slots=10 -c max_wal_senders=10" \
   postgres:16
-LESTO_LIVE_SOURCE=pg LESTO_LIVE_PG_URL=postgres://postgres:postgres@localhost:55432/postgres \
-  bun run build && LESTO_LIVE_SOURCE=pg LESTO_LIVE_PG_URL=postgres://postgres:postgres@localhost:55432/postgres \
-  bun run serve
+bun add pg                        # the Postgres change source's optional peer (loaded lazily)
+export LESTO_LIVE_SOURCE=pg LESTO_LIVE_PG_URL=postgres://postgres:postgres@localhost:55432/postgres
+bun run build && bun run serve    # bootstraps the schema + REPLICA IDENTITY FULL + publication
 ```
 
 The app is auth-scoped by `?user=` / `?room=` (a session cookie in production): `lobby` is public;
@@ -58,8 +72,12 @@ authz refuse before any stream opens.
 
 **Deploy story (honest):** the v1 replication path deploys to a **long-lived** bun/node host — a
 logical-replication slot consumer is not an edge/serverless fit (it holds a dedicated connection and
-pins WAL until it acks). Edge fan-out (a Durable Object holding shapes for a key range) is the ADR's
-deferred vNext. The v0 poll path has no such constraint.
+pins WAL until it acks). `serve.ts` drops the slot on SIGINT/SIGTERM, and on boot drops any slot a
+**prior hard crash** left orphaned before recreating it (so a restart never wedges on
+`CREATE_REPLICATION_SLOT … already exists`, and a crashed consumer's WAL stops pinning) — a real
+deployment still owns slot-lag alerting + the disk-pressure runbook (ADR 0042 _Consequences_). Edge
+fan-out (a Durable Object holding shapes for a key range) is the ADR's deferred vNext. The v0 poll path
+has no such constraint.
 
 ## The manual browser checklist (the one piece the sandbox cannot run)
 
@@ -77,9 +95,10 @@ serve`, in a real browser:
    connection of its own. Close the leader tab; the follower is promoted and resumes the stream.
 
 > **Known boundary (`L-f5a4f807`, a filed child of this capstone):** the offline outbox lives on the
-> leader's store, so a FOLLOWER tab's send takes the plain authorized `POST` (no follower-local
-> optimistic paint — it still appears everywhere via the leader's echo). Write-relay + failover-orphan
-> handling is that follow-up.
+> LEADER's store, so a FOLLOWER tab's send takes the plain authorized `POST` and is **not queued** —
+> online it lands everywhere via the leader's echo (no follower-local optimistic paint), but offline it
+> **fails immediately** and says so in the status line rather than silently dropping the text. Relaying a
+> follower's write to the leader's outbox is that follow-up.
 
 ## The automated gate (`test/acceptance.pg.ts`)
 
@@ -98,17 +117,19 @@ on the real replication path and asserts, over real SSE sockets + a real `POST`:
 6. (e) resume replays from a live cursor, and re-snapshots on a `systemId` OR `timelineId` mismatch;
 7. offline reconcile through the **real** `@lesto/live` store + outbox + consumer — no read-your-writes
    flash, durable outbox row removed on echo;
-8. reload rebuild — a pending write re-queues, a held (acked) write rebuilds as held;
+8. reload rebuild over the real durable store — a pending write re-queues, a held (acked) write rebuilds
+   as held (this leg also re-exercises `@lesto/live`'s unit-covered outbox rehydration, end-to-end);
 9. a server-rejected (403) write rolls back locally and never lands on the server;
 10. an at-least-once duplicate-id replay is idempotent (no duplicate row);
 11. `stop()` drops the WAL-pinning slot.
 
-Run it locally against the docker Postgres above:
+Run it locally against the docker Postgres above (install the `pg` peer first — see the prod snippet):
 
 ```bash
+bun add pg
 LESTO_LIVE_PG_URL=postgres://postgres:postgres@localhost:55432/postgres bun run acceptance:pg
 ```
 
 The **dev-parity leg** (`test/acceptance.sqlite.test.ts`, a normal vitest run via `bun run test`)
-proves the SAME app's authz/liveness surface on the SQLite poll — so what a developer builds against on
-SQLite is byte-identical to prod.
+proves the SAME app's authz/liveness surface on the SQLite poll — the app code is the same file,
+verbatim, so what a developer builds against on SQLite matches prod above the change source.

@@ -433,6 +433,14 @@ jobs:
         working-directory: examples/live-capstone
         run: bun add pg
 
+      # Verify the client bundles — the OPFS engine's LITERAL dynamic import must survive a real
+      # `vite build` (the landmine that founded examples/live-durable; a non-literal specifier is
+      # silently dropped, emitting a bundle with none of the ~1.1 MB engine). This proves the "runs
+      # locally AND deploys" half; the browser session that exercises the bundle is the manual README step.
+      - name: Build the capstone client bundle
+        working-directory: examples/live-capstone
+        run: bun run build
+
       - name: Tier-4 v1 capstone acceptance (real logical replication)
         working-directory: examples/live-capstone
         env:

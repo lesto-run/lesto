@@ -143,8 +143,21 @@ export type SourceConfig =
  */
 export function resolveSourceConfig(env: Record<string, string | undefined>): SourceConfig {
   const kind = env.LESTO_LIVE_SOURCE ?? "poll";
+  const hasUrl = (env.LESTO_LIVE_PG_URL ?? "").trim() !== "";
 
-  if (kind === "poll") return { kind: "poll" };
+  if (kind === "poll") {
+    // A Postgres URL present while the source is the dev poll is almost always a prod deploy that
+    // forgot `LESTO_LIVE_SOURCE=pg` — refuse it rather than silently run the stand-in against a real
+    // DB (the same fail-closed reason the pg branch refuses a missing URL).
+    if (hasUrl) {
+      throw new Error(
+        "LESTO_LIVE_PG_URL is set but LESTO_LIVE_SOURCE is not 'pg'; refusing to run the SQLite dev " +
+          "poll with a Postgres URL present. Set LESTO_LIVE_SOURCE=pg, or unset the URL for dev.",
+      );
+    }
+
+    return { kind: "poll" };
+  }
 
   if (kind === "pg") {
     const url = env.LESTO_LIVE_PG_URL;
@@ -323,14 +336,17 @@ export async function buildApp(options: BuildAppOptions): Promise<Booted> {
 
         return c.json({ message }, 201);
       } catch (error) {
-        // ONLY a duplicate id is an idempotent no-op success (the original already landed). Any OTHER
-        // error is a real failure and must surface as a 5xx, so the outbox classifies it "retry" and
-        // KEEPS the write — never a false "ok" that drops a write the server never stored.
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        // The idempotency truth condition is STRUCTURAL, not a message match: "the original already
+        // landed" ⇔ a row with this client-generated id now exists. Checking that (rather than parsing
+        // the driver's error string, which differs across SQLite/Postgres and would misclassify an
+        // unrelated constraint error as success) keeps the at-least-once replay arm from ever returning
+        // a false "ok" that drops a write the server never stored. If the row is NOT there, the insert
+        // failed for a real reason → 5xx, so the outbox classifies it "retry" and KEEPS the write.
+        const existing = await db.select().from(messages).where(eq(messages.id, id)).all();
 
-        if (/unique|constraint|primary key|duplicate/i.test(errorMessage)) {
-          return c.json({ ok: true }, 200);
-        }
+        if (existing.length > 0) return c.json({ ok: true }, 200);
+
+        const errorMessage = error instanceof Error ? error.message : String(error);
 
         return c.json({ error: errorMessage }, 500);
       }

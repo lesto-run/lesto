@@ -20,6 +20,7 @@
  */
 
 import { defineTable, text, timestamp } from "@lesto/db";
+import { live } from "@lesto/live";
 import type { ShapeDefinition } from "@lesto/live-protocol";
 
 /**
@@ -39,16 +40,19 @@ export const messages = defineTable("messages", {
 export const capstoneTables = [messages] as const;
 
 /**
- * The bound shape one room syncs: every column, filtered to a single `room_id`, in a total order
- * (`created_at` asc) so the snapshot is deterministic. The bound `room_id` value IS the capability
- * the server authorizes at subscribe time — a client names a room, it does not author the predicate.
+ * The bound shape one room syncs, minted by the shipped **`live()` moat method** — a typed, fluent
+ * builder over the SAME `@lesto/db` table the app writes with (`packages/live/src/builder.ts`). This
+ * dogfoods the moat directly: one query language, one AST of typed `Table`/`Column` values, one row
+ * type across both runtimes — no second query language, no hand-written wire literal. `.toShape()`
+ * compiles + validates the `ShapeDefinition` (whole-row projection, the PK as the key, `created_at`
+ * asc for a deterministic total order) without opening a stream, so it is shared by the client
+ * (`main.ts`, which calls `.query()` via `createCrossTabLiveQuery`) and the server/tests. The bound
+ * `room_id` value IS the capability the server authorizes at subscribe time — a client names a room,
+ * it does not author the predicate.
  */
 export function messagesInRoom(room: string): ShapeDefinition {
-  return {
-    table: "messages",
-    key: "id",
-    columns: ["id", "roomId", "author", "body", "createdAt"],
-    where: [{ column: "roomId", op: "eq", value: room }],
-    orderBy: { column: "createdAt", direction: "asc" },
-  };
+  return live(messages)
+    .where(messages.roomId, "eq", room)
+    .orderBy(messages.createdAt, "asc")
+    .toShape();
 }

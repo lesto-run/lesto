@@ -81,10 +81,10 @@ async function waitUntil(
 }
 
 /**
- * A grace-timer scheduler for {@link createLiveMutations} that never keeps the process alive (mirrors
- * the repo's `unref` timer discipline). Without it a held write's grace `setTimeout` outlives the store
- * it closes over — harmless (`process.exit` reaps it), but this keeps a stray timer from firing against
- * an already-closed store in the reload legs.
+ * A grace-timer scheduler for {@link createLiveMutations} that `unref`s its timer so a held write's
+ * long grace `setTimeout` (60s in the reload legs) cannot keep the process's event loop alive after the
+ * assertions finish. Correctness never depends on it — the real backstop is the 60s `graceMs` (the echo
+ * always wins) plus the final `process.exit` — it just mirrors the repo's `unref` timer discipline.
  */
 function unrefSchedule(cb: () => void, ms: number): void {
   const timer = setTimeout(cb, ms);
@@ -194,8 +194,8 @@ async function main(): Promise<void> {
     revokeSession("bob"); // valid membership (lobby is public), invalid session — the (d) axis
     const sessionResync = await sessionUser.waitFor((f) => f.event === "resync", 2000);
     check(
-      "3c. (d) a revoked session severs (resync) within the re-auth interval even while membership holds",
-      sessionResync.event === "resync",
+      "3c. (d) a revoked session purges (resync w/ the non-resumable sentinel) within the re-auth interval even while membership holds",
+      sessionResync.event === "resync" && sessionResync.id === "v0:resync",
     );
 
     // ---- 4. (c on-row) / (b) delete-from-shape live on a FULL table ------------------------------
