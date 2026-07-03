@@ -35,10 +35,10 @@ Railway also work. The one hard requirement is a Postgres you can put in **logic
 | Postgres option                          | `wal_level=logical`?                                             |
 | ---------------------------------------- | --------------------------------------------------------------- |
 | **Self-run `postgres:16` container**     | ✅ Yes — pass the exact args CI uses (below). Most reproducible. |
-| **Fly Postgres** (`fly pg create`)       | ✅ Yes — it's a Postgres app you control; set the config.        |
-| **Neon / Supabase** (managed)            | ✅ Yes — both support logical replication (enable it).           |
-| **Render Managed Postgres**              | ❌ No — no `wal_level` control; run a container Postgres instead. |
-| **Railway Postgres plugin**              | ⚠️ Deploy the `postgres:16` image with the args, not the plugin. |
+| **Fly Postgres** (`fly pg create`, legacy; newer `fly mpg create`) | ✅ Yes — a Postgres app you control: `fly pg config update --wal-level logical` + restart. |
+| **Neon / Supabase** (managed)            | ⚠️ Yes, but use the **direct** (non-pooled) connection string — replication can't run over Neon's `-pooler` / Supabase's Supavisor (6543) pooler. Neon's compute also auto-suspends on idle, which fights an always-on slot consumer. |
+| **Render Managed Postgres**              | ⚠️ Verify current Render docs (logical replication support has changed); if unavailable, run a container Postgres. |
+| **Railway**                              | ⚠️ Deploy the `postgres:16` **image** (a database service) with the args, not a stock template. |
 
 The **most reproducible** path (byte-for-byte what the `live-capstone-acceptance` CI job runs) is a
 self-run `postgres:16`:
@@ -79,24 +79,28 @@ back to the dev SQLite poll — a prod deploy that quietly ran the stand-in woul
 
 ## Deploy — Fly.io (recommended)
 
-[`fly.toml`](./fly.toml) is the runtime config (rename `app`, set `primary_region`). It pins the app to
-**exactly one machine** — a logical-replication slot is a single-writer resource, so two machines would
-fight over the same slot name. **Never `fly scale count > 1`.**
+[`fly.toml`](./fly.toml) is the runtime config (rename `app`, set `primary_region`). The app must run
+**exactly one machine** — a logical-replication slot is a single-writer resource, so a second machine
+would race to create/drop the same slot. No fly.toml key can *cap* the machine count, so the invariant
+rests on three habits: **deploy with `--ha=false`** (one machine, not an HA pair), the
+`[deploy] strategy = "immediate"` in `fly.toml` (no second concurrent machine on a redeploy — never a
+rolling/bluegreen/canary strategy), and **never `fly scale count > 1`.**
 
 ```bash
 # 1. Create the app (no deploy yet) and a wal_level=logical Postgres.
 fly apps create lesto-live-capstone
-fly pg create --name lesto-capstone-pg          # then set wal_level=logical on it (fly pg config …),
-                                                #   OR point at a Neon/Supabase/self-run PG instead.
+fly pg create --name lesto-capstone-pg          # legacy unmanaged PG you control (or `fly mpg create`);
+fly pg config update --wal-level logical \
+  --app lesto-capstone-pg                        #   set logical + restart. OR use a Neon/Supabase/self-run PG.
 
 # 2. Give the app its Postgres URL as a SECRET (never in fly.toml).
 fly secrets set LESTO_LIVE_PG_URL='postgres://…@…:5432/postgres' --app lesto-live-capstone
 
-# 3. Deploy — from the REPO ROOT, so the monorepo is the build context.
+# 3. Deploy — from the REPO ROOT (the monorepo is the build context), one machine, no HA pair.
 fly deploy --config examples/live-capstone/fly.toml \
-  --dockerfile examples/live-capstone/Dockerfile .
+  --dockerfile examples/live-capstone/Dockerfile --ha=false .
 
-# 4. Confirm exactly one machine is running.
+# 4. Verify exactly one machine (and correct it to one if HA slipped through).
 fly scale count 1 --app lesto-live-capstone
 fly status --app lesto-live-capstone
 ```
@@ -124,7 +128,9 @@ fills. A full Postgres disk stops accepting writes (and can refuse to start).
 ### The alert: `bun run slot-lag`
 
 [`ops/slot-lag-check.ts`](./ops/slot-lag-check.ts) is a one-shot probe over `pg_replication_slots`. It
-exits **Nagios-style** so any monitor reads it — **`0` OK, `1` WARN, `2` CRITICAL**:
+exits **Nagios-style** so any monitor reads it — **`0` OK, `1` WARN, `2` CRITICAL** (a probe failure,
+e.g. a full disk refusing connections, is also `2`), **`3` UNKNOWN** (misconfigured — no URL, or
+inverted thresholds):
 
 ```bash
 LESTO_LIVE_PG_URL='postgres://…' bun run slot-lag

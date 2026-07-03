@@ -10,7 +10,8 @@
  * The "at least a basic slot-lag check" the capstone README + this task call for: a one-shot probe you
  * run on an interval (cron, a Fly `[checks]`, a monitor's exec probe) that reads the slot's
  * retained-WAL bytes and exits Nagios-style so any monitor reads it — **0 = OK, 1 = WARN, 2 =
- * CRITICAL**. See `DEPLOY.md` → "Slot-lag alerting + the disk-pressure runbook".
+ * CRITICAL** (a probe failure — DB down / disk full refusing connections — is also 2), **3 = UNKNOWN**
+ * (misconfigured: no URL, or inverted thresholds). See `DEPLOY.md` → "Slot-lag alerting".
  *
  * Reusable framework infra, not capstone-only: point it at any Lesto replication slot via env
  * (`LESTO_LIVE_PG_URL`, `LESTO_LIVE_SLOT`, `LESTO_SLOT_LAG_WARN_BYTES`, `LESTO_SLOT_LAG_CRIT_BYTES`).
@@ -172,11 +173,13 @@ function envBytes(name: string, fallback: number): number {
 async function main(): Promise<void> {
   const url = (process.env.LESTO_LIVE_PG_URL ?? process.env.DATABASE_URL ?? "").trim();
 
+  // A misconfiguration (missing URL, inverted thresholds) is Nagios exit 3 = UNKNOWN — "the check
+  // can't run", NOT 2 = CRITICAL, so a forgotten env var doesn't page oncall as if the DB were dying.
   if (url === "") {
     console.error(
       "slot-lag-check: set LESTO_LIVE_PG_URL (or DATABASE_URL) to the deployment's Postgres.",
     );
-    process.exit(2);
+    process.exit(3);
   }
 
   const slot = process.env.LESTO_LIVE_SLOT ?? CAPSTONE_SLOT;
@@ -184,6 +187,17 @@ async function main(): Promise<void> {
     warnBytes: envBytes("LESTO_SLOT_LAG_WARN_BYTES", DEFAULT_WARN_BYTES),
     critBytes: envBytes("LESTO_SLOT_LAG_CRIT_BYTES", DEFAULT_CRIT_BYTES),
   };
+
+  // Guard the WARN band: `classifySlotLag` tests `≥ crit` before `≥ warn`, so a WARN threshold set
+  // ABOVE crit (easy to fat-finger on a small disk) would make WARN unreachable and silently hide the
+  // early-warning tier. Refuse it loudly rather than grade wrong.
+  if (thresholds.warnBytes > thresholds.critBytes) {
+    console.error(
+      `slot-lag-check: LESTO_SLOT_LAG_WARN_BYTES (${thresholds.warnBytes}) exceeds ` +
+        `LESTO_SLOT_LAG_CRIT_BYTES (${thresholds.critBytes}); the WARN band would be unreachable.`,
+    );
+    process.exit(3);
+  }
 
   const { db, close } = await openPostgres({ connectionString: url });
 
@@ -206,4 +220,12 @@ async function main(): Promise<void> {
 }
 
 // Run as a CLI only — importing the module (the unit test) must NOT probe a live Postgres or exit.
-if (import.meta.main) void main();
+// A probe FAILURE (DB unreachable, a full disk refusing connections, a missing `pg` peer) must exit
+// 2 = CRITICAL — the disk-fill scenario this alarm exists to catch — NOT the code 1 (WARN) an
+// unhandled rejection would default to, which a CRITICAL-only monitor could miss.
+if (import.meta.main) {
+  main().catch((error: unknown) => {
+    console.error("slot-lag-check:", error);
+    process.exit(2);
+  });
+}

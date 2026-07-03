@@ -20,13 +20,14 @@ WORKDIR /repo
 # The capstone resolves @lesto/* from the workspace, so install the ROOT workspace, not a lone package.
 # Copy the whole context (Dockerfile.dockerignore keeps it lean — no node_modules/dist/.git), then:
 #   1. install the workspace (symlinks every @lesto/* into node_modules),
-#   2. add `pg` — the Postgres change source's OPTIONAL peer, loaded lazily; installed here exactly as
-#      the CI acceptance job does (`bun add pg`), so the image mirrors the gate that proves the path,
+#   2. add `pg` — the Postgres change source's OPTIONAL peer (not in package.json, so the frozen
+#      install above doesn't cover it), PINNED so the "prod" image is reproducible rather than floating
+#      to whatever `pg` is latest at build time,
 #   3. build the client bundle — the ~1.1 MB OPFS engine must survive a real `vite build` into dist/.
 COPY . .
 RUN bun install --frozen-lockfile \
   && cd examples/live-capstone \
-  && bun add pg \
+  && bun add pg@8 \
   && bun run build
 
 WORKDIR /repo/examples/live-capstone
@@ -41,15 +42,17 @@ ENV NODE_ENV=production \
   PORT=3000
 EXPOSE 3000
 
-# Liveness: `/` serves the built index once the app is up. Use Bun's fetch so the slim image needs no
-# curl/wget. Hits loopback, which HOST=0.0.0.0 also binds.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+# Liveness for a plain `docker run` / Render / Railway (Fly uses its own fly.toml [[checks]], not this).
+# Use Bun's fetch so the slim image needs no curl/wget. Hits loopback, which HOST=0.0.0.0 also binds.
+# start-period is generous: serve.ts runs the pg bootstrap + first snapshot before opening the port.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
   CMD bun -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Run as the unprivileged user the Bun base image ships with (the build artifacts are world-readable;
 # the pg path writes nothing to local disk — a connecting client re-snapshots).
 USER bun
 
-# serve.ts OWNS the slot lifecycle: it drops the WAL-pinning slot on SIGTERM and self-heals a
-# crash-orphaned slot on boot. Fly/Render/Railway send SIGTERM on stop, so a graceful stop unpins WAL.
+# serve.ts OWNS the slot lifecycle: it drops the WAL-pinning slot on SIGINT/SIGTERM and self-heals a
+# crash-orphaned slot on boot. A graceful host stop (Fly's default signal is SIGINT; SIGTERM elsewhere)
+# unpins WAL. Exec-form + a file arg means bun runs serve.ts in-process, receiving the signal directly.
 CMD ["bun", "run", "serve.ts"]
