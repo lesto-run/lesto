@@ -36,12 +36,13 @@ import type { Policy } from "@lesto/authz";
 import { buildTools, dispatch } from "./tools";
 import type { LestoMcpContext } from "./tools";
 import {
+  compileToolFloor,
   gateMcpHttpRequest,
   policyFloorChallenge,
   protectedResourceMetadata,
   scopeCeilingChallenge,
 } from "./http";
-import type { BearerSession, ToolRequirement } from "./http";
+import type { BearerSession } from "./http";
 
 /** What {@link createMcpHttpHandlers} needs to serve a Resource Server over HTTP. */
 export interface McpHttpServerOptions {
@@ -233,15 +234,30 @@ async function runStreamableHttp(
 export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHandlers {
   const serverInfo = options.serverInfo ?? DEFAULT_SERVER_INFO;
 
-  // The per-tool floor requirements (OCP-7), compiled once: `tool name → { scope, permission }`.
-  // Each mapped tool's required scope IS the write scope, so the floor intersects exactly with
-  // the existing scope ceiling. Empty (and inert) when no `toolPermissions` map was supplied.
-  const requirements = new Map<string, ToolRequirement>(
-    Object.entries(options.toolPermissions ?? {}).map(([tool, permission]) => [
-      tool,
-      { scope: options.writeScope, permission },
-    ]),
-  );
+  // The connection-constant context (ADR 0043): the deployment's compiled policy rides HERE so the
+  // dispatch-level domain-tool floor adjudicates against the SAME policy the HTTP floor does. The
+  // per-request runContext (below) adds only `mode` + `resolvePrincipal`.
+  const baseContext: LestoMcpContext = {
+    ...options.context,
+    ...(options.policy === undefined ? {} : { policy: options.policy }),
+  };
+
+  // Validate the domain-tool declarations up front (ADR 0043 D2 — a destructive tool with no floor,
+  // a name collision, a governed tool with no policy each refuse to register) and learn the built
+  // framework tool names for the unknown-tool floor check. Destructive domain tools are absent here
+  // (no per-request resolver yet), but every declaration is still validated before that gate.
+  const constructionTools = buildTools(baseContext);
+
+  // The per-tool floor (OCP-7 + ADR 0043 D3), compiled once in tested code: framework floors from the
+  // deployment map, domain floors from each governed declaration, disjoint ownership enforced.
+  const requirements = compileToolFloor({
+    ...(options.toolPermissions === undefined ? {} : { toolPermissions: options.toolPermissions }),
+    ...(options.context.domainTools === undefined
+      ? {}
+      : { domainTools: options.context.domainTools }),
+    knownToolNames: new Set(constructionTools.map((tool) => tool.name)),
+    writeScope: options.writeScope,
+  });
 
   const metadataBody = JSON.stringify(
     protectedResourceMetadata({
@@ -284,10 +300,10 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
 
     const { session, mode } = decision;
 
-    // Per-request context: the same connection-constant seams, plus this request's mode
-    // and a `resolvePrincipal` closed over its authenticated session (seam decision a).
+    // Per-request context: the connection-constant seams (incl. the ADR 0043 policy), plus this
+    // request's mode and a `resolvePrincipal` closed over its authenticated session (seam decision a).
     const runContext: LestoMcpContext = {
-      ...options.context,
+      ...baseContext,
       mode,
       resolvePrincipal: () => session.principal,
     };

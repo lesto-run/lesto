@@ -5,10 +5,12 @@
  *   ANTHROPIC_API_KEY=sk-... bun run …/agent.ts           # + Claude drives autonomously
  *
  * Fully self-contained: it boots the OpenAuth issuer and the Lesto MCP Resource Server in-process
- * (no deploy), runs a real PKCE dance for an SRE + an on-call + a viewer token, then connects the
- * actual `@modelcontextprotocol/sdk` `Client` — the same library Claude/Cursor/Inspector use —
- * over the OAuth-gated Streamable-HTTP transport. The MCP server's `handle_request` tool reaches a
- * real ops console with THREE linked domains: services, incidents, and deploys.
+ * (no deploy), runs a real PKCE dance for an SRE + an on-call + a viewer + a stakeholder token, then
+ * connects the actual `@modelcontextprotocol/sdk` `Client` — the same library Claude/Cursor/Inspector
+ * use — over the OAuth-gated Streamable-HTTP transport. The console exposes its real actions as
+ * FIRST-CLASS domain tools (ADR 0043): `declare_incident` / `annotate_incident` / `gate_deploy`
+ * writes and `list_services` / `list_deploys` reads, each owning its own per-tool policy floor. The
+ * generic `handle_request` is omitted (least privilege), so an agent reaches exactly these actions.
  *
  * What it shows:
  *   1. an SRE (mcp:read mcp:write) runs a genuine incident-response CHAIN across all three
@@ -17,10 +19,11 @@
  *      whose later steps depend on the earlier writes;
  *   2. a VIEWER (mcp:read) is refused every write by the SCOPE ceiling (403);
  *   3. an over-scoped STAKEHOLDER (mcp:write) is refused by the ROLE floor (OCP-7) — it holds the
- *      write scope, but its role isn't granted `console:operate`, so the floor catches the write
- *      the scope alone would allow;
- *   4. an ANONYMOUS agent can't even connect (401);
- *   5. with ANTHROPIC_API_KEY set, Claude is handed the same tools and runs the incident
+ *      write scope, but its role is granted none of the action permissions;
+ *   4. THE SPLIT (ADR 0043): an ON-CALL responder MAY declare an incident but is REFUSED a deploy
+ *      gate — the per-action distinction the single generic `handle_request` could never express;
+ *   5. an ANONYMOUS agent can't even connect (401);
+ *   6. with ANTHROPIC_API_KEY set, Claude is handed the SAME advertised tools and runs the incident
  *      response autonomously — deciding for itself the order of operations.
  *
  * The deploy-freeze rule (a deploy is blocked while its service has an open incident) lives in the
@@ -54,28 +57,23 @@ async function connect(base: string, token: string | undefined): Promise<Client>
   return client;
 }
 
-/** One app call through the MCP `handle_request` tool → the app's parsed JSON response. */
-async function call(
+/**
+ * Call a NAMED domain tool through the MCP client → its structured result.
+ *
+ * The domain tools return JSON objects, surfaced as `structuredContent` (MCP 2025-06-18); fall back
+ * to parsing the text envelope for an older server.
+ */
+async function callDomain(
   client: Client,
-  method: string,
-  path: string,
-  opts: { query?: Record<string, string>; body?: unknown } = {},
-): Promise<{ status: number; data: unknown }> {
-  const args: Record<string, unknown> = { method, path };
-  if (opts.query !== undefined) args.query = opts.query;
-  if (opts.body !== undefined) args.body = opts.body;
+  name: string,
+  args: Record<string, unknown> = {},
+): Promise<unknown> {
+  const result = await client.callTool({ name, arguments: args }, CallToolResultSchema);
 
-  const result = await client.callTool({ name: "handle_request", arguments: args }, CallToolResultSchema);
-  // handle_request returns the app's `{ status, headers, body }` as `structuredContent` — read it
-  // directly, no parsing the text envelope (falls back to the text for an older server). The app's
-  // `body` is itself a JSON string, so that one parse remains.
-  const wrapped = (result.structuredContent ??
-    JSON.parse((result.content as { text: string }[])[0]?.text ?? "{}")) as {
-    status: number;
-    body: string;
-  };
-
-  return { status: wrapped.status, data: JSON.parse(wrapped.body || "null") };
+  return (
+    result.structuredContent ??
+    JSON.parse((result.content as { text: string }[])[0]?.text ?? "null")
+  );
 }
 
 /** The console as typed shapes (mirrors mcp/ops.ts). */
@@ -102,75 +100,85 @@ interface Deploy {
 
 /**
  * The scripted incident response an SRE agent runs — a real CHAIN across services → incidents →
- * deploys, where later steps observe the effects of the earlier writes.
+ * deploys, where later steps observe the effects of the earlier writes, all through the domain tools.
  */
 async function scriptedIncidentResponse(sre: Client): Promise<void> {
   console.log("\n── SRE runs a multi-step incident response ────────────────────");
 
   // 1. Survey the fleet (read).
-  const services = (await call(sre, "GET", "/services")).data as { services: Service[] };
+  const services = (await callDomain(sre, "list_services")) as { services: Service[] };
   console.log("  fleet:");
   for (const s of services.services) {
     console.log(`     • ${s.name.padEnd(12)} [${s.tier}] ${s.health}`);
   }
 
   // 2. A naïve deploy to a HEALTHY service ships (read the reason — the gate is real).
-  const clean = (await call(sre, "POST", "/deploys", {
-    body: { service: "checkout", version: "2.4.0" },
-  })).data as { deploy: Deploy };
+  const clean = (await callDomain(sre, "gate_deploy", {
+    service: "checkout",
+    version: "2.4.0",
+  })) as { deploy: Deploy };
   console.log(`\n  deploy checkout@2.4.0 → ${clean.deploy.status} (${clean.deploy.reason})`);
 
   // 3. Declare a sev1 against checkout (write) — this is what freezes the next deploy.
-  const declared = (await call(sre, "POST", "/incidents", {
-    body: {
-      title: "Checkout 500s on card capture",
-      severity: "sev1",
-      services: ["checkout", "billing"],
-    },
-  })).data as { incident: Incident };
+  const declared = (await callDomain(sre, "declare_incident", {
+    title: "Checkout 500s on card capture",
+    severity: "sev1",
+    services: ["checkout", "billing"],
+  })) as { incident: Incident };
   console.log(
     `\n  🚨 declared INC-${declared.incident.id}: "${declared.incident.title}" ` +
       `(${declared.incident.severity}, services: ${declared.incident.services.join(", ")})`,
   );
 
   // 4. The SAME deploy is now FROZEN — caused by step 3's write, not a script.
-  const frozen = (await call(sre, "POST", "/deploys", {
-    body: { service: "checkout", version: "2.4.1" },
-  })).data as { deploy: Deploy };
-  console.log(`  deploy checkout@2.4.1 → ${frozen.deploy.status.toUpperCase()} (${frozen.deploy.reason})`);
+  const frozen = (await callDomain(sre, "gate_deploy", {
+    service: "checkout",
+    version: "2.4.1",
+  })) as { deploy: Deploy };
+  console.log(
+    `  deploy checkout@2.4.1 → ${frozen.deploy.status.toUpperCase()} (${frozen.deploy.reason})`,
+  );
 
   // 5. The checkout service now reads degraded/down (the incident propagated to health).
-  const checkout = (await call(sre, "GET", "/services/checkout")).data as Service;
-  console.log(`  checkout health is now: ${checkout.health}`);
+  const afterDeclare = (await callDomain(sre, "list_services")) as { services: Service[] };
+  const checkout = afterDeclare.services.find((s) => s.id === "checkout");
+  console.log(`  checkout health is now: ${checkout?.health}`);
 
   // 6. Post mitigation, then resolve the incident (write, with a status transition).
-  await call(sre, "POST", `/incidents/${declared.incident.id}/notes`, {
-    body: { note: "rolled back card-capture flag; error rate falling", status: "mitigated" },
+  await callDomain(sre, "annotate_incident", {
+    id: declared.incident.id,
+    note: "rolled back card-capture flag; error rate falling",
+    status: "mitigated",
   });
-  const resolved = (await call(sre, "POST", `/incidents/${declared.incident.id}/notes`, {
-    body: { note: "error rate at baseline for 15m — resolving", status: "resolved" },
-  })).data as { incident: Incident };
+  const resolved = (await callDomain(sre, "annotate_incident", {
+    id: declared.incident.id,
+    note: "error rate at baseline for 15m — resolving",
+    status: "resolved",
+  })) as { incident: Incident };
   console.log(`\n  📝 INC-${declared.incident.id} → ${resolved.incident.status}`);
 
   // 7. With the incident resolved, the deploy is CLEARED — the chain's payoff.
-  const cleared = (await call(sre, "POST", "/deploys", {
-    body: { service: "checkout", version: "2.4.1" },
-  })).data as { deploy: Deploy };
+  const cleared = (await callDomain(sre, "gate_deploy", {
+    service: "checkout",
+    version: "2.4.1",
+  })) as { deploy: Deploy };
   console.log(`  deploy checkout@2.4.1 → ${cleared.deploy.status} (${cleared.deploy.reason})`);
 
   console.log("\n  deploy log:");
-  const deploys = (await call(sre, "GET", "/deploys")).data as { deploys: Deploy[] };
+  const deploys = (await callDomain(sre, "list_deploys")) as { deploys: Deploy[] };
   for (const d of deploys.deploys) {
     console.log(`     • #${d.id} ${d.service}@${d.version} — ${d.status}`);
   }
 }
 
 /**
- * The governance proof: a viewer is refused by the SCOPE ceiling, an over-scoped stakeholder is
- * refused by the ROLE floor (OCP-7), and an anonymous agent can't connect at all.
+ * The governance proof (ADR 0043): a viewer is refused by the SCOPE ceiling, an over-scoped
+ * stakeholder by the ROLE floor, an on-call responder may declare but NOT gate a deploy (the split),
+ * and an anonymous agent can't connect at all.
  */
 async function governanceProof(
   base: string,
+  oncallToken: string,
   viewerToken: string,
   stakeholderToken: string,
 ): Promise<void> {
@@ -180,123 +188,87 @@ async function governanceProof(
   await viewer.listTools(); // a read-scoped client lists fine
   try {
     await viewer.callTool({
-      name: "handle_request",
-      arguments: { method: "POST", path: "/incidents", body: { title: "x", severity: "sev3" } },
+      name: "declare_incident",
+      arguments: { title: "x", severity: "sev3" },
     });
-    console.log("  viewer (mcp:read) declare-incident → UNEXPECTEDLY ALLOWED");
-  } catch (error) {
-    console.log(`  viewer (mcp:read) declare-incident → refused by SCOPE ceiling`);
+    console.log("  viewer (mcp:read) declare_incident → UNEXPECTEDLY ALLOWED");
+  } catch {
+    console.log("  viewer (mcp:read) declare_incident → refused by SCOPE ceiling");
   }
   await viewer.close();
 
-  // The stakeholder holds mcp:write — it clears the scope ceiling — but its ROLE isn't granted
-  // `console:operate`, so the OCP-7 policy floor refuses the write the scope alone would allow.
+  // The stakeholder holds mcp:write — it clears the scope ceiling — but its ROLE is granted none of
+  // the action permissions, so the OCP-7 policy floor refuses the write the scope alone would allow.
   const stakeholder = await connect(base, stakeholderToken);
   await stakeholder.listTools();
   try {
     await stakeholder.callTool({
-      name: "handle_request",
-      arguments: { method: "POST", path: "/incidents", body: { title: "x", severity: "sev3" } },
+      name: "declare_incident",
+      arguments: { title: "x", severity: "sev3" },
     });
-    console.log("  stakeholder (mcp:write) declare-incident → UNEXPECTEDLY ALLOWED");
-  } catch (error) {
-    console.log(`  stakeholder (mcp:write) declare-incident → refused by ROLE floor (needs console:operate)`);
+    console.log("  stakeholder (mcp:write) declare_incident → UNEXPECTEDLY ALLOWED");
+  } catch {
+    console.log(
+      "  stakeholder (mcp:write) declare_incident → refused by ROLE floor (needs incident:declare)",
+    );
   }
   await stakeholder.close();
+
+  // THE SPLIT (ADR 0043): oncall MAY declare an incident but is REFUSED a deploy gate — the exact
+  // per-action distinction that was unenforceable under the single generic handle_request.
+  const oncall = await connect(base, oncallToken);
+  try {
+    await oncall.callTool({
+      name: "declare_incident",
+      arguments: { title: "oncall paged: search degraded", severity: "sev2", services: ["search"] },
+    });
+    console.log("  oncall declare_incident → ALLOWED (floor grants incident:declare)");
+  } catch {
+    console.log("  oncall declare_incident → UNEXPECTEDLY REFUSED");
+  }
+  try {
+    await oncall.callTool({
+      name: "gate_deploy",
+      arguments: { service: "search", version: "9.9.9" },
+    });
+    console.log("  oncall gate_deploy → UNEXPECTEDLY ALLOWED");
+  } catch {
+    console.log("  oncall gate_deploy → refused by ROLE floor (needs deploy:gate)");
+  }
+  await oncall.close();
 
   try {
     await connect(base, undefined);
     console.log("  anonymous connect → UNEXPECTEDLY ALLOWED");
-  } catch (error) {
-    console.log(`  anonymous connect → refused (401)`);
+  } catch {
+    console.log("  anonymous connect → refused (401)");
   }
 }
 
-/** The Claude tools — each maps to one console route, dispatched as the SRE. */
-function claudeTools(): Anthropic.Tool[] {
-  return [
-    {
-      name: "list_services",
-      description: "List every service in the fleet with its tier and current health.",
-      input_schema: { type: "object", properties: {} },
-    },
-    {
-      name: "list_incidents",
-      description: "List incidents, optionally filtered by status (open | mitigated | resolved).",
-      input_schema: {
-        type: "object",
-        properties: { status: { type: "string", enum: ["open", "mitigated", "resolved"] } },
-      },
-    },
-    {
-      name: "declare_incident",
-      description: "Open an incident against one or more services. A privileged write.",
-      input_schema: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          severity: { type: "string", enum: ["sev1", "sev2", "sev3"] },
-          services: { type: "array", items: { type: "string" } },
-        },
-        required: ["title", "severity", "services"],
-      },
-    },
-    {
-      name: "annotate_incident",
-      description:
-        "Add a timeline note to an incident and optionally transition its status. A privileged write.",
-      input_schema: {
-        type: "object",
-        properties: {
-          id: { type: "number" },
-          note: { type: "string" },
-          status: { type: "string", enum: ["open", "mitigated", "resolved"] },
-        },
-        required: ["id", "note"],
-      },
-    },
-    {
-      name: "request_deploy",
-      description:
-        "Request a deploy of a version to a service. It is FROZEN while that service has an active " +
-        "incident — read the returned status/reason. A privileged write.",
-      input_schema: {
-        type: "object",
-        properties: { service: { type: "string" }, version: { type: "string" } },
-        required: ["service", "version"],
-      },
-    },
-  ];
+/** Hand Claude the tools the MCP server actually ADVERTISES — the real, governed domain tools. */
+async function claudeTools(sre: Client): Promise<Anthropic.Tool[]> {
+  const { tools } = await sre.listTools();
+
+  return tools.map((tool) => {
+    const claudeTool: Anthropic.Tool = {
+      name: tool.name,
+      input_schema: tool.inputSchema as Anthropic.Tool.InputSchema,
+    };
+
+    // `exactOptionalPropertyTypes`: carry `description` only when the advertised tool has one.
+    if (tool.description !== undefined) claudeTool.description = tool.description;
+
+    return claudeTool;
+  });
 }
 
-/** Dispatch a Claude tool call to the console through the MCP client. */
-async function runClaudeTool(sre: Client, name: string, input: Record<string, unknown>): Promise<unknown> {
-  switch (name) {
-    case "list_services":
-      return (await call(sre, "GET", "/services")).data;
-    case "list_incidents": {
-      const query = input.status === undefined ? {} : { query: { status: String(input.status) } };
-
-      return (await call(sre, "GET", "/incidents", query)).data;
-    }
-    case "declare_incident":
-      return (await call(sre, "POST", "/incidents", { body: input })).data;
-    case "annotate_incident":
-      return (await call(sre, "POST", `/incidents/${Number(input.id)}/notes`, { body: input })).data;
-    case "request_deploy":
-      return (await call(sre, "POST", "/deploys", { body: input })).data;
-    default:
-      return { error: `unknown tool ${name}` };
-  }
-}
-
-/** The Claude-driven finale: hand the agent the tools and a goal, let it run the response. */
+/** The Claude-driven finale: hand the agent the advertised tools and a goal, let it run the response. */
 async function claudeIncidentResponse(sre: Client): Promise<void> {
   const model = process.env.OPS_AGENT_MODEL ?? "claude-sonnet-4-6";
   console.log(`\n── CLAUDE runs the incident response (${model}) ───────────────`);
 
   const anthropic = new Anthropic();
-  const tools = claudeTools();
+  const tools = await claudeTools(sre);
   const messages: Anthropic.MessageParam[] = [
     {
       role: "user",
@@ -312,7 +284,8 @@ async function claudeIncidentResponse(sre: Client): Promise<void> {
     const resp = await anthropic.messages.create({ model, max_tokens: 1024, tools, messages });
 
     for (const block of resp.content) {
-      if (block.type === "text" && block.text.trim() !== "") console.log(`  🤖 ${block.text.trim()}`);
+      if (block.type === "text" && block.text.trim() !== "")
+        console.log(`  🤖 ${block.text.trim()}`);
     }
 
     const toolUses = resp.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
@@ -322,7 +295,7 @@ async function claudeIncidentResponse(sre: Client): Promise<void> {
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const tu of toolUses) {
       console.log(`     ↳ ${tu.name}(${JSON.stringify(tu.input)})`);
-      const out = await runClaudeTool(sre, tu.name, tu.input as Record<string, unknown>);
+      const out = await callDomain(sre, tu.name, tu.input as Record<string, unknown>);
       results.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out) });
     }
     messages.push({ role: "user", content: results });
@@ -354,6 +327,7 @@ async function main(): Promise<void> {
 
   // 2. Real PKCE tokens from the real dance.
   const sreToken = await getAccessToken(issuerUrl, "sre");
+  const oncallToken = await getAccessToken(issuerUrl, "oncall");
   const viewerToken = await getAccessToken(issuerUrl, "viewer");
   const stakeholderToken = await getAccessToken(issuerUrl, "stakeholder");
 
@@ -363,14 +337,16 @@ async function main(): Promise<void> {
   console.log(`SRE connected — ${tools.length} tools available`);
   await scriptedIncidentResponse(sre);
 
-  // 4. Governance: viewer refused by scope, stakeholder refused by role (OCP-7), anon refused.
-  await governanceProof(base, viewerToken, stakeholderToken);
+  // 4. Governance: viewer refused by scope, stakeholder by role, oncall split, anon refused (OCP-7 + ADR 0043).
+  await governanceProof(base, oncallToken, viewerToken, stakeholderToken);
 
   // 5. Optional: let Claude drive the same tools autonomously.
   if (process.env.ANTHROPIC_API_KEY) {
     await claudeIncidentResponse(sre);
   } else {
-    console.log("\n(set ANTHROPIC_API_KEY to watch Claude run the incident response through these tools)");
+    console.log(
+      "\n(set ANTHROPIC_API_KEY to watch Claude run the incident response through these tools)",
+    );
   }
 
   await sre.close();

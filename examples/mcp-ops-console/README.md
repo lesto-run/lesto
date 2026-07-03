@@ -58,32 +58,35 @@ place; `app.ts` boots it on the Node kernel and `worker.ts` runs the *same* app 
 Worker. The `@lesto/mcp` battery and the OpenAuth verifier are byte-identical across both — only the
 substrate (and, on the edge, the JWKS *transport*) differs.
 
-## Roles & scopes — capability split, today and tomorrow
+## Roles & scopes — the per-action capability split, enforced
+
+The app's real actions are **first-class MCP tools** (ADR 0043): `declare_incident`,
+`annotate_incident`, `gate_deploy` (governed writes) and `list_services`, `list_deploys` (reads).
+Each write **owns its per-tool policy floor**, and the generic `handle_request` is **omitted** —
+least privilege, so an agent reaches exactly the declared actions.
 
 The issuer mints four identities, selected by `?provider=`:
 
-| role          | scopes                | enforced today                                                      |
-| ------------- | --------------------- | ------------------------------------------------------------------ |
-| `sre`         | `mcp:read mcp:write`  | full operator — scope + the `console:operate` role permission      |
-| `oncall`      | `mcp:read mcp:write`  | operator too (the per-route sre/oncall split is future, see below) |
-| `viewer`      | `mcp:read`            | read only — refused writes by the **scope ceiling**                |
-| `stakeholder` | `mcp:read mcp:write`  | refused writes by the **role floor** — has the scope, not the role |
+| role          | scopes               | enforced                                                              |
+| ------------- | -------------------- | -------------------------------------------------------------------- |
+| `sre`         | `mcp:read mcp:write` | full operator — clears the floor on every action, including `gate_deploy` |
+| `oncall`      | `mcp:read mcp:write` | MAY `declare_incident` / `annotate_incident`, REFUSED `gate_deploy` (floor) |
+| `viewer`      | `mcp:read`           | read only — refused every write by the **scope ceiling**             |
+| `stakeholder` | `mcp:read mcp:write` | refused every write by the **role floor** — has the scope, not the role |
 
-**Enforced TODAY — both halves of the intersection:**
+**Both halves of the intersection, per action:**
 - the **scope ceiling** — `mcp:write` unlocks the destructive tools, so a `viewer` (`mcp:read`) is
   refused every write (`403`) and an anonymous agent can't connect (`401`); and
-- the **per-tool role FLOOR** (OCP-7, now wired) — `handle_request` (the write tool) requires the
-  `console:operate` permission ON TOP of `mcp:write`. So the over-scoped **`stakeholder`** — which
-  *holds* `mcp:write` but whose role isn't granted `console:operate` — is refused the write **by
-  ROLE**: a `403` whose challenge names `scope="console:operate"`, not the token's scope. That's the
-  floor catching a write the scope ceiling alone would allow (`mcp/governance.ts`'s `opsPolicy` +
-  `toolPermissions`, intersected via `@lesto/mcp`'s `authorizeBearer`).
+- the **per-tool role FLOOR** (OCP-7 + ADR 0043) — each governed tool requires its own permission ON
+  TOP of `mcp:write`. So the over-scoped **`stakeholder`** — which *holds* `mcp:write` but whose role
+  is granted no action permission — is refused **by ROLE**: a `403` whose challenge names the missing
+  permission (e.g. `scope="incident:declare"`), not the token's scope.
 
-**Designed but NOT yet enforced — per-ROUTE gating.** The floor today is per-TOOL (`handle_request`
-as a whole). The finer split — `oncall` may annotate incidents but NOT gate deploys — is per-ROUTE,
-which the single generic `handle_request` can't express: it needs domain-specific MCP tools (one per
-action) instead of the do-everything tool. `mcp/governance.ts`'s `toolPolicy` table documents that
-future split; until app-defined tools land, `sre` and `oncall` operate equivalently.
+**The split, now REAL.** Because each action is its own tool with its own floor, the finer
+distinction the single generic `handle_request` could never express is enforced: `oncall` **may**
+declare and annotate incidents but is **refused** `gate_deploy` — `sre` may do all three. That is the
+`oncall`-can-declare-but-not-gate-deploy row, proven live on both substrates
+(`mcp/governance.ts`'s `opsPolicy` maps each `PERMISSIONS.*` to the roles that hold it).
 
 ## What it proves (CI; tokens from the **real PKCE dance**, `idp/dance.ts`)
 
@@ -94,11 +97,16 @@ Worker ships (in-process, no workerd):
 - the RS advertises the OpenAuth issuer in its RFC 9728 metadata;
 - **no token → 401**;
 - a valid token minted for **another OpenAuth client → 401** (the confused-deputy guard);
-- an **SRE** runs the **incident-response chain** through the MCP tools — a declared incident
-  **freezes** a subsequent deploy, and resolving it **clears** the deploy (the cross-domain
-  cause-and-effect, observed through the tool's own dispatched writes);
-- a **viewer** is refused the destructive tool — `403 insufficient_scope`, the ceiling sourced from
-  the OpenAuth token's `properties.scopes`.
+- the surface is **domain tools**, not the generic `handle_request` (least privilege, ADR 0043 D4);
+- an **SRE** runs the **incident-response chain** through the domain tools — a declared incident
+  **freezes** a subsequent `gate_deploy`, and resolving it **clears** the deploy (the cross-domain
+  cause-and-effect), and the audit names the **domain action** (`gate_deploy`), not `handle_request`;
+- **the four-identity matrix** — the acceptance gate:
+  - a **viewer** refused every write by the **scope ceiling** (`403`, `scope="mcp:write"`);
+  - an over-scoped **stakeholder** refused by the **role floor** (`403` naming the missing permission);
+  - **`oncall` MAY `declare_incident` but is REFUSED `gate_deploy`** — the split that was impossible
+    under the generic `handle_request`;
+  - **`sre`** clears the floor on every action.
 
 ```
 bun --filter '@lesto/example-mcp-ops-console' test
@@ -179,9 +187,9 @@ that stamps the resource into `aud` — only the verifier changes, not the batte
    swap `MemoryStorage()` for a strongly-consistent store — OpenAuth keeps its ES256 signing keys in
    storage, so an in-memory store regenerates them per process.
 3. **Wire `rolesOf`** to your identity service (the demo maps an email → role).
-4. **Per-route gating (follow-up).** The tool-level role floor is wired (`opsPolicy` →
-   `handle_request` requires `console:operate`). The per-route split (`oncall` keeps incidents but
-   loses deploy gating) needs domain-specific MCP tools instead of the generic `handle_request`.
+4. **Declare your own domain tools.** This console's actions are `@lesto/mcp` domain tools
+   (`defineDomainTool`, ADR 0043), each with its own `requires.permission`; a production server keeps
+   `handle_request` omitted so an agent reaches only the actions you declare.
 
 The issuer is configuration. When a first-party `@lesto` Authorization Server lands (ADR 0029), you
 point the verifier at its JWKS and the Resource Server is unchanged.

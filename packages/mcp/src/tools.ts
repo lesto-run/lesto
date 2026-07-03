@@ -9,9 +9,11 @@
 
 import { createHash } from "node:crypto";
 
+import { z } from "zod";
+
 import type { App } from "@lesto/kernel";
 import type { SqlDatabase } from "@lesto/migrate";
-import type { Principal } from "@lesto/authz";
+import type { Policy, Principal } from "@lesto/authz";
 import type { OpenApiInfo } from "@lesto/openapi";
 
 import { missingContentError } from "./content-peer";
@@ -233,6 +235,39 @@ export interface LestoMcpContext {
    * are present but inert (they raise `MCP_CONTENT_STORE_UNAVAILABLE`).
    */
   contentDb?: SqlDatabase;
+
+  /**
+   * The app's DECLARED domain tools (ADR 0043) — the real actions the app exposes as
+   * first-class, named, typed MCP tools, each carrying its OWN per-tool policy floor. Appended
+   * to the framework set (after it, before the conditional dev tools) by {@link buildTools},
+   * so `handle_request` becomes one governed option among many rather than the sole conduit
+   * through which every app write squeezes and loses its identity. Each declaration is validated
+   * at registration ({@link LestoDomainTool}): a destructive tool with no floor refuses, a name
+   * collision refuses, a governed tool with no {@link policy} refuses, and a destructive tool
+   * with no principal resolver is ABSENT (fail-closed, never present-and-open).
+   */
+  domainTools?: readonly LestoDomainTool[];
+
+  /**
+   * The compiled authorization {@link Policy} the dispatch-level domain-tool floor adjudicates
+   * against (ADR 0043 D1). The floor checks `policy.allows(principal.actorRoles, requires.permission)`
+   * inside {@link dispatch}, so a governed domain tool needs a policy here to be enforceable — a
+   * governed tool declared on a context with NO policy refuses to register (D2.4). The
+   * framework tools' back-compatible "no policy → floor off" rule does NOT extend to domain tools.
+   * On the HTTP path this is the same compiled policy the deployment hands `createMcpHttpHandlers`.
+   */
+  policy?: Policy<string, string>;
+
+  /**
+   * Framework tools to DROP from {@link buildTools}'s output (ADR 0043 D4) — e.g.
+   * `["handle_request"]`. Once an app's MCP surface is fully covered by {@link domainTools},
+   * keeping the generic `handle_request` driver around is gratuitous privilege (it can reach any
+   * route under the one `handle_request` permission, re-collapsing the per-action floor the domain
+   * tools just bought). A production Resource Server whose surface is enumerated as domain tools
+   * omits it — the least-privilege posture. An omitted framework tool's name is still RESERVED, so
+   * a domain tool may not re-claim it (D2.3) and a later un-omit can never silently re-point a name.
+   */
+  omitTools?: readonly string[];
 }
 
 /** The session + roles seams an {@link mcpPrincipalResolver} composes into a principal. */
@@ -294,7 +329,98 @@ export interface LestoTool {
    */
   destructive: boolean;
 
-  handler: (input: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * The policy permission this tool's DISPATCH-level floor requires (ADR 0043 D3), set only for a
+   * governed {@link LestoDomainTool}. Present → {@link dispatch} checks
+   * `context.policy.allows(principal.actorRoles, requiresPermission)` before running the handler
+   * and refuses `MCP_FORBIDDEN` on denial — the belt-and-suspenders floor that also covers stdio
+   * (which has no HTTP pre-dispatch floor). Absent → no dispatch floor (framework tools; ungoverned
+   * domain tools), governed by the scope ceiling / operator gate alone.
+   */
+  requiresPermission?: string;
+
+  /**
+   * Run the tool. The resolved {@link Principal} (ADR 0028 Phase 3a) is passed as the second
+   * argument — the SINGLE principal {@link dispatch} resolved (ADR 0043 amendment (b)), so a
+   * governed domain tool's floor check and its handler reason about the SAME subject (never a
+   * second `resolvePrincipal()` that a non-memoized stdio resolver could answer differently).
+   * Framework tools ignore it; the domain-tool adapter threads it to the declared handler.
+   */
+  handler: (input: Record<string, unknown>, principal?: Principal) => Promise<unknown>;
+}
+
+/**
+ * An app-declared domain tool (ADR 0043): a real app action as a first-class, named, typed MCP
+ * tool that OWNS its per-tool policy floor. The abstraction is minimal — a {@link LestoTool} plus a
+ * `requires` clause — and {@link buildTools} adapts it: it derives the `tools/list` JSON Schema from
+ * the Zod `input`, parses the input at dispatch (ADR 0005 — a coded `MCP_INVALID_TOOL_INPUT`
+ * refusal, never a crash), gates a destructive tool on operator mode, and threads the resolved
+ * principal to the handler.
+ */
+export interface LestoDomainTool<I = unknown> {
+  /** The agent-legible action name (ADR 0035) — the consent/capability unit a client displays. */
+  name: string;
+
+  /** Shown in `tools/list`. */
+  description: string;
+
+  /**
+   * The input contract as a Zod schema (ADR 0005): the JSON Schema advertised in `tools/list` is
+   * DERIVED from it, and the input is PARSED against it at dispatch — the same validated boundary
+   * an HTTP body crosses. A parse failure is a coded `MCP_INVALID_TOOL_INPUT`, not a raw throw.
+   */
+  input: z.ZodType<I>;
+
+  /**
+   * True iff the tool mutates state. Surfaced on the built {@link LestoTool}; gates operator mode
+   * (a destructive tool refuses in `read-only`, like `handle_request`) and drives the
+   * default-scope + must-be-governed rules below.
+   */
+  destructive: boolean;
+
+  /**
+   * The per-tool policy floor this tool OWNS. A governed tool needs a {@link LestoMcpContext.policy}
+   * to adjudicate it (D2.4). Absent on a NON-destructive tool → no floor (scope ceiling governs it,
+   * like an unmapped framework tool); absent on a DESTRUCTIVE tool → refuses to register unless
+   * {@link ungoverned} is set (D2.1).
+   */
+  requires?: {
+    /**
+     * The OAuth scope this tool needs — the per-tool ceiling. For a DESTRUCTIVE tool it defaults to
+     * the deployment write scope (mirroring the OCP-7 rule that a mapped tool's scope IS the write
+     * scope). A NON-destructive governed tool MUST set it explicitly (`MCP_DOMAIN_TOOL_SCOPE_REQUIRED`
+     * otherwise) — defaulting a read to the write scope would wrongly demand write.
+     */
+    scope?: string;
+
+    /** The policy permission the floor checks via `Policy.allows` — the role gate the app owns. */
+    permission: string;
+  };
+
+  /**
+   * The loud, greppable opt-out (ADR 0043 D2.1 — the `createAdmin` convention verbatim) that lets a
+   * DESTRUCTIVE tool ship with NO floor. There is no silent "no floor → open" default: a
+   * destructive tool with no `requires` and no `ungoverned: true` refuses to register.
+   */
+  ungoverned?: boolean;
+
+  /**
+   * The tool's work. Receives the PARSED input and the resolved principal (the single one
+   * {@link dispatch} resolved), so a governed write can attribute to and reason about the subject.
+   * `principal` is `undefined` on an unauthenticated dispatch — a governed tool's floor has already
+   * denied that case before the handler runs, but the type stays honest for an ungoverned tool.
+   */
+  handler(input: I, ctx: { principal: Principal | undefined }): Promise<unknown>;
+}
+
+/**
+ * Give a {@link LestoDomainTool} declaration its types (ADR 0043) — the `defineTable`/`definePolicy`
+ * ergonomic for domain tools. This identity helper INFERS the input shape `I` from the Zod `input`
+ * schema, so the `handler`'s `input` and `ctx` are typed without a hand-written generic (which would
+ * otherwise clash with Zod's inferred output under `exactOptionalPropertyTypes`).
+ */
+export function defineDomainTool<I>(tool: LestoDomainTool<I>): LestoDomainTool<I> {
+  return tool;
 }
 
 /** The content-store database, or a clear refusal when none was wired in. */
@@ -529,11 +655,158 @@ const WRITE_ENTRY_SCHEMA = {
 };
 
 /**
+ * The names of the three dev-loop tools ({@link buildDevTools}), RESERVED for the domain-tool
+ * collision check (ADR 0043 D2.3) even on a non-dev server where they are not built — so a domain
+ * tool can never shadow a name a `lesto dev` server would later add.
+ */
+const DEV_TOOL_NAMES: readonly string[] = [
+  "get_dev_diagnostics",
+  "get_recent_requests",
+  "tail_logs",
+];
+
+/**
+ * Derive the MCP `tools/list` JSON Schema from a domain tool's Zod schema (ADR 0043 D1).
+ *
+ * Zod v4's native `z.toJSONSchema` produces a faithful schema (properties + `required`); the
+ * `$schema` key it stamps is dropped — MCP tool `inputSchema` does not carry it, matching the shape
+ * the framework tools hand-write.
+ */
+function domainInputSchema(schema: z.ZodType): object {
+  const json = z.toJSONSchema(schema) as Record<string, unknown>;
+
+  const { $schema: _drop, ...rest } = json;
+
+  return rest;
+}
+
+/**
+ * Adapt a {@link LestoDomainTool} into the framework {@link LestoTool} shape (ADR 0043 D1).
+ *
+ * The built handler gates a destructive tool on operator mode (the scope ceiling at dispatch, like
+ * `handle_request`), PARSES the input against the Zod schema at the boundary (ADR 0005 — a coded
+ * `MCP_INVALID_TOOL_INPUT` on failure, never a crash), then runs the declared handler with the
+ * parsed input and the resolved principal. `requiresPermission` (the dispatch floor, D3) is carried
+ * when the tool declares a `requires` — {@link dispatch} enforces it before the handler runs.
+ */
+function adaptDomainTool(context: LestoMcpContext, domain: LestoDomainTool): LestoTool {
+  return {
+    name: domain.name,
+    description: domain.description,
+    inputSchema: domainInputSchema(domain.input),
+    destructive: domain.destructive,
+    ...(domain.requires === undefined ? {} : { requiresPermission: domain.requires.permission }),
+    handler: async (input, principal) => {
+      // A destructive domain tool is operator-only, exactly like handle_request: a read-only server
+      // advertises it in tools/list but never runs the mutation.
+      if (domain.destructive) requireOperator(context, domain.name);
+
+      // Parse at the boundary (ADR 0005): a bad input is a coded refusal naming the tool, not a raw
+      // ZodError bubbling out of a governed dispatch.
+      const parsed = domain.input.safeParse(input);
+
+      if (!parsed.success) {
+        throw new McpError(
+          "MCP_INVALID_TOOL_INPUT",
+          `Input for the "${domain.name}" tool failed validation.`,
+          { tool: domain.name, issues: parsed.error.issues },
+        );
+      }
+
+      return domain.handler(parsed.data, { principal });
+    },
+  };
+}
+
+/**
+ * Validate + adapt the app's declared domain tools (ADR 0043 D2), or `[]` when none are declared.
+ *
+ * Every declaration is checked against the fail-closed invariants — each lifted verbatim from a
+ * shipped precedent — BEFORE the resolver-absence gate:
+ *   - **D2.3 name collision** — a domain name equal to a framework name (`reserved`, the FULL set
+ *     regardless of `omitTools`) or to another domain name refuses.
+ *   - **D2.1 ungoverned destructive** — a destructive tool with no `requires.permission` and no
+ *     `ungoverned: true` refuses.
+ *   - **D2.4 governed-without-policy** — a tool declaring `requires` on a context with no `policy`
+ *     refuses (the floor would never be adjudicated).
+ *   - **L-0c458a04 non-destructive-without-scope** — a non-destructive `requires` with no explicit
+ *     `scope` refuses (defaulting a read to the write scope would wrongly demand write).
+ * Then **D2.2**: destructive tools are ABSENT (a build-time gate, like the dev tools) when no
+ * principal resolver is wired — fail-closed, never present-and-open.
+ */
+function resolveDomainTools(context: LestoMcpContext, reserved: ReadonlySet<string>): LestoTool[] {
+  const declared = context.domainTools ?? [];
+
+  if (declared.length === 0) return [];
+
+  const seen = new Set<string>();
+
+  for (const domain of declared) {
+    if (reserved.has(domain.name)) {
+      throw new McpError(
+        "MCP_DOMAIN_TOOL_NAME_CONFLICT",
+        `Domain tool "${domain.name}" collides with a framework tool of the same name.`,
+        { name: domain.name },
+      );
+    }
+
+    if (seen.has(domain.name)) {
+      throw new McpError(
+        "MCP_DOMAIN_TOOL_NAME_CONFLICT",
+        `Two domain tools are named "${domain.name}".`,
+        { name: domain.name },
+      );
+    }
+
+    seen.add(domain.name);
+
+    if (domain.destructive && domain.requires === undefined && domain.ungoverned !== true) {
+      throw new McpError(
+        "MCP_DOMAIN_TOOL_UNGOVERNED",
+        `Destructive domain tool "${domain.name}" needs a requires.permission floor (or an explicit ungoverned: true).`,
+        { name: domain.name },
+      );
+    }
+
+    if (domain.requires !== undefined && context.policy === undefined) {
+      throw new McpError(
+        "MCP_DOMAIN_TOOL_POLICY_REQUIRED",
+        `Governed domain tool "${domain.name}" needs a policy on the MCP context to adjudicate its floor.`,
+        { name: domain.name },
+      );
+    }
+
+    if (
+      domain.requires !== undefined &&
+      !domain.destructive &&
+      domain.requires.scope === undefined
+    ) {
+      throw new McpError(
+        "MCP_DOMAIN_TOOL_SCOPE_REQUIRED",
+        `Non-destructive governed domain tool "${domain.name}" needs an explicit requires.scope.`,
+        { name: domain.name },
+      );
+    }
+  }
+
+  // D2.2: a destructive domain tool with no principal resolver is ABSENT — it never runs
+  // unattributed. Non-destructive tools stay (they attribute nothing); a governed one with no
+  // resolver still fails closed at the floor (empty roles satisfy nothing).
+  const canAttribute = context.resolvePrincipal !== undefined;
+
+  return declared
+    .filter((domain) => canAttribute || !domain.destructive)
+    .map((domain) => adaptDomainTool(context, domain));
+}
+
+/**
  * Build the Lesto tool set bound to a context.
  *
- * The handlers close over `context`, so the same tool definitions drive any app
- * the caller assembles. Order is stable: routes and request, then the content
- * read tools, then the content write tools.
+ * The handlers close over `context`, so the same tool definitions drive any app the caller
+ * assembles. Order is stable: the framework tools (routes/request, content reads, content writes),
+ * then the app's declared domain tools (ADR 0043), then — only under `lesto dev` — the dev tools.
+ * `context.omitTools` drops named framework tools last (D4), e.g. a production RS covered by domain
+ * tools drops `handle_request` for least privilege.
  */
 export function buildTools(context: LestoMcpContext): LestoTool[] {
   // One incremental runtime view per tool set: the content writes refresh through
@@ -765,7 +1038,7 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
     },
   };
 
-  return [
+  const frameworkTools: LestoTool[] = [
     listRoutes,
     handleRequest,
     generateUi,
@@ -776,12 +1049,50 @@ export function buildTools(context: LestoMcpContext): LestoTool[] {
     createContentEntry,
     updateContentEntry,
     deleteContentEntry,
-    // The dev-loop introspection tools (ADR 0032 Phase 1) exist ONLY when a live-dev-state
-    // reader is wired — i.e. under `lesto dev`. Absent it they are never built, so a
-    // non-dev / remote server can neither advertise nor reach them: the dev surface is
-    // gated at build time, never present-and-refusing (see {@link buildDevTools}).
-    ...(context.devState === undefined ? [] : buildDevTools(context.devState)),
   ];
+
+  // The dev-loop introspection tools (ADR 0032 Phase 1) exist ONLY when a live-dev-state reader is
+  // wired — i.e. under `lesto dev`. Absent it they are never built, so a non-dev / remote server can
+  // neither advertise nor reach them: the dev surface is gated at build time (see buildDevTools).
+  const devTools = context.devState === undefined ? [] : buildDevTools(context.devState);
+
+  // Domain tools (ADR 0043) append AFTER the framework set and BEFORE the conditional dev tools,
+  // preserving the stable-order contract. The collision reservation is the FULL framework name set —
+  // the always-on tools plus the dev names — so a domain tool can never shadow a framework name,
+  // even an omitted or a dev one (D2.3).
+  const reserved = new Set<string>([...frameworkTools.map((tool) => tool.name), ...DEV_TOOL_NAMES]);
+
+  const domainTools = resolveDomainTools(context, reserved);
+
+  const all = [...frameworkTools, ...domainTools, ...devTools];
+
+  // omitTools (D4): drop the named framework tools last — e.g. a production RS covered by domain
+  // tools drops handle_request for least privilege. Names stay reserved above, so an omit can never
+  // silently re-point a domain-tool name.
+  const omit = new Set(context.omitTools ?? []);
+
+  if (omit.size === 0) return all;
+
+  // L-0c458a04: an omit that names NO known tool is a typo that would silently leave the intended
+  // tool EXPOSED (the fail-open inverse of the reserved-name rule) — refuse it. The known set is the
+  // reserved framework names (incl. the dev names, so omitting a dev tool off `lesto dev` is fine)
+  // plus the declared domain names.
+  const omittable = new Set<string>([
+    ...reserved,
+    ...(context.domainTools ?? []).map((t) => t.name),
+  ]);
+
+  for (const name of omit) {
+    if (!omittable.has(name)) {
+      throw new McpError(
+        "MCP_UNKNOWN_OMIT_TOOL",
+        `omitTools names "${name}", which is not a known framework or domain tool.`,
+        { name },
+      );
+    }
+  }
+
+  return all.filter((tool) => !omit.has(tool.name));
 }
 
 /**
@@ -896,8 +1207,30 @@ export async function dispatch(
     throw new McpError("MCP_UNKNOWN_TOOL", `No MCP tool is named "${name}".`, { name });
   }
 
+  // The dispatch-level policy floor (ADR 0043 D3): a governed domain tool is reachable only by a
+  // subject whose roles the policy grants the tool's permission — enforced on EVERY transport, so
+  // stdio (which has no HTTP pre-dispatch floor) is finally gated (0028 Phase 3a item 2), and an
+  // HTTP request that already cleared `policyFloorChallenge` gets the identical verdict here. It
+  // checks the SAME single `principal` the handler receives (amendment (b)). Deny by default: an
+  // unauthenticated dispatch has no principal → empty roles → denied; and a missing policy denies
+  // too (a fail-closed backstop — a governed tool refuses to register without one, D2.4).
+  if (tool.requiresPermission !== undefined) {
+    const permitted =
+      context.policy?.allows(principal?.actorRoles, tool.requiresPermission) ?? false;
+
+    if (!permitted) {
+      await audit("error");
+
+      throw new McpError(
+        "MCP_FORBIDDEN",
+        `The "${name}" tool requires the "${tool.requiresPermission}" permission.`,
+        { tool: name, permission: tool.requiresPermission },
+      );
+    }
+  }
+
   try {
-    const result = await tool.handler(input);
+    const result = await tool.handler(input, principal);
 
     await audit("ok");
 

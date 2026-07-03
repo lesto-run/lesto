@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { z } from "zod";
+
 import { definePolicy } from "@lesto/authz";
 
 import {
   authorizeBearer,
   bearerChallenge,
   bearerFromAuthorization,
+  compileToolFloor,
   createBearerAuthenticator,
   gateMcpHttpRequest,
   insufficientScopeChallenge,
@@ -17,6 +20,7 @@ import {
   scopeCeilingChallenge,
 } from "../src/http";
 import type { AccessTokenClaims, BearerSession, ToolRequirement } from "../src/http";
+import type { LestoDomainTool } from "../src/tools";
 
 const PRM_URL = "https://api.example.test/.well-known/oauth-protected-resource";
 
@@ -700,5 +704,102 @@ describe("refusalBody", () => {
         resource_metadata: PRM_URL,
       }),
     );
+  });
+});
+
+describe("compileToolFloor (ADR 0043 D3 — the one floor map, disjoint ownership)", () => {
+  const WRITE = "mcp:write";
+
+  const gateDeploy: LestoDomainTool<{ service: string }> = {
+    name: "gate_deploy",
+    description: "Request a deploy.",
+    input: z.object({ service: z.string() }),
+    destructive: true,
+    requires: { permission: "deploy:gate" },
+    handler: () => Promise.resolve(null),
+  };
+
+  it("maps a framework tool from the deployment permissions with the write scope pinned", () => {
+    const floor = compileToolFloor({
+      toolPermissions: { handle_request: "console:operate" },
+      knownToolNames: new Set(["handle_request", "list_routes"]),
+      writeScope: WRITE,
+    });
+
+    expect(floor.get("handle_request")).toEqual({ scope: WRITE, permission: "console:operate" });
+  });
+
+  it("maps a governed domain tool from its own declaration, defaulting scope to the write scope", () => {
+    const floor = compileToolFloor({
+      domainTools: [gateDeploy],
+      knownToolNames: new Set(["list_routes"]),
+      writeScope: WRITE,
+    });
+
+    expect(floor.get("gate_deploy")).toEqual({ scope: WRITE, permission: "deploy:gate" });
+  });
+
+  it("honors an explicit scope on a non-destructive governed domain tool", () => {
+    const read: LestoDomainTool<Record<string, never>> = {
+      name: "read_stats",
+      description: "A governed read.",
+      input: z.object({}),
+      destructive: false,
+      requires: { scope: "mcp:read", permission: "stats:read" },
+      handler: () => Promise.resolve(null),
+    };
+
+    const floor = compileToolFloor({
+      domainTools: [read],
+      knownToolNames: new Set(["list_routes"]),
+      writeScope: WRITE,
+    });
+
+    expect(floor.get("read_stats")).toEqual({ scope: "mcp:read", permission: "stats:read" });
+  });
+
+  it("gives an ungoverned domain tool no floor", () => {
+    const ungoverned: LestoDomainTool<Record<string, never>> = {
+      name: "ping",
+      description: "An ungoverned read.",
+      input: z.object({}),
+      destructive: false,
+      handler: () => Promise.resolve(null),
+    };
+
+    const floor = compileToolFloor({
+      domainTools: [ungoverned],
+      knownToolNames: new Set(["list_routes"]),
+      writeScope: WRITE,
+    });
+
+    expect(floor.has("ping")).toBe(false);
+  });
+
+  it("refuses a deployment permissions entry that names a domain tool (D3 disjoint ownership)", () => {
+    expect(() =>
+      compileToolFloor({
+        toolPermissions: { gate_deploy: "deploy:gate" },
+        domainTools: [gateDeploy],
+        knownToolNames: new Set(["gate_deploy", "list_routes"]),
+        writeScope: WRITE,
+      }),
+    ).toThrow(expect.objectContaining({ code: "MCP_DOMAIN_TOOL_FLOOR_CONFLICT" }));
+  });
+
+  it("refuses a deployment permissions entry that names no built tool (L-0c458a04)", () => {
+    expect(() =>
+      compileToolFloor({
+        toolPermissions: { handle_reqeust: "console:operate" },
+        knownToolNames: new Set(["handle_request", "list_routes"]),
+        writeScope: WRITE,
+      }),
+    ).toThrow(expect.objectContaining({ code: "MCP_UNKNOWN_TOOL_FLOOR" }));
+  });
+
+  it("is empty when neither a deployment map nor domain tools are supplied", () => {
+    const floor = compileToolFloor({ knownToolNames: new Set(["list_routes"]), writeScope: WRITE });
+
+    expect(floor.size).toBe(0);
   });
 });

@@ -8,22 +8,23 @@
  * and on the edge. Pointing the RS at a different issuer is config, not code; running it on a
  * different transport is a substrate swap, not a rewrite.
  *
- * The app's own surface is an ops console: `handle_request` (write-scoped) drives the
- * services/incidents/deploys reads + the destructive writes, `list_routes` is read-only — so the
- * OpenAuth scopes (`mcp:read` vs `mcp:read mcp:write`, carried in the token's `properties.scopes`)
- * gate exactly as designed.
+ * The app's own surface is an ops console: the app's real actions are FIRST-CLASS governed MCP tools
+ * (`declare_incident` / `annotate_incident` / `gate_deploy` writes, `list_services` / `list_deploys`
+ * reads, ADR 0043), the generic `handle_request` is OMITTED for least privilege, and `list_routes`
+ * is read-only — so the OpenAuth scopes (`mcp:read` vs `mcp:read mcp:write`) AND the per-tool role
+ * floor gate exactly as designed.
  */
 
 import { createApp } from "@lesto/kernel";
 import type { App, KernelDatabase } from "@lesto/kernel";
 import type { McpAuditRecord } from "@lesto/mcp";
 
-import { buildGovernedApi, ROLES, SCOPES, demoRolesOf, opsPolicy, toolPolicy } from "./governance";
+import { buildGovernedApi, PERMISSIONS, ROLES, SCOPES, demoRolesOf, opsPolicy } from "./governance";
 import type { GovernanceOptions } from "./governance";
 import type { OpsStore } from "./ops";
 
 // Re-exported so the example's tests and entrypoints keep importing them from `./app`.
-export { ROLES, SCOPES, demoRolesOf, opsPolicy, toolPolicy };
+export { PERMISSIONS, ROLES, SCOPES, demoRolesOf, opsPolicy };
 
 export interface BuildRsOptions extends GovernanceOptions {
   /** The kernel database handle (from `@lesto/runtime`'s `openSqlite`). */

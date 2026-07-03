@@ -10,17 +10,21 @@
  * the transport is a swap.
  *
  * The app's surface is richer than the sibling's single dataset: THREE linked domains —
- * services, incidents, deploys (../mcp/ops.ts) — so the agent chains several tools into one real
- * incident-response task. The destructive writes (`POST /incidents`, `POST /incidents/:id/notes`,
- * `POST /deploys`) are reached only through the MCP `handle_request` tool, so the OpenAuth scopes
- * gate them exactly as designed: an SRE (`mcp:write`) drives the console, a viewer (`mcp:read`) is
- * refused every write, an unauthenticated agent never connects.
+ * services, incidents, deploys (../mcp/ops.ts) — so an agent chains several tools into one real
+ * incident-response task. Each real action is a FIRST-CLASS, named, typed MCP tool that OWNS its
+ * per-tool policy floor (ADR 0043): `declare_incident` / `annotate_incident` / `gate_deploy` are
+ * the governed writes, `list_services` / `list_deploys` the reads. The generic `handle_request` is
+ * OMITTED (`omitTools`) — the least-privilege production posture — so an agent can perform exactly
+ * the declared actions and nothing else, and the floor discriminates them: `oncall` may declare and
+ * annotate but NOT gate a deploy, the split that was unenforceable under one opaque `handle_request`.
  */
+
+import { z } from "zod";
 
 import { definePolicy } from "@lesto/authz";
 import type { App } from "@lesto/kernel";
-import { createBearerAuthenticator, createMcpHttpHandlers } from "@lesto/mcp";
-import type { McpAuditRecord } from "@lesto/mcp";
+import { createBearerAuthenticator, createMcpHttpHandlers, defineDomainTool } from "@lesto/mcp";
+import type { LestoDomainTool, McpAuditRecord } from "@lesto/mcp";
 import { lesto } from "@lesto/web";
 import type { Lesto } from "@lesto/web";
 
@@ -28,13 +32,13 @@ import { declareIncident, requestDeploy, seedOps, updateIncident } from "./ops";
 import type { Incident, OpsStore } from "./ops";
 import { createOpenAuthVerifier } from "./verify";
 
-/** The scope vocabulary; `mcp:write` is the ceiling that unlocks the destructive tools today. */
+/** The scope vocabulary; `mcp:write` is the ceiling that unlocks the destructive domain tools. */
 export const SCOPES = { read: "mcp:read", write: "mcp:write" } as const;
 
 /**
- * The ops roles this console understands. Scope governance enforces the read/write CEILING today
- * (a viewer can't write at all); the per-tool ROLE FLOOR is the forward-looking half — see
- * {@link toolPolicy} and {@link demoRolesOf}.
+ * The ops roles this console understands. The scope ceiling enforces the read/write CEILING (a
+ * viewer can't write at all); the per-tool ROLE FLOOR discriminates the writes — see
+ * {@link opsPolicy} and {@link demoRolesOf}.
  */
 export const ROLES = {
   sre: "sre",
@@ -46,38 +50,30 @@ export const ROLES = {
 } as const;
 
 /**
- * The permission the console's WRITE tool demands — the OCP-7 role floor, now WIRED on the
- * dispatch path. Every write flows through the one destructive MCP tool, `handle_request`, which
- * {@link buildGovernedApi} maps to this permission via `toolPermissions`. So the floor intersects
- * the scope ceiling: `handle_request` needs the `mcp:write` scope AND `console:operate`. An
- * over-scoped token is therefore still bounded by the subject's ROLE.
+ * The per-ACTION permissions each governed domain tool OWNS (ADR 0043). One permission per real
+ * action — the granularity the generic `handle_request` collapsed onto a single `console:operate`.
  */
-const OPERATE = "console:operate";
+export const PERMISSIONS = {
+  declare: "incident:declare",
+  annotate: "incident:annotate",
+  gate: "deploy:gate",
+} as const;
 
 /**
- * The `@lesto/authz` policy the OCP-7 floor consults. Only `sre`/`oncall` may operate the console;
- * a `viewer` (no write scope) and a `stakeholder` (write scope but no `console:operate`) are both
- * refused the write tool — the `stakeholder` BY ROLE, demonstrating the floor catching a token the
- * scope ceiling alone would let through. Passed to `createMcpHttpHandlers` in {@link buildGovernedApi}.
+ * The `@lesto/authz` policy the OCP-7 floor consults, now PER-ACTION (ADR 0043). `sre` and `oncall`
+ * may declare and annotate incidents, but ONLY `sre` may gate a deploy. A `viewer` (no write scope)
+ * is refused every write by the scope ceiling; a `stakeholder` (write scope but no operating role)
+ * by the floor. The `oncall`-can-declare-but-not-gate-deploy row is the exact assertion that was
+ * impossible under the single generic `handle_request` — now real, enforced on both substrates.
  */
 export const opsPolicy = definePolicy({
   roles: [ROLES.sre, ROLES.oncall, ROLES.viewer, ROLES.stakeholder],
-  can: { [OPERATE]: [ROLES.sre, ROLES.oncall] },
+  can: {
+    [PERMISSIONS.declare]: [ROLES.sre, ROLES.oncall],
+    [PERMISSIONS.annotate]: [ROLES.sre, ROLES.oncall],
+    [PERMISSIONS.gate]: [ROLES.sre],
+  },
 });
-
-/**
- * The per-ROUTE split (e.g. `oncall` may annotate incidents but not gate deploys) the console
- * WOULD enforce once the floor is ROUTE-aware. The TOOL-level floor is wired TODAY (see
- * {@link opsPolicy}: `handle_request` → `console:operate`); per-route gating needs domain-specific
- * MCP tools (one tool per action) instead of the generic `handle_request` — a follow-up. This
- * table documents that future split and is a test fixture; it is not consulted on the live path.
- */
-export const toolPolicy: Record<string, readonly string[]> = {
-  list_routes: [ROLES.sre, ROLES.oncall, ROLES.viewer],
-  declare_incident: [ROLES.sre, ROLES.oncall],
-  annotate_incident: [ROLES.sre, ROLES.oncall],
-  gate_deploy: [ROLES.sre],
-};
 
 /** The issuer-and-policy wiring the governed app needs — identical for Node and the edge. */
 export interface GovernanceOptions {
@@ -122,10 +118,10 @@ export interface GovernedApi {
   /** The RS's resource identifier (= `clientID`, forced by OpenAuth's token shape). */
   resource: string;
 
-  /** The MCP audit trail (every authenticated tool call lands here). */
+  /** The MCP audit trail (every authenticated tool call lands here, naming the DOMAIN action). */
   audit: McpAuditRecord[];
 
-  /** The ops console's state — what the `handle_request` tool reads and writes through the routes. */
+  /** The ops console's state — what the domain tools read and write. */
   store: OpsStore;
 }
 
@@ -142,17 +138,101 @@ function asSeverity(value: unknown): Incident["severity"] {
 }
 
 /**
+ * The app's real actions as first-class, governed domain tools (ADR 0043), bound to `store` and the
+ * resolved principal. Each write OWNS its per-tool floor via `requires.permission`, attributes to
+ * `ctx.principal.actor` (no hard-coded actor), and RETURNS the resulting entity so an agent observes
+ * the effect (a declared incident freezing the next deploy) without a separate read. The reads carry
+ * no floor — the scope ceiling (a read-scoped token) governs them, so a `viewer` reads but never writes.
+ */
+function opsDomainTools(store: OpsStore): LestoDomainTool[] {
+  const listServices = defineDomainTool({
+    name: "list_services",
+    description: "List the fleet's services with their current health.",
+    input: z.object({}),
+    destructive: false,
+    handler: () => Promise.resolve({ services: store.services }),
+  });
+
+  const declare = defineDomainTool({
+    name: "declare_incident",
+    description: "Declare a new incident against one or more services (freezes their deploys).",
+    input: z.object({
+      title: z.string(),
+      severity: z.enum(["sev1", "sev2", "sev3"]).optional(),
+      services: z.array(z.string()).optional(),
+    }),
+    destructive: true,
+    requires: { permission: PERMISSIONS.declare },
+    handler: (input, ctx) => {
+      const incident = declareIncident(store, {
+        title: input.title,
+        severity: input.severity ?? "sev3",
+        services: input.services ?? [],
+        actor: ctx.principal?.actor ?? "unknown",
+      });
+
+      return Promise.resolve({ incident });
+    },
+  });
+
+  const annotate = defineDomainTool({
+    name: "annotate_incident",
+    description: "Append a note to an incident's timeline and optionally transition its status.",
+    input: z.object({
+      id: z.number(),
+      note: z.string(),
+      status: z.enum(["open", "mitigated", "resolved"]).optional(),
+    }),
+    destructive: true,
+    requires: { permission: PERMISSIONS.annotate },
+    handler: (input, ctx) => {
+      const incident = updateIncident(store, input.id, {
+        note: input.note,
+        actor: ctx.principal?.actor ?? "unknown",
+        ...(input.status === undefined ? {} : { status: input.status }),
+      });
+
+      return Promise.resolve(incident === undefined ? { error: "no such incident" } : { incident });
+    },
+  });
+
+  const gate = defineDomainTool({
+    name: "gate_deploy",
+    description:
+      "Request a deploy of a service; BLOCKED while that service has an active incident.",
+    input: z.object({ service: z.string(), version: z.string().optional() }),
+    destructive: true,
+    requires: { permission: PERMISSIONS.gate },
+    handler: (input) => {
+      const deploy = requestDeploy(store, {
+        service: input.service,
+        version: input.version ?? "0.0.0",
+      });
+
+      return Promise.resolve({ deploy });
+    },
+  });
+
+  const listDeploys = defineDomainTool({
+    name: "list_deploys",
+    description: "List every deploy request and whether it shipped or was frozen.",
+    input: z.object({}),
+    destructive: false,
+    handler: () => Promise.resolve({ deploys: store.deploys }),
+  });
+
+  return [listServices, declare, annotate, gate, listDeploys];
+}
+
+/**
  * Build the ops console and mount the `@lesto/mcp` governance on a fresh `@lesto/web` app.
  *
- * `app` is the {@link App} the MCP tools dispatch back INTO (`handle_request` drives a real
- * `POST /incidents` etc. through it). It is read only at REQUEST time. The two substrates differ
- * here, and ONLY here:
+ * `app` is the {@link App} the framework tools dispatch back INTO. With the generic `handle_request`
+ * OMITTED (least-privilege, ADR 0043 D4) the domain tools act on `store` directly, so `app` is read
+ * only by the framework read tools. The two substrates differ here, and ONLY here:
  *   - Node passes a forward-reference to the BOOTED KERNEL app — `./app.ts` creates it with
- *     `await createApp` AFTER this returns, so the reference must be late-bound (migrations and
- *     durable schema apply before a tool call dispatches through it).
- *   - the edge omits `app`: there is no kernel, so MCP tool dispatch falls back into THIS `api`
- *     directly (self-dispatch). No forward-reference is needed — `api` is fully mounted by the
- *     time any request arrives.
+ *     `await createApp` AFTER this returns, so the reference must be late-bound.
+ *   - the edge omits `app`: there is no kernel, so it falls back to THIS `api` (self-dispatch).
  */
 export function buildGovernedApi(options: GovernanceOptions, app?: App): GovernedApi {
   // Forced by OpenAuth's token shape (aud = clientID, no RFC 8707) — see `clientID` above.
@@ -162,10 +242,9 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
   const store = seedOps();
   const audit: McpAuditRecord[] = [];
 
-  // The console: in-memory reads (services / incidents / deploys) + the destructive writes. Every
-  // route is reached through the MCP `handle_request` tool, so the OpenAuth scopes gate them — an
-  // SRE (mcp:write) drives the console, a viewer (mcp:read) is refused the writes, an
-  // unauthenticated agent never connects. The cross-entity deploy-freeze rule lives in ../mcp/ops.ts.
+  // The console's HTTP surface — its own routes (services / incidents / deploys). `list_routes`
+  // reports these; the GOVERNED MCP write path is the domain tools below, which act on the same
+  // `store`. The cross-entity deploy-freeze rule lives in ../mcp/ops.ts.
   const api = lesto()
     .get("/health", (c) => c.json({ ok: true }))
     // ── Services ──────────────────────────────────────────────────────────────
@@ -195,9 +274,7 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
         title: String(body.title ?? "untitled incident"),
         severity: asSeverity(body.severity),
         services,
-        // The MCP principal isn't on the route context here; the demo attributes the write to the
-        // role's archetype actor. (A production app would thread the authenticated subject through.)
-        actor: "sre@ops.example.com",
+        actor: "http@ops.example.com",
       });
 
       return c.json({ incident }, 201);
@@ -210,7 +287,7 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
           : undefined;
       const incident = updateIncident(store, Number(c.param("id")), {
         note: String(body.note ?? ""),
-        actor: "sre@ops.example.com",
+        actor: "http@ops.example.com",
         ...(status === undefined ? {} : { status }),
       });
 
@@ -227,8 +304,7 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
         version: String(body.version ?? "0.0.0"),
       });
 
-      // A blocked deploy is a successful, recorded decision (201) — the freeze is the feature,
-      // not an error. The agent reads `status: "blocked"` and knows to resolve the incident first.
+      // A blocked deploy is a successful, recorded decision (201) — the freeze is the feature.
       return c.json({ deploy }, 201);
     });
 
@@ -236,9 +312,8 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
   // MCP plumbing.
   const routes = api.routes();
 
-  // Node redirects MCP tool dispatch through its booted kernel app; the edge (no `app`) dispatches
-  // straight back into this `api`. `api` is fully built before any request, so this self-reference
-  // needs no late binding (and there are no edge migrations to report).
+  // Node redirects the framework tools' dispatch through its booted kernel app; the edge (no `app`)
+  // dispatches straight back into this `api`. The domain tools do not need it (they act on `store`).
   const contextApp: App = app ?? {
     handle: (method, path, requestOptions) => api.handle(method, path, requestOptions),
     migrationsApplied: [],
@@ -251,6 +326,11 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
       audit: (record: McpAuditRecord) => {
         audit.push(record);
       },
+      // The app's real actions as governed domain tools (ADR 0043); each write owns its floor.
+      domainTools: opsDomainTools(store),
+      // Least privilege: the surface is covered by domain tools, so drop the generic driver — an
+      // agent reaches exactly the declared actions and nothing else (ADR 0043 D4).
+      omitTools: ["handle_request"],
     },
     // The ONLY issuer-specific wiring: validate a real OpenAuth token via its JWKS.
     authenticate: createBearerAuthenticator({
@@ -268,10 +348,10 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
     writeScope: SCOPES.write,
     allowedOrigins: options.allowedOrigins,
     resourceMetadataUrl,
-    // OCP-7 role floor (now wired): the write tool needs `console:operate` ON TOP of `mcp:write`,
-    // so a subject with the scope but not the role (the stakeholder) is refused — a 403 floor.
+    // The OCP-7 role floor: each domain tool's `requires.permission` is adjudicated against this
+    // policy, per action. A destructive tool's scope defaults to `mcp:write`, so the floor
+    // intersects the scope ceiling exactly — an over-scoped stakeholder is still refused by ROLE.
     policy: opsPolicy,
-    toolPermissions: { handle_request: OPERATE },
   });
 
   api
@@ -283,10 +363,10 @@ export function buildGovernedApi(options: GovernanceOptions, app?: App): Governe
 }
 
 /**
- * Demo `subject → roles`: the OpenAuth subject (an email) maps to its ops role. Shaped so the
- * forward-looking per-tool floor ({@link toolPolicy}) can read `sre` / `oncall` / `viewer`
- * straight off the principal; today only the scope ceiling is consulted, so `sre` and `oncall`
- * are equivalent at runtime (both write).
+ * Demo `subject → roles`: the OpenAuth subject (an email) maps to its ops role. The RS resolves the
+ * role from the SUBJECT (its source of truth is the identity service, not the token), and the OCP-7
+ * per-tool floor ({@link opsPolicy}) reads it — so `sre` and `oncall` now DIVERGE at runtime (both
+ * write, but only `sre` may `gate_deploy`).
  */
 export function demoRolesOf(actor: string): string[] {
   if (actor === "sre@ops.example.com") return [ROLES.sre];

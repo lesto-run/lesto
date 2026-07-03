@@ -18,7 +18,8 @@
     "@lesto/migrate": "workspace:*",
     "@lesto/openapi": "workspace:*",
     "@lesto/web": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.0.0"
   },
   "peerDependencies": {
     "@lesto/content-core": "workspace:*",

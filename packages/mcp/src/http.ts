@@ -39,7 +39,7 @@
 import type { Policy, Principal } from "@lesto/authz";
 
 import { McpError } from "./errors";
-import type { McpMode } from "./tools";
+import type { LestoDomainTool, McpMode } from "./tools";
 
 /** A value delivered now or awaited — the established local convention. */
 type MaybePromise<T> = T | Promise<T>;
@@ -581,6 +581,73 @@ export interface ToolRequirement {
 
   /** The policy permission this tool needs — the floor the subject's roles are checked against. */
   permission: string;
+}
+
+/**
+ * Compile the per-tool OCP-7 floor (`tool name → { scope, permission }`) from a deployment's
+ * `toolPermissions` map for FRAMEWORK tools PLUS each governed {@link LestoDomainTool}'s own
+ * `requires` (ADR 0043 D3) — the single map {@link policyFloorChallenge} consumes, so the
+ * deployment-owned framework floors and the app-owned domain floors run through the identical
+ * intersection logic. (Lives here in tested code, not the coverage-excluded transport, because the
+ * disjoint-ownership refusal is a load-bearing security decision.)
+ *
+ * Ownership is disjoint and enforced: the deployment map owns FRAMEWORK tool floors; a domain tool's
+ * declaration owns THAT tool's floor. A `toolPermissions` entry that names a domain tool is REFUSED
+ * (`MCP_DOMAIN_TOOL_FLOOR_CONFLICT`) — the two maps cannot disagree about one tool's permission — and
+ * one that names no built tool is REFUSED (`MCP_UNKNOWN_TOOL_FLOOR`), since a typo would otherwise
+ * ship its intended target floorless. A destructive domain tool's scope defaults to the write scope;
+ * a non-destructive governed one carries the explicit scope its declaration required (`buildTools`
+ * refuses a non-destructive `requires` with no scope, so it is defined by the time this compiles).
+ */
+export function compileToolFloor(options: {
+  toolPermissions?: Readonly<Record<string, string>>;
+  domainTools?: readonly LestoDomainTool[];
+  /** The names of the tools actually built (framework tools, post-omit) — the unknown-tool oracle. */
+  knownToolNames: ReadonlySet<string>;
+  /** The deployment write scope — the default per-tool scope for a destructive tool's floor. */
+  writeScope: string;
+}): Map<string, ToolRequirement> {
+  const domainTools = options.domainTools ?? [];
+  const domainNames = new Set(domainTools.map((tool) => tool.name));
+
+  const requirements = new Map<string, ToolRequirement>();
+
+  // Framework floors: each maps a KNOWN framework tool → a permission, its scope pinned to the write
+  // scope so the floor intersects the existing scope ceiling exactly.
+  for (const [tool, permission] of Object.entries(options.toolPermissions ?? {})) {
+    // D3: a deployment entry naming a domain tool is refused — the declaration is that floor's owner.
+    if (domainNames.has(tool)) {
+      throw new McpError(
+        "MCP_DOMAIN_TOOL_FLOOR_CONFLICT",
+        `toolPermissions names the domain tool "${tool}", which owns its own floor via its declaration.`,
+        { tool },
+      );
+    }
+
+    // A map entry naming no built tool is a typo that would ship its intended target floorless.
+    if (!options.knownToolNames.has(tool)) {
+      throw new McpError(
+        "MCP_UNKNOWN_TOOL_FLOOR",
+        `toolPermissions names "${tool}", which is not a built tool.`,
+        { tool },
+      );
+    }
+
+    requirements.set(tool, { scope: options.writeScope, permission });
+  }
+
+  // Domain floors: the declaration is the single owner (D3). An ungoverned domain tool (no
+  // `requires`) carries no floor — the scope ceiling governs it, like an unmapped framework tool.
+  for (const domain of domainTools) {
+    if (domain.requires === undefined) continue;
+
+    requirements.set(domain.name, {
+      scope: domain.requires.scope ?? options.writeScope,
+      permission: domain.requires.permission,
+    });
+  }
+
+  return requirements;
 }
 
 /**

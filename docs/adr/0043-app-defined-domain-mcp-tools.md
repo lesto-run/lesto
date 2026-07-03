@@ -278,6 +278,22 @@ the app already has a router, and it reuses `handle_request`'s header-allowlist 
    explicitly governed) becomes the unsafe default (reachable until explicitly restricted). The
    domain-tool surface has the opposite failure mode: a destructive tool with no permission
    *refuses to register* (D2.1), so the unmapped state is unreachable, not open.
+
+   *Steelman — the **default-deny** route-map variant.* One could close exactly this hole by
+   flipping the table's default: an unmapped route is **denied** (not reachable) until someone maps
+   it a permission. That does answer D5.1 — the fail-open-by-omission objection dissolves. But it
+   still loses on the other two, and adds a fourth cost of its own: **(D5.2 unchanged)** the table
+   must still match the router's path-param / trailing-slash / case normalization byte-for-byte, so
+   the confused-deputy risk is identical — default-deny changes *what happens to an unmapped route*,
+   not *whether the floor and the router agree on a mapped one*; **(D5.3 unchanged)** the capability
+   the client displays is still `handle_request`, not the real action, so the legibility loss is
+   identical; and **(escape-hatch forfeiture)** default-deny turns `handle_request` from a *governed
+   generic driver* into a tool that can reach nothing until every route it might touch is enumerated
+   in the table — that is the enumeration work domain tools already do, but now *without* the
+   name-as-capability, typed-input, and per-tool-floor wins, and it destroys the D4 use case
+   `handle_request` exists for (an app whose surface is *deliberately not* fully enumerated). So the
+   default-deny variant pays the full price of enumeration and keeps none of its benefits. Verdict
+   unchanged: domain tools win.
 2. **It duplicates the router inside the governance layer.** A route→permission table must match
    the app router's path-param, trailing-slash, and case normalization **byte-for-byte**, or the
    floor and the dispatch disagree about which permission a request needs — a request the floor

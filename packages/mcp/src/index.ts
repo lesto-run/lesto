@@ -14,11 +14,12 @@
  * separate adapter in `server.ts`.
  */
 
-export { buildTools, dispatch, mcpPrincipalResolver } from "./tools";
+export { buildTools, defineDomainTool, dispatch, mcpPrincipalResolver } from "./tools";
 export type {
   AppSchemaShape,
   ContentModules,
   DispatchOptions,
+  LestoDomainTool,
   LestoMcpContext,
   LestoTool,
   McpAuditRecord,
@@ -48,6 +49,7 @@ export {
   authorizeBearer,
   bearerChallenge,
   bearerFromAuthorization,
+  compileToolFloor,
   createBearerAuthenticator,
   gateMcpHttpRequest,
   insufficientScopeChallenge,
