@@ -617,9 +617,13 @@ jobs:
 
       # The headline: the scaffolded Worker bundles and its config validates. The
       # dry-run exits 0 without ever contacting Cloudflare (no secrets in main CI).
+      # `bunx`, not `npx`: bun is set up here and runs the fetched bin directly, whereas
+      # `npx --yes wrangler@4` in this scaffolded dir fell back to a `sh -c wrangler` PATH
+      # lookup and died `wrangler: not found` (127) without installing. wrangler still runs
+      # under Node (its shebang) — that is what the Node 22 setup above provides.
       - name: wrangler deploy --dry-run
         working-directory: cf-dry-app
-        run: npx --yes wrangler@4 deploy --dry-run
+        run: bunx wrangler@4 deploy --dry-run
 
   # The install-and-boot proof (publish-day step 7): the ONLY gate that exercises the
   # PACKAGED shape rather than workspace symlinks. `scripts/pack-and-boot.mjs` packs
