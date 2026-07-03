@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -171,21 +173,40 @@ async function buildContentlessNodeFixture(): Promise<string> {
   const nodeModules = join(fixture, "node_modules");
   await mkdir(join(nodeModules, "@lesto"), { recursive: true });
 
+  // Hoisted third-party deps (react, zod, …) live in the repo-root install; symlink each in
+  // so the copied `src`/`bin` still resolve them, every package escaping to the repo for its
+  // own transitive deps. The `@lesto` scope and `jiti` are NOT hoisted here (bun nests them
+  // under each package's own install), so they are sourced explicitly below.
   for (const entry of await readdir(repoNodeModules)) {
-    if (entry.startsWith(".")) continue;
+    if (entry.startsWith(".") || entry === "@lesto") continue;
 
-    if (entry === "@lesto") {
-      // The one scope that can't be whole-symlinked: it holds the content peers we must
-      // OMIT, so link its packages one at a time and skip `content-core`/`content-store`.
-      for (const pkg of await readdir(join(repoNodeModules, "@lesto"))) {
-        if (pkg === "content-core" || pkg === "content-store") continue;
-
-        await symlink(join(repoNodeModules, "@lesto", pkg), join(nodeModules, "@lesto", pkg));
-      }
-    } else {
-      await symlink(join(repoNodeModules, entry), join(nodeModules, entry));
-    }
+    await symlink(join(repoNodeModules, entry), join(nodeModules, entry));
   }
+
+  // The eager `@lesto/*` graph the bin imports. bun does NOT hoist the `@lesto` scope to the
+  // repo-root `node_modules` in this workspace — it nests it under the CLI package's own
+  // install — so source the scope from THERE (with a repo-root fallback for a hoisted
+  // layout). Link its packages ONE AT A TIME so we can OMIT `content-core`/`content-store`:
+  // their genuine absence is the whole point of this fixture (the UNGUARDED optional-peer
+  // path under test). Each symlink escapes to its real workspace dir for transitive deps.
+  const cliLestoScope = join(here, "..", "node_modules", "@lesto");
+  const lestoScope = existsSync(cliLestoScope) ? cliLestoScope : join(repoNodeModules, "@lesto");
+  for (const pkg of await readdir(lestoScope)) {
+    if (pkg === "content-core" || pkg === "content-store") continue;
+
+    await symlink(join(lestoScope, pkg), join(nodeModules, "@lesto", pkg));
+  }
+
+  // `jiti` is the LOADER ITSELF, not a peer under test: the copied `bin/lesto.mjs` does
+  // `import { createJiti } from "jiti"` before a single line of TS runs, so the fixture
+  // can't even boot without it. It's a hard `@lesto/cli` dependency, but — like the `@lesto`
+  // scope above — bun does NOT hoist it to the repo-root `node_modules` (it's nested under
+  // the CLI package), so the top-level sweep never links it, and `node bin/lesto.mjs` dies
+  // with ERR_MODULE_NOT_FOUND 'jiti' before it can reach the absent-CONTENT-peer path this
+  // test actually exercises. Resolve jiti's real on-disk package root and link THAT (robust
+  // whether jiti is hoisted or nested); the content peers stay omitted above.
+  const jitiPkgRoot = dirname(createRequire(import.meta.url).resolve("jiti/package.json"));
+  await symlink(jitiPkgRoot, join(nodeModules, "jiti"));
 
   return fixture;
 }
