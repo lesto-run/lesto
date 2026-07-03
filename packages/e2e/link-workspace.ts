@@ -25,8 +25,14 @@ export async function linkWorkspaceInto(appDir: string, repoRoot: string): Promi
   const nodeModules = join(appDir, "node_modules");
   await mkdir(join(nodeModules, "@lesto"), { recursive: true });
 
-  // The externals (and the `.bun` store the `@lesto/*` links realpath into).
+  // The externals (react/preact/…) plus bun's `.bun` store (the `@lesto/*` links realpath into
+  // it). Skip the OTHER dotfile entries — `.bin` above all: linking the repo's read-only `.bin`
+  // in makes `npx`/`npm` unable to install a tool's bin shim into THIS app's node_modules, which
+  // is why the deploy-dry `npx wrangler` step died with `wrangler: not found`. Nothing the
+  // reconstructed app runs uses its `node_modules/.bin` (consumers invoke `lesto`'s bin.ts by
+  // absolute path), so dropping it is free.
   for (const entry of await readdir(join(repoRoot, "node_modules"))) {
+    if (entry.startsWith(".") && entry !== ".bun") continue;
     await linkIfAbsent(join(repoRoot, "node_modules", entry), join(nodeModules, entry));
   }
 
