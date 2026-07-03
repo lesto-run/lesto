@@ -919,6 +919,12 @@
         "@lesto/live-protocol": "workspace:*",
         "@lesto/web": "workspace:*",
       },
+      "peerDependencies": {
+        "pg": ">=8",
+      },
+      "optionalPeers": [
+        "pg",
+      ],
     },
     "packages/mail": {
       "name": "@lesto/mail",

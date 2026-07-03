@@ -11,6 +11,14 @@
     "@lesto/live-protocol": "workspace:*",
     "@lesto/web": "workspace:*"
   },
+  "peerDependencies": {
+    "pg": ">=8"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",

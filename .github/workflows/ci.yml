@@ -343,7 +343,7 @@ jobs:
 
       - name: Install the pg driver (peer of @lesto/pg)
         working-directory: packages/integration
-        run: bun add pg
+        run: bun add pg@^8
 
       - name: Cross-driver parity (SQLite + Postgres)
         working-directory: packages/integration
@@ -393,7 +393,7 @@ jobs:
 
       - name: Install the pg driver (an optional peer of @lesto/live-server)
         working-directory: packages/live-server
-        run: bun add pg
+        run: bun add pg@^8
 
       - name: Live pgoutput logical-replication shakeout
         working-directory: packages/live-server
@@ -443,7 +443,7 @@ jobs:
       # leave the acceptance run crashing with `Cannot find package 'pg'`. Landing pg in
       # root node_modules makes it reachable from packages/live-server AND packages/pg.
       - name: Install the pg driver (an optional peer of the Postgres change source)
-        run: bun add pg
+        run: bun add pg@^8
 
       # Verify the client bundles — the OPFS engine's LITERAL dynamic import must survive a real
       # `vite build` (the landmine that founded examples/live-durable; a non-literal specifier is
@@ -545,7 +545,7 @@ jobs:
 
       - name: Install the pg driver (the Hyperdrive parity test connects with it)
         working-directory: packages/integration
-        run: bun add pg
+        run: bun add pg@^8
 
       - name: Edge-Postgres parity (Hyperdrive adapter over a real Postgres)
         working-directory: packages/integration
