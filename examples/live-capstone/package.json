@@ -1,0 +1,28 @@
+{
+  "name": "@lesto/example-live-capstone",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Tier-4 v1 capstone (ADR 0042 Inc8): ONE multi-tenant local-first app proving the full v1 together — the per-row shape-authz matrix, offline writes, and cross-tab — on the REAL Postgres logical-replication path AND the SQLite v0 poll, behind the SAME live() surface. The epic-closing gallery-as-QA gate.",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "serve": "bun run serve.ts",
+    "test": "vitest run",
+    "acceptance:pg": "bun test/acceptance.pg.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/db": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/live": "workspace:*",
+    "@lesto/live-protocol": "workspace:*",
+    "@lesto/live-server": "workspace:*",
+    "@lesto/pg": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "@sqlite.org/sqlite-wasm": "3.46.1-build5"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0"
+  }
+}

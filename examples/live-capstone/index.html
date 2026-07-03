@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lesto local-first capstone (ADR 0042 Tier 4 v1)</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 40rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      #status {
+        color: #555;
+        font-size: 0.9rem;
+      }
+      #messages {
+        padding-left: 1rem;
+      }
+      form {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+      input {
+        flex: 1;
+        padding: 0.4rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Lesto local-first <code>live()</code> — capstone</h1>
+    <p>
+      Durable (OPFS-SQLite) + offline-capable + cross-tab, auth-scoped to
+      <code>?user=</code>/<code>?room=</code>. Open a second tab, go offline in DevTools, reload —
+      see <code>README.md</code> for the full manual checklist.
+    </p>
+    <p id="status">starting…</p>
+    <ul id="messages"></ul>
+    <form id="send-form">
+      <input id="message-body" placeholder="Type a message…" autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

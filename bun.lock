@@ -130,6 +130,24 @@
         "@lesto/web": "workspace:*",
       },
     },
+    "examples/live-capstone": {
+      "name": "@lesto/example-live-capstone",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/db": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/live": "workspace:*",
+        "@lesto/live-protocol": "workspace:*",
+        "@lesto/live-server": "workspace:*",
+        "@lesto/pg": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/web": "workspace:*",
+        "@sqlite.org/sqlite-wasm": "3.46.1-build5",
+      },
+      "devDependencies": {
+        "vite": "^7.0.0",
+      },
+    },
     "examples/live-durable": {
       "name": "@lesto/example-live-durable",
       "version": "0.0.0",
@@ -1518,6 +1536,8 @@
     "@lesto/example-island-fast-refresh": ["@lesto/example-island-fast-refresh@workspace:examples/island-fast-refresh"],
 
     "@lesto/example-live": ["@lesto/example-live@workspace:examples/live"],
+
+    "@lesto/example-live-capstone": ["@lesto/example-live-capstone@workspace:examples/live-capstone"],
 
     "@lesto/example-live-durable": ["@lesto/example-live-durable@workspace:examples/live-durable"],
 
