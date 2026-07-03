@@ -51,15 +51,31 @@ export async function linkWorkspaceInto(appDir: string, repoRoot: string): Promi
   const storeEntries = existsSync(store) ? await readdir(store) : [];
   const manifest = await readManifest(join(appDir, "package.json"));
   const declared = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies });
+  const unresolved = [];
   for (const dep of declared) {
     if (dep.startsWith("@lesto/")) continue;
     if (existsSync(join(nodeModules, dep))) continue; // the root sweep already covered it
     // store dirs are `<name>@<version>` (a scoped `/` encoded as `+`); `@` guards the prefix.
     const prefix = `${dep.replace("/", "+")}@`;
     const hit = storeEntries.find((entry) => entry.startsWith(prefix));
-    if (hit === undefined) continue;
+    if (hit === undefined) {
+      unresolved.push(dep);
+      continue;
+    }
     if (dep.includes("/")) await mkdir(join(nodeModules, dirname(dep)), { recursive: true });
     await linkIfAbsent(join(store, hit, "node_modules", dep), join(nodeModules, dep));
+  }
+
+  // A declared dep the sweep didn't cover AND that isn't in the bun store gets linked nowhere —
+  // the app then fails its build/boot resolving it with no pointer back to here (the exact
+  // silent whack-a-mole this helper exists to end). Surface it loudly; the usual cause is a
+  // dep no workspace package declares, so the store never fetched it.
+  if (unresolved.length > 0) {
+    console.warn(
+      `link-workspace: ${unresolved.length} declared dep(s) not found in the workspace ` +
+        `install, left UNLINKED: ${unresolved.join(", ")}. If the app needs them at ` +
+        `build/runtime, declare each on a workspace package so bun installs it into the store.`,
+    );
   }
 }
 
