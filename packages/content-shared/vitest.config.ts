@@ -8,9 +8,11 @@ import { defineConfig } from "vitest/config";
 // ship fully covered — see CONTENT_COVERAGE.md for the ratchet plan.
 export default defineConfig({
   test: {
-    // The FIRST HTML-sanitize call cold-inits the sanitizer (the "Worker threads require
-    // built JS" single-threaded fallback), which can exceed vitest's 5s default on a
-    // contended CI runner — every subsequent call then runs in <50ms. Give it headroom.
+    // The FIRST HTML-sanitize call cold-inits the sanitizer — `require("jsdom")` + a
+    // `new JSDOM("")` to give DOMPurify a DOM (see src/sanitize.ts) — and loading jsdom's
+    // module graph once can exceed vitest's 5s default on a contended CI runner; every
+    // subsequent call then runs in <50ms. Give it headroom. (A per-worker setupFiles warm-up
+    // would remove the cost instead of hiding it — tracked as a follow-up.)
     testTimeout: 30_000,
     coverage: {
       provider: "v8",
