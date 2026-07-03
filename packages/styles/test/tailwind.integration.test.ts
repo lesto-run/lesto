@@ -20,9 +20,10 @@ import { buildStyles } from "../src/build-styles";
 import { StylesError } from "../src/errors";
 import { tailwindStyleCompiler } from "../src/tailwind";
 
-// `resolveBase` must be a directory from which `tailwindcss` resolves; the
-// workspace root (two levels up from this package) hoists it.
-const resolveBase = join(import.meta.dirname, "..", "..", "..");
+// `resolveBase` must be a directory from which `tailwindcss` resolves. It is a direct
+// devDep of THIS package (see package.json), so under bun's isolated install layout it
+// resolves from the package dir — the repo root no longer hoists it.
+const resolveBase = join(import.meta.dirname, "..");
 
 let projectDir: string;
 let appDir: string;

@@ -31,10 +31,11 @@ import { buildStyles } from "../src/build-styles";
 import { tailwindStyleCompiler } from "../src/tailwind";
 
 // `resolveBase` must be a directory from which BOTH `tailwindcss` AND `tw-animate-css`
-// resolve; the workspace root (two levels up) hoists them (`tw-animate-css` is a devDep
-// of this package — see package.json). This is the same root the shadcn `@import`s use
-// in a real scaffolded app whose `node_modules` symlinks back to the workspace.
-const resolveBase = join(import.meta.dirname, "..", "..", "..");
+// resolve; both are direct devDeps of THIS package (see package.json), so under bun's
+// isolated install layout they resolve from the package dir — the repo root no longer
+// hoists them. (A real scaffolded app resolves the shadcn `@import`s the same way, from
+// its own installed `node_modules`.)
+const resolveBase = join(import.meta.dirname, "..");
 const fixture = join(import.meta.dirname, "fixtures", "shadcn-scaffold.app.css");
 
 let projectDir: string;
