@@ -13,11 +13,14 @@
 // Contract: runnable as `bun scripts/assert-isolated-node-modules.mjs` (the CI-wired invocation).
 // Paths resolve relative to this file, not the CWD, so the invocation dir doesn't matter.
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const hoistedScope = fileURLToPath(new URL("../node_modules/@lesto", import.meta.url));
 const bunfig = fileURLToPath(new URL("../bunfig.toml", import.meta.url));
+const lockfile = fileURLToPath(new URL("../bun.lock", import.meta.url));
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 const problems = [];
 
@@ -45,6 +48,43 @@ if (!pinPresent) {
       "  Without the pin the isolated layout is an implicit consequence of the lockfile's\n" +
       "  `configVersion` — a future regen could silently flip it. Restore the pin (ADR 0045).",
   );
+}
+
+// 3. Phantom workspace: every workspace entry in the COMMITTED lockfile must map to a
+//    git-tracked package.json. An untracked directory matching a workspace glob (packages/*,
+//    examples/*) gets baked into bun.lock by any local `bun install`; a fresh CI checkout —
+//    which lacks that dir — then fails `bun install --frozen-lockfile` with an opaque
+//    "lockfile had changes" that names no cause. This asserts the invariant that class
+//    violates, naming the offending path. (It cost this repo several red CI runs before the
+//    `!examples/hmr-check` negation closed the specific case — this catches the whole class.)
+if (existsSync(lockfile)) {
+  const raw = readFileSync(lockfile, "utf8").replace(/,(\s*[}\]])/g, "$1");
+  let workspaces;
+  try {
+    workspaces = JSON.parse(raw).workspaces ?? {};
+  } catch {
+    workspaces = {};
+    problems.push("Could not parse bun.lock to verify workspace entries — inspect it by hand.");
+  }
+  for (const ws of Object.keys(workspaces)) {
+    if (ws === "") continue; // the root package itself, not a member path
+    const manifest = `${ws}/package.json`;
+    try {
+      execFileSync("git", ["ls-files", "--error-unmatch", manifest], {
+        cwd: repoRoot,
+        stdio: "ignore",
+      });
+    } catch {
+      problems.push(
+        `Phantom workspace: bun.lock lists "${ws}", but ${manifest} is not git-tracked.\n` +
+          "  An untracked directory matching a workspace glob was baked into the lockfile by a\n" +
+          '  local `bun install`; a fresh checkout lacks it, so `bun install --frozen-lockfile`\n' +
+          '  fails with an opaque "lockfile had changes".\n' +
+          `  Fix: delete the stray dir (or negate it in root package.json "workspaces"), then\n` +
+          "  re-run `bun install` to drop the phantom entry from bun.lock.",
+      );
+    }
+  }
 }
 
 if (problems.length > 0) {
