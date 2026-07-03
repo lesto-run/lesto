@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { cp, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
+
+import { linkWorkspaceInto } from "./link-workspace";
 
 /**
  * Dev page-swap on the BUN dev path, end to end in a real browser (`L-7dd16878`).
@@ -19,7 +21,7 @@ import { expect, test } from "@playwright/test";
  * `app/routes/*` file SWAPS the page in place instead of full-reloading.
  *
  * The sibling `page-swap.spec.ts` proves the same on the Vite path; this is its Bun twin.
- * The de-peer + symlink-the-repo-node_modules pattern mirrors `island-bundler-parity.spec.ts`:
+ * The de-peer + reconstruct-the-workspace-node_modules pattern mirrors `island-bundler-parity.spec.ts`:
  * the fixture is copied to a temp app whose `package.json` does NOT declare the island-dev
  * peer — the single switch that selects the Bun bundler — and the route file is edited in
  * the COPY (so the tracked example is never touched).
@@ -66,13 +68,14 @@ test.beforeAll(async () => {
   appDir = join(workspace, "bun-app");
   pageFile = join(appDir, "app", "routes", "page.tsx");
 
-  // Copy the fixture SOURCE (no node_modules / build output), link the workspace packages
-  // the publish-equivalent way (symlink the repo node_modules), then DROP the island-dev
-  // peer so `lesto dev` takes the Bun.build path (bare `/client.js`).
+  // Copy the fixture SOURCE (no node_modules / build output), reconstruct the workspace
+  // node_modules the publish-equivalent way (externals + the rebuilt `@lesto/*` scope, since
+  // bun's isolated layout no longer hoists `@lesto/*` to the root — see `link-workspace.ts`),
+  // then DROP the island-dev peer so `lesto dev` takes the Bun.build path (bare `/client.js`).
   for (const entry of ["package.json", "tsconfig.json", "lesto.app.ts", "lesto.sites.ts", "app"]) {
     await cp(join(FIXTURE, entry), join(appDir, entry), { recursive: true });
   }
-  await symlink(join(REPO_ROOT, "node_modules"), join(appDir, "node_modules"), "dir");
+  await linkWorkspaceInto(appDir, REPO_ROOT);
 
   const pkgPath = join(appDir, "package.json");
   const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as {

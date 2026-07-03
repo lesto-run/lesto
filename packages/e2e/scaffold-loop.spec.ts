@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
+
+import { linkWorkspaceInto } from "./link-workspace";
 
 /**
  * The scaffold→run loop, end to end — the gate that makes blocker #9's three
@@ -37,9 +39,10 @@ import { expect, test } from "@playwright/test";
  * The packages are not published, so a `bun install` of the `file:`-pinned
  * workspace packages cannot resolve their transitive `workspace:*` deps until the
  * publish. So this e2e installs the way a published `bun install` WOULD resolve —
- * by linking the scaffolded app's `node_modules` at the repo's already-installed
- * workspace `node_modules` (where every `@lesto/*` package + `react`/`preact` is
- * present) — then runs the in-repo `lesto` bin. That makes the app's own
+ * by reconstructing the scaffolded app's `node_modules` from the repo (the externals
+ * linked in from the repo root, and the `@lesto/*` scope rebuilt from `packages/*`,
+ * since bun's isolated layout no longer hoists `@lesto/*` to the repo root — see
+ * `link-workspace.ts`) — then runs the in-repo `lesto` bin. That makes the app's own
  * `import "@lesto/db"` resolve exactly as a published install would. At the `0.x`
  * publish the link step becomes a literal `bun install` (the `file:` pins flip to
  * `^0.x` ranges); everything downstream of it is unchanged.
@@ -111,13 +114,15 @@ test.beforeAll(async () => {
   //    `--no-install` because step 2 IS the install: a real `bun install` of `file:`
   //    pins can't resolve their transitive `workspace:*` deps until publish (the
   //    unpublished-package problem this e2e works around — see the file header), and
-  //    skipping it leaves `node_modules` absent so the symlink below can claim it.
+  //    skipping it leaves `node_modules` absent so the link step below can claim it.
   await run("bun", [CREATE_LESTO_BIN, APP_NAME, "--local", "--no-install"], workspace);
 
-  // 2. "Install" the workspace-linked packages: link the app's node_modules at the
-  //    repo's installed workspace node_modules (the publish-equivalent of `bun
-  //    install` while the packages are unpublished — see the file header).
-  await symlink(join(REPO_ROOT, "node_modules"), join(appDir, "node_modules"), "dir");
+  // 2. "Install" the workspace-linked packages: reconstruct the app's node_modules from
+  //    the repo (externals + the rebuilt `@lesto/*` scope — bun's isolated layout no
+  //    longer hoists `@lesto/*` to the root, so a bare root symlink would resolve none;
+  //    see `link-workspace.ts`). The publish-equivalent of `bun install` while the
+  //    packages are unpublished.
+  await linkWorkspaceInto(appDir, REPO_ROOT);
 
   // 3. Build the Preact island client (and prove the build no longer crashes on a
   //    fresh out dir / the now-present sites file).

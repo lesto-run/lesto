@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { cp, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
+
+import { linkWorkspaceInto } from "./link-workspace";
 
 /**
  * Build-vs-dev bundler PARITY smoke (DX-parity R2, `L-56f79043`) — the gate before
@@ -32,8 +34,10 @@ import { expect, test } from "@playwright/test";
  * mode (unminified), because `lesto serve` does not serve `out/` assets (prod static is
  * the Worker/CDN's job), so a minified-prod browser leg isn't reachable via the CLI.
  *
- * Workspace packages are linked the way `scaffold-loop.spec.ts` does (symlink the repo
- * `node_modules` into each temp app). The Vite leg's island-dev now picks FREE Vite/HMR
+ * Workspace packages are linked the way `scaffold-loop.spec.ts` does (reconstruct each temp
+ * app's `node_modules` from the repo — externals plus the rebuilt `@lesto/*` scope, since
+ * bun's isolated layout no longer hoists `@lesto/*` to the root; see `link-workspace.ts`).
+ * The Vite leg's island-dev now picks FREE Vite/HMR
  * ports per `lesto dev` (no longer the old fixed 24677/24678), so it no longer collides
  * with the other island-dev specs on those ports.
  */
@@ -77,8 +81,8 @@ async function copyFixture(dest: string): Promise<void> {
     await cp(join(FIXTURE, entry), join(dest, entry), { recursive: true });
   }
 
-  // Link the workspace packages the publish-equivalent way (see file header).
-  await symlink(join(REPO_ROOT, "node_modules"), join(dest, "node_modules"), "dir");
+  // Reconstruct the workspace node_modules the publish-equivalent way (see file header).
+  await linkWorkspaceInto(dest, REPO_ROOT);
 }
 
 /** Remove `@lesto/island-dev` from an app's package.json — the switch to the Bun path. */
