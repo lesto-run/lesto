@@ -1,12 +1,22 @@
 # ADR 0044 — Multi-resource repo infrastructure deploys with Alchemy (TypeScript IaC) — a convention **beside** wrangler, not a replacement for `lesto deploy`
 
-- **Status:** **Proposed.** A **convention** ADR for the repo's *own* infrastructure — the
+- **Status:** **Accepted** (2026-07-03, chief-architect governance panel — verdict *ratify with
+  amendments*; the two working `alchemy.run.ts` files and ADR 0015's un-reversed scope both
+  verified against the tree). A **convention** ADR for the repo's *own* infrastructure — the
   cooperating-Worker examples and the live benchmark edge worker — plus the one genuine open
   question it answers (the shared state backend). It introduces no new package and no new
   product surface; it **records and generalizes** the pattern already proven in
   `examples/mcp-auth-openauth/alchemy.run.ts` and `examples/mcp-ops-console/alchemy.run.ts`
   (commit `a9b589d`) and picks the missing piece those two files left implicit (where Alchemy
-  keeps its state).
+  keeps its state). **Three blocking amendments, now folded in:** (1) Inc2 retires
+  `benchmarks/apps/lesto/wrangler.jsonc` as *deploy authority only* — it stays as the local
+  `wrangler dev` config (`start-edge.mjs` has no `--config` flag), with a compat-drift guard and a
+  "driver still boots locally" acceptance; (2) the state-encryption passphrase is **one shared
+  secret** across all adopting environments (D4), or a second machine cannot decrypt the shared
+  state; (3) the `adopt` + `--dry-run` CLI flag names are verify-at-implementation, same as D5's
+  state-backend API name. **Lock-in discipline:** the Alchemy dep is pinned caret on a `0.x`
+  (`^0.93.x` → patch-only); a minor/major bump is a deliberate, reviewed act, not an automatic
+  update.
 - **Date:** 2026-07-02.
 - **Deciders:** tech lead + owner (authored under board task `L-ff24955f`).
 - **Reconciles with / does NOT reverse — ADR 0015.** ADR 0015 rejected IaC frameworks
@@ -83,9 +93,10 @@ multi-resource infrastructure**, beside — never replacing — `wrangler`. Six 
 Each multi-resource deploy is a single `alchemy.run.ts` at the app/example root (already the
 pattern for the two MCP examples). The verbs are:
 
-- `bun alchemy.run.ts` — deploy the graph; **print the discovery URLs** it resolved (issuer
-  discovery, JWKS, the RS `/mcp` + `/.well-known/oauth-protected-resource`), so a human or CI can
-  immediately probe the live resources.
+- `bun alchemy.run.ts` — deploy the graph; **print the resolved resource URLs** (for the MCP-auth
+  examples: issuer discovery, JWKS, the RS `/mcp` + `/.well-known/oauth-protected-resource` — those
+  are the *example*, not the convention verb), so a human or CI can immediately probe the live
+  resources.
 - `bun alchemy.run.ts --destroy` — tear the graph down.
 - **Best-effort warmups after `app.finalize()` are allowed** (the two examples prime OpenAuth's
   lazy ES256/RSA keygen with one sequential dance) — but a warmup failure must be caught and must
@@ -118,9 +129,14 @@ against a service binding *or* a genuine third-party endpoint — the seam is wh
 
 Locally, `bunx alchemy login` (one-time) is fine — Alchemy needs its own CF credentials, distinct
 from wrangler's. **In CI, authentication is `CLOUDFLARE_API_TOKEN` in the environment** (an
-interactive `alchemy login` cannot run in CI), plus a **CI-secret password for Alchemy's state
-encryption** (Alchemy encrypts secrets in its state; that passphrase is a CI secret, not committed).
-The API token's account is the account the state backend (D5) must live in — see D5.
+interactive `alchemy login` cannot run in CI), plus a **password for Alchemy's state encryption**
+(Alchemy encrypts secrets in its state under this passphrase). **That passphrase must be ONE shared
+secret across every adopting environment — provisioned identically in CI secrets and the team
+secret store — not a per-environment value** (panel-caught blocking amendment). Alchemy's state
+secrets are encrypted under it, so Inc1's acceptance — a *different* machine reads the shared state
+and `--destroy`s resources it did not create — is **unsatisfiable if each environment mints its
+own passphrase**: the second machine could read the state records but not decrypt the secrets
+within them. The API token's account is the account the state backend (D5) must live in — see D5.
 
 ### D5 — Shared state backend: a Durable-Object-backed store, keyed per app+stage (the open question, answered)
 
@@ -147,6 +163,13 @@ preferred) and deliberately does **not** commit to an unverified Alchemy API nam
 
 ### D6 — What stays on wrangler, what migrates (explicit, so nothing drifts silently)
 
+**The principle behind the enumeration:** *user-path dogfoods never migrate* (estate, `www/`,
+`site/` — their whole value is running the path users run), while *the repo's own ops
+infrastructure migrates when Alchemy buys something wrangler can't — a resource graph, or
+CI-deployability.* The bench worker is the one deliberate exception below: it has no graph, but it
+migrates because it is repo-own infra where CI-deployability (Inc3) is the payoff. The list below
+is that principle applied, not an ad-hoc enumeration.
+
 **Stays on `wrangler` — unchanged by this ADR:**
 
 - **`lesto deploy --cloudflare`** — the product deploy battery, ADR 0015, `wrangler` behind
@@ -167,8 +190,9 @@ preferred) and deliberately does **not** commit to an unverified Alchemy API nam
 
 - The **multi-resource example topologies** — already on Alchemy (`a9b589d`); D5 completes them by
   wiring the shared state backend.
-- The **live benchmark edge worker** — as the simplest single-worker exercise, after the state
-  backend is proven (see *Migration sequencing*, and its safety warning).
+- The **live benchmark edge worker** — its *deploy authority* only (the `wrangler.jsonc` stays as
+  local-runtime config, Inc2), as the simplest single-worker exercise, after the state backend is
+  proven (see *Migration sequencing*, and its safety warning).
 
 ## Migration sequencing
 
@@ -182,15 +206,27 @@ nothing touches a live resource blind. (This plan is also captured, for tracking
   adopting the state** — deploying, then having a *different* environment read that same state and
   cleanly `--destroy` the resources it did not create. This increment de-risks everything after it:
   until shared state works, no migration is safe.
-- **Inc2 — migrate the benchmark edge worker; retire its `wrangler.jsonc`.** Author
-  `benchmarks/apps/lesto/alchemy.run.ts` for the single edge Worker, then remove
-  `benchmarks/apps/lesto/wrangler.jsonc` once Alchemy owns it. **SAFETY (from red-team — put in the
-  ADR so it is unmissable): Alchemy has NO state for the already-`wrangler`-deployed
-  `lesto-bench-edge` worker, so a blind `bun alchemy.run.ts` can ORPHAN the existing resource or
-  DUPLICATE it under a new name.** The migration **must** use Alchemy's **adopt** path and a
-  **`--dry-run`** first, confirm that Alchemy *takes over the existing resource* rather than
-  creating a second one, and **never** run a blind `--destroy` against a live or shared worker.
-  (`start-edge.mjs`'s local `wrangler dev` loop is unaffected — D6 keeps it on wrangler.)
+- **Inc2 — migrate the benchmark edge worker; retire its `wrangler.jsonc` as *deploy authority
+  only*.** Author `benchmarks/apps/lesto/alchemy.run.ts` for the single edge Worker so **Alchemy
+  owns the deploy**. **Do NOT delete `benchmarks/apps/lesto/wrangler.jsonc`** — `start-edge.mjs`
+  spawns `wrangler dev --local` with `cwd` = the app dir and **no `--config` flag**, so that file
+  *is* the local edge loop's config (`main: worker.ts`, `compatibility_date`, `nodejs_compat`,
+  observability-off). Deleting it kills the driver's edge tier (the exact panel-caught
+  contradiction with "the local loop is unaffected"). Instead: retire it as deploy authority —
+  re-comment it as *local-runtime config, deploy owned by `alchemy.run.ts`* (or **generate** it
+  from the Alchemy Worker definition — verify Alchemy's wrangler-json emission surface at
+  implementation time). **Add a drift guard:** the compat date + flags must match between the two
+  (or one must be generated from the other) — a benchmark whose local `workerd` config silently
+  diverges from the deployed worker forfeits its apples-to-apples claim.
+  **SAFETY (from red-team — put in the ADR so it is unmissable): Alchemy has NO state for the
+  already-`wrangler`-deployed `lesto-bench-edge` worker, so a blind `bun alchemy.run.ts` can ORPHAN
+  the existing resource or DUPLICATE it under a new name.** The migration **must** use Alchemy's
+  **adopt** path and a **`--dry-run`** first, confirm that Alchemy *takes over the existing
+  resource* rather than creating a second one, and **never** run a blind `--destroy` against a live
+  or shared worker. The adopt + `--dry-run` **flag names are verify-at-implementation** against
+  Alchemy's live docs (same caveat as D5's state-backend API) — the *requirement* is pinned, not
+  the exact CLI spelling. **Acceptance additionally asserts the driver's edge tier still boots
+  locally** (`start-edge.mjs` → live `workerd`) after the retirement.
 - **Inc3 — a CI deploy job.** `bun alchemy.run.ts` per migrated example, gated on the D4 secrets
   (`CLOUDFLARE_API_TOKEN` + the state passphrase) being present, so the job is skipped-out-loud on
   forks/PRs without secrets. This makes the **gallery-as-QA-gate**'s "it deploys" leg *mechanically
@@ -214,10 +250,13 @@ wrangler path (D6).
 
 ## Rejected alternatives
 
-1. **Keep everything on `wrangler.jsonc`.** It cannot express a two-Worker graph, cannot resolve
-   one Worker's deployed URL into another's binding, and cannot declare a service binding between
-   two Workers — the exact things the MCP-auth examples need and `a9b589d` proved Alchemy does. A
-   single-worker file for a multi-worker deploy is a non-starter.
+1. **Keep everything on `wrangler.jsonc`.** A `wrangler.jsonc` **can** declare a `services`
+   binding to a *named* worker — so the service-binding wiring alone is not the gap. The
+   irreducible gaps are the ones `a9b589d` proved Alchemy handles and a single file cannot:
+   **deploy ordering** across two Workers, **resolving one Worker's post-deploy URL into another's
+   binding** (`OPENAUTH_ISSUER: issuer.url`), and **graph-scoped shared state + teardown**. A
+   single-worker file for a multi-worker deploy graph is a non-starter on those three, even though
+   it could name the service binding.
 2. **Public `workers.dev` URLs for worker→worker calls instead of service bindings.** Refused by
    **Cloudflare error 1042** for same-account `workers.dev → workers.dev` subrequests. Service
    bindings (D3) are mandatory, with the injected-`fetch` seam preserving external-issuer parity.

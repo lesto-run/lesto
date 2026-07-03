@@ -1,17 +1,24 @@
 # ADR 0043 — App-defined domain MCP tools (a per-tool policy floor the app owns, so the tool SET is open)
 
-- **Status:** **Proposed** — a design pass, no code. It opens the closed part of the OCP-7
-  floor: the *floor* is already per-tool and sound (`packages/mcp/src/http.ts`
+- **Status:** **Accepted** (2026-07-03, chief-architect governance panel — verdict *ratify with
+  amendments*; every cited `file:line` seam spot-checked accurate). It opens the closed part of
+  the OCP-7 floor: the *floor* is already per-tool and sound (`packages/mcp/src/http.ts`
   `policyFloorChallenge`, `:607-660`), but the *tool set* is closed
   (`packages/mcp/src/tools.ts` `buildTools`, `:538,768-785`), so every app write collapses onto
   one permission. This ADR lets an app declare its own domain tools, each carrying its own
   floor. It writes **no** production code (nothing under `packages/`/`examples/` changes here)
   and it inherits the fail-closed invariants verbatim from two shipped precedents (ADR 0028's
   `createAdmin` opt-out, ADR 0034 Part B.2's absent-without-a-resolver), so the novel *risk*
-  surface is small even though the *capability* surface is large. It must still clear the
-  standard governance panel (red-team + chief-architect, grounded in the cited seams) before it
-  is Accepted and built — this draft is written to *be* that panel's input, not to pre-empt it.
-  Board task `L-6fd79629`.
+  surface is small even though the *capability* surface is large. The panel confirmed the two
+  load-bearing calls — app-owns-the-floor is the right ownership, and D5's rejection of a
+  route-aware `handle_request` is correct (chiefly D5.2, the router-normalization confused
+  deputy) — and required **two blocking amendments, now folded in**: (a) D2 gains a fourth
+  fail-closed invariant — a governed domain tool on a server with **no policy configured refuses
+  to register** (a `LestoMcpContext.policy` seam names where `dispatch`'s policy comes from), so
+  the "no policy → floor off" back-compat rule for framework tools does **not** silently extend
+  to domain tools; and (b) the dispatch-floor check and the handler consume the **single**
+  `dispatch`-resolved principal (an explicit `dispatch → handler` signature extension), never a
+  second `resolvePrincipal()`. Board task `L-6fd79629`.
 - **Date:** 2026-07-02
 - **Deciders:** tech lead + owner
 - **Builds on / touches / delivers:**
@@ -107,11 +114,22 @@ becomes one governed option among many, excludable. Five numbered decisions.
 
 ### D1 — The declaration API
 
-`LestoMcpContext` (`tools.ts:158`) gains one optional field:
+`LestoMcpContext` (`tools.ts:158`) gains two fields — the tool list and the **policy seam** the
+dispatch floor adjudicates against:
 
 ```ts
 domainTools?: readonly LestoDomainTool[];
+policy?: Policy;   // where dispatch's floor gets its Policy.allows (@lesto/authz, policy.ts:77)
 ```
+
+**The `policy` seam is load-bearing and is amendment (a).** The dispatch floor (D3) checks
+`policy.allows(principal.actorRoles, requires.permission)`; that `policy` must be reachable from
+the dispatch context. On the HTTP path it is the same compiled `Policy` the deployment already
+hands `createMcpHttpHandlers` (`streamable-http.ts:89`); on stdio it is threaded here. When a
+domain tool declares a `requires` floor but **no `policy` is configured on the context**, the
+tool **refuses to register** (D2.4) — the framework tools' back-compatible "no policy → floor
+off" rule (`http.ts:595-600`) must **not** extend to domain tools, or a governed-on-paper tool
+would ship scope-ceiling-only in fact.
 
 `buildTools` (`tools.ts:538`) appends them **after** the framework set and before the
 conditional dev tools, preserving the "order is stable" contract its docstring already makes
@@ -140,7 +158,13 @@ interface LestoDomainTool<I = unknown> {
 - **The handler receives the resolved principal**, so a domain write can attribute to and
   reason about the subject (`ctx.principal` is the `{ actor, actorRoles }` `dispatch` already
   resolves, `tools.ts:862`) — the seam the ops-console's `handle_request` currently lacks (it
-  hard-codes `actor: "sre@ops.example.com"`, `governance.ts:200,213`).
+  hard-codes `actor: "sre@ops.example.com"`, `governance.ts:200,213`). **It is the SAME single
+  resolution the dispatch floor checks against — amendment (b).** `dispatch` resolves the
+  principal once (`tools.ts:862`); D3's floor check and this handler call both consume *that*
+  value via an explicit `dispatch → handler` signature extension (`handler(input, ctx.principal)`).
+  A domain-tool wrapper must **never** call `resolvePrincipal()` a second time: a non-memoized
+  stdio resolver could return a different principal on the second call, so the tool would be
+  *checked-as-A* by the floor but *run-as-B* by the handler.
 - **`requires.scope` defaults to the deployment write scope for a destructive tool**, mirroring
   the OCP-7 rule that "each mapped tool's required scope IS the write scope, so the floor
   intersects exactly with the existing ceiling" (`http.ts:576-578`, `streamable-http.ts:237`).
@@ -149,7 +173,7 @@ interface LestoDomainTool<I = unknown> {
 
 ### D2 — Fail-closed registration invariants
 
-Three invariants, each lifted verbatim from an established, shipped precedent — so this ADR
+Four invariants, each lifted verbatim from an established, shipped precedent — so this ADR
 introduces *no new* fail-closed philosophy, only applies the existing ones to a new surface:
 
 1. **A destructive domain tool with no `requires.permission` refuses to register** — unless the
@@ -171,7 +195,18 @@ introduces *no new* fail-closed philosophy, only applies the existing ones to a 
    domain tool's) throws at build — no silent shadowing. `dispatch` resolves a tool by
    `tools.find(name)` (`tools.ts:891`), so a duplicate name would make dispatch order the
    security boundary; refusing at registration keeps the name a stable capability identifier
-   (ADR 0035).
+   (ADR 0035). The collision check runs against the **full framework name set regardless of
+   `omitTools`** — an omitted framework tool's name may not be re-claimed by a domain tool, so a
+   later un-omit can never silently re-point a name.
+4. **A governed domain tool with no `policy` configured on the context refuses to register**
+   (amendment (a)). A domain tool that declares a `requires` floor needs a `Policy` to adjudicate
+   it (D1's `policy` seam); if the context supplies none, the tool is not shippable governed —
+   it refuses at build, mirroring D2.1's `createAdmin`-verbatim "a supplied `policy` makes
+   governance mandatory … no silent 'no policy → fully open' default" (0028:127-129). This closes
+   the one fail-open hole of exactly the shape D5 rejects: without it, a `requires.permission`
+   would satisfy D2.1 at registration yet nothing would ever adjudicate it (both floor call sites
+   skip when no policy is configured — `http.ts:616`, `streamable-http.ts:313-315`). Enforced at
+   **both** entry points: `createMcpHttpHandlers` construction and the stdio `buildTools`.
 
 ### D3 — Floor composition: one owner per tool's floor
 
@@ -276,6 +311,11 @@ already-designed pieces of the roadmap were each waiting on:
 All three are the same declaration; building it once serves all three. This ADR is *also* the
 vehicle that builds **ADR 0028 Phase 3a item 2** (`requirePermission` at dispatch, 0028:191-193)
 — the dispatch-floor half (D3) that no shipped code provides, and that ADR 0034 Part B.2 assumes.
+**Superseding note:** 0028 Phase 3a item 2 also proposed *retiring* `requireOperator` / `McpMode`
+("one model, one place denials are decided"). This ADR delivers the `requirePermission`-at-dispatch
+half but **keeps the operator-mode ceiling** — per OCP-7's intersection posture, denials are
+decided by scope ceiling **and** policy floor together. So 0028's retirement clause is *superseded,
+not delivered*; do not read 0028's record as fully closed.
 
 ## Non-goals
 
@@ -289,8 +329,9 @@ vehicle that builds **ADR 0028 Phase 3a item 2** (`requirePermission` at dispatc
 - **Not retiring `handle_request`.** It stays as the governed generic escape hatch (D4);
   `omitTools` makes dropping it a *deployment* choice, not a framework removal.
 - **No silent fail-open.** A destructive domain tool with no floor refuses to register (D2.1);
-  with no resolver it is absent (D2.2); a deployment map naming a domain tool is refused (D3);
-  the dispatch floor denies unauthenticated and unprivileged subjects (D3).
+  with no resolver it is absent (D2.2); a governed tool with no configured `policy` refuses to
+  register (D2.4); a deployment map naming a domain tool is refused (D3); the dispatch floor
+  denies unauthenticated and unprivileged subjects (D3).
 
 ## Acceptance demo (specified, not built here)
 
@@ -329,9 +370,14 @@ under the generic `handle_request` (`governance.ts:68-73`).
   tools, so `oncall` ≠ `sre` at the permission boundary — the ops-console's designed-for split
   is finally enforceable, and the dormant `toolPolicy` fixture (`governance.ts:75-80`) becomes
   live code instead of a documented aspiration.
-- **stdio gains a floor for the first time.** D3 threads `requirePermission` through `dispatch`
-  (`tools.ts:847`), delivering ADR 0028 Phase 3a item 2 (0028:191-193) — the gap the HTTP-only
-  floor left open, and the landmine ADR 0034 Part B.2 flagged for `apply_migration` (0034:280-288).
+- **stdio gains a floor for the first time — for *domain* tools.** D3 threads `requirePermission`
+  through `dispatch` (`tools.ts:847`), delivering ADR 0028 Phase 3a item 2 (0028:191-193) — the
+  gap the HTTP-only floor left open, and the landmine ADR 0034 Part B.2 flagged for
+  `apply_migration` (0034:280-288). **Scope honesty:** this covers domain tools (whose `requires`
+  rides the context to `dispatch`). Framework destructive tools (`handle_request`, the content
+  writes) on stdio remain gated by operator mode alone, because deployment `toolPermissions` is
+  HTTP-construction-scoped; threading context-level permissions for *framework* tools to dispatch
+  is a follow-up, not this ADR.
 - **One surface unblocks three roadmap items** — the admin tool set (0028 Phase 3a item 1), the
   migration tools (0034 Part B), and app domain tools are the same declaration; the scaffold
   (0039 D1) emits a domain-tools file so production Resource Servers ship least-privilege
@@ -350,9 +396,16 @@ under the generic `handle_request` (`governance.ts:68-73`).
 
 ## Reviews
 
-Not yet reviewed — this is a Proposed design pass. It is written to be the input to the standard
-governance panel (red-team + chief-architect, grounded in the cited `file:line` seams), the same
-panel ADRs 0028 / 0034 / 0039 / 0042 cleared. The three claims the panel should press hardest:
+**Ratified 2026-07-03** by the chief-architect governance panel (grounded in the cited
+`file:line` seams, the same bar ADRs 0028 / 0034 / 0039 / 0042 cleared): **ratify with two
+blocking amendments**, both folded into the Status note, D1, D2.4, and D3 above — (a) governed
+domain tools fail closed when no `policy` is configured (the `LestoMcpContext.policy` seam), and
+(b) the dispatch floor and handler share the single dispatch-resolved principal. The panel
+verified the design was "unusually well-grounded" (every citation spot-checked) and confirmed
+app-owns-the-floor and the D5 route-aware rejection (chiefly D5.2). Non-blocking follow-ups
+(refuse a `toolPermissions` entry naming an unknown tool; the non-destructive-`requires`-without-
+`scope` default rule) are tracked on the board. The three claims the panel pressed hardest and
+cleared:
 
 - **D3's disjoint-ownership rule is load-bearing** — verify there is no path by which a domain
   tool ends up with two floors (its declaration + a deployment `toolPermissions` entry) that
