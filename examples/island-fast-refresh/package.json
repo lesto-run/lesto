@@ -13,6 +13,7 @@
     "@lesto/cli": "workspace:*",
     "@lesto/db": "workspace:*",
     "@lesto/kernel": "workspace:*",
+    "@lesto/observability": "workspace:*",
     "@lesto/runtime": "workspace:*",
     "@lesto/sites": "workspace:*",
     "@lesto/ui": "workspace:*",
@@ -24,6 +25,8 @@
     "react-dom": "^19"
   },
   "devDependencies": {
-    "@lesto/island-dev": "workspace:*"
+    "@lesto/island-dev": "workspace:*",
+    "@prefresh/core": "^1.5.0",
+    "@prefresh/utils": "^1.2.0"
   }
 }
