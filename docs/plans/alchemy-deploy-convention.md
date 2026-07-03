@@ -93,28 +93,34 @@ increment still gates completion; see "What still requires a live environment" b
   down. Because there is no local state at all, any environment with the shared `ALCHEMY_STATE_TOKEN`
   is equivalent — that *is* the second-machine adoption. Committed `65d4c22`.
 
-- **Inc2 — BLOCKED on a design reconciliation (discovered live, evidence-based).** The live
-  `lesto-bench-edge` worker exists (HTTP 200), so `adopt: true` is the right mechanism and the
-  Worker/`alchemy.run.ts` shape is settled (name literal `lesto-bench-edge`, `adopt: true`, matching
-  compat date/flags + observability-off). But `alchemy run` (read-only preview) fails with **`Cannot
-  find package 'alchemy'`**: `benchmarks/apps/lesto` is **deliberately NOT a workspace member**
-  (root `workspaces` = `packages/*`, `examples/*`, `site`, `www`) and carries **no deps** — it
-  resolves `@lesto/*` virtually via Bun for the `bun run server.ts` node path, which esbuild/Alchemy
-  bundling cannot do (no physical `node_modules/@lesto/*`, no `alchemy` dep). Making the bench
-  Alchemy-deployable means either (a) giving it its own install + an `@lesto/*` esbuild `alias` map
-  (`bundle.alias`), or (b) bringing it into the workspace — both **change the benchmark's intentional
-  zero-dependency, run-from-root design**, which is an architectural call, not an implementation
-  detail. Deferred to that decision rather than forced; the authored `alchemy.run.ts` shape is
-  recorded above for when it lands. Until then the bench stays on `wrangler` (its `wrangler.jsonc` is
-  untouched — still both deploy authority AND the local `wrangler dev` config).
+- **Inc2 — DONE, proven LIVE (design conflict resolved by a fable chief-architect panel).** The
+  first attempt hit a real blocker: `benchmarks/apps/lesto` was **deliberately NOT a workspace
+  member** with **zero deps**, so neither `alchemy`/`@lesto/*` (the deploy script + esbuild bundle)
+  resolved. A fable chief-architect verdict (2026-07-03) established the load-bearing fact: that
+  "zero-dep virtual-resolution" design was **already dead on the current tree** — the repo is on Bun
+  1.3.5 **isolated installs**, so a non-member gets NO `@lesto/*` symlinks and even `bun run
+  server.ts` fails `Cannot find module '@lesto/web'` (verified). So the design being "protected" no
+  longer worked for ANY consumer (node tier, `wrangler dev`, esbuild, Alchemy). **Verdict: Option B,
+  surgically scoped** — add exactly `benchmarks/apps/lesto` to the root `workspaces` glob + give it
+  `workspace:*` deps on `@lesto/{cloudflare,web}` + an `alchemy` devDep. `workspace:*` resolves to the
+  same `packages/*/src` the whole repo runs, so the **measured code is byte-identical** (charter
+  intact), and `lesto-bench-app` matches neither the `@lesto/*` nor `@lesto/example-*` filters, so it
+  stays out of every gate (verified: not in the typecheck filter; all `@lesto/*` still clean). Then:
+  authored `alchemy.run.ts` (name/compat/flags/observability **read from `wrangler.jsonc`** — the
+  drift guard, one source of truth); `adopt: true` **adopted the live `lesto-bench-edge`** (all four
+  workload routes serve 200, `/plaintext` = byte-identical `Hello, World!`, no duplicate, state in
+  the shared DO); `start-edge.mjs` → local `workerd` **still boots + serves** post-membership;
+  retired `wrangler.jsonc` to **deploy-authority-only** (re-commented: local-runtime config + the
+  drift-guard source, no more `wrangler deploy`). Honesty debt paid: the bench `package.json`
+  description + this doc now record that the virtual-resolution premise died with Bun 1.3 isolated
+  installs, so nobody "restores" the broken design.
 
-- **Inc3 — authored.** `.github/workflows/deploy-examples.yml` deploys the two migrated examples on
+- **Inc3 — DONE.** `.github/workflows/deploy-examples.yml` deploys the migrated Alchemy graphs on
   push to `main`, stage pinned to `prod` (D2), gated on the D4 secrets (`CLOUDFLARE_API_TOKEN` +
-  `ALCHEMY_STATE_TOKEN`) — **skips out loud** (a `::notice::`, not a failure) when they are absent
-  (forks/PRs). It deploys for real once those two secrets are set in the repo. Runs green locally
-  only insofar as the workflow is well-formed; its live behavior is exercised the first time it runs
-  on `main` with secrets present.
+  `ALCHEMY_STATE_TOKEN`) — **skips out loud** (a `::notice::`, not a failure) when absent (forks/PRs).
+  It deploys for real once those two secrets are set in the repo.
 
-**Net:** the convention is proven live end-to-end for the multi-resource examples (the load-bearing
-Inc1); the bench migration (Inc2) awaits a decision on the benchmark's workspace/dependency design;
-the CI job (Inc3) is in place and secret-gated.
+**Net:** ADR 0044 is implemented and **proven live end-to-end** — the multi-resource examples (Inc1)
+AND the benchmark edge worker (Inc2) run on the DO-backed shared-state Alchemy convention, with the
+CI deploy job (Inc3) in place and secret-gated. `lesto deploy`, estate, `www`/`site` stay on wrangler
+(D6), untouched.

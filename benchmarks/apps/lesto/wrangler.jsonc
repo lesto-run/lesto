@@ -1,7 +1,18 @@
 {
 	// The Lesto bench app as a Cloudflare Worker — Lesto's edge-native target.
-	// Used two ways: `wrangler deploy` (a live functional + bundle-size check) and
-	// `wrangler dev` (local workerd, the driver's apples-to-apples edge load path).
+	//
+	// LOCAL-RUNTIME CONFIG + DRIFT-GUARD SOURCE, not the deploy authority (ADR 0044 Inc2).
+	// The DEPLOY is owned by `alchemy.run.ts` (Alchemy adopts the `lesto-bench-edge`
+	// resource); this file is kept for two reasons:
+	//   1. `start-edge.mjs` runs `wrangler dev --local` with cwd = this dir and NO
+	//      `--config` flag, so THIS file is the local edge loop's config (the driver's
+	//      apples-to-apples workerd tier). Deleting it kills that tier.
+	//   2. `alchemy.run.ts` READS name + compat date/flags + observability from here — one
+	//      source of truth, so the deployed worker and the local `workerd` loop can never
+	//      diverge. Change a runtime setting HERE and the deploy follows automatically.
+	// Do NOT run `wrangler deploy` from this file anymore (Alchemy owns deploy); it stays
+	// for `wrangler dev` + as the values Alchemy reads.
+	//
 	// Minimal on purpose: the four workload routes are pure dynamic dispatch — NO
 	// static-assets binding (no prerendered files) and NO D1/Hyperdrive (the routes
 	// never query a DB), unlike the estate example.

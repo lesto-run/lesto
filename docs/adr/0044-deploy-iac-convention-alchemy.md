@@ -17,6 +17,15 @@
   state-backend API name. **Lock-in discipline:** the Alchemy dep is pinned caret on a `0.x`
   (`^0.93.x` → patch-only); a minor/major bump is a deliberate, reviewed act, not an automatic
   update.
+- **Implementation status (2026-07-03): IMPLEMENTED + proven LIVE.** Inc1 (both examples on the
+  DO-backed `CloudflareStateStore`, deploy→destroy across clean/shared state), Inc2 (the benchmark
+  `lesto-bench-edge` worker adopted via `adopt: true`, `wrangler.jsonc` retired to
+  deploy-authority-only + made the drift-guard source, `start-edge.mjs` → `workerd` re-verified), and
+  Inc3 (`.github/workflows/deploy-examples.yml`, secret-gated) are all done. Inc2 uncovered — and a
+  fable chief-architect panel resolved — that the benchmark's zero-dep/non-workspace design had
+  already been broken by Bun 1.3 isolated installs; the fix was to make `benchmarks/apps/lesto` a
+  workspace member (byte-identical measured code, still outside every `@lesto/*` gate). Full record:
+  `docs/plans/alchemy-deploy-convention.md` → "Status".
 - **Date:** 2026-07-02.
 - **Deciders:** tech lead + owner (authored under board task `L-ff24955f`).
 - **Reconciles with / does NOT reverse — ADR 0015.** ADR 0015 rejected IaC frameworks

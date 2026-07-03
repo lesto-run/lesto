@@ -2,9 +2,17 @@
   "name": "lesto-bench-app",
   "version": "0.0.0",
   "private": true,
-  "description": "Lesto benchmark app. Resolves @lesto/* from the monorepo root — no install step (run with `bun run server.ts` from the repo). Not a workspace member, so it carries no workspace:* deps.",
+  "description": "Lesto benchmark app. A root workspace member so @lesto/* resolve via physical node_modules symlinks — required by esbuild/wrangler/Alchemy bundling AND (since Bun 1.3 isolated installs) by `bun run` itself. workspace:* deps point at the same packages/*/src the whole repo runs, so the measured code is byte-identical. Not matched by the `@lesto/*` / `@lesto/example-*` workspace-script filters, so it stays out of the test/lint/typecheck/coverage/publish gates.",
   "type": "module",
   "scripts": {
     "start": "bun run server.ts"
+  },
+  "dependencies": {
+    "@lesto/cloudflare": "workspace:*",
+    "@lesto/web": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.0.0",
+    "alchemy": "^0.93.12"
   }
 }

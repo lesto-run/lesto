@@ -74,3 +74,15 @@ jobs:
           ALCHEMY_STATE_TOKEN: ${{ secrets.ALCHEMY_STATE_TOKEN }}
           ALCHEMY_STAGE: prod
         run: bun alchemy.run.ts
+
+      # The benchmark edge worker (ADR 0044 Inc2) — Alchemy adopts the existing `lesto-bench-edge`
+      # resource. `wrangler.jsonc` stays as the local `wrangler dev` config + the drift-guard source
+      # `alchemy.run.ts` reads its runtime settings from.
+      - name: Deploy benchmark edge worker
+        if: steps.guard.outputs.deploy == 'true'
+        working-directory: benchmarks/apps/lesto
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ALCHEMY_STATE_TOKEN: ${{ secrets.ALCHEMY_STATE_TOKEN }}
+          ALCHEMY_STAGE: prod
+        run: bun alchemy.run.ts
