@@ -9,6 +9,8 @@
   },
   "dependencies": {
     "@lesto/cloudflare": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/runtime": "workspace:*",
     "@lesto/web": "workspace:*"
   },
   "devDependencies": {

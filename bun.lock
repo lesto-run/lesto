@@ -33,6 +33,8 @@
       "version": "0.0.0",
       "dependencies": {
         "@lesto/cloudflare": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/runtime": "workspace:*",
         "@lesto/web": "workspace:*",
       },
       "devDependencies": {
@@ -106,6 +108,24 @@
       "devDependencies": {
         "@lesto/cli": "workspace:*",
         "@lesto/mcp": "workspace:*",
+      },
+    },
+    "examples/hmr-check": {
+      "name": "@lesto/example-hmr-check",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/cli": "workspace:*",
+        "@lesto/db": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/ui": "workspace:*",
+        "@lesto/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+        "react": "^19",
+        "react-dom": "^19",
+      },
+      "devDependencies": {
+        "@lesto/island-dev": "workspace:*",
       },
     },
     "examples/island-fast-refresh": {
@@ -1561,6 +1581,8 @@
     "@lesto/example-blog": ["@lesto/example-blog@workspace:examples/blog"],
 
     "@lesto/example-estate": ["@lesto/example-estate@workspace:examples/estate"],
+
+    "@lesto/example-hmr-check": ["@lesto/example-hmr-check@workspace:examples/hmr-check"],
 
     "@lesto/example-island-fast-refresh": ["@lesto/example-island-fast-refresh@workspace:examples/island-fast-refresh"],
 

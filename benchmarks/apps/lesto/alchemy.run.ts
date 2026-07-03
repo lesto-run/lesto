@@ -44,10 +44,26 @@ function parseJsonc(text: string): Record<string, unknown> {
 // one source of truth, no possible divergence (the apples-to-apples claim ADR 0044 Inc2 protects).
 const wrangler = parseJsonc(readFileSync(join(here, "wrangler.jsonc"), "utf8"));
 const name = wrangler.name as string;
+// The entrypoint is part of the drift guard too — read `main` from wrangler.jsonc rather than
+// hardcode it, so the deployed worker and the local `wrangler dev` loop can never point at
+// different modules.
+const entrypoint = wrangler.main as string;
 const compatibilityDate = wrangler.compatibility_date as string;
 const compatibilityFlags = (wrangler.compatibility_flags as string[] | undefined) ?? [];
 const observabilityEnabled =
   (wrangler.observability as { enabled?: boolean } | undefined)?.enabled ?? true;
+
+// SAFETY: `lesto-bench-edge` is a LITERAL-named, adopted, SHARED live worker (not stage-suffixed
+// like the example resources), so EVERY stage's state adopts the ONE physical worker. A
+// `--destroy` from a developer's `$USER` stage would therefore delete the shared production worker.
+// Refuse a teardown unless the stage is explicitly `prod` — the only context that legitimately owns
+// the shared resource's lifecycle (and the stage CI deploys under).
+if (process.argv.includes("--destroy") && (process.env.ALCHEMY_STAGE ?? "") !== "prod") {
+  throw new Error(
+    "Refusing to --destroy the shared literal-named `lesto-bench-edge` worker from a non-prod stage. " +
+      "Set ALCHEMY_STAGE=prod to deliberately tear down the shared resource.",
+  );
+}
 
 // Shared, DO-backed deploy state (ADR 0044 D5) under the one shared `ALCHEMY_STATE_TOKEN` (D4), so
 // CI and a second machine adopt the same resource rather than orphaning it.
@@ -60,7 +76,7 @@ const app = await alchemy("lesto-bench", {
 const worker = await Worker("bench-edge", {
   name,
   adopt: true,
-  entrypoint: "worker.ts",
+  entrypoint,
   compatibilityDate,
   compatibilityFlags,
   observability: { enabled: observabilityEnabled },
