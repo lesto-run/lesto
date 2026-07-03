@@ -1,0 +1,51 @@
+# Repo-root .dockerignore — LEGACY-BUILDER FALLBACK NET.
+#
+# Modern Docker (BuildKit / `# syntax=` / Fly's remote builder) reads the
+# adjacent `<dockerfile>.dockerignore` (e.g. examples/live-capstone/Dockerfile.dockerignore,
+# benchmarks/Dockerfile.dockerignore) and IGNORES this root file for those images.
+# The real deploy paths all force BuildKit, so this file does NOT change their behavior.
+#
+# This file exists only for the LEGACY builder (DOCKER_BUILDKIT=0 / an old engine),
+# which skips per-Dockerfile ignores entirely. Without it, a legacy `COPY . .` would
+# upload the ENTIRE monorepo — root node_modules, full .git history, var/ — into the
+# build context and into the image.
+#
+# It also tightens the repo-root framework Dockerfile's `COPY . .` under any builder:
+# that image brings its OWN production node_modules from the `deps` stage via
+# `COPY --from=deps`, so a local node_modules must never overwrite it.
+#
+# Keep this CONSERVATIVE: only VCS metadata, dependency installs, build outputs, and
+# local tooling caches / binary noise. Never exclude application SOURCE — both
+# `COPY . .` images ship app + workspace source (*.ts, lesto.app.ts, package.json,
+# migrations, static assets, packages/, examples/, site/, www/, docs/).
+
+# Dependency installs (runtime images bring their own via `COPY --from=deps`)
+node_modules
+**/node_modules
+
+# Version control
+.git
+.gitignore
+
+# Local runtime scratch / sandbox-redirected writes
+var
+
+# Test + build outputs
+coverage
+**/coverage
+dist
+**/dist
+build
+**/build
+.next
+**/.next
+.svelte-kit
+**/.svelte-kit
+
+# Local tooling caches / agent scratch
+.claude
+.playwright-mcp
+.devcontainer
+
+# Large binary noise (screenshots, etc.)
+*.png
