@@ -1,10 +1,9 @@
 {
   "name": "@lesto/authz",
-  "version": "0.0.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "Lesto's first-class authorization — a declarative role/permission policy and the guard middleware that enforces it.",
   "type": "module",
-  "private": true,
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -26,5 +25,20 @@
   "dependencies": {
     "@lesto/errors": "workspace:*",
     "@lesto/web": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/authz"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }

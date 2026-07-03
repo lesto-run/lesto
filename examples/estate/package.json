@@ -25,6 +25,7 @@
     "@lesto/env": "workspace:*",
     "@lesto/flags": "workspace:*",
     "@lesto/identity": "workspace:*",
+    "@lesto/kernel": "workspace:*",
     "@lesto/migrate": "workspace:*",
     "@lesto/observability": "workspace:*",
     "@lesto/ratelimit": "workspace:*",
