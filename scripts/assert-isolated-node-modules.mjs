@@ -75,6 +75,17 @@ export function firstMajor(range) {
 }
 
 /**
+ * Collapse the whitespace INSIDE a spaced comparator so operator and number tokenize as one:
+ * `">= 8"` → `">=8"`, `"> 8"` → `">8"`, `"< 20"` → `"<20"`. npm/bun honor `">= 8"` as exactly the
+ * unbounded `>=8.0.0`, but a naive whitespace split turns it into two tokens (`>=` and a bare `8`)
+ * — and the orphaned `8` reads as a bounded exact major, letting an open range slip the check.
+ * Normalizing first closes that hole for every function that tokenizes a range on whitespace.
+ */
+function normalizeComparatorSpacing(disjunct) {
+  return disjunct.replace(/([<>]=?)\s+/g, "$1");
+}
+
+/**
  * Is `range` BOUNDED above — i.e. does it name a finite ceiling major? Caret/tilde/exact/x-range
  * (and `||`-unions of them, and `>=X <Y` comparator pairs) are bounded. Open-ended ranges — `>=X`,
  * `>X`, `*`, `x`, bare "", or any disjunct that is lower-bound-only — are NOT: they advertise every
@@ -89,7 +100,7 @@ export function isBounded(range) {
     if (d === "" || d === "*" || d === "x" || d === "X") return false;
     let hasUpper = false;
     let hasOpenLower = false;
-    for (const token of d.split(/\s+/).filter(Boolean)) {
+    for (const token of normalizeComparatorSpacing(d).split(/\s+/).filter(Boolean)) {
       if (token === "*" || token === "x" || token === "X") return false;
       if (token.startsWith(">=") || token.startsWith(">")) hasOpenLower = true;
       else if (token.startsWith("<"))
@@ -104,9 +115,12 @@ export function isBounded(range) {
 }
 
 /**
- * Derive the tested major for `dep`: the package's OWN devDependency pin wins, else a fallback
- * "CI-pinned" map (the versions CI actually installs — the repo root's deps/devDeps, plus any
- * explicitly `bun add`-ed peer). Returns null when neither is known.
+ * Derive the tested major for `dep`: the package's OWN devDependency pin wins, else a `fallbackPins`
+ * map (currently the repo ROOT manifest's deps/devDeps). Returns null when neither is known — and
+ * NOTE the fallback only sees the root manifest, so a peer pinned solely in a sub-package
+ * (`packages/integration`'s `pg`) or via a per-job `bun add` step is NOT covered: for those the
+ * reach check no-ops and BOUNDEDNESS is the only honesty enforced. Widening the pin source is the
+ * open reach-refinement question (see the follow-up task referenced in ADR 0045).
  */
 export function testedMajor(manifest, dep, fallbackPins = {}) {
   const own = manifest.devDependencies?.[dep];
@@ -158,12 +172,20 @@ export function assertPeerHonesty(manifest, fallbackPins = {}) {
   return problems;
 }
 
-/** The major numbers a range advertises, ascending — e.g. `^18 || ^19` → [18, 19]. */
+/**
+ * The major numbers a range ADVERTISES as supported, ascending — e.g. `^18 || ^19` → [18, 19].
+ * A `<Y`/`<=Y` upper bound is a ceiling, not an advertised major, so it is skipped: `>=18 <19`
+ * advertises [18] (NOT [18, 19]) — counting the exclusive `<19` as major 19 would false-split a
+ * `>=18 <19` peer against an equivalent `^18` one. Lower bounds (`>=18`) and caret/tilde/exact
+ * tokens do contribute their major. (This is a major-set approximation, enough for lockstep on the
+ * repo's caret-style peers; it does not enumerate the interior majors of a wide comparator span.)
+ */
 function advertisedMajors(range) {
   const set = new Set();
   for (const d of String(range).trim().split("||")) {
-    for (const token of d.trim().split(/\s+/).filter(Boolean)) {
-      const m = /(\d+)/.exec(token.replace(/^[\^~=v<>]=?/, ""));
+    for (const token of normalizeComparatorSpacing(d.trim()).split(/\s+/).filter(Boolean)) {
+      if (token.startsWith("<")) continue; // an upper bound caps the range; it is not an advertised major
+      const m = /(\d+)/.exec(token.replace(/^[\^~=v>]=?/, ""));
       if (m) set.add(Number(m[1]));
     }
   }
@@ -298,9 +320,10 @@ function main() {
   }
 
   // 4 + 5. Manifest honesty: bounded framework/runtime peers + react/react-dom lockstep. The
-  //    "CI-pinned version" fallback for the tested-major derivation is the repo root's own
-  //    deps/devDeps — the versions `bun install` actually lands — so a peer with no local devDep
-  //    (e.g. an optional `pg`) is still measured against what CI resolves.
+  //    tested-major fallback is the repo ROOT manifest's deps/devDeps only. A peer pinned solely in
+  //    a sub-package (e.g. `pg` in packages/integration) or via a per-job `bun add` is NOT in this
+  //    map, so its reach check no-ops and only boundedness guards it — the open reach-refinement
+  //    question tracked as a follow-up (widen this source, or cut the reach leg entirely).
   let fallbackPins = {};
   try {
     const root = JSON.parse(readFileSync(`${repoRoot}/package.json`, "utf8"));

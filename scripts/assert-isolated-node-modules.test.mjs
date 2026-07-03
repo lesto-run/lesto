@@ -96,6 +96,13 @@ describe("isBounded", () => {
       expect(isBounded(r)).toBe(false);
     }
   });
+  it("is not fooled by a SPACED comparator (npm honors `>= 8` as the unbounded `>=8.0.0`)", () => {
+    for (const r of [">= 8", "> 8", "^18 || >= 19"]) {
+      expect(isBounded(r)).toBe(false);
+    }
+    // a spaced but genuinely bounded pair stays bounded
+    expect(isBounded(">= 18 < 20")).toBe(true);
+  });
 });
 
 describe("testedMajor", () => {
@@ -120,6 +127,11 @@ describe("assertPeerHonesty", () => {
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/UNBOUNDED/);
     expect(problems[0]).toContain('"^8"');
+  });
+  it('FAILS on a SPACED unbounded peer (`pg: ">= 8"`) — the space must not smuggle it past', () => {
+    const problems = assertPeerHonesty({ name: "@lesto/pg", peerDependencies: { pg: ">= 8" } });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/UNBOUNDED/);
   });
   it("FAILS on a bare `*` peer with no derivable major (no suggestion)", () => {
     const problems = assertPeerHonesty({ name: "x", peerDependencies: { foo: "*" } });
@@ -174,6 +186,13 @@ describe("assertReactLockstep", () => {
       assertReactLockstep({
         name: "x",
         peerDependencies: { react: "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" },
+      }),
+    ).toEqual([]);
+    // a `<Y` ceiling is not an advertised major: `>=18 <19` is major-18-only, equal to `^18`
+    expect(
+      assertReactLockstep({
+        name: "x",
+        peerDependencies: { react: ">=18.0.0 <19.0.0", "react-dom": "^18.0.0" },
       }),
     ).toEqual([]);
   });

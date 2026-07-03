@@ -69,10 +69,14 @@ declaring package" as a discipline the guard *assists*, not one the linker fully
 - **Manifest-honesty (amendment, 2026-07-03).** The same drift guard now also enforces the class of
   latent dishonesty the layout flip surfaced one CI job at a time: (a) every external
   framework/runtime peer (`react`, `react-dom`, `vue`, `svelte`, `pg`, …; not `@lesto/*` or
-  `workspace:*`) must be a **bounded** range that does not reach past its **tested major** (its own
-  devDependency, else the CI-installed pin) — an unbounded `>=X`/`*` peer advertises untested,
-  possibly nonexistent future majors and now **fails** here; and (b) `react` must share a major with
-  `react-dom` wherever both are declared, since a split pair throws at client render. The precipitating
+  `workspace:*`) must be a **bounded** range — an unbounded `>=X`/`*` peer advertises untested,
+  possibly nonexistent future majors and now **fails** here. As a best-effort refinement it also
+  fails a bounded range that reaches _past_ its **tested major**, but only when that major is locally
+  derivable (the package's own devDependency, else the repo-root manifest's pin); a peer pinned solely
+  in a sub-package or via a per-job `bun add` (e.g. `pg`) is guarded by boundedness alone — widening
+  that reach source, or cutting the reach leg entirely, is an open follow-up. And (b) `react` must
+  share a major with `react-dom` wherever both are declared, since a split pair throws at client
+  render. The precipitating
   fix: `@lesto/pg` and `@lesto/live-server` narrowed their `pg` peer `">=8"` → `"^8"` (npm `pg` latest
   is 8.x — pg 9 does not exist; CI installs `pg@^8`). Per chief-architect review this is a plain
   fail-on-unbounded rule with **no wider-than-tested escape hatch** (no live deliberate-wide case
