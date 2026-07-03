@@ -24,8 +24,13 @@
  * the deploy template's `worker.ts` fronts the app with (`lesto deploy
  * --cloudflare`); `@lesto/styles` is the Tailwind CSS pipeline the CLI lazily
  * imports to compile `app/styles/app.css` → `out/styles.css` (ADR 0037 — it is the
- * CLI's optional peer, so the app must carry it to light the CSS build). The rest
- * are the app's own runtime (db/kernel/migrate/runtime, the web router, the UI engine).
+ * CLI's optional peer, so the app must carry it to light the CSS build); `@lesto/observability`
+ * is carried directly because the island client bundle the build synthesizes ALWAYS
+ * `import`s `@lesto/observability/rum` (browser RUM — ARCHITECTURE.md §7), a bare specifier
+ * resolved from the app root: a transitive copy (via `@lesto/assets`/`web`/`cli`) resolves
+ * only under a HOISTING install, so under bun's isolated linker (its default inside a
+ * workspace), pnpm strict, or Yarn PnP the build would hard-fail without the direct dep. The
+ * rest are the app's own runtime (db/kernel/migrate/runtime, the web router, the UI engine).
  */
 export const LESTO_PACKAGES = [
   "@lesto/cli",
@@ -35,6 +40,7 @@ export const LESTO_PACKAGES = [
   "@lesto/env",
   "@lesto/kernel",
   "@lesto/migrate",
+  "@lesto/observability",
   "@lesto/runtime",
   // `lesto.sites.ts` does `import type { Site } from "@lesto/sites"`; without this
   // dep the scaffolded app's type import 404s on a standalone (non-monorepo) install.
@@ -65,21 +71,19 @@ export const LESTO_DEV_PACKAGES = ["@lesto/island-dev"] as const;
  *
  * The scaffold's `ui.dialect` is `"preact"`, so on `lesto dev` `@lesto/island-dev` loads
  * `@prefresh/vite` (the Preact half of the Fast-Refresh plugin pair — see its `dialect.ts`).
- * `@prefresh/vite` pins `@prefresh/core` + `@prefresh/utils` into Vite's
- * `optimizeDeps.include` and injects a browser preamble that imports them — and Vite
- * resolves `optimizeDeps` entries from the APP (project) root, NOT from `@prefresh/vite`'s
- * own location. So the app must carry them itself; without the declaration, editing an
- * island falls back to a full reload instead of preserving `useState`. This is the exact
- * break `examples/island-fast-refresh` hit and fixed by declaring these same two.
+ * `@prefresh/vite` names `@prefresh/core` + `@prefresh/utils` in Vite's `optimizeDeps.include`,
+ * and Vite resolves those entries from the APP (project) root. (Its injected browser preamble
+ * resolves them plugin-anchored via `this.resolve(id, __filename)`, so the preamble itself is
+ * layout-robust — it is the `optimizeDeps` pre-bundle step that needs them at the app root.)
+ * Declaring them makes that resolution deterministic under every layout; without it, on a
+ * non-hoisting install Vite's dep pre-bundle can miss them and editing an island degrades to a
+ * full reload instead of preserving `useState`. Same two `examples/island-fast-refresh` declares.
  *
  * They are DEV-ONLY (the Fast-Refresh runtime is never in a production `lesto build`) and
  * plain npm packages (NOT `@lesto/*`), so — like {@link SHADCN_DEPS} — they sit in
- * `devDependencies`, pinned to the ranges `@prefresh/vite` itself depends on.
- *
- * We do NOT declare `@lesto/observability` (the RUM half of that example's fix): it is
- * already a runtime dependency of the scaffold's `@lesto/assets`/`@lesto/web`/`@lesto/cli`,
- * so a standalone (non-monorepo) `bun install` hoists it transitively — the example needed
- * it directly only under bun's workspace ISOLATED layout, which a scaffolded app is not.
+ * `devDependencies`, pinned to the ranges `@prefresh/vite` itself depends on. (The RUM half of
+ * that same example fix, `@lesto/observability`, is carried as a RUNTIME dep — see
+ * {@link LESTO_PACKAGES} — because the production client bundle imports it too.)
  */
 export const PREFRESH_DEPS = {
   "@prefresh/core": "^1.5.0",
