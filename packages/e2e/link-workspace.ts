@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, symlink } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, symlink, unlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -56,19 +56,22 @@ export async function linkWorkspaceInto(appDir: string, repoRoot: string): Promi
   const store = join(repoRoot, "node_modules", ".bun");
   const storeEntries = existsSync(store) ? await readdir(store) : [];
   const manifest = await readManifest(join(appDir, "package.json"));
-  const declared = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies });
+  const declared = Object.entries({ ...manifest.dependencies, ...manifest.devDependencies });
   const unresolved = [];
-  for (const dep of declared) {
+  for (const [dep, range] of declared) {
     if (dep.startsWith("@lesto/")) continue;
     if (existsSync(join(nodeModules, dep))) continue; // the root sweep already covered it
     // store dirs are `<name>@<version>` (a scoped `/` encoded as `+`); `@` guards the prefix.
     const prefix = `${dep.replace("/", "+")}@`;
-    const hit = storeEntries.find((entry) => entry.startsWith(prefix));
-    if (hit === undefined) {
+    const matches = storeEntries.filter((entry) => entry.startsWith(prefix));
+    if (matches.length === 0) {
       unresolved.push(dep);
       continue;
     }
-    if (dep.includes("/")) await mkdir(join(nodeModules, dirname(dep)), { recursive: true });
+    const hit = pickStoreEntry(dep, range, prefix, matches);
+    // A scoped dep must NOT be linked through the pass-1 scope symlink (`@types`, `@vitest`, …)
+    // — that resolves into the REAL repo `node_modules` — so materialize a real scope dir first.
+    if (dep.includes("/")) await ensureRealScopeDir(join(nodeModules, dirname(dep)));
     await linkIfAbsent(join(store, hit, "node_modules", dep), join(nodeModules, dep));
   }
 
@@ -82,6 +85,152 @@ export async function linkWorkspaceInto(appDir: string, repoRoot: string): Promi
         `install, left UNLINKED: ${unresolved.join(", ")}. If the app needs them at ` +
         `build/runtime, declare each on a workspace package so bun installs it into the store.`,
     );
+  }
+}
+
+/**
+ * Choose ONE `.bun` store entry for `dep` among `matches` (all `<name>@<version>[+peerhash]`
+ * dirs whose name is `dep`).
+ *
+ * `readdir` yields the store in hash order, NOT semver order, so the old
+ * `matches.find(...)` picked whichever version the filesystem listed first — a coin flip.
+ * With `zod@3` and `zod@4` both in the store it returned `zod@3` even for an app declaring
+ * `zod: ^4` (a wrong-MAJOR link that only stayed hidden because the root install happened to
+ * cover zod first). So: a lone match is used as-is; with several, keep the ones whose major
+ * satisfies the app's declared range and take the highest, and REFUSE (throw) when the range
+ * pins no major or matches none — a loud, deterministic failure beats a silent wrong pick.
+ */
+function pickStoreEntry(
+  dep: string,
+  range: string | undefined,
+  prefix: string,
+  matches: readonly string[],
+): string {
+  if (matches.length === 1) return matches[0] as string;
+
+  // `<name>@<version>+<peerhash>` → the semver `<version>` (build metadata is not precedence).
+  const versionOf = (entry: string): string => entry.slice(prefix.length).split("+")[0] ?? "";
+  const wanted = majorPredicate(range);
+  const satisfying = wanted.constrained
+    ? matches.filter((entry) => wanted.test(majorOf(versionOf(entry))))
+    : [];
+
+  if (satisfying.length === 0) {
+    const versions = matches.map((entry) => entry.slice(prefix.length)).join(", ");
+    throw new Error(
+      `link-workspace: cannot pick a version for "${dep}" — the bun store has ${matches.length} ` +
+        `(${versions}) and the app's declared range "${range ?? "(none)"}" ` +
+        `${wanted.constrained ? "satisfies none of them" : "does not pin a major"}. ` +
+        `Pin "${dep}" to a single major in the app's package.json so the link is deterministic.`,
+    );
+  }
+
+  // Highest satisfying version wins; a version tie (peer-hash variants of the SAME version —
+  // e.g. two `react-dom@19.2.7+…`) breaks on the entry name so the pick stays deterministic.
+  return satisfying.toSorted(
+    (a, b) => compareVersionDesc(versionOf(a), versionOf(b)) || (a < b ? -1 : a > b ? 1 : 0),
+  )[0] as string;
+}
+
+/** The leading numeric component of a `<major>.<minor>.<patch>` version, or 0 if absent. */
+function majorOf(version: string): number {
+  return Number.parseInt(version.split(".")[0] ?? "", 10) || 0;
+}
+
+/** Order two versions high→low by numeric [major, minor, patch] (build metadata already stripped). */
+function compareVersionDesc(a: string, b: string): number {
+  const pa = a.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const diff = (pb[i] ?? 0) - (pa[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+/**
+ * Turn a package.json range into a MAJOR-level predicate — enough to disambiguate store entries
+ * without a full semver dependency. `^19`/`~19.1`/`19`/`19.x`/`19.2.0` → major 19; `>=18`/`>18`
+ * → major ≥ 18; a `||` union accepts any of its alternatives' majors. A range with no pinnable
+ * major (`*`, `latest`, `workspace:*`, `file:`/`link:`/`npm:`/git/url, or unparseable) is
+ * reported `constrained: false`, which forces the ambiguous-multi-match case to fail loud rather
+ * than guess.
+ */
+function majorPredicate(range: string | undefined): {
+  test: (major: number) => boolean;
+  constrained: boolean;
+} {
+  const unconstrained = { test: () => true, constrained: false };
+  if (range === undefined) return unconstrained;
+
+  const alternatives = range
+    .split("||")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (alternatives.length === 0) return unconstrained;
+
+  const predicates: ((major: number) => boolean)[] = [];
+  for (const alternative of alternatives) {
+    if (
+      alternative === "*" ||
+      alternative === "x" ||
+      alternative === "latest" ||
+      /^(?:workspace:|file:|link:|npm:|git|https?:)/.test(alternative)
+    ) {
+      return unconstrained; // one wildcard alternative means we cannot pin a major
+    }
+    const lowerBound = alternative.match(/^>=?\s*v?(\d+)/);
+    if (alternative.startsWith(">") && lowerBound) {
+      const floor = Number(lowerBound[1]);
+      predicates.push((major) => major >= floor);
+      continue;
+    }
+    const exact = alternative.match(/^[\^~]?\s*v?(\d+)/);
+    if (exact) {
+      const major = Number(exact[1]);
+      predicates.push((candidate) => candidate === major);
+      continue;
+    }
+    return unconstrained; // an alternative we cannot read — do not guess
+  }
+
+  return { test: (major) => predicates.some((predicate) => predicate(major)), constrained: true };
+}
+
+/**
+ * Ensure `scopePath` (e.g. `<app>/node_modules/@types`) is a REAL directory we can write a
+ * scoped link into — never a symlink that resolves THROUGH to the repo's own scope dir.
+ *
+ * Pass 1 links each root `node_modules` entry, whole scope dirs (`@types`, `@vitest`, …)
+ * included, as a SINGLE symlink to the repo's real scope. If the app then declares a scoped
+ * dep in one of those scopes that the root scope lacks, a bare
+ * `symlink(store/@x/y, node_modules/@x/y)` resolves `node_modules/@x` through that symlink and
+ * creates `y` INSIDE the repo checkout — mutating the real repo `node_modules`. So when the
+ * scope is a symlink, replace it with a real dir that re-links what it pointed at, so every
+ * later write stays inside this app. (Absent scope → just create it; already real → nothing to do.)
+ */
+async function ensureRealScopeDir(scopePath: string): Promise<void> {
+  let stats;
+  try {
+    stats = await lstat(scopePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      await mkdir(scopePath, { recursive: true });
+      return;
+    }
+    throw error;
+  }
+
+  if (!stats.isSymbolicLink()) return; // already a real dir (root scope, or a prior materialize)
+
+  // Materialize: capture what the scope symlink pointed at, drop the link, and rebuild it as a
+  // real dir whose entries link to the SAME realpaths — so nothing the root scope provided is lost.
+  const target = await realpath(scopePath);
+  const existing = await readdir(target);
+  await unlink(scopePath);
+  await mkdir(scopePath, { recursive: true });
+  for (const entry of existing) {
+    await linkIfAbsent(join(target, entry), join(scopePath, entry));
   }
 }
 
