@@ -17,10 +17,19 @@
 
 import alchemy from "alchemy";
 import { DurableObjectNamespace, Worker } from "alchemy/cloudflare";
+import { CloudflareStateStore } from "alchemy/state";
 
 import { CLIENT_ID, getAccessToken } from "./idp/dance";
 
-const app = await alchemy("lesto-mcp-auth-openauth");
+// Shared deploy state in a Cloudflare-Durable-Object-backed SQLite store (ADR 0044 D5), so CI and a
+// teammate's machine adopt + tear down the SAME resources instead of orphaning them. A DO-backed
+// store (not R2/KV) because deploy state is correctness-bearing read-modify-write, and
+// eventually-consistent CF storage is unviable for it (the c782e4e / L-35a55b2e key-storm lesson).
+// The store encrypts its secrets under `ALCHEMY_STATE_TOKEN`, which MUST be the SAME value across
+// every adopting environment (ADR D4) or a second machine can read the state but not decrypt it.
+const app = await alchemy("lesto-mcp-auth-openauth", {
+  stateStore: (scope) => new CloudflareStateStore(scope),
+});
 
 // OpenAuth's ES256 signing keys + auth state live in a single Durable Object (the `OpenAuthKeyStore`
 // class exported from idp/worker.ts) — strongly consistent across isolates, so the JWKS never
