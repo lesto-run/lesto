@@ -149,12 +149,14 @@ and `--destroy`s resources it did not create — is **unsatisfiable if each envi
 own passphrase**: the second machine could read the state records but not decrypt the secrets
 within them. The API token's account is the account the state backend (D5) must live in — see D5.
 
-Because that passphrase is baked into the `alchemy-state-service` worker's `STATE_TOKEN` binding —
-which only changes on a `forceUpdate` deploy — it lives in three copies (worker binding, the local
-`~/.alchemy` file, the CI secret) that must stay identical; changing one alone silently drifts and
-401s. Rotating it is scripted (`scripts/rotate-alchemy-state-token.ts`, gated behind
-`ALCHEMY_STATE_FORCE_UPDATE=1` in each `alchemy.run.ts`) — see
-[docs/runbooks/rotate-alchemy-state-token.md](../runbooks/rotate-alchemy-state-token.md).
+Operationally, `ALCHEMY_STATE_TOKEN` is the **bearer credential** the `alchemy-state-service` worker
+checks on every request — it is the worker's `STATE_TOKEN` binding, which only changes on a
+`forceUpdate` deploy. So the token lives in three copies (worker binding, the local `~/.alchemy` file,
+the CI secret) that must stay identical; changing one alone silently drifts and 401s. Rotating it is
+scripted (`scripts/rotate-alchemy-state-token.ts`, gated behind `ALCHEMY_STATE_FORCE_UPDATE=1` in each
+`alchemy.run.ts`) — see [docs/runbooks/rotate-alchemy-state-token.md](../runbooks/rotate-alchemy-state-token.md).
+(NB: this bearer token is distinct from Alchemy's state-*encryption* passphrase `ALCHEMY_PASSWORD`,
+which this repo does not currently set — see the follow-up on reconciling D4's encryption framing.)
 
 ### D5 — Shared state backend: a Durable-Object-backed store, keyed per app+stage (the open question, answered)
 
