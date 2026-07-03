@@ -244,6 +244,17 @@ describe.each(drivers)("queue concurrency: $name", (driver) => {
     handle = opened.db;
     close = opened.close;
 
+    // Drop ALL THREE queue tables, not just `lesto_jobs`. On Postgres the database
+    // persists across tests (every test opens a fresh pool onto the SAME socket),
+    // so a batch test's leftover `lesto_job_deps` edge survives into the next test.
+    // Dropping `lesto_jobs` alone resets its IDENTITY sequence, so the next batch's
+    // ids restart at 1,2 and it re-inserts the SAME `(job_id, depends_on_id)` pair —
+    // colliding with the survivor on the edge table's composite PRIMARY KEY and
+    // failing `enqueueBatch` before the test under proof even runs. Clearing the
+    // satellite tables too gives each test the fresh schema it assumes. (On SQLite
+    // every test gets a brand-new in-memory db, so these drops are a harmless no-op.)
+    await handle.exec("DROP TABLE IF EXISTS lesto_job_deps");
+    await handle.exec("DROP TABLE IF EXISTS lesto_job_batches");
     await handle.exec("DROP TABLE IF EXISTS lesto_jobs");
     await installQueueSchema(handle, driver.name);
   });
