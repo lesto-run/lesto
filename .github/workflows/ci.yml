@@ -447,6 +447,34 @@ jobs:
           LESTO_LIVE_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: bun run acceptance:pg
 
+      # Dead-alarm regression guard for the slot-lag probe (ADR 0042 Inc8, `L-2c330109`). The acceptance
+      # run above boots a real wal_level=logical slot but NEVER invokes `slot-lag`, so a column-name /
+      # function typo in readSlotLag's `pg_replication_slots` / `pg_wal_lsn_diff(pg_current_wal_lsn(),
+      # restart_lsn)::bigint` query would ship a SILENTLY DEAD alarm — dead exactly when the disk it
+      # guards is filling. This step is the missing regression check.
+      #
+      # WHY the exit code is tolerated but the verdict line is asserted: right after acceptance drops its
+      # slot, the probe LEGITIMATELY WARNs (exit 1, `slot "…" not present`), so a naive `bun run slot-lag`
+      # would red-fail on a healthy run. But a naive `|| true` would let a dead alarm pass silently. So we
+      # tolerate the non-zero exit yet ASSERT a `[OK|WARN|CRITICAL]` verdict line was emitted — that line
+      # is printed ONLY after the pg_replication_slots / pg_wal_lsn_diff query returns and classifySlotLag
+      # runs, so its presence is the exact proof the query executed. A column/function typo (or an
+      # unreachable DB / missing `pg` peer) throws FIRST — exit 2, no verdict line — and fails this step.
+      - name: Slot-lag probe query regression guard (dead-alarm check)
+        working-directory: examples/live-capstone
+        env:
+          LESTO_LIVE_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: |
+          # Capture combined stdout+stderr; `|| true` tolerates the legit non-zero exit (WARN=1 on the
+          # dropped slot). The default GitHub shell runs with `set -eo pipefail`, so guard the assignment.
+          output="$(bun run slot-lag 2>&1)" || true
+          echo "$output"
+          if ! printf '%s\n' "$output" | grep -qE '^\[(OK|WARN|CRITICAL)\]'; then
+            echo "::error::slot-lag emitted no [OK|WARN|CRITICAL] verdict line — readSlotLag's pg_replication_slots / pg_wal_lsn_diff query did not run (dead alarm: column/function typo, DB unreachable, or missing pg peer), or the check exited UNKNOWN. Full probe output is echoed above."
+            exit 1
+          fi
+          echo "slot-lag emitted a verdict line — the pg_replication_slots / pg_wal_lsn_diff query executed (alarm is live)."
+
   # Browser→server RUM tracing (ARCHITECTURE.md §7's headline differentiator):
   # boots a served page over a real socket + a local OTLP collector, reads the
   # SSR-injected `lesto-traceparent` meta the way a browser would, POSTs the
