@@ -61,7 +61,12 @@ export interface McpHttpServerOptions {
    * even pass a reader that would leak DevError stacks (absolute fs paths) or access-log
    * paths to a read-scoped bearer.
    */
-  context: Omit<LestoMcpContext, "mode" | "resolvePrincipal" | "devState">;
+  // `policy` is omitted too (ADR 0043): the deployment's policy is supplied via the top-level
+  // {@link policy} option, injected once into the per-request context here. Omitting it from
+  // `context` makes it IMPOSSIBLE to set two policies (a `context.policy` the dispatch floor honors
+  // + a `policy` the HTTP floor reads) that could disagree — the two gates read one effective policy
+  // by construction, closing the divergence the ratification panel demanded be ruled out.
+  context: Omit<LestoMcpContext, "mode" | "resolvePrincipal" | "devState" | "policy">;
 
   /** Validate a bearer token and bind it to a session — a configured `createBearerAuthenticator`. */
   authenticate: (token: string) => Promise<BearerSession | undefined>;
@@ -333,7 +338,10 @@ export function createMcpHttpHandlers(options: McpHttpServerOptions): McpHttpHan
       message: c.req.body,
       scopes: session.scopes,
       roles: session.principal.actorRoles,
-      policy: options.policy,
+      // Read the SAME effective policy the registration (D2.4) and dispatch floors read
+      // (`baseContext.policy`), so the HTTP pre-dispatch gate can never adjudicate against a
+      // different policy than the dispatch gate — one source, three gates, identical verdict.
+      policy: baseContext.policy,
       requirements,
       resourceMetadata: options.resourceMetadataUrl,
     });
