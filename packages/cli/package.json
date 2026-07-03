@@ -37,6 +37,10 @@
     "@lesto/web": "workspace:*",
     "jiti": "^2.7.0"
   },
+  "devDependencies": {
+    "@lesto/ai": "workspace:*",
+    "@lesto/db": "workspace:*"
+  },
   "peerDependencies": {
     "@lesto/content-core": "workspace:*",
     "@lesto/content-store": "workspace:*",

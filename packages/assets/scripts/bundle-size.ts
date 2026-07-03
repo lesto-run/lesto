@@ -51,8 +51,16 @@ const BACKENDS: ReadonlyArray<{
 /** Where the fixture island the bundle is measured against lives. */
 const FIXTURE_ISLANDS = join(import.meta.dir, "fixture-islands");
 
-/** The repo root, where `@lesto/ui`, `react`, and `preact` all resolve from. */
-const APP_ROOT = join(import.meta.dir, "..", "..", "..");
+/**
+ * The `@lesto/assets` package root — the resolution base for the entry's bare
+ * specifiers (`@lesto/ui`, `react`/`react-dom`, `preact`). It must be a package that
+ * actually DECLARES them so bun's hoisted linker links them into a `node_modules` this
+ * script can resolve from; the repo root does not declare `react`/`@lesto/ui`, so a
+ * root base leaves Rollup unable to resolve `@lesto/ui` from the staged entry. The
+ * fixture island paths are absolute (`join(FIXTURE_ISLANDS, name)`), so they resolve
+ * regardless of the base — only these bare specifiers ride on it.
+ */
+const APP_ROOT = join(import.meta.dir, "..");
 
 /** Build one backend × dialect production client and return its gzipped entry size in bytes. */
 async function measure(

@@ -546,8 +546,12 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # `--no-install` because the very next step symlinks the workspace node_modules
+      # in; create-lesto's default `bun install` would otherwise run against the
+      # unpublished @lesto/* graph and fail to resolve their `workspace:*` deps
+      # standalone (the same reason packages/e2e's scaffold-loop.spec.ts uses it).
       - name: Scaffold a fresh app (create-lesto --local)
-        run: bun packages/create-lesto/src/bin.ts cf-dry-app --local
+        run: bun packages/create-lesto/src/bin.ts cf-dry-app --local --no-install
 
       # Link the scaffolded app's node_modules at the repo's installed workspace
       # node_modules — the publish-equivalent of `bun install` while the @lesto/*

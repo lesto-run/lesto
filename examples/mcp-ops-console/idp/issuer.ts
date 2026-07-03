@@ -102,4 +102,4 @@ export function buildIssuer(storage: StorageAdapter): ReturnType<typeof issuer> 
 }
 
 /** The local/test issuer (in-memory). The Worker deploy uses {@link buildIssuer} with DO storage. */
-export const issuerApp = buildIssuer(MemoryStorage());
+export const issuerApp: ReturnType<typeof buildIssuer> = buildIssuer(MemoryStorage());

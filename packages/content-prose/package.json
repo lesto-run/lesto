@@ -32,6 +32,7 @@
     "fillers": "^2.0.0",
     "hedges": "^2.0.0",
     "no-cliches": "^0.3.6",
+    "picocolors": "^1.1.1",
     "typo-js": "^1.2.5",
     "weasels": "^2.0.0"
   },

@@ -25,6 +25,14 @@
   "dependencies": {
     "@lesto/db": "workspace:*"
   },
+  "peerDependencies": {
+    "pg": ">=8"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
+  },
   "publishConfig": {
     "access": "public"
   },

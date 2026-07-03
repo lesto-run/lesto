@@ -136,17 +136,24 @@ const appManifest = JSON.parse(readFileSync(appManifestPath, "utf8"));
 
 // Point the app's DIRECT `@lesto/*` deps at the tarballs too. npm rejects an
 // `overrides` entry that disagrees with a direct dependency's range (EOVERRIDE), so
-// the direct dep and its override must name the same tarball. `overrides` then reaches
-// the TRANSITIVE `@lesto/*` deps the tarballs declare (e.g. @lesto/queue → @lesto/errors).
-for (const dep of Object.keys(appManifest.dependencies ?? {})) {
-  if (dep in overrides) appManifest.dependencies[dep] = overrides[dep];
+// the direct dep and its override must name the same tarball. This holds for BOTH
+// `dependencies` and `devDependencies` — a scaffold's dev-only `@lesto/island-dev`
+// would otherwise disagree with its override and fail EOVERRIDE. `overrides` then
+// reaches the TRANSITIVE `@lesto/*` deps the tarballs declare (e.g. @lesto/queue → @lesto/errors).
+for (const field of ["dependencies", "devDependencies"]) {
+  for (const dep of Object.keys(appManifest[field] ?? {})) {
+    if (dep in overrides) appManifest[field][dep] = overrides[dep];
+  }
 }
 appManifest.overrides = overrides;
 
 // Every direct `@lesto/*` dep must now be a tarball `file:` spec. A future scaffold dep on
 // a package missing from the public closure would otherwise be left at its `^0.x` range and
 // 404 at install — fail HERE with a clear name instead of a buried npm error.
-const unpinned = Object.entries(appManifest.dependencies ?? {})
+const unpinned = [
+  ...Object.entries(appManifest.dependencies ?? {}),
+  ...Object.entries(appManifest.devDependencies ?? {}),
+]
   .filter(([dep, spec]) => dep.startsWith("@lesto/") && !String(spec).startsWith("file:"))
   .map(([dep]) => dep);
 if (unpinned.length > 0) {
