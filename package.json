@@ -1,6 +1,6 @@
 {
   "private": true,
-  "workspaces": ["packages/*", "examples/*", "site", "www", "benchmarks/apps/lesto"],
+  "workspaces": ["packages/*", "examples/*", "!examples/hmr-check", "site", "www", "benchmarks/apps/lesto"],
   "packageManager": "bun@1.3.5",
   "engines": {
     "node": ">=22"
