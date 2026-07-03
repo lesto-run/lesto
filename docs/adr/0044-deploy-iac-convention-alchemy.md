@@ -161,6 +161,15 @@ orphans or double-creates a resource), so it earns the same strong-consistency a
 the *requirement* (shared, same-account, strongly consistent, keyed per app+stage; DO-backed
 preferred) and deliberately does **not** commit to an unverified Alchemy API name.
 
+> **Resolved (2026-07-03, against the installed `alchemy@0.93.12`):** the store is
+> **`CloudflareStateStore`** from `alchemy/state` — *"backed by a SQLite database in a Cloudflare
+> Durable Object"* (the DO-backed, strongly-consistent store this D5 requires; the older
+> `DOStateStore` is `@deprecated`). Wired via `alchemy(name, { stateStore: (scope) => new
+> CloudflareStateStore(scope) })`; the one shared secret is its `stateToken` (default
+> `ALCHEMY_STATE_TOKEN`), whose own doc note — *"You must use the same token for all deployments on
+> your Cloudflare account"* — is exactly D4. Full findings + the remaining live-acceptance gate in
+> `docs/plans/alchemy-deploy-convention.md` ("Verified Alchemy API").
+
 ### D6 — What stays on wrangler, what migrates (explicit, so nothing drifts silently)
 
 **The principle behind the enumeration:** *user-path dogfoods never migrate* (estate, `www/`,
@@ -227,6 +236,10 @@ nothing touches a live resource blind. (This plan is also captured, for tracking
   Alchemy's live docs (same caveat as D5's state-backend API) — the *requirement* is pinned, not
   the exact CLI spelling. **Acceptance additionally asserts the driver's edge tier still boots
   locally** (`start-edge.mjs` → live `workerd`) after the retirement.
+  > **Resolved (2026-07-03, `alchemy@0.93.12`):** *adopt* is `Worker({ adopt: true })` (or `alchemy
+  > deploy --adopt --force`); the *dry-run* preview is the **`alchemy run <entrypoint>`** read-only
+  > subcommand (there is no `--dry-run` flag). Run `alchemy run` first to confirm it reports **adopt,
+  > not create**. Details in `docs/plans/alchemy-deploy-convention.md`.
 - **Inc3 — a CI deploy job.** `bun alchemy.run.ts` per migrated example, gated on the D4 secrets
   (`CLOUDFLARE_API_TOKEN` + the state passphrase) being present, so the job is skipped-out-loud on
   forks/PRs without secrets. This makes the **gallery-as-QA-gate**'s "it deploys" leg *mechanically

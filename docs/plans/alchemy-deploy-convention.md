@@ -30,3 +30,70 @@ the adopt/`--dry-run` discipline in Inc2.**
 
 **Never in scope:** `lesto deploy` / `packages/cloudflare/src/wrangler.ts` (ADR 0015 emitter);
 `examples/estate`'s `wrangler deploy` dogfood path; `www/` + `site/` single-worker static deploys.
+
+## Verified Alchemy API (resolved against the installed `alchemy@0.93.12`)
+
+ADR 0044 deliberately left three surfaces as *verify-at-implementation-time* (D5's state-backend
+name, and Inc2's `adopt` + `--dry-run` flag names). Resolved here against the **installed package's
+own type declarations** — the authoritative source for the pinned `^0.93.x`, more reliable than the
+docs site — so the eventual live implementation is turnkey. (The live-deploy *acceptance* of each
+increment still gates completion; see "What still requires a live environment" below.)
+
+- **D5 — shared state backend → `CloudflareStateStore` (from `alchemy/state`).** Its declaration
+  (`node_modules/alchemy/lib/state/cloudflare-state-store.d.ts`) reads verbatim: *"A state store
+  backed by a SQLite database in a Cloudflare Durable Object."* That is the **DO-backed, strongly
+  consistent** store D5 requires (the R2/KV eventual-consistency options are explicitly rejected on
+  the `c782e4e` / `L-35a55b2e` key-storm lesson). **Do NOT use the older `DOStateStore`** — in
+  `0.93.x` it is `@deprecated` (it aliases `DOFSStateStore`) and its own deprecation note points to
+  `CloudflareStateStore`. Wiring:
+
+  ```ts
+  import alchemy from "alchemy";
+  import { CloudflareStateStore } from "alchemy/state";
+
+  const app = await alchemy("lesto-mcp-ops-console", {
+    // alchemy()'s options carry `stateStore?: StateStoreType`, where
+    // `StateStoreType = (scope: Scope) => StateStore` (lib/state.d.ts).
+    stateStore: (scope) => new CloudflareStateStore(scope),
+  });
+  ```
+
+  Config surface (`CloudflareStateStoreOptions`): `stateToken?: Secret<string>` (default
+  `process.env.ALCHEMY_STATE_TOKEN`) — its own doc note: *"You must use the same token for all
+  deployments on your Cloudflare account."* That is **exactly ADR D4's ONE-shared-secret rule**, now
+  confirmed as a first-class Alchemy constraint (not merely our convention). Plus `CloudflareApiOptions`
+  (the `CLOUDFLARE_API_TOKEN` / account the state-service worker is provisioned in — same account as
+  D4's deploy token), a `scriptName?` (default `"alchemy-state-service"` — the worker Alchemy stands
+  up to host the state DO), and a `forceUpdate?` recovery escape hatch. Per-app+stage keying (D2/D5)
+  is intrinsic: the store keys on `app.name` + `app.stage`.
+
+- **Inc2 — `adopt`.** Two verified mechanisms: the **`Worker({ ..., adopt: true })` resource option**
+  (`lib/cloudflare/worker.d.ts:132` — *"Whether to adopt the Worker if it already exists when
+  creating"*) — the in-script form, preferred for the bench migration so adopt is declarative — **or**
+  the **`alchemy deploy --adopt --force`** CLI flags (`--adopt` *"Adopt resources if they already
+  exist … (requires --force)"*). Either makes Alchemy **take over** the existing `wrangler`-deployed
+  `lesto-bench-edge` worker instead of duplicating it — the orphan/duplicate footgun ADR 0044 flags
+  as its chief risk.
+
+- **Inc2 — "`--dry-run`".** There is **no `--dry-run` flag** in `0.93.x`; the read-only preview is the
+  **`alchemy run <entrypoint>`** subcommand (its help: *"run alchemy in read-only mode"* — it
+  evaluates the program and reports the Create/Update/Delete plan while **applying nothing**). Run it
+  first to confirm the bench migration reports **adopt, not create**, before any `alchemy deploy`.
+  (State can also be inspected read-only with `alchemy state tree|list|get`.)
+
+### What still requires a live environment (this sandbox cannot execute it)
+
+Every increment's **acceptance** is a live-Cloudflare operation that cannot be run — or safely
+run — from this sandbox (no live-mutation credential for a second machine, `wrangler dev` server
+starts are blocked, and ADR 0044 forbids a blind deploy against the live bench worker):
+
+- **Inc1 acceptance** — a *second machine / CI* adopts the shared `CloudflareStateStore` and cleanly
+  `--destroy`s resources it did not create — is inherently multi-environment.
+- **Inc2 acceptance** — `alchemy run` shows **adopt** (not create) against the live `lesto-bench-edge`
+  worker, then the edge tier still serves and `start-edge.mjs` → `workerd` still boots — needs the
+  live worker + a `wrangler dev` start.
+- **Inc3 acceptance** — the secret-gated CI job runs green with `CLOUDFLARE_API_TOKEN` +
+  `ALCHEMY_STATE_TOKEN` present and skips-out-loud without them — needs CI secrets.
+
+The API above is pinned and turnkey; the implementation + live acceptance is a follow-up for an
+environment with live Cloudflare access and a second machine.
