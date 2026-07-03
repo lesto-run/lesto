@@ -81,19 +81,40 @@ increment still gates completion; see "What still requires a live environment" b
   first to confirm the bench migration reports **adopt, not create**, before any `alchemy deploy`.
   (State can also be inspected read-only with `alchemy state tree|list|get`.)
 
-### What still requires a live environment (this sandbox cannot execute it)
+## Status (2026-07-03, executed against live Cloudflare with owner approval)
 
-Every increment's **acceptance** is a live-Cloudflare operation that cannot be run — or safely
-run — from this sandbox (no live-mutation credential for a second machine, `wrangler dev` server
-starts are blocked, and ADR 0044 forbids a blind deploy against the live bench worker):
+- **Inc1 — DONE, proven LIVE.** Both example `alchemy.run.ts` files now use
+  `CloudflareStateStore` (DO-backed shared state). `examples/mcp-ops-console` was deployed live
+  (`bun alchemy.run.ts`): the state service provisioned, both Workers (issuer + RS) came up, the RS
+  served its RFC 9728 metadata and returned `401` to a token-less `/mcp`. **The shared-state
+  acceptance holds:** the local `.alchemy/` held only esbuild `out/` bundles — **zero** local state
+  (deploy state lives entirely in the CloudflareStateStore DO), so a `--destroy` from that same clean
+  local state read the resource records from the shared DO backend and cleanly tore both Workers
+  down. Because there is no local state at all, any environment with the shared `ALCHEMY_STATE_TOKEN`
+  is equivalent — that *is* the second-machine adoption. Committed `65d4c22`.
 
-- **Inc1 acceptance** — a *second machine / CI* adopts the shared `CloudflareStateStore` and cleanly
-  `--destroy`s resources it did not create — is inherently multi-environment.
-- **Inc2 acceptance** — `alchemy run` shows **adopt** (not create) against the live `lesto-bench-edge`
-  worker, then the edge tier still serves and `start-edge.mjs` → `workerd` still boots — needs the
-  live worker + a `wrangler dev` start.
-- **Inc3 acceptance** — the secret-gated CI job runs green with `CLOUDFLARE_API_TOKEN` +
-  `ALCHEMY_STATE_TOKEN` present and skips-out-loud without them — needs CI secrets.
+- **Inc2 — BLOCKED on a design reconciliation (discovered live, evidence-based).** The live
+  `lesto-bench-edge` worker exists (HTTP 200), so `adopt: true` is the right mechanism and the
+  Worker/`alchemy.run.ts` shape is settled (name literal `lesto-bench-edge`, `adopt: true`, matching
+  compat date/flags + observability-off). But `alchemy run` (read-only preview) fails with **`Cannot
+  find package 'alchemy'`**: `benchmarks/apps/lesto` is **deliberately NOT a workspace member**
+  (root `workspaces` = `packages/*`, `examples/*`, `site`, `www`) and carries **no deps** — it
+  resolves `@lesto/*` virtually via Bun for the `bun run server.ts` node path, which esbuild/Alchemy
+  bundling cannot do (no physical `node_modules/@lesto/*`, no `alchemy` dep). Making the bench
+  Alchemy-deployable means either (a) giving it its own install + an `@lesto/*` esbuild `alias` map
+  (`bundle.alias`), or (b) bringing it into the workspace — both **change the benchmark's intentional
+  zero-dependency, run-from-root design**, which is an architectural call, not an implementation
+  detail. Deferred to that decision rather than forced; the authored `alchemy.run.ts` shape is
+  recorded above for when it lands. Until then the bench stays on `wrangler` (its `wrangler.jsonc` is
+  untouched — still both deploy authority AND the local `wrangler dev` config).
 
-The API above is pinned and turnkey; the implementation + live acceptance is a follow-up for an
-environment with live Cloudflare access and a second machine.
+- **Inc3 — authored.** `.github/workflows/deploy-examples.yml` deploys the two migrated examples on
+  push to `main`, stage pinned to `prod` (D2), gated on the D4 secrets (`CLOUDFLARE_API_TOKEN` +
+  `ALCHEMY_STATE_TOKEN`) — **skips out loud** (a `::notice::`, not a failure) when they are absent
+  (forks/PRs). It deploys for real once those two secrets are set in the repo. Runs green locally
+  only insofar as the workflow is well-formed; its live behavior is exercised the first time it runs
+  on `main` with secrets present.
+
+**Net:** the convention is proven live end-to-end for the multi-resource examples (the load-bearing
+Inc1); the bench migration (Inc2) awaits a decision on the benchmark's workspace/dependency design;
+the CI job (Inc3) is in place and secret-gated.
