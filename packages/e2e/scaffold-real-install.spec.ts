@@ -1,14 +1,21 @@
-import { execFileSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
-import { type Locator, expect, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import { killAndWait, run, spawnDev, waitForServer } from "./dev-harness";
+import {
+  CREATE_LESTO_BIN,
+  REPO_ROOT,
+  assertPreactClient,
+  expectIslandHydrated,
+  lestoBin,
+  packLestoClosure,
+  pinAppToTarballs,
+} from "./scaffold-real-helpers";
 
 /**
  * The REAL-install scaffold smoke — the gate the link-workspace e2e cannot be (`L-e00589b8`).
@@ -49,9 +56,6 @@ import { killAndWait, run, spawnDev, waitForServer } from "./dev-harness";
  * island hydrates (the `useState` button goes live). Block (b) additionally proves Fast Refresh
  * preserves an island's state across an edit — the scaffold-output twin of `island-fast-refresh`.
  */
-
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const CREATE_LESTO_BIN = join(REPO_ROOT, "packages", "create-lesto", "src", "bin.ts");
 
 // The in-tree create-lesto version drives leg (a): it pins the published scaffold below AND gates
 // the leg's skip, so both advance together at the next republish.
@@ -113,35 +117,6 @@ const PORT_TREE = 4191;
 // failure off a real install is debuggable from the uploaded CI artifact (the dev server's own
 // boot output is captured separately by `spawnDev`). Scoped to this spec; other e2e jobs unchanged.
 test.use({ trace: "retain-on-failure", screenshot: "only-on-failure" });
-
-/** The app's own installed `lesto` bin (a node shim; run under `bun` so `Bun.build` is defined). */
-function lestoBin(appDir: string): string {
-  return join(appDir, "node_modules", ".bin", "lesto");
-}
-
-/** Assert `out/client.js` is the Preact island bundle — never drags React's server renderer. */
-async function assertPreactClient(appDir: string): Promise<void> {
-  const source = await readFile(join(appDir, "out", "client.js"), "utf8");
-
-  expect(source).not.toContain("renderToReadableStream");
-  expect(source).not.toContain("renderToStaticMarkup");
-}
-
-/**
- * Gate the FIRST click of a hydration test on the island actually being interactive — the fix for the
- * click-races-hydration flake (L-d86ae3a1). The scaffold Counter's LIVE component renders a `title`
- * attribute (`title={publicEnv.PUBLIC_APP_NAME}`) that its deferred SSR fallback button does NOT, and
- * the client mounts it via `createRoot().render()`, committing that attribute in the SAME render that
- * binds the button's `onClick` — so the instant `title` is observable the handler is already attached.
- * This is a NON-clicking wait, so it provably sidesteps the double-count trap of a click-and-retry
- * `toPass` loop: because we never click during the wait, a late-but-registered click can't be re-fired
- * into `count: 2`. Couples to the scaffold Counter's `title`; this same suite scaffolds and drives that
- * Counter, so a future removal of `title` reds HERE (a timed-out wait), not silently. Callers still
- * click exactly once after this resolves.
- */
-async function expectIslandHydrated(counter: Locator): Promise<void> {
-  await expect(counter).toHaveAttribute("title");
-}
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // (a) Real registry install of the PUBLISHED closure (0.1.2 today), hoisted layout.
@@ -284,70 +259,6 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, isol
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // (b) Current-tree reconstruction, NON-HOISTING (isolated) linker.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-
-/**
- * Pack every PUBLIC `@lesto/*` package (+ create-lesto) to `vendor` and return a
- * `{ name → "file:<tarball>" }` map — the registry stand-in (mirrors `scripts/pack-and-boot.mjs`).
- * `bun pm pack` rewrites each `workspace:*` to the exact version, exactly like a publish.
- */
-function packLestoClosure(repoRoot: string, vendor: string): Record<string, string> {
-  const packagesDir = join(repoRoot, "packages");
-
-  for (const dir of readdirSync(packagesDir)) {
-    const manifestPath = join(packagesDir, dir, "package.json");
-    if (!existsSync(manifestPath)) continue;
-    if (JSON.parse(readFileSync(manifestPath, "utf8")).private === true) continue;
-
-    // Quiet stdout; let bun's stderr through so a pack failure names its cause.
-    execFileSync("bun", ["pm", "pack", "--destination", vendor], {
-      cwd: join(packagesDir, dir),
-      stdio: ["ignore", "ignore", "inherit"],
-    });
-  }
-
-  const overrides: Record<string, string> = {};
-
-  for (const tarball of readdirSync(vendor).filter((file) => file.endsWith(".tgz"))) {
-    // Read the packaged name from the tarball's own manifest (robust to filename mangling).
-    const meta = JSON.parse(
-      execFileSync("tar", ["-xzOf", join(vendor, tarball), "package/package.json"], {
-        encoding: "utf8",
-      }),
-    ) as { name: string };
-
-    overrides[meta.name] = `file:${join(vendor, tarball)}`;
-  }
-
-  return overrides;
-}
-
-/**
- * Repin the app's DIRECT `@lesto/*` deps onto the tarballs AND set package.json `overrides` to the
- * full tarball map — the overrides reach the TRANSITIVE `@lesto/*` graph the tarballs declare.
- * Without them bun would resolve those transitive refs from the registry (the published closure),
- * masking the current tree — the exact silent substitution this leg exists to prevent.
- */
-async function pinAppToTarballs(appDir: string, overrides: Record<string, string>): Promise<void> {
-  const manifestPath = join(appDir, "package.json");
-  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
-    dependencies?: Record<string, string>;
-    devDependencies?: Record<string, string>;
-    overrides?: Record<string, string>;
-  };
-
-  for (const field of ["dependencies", "devDependencies"] as const) {
-    const deps = manifest[field];
-    if (deps === undefined) continue;
-
-    for (const dep of Object.keys(deps)) {
-      if (dep in overrides) deps[dep] = overrides[dep] as string;
-    }
-  }
-
-  manifest.overrides = overrides;
-
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-}
 
 test.describe("current-tree reconstruction — non-hoisting (isolated) linker @tree-isolated", () => {
   test.describe.configure({ mode: "serial" });

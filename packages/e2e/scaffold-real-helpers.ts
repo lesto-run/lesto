@@ -4,17 +4,19 @@ import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { expect } from "@playwright/test";
+import { type Locator, expect } from "@playwright/test";
 
 /**
- * Shared scaffold-install helpers, factored OUT of `scaffold-real-install.spec.ts` so a second
- * spec (`scaffold-hoisted-preflight.spec.ts`, L-513dd8a6) can reuse the exact pack/pin/build
- * mechanics WITHOUT importing that spec — importing a `.spec.ts` would execute its `test.describe`
+ * Shared scaffold-install helpers, factored OUT of `scaffold-real-install.spec.ts` so the sibling
+ * specs (`scaffold-hoisted-preflight.spec.ts`, L-513dd8a6) can reuse the exact pack/pin/build
+ * mechanics WITHOUT importing a `.spec.ts` — importing one would execute its `test.describe`
  * blocks as a side effect and register them into the importer's run. These functions are pure IO
- * helpers with NO top-level test registration, so they are safe to import from any spec.
+ * helpers (+ one Playwright assertion) with NO top-level test registration, so they are safe to
+ * import from any spec.
  *
- * `packLestoClosure` and `pinAppToTarballs` are copied VERBATIM from `scaffold-real-install.spec.ts`
- * (leg b's current-tree tarball reconstruction); keep the two in sync if either is touched.
+ * This module is now the CANONICAL home for the pack/pin/build/hydration helpers: both
+ * `scaffold-real-install.spec.ts` and `scaffold-hoisted-preflight.spec.ts` import them from here,
+ * so there is a single copy to maintain (the earlier inline duplicates were deleted — L-eb3a6fab).
  */
 
 /** Repo root, resolved from this module's location (`packages/e2e/` → `../..`). */
@@ -101,4 +103,20 @@ export async function pinAppToTarballs(
   manifest.overrides = overrides;
 
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+/**
+ * Gate the FIRST click of a hydration test on the island actually being interactive — the fix for the
+ * click-races-hydration flake (L-d86ae3a1). The scaffold Counter's LIVE component renders a `title`
+ * attribute (`title={publicEnv.PUBLIC_APP_NAME}`) that its deferred SSR fallback button does NOT, and
+ * the client mounts it via `createRoot().render()`, committing that attribute in the SAME render that
+ * binds the button's `onClick` — so the instant `title` is observable the handler is already attached.
+ * This is a NON-clicking wait, so it provably sidesteps the double-count trap of a click-and-retry
+ * `toPass` loop: because we never click during the wait, a late-but-registered click can't be re-fired
+ * into `count: 2`. Couples to the scaffold Counter's `title`; the scaffold-real specs scaffold and drive
+ * that Counter, so a future removal of `title` reds HERE (a timed-out wait), not silently. Callers still
+ * click exactly once after this resolves.
+ */
+export async function expectIslandHydrated(counter: Locator): Promise<void> {
+  await expect(counter).toHaveAttribute("title");
 }
