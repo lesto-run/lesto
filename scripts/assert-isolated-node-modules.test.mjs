@@ -18,12 +18,9 @@ import {
   assertManifestHonesty,
   assertPeerHonesty,
   assertReactLockstep,
-  firstMajor,
   isBounded,
   isExternalPeer,
   isLocalProtocolRange,
-  simpleMaxMajor,
-  testedMajor,
 } from "./assert-isolated-node-modules.mjs";
 
 describe("isLocalProtocolRange", () => {
@@ -46,34 +43,6 @@ describe("isExternalPeer", () => {
   it("is NOT external for @lesto siblings or workspace-protocol peers", () => {
     expect(isExternalPeer("@lesto/db", "workspace:*")).toBe(false);
     expect(isExternalPeer("some-dep", "workspace:*")).toBe(false);
-  });
-});
-
-describe("simpleMaxMajor", () => {
-  it("returns the highest major across a simple union", () => {
-    expect(simpleMaxMajor("^18.0.0 || ^19.0.0")).toBe(19);
-    expect(simpleMaxMajor("^5.0.0 || ^6.0.0 || ^7.0.0")).toBe(7);
-    expect(simpleMaxMajor("^6")).toBe(6);
-    expect(simpleMaxMajor("3.46.1-build5")).toBe(3);
-    expect(simpleMaxMajor("4.3.1")).toBe(4);
-  });
-  it("bails out (null) on comparator ranges and wildcards", () => {
-    expect(simpleMaxMajor(">=8")).toBe(null);
-    expect(simpleMaxMajor("*")).toBe(null);
-    expect(simpleMaxMajor("x")).toBe(null);
-  });
-  it("returns null when no numeric major is present", () => {
-    expect(simpleMaxMajor("latest")).toBe(null);
-  });
-});
-
-describe("firstMajor", () => {
-  it("extracts the first major from an unbounded range", () => {
-    expect(firstMajor(">=8")).toBe(8);
-    expect(firstMajor("^19.2.3")).toBe(19);
-  });
-  it("returns null with no digits", () => {
-    expect(firstMajor("latest")).toBe(null);
   });
 });
 
@@ -105,61 +74,41 @@ describe("isBounded", () => {
   });
 });
 
-describe("testedMajor", () => {
-  it("prefers the package's own devDependency", () => {
-    expect(testedMajor({ devDependencies: { react: "^19.2.3" } }, "react")).toBe(19);
-  });
-  it("falls back to CI pins when the own devDep is a workspace protocol", () => {
-    expect(testedMajor({ devDependencies: { pg: "workspace:*" } }, "pg", { pg: "^8" })).toBe(8);
-  });
-  it("falls back to CI pins when there is no own devDep", () => {
-    expect(testedMajor({}, "pg", { pg: "8.22.0" })).toBe(8);
-  });
-  it("returns null when neither is known", () => {
-    expect(testedMajor({}, "pg")).toBe(null);
-    expect(testedMajor({ devDependencies: { pg: "latest" } }, "pg", { pg: "latest" })).toBe(null);
-  });
-});
-
 describe("assertPeerHonesty", () => {
-  it("FAILS on an unbounded `>=` peer and suggests the tested-major caret", () => {
+  it("FAILS on an unbounded `>=` peer", () => {
     const problems = assertPeerHonesty({ name: "@lesto/pg", peerDependencies: { pg: ">=8" } });
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/UNBOUNDED/);
-    expect(problems[0]).toContain('"^8"');
   });
   it('FAILS on a SPACED unbounded peer (`pg: ">= 8"`) — the space must not smuggle it past', () => {
     const problems = assertPeerHonesty({ name: "@lesto/pg", peerDependencies: { pg: ">= 8" } });
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/UNBOUNDED/);
   });
-  it("FAILS on a bare `*` peer with no derivable major (no suggestion)", () => {
+  it("FAILS on a bare `*` peer", () => {
     const problems = assertPeerHonesty({ name: "x", peerDependencies: { foo: "*" } });
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/UNBOUNDED/);
-    expect(problems[0]).not.toContain("narrow to");
   });
-  it("PASSES a caret peer matching the tested major", () => {
-    const manifest = {
-      name: "@lesto/x",
-      peerDependencies: { react: "^19" },
-      devDependencies: { react: "^19.0.0" },
-    };
-    expect(assertPeerHonesty(manifest)).toEqual([]);
+  it("PASSES a bounded caret peer", () => {
+    expect(
+      assertPeerHonesty({ name: "@lesto/x", peerDependencies: { react: "^19" } }),
+    ).toEqual([]);
   });
-  it("FAILS a bounded peer that reaches PAST the tested major", () => {
+  it("PASSES a bounded peer even when it reaches past a would-be tested major (reach leg CUT)", () => {
+    // Before the ADR-0045 CUT this FAILED (`^20` peer against a `^19` devDep). The reach-past-
+    // tested-major leg was removed as unmandated speculative strictness; boundedness is the whole
+    // honesty floor now, so a bounded `^20` PASSES regardless of any devDependency pin.
     const manifest = {
       name: "@lesto/x",
       peerDependencies: { react: "^20" },
       devDependencies: { react: "^19.0.0" },
     };
-    const problems = assertPeerHonesty(manifest);
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/reaches\s+major 20/);
-    expect(problems[0]).toMatch(/only major 19 is tested/);
+    expect(assertPeerHonesty(manifest)).toEqual([]);
   });
-  it("PASSES a bounded peer when the tested major is unknowable (bounded is enough)", () => {
+  it("PASSES any bounded peer (boundedness is the whole check)", () => {
     expect(assertPeerHonesty({ name: "x", peerDependencies: { foo: "^3" } })).toEqual([]);
+    expect(assertPeerHonesty({ name: "x", peerDependencies: { foo: ">=18 <20" } })).toEqual([]);
   });
   it("SKIPS @lesto workspace peers and packages with no peers", () => {
     expect(
@@ -212,8 +161,8 @@ describe("assertManifestHonesty (aggregator over a git tree)", () => {
   beforeAll(() => {
     repo = mkdtempSync(join(tmpdir(), "manifest-honesty-"));
     execFileSync("git", ["init", "-q"], { cwd: repo });
-    // A root manifest that supplies the CI-pin fallback + a clean package + a violating package
-    // (unbounded pg peer AND a react/react-dom major split) + a malformed manifest.
+    // A root manifest + a clean package + a violating package (unbounded pg peer AND a
+    // react/react-dom major split) + a malformed manifest.
     writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "root" }));
     mkdirSync(join(repo, "packages/clean"), { recursive: true });
     writeFileSync(
@@ -238,7 +187,7 @@ describe("assertManifestHonesty (aggregator over a git tree)", () => {
   });
 
   it("collects unbounded-peer, react-split, and parse-error problems across the tree", () => {
-    const problems = assertManifestHonesty({ repoRoot: repo, fallbackPins: {} });
+    const problems = assertManifestHonesty({ repoRoot: repo });
     expect(problems.some((p) => /UNBOUNDED/.test(p))).toBe(true);
     expect(problems.some((p) => /react\/react-dom major mismatch/.test(p))).toBe(true);
     expect(problems.some((p) => /Could not parse .*broken\/package\.json/.test(p))).toBe(true);
@@ -247,7 +196,6 @@ describe("assertManifestHonesty (aggregator over a git tree)", () => {
   it("reports an enumerate failure when git cannot list the tree", () => {
     const problems = assertManifestHonesty({
       repoRoot: join(tmpdir(), "definitely-not-a-git-repo-xyz"),
-      fallbackPins: {},
     });
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/Could not enumerate/);

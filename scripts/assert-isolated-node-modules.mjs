@@ -16,8 +16,9 @@
 // advertise more majors than are tested (e.g. `pg: ">=8"` when only pg 8 exists and is CI-tested,
 // or a `react`/`react-dom` pair that could resolve to split majors and throw at client render) —
 // into one-job-at-a-time CI failures. Checks 4 and 5 below enforce the whole class up front:
-// every external framework/runtime peer must be a BOUNDED range that does not reach past its
-// tested major, and react must share a major with react-dom wherever both are declared.
+// every external framework/runtime peer must be a BOUNDED range (no unbounded `>=X`/`*` that
+// advertises untested future majors), and react must share a major with react-dom wherever both
+// are declared.
 //
 // Contract: runnable as `bun scripts/assert-isolated-node-modules.mjs` (the CI-wired invocation).
 // Paths resolve relative to this file, not the CWD, so the invocation dir doesn't matter. The
@@ -46,32 +47,6 @@ export function isLocalProtocolRange(range) {
  */
 export function isExternalPeer(name, range) {
   return !name.startsWith("@lesto/") && !isLocalProtocolRange(range);
-}
-
-/** The highest major named anywhere in a simple (`^`/`~`/exact/x-range, `||`-unioned) range. */
-export function simpleMaxMajor(range) {
-  const disjuncts = String(range)
-    .trim()
-    .split("||")
-    .map((d) => d.trim());
-  let max = null;
-  for (const d of disjuncts) {
-    for (const token of d.split(/\s+/).filter(Boolean)) {
-      if (/^[<>]=?/.test(token)) return null; // a comparator range is not "simple" — bail out
-      if (token === "*" || token === "x" || token === "X") return null;
-      const m = /(\d+)/.exec(token.replace(/^[\^~=v]/, ""));
-      if (!m) continue;
-      const major = Number(m[1]);
-      if (max === null || major > max) max = major;
-    }
-  }
-  return max;
-}
-
-/** The first (lowest-position) major in a range string, or null — used only for FAIL suggestions. */
-export function firstMajor(range) {
-  const m = /(\d+)/.exec(String(range));
-  return m ? Number(m[1]) : null;
 }
 
 /**
@@ -115,57 +90,25 @@ export function isBounded(range) {
 }
 
 /**
- * Derive the tested major for `dep`: the package's OWN devDependency pin wins, else a `fallbackPins`
- * map (currently the repo ROOT manifest's deps/devDeps). Returns null when neither is known — and
- * NOTE the fallback only sees the root manifest, so a peer pinned solely in a sub-package
- * (`packages/integration`'s `pg`) or via a per-job `bun add` step is NOT covered: for those the
- * reach check no-ops and BOUNDEDNESS is the only honesty enforced. Widening the pin source is the
- * open reach-refinement question (see the follow-up task referenced in ADR 0045).
+ * Manifest honesty: every external framework/runtime peer must be a BOUNDED range — one that names
+ * a finite ceiling major rather than advertising every future (untested, possibly nonexistent) one.
+ * This is the ratified honesty floor: boundedness only. A stricter "does not reach past its tested
+ * major" leg was prototyped and then CUT (ADR 0045, ratified 2026-07-03) — it was unmandated,
+ * inert for its motivating case (`pg`, whose tested major lives in a sub-package / per-job `bun add`
+ * and is invisible here), and holey for comparator ranges. Returns problem strings (empty = ok).
  */
-export function testedMajor(manifest, dep, fallbackPins = {}) {
-  const own = manifest.devDependencies?.[dep];
-  if (own && !isLocalProtocolRange(own)) {
-    const m = simpleMaxMajor(own) ?? firstMajor(own);
-    if (m !== null) return m;
-  }
-  const pin = fallbackPins[dep];
-  if (pin) {
-    const m = simpleMaxMajor(pin) ?? firstMajor(pin);
-    if (m !== null) return m;
-  }
-  return null;
-}
-
-/**
- * Manifest honesty: every external framework/runtime peer must be a bounded range that does not
- * reach past its tested major. Returns an array of human-readable problem strings (empty = ok).
- */
-export function assertPeerHonesty(manifest, fallbackPins = {}) {
+export function assertPeerHonesty(manifest) {
   const problems = [];
   const peers = manifest.peerDependencies ?? {};
   const label = manifest.name ?? "(unnamed package)";
   for (const [name, range] of Object.entries(peers)) {
     if (!isExternalPeer(name, range)) continue;
     if (!isBounded(range)) {
-      const major = testedMajor(manifest, name, fallbackPins) ?? firstMajor(range);
-      const suggestion = major !== null ? ` — narrow to "^${major}" (the tested major)` : "";
       problems.push(
         `Dishonest peer range: ${label} declares peer "${name}": "${range}", which is\n` +
           "  UNBOUNDED/open-ended — it advertises every future (untested, possibly nonexistent)\n" +
-          "  major. ADR 0045: a framework/runtime peer must be a BOUNDED range intersecting only\n" +
-          `  its tested major(s)${suggestion}.`,
-      );
-      continue;
-    }
-    // Bounded: if we can independently derive the tested major and the range is a simple
-    // caret/tilde/exact shape, assert it does not reach a HIGHER (untested) major.
-    const tested = testedMajor(manifest, name, fallbackPins);
-    const reach = simpleMaxMajor(range);
-    if (tested !== null && reach !== null && reach > tested) {
-      problems.push(
-        `Dishonest peer range: ${label} declares peer "${name}": "${range}", which reaches\n` +
-          `  major ${reach}, but only major ${tested} is tested (its devDependency / CI pin).\n` +
-          `  Narrow the peer so it intersects only the tested major(s) — e.g. "^${tested}".`,
+          "  major. ADR 0045: a framework/runtime peer must be a BOUNDED range (caret/tilde/exact,\n" +
+          "  or a `>=X <Y` pair) that names a finite ceiling. Narrow it to the major(s) you test.",
       );
     }
   }
@@ -218,7 +161,7 @@ export function assertReactLockstep(manifest) {
 }
 
 /** Run the manifest-honesty + lockstep checks across every git-tracked package.json. */
-export function assertManifestHonesty({ repoRoot, fallbackPins }) {
+export function assertManifestHonesty({ repoRoot }) {
   const problems = [];
   let manifests;
   try {
@@ -240,7 +183,7 @@ export function assertManifestHonesty({ repoRoot, fallbackPins }) {
       problems.push(`Could not parse ${rel} — inspect it by hand.`);
       continue;
     }
-    problems.push(...assertPeerHonesty(manifest, fallbackPins));
+    problems.push(...assertPeerHonesty(manifest));
     problems.push(...assertReactLockstep(manifest));
   }
   return problems;
@@ -319,19 +262,10 @@ function main() {
     }
   }
 
-  // 4 + 5. Manifest honesty: bounded framework/runtime peers + react/react-dom lockstep. The
-  //    tested-major fallback is the repo ROOT manifest's deps/devDeps only. A peer pinned solely in
-  //    a sub-package (e.g. `pg` in packages/integration) or via a per-job `bun add` is NOT in this
-  //    map, so its reach check no-ops and only boundedness guards it — the open reach-refinement
-  //    question tracked as a follow-up (widen this source, or cut the reach leg entirely).
-  let fallbackPins = {};
-  try {
-    const root = JSON.parse(readFileSync(`${repoRoot}/package.json`, "utf8"));
-    fallbackPins = { ...root.dependencies, ...root.devDependencies };
-  } catch {
-    // no root manifest readable — honesty checks fall back to own-devDep only
-  }
-  problems.push(...assertManifestHonesty({ repoRoot, fallbackPins }));
+  // 4 + 5. Manifest honesty: every external framework/runtime peer must be a BOUNDED range, and
+  //    react/react-dom must share a major wherever both are declared. Boundedness is the ratified
+  //    honesty floor (the stricter reach-past-tested-major leg was cut — see assertPeerHonesty).
+  problems.push(...assertManifestHonesty({ repoRoot }));
 
   if (problems.length > 0) {
     process.stderr.write(
