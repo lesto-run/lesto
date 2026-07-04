@@ -401,8 +401,14 @@ in memory; see the 2026-07-02 cross-tab amendment.**
   revoked *session* is severed within the re-auth interval + TTL; (e) on reconnect where
   **either** the `systemId` **or** the `timelineId` differs from the live database's — including a
   *same-cluster failover* (timeline increments, `systemId` unchanged), the case a `systemId`-only check
-  would miss — the client re-snapshots rather than replaying a false-continuity LSN. **This matrix is
-  the gate.**
+  would miss — the client re-snapshots rather than replaying a false-continuity LSN. This branch now
+  carries **two-part coverage**: a *forged-branch* cover — `examples/live-capstone/test/acceptance.pg.ts`
+  assertion 6c hand-forges a `timelineId + 1` resume cursor and asserts the re-snapshot (deterministic,
+  no standby) — and a *real-mechanic* proof — `examples/live-capstone/test/failover.pg.ts` (`L-45e1b56b`)
+  stands up a real primary + physical streaming-replication standby and `pg_promote`s it so the WAL
+  timeline increments for real (`systemId` held constant), asserting a reconnecting client with a
+  pre-failover cursor re-snapshots — so the branch fires on the failover the real world produces, not
+  only a forged cursor. **This matrix is the gate.**
 - **Sound resume:** a reconnect from a stale LSN replays exactly the missed changes, or re-snapshots
   when the LSN aged past slot retention — never silently misses a change (the Tier-4 analogue of ADR
   0040's missed-message guarantee, now LSN-exact).
