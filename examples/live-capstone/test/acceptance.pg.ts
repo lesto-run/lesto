@@ -16,10 +16,13 @@
  *        bun examples/live-capstone/test/acceptance.pg.ts
  *
  * Exits 0 on success, 1 on any failed assertion (so CI gates on it). CI wires this as the
- * `live-capstone-acceptance` job. The browser-only guarantees (OPFS durability across reload, the
- * cross-tab BroadcastChannel relay + failover) are proven by `@lesto/live`'s injected-seam unit tests
- * + the manual browser checklist in `README.md` — the ratified fork-A scope; this gate proves the
- * server/wire half AND drives the REAL client store/outbox/consumer for the offline-reconcile leg.
+ * `live-capstone-acceptance` job. This gate proves the server/wire half AND drives the REAL client
+ * store/outbox/consumer for the offline-reconcile leg — but over Node SQLite (`openSqlite`), NOT the
+ * browser OPFS engine. The genuinely browser-only guarantees (the OPFS engine opening + durability
+ * across a real reload, the cross-tab BroadcastChannel relay + failover) are the BROWSER's job: the
+ * `@lesto/live` injected-seam unit tests prove the coordination LOGIC, and the recorded manual run
+ * (`evidence/`) + the FILED headless-browser smoke `L-2e410682` (not yet in CI) prove the engine —
+ * the ratified fork-A scope, corrected after the Inc9 P0 (the OPFS engine had never run in a browser).
  */
 
 import { rm } from "node:fs/promises";
@@ -464,8 +467,9 @@ async function main(): Promise<void> {
 
     // ---- 8. Reload rebuild (real store logic over Node SQLite, no live echo — deterministic) ------
     // NB: this reopens the store over `openSqlite` (Node has no OPFS), so it exercises the store's
-    // rehydration LOGIC, not the browser OPFS engine — that engine is covered by the browser smoke
-    // (L-2e410682) and the recorded evidence run. The logic above the handle is identical either way.
+    // rehydration LOGIC, not the browser OPFS engine — that engine is covered by the recorded evidence
+    // run and the FILED browser smoke L-2e410682 (not yet in CI). The logic above the handle is
+    // identical either way.
     // 8a: a PENDING offline write survives reload and re-queues.
     const pendingFile = tmpFile();
     tmpFiles.push(pendingFile);

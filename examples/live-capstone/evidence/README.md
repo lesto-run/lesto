@@ -3,7 +3,7 @@
 The recorded real-browser execution of [`../README.md`](../README.md)'s **manual browser
 checklist** — the epic-closure evidence the Tier-4 v1 capstone ratification (`L-b1501de9`, fork A)
 required for the browser-only half the sandbox + the bun/PG acceptance gate cannot execute (OPFS
-durable first paint, offline-write-survives, cross-tab leader/follower + failover).
+durable first paint, offline-write optimistic + durable-log, cross-tab leader/follower + failover).
 
 - **When:** 2026-07-03 (UTC), against `main`.
 - **How:** a real headed **Chromium 149** driven over the Playwright MCP (the same "real browser or
@@ -38,14 +38,23 @@ Loaded `?user=alice&room=lobby`. Status: **`alice @ lobby — ready — 0 messag
 errors** (contrast: the pre-Inc9 load showed the `OpfsSqliteError`). A worker-side OPFS probe
 confirmed the SAHPool opened and persisted real bytes (6 pooled files / ~80 KB).
 
-### 1. Durable first paint  →  `01-message-sent.png`, `04-durable-paint-server-blocked.png`
+### 1. Durable first paint  →  `01-message-sent.png`, `04-durable-paint-server-blocked.png`, `durability-network-proof.json`
 
-- Sent `"hello from alice — durable OPFS proof"`; it painted in the list immediately (`01`).
-- **Airtight source isolation:** reloaded with the browser online **but every server data route
-  blocked** at the network layer (`route.abort()` on `/__lesto/live-data**` and `/messages**`), so
-  the app shell loads but no row can arrive over the wire. The message **still painted** from the
-  durable store (`04`). With the server data stream provably unreachable, OPFS is the only possible
-  source — this is the durable-first-paint guarantee, proven rather than asserted.
+- Sent `"hello from alice — durable OPFS proof"`; it painted in the list (`01`).
+- **What "first paint" actually looks like (honest):** on reload the very first `render()` runs
+  against a *fresh empty* in-memory store (the durable rows haven't loaded yet — the OPFS worker must
+  boot + the ~940 KB wasm compile + hydrate), so there is a brief empty frame, then the durable rows
+  paint one async hop later. This is always **before the SSE stream connects** — by construction, the
+  leader opens the stream only after the store attaches (`cross-tab.ts`), not by winning a race. The
+  `— 0 message(s)` count in every post-reload screenshot is that empty init-time snapshot; the **list**
+  is authoritative.
+- **Source isolation (the real proof):** reloaded online **but with both server data routes aborted at
+  the network layer** (`route.abort()` on `/__lesto/live-data**` and `/messages**`). All **3 durable
+  rows still painted**, while the SSE subscription failed with `net::ERR_FAILED` — captured in
+  [`durability-network-proof.json`](./durability-network-proof.json) (the aborted-request record is the
+  load-bearing artifact; a screenshot of a reload looks identical whether or not the wire was blocked).
+  Screenshot `04` shows the 3 rows under that blocked condition. With the wire provably unreachable and
+  a single tab + no service worker (see premises in the JSON), OPFS is the only possible source.
 
 ### 2. Offline writes  →  `03-offline-write-optimistic.png`
 
@@ -54,6 +63,11 @@ confirmed the SAHPool opened and persisted real bytes (6 pooled files / ~80 KB).
   the expected single console error (`03`).
 - On reconnect, the outbox **drained**: after the network returned, `GET /messages` from the shell
   showed the offline row had reconciled onto the server (verified again end-to-end in step 3's write).
+- **Not demonstrated in-browser here:** *reload-survival of a pending offline write*. A fully-offline
+  `page.reload()` fails at the document fetch (no service worker ships the app shell — boundary #1),
+  so this run could not reload with a still-pending write. That property (a pending write re-queues, a
+  held write rebuilds as held) is proven by the acceptance gate's check 8a/8b — over **Node SQLite**,
+  not the OPFS engine — and awaits the filed browser smoke `L-2e410682` for a browser proof.
 
 ### 3. Cross-tab leader / follower + failover  →  `05-follower-mirrors-leader.png`, `06-follower-promoted-after-failover.png`
 
@@ -79,20 +93,40 @@ a broken room.
 
 1. **A fully-offline *reload* can't re-fetch the app shell.** This example ships no service worker, so
    `page.reload()` while offline fails at the *document* fetch (`ERR_INTERNET_DISCONNECTED`) — the
-   README's "go offline, reload" step depends on the browser's HTTP disk cache serving the shell,
-   which this static server doesn't guarantee. The **data** durability is unaffected and is proven
-   airtight in step 1 by blocking only the data routes while letting the shell load. A PWA
-   shell-cache is the natural follow-up if true offline cold-start is wanted.
-2. **The status line's `— N message(s)` count is a snapshot-timing artifact.** It is computed once at
-   init from `query.getSnapshot().length` before the async leader store has attached, so it can read
-   `0` while the list itself then repaints the durable rows. Cosmetic (the list is correct); noted so
-   a future reader doesn't mistake it for data loss.
+   README's original "go offline, reload" step depends on the browser's HTTP disk cache serving the
+   shell, which this static server doesn't guarantee (the checklist was corrected to not claim it). The
+   **data** durability is unaffected and is proven in step 1 by blocking only the data routes while
+   letting the shell load online. A PWA shell-cache is the natural follow-up if true offline cold-start
+   is wanted.
+2. **The empty first frame is real, not just a cosmetic count.** The `— 0 message(s)` status is
+   computed once at init from `query.getSnapshot().length` **before** the async leader store attaches —
+   and the first `render()` also runs against that same empty snapshot, so the list's *first* paint is
+   empty too; the durable rows are the **second** paint (a tick later, after the OPFS worker boots).
+   The count is not hiding data loss (the list ends correct), but it honestly witnesses that "durable
+   first paint" is "durable *second* paint, after an empty frame" — always still before the stream
+   connects. A synchronous durable hydrate (or a "loading…" placeholder like `live-durable` uses) would
+   remove the empty frame.
 3. **A benign sqlite-wasm warning appears on every load** (`console-full.log`): *"Ignoring inability to
    install OPFS sqlite3_vfs: … Missing SharedArrayBuffer and/or Atomics … COOP/COEP …"*. This is
    sqlite-wasm's init probing the **plain** SharedArrayBuffer-based `opfs` VFS, which we deliberately do
    **not** use — the durable store runs on the **SAHPool** VFS, which needs no COOP/COEP headers and
    installed fine (the 80 KB persisted above is the proof). Expected, not a failure; it is precisely
    why SAHPool-in-a-Worker was chosen over the header-gated alternatives.
+
+## Artifact provenance (what is a file vs. a live observation)
+
+Honest accounting so a future reader knows what to trust:
+
+- **File-backed:** the 7 screenshots, [`durability-network-proof.json`](./durability-network-proof.json)
+  (the aborted-route + rendered-rows capture — the load-bearing durability artifact), and
+  `console-full.log`.
+- **`console-full.log` is the FINAL page's console dump** (the bonus authz page), NOT the whole run —
+  it holds the two benign sqlite-wasm warnings + bob's deliberate 403. So "0 console errors" in step 0
+  describes that step as observed live, not this file.
+- **Live-only observations** (seen in the Playwright tool output at capture time, not saved as separate
+  files): the step-0 OPFS byte probe ("6 pooled files / ~80 KB"), and the step-3 follower "opened no
+  `/__lesto/live-data` of its own" network check. The filed browser smoke `L-2e410682` is what turns
+  these into repeatable CI assertions.
 
 ## The automated regression gate this run motivated
 

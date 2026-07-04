@@ -24,16 +24,12 @@ export default defineConfig({
       // `opfs-sqlite.ts` (spawns a real `Worker`) and `opfs-worker.ts` (dynamic-imports
       // `@sqlite.org/sqlite-wasm` and installs the OPFS SAHPool VFS — Worker-only) are
       // coverage-excluded like `@lesto/runtime`'s `sqlite-drivers.ts`: browser-only wiring that
-      // cannot run under Node/vitest. Everything they decide is tested elsewhere — the request
-      // correlation in `opfs-rpc.ts` (`test/opfs-rpc.test.ts`) and the atomic rows+cursor
-      // transaction in `sqlite-store.ts` against `openSqlite`. No exclusion without a real gate:
-      // the end-to-end browser boot of these two is covered by the Playwright smoke (L-2e410682).
-      exclude: [
-        "src/index.ts",
-        "src/opfs-sqlite.ts",
-        "src/opfs-worker.ts",
-        "**/live-protocol/**",
-      ],
+      // cannot run under Node/vitest. The request correlation they rely on IS tested — `opfs-rpc.ts`
+      // (`test/opfs-rpc.test.ts`), and the atomic rows+cursor transaction in `sqlite-store.ts`
+      // against `openSqlite`. Their end-to-end browser boot is NOT yet in CI: it has one recorded
+      // manual run (`examples/live-capstone/evidence/`) and a FILED headless-browser smoke gate
+      // (`L-2e410682`) not yet built — until that lands, these two exclusions rest on the manual run.
+      exclude: ["src/index.ts", "src/opfs-sqlite.ts", "src/opfs-worker.ts", "**/live-protocol/**"],
       thresholds: {
         lines: 100,
         functions: 100,

@@ -1,0 +1,22 @@
+{
+  "what": "The airtight durable-first-paint proof for examples/live-capstone (evidence task L-aa9779f5). Captured via Playwright against the live `bun run serve` (dev SQLite-poll path).",
+  "method": "Reloaded the app with BOTH server data routes intercepted and aborted at the network layer (page.route → route.abort), then read the rendered #messages list. With the wire provably unreachable, any rendered row can only have come from the durable OPFS-SQLite store.",
+  "result": {
+    "rowsRenderedFromOpfs": [
+      "alice: hello from alice — durable OPFS proof",
+      "alice: offline write by alice — queued in the outbox",
+      "alice: after failover — this tab was promoted to leader"
+    ],
+    "rowCount": 3,
+    "statusLine": "alice @ lobby — ready — 0 message(s)  (NB: the '0' is the init-time snapshot count read BEFORE the async leader store attaches — the list is the authoritative render; see evidence/README.md boundary #2)",
+    "dataRouteAborted": "GET /__lesto/live-data?shape=...where roomId eq lobby...&lastEventId=v0:0",
+    "networkFailureObserved": "net::ERR_FAILED (the SSE subscription could not reach the server)",
+    "screenshot": "screenshots/04-durable-paint-server-blocked.png"
+  },
+  "conclusion": "The /__lesto/live-data subscription failed (net::ERR_FAILED) yet all 3 rows still painted, so the durable OPFS store — not the wire — is the source. This is the proof the screenshot alone cannot carry (a screenshot of a reload looks identical whether the wire was blocked or not); the aborted-request record is the load-bearing artifact.",
+  "premises": [
+    "Single tab open (no second tab whose BroadcastChannel snapshot could paint a follower with zero network).",
+    "No service worker ships in this example (so no cached app-data response could substitute for the wire).",
+    "Both /__lesto/live-data and /messages were intercepted, covering the SSE subscription and any REST read."
+  ]
+}

@@ -21,9 +21,10 @@ export default defineConfig({
     format: "es",
   },
   build: {
-    // Fixed, unhashed output names — this example has one entry and no need for
-    // cache-busting, and it keeps the tiny static file server in `src/app.ts` from having to
-    // discover a hashed filename.
+    // Fixed, unhashed names for the MAIN entry (`index.js`) — one entry, no cache-busting, so the
+    // static server serves it by a known path. This does NOT cover the WORKER sub-bundle
+    // (`worker.rollupOptions`): the worker chunk + sqlite engine + `.wasm` under `/assets/` ARE
+    // content-hashed (fine — served by request path, URL baked into the main bundle by Vite).
     rollupOptions: {
       output: {
         entryFileNames: "[name].js",

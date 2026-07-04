@@ -18,8 +18,9 @@ What this app puts under one roof (no earlier increment combined all three):
   may not see is refused at subscribe AND on every re-auth tick), delete-from-shape on a non-PK column
   under `REPLICA IDENTITY FULL`, both membership-revocation mechanisms, and LSN-exact resume vs
   re-snapshot on a failover.
-- **Offline writes** — a write made offline is shown at once, survives reload (OPFS), and reconciles
-  through the app's **normal authorized `POST`** on reconnect; a rejected write rolls back.
+- **Offline writes** — a write made offline is shown at once, is durably logged to OPFS (so it
+  survives a reload where the app shell is available), and reconciles through the app's **normal
+  authorized `POST`** on reconnect; a rejected write rolls back.
 - **Cross-tab** — one leader tab holds the sync connection + durable store; the rest mirror it over
   BroadcastChannel; leadership fails over on tab close.
 
@@ -93,21 +94,27 @@ runs in a **dedicated Worker** (`@lesto/live/opfs` → `opfs-worker.ts`), becaus
 `createSyncAccessHandle` is Worker-only in every browser (booting it on the main thread was the Inc9
 P0 — see [`evidence/`](./evidence/README.md)). After `bun run serve`, in a real browser:
 
-1. **Durable first paint** — send a message, reload: it repaints instantly from OPFS before the stream
-   reconnects. (To prove OPFS is the source and not the wire, block the server's data routes and
-   reload — it still paints; see the evidence.)
-2. **Offline writes** — DevTools → Network → Offline, send a message (it appears at once; the outbox
-   persisted it to OPFS), go back online, watch it drain to `POST /messages` and reconcile under its
-   client-generated id.
+1. **Durable first paint** — send a message, reload: the durable rows repaint from OPFS one async hop
+   after an initially-empty first frame (while the OPFS worker boots + hydrates), and always **before
+   the stream connects** (the leader opens the SSE only after the store attaches). To prove OPFS — not
+   the wire — is the source, block the server's data routes and reload: it still paints (see the
+   evidence's network-log proof).
+2. **Offline writes** — DevTools → Network → Offline, send a message: it appears at once and is durably
+   logged to OPFS; go back online and watch it drain to `POST /messages` and reconcile under its
+   client-generated id. (A *reload while fully offline* can't re-fetch the app shell — no service
+   worker ships here — so the reload-survival of a pending write is proven over Node SQLite in the gate
+   below, not yet in a browser.)
 3. **Cross-tab** — open a second tab on the same `?room=`: a follower mirrors the leader with no
    connection of its own. Close the leader tab; the follower is promoted and resumes the stream.
 
 > **Recorded run:** [`evidence/`](./evidence/README.md) holds a real Chromium 149 execution of this
-> checklist (screenshots + notes) as the epic-closure evidence (`L-aa9779f5`) — including the airtight
-> "block the server, still paints from OPFS" durability proof and two honest boundaries (a
-> fully-offline *reload* needs a service-worker shell cache this example doesn't ship; the status
-> line's message count is a cosmetic snapshot-timing artifact). The CI regression gate for this class
-> is the headless-browser smoke `L-2e410682`.
+> checklist (screenshots + a network-log proof + notes) as the epic-closure evidence (`L-aa9779f5`) —
+> including the "block the server's data routes, still paints from OPFS" durability proof (the
+> aborted-request log is the load-bearing artifact — a screenshot alone can't show the wire was
+> blocked) and two honest boundaries (a fully-offline *reload* needs a service-worker shell cache this
+> example doesn't ship; the status line's message count reads the empty init-time snapshot, so it
+> witnesses the empty first frame — the list is authoritative). The regression gate for this class is
+> the **filed** headless-browser smoke `L-2e410682`, not yet in CI.
 
 > **Known boundary (`L-f5a4f807`, a filed child of this capstone):** the offline outbox lives on the
 > LEADER's store, so a FOLLOWER tab's send takes the plain authorized `POST` and is **not queued** —

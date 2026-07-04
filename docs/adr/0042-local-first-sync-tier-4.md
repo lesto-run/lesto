@@ -614,7 +614,9 @@ Both browser primitives (Web Locks, BroadcastChannel) are reached through an inj
 test-fakeable with an in-process lock queue + message bus. The result is the same `LiveQuery` handle
 `createLiveQuery` returns, so `@lesto/live/react`'s `useLiveQuery(() => createCrossTabLiveQuery(def, opts),
 deps)` binds it with no new hook. The end-to-end multi-tab acceptance (Inc8, `L-b1501de9`) exercises the
-durable leader store + the shared-OPFS outbox under real failover.
+durable (SQLite) outbox under real failover. (As-built note per the 2026-07-03 errata below: the
+automated acceptance exercises the store/outbox LOGIC over Node SQLite — the OPFS engine itself is
+browser-only and is covered by the recorded evidence run + the filed `L-2e410682` smoke, not here.)
 
 ### 2026-07-03 — errata: the OPFS engine MUST run in a dedicated Worker (Inc9 P0, `L-565a4b33`)
 
@@ -636,8 +638,9 @@ request-id-correlated `postMessage` RPC (`opfs-rpc.ts`) shaped exactly like the 
 `exec`/`prepare` pair, wrapped by the **unchanged** `adaptSyncSqlite` — so the store/outbox/cursor
 layers above the handle are untouched (the seam was already async). The RPC client is unit-tested
 against a fake port pair; the two irreducibly-browser halves (the `new Worker` spawn and the
-worker-side sqlite binding) stay coverage-excluded, but now with a **replacement gate**: the
-headless-browser smoke `L-2e410682` boots the real engine end-to-end in CI. Rejected: the
+worker-side sqlite binding) stay coverage-excluded, backed today by ONE recorded manual browser run
+(`examples/live-capstone/evidence/`) and a **FILED replacement gate not yet built**: the
+headless-browser smoke `L-2e410682` will boot the real engine end-to-end in CI. Rejected: the
 `sqlite3-worker1` promiser — it does not open SAHPool, and its fallback "opfs" VFS needs
 SharedArrayBuffer → COOP/COEP, the header burden SAHPool was chosen to avoid. Two honest boundaries the
 evidence records: a *fully-offline reload* still needs the app shell cached (no service worker ships in

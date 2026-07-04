@@ -15,9 +15,11 @@
  * Two payoffs to see by hand:
  *   1. Durable first paint — on reload `render()` paints whatever the store hydrated from OPFS
  *      before the network reconnects.
- *   2. Offline writes — go offline (DevTools → Network → Offline), add a note (it appears
- *      instantly and, on reload, is STILL there — the outbox persisted it), then go back online and
- *      watch it drain to the server and reconcile as the authoritative row under the same id.
+ *   2. Offline writes — go offline (DevTools → Network → Offline), add a note (it appears instantly
+ *      and is durably logged to the OPFS outbox), then go back online and watch it drain to the server
+ *      and reconcile as the authoritative row under the same id. (A reload while FULLY offline can't
+ *      re-fetch the app shell — no service worker ships here — so the reload-survival of a pending
+ *      write is a durable-store property, demonstrable once the shell is reachable.)
  */
 
 import { createLiveMutations, createLiveQuery, createSqliteLiveStore } from "@lesto/live";
@@ -111,7 +113,9 @@ async function main(): Promise<void> {
   // Paint immediately from whatever the durable store hydrated — the authorized slice AND any
   // offline writes the outbox just re-applied — before the live stream below has reconnected.
   render();
-  setStatus(`Ready — ${query.getSnapshot().length} note(s) loaded (${mutations.pending()} pending).`);
+  setStatus(
+    `Ready — ${query.getSnapshot().length} note(s) loaded (${mutations.pending()} pending).`,
+  );
   query.subscribe(render);
 
   // Drain now (an offline write from a prior session may be waiting) and on every reconnect.
