@@ -29,10 +29,11 @@ import { killAndWait, run, spawnDev, waitForServer } from "./dev-harness";
  *       npm registry. This validates the IMMUTABLE published closure a `npm create lesto` user installs
  *       TODAY — NOT the working tree. 0.1.2 carries the observability/island-dev/styles work, so unlike
  *       0.1.1 (which predated it, making its NON-HOISTING install a KNOWN-broken `@lesto/observability/rum`
- *       snapshot) the published closure now resolves under a non-hoisting layout too — which this leg proves
- *       by ALSO installing + building the published closure under `--linker=isolated` into a second app dir
- *       (L-9dc62468), decoupled from the dev boot. Its `lesto dev` boot + hydration are version-skipped
- *       while the known-stall pin holds (see the gate below).
+ *       snapshot) the published closure now resolves under a non-hoisting layout too — proven by a sibling
+ *       `@published-isolated` leg (L-9dc62468) that installs + builds the published closure under
+ *       `--linker=isolated` in its OWN describe, so an isolated-specific failure can't mask this hoisted
+ *       leg's canary. This leg's `lesto dev` boot + hydration are version-skipped while the known-stall
+ *       pin holds (see the gate below).
  *
  *   (b) CURRENT TREE, NON-HOISTING (isolated) — packs the current `@lesto/*` closure to tarballs
  *       (`bun pm pack`, which rewrites `workspace:*` → the real version exactly like a publish),
@@ -151,12 +152,10 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
 
   let workspace: string;
   let appDir: string;
-  let appDirIso: string;
   let dev: ChildProcess | undefined;
 
   test.beforeAll(async () => {
-    // Packing/installing from the network is well past Playwright's default 30s hook budget (and this
-    // hook does TWO published installs — hoisted `pub-app` + isolated `pub-app-iso`, L-9dc62468).
+    // Packing/installing from the network is well past Playwright's default 30s hook budget.
     test.setTimeout(600_000);
 
     workspace = await mkdtemp(join(tmpdir(), "lesto-real-published-"));
@@ -178,23 +177,6 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
     // builds; it stays LIVE even while only the dev boot below is skipped (see the version-gate comment above).
     await run("bun", ["install", "--linker=hoisted"], appDir);
     await run("bun", [lestoBin(appDir), "build"], appDir);
-
-    // L-9dc62468 — the NON-HOISTING proof for the PUBLISHED closure. Published 0.1.2 carries the
-    // `@lesto/observability` fix, so unlike 0.1.1 the published `@lesto/*` graph now resolves under a
-    // non-hoisting layout too. Scaffold a SECOND published app into its OWN dir (so the hoisted `pub-app`
-    // above — whose dev boot un-skips at 0.1.3 — is untouched), `bun install --linker=isolated`, and build
-    // via its OWN installed cli. This is deliberately DECOUPLED from the (skipped) dev boot below: it proves
-    // ONLY that the published closure installs + builds the Preact bundle under the isolated linker, and
-    // NEVER boots the stalling dev server (that hoisted-Linux hang is L-513dd8a6's alone). A second network
-    // install is acceptable on a nightly canary.
-    appDirIso = join(workspace, "pub-app-iso");
-    await run(
-      "bunx",
-      [`create-lesto@${CREATE_LESTO_VERSION}`, "pub-app-iso", "--yes", "--no-install", "--no-git"],
-      workspace,
-    );
-    await run("bun", ["install", "--linker=isolated"], appDirIso);
-    await run("bun", [lestoBin(appDirIso), "build"], appDirIso);
 
     // Boot `lesto dev` only when the published version is NOT the known-stall pin (see the gate above).
     // Published 0.1.2's dev stays alive but HANGS the first request under the hoisted layout on CI Linux
@@ -224,16 +206,6 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
     await assertPreactClient(appDir);
   });
 
-  test("the published closure also installs+builds under the isolated linker (L-9dc62468)", async () => {
-    // The non-hoisting proof for the PUBLISHED closure: published 0.1.2 carries the `@lesto/observability`
-    // fix, so the published `@lesto/*` graph resolves AND builds the Preact bundle under `--linker=isolated`
-    // too — not just the hoisted default (at 0.1.1 this would have red-flagged the known-broken
-    // `@lesto/observability/rum` non-hoisting import). Runs at EVERY version and is DECOUPLED from the
-    // version-skipped dev boot: it needs only the isolated build output, so it stays live even while the
-    // hydration test is skipped. The `pub-app-iso` build happens in `beforeAll`, never touching `pub-app`.
-    await assertPreactClient(appDirIso);
-  });
-
   test("the deferred island hydrates in a real browser — the button goes live", async ({ page }) => {
     // Skipped while the published version is the known-stall pin: published 0.1.2's `lesto dev` HANGS the
     // first request under the hoisted layout on CI Linux (confirmed at 300s; the `beforeAll` above skips
@@ -257,6 +229,55 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
     await counter.click();
 
     await expect(counter).toHaveText("count: 1");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// (a′) Real registry install of the PUBLISHED closure (0.1.2 today), NON-HOISTING (isolated) layout.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The non-hoisting proof for the PUBLISHED closure (L-9dc62468), in its OWN serial group so an
+ * isolated-specific resolution failure — or a transient network blip on this second real-registry
+ * install — reds HERE and never masks leg (a)'s always-live hoisted install+build canary (the
+ * file's leg-split signal-isolation rule). Published 0.1.2 carries the `@lesto/observability` fix,
+ * so unlike 0.1.1 the published `@lesto/*` graph resolves AND builds the Preact bundle under
+ * `--linker=isolated` too — not just the hoisted default. DECOUPLED from the stalling dev boot: it
+ * installs + builds only, NEVER `spawnDev` (that hoisted-Linux hang is L-513dd8a6's alone).
+ */
+test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, isolated layout @published-isolated`, () => {
+  test.describe.configure({ mode: "serial" });
+
+  let workspace: string;
+  let appDir: string;
+
+  test.beforeAll(async () => {
+    // A real-registry `bunx create-lesto` + isolated install + build is well past the 30s hook budget.
+    test.setTimeout(600_000);
+
+    workspace = await mkdtemp(join(tmpdir(), "lesto-real-published-iso-"));
+    appDir = join(workspace, "pub-app-iso");
+
+    // Scaffold the SAME published closure as leg (a), install it under the ISOLATED (non-hoisting)
+    // linker, and build via its OWN installed cli — the proof the published graph resolves non-hoisted.
+    await run(
+      "bunx",
+      [`create-lesto@${CREATE_LESTO_VERSION}`, "pub-app-iso", "--yes", "--no-install", "--no-git"],
+      workspace,
+    );
+    await run("bun", ["install", "--linker=isolated"], appDir);
+    await run("bun", [lestoBin(appDir), "build"], appDir);
+  });
+
+  test.afterAll(async () => {
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  test("the published closure installs+builds the Preact bundle under the isolated linker", async () => {
+    // The real teeth are in `beforeAll`: a broken non-hoisting `@lesto/observability/rum` import (the
+    // exact 0.1.1 break) would red the isolated install/build there. This corroborates the built client
+    // is the Preact bundle, never react-dom/server.
+    await assertPreactClient(appDir);
   });
 });
 

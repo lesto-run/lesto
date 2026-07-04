@@ -124,8 +124,12 @@ Whichever lands, the acceptance is: **the preflight (`test:scaffold-hoisted-pref
 ## Status / what is deferred
 
 - **Shipped here (acceptance #1):** the mutable-tree hoisted dev-boot preflight + its workflow +
-  helpers + package.json script. This is the missing pre-publish gate; it reds fast (bounded 120s) on
-  the hang against a fixable tree.
+  helpers + package.json script. This closes the CURRENT-tree × HOISTED × Linux coverage hole as a
+  nightly/dispatch CANARY (bounded 120s so it reds fast on the hang). Two follow-ups make it a real
+  gate: (i) CONFIRM it actually reds on `ubuntu-latest` against the unfixed tree — the 300s hang was
+  observed on the immutable PUBLISHED closure, not this current-tree path, so its reproduction here is
+  unconfirmed; if it greens, the tree has drifted and it guards nothing; (ii) WIRE it into `release.yml`
+  as a blocking pre-publish job — only AFTER the fix, else it deadlocks the 0.1.3 release.
 - **Acceptance #2 (root-cause):** documented above — leading hypothesis + evidence + a concrete Linux
   bisect plan. Not confirmed (no macOS repro).
 - **Acceptance #3 (product fix):** intentionally **not applied** (strict gate — unproven mechanism).

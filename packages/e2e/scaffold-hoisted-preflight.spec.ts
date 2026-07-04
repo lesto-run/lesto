@@ -16,8 +16,17 @@ import {
 } from "./scaffold-real-helpers";
 
 /**
- * The MUTABLE-TREE HOISTED dev-boot preflight — the pre-publish gate that would have caught
- * L-27285131 BEFORE it shipped (L-513dd8a6).
+ * The MUTABLE-TREE HOISTED dev-boot preflight (L-513dd8a6) — the pre-publish CANARY for the
+ * L-27285131 hang class. Run BEFORE a publish (dispatch / nightly) it would have caught the hang;
+ * it is NOT yet wired into `release.yml` as a blocking gate (a follow-up — and one that must land
+ * only AFTER the fix, since a blocking gate on the still-hung tree would deadlock the 0.1.3 release
+ * that ships the fix).
+ *
+ * ⚠️ NOT YET CONFIRMED ON THIS PATH: the 300s hang was observed against the IMMUTABLE PUBLISHED
+ * closure (`bunx create-lesto@0.1.2`), NOT the current-tree tarball path this spec installs. It
+ * SHOULD reproduce (published dev code == the tree) but has NOT yet been observed RED on
+ * `ubuntu-latest` — dispatch it once against the unfixed tree to confirm it reds before trusting it.
+ * If it greens, the current tree has drifted from published-0.1.2's dev and it is reproducing nothing.
  *
  * `scaffold-real-install.spec.ts` has two legs, and NEITHER boots `lesto dev` under the hoisted
  * linker against a FIXABLE tree:
@@ -33,9 +42,9 @@ import {
  * DEFAULT. This spec fills it: pack the current `@lesto/*` closure to tarballs, scaffold via the
  * in-repo `create-lesto`, pin onto the tarballs, then `bun install --linker=hoisted`, build, boot
  * `lesto dev`, and assert the FIRST `GET /` answers. Since the published dev code == the tree, this
- * reproduces the L-27285131 hang on a FIXABLE target — so a fix can be red/greened here on Linux CI
- * instead of only against the immutable published leg (a), and this becomes the standing pre-publish
- * gate against a regression of the same class.
+ * SHOULD reproduce the L-27285131 hang on a FIXABLE target (see the ⚠️ above — unconfirmed on Linux)
+ * — so a fix can be red/greened here on Linux CI instead of only against the immutable published
+ * leg (a), and this becomes the standing pre-publish canary against a regression of the same class.
  *
  * On macOS (where the hang does NOT reproduce — hoisted dev answers in ~24ms) and once the Linux hang
  * is fixed, this passes fast. On the still-hung path the first-GET wait is BOUNDED (120s, well under

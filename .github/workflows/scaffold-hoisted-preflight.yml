@@ -1,6 +1,7 @@
 # The MUTABLE-TREE HOISTED dev-boot preflight (L-513dd8a6) — its OWN workflow, nightly + on-demand.
 #
-# This is the pre-publish gate that would have caught L-27285131 BEFORE it shipped. That defect —
+# This is the pre-publish CANARY that would have caught L-27285131 if run before the publish (it is a
+# nightly/dispatch job, NOT yet wired into release.yml as a blocking gate — see PRE-PUBLISH below). That defect —
 # published-0.1.2 `lesto dev` HANGS the first `GET /` under the HOISTED linker on CI Linux (a true
 # hang, confirmed at 300s; the child stays alive + bound) — was only discoverable POST-publish,
 # because the only leg that booted dev under hoisted (leg (a) of scaffold-real-install) runs the
@@ -14,8 +15,11 @@
 # hang can go RED on a FIXABLE target (published dev code == the tree) instead of only against the
 # immutable published leg. This is the standing pre-publish canary for that whole failure class.
 #
-# PRE-PUBLISH GATE: the release/publish flow SHOULD run `bun run test:scaffold-hoisted-preflight`
-# before it cuts a version — a red here is a real default-path dev hang for Linux users, not flake.
+# PRE-PUBLISH: the release/publish flow SHOULD run `bun run test:scaffold-hoisted-preflight` before it
+# cuts a version — a red here is a real default-path dev hang for Linux users, not flake. Wiring this as
+# an automatic blocking `needs:` job in release.yml is a tracked follow-up (it must land AFTER the fix,
+# or it would deadlock the very 0.1.3 release that ships the fix). Also unconfirmed until dispatched on
+# ubuntu-latest: that the current-tree path reproduces the hang the immutable published closure showed.
 #
 # Deliberately a SEPARATE workflow with its OWN concurrency group (same reasoning as
 # `scaffold-real-install.yml` / `benchmarks.yml`): a `schedule`/`workflow_dispatch` on ci.yml's shared
