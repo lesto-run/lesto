@@ -73,6 +73,9 @@ function run(command: string, args: string[], cwd: string): Promise<void> {
 
     let stderr = "";
     child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    // Drain stdout too: an unread `stdio: "pipe"` stream can fill the OS pipe buffer and BLOCK a
+    // chatty child (a real `bun install` / `lesto build`) — the same stall that faked a leg failure.
+    child.stdout?.resume();
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) {
@@ -141,6 +144,11 @@ function spawnDev(appDir: string, port: number): { child: ChildProcess; output: 
   };
   child.stdout?.on("data", capture);
   child.stderr?.on("data", capture);
+  // Name a silent post-boot death (published 0.1.1's dev binds then vanishes on CI Linux): the exit
+  // code/signal is otherwise invisible — the process is simply gone when waitForServer times out.
+  child.on("exit", (code, signal) => {
+    buffer += `\n[lesto dev exited code=${code ?? "null"} signal=${signal ?? "null"}]`;
+  });
 
   return { child, output: () => buffer };
 }
