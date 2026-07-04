@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Drift guard — assert the repo-root node_modules stays ISOLATED (no hoisted `@lesto`),
-// AND that the workspace's package manifests stay HONEST (framework/runtime peer ranges
-// advertise only what is tested; react and react-dom never split majors).
+// AND that the workspace's package manifests stay HONEST (every framework/runtime peer range is
+// BOUNDED — names a finite ceiling major, no open-ended `>=X`/`*`; react and react-dom never split
+// majors). Note the honesty floor is boundedness, NOT "advertises only tested majors": a bounded
+// but wider-than-tested peer (`react: "^99"`) PASSES — the reach-past-tested leg was cut (ADR 0045).
 //
 // bun 1.3.5 installs `configVersion: 1` lockfiles (this repo's, since `8c2209c`) with an
 // ISOLATED node_modules layout: the repo root holds only the ~16 shared externals, and every
@@ -15,10 +17,12 @@
 // The isolated flip also turned a latent class of MANIFEST DISHONESTY — peer ranges that
 // advertise more majors than are tested (e.g. `pg: ">=8"` when only pg 8 exists and is CI-tested,
 // or a `react`/`react-dom` pair that could resolve to split majors and throw at client render) —
-// into one-job-at-a-time CI failures. Checks 4 and 5 below enforce the whole class up front:
-// every external framework/runtime peer must be a BOUNDED range (no unbounded `>=X`/`*` that
-// advertises untested future majors), and react must share a major with react-dom wherever both
-// are declared.
+// into one-job-at-a-time CI failures. Checks 4 and 5 below enforce the ENFORCEABLE floor of that
+// class up front: every external framework/runtime peer must be a BOUNDED range (no unbounded
+// `>=X`/`*` that advertises untested future majors), and react must share a major with react-dom
+// wherever both are declared. The stricter "bounded but reaches past the tested major" leg was
+// prototyped and cut as unmandated + inert for its motivating case (ADR 0045) — so a bounded
+// `^99` peer is NOT caught here.
 //
 // Contract: runnable as `bun scripts/assert-isolated-node-modules.mjs` (the CI-wired invocation).
 // Paths resolve relative to this file, not the CWD, so the invocation dir doesn't matter. The
@@ -108,7 +112,8 @@ export function assertPeerHonesty(manifest) {
         `Dishonest peer range: ${label} declares peer "${name}": "${range}", which is\n` +
           "  UNBOUNDED/open-ended — it advertises every future (untested, possibly nonexistent)\n" +
           "  major. ADR 0045: a framework/runtime peer must be a BOUNDED range (caret/tilde/exact,\n" +
-          "  or a `>=X <Y` pair) that names a finite ceiling. Narrow it to the major(s) you test.",
+          "  x-range, a `>=X <Y` pair, or a `||`-union of these) that names a finite ceiling.\n" +
+          "  Narrow it to the major(s) you test.",
       );
     }
   }
