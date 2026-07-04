@@ -45,7 +45,24 @@ class Reader {
 
   constructor(private readonly buf: Buffer) {}
 
+  /**
+   * Bound-check a fixed-width read: refuse (coded) when the frame is cut mid-field. Without it a
+   * prefix truncated mid-Int32 surfaces only as a bare `RangeError` from `readUInt32BE` et al. —
+   * caught by the engine sink but left unclassified. Mirrors {@link bytes}'s guard for the length
+   * VALUE overrunning the buffer, so a truncated length PREFIX is coded the same way.
+   */
+  #need(width: number): void {
+    if (this.#offset + width > this.buf.length) {
+      throw new LiveServerError(
+        "LIVE_SERVER_REPLICATION_MALFORMED_FRAME",
+        `pgoutput frame ended mid-field: a ${width}-byte read at offset ${this.#offset} needs more than the ${this.buf.length - this.#offset} byte(s) that remain.`,
+        { offset: this.#offset, width, remaining: this.buf.length - this.#offset },
+      );
+    }
+  }
+
   uint8(): number {
+    this.#need(1);
     const value = this.buf.readUInt8(this.#offset);
     this.#offset += 1;
 
@@ -53,6 +70,7 @@ class Reader {
   }
 
   uint32(): number {
+    this.#need(4);
     const value = this.buf.readUInt32BE(this.#offset);
     this.#offset += 4;
 
@@ -60,6 +78,7 @@ class Reader {
   }
 
   int16(): number {
+    this.#need(2);
     const value = this.buf.readInt16BE(this.#offset);
     this.#offset += 2;
 
@@ -67,6 +86,7 @@ class Reader {
   }
 
   bigUint64(): bigint {
+    this.#need(8);
     const value = this.buf.readBigUInt64BE(this.#offset);
     this.#offset += 8;
 
@@ -201,7 +221,18 @@ export function createPgOutputDecoder(): PgOutputDecoder {
 
         case 0x49 /* 'I' Insert */: {
           const { table, columns } = relation(reader.uint32());
-          reader.uint8(); // 'N' — the new-tuple marker
+          const marker = reader.uint8(); // MUST be 'N' — the new-tuple marker
+
+          // pgoutput always precedes an Insert's TupleData with 'N'. Any other byte means the cursor
+          // is misaligned — assuming 'N' and reading on would decode garbage, so refuse it loudly.
+          if (marker !== 0x4e /* 'N' */) {
+            throw new LiveServerError(
+              "LIVE_SERVER_REPLICATION_MALFORMED_FRAME",
+              `pgoutput Insert expected the new-tuple 'N' marker but read byte 0x${marker.toString(16)}.`,
+              { marker },
+            );
+          }
+
           const newImage = readTuple(reader, columns);
 
           return { op: "insert", table, commitLSN, newImage };
@@ -241,8 +272,20 @@ export function createPgOutputDecoder(): PgOutputDecoder {
 
         case 0x44 /* 'D' Delete */: {
           const { table, columns } = relation(reader.uint32());
-          // 'O' (full old row) or 'K' (key only) — a delete always carries one, never absent.
-          const oldImageKind: OldImageKind = reader.uint8() === 0x4f /* 'O' */ ? "full" : "key";
+          const marker = reader.uint8();
+
+          // 'O' (full old row) or 'K' (key only) — a delete always carries one, never absent. Any
+          // other byte means the cursor is misaligned; refuse it rather than decode garbage as a
+          // 'key' image (the old fall-through silently treated every non-'O' byte as 'K').
+          if (marker !== 0x4f /* 'O' */ && marker !== 0x4b /* 'K' */) {
+            throw new LiveServerError(
+              "LIVE_SERVER_REPLICATION_MALFORMED_FRAME",
+              `pgoutput Delete expected an old-tuple 'O' or 'K' marker but read byte 0x${marker.toString(16)}.`,
+              { marker },
+            );
+          }
+
+          const oldImageKind: OldImageKind = marker === 0x4f /* 'O' */ ? "full" : "key";
           const oldImage = readTuple(reader, columns);
 
           return { op: "delete", table, commitLSN, oldImage, oldImageKind };

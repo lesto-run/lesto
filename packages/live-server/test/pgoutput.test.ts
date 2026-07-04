@@ -245,4 +245,35 @@ describe("createPgOutputDecoder — malformed / truncated frames (defense-in-dep
 
     expect(codeOf(() => decoder.decode(update))).toBe("LIVE_SERVER_REPLICATION_MALFORMED_FRAME");
   });
+
+  it("(d) refuses an Insert whose post-OID marker is not the new-tuple 'N' instead of decoding garbage", () => {
+    const decoder = createPgOutputDecoder();
+    decoder.decode(rel());
+
+    // 'I' + oid + 0x58 ('X') — not the new-tuple 'N' that always precedes an Insert's TupleData.
+    const insert = frame("49", "00000064", "58");
+
+    expect(codeOf(() => decoder.decode(insert))).toBe("LIVE_SERVER_REPLICATION_MALFORMED_FRAME");
+  });
+
+  it("(e) refuses a Delete whose old-tuple marker is neither 'O' nor 'K' instead of assuming 'key'", () => {
+    const decoder = createPgOutputDecoder();
+    decoder.decode(rel());
+
+    // 'D' + oid + 0x58 ('X') — not an old-tuple 'O'/'K'; the old fall-through decoded it as 'key'.
+    const del = frame("44", "00000064", "58");
+
+    expect(codeOf(() => decoder.decode(del))).toBe("LIVE_SERVER_REPLICATION_MALFORMED_FRAME");
+  });
+
+  it("(f) refuses a tuple whose length PREFIX is cut mid-Int32 (coded, not a bare RangeError)", () => {
+    const decoder = createPgOutputDecoder();
+    decoder.decode(rel());
+
+    // 'I' + oid + 'N' + 1 col + kind 't' + only 2 of the length prefix's 4 bytes — the Int32 read
+    // for the length runs past the frame's end, so #need codes it (vs. readUInt32BE's RangeError).
+    const insert = frame("49", "00000064", "4e", "0001", "74", "0000");
+
+    expect(codeOf(() => decoder.decode(insert))).toBe("LIVE_SERVER_REPLICATION_MALFORMED_FRAME");
+  });
 });
