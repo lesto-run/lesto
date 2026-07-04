@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "lesto dev",
-    "build": "lesto generate agents --check && bun --bun lesto build",
+    "build": "lesto generate agents --check && lesto build",
     "deploy": "lesto generate agents --check && bun --bun lesto build && wrangler deploy",
     "agents": "lesto generate agents",
     "agents:check": "lesto generate agents --check",
