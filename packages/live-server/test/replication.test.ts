@@ -338,6 +338,115 @@ describe("createPgReplicationSource — change decode + identity stamping", () =
   });
 });
 
+// The identity hook (L-2bd5c9f7): the source fans the connection's `(systemId, timelineId)` from
+// EVERY (re)connect's IDENTIFY_SYSTEM, BEFORE any change streams — so a downstream consumer (the
+// shape engine) can resync on a failover the moment the new timeline is known, not only when the
+// first post-failover change happens to flow (which, on a quiet promoted DB or a slot that did not
+// survive the promote, may be never).
+describe("createPgReplicationSource — identity hook (onIdentity)", () => {
+  it("fans the captured identity at the first connect, before any change", async () => {
+    const { createClient, clients } = tracking();
+    const source = createPgReplicationSource({ createClient });
+    const identities: SystemIdentity[] = [];
+    source.onIdentity((identity) => identities.push(identity));
+
+    await source.start();
+
+    // Revealed once, from IDENTIFY_SYSTEM — with no change emitted.
+    expect(identities).toEqual([{ systemId: "sys-1", timelineId: 1 }]);
+    expect(clients[0]!.replications).toHaveLength(1); // (streaming did start)
+
+    await source.stop();
+  });
+
+  it("re-fans the re-read identity at reconnect EVEN when the reconnect's slot is gone (the dead-slot failover — the reveal is the only signal)", async () => {
+    // index 0: the original connection (sys-1/1). index 1: the first reconnect lands after a
+    // pg_promote — a NEW timeline (sys-1/2) AND a slot that did not survive the promote, so its
+    // START_REPLICATION throws and no change will ever stream on it. index 2: the next attempt
+    // finally re-streams (still sys-1/2). The identity must be revealed at index 1 regardless — that
+    // reveal, not a change, is what lets the engine resync a shape off the pre-failover timeline.
+    const { createClient, clients } = tracking((client, index) => {
+      if (index >= 1) client.identity = { systemId: "sys-1", timelineId: 2 };
+      if (index === 1) {
+        client.startReplication = async () => {
+          throw new Error('replication slot "lesto_live" does not exist');
+        };
+      }
+    });
+    const source = createPgReplicationSource({
+      createClient,
+      delay: async () => {},
+      reconnectMs: 1,
+    });
+    const identities: SystemIdentity[] = [];
+    source.onIdentity((identity) => identities.push(identity));
+    source.onError(() => {}); // the dead-slot START_REPLICATION error is routed, not thrown
+
+    await source.start();
+    clients[0]!.emitError(new Error("connection lost"));
+    await flush();
+
+    // Every connect that reached IDENTIFY_SYSTEM revealed — including the dead-slot one (index 1),
+    // whose stream never restarted. The new timeline surfaced before any change could.
+    expect(identities).toEqual([
+      { systemId: "sys-1", timelineId: 1 },
+      { systemId: "sys-1", timelineId: 2 },
+      { systemId: "sys-1", timelineId: 2 },
+    ]);
+    expect(clients[1]!.replications).toEqual([]); // index 1's stream never started (slot gone)
+    expect(clients[2]!.replications).toHaveLength(1); // index 2 finally re-streamed
+
+    await source.stop();
+  });
+
+  it("stops revealing after the identity sink unsubscribes", async () => {
+    const { createClient, clients } = tracking((client, index) => {
+      if (index === 1) client.identity = { systemId: "sys-1", timelineId: 2 };
+    });
+    const source = createPgReplicationSource({
+      createClient,
+      delay: async () => {},
+      reconnectMs: 1,
+    });
+    const identities: SystemIdentity[] = [];
+    const off = source.onIdentity((identity) => identities.push(identity));
+
+    await source.start();
+    expect(identities).toHaveLength(1);
+
+    off();
+    clients[0]!.emitError(new Error("connection lost")); // drives a reconnect (would re-reveal)
+    await flush();
+
+    expect(identities).toHaveLength(1); // the reconnect's reveal reached no sink
+
+    await source.stop();
+  });
+
+  it("routes a throwing identity sink to onError and keeps streaming (a sink cannot break the source)", async () => {
+    const { createClient, clients } = tracking();
+    const source = createPgReplicationSource({ createClient });
+    const onError = vi.fn();
+    source.onError(onError);
+    source.onIdentity(() => {
+      throw new Error("bad identity sink");
+    });
+    const sink = collector();
+    source.onChange(sink.onChange);
+
+    await source.start(); // fanIdentity catches the throw and routes it — start() still resolves
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect((onError.mock.calls[0]![0] as Error).message).toBe("bad identity sink");
+
+    // The source survived the broken sink — a change still flows through.
+    clients[0]!.emitChange(insert);
+    expect(sink.changes).toHaveLength(1);
+
+    await source.stop();
+  });
+});
+
 describe("createPgReplicationSource — reconnect", () => {
   it("on a client error, ends the old client and re-streams on a fresh one WITHOUT re-creating the slot, re-reading identity", async () => {
     const { createClient, clients } = tracking((client, index) => {

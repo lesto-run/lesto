@@ -10,11 +10,13 @@ import { createShapeEngine, decodeResumeCursor, LiveServerError } from "../src/i
 import type {
   ChangeHandler,
   ChangeSource,
+  IdentityHandler,
   OldImageKind,
   ReplicationChange,
   RowImage,
   ShapeEngine,
   ShapeResume,
+  SystemIdentity,
   TimerSeam,
 } from "../src/index";
 
@@ -333,13 +335,19 @@ describe("fan-out + lifecycle", () => {
   });
 });
 
-/** A hand-driven {@link ChangeSource}: `emit` fires a change at every wired sink. */
+/**
+ * A hand-driven {@link ChangeSource}: `emit` fires a change at every wired sink, and `emitIdentity`
+ * fires the source's `onIdentity` hook (the connection's `IDENTIFY_SYSTEM` reveal at a (re)connect,
+ * BEFORE any change) — so a test can drive the failover-at-reconnect path with no change flowing.
+ */
 function fakeSource(): {
   source: ChangeSource;
   emit(change: ReplicationChange): void;
+  emitIdentity(identity: SystemIdentity): void;
   subscribers(): number;
 } {
   const handlers = new Set<ChangeHandler>();
+  const identityHandlers = new Set<IdentityHandler>();
 
   return {
     source: {
@@ -352,10 +360,20 @@ function fakeSource(): {
         };
       },
       onError: () => () => {},
+      onIdentity: (handler) => {
+        identityHandlers.add(handler);
+
+        return () => {
+          identityHandlers.delete(handler);
+        };
+      },
       stop: async () => {},
     },
     emit: (change) => {
       for (const handler of handlers) handler(change);
+    },
+    emitIdentity: (identity) => {
+      for (const handler of identityHandlers) handler(identity);
     },
     subscribers: () => handlers.size,
   };
@@ -1003,6 +1021,55 @@ describe("LSN-exact resume (Inc4) — replay-or-re-snapshot on reconnect", () =>
     // change feed but was never in the DB (the lost-on-promote analog) — the drop + re-seed from the
     // promoted DB must serve it no more, not just carry an honest cursor.
     expect(sub.snapshot).toEqual([]);
+    e.stop();
+  });
+
+  it("resyncs EVERY shape when the SOURCE reveals a new identity at reconnect, BEFORE any change flows (L-2bd5c9f7)", async () => {
+    const { src, e } = replEngine();
+    const onResyncA = vi.fn();
+    const onResyncB = vi.fn();
+    // Two DISTINCT shapes on the same table, each with a subscriber that observes resync.
+    await e.subscribe(room1Shape(), () => {}, undefined, onResyncA);
+    await e.subscribe(room1Shape({ where: [] }), () => {}, undefined, onResyncB);
+
+    // The source's first connect reveals the identity (sysA/1) via the onIdentity hook — that is
+    // initialization, not a failover, so nothing drops — then a change records into both rings on it.
+    src.emitIdentity({ systemId: "sysA", timelineId: 1 });
+    src.emit(ins(1, 1, "0/50"));
+    expect(onResyncA).not.toHaveBeenCalled();
+    expect(onResyncB).not.toHaveBeenCalled();
+
+    // A stock pg_promote: the source reconnects, re-reads IDENTIFY_SYSTEM → the NEW timeline (sysA/2),
+    // and fires onIdentity BEFORE any change streams. On a QUIET promoted DB — or a dead slot whose
+    // tail error-loops and never re-streams — NO post-failover change ever arrives, so the
+    // change-gated reveal alone would leave the stale-ring-replay + stale-snapshot-rows windows open
+    // indefinitely. The identity hook drops every shape the moment the new timeline is known.
+    src.emitIdentity({ systemId: "sysA", timelineId: 2 });
+
+    expect(onResyncA).toHaveBeenCalledTimes(1);
+    expect(onResyncB).toHaveBeenCalledTimes(1);
+    expect(e.activeShapes).toBe(0); // both dropped → a re-subscribe re-seeds from the promoted DB
+
+    // A re-subscribe anchors to the NEW identity with a fresh (empty) ring → the `0/0` baseline, and
+    // its snapshot re-seeds from the promoted DB: row id=1 reached the OLD entry.rows via the change
+    // feed but was never in the DB (the lost-on-promote analog) — served no more, no change needed.
+    const sub = await e.subscribe(room1Shape(), () => {});
+    expect(sub.cursor).toBe("v1:sysA:2:0/0");
+    expect(sub.snapshot).toEqual([]);
+    e.stop();
+  });
+
+  it("the onIdentity hook anchors a fresh shape's snapshot cursor at connect, before any change (L-2bd5c9f7)", async () => {
+    const { src, e } = replEngine();
+
+    // The source reveals its identity at connect (IDENTIFY_SYSTEM) via onIdentity — before a single
+    // change has streamed. A shape subscribing now can already mint a resumable v1 cursor anchored to
+    // the live identity at the `0/0` baseline (not the non-resumable v0 token), because the identity
+    // is genuinely known — a reconnect from `0/0` replays the whole ring idempotently.
+    src.emitIdentity({ systemId: "sysA", timelineId: 1 });
+
+    const sub = await e.subscribe(room1Shape(), () => {});
+    expect(sub.cursor).toBe("v1:sysA:1:0/0");
     e.stop();
   });
 

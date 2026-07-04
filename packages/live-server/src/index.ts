@@ -77,6 +77,7 @@ export type {
   ChangeHandler,
   ChangeSource,
   DecodedChange,
+  IdentityHandler,
   OldImageKind,
   PgReplicationClient,
   PgReplicationSource,

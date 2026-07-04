@@ -171,6 +171,15 @@ export type ChangeHandler = (change: ReplicationChange) => void;
 export type SourceErrorHandler = (error: unknown) => void;
 
 /**
+ * A subscriber to the connection's system identity — fired at EVERY (re)connect's `IDENTIFY_SYSTEM`,
+ * BEFORE any change streams. This is the failover *signal* on its own: a consumer sees a promoted
+ * standby / restored timeline the moment the new `(systemId, timelineId)` is known, not only when
+ * the first post-failover change happens to flow (which, on a quiet promoted DB or a stock
+ * `pg_promote` whose slot did not survive, may be never).
+ */
+export type IdentityHandler = (identity: SystemIdentity) => void;
+
+/**
  * A change feed the engine can consume: start it, subscribe to changes and errors, stop it.
  * The Tier-4 production twin of the v0 poll (whose {@link file://./engine.ts} diff + authz
  * seam Inc2 will keep, only swapping *where the changes come from*).
@@ -189,6 +198,15 @@ export interface ChangeSource {
 
   /** Register an error sink; returns an idempotent unsubscribe. */
   onError(handler: SourceErrorHandler): () => void;
+
+  /**
+   * Register an identity sink; returns an idempotent unsubscribe. Fires the connection's
+   * `(systemId, timelineId)` at each (re)connect's `IDENTIFY_SYSTEM` — BEFORE any change streams —
+   * so the engine can resync on a failover the MOMENT the new timeline is known, independent of
+   * change flow (see {@link IdentityHandler}). The engine's per-shape resume windows would otherwise
+   * stay open until the first post-failover change, which may never arrive.
+   */
+  onIdentity(handler: IdentityHandler): () => void;
 
   /** Stop streaming and **DROP the slot** (releasing pinned WAL). Idempotent and terminal. */
   stop(): Promise<void>;
@@ -262,6 +280,8 @@ class PgLogicalReplicationSource implements PgReplicationSource {
   readonly #changeHandlers = new Set<ChangeHandler>();
 
   readonly #errorHandlers = new Set<SourceErrorHandler>();
+
+  readonly #identityHandlers = new Set<IdentityHandler>();
 
   #client: PgReplicationClient | undefined;
 
@@ -356,11 +376,22 @@ class PgLogicalReplicationSource implements PgReplicationSource {
     };
   }
 
+  onIdentity(handler: IdentityHandler): () => void {
+    this.#identityHandlers.add(handler);
+
+    return () => {
+      this.#identityHandlers.delete(handler);
+    };
+  }
+
   async stop(): Promise<void> {
     if (this.#stopped) return;
 
     this.#stopped = true;
     this.#changeHandlers.clear();
+    // Drop the identity sink alongside the change sink: after the terminal stop no reveal should
+    // reach the engine (a raced `#openAndStart` past this point fans to an empty set — a no-op).
+    this.#identityHandlers.clear();
 
     // END the streaming connection FIRST, then drop the slot. A logical slot cannot be dropped on
     // its own active streaming connection — a same-connection `DROP_REPLICATION_SLOT` deadlocks
@@ -400,6 +431,14 @@ class PgLogicalReplicationSource implements PgReplicationSource {
     const identity = await client.identifySystem();
 
     this.#identity = identity;
+
+    // Fan the identity to the engine NOW — before the slot is (re)created and before any change is
+    // wired — so a reconnect that crossed a failover triggers the engine's resync the moment the new
+    // timeline is known, not only when the first post-failover change flows. On a stock `pg_promote`
+    // whose slot did not survive, `startReplication` below error-loops and no change ever arrives,
+    // so this is the ONLY signal the engine gets; firing it here is what closes that window
+    // (L-2bd5c9f7). Idempotent on the engine side — a repeat of the same identity is a no-op.
+    this.#fanIdentity(identity);
 
     if (await this.#abortIfStopped(client, false)) return;
 
@@ -468,6 +507,22 @@ class PgLogicalReplicationSource implements PgReplicationSource {
     // FULL, UNFILTERED feed: every change is emitted, none is dropped — authorization is the
     // shape engine's job downstream, never here (ADR 0042).
     for (const handler of this.#changeHandlers) handler(change);
+  }
+
+  /**
+   * Fan the connection's identity to every registered sink. A sink must not break the source: this
+   * runs inside the awaited `#openAndStart`, so a throw would reject the caller's `start()` or the
+   * fire-and-forget `void #reconnect()` (an unhandled rejection). So a throwing handler is routed to
+   * the error sinks and swallowed — the same discipline {@link #routeError} applies to error sinks.
+   */
+  #fanIdentity(identity: SystemIdentity): void {
+    for (const handler of this.#identityHandlers) {
+      try {
+        handler(identity);
+      } catch (error) {
+        this.#routeError(error);
+      }
+    }
   }
 
   /**

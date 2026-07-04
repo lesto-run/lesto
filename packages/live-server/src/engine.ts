@@ -509,6 +509,40 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
   }
 
   /**
+   * Reveal the live database's identity and, if it CHANGED, resync every shape. Fired from BOTH the
+   * source's `onIdentity` hook (every (re)connect's `IDENTIFY_SYSTEM`, BEFORE any change) AND every
+   * change (Inc1 stamps identity on each). A change in the identity means a failover/restore crossed
+   * (a standby was promoted, or a PITR rewound the timeline). Every active shape may now hold
+   * pre-failover state the promoted node never received: lost-on-promote writes still sitting in
+   * `entry.rows` (served in the next snapshot PAYLOAD), and a replay ring whose entries belong to the
+   * OLD timeline (which would grant a pre-failover reconnect a false replay — resume.ts permits
+   * replay ONLY when both identities match the live database's). Neither self-heals until the shape
+   * drops. So drop every shape here: each subscriber resyncs, and any re-subscribe re-seeds
+   * `entry.rows` from the promoted DB and mints a fresh ring on the new identity. This subsumes the
+   * `snapshotCursor` stale-identity guard (now belt-and-braces) and closes the `resumeFor`
+   * stale-ring-replay + stale-snapshot-rows windows (L-f61264b0).
+   *
+   * Driving it from the identity hook — not only the change path — closes those windows the moment
+   * the new timeline is KNOWN, not only when the first post-failover change happens to flow. On a
+   * quiet promoted DB, or a stock `pg_promote` whose replication slot did not survive (so the tail
+   * error-loops and no change ever arrives), the change-gated reveal alone would leave them open
+   * indefinitely (L-2bd5c9f7). Idempotent on a repeat of the same identity (the first reveal sets it;
+   * a matching hook/change later is a no-op), and on the FIRST reveal `liveIdentity` is undefined —
+   * that is initialization, not a failover, so nothing drops.
+   */
+  function revealIdentity(identity: SystemIdentity): void {
+    if (
+      liveIdentity !== undefined &&
+      (liveIdentity.systemId !== identity.systemId ||
+        liveIdentity.timelineId !== identity.timelineId)
+    ) {
+      for (const [id, entry] of shapes) dropShape(id, entry);
+    }
+
+    liveIdentity = identity;
+  }
+
+  /**
    * The source's change sink: for every active shape on the change's table, classify the change and
    * — if it affects that shape — apply it, record it in the shape's replay ring, stamp it with a
    * resumable `(systemId, timelineId, LSN)` cursor, and fan it. Each shape is guarded independently:
@@ -540,31 +574,16 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
       return;
     }
 
-    // Capture the live database's identity from every change (Inc1 stamps it), even one that
+    // Reveal the live database's identity this change carries (Inc1 stamps it), even one that
     // matches no active shape — so a fresh shape's snapshot cursor is anchored to the current
-    // cluster/timeline the moment any change has flowed.
+    // cluster/timeline, AND every shape resyncs if the identity CHANGED (a failover the change path
+    // reveals). The same reveal fires from the source's `onIdentity` hook at (re)connect, before any
+    // change — so a failover no longer waits on the first post-failover change to engage. When the
+    // identity changed, `revealIdentity` drops every shape, so the per-shape loop below iterates an
+    // emptied map: this change is dropped and its subscribers re-snapshot from the promoted DB.
     const identity = { systemId: change.systemId, timelineId: change.timelineId };
 
-    // A CHANGE in the live identity means a failover/restore crossed (a standby was promoted, or a
-    // PITR rewound the timeline). Every active shape may now hold pre-failover state the promoted
-    // node never received: lost-on-promote writes still sitting in `entry.rows` (served in the next
-    // snapshot PAYLOAD), and a replay ring whose entries belong to the OLD timeline (which would
-    // grant a pre-failover reconnect a false replay — resume.ts's contract permits replay ONLY when
-    // both identities match the live database's). Neither self-heals until the shape drops. So drop
-    // every shape here, BEFORE applying this change: each subscriber resyncs, and any re-subscribe
-    // re-seeds `entry.rows` from the promoted DB and mints a fresh ring on the new identity. This
-    // subsumes the snapshotCursor stale-identity guard below (now belt-and-braces) and closes the
-    // resumeFor stale-ring-replay + stale-snapshot-rows windows (L-f61264b0). On the FIRST change
-    // `liveIdentity` is still undefined — that is initialization, not a failover, so nothing drops.
-    if (
-      liveIdentity !== undefined &&
-      (liveIdentity.systemId !== identity.systemId ||
-        liveIdentity.timelineId !== identity.timelineId)
-    ) {
-      for (const [id, entry] of shapes) dropShape(id, entry);
-    }
-
-    liveIdentity = identity;
+    revealIdentity(identity);
 
     for (const [id, entry] of shapes) {
       if (entry.def.table !== change.table) continue;
@@ -622,8 +641,11 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
   }
 
   // Subscribe to the feed once, for the engine's life: the sink is a no-op until a shape registers,
-  // and `stop()` detaches it. (The source's own start/stop + slot lifecycle is the caller's.)
+  // and `stop()` detaches it. (The source's own start/stop + slot lifecycle is the caller's.) The
+  // identity hook rides alongside the change sink: it reveals a failover at (re)connect — before any
+  // change flows — so the resync engages the moment the new timeline is known, not change-gated.
   const detachSource = replication?.source.onChange(onSourceChange);
+  const detachIdentity = replication?.source.onIdentity(revealIdentity);
 
   return {
     async subscribe(def, onChange, since, onResync) {
@@ -719,6 +741,7 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
     stop() {
       stopPolling();
       detachSource?.();
+      detachIdentity?.();
       shapes.clear();
     },
   };
