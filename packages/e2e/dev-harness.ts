@@ -249,28 +249,29 @@ export async function spawnDev(
  * at once (attaching `once(child, "exit")` after exit already fired would await an event that never comes).
  */
 export async function killAndWait(child: ChildProcess | undefined, graceMs = 5_000): Promise<void> {
-  if (!child) return;
-  // Already dead — `exit` (or a spawn `error`) has fired, recording a code/signal — so `once(child,
-  // "exit")` below would never resolve. Nothing to signal or wait on.
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  // Nothing to wait on — return at once, because each case would otherwise hang the `await` below on an
+  // `exit` that never comes: no child; a child that never spawned (a spawn `error` fires but no `exit`,
+  // and `exitCode`/`signalCode` stay null, so `pid === undefined` is the only tell); or one that already
+  // exited (`exitCode`/`signalCode` set, so `once(…,"exit")` would await an event that already passed).
+  if (!child || child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
 
-  // Attach the listener BEFORE signalling: a child that dies instantly must not fire `exit` in the gap
-  // between `kill` and `once`, which would leave us awaiting an event that already passed.
-  const exited = once(child, "exit");
+  // Resolve on the child's real `exit`. `.catch` keeps this TOTAL: a teardown-time `error` event must not
+  // reject out of killAndWait and skip the caller's own afterAll cleanup (restoring an edited source file,
+  // rm-ing a temp workspace) — guarantees the old fire-and-forget `kill` upheld for free because it could
+  // not throw. Attach BEFORE signalling so a child that dies instantly can't fire `exit` in the gap.
+  const exited = once(child, "exit").catch(() => {});
   child.kill("SIGTERM");
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const graced = new Promise<"grace">((resolve) => {
-    timer = setTimeout(() => resolve("grace"), graceMs);
-  });
+  // Escalate to an uncatchable SIGKILL if SIGTERM is starved past the grace window — a busy event loop
+  // (Vite dep-optimize / bun transpile), and the CLI sets no force-exit deadline. The single `await exited`
+  // resolves whether death came from the SIGTERM or this SIGKILL, so the port is always free before we
+  // return; the timer is cleared synchronously in `finally` the instant the child exits, so a fast SIGTERM
+  // leaves no pending SIGKILL to hit a PID the OS may have recycled.
+  const killer = setTimeout(() => child.kill("SIGKILL"), graceMs);
 
-  const outcome = await Promise.race([exited.then(() => "exit" as const), graced]);
-  clearTimeout(timer);
-
-  if (outcome === "grace") {
-    // SIGTERM didn't land within the grace window (a wedged/busy child). SIGKILL cannot be trapped, so
-    // the child WILL exit and free the port; await that so we never return with the port still held.
-    child.kill("SIGKILL");
+  try {
     await exited;
+  } finally {
+    clearTimeout(killer);
   }
 }

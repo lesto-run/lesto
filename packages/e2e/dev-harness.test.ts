@@ -207,6 +207,27 @@ describe("pre-spawn live-squatter guard (assertPortAvailable → spawnDev)", () 
       await squatter.close();
     }
   });
+
+  it("spawnDev THREADS a custom origin into the probe (not just assertPortAvailable in isolation)", async () => {
+    // The commit's headline is "origin threaded from BASE_URL THROUGH spawnDev". Prove that seam end to
+    // end: pass a free `port` arg but an `origin` pointing at a live squatter. spawnDev must follow the
+    // origin, throw from its pre-spawn probe, and NEVER spawn the (bogus) bin. If spawnDev stops
+    // forwarding `origin` (probes the default `127.0.0.1:${port}` — a free port), the probe resolves and
+    // spawnDev returns a live DevProcess instead of rejecting → RED. The bin/dir are never reached.
+    const free = await startSquatter();
+    const freePort = free.port;
+    await free.close();
+
+    const squatter = await startSquatter();
+
+    try {
+      await expect(
+        spawnDev("unused-bin.mjs", "/nonexistent", freePort, `http://127.0.0.1:${squatter.port}`),
+      ).rejects.toThrow(/already answering/);
+    } finally {
+      await squatter.close();
+    }
+  });
 });
 
 /**
@@ -234,6 +255,9 @@ describe("killAndWait teardown (SIGTERM → await exit, SIGKILL on grace timeout
       join(dir, "ignore-sigterm.mjs"),
       "process.on('SIGTERM', () => {});\nprocess.stdout.write('ready');\nsetInterval(() => {}, 1000);\n",
     );
+    // Exits 0 on its OWN, unsignalled — models a child that already left cleanly (exitCode set,
+    // signalCode null), exercising the guard's `exitCode !== null` arm distinctly from a signalled death.
+    await writeFile(join(dir, "exit0.mjs"), "process.exit(0);\n");
   });
 
   afterAll(async () => {
@@ -253,6 +277,34 @@ describe("killAndWait teardown (SIGTERM → await exit, SIGKILL on grace timeout
     const start = Date.now();
     // A 10s grace we must NOT wait on: without the already-exited guard, `once(child,"exit")` would
     // never resolve (exit already fired) and this would hang to the grace/vitest timeout.
+    await killAndWait(child, 10_000);
+
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
+
+  it("short-circuits a child that already SELF-exited (the exitCode arm, distinct from a signalled death)", async () => {
+    const child = spawn("bun", [join(dir, "exit0.mjs")]);
+    await once(child, "exit"); // exitCode === 0, signalCode === null
+
+    const start = Date.now();
+    // Drop the `exitCode !== null` arm of the guard and this cleanly-exited child falls through to
+    // `once(child,"exit")` — which never re-fires — hanging to the vitest timeout. The 10s grace we must
+    // NOT reach makes that hang unmistakable.
+    await killAndWait(child, 10_000);
+
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
+
+  it("short-circuits a child that never SPAWNED (pid undefined, error without exit) instead of hanging", async () => {
+    // A spawn failure (ENOENT here; EMFILE on a loaded CI runner is the real trigger spawnDev models)
+    // emits `error` and NEVER `exit`, leaving exitCode/signalCode null — so `pid === undefined` is the
+    // only guard arm that catches it. `await once(child,"error")` both settles the failure and consumes
+    // the event so it isn't an unhandled `error` throw. Remove the `pid === undefined` arm and killAndWait
+    // waits on an `exit` that can never come → hangs to the vitest timeout → RED.
+    const child = spawn("lesto-nonexistent-binary-xyzzy");
+    await once(child, "error");
+
+    const start = Date.now();
     await killAndWait(child, 10_000);
 
     expect(Date.now() - start).toBeLessThan(1_000);
@@ -286,10 +338,10 @@ describe("killAndWait teardown (SIGTERM → await exit, SIGKILL on grace timeout
     await killAndWait(child, 300);
     const elapsed = Date.now() - start;
 
-    // The child IGNORES SIGTERM, so it can only have died from the escalated SIGKILL. `exited` proves
-    // the kill landed (remove the SIGKILL branch and killAndWait returns with the child still alive →
-    // `exited` false → RED); `elapsed >= grace` proves we went through the grace window, not an immediate
-    // death (which would mean the trap never installed — a broken fixture, caught loud).
+    // The child IGNORES SIGTERM, so it can only have died from the escalated SIGKILL. `exited` proves the
+    // kill landed (remove the SIGKILL timer and the trapped child never dies → `await exited` hangs → the
+    // vitest timeout fires → RED); `elapsed >= grace` proves we went through the grace window, not an
+    // immediate death (which would mean the trap never installed — a broken fixture, caught loud).
     expect(exited).toBe(true);
     expect(elapsed).toBeGreaterThanOrEqual(250);
   });
