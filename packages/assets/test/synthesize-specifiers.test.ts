@@ -175,6 +175,13 @@ describe("synthesized entry — every bare specifier is a scaffold-declared pack
   ])("%s: imports only declared @lesto/* packages", (_label, source) => {
     // Authoritative check: every `@lesto/*` specifier the entry emits ∈ the REAL LESTO_PACKAGES.
     expect(undeclaredLestoPackages(source, SCAFFOLD_DECLARED_PACKAGES)).toEqual([]);
+
+    // And the entry emits NO non-`@lesto/*` bare specifier today. `undeclaredLestoPackages` only
+    // vets the `@lesto/*` half against LESTO_PACKAGES; a future bare `preact`/`react` import the
+    // scaffold might not declare would slip THAT check silently (fail-open to the nightly e2e). This
+    // holds the other half of the namespace red until someone consciously decides — the whole point.
+    const nonLesto = [...importedPackages(source)].filter((pkg) => !pkg.startsWith("@lesto/"));
+    expect(nonLesto).toEqual([]);
   });
 
   it("statically imports @lesto/ui AND @lesto/observability (the RUM package the omission dropped)", () => {
