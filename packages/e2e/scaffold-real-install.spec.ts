@@ -159,7 +159,10 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
       const devProc = spawnDev(lestoBin(appDir), appDir, PORT_PUBLISHED);
       dev = devProc.child;
 
-      await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 60_000, { output: devProc.output });
+      await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 60_000, {
+        output: devProc.output,
+        hasExited: devProc.hasExited,
+      });
     }
   });
 
@@ -303,7 +306,10 @@ test.describe("current-tree reconstruction — non-hoisting (isolated) linker @t
     const devProc = spawnDev(lestoBin(appDir), appDir, PORT_TREE);
     dev = devProc.child;
 
-    await waitForServer(`http://127.0.0.1:${PORT_TREE}/`, 60_000, { output: devProc.output });
+    await waitForServer(`http://127.0.0.1:${PORT_TREE}/`, 60_000, {
+      output: devProc.output,
+      hasExited: devProc.hasExited,
+    });
   });
 
   test.afterAll(async () => {

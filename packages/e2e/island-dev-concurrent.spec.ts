@@ -64,8 +64,8 @@ test.beforeAll(async () => {
   devB = b.child;
 
   await Promise.all([
-    waitForServer(`${URL_A}/`, 30_000, { output: a.output }),
-    waitForServer(`${URL_B}/`, 30_000, { output: b.output }),
+    waitForServer(`${URL_A}/`, 30_000, { output: a.output, hasExited: a.hasExited }),
+    waitForServer(`${URL_B}/`, 30_000, { output: b.output, hasExited: b.hasExited }),
   ]);
 });
 

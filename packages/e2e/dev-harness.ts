@@ -91,6 +91,12 @@ export function run(command: string, args: string[], cwd: string): Promise<void>
 export interface DevProcess {
   child: ChildProcess;
   output: () => string;
+  /**
+   * `true` once the child has exited — feeds {@link WaitForServerOptions.hasExited} so a spec on a
+   * fixed port fails fast on a dead child instead of polling a corpse (or adopting a squatter) for
+   * the full timeout. Reflects real exit state (flipped by the `exit` listener), never a constant.
+   */
+  hasExited: () => boolean;
 }
 
 /**
@@ -110,17 +116,20 @@ export function spawnDev(bin: string, appDir: string, port: number): DevProcess 
   });
 
   let buffer = "";
+  let exited = false;
   const capture = (chunk: Buffer): void => {
     buffer += chunk.toString();
   };
   child.stdout?.on("data", capture);
   child.stderr?.on("data", capture);
-  // Record the exit code/signal IF the child ever dies — otherwise invisible. NOTE: published 0.1.1's
-  // dev does NOT exit; it stays alive but unreachable on CI (this listener never fired — the evidence
-  // that refuted a presumed death), so leg (a)'s dev boot is version-skipped. See scaffold-real-install.
+  // Record the exit code/signal IF the child ever dies — otherwise invisible — and flip `exited` so
+  // callers can fail fast via `hasExited`. NOTE: published 0.1.1's dev does NOT exit; it stays alive
+  // but unreachable on CI (this listener never fired — the evidence that refuted a presumed death),
+  // so leg (a)'s dev boot is version-skipped. See scaffold-real-install.
   child.on("exit", (code, signal) => {
+    exited = true;
     buffer += `\n[lesto dev exited code=${code ?? "null"} signal=${signal ?? "null"}]`;
   });
 
-  return { child, output: () => buffer };
+  return { child, output: () => buffer, hasExited: () => exited };
 }
