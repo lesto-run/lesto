@@ -96,11 +96,14 @@ async function waitForServer(
 
   for (;;) {
     try {
-      const response = await fetch(url, { headers: { "Sec-Fetch-Site": "same-origin" } });
+      // Any HTTP response — even a non-2xx — means the server is UP and answering; the per-test
+      // `page.goto` assertions are what validate the actual response. Requiring 2xx here turned a
+      // reachable server whose `/` is non-2xx into an opaque 60s timeout instead of a real failure.
+      await fetch(url, { headers: { "Sec-Fetch-Site": "same-origin" } });
 
-      if (response.ok) return;
+      return;
     } catch {
-      // not up yet
+      // not up yet (connection refused / reset)
     }
 
     if (Date.now() > deadline) {
