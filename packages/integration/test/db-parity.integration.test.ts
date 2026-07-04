@@ -364,6 +364,13 @@ describe.each(drivers)("schema installers on $name", (driver) => {
     handle = opened.db;
     close = opened.close;
 
+    // Drop all three queue tables (deps/batches before lesto_jobs), not just
+    // lesto_jobs — the shared-PG IDENTITY-reset collision guarded in
+    // retention/durable-stores (see the WHY comment there). No batch test lives
+    // here yet, but mirror the fix so the first one added can't reintroduce it.
+    // Extracting a shared dropQueueTables() helper is tracked in L-bfe75642.
+    await handle.exec("DROP TABLE IF EXISTS lesto_job_deps");
+    await handle.exec("DROP TABLE IF EXISTS lesto_job_batches");
     await handle.exec("DROP TABLE IF EXISTS lesto_jobs");
     await handle.exec("DROP TABLE IF EXISTS lesto_cache");
     await handle.exec("DROP TABLE IF EXISTS lesto_workflow_steps");
