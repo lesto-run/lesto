@@ -50,6 +50,11 @@ export type { BeaconEvent, BeaconEventKind, BeaconOptions, BeaconPayload } from 
 
 export { isChunkFile } from "./chunks";
 
+// The runtime-agnostic node_modules walk behind `buildClient`'s RUM preflight — shared so
+// the `@lesto/island-dev` Vite dev server can run the SAME missing-dep guard before Vite
+// starts (L-44ca7c57), rather than re-implementing the probe.
+export { resolveInstalledPackage } from "./resolve-import";
+
 export { verifyPublicEnvDefine } from "./public-env";
 export type { PublicEnvDefine } from "./public-env";
 

@@ -13,6 +13,7 @@
  * covered; only that wiring is excluded.
  */
 
+import { AssetsError } from "@lesto/assets";
 import type { PublicEnvDefine } from "@lesto/assets";
 
 import { createApp } from "@lesto/kernel";
@@ -1788,6 +1789,13 @@ async function resolveIslandDev(
   try {
     return await deps.islandDev({ dialect });
   } catch (error) {
+    // The missing-RUM-dependency preflight is FATAL on the Bun island fallback too (its
+    // `buildClientIfPresent` runs the very same guard), so degrading it here would merely hide an
+    // actionable "add @lesto/observability" error behind a misleading "full reload" note. Re-throw
+    // it so dev boot fails loud, exactly as `lesto build`/`deploy` do. Everything else (a bound HMR
+    // port, a bad plugin) still degrades to the Bun path with a logged note — dev must not crash.
+    if (error instanceof AssetsError && error.code === "ASSETS_MISSING_RUM_DEPENDENCY") throw error;
+
     deps.out(`island Fast Refresh unavailable, using full reload: ${rebuildErrorMessage(error)}`);
 
     return undefined;

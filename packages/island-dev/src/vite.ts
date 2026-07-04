@@ -25,8 +25,9 @@
  * tuning for the workspace `@lesto/*` packages, and the `@prefresh/vite` preamble.
  */
 
-import { bunBuildClientDeps } from "@lesto/assets";
+import { bunBuildClientDeps, resolveInstalledPackage } from "@lesto/assets";
 import type { HandleOptions, LestoResponse } from "@lesto/web";
+import { existsSync } from "node:fs";
 import { createServer } from "vite";
 import type { InlineConfig, Plugin, PluginOption } from "vite";
 
@@ -140,6 +141,10 @@ async function createViteBackend(request: CreateBackendRequest): Promise<IslandD
 export function viteIslandDevDeps(root: string): IslandDevDeps {
   return {
     listIslands: bunBuildClientDeps(root).listIslands,
+    // The SAME node_modules walk `buildClient`'s RUM preflight uses (runtime-agnostic — a pure
+    // `existsSync` walk, no `Bun` global), so the dev-boot guard resolves the RUM import exactly
+    // as the build does. `root` is the app root the walk starts from.
+    resolveClientImport: (specifier) => resolveInstalledPackage(specifier, root, existsSync),
     createBackend: createViteBackend,
   };
 }

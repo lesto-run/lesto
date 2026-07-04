@@ -6,7 +6,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clientDefineMap, envField, PUBLIC_ENV_DEFINE_KEY } from "@lesto/env";
-import { verifyPublicEnvDefine } from "@lesto/assets";
+import { AssetsError, verifyPublicEnvDefine } from "@lesto/assets";
 
 import { createDb, createTableSql, defineTable, dropTableSql, integer, text } from "@lesto/db";
 import { currentContext, currentRequestSpan, lesto, runWithContext } from "@lesto/web";
@@ -2041,6 +2041,40 @@ describe("run dev — Vite island Fast Refresh (DX-parity R2)", () => {
     expect(code).toBe(0);
     expect(buildClientAssets).toHaveBeenCalledTimes(1);
     expect(lines.some((line) => line.includes("island Fast Refresh unavailable"))).toBe(true);
+  });
+
+  it("re-throws (does NOT degrade) a missing-RUM-dependency error from the island dev server", async () => {
+    const serve = fakeServe(3000);
+    const buildClientAssets = vi.fn(() => Promise.resolve());
+    // The default `lesto dev` Vite path's RUM preflight refusing (L-44ca7c57): missing
+    // `@lesto/observability` is fatal on the Bun fallback TOO, so degrading it would only hide the
+    // actionable error behind the misleading "full reload" note. Dev boot must fail loud.
+    const rumError = new AssetsError(
+      "ASSETS_MISSING_RUM_DEPENDENCY",
+      `the client entry imports "@lesto/observability/rum" — but "@lesto/observability" does not resolve.`,
+      { module: "@lesto/observability/rum", dependency: "@lesto/observability" },
+    );
+    const islandDev = vi.fn(async () => {
+      throw rumError;
+    });
+
+    await expect(
+      run(
+        ["dev"],
+        depsWith({
+          serve,
+          loadSites: () => Promise.resolve([]),
+          hasIslandsDir: () => Promise.resolve(true),
+          buildClientAssets,
+          islandDev,
+        }),
+      ),
+    ).rejects.toBe(rumError);
+
+    // It did NOT degrade: no fallback log, no Bun build, no server stood up.
+    expect(lines.some((line) => line.includes("island Fast Refresh unavailable"))).toBe(false);
+    expect(buildClientAssets).not.toHaveBeenCalled();
+    expect(serve).not.toHaveBeenCalled();
   });
 
   it("closes the Vite island server on graceful shutdown", async () => {

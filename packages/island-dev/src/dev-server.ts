@@ -17,6 +17,7 @@
  * edge ({@link IslandDevDeps}); this orchestration is covered with a fake backend.
  */
 
+import { AssetsError, RUM_MODULE } from "@lesto/assets";
 import type { IslandFile } from "@lesto/assets";
 import type { HandleOptions, LestoResponse } from "@lesto/web";
 
@@ -67,6 +68,13 @@ export interface IslandDevDeps {
   /** Discover + classify the app's islands (the same listing `lesto build` uses). */
   listIslands: (islandsDir: string) => Promise<readonly IslandFile[]>;
 
+  /**
+   * Resolve a framework runtime import against the app's `node_modules` — the same
+   * `resolveInstalledPackage` walk `buildClient`'s RUM preflight runs, injected so the
+   * dev-boot guard below is covered with a fake and the real disk walk lives in `vite.ts`.
+   */
+  resolveClientImport: (specifier: string) => string | undefined;
+
   /** Stand up the real (loopback, proxied) Vite dev server for the given config + entry. */
   createBackend: (request: CreateBackendRequest) => Promise<IslandDevBackend>;
 }
@@ -111,6 +119,25 @@ export async function createIslandDevServer(
   const pluginSpec = dialectPluginSpec(options.dialect);
 
   const islands = await deps.listIslands(options.islandsDir);
+
+  // Preflight the framework runtime import the synthesized dev entry UNCONDITIONALLY carries —
+  // the SAME guard `lesto build`/`deploy` (both bundlers) + the Bun dev fallback run in
+  // `buildClient`, now extended to the default `lesto dev` Vite path (L-44ca7c57). `devEntrySource`
+  // emits `import … from "@lesto/observability/rum"` for every app (browser RUM is on by default,
+  // `RumConfig` has no opt-out), so `@lesto/observability` is a hard, unstated dependency of every
+  // app with a client entry. A hand-written app that drops it would otherwise hit only the opaque
+  // Vite dev "failed to resolve @lesto/observability/rum" (the @prefresh-class trap) — so resolve
+  // the dep from the app root and refuse HERE, loud + actionable (ADR 0011 loud-when-wrong), with
+  // the IDENTICAL error the build path throws so users see one consistent message across build + dev.
+  if (deps.resolveClientImport(RUM_MODULE) === undefined) {
+    throw new AssetsError(
+      "ASSETS_MISSING_RUM_DEPENDENCY",
+      `the client entry imports "${RUM_MODULE}" — browser RUM (the UI→API→DB trace's browser half) ` +
+        `is on by default — but "@lesto/observability" does not resolve from the app root. Add it to ` +
+        `your dependencies (e.g. \`bun add @lesto/observability\`).`,
+      { module: RUM_MODULE, dependency: "@lesto/observability" },
+    );
+  }
 
   const config = viteIslandConfig({
     root: options.root,

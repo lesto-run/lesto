@@ -36,22 +36,30 @@ function fakeBackend(): IslandDevBackend {
   };
 }
 
-/** Fake deps, capturing the backend request and letting tests override the two seams. */
+/** Fake deps, capturing the backend request and letting tests override the seams. */
 function fakeDeps(
   over: Partial<{
     islands: readonly IslandFile[];
     backend: IslandDevBackend;
     createBackend: IslandDevDeps["createBackend"];
+    resolveClientImport: IslandDevDeps["resolveClientImport"];
   }> = {},
 ): {
   deps: IslandDevDeps;
   listIslands: ReturnType<typeof vi.fn>;
+  resolveClientImport: ReturnType<typeof vi.fn>;
   requests: CreateBackendRequest[];
 } {
   const requests: CreateBackendRequest[] = [];
   const backend = over.backend ?? fakeBackend();
 
   const listIslands = vi.fn(async () => over.islands ?? [island]);
+
+  // Default: the RUM dep resolves (present), so the guard passes. A test overrides this to
+  // `undefined` to prove the missing-dep refusal.
+  const resolveClientImport = vi.fn(
+    over.resolveClientImport ?? (() => "/proj/node_modules/@lesto/observability"),
+  );
 
   const createBackend =
     over.createBackend ??
@@ -61,7 +69,12 @@ function fakeDeps(
       return backend;
     });
 
-  return { deps: { listIslands, createBackend }, listIslands, requests };
+  return {
+    deps: { listIslands, resolveClientImport, createBackend },
+    listIslands,
+    resolveClientImport,
+    requests,
+  };
 }
 
 describe("createIslandDevServer", () => {
@@ -107,6 +120,32 @@ describe("createIslandDevServer", () => {
     ).rejects.toMatchObject({ code: "ISLAND_DEV_UNKNOWN_DIALECT" });
 
     expect(listIslands).not.toHaveBeenCalled();
+  });
+
+  it("resolves the RUM dependency from the app root before standing Vite up", async () => {
+    const { deps, resolveClientImport } = fakeDeps();
+
+    const server = await createIslandDevServer(okOptions, deps);
+
+    // The preflight queried the SAME import the build path guards (`@lesto/observability/rum`),
+    // and — the dep resolving — the backend still stood up.
+    expect(resolveClientImport).toHaveBeenCalledWith("@lesto/observability/rum");
+    expect(await server.handle("GET", "/client.js")).toMatchObject({ body: "module-code" });
+  });
+
+  it("refuses (before starting Vite) when @lesto/observability does not resolve", async () => {
+    // The hand-written app that dropped `@lesto/observability`: the dep does not resolve from the
+    // app root, so the dev boot must refuse with the SAME coded error the build path throws —
+    // rather than letting Vite fail opaquely with "failed to resolve @lesto/observability/rum".
+    const { deps, requests } = fakeDeps({ resolveClientImport: () => undefined });
+
+    await expect(createIslandDevServer(okOptions, deps)).rejects.toMatchObject({
+      code: "ASSETS_MISSING_RUM_DEPENDENCY",
+      details: { module: "@lesto/observability/rum", dependency: "@lesto/observability" },
+    });
+
+    // It bailed BEFORE constructing the Vite backend (loud + early, no half-started server).
+    expect(requests).toHaveLength(0);
   });
 
   it("wraps a backend startup failure as a coded error carrying the cause", async () => {
