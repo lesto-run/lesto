@@ -313,10 +313,18 @@ describe.each(drivers)("full-app journey + cross-process sharing: $name", (drive
     close = opened.close;
 
     // Fresh schema (Postgres persists across runs); the two app boots below then
-    // install everything against the clean database.
+    // install everything against the clean database. Drop the queue's satellite
+    // tables (`lesto_job_deps`, `lesto_job_batches`) BEFORE `lesto_jobs`: on the
+    // shared PG db, dropping `lesto_jobs` alone resets its IDENTITY sequence while a
+    // prior batch test's `lesto_job_deps` edge survives, so the next `enqueueBatch`
+    // re-mints ids 1,2 and collides on the edge table's composite PK. No batch test
+    // lives here yet, but mirror the fix so the first one added can't reintroduce
+    // that pg-only collision. (No-op on SQLite.)
     for (const table of [
       "lesto_sessions",
       "lesto_rate_limits",
+      "lesto_job_deps",
+      "lesto_job_batches",
       "lesto_jobs",
       "lesto_cache",
       "users",
