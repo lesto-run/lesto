@@ -4,10 +4,10 @@ import { defineConfig } from "vitest/config";
 // A line we cannot reach is a line we should not have written.
 export default defineConfig({
   test: {
-    // The recovery-code / TOTP paths hash with the full password scrypt cost (~1s each),
-    // so a test doing several hash+verify ops blows past vitest's 5s default on the
-    // contended serial coverage gate. Give the whole suite real headroom.
-    testTimeout: 30_000,
+    // No suite-wide timeout override: the scrypt-bound paths (password + recovery-code
+    // hashing) run under an injected cheap-cost `hasher` in tests (see test/cheap-hasher.ts),
+    // so every test finishes well inside vitest's 5s default — and that default keeps
+    // honest hang-detection on the whole suite instead of a 30s tourniquet.
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],

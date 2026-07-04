@@ -24,6 +24,8 @@ import {
 
 import * as userRepo from "../src/user";
 
+import { cheapHasher } from "./cheap-hasher";
+
 import type { Identity, IdentityEvent, IdentityMailer, IdentityOptions } from "../src/index";
 
 // ---------------------------------------------------------------------------
@@ -122,11 +124,35 @@ function buildIdentity(opts: Partial<IdentityOptions> = {}): {
     revokeUserSessions: (userId) => {
       revokedFor.push(userId);
     },
+    // Inject the cheap-cost hasher so the scrypt-bound register/login/reset paths
+    // run in microseconds instead of ~150 ms/derive. Any test that needs the REAL
+    // cost (the rehash-on-login pair) uses `buildRealIdentity` instead.
+    hasher: cheapHasher,
     clock: () => clock(),
     ...opts,
   });
 
   return { identity, sent, revokedFor };
+}
+
+/**
+ * An identity on the REAL `@lesto/auth` scrypt hasher (production cost + legacy-hash
+ * parsing). Used only by the rehash-on-login tests, which seed a legacy hash and
+ * assert the transparent upgrade to today's cost — a claim that is meaningless
+ * under the cheap hasher. Leaving `hasher` unset also exercises the
+ * `options.hasher ?? productionHasher` default the rest of the suite overrides.
+ */
+function buildRealIdentity(): Identity {
+  const { mailer } = captureMailer();
+
+  return createIdentity({
+    db,
+    secret: "test-secret-0123456789abcdefghij",
+    mailer,
+    verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+    resetUrl: (token) => `https://app.test/reset?token=${token}`,
+    clock: () => clock(),
+  });
 }
 
 beforeEach(async () => {
@@ -385,7 +411,7 @@ describe("login", () => {
   // Rehash-on-login: a user whose stored hash predates the current scrypt cost
   // logs in normally AND has the stored hash transparently upgraded.
   it("rehashes a stale (legacy-format) password hash on successful login", async () => {
-    const { identity } = buildIdentity();
+    const identity = buildRealIdentity();
     const password = "correct horse staple";
 
     // Seed a user with a *legacy* parameterless hash (scrypt$salt$hash, N=2^14),
@@ -415,7 +441,7 @@ describe("login", () => {
   });
 
   it("still logs in when the best-effort rehash persist fails", async () => {
-    const { identity } = buildIdentity();
+    const identity = buildRealIdentity();
     const password = "correct horse staple";
 
     const salt = randomBytes(16);
@@ -521,6 +547,7 @@ describe("resetPassword", () => {
       mailer,
       verificationUrl: (t) => `https://app.test/v?t=${t}`,
       resetUrl: (t) => `https://app.test/r?t=${t}`,
+      hasher: cheapHasher,
       clock: () => clock(),
     });
 
@@ -781,6 +808,7 @@ describe("token signer", () => {
       mailer,
       verificationUrl: (t) => `https://app/v?t=${t}`,
       resetUrl: (t) => `https://app/r?t=${t}`,
+      hasher: cheapHasher,
     });
 
     await identity.register("ada@example.com", "correct horse staple");
@@ -815,6 +843,7 @@ describe("revoke-on-reset (SQL-backed default)", () => {
       verificationUrl: (token) => `https://app.test/verify?token=${token}`,
       resetUrl: (token) => `https://app.test/reset?token=${token}`,
       sessionStore: sqlSessionStore(sql),
+      hasher: cheapHasher,
       clock: () => clock(),
     });
 
@@ -853,6 +882,7 @@ describe("revoke-on-reset (SQL-backed default)", () => {
       revokeUserSessions: (userId) => {
         revokedFor.push(userId);
       },
+      hasher: cheapHasher,
       clock: () => clock(),
     });
 
@@ -895,6 +925,7 @@ describe("login throttling", () => {
       verificationUrl: (token) => `https://app.test/verify?token=${token}`,
       resetUrl: (token) => `https://app.test/reset?token=${token}`,
       loginRateLimiter: limiter,
+      hasher: cheapHasher,
       clock: () => clock(),
     });
 
@@ -1024,6 +1055,7 @@ describe("onEvent seam", () => {
       onEvent: (event) => {
         events.push(event);
       },
+      hasher: cheapHasher,
       clock: () => clock(),
       ...extra,
     });
@@ -1168,6 +1200,7 @@ describe("onEvent seam", () => {
       onEvent: (event) => {
         events.push(event);
       },
+      hasher: cheapHasher,
       clock: () => clock(),
     });
 
@@ -1226,6 +1259,7 @@ describe("onEvent seam", () => {
         await Promise.resolve();
         order.push(event.type);
       },
+      hasher: cheapHasher,
       clock: () => clock(),
     });
 

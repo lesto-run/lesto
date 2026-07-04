@@ -15,6 +15,8 @@ import { recoveryCodes as recoveryCodesTable, totpFactors } from "../src/totp";
 import * as totpRepo from "../src/totp";
 import { usersMigration } from "../src/user";
 
+import { cheapHasher } from "./cheap-hasher";
+
 import type { Identity, IdentityMailer, IdentityOptions } from "../src/index";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +84,9 @@ function buildIdentity(opts: Partial<IdentityOptions> = {}): Identity {
     sessionStore: sqlSessionStore(sql),
     requireVerifiedEmail: false,
     appName: "Lesto Test",
+    // Cheap-cost scrypt so the TOTP-confirm path (ten recovery-code digests) and the
+    // register/login setup run in microseconds, not ~1.5 s of full-cost hashing.
+    hasher: cheapHasher,
     clock: () => clock(),
     ...opts,
   });
@@ -292,6 +297,7 @@ describe("enrollTotp", () => {
       resetUrl: (token) => `https://app.test/reset?token=${token}`,
       sessionStore: sqlSessionStore(sql),
       requireVerifiedEmail: false,
+      hasher: cheapHasher,
       clock: () => clock(),
     });
     const { token } = await signedInUser(identity);

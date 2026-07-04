@@ -99,29 +99,51 @@ const DEFAULT_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RESET_TTL_MS = 60 * 60 * 1000;
 
 /**
- * A *constant* scrypt hash of a placeholder password, computed lazily.
+ * The scrypt password-hashing surface Identity leans on — an injectable seam over
+ * `@lesto/auth`'s KDF (ADR 0020), bundled so a caller can substitute the whole
+ * implementation as one unit.
  *
- * `login` runs `verifyPassword(candidate, await dummyHash())` whenever the
- * supplied email matches no user, so the no-user and wrong-password paths spend
- * the same CPU. Computed on first use and memoized as a *promise* (so racing
- * first-callers share one derive) — NOT at module load: `hashPassword` calls
- * `randomBytes`, and a Cloudflare Worker forbids generating random values
- * in global scope (module evaluation), so an eager module-level constant made
- * `@lesto/identity` impossible to even *import* in a Worker. Deferring it keeps
- * the package import-safe on the edge; the one-time cost lands on the first
- * failed login, inside a request handler where randomness is allowed.
+ * Every method delegates to the SAME self-describing scrypt format `@lesto/auth`
+ * mints (`scrypt$N$r$p$salt$hash`); this seam exists to make the *cost* an
+ * injection point, not to fork the algorithm. The production default —
+ * {@link productionHasher} — runs the full cost (N=2^17, ~150 ms/derive), which is
+ * right for a real deployment but far too slow to invoke the dozens of times a unit
+ * suite does. A test passes a cheap-cost implementation of this same shape so the
+ * password / recovery-code paths stay fast without weakening what ships.
  *
- * The lazy memoization has one honest seam: the timing-equalization property
- * holds for all but the FIRST failed-unknown-email login per isolate. On a cold
- * cache that first request also computes the decoy hash (an extra `hashPassword`
- * scrypt), so it is slower than a steady-state miss. Once warmed, every
- * subsequent miss spends exactly one scrypt and is indistinguishable from a
- * wrong-password hit — the property the rest of this doc describes.
+ * The default MUST remain the production cost: {@link IdentityOptions.hasher} is
+ * optional and falls back to {@link productionHasher}, so a caller that does not
+ * wire it gets full-strength hashing with no way to accidentally under-cost it.
  */
-let dummyHashCache: Promise<string> | undefined;
+export interface PasswordHasher {
+  /** Hash a password / recovery code with a fresh salt under the current cost. */
+  hashPassword(password: string): Promise<string>;
 
-const dummyHash = (): Promise<string> =>
-  (dummyHashCache ??= hashPassword("__lesto_identity_timing_decoy__"));
+  /** Verify a candidate against a stored hash in constant time; `false` (never throws) on a malformed hash. */
+  verifyPassword(password: string, stored: string): Promise<boolean>;
+
+  /** True iff the stored hash was minted below today's cost — the rehash-on-login seam. */
+  needsRehash(stored: string): boolean;
+
+  /** Hash a batch of plaintext recovery codes for storage at rest. */
+  hashRecoveryCodes(codes: readonly string[]): Promise<string[]>;
+
+  /** Verify a candidate recovery code against one stored hash, in constant time. */
+  verifyRecoveryCode(code: string, storedHash: string): Promise<boolean>;
+}
+
+/**
+ * The production password hasher — the full-cost `@lesto/auth` scrypt KDF, and the
+ * default whenever {@link IdentityOptions.hasher} is not wired. Deployments get this
+ * with no configuration; only tests substitute a cheaper cost.
+ */
+const productionHasher: PasswordHasher = {
+  hashPassword,
+  verifyPassword,
+  needsRehash,
+  hashRecoveryCodes,
+  verifyRecoveryCode,
+};
 
 const invalidToken = (kind: "verification" | "reset"): IdentityError =>
   new IdentityError("IDENTITY_INVALID_TOKEN", `The ${kind} link is invalid or has expired.`);
@@ -317,6 +339,17 @@ export interface IdentityOptions {
   readonly clock?: Clock;
 
   /**
+   * The scrypt hashing implementation (see {@link PasswordHasher}).
+   *
+   * Defaults to {@link productionHasher} — the full-cost `@lesto/auth` KDF — so a
+   * deployment gets full-strength hashing with no configuration. The seam exists
+   * for tests, which inject a cheap-cost implementation of the same shape to keep
+   * the password / recovery-code paths fast; production callers should leave it
+   * unset. Under-costing is opt-in and never the default.
+   */
+  readonly hasher?: PasswordHasher;
+
+  /**
    * Optional observability hook fired on each identity lifecycle event —
    * `login_succeeded` / `login_failed` / `password_reset` / `email_verified` /
    * `session_revoked` (see {@link IdentityEvent}).
@@ -410,6 +443,7 @@ export function createIdentity(options: IdentityOptions): Identity {
   assertStrongSecret(options.secret);
 
   const db = options.db;
+  const hasher = options.hasher ?? productionHasher;
   const requireVerifiedEmail = options.requireVerifiedEmail ?? true;
   const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
   const verificationTtlMs = options.verificationTtlMs ?? DEFAULT_VERIFICATION_TTL_MS;
@@ -490,6 +524,24 @@ export function createIdentity(options: IdentityOptions): Identity {
     }
   };
 
+  // A *constant* decoy hash, computed lazily on first use and memoized as a promise
+  // (so racing first-callers share one derive). `login` runs
+  // `hasher.verifyPassword(candidate, await dummyHash())` whenever the email matches
+  // no user, so the no-user and wrong-password paths spend the same CPU. Deferred —
+  // NOT computed at construction — because `hashPassword` calls `randomBytes`, which
+  // a Cloudflare Worker forbids in global/module scope; a decoy built eagerly made
+  // `@lesto/identity` impossible to even *import* on the edge. The one-time cost
+  // lands on the first failed login, inside a request handler where randomness is
+  // allowed. It runs through the SAME injected `hasher` as every other path, so an
+  // injected cheap-cost hasher keeps this decoy cheap too. One honest seam: the
+  // timing-equalization holds for every miss AFTER the first per instance — a cold
+  // instance also computes the decoy on that first miss, so it is slower than a
+  // steady-state miss; once warmed, every miss spends exactly one derive and is
+  // indistinguishable from a wrong-password hit.
+  let dummyHashCache: Promise<string> | undefined;
+  const dummyHash = (): Promise<string> =>
+    (dummyHashCache ??= hasher.hashPassword("__lesto_identity_timing_decoy__"));
+
   return {
     /**
      * Register a new account.
@@ -522,7 +574,7 @@ export function createIdentity(options: IdentityOptions): Identity {
       if (await userRepo.findUserByEmail(db, normalized)) {
         // Burn the same CPU we'd burn on a real insert so the response time
         // doesn't betray the collision. We discard the result.
-        await hashPassword(password);
+        await hasher.hashPassword(password);
 
         return { status: "verification_sent", user: undefined };
       }
@@ -531,7 +583,7 @@ export function createIdentity(options: IdentityOptions): Identity {
       try {
         user = await userRepo.insertUser(db, {
           email: normalized,
-          passwordHash: await hashPassword(password),
+          passwordHash: await hasher.hashPassword(password),
           emailVerifiedAt: null,
         });
       } catch {
@@ -659,7 +711,7 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       if (!user) {
         // Equalize CPU so a missing user costs the same as a wrong password.
-        await verifyPassword(password, await dummyHash());
+        await hasher.verifyPassword(password, await dummyHash());
 
         await penalize();
 
@@ -670,7 +722,7 @@ export function createIdentity(options: IdentityOptions): Identity {
         throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
-      if (!(await verifyPassword(password, user.passwordHash))) {
+      if (!(await hasher.verifyPassword(password, user.passwordHash))) {
         await penalize();
 
         // A failed login. Even though we now hold a `user`, we omit its id to keep
@@ -691,9 +743,9 @@ export function createIdentity(options: IdentityOptions): Identity {
       // valid login. On failure the stored hash simply stays at its old (still
       // valid) cost and the upgrade is retried on the next sign-in — swallowing
       // here is strictly safer than blocking auth on a transient write error.
-      if (needsRehash(user.passwordHash)) {
+      if (hasher.needsRehash(user.passwordHash)) {
         try {
-          await userRepo.setPasswordHash(db, user.id, await hashPassword(password));
+          await userRepo.setPasswordHash(db, user.id, await hasher.hashPassword(password));
         } catch {
           // The login succeeded; the cost upgrade can wait for the next login.
         }
@@ -782,7 +834,7 @@ export function createIdentity(options: IdentityOptions): Identity {
         throw invalidToken("reset");
       }
 
-      const newHash = await hashPassword(newPassword);
+      const newHash = await hasher.hashPassword(newPassword);
       await userRepo.setPasswordHash(db, user.id, newHash);
 
       const userId = String(user.id);
@@ -899,7 +951,11 @@ export function createIdentity(options: IdentityOptions): Identity {
       // recovery codes (a lockout). The plaintext codes are returned for one-time
       // display; only the scrypt hashes are persisted (ADR 0020).
       const recoveryCodes = generateRecoveryCodes();
-      await totpRepo.replaceRecoveryCodes(db, user.id, await hashRecoveryCodes(recoveryCodes));
+      await totpRepo.replaceRecoveryCodes(
+        db,
+        user.id,
+        await hasher.hashRecoveryCodes(recoveryCodes),
+      );
 
       // Record the accepted step so this code can never be replayed, then confirm.
       await totpRepo.recordTotpStep(db, user.id, step);
@@ -961,7 +1017,7 @@ export function createIdentity(options: IdentityOptions): Identity {
       // closing the check-then-mark TOCTOU. No factor / no unused codes / no match
       // all surface the same coded refusal.
       for (const candidate of candidates) {
-        if (await verifyRecoveryCode(code, candidate.codeHash)) {
+        if (await hasher.verifyRecoveryCode(code, candidate.codeHash)) {
           if (await totpRepo.markRecoveryCodeUsed(db, candidate.id)) return;
 
           // Lost the race: another request spent this code between our read and our
