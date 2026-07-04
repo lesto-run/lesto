@@ -375,7 +375,7 @@ describe("run serve / dev", () => {
     expect(options?.onDrain).toBeUndefined();
   });
 
-  it("wires the OTLP tracer on serve when LESTO_OTLP_URL is set, and stops the interval on shutdown", async () => {
+  it("wires the OTLP tracer on serve when LESTO_OTLP_URL is set", async () => {
     const close = vi.fn(() => Promise.resolve());
     const serve = vi.fn(
       (_app: App, _options?: ServeOptions): Promise<Server> =>
@@ -397,7 +397,8 @@ describe("run serve / dev", () => {
     expect(options?.tracer).toBeDefined();
     expect(typeof options?.onDrain).toBe("function");
 
-    // The shutdown hook drains, then stops the flush interval — it resolves cleanly.
+    // The shutdown hook drains cleanly (the `stopInterval` half is asserted by the
+    // seam-injecting test below, which can observe the flush-cadence handle).
     const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
     await expect(drain()).resolves.toBeUndefined();
 
@@ -424,6 +425,9 @@ describe("run serve / dev", () => {
 
     expect(close).toHaveBeenCalledTimes(1);
     expect(stopInterval).toHaveBeenCalledTimes(1);
+    // Order is load-bearing (run.ts): the final drain flush must run before the
+    // cadence stops, or it is cut short. Assert it, not just the call counts.
+    expect(close.mock.invocationCallOrder[0]!).toBeLessThan(stopInterval.mock.invocationCallOrder[0]!);
   });
 
   it("wires /readyz to a real database ping that answers true when the DB is up", async () => {
@@ -3066,8 +3070,10 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
     expect(reloadClose).toHaveBeenCalledTimes(1);
 
     // …including the trace-flush cadence: teardown calls `stopInterval()`, so the
-    // (unref'd) interval never leaks past a failed dev boot (L-fe2da7f5).
+    // (unref'd) interval never leaks past a failed dev boot (L-fe2da7f5) — and it
+    // closes the server (its final drain flush) BEFORE stopping the cadence.
     expect(stopInterval).toHaveBeenCalledTimes(1);
+    expect(serverClose.mock.invocationCallOrder[0]!).toBeLessThan(stopInterval.mock.invocationCallOrder[0]!);
 
     // The shutdown hook is never reached, since teardown already ran on the failure path.
     expect(installShutdown).not.toHaveBeenCalled();
