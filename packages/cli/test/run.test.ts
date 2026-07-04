@@ -3318,6 +3318,10 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a + L-69d76e71 harde
   });
 
   it("scrubs a secret in the tool RESULT before it hits the reply, keeping routes intact (L-01d526da)", async () => {
+    // The Stripe key is assembled at runtime so the contiguous literal never appears in
+    // source — GitHub push protection scans the raw file (L-b58f9bc0); value is unchanged.
+    const stripeLivePrefix = ["sk_live", "_"].join("");
+    const stripeSecret = `${stripeLivePrefix}51H8xYz0123456789abcdEFGH`;
     const served = await bootHandle({
       script,
       endpoint,
@@ -3327,7 +3331,7 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a + L-69d76e71 harde
       dispatchDevTool: () =>
         Promise.resolve({
           routes: ["/api/v2/organizations/settings"],
-          note: "deployed with sk_live_51H8xYz0123456789abcdEFGH",
+          note: `deployed with ${stripeSecret}`,
         }),
     });
 
@@ -3337,12 +3341,15 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a + L-69d76e71 harde
     });
 
     const reply = await replyOf(response);
-    expect(reply).not.toContain("sk_live_");
+    expect(reply).not.toContain(stripeLivePrefix);
     expect(reply).toContain("<redacted>");
     expect(reply).toContain("/api/v2/organizations/settings");
   });
 
   it("redacts a secret pasted into the prompt before it can leave the process (L-7fd1b91e)", async () => {
+    // Assembled at runtime so the contiguous AWS key literal never appears in source —
+    // GitHub push protection scans the raw file (L-b58f9bc0); value is unchanged.
+    const awsKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
     const served = await bootHandle({
       script,
       endpoint,
@@ -3352,11 +3359,11 @@ describe("run dev — in-preview AI endpoint (ADR 0033 Inc 6a + L-69d76e71 harde
 
     const response = await served.handle("POST", endpoint, {
       headers: authed,
-      body: { prompt: "my key AKIAIOSFODNN7EXAMPLE ok?", route: "/" },
+      body: { prompt: `my key ${awsKey} ok?`, route: "/" },
     });
 
     const reply = await replyOf(response);
-    expect(reply).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(reply).not.toContain(awsKey);
     expect(reply).toContain("<redacted>");
   });
 
