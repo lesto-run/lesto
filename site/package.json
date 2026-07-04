@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "lesto dev",
     "build": "lesto generate agents --check && lesto build",
-    "deploy": "lesto generate agents --check && bun --bun lesto build && wrangler deploy",
+    "deploy": "bun run build && wrangler deploy",
     "agents": "lesto generate agents",
     "agents:check": "lesto generate agents --check",
     "test": "vitest run",
