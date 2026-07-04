@@ -1,3 +1,10 @@
+# ⚠️ SUPERSEDED framing (2026-07-04, L-3daa1173): the "published vs current-tree = branch a/b/c" model
+# below is WRONG. The `published` CURL leg is a FALSE ORACLE — curl greens on a dev server that is
+# genuinely broken for undici `fetch()` clients (the actual defect). The `published-harness` (undici) leg
+# is the real signal. Root cause: real published-0.1.2 npm closure + undici `fetch()` fails where curl /
+# node:http / browsers all get 200; source-invisible + local-pack-blind. See hoisted-hang-mechanism.yml
+# and the L-3daa1173 closing note. Kept for its history + the reusable published-harness leg.
+#
 # DISPATCH-ONLY diagnostic for L-3daa1173 — is the L-27285131 hoisted-Linux `lesto dev` first-`GET /`
 # HANG (a) still reproducing on the IMMUTABLE published closure, and (b) gone on the CURRENT tree at
 # HEAD — measured at n>=3 so a single green/red can't masquerade as the trend. Two matrix legs:
@@ -95,7 +102,9 @@ jobs:
         run: bunx playwright test scaffold-real-install.spec.ts --workers=1 --grep "@published-hoisted"
 
       # ── published leg: the IMMUTABLE artifact, shell-level first-GET probe (no repo-side fix exists) ──
-      - name: Published hoisted `lesto dev` first-GET probe
+      # ⚠️ FALSE ORACLE (L-3daa1173): curl greens on a server that is broken for undici `fetch()` clients —
+      # the actual defect. Trust the `published-harness` (undici) leg, not this one, for dev liveness.
+      - name: Published hoisted `lesto dev` first-GET probe (curl — FALSE ORACLE, see header)
         if: matrix.leg == 'published'
         env:
           VERSION: ${{ inputs.version }}

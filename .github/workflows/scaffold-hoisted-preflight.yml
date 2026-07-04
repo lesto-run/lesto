@@ -1,3 +1,10 @@
+# ⚠️ CORRECTION (2026-07-04, L-3daa1173): this preflight is STRUCTURALLY BLIND to the L-27285131 defect —
+# it would NOT have caught it. The defect only reproduces on the REAL npm-resolved published closure under
+# a Node undici `fetch()` client; this is a LOCAL PACK, and every local pack GREENS under undici (incl. of
+# published-0.1.2's byte-identical source). Keep it for install/build + hoisted-layout coverage; the
+# faithful published-closure dev-boot check (verdaccio) is the re-scoped L-513dd8a6 deliverable. The
+# "would have caught it" / "gate" language below is superseded — read it as install-coverage, not the gate.
+#
 # The MUTABLE-TREE HOISTED dev-boot preflight (L-513dd8a6) — its OWN workflow, nightly + on-demand.
 #
 # This is the pre-publish CANARY that would have caught L-27285131 if run before the publish (it is a

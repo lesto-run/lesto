@@ -84,14 +84,17 @@ const CREATE_LESTO_VERSION = (
  * (non-default) AND flaky (L-d86ae3a1). So a green nightly does NOT prove the hoisted default-path dev
  * works. L-513dd8a6 re-closes this on a FIXABLE target (a mutable-tree HOISTED preflight) + ships the fix.
  *
- * NARROW, not a universal dev bug: the SAME dev code under the ISOLATED linker on the SAME Linux runner
- * (leg b) boots fine, and hoisted boots instantly on macOS (~24ms first GET) — specific to the HOISTED
- * PUBLISHED CLOSURE ON LINUX. Mechanism UNPROVEN: suspected first-request Vite/@prefresh dep-optimize stall
- * under a flat node_modules on a constrained runner (the preact scaffold's `@prefresh/vite` drags a
- * rolldown native binary). Leg (a) is the IMMUTABLE published artifact — no repo-side fix exists for 0.1.2.
- * This root cause DIFFERS from the 0.1.1 skip's stated "127.0.0.1 bind/poll mismatch": an isolated-linker
- * pass on the same runner rules OUT a bind bug, so 0.1.1 was almost certainly the same hoisted stall,
- * misdiagnosed — do NOT reinstate the bind/poll wording (reconcile L-2d87f1b5).
+ * ⚠️ MECHANISM CORRECTED (2026-07-04, L-3daa1173) — the "dep-optimize / @prefresh rolldown stall" guess
+ * below the fold is REFUTED. The real signature: `beforeAll`'s `waitForServer` fails because it uses Node's
+ * undici `fetch()`, and undici `fetch()` fails outright (instant, persistent) against the published-0.1.2
+ * hoisted dev — while curl, `node:http` (fresh socket), and real browsers all get `GET / → 200` fast (the
+ * first-request Vite transform completes in ~55ms, so it is NOT a dep-optimize deadlock). It is undici-
+ * `fetch`-client-specific and REAL-PUBLISHED-CLOSURE-specific: a LOCAL pack of the byte-identical 0.1.2
+ * source answers undici fine (source-invisible + local-pack-blind). So the skip is correct (leg-a's fetch
+ * harness genuinely reds on 0.1.2), user impact is LOW (real clients work), and HEAD's published-closure
+ * behavior is UNPROVEN. The "isolated boots fine / hoisted-on-Linux only" framing still holds directionally
+ * but the CAUSE is undici-fetch-vs-real-closure, not a Vite stall; do NOT reinstate the bind/poll wording
+ * (reconcile L-2d87f1b5). Full evidence + the verdaccio "is HEAD fixed" follow-up: L-3daa1173 / L-513dd8a6.
  *
  * The gate is a SINGLE known-bad version pin, so it AUTO-LIFTS at the next bump — NOT a `<=` threshold
  * (which greens forever and defeats the auto-re-test that caught this at the 0.1.2 bump). Two follow-on
@@ -99,12 +102,12 @@ const CREATE_LESTO_VERSION = (
  * `beforeAll` reds on `bunx create-lesto@0.1.3` (404); and if 0.1.3 un-skips onto a still-unfixed dev the
  * hydration test reds. The un-skip conditions + the isolated-install add-on live on L-513dd8a6 / L-9dc62468.
  */
-// Force-lift hook for the L-3daa1173 characterization: the `hoisted-hang-probe` workflow sets
-// `LESTO_FORCE_PUBLISHED_DEV_BOOT=1` to boot the published dev under THIS exact harness — the missing
-// matrix cell. The original RED (run 28714591201) was leg-a's `beforeAll` `waitForServer`; a curl probe
-// proved the SERVER answers 0.1.2 3/3, but only re-running the SAME spawnDev/waitForServer harness at n>=3
-// discriminates branch (b) environmental-flake from (c) a conditional harness/product hang. UNSET on every
-// normal path (the nightly, scaffold-real-install.yml, CI), so the version-pinned skip is unchanged there.
+// Force-lift hook (L-3daa1173 characterization): the `hoisted-hang-probe` workflow sets
+// `LESTO_FORCE_PUBLISHED_DEV_BOOT=1` to boot the published dev under THIS exact `waitForServer` (undici
+// `fetch`) harness. That run SETTLED it: undici `fetch()` reds the published-0.1.2 hoisted dev 3/3 while
+// curl greens 3/3 on the SAME server — a curl probe is a FALSE ORACLE, only the fetch harness sees the
+// real defect. UNSET on every normal path (the nightly, scaffold-real-install.yml, CI), so the
+// version-pinned skip is unchanged there; the hook exists only for the characterization sweep.
 const DEV_BOOT_SKIPPED =
   CREATE_LESTO_VERSION === "0.1.2" && process.env.LESTO_FORCE_PUBLISHED_DEV_BOOT !== "1";
 

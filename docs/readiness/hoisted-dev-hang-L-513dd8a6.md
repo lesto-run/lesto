@@ -1,5 +1,33 @@
 # Hoisted-Linux `lesto dev` first-request hang — root-cause investigation (L-513dd8a6)
 
+> ## ⚠️ SUPERSEDED — the hypothesis below (Vite/@prefresh/rolldown dep-optimize stall) is REFUTED (2026-07-04, L-3daa1173)
+>
+> A characterization sweep (probe/bisect/mechanism runs on `hoisted-hang-{probe,bisect,mechanism}.yml`)
+> overturned the framing in the rest of this note. **What is now established:**
+> - **Not a dep-optimize / rolldown deadlock.** `curl` gets `GET / → 200 in ~55ms` on the *first* request
+>   against the published-0.1.2 hoisted dev (server-side `http.access` logged). If the first-request Vite
+>   transform/dep-optimize deadlocked, curl would hang too. It doesn't — the transform completes fast.
+> - **Not a total hang, not a bind bug.** `curl`, `node:http` (fresh socket), and real browsers all get
+>   `200`. **Only Node's undici `fetch()` fails** — instantly (`fetch failed` in ~3ms), persistently
+>   (300/300 attempts over 60s), *before* the handler. It is **not** the `Sec-Fetch-Site` header (a
+>   `node:http` request that sends it gets 200) and **not** the 2s-abort/keep-alive-pool (a single
+>   no-abort `fetch` also fails instantly).
+> - **Source-invisible + local-pack-blind.** The published-0.1.2 `@lesto/*` source is byte-identical to
+>   commit `6d65d49` (verified via `npm pack` diff); every LOCAL pack of that same source (the
+>   `scaffold-hoisted-preflight` spec, and an overlay bisect of all of `6d65d49..HEAD`) GREENS under the
+>   same undici client. **Only the real npm-resolved published closure reproduces the RED.** So the
+>   mutable-tree preflight is structurally blind to this class (the `scaffold-e2e-masks-real-resolution`
+>   trap), and there is no code-anchored *source* RED to bisect to.
+> - **User impact is LOW** (browsers/curl/`node:http` unaffected); the `waitForServer` harness — which
+>   uses `fetch` — is the primary victim. **`HEAD`'s published-closure behavior is UNPROVEN** (HEAD was
+>   never published; local packs are blind). The only faithful "is HEAD fixed" test is a **verdaccio**
+>   publish of HEAD's closure + `create-lesto` + undici — filed as the re-scoped **L-513dd8a6** deliverable.
+> - **`DEV_BOOT_SKIPPED === "0.1.2"` stays** (0.1.2 is genuinely RED under leg-a's `fetch` harness); the
+>   un-skip must gate on the verdaccio check, NOT on the blind local-pack preflight or the version bump alone.
+>
+> Everything below is the *original, now-refuted* investigation, kept for history. Read it as a record of
+> a hypothesis that the curl-vs-undici + local-pack-vs-published-closure evidence disproved — not as guidance.
+
 Follow-up to the L-27285131 triage. This note is the evidence-based investigation that pairs with
 the new **mutable-tree hoisted dev-boot preflight** (`packages/e2e/scaffold-hoisted-preflight.spec.ts`
 + `.github/workflows/scaffold-hoisted-preflight.yml`). The preflight is what will red/green a fix on

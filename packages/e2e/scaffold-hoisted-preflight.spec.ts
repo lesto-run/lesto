@@ -23,11 +23,14 @@ import {
  * only AFTER the fix, since a blocking gate on the still-hung tree would deadlock the 0.1.3 release
  * that ships the fix).
  *
- * ⚠️ NOT YET CONFIRMED ON THIS PATH: the 300s hang was observed against the IMMUTABLE PUBLISHED
- * closure (`bunx create-lesto@0.1.2`), NOT the current-tree tarball path this spec installs. It
- * SHOULD reproduce (published dev code == the tree) but has NOT yet been observed RED on
- * `ubuntu-latest` — dispatch it once against the unfixed tree to confirm it reds before trusting it.
- * If it greens, the current tree has drifted from published-0.1.2's dev and it is reproducing nothing.
+ * ⚠️ STRUCTURALLY BLIND to the L-27285131 defect (established 2026-07-04, L-3daa1173) — do NOT treat a
+ * green here as "the published default path is fine." The defect only reproduces on the REAL npm-resolved
+ * published closure under a Node undici `fetch()` client; this spec is a LOCAL PACK (`packLestoClosure`
+ * pins the whole `@lesto/*` graph to `file:` tarballs via `overrides`), and every local pack GREENS under
+ * undici — including of published-0.1.2's own byte-identical source (overlay bisect run 28719740861, all
+ * SHAs green). So this leg CANNOT redden on that class (the `scaffold-e2e-masks-real-resolution` trap). It
+ * still earns its keep as install/build + hoisted-layout coverage; the faithful published-closure dev-boot
+ * check (verdaccio) is the re-scoped L-513dd8a6 deliverable. curl is likewise a FALSE ORACLE here.
  *
  * `scaffold-real-install.spec.ts` has two legs, and NEITHER boots `lesto dev` under the hoisted
  * linker against a FIXABLE tree:
