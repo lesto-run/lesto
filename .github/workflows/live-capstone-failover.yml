@@ -1,0 +1,84 @@
+name: live-capstone-failover
+
+# The Tier-4 v1 capstone's REAL `pg_promote` failover gate (ADR 0042 Inc4/Inc8, leg `L-45e1b56b`, CI
+# wiring `L-c052144e`) — the deferred half of the failover leg, now run in CI.
+#
+# The bun-run acceptance gate in `ci.yml` (`live-capstone-acceptance`) proves the timeline-increment
+# resume DECISION only against a FORGED cursor: `acceptance.pg.ts` assertion 6c hand-encodes a
+# `timelineId + 1` cursor and asserts a re-snapshot. That covers the BRANCH deterministically, but it
+# structurally cannot prove the branch fires on the mechanic the real world produces — a WAL timeline
+# that increments because a physical standby was `pg_promote`d, with the `systemId` held constant.
+#
+# WHY a docker-compose-in-job step and NOT a `services:` image (which is how `live-capstone-acceptance`
+# gets its single node): a GitHub Actions `services:` image CANNOT express a promotable streaming
+# standby — no start ordering, no `pg_basebackup`, no `pg_promote`. So this job brings up the two-node
+# stack (`examples/live-capstone/docker-compose.failover.yml` — official `postgres:16` primary + a
+# `pg_basebackup -R` physical standby) on the runner's preinstalled docker, then `bun run failover:pg`
+# captures a real pre-failover `(systemId, timelineId, LSN)` cursor, promotes the standby (timeline
+# increments, systemId constant), and asserts a reconnecting client RE-SNAPSHOTS against the new
+# timeline. `failover:pg` exits 0/1, so the step already gates. This same compose was verified locally
+# end-to-end (9/9, evidence under `examples/live-capstone/evidence/`, `L-839c47e8`).
+#
+# TRIGGER: `push` to main + `workflow_dispatch` — deliberately NOT a `pull_request` gate YET. The compose
+# is locally verified but this exact job has not yet had a green run on a GitHub-hosted runner; run it on
+# main / on demand first, and PROMOTE it to a `pull_request` gate (add the trigger below) once a first
+# run is observed green, so an unproven runner-specific wrinkle (compose version, docker perms, timing)
+# doesn't red-fail every PR. `pg_promote` is IRREVERSIBLE, but each CI run gets a fresh stack, so the
+# run-once nature is a non-issue here.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same ref supersedes an in-flight run.
+concurrency:
+  group: live-capstone-failover-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capstone-failover-pg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Install pg at the REPO ROOT (not the example subtree): the replication client
+      # (packages/live-server/src/pg-replication-client.ts) does a createRequire-rooted `require("pg")`
+      # that resolves from packages/live-server and CANNOT walk up into examples/live-capstone — the
+      # same constraint `live-capstone-acceptance` documents. Landing pg in root node_modules makes it
+      # reachable from packages/live-server AND packages/pg.
+      - name: Install the pg driver (an optional peer of the Postgres change source)
+        run: bun add pg@^8
+
+      # A promotable physical streaming standby is not expressible as a GH Actions `services:` image, so
+      # bring up the two-node stack on the runner's docker. `--wait` blocks until BOTH healthchecks pass;
+      # the standby only reports healthy once it is up as a hot standby (via `pg_basebackup -R`), so a
+      # green `up` already means the replica is streaming.
+      - name: Bring up the primary + promotable standby (docker compose)
+        run: docker compose -f examples/live-capstone/docker-compose.failover.yml up -d --wait
+
+      - name: Tier-4 v1 capstone REAL pg_promote failover (physical standby → timeline increment)
+        working-directory: examples/live-capstone
+        env:
+          LESTO_LIVE_PG_PRIMARY_URL: postgres://postgres:postgres@localhost:55432/postgres
+          LESTO_LIVE_PG_STANDBY_URL: postgres://postgres:postgres@localhost:55433/postgres
+        run: bun run failover:pg
+
+      # On a red run, dump both nodes' logs so the failure can be diagnosed without a local two-node repro.
+      - name: Dump Postgres logs on failure
+        if: failure()
+        run: docker compose -f examples/live-capstone/docker-compose.failover.yml logs --no-color
+
+      # Always drop the stack + its volumes — a fresh basebackup on the next run (pg_promote is one-way).
+      - name: Tear down the stack
+        if: always()
+        run: docker compose -f examples/live-capstone/docker-compose.failover.yml down -v
