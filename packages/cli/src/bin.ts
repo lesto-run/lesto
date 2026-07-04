@@ -475,8 +475,9 @@ interface IslandDevPorts {
 // concurrent `lesto dev` claims its own pair instead of colliding on a shared constant —
 // the old fixed 24677/24678 made the second app's Vite bind fail (`strictPort`), silently
 // degrading it to full reload. A tiny TOCTOU window between release and Vite's bind
-// remains; `strictPort` + the `resolveIslandDev` degrade cover it (a lost race → full
-// reload, never a crash).
+// remains; `strictPort` + `buildIslandDev`'s wrap of this call into a coded
+// `ISLAND_DEV_SERVER_FAILED` (the one signal `resolveIslandDev` degrades) cover it (a
+// lost race → full reload, never a crash).
 const findIslandDevPorts = (): Promise<IslandDevPorts> =>
   new Promise((resolve, reject) => {
     const servers: NetServer[] = [];
@@ -509,8 +510,9 @@ const findIslandDevPorts = (): Promise<IslandDevPorts> =>
       );
 
     // A loopback `listen(0)` effectively always fires `listening`/`error`, but never let a
-    // pathological stall WEDGE the dev boot: `resolveIslandDev` degrades a REJECTION to full
-    // reload, not a hang — so time out → reject → fall back, never hang with no log.
+    // pathological stall WEDGE the dev boot: `buildIslandDev` wraps this REJECTION into a coded
+    // `ISLAND_DEV_SERVER_FAILED` that `resolveIslandDev` degrades to full reload, not a hang — so
+    // time out → reject → wrap → fall back, never hang with no log.
     const timer = setTimeout(() => fail(new Error("timed out finding a free port")), 5000);
 
     for (let index = 0; index < 2; index += 1) {
@@ -555,7 +557,25 @@ const buildIslandDev = async (dialect: UiDialect): Promise<IslandDevServer | und
   if (islandDevModule === undefined) return undefined;
 
   const publicEnvDefine = await resolvePublicEnvDefine();
-  const { vitePort, hmrPort } = await findIslandDevPorts();
+
+  // A port-allocation failure (timeout, listen error, or a lost TOCTOU race) is a Vite
+  // TRANSPORT failure, not a crash: wrap it as the ONE coded signal `resolveIslandDev`
+  // degrades on (`ISLAND_DEV_SERVER_FAILED`), using the peer's OWN exported error class
+  // (the peer resolved above, so `islandDevModule.IslandDevError` is in scope). Without
+  // this wrap the raw `Error` would reach `resolveIslandDev`'s allowlist unmatched and
+  // CRASH dev boot — the exact regression the denylist→allowlist inversion opened.
+  let vitePort: number;
+  let hmrPort: number;
+
+  try {
+    ({ vitePort, hmrPort } = await findIslandDevPorts());
+  } catch (cause) {
+    throw new islandDevModule.IslandDevError(
+      "ISLAND_DEV_SERVER_FAILED",
+      "could not allocate island Fast Refresh ports",
+      { cause },
+    );
+  }
 
   return islandDevModule.createIslandDevServer(
     {

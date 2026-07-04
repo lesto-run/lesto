@@ -23,6 +23,7 @@ import type { ReleaseStore } from "@lesto/deploy";
 import {
   CliError,
   declaresIslandDevPeer,
+  LestoError,
   parsePort,
   parseServeLimit,
   parseStringFlag,
@@ -2021,9 +2022,14 @@ describe("run dev — Vite island Fast Refresh (DX-parity R2)", () => {
   it("falls back to the Bun path (not a crash) when the Vite server fails to start", async () => {
     const serve = fakeServe(3000);
     const buildClientAssets = vi.fn(() => Promise.resolve());
-    // A genuine startup failure (e.g. the HMR port is bound) — must NOT crash dev boot.
+    // The one degradable signal: `ISLAND_DEV_SERVER_FAILED` carries the Vite/port throw as
+    // `details.cause`. Must NOT crash dev boot — degrade to the Bun path with a logged note.
     const islandDev = vi.fn(async () => {
-      throw new Error("EADDRINUSE: hmr port 24678 in use");
+      throw new LestoError(
+        "ISLAND_DEV_SERVER_FAILED",
+        "the island dev server (Vite) failed to start",
+        { cause: new Error("EADDRINUSE: hmr port 24678 in use") },
+      );
     });
 
     const code = await run(
@@ -2040,7 +2046,12 @@ describe("run dev — Vite island Fast Refresh (DX-parity R2)", () => {
     // Dev still booted; the Bun client build ran; the failure was logged, not thrown.
     expect(code).toBe(0);
     expect(buildClientAssets).toHaveBeenCalledTimes(1);
-    expect(lines.some((line) => line.includes("island Fast Refresh unavailable"))).toBe(true);
+
+    // The note surfaced the UNWRAPPED cause (Amendment B), not the generic wrapper prose —
+    // so the actionable "EADDRINUSE …" reaches the author.
+    const note = lines.find((line) => line.includes("island Fast Refresh unavailable"));
+    expect(note).toBeDefined();
+    expect(note).toContain("EADDRINUSE");
   });
 
   it("re-throws (does NOT degrade) a missing-RUM-dependency error from the island dev server", async () => {
@@ -2075,6 +2086,99 @@ describe("run dev — Vite island Fast Refresh (DX-parity R2)", () => {
     expect(lines.some((line) => line.includes("island Fast Refresh unavailable"))).toBe(false);
     expect(buildClientAssets).not.toHaveBeenCalled();
     expect(serve).not.toHaveBeenCalled();
+  });
+
+  it("re-throws (does NOT degrade) an unknown-dialect error from the island dev server", async () => {
+    const serve = fakeServe(3000);
+    const buildClientAssets = vi.fn(() => Promise.resolve());
+    // Fatal-by-default under the allowlist: ONLY `ISLAND_DEV_SERVER_FAILED` degrades. An
+    // unknown `ui.dialect` is a real misconfiguration (near-unreachable today: `dialectOf`
+    // only yields react|preact) — fail dev boot loud, never silently drop to full reload.
+    const dialectError = new LestoError(
+      "ISLAND_DEV_UNKNOWN_DIALECT",
+      "the configured ui.dialect is neither react nor preact",
+    );
+    const islandDev = vi.fn(async () => {
+      throw dialectError;
+    });
+
+    await expect(
+      run(
+        ["dev"],
+        depsWith({
+          serve,
+          loadSites: () => Promise.resolve([]),
+          hasIslandsDir: () => Promise.resolve(true),
+          buildClientAssets,
+          islandDev,
+        }),
+      ),
+    ).rejects.toBe(dialectError);
+
+    // It did NOT degrade: no fallback log, no Bun build, no server stood up.
+    expect(lines.some((line) => line.includes("island Fast Refresh unavailable"))).toBe(false);
+    expect(buildClientAssets).not.toHaveBeenCalled();
+    expect(serve).not.toHaveBeenCalled();
+  });
+
+  it("re-throws (does NOT degrade) an uncoded error from the island dev server", async () => {
+    const serve = fakeServe(3000);
+    const buildClientAssets = vi.fn(() => Promise.resolve());
+    // The load-bearing inversion pin: an UNCODED throw (e.g. a broken transitive inside the
+    // installed peer) is NOT the `ISLAND_DEV_SERVER_FAILED` allowlist signal, so it is FATAL —
+    // the OPPOSITE of the old denylist, which degraded every uncoded error to full reload.
+    const rawError = new Error("boom inside the installed peer");
+    const islandDev = vi.fn(async () => {
+      throw rawError;
+    });
+
+    await expect(
+      run(
+        ["dev"],
+        depsWith({
+          serve,
+          loadSites: () => Promise.resolve([]),
+          hasIslandsDir: () => Promise.resolve(true),
+          buildClientAssets,
+          islandDev,
+        }),
+      ),
+    ).rejects.toBe(rawError);
+
+    // It did NOT degrade: no fallback log, no Bun build, no server stood up.
+    expect(lines.some((line) => line.includes("island Fast Refresh unavailable"))).toBe(false);
+    expect(buildClientAssets).not.toHaveBeenCalled();
+    expect(serve).not.toHaveBeenCalled();
+  });
+
+  it("degrades an ISLAND_DEV_SERVER_FAILED with no cause via the error's own message", async () => {
+    const serve = fakeServe(3000);
+    const buildClientAssets = vi.fn(() => Promise.resolve());
+    // Amendment B's else branch: the signal still degrades even with NO `Error` cause in
+    // `details` — the note falls back to the error's own message (not a wrapped cause).
+    const islandDev = vi.fn(async () => {
+      throw new LestoError(
+        "ISLAND_DEV_SERVER_FAILED",
+        "the island dev server (Vite) failed to start",
+      );
+    });
+
+    const code = await run(
+      ["dev"],
+      depsWith({
+        serve,
+        loadSites: () => Promise.resolve([]),
+        hasIslandsDir: () => Promise.resolve(true),
+        buildClientAssets,
+        islandDev,
+      }),
+    );
+
+    // Degraded (exit 0, Bun build ran) and the note carries the error's OWN message.
+    expect(code).toBe(0);
+    expect(buildClientAssets).toHaveBeenCalledTimes(1);
+    const note = lines.find((line) => line.includes("island Fast Refresh unavailable"));
+    expect(note).toContain("the island dev server (Vite) failed to start");
   });
 
   it("closes the Vite island server on graceful shutdown", async () => {

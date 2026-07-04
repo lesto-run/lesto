@@ -14,10 +14,14 @@ export type IslandDevErrorCode =
    */
   | "ISLAND_DEV_UNKNOWN_DIALECT"
   /**
-   * The Vite dev server failed to start (a bound HMR port, a malformed plugin, a
-   * resolve error in the synthesized entry). The underlying Vite throw is carried as
-   * `details.cause` so the CLI can paint it in the dev overlay rather than crash the
-   * boot.
+   * The island Fast-Refresh transport could not be stood up — the Vite dev server
+   * failed to start (a bound HMR/Vite port, a malformed plugin, a resolve error in the
+   * synthesized entry) OR its loopback ports could not be allocated. The underlying
+   * throw is carried as `details.cause`. This is THE one island-dev code `lesto dev`
+   * DEGRADES on: on it the CLI falls back to the Bun island build/watch/reload path with
+   * a logged note (a Vite-transport failure leaves the Bun path unaffected); every OTHER
+   * island-dev code is fatal to the dev boot. Only `createIslandDevServer`'s backend
+   * start and the CLI's port-allocation wrap (`buildIslandDev`) may mint it.
    */
   | "ISLAND_DEV_SERVER_FAILED";
 

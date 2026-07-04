@@ -15,7 +15,7 @@
 
 import type { PublicEnvDefine } from "@lesto/assets";
 
-import { hasCode } from "@lesto/errors";
+import { hasCode, isLestoError } from "@lesto/errors";
 
 import { createApp } from "@lesto/kernel";
 import type { App, LestoAppConfig, KernelDatabase } from "@lesto/kernel";
@@ -1221,13 +1221,17 @@ async function buildStylesIfPresent(
 }
 
 /**
- * The human message for a watch-triggered rebuild failure. A `buildClientIfPresent`
- * failure is a coded `CliError` carrying the bundler's own error as
- * `details.cause` — that cause's message is what an author needs. Falls back to
- * the error's own string form when no useful cause is present.
+ * The human message for a coded dev/rebuild failure. Both a watch-triggered
+ * `buildClientIfPresent` failure (a `CliError` wrapping the bundler's error) and a
+ * degraded island Fast-Refresh failure (an `ISLAND_DEV_SERVER_FAILED` carrying the Vite
+ * throw / port error) arrive as a `LestoError` whose `details.cause` is what an author
+ * needs — so unwrap on the `LestoError` base (`isLestoError`), not `instanceof CliError`,
+ * or the island degrade note would regress to the generic wrapper message and lose the
+ * actionable detail (e.g. `EADDRINUSE …`). Falls back to the error's own string form
+ * when no useful `Error` cause is present.
  */
 function rebuildErrorMessage(error: unknown): string {
-  const cause = error instanceof CliError ? error.details["cause"] : undefined;
+  const cause = isLestoError(error) ? error.details["cause"] : undefined;
 
   if (cause instanceof Error) return cause.message;
 
@@ -1775,11 +1779,15 @@ export function isMissingSelfModule(error: unknown, filename: string): boolean {
 
 /**
  * Resolve the dev island Fast-Refresh server (or `undefined`). Absent factory / an
- * uninstalled peer → `undefined` (the Bun island path). A genuine startup FAILURE (a
- * bound HMR port, a bad plugin) is caught here and degraded to `undefined` with a
- * logged note — the Bun build/watch/reload path still serves, exactly as the Bun
- * reload socket tolerates a busy port (`buildLiveReload`). It must never crash the
- * long-running dev boot.
+ * uninstalled peer → `undefined` (the Bun island path). A transport startup FAILURE is
+ * recognised by ONE coded signal — `ISLAND_DEV_SERVER_FAILED` (a bound HMR/Vite port, a
+ * bad plugin, an entry resolve error, or a lost port-allocation race) — and degraded to
+ * `undefined` with a logged note; the Bun build/watch/reload path still serves, exactly
+ * as the Bun reload socket tolerates a busy port (`buildLiveReload`). This is an
+ * ALLOWLIST: every OTHER throw (a missing RUM dependency, an unknown dialect, an
+ * env/schema error, a genuine fault inside an installed peer) is FATAL and re-thrown, so
+ * dev boot fails loud instead of silently dropping to full reload on an actionable error.
+ * It must never crash on the one degradable signal.
  */
 async function resolveIslandDev(
   deps: CliDeps,
@@ -1790,16 +1798,23 @@ async function resolveIslandDev(
   try {
     return await deps.islandDev({ dialect });
   } catch (error) {
-    // The missing-RUM-dependency preflight is FATAL on the Bun island fallback too (its
-    // `buildClientIfPresent` runs the very same guard), so degrading it here would merely hide an
-    // actionable "add @lesto/observability" error behind a misleading "full reload" note. Re-throw
-    // it so dev boot fails loud, exactly as `lesto build`/`deploy` do. Everything else (a bound HMR
-    // port, a bad plugin) still degrades to the Bun path with a logged note — dev must not crash.
-    // Branch on the CODE (via `hasCode`), not `instanceof AssetsError`: island-dev throws it, the CLI
-    // catches it, and a cross-package `instanceof` misfires if the graph ever carries two `@lesto/assets`
-    // copies. `hasCode` keys off the `LestoError` base (a leaf dep that dedupes) — the errors philosophy.
-    if (hasCode(error, "ASSETS_MISSING_RUM_DEPENDENCY")) throw error;
+    // ALLOWLIST, not denylist: degrade ONLY `ISLAND_DEV_SERVER_FAILED` — "the Vite transport
+    // could not be stood up (backend start OR port allocation); the Bun path is unaffected."
+    // Everything else is FATAL by default and re-thrown raw. A missing-RUM-dependency
+    // (`ASSETS_MISSING_RUM_DEPENDENCY`, arriving raw pre-`startBackend`) is fatal on the Bun
+    // fallback TOO (its `buildClientIfPresent` runs the very same guard), so degrading it would
+    // only hide an actionable "add @lesto/observability" error behind a misleading "full reload"
+    // note; an unknown dialect, an env/schema error, or a real fault inside an installed peer
+    // likewise must fail dev boot loud, exactly as `lesto build`/`deploy` do.
+    // Branch on the CODE (via `hasCode`), not `instanceof IslandDevError`: island-dev throws it,
+    // the CLI catches it, and a cross-package `instanceof` misfires if the graph ever carries two
+    // `@lesto/island-dev` copies. `hasCode` keys off the `LestoError` base (a leaf dep that
+    // dedupes) — the errors philosophy.
+    if (!hasCode(error, "ISLAND_DEV_SERVER_FAILED")) throw error;
 
+    // The degrade note surfaces the wrapped Vite/port cause (`details.cause`) via
+    // `rebuildErrorMessage`, not the generic wrapper prose — so a real "EADDRINUSE …" reaches the
+    // author, falling back to the error's own message when no `Error` cause was carried.
     deps.out(`island Fast Refresh unavailable, using full reload: ${rebuildErrorMessage(error)}`);
 
     return undefined;
@@ -1913,10 +1928,12 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
 
   // Resolve the Vite island dev server for this dialect (DX-parity R2). Absent factory
   // OR an uninstalled `@lesto/island-dev` peer → `undefined`, and dev keeps the Bun
-  // island build/watch/reload path. Present → Vite owns islands (Fast Refresh). A
-  // genuine startup failure (a bound port, a bad plugin) FALLS BACK to the Bun path
-  // with a logged note rather than crashing the dev boot — the same tolerance the Bun
-  // reload socket has for a busy port.
+  // island build/watch/reload path. Present → Vite owns islands (Fast Refresh). The one
+  // coded transport-failure signal (`ISLAND_DEV_SERVER_FAILED`: a bound port, a bad
+  // plugin, a lost port-allocation race) FALLS BACK to the Bun path with a logged note
+  // rather than crashing the dev boot — the same tolerance the Bun reload socket has for
+  // a busy port; any OTHER throw (missing RUM dep, unknown dialect, a peer's own fault)
+  // is fatal.
   const islandDev = await resolveIslandDev(deps, dialect);
 
   // Build the island client on boot, then watch for changes. The dev outDir is
