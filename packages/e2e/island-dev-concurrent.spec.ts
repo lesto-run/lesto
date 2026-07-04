@@ -1,10 +1,11 @@
-import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
+
+import { spawnDev, waitForServer } from "./dev-harness";
 
 /**
  * Two concurrent `lesto dev` apps each get their OWN island Fast Refresh server — the
@@ -54,37 +55,18 @@ test.describe.configure({ mode: "serial" });
 let devA: ChildProcess | undefined;
 let devB: ChildProcess | undefined;
 
-/** Poll the dev server until it answers, or time out. */
-async function waitForServer(url: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-
-  for (;;) {
-    try {
-      const response = await fetch(url, { headers: { "Sec-Fetch-Site": "same-origin" } });
-
-      if (response.ok) return;
-    } catch {
-      // not up yet
-    }
-
-    if (Date.now() > deadline) throw new Error(`dev server never answered at ${url}`);
-
-    await new Promise((r) => setTimeout(r, 200));
-  }
-}
-
-/** Boot `lesto dev` for the example on the given port. */
-function bootDev(port: number): ChildProcess {
-  return spawn("bun", [LESTO_BIN, "dev", "--port", String(port)], { cwd: APP_DIR, stdio: "pipe" });
-}
-
 test.beforeAll(async () => {
   // Start both BEFORE waiting: they must be up at the same time for the collision check to
   // mean anything (a sequential boot+shutdown would free the ports and never collide).
-  devA = bootDev(PORT_A);
-  devB = bootDev(PORT_B);
+  const a = spawnDev(LESTO_BIN, APP_DIR, PORT_A);
+  const b = spawnDev(LESTO_BIN, APP_DIR, PORT_B);
+  devA = a.child;
+  devB = b.child;
 
-  await Promise.all([waitForServer(`${URL_A}/`, 30_000), waitForServer(`${URL_B}/`, 30_000)]);
+  await Promise.all([
+    waitForServer(`${URL_A}/`, 30_000, { output: a.output }),
+    waitForServer(`${URL_B}/`, 30_000, { output: b.output }),
+  ]);
 });
 
 test.afterAll(() => {

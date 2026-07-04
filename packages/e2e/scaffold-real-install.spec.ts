@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -7,6 +7,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
+
+import { run, spawnDev, waitForServer } from "./dev-harness";
 
 /**
  * The REAL-install scaffold smoke — the gate the link-workspace e2e cannot be (`L-e00589b8`).
@@ -58,24 +60,31 @@ const CREATE_LESTO_VERSION = (
 ).version;
 
 /**
- * Register leg (a) skipped-or-live by the in-tree create-lesto version. Published 0.1.1's `lesto dev`
- * boots and announces its port but then REFUSES connections on 127.0.0.1:<port> on CI Linux while the
- * process stays ALIVE (no exit signal is ever captured) — a localhost/::1-vs-IPv4-literal bind/poll
- * mismatch on the IMMUTABLE published artifact, unfixable from this repo. Left live it would red a
- * shared, non-blocking nightly forever and mask leg (b)'s current-tree signal, so while the tree is
- * still at 0.1.1 the leg is `test.describe.skip` — which skips at COLLECTION time, so its 5-minute
- * install `beforeAll` never runs. The skip AUTO-EXPIRES at the 0.1.2 version bump (which also re-pins
- * the scaffold below), so no human has to remember; L-2d87f1b5 is the backstop. (Small window:
- * between the bump commit and create-lesto@0.1.2 landing on npm, a dispatched run reds on the
- * not-yet-published pin — acceptable for a same-day bump+dispatch release.)
+ * Leg (a)'s scope is gated by the in-tree create-lesto version. Published 0.1.1's `lesto dev` boots and
+ * announces its port but then REFUSES connections on 127.0.0.1:<port> on CI Linux while the process stays
+ * ALIVE (no exit signal is ever captured) — a localhost/::1-vs-IPv4-literal bind/poll mismatch on the
+ * IMMUTABLE published artifact, unfixable from this repo. So while the tree is still at 0.1.1 we skip ONLY
+ * the dev-server-dependent work, not the whole leg: the describe stays REGISTERED and its `beforeAll` still
+ * scaffolds → installs → BUILDS (the registry-install + Preact-bundle canary — the part that proves the
+ * published 0.1.1 closure still installs and builds from the real registry stays LIVE), and only the
+ * `lesto dev` boot + the browser-hydration test that needs it are skipped. An earlier `test.describe.skip`
+ * of the WHOLE leg silenced that still-passing canary too — this finer split (L-2d87f1b5) keeps it green.
+ *
+ * The gate AUTO-EXPIRES at the 0.1.2 version bump (which also re-pins the scaffold below), so no human has
+ * to remember; L-2d87f1b5 is the backstop. (Small window: between the bump commit and create-lesto@0.1.2
+ * landing on npm, a dispatched run reds on the not-yet-published pin — acceptable for a same-day
+ * bump+dispatch release.)
+ *
+ * ── GATE NOTE for the 0.1.2 publisher (L-7d411090) ──────────────────────────────────────────────────
+ * At the 0.1.2 bump this gate flips false and the dev boot + hydration test go LIVE automatically. Before
+ * relying on green, VERIFY ON CI that published-0.1.2 `lesto dev` actually binds 127.0.0.1: the 0.1.1
+ * failure was a bind/poll mismatch baked into the immutable artifact, so if 0.1.2 ships the same bug the
+ * newly-live hydration test reds (a real product failure, not test flake). ALSO: the NON-HOISTING install
+ * of the PUBLISHED scaffold is still deliberately omitted here (see the header) — today it is a guaranteed
+ * red because published 0.1.1 predates @lesto/observability; once 0.1.2 carries that fix, ADD an
+ * isolated-linker install to leg (a) so the published closure is proven under a non-hoisting layout too.
  */
-function registerPublishedLeg(title: string, body: () => void): void {
-  if (CREATE_LESTO_VERSION === "0.1.1") {
-    test.describe.skip(title, body);
-  } else {
-    test.describe(title, body);
-  }
-}
+const DEV_BOOT_SKIPPED = CREATE_LESTO_VERSION === "0.1.1";
 
 // Distinct ports per leg (and clear of the fixture webServer's 4180 + the other specs' 4188/4189).
 const PORT_PUBLISHED = 4190;
@@ -94,98 +103,9 @@ const PORT_TREE = 4191;
 // boot output is captured separately by `spawnDev`). Scoped to this spec; other e2e jobs unchanged.
 test.use({ trace: "retain-on-failure", screenshot: "only-on-failure" });
 
-/** Run a command to completion, rejecting on a non-zero exit (captures stderr for the message). */
-function run(command: string, args: string[], cwd: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: "pipe" });
-
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    // Drain stdout too: an unread `stdio: "pipe"` stream can fill the OS pipe buffer and BLOCK a
-    // chatty child (a real `bun install` / `lesto build`) — the same stall that faked a leg failure.
-    child.stdout?.resume();
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-
-        return;
-      }
-
-      reject(new Error(`${command} ${args.join(" ")} exited ${code}: ${stderr}`));
-    });
-  });
-}
-
-/** Poll the dev server until it answers, or time out — naming the captured dev output on failure. */
-async function waitForServer(
-  url: string,
-  timeoutMs: number,
-  devOutput?: () => string,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-
-  for (;;) {
-    try {
-      // Any HTTP response — even a non-2xx — means the server is UP and answering; the per-test
-      // `page.goto` assertions are what validate the actual response. Requiring 2xx here turned a
-      // reachable server whose `/` is non-2xx into an opaque 60s timeout instead of a real failure.
-      // A per-attempt abort bounds the "accepts TCP but never sends headers" case: without it undici's
-      // ~300s headers timeout outruns the 60s deadline, and the diagnostic-bearing throw below never runs.
-      await fetch(url, {
-        headers: { "Sec-Fetch-Site": "same-origin" },
-        signal: AbortSignal.timeout(2_000),
-      });
-
-      return;
-    } catch {
-      // not up yet (connection refused / reset)
-    }
-
-    if (Date.now() > deadline) {
-      const tail = devOutput?.().trim();
-
-      throw new Error(
-        `dev server never answered at ${url}` +
-          (tail ? `\n--- lesto dev output ---\n${tail}` : " (no dev output was captured)"),
-      );
-    }
-
-    await new Promise((r) => setTimeout(r, 200));
-  }
-}
-
 /** The app's own installed `lesto` bin (a node shim; run under `bun` so `Bun.build` is defined). */
 function lestoBin(appDir: string): string {
   return join(appDir, "node_modules", ".bin", "lesto");
-}
-
-/**
- * Boot `lesto dev`, capturing its stdout+stderr into an (unbounded) buffer. An unread `stdio: "pipe"`
- * stream does not just lose the output — it BACKPRESSURE-BLOCKS the child once the OS pipe fills, the
- * stall that faked leg (b)'s "won't hydrate" (ccdc936). Draining also lets {@link waitForServer} append
- * the captured output to its timeout error, so a boot failure names its cause instead of being opaque.
- */
-function spawnDev(appDir: string, port: number): { child: ChildProcess; output: () => string } {
-  const child = spawn("bun", [lestoBin(appDir), "dev", "--port", String(port)], {
-    cwd: appDir,
-    stdio: "pipe",
-  });
-
-  let buffer = "";
-  const capture = (chunk: Buffer): void => {
-    buffer += chunk.toString();
-  };
-  child.stdout?.on("data", capture);
-  child.stderr?.on("data", capture);
-  // Record the exit code/signal IF the child ever dies — otherwise invisible. NOTE: published 0.1.1's
-  // dev does NOT exit; it stays alive but unreachable on CI (this listener never fired — the evidence
-  // that refuted a presumed death), so leg (a) is version-skipped. See `registerPublishedLeg`.
-  child.on("exit", (code, signal) => {
-    buffer += `\n[lesto dev exited code=${code ?? "null"} signal=${signal ?? "null"}]`;
-  });
-
-  return { child, output: () => buffer };
 }
 
 /** Assert `out/client.js` is the Preact island bundle — never drags React's server renderer. */
@@ -200,7 +120,7 @@ async function assertPreactClient(appDir: string): Promise<void> {
 // (a) Real registry install of the PUBLISHED 0.1.1 closure, hoisted layout.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-registerPublishedLeg(`real-registry install — published ${CREATE_LESTO_VERSION}, hoisted layout @published-hoisted`, () => {
+test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hoisted layout @published-hoisted`, () => {
   test.describe.configure({ mode: "serial" });
 
   let workspace: string;
@@ -216,25 +136,31 @@ registerPublishedLeg(`real-registry install — published ${CREATE_LESTO_VERSION
 
     // Scaffold via the PUBLISHED create-lesto — the exact bin a `npm create lesto` user runs. Pinned
     // to the in-tree version (0.1.1 today) so the smoke tests an immutable published snapshot and the
-    // pin advances in lockstep with the skip gate above at the next republish.
+    // pin advances in lockstep with the version gate above at the next republish.
     await run(
       "bunx",
       [`create-lesto@${CREATE_LESTO_VERSION}`, "pub-app", "--yes", "--no-install", "--no-git"],
       workspace,
     );
 
-    // The headline: a REAL `bun install` resolving every `@lesto/*` from the npm registry (the
-    // resolution `link-workspace` never performs), in the DEFAULT hoisted layout.
+    // The headline CANARY — runs at EVERY version, INCLUDING 0.1.1: a REAL `bun install` resolving every
+    // `@lesto/*` from the npm registry (the resolution `link-workspace` never performs), in the DEFAULT
+    // hoisted layout, then a build of the Preact island client through the app's OWN installed cli (under
+    // Bun). This install+build is the part that proves the published closure still installs and builds; it
+    // stays LIVE at 0.1.1 while only the dev boot below is skipped (see the version-gate comment above).
     await run("bun", ["install", "--linker=hoisted"], appDir);
-
-    // Build the Preact island client through the app's OWN installed cli, under Bun.
     await run("bun", [lestoBin(appDir), "build"], appDir);
 
-    // Boot `lesto dev` (published 0.1.1 declares no island-dev peer → the Bun dev path).
-    const devProc = spawnDev(appDir, PORT_PUBLISHED);
-    dev = devProc.child;
+    // Boot `lesto dev` ONLY when NOT at 0.1.1 (published 0.1.1 declares no island-dev peer → the Bun dev
+    // path). Published 0.1.1's dev stays alive but refuses 127.0.0.1 on CI (the documented bind/poll
+    // mismatch), so booting it here would hang this hook for the full 60s deadline for nothing. The
+    // hydration test below is `test.skip`-ped on the SAME gate, so the two move together at the 0.1.2 bump.
+    if (!DEV_BOOT_SKIPPED) {
+      const devProc = spawnDev(lestoBin(appDir), appDir, PORT_PUBLISHED);
+      dev = devProc.child;
 
-    await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 60_000, devProc.output);
+      await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 60_000, { output: devProc.output });
+    }
   });
 
   test.afterAll(async () => {
@@ -244,10 +170,20 @@ registerPublishedLeg(`real-registry install — published ${CREATE_LESTO_VERSION
   });
 
   test("the registry-installed build is the Preact bundle, never react-dom/server", async () => {
+    // Live at EVERY version — needs only the build output, so it guards the published closure's
+    // install+build even while the dev-dependent hydration test is version-skipped.
     await assertPreactClient(appDir);
   });
 
   test("the deferred island hydrates in a real browser — the button goes live", async ({ page }) => {
+    // Skipped at 0.1.1: published 0.1.1's `lesto dev` never binds 127.0.0.1 on CI (bind/poll mismatch on
+    // the immutable artifact — the `beforeAll` above skips its boot to match), so there is no reachable
+    // server to hydrate against. Auto-expires at the 0.1.2 bump in lockstep with the dev-boot guard.
+    test.skip(
+      DEV_BOOT_SKIPPED,
+      `published ${CREATE_LESTO_VERSION} dev never binds 127.0.0.1 on CI (bind/poll mismatch)`,
+    );
+
     await page.goto(`http://127.0.0.1:${PORT_PUBLISHED}/`);
 
     const counter = page.locator('[data-testid="counter"]');
@@ -364,10 +300,10 @@ test.describe("current-tree reconstruction — non-hoisting (isolated) linker @t
     await run("bun", [lestoBin(appDir), "build"], appDir);
 
     // Boot `lesto dev` (the current-tree scaffold declares @lesto/island-dev → the Vite path).
-    const devProc = spawnDev(appDir, PORT_TREE);
+    const devProc = spawnDev(lestoBin(appDir), appDir, PORT_TREE);
     dev = devProc.child;
 
-    await waitForServer(`http://127.0.0.1:${PORT_TREE}/`, 60_000, devProc.output);
+    await waitForServer(`http://127.0.0.1:${PORT_TREE}/`, 60_000, { output: devProc.output });
   });
 
   test.afterAll(async () => {

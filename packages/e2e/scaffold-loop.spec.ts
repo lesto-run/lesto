@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
+import { run, spawnDev, waitForServer } from "./dev-harness";
 import { linkWorkspaceInto } from "./link-workspace";
 
 /**
@@ -65,45 +65,6 @@ let workspace: string;
 let appDir: string;
 let dev: ChildProcess | undefined;
 
-/** Run a command to completion, rejecting on a non-zero exit. */
-function run(command: string, args: string[], cwd: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: "pipe" });
-
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-
-        return;
-      }
-
-      reject(new Error(`${command} exited ${code}: ${stderr}`));
-    });
-  });
-}
-
-/** Poll the dev server until it answers, or time out. */
-async function waitForServer(url: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-
-  for (;;) {
-    try {
-      const response = await fetch(url, { headers: { "Sec-Fetch-Site": "same-origin" } });
-
-      if (response.ok) return;
-    } catch {
-      // not up yet
-    }
-
-    if (Date.now() > deadline) throw new Error(`dev server never answered at ${url}`);
-
-    await new Promise((r) => setTimeout(r, 200));
-  }
-}
-
 test.beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "lesto-scaffold-loop-"));
   appDir = join(workspace, APP_NAME);
@@ -129,9 +90,10 @@ test.beforeAll(async () => {
   await run("bun", [LESTO_BIN, "build"], appDir);
 
   // 4. Boot `lesto dev` against the scaffolded app on a private port.
-  dev = spawn("bun", [LESTO_BIN, "dev", "--port", String(PORT)], { cwd: appDir, stdio: "pipe" });
+  const devProc = spawnDev(LESTO_BIN, appDir, PORT);
+  dev = devProc.child;
 
-  await waitForServer(`${BASE_URL}/`, 30_000);
+  await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output });
 });
 
 test.afterAll(async () => {

@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
 
+import { waitForServer } from "./dev-harness";
+
 /**
  * The Tier-4 v1 capstone's headless-browser REGRESSION GATE (ADR 0042, `L-2e410682`) — the CI guard
  * for the browser-only half a Node/bun gate structurally cannot cover.
@@ -71,35 +73,6 @@ test.describe.configure({ mode: "serial", timeout: 60_000 });
 
 let server: ChildProcess | undefined;
 
-/**
- * Poll the served shell until it answers, or time out. `hasExited` lets the caller fail fast (and avoid
- * silently ADOPTING a stale/foreign server squatting on the fixed port) if our own child died first.
- */
-async function waitForServer(
-  url: string,
-  timeoutMs: number,
-  hasExited?: () => boolean,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-
-  for (;;) {
-    if (hasExited?.() === true)
-      throw new Error(`capstone server process exited before answering ${url}`);
-
-    try {
-      const response = await fetch(url);
-
-      if (response.ok) return;
-    } catch {
-      // not up yet
-    }
-
-    if (Date.now() > deadline) throw new Error(`capstone server never answered at ${url}`);
-
-    await new Promise((r) => setTimeout(r, 200));
-  }
-}
-
 /** Run the capstone's `vite build` to completion (the built bundle is what the browser exercises). */
 async function buildCapstone(): Promise<void> {
   // Inherit stdout (streams vite's output to the run log AND drains it — an unread "pipe" stdout can
@@ -155,7 +128,9 @@ test.beforeAll(async () => {
 
   server.once("exit", () => (exited = true));
 
-  await waitForServer(`${BASE_URL}/`, 60_000, () => exited);
+  // `hasExited` fails fast if our own `bun serve.ts` child died before answering, rather than
+  // silently ADOPTING a stale/foreign server squatting on the fixed port until the deadline.
+  await waitForServer(`${BASE_URL}/`, 60_000, { hasExited: () => exited });
 });
 
 test.afterAll(() => {

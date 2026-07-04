@@ -1,10 +1,11 @@
-import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
+
+import { spawnDev, waitForServer } from "./dev-harness";
 
 /**
  * Island Fast Refresh, end to end in a real browser — the proof the unit/transform
@@ -42,32 +43,14 @@ test.describe.configure({ mode: "serial" });
 let dev: ChildProcess | undefined;
 let originalIsland: string;
 
-/** Poll the dev server until it answers, or time out. */
-async function waitForServer(url: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-
-  for (;;) {
-    try {
-      const response = await fetch(url, { headers: { "Sec-Fetch-Site": "same-origin" } });
-
-      if (response.ok) return;
-    } catch {
-      // not up yet
-    }
-
-    if (Date.now() > deadline) throw new Error(`dev server never answered at ${url}`);
-
-    await new Promise((r) => setTimeout(r, 200));
-  }
-}
-
 test.beforeAll(async () => {
   // Snapshot the island source so the edit test can restore it no matter how it ends.
   originalIsland = await readFile(ISLAND_FILE, "utf8");
 
-  dev = spawn("bun", [LESTO_BIN, "dev", "--port", String(PORT)], { cwd: APP_DIR, stdio: "pipe" });
+  const devProc = spawnDev(LESTO_BIN, APP_DIR, PORT);
+  dev = devProc.child;
 
-  await waitForServer(`${BASE_URL}/`, 30_000);
+  await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output });
 });
 
 test.afterAll(async () => {

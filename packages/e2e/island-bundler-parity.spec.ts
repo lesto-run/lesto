@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
+import { spawnDev, waitForServer } from "./dev-harness";
 import { linkWorkspaceInto } from "./link-workspace";
 
 /**
@@ -57,24 +57,6 @@ let workspace: string;
 let bunDev: ChildProcess | undefined;
 let viteDev: ChildProcess | undefined;
 
-async function waitForServer(url: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-
-  for (;;) {
-    try {
-      const response = await fetch(url, { headers: { "Sec-Fetch-Site": "same-origin" } });
-
-      if (response.ok) return;
-    } catch {
-      // not up yet
-    }
-
-    if (Date.now() > deadline) throw new Error(`dev server never answered at ${url}`);
-
-    await new Promise((r) => setTimeout(r, 200));
-  }
-}
-
 /** Copy the fixture's SOURCE (no node_modules / build output) into a fresh app dir. */
 async function copyFixture(dest: string): Promise<void> {
   for (const entry of ["package.json", "tsconfig.json", "lesto.app.ts", "lesto.sites.ts", "app"]) {
@@ -113,16 +95,15 @@ test.beforeAll(async () => {
   // The ONLY difference: the Bun-path app does not declare the island-dev peer.
   await dropIslandDevPeer(bunApp);
 
-  bunDev = spawn("bun", [LESTO_BIN, "dev", "--port", String(BUN_PORT)], {
-    cwd: bunApp,
-    stdio: "pipe",
-  });
-  viteDev = spawn("bun", [LESTO_BIN, "dev", "--port", String(VITE_PORT)], {
-    cwd: viteApp,
-    stdio: "pipe",
-  });
+  const bun = spawnDev(LESTO_BIN, bunApp, BUN_PORT);
+  const vite = spawnDev(LESTO_BIN, viteApp, VITE_PORT);
+  bunDev = bun.child;
+  viteDev = vite.child;
 
-  await Promise.all([waitForServer(`${BUN_URL}/`, 30_000), waitForServer(`${VITE_URL}/`, 30_000)]);
+  await Promise.all([
+    waitForServer(`${BUN_URL}/`, 30_000, { output: bun.output }),
+    waitForServer(`${VITE_URL}/`, 30_000, { output: vite.output }),
+  ]);
 });
 
 test.afterAll(async () => {

@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
+import { spawnDev, waitForServer } from "./dev-harness";
 import { linkWorkspaceInto } from "./link-workspace";
 
 /**
@@ -44,25 +44,6 @@ let appDir: string;
 let pageFile: string;
 let dev: ChildProcess | undefined;
 
-/** Poll the dev server until it answers, or time out. */
-async function waitForServer(url: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-
-  for (;;) {
-    try {
-      const response = await fetch(url, { headers: { "Sec-Fetch-Site": "same-origin" } });
-
-      if (response.ok) return;
-    } catch {
-      // not up yet
-    }
-
-    if (Date.now() > deadline) throw new Error(`dev server never answered at ${url}`);
-
-    await new Promise((r) => setTimeout(r, 200));
-  }
-}
-
 test.beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "lesto-page-swap-bun-"));
   appDir = join(workspace, "bun-app");
@@ -86,9 +67,10 @@ test.beforeAll(async () => {
   if (pkg.devDependencies) delete pkg.devDependencies["@lesto/island-dev"];
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
 
-  dev = spawn("bun", [LESTO_BIN, "dev", "--port", String(PORT)], { cwd: appDir, stdio: "pipe" });
+  const devProc = spawnDev(LESTO_BIN, appDir, PORT);
+  dev = devProc.child;
 
-  await waitForServer(`${BASE_URL}/`, 30_000);
+  await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output });
 });
 
 test.afterAll(async () => {
