@@ -75,7 +75,7 @@ export function packLestoClosure(repoRoot: string, vendor: string): Record<strin
 /**
  * Repin the app's DIRECT `@lesto/*` deps onto the tarballs AND set package.json `overrides` to the
  * full tarball map — the overrides reach the TRANSITIVE `@lesto/*` graph the tarballs declare.
- * Without them bun would resolve those transitive refs from the registry (published 0.1.1),
+ * Without them bun would resolve those transitive refs from the registry (the published closure),
  * masking the current tree — the exact silent substitution this leg exists to prevent.
  */
 export async function pinAppToTarballs(

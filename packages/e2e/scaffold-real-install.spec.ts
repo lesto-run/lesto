@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { expect, test } from "@playwright/test";
+import { type Locator, expect, test } from "@playwright/test";
 
 import { killAndWait, run, spawnDev, waitForServer } from "./dev-harness";
 
@@ -29,16 +29,17 @@ import { killAndWait, run, spawnDev, waitForServer } from "./dev-harness";
  *       npm registry. This validates the IMMUTABLE published closure a `npm create lesto` user installs
  *       TODAY — NOT the working tree. 0.1.2 carries the observability/island-dev/styles work, so unlike
  *       0.1.1 (which predated it, making its NON-HOISTING install a KNOWN-broken `@lesto/observability/rum`
- *       snapshot) the published closure now resolves under a non-hoisting layout too — but this leg still
- *       installs HOISTED only; adding the published isolated install is tracked L-9dc62468. Its `lesto dev`
- *       boot + hydration are version-skipped while the known-stall pin holds (see the gate below).
+ *       snapshot) the published closure now resolves under a non-hoisting layout too — which this leg proves
+ *       by ALSO installing + building the published closure under `--linker=isolated` into a second app dir
+ *       (L-9dc62468), decoupled from the dev boot. Its `lesto dev` boot + hydration are version-skipped
+ *       while the known-stall pin holds (see the gate below).
  *
  *   (b) CURRENT TREE, NON-HOISTING (isolated) — packs the current `@lesto/*` closure to tarballs
  *       (`bun pm pack`, which rewrites `workspace:*` → the real version exactly like a publish),
  *       scaffolds via the IN-REPO `create-lesto` (default published `^0.x` pins), repins its
  *       `@lesto/*` deps onto those tarballs + sets package.json `overrides` (which reach the
- *       TRANSITIVE `@lesto/*` graph — WITHOUT them bun silently pulls published 0.1.1 from the
- *       registry, masking the working tree), then `bun install --linker=isolated`. This is the
+ *       TRANSITIVE `@lesto/*` graph — WITHOUT them bun silently pulls the published `@lesto/*`
+ *       closure from the registry, masking the working tree), then `bun install --linker=isolated`. This is the
  *       leg that exercises the observability + prefresh decisions under a non-hoisting layout;
  *       third-party deps (react/preact/tailwindcss/@prefresh/…) still come from the REAL registry.
  *
@@ -102,7 +103,7 @@ const PORT_TREE = 4191;
 // Each block is its OWN serial group (the `configure` lives INSIDE each describe, not here at
 // file scope): a block scaffolds once and shares a single `lesto dev` across its tests, so its
 // tests must run in order in one worker. Crucially they are NOT one file-wide serial chain —
-// leg (a) is a frozen published-0.1.1 snapshot whose failures are registry weather / bit-rot with
+// leg (a) is a frozen published snapshot (pinned to CREATE_LESTO_VERSION) whose failures are registry weather / bit-rot with
 // no repo-side fix, and a file-wide chain would let an (a) failure SKIP all of leg (b), the leg
 // that actually guards the current tree (`3fd4941`/`53cdbfc`). `--workers=1` (in the `test:scaffold-real`
 // script) keeps the two independent groups from running their heavy installs in parallel.
@@ -125,6 +126,22 @@ async function assertPreactClient(appDir: string): Promise<void> {
   expect(source).not.toContain("renderToStaticMarkup");
 }
 
+/**
+ * Gate the FIRST click of a hydration test on the island actually being interactive — the fix for the
+ * click-races-hydration flake (L-d86ae3a1). The scaffold Counter's LIVE component renders a `title`
+ * attribute (`title={publicEnv.PUBLIC_APP_NAME}`) that its deferred SSR fallback button does NOT, and
+ * the client mounts it via `createRoot().render()`, committing that attribute in the SAME render that
+ * binds the button's `onClick` — so the instant `title` is observable the handler is already attached.
+ * This is a NON-clicking wait, so it provably sidesteps the double-count trap of a click-and-retry
+ * `toPass` loop: because we never click during the wait, a late-but-registered click can't be re-fired
+ * into `count: 2`. Couples to the scaffold Counter's `title`; this same suite scaffolds and drives that
+ * Counter, so a future removal of `title` reds HERE (a timed-out wait), not silently. Callers still
+ * click exactly once after this resolves.
+ */
+async function expectIslandHydrated(counter: Locator): Promise<void> {
+  await expect(counter).toHaveAttribute("title");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // (a) Real registry install of the PUBLISHED closure (0.1.2 today), hoisted layout.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -134,10 +151,12 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
 
   let workspace: string;
   let appDir: string;
+  let appDirIso: string;
   let dev: ChildProcess | undefined;
 
   test.beforeAll(async () => {
-    // Packing/installing from the network is well past Playwright's default 30s hook budget.
+    // Packing/installing from the network is well past Playwright's default 30s hook budget (and this
+    // hook does TWO published installs — hoisted `pub-app` + isolated `pub-app-iso`, L-9dc62468).
     test.setTimeout(600_000);
 
     workspace = await mkdtemp(join(tmpdir(), "lesto-real-published-"));
@@ -152,13 +171,30 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
       workspace,
     );
 
-    // The headline CANARY — runs at EVERY version, INCLUDING 0.1.1: a REAL `bun install` resolving every
-    // `@lesto/*` from the npm registry (the resolution `link-workspace` never performs), in the DEFAULT
-    // hoisted layout, then a build of the Preact island client through the app's OWN installed cli (under
-    // Bun). This install+build is the part that proves the published closure still installs and builds; it
-    // stays LIVE at 0.1.1 while only the dev boot below is skipped (see the version-gate comment above).
+    // The headline CANARY — runs at EVERY version, including the dev-boot-skipped one: a REAL `bun install`
+    // resolving every `@lesto/*` from the npm registry (the resolution `link-workspace` never performs), in
+    // the DEFAULT hoisted layout, then a build of the Preact island client through the app's OWN installed
+    // cli (under Bun). This install+build is the part that proves the published closure still installs and
+    // builds; it stays LIVE even while only the dev boot below is skipped (see the version-gate comment above).
     await run("bun", ["install", "--linker=hoisted"], appDir);
     await run("bun", [lestoBin(appDir), "build"], appDir);
+
+    // L-9dc62468 — the NON-HOISTING proof for the PUBLISHED closure. Published 0.1.2 carries the
+    // `@lesto/observability` fix, so unlike 0.1.1 the published `@lesto/*` graph now resolves under a
+    // non-hoisting layout too. Scaffold a SECOND published app into its OWN dir (so the hoisted `pub-app`
+    // above — whose dev boot un-skips at 0.1.3 — is untouched), `bun install --linker=isolated`, and build
+    // via its OWN installed cli. This is deliberately DECOUPLED from the (skipped) dev boot below: it proves
+    // ONLY that the published closure installs + builds the Preact bundle under the isolated linker, and
+    // NEVER boots the stalling dev server (that hoisted-Linux hang is L-513dd8a6's alone). A second network
+    // install is acceptable on a nightly canary.
+    appDirIso = join(workspace, "pub-app-iso");
+    await run(
+      "bunx",
+      [`create-lesto@${CREATE_LESTO_VERSION}`, "pub-app-iso", "--yes", "--no-install", "--no-git"],
+      workspace,
+    );
+    await run("bun", ["install", "--linker=isolated"], appDirIso);
+    await run("bun", [lestoBin(appDirIso), "build"], appDirIso);
 
     // Boot `lesto dev` only when the published version is NOT the known-stall pin (see the gate above).
     // Published 0.1.2's dev stays alive but HANGS the first request under the hoisted layout on CI Linux
@@ -188,6 +224,16 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
     await assertPreactClient(appDir);
   });
 
+  test("the published closure also installs+builds under the isolated linker (L-9dc62468)", async () => {
+    // The non-hoisting proof for the PUBLISHED closure: published 0.1.2 carries the `@lesto/observability`
+    // fix, so the published `@lesto/*` graph resolves AND builds the Preact bundle under `--linker=isolated`
+    // too — not just the hoisted default (at 0.1.1 this would have red-flagged the known-broken
+    // `@lesto/observability/rum` non-hoisting import). Runs at EVERY version and is DECOUPLED from the
+    // version-skipped dev boot: it needs only the isolated build output, so it stays live even while the
+    // hydration test is skipped. The `pub-app-iso` build happens in `beforeAll`, never touching `pub-app`.
+    await assertPreactClient(appDirIso);
+  });
+
   test("the deferred island hydrates in a real browser — the button goes live", async ({ page }) => {
     // Skipped while the published version is the known-stall pin: published 0.1.2's `lesto dev` HANGS the
     // first request under the hoisted layout on CI Linux (confirmed at 300s; the `beforeAll` above skips
@@ -203,8 +249,11 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
 
     await expect(counter).toHaveText("count: 0");
 
-    // A click increments only AFTER hydration — the visible proof the Preact client mounted
-    // the live component over the server fallback, off a real registry install.
+    // A click increments only AFTER hydration — the visible proof the Preact client mounted the live
+    // component over the server fallback, off a real registry install. Gate the click on hydration
+    // (L-d86ae3a1) so that when this un-skips at the 0.1.3 fix (L-513dd8a6) it does NOT re-inherit the
+    // click-races-hydration flake the isolated leg (b) hit.
+    await expectIslandHydrated(counter);
     await counter.click();
 
     await expect(counter).toHaveText("count: 1");
@@ -254,7 +303,7 @@ function packLestoClosure(repoRoot: string, vendor: string): Record<string, stri
 /**
  * Repin the app's DIRECT `@lesto/*` deps onto the tarballs AND set package.json `overrides` to the
  * full tarball map — the overrides reach the TRANSITIVE `@lesto/*` graph the tarballs declare.
- * Without them bun would resolve those transitive refs from the registry (published 0.1.1),
+ * Without them bun would resolve those transitive refs from the registry (the published closure),
  * masking the current tree — the exact silent substitution this leg exists to prevent.
  */
 async function pinAppToTarballs(appDir: string, overrides: Record<string, string>): Promise<void> {
@@ -331,8 +380,8 @@ test.describe("current-tree reconstruction — non-hoisting (isolated) linker @t
   test("the isolated install pins every @lesto/* at a packed tarball, not the registry", async () => {
     // The `overrides` guarantee: bun resolved the `@lesto/*` graph from the tarballs, never the
     // registry. If a future bun ignored overrides (or a dep were left unpinned) it would silently
-    // pull published 0.1.1 — so assert against bun 1.3.5's lockfile RESOLUTION-KEY grammar: a
-    // registry resolution keys as `"<name>@<version>"` (e.g. `"@lesto/errors@0.1.1"`), a tarball as
+    // pull the published closure — so assert against bun 1.3.5's lockfile RESOLUTION-KEY grammar: a
+    // registry resolution keys as `"<name>@<version>"` (e.g. `"@lesto/errors@0.1.2"`), a tarball as
     // `"<name>@<abs-path>.tgz"`. (An earlier `.not.toMatch(/registry\.npmjs\.org/)` was vacuous —
     // bun.lock records NO registry URLs — and a bare `.toContain(".tgz")` is satisfied by the app's
     // own `file:` dep RANGES regardless of what resolved. The quoted-key `@`-boundary below is what
@@ -356,6 +405,10 @@ test.describe("current-tree reconstruction — non-hoisting (isolated) linker @t
 
     await expect(counter).toHaveText("count: 0");
 
+    // Gate the click on hydration (L-d86ae3a1): the fallback and the live component both paint
+    // "count: 0", so without this the click can land on the inert fallback before @prefresh/Vite
+    // attaches the handler — a lost click that RED-flags "count: 1" forever.
+    await expectIslandHydrated(counter);
     await counter.click();
 
     await expect(counter).toHaveText("count: 1");
@@ -365,6 +418,10 @@ test.describe("current-tree reconstruction — non-hoisting (isolated) linker @t
     await page.goto(`http://127.0.0.1:${PORT_TREE}/`);
 
     const counter = page.locator('[data-testid="counter"]');
+
+    // Gate the FIRST click on hydration (L-d86ae3a1); once the island is interactive the remaining
+    // clicks are safe. Without this the first click can race the handler attach and be lost.
+    await expectIslandHydrated(counter);
 
     // Drive the count to a non-initial value so a full reload (reset to 0) would be visible.
     await counter.click();

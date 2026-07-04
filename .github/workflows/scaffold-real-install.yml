@@ -1,10 +1,10 @@
 # The REAL-install scaffold smoke (L-e00589b8) — its OWN workflow, nightly + on-demand ONLY,
 # never a blocking PR gate. It does a REAL `bun install` resolving `@lesto/*` from the npm registry
-# (published 0.1.1) AND packs the current tree to tarballs, so it depends on registry state and is
+# (the published `@lesto/*` closure) AND packs the current tree to tarballs, so it depends on registry state and is
 # too slow/flaky-by-network to gate every PR. Unlike `scaffold-loop` in ci.yml (which link-workspaces
 # the whole @lesto scope + store, exercising NO registry resolution or linker LAYOUT), this proves
 # the two layouts a real user actually hits — both legs live in `scaffold-real-install.spec.ts`:
-# (a) a HOISTED registry install of the published 0.1.1 closure, and (b) a NON-HOISTING (isolated)
+# (a) a HOISTED registry install of the published `@lesto/*` closure, and (b) a NON-HOISTING (isolated)
 # install of the CURRENT tree packed to tarballs — the leg that would have caught the
 # `@lesto/observability/rum` + `@prefresh/*` bare-import breaks (`3fd4941` / `53cdbfc`) a hoisting
 # layout silently masks. A green run is the standing proof a fresh scaffold installs, builds,
@@ -52,9 +52,9 @@ jobs:
         working-directory: packages/e2e
         run: bunx playwright install --with-deps chromium
 
-      # Both legs (hoisted published-0.1.1 registry install + isolated current-tree tarball install),
+      # Both legs (hoisted published-closure registry install + isolated current-tree tarball install),
       # each its own serial group, run sequentially via `--workers=1` (in the test:scaffold-real script).
-      - name: Real-registry (published 0.1.1) + non-hoisting (current-tree) scaffold install smoke
+      - name: Real-registry (published closure) + non-hoisting (current-tree) scaffold install smoke
         working-directory: packages/e2e
         run: bun run test:scaffold-real
 

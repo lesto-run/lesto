@@ -132,6 +132,13 @@ test.describe("current-tree HOISTED dev-boot preflight — the L-513dd8a6 gate @
 
     await expect(counter).toHaveText("count: 0");
 
+    // Gate the click on hydration (L-d86ae3a1): the deferred island's LIVE Counter renders a `title`
+    // attribute (`title={publicEnv.PUBLIC_APP_NAME}`) its SSR fallback button lacks, committed in the
+    // SAME render that binds `onClick`. Waiting for `title` before the (single) click proves the handler
+    // is attached — a NON-clicking wait, so no double-count. Without it the click can land on the inert
+    // fallback (both paint "count: 0") before @prefresh/Vite attaches the handler, losing it forever.
+    await expect(counter).toHaveAttribute("title");
+
     // A click increments only AFTER hydration — the visible proof the island went live under the
     // hoisted layout, off a real install.
     await counter.click();
