@@ -60,31 +60,36 @@ const CREATE_LESTO_VERSION = (
 ).version;
 
 /**
- * Leg (a)'s scope is gated by the in-tree create-lesto version. Published 0.1.1's `lesto dev` boots and
- * announces its port but then REFUSES connections on 127.0.0.1:<port> on CI Linux while the process stays
- * ALIVE (no exit signal is ever captured) — a localhost/::1-vs-IPv4-literal bind/poll mismatch on the
- * IMMUTABLE published artifact, unfixable from this repo. So while the tree is still at 0.1.1 we skip ONLY
- * the dev-server-dependent work, not the whole leg: the describe stays REGISTERED and its `beforeAll` still
- * scaffolds → installs → BUILDS (the registry-install + Preact-bundle canary — the part that proves the
- * published 0.1.1 closure still installs and builds from the real registry stays LIVE), and only the
- * `lesto dev` boot + the browser-hydration test that needs it are skipped. An earlier `test.describe.skip`
- * of the WHOLE leg silenced that still-passing canary too — this finer split (L-2d87f1b5) keeps it green.
+ * Leg (a) boots + hydrates the PUBLISHED scaffold — EXCEPT when the published version is the known-stall
+ * pin below. Published 0.1.2's `lesto dev` under bun's HOISTED linker on CI Linux announces its port (the
+ * listen callback fires; the child stays ALIVE — the exit-listener never trips) but does NOT answer the
+ * first `GET /`. This is a TRUE HANG, not a slow cold start — confirmed by a 300s-budget dispatch (run
+ * 28714591201: still no answer at 300s). So `beforeAll`'s dev boot would hang for the full deadline; we
+ * skip ONLY the dev-boot + the browser-hydration test it feeds. The describe stays REGISTERED and
+ * `beforeAll` still scaffolds → installs → BUILDS, so the registry-install + Preact-bundle CANARY (the
+ * part that proves the published closure still installs and builds from the real registry) stays LIVE. An
+ * earlier `test.describe.skip` of the WHOLE leg silenced that canary too; this finer split keeps it green.
  *
- * The gate AUTO-EXPIRES at the 0.1.2 version bump (which also re-pins the scaffold below), so no human has
- * to remember; L-2d87f1b5 is the backstop. (Small window: between the bump commit and create-lesto@0.1.2
- * landing on npm, a dispatched run reds on the not-yet-published pin — acceptable for a same-day
- * bump+dispatch release.)
+ * NARROW, not a universal dev bug: the SAME dev code under the ISOLATED linker on the SAME Linux runner
+ * (leg b) boots fine, and hoisted boots instantly on macOS (~24ms first GET). The failure is specific to
+ * the HOISTED PUBLISHED CLOSURE ON LINUX — and hoisted is bun's standalone-scaffold DEFAULT, so it is the
+ * real-user path. Mechanism UNPROVEN: suspected first-request Vite/@prefresh dep-optimize stall under a
+ * flat node_modules on a constrained runner (the preact scaffold's `@prefresh/vite` drags a rolldown
+ * native binary) — NOT confirmed. Leg (a) is the IMMUTABLE published artifact: no repo-side fix exists for
+ * 0.1.2; the fix + this un-skip land at 0.1.3 (tracked L-513dd8a6, which also adds the missing mutable-tree
+ * HOISTED preflight so the hang can go red on a FIXABLE target instead of only the immutable leg here).
  *
- * ── GATE NOTE for the 0.1.2 publisher (L-7d411090) ──────────────────────────────────────────────────
- * At the 0.1.2 bump this gate flips false and the dev boot + hydration test go LIVE automatically. Before
- * relying on green, VERIFY ON CI that published-0.1.2 `lesto dev` actually binds 127.0.0.1: the 0.1.1
- * failure was a bind/poll mismatch baked into the immutable artifact, so if 0.1.2 ships the same bug the
- * newly-live hydration test reds (a real product failure, not test flake). ALSO: the NON-HOISTING install
- * of the PUBLISHED scaffold is still deliberately omitted here (see the header) — today it is a guaranteed
- * red because published 0.1.1 predates @lesto/observability; once 0.1.2 carries that fix, ADD an
- * isolated-linker install to leg (a) so the published closure is proven under a non-hoisting layout too.
+ * This root cause DIFFERS from the 0.1.1 skip's stated "127.0.0.1 bind/poll mismatch": an isolated-linker
+ * pass on the same runner rules OUT a bind bug, so 0.1.1 was almost certainly the same hoisted stall,
+ * misdiagnosed. Do NOT reinstate the bind/poll wording (reconcile L-2d87f1b5).
+ *
+ * The gate is a SINGLE known-bad version pin, so it AUTO-LIFTS at the next bump — NOT a `<=` threshold,
+ * which would green forever until a human moved it and defeat the auto-re-test that caught this at the
+ * 0.1.2 bump. GATE NOTE for the 0.1.3 publisher: before trusting green, confirm L-513dd8a6 actually shipped
+ * the fix; if it did not this reds again — a REAL default-path failure, not flake. ALSO (L-9dc62468): now
+ * that published 0.1.2 carries the @lesto/observability fix, ADD an isolated install+build to leg (a).
  */
-const DEV_BOOT_SKIPPED = CREATE_LESTO_VERSION === "0.1.1";
+const DEV_BOOT_SKIPPED = CREATE_LESTO_VERSION === "0.1.2";
 
 // Distinct ports per leg (and clear of the fixture webServer's 4180 + the other specs' 4188/4189).
 const PORT_PUBLISHED = 4190;
@@ -151,20 +156,16 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
     await run("bun", ["install", "--linker=hoisted"], appDir);
     await run("bun", [lestoBin(appDir), "build"], appDir);
 
-    // Boot `lesto dev` ONLY when NOT at 0.1.1 (published 0.1.1 declares no island-dev peer → the Bun dev
-    // path). Published 0.1.1's dev stays alive but refuses 127.0.0.1 on CI (the documented bind/poll
-    // mismatch), so booting it here would hang this hook for the full 60s deadline for nothing. The
-    // hydration test below is `test.skip`-ped on the SAME gate, so the two move together at the 0.1.2 bump.
+    // Boot `lesto dev` only when the published version is NOT the known-stall pin (see the gate above).
+    // Published 0.1.2's dev stays alive but HANGS the first request under the hoisted layout on CI Linux
+    // (confirmed a true hang at 300s), so booting it here would hang this hook for the full deadline. The
+    // hydration test below is `test.skip`-ped on the SAME gate, so the two move together and un-skip in
+    // lockstep at the 0.1.3 fix (L-513dd8a6).
     if (!DEV_BOOT_SKIPPED) {
       const devProc = await spawnDev(lestoBin(appDir), appDir, PORT_PUBLISHED);
       dev = devProc.child;
 
-      // TEMPORARY DISCRIMINATOR PROBE (L-27285131): 300s (not 60s) to tell a TRUE HANG from a merely
-      // slow first-request Vite/@prefresh dep-optimize under the hoisted layout on CI Linux. If it
-      // still never answers at 300s → hang → skip the dev-boot for the immutable published 0.1.2; if
-      // it answers late → slow cold start → keep the assertion live at a raised budget. Reverted once
-      // the run resolves this.
-      await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 300_000, {
+      await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 60_000, {
         output: devProc.output,
         hasExited: devProc.hasExited,
       });
@@ -184,12 +185,12 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
   });
 
   test("the deferred island hydrates in a real browser — the button goes live", async ({ page }) => {
-    // Skipped at 0.1.1: published 0.1.1's `lesto dev` never binds 127.0.0.1 on CI (bind/poll mismatch on
-    // the immutable artifact — the `beforeAll` above skips its boot to match), so there is no reachable
-    // server to hydrate against. Auto-expires at the 0.1.2 bump in lockstep with the dev-boot guard.
+    // Skipped while the published version is the known-stall pin: published 0.1.2's `lesto dev` HANGS the
+    // first request under the hoisted layout on CI Linux (confirmed at 300s; the `beforeAll` above skips
+    // its boot to match), so there is no reachable server to hydrate against. Un-skips at the 0.1.3 fix.
     test.skip(
       DEV_BOOT_SKIPPED,
-      `published ${CREATE_LESTO_VERSION} dev never binds 127.0.0.1 on CI (bind/poll mismatch)`,
+      `published ${CREATE_LESTO_VERSION} dev hangs the first request under hoisted-on-Linux (L-513dd8a6)`,
     );
 
     await page.goto(`http://127.0.0.1:${PORT_PUBLISHED}/`);
