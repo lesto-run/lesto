@@ -14,6 +14,7 @@ import type { App, LestoAppConfig, KernelDatabase } from "@lesto/kernel";
 import type { MigrationEntry } from "@lesto/migrate";
 import type { RuntimeEntry } from "@lesto/content-core";
 import type { Server, ServeOptions } from "@lesto/runtime";
+import { parseTraceparent } from "@lesto/observability";
 import type { TraceSeams } from "@lesto/observability";
 
 import type { OutputSink, Site } from "@lesto/sites";
@@ -32,6 +33,7 @@ import {
 // here directly (they are internal to the CLI's own wiring, not part of the package's public
 // barrel like `declaresIslandDevPeer`/`run`).
 import { isMissingSelfModule, missingModuleSpecifier } from "../src/run";
+import type { ServeTracing } from "../src/run";
 import type { BuildHook, BuildHookContext, CliDeps, DevError, ReleaseTarget } from "../src/index";
 import { createDevState } from "../src/dev-state";
 import type { AiTurn } from "../src/ai-bridge";
@@ -240,6 +242,34 @@ const fakeServe = (boundPort: number) =>
       Promise.resolve({ port: boundPort, close: () => Promise.resolve() }),
   );
 
+// A `ServeTracing` whose only OBSERVABLE is `stopInterval` — the flush-cadence handle
+// the long-lived teardown paths (a `serve`/`dev` graceful shutdown AND the dev-MCP-reject
+// unwind) call. Injected through the `CliDeps.buildServeTracing` seam so a test can spy
+// that call, which a real `unref`'d interval otherwise makes unobservable. `serveOptions`
+// and `seams` are inert here: `deps.serve` is faked (so the tracer/drain are never
+// exercised) and the harness `loadApp` ignores the seams it is handed — so injecting this
+// changes nothing but making the lifecycle assertable.
+function fakeServeTracing(): {
+  buildServeTracing: NonNullable<CliDeps["buildServeTracing"]>;
+  stopInterval: ReturnType<typeof vi.fn>;
+} {
+  const stopInterval = vi.fn();
+
+  const tracing: ServeTracing = {
+    serveOptions: {
+      // Never invoked — the faked `serve` mints no request span.
+      tracer: (() => undefined) as unknown as ServeTracing["serveOptions"]["tracer"],
+      parseTraceparent,
+      onDrain: () => Promise.resolve(),
+    },
+    // Never invoked — the harness `loadApp` ignores its seams arg.
+    seams: {} as TraceSeams,
+    stopInterval,
+  };
+
+  return { buildServeTracing: () => tracing, stopInterval };
+}
+
 /** Pull the readiness probe out of the health option the serve command wired. */
 function readinessProbe(serve: ReturnType<typeof fakeServe>): () => Promise<boolean> {
   const [, options] = serve.mock.calls[0]!;
@@ -372,6 +402,28 @@ describe("run serve / dev", () => {
     await expect(drain()).resolves.toBeUndefined();
 
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the flush cadence on serve shutdown, observed through the tracing seam (L-fe2da7f5)", async () => {
+    const close = vi.fn(() => Promise.resolve());
+    const serve = vi.fn(
+      (_app: App, _options?: ServeOptions): Promise<Server> =>
+        Promise.resolve({ port: 3000, close }),
+    );
+    const installShutdown = vi.fn();
+    const { buildServeTracing, stopInterval } = fakeServeTracing();
+
+    await run(["serve"], depsWith({ serve, installShutdown, buildServeTracing }));
+
+    // The interval runs until shutdown — booting alone must NOT stop the cadence.
+    expect(stopInterval).not.toHaveBeenCalled();
+
+    // The shutdown hook drains the server, THEN stops the flush cadence.
+    const drain = installShutdown.mock.calls[0]![0] as () => Promise<void>;
+    await drain();
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(stopInterval).toHaveBeenCalledTimes(1);
   });
 
   it("wires /readyz to a real database ping that answers true when the DB is up", async () => {
@@ -2972,8 +3024,10 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
     const reloadClose = vi.fn();
     const installShutdown = vi.fn();
 
-    // Tracing on so the flush interval exists and must be stopped on the failure path.
-    const env = { LESTO_OTLP_URL: "http://collector.example/v1/traces" };
+    // Inject the tracing seam so the flush-cadence `stopInterval()` the failure-path
+    // teardown calls is a spy we can assert fired — a real `unref`'d interval is
+    // otherwise unobservable, so a regression that dropped the call would stay green.
+    const { buildServeTracing, stopInterval } = fakeServeTracing();
 
     let caught: unknown;
 
@@ -2981,7 +3035,7 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
       await run(
         ["dev"],
         depsWith({
-          env,
+          buildServeTracing,
           serve: () => Promise.resolve({ port: 5173, close: serverClose }),
           loadSites: () => Promise.resolve(sites),
           devState: createDevState(),
@@ -3010,6 +3064,10 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
     expect(serverClose).toHaveBeenCalledTimes(1);
     expect(stopRoutes).toHaveBeenCalledTimes(1);
     expect(reloadClose).toHaveBeenCalledTimes(1);
+
+    // …including the trace-flush cadence: teardown calls `stopInterval()`, so the
+    // (unref'd) interval never leaks past a failed dev boot (L-fe2da7f5).
+    expect(stopInterval).toHaveBeenCalledTimes(1);
 
     // The shutdown hook is never reached, since teardown already ran on the failure path.
     expect(installShutdown).not.toHaveBeenCalled();

@@ -645,6 +645,18 @@ export interface CliDeps {
    */
   env?: TracesEnv & ServeLimitsEnv;
 
+  /**
+   * Construct the tracing lifecycle the long-lived `serve`/`dev` servers wire — the
+   * request tracer + drain flush handed to `serve`, plus the {@link ServeTracing.stopInterval}
+   * the teardown paths call to halt the flush cadence. The bin never sets this: absent,
+   * both commands use the internal {@link buildServeTracing} (env-driven, off unless
+   * `LESTO_OTLP_URL` is set), so there is ZERO behaviour change in production. It exists
+   * as a seam so a test can inject a `ServeTracing` whose `stopInterval` is a spy and
+   * assert the teardown paths (graceful shutdown AND the dev MCP-reject unwind) actually
+   * stop it — a lifecycle a real `unref`'d interval otherwise makes unobservable.
+   */
+  buildServeTracing?: (deps: CliDeps) => ServeTracing | undefined;
+
   /** Where a line of output goes (the bin passes `console.log`). */
   out: (line: string) => void;
 }
@@ -751,7 +763,7 @@ const requestSpan = currentRequestSpan as CurrentSpan;
  * the collector on a rolling restart). `stopInterval` halts the steady flush
  * cadence; the caller stops it on shutdown, after the final drain flush has run.
  */
-interface ServeTracing {
+export interface ServeTracing {
   readonly serveOptions: {
     readonly tracer: Traces["requestTracer"];
     readonly parseTraceparent: typeof parseTraceparent;
@@ -944,8 +956,10 @@ async function runServe(args: readonly string[], deps: CliDeps): Promise<number>
   // `db.query` CHILD span of the request span — the served path's deep
   // request→query tree, not just the integration harness's. When on, its
   // serve-options slice (request tracer + `traceparent` parser + drain flush)
-  // rides into `serve` and the steady flush interval is running.
-  const tracing = buildServeTracing(deps);
+  // rides into `serve` and the steady flush interval is running. Built through the
+  // `deps` seam (defaulting to the internal builder) so a test can observe the
+  // shutdown-path `stopInterval`; the bin never overrides it.
+  const tracing = (deps.buildServeTracing ?? buildServeTracing)(deps);
 
   // Hand the trace seams to the app loader when tracing is on; absent, `loadApp`
   // is called with no seams (a plain-config project is unchanged either way).
@@ -1869,8 +1883,10 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // is set), so a developer sees the same spans locally that production emits.
   // Built BEFORE the app so its `seams` thread into `loadApp` — a project whose
   // `lesto.app.ts` default-exports a config factory wires `db.onQuery` and a
-  // query run during a dev request becomes a `db.query` child span.
-  const tracing = buildServeTracing(deps);
+  // query run during a dev request becomes a `db.query` child span. Built through the
+  // `deps` seam (defaulting to the internal builder) so a test can observe the
+  // teardown-path `stopInterval`; the bin never overrides it.
+  const tracing = (deps.buildServeTracing ?? buildServeTracing)(deps);
 
   const config = await deps.loadApp(tracing?.seams);
 
