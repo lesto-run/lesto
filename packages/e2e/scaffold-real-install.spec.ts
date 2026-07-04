@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-import { run, spawnDev, waitForServer } from "./dev-harness";
+import { killAndWait, run, spawnDev, waitForServer } from "./dev-harness";
 
 /**
  * The REAL-install scaffold smoke — the gate the link-workspace e2e cannot be (`L-e00589b8`).
@@ -24,14 +24,14 @@ import { run, spawnDev, waitForServer } from "./dev-harness";
  * It is deliberately split into two complementary describe blocks, because there is no single
  * install that is both "what a user gets today" AND "the current working tree":
  *
- *   (a) REAL REGISTRY, PUBLISHED 0.1.1, hoisted — scaffolds via the PUBLISHED `create-lesto@0.1.1`
- *       and `bun install --linker=hoisted`, resolving every `@lesto/*` from the npm registry.
- *       This validates the IMMUTABLE published 0.1.1 closure a `npm create lesto` user installs
- *       TODAY — NOT the working tree. (Honesty note: `create-lesto@0.1.1` predates the
- *       observability/island-dev/styles work, so its scaffold is the 10-package closure and its
- *       NON-HOISTING install is a KNOWN-broken snapshot — the very `@lesto/observability/rum`
- *       masking — until a `0.1.2` republish carries the fix. So the green non-hoisting proof
- *       lives in block (b), against the FIXED current tree.)
+ *   (a) REAL REGISTRY, PUBLISHED (create-lesto@<current>, 0.1.2 today), hoisted — scaffolds via the
+ *       PUBLISHED `create-lesto` and `bun install --linker=hoisted`, resolving every `@lesto/*` from the
+ *       npm registry. This validates the IMMUTABLE published closure a `npm create lesto` user installs
+ *       TODAY — NOT the working tree. 0.1.2 carries the observability/island-dev/styles work, so unlike
+ *       0.1.1 (which predated it, making its NON-HOISTING install a KNOWN-broken `@lesto/observability/rum`
+ *       snapshot) the published closure now resolves under a non-hoisting layout too — but this leg still
+ *       installs HOISTED only; adding the published isolated install is tracked L-9dc62468. Its `lesto dev`
+ *       boot + hydration are version-skipped while the known-stall pin holds (see the gate below).
  *
  *   (b) CURRENT TREE, NON-HOISTING (isolated) — packs the current `@lesto/*` closure to tarballs
  *       (`bun pm pack`, which rewrites `workspace:*` → the real version exactly like a publish),
@@ -63,31 +63,35 @@ const CREATE_LESTO_VERSION = (
  * Leg (a) boots + hydrates the PUBLISHED scaffold — EXCEPT when the published version is the known-stall
  * pin below. Published 0.1.2's `lesto dev` under bun's HOISTED linker on CI Linux announces its port (the
  * listen callback fires; the child stays ALIVE — the exit-listener never trips) but does NOT answer the
- * first `GET /`. This is a TRUE HANG, not a slow cold start — confirmed by a 300s-budget dispatch (run
- * 28714591201: still no answer at 300s). So `beforeAll`'s dev boot would hang for the full deadline; we
- * skip ONLY the dev-boot + the browser-hydration test it feeds. The describe stays REGISTERED and
- * `beforeAll` still scaffolds → installs → BUILDS, so the registry-install + Preact-bundle CANARY (the
- * part that proves the published closure still installs and builds from the real registry) stays LIVE. An
- * earlier `test.describe.skip` of the WHOLE leg silenced that canary too; this finer split keeps it green.
+ * first `GET /`, even under a 300s waitForServer budget (one dispatch, run 28714591201). That STRONGLY
+ * indicates a hang over a slow cold start — but it is n=1, and that same run's leg-b hydration also failed
+ * (the runner may have been degraded), so a true deadlock vs a >300s dep-optimize stall under CPU
+ * contention is NOT conclusively separated. Either way `beforeAll`'s dev boot hangs past the deadline, so
+ * we skip ONLY the dev-boot + the browser-hydration test it feeds. The describe stays REGISTERED and
+ * `beforeAll` still scaffolds → installs → BUILDS, so the registry-install + Preact-bundle CANARY (proof
+ * the published closure still installs and builds from the real registry) stays LIVE. An earlier
+ * `test.describe.skip` of the WHOLE leg silenced that canary too; this finer split keeps it green.
+ *
+ * ⚠️ COVERAGE HOLE while skipped: leg (a) is the ONLY spec that boots `lesto dev` off a hoisted, real-
+ * registry install — bun's standalone-scaffold DEFAULT, i.e. the real-user path. With it skipped, CI has
+ * NO hoisted dev-boot coverage; the sole remaining dev-boot+hydrate signal is leg (b), which is isolated
+ * (non-default) AND flaky (L-d86ae3a1). So a green nightly does NOT prove the hoisted default-path dev
+ * works. L-513dd8a6 re-closes this on a FIXABLE target (a mutable-tree HOISTED preflight) + ships the fix.
  *
  * NARROW, not a universal dev bug: the SAME dev code under the ISOLATED linker on the SAME Linux runner
- * (leg b) boots fine, and hoisted boots instantly on macOS (~24ms first GET). The failure is specific to
- * the HOISTED PUBLISHED CLOSURE ON LINUX — and hoisted is bun's standalone-scaffold DEFAULT, so it is the
- * real-user path. Mechanism UNPROVEN: suspected first-request Vite/@prefresh dep-optimize stall under a
- * flat node_modules on a constrained runner (the preact scaffold's `@prefresh/vite` drags a rolldown
- * native binary) — NOT confirmed. Leg (a) is the IMMUTABLE published artifact: no repo-side fix exists for
- * 0.1.2; the fix + this un-skip land at 0.1.3 (tracked L-513dd8a6, which also adds the missing mutable-tree
- * HOISTED preflight so the hang can go red on a FIXABLE target instead of only the immutable leg here).
- *
+ * (leg b) boots fine, and hoisted boots instantly on macOS (~24ms first GET) — specific to the HOISTED
+ * PUBLISHED CLOSURE ON LINUX. Mechanism UNPROVEN: suspected first-request Vite/@prefresh dep-optimize stall
+ * under a flat node_modules on a constrained runner (the preact scaffold's `@prefresh/vite` drags a
+ * rolldown native binary). Leg (a) is the IMMUTABLE published artifact — no repo-side fix exists for 0.1.2.
  * This root cause DIFFERS from the 0.1.1 skip's stated "127.0.0.1 bind/poll mismatch": an isolated-linker
  * pass on the same runner rules OUT a bind bug, so 0.1.1 was almost certainly the same hoisted stall,
- * misdiagnosed. Do NOT reinstate the bind/poll wording (reconcile L-2d87f1b5).
+ * misdiagnosed — do NOT reinstate the bind/poll wording (reconcile L-2d87f1b5).
  *
- * The gate is a SINGLE known-bad version pin, so it AUTO-LIFTS at the next bump — NOT a `<=` threshold,
- * which would green forever until a human moved it and defeat the auto-re-test that caught this at the
- * 0.1.2 bump. GATE NOTE for the 0.1.3 publisher: before trusting green, confirm L-513dd8a6 actually shipped
- * the fix; if it did not this reds again — a REAL default-path failure, not flake. ALSO (L-9dc62468): now
- * that published 0.1.2 carries the @lesto/observability fix, ADD an isolated install+build to leg (a).
+ * The gate is a SINGLE known-bad version pin, so it AUTO-LIFTS at the next bump — NOT a `<=` threshold
+ * (which greens forever and defeats the auto-re-test that caught this at the 0.1.2 bump). Two follow-on
+ * reds are EXPECTED, not flake: between a 0.1.3 bump and create-lesto@0.1.3 landing on npm the whole leg-a
+ * `beforeAll` reds on `bunx create-lesto@0.1.3` (404); and if 0.1.3 un-skips onto a still-unfixed dev the
+ * hydration test reds. The un-skip conditions + the isolated-install add-on live on L-513dd8a6 / L-9dc62468.
  */
 const DEV_BOOT_SKIPPED = CREATE_LESTO_VERSION === "0.1.2";
 
@@ -122,7 +126,7 @@ async function assertPreactClient(appDir: string): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// (a) Real registry install of the PUBLISHED 0.1.1 closure, hoisted layout.
+// (a) Real registry install of the PUBLISHED closure (0.1.2 today), hoisted layout.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hoisted layout @published-hoisted`, () => {
@@ -140,7 +144,7 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
     appDir = join(workspace, "pub-app");
 
     // Scaffold via the PUBLISHED create-lesto — the exact bin a `npm create lesto` user runs. Pinned
-    // to the in-tree version (0.1.1 today) so the smoke tests an immutable published snapshot and the
+    // to the in-tree version (0.1.2 today) so the smoke tests an immutable published snapshot and the
     // pin advances in lockstep with the version gate above at the next republish.
     await run(
       "bunx",
@@ -173,7 +177,7 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
   });
 
   test.afterAll(async () => {
-    dev?.kill("SIGTERM");
+    await killAndWait(dev);
 
     await rm(workspace, { recursive: true, force: true });
   });
@@ -319,7 +323,7 @@ test.describe("current-tree reconstruction — non-hoisting (isolated) linker @t
   });
 
   test.afterAll(async () => {
-    dev?.kill("SIGTERM");
+    await killAndWait(dev);
 
     await rm(workspace, { recursive: true, force: true });
   });
