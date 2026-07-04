@@ -130,7 +130,12 @@ async function waitForServer(
       // Any HTTP response — even a non-2xx — means the server is UP and answering; the per-test
       // `page.goto` assertions are what validate the actual response. Requiring 2xx here turned a
       // reachable server whose `/` is non-2xx into an opaque 60s timeout instead of a real failure.
-      await fetch(url, { headers: { "Sec-Fetch-Site": "same-origin" } });
+      // A per-attempt abort bounds the "accepts TCP but never sends headers" case: without it undici's
+      // ~300s headers timeout outruns the 60s deadline, and the diagnostic-bearing throw below never runs.
+      await fetch(url, {
+        headers: { "Sec-Fetch-Site": "same-origin" },
+        signal: AbortSignal.timeout(2_000),
+      });
 
       return;
     } catch {
@@ -156,9 +161,10 @@ function lestoBin(appDir: string): string {
 }
 
 /**
- * Boot `lesto dev`, capturing its stdout+stderr into a rolling buffer. The dev child's output is
- * otherwise dropped (`stdio: "pipe"` with no reader), so a boot failure surfaces only as an opaque
- * "never answered" — the buffer is what {@link waitForServer} appends to that error to name the cause.
+ * Boot `lesto dev`, capturing its stdout+stderr into an (unbounded) buffer. An unread `stdio: "pipe"`
+ * stream does not just lose the output — it BACKPRESSURE-BLOCKS the child once the OS pipe fills, the
+ * stall that faked leg (b)'s "won't hydrate" (ccdc936). Draining also lets {@link waitForServer} append
+ * the captured output to its timeout error, so a boot failure names its cause instead of being opaque.
  */
 function spawnDev(appDir: string, port: number): { child: ChildProcess; output: () => string } {
   const child = spawn("bun", [lestoBin(appDir), "dev", "--port", String(port)], {
@@ -172,8 +178,9 @@ function spawnDev(appDir: string, port: number): { child: ChildProcess; output: 
   };
   child.stdout?.on("data", capture);
   child.stderr?.on("data", capture);
-  // Name a silent post-boot death (published 0.1.1's dev binds then vanishes on CI Linux): the exit
-  // code/signal is otherwise invisible — the process is simply gone when waitForServer times out.
+  // Record the exit code/signal IF the child ever dies — otherwise invisible. NOTE: published 0.1.1's
+  // dev does NOT exit; it stays alive but unreachable on CI (this listener never fired — the evidence
+  // that refuted a presumed death), so leg (a) is version-skipped. See `registerPublishedLeg`.
   child.on("exit", (code, signal) => {
     buffer += `\n[lesto dev exited code=${code ?? "null"} signal=${signal ?? "null"}]`;
   });
@@ -193,7 +200,7 @@ async function assertPreactClient(appDir: string): Promise<void> {
 // (a) Real registry install of the PUBLISHED 0.1.1 closure, hoisted layout.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-registerPublishedLeg("real-registry install — published 0.1.1, hoisted layout @published-hoisted", () => {
+registerPublishedLeg(`real-registry install — published ${CREATE_LESTO_VERSION}, hoisted layout @published-hoisted`, () => {
   test.describe.configure({ mode: "serial" });
 
   let workspace: string;
