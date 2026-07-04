@@ -9,7 +9,7 @@
  * tab never receives the update (not even its timing).
  */
 
-import { openSqlite, serve } from "@lesto/runtime";
+import { openSqlite, serveWithGracefulShutdown } from "@lesto/runtime";
 
 import { buildApp } from "./src/app";
 
@@ -20,16 +20,16 @@ async function main(): Promise<void> {
 
   const { app } = await buildApp({ handle });
 
-  const server = await serve(app, { port: PORT, host: "127.0.0.1" });
+  // serveWithGracefulShutdown owns the shutdown lifecycle (see @lesto/runtime): SIGINT + SIGTERM
+  // (this demo previously handled only SIGINT), a double-signal guard, a `.catch`(exit 1), and a
+  // force-exit backstop. `onClosed` closes the db once in-flight requests have drained.
+  const server = await serveWithGracefulShutdown(app, {
+    port: PORT,
+    host: "127.0.0.1",
+    onClosed: close,
+  });
 
   console.log(`Reactive demo on http://127.0.0.1:${server.port} — open it in two tabs.`);
-
-  process.on("SIGINT", () => {
-    void server
-      .close()
-      .then(close)
-      .then(() => process.exit(0));
-  });
 }
 
 void main();

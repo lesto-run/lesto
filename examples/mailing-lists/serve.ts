@@ -23,7 +23,7 @@
 
 import { createSmtpTransport, nodeConnect, nodeUpgrade } from "@lesto/mail";
 import type { MailTransport, RenderedEmail } from "@lesto/mail";
-import { openSqlite, serve } from "@lesto/runtime";
+import { openSqlite, serveWithGracefulShutdown } from "@lesto/runtime";
 
 import { buildApp } from "./src/app";
 
@@ -71,7 +71,17 @@ async function main(): Promise<void> {
   // the one-shot drain run.ts uses.
   const worker = queue.work();
 
-  const server = await serve(app, { port: PORT });
+  // serveWithGracefulShutdown owns the SIGINT + SIGTERM wiring, the double-signal guard, and a
+  // force-exit backstop (see @lesto/runtime). `onShutdown` stops the mail worker BEFORE the drain
+  // (it must stop taking new jobs first); `onClosed` closes the db AFTER in-flight requests drain.
+  const server = await serveWithGracefulShutdown(app, {
+    port: PORT,
+    onShutdown: async () => {
+      console.log("\nshutting down...");
+      await worker.stop();
+    },
+    onClosed: close,
+  });
   const url = `http://127.0.0.1:${server.port}`;
 
   console.log(`\nlistening on ${url}`);
@@ -84,17 +94,6 @@ async function main(): Promise<void> {
       ? `\nmail: logging to console (set SMTP_HOST to deliver to a real sink)`
       : `\nmail: delivering over SMTP to ${process.env.SMTP_HOST}:${process.env.SMTP_PORT ?? 1025}`,
   );
-
-  const shutdown = async (): Promise<void> => {
-    console.log("\nshutting down...");
-    await worker.stop();
-    await server.close();
-    close();
-    process.exit(0);
-  };
-
-  process.on("SIGINT", () => void shutdown());
-  process.on("SIGTERM", () => void shutdown());
 }
 
 await main();

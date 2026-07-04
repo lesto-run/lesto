@@ -10,7 +10,7 @@
  * (403) at subscribe time, so it never opens.
  */
 
-import { openSqlite, serve } from "@lesto/runtime";
+import { openSqlite, serveWithGracefulShutdown } from "@lesto/runtime";
 
 import { buildApp } from "./src/app";
 
@@ -21,20 +21,20 @@ async function main(): Promise<void> {
 
   const booted = await buildApp({ handle });
 
-  const server = await serve(booted.app, { port: PORT, host: "127.0.0.1" });
+  // serveWithGracefulShutdown owns the shutdown lifecycle (see @lesto/runtime): SIGINT + SIGTERM
+  // (this demo previously handled only SIGINT), a double-signal guard, a `.catch`(exit 1), and a
+  // force-exit backstop. Stop the change engine BEFORE the drain (`onShutdown`), close the db
+  // AFTER it (`onClosed`).
+  const server = await serveWithGracefulShutdown(booted.app, {
+    port: PORT,
+    host: "127.0.0.1",
+    onShutdown: () => booted.engine.stop(),
+    onClosed: close,
+  });
 
   console.log(
     `Live demo on http://127.0.0.1:${server.port} — shapes stream at /__lesto/live-data.`,
   );
-
-  process.on("SIGINT", () => {
-    booted.engine.stop();
-
-    void server
-      .close()
-      .then(close)
-      .then(() => process.exit(0));
-  });
 }
 
 void main();

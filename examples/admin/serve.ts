@@ -16,7 +16,7 @@
  *   curl localhost:3000/admin/audit
  */
 
-import { openSqlite, serve } from "@lesto/runtime";
+import { openSqlite, serveWithGracefulShutdown } from "@lesto/runtime";
 
 import { buildApp } from "./src/app";
 
@@ -30,7 +30,14 @@ async function main(): Promise<void> {
   console.log("migrations applied:", app.migrationsApplied);
   console.log(`seeded ${seeded} products`);
 
-  const server = await serve(app, { port: PORT });
+  // serveWithGracefulShutdown owns the SIGINT + SIGTERM wiring, the double-signal guard, and a
+  // force-exit backstop (see @lesto/runtime): `onShutdown` runs on the signal, before the drain;
+  // `onClosed` runs after in-flight requests drain — where the db is safe to close.
+  const server = await serveWithGracefulShutdown(app, {
+    port: PORT,
+    onShutdown: () => console.log("\nshutting down..."),
+    onClosed: close,
+  });
   const url = `http://127.0.0.1:${server.port}`;
 
   console.log(`\nlistening on ${url}`);
@@ -43,16 +50,6 @@ async function main(): Promise<void> {
   console.log(
     `\n  pass  -H 'x-admin-actor: you@example.com'  to attribute a write in the audit log`,
   );
-
-  const shutdown = async (): Promise<void> => {
-    console.log("\nshutting down...");
-    await server.close();
-    close();
-    process.exit(0);
-  };
-
-  process.on("SIGINT", () => void shutdown());
-  process.on("SIGTERM", () => void shutdown());
 }
 
 await main();

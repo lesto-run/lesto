@@ -445,7 +445,14 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_HEADERS_TIMEOUT_MS = 15_000;
 const DEFAULT_KEEP_ALIVE_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_HEADER_BYTES = 16 * 1024;
-const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
+
+/**
+ * How long a graceful drain waits for in-flight requests before it force-closes
+ * the remaining sockets. Exported so {@link serveWithGracefulShutdown} can size
+ * its outer force-EXIT deadline off the same figure (drain window + a grace),
+ * rather than duplicating the constant and risking drift.
+ */
+export const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
 
 /**
  * Backstop caps on connection and in-flight-request VOLUME — the layer the

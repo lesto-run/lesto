@@ -20,7 +20,7 @@
 
 import { fileURLToPath } from "node:url";
 
-import { serve } from "@lesto/runtime";
+import { serveWithGracefulShutdown } from "@lesto/runtime";
 import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
 import { currentRequestSpan } from "@lesto/web";
 import type { CurrentSpan, TracesEnv } from "@lesto/observability";
@@ -94,13 +94,18 @@ async function main(): Promise<void> {
   // Serve it. The dispatcher is the app's `handle` as far as the runtime cares.
   // When tracing is on, every request mints a span, an inbound `traceparent`
   // joins one trace, and the final batch flushes on graceful drain.
-  const server = await serve(
+  // serveWithGracefulShutdown owns the SIGINT + SIGTERM wiring, the double-signal guard, and a
+  // force-exit backstop (see @lesto/runtime). The order matters here: the server's `onDrain`
+  // (below) flushes the final spans DURING the drain, then `onClosed` stops the flush interval
+  // AFTER the drain resolves — so the last flush is never cut short.
+  const server = await serveWithGracefulShutdown(
     { handle: dispatch, migrationsApplied: [] },
     {
       port: PORT,
       ...(traces === undefined
         ? {}
         : { tracer: traces.requestTracer, parseTraceparent, onDrain: () => traces.flush() }),
+      onClosed: () => stopFlush?.(),
     },
   );
 
@@ -109,19 +114,6 @@ async function main(): Promise<void> {
   console.log(`\nlistening on ${url}`);
   console.log(`  ${url}/         static marketing (with the Account island)`);
   console.log(`  ${url}/mls      the dynamic, authed app`);
-
-  const shutdown = async (): Promise<void> => {
-    // Drain first (the server's `onDrain` flushes the final spans), then stop the
-    // interval — order matters, so the last flush is not cut short.
-    await server.close();
-
-    stopFlush?.();
-
-    process.exit(0);
-  };
-
-  process.on("SIGINT", () => void shutdown());
-  process.on("SIGTERM", () => void shutdown());
 }
 
 await main();

@@ -18,7 +18,7 @@
 
 import type { KernelDatabase } from "@lesto/kernel";
 import { openPostgres } from "@lesto/pg";
-import { openSqlite, serve } from "@lesto/runtime";
+import { openSqlite, serveWithGracefulShutdown } from "@lesto/runtime";
 
 import { buildApp, CAPSTONE_PUBLICATION, CAPSTONE_SLOT, resolveSourceConfig } from "./src/app";
 import { cleanPg, setupPgSchema } from "./src/pg-setup";
@@ -51,35 +51,25 @@ async function main(): Promise<void> {
   // live feed. The engine seeds each shape's snapshot from the pool; the source carries the tail.
   await booted.source?.start();
 
-  const server = await serve(booted.app, { port: PORT, host: HOST });
+  // serveWithGracefulShutdown owns what this file used to hand-roll — SIGINT + SIGTERM, the
+  // double-signal guard, the `.catch`(exit 1) — plus a force-exit backstop it previously lacked
+  // (see @lesto/runtime). `onShutdown` stops the engine and drops the WAL-pinning slot BEFORE the
+  // drain (the source must stop producing first); `onClosed` closes the db AFTER the drain.
+  const server = await serveWithGracefulShutdown(booted.app, {
+    port: PORT,
+    host: HOST,
+    onShutdown: async () => {
+      booted.engine.stop();
+
+      await booted.source?.stop(); // drop the WAL-pinning slot
+    },
+    onClosed: close,
+  });
 
   console.log(
     `Capstone (${sourceConfig.kind}) on http://${HOST}:${server.port} — shapes stream at ` +
       `/__lesto/live-data. ${sourceConfig.kind === "poll" ? "Set LESTO_LIVE_SOURCE=pg + LESTO_LIVE_PG_URL for the real replication path." : ""}`,
   );
-
-  // Guard against a double signal (SIGINT then SIGTERM) re-entering teardown, and `.catch` the chain
-  // so a failing `stop()`/`close()` still exits (never a hang until SIGKILL, nor an unhandled rejection).
-  let shuttingDown = false;
-  const shutdown = (): void => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-
-    booted.engine.stop();
-
-    void Promise.resolve()
-      .then(() => booted.source?.stop()) // drop the WAL-pinning slot
-      .then(() => server.close())
-      .then(close)
-      .then(() => process.exit(0))
-      .catch((error: unknown) => {
-        console.error("shutdown failed:", error);
-        process.exit(1);
-      });
-  };
-
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
 }
 
 /** A booted database handle plus its drain — uniform across the two source paths. */

@@ -16,7 +16,7 @@ import { createServer as createNetServer } from "node:net";
 import type { AddressInfo, Server as NetServer } from "node:net";
 import { dirname, join } from "node:path";
 
-import { nodeStaticReader, serve } from "@lesto/runtime";
+import { nodeStaticReader, onShutdownSignals, serve } from "@lesto/runtime";
 import type { LestoAppConfig } from "@lesto/kernel";
 import { compileFileRoutes, scanRoutes } from "@lesto/router";
 import { applyFileRoutes, generateRouteManifest, loadFileRoutes } from "@lesto/web";
@@ -1298,25 +1298,13 @@ const code = await run(argv, {
   now: Date.now,
   cloudflare: wranglerDeployer,
   checkHealth: httpHealthCheck,
-  // On a deploy's rolling restart, drain in-flight requests then exit cleanly.
-  installShutdown: (drain) => {
-    const shutdown = (): void => {
-      // Drain in-flight requests + run teardown, THEN exit. A teardown REJECTION (a socket
-      // close that threw, the dev MCP / trace flush that rejected) must still terminate the
-      // process — with a non-zero code and a stderr line — never hang on an unhandled
-      // rejection. The `dev` teardown closes several resources, so this path is reachable.
-      void drain().then(
-        () => process.exit(0),
-        (error: unknown) => {
-          console.error(error);
-          process.exit(1);
-        },
-      );
-    };
-
-    process.on("SIGTERM", shutdown);
-    process.on("SIGINT", shutdown);
-  },
+  // On a deploy's rolling restart, drain in-flight requests then exit cleanly. The
+  // same productized helper the long-lived examples dogfood: SIGTERM + SIGINT, a
+  // double-signal guard (a second Ctrl-C mid-drain is a no-op, never a re-entry),
+  // and exit 0 on a clean drain / exit 1 + stderr on a teardown REJECTION (a socket
+  // close that threw, the dev MCP / trace flush that rejected — never an unhandled
+  // rejection). The injected `drain` is trusted to settle, so no force-exit deadline.
+  installShutdown: (drain) => onShutdownSignals(drain),
   out: console.log,
 });
 

@@ -23,7 +23,7 @@
  * `examples/estate/README.md` ("Tracing — the two-env-var setup").
  */
 
-import { openSqlite, serve } from "@lesto/runtime";
+import { openSqlite, serveWithGracefulShutdown } from "@lesto/runtime";
 
 import { buildApp } from "./src/app";
 import { countPosts, insertPost } from "./src/post";
@@ -51,27 +51,21 @@ async function main(): Promise<void> {
 
   console.log("posts seeded:", await countPosts(db));
 
-  // Stand a real node:http server in front of the app.
-  const server = await serve(app, { port: PORT });
+  // Stand a real node:http server in front of the app, with a productized graceful shutdown:
+  // serveWithGracefulShutdown wires SIGINT + SIGTERM, a double-signal guard, and a force-exit
+  // backstop (see @lesto/runtime). `onShutdown` logs at the signal (before the drain); `onClosed`
+  // closes the database once in-flight requests have drained.
+  const server = await serveWithGracefulShutdown(app, {
+    port: PORT,
+    onShutdown: () => console.log("\nshutting down..."),
+    onClosed: close,
+  });
 
   const url = `http://127.0.0.1:${server.port}`;
 
   console.log(`\nlistening on ${url}`);
   console.log(`  ${url}/posts       (HTML page)`);
   console.log(`  ${url}/api/posts   (JSON API)`);
-
-  // Graceful shutdown: close the socket, then the database.
-  const shutdown = async (): Promise<void> => {
-    console.log("\nshutting down...");
-
-    await server.close();
-    close();
-
-    process.exit(0);
-  };
-
-  process.on("SIGINT", () => void shutdown());
-  process.on("SIGTERM", () => void shutdown());
 }
 
 await main();

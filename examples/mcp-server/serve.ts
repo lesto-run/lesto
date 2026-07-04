@@ -12,7 +12,7 @@
  * the agent's own OAuth client obtains the token — nothing else changes.
  */
 
-import { openSqlite, serve } from "@lesto/runtime";
+import { openSqlite, serveWithGracefulShutdown } from "@lesto/runtime";
 
 import { buildApp, demoRolesOf } from "./src/app";
 import { createDemoIdp } from "./src/idp";
@@ -47,7 +47,14 @@ async function main(): Promise<void> {
     audience: resource,
   });
 
-  const server = await serve(app, { port: PORT });
+  // serveWithGracefulShutdown owns the SIGINT + SIGTERM wiring, the double-signal guard, and a
+  // force-exit backstop (see @lesto/runtime): `onShutdown` logs at the signal; `onClosed` closes
+  // the db after in-flight requests drain.
+  const server = await serveWithGracefulShutdown(app, {
+    port: PORT,
+    onShutdown: () => console.log("\nshutting down..."),
+    onClosed: close,
+  });
   const url = `http://127.0.0.1:${server.port}`;
 
   console.log(`\nMCP Resource Server listening on ${url}`);
@@ -97,16 +104,6 @@ async function main(): Promise<void> {
     `  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"handle_request","arguments":{"method":"POST","path":"/deployments","body":{"app":"web","ref":"v2"}}}}'`,
   );
   console.log(`\n  then: curl -s ${url}/deployments   # the deploy the operator agent created`);
-
-  const shutdown = async (): Promise<void> => {
-    console.log("\nshutting down...");
-    await server.close();
-    close();
-    process.exit(0);
-  };
-
-  process.on("SIGINT", () => void shutdown());
-  process.on("SIGTERM", () => void shutdown());
 }
 
 await main();

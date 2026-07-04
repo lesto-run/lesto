@@ -10,7 +10,7 @@
  * before the live stream reconnects.
  */
 
-import { openSqlite, serve } from "@lesto/runtime";
+import { openSqlite, serveWithGracefulShutdown } from "@lesto/runtime";
 
 import { buildApp } from "./src/app";
 
@@ -26,34 +26,21 @@ async function main(): Promise<void> {
 
   const booted = await buildApp({ handle });
 
-  const server = await serve(booted.app, { port: PORT, host: HOST });
+  // serveWithGracefulShutdown owns what this file used to hand-roll — SIGINT + SIGTERM, the
+  // double-signal guard, the `.catch`(exit 1) — plus a force-exit backstop it previously lacked
+  // (see @lesto/runtime). Stop the change engine BEFORE the drain (`onShutdown`), close the db
+  // AFTER it (`onClosed`).
+  const server = await serveWithGracefulShutdown(booted.app, {
+    port: PORT,
+    host: HOST,
+    onShutdown: () => booted.engine.stop(),
+    onClosed: close,
+  });
 
   console.log(
     `Durable live() demo on http://${HOST}:${server.port} — build the client first with ` +
       `"bun run build" if you have not yet.`,
   );
-
-  // Guard against a double signal (SIGINT then SIGTERM) re-entering teardown, and `.catch` the chain
-  // so a failing `close()` still exits (never a hang until SIGKILL, nor an unhandled rejection).
-  let shuttingDown = false;
-  const shutdown = (): void => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-
-    booted.engine.stop();
-
-    void server
-      .close()
-      .then(close)
-      .then(() => process.exit(0))
-      .catch((error: unknown) => {
-        console.error("shutdown failed:", error);
-        process.exit(1);
-      });
-  };
-
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
 }
 
 void main();

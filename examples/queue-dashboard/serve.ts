@@ -33,7 +33,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { openSqlite, serve } from "@lesto/runtime";
+import { openSqlite, serveWithGracefulShutdown } from "@lesto/runtime";
 
 import { buildApp, makeRunObserver } from "./src/app";
 import { FLAKY, INGEST, NOTIFY, THUMBNAIL } from "./src/operator";
@@ -128,7 +128,19 @@ async function main(): Promise<void> {
   // stalled jobs on its own cadence and drains gracefully on stop().
   const worker = queue.work({ onJob: makeRunObserver(db) });
 
-  const server = await serve(app, { port: PORT, ...serveLimitsFromEnv(process.env) });
+  // serveWithGracefulShutdown owns the SIGINT + SIGTERM wiring, the double-signal guard, and a
+  // force-exit backstop (see @lesto/runtime), on top of the same operator-tunable DoS limits the
+  // CLI serves under. `onShutdown` stops the background worker BEFORE the drain; `onClosed` closes
+  // the db AFTER in-flight requests drain.
+  const server = await serveWithGracefulShutdown(app, {
+    port: PORT,
+    ...serveLimitsFromEnv(process.env),
+    onShutdown: async () => {
+      console.log("\nshutting down...");
+      await worker.stop();
+    },
+    onClosed: close,
+  });
   const url = `http://127.0.0.1:${server.port}`;
 
   console.warn(
@@ -146,17 +158,6 @@ async function main(): Promise<void> {
   console.log(`  DELETE ${url}/queue/jobs/:id`);
   console.log(`  GET    ${url}/queue/batches/:id`);
   console.log(`  GET    ${url}/admin/runs?limit=&offset=`);
-
-  const shutdown = async (): Promise<void> => {
-    console.log("\nshutting down...");
-    await worker.stop();
-    await server.close();
-    close();
-    process.exit(0);
-  };
-
-  process.on("SIGINT", () => void shutdown());
-  process.on("SIGTERM", () => void shutdown());
 }
 
 await main();

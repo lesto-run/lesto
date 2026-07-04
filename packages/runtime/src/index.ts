@@ -26,6 +26,7 @@ export {
   serve,
   closeWithDrain,
   defaultLogRequest,
+  DEFAULT_DRAIN_TIMEOUT_MS,
   DEFAULT_SECURITY_HEADERS,
   RECOMMENDED_CSP,
 } from "./server";
@@ -41,6 +42,14 @@ export type {
   RequestTracer,
   TraceparentParser,
 } from "./server";
+
+export { onShutdownSignals, serveWithGracefulShutdown } from "./graceful-shutdown";
+export type {
+  GracefulShutdownOptions,
+  ShutdownSignalOptions,
+  SignalDeps,
+  ServeShutdownDeps,
+} from "./graceful-shutdown";
 
 export { resolveClient } from "./trust-proxy";
 export type { ForwardHeaders, ResolvedClient, TrustProxy } from "./trust-proxy";
