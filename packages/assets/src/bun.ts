@@ -9,6 +9,7 @@
  * (`build-client.ts`) is covered with fakes.
  */
 
+import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -18,6 +19,7 @@ import type { BunPlugin } from "bun";
 import type { BuildClientDeps, BundleArtifact, BundleRequest } from "./build-client";
 import { AssetsError } from "./errors";
 import { PREACT_ALIAS } from "./preact-alias";
+import { resolveInstalledPackage } from "./resolve-import";
 import { islandFileFromModule } from "./synthesize";
 import type { IslandFile } from "./synthesize";
 
@@ -125,17 +127,11 @@ export function bunBuildClientDeps(appRoot: string): BuildClientDeps {
 
     bundle: (request) => bundle(request, appRoot),
 
-    // Resolve a framework runtime import from the app root exactly as the bundler will —
-    // `Bun.resolveSync` is the same resolver the preact alias plugin uses — so the RUM preflight's
-    // verdict matches what the real bundle would do. It THROWS when the specifier does not resolve;
-    // the preflight reads that as "the dependency is missing" (→ the actionable refusal).
-    resolveClientImport: (specifier) => {
-      try {
-        return Bun.resolveSync(specifier, appRoot);
-      } catch {
-        return undefined;
-      }
-    },
+    // The RUM preflight's probe: is the package a framework import belongs to installed in the app's
+    // node_modules chain? A pure `node_modules` walk (NOT `Bun.resolveSync`) because this seam is
+    // shared with `viteBuildClientDeps`, whose `lesto build`/`deploy` runs under plain Node (the
+    // jiti bin) where a `Bun` global is undefined — see `resolveInstalledPackage`.
+    resolveClientImport: (specifier) => resolveInstalledPackage(specifier, appRoot, existsSync),
 
     // A first build has no out dir yet — that is "no stale chunks", not an error.
     listOutDir: async (outDir) => {

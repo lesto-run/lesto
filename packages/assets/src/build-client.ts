@@ -126,13 +126,16 @@ export interface BuildClientDeps {
   bundle(request: BundleRequest): Promise<readonly BundleArtifact[]>;
 
   /**
-   * Resolve a framework runtime import (a bare specifier the synthesized entry `import`s, e.g. the
-   * RUM subpath) from the APP ROOT, exactly as the bundler will — returning the resolved path, or
-   * `undefined` when it does not resolve. Drives the build-time preflight that turns a missing
-   * framework dependency into an actionable error at the source instead of an opaque bundler
-   * "failed to resolve" deep in the build. Real impl: `Bun.resolveSync(specifier, appRoot)` in
-   * `bun.ts` (the same resolver the preact alias uses), so the preflight sees the app's REAL
-   * `node_modules` layout in production while a fake answers offline in tests.
+   * Whether the package a framework runtime import belongs to (a bare specifier the synthesized
+   * entry `import`s, e.g. the RUM subpath `@lesto/observability/rum`) is installed in the APP's
+   * `node_modules` chain — returning the package directory when present, or `undefined` when no
+   * ancestor holds it. Drives the build-time preflight that turns a missing framework dependency
+   * into an actionable error at the source instead of an opaque bundler "failed to resolve" deep in
+   * the build. Real impl: a pure `node_modules` walk from the app root (`resolveInstalledPackage` in
+   * `bun.ts`), so it is runtime-agnostic — the production `viteBuildClientDeps` path runs under
+   * plain Node where a `Bun` global is undefined — and a fake answers offline in tests. It checks
+   * package PRESENCE (the recurring failure: an isolated per-app layout omits the dep), not the exact
+   * export subpath — a present package's own `exports` map governs the subpath.
    */
   resolveClientImport(specifier: string): string | undefined;
 
@@ -342,9 +345,12 @@ export async function buildClient(
   // `@lesto/observability` a hard, unstated dependency of EVERY app with a client entry. The
   // scaffold declares it, but a hand-written app need not, and under an isolated per-app
   // `node_modules` layout the gap surfaces only as an opaque bundler "failed to resolve
-  // @lesto/observability/rum" deep in the build (it has bitten three times). Resolve it from the app
-  // root — exactly as the bundler will — and refuse HERE, loud + actionable (ADR 0011
-  // loud-when-wrong), rather than letting the bundle fail cryptically. Making the RUM injection
+  // @lesto/observability/rum" deep in the build (it has bitten three times). Check the dep is
+  // installed in the app's node_modules chain — a runtime-agnostic proxy for what the bundler will
+  // resolve — and refuse HERE, loud + actionable (ADR 0011 loud-when-wrong), rather than letting the
+  // bundle fail cryptically. NB this guards `lesto build`/`deploy` (both bundlers) + the Bun dev
+  // fallback, but NOT the default `lesto dev` island-dev/Vite server, which synthesizes its own
+  // entry (L-44ca7c57 tracks extending the guard there). Making the RUM injection
   // conditional on the dep was rejected as fail-open: it would silently drop the UI→API→DB trace the
   // framework's pitch rests on. (L-a457e604.)
   if (deps.resolveClientImport(RUM_MODULE) === undefined) {
