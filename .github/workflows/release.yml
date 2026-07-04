@@ -11,13 +11,14 @@
 # Publishing runs `bun run release` (scripts/publish.mjs): `bun pm pack` rewrites the
 # `workspace:*` protocol (npm does not), then `npm publish` uploads each tarball over OIDC.
 #
-# Dormant until the RELEASE_ENABLED repo variable is `true`. Trigger from the Actions tab
-# ("Run workflow" → workflow_dispatch) or by pushing to main once armed.
+# Dormant until the RELEASE_ENABLED repo variable is `true`. Trigger EXPLICITLY from the Actions
+# tab ("Run workflow" → workflow_dispatch). There is deliberately NO `push` trigger: this repo's
+# Studio daemon auto-pushes to main, so an on-push release would let a stray daemon push publish
+# whatever is at HEAD the moment RELEASE_ENABLED is flipped on (ADR/L-c095f277). Dispatch is the
+# only path, so arming the variable never auto-fires a release.
 name: Release
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
