@@ -9,6 +9,7 @@
     "test:e2e": "playwright test island-hydration.spec.ts",
     "test:scaffold": "playwright test scaffold-loop.spec.ts",
     "test:scaffold-real": "playwright test scaffold-real-install.spec.ts --workers=1",
+    "test:scaffold-hoisted-preflight": "playwright test scaffold-hoisted-preflight.spec.ts --workers=1",
     "test:island-hmr": "playwright test island-fast-refresh.spec.ts",
     "test:island-concurrent": "playwright test island-dev-concurrent.spec.ts",
     "test:page-swap": "playwright test page-swap.spec.ts",

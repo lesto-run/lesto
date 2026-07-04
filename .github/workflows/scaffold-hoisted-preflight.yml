@@ -1,0 +1,80 @@
+# The MUTABLE-TREE HOISTED dev-boot preflight (L-513dd8a6) — its OWN workflow, nightly + on-demand.
+#
+# This is the pre-publish gate that would have caught L-27285131 BEFORE it shipped. That defect —
+# published-0.1.2 `lesto dev` HANGS the first `GET /` under the HOISTED linker on CI Linux (a true
+# hang, confirmed at 300s; the child stays alive + bound) — was only discoverable POST-publish,
+# because the only leg that booted dev under hoisted (leg (a) of scaffold-real-install) runs the
+# IMMUTABLE PUBLISHED closure, which has no repo-side fix and can only be SKIPPED. Its sibling leg (b)
+# boots the CURRENT tree but under the ISOLATED linker, which does NOT reproduce the hang.
+#
+# The uncovered quadrant — CURRENT tree × HOISTED linker — is exactly what a real
+# `bun create lesto && cd app && bun install && lesto dev` user gets, because HOISTED is bun's
+# standalone-scaffold DEFAULT. This job fills it: it packs the current tree to tarballs, installs with
+# `bun install --linker=hoisted`, and boots `lesto dev` asserting the first `GET /` answers — so the
+# hang can go RED on a FIXABLE target (published dev code == the tree) instead of only against the
+# immutable published leg. This is the standing pre-publish canary for that whole failure class.
+#
+# PRE-PUBLISH GATE: the release/publish flow SHOULD run `bun run test:scaffold-hoisted-preflight`
+# before it cuts a version — a red here is a real default-path dev hang for Linux users, not flake.
+#
+# Deliberately a SEPARATE workflow with its OWN concurrency group (same reasoning as
+# `scaffold-real-install.yml` / `benchmarks.yml`): a `schedule`/`workflow_dispatch` on ci.yml's shared
+# `on:` would drop the run into ci's `ci-${{ github.ref }}` group, where the nightly and a concurrent
+# push-to-main cancel each other (this repo pushes to main around the clock). Its own file + own
+# concurrency group keeps both signals intact.
+name: Scaffold hoisted-preflight (dev-boot)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly, 07:30 UTC — offset from scaffold-real-install's 07:00 so the two heavy install jobs
+    # don't contend for runners; a standing canary on the default hoisted dev-boot path, not a PR gate.
+    - cron: "30 7 * * *"
+
+concurrency:
+  group: scaffold-hoisted-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scaffold-hoisted-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+
+      # The app runs under bun/bunx; Node is here only for the playwright shim, matching the runner
+      # baseline the other e2e jobs ride. Pinned so a runner-image node bump can't drift this canary.
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browser
+        working-directory: packages/e2e
+        run: bunx playwright install --with-deps chromium
+
+      # Pack the current tree → scaffold → `bun install --linker=hoisted` → build → boot `lesto dev`
+      # and gate on the first `GET /` (bounded 120s so the hang reds fast). `--workers=1` (in the
+      # test:scaffold-hoisted-preflight script) keeps the single serial group from oversubscribing.
+      - name: Current-tree HOISTED dev-boot preflight (the L-513dd8a6 gate)
+        working-directory: packages/e2e
+        run: bun run test:scaffold-hoisted-preflight
+
+      # On failure, keep Playwright's trace/screenshot/error-context so the hang (or a hydration
+      # failure) is debuggable from the artifact without a re-run. The dev server's own boot output is
+      # captured into the test's error message by `spawnDev` in the spec — this is the browser-side half.
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaffold-hoisted-preflight-results
+          path: packages/e2e/test-results/**
+          retention-days: 14
+          if-no-files-found: warn
