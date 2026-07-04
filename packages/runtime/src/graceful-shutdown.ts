@@ -14,6 +14,11 @@
  * rather than re-deriving it (three different ways, one of them missing the
  * double-signal guard).
  *
+ * The full teardown timeline spans three hooks across two layers: `onShutdown`
+ * (stop new work — BEFORE the drain) → `server.close()` drains, running any
+ * `onDrain` from {@link ServeOptions} DURING it → `onClosed` (release resources —
+ * AFTER the drain).
+ *
  *   const server = await serveWithGracefulShutdown(app, {
  *     port: 3000,
  *     host: process.env.HOST ?? "127.0.0.1", // 0.0.0.0 in a container

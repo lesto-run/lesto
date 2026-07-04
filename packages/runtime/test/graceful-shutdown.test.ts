@@ -223,6 +223,7 @@ describe("serveWithGracefulShutdown", () => {
     expect(boundHost).toBe("127.0.0.1"); // loopback by default
     expect(server.port).toBe(4321);
     expect(h.signalCount()).toBe(2); // handlers installed before returning
+    expect(h.state.forceExitCb).toBeUndefined(); // NOT armed until a signal fires (never self-kills on boot)
   });
 
   it("passes an overridden host straight through (the container case)", async () => {
@@ -245,17 +246,19 @@ describe("serveWithGracefulShutdown", () => {
 
   it("runs teardown in order on a signal: onShutdown → drain → onClosed → exit 0", async () => {
     const h = harness();
-    const order: string[] = [];
 
     await serveWithGracefulShutdown(
       trivialApp,
       {
         port: 3000,
+        // Push the hooks into the SAME log the fake server's `close` writes to, so the drain's
+        // position between the two hooks is asserted in one ordered array — an inversion (close
+        // before onShutdown, or onClosed before close) then fails HERE, not silently in a second array.
         onShutdown: () => {
-          order.push("onShutdown");
+          h.events.push("onShutdown");
         },
         onClosed: () => {
-          order.push("onClosed");
+          h.events.push("onClosed");
         },
       },
       h.deps,
@@ -265,9 +268,36 @@ describe("serveWithGracefulShutdown", () => {
     await tick();
 
     // "serve" is pushed at boot; the signal drives the rest in the contract order.
-    expect(order).toEqual(["onShutdown", "onClosed"]);
-    expect(h.events).toEqual(["serve", "close"]); // drain sits between the two hooks
+    expect(h.events).toEqual(["serve", "onShutdown", "close", "onClosed"]);
     expect(h.exits).toEqual([0]);
+  });
+
+  it("skips onClosed (and the drain) when onShutdown rejects, exiting 1", async () => {
+    const h = harness();
+    const boom = new Error("onShutdown threw");
+    let closedRan = false;
+
+    await serveWithGracefulShutdown(
+      trivialApp,
+      {
+        port: 3000,
+        forceExitTimeoutMs: 100,
+        onShutdown: () => Promise.reject(boom),
+        onClosed: () => {
+          closedRan = true;
+        },
+      },
+      h.deps,
+    );
+
+    h.fire("SIGINT");
+    await tick();
+
+    // A pre-drain failure aborts the rest of teardown: no drain, no onClosed, exit 1 (the doc contract).
+    expect(closedRan).toBe(false);
+    expect(h.events).toEqual(["serve"]); // never reached `server.close()`
+    expect(h.errors).toEqual([{ message: "graceful shutdown failed", error: boom }]);
+    expect(h.exits).toEqual([1]);
   });
 
   it("skips the optional hooks cleanly when neither is given", async () => {
