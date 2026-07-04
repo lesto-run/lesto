@@ -21,6 +21,12 @@
 // `window.postMessage`). The unicorn rule cannot tell the two APIs apart, so disable it file-wide.
 // oxlint-disable unicorn/require-post-message-target-origin
 
+// The wire protocol is OWNED by `opfs-rpc.ts` (the main-thread half). Import it as TYPES ONLY — the
+// import is erased at build, so the worker chunk stays runtime-isolated from the RPC client's own
+// deps, while a rename on either side of this cross-thread boundary now breaks the build instead of
+// silently only in a real browser (the exact failure class Inc9 exists to prevent).
+import type { WorkerRequest, WorkerResponse } from "./opfs-rpc";
+
 // ── The minimal `@sqlite.org/sqlite-wasm` oo1 surface this engine drives (the real module is far
 // larger). Declared locally so the package keeps sqlite-wasm an OPTIONAL peer — see `opfs-sqlite.ts`.
 
@@ -74,15 +80,10 @@ ctx.addEventListener("message", (event) => {
  * missing peer, an OPFS-less context) surfaces as a rejected `open` on the main thread.
  */
 async function handleMessage(raw: unknown): Promise<void> {
-  const message = raw as {
-    readonly id?: number;
-    readonly op?: string;
-    readonly filename?: string;
-    readonly vfsName?: string;
-    readonly sql?: string;
-    readonly bind?: readonly unknown[];
-    readonly wantRows?: boolean;
-  };
+  // Typed as `WorkerRequest` so the `switch` narrows each arm's fields (filename/sql/bind/…) against
+  // the client's own union — a rename breaks the build. `raw` is still untrusted worker-boundary
+  // input, so the runtime guards below (`typeof id`, `typeof sql`) remain load-bearing.
+  const message = raw as WorkerRequest;
 
   const { id } = message;
 
@@ -101,7 +102,7 @@ async function handleMessage(raw: unknown): Promise<void> {
         );
 
         db = new pool.OpfsSAHPoolDb(message.filename ?? "lesto-live.sqlite3");
-        ctx.postMessage({ id, ok: true });
+        ctx.postMessage({ id, ok: true } satisfies WorkerResponse);
 
         return;
       }
@@ -119,7 +120,7 @@ async function handleMessage(raw: unknown): Promise<void> {
               : { sql: message.sql, bind: message.bind, rowMode: "object", resultRows };
 
           db.exec(query);
-          ctx.postMessage({ id, ok: true, rows: resultRows });
+          ctx.postMessage({ id, ok: true, rows: resultRows } satisfies WorkerResponse);
 
           return;
         }
@@ -129,7 +130,7 @@ async function handleMessage(raw: unknown): Promise<void> {
         if (message.bind === undefined) db.exec(message.sql);
         else db.exec({ sql: message.sql, bind: message.bind });
 
-        ctx.postMessage({ id, ok: true, changes: db.changes() });
+        ctx.postMessage({ id, ok: true, changes: db.changes() } satisfies WorkerResponse);
 
         return;
       }
@@ -137,20 +138,24 @@ async function handleMessage(raw: unknown): Promise<void> {
       case "close": {
         db?.close();
         db = undefined;
-        ctx.postMessage({ id, ok: true });
+        ctx.postMessage({ id, ok: true } satisfies WorkerResponse);
         ctx.close();
 
         return;
       }
 
       default:
-        throw new Error(`OPFS worker received unknown op: ${String(message.op)}`);
+        // `message.op` is `never` here (the union is exhausted), but a malformed runtime message
+        // can still land here — read the op off the untrusted value for the error text.
+        throw new Error(
+          `OPFS worker received unknown op: ${String((raw as { readonly op?: unknown }).op)}`,
+        );
     }
   } catch (cause) {
     ctx.postMessage({
       id,
       ok: false,
       error: cause instanceof Error ? cause.message : String(cause),
-    });
+    } satisfies WorkerResponse);
   }
 }

@@ -14,9 +14,13 @@
  *
  * Three things to see by hand (the README's manual checklist — the one piece this repo's sandbox
  * cannot execute; the acceptance gate proves the server/wire half over the real Postgres path):
- *   1. **Durable first paint** — reload and the leader repaints from OPFS before the stream reconnects.
- *   2. **Offline writes** — go offline, send a message (shown at once, survives reload via the outbox),
- *      go online, watch it drain to the authorized `POST /messages` and reconcile under its client id.
+ *   1. **Durable first paint** — reload and the leader repaints the durable rows from OPFS one async
+ *      hop after an initially-empty frame (the OPFS worker boots first), always BEFORE the stream
+ *      connects (the leader opens the SSE only after the store attaches).
+ *   2. **Offline writes** — go offline, send a message (shown at once, durably logged to OPFS), go
+ *      online, watch it drain to the authorized `POST /messages` and reconcile under its client id.
+ *      (A fully-offline RELOAD can't re-fetch the app shell — no service worker — so reload-survival
+ *      of a pending write is proven over Node SQLite in the acceptance gate, not in a browser yet.)
  *   3. **Cross-tab** — open a second tab (a follower mirrors the leader with no connection of its own);
  *      close the leader and the follower is promoted and resumes the stream.
  *
@@ -93,7 +97,7 @@ async function main(): Promise<void> {
   let leaderMutations: LiveMutations | undefined;
 
   const createLeaderStore = async (): Promise<LeaderStore> => {
-    const { db } = await openOpfsSqliteDatabase();
+    const { db, close } = await openOpfsSqliteDatabase();
 
     const store = await createSqliteLiveStore({
       def,
@@ -118,6 +122,12 @@ async function main(): Promise<void> {
       dispose: async () => {
         await store.whenIdle();
         leaderMutations = undefined;
+        // Release the OPFS engine worker + its EXCLUSIVE SAHPool handle. Post-Inc9 the engine runs
+        // in a dedicated worker, so without this a leadership term that ends WITHOUT a tab close (a
+        // relinquish/hand-off) would leave the old worker holding the single-owner OPFS handle → the
+        // next leader's `installOpfsSAHPoolVfs` on the same vfsName fails. The `dispose` contract
+        // (cross-tab.ts) is "flush then close the OPFS handle"; this is that close.
+        close();
       },
     };
   };

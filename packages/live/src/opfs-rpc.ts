@@ -79,6 +79,7 @@ export async function createWorkerSqlDatabase(
   options: { readonly filename: string; readonly vfsName: string },
 ): Promise<WorkerSqlConnection> {
   let nextId = 1;
+  let closed = false;
   const pending = new Map<
     number,
     {
@@ -118,6 +119,15 @@ export async function createWorkerSqlDatabase(
     body: DistributiveOmit<WorkerRequest, "id">,
   ): Promise<Extract<WorkerResponse, { ok: true }>> =>
     new Promise((resolve, reject) => {
+      // Fail LOUD after close rather than hang forever: a post-close statement would otherwise
+      // enqueue a promise the (terminated) worker can never answer, wedging the store's FIFO
+      // transaction chain silently. The pre-Inc9 sync engine threw synchronously here.
+      if (closed) {
+        reject(new Error("OPFS worker connection is closed"));
+
+        return;
+      }
+
       const id = nextId++;
 
       pending.set(id, { resolve, reject });
@@ -153,8 +163,19 @@ export async function createWorkerSqlDatabase(
   return {
     db: adaptSyncSqlite(statements),
     close: () => {
+      if (closed) return;
+      closed = true;
+
       port.postMessage({ id: nextId++, op: "close" });
       port.removeEventListener("message", onMessage);
+
+      // Reject anything still in flight — its reply can no longer be delivered (listener gone),
+      // so without this the awaiting caller (e.g. `store.whenIdle()`) would hang forever.
+      const orphaned = new Error("OPFS worker connection closed with a request in flight");
+
+      for (const [, entry] of pending) entry.reject(orphaned);
+
+      pending.clear();
     },
   };
 }

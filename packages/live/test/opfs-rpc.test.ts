@@ -237,7 +237,7 @@ describe("createWorkerSqlDatabase", () => {
     expect(await db.prepare("SELECT").all([])).toEqual([{ v: 1 }]);
   });
 
-  it("close() sends a close op and stops listening", async () => {
+  it("close() sends a close op and stops listening; a second close is a no-op", async () => {
     const channel = programmableChannel();
     const closes: number[] = [];
 
@@ -250,9 +250,41 @@ describe("createWorkerSqlDatabase", () => {
     const before = channel.listenerCount();
 
     close();
+    close(); // idempotent — must not post a second close op or double-remove the listener.
     await flush();
 
     expect(closes).toHaveLength(1);
     expect(channel.listenerCount()).toBe(before - 1);
+  });
+
+  it("close() rejects an in-flight request instead of hanging it forever", async () => {
+    const channel = programmableChannel();
+
+    // Answer `open`, then NEVER answer the `exec` — the worker went away mid-request.
+    channel.onRequest((request) => {
+      if (request.op === "open") channel.sendToClient({ id: request.id, ok: true });
+    });
+
+    const { db, close } = await createWorkerSqlDatabase(channel.clientPort, opts);
+    const inflight = db.prepare("SELECT 1").all([]);
+
+    close();
+
+    await expect(inflight).rejects.toThrow(/closed with a request in flight/);
+  });
+
+  it("a statement issued after close() rejects loudly rather than hanging", async () => {
+    const channel = programmableChannel();
+
+    channel.onRequest((request) => {
+      if (request.op === "open") channel.sendToClient({ id: request.id, ok: true });
+    });
+
+    const { db, close } = await createWorkerSqlDatabase(channel.clientPort, opts);
+
+    close();
+
+    await expect(db.exec("SELECT 1")).rejects.toThrow(/connection is closed/);
+    await expect(db.prepare("SELECT 1").all([])).rejects.toThrow(/connection is closed/);
   });
 });
