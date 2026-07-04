@@ -9,7 +9,9 @@
     // which ships its types AS SOURCE (`"types": "./src/index.ts"`) — so tsc typechecks
     // assets' `client-beacon.ts` (a browser runtime using `document`/`fetch`) under THIS
     // package's lib. The scaffolder's own src is DOM-free; DOM joins ES2023 only to admit
-    // that imported client source, exactly as `@lesto/assets` itself carries DOM for `@lesto/ui`.
+    // that imported client source, exactly as `@lesto/assets` and `@lesto/ui` carry DOM for the
+    // browser runtimes THEY ship. (Dragon: this is the types-as-source DOM tax — ANY package whose
+    // program imports `@lesto/assets` inherits it; fix at the root, not per-package, if it recurs.)
     "lib": ["ES2023", "DOM"]
   },
 
