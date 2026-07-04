@@ -47,7 +47,7 @@ test.beforeAll(async () => {
   // Snapshot the island source so the edit test can restore it no matter how it ends.
   originalIsland = await readFile(ISLAND_FILE, "utf8");
 
-  const devProc = spawnDev(LESTO_BIN, APP_DIR, PORT);
+  const devProc = await spawnDev(LESTO_BIN, APP_DIR, PORT);
   dev = devProc.child;
 
   await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output, hasExited: devProc.hasExited });

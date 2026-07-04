@@ -49,7 +49,7 @@ let originalPage: string;
 test.beforeAll(async () => {
   originalPage = await readFile(PAGE_FILE, "utf8");
 
-  const devProc = spawnDev(LESTO_BIN, APP_DIR, PORT);
+  const devProc = await spawnDev(LESTO_BIN, APP_DIR, PORT);
   dev = devProc.child;
 
   await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output, hasExited: devProc.hasExited });

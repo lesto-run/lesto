@@ -10,6 +10,9 @@ import type { ChildProcess } from "node:child_process";
  * This module carries BOTH needs as OPTIONAL fields on one options object, so neither caller
  * forces a mode flag, and adopts the hardened readiness behaviour (any-response, per-attempt
  * abort, `Sec-Fetch-Site` header) for every caller.
+ *
+ * `spawnDev` additionally probes the fixed port BEFORE spawning (see {@link assertPortAvailable}) so
+ * a dev server leaked by a prior crashed run can't be silently adopted as a false-green.
  */
 
 /** Optional hardening hooks for {@link waitForServer}; both independently optional. */
@@ -96,12 +99,49 @@ export interface DevProcess {
    * so a spec on a fixed port fails fast on a dead child instead of polling a corpse for the full
    * timeout. Reflects real state (flipped by the `exit`/`error` listeners), never a constant.
    *
-   * Does NOT defend against a live SQUATTER (a dev server leaked by a prior crashed run, already
-   * answering the fixed port): the first probe succeeds against it and `waitForServer` returns
-   * BEFORE our own child's EADDRINUSE death flips this flag. Closing that needs a pre-spawn port
-   * probe — tracked in L-b5186728.
+   * Does NOT itself defend against a live SQUATTER (a dev server leaked by a prior crashed run,
+   * already answering the fixed port): the first probe would succeed against it and `waitForServer`
+   * would return BEFORE our own child's EADDRINUSE death flips this flag. That case is closed
+   * separately, at the source, by {@link spawnDev}'s pre-spawn {@link assertPortAvailable} probe
+   * (L-b5186728). This flag remains for the complementary case it does cover: OUR OWN child dying
+   * at (or after) boot without ever answering.
    */
   hasExited: () => boolean;
+}
+
+/**
+ * Throw if anything is ALREADY answering `port` before we spawn our own dev server on it — the real
+ * closure of the live-squatter false-green (L-b5186728).
+ *
+ * A `lesto dev` leaked by a prior crashed run stays LISTENING on a fixed port (the specs pin
+ * 4180-4191). Our new child hasn't bound yet, so {@link waitForServer}'s first fetch answers against
+ * the SQUATTER and returns green — against STALE code — ~500ms BEFORE our own child hits EADDRINUSE,
+ * dies, and flips {@link DevProcess.hasExited} (which nothing re-reads after the green return). So
+ * `hasExited` only narrows a LATE-appearing squatter; probing the port BEFORE spawn closes the
+ * already-listening case deterministically. A page-swap / island-fast-refresh spec is otherwise a
+ * silent false-green when a leaked prior dev serves the same examples dir.
+ *
+ * A refused/reset connection (or a header-timeout on a TCP-accepting-but-silent squatter) means the
+ * port is free to us; only an actual HTTP response proves a squatter is serving it. The refused case
+ * is instant on localhost, so this is ~free on the happy path.
+ */
+export async function assertPortAvailable(port: number): Promise<void> {
+  try {
+    // Any HTTP response — even non-2xx — means SOMETHING is already serving this port. Mirror
+    // waitForServer's request shape (same-origin hint + per-attempt abort) so a slow squatter can't
+    // outrun undici's multi-minute default header timeout and slip past this check.
+    await fetch(`http://127.0.0.1:${port}/`, {
+      headers: { "Sec-Fetch-Site": "same-origin" },
+      signal: AbortSignal.timeout(2_000),
+    });
+  } catch {
+    return; // nothing answered (connection refused / reset / abort) — the port is ours to bind
+  }
+
+  throw new Error(
+    `port ${port} already answering before spawn — stale dev server from a prior crashed run? ` +
+      `Kill it (e.g. \`lsof -ti :${port} | xargs kill\`) and retry.`,
+  );
 }
 
 /**
@@ -114,7 +154,14 @@ export interface DevProcess {
  * `bin` is passed in because specs resolve the `lesto` bin differently: `scaffold-real-install` runs
  * the app's OWN installed shim (`node_modules/.bin/lesto`), the others run the in-repo `packages/cli/src/bin.ts`.
  */
-export function spawnDev(bin: string, appDir: string, port: number): DevProcess {
+export async function spawnDev(bin: string, appDir: string, port: number): Promise<DevProcess> {
+  // Close the live-squatter false-green (L-b5186728) at the source: if a dev server leaked by a prior
+  // crashed run is ALREADY answering this fixed port, waitForServer's first probe would adopt it and
+  // return green against STALE code, well before our own child's EADDRINUSE death flips `hasExited`.
+  // Probe BEFORE spawn so the boot fails loud instead of silently serving a prior run. See
+  // {@link assertPortAvailable}.
+  await assertPortAvailable(port);
+
   const child = spawn("bun", [bin, "dev", "--port", String(port)], {
     cwd: appDir,
     stdio: "pipe",

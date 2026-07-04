@@ -67,7 +67,7 @@ test.beforeAll(async () => {
   if (pkg.devDependencies) delete pkg.devDependencies["@lesto/island-dev"];
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
 
-  const devProc = spawnDev(LESTO_BIN, appDir, PORT);
+  const devProc = await spawnDev(LESTO_BIN, appDir, PORT);
   dev = devProc.child;
 
   await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output, hasExited: devProc.hasExited });

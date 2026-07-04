@@ -90,7 +90,7 @@ test.beforeAll(async () => {
   await run("bun", [LESTO_BIN, "build"], appDir);
 
   // 4. Boot `lesto dev` against the scaffolded app on a private port.
-  const devProc = spawnDev(LESTO_BIN, appDir, PORT);
+  const devProc = await spawnDev(LESTO_BIN, appDir, PORT);
   dev = devProc.child;
 
   await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output, hasExited: devProc.hasExited });

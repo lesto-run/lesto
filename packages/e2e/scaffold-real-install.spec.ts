@@ -156,7 +156,7 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
     // mismatch), so booting it here would hang this hook for the full 60s deadline for nothing. The
     // hydration test below is `test.skip`-ped on the SAME gate, so the two move together at the 0.1.2 bump.
     if (!DEV_BOOT_SKIPPED) {
-      const devProc = spawnDev(lestoBin(appDir), appDir, PORT_PUBLISHED);
+      const devProc = await spawnDev(lestoBin(appDir), appDir, PORT_PUBLISHED);
       dev = devProc.child;
 
       await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 60_000, {
@@ -303,7 +303,7 @@ test.describe("current-tree reconstruction — non-hoisting (isolated) linker @t
     await run("bun", [lestoBin(appDir), "build"], appDir);
 
     // Boot `lesto dev` (the current-tree scaffold declares @lesto/island-dev → the Vite path).
-    const devProc = spawnDev(lestoBin(appDir), appDir, PORT_TREE);
+    const devProc = await spawnDev(lestoBin(appDir), appDir, PORT_TREE);
     dev = devProc.child;
 
     await waitForServer(`http://127.0.0.1:${PORT_TREE}/`, 60_000, {

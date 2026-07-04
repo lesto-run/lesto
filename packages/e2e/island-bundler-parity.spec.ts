@@ -95,9 +95,11 @@ test.beforeAll(async () => {
   // The ONLY difference: the Bun-path app does not declare the island-dev peer.
   await dropIslandDevPeer(bunApp);
 
-  const bun = spawnDev(LESTO_BIN, bunApp, BUN_PORT);
-  const vite = spawnDev(LESTO_BIN, viteApp, VITE_PORT);
+  // Assign each child handle right after its spawn: spawnDev's pre-spawn probe can throw between the
+  // two (a squatter on the vite port), and afterAll must still be able to kill an already-booted bun.
+  const bun = await spawnDev(LESTO_BIN, bunApp, BUN_PORT);
   bunDev = bun.child;
+  const vite = await spawnDev(LESTO_BIN, viteApp, VITE_PORT);
   viteDev = vite.child;
 
   await Promise.all([

@@ -57,10 +57,12 @@ let devB: ChildProcess | undefined;
 
 test.beforeAll(async () => {
   // Start both BEFORE waiting: they must be up at the same time for the collision check to
-  // mean anything (a sequential boot+shutdown would free the ports and never collide).
-  const a = spawnDev(LESTO_BIN, APP_DIR, PORT_A);
-  const b = spawnDev(LESTO_BIN, APP_DIR, PORT_B);
+  // mean anything (a sequential boot+shutdown would free the ports and never collide). The
+  // awaits here are only the fast pre-spawn port probes; both children are still spawned before
+  // the Promise.all below waits on either.
+  const a = await spawnDev(LESTO_BIN, APP_DIR, PORT_A);
   devA = a.child;
+  const b = await spawnDev(LESTO_BIN, APP_DIR, PORT_B);
   devB = b.child;
 
   await Promise.all([
