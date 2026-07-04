@@ -92,9 +92,14 @@ export interface DevProcess {
   child: ChildProcess;
   output: () => string;
   /**
-   * `true` once the child has exited — feeds {@link WaitForServerOptions.hasExited} so a spec on a
-   * fixed port fails fast on a dead child instead of polling a corpse (or adopting a squatter) for
-   * the full timeout. Reflects real exit state (flipped by the `exit` listener), never a constant.
+   * `true` once the child has exited OR failed to spawn — feeds {@link WaitForServerOptions.hasExited}
+   * so a spec on a fixed port fails fast on a dead child instead of polling a corpse for the full
+   * timeout. Reflects real state (flipped by the `exit`/`error` listeners), never a constant.
+   *
+   * Does NOT defend against a live SQUATTER (a dev server leaked by a prior crashed run, already
+   * answering the fixed port): the first probe succeeds against it and `waitForServer` returns
+   * BEFORE our own child's EADDRINUSE death flips this flag. Closing that needs a pre-spawn port
+   * probe — tracked in L-b5186728.
    */
   hasExited: () => boolean;
 }
@@ -129,6 +134,14 @@ export function spawnDev(bin: string, appDir: string, port: number): DevProcess 
   child.on("exit", (code, signal) => {
     exited = true;
     buffer += `\n[lesto dev exited code=${code ?? "null"} signal=${signal ?? "null"}]`;
+  });
+  // A spawn-level failure (ENOENT `bun`, EMFILE on a loaded runner) emits `error` and NEVER `exit`.
+  // Without this listener the ChildProcess EventEmitter would throw ERR_UNHANDLED_ERROR and crash the
+  // Playwright worker, and `exited` would stay false — so waitForServer would poll a process that was
+  // never alive. Flip the same flag so the boot failure surfaces fast, with its cause named.
+  child.on("error", (err) => {
+    exited = true;
+    buffer += `\n[lesto dev spawn error: ${err.message}]`;
   });
 
   return { child, output: () => buffer, hasExited: () => exited };
