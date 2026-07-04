@@ -587,7 +587,25 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
    */
   function snapshotCursor(entry: ShapeEntry): Cursor {
     if (entry.ring !== undefined && liveIdentity !== undefined) {
-      return encodeResumeCursor({ ...liveIdentity, lsn: entry.ring.latestLsn() ?? LSN_BASE });
+      const ringIdentity = entry.ring.identity();
+      const latest = entry.ring.latestLsn();
+
+      // Stamp the shape's latest applied LSN only when the ring belongs to the SAME identity the
+      // live feed is on now. In a narrow post-failover window a change on ANOTHER table advances
+      // `liveIdentity` to the new (systemId, timelineId) while this shape's ring still holds
+      // pre-failover entries — stamping its `latest` would mint a new-identity/stale-timeline-LSN
+      // mix (`v1:newId:newTl:<old-lsn>`). Fall back to the `0/0` baseline instead, so the cursor is
+      // obviously-correct. An empty ring (no change yet, or all evicted) also baselines here.
+      if (
+        ringIdentity !== undefined &&
+        latest !== undefined &&
+        ringIdentity.systemId === liveIdentity.systemId &&
+        ringIdentity.timelineId === liveIdentity.timelineId
+      ) {
+        return encodeResumeCursor({ ...liveIdentity, lsn: latest });
+      }
+
+      return encodeResumeCursor({ ...liveIdentity, lsn: LSN_BASE });
     }
 
     return pollCursor(entry);

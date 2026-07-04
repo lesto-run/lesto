@@ -211,6 +211,16 @@ export class ShapeReplayRing {
   }
 
   /**
+   * The {@link SystemIdentity} the retained entries belong to, or `undefined` before the first
+   * change. A caller stamping a cursor from {@link latestLsn} must check this equals the live
+   * identity first: a failover/restore can leave the ring holding pre-failover entries (a
+   * stale-timeline LSN) after another table's change already advanced the live identity.
+   */
+  identity(): SystemIdentity | undefined {
+    return this.#identity;
+  }
+
+  /**
    * Record a delivered change under `identity`. A change whose identity differs from the ring's
    * current one (a failover/restore crossed mid-life) resets the ring first, so it never mixes two
    * WAL-position spaces. Then append and evict what fell out of the retained window.

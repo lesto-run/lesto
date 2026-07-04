@@ -966,6 +966,31 @@ describe("LSN-exact resume (Inc4) — replay-or-re-snapshot on reconnect", () =>
     e.stop();
   });
 
+  it("uses the `0/0` baseline when the ring's identity is stale vs the live identity (post-failover)", async () => {
+    const { src, e } = replEngine();
+    await e.subscribe(room1Shape(), () => {}); // keep the shape (+ its ring) alive
+
+    // A change on THIS shape under the pre-failover identity (sysA/1): its ring records 0/50.
+    src.emit(ins(1, 1, "0/50"));
+
+    // A failover bumps the WAL timeline. The first post-failover change lands on ANOTHER table, so
+    // it advances the live identity to sysA/2 while this shape's ring still holds sysA/1 @ 0/50.
+    src.emit({
+      op: "insert",
+      table: "rooms",
+      newImage: { id: "1", name: "general" },
+      commitLSN: "0/60",
+      systemId: "sysA",
+      timelineId: 2,
+    });
+
+    const sub = await e.subscribe(room1Shape(), () => {});
+    // Ring identity (sysA/1) != live identity (sysA/2) → stamp the `0/0` baseline, NOT the stale
+    // 0/50: the cursor must never mix the new identity with a pre-failover LSN (`v1:sysA:2:0/50`).
+    expect(sub.cursor).toBe("v1:sysA:2:0/0");
+    e.stop();
+  });
+
   it("rejects a change with a malformed commit LSN at ingest — routes to onError, never poisons the ring", async () => {
     const src = fakeSource();
     const errors: unknown[] = [];
