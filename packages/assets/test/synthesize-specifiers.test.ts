@@ -92,8 +92,18 @@ function importedPackages(source: string): Set<string> {
 
 // A representative spread: an eager island, a lazy (dynamic-import) island, and the dev/prod +
 // RUM-sample-rate knobs — so the parse covers every static-import shape the synthesizer emits.
-const eager: IslandFile = { name: "Account", importPath: "/app/islands/account.tsx", lazy: false, ssr: false };
-const lazy: IslandFile = { name: "Chart", importPath: "/app/islands/chart.tsx", lazy: true, ssr: false };
+const eager: IslandFile = {
+  name: "Account",
+  importPath: "/app/islands/account.tsx",
+  lazy: false,
+  ssr: false,
+};
+const lazy: IslandFile = {
+  name: "Chart",
+  importPath: "/app/islands/chart.tsx",
+  lazy: true,
+  ssr: false,
+};
 
 describe("synthesized entry — every bare specifier is a scaffold-declared package", () => {
   it.each([
