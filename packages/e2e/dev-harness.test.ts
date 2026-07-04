@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createTcpServer } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,7 +19,9 @@ import { assertPortAvailable, spawnDev, waitForServer } from "./dev-harness";
 // link-workspace.test.ts, via `bunx vitest run packages/e2e/dev-harness.test.ts`.
 //
 // spawnDev runs `bun <bin> dev --port <port>`; here <bin> is a throwaway script that ignores its argv,
-// so the child never binds the port (its value is cosmetic) and either exits at once or sleeps.
+// so the child never BINDS the port and either exits at once or sleeps. The port is NOT cosmetic though:
+// spawnDev now network-probes it before spawning (assertPortAvailable), so 4932/4933 are load-bearing
+// preconditions — the fixtures below assume nothing is already listening there.
 describe("dev-harness fail-fast guard (spawnDev.hasExited → waitForServer)", () => {
   let dir: string;
 
@@ -100,6 +103,30 @@ async function startSquatter(): Promise<{ port: number; close: () => Promise<voi
 }
 
 /**
+ * A raw-TCP listener that ACCEPTS the connection but never sends a byte — a wedged/cold dev server
+ * that has bound the port but isn't answering HTTP yet. On loopback a free port refuses instantly, so
+ * only an occupied-but-stalled port makes the probe's 2s timer fire; this stands that case up. Held
+ * sockets are destroyed on close so `server.close` can actually resolve.
+ */
+async function startSilentAcceptor(): Promise<{ port: number; close: () => Promise<void> }> {
+  const sockets = new Set<Socket>();
+  const server = createTcpServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+
+  return {
+    port: (server.address() as AddressInfo).port,
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+/**
  * The pre-spawn port probe (L-b5186728) — the REAL closure of the live-squatter false-green that
  * `hasExited` (above) structurally cannot close. hasExited only fires AFTER our own child dies of
  * EADDRINUSE, which is AFTER waitForServer's first probe already answered green against the squatter.
@@ -122,6 +149,20 @@ describe("pre-spawn live-squatter guard (assertPortAvailable → spawnDev)", () 
 
     try {
       await expect(assertPortAvailable(port)).rejects.toThrow(/already answering/);
+    } finally {
+      await close();
+    }
+  });
+
+  it("fails CLOSED when a port accepts the connection but never answers (a wedged squatter, not a free port)", async () => {
+    // The fail-open arm a red-team review caught: on loopback a free port refuses INSTANTLY, so the 2s
+    // timer can only fire on an occupied-but-stalled port. Treating that timeout as "free" (the prior
+    // behavior) would spawn into EADDRINUSE and hand the slow-squatter race back to waitForServer. The
+    // probe must instead throw. Remove the `signal.aborted` branch and this reverts to resolving → RED.
+    const { port, close } = await startSilentAcceptor();
+
+    try {
+      await expect(assertPortAvailable(port)).rejects.toThrow(/sent no response within 2s/);
     } finally {
       await close();
     }

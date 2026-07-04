@@ -113,34 +113,52 @@ export interface DevProcess {
  * Throw if anything is ALREADY answering `port` before we spawn our own dev server on it — the real
  * closure of the live-squatter false-green (L-b5186728).
  *
- * A `lesto dev` leaked by a prior crashed run stays LISTENING on a fixed port (the specs pin
- * 4180-4191). Our new child hasn't bound yet, so {@link waitForServer}'s first fetch answers against
- * the SQUATTER and returns green — against STALE code — ~500ms BEFORE our own child hits EADDRINUSE,
- * dies, and flips {@link DevProcess.hasExited} (which nothing re-reads after the green return). So
- * `hasExited` only narrows a LATE-appearing squatter; probing the port BEFORE spawn closes the
- * already-listening case deterministically. A page-swap / island-fast-refresh spec is otherwise a
- * silent false-green when a leaked prior dev serves the same examples dir.
+ * A `lesto dev` leaked by a prior crashed run — or this suite's OWN previous attempt still dying — stays
+ * LISTENING on a fixed port (the specs pin fixed ports in the 4187-4199 range). Our new child hasn't
+ * bound yet, so {@link waitForServer}'s first fetch answers against the SQUATTER and returns green —
+ * against STALE code — ~500ms BEFORE our own child hits EADDRINUSE, dies, and flips
+ * {@link DevProcess.hasExited} (which nothing re-reads after the green return). So `hasExited` only
+ * narrows a LATE-appearing squatter; probing the port BEFORE spawn closes the already-listening case
+ * deterministically. A page-swap / island-fast-refresh spec is otherwise a silent false-green when a
+ * leaked prior dev serves the same examples dir.
  *
- * A refused/reset connection (or a header-timeout on a TCP-accepting-but-silent squatter) means the
- * port is free to us; only an actual HTTP response proves a squatter is serving it. The refused case
- * is instant on localhost, so this is ~free on the happy path.
+ * Classification (loopback makes this crisp): a genuinely-free 127.0.0.1 port refuses the connection
+ * INSTANTLY (kernel RST → the fetch rejects long before the 2s timer), so ONLY a refused/reset reject
+ * means "free". An actual HTTP response OR a FIRED timeout (something accepted the connection but
+ * stalled — a wedged/cold squatter) both mean "occupied", and both throw. Unlike {@link waitForServer},
+ * which RETRIES on a per-attempt timeout, this one-shot probe fails CLOSED on it: treating a stalled
+ * acceptor as free would spawn into an EADDRINUSE and hand the slow-squatter race straight back. The
+ * happy path (free port) is instant.
  */
 export async function assertPortAvailable(port: number): Promise<void> {
+  // Own the signal so we can tell a fired timeout (stalled acceptor → occupied) from a fast connection
+  // reject (refused/reset → free) portably, without inspecting undici/bun-specific error shapes.
+  const signal = AbortSignal.timeout(2_000);
+
   try {
-    // Any HTTP response — even non-2xx — means SOMETHING is already serving this port. Mirror
-    // waitForServer's request shape (same-origin hint + per-attempt abort) so a slow squatter can't
-    // outrun undici's multi-minute default header timeout and slip past this check.
+    // Any HTTP response — even non-2xx — means SOMETHING is already serving this port. `redirect:
+    // "manual"` so a squatter answering a 3xx still counts as answering, rather than chasing it to a
+    // possibly-dead target whose reject we'd misread as a free port.
     await fetch(`http://127.0.0.1:${port}/`, {
       headers: { "Sec-Fetch-Site": "same-origin" },
-      signal: AbortSignal.timeout(2_000),
+      redirect: "manual",
+      signal,
     });
   } catch {
-    return; // nothing answered (connection refused / reset / abort) — the port is ours to bind
+    if (signal.aborted) {
+      throw new Error(
+        `port ${port} accepted a connection but sent no response within 2s before spawn — a wedged ` +
+          `dev server (this suite's own prior attempt, or a prior run) is holding it. ` +
+          `Kill it (e.g. \`lsof -ti :${port} | xargs kill\`) and retry.`,
+      );
+    }
+
+    return; // connection refused/reset (not a timeout) — the port is ours to bind
   }
 
   throw new Error(
-    `port ${port} already answering before spawn — stale dev server from a prior crashed run? ` +
-      `Kill it (e.g. \`lsof -ti :${port} | xargs kill\`) and retry.`,
+    `port ${port} already answering before spawn — a dev server (this suite's own prior attempt, or a ` +
+      `prior crashed run) is holding it. Kill it (e.g. \`lsof -ti :${port} | xargs kill\`) and retry.`,
   );
 }
 
