@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "lesto dev",
-    "build": "bun --bun lesto build",
-    "deploy": "bun --bun lesto build && wrangler deploy",
+    "build": "lesto build",
+    "deploy": "bun run build && wrangler deploy",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -17,6 +17,7 @@
     "@lesto/content-core": "workspace:*",
     "@lesto/content-markdown": "workspace:*",
     "@lesto/kernel": "workspace:*",
+    "@lesto/observability": "workspace:*",
     "@lesto/runtime": "workspace:*",
     "@lesto/seo": "workspace:*",
     "@lesto/sites": "workspace:*",

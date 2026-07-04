@@ -1202,6 +1202,7 @@
         "@lesto/content-core": "workspace:*",
         "@lesto/content-markdown": "workspace:*",
         "@lesto/kernel": "workspace:*",
+        "@lesto/observability": "workspace:*",
         "@lesto/runtime": "workspace:*",
         "@lesto/seo": "workspace:*",
         "@lesto/sites": "workspace:*",
