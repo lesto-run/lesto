@@ -57,3 +57,15 @@ jobs:
       - name: Real-registry (published 0.1.1) + non-hoisting (current-tree) scaffold install smoke
         working-directory: packages/e2e
         run: bun run test:scaffold-real
+
+      # On failure, keep Playwright's trace/screenshot/error-context so the never-run legs are
+      # debuggable from the artifact without a re-run. (The dev server's own boot output is captured
+      # into the test's error message by `spawnDev` in the spec — this is the browser-side half.)
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaffold-real-install-results
+          path: packages/e2e/test-results/**
+          retention-days: 14
+          if-no-files-found: warn

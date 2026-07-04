@@ -61,6 +61,11 @@ const PORT_TREE = 4191;
 // that actually guards the current tree (`3fd4941`/`53cdbfc`). `--workers=1` (in the `test:scaffold-real`
 // script) keeps the two independent groups from running their heavy installs in parallel.
 
+// Retain a full Playwright trace + a screenshot whenever a browser test FAILS, so a hydration
+// failure off a real install is debuggable from the uploaded CI artifact (the dev server's own
+// boot output is captured separately by `spawnDev`). Scoped to this spec; other e2e jobs unchanged.
+test.use({ trace: "retain-on-failure", screenshot: "only-on-failure" });
+
 /** Run a command to completion, rejecting on a non-zero exit (captures stderr for the message). */
 function run(command: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -81,8 +86,12 @@ function run(command: string, args: string[], cwd: string): Promise<void> {
   });
 }
 
-/** Poll the dev server until it answers, or time out. */
-async function waitForServer(url: string, timeoutMs: number): Promise<void> {
+/** Poll the dev server until it answers, or time out — naming the captured dev output on failure. */
+async function waitForServer(
+  url: string,
+  timeoutMs: number,
+  devOutput?: () => string,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
 
   for (;;) {
@@ -94,7 +103,14 @@ async function waitForServer(url: string, timeoutMs: number): Promise<void> {
       // not up yet
     }
 
-    if (Date.now() > deadline) throw new Error(`dev server never answered at ${url}`);
+    if (Date.now() > deadline) {
+      const tail = devOutput?.().trim();
+
+      throw new Error(
+        `dev server never answered at ${url}` +
+          (tail ? `\n--- lesto dev output ---\n${tail}` : " (no dev output was captured)"),
+      );
+    }
 
     await new Promise((r) => setTimeout(r, 200));
   }
@@ -103,6 +119,27 @@ async function waitForServer(url: string, timeoutMs: number): Promise<void> {
 /** The app's own installed `lesto` bin (a node shim; run under `bun` so `Bun.build` is defined). */
 function lestoBin(appDir: string): string {
   return join(appDir, "node_modules", ".bin", "lesto");
+}
+
+/**
+ * Boot `lesto dev`, capturing its stdout+stderr into a rolling buffer. The dev child's output is
+ * otherwise dropped (`stdio: "pipe"` with no reader), so a boot failure surfaces only as an opaque
+ * "never answered" — the buffer is what {@link waitForServer} appends to that error to name the cause.
+ */
+function spawnDev(appDir: string, port: number): { child: ChildProcess; output: () => string } {
+  const child = spawn("bun", [lestoBin(appDir), "dev", "--port", String(port)], {
+    cwd: appDir,
+    stdio: "pipe",
+  });
+
+  let buffer = "";
+  const capture = (chunk: Buffer): void => {
+    buffer += chunk.toString();
+  };
+  child.stdout?.on("data", capture);
+  child.stderr?.on("data", capture);
+
+  return { child, output: () => buffer };
 }
 
 /** Assert `out/client.js` is the Preact island bundle — never drags React's server renderer. */
@@ -143,12 +180,10 @@ test.describe("real-registry install — published 0.1.1, hoisted layout @publis
     await run("bun", [lestoBin(appDir), "build"], appDir);
 
     // Boot `lesto dev` (published 0.1.1 declares no island-dev peer → the Bun dev path).
-    dev = spawn("bun", [lestoBin(appDir), "dev", "--port", String(PORT_PUBLISHED)], {
-      cwd: appDir,
-      stdio: "pipe",
-    });
+    const devProc = spawnDev(appDir, PORT_PUBLISHED);
+    dev = devProc.child;
 
-    await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 60_000);
+    await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 60_000, devProc.output);
   });
 
   test.afterAll(async () => {
@@ -278,12 +313,10 @@ test.describe("current-tree reconstruction — non-hoisting (isolated) linker @t
     await run("bun", [lestoBin(appDir), "build"], appDir);
 
     // Boot `lesto dev` (the current-tree scaffold declares @lesto/island-dev → the Vite path).
-    dev = spawn("bun", [lestoBin(appDir), "dev", "--port", String(PORT_TREE)], {
-      cwd: appDir,
-      stdio: "pipe",
-    });
+    const devProc = spawnDev(appDir, PORT_TREE);
+    dev = devProc.child;
 
-    await waitForServer(`http://127.0.0.1:${PORT_TREE}/`, 60_000);
+    await waitForServer(`http://127.0.0.1:${PORT_TREE}/`, 60_000, devProc.output);
   });
 
   test.afterAll(async () => {
