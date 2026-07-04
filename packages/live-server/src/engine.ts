@@ -259,9 +259,12 @@ function resumeFor(entry: ShapeEntry, since: ResumeCursor | undefined): ShapeRes
  */
 export interface ReplicationSourceConfig {
   /**
-   * The change feed to consume — a started {@link ChangeSource} (its `start`/`stop` slot lifecycle
-   * is the caller's to own; the engine only subscribes to `onChange`). The feed is FULL and
-   * unfiltered; the engine applies the shape's authorization to it.
+   * The change feed to consume — a {@link ChangeSource} whose `start`/`stop` slot lifecycle is the
+   * caller's to own (the engine only subscribes to `onChange` + `onIdentity`). The feed is FULL and
+   * unfiltered; the engine applies the shape's authorization to it. **Construct the engine BEFORE
+   * `start()`ing the source:** the engine subscribes to `onIdentity` at construction, and a source
+   * fires its first identity at start — so an engine built after start misses the first-connect
+   * reveal and its failover resync silently degrades to change-gated until the next reconnect.
    */
   readonly source: ChangeSource;
 
@@ -337,10 +340,13 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
   let ticking = false;
 
   /**
-   * The live database's identity, captured from the replication feed (every change is stamped with
-   * it — Inc1). It anchors a fresh shape's v1 snapshot cursor: a reconnecting client compares its
-   * cursor's `(systemId, timelineId)` against this to decide replay-vs-re-snapshot. `undefined`
-   * until the first change flows (on the poll path it stays `undefined`, and the v0 cursor is used).
+   * The live database's identity, revealed by the replication source — at every (re)connect's
+   * `IDENTIFY_SYSTEM` (the `onIdentity` hook, before any change) AND stamped on every change (Inc1).
+   * It anchors a fresh shape's v1 snapshot cursor: a reconnecting client compares its cursor's
+   * `(systemId, timelineId)` against this to decide replay-vs-re-snapshot, and a CHANGE in it drives
+   * the failover resync (see {@link revealIdentity}). `undefined` until the first reveal — the
+   * source's `onIdentity` at connect, or (if the engine subscribed after start) the first change; on
+   * the poll path it stays `undefined` and the v0 cursor is used.
    */
   let liveIdentity: SystemIdentity | undefined;
 
@@ -621,9 +627,17 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
   /**
    * The wire cursor a subscribe hands back with its snapshot. On the v1 path, anchor it to the live
    * identity + the shape's latest applied LSN (or the `0/0` baseline before any change), so a
-   * reconnecting client can prove continuity against the ring. Before any change has revealed the
-   * identity — and on the whole poll path — fall back to the (non-resumable) v0 cursor, which safely
-   * forces a re-snapshot on reconnect.
+   * reconnecting client can prove continuity against the ring. Before the identity has been revealed
+   * — and on the whole poll path — fall back to the (non-resumable) v0 cursor, which safely forces a
+   * re-snapshot on reconnect.
+   *
+   * NB since the `onIdentity` hook reveals the identity at CONNECT (not only at the first change), a
+   * shape subscribing before any change now anchors to `v1:sysId:tl:0/0` rather than `v0:0`. That is
+   * sound — a reconnect from `0/0` replays the whole ring idempotently — but it drops the incidental
+   * full-re-snapshot that a `v0:0` reconnect used to force, which had healed a change lost in the
+   * unfenced seed↔tail window (`L-85e3eb10`) for a not-yet-tailed shape. That window is an accepted,
+   * separately-tracked hazard (documented as "diverges until re-subscribe"), and the heal never
+   * applied once any change had flowed — so this is a conscious narrowing, not a new guarantee lost.
    */
   function snapshotCursor(entry: ShapeEntry): Cursor {
     if (entry.ring !== undefined && liveIdentity !== undefined) {
