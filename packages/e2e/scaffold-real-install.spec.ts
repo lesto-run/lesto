@@ -159,7 +159,12 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
       const devProc = await spawnDev(lestoBin(appDir), appDir, PORT_PUBLISHED);
       dev = devProc.child;
 
-      await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 60_000, {
+      // TEMPORARY DISCRIMINATOR PROBE (L-27285131): 300s (not 60s) to tell a TRUE HANG from a merely
+      // slow first-request Vite/@prefresh dep-optimize under the hoisted layout on CI Linux. If it
+      // still never answers at 300s → hang → skip the dev-boot for the immutable published 0.1.2; if
+      // it answers late → slow cold start → keep the assertion live at a raised budget. Reverted once
+      // the run resolves this.
+      await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 300_000, {
         output: devProc.output,
         hasExited: devProc.hasExited,
       });
