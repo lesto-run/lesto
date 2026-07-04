@@ -25,6 +25,9 @@
     "@lesto/errors": "workspace:*",
     "jiti": "^2.7.0"
   },
+  "devDependencies": {
+    "@lesto/assets": "workspace:*"
+  },
   "publishConfig": {
     "access": "public"
   },

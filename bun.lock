@@ -737,6 +737,9 @@
         "@lesto/errors": "workspace:*",
         "jiti": "^2.7.0",
       },
+      "devDependencies": {
+        "@lesto/assets": "workspace:*",
+      },
     },
     "packages/csrf": {
       "name": "@lesto/csrf",
@@ -923,7 +926,7 @@
         "@lesto/web": "workspace:*",
       },
       "peerDependencies": {
-        "pg": ">=8",
+        "pg": "^8",
       },
       "optionalPeers": [
         "pg",
@@ -1004,7 +1007,7 @@
         "@lesto/db": "workspace:*",
       },
       "peerDependencies": {
-        "pg": ">=8",
+        "pg": "^8",
       },
       "optionalPeers": [
         "pg",
