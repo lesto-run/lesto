@@ -125,6 +125,18 @@ export function bunBuildClientDeps(appRoot: string): BuildClientDeps {
 
     bundle: (request) => bundle(request, appRoot),
 
+    // Resolve a framework runtime import from the app root exactly as the bundler will —
+    // `Bun.resolveSync` is the same resolver the preact alias plugin uses — so the RUM preflight's
+    // verdict matches what the real bundle would do. It THROWS when the specifier does not resolve;
+    // the preflight reads that as "the dependency is missing" (→ the actionable refusal).
+    resolveClientImport: (specifier) => {
+      try {
+        return Bun.resolveSync(specifier, appRoot);
+      } catch {
+        return undefined;
+      }
+    },
+
     // A first build has no out dir yet — that is "no stale chunks", not an error.
     listOutDir: async (outDir) => {
       try {

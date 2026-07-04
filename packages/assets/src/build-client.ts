@@ -21,6 +21,7 @@ import { isChunkFile } from "./chunks";
 import { AssetsError } from "./errors";
 import { verifyPublicEnvDefine } from "./public-env";
 import type { PublicEnvDefine } from "./public-env";
+import { RUM_MODULE } from "./rum-client";
 import { synthesizeEntry } from "./synthesize";
 import type { IslandFile } from "./synthesize";
 
@@ -123,6 +124,17 @@ export interface BuildClientDeps {
 
   /** Compile the synthesized entry; returns the entry + chunk artifacts. Throws on a failed build. */
   bundle(request: BundleRequest): Promise<readonly BundleArtifact[]>;
+
+  /**
+   * Resolve a framework runtime import (a bare specifier the synthesized entry `import`s, e.g. the
+   * RUM subpath) from the APP ROOT, exactly as the bundler will — returning the resolved path, or
+   * `undefined` when it does not resolve. Drives the build-time preflight that turns a missing
+   * framework dependency into an actionable error at the source instead of an opaque bundler
+   * "failed to resolve" deep in the build. Real impl: `Bun.resolveSync(specifier, appRoot)` in
+   * `bun.ts` (the same resolver the preact alias uses), so the preflight sees the app's REAL
+   * `node_modules` layout in production while a fake answers offline in tests.
+   */
+  resolveClientImport(specifier: string): string | undefined;
 
   /** The names of files currently in the out dir (for the stale-chunk sweep). */
   listOutDir(outDir: string): Promise<readonly string[]>;
@@ -323,6 +335,27 @@ export async function buildClient(
   // page swap up on the Bun path too. Production passes `dev: false`, so the prod
   // bundle ships neither the hook nor the overlay swap.
   const entrySource = synthesizeEntry(islands, { dev: options.mode === "development" });
+
+  // Preflight the framework runtime import the synthesized entry UNCONDITIONALLY carries: browser
+  // RUM is on by default (`RumConfig` has no opt-out), so `synthesizeEntry` always emits
+  // `import … from "@lesto/observability/rum"` — even for an empty islands dir. That makes
+  // `@lesto/observability` a hard, unstated dependency of EVERY app with a client entry. The
+  // scaffold declares it, but a hand-written app need not, and under an isolated per-app
+  // `node_modules` layout the gap surfaces only as an opaque bundler "failed to resolve
+  // @lesto/observability/rum" deep in the build (it has bitten three times). Resolve it from the app
+  // root — exactly as the bundler will — and refuse HERE, loud + actionable (ADR 0011
+  // loud-when-wrong), rather than letting the bundle fail cryptically. Making the RUM injection
+  // conditional on the dep was rejected as fail-open: it would silently drop the UI→API→DB trace the
+  // framework's pitch rests on. (L-a457e604.)
+  if (deps.resolveClientImport(RUM_MODULE) === undefined) {
+    throw new AssetsError(
+      "ASSETS_MISSING_RUM_DEPENDENCY",
+      `the client entry imports "${RUM_MODULE}" — browser RUM (the UI→API→DB trace's browser half) ` +
+        `is on by default — but "@lesto/observability" does not resolve from the app root. Add it to ` +
+        `your dependencies (e.g. \`bun add @lesto/observability\`).`,
+      { module: RUM_MODULE, dependency: "@lesto/observability" },
+    );
+  }
 
   const artifacts = await deps.bundle({
     entrySource,

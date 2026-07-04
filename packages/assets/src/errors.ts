@@ -43,7 +43,19 @@ export type AssetsErrorCode =
    * reads of public names may be injected. The structural mirror of `@lesto/env`'s
    * `ENV_CLIENT_NOT_PUBLIC`, enforced at the bundler boundary.
    */
-  | "ASSETS_SERVER_ENV_LEAK";
+  | "ASSETS_SERVER_ENV_LEAK"
+  /**
+   * The framework UNCONDITIONALLY injects `import … from "@lesto/observability/rum"` into every
+   * synthesized client entry — browser RUM is on by default and `RumConfig` has no opt-out — so
+   * EVERY app with a client entry MUST declare `@lesto/observability`. Nothing else states that
+   * contract, and under an isolated per-app `node_modules` layout a missing dep would otherwise
+   * surface only as an opaque bundler "failed to resolve" deep in the build, far from the cause.
+   * The build-time preflight resolves the RUM import from the APP ROOT and refuses HERE — loud +
+   * actionable (ADR 0011 loud-when-wrong), naming the package to add — instead of letting the
+   * bundler fail cryptically. Making the injection conditional on the dep was rejected as fail-open:
+   * it would silently drop the UI→API→DB trace the framework's pitch rests on.
+   */
+  | "ASSETS_MISSING_RUM_DEPENDENCY";
 
 /** Anything the client-asset pipeline can refuse to do. */
 export class AssetsError extends LestoError<AssetsErrorCode> {

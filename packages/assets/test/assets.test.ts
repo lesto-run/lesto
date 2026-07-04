@@ -235,6 +235,10 @@ function fakeDeps(overrides: Partial<BuildClientDeps> = {}): {
         { kind: "chunk", fileName: "chunk-deadbeef.js", contents: "CHUNK" },
       ] as BundleArtifact[]);
     },
+    // The RUM preflight probe: by default every framework import resolves from the app root (a real
+    // app declares `@lesto/observability`). A test overrides this to `undefined` to simulate the
+    // missing dependency and assert the actionable refusal.
+    resolveClientImport: (specifier) => `/node_modules/${specifier}`,
     listOutDir: () => Promise.resolve([]),
     read: (path) => {
       const value = written.get(path);
@@ -646,6 +650,60 @@ describe("buildClient", () => {
       expect(error).toBeInstanceOf(AssetsError);
       expect((error as AssetsError).code).toBe("ASSETS_NO_ENTRY");
     }
+  });
+
+  it("refuses the build when @lesto/observability/rum does not resolve from the app root — loud + before bundling (L-a457e604)", async () => {
+    // The framework injects the RUM import into EVERY client entry, so `@lesto/observability` is an
+    // unstated hard dependency. When it is missing from the app's node_modules the preflight must
+    // fail LOUD here — naming the package to add — not let the bundler fail with an opaque
+    // "failed to resolve" deep in the build (the trap that bit hand-written apps three times).
+    const probed: string[] = [];
+    const { deps, bundled } = fakeDeps({
+      resolveClientImport: (specifier) => {
+        probed.push(specifier);
+
+        return undefined; // nothing resolves — the app never declared @lesto/observability
+      },
+    });
+
+    try {
+      await buildClient(
+        { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+        deps,
+      );
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(AssetsError);
+      expect((error as AssetsError).code).toBe("ASSETS_MISSING_RUM_DEPENDENCY");
+      // The message explains RUM is on by default and gives the actionable fix (the package to add).
+      expect((error as AssetsError).message).toContain('"@lesto/observability/rum"');
+      expect((error as AssetsError).message).toContain("on by default");
+      expect((error as AssetsError).message).toContain("bun add @lesto/observability");
+      expect((error as AssetsError).details).toMatchObject({
+        module: "@lesto/observability/rum",
+        dependency: "@lesto/observability",
+      });
+    }
+
+    // It probed the RUM subpath specifically, and short-circuited before the bundler ran.
+    expect(probed).toContain("@lesto/observability/rum");
+    expect(bundled).toEqual([]);
+  });
+
+  it("preflights RUM even for an EMPTY islands dir — the RUM import is unconditional (L-a457e604)", async () => {
+    // `synthesizeEntry` emits the RUM import regardless of islands, so the dependency is required
+    // even by an app with zero islands — the preflight must not be islands-gated.
+    const { deps } = fakeDeps({
+      listIslands: () => Promise.resolve([] as IslandFile[]),
+      resolveClientImport: () => undefined,
+    });
+
+    await expect(
+      buildClient(
+        { islandsDir: "/app/islands", outDir: "/out", mode: "production", dialect: "react" },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "ASSETS_MISSING_RUM_DEPENDENCY" });
   });
 
   it("refuses an ssr: true island under the preact dialect, naming the island", async () => {
