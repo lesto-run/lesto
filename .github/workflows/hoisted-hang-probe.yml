@@ -43,7 +43,12 @@ jobs:
       # (the entire reason this exists) is lost.
       fail-fast: false
       matrix:
-        leg: [published, current-tree]
+        # published        — curl probe of the immutable artifact (client-agnostic first-GET proof).
+        # published-harness — the EXACT scaffold-real leg-a Playwright harness (spawnDev/waitForServer),
+        #                     dev-boot force-lifted: the missing matrix cell that discriminates a real
+        #                     conditional hang (RED) from environmental flake (GREEN) at n>=3 (L-3daa1173).
+        # current-tree     — the existing preflight spec against HEAD.
+        leg: [published, published-harness, current-tree]
         attempt: [1, 2, 3]
     name: ${{ matrix.leg }} #${{ matrix.attempt }}
     steps:
@@ -54,27 +59,40 @@ jobs:
         with:
           bun-version: "1.3.5"
 
-      # Node is only needed for the current-tree leg's Playwright shim; pinned to match the other e2e jobs.
+      # Node is needed for the Playwright shim on both harness-driven legs; pinned to match the other e2e jobs.
       - name: Set up Node 22
-        if: matrix.leg == 'current-tree'
+        if: matrix.leg != 'published'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      # ── current-tree leg: the existing preflight spec, verbatim (packs HEAD → hoisted-install → boot → first GET) ──
+      # ── both harness legs (current-tree + published-harness) need the repo install + a browser ──
       - name: Install dependencies
-        if: matrix.leg == 'current-tree'
+        if: matrix.leg != 'published'
         run: bun install --frozen-lockfile
 
       - name: Install Playwright browser
-        if: matrix.leg == 'current-tree'
+        if: matrix.leg != 'published'
         working-directory: packages/e2e
         run: bunx playwright install --with-deps chromium
 
+      # ── current-tree leg: the existing preflight spec, verbatim (packs HEAD → hoisted-install → boot → first GET) ──
       - name: Current-tree HOISTED dev-boot preflight (test:scaffold-hoisted-preflight)
         if: matrix.leg == 'current-tree'
         working-directory: packages/e2e
         run: bun run test:scaffold-hoisted-preflight
+
+      # ── published-harness leg: the EXACT leg-a harness that saw the original RED, dev-boot force-lifted ──
+      # `LESTO_FORCE_PUBLISHED_DEV_BOOT=1` flips DEV_BOOT_SKIPPED off (see scaffold-real-install.spec.ts) so
+      # leg-a's `beforeAll` boots `bunx create-lesto@0.1.2` hoisted dev under spawnDev/waitForServer — the same
+      # code path whose `waitForServer` timed out in run 28714591201. `--grep @published-hoisted` scopes to that
+      # one describe. RED here at n>=3 == a reproducible conditional hang (branch c); GREEN == flake (branch b).
+      - name: Published leg-a via the EXACT Playwright harness (force-lifted dev boot)
+        if: matrix.leg == 'published-harness'
+        working-directory: packages/e2e
+        env:
+          LESTO_FORCE_PUBLISHED_DEV_BOOT: "1"
+        run: bunx playwright test scaffold-real-install.spec.ts --workers=1 --grep "@published-hoisted"
 
       # ── published leg: the IMMUTABLE artifact, shell-level first-GET probe (no repo-side fix exists) ──
       - name: Published hoisted `lesto dev` first-GET probe

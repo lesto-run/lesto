@@ -99,7 +99,14 @@ const CREATE_LESTO_VERSION = (
  * `beforeAll` reds on `bunx create-lesto@0.1.3` (404); and if 0.1.3 un-skips onto a still-unfixed dev the
  * hydration test reds. The un-skip conditions + the isolated-install add-on live on L-513dd8a6 / L-9dc62468.
  */
-const DEV_BOOT_SKIPPED = CREATE_LESTO_VERSION === "0.1.2";
+// Force-lift hook for the L-3daa1173 characterization: the `hoisted-hang-probe` workflow sets
+// `LESTO_FORCE_PUBLISHED_DEV_BOOT=1` to boot the published dev under THIS exact harness — the missing
+// matrix cell. The original RED (run 28714591201) was leg-a's `beforeAll` `waitForServer`; a curl probe
+// proved the SERVER answers 0.1.2 3/3, but only re-running the SAME spawnDev/waitForServer harness at n>=3
+// discriminates branch (b) environmental-flake from (c) a conditional harness/product hang. UNSET on every
+// normal path (the nightly, scaffold-real-install.yml, CI), so the version-pinned skip is unchanged there.
+const DEV_BOOT_SKIPPED =
+  CREATE_LESTO_VERSION === "0.1.2" && process.env.LESTO_FORCE_PUBLISHED_DEV_BOOT !== "1";
 
 // Distinct ports per leg (and clear of the fixture webServer's 4180 + the other specs' 4188/4189).
 const PORT_PUBLISHED = 4190;
