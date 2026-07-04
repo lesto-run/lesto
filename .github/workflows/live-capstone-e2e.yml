@@ -10,11 +10,18 @@ name: live-capstone-e2e
 # Chromium via Playwright and asserts durable first paint, offline drain, and cross-tab failover — the
 # test that would have caught the Inc9 class.
 #
-# It is its OWN workflow (not a job in `ci.yml`) for the same reason `benchmarks.yml` / `deploy-examples.yml`
-# are separate: a distinct concern (a browser dependency) with its own lifecycle, and it needs NO Postgres
-# service — the capstone's dev SQLite-poll source drives all four checklist steps (they live above the
-# change source), so this is a plain build-and-serve run. The spec (`packages/e2e/live-capstone-opfs.spec.ts`)
-# owns its own build + server in `beforeAll`, so this workflow only installs deps + the browser and runs it.
+# It needs NO Postgres service — the capstone's dev SQLite-poll source drives all four checklist steps
+# (they live above the change source), so this is a plain build-and-serve run. The spec
+# (`packages/e2e/live-capstone-opfs.spec.ts`) owns its own build + server in `beforeAll`; the workflow
+# installs deps + the chromium browser and runs it. (The shared `packages/e2e/playwright.config.ts` also
+# boots its unused island-fixture webServer on :4180 — harmless, as it does for the sibling e2e specs.)
+#
+# WHY a standalone workflow and NOT a job in `ci.yml` (which is where every OTHER blocking gate lives,
+# including the 7 sibling browser e2e jobs): at authoring time `ci.yml` AND `packages/e2e/package.json`
+# were both held by a concurrent session in this shared worktree, so editing them risked a conflict with
+# the daemon's per-path commits. This is the TEMPORARY shape. Clean end-state (follow-up filed): fold
+# this into `ci.yml` as a `page-swap`-shaped job + add a `test:live-capstone` script to
+# `packages/e2e/package.json`, then delete this file — do it once the holding session clears.
 
 on:
   push:
@@ -30,6 +37,7 @@ concurrency:
 jobs:
   capstone-browser-e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -50,3 +58,14 @@ jobs:
       - name: Capstone OPFS + cross-tab browser e2e (dev SQLite-poll path, no Postgres)
         working-directory: packages/e2e
         run: bunx playwright test live-capstone-opfs.spec.ts
+
+      # A first-of-its-kind browser gate here: on a red run, keep the traces/screenshots so it can be
+      # debugged without a local repro.
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capstone-e2e-results
+          path: packages/e2e/test-results/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -71,11 +71,21 @@ test.describe.configure({ mode: "serial", timeout: 60_000 });
 
 let server: ChildProcess | undefined;
 
-/** Poll the served shell until it answers, or time out. */
-async function waitForServer(url: string, timeoutMs: number): Promise<void> {
+/**
+ * Poll the served shell until it answers, or time out. `hasExited` lets the caller fail fast (and avoid
+ * silently ADOPTING a stale/foreign server squatting on the fixed port) if our own child died first.
+ */
+async function waitForServer(
+  url: string,
+  timeoutMs: number,
+  hasExited?: () => boolean,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
 
   for (;;) {
+    if (hasExited?.() === true)
+      throw new Error(`capstone server process exited before answering ${url}`);
+
     try {
       const response = await fetch(url);
 
@@ -92,15 +102,20 @@ async function waitForServer(url: string, timeoutMs: number): Promise<void> {
 
 /** Run the capstone's `vite build` to completion (the built bundle is what the browser exercises). */
 async function buildCapstone(): Promise<void> {
-  const build = spawn("bun", ["run", "build"], { cwd: APP_DIR, stdio: "pipe" });
+  // Inherit stdout (streams vite's output to the run log AND drains it — an unread "pipe" stdout can
+  // backpressure-hang a chatty child); collect only stderr for the failure message.
+  const build = spawn("bun", ["run", "build"], {
+    cwd: APP_DIR,
+    stdio: ["ignore", "inherit", "pipe"],
+  });
 
   let stderr = "";
 
   build.stderr?.on("data", (chunk) => (stderr += String(chunk)));
-  // A spawn failure (e.g. `bun` missing) folds into a null/non-zero exit code below rather than an
-  // unhandled `error` event — collect it into the reported diagnostics.
-  build.on("error", (error) => (stderr += String(error)));
 
+  // `events.once` attaches its own `error` listener and REJECTS if the child emits `error` before
+  // `close` (e.g. `bun` missing), so a spawn failure surfaces loudly here rather than crashing the
+  // process; a non-zero/absent exit is reported below with the collected stderr.
   const [code] = (await once(build, "close")) as [number | null];
 
   if (code !== 0) {
@@ -133,9 +148,14 @@ test.beforeAll(async () => {
   delete env["LESTO_LIVE_SOURCE"];
   delete env["LESTO_LIVE_PG_URL"];
 
-  server = spawn("bun", ["serve.ts"], { cwd: APP_DIR, stdio: "pipe", env });
+  // Inherit stdio (surfaces serve.ts's logs in the run output AND drains the pipes).
+  server = spawn("bun", ["serve.ts"], { cwd: APP_DIR, stdio: "inherit", env });
 
-  await waitForServer(`${BASE_URL}/`, 60_000);
+  let exited = false;
+
+  server.once("exit", () => (exited = true));
+
+  await waitForServer(`${BASE_URL}/`, 60_000, () => exited);
 });
 
 test.afterAll(() => {
@@ -148,30 +168,20 @@ test("boots the OPFS-SQLite leader and repaints durably after a data-blocked rel
   const nonce = Date.now().toString(36);
   const body = `durable OPFS proof ${nonce}`;
 
-  // Capture browser-side errors up front so the boot-cleanliness assertion sees load-time failures.
-  const consoleErrors: string[] = [];
-
-  page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
-  });
-  page.on("pageerror", (error) => consoleErrors.push(String(error)));
-
-  // The leader must fully come up — its store opened AND the connection started. A DOA OPFS store
-  // (the Inc9 regression) tears the leader bid down before this request, so awaiting it is itself a
-  // gate on the store opening.
+  // The load-bearing Inc9 detector. The leader (and only the leader) opens this stream, and ONLY after
+  // its durable store has opened — so awaiting it gates on the store actually opening. Pre-Inc9,
+  // `openOpfsSqliteDatabase` rejects in every browser → `createLeaderStore` throws → the leader bid
+  // tears down → `connectLiveData` is never called → this request never fires → the await times out RED.
+  //
+  // NB: there is deliberately NO "assert `OpfsSqliteError` is absent from the console" check here. The
+  // app CATCHES an OPFS-open failure and routes it to the `#status` text (main.ts), never
+  // `console.error`/`pageerror` — so such an assertion would be green-forever/decorative (the exact
+  // vacuous-negative-assertion trap this repo codified). The witness below can genuinely go red;
+  // confirmed by a worker-blocked negative control (see this test's commit message).
   const leaderConnected = page.waitForRequest((r) => isLiveData(r.url()), { timeout: 20_000 });
 
   await page.goto(APP_URL);
   await leaderConnected;
-
-  // The exact pre-Inc9 failure was `OpfsSqliteError: Could not open OPFS-SQLite` / `Missing required
-  // OPFS APIs`. Assert none surfaced. (The benign sqlite-wasm "Missing SharedArrayBuffer …" warning is
-  // a console WARN about the plain `opfs` VFS we deliberately don't use — it is not matched here.)
-  const opfsErrors = consoleErrors.filter((text) =>
-    /OpfsSqliteError|Missing required OPFS/i.test(text),
-  );
-
-  expect(opfsErrors, `unexpected OPFS errors on boot: ${opfsErrors.join(" | ")}`).toEqual([]);
 
   // Write a row, and confirm it round-tripped to the server (so it is a real synced row, not just an
   // optimistic overlay) before proving durability.
