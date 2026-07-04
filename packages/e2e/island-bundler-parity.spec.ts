@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-import { spawnDev, waitForServer } from "./dev-harness";
+import { killAndWait, spawnDev, waitForServer } from "./dev-harness";
 import { linkWorkspaceInto } from "./link-workspace";
 
 /**
@@ -97,9 +97,9 @@ test.beforeAll(async () => {
 
   // Assign each child handle right after its spawn: spawnDev's pre-spawn probe can throw between the
   // two (a squatter on the vite port), and afterAll must still be able to kill an already-booted bun.
-  const bun = await spawnDev(LESTO_BIN, bunApp, BUN_PORT);
+  const bun = await spawnDev(LESTO_BIN, bunApp, BUN_PORT, BUN_URL);
   bunDev = bun.child;
-  const vite = await spawnDev(LESTO_BIN, viteApp, VITE_PORT);
+  const vite = await spawnDev(LESTO_BIN, viteApp, VITE_PORT, VITE_URL);
   viteDev = vite.child;
 
   await Promise.all([
@@ -109,8 +109,8 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  bunDev?.kill("SIGTERM");
-  viteDev?.kill("SIGTERM");
+  // Await BOTH children's exits (in parallel) so a retry's pre-spawn probe finds both fixed ports free.
+  await Promise.all([killAndWait(bunDev), killAndWait(viteDev)]);
 
   if (workspace !== undefined) await rm(workspace, { recursive: true, force: true });
 });

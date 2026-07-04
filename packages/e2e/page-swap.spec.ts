@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-import { spawnDev, waitForServer } from "./dev-harness";
+import { killAndWait, spawnDev, waitForServer } from "./dev-harness";
 
 /**
  * Dev page-swap, end to end in a real browser — the "second half" of HMR (DX-parity R2,
@@ -49,14 +49,14 @@ let originalPage: string;
 test.beforeAll(async () => {
   originalPage = await readFile(PAGE_FILE, "utf8");
 
-  const devProc = await spawnDev(LESTO_BIN, APP_DIR, PORT);
+  const devProc = await spawnDev(LESTO_BIN, APP_DIR, PORT, BASE_URL);
   dev = devProc.child;
 
   await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output, hasExited: devProc.hasExited });
 });
 
 test.afterAll(async () => {
-  dev?.kill("SIGTERM");
+  await killAndWait(dev);
 
   // Always restore the page file, even if a test left it edited.
   if (originalPage !== undefined) await writeFile(PAGE_FILE, originalPage);

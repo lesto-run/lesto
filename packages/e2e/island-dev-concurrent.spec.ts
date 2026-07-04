@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
 
-import { spawnDev, waitForServer } from "./dev-harness";
+import { killAndWait, spawnDev, waitForServer } from "./dev-harness";
 
 /**
  * Two concurrent `lesto dev` apps each get their OWN island Fast Refresh server — the
@@ -60,9 +60,9 @@ test.beforeAll(async () => {
   // mean anything (a sequential boot+shutdown would free the ports and never collide). The
   // awaits here are only the fast pre-spawn port probes; both children are still spawned before
   // the Promise.all below waits on either.
-  const a = await spawnDev(LESTO_BIN, APP_DIR, PORT_A);
+  const a = await spawnDev(LESTO_BIN, APP_DIR, PORT_A, URL_A);
   devA = a.child;
-  const b = await spawnDev(LESTO_BIN, APP_DIR, PORT_B);
+  const b = await spawnDev(LESTO_BIN, APP_DIR, PORT_B, URL_B);
   devB = b.child;
 
   await Promise.all([
@@ -71,9 +71,9 @@ test.beforeAll(async () => {
   ]);
 });
 
-test.afterAll(() => {
-  devA?.kill("SIGTERM");
-  devB?.kill("SIGTERM");
+test.afterAll(async () => {
+  // Await BOTH children's exits (in parallel) so a retry's pre-spawn probe finds both fixed ports free.
+  await Promise.all([killAndWait(devA), killAndWait(devB)]);
 });
 
 /** Assert an app's document is served through island-dev's Vite server (not the degraded Bun path). */

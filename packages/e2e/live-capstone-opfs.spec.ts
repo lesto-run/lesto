@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
 
-import { assertPortAvailable, waitForServer } from "./dev-harness";
+import { assertPortAvailable, killAndWait, waitForServer } from "./dev-harness";
 
 /**
  * The Tier-4 v1 capstone's headless-browser REGRESSION GATE (ADR 0042, `L-2e410682`) — the CI guard
@@ -124,7 +124,7 @@ test.beforeAll(async () => {
   // Same live-squatter defense as spawnDev (L-b5186728): if a server leaked by a prior crashed run
   // is already answering this fixed port, adopting it would durably-repaint against STALE state and
   // pass this gate falsely. Probe before spawn so a squatter fails the boot loud.
-  await assertPortAvailable(PORT);
+  await assertPortAvailable(PORT, BASE_URL);
 
   // Inherit stdio (surfaces serve.ts's logs in the run output AND drains the pipes).
   server = spawn("bun", ["serve.ts"], { cwd: APP_DIR, stdio: "inherit", env });
@@ -138,8 +138,8 @@ test.beforeAll(async () => {
   await waitForServer(`${BASE_URL}/`, 60_000, { hasExited: () => exited });
 });
 
-test.afterAll(() => {
-  server?.kill("SIGTERM");
+test.afterAll(async () => {
+  await killAndWait(server);
 });
 
 test("boots the OPFS-SQLite leader and repaints durably after a data-blocked reload (the Inc9 gate)", async ({

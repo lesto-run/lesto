@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-import { spawnDev, waitForServer } from "./dev-harness";
+import { killAndWait, spawnDev, waitForServer } from "./dev-harness";
 
 /**
  * Island Fast Refresh, end to end in a real browser — the proof the unit/transform
@@ -47,14 +47,14 @@ test.beforeAll(async () => {
   // Snapshot the island source so the edit test can restore it no matter how it ends.
   originalIsland = await readFile(ISLAND_FILE, "utf8");
 
-  const devProc = await spawnDev(LESTO_BIN, APP_DIR, PORT);
+  const devProc = await spawnDev(LESTO_BIN, APP_DIR, PORT, BASE_URL);
   dev = devProc.child;
 
   await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output, hasExited: devProc.hasExited });
 });
 
 test.afterAll(async () => {
-  dev?.kill("SIGTERM");
+  await killAndWait(dev);
 
   // Always restore the island file, even if a test left it edited.
   if (originalIsland !== undefined) await writeFile(ISLAND_FILE, originalIsland);

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-import { run, spawnDev, waitForServer } from "./dev-harness";
+import { killAndWait, run, spawnDev, waitForServer } from "./dev-harness";
 import { linkWorkspaceInto } from "./link-workspace";
 
 /**
@@ -90,14 +90,14 @@ test.beforeAll(async () => {
   await run("bun", [LESTO_BIN, "build"], appDir);
 
   // 4. Boot `lesto dev` against the scaffolded app on a private port.
-  const devProc = await spawnDev(LESTO_BIN, appDir, PORT);
+  const devProc = await spawnDev(LESTO_BIN, appDir, PORT, BASE_URL);
   dev = devProc.child;
 
   await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output, hasExited: devProc.hasExited });
 });
 
 test.afterAll(async () => {
-  dev?.kill("SIGTERM");
+  await killAndWait(dev);
 
   await rm(workspace, { recursive: true, force: true });
 });

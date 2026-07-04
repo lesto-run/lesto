@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-import { spawnDev, waitForServer } from "./dev-harness";
+import { killAndWait, spawnDev, waitForServer } from "./dev-harness";
 import { linkWorkspaceInto } from "./link-workspace";
 
 /**
@@ -67,14 +67,14 @@ test.beforeAll(async () => {
   if (pkg.devDependencies) delete pkg.devDependencies["@lesto/island-dev"];
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
 
-  const devProc = await spawnDev(LESTO_BIN, appDir, PORT);
+  const devProc = await spawnDev(LESTO_BIN, appDir, PORT, BASE_URL);
   dev = devProc.child;
 
   await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output, hasExited: devProc.hasExited });
 });
 
 test.afterAll(async () => {
-  dev?.kill("SIGTERM");
+  await killAndWait(dev);
 
   if (workspace !== undefined) await rm(workspace, { recursive: true, force: true });
 });
@@ -100,7 +100,8 @@ test("editing a route file swaps the page in place on the Bun dev path — new m
   // Vite-only before). Wait for it before editing, else the swap could fire before the
   // hook exists and fall back to a full reload (the correct floor, just not the assertion).
   await page.waitForFunction(
-    () => typeof (window as unknown as Record<string, unknown>)["__lestoDevRefreshPage"] === "function",
+    () =>
+      typeof (window as unknown as Record<string, unknown>)["__lestoDevRefreshPage"] === "function",
     undefined,
     { timeout: 15_000 },
   );

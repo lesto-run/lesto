@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
@@ -7,7 +9,7 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { assertPortAvailable, spawnDev, waitForServer } from "./dev-harness";
+import { assertPortAvailable, killAndWait, spawnDev, waitForServer } from "./dev-harness";
 
 // The fail-fast guard added in 9842aec (spawnDev exposes `hasExited`, wired into `waitForServer` at
 // every fixed-port dev spec) fires ONLY when a `lesto dev` child dies at boot — the happy path every
@@ -183,5 +185,112 @@ describe("pre-spawn live-squatter guard (assertPortAvailable → spawnDev)", () 
     } finally {
       await close();
     }
+  });
+
+  it("probes the passed origin, not the port arg — the localhost/::1 seam (L-2d87f1b5)", async () => {
+    // Learn a guaranteed-free port, then release it: the `port` ARG below is free. But `origin` points at
+    // a LIVE squatter, so the probe must follow the origin and throw. This proves `origin` (not `port`)
+    // selects the address polled — the seam that lets a future `localhost` spec probe the same `::1` it
+    // adopts, instead of a `127.0.0.1` a `::1`-only squatter never answers. Hardcode the fetch back to
+    // 127.0.0.1 and this reverts to resolving (free port) → RED.
+    const free = await startSquatter();
+    const freePort = free.port;
+    await free.close();
+
+    const squatter = await startSquatter();
+
+    try {
+      await expect(
+        assertPortAvailable(freePort, `http://127.0.0.1:${squatter.port}`),
+      ).rejects.toThrow(/already answering/);
+    } finally {
+      await squatter.close();
+    }
+  });
+});
+
+/**
+ * killAndWait is the teardown counterpart to the pre-spawn probe (L-2a28bde6): every fixed-port spec's
+ * `afterAll` awaits it so the child has actually EXITED — the port released — before the function
+ * resolves, closing the window where a Playwright retry's `beforeAll` probe finds the dying prior attempt
+ * still bound and burns the one retry. These tests spawn real `bun` children (no port bound, no network),
+ * so they run beside the guards above in the dedicated CI unit step.
+ */
+describe("killAndWait teardown (SIGTERM → await exit, SIGKILL on grace timeout)", () => {
+  let dir: string;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "lesto-killwait-"));
+    // Stays alive on a timer under the DEFAULT SIGTERM disposition (terminate) — a well-behaved dev
+    // server. Announces `ready` on stdout so a test never signals it before it is actually running.
+    await writeFile(
+      join(dir, "alive.mjs"),
+      "process.stdout.write('ready');\nsetInterval(() => {}, 1000);\n",
+    );
+    // TRAPS SIGTERM (installs a no-op handler, overriding the default terminate) and stays alive — a
+    // wedged child whose SIGTERM handler is starved. Only an escalated SIGKILL can free its port. The
+    // handler is installed BEFORE `ready`, so a test that waits for `ready` cannot race the trap.
+    await writeFile(
+      join(dir, "ignore-sigterm.mjs"),
+      "process.on('SIGTERM', () => {});\nprocess.stdout.write('ready');\nsetInterval(() => {}, 1000);\n",
+    );
+  });
+
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("is a null-safe no-op when passed no child", async () => {
+    await expect(killAndWait(undefined)).resolves.toBeUndefined();
+  });
+
+  it("returns at once for an already-exited child instead of awaiting an exit that already fired", async () => {
+    const child = spawn("bun", [join(dir, "alive.mjs")]);
+    await once(child.stdout!, "data");
+    child.kill("SIGKILL");
+    await once(child, "exit"); // dead now — exitCode/signalCode are set, so the guard must short-circuit
+
+    const start = Date.now();
+    // A 10s grace we must NOT wait on: without the already-exited guard, `once(child,"exit")` would
+    // never resolve (exit already fired) and this would hang to the grace/vitest timeout.
+    await killAndWait(child, 10_000);
+
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
+
+  it("SIGTERMs a live child and resolves only once it has actually exited (port freed)", async () => {
+    const child = spawn("bun", [join(dir, "alive.mjs")]);
+    await once(child.stdout!, "data");
+
+    let exited = false;
+    child.on("exit", () => (exited = true));
+
+    const start = Date.now();
+    // Generous 10s grace, but the child honours SIGTERM, so this must return in well under a second —
+    // BECAUSE the child exited, not because the grace elapsed. `exited` proves the await resolved on the
+    // real exit; drop the `await exited` and this could resolve with the child still alive.
+    await killAndWait(child, 10_000);
+
+    expect(exited).toBe(true);
+    expect(Date.now() - start).toBeLessThan(2_000);
+  });
+
+  it("escalates to SIGKILL when SIGTERM is trapped, so a wedged child still dies (~grace)", async () => {
+    const child = spawn("bun", [join(dir, "ignore-sigterm.mjs")]);
+    await once(child.stdout!, "data"); // trap installed
+
+    let exited = false;
+    child.on("exit", () => (exited = true));
+
+    const start = Date.now();
+    await killAndWait(child, 300);
+    const elapsed = Date.now() - start;
+
+    // The child IGNORES SIGTERM, so it can only have died from the escalated SIGKILL. `exited` proves
+    // the kill landed (remove the SIGKILL branch and killAndWait returns with the child still alive →
+    // `exited` false → RED); `elapsed >= grace` proves we went through the grace window, not an immediate
+    // death (which would mean the trap never installed — a broken fixture, caught loud).
+    expect(exited).toBe(true);
+    expect(elapsed).toBeGreaterThanOrEqual(250);
   });
 });

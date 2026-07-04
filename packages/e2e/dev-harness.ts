@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 
 /**
  * Shared dev-server harness for the browser E2E specs.
@@ -122,15 +123,24 @@ export interface DevProcess {
  * deterministically. A page-swap / island-fast-refresh spec is otherwise a silent false-green when a
  * leaked prior dev serves the same examples dir.
  *
- * Classification (loopback makes this crisp): a genuinely-free 127.0.0.1 port refuses the connection
+ * Classification (loopback makes this crisp): a genuinely-free loopback port refuses the connection
  * INSTANTLY (kernel RST → the fetch rejects long before the 2s timer), so ONLY a refused/reset reject
  * means "free". An actual HTTP response OR a FIRED timeout (something accepted the connection but
  * stalled — a wedged/cold squatter) both mean "occupied", and both throw. Unlike {@link waitForServer},
  * which RETRIES on a per-attempt timeout, this one-shot probe fails CLOSED on it: treating a stalled
  * acceptor as free would spawn into an EADDRINUSE and hand the slow-squatter race straight back. The
  * happy path (free port) is instant.
+ *
+ * @param origin The base URL to probe (default `http://127.0.0.1:${port}`). Callers pass the SAME origin
+ * they'll later poll with {@link waitForServer}, so probe-addr == adoption-addr: today every fixed-port
+ * spec pins `127.0.0.1`, but a spec polling `localhost` resolves to `::1`, and a `::1`-only squatter a
+ * `127.0.0.1` probe never saw would be adopted as a false-green (the repo already ate a localhost/::1
+ * mismatch, L-2d87f1b5). MUST be a loopback origin for the instant-refuse classification above to hold.
  */
-export async function assertPortAvailable(port: number): Promise<void> {
+export async function assertPortAvailable(
+  port: number,
+  origin = `http://127.0.0.1:${port}`,
+): Promise<void> {
   // Own the signal so we can tell a fired timeout (stalled acceptor → occupied) from a fast connection
   // reject (refused/reset → free) portably, without inspecting undici/bun-specific error shapes.
   const signal = AbortSignal.timeout(2_000);
@@ -139,7 +149,7 @@ export async function assertPortAvailable(port: number): Promise<void> {
     // Any HTTP response — even non-2xx — means SOMETHING is already serving this port. `redirect:
     // "manual"` so a squatter answering a 3xx still counts as answering, rather than chasing it to a
     // possibly-dead target whose reject we'd misread as a free port.
-    await fetch(`http://127.0.0.1:${port}/`, {
+    await fetch(`${origin}/`, {
       headers: { "Sec-Fetch-Site": "same-origin" },
       redirect: "manual",
       signal,
@@ -171,14 +181,23 @@ export async function assertPortAvailable(port: number): Promise<void> {
  *
  * `bin` is passed in because specs resolve the `lesto` bin differently: `scaffold-real-install` runs
  * the app's OWN installed shim (`node_modules/.bin/lesto`), the others run the in-repo `packages/cli/src/bin.ts`.
+ *
+ * `origin` (default `http://127.0.0.1:${port}`) is forwarded to the pre-spawn probe so it checks the SAME
+ * address the caller will poll — see {@link assertPortAvailable}. All callers pin `127.0.0.1` today; the
+ * seam exists so a future `localhost` spec probes `::1` rather than a mismatched `127.0.0.1`.
  */
-export async function spawnDev(bin: string, appDir: string, port: number): Promise<DevProcess> {
+export async function spawnDev(
+  bin: string,
+  appDir: string,
+  port: number,
+  origin = `http://127.0.0.1:${port}`,
+): Promise<DevProcess> {
   // Close the live-squatter false-green (L-b5186728) at the source: if a dev server leaked by a prior
   // crashed run is ALREADY answering this fixed port, waitForServer's first probe would adopt it and
   // return green against STALE code, well before our own child's EADDRINUSE death flips `hasExited`.
   // Probe BEFORE spawn so the boot fails loud instead of silently serving a prior run. See
   // {@link assertPortAvailable}.
-  await assertPortAvailable(port);
+  await assertPortAvailable(port, origin);
 
   const child = spawn("bun", [bin, "dev", "--port", String(port)], {
     cwd: appDir,
@@ -210,4 +229,48 @@ export async function spawnDev(bin: string, appDir: string, port: number): Promi
   });
 
   return { child, output: () => buffer, hasExited: () => exited };
+}
+
+/**
+ * SIGTERM a dev child and AWAIT its exit, bounded — the teardown counterpart to {@link spawnDev}'s
+ * pre-spawn probe (L-2a28bde6).
+ *
+ * The fixed-port specs pin a port, and on CI (`retries: 1`, serial) Playwright reruns a failed file in a
+ * FRESH worker. A fire-and-forget `child.kill("SIGTERM")` in `afterAll` returns the instant the signal is
+ * QUEUED — not when the child has unlistened — so the retry's `beforeAll` can call {@link assertPortAvailable}
+ * on the same port while the dying prior attempt is still bound, and the probe throws (fails SAFE — a RED,
+ * not a false-green — but it BURNS the one retry that absorbs real flakes). Awaiting the child's actual
+ * `exit` here closes that window: the port is released before this resolves and the next attempt binds.
+ *
+ * A busy event loop (Vite dep-optimize / bun transpile) can delay the child's SIGTERM handler by seconds
+ * — and the CLI's shutdown sets no force-exit deadline — so the wait is bounded by `graceMs`; if the child
+ * hasn't exited by then we escalate to an uncatchable SIGKILL and await THAT, so `afterAll` can neither
+ * hang the run nor leave the port held. Null-safe and idempotent: a nullish or already-exited child returns
+ * at once (attaching `once(child, "exit")` after exit already fired would await an event that never comes).
+ */
+export async function killAndWait(child: ChildProcess | undefined, graceMs = 5_000): Promise<void> {
+  if (!child) return;
+  // Already dead — `exit` (or a spawn `error`) has fired, recording a code/signal — so `once(child,
+  // "exit")` below would never resolve. Nothing to signal or wait on.
+  if (child.exitCode !== null || child.signalCode !== null) return;
+
+  // Attach the listener BEFORE signalling: a child that dies instantly must not fire `exit` in the gap
+  // between `kill` and `once`, which would leave us awaiting an event that already passed.
+  const exited = once(child, "exit");
+  child.kill("SIGTERM");
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const graced = new Promise<"grace">((resolve) => {
+    timer = setTimeout(() => resolve("grace"), graceMs);
+  });
+
+  const outcome = await Promise.race([exited.then(() => "exit" as const), graced]);
+  clearTimeout(timer);
+
+  if (outcome === "grace") {
+    // SIGTERM didn't land within the grace window (a wedged/busy child). SIGKILL cannot be trapped, so
+    // the child WILL exit and free the port; await that so we never return with the port still held.
+    child.kill("SIGKILL");
+    await exited;
+  }
 }
