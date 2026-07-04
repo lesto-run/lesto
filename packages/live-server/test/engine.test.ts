@@ -999,6 +999,10 @@ describe("LSN-exact resume (Inc4) — replay-or-re-snapshot on reconnect", () =>
     // never a `v1:sysA:2:<pre-failover-LSN>` mix.
     const sub = await e.subscribe(room1Shape(), () => {});
     expect(sub.cursor).toBe("v1:sysA:2:0/0");
+    // Direct teeth for the stale-snapshot-ROWS window: row id=1 reached the OLD entry.rows via the
+    // change feed but was never in the DB (the lost-on-promote analog) — the drop + re-seed from the
+    // promoted DB must serve it no more, not just carry an honest cursor.
+    expect(sub.snapshot).toEqual([]);
     e.stop();
   });
 

@@ -215,8 +215,9 @@ export class ShapeReplayRing {
    * belong to `identity` (same cluster AND same WAL timeline); `undefined` otherwise — before any
    * change, or when a failover/restore left the ring on a stale identity the caller's live feed has
    * already moved off. Folding the identity check in here (rather than exposing a raw `identity()`
-   * accessor) keeps every identity comparison inside this module and makes the caller's snapshot
-   * cursor a single line — it can never mint a new-identity/stale-timeline-LSN mix.
+   * accessor) keeps the cursor-stamping identity comparison inside this module and makes the caller's
+   * snapshot cursor a single line — it can never mint a new-identity/stale-timeline-LSN mix. (The
+   * engine's failover guard compares identity separately — that's a drop decision, not a cursor.)
    */
   latestLsnFor(identity: SystemIdentity): string | undefined {
     if (this.#identity === undefined) return undefined;
