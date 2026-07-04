@@ -137,15 +137,17 @@ function buildIdentity(opts: Partial<IdentityOptions> = {}): {
 
 /**
  * An identity on the REAL `@lesto/auth` scrypt hasher (production cost + legacy-hash
- * parsing). Used only by the rehash-on-login tests, which seed a legacy hash and
- * assert the transparent upgrade to today's cost — a claim that is meaningless
- * under the cheap hasher. Leaving `hasher` unset also exercises the
- * `options.hasher ?? productionHasher` default the rest of the suite overrides.
+ * parsing). Used by the tests that assert production `needsRehash` behavior — the
+ * rehash-on-login pair (seed a legacy hash, assert the transparent upgrade) and the
+ * no-rehash-on-current-cost test — a claim that is meaningless under the cheap
+ * hasher, whose `needsRehash` is pinned `false`. Leaving `hasher` unset also
+ * exercises the `options.hasher ?? productionHasher` default the rest of the suite
+ * overrides.
  */
-function buildRealIdentity(): Identity {
-  const { mailer } = captureMailer();
+function buildRealIdentity(): { identity: Identity; sent: CapturedEmail[] } {
+  const { mailer, sent } = captureMailer();
 
-  return createIdentity({
+  const identity = createIdentity({
     db,
     secret: "test-secret-0123456789abcdefghij",
     mailer,
@@ -153,6 +155,8 @@ function buildRealIdentity(): Identity {
     resetUrl: (token) => `https://app.test/reset?token=${token}`,
     clock: () => clock(),
   });
+
+  return { identity, sent };
 }
 
 beforeEach(async () => {
@@ -411,7 +415,7 @@ describe("login", () => {
   // Rehash-on-login: a user whose stored hash predates the current scrypt cost
   // logs in normally AND has the stored hash transparently upgraded.
   it("rehashes a stale (legacy-format) password hash on successful login", async () => {
-    const identity = buildRealIdentity();
+    const { identity } = buildRealIdentity();
     const password = "correct horse staple";
 
     // Seed a user with a *legacy* parameterless hash (scrypt$salt$hash, N=2^14),
@@ -441,7 +445,7 @@ describe("login", () => {
   });
 
   it("still logs in when the best-effort rehash persist fails", async () => {
-    const identity = buildRealIdentity();
+    const { identity } = buildRealIdentity();
     const password = "correct horse staple";
 
     const salt = randomBytes(16);
@@ -471,7 +475,11 @@ describe("login", () => {
   });
 
   it("does not rehash a current-cost hash on login", async () => {
-    const { identity, sent } = buildIdentity();
+    // MUST use the real hasher: this asserts production `needsRehash` returns false
+    // for a hash it just minted at the current cost, so login leaves it untouched.
+    // Under the cheap hasher (`needsRehash: () => false`) the rehash branch is
+    // structurally unreachable and this assertion could never fail — a vacuous test.
+    const { identity, sent } = buildRealIdentity();
 
     await identity.register("ada@example.com", "correct horse staple");
     await identity.verifyEmail(sent[0]!.token);
