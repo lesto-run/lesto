@@ -1,0 +1,64 @@
+# A primary + a promotable physical streaming-replication standby, for the Tier-4 v1 real-failover leg
+# (`test/failover.pg.ts`, ADR 0042 Inc4/Inc8, `L-45e1b56b`). The leg captures a real pre-failover
+# `(systemId, timelineId, LSN)` resume cursor against the primary, `pg_promote`s the standby (the WAL
+# timeline INCREMENTS, the systemId stays constant), and asserts a reconnecting client RE-SNAPSHOTS
+# against the new timeline instead of a false-continuity replay.
+#
+#   docker compose -f examples/live-capstone/docker-compose.failover.yml up -d --wait
+#   LESTO_LIVE_PG_PRIMARY_URL=postgresql://postgres:postgres@localhost:55432/postgres \
+#   LESTO_LIVE_PG_STANDBY_URL=postgresql://postgres:postgres@localhost:55433/postgres \
+#     bun examples/live-capstone/test/failover.pg.ts
+#
+#   # A promotion is IRREVERSIBLE. To re-run, rebuild the standby from a fresh basebackup:
+#   docker compose -f examples/live-capstone/docker-compose.failover.yml down -v && … up -d --wait
+#
+# ⚠️ UNVERIFIED IN THE AUTHORING SANDBOX (no docker/server-starts here). This uses the Bitnami
+# PostgreSQL image because its built-in streaming-replication env contract (`pg_basebackup` the standby,
+# follow the master, promotable) is by far the least error-prone way to express a two-node replica in a
+# single compose — but the exact env-var names are image-specific; adjust to your image/version if a
+# container refuses to boot. The equivalent official-`postgres:16` + manual `pg_basebackup -R` recipe is
+# spelled out in the leg's header. `wal_level=logical` on BOTH nodes is what lets the PROMOTED node
+# decode logically (the standby inherits it through `pg_control`, but pinning it is belt-and-braces).
+
+name: lesto-live-failover
+
+services:
+  pg-primary:
+    image: bitnami/postgresql:16
+    ports:
+      - "55432:5432"
+    environment:
+      POSTGRESQL_POSTGRES_PASSWORD: postgres
+      POSTGRESQL_REPLICATION_MODE: master
+      POSTGRESQL_REPLICATION_USER: repl
+      POSTGRESQL_REPLICATION_PASSWORD: replpass
+      POSTGRESQL_WAL_LEVEL: logical
+      # Room for the physical standby's walsender AND the leg's logical slot consumer.
+      POSTGRESQL_MAX_WAL_SENDERS: "10"
+      POSTGRESQL_MAX_REPLICATION_SLOTS: "10"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  pg-standby:
+    image: bitnami/postgresql:16
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+    ports:
+      - "55433:5432"
+    environment:
+      POSTGRESQL_POSTGRES_PASSWORD: postgres
+      POSTGRESQL_REPLICATION_MODE: slave
+      POSTGRESQL_REPLICATION_USER: repl
+      POSTGRESQL_REPLICATION_PASSWORD: replpass
+      POSTGRESQL_MASTER_HOST: pg-primary
+      POSTGRESQL_MASTER_PORT_NUMBER: "5432"
+      POSTGRESQL_WAL_LEVEL: logical
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 30

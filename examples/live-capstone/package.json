@@ -9,6 +9,7 @@
     "serve": "bun run serve.ts",
     "test": "vitest run",
     "acceptance:pg": "bun test/acceptance.pg.ts",
+    "failover:pg": "bun test/failover.pg.ts",
     "slot-lag": "bun ops/slot-lag-check.ts",
     "typecheck": "tsc --noEmit"
   },
