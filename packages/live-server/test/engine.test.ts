@@ -966,15 +966,22 @@ describe("LSN-exact resume (Inc4) — replay-or-re-snapshot on reconnect", () =>
     e.stop();
   });
 
-  it("uses the `0/0` baseline when the ring's identity is stale vs the live identity (post-failover)", async () => {
+  it("resyncs EVERY shape when a change reveals a NEW live identity (failover), re-seeding rows + ring (L-f61264b0)", async () => {
     const { src, e } = replEngine();
-    await e.subscribe(room1Shape(), () => {}); // keep the shape (+ its ring) alive
+    const onResyncA = vi.fn();
+    const onResyncB = vi.fn();
+    // Two DISTINCT shapes on the same table, each with a subscriber that observes resync.
+    await e.subscribe(room1Shape(), () => {}, undefined, onResyncA);
+    await e.subscribe(room1Shape({ where: [] }), () => {}, undefined, onResyncB);
 
-    // A change on THIS shape under the pre-failover identity (sysA/1): its ring records 0/50.
+    // Establish the pre-failover identity (sysA/1); THIS change records into both rings.
     src.emit(ins(1, 1, "0/50"));
+    expect(onResyncA).not.toHaveBeenCalled();
+    expect(onResyncB).not.toHaveBeenCalled();
 
-    // A failover bumps the WAL timeline. The first post-failover change lands on ANOTHER table, so
-    // it advances the live identity to sysA/2 while this shape's ring still holds sysA/1 @ 0/50.
+    // A failover bumps the WAL timeline. The first post-failover change advances the live identity
+    // to sysA/2 — even landing on ANOTHER table — so every shape may hold lost-on-promote rows and
+    // a stale-timeline ring. Each shape drops and every subscriber is told to resync.
     src.emit({
       op: "insert",
       table: "rooms",
@@ -984,10 +991,38 @@ describe("LSN-exact resume (Inc4) — replay-or-re-snapshot on reconnect", () =>
       timelineId: 2,
     });
 
+    expect(onResyncA).toHaveBeenCalledTimes(1);
+    expect(onResyncB).toHaveBeenCalledTimes(1);
+    expect(e.activeShapes).toBe(0); // both dropped → a re-subscribe re-seeds from the promoted DB
+
+    // A re-subscribe now anchors to the NEW identity with a fresh (empty) ring → the `0/0` baseline,
+    // never a `v1:sysA:2:<pre-failover-LSN>` mix.
     const sub = await e.subscribe(room1Shape(), () => {});
-    // Ring identity (sysA/1) != live identity (sysA/2) → stamp the `0/0` baseline, NOT the stale
-    // 0/50: the cursor must never mix the new identity with a pre-failover LSN (`v1:sysA:2:0/50`).
     expect(sub.cursor).toBe("v1:sysA:2:0/0");
+    e.stop();
+  });
+
+  it("resyncs every shape when a change reveals a DIFFERENT cluster (systemId change), too (L-f61264b0)", async () => {
+    const { src, e } = replEngine();
+    const onResync = vi.fn();
+    await e.subscribe(room1Shape(), () => {}, undefined, onResync);
+
+    src.emit(ins(1, 1, "0/50")); // identity sysA/1
+    expect(onResync).not.toHaveBeenCalled();
+
+    // A restore onto a DIFFERENT cluster: the systemId changes (the timeline happens to coincide) —
+    // the `systemId`-only arm of the guard must fire on its own, without a timeline bump.
+    src.emit({
+      op: "insert",
+      table: "messages",
+      newImage: { id: "2", room_id: "1", body: "b2", created_at: "100" },
+      commitLSN: "0/60",
+      systemId: "sysZ",
+      timelineId: 1,
+    });
+
+    expect(onResync).toHaveBeenCalledTimes(1);
+    expect(e.activeShapes).toBe(0);
     e.stop();
   });
 

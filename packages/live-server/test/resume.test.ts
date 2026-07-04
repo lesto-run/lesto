@@ -229,4 +229,43 @@ describe("ShapeReplayRing", () => {
       changes: [{ lsn: "0/1", change: insert("a") }],
     });
   });
+
+  // latestLsnFor — the identity-gated latest LSN the engine stamps a snapshot cursor from. It
+  // returns the latest LSN ONLY when the caller's live identity matches the ring's; every mismatch
+  // (and the pre-first-change state) returns `undefined`, so a snapshot cursor can never carry the
+  // new identity with a pre-failover (stale-timeline) LSN.
+  describe("latestLsnFor", () => {
+    it("returns `undefined` before any change is recorded (no identity yet)", () => {
+      const ring = new ShapeReplayRing({ maxEntries: 10, maxAgeMs: 1_000, now: () => 0 });
+
+      expect(ring.latestLsnFor(SYS_A)).toBeUndefined();
+    });
+
+    it("returns the latest LSN when the live identity matches the ring's", () => {
+      const ring = new ShapeReplayRing({ maxEntries: 10, maxAgeMs: 1_000, now: () => 0 });
+
+      ring.record(SYS_A, "0/1", insert("a"));
+      ring.record(SYS_A, "0/2", insert("b"));
+
+      expect(ring.latestLsnFor(SYS_A)).toBe("0/2");
+    });
+
+    it("returns `undefined` for a DIFFERENT cluster (systemId mismatch)", () => {
+      const ring = new ShapeReplayRing({ maxEntries: 10, maxAgeMs: 1_000, now: () => 0 });
+
+      ring.record(SYS_A, "0/1", insert("a"));
+
+      expect(ring.latestLsnFor({ systemId: "sysB", timelineId: 1 })).toBeUndefined();
+    });
+
+    it("returns `undefined` after a SAME-cluster failover (timelineId mismatch)", () => {
+      const ring = new ShapeReplayRing({ maxEntries: 10, maxAgeMs: 1_000, now: () => 0 });
+
+      ring.record(SYS_A, "0/1", insert("a"));
+
+      // systemId matches — a `systemId`-only check would wrongly stamp the stale LSN — but the
+      // WAL timeline moved, so the LSN is meaningless on the new identity.
+      expect(ring.latestLsnFor({ systemId: "sysA", timelineId: 2 })).toBeUndefined();
+    });
+  });
 });

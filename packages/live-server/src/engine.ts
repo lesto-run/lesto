@@ -543,7 +543,28 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
     // Capture the live database's identity from every change (Inc1 stamps it), even one that
     // matches no active shape — so a fresh shape's snapshot cursor is anchored to the current
     // cluster/timeline the moment any change has flowed.
-    liveIdentity = { systemId: change.systemId, timelineId: change.timelineId };
+    const identity = { systemId: change.systemId, timelineId: change.timelineId };
+
+    // A CHANGE in the live identity means a failover/restore crossed (a standby was promoted, or a
+    // PITR rewound the timeline). Every active shape may now hold pre-failover state the promoted
+    // node never received: lost-on-promote writes still sitting in `entry.rows` (served in the next
+    // snapshot PAYLOAD), and a replay ring whose entries belong to the OLD timeline (which would
+    // grant a pre-failover reconnect a false replay — resume.ts's contract permits replay ONLY when
+    // both identities match the live database's). Neither self-heals until the shape drops. So drop
+    // every shape here, BEFORE applying this change: each subscriber resyncs, and any re-subscribe
+    // re-seeds `entry.rows` from the promoted DB and mints a fresh ring on the new identity. This
+    // subsumes the snapshotCursor stale-identity guard below (now belt-and-braces) and closes the
+    // resumeFor stale-ring-replay + stale-snapshot-rows windows (L-f61264b0). On the FIRST change
+    // `liveIdentity` is still undefined — that is initialization, not a failover, so nothing drops.
+    if (
+      liveIdentity !== undefined &&
+      (liveIdentity.systemId !== identity.systemId ||
+        liveIdentity.timelineId !== identity.timelineId)
+    ) {
+      for (const [id, entry] of shapes) dropShape(id, entry);
+    }
+
+    liveIdentity = identity;
 
     for (const [id, entry] of shapes) {
       if (entry.def.table !== change.table) continue;
@@ -560,8 +581,8 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
 
         // Inc4: stamp the real commit LSN + system identity onto the cursor (no longer a discarded
         // counter), and retain the change in the shape's replay ring so a reconnecting client can
-        // replay it LSN-exactly. The ring resets itself if `identity` crossed a failover.
-        const identity = { systemId: change.systemId, timelineId: change.timelineId };
+        // replay it LSN-exactly. A stale-identity change never reaches here — it dropped every shape
+        // above — so `record` only ever appends to a ring already on this identity.
         entry.ring!.record(identity, change.commitLSN, shapeChange);
         const cursor = encodeResumeCursor({ ...identity, lsn: change.commitLSN });
 
@@ -587,25 +608,14 @@ export function createShapeEngine(options: ShapeEngineOptions): ShapeEngine {
    */
   function snapshotCursor(entry: ShapeEntry): Cursor {
     if (entry.ring !== undefined && liveIdentity !== undefined) {
-      const ringIdentity = entry.ring.identity();
-      const latest = entry.ring.latestLsn();
+      // The shape's latest applied LSN, but only when its ring belongs to the identity the live feed
+      // is on now (`latestLsnFor` returns `undefined` otherwise). Fall back to the `0/0` baseline
+      // for an empty ring — and, belt-and-braces, for a ring left on a stale identity: the failover
+      // resync at the top of `onSourceChange` already drops such a shape, so this never mints a
+      // new-identity/stale-timeline-LSN mix (`v1:newId:newTl:<old-lsn>`).
+      const latest = entry.ring.latestLsnFor(liveIdentity);
 
-      // Stamp the shape's latest applied LSN only when the ring belongs to the SAME identity the
-      // live feed is on now. In a narrow post-failover window a change on ANOTHER table advances
-      // `liveIdentity` to the new (systemId, timelineId) while this shape's ring still holds
-      // pre-failover entries — stamping its `latest` would mint a new-identity/stale-timeline-LSN
-      // mix (`v1:newId:newTl:<old-lsn>`). Fall back to the `0/0` baseline instead, so the cursor is
-      // obviously-correct. An empty ring (no change yet, or all evicted) also baselines here.
-      if (
-        ringIdentity !== undefined &&
-        latest !== undefined &&
-        ringIdentity.systemId === liveIdentity.systemId &&
-        ringIdentity.timelineId === liveIdentity.timelineId
-      ) {
-        return encodeResumeCursor({ ...liveIdentity, lsn: latest });
-      }
-
-      return encodeResumeCursor({ ...liveIdentity, lsn: LSN_BASE });
+      return encodeResumeCursor({ ...liveIdentity, lsn: latest ?? LSN_BASE });
     }
 
     return pollCursor(entry);

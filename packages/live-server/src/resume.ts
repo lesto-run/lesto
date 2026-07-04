@@ -211,13 +211,19 @@ export class ShapeReplayRing {
   }
 
   /**
-   * The {@link SystemIdentity} the retained entries belong to, or `undefined` before the first
-   * change. A caller stamping a cursor from {@link latestLsn} must check this equals the live
-   * identity first: a failover/restore can leave the ring holding pre-failover entries (a
-   * stale-timeline LSN) after another table's change already advanced the live identity.
+   * The commit LSN of the most recently recorded change, but ONLY when the ring's retained entries
+   * belong to `identity` (same cluster AND same WAL timeline); `undefined` otherwise — before any
+   * change, or when a failover/restore left the ring on a stale identity the caller's live feed has
+   * already moved off. Folding the identity check in here (rather than exposing a raw `identity()`
+   * accessor) keeps every identity comparison inside this module and makes the caller's snapshot
+   * cursor a single line — it can never mint a new-identity/stale-timeline-LSN mix.
    */
-  identity(): SystemIdentity | undefined {
-    return this.#identity;
+  latestLsnFor(identity: SystemIdentity): string | undefined {
+    if (this.#identity === undefined) return undefined;
+    if (this.#identity.systemId !== identity.systemId) return undefined;
+    if (this.#identity.timelineId !== identity.timelineId) return undefined;
+
+    return this.latestLsn();
   }
 
   /**
