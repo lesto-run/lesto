@@ -17,7 +17,7 @@
  * edge ({@link IslandDevDeps}); this orchestration is covered with a fake backend.
  */
 
-import { AssetsError, RUM_MODULE } from "@lesto/assets";
+import { missingRumDependencyError, RUM_MODULE } from "@lesto/assets";
 import type { IslandFile } from "@lesto/assets";
 import type { HandleOptions, LestoResponse } from "@lesto/web";
 
@@ -127,16 +127,11 @@ export async function createIslandDevServer(
   // `RumConfig` has no opt-out), so `@lesto/observability` is a hard, unstated dependency of every
   // app with a client entry. A hand-written app that drops it would otherwise hit only the opaque
   // Vite dev "failed to resolve @lesto/observability/rum" (the @prefresh-class trap) — so resolve
-  // the dep from the app root and refuse HERE, loud + actionable (ADR 0011 loud-when-wrong), with
-  // the IDENTICAL error the build path throws so users see one consistent message across build + dev.
+  // the dep from the app root and refuse HERE, loud + actionable (ADR 0011 loud-when-wrong), through
+  // the SAME `missingRumDependencyError()` factory `buildClient` throws — so build + dev share one
+  // error, code and message, and can't drift (only value equality is CI-caught, restated prose is not).
   if (deps.resolveClientImport(RUM_MODULE) === undefined) {
-    throw new AssetsError(
-      "ASSETS_MISSING_RUM_DEPENDENCY",
-      `the client entry imports "${RUM_MODULE}" — browser RUM (the UI→API→DB trace's browser half) ` +
-        `is on by default — but "@lesto/observability" does not resolve from the app root. Add it to ` +
-        `your dependencies (e.g. \`bun add @lesto/observability\`).`,
-      { module: RUM_MODULE, dependency: "@lesto/observability" },
-    );
+    throw missingRumDependencyError();
   }
 
   const config = viteIslandConfig({

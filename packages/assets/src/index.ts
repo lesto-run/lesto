@@ -35,7 +35,7 @@ export type { BeaconConfig, IslandFile } from "./synthesize";
 
 // The browser-RUM wiring the synthesized entry emits (ARCHITECTURE.md §7): the
 // `@lesto/observability/rum` import + the `startBrowserRum()` call.
-export { RUM_MODULE, rumImport, rumStartCall } from "./rum-client";
+export { missingRumDependencyError, RUM_MODULE, rumImport, rumStartCall } from "./rum-client";
 export type { RumConfig } from "./rum-client";
 
 export {

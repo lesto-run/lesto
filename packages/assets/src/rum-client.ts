@@ -18,6 +18,8 @@
  * subpath keeps the byte cost tree-shaken to what the entry actually calls.
  */
 
+import { AssetsError } from "./errors";
+
 /** The module the synthesized entry imports the RUM runtime from (a node-free subpath). */
 export const RUM_MODULE = "@lesto/observability/rum";
 
@@ -55,4 +57,24 @@ export function rumStartCall(config: RumConfig = {}): string {
     config.sampleRate === undefined ? "" : `{ sampleRate: ${JSON.stringify(config.sampleRate)} }`;
 
   return `startBrowserRum(${options});`;
+}
+
+/**
+ * The single `ASSETS_MISSING_RUM_DEPENDENCY` error, built in ONE place.
+ *
+ * Both guards that refuse a client entry whose UNCONDITIONAL `@lesto/observability/rum`
+ * import can't resolve — `buildClient`'s (`lesto build`/`deploy` + the Bun dev fallback)
+ * and `@lesto/island-dev`'s `createIslandDevServer` (the default `lesto dev` Vite path,
+ * L-44ca7c57) — throw THIS, so a hand-written app sees one identical, actionable message
+ * across build and dev. Restated prose would drift silently (only value equality is
+ * CI-caught); a shared factory forecloses that.
+ */
+export function missingRumDependencyError(): AssetsError {
+  return new AssetsError(
+    "ASSETS_MISSING_RUM_DEPENDENCY",
+    `the client entry imports "${RUM_MODULE}" — browser RUM (the UI→API→DB trace's browser half) ` +
+      `is on by default — but "@lesto/observability" does not resolve from the app root. Add it to ` +
+      `your dependencies (e.g. \`bun add @lesto/observability\`).`,
+    { module: RUM_MODULE, dependency: "@lesto/observability" },
+  );
 }

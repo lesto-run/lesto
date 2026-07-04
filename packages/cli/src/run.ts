@@ -13,8 +13,9 @@
  * covered; only that wiring is excluded.
  */
 
-import { AssetsError } from "@lesto/assets";
 import type { PublicEnvDefine } from "@lesto/assets";
+
+import { hasCode } from "@lesto/errors";
 
 import { createApp } from "@lesto/kernel";
 import type { App, LestoAppConfig, KernelDatabase } from "@lesto/kernel";
@@ -1794,7 +1795,10 @@ async function resolveIslandDev(
     // actionable "add @lesto/observability" error behind a misleading "full reload" note. Re-throw
     // it so dev boot fails loud, exactly as `lesto build`/`deploy` do. Everything else (a bound HMR
     // port, a bad plugin) still degrades to the Bun path with a logged note — dev must not crash.
-    if (error instanceof AssetsError && error.code === "ASSETS_MISSING_RUM_DEPENDENCY") throw error;
+    // Branch on the CODE (via `hasCode`), not `instanceof AssetsError`: island-dev throws it, the CLI
+    // catches it, and a cross-package `instanceof` misfires if the graph ever carries two `@lesto/assets`
+    // copies. `hasCode` keys off the `LestoError` base (a leaf dep that dedupes) — the errors philosophy.
+    if (hasCode(error, "ASSETS_MISSING_RUM_DEPENDENCY")) throw error;
 
     deps.out(`island Fast Refresh unavailable, using full reload: ${rebuildErrorMessage(error)}`);
 

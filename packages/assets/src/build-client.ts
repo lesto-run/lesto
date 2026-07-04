@@ -21,7 +21,7 @@ import { isChunkFile } from "./chunks";
 import { AssetsError } from "./errors";
 import { verifyPublicEnvDefine } from "./public-env";
 import type { PublicEnvDefine } from "./public-env";
-import { RUM_MODULE } from "./rum-client";
+import { missingRumDependencyError, RUM_MODULE } from "./rum-client";
 import { synthesizeEntry } from "./synthesize";
 import type { IslandFile } from "./synthesize";
 
@@ -354,13 +354,7 @@ export async function buildClient(
   // conditional on the dep was rejected as fail-open: it would silently drop the UI→API→DB trace the
   // framework's pitch rests on. (L-a457e604.)
   if (deps.resolveClientImport(RUM_MODULE) === undefined) {
-    throw new AssetsError(
-      "ASSETS_MISSING_RUM_DEPENDENCY",
-      `the client entry imports "${RUM_MODULE}" — browser RUM (the UI→API→DB trace's browser half) ` +
-        `is on by default — but "@lesto/observability" does not resolve from the app root. Add it to ` +
-        `your dependencies (e.g. \`bun add @lesto/observability\`).`,
-      { module: RUM_MODULE, dependency: "@lesto/observability" },
-    );
+    throw missingRumDependencyError();
   }
 
   const artifacts = await deps.bundle({
