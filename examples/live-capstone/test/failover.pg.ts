@@ -36,19 +36,22 @@
  * slots are not created on a physical standby in PG16), so the post-failover consumer creates a FRESH
  * slot on the promoted node. No split-brain, no two-writer window on any one slot.
  *
- * ── Setup: a primary + a promotable physical standby (NOT runnable in this sandbox: no docker) ─────
- * The authoring sandbox has no docker/server-starts, so — exactly like the sibling gates document a
- * `docker run` in their headers — the two-node setup is documented here, and this leg is env-gated and
- * CI-PENDING (a promotable streaming standby is not expressible as a plain GitHub Actions `services:`
- * image, and orchestrating `pg_basebackup` + `pg_promote` across two nodes is deferred rather than
- * shipped unverified — see the report). Two runnable paths:
+ * ── Setup: a primary + a promotable physical standby (docker; EXECUTED, env-gated, CI-PENDING) ─────
+ * EXECUTED 2026-07-04 (`L-839c47e8`): the two-node stack below was booted on the OFFICIAL `postgres:16`
+ * image and this leg ran end-to-end — 9/9 assertions, exit 0. The console plus a DB-level
+ * systemId/timeline proof (systemId constant, timeline 1→2 from a real `pg_promote`) are filed under
+ * `evidence/failover-pg.log` + `evidence/failover-pg-proof.json`, making `L-45e1b56b`'s "validates the
+ * failover fix end-to-end" claim true. It stays env-gated (needs the two `LESTO_LIVE_PG_*_URL`s) and
+ * CI-PENDING: a promotable streaming standby is not expressible as a plain GitHub Actions `services:`
+ * image, and orchestrating `pg_basebackup` + `pg_promote` across two nodes is wired separately in its
+ * own job (`L-c052144e`), not shoehorned into `services:`. Two runnable paths:
  *
  *   A) docker-compose (recommended — one command):
  *        docker compose -f examples/live-capstone/docker-compose.failover.yml up -d --wait
  *        LESTO_LIVE_PG_PRIMARY_URL=postgresql://postgres:postgres@localhost:55432/postgres \
  *        LESTO_LIVE_PG_STANDBY_URL=postgresql://postgres:postgres@localhost:55433/postgres \
  *          bun examples/live-capstone/test/failover.pg.ts
- *      (See that compose file's header; env-var names are image-specific and marked unverified there.)
+ *      (See that compose file's header — official `postgres:16`, `pg_basebackup -R` standby, VERIFIED.)
  *
  *   B) manual, with the official `postgres:16` image + `pg_basebackup` (the streaming-replica recipe):
  *        - Primary: `wal_level=logical`, `max_wal_senders>=10`, `max_replication_slots>=10`,

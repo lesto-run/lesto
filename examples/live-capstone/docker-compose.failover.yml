@@ -10,55 +10,111 @@
 #     bun examples/live-capstone/test/failover.pg.ts
 #
 #   # A promotion is IRREVERSIBLE. To re-run, rebuild the standby from a fresh basebackup:
-#   docker compose -f examples/live-capstone/docker-compose.failover.yml down -v && … up -d --wait
+#   docker compose -f examples/live-capstone/docker-compose.failover.yml down -v   # then `up -d --wait`
 #
-# ⚠️ UNVERIFIED IN THE AUTHORING SANDBOX (no docker/server-starts here). This uses the Bitnami
-# PostgreSQL image because its built-in streaming-replication env contract (`pg_basebackup` the standby,
-# follow the master, promotable) is by far the least error-prone way to express a two-node replica in a
-# single compose — but the exact env-var names are image-specific; adjust to your image/version if a
-# container refuses to boot. The equivalent official-`postgres:16` + manual `pg_basebackup -R` recipe is
-# spelled out in the leg's header. `wal_level=logical` on BOTH nodes is what lets the PROMOTED node
-# decode logically (the standby inherits it through `pg_control`, but pinning it is belt-and-braces).
+# VERIFIED on the official `postgres:16` image (2026-07-04): booted this two-node stack, confirmed the
+# standby is a real physical replica (shares the primary's systemId, in recovery), ran the leg
+# end-to-end, and filed the console under `evidence/failover-pg.log`. This replaces the earlier
+# UNVERIFIED Bitnami compose — `bitnami/postgresql:16` was relocated to `bitnamilegacy` (Broadcom, late
+# 2025), so it can pull a stale/absent image; the official image + a `pg_basebackup -R` standby is the
+# least-surprise two-node recipe and needs no vendor-specific replication env contract.
+#
+# Two nodes, official `postgres:16`:
+#   * pg-primary — `wal_level=logical`, replication room, and a pg_hba line (injected via the initdb.d
+#     config below) allowing a physical-replication connection from the standby container. Trust auth:
+#     a throwaway LOCAL test node, never a production posture.
+#   * pg-standby — self-builds as a byte-for-byte physical replica via `pg_basebackup -R` (writes
+#     `standby.signal` + `primary_conninfo`), then boots. It is given `wal_level=logical` ON ITS OWN
+#     COMMAND LINE too: during recovery a standby's wal_level follows the primary through `pg_control`,
+#     but AFTER `pg_promote` the node runs as a primary on ITS OWN configured level — and the leg then
+#     creates a LOGICAL replication slot on the promoted node, which needs `wal_level=logical`. Because
+#     the primary sets its replication params via `-c` flags (not in a copied `postgresql.conf`), the
+#     basebackup does not carry them across, so they are re-stated here explicitly.
 
 name: lesto-live-failover
 
+configs:
+  # Appended to the PRIMARY's pg_hba.conf during initdb — initdb's defaults only trust `replication`
+  # from localhost, so a standby in another container is refused without this. Runs once (before the
+  # final server start reads pg_hba), so no reload is needed. `$$PGDATA` is `$PGDATA` after Compose's
+  # own `$`-interpolation (doubled to reach the shell).
+  primary-replication-hba:
+    content: |
+      #!/bin/sh
+      set -e
+      cat >> "$$PGDATA/pg_hba.conf" <<'HBA'
+      # lesto real-failover leg: allow the physical standby to stream + basebackup (trust: local test)
+      host replication all all trust
+      host all all all trust
+      HBA
+
 services:
   pg-primary:
-    image: bitnami/postgresql:16
+    image: postgres:16
     ports:
       - "55432:5432"
     environment:
-      POSTGRESQL_POSTGRES_PASSWORD: postgres
-      POSTGRESQL_REPLICATION_MODE: master
-      POSTGRESQL_REPLICATION_USER: repl
-      POSTGRESQL_REPLICATION_PASSWORD: replpass
-      POSTGRESQL_WAL_LEVEL: logical
-      # Room for the physical standby's walsender AND the leg's logical slot consumer.
-      POSTGRESQL_MAX_WAL_SENDERS: "10"
-      POSTGRESQL_MAX_REPLICATION_SLOTS: "10"
+      POSTGRES_PASSWORD: postgres
+      # Throwaway LOCAL test node — trust auth so the standby's pg_basebackup and the leg connect with
+      # no password plumbing. NEVER a production posture.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    configs:
+      - source: primary-replication-hba
+        target: /docker-entrypoint-initdb.d/10-replication-hba.sh
+        mode: 0o755
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      # Room for the physical standby's walsender AND the leg's logical-slot consumer.
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby=on
+      - -c
+      - listen_addresses=*
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 3s
       timeout: 5s
-      retries: 30
+      retries: 40
 
   pg-standby:
-    image: bitnami/postgresql:16
+    image: postgres:16
     depends_on:
       pg-primary:
         condition: service_healthy
     ports:
       - "55433:5432"
-    environment:
-      POSTGRESQL_POSTGRES_PASSWORD: postgres
-      POSTGRESQL_REPLICATION_MODE: slave
-      POSTGRESQL_REPLICATION_USER: repl
-      POSTGRESQL_REPLICATION_PASSWORD: replpass
-      POSTGRESQL_MASTER_HOST: pg-primary
-      POSTGRESQL_MASTER_PORT_NUMBER: "5432"
-      POSTGRESQL_WAL_LEVEL: logical
+    user: postgres
+    # Build the standby as a physical replica of the primary via `pg_basebackup -R` (once, when PGDATA
+    # is empty), then boot it with `wal_level=logical` so it can decode logically after `pg_promote`.
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -e
+        PGDATA=/var/lib/postgresql/data
+        if [ ! -s "$$PGDATA/PG_VERSION" ]; then
+          until pg_isready -h pg-primary -U postgres -d postgres; do
+            echo "standby: waiting for primary..."; sleep 1
+          done
+          rm -rf "$$PGDATA"/* "$$PGDATA"/.[!.]* 2>/dev/null || true
+          pg_basebackup -h pg-primary -U postgres -D "$$PGDATA" -Fp -Xs -R -P
+        fi
+        # PG refuses a data dir looser than 0700/0750; the mounted volume dir defaults to 0755 and
+        # pg_basebackup writes INTO it without tightening the top dir, so clamp it here.
+        chmod 0700 "$$PGDATA"
+        exec postgres \
+          -c listen_addresses='*' \
+          -c wal_level=logical \
+          -c max_wal_senders=10 \
+          -c max_replication_slots=10 \
+          -c hot_standby=on
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 3s
       timeout: 5s
-      retries: 30
+      retries: 60

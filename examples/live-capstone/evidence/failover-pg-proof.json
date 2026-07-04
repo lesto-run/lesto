@@ -1,0 +1,31 @@
+{
+  "what": "The real-pg_promote failover proof for examples/live-capstone (ADR 0042 Inc4/Inc8, leg L-45e1b56b, run task L-839c47e8). Converts test/failover.pg.ts from a typechecked-only spec into an executed proof: the timeline-increment resume decision fires against a REAL Postgres timeline bump from pg_promote, not the forged cursor of acceptance.pg.ts assertion 6c.",
+  "when": "2026-07-04 (UTC), against main.",
+  "how": "Booted the two-node stack in docker-compose.failover.yml (a primary + a physical streaming-replication standby built via `pg_basebackup -R`) on the OFFICIAL postgres:16 image, then ran `bun test/failover.pg.ts` against the two nodes. The leg captures a real pre-failover (systemId, timeline 1, LSN) resume cursor on the primary, stops+drops that consumer's slot, `pg_promote`s the standby (timeline increments, systemId held), and asserts a reconnecting client with the pre-failover cursor RE-SNAPSHOTS against the new timeline (never a false-continuity replay), with a positive control that a live post-failover cursor replays on the SAME timeline.",
+  "image": "postgres:16 @ sha256:fe03a7605299a34ddf5e4f285dff78c3d7190a576b3c6b46f2fcff69f4bffd54",
+  "result": {
+    "exitCode": 0,
+    "assertionsPassed": "9/9",
+    "console": "failover-pg.log",
+    "finalLine": "✅ Tier-4 v1 real-failover leg PASSED — pg_promote's timeline increment drives a real re-snapshot"
+  },
+  "identityProof": {
+    "systemIdConstantAcrossFailover": "7658774196296511527",
+    "primaryTimelineId": 1,
+    "promotedNodeTimelineId": 2,
+    "promotedNodeInRecoveryAfterPromote": false,
+    "promotedWalFile": "000000020000000000000003",
+    "timelineHistoryOnPromotedNode": "00000002.history: `1\t0/303E540\tno recovery target specified` — the branch record proving timeline 2 forked from timeline 1 at LSN 0/303E540",
+    "note": "The systemId is IDENTICAL pre and post (same cluster), while the timeline incremented 1→2 from a real pg_promote — the exact (systemId-constant, timelineId-incremented) shape a same-cluster failover produces, which a systemId-only resume check would miss. Read live from the DB (WAL filename + timeline history file), independent of the leg's own IDENTIFY_SYSTEM assertions 5/6."
+  },
+  "reproduce": [
+    "docker compose -f examples/live-capstone/docker-compose.failover.yml down -v",
+    "docker compose -f examples/live-capstone/docker-compose.failover.yml up -d --wait",
+    "LESTO_LIVE_PG_PRIMARY_URL=postgresql://postgres:postgres@localhost:55432/postgres LESTO_LIVE_PG_STANDBY_URL=postgresql://postgres:postgres@localhost:55433/postgres bun examples/live-capstone/test/failover.pg.ts"
+  ],
+  "premises": [
+    "The standby is a genuine physical streaming replica, not two unrelated primaries: leg assertion 1 fails CLOSED unless the standby shares the primary's systemId AND is in recovery (verified here: shared systemId 7658774196296511527, pg_is_in_recovery()=t, pg_stat_wal_receiver=streaming from pg-primary).",
+    "A promotion is IRREVERSIBLE — a re-run needs the standby rebuilt from a fresh basebackup (`down -v` then `up`), which is why this is a run-once evidence capture, not a CI job yet (CI wiring: L-c052144e).",
+    "Single-writer hazard respected: the pre-failover consumer's slot on the primary is dropped and its connection ended BEFORE promote, so no two consumers are ever alive on one slot across the failover (assertion 9 confirms both nodes' slots end at 0 — no orphaned WAL pin)."
+  ]
+}

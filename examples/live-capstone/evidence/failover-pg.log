@@ -1,0 +1,20 @@
+  ok   1. the standby is a physical streaming replica in recovery, sharing the primary's systemId
+{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":14,"request_id":"b2cae243-9dc8-4831-acae-b148d5b52a71","active_streams":1}
+{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":8,"request_id":"ebc52bb0-9513-4171-b0db-e26b44b8c015"}
+  ok   2. booted a live consumer on the primary; captured its identity + a real v1 change cursor
+  ok   3. the pre-failover cursor decodes to the primary's (systemId, timelineId) — a real position
+  ok   4. pg_promote turned the standby into a primary (out of recovery)
+  ok   5. the promoted node shares the systemId (same cluster) but its timelineId INCREMENTED (real pg_promote)
+{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":20,"request_id":"1411b1e2-399f-4b9b-a914-031dc7fc5712","active_streams":1}
+{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":8,"request_id":"d0cfb532-8111-4872-b489-9cf939515d5c"}
+  ok   6. the promoted change cursor carries the incremented timelineId (constant systemId), matching IDENTIFY_SYSTEM
+{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":6,"request_id":"4205d4c3-4aa1-4440-b9a2-889b72d68518","active_streams":2}
+  ok   7. NEGATIVE ARM: a pre-failover cursor RE-SNAPSHOTS against the promoted timeline (real timelineId mismatch), never a false-continuity replay
+{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":4,"request_id":"6cdcfa68-d1c9-4234-badd-dea7c6dbacd1","active_streams":3}
+{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":7,"request_id":"136330d7-4c51-4a78-b4a1-f271e294a7c1"}
+{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":10,"request_id":"ecccb350-8c10-499b-8d55-4ba34fe3a832"}
+{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":5,"request_id":"8e0cc12d-9808-4eb5-bd45-a8c6e8c64672","active_streams":4}
+  ok   8. POSITIVE CONTROL: a live post-failover cursor REPLAYS exactly the missed change on the promoted timeline, with no re-snapshot
+  ok   9. both the primary's (pre-failover) and the promoted node's slots are dropped — no orphaned WAL pin
+
+✅ Tier-4 v1 real-failover leg PASSED — pg_promote's timeline increment drives a real re-snapshot
