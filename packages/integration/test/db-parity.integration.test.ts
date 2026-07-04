@@ -41,6 +41,8 @@ import type { Db, Dialect, SqlDatabase } from "@lesto/db";
 import { Migrator } from "@lesto/migrate";
 import { openSqlite } from "@lesto/runtime";
 
+import { dropQueueTables } from "./drop-queue-tables";
+
 // The schema-as-value drives every query (column refs, insert, select) AND the
 // CREATE TABLE: one source of truth, rendered per dialect by `createTableSql`.
 const items = defineTable("items", {
@@ -364,14 +366,11 @@ describe.each(drivers)("schema installers on $name", (driver) => {
     handle = opened.db;
     close = opened.close;
 
-    // Drop all three queue tables (deps/batches before lesto_jobs), not just
-    // lesto_jobs — the shared-PG IDENTITY-reset collision guarded in
-    // retention/durable-stores (see the WHY comment there). No batch test lives
-    // here yet, but mirror the fix so the first one added can't reintroduce it.
-    // Extracting a shared dropQueueTables() helper is tracked in L-bfe75642.
-    await handle.exec("DROP TABLE IF EXISTS lesto_job_deps");
-    await handle.exec("DROP TABLE IF EXISTS lesto_job_batches");
-    await handle.exec("DROP TABLE IF EXISTS lesto_jobs");
+    // Reset the queue's three tables via the shared helper (why the whole trio, and
+    // the shared-PG IDENTITY-reset collision it guards: see `dropQueueTables`). No
+    // batch test lives here yet, but sharing the helper keeps the guard in place for
+    // the first one added.
+    await dropQueueTables(handle);
     await handle.exec("DROP TABLE IF EXISTS lesto_cache");
     await handle.exec("DROP TABLE IF EXISTS lesto_workflow_steps");
     await handle.exec("DROP TABLE IF EXISTS schema_migrations");

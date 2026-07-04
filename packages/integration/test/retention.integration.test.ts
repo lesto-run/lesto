@@ -27,6 +27,8 @@ import { installSchema as installQueueSchema, Queue, RetentionScheduler } from "
 import type { SqlDatabase } from "@lesto/queue";
 import { openSqlite } from "@lesto/runtime";
 
+import { dropQueueTables } from "./drop-queue-tables";
+
 interface Driver {
   readonly name: Dialect;
   open(): Promise<{ db: SqlDatabase; close: () => unknown }>;
@@ -65,15 +67,11 @@ describe.each(drivers)("retention & sweeps: $name", (driver) => {
     close = opened.close;
 
     // Fresh schema each test — Postgres persists across tests in the CI service.
-    // Drop ALL THREE queue tables (deps/batches BEFORE lesto_jobs), not just
-    // `lesto_jobs`: on the shared PG db, dropping `lesto_jobs` alone resets its
-    // IDENTITY sequence while a prior batch test's `lesto_job_deps` edge survives,
-    // so the next `enqueueBatch` re-mints ids 1,2 and collides on the edge table's
-    // composite PK. No batch test lives here yet, but mirror the fix so the first
-    // one added can't reintroduce that pg-only collision. (No-op on SQLite.)
-    await handle.exec("DROP TABLE IF EXISTS lesto_job_deps");
-    await handle.exec("DROP TABLE IF EXISTS lesto_job_batches");
-    await handle.exec("DROP TABLE IF EXISTS lesto_jobs");
+    // Reset the queue's three tables (why the whole trio, and the shared-PG
+    // IDENTITY-reset collision it guards: see `dropQueueTables`). No batch test
+    // lives here yet, but sharing the helper keeps the guard in place for the first
+    // one added.
+    await dropQueueTables(handle);
     await handle.exec("DROP TABLE IF EXISTS lesto_cache");
     await handle.exec("DROP TABLE IF EXISTS lesto_sessions");
     await handle.exec("DROP TABLE IF EXISTS lesto_rate_limits");
