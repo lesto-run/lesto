@@ -82,6 +82,26 @@ Commit the generated `.changeset/*.md` alongside the code.
    only, so bump `LESTO_DEP_RANGE` in lockstep when the surface's minor moves.
 3. **Version.** `bun run version` consumes the queued changesets, bumping versions and
    writing changelogs. Commit the result.
+
+   > **Pre-publish gate — dispatch `scaffold-hoisted-preflight` on the release SHA and confirm
+   > GREEN before you publish (interim SOFT gate, run it by hand).** This is the one leg that boots
+   > `lesto dev` on the DEFAULT hoisted layout a real `bun create lesto && cd app && bun install &&
+   > lesto dev` user gets — the exact quadrant the published-0.1.2 hang (L-27285131) slipped through,
+   > because it was only discoverable POST-publish (the immutable published leg (a) of
+   > `scaffold-real-install` has no repo-side fix; leg (b) boots the current tree but only under the
+   > ISOLATED linker). A RED here is a real default-path dev hang for Linux users, not flake — do NOT
+   > publish over it. Run it against the exact SHA the release will cut from:
+   >
+   > ```sh
+   > gh workflow run scaffold-hoisted-preflight.yml --ref <release-sha>
+   > gh run watch   # or: gh run list --workflow=scaffold-hoisted-preflight.yml
+   > ```
+   >
+   > This is a MANUAL runbook step, not a `needs:` edge — release is dispatch-only, so a blocking gate
+   > buys deadlock surface + heavy-job latency for little gain until the preflight is proven able to go
+   > RED (L-8aa4315b) and the hoisted-Linux dev-hang fix ships (L-513dd8a6). Wiring it as an automatic
+   > blocking pre-publish job in `release.yml` is the tracked follow-up **L-e6a86c59** (lands only AFTER
+   > the fix, or it would deadlock the very release that ships it).
 4. **Publish via Trusted Publishing (OIDC) in CI — the supported path.** Releases run from
    `.github/workflows/release.yml` on `github.com/lesto-run/lesto`, authenticated by GitHub's
    OIDC identity (NO `NPM_TOKEN`), matched against each package's **trusted publisher** config
