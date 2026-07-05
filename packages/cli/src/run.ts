@@ -1239,13 +1239,16 @@ function rebuildErrorMessage(error: unknown): string {
 }
 
 /**
- * The effective error behind a dev failure: the bundler/loader cause when the
- * failure is a coded {@link CliError} wrapping an `Error` (the `details.cause` whose
- * message {@link rebuildErrorMessage} shows), else the error itself. Lets the overlay
- * read a clean `.message`/`.stack` off one value instead of re-walking the wrap.
+ * The effective error behind a dev failure: the wrapped cause when the failure is a
+ * coded `LestoError` carrying an `Error` in `details.cause` (the message
+ * {@link rebuildErrorMessage} shows), else the error itself. Keys off the `LestoError`
+ * base — the twin of {@link rebuildErrorMessage}, kept in LOCKSTEP with it so the stderr
+ * note and the overlay never diverge on a coded-with-cause error (e.g. a degraded
+ * `ISLAND_DEV_SERVER_FAILED`). Lets the overlay read a clean `.message`/`.stack` off one
+ * value instead of re-walking the wrap.
  */
 function unwrapCause(error: unknown): unknown {
-  const cause = error instanceof CliError ? error.details["cause"] : undefined;
+  const cause = isLestoError(error) ? error.details["cause"] : undefined;
 
   return cause instanceof Error ? cause : error;
 }
@@ -1809,7 +1812,10 @@ async function resolveIslandDev(
     // Branch on the CODE (via `hasCode`), not `instanceof IslandDevError`: island-dev throws it,
     // the CLI catches it, and a cross-package `instanceof` misfires if the graph ever carries two
     // `@lesto/island-dev` copies. `hasCode` keys off the `LestoError` base (a leaf dep that
-    // dedupes) — the errors philosophy.
+    // dedupes) — the errors philosophy. NB: with degrade now the ALLOWLIST (not the default), this
+    // "never crash on a transport failure" guarantee assumes `@lesto/errors` dedupes to ONE copy —
+    // under a duplicated graph (pnpm/PnP/isolated) `hasCode`'s `instanceof` could misfire and a
+    // wrapped port/backend error would fall through to fatal → crash; hardening tracked in L-1e43bbee.
     if (!hasCode(error, "ISLAND_DEV_SERVER_FAILED")) throw error;
 
     // The degrade note surfaces the wrapped Vite/port cause (`details.cause`) via

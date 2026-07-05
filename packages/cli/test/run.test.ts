@@ -2091,9 +2091,10 @@ describe("run dev — Vite island Fast Refresh (DX-parity R2)", () => {
   it("re-throws (does NOT degrade) an unknown-dialect error from the island dev server", async () => {
     const serve = fakeServe(3000);
     const buildClientAssets = vi.fn(() => Promise.resolve());
-    // Fatal-by-default under the allowlist: ONLY `ISLAND_DEV_SERVER_FAILED` degrades. An
-    // unknown `ui.dialect` is a real misconfiguration (near-unreachable today: `dialectOf`
-    // only yields react|preact) — fail dev boot loud, never silently drop to full reload.
+    // Fatal-by-default under the allowlist: ONLY `ISLAND_DEV_SERVER_FAILED` degrades. An unknown
+    // `ui.dialect` is a real, REACHABLE misconfiguration: `dialectOf`'s `UiDialect` return is
+    // compile-time only and `createApp` does NOT validate `ui.dialect`, so an untyped/JS config with
+    // `ui.dialect: "vue"` reaches island-dev at runtime — fail dev boot loud, never silently degrade.
     const dialectError = new LestoError(
       "ISLAND_DEV_UNKNOWN_DIALECT",
       "the configured ui.dialect is neither react nor preact",
