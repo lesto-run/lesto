@@ -7,21 +7,31 @@
 > - **Not a dep-optimize / rolldown deadlock.** `curl` gets `GET / → 200 in ~55ms` on the *first* request
 >   against the published-0.1.2 hoisted dev (server-side `http.access` logged). If the first-request Vite
 >   transform/dep-optimize deadlocked, curl would hang too. It doesn't — the transform completes fast.
-> - **Not a total hang, not a bind bug.** `curl`, `node:http` (fresh socket), and real browsers all get
->   `200`. **Only Node's undici `fetch()` fails** — instantly (`fetch failed` in ~3ms), persistently
->   (300/300 attempts over 60s), *before* the handler. It is **not** the `Sec-Fetch-Site` header (a
->   `node:http` request that sends it gets 200) and **not** the 2s-abort/keep-alive-pool (a single
->   no-abort `fetch` also fails instantly).
+> - **Not a total hang, not a bind bug.** `curl` and `node:http` (fresh socket, `Connection: close`) both
+>   get `200`. **Only Node's undici `fetch()` fails** — instantly (`fetch failed` in ~3ms), persistently
+>   (300/300 attempts over 60s). It is **not** the `Sec-Fetch-Site` header (a `node:http` request that
+>   sends it gets 200) and **not** the 2s-abort/keep-alive-pool (a single no-abort `fetch` also fails
+>   instantly). ⚠️ **A real BROWSER was NEVER tested against the published-0.1.2 dev** (the harness leg's
+>   `page.goto` never ran — `beforeAll` threw first), so "browsers are fine" is an INFERENCE, not observed
+>   — and the only *passing* probe (`node:http`) used `Connection: close` while undici (and browsers) are
+>   keep-alive-first, so browser impact is genuinely OPEN. Likewise **"before the handler" is inferred from
+>   the 3ms timing** — the mechanism run's server-side `http.access` dump was lost to a `set -e` bug and
+>   `err.cause` was never captured, so the exact byte (ECONNRESET vs a header-framing reject) is UNNAMED.
 > - **Source-invisible + local-pack-blind.** The published-0.1.2 `@lesto/*` source is byte-identical to
 >   commit `6d65d49` (verified via `npm pack` diff); every LOCAL pack of that same source (the
 >   `scaffold-hoisted-preflight` spec, and an overlay bisect of all of `6d65d49..HEAD`) GREENS under the
 >   same undici client. **Only the real npm-resolved published closure reproduces the RED.** So the
 >   mutable-tree preflight is structurally blind to this class (the `scaffold-e2e-masks-real-resolution`
 >   trap), and there is no code-anchored *source* RED to bisect to.
-> - **User impact is LOW** (browsers/curl/`node:http` unaffected); the `waitForServer` harness — which
->   uses `fetch` — is the primary victim. **`HEAD`'s published-closure behavior is UNPROVEN** (HEAD was
->   never published; local packs are blind). The only faithful "is HEAD fixed" test is a **verdaccio**
->   publish of HEAD's closure + `create-lesto` + undici — filed as the re-scoped **L-513dd8a6** deliverable.
+> - **User impact is NOT settled — narrower than "dev hangs", wider than "harness only".** `curl`/`node:http`
+>   work, so a raw page fetch is fine; but undici `fetch()` is Node/Bun's DEFAULT HTTP client, so the real
+>   surface includes agents, SSR self-fetch, health checks, and — the biggest unflagged risk — **Lesto's own
+>   agent-native dev-MCP control plane** (`packages/mcp/src/server.ts` is the SAME `node:http` stack, and
+>   MCP SDK clients reach it via undici `fetch`), which was NEVER exercised against the published closure.
+>   Browser impact is untested (above). So do NOT claim "agent-native works end-to-end" on 0.1.2.
+>   **`HEAD`'s published-closure behavior is UNPROVEN** (HEAD was never published; local packs are blind).
+>   The only faithful "is HEAD fixed" test is a **verdaccio** publish of HEAD's closure + `create-lesto` +
+>   undici (GET / AND a real dev-MCP handshake) — filed as the re-scoped **L-513dd8a6** deliverable.
 > - **`DEV_BOOT_SKIPPED === "0.1.2"` stays** (0.1.2 is genuinely RED under leg-a's `fetch` harness); the
 >   un-skip must gate on the verdaccio check, NOT on the blind local-pack preflight or the version bump alone.
 >

@@ -87,12 +87,14 @@ const CREATE_LESTO_VERSION = (
  * ⚠️ MECHANISM CORRECTED (2026-07-04, L-3daa1173) — the "dep-optimize / @prefresh rolldown stall" guess
  * below the fold is REFUTED. The real signature: `beforeAll`'s `waitForServer` fails because it uses Node's
  * undici `fetch()`, and undici `fetch()` fails outright (instant, persistent) against the published-0.1.2
- * hoisted dev — while curl, `node:http` (fresh socket), and real browsers all get `GET / → 200` fast (the
- * first-request Vite transform completes in ~55ms, so it is NOT a dep-optimize deadlock). It is undici-
- * `fetch`-client-specific and REAL-PUBLISHED-CLOSURE-specific: a LOCAL pack of the byte-identical 0.1.2
- * source answers undici fine (source-invisible + local-pack-blind). So the skip is correct (leg-a's fetch
- * harness genuinely reds on 0.1.2), user impact is LOW (real clients work), and HEAD's published-closure
- * behavior is UNPROVEN. The "isolated boots fine / hoisted-on-Linux only" framing still holds directionally
+ * hoisted dev — while curl and `node:http` (fresh socket, `Connection: close`) both get `GET / → 200` fast
+ * (~55ms, so it is NOT a dep-optimize deadlock). It is undici-`fetch`-client-specific and REAL-PUBLISHED-
+ * CLOSURE-specific: a LOCAL pack of the byte-identical 0.1.2 source answers undici fine (source-invisible +
+ * local-pack-blind). So the skip is correct (leg-a's fetch harness genuinely reds on 0.1.2), and HEAD's
+ * published-closure behavior is UNPROVEN. ⚠️ USER IMPACT NOT SETTLED: no real browser was tested against
+ * the published dev (this leg's `page.goto` never ran — `beforeAll` threw), and undici `fetch()` is Node/
+ * Bun's DEFAULT client (agents, SSR self-fetch, and Lesto's OWN dev-MCP plane use it) — do NOT read this as
+ * "users fine"; browser + agent-native impact is OPEN (L-513dd8a6). The "isolated boots fine / hoisted-on-Linux only" framing still holds directionally
  * but the CAUSE is undici-fetch-vs-real-closure, not a Vite stall; do NOT reinstate the bind/poll wording
  * (reconcile L-2d87f1b5). Full evidence + the verdaccio "is HEAD fixed" follow-up: L-3daa1173 / L-513dd8a6.
  *

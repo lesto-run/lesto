@@ -88,25 +88,29 @@ jobs:
           const mode = process.env.PROBE_MODE;
           const SEC = { "Sec-Fetch-Site": "same-origin" };
 
+          // Capture `error.cause` (undici hides the real reason there — ECONNRESET / UND_ERR_SOCKET /
+          // HPE_INVALID_* / ECONNREFUSED) — it disambiguates "connection-level" from "server framed a
+          // response strict undici rejects" (which would re-open the user-impact question). L-3daa1173.
+          const causeOf = (e) => e?.cause?.code ?? (e?.cause ? String(e.cause).slice(0, 160) : String(e).slice(0, 160));
           async function loop(headers, abortMs) {
             const deadline = Date.now() + 60000;
-            let attempts = 0;
+            let attempts = 0, lastCause = "";
             while (Date.now() < deadline) {
               attempts++;
               try {
                 const r = await fetch(url, { headers, signal: AbortSignal.timeout(abortMs) });
-                return { ok: true, status: r.status, attempts, ms: Date.now() - (deadline - 60000) };
-              } catch { /* retry */ }
+                return { ok: true, status: r.status, attempts };
+              } catch (e) { lastCause = causeOf(e); }
               await new Promise((r) => setTimeout(r, 200));
             }
-            return { ok: false, attempts, note: "60s deadline, never answered" };
+            return { ok: false, attempts, note: "60s deadline, never answered", lastCause };
           }
           async function single(headers) {
             const t0 = Date.now();
             try {
               const r = await fetch(url, { headers, signal: AbortSignal.timeout(60000) });
               return { ok: true, status: r.status, ms: Date.now() - t0 };
-            } catch (e) { return { ok: false, ms: Date.now() - t0, err: String(e).slice(0, 140) }; }
+            } catch (e) { return { ok: false, ms: Date.now() - t0, err: String(e).slice(0, 140), cause: causeOf(e) }; }
           }
           function httpClose(headers) {
             return new Promise((resolve) => {
@@ -136,7 +140,10 @@ jobs:
         env:
           PROBE_MODE: ${{ matrix.mode }}
         run: |
-          set -uo pipefail
+          # `set +e` is LOAD-BEARING: GHA's default shell is `bash -e {0}`, so a non-zero `node` exit (a
+          # red probe — which is DATA here, not a failure) would kill this step BEFORE the http.access dump
+          # + `.cause` print below. That bug lost the server-side evidence on the first run (28720092379).
+          set +e
           if [ "$PROBE_MODE" = "curl" ]; then
             if curl -sS -o /dev/null -w "curl HTTP %{http_code} in %{time_total}s\n" --max-time 60 "http://127.0.0.1:4190/"; then
               echo "PROBE_RESULT curl {\"ok\":true}"; rc=0

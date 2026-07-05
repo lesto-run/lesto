@@ -1,3 +1,11 @@
+# ⚠️ RESULT: VACUOUS (2026-07-04, run 28719740861) — this bisect came back GREEN at ALL 7 SHAs, INCLUDING
+# `6d65d49` (labeled the "expected-RED control" below — that label is FALSIFIED). It proves nothing about a
+# fix commit: the method uses LOCAL packs (`packLestoClosure`, `overrides`-pinned `file:` tarballs), which
+# are STRUCTURALLY BLIND to this defect (only the real npm-resolved published closure reproduces it). So
+# "no source red-anchor exists" is one reading; "this methodology cannot see the defect" is equally consistent
+# — indistinguishable from all-green. Kept only as the record that local-pack bisection is blind here; the
+# faithful oracle is the verdaccio check (L-513dd8a6). Do NOT trust a green/red from this workflow.
+#
 # DISPATCH-ONLY bisect for L-3daa1173 (the chief-architect's required run): NAME the commit in
 # `6d65d49..HEAD` that fixed the published-0.1.2 hoisted-Linux `lesto dev` first-request defect
 # (undici-`fetch`/`Sec-Fetch-Site` request gets no headers while curl gets a 200), and MINT the

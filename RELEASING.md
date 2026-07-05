@@ -83,25 +83,30 @@ Commit the generated `.changeset/*.md` alongside the code.
 3. **Version.** `bun run version` consumes the queued changesets, bumping versions and
    writing changelogs. Commit the result.
 
-   > **Pre-publish gate — dispatch `scaffold-hoisted-preflight` on the release SHA and confirm
-   > GREEN before you publish (interim SOFT gate, run it by hand).** This is the one leg that boots
-   > `lesto dev` on the DEFAULT hoisted layout a real `bun create lesto && cd app && bun install &&
-   > lesto dev` user gets — the exact quadrant the published-0.1.2 hang (L-27285131) slipped through,
-   > because it was only discoverable POST-publish (the immutable published leg (a) of
-   > `scaffold-real-install` has no repo-side fix; leg (b) boots the current tree but only under the
-   > ISOLATED linker). A RED here is a real default-path dev hang for Linux users, not flake — do NOT
-   > publish over it. Run it against the exact SHA the release will cut from:
+   > **⚠️ Pre-publish check — dispatch `scaffold-hoisted-preflight` on the release SHA (install/build
+   > coverage ONLY — it is BLIND to the L-27285131 undici dev defect; a GREEN does NOT license publish).**
+   > Run it against the exact release SHA to confirm the closure packs, hoisted-installs, and builds:
    >
    > ```sh
-   > gh workflow run scaffold-hoisted-preflight.yml --ref <release-sha>
+   > gh workflow run scaffold-hoisted-preflight.yml --ref <release-sha>   # install/build/hoisted-layout only
    > gh run watch   # or: gh run list --workflow=scaffold-hoisted-preflight.yml
    > ```
    >
-   > This is a MANUAL runbook step, not a `needs:` edge — release is dispatch-only, so a blocking gate
-   > buys deadlock surface + heavy-job latency for little gain until the preflight is proven able to go
-   > RED (L-8aa4315b) and the hoisted-Linux dev-hang fix ships (L-513dd8a6). Wiring it as an automatic
-   > blocking pre-publish job in `release.yml` is the tracked follow-up **L-e6a86c59** (lands only AFTER
-   > the fix, or it would deadlock the very release that ships it).
+   > **This preflight CANNOT catch the L-27285131 / L-3daa1173 defect** — published-0.1.2 `lesto dev`
+   > (real npm-resolved hoisted closure) is unreachable to a Node undici `fetch()` client (curl/`node:http`
+   > answer 200, but Node/Bun's DEFAULT `fetch()` client fails). It is a LOCAL pack (`packLestoClosure`
+   > pins the whole `@lesto/*` graph to `file:` tarballs via `overrides`), so it GREENS on the very defect
+   > it appears to gate (verified: overlay bisect greened at every SHA incl. published-0.1.2's own source).
+   > The `scaffold-e2e-masks-real-resolution` trap — do NOT read its green as "the published default path
+   > is fine." **There is NO automated pre-publish gate for the undici defect yet.** The faithful gate is
+   > the re-scoped **L-513dd8a6** verdaccio check (publish HEAD's closure to a local registry → `create-lesto`
+   > → hoisted install with NO `overrides` → undici `GET /`); until it lands, the undici defect is UNGATED —
+   > and its fix-status at HEAD is UNPROVEN, so a 0.1.3 that bumps `create-lesto` will auto-un-skip
+   > `scaffold-real-install` leg-a and re-red post-publish if still broken (gate the bump on the verdaccio
+   > check, not the version string). Blocking-gate follow-up: **L-e6a86c59** (must `needs:` the verdaccio job,
+   > not this blind preflight). ⚠️ Real-user exposure is NARROWER than "dev hangs" but WIDER than "harness
+   > only": browsers were NOT tested against the published closure, and the agent-native dev-MCP path runs on
+   > the same undici-rejecting stack — see L-513dd8a6.
 4. **Publish via Trusted Publishing (OIDC) in CI — the supported path.** Releases run from
    `.github/workflows/release.yml` on `github.com/lesto-run/lesto`, authenticated by GitHub's
    OIDC identity (NO `NPM_TOKEN`), matched against each package's **trusted publisher** config
