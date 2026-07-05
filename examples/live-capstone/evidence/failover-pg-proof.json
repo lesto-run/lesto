@@ -7,16 +7,17 @@
     "exitCode": 0,
     "assertionsPassed": "9/9",
     "console": "failover-pg.log",
+    "identityTranscript": "failover-pg-identity.txt",
     "finalLine": "✅ Tier-4 v1 real-failover leg PASSED — pg_promote's timeline increment drives a real re-snapshot"
   },
   "identityProof": {
-    "systemIdConstantAcrossFailover": "7658774196296511527",
+    "systemIdConstantAcrossFailover": "7658875336691048487",
     "primaryTimelineId": 1,
     "promotedNodeTimelineId": 2,
     "promotedNodeInRecoveryAfterPromote": false,
     "promotedWalFile": "000000020000000000000003",
-    "timelineHistoryOnPromotedNode": "00000002.history: `1\t0/303E540\tno recovery target specified` — the branch record proving timeline 2 forked from timeline 1 at LSN 0/303E540",
-    "note": "The systemId is IDENTICAL pre and post (same cluster), while the timeline incremented 1→2 from a real pg_promote — the exact (systemId-constant, timelineId-incremented) shape a same-cluster failover produces, which a systemId-only resume check would miss. Read live from the DB (WAL filename + timeline history file), independent of the leg's own IDENTIFY_SYSTEM assertions 5/6."
+    "timelineHistoryOnPromotedNode": "00000002.history: `1\t0/303E508\tno recovery target specified` — the branch record proving timeline 2 forked from timeline 1 at LSN 0/303E508",
+    "note": "The systemId is IDENTICAL pre and post (same cluster), while the timeline incremented 1→2 from a real pg_promote — the exact (systemId-constant, timelineId-incremented) shape a same-cluster failover produces, which a systemId-only resume check would miss. These values are NOT printed in failover-pg.log (the leg's console shows only the 9 pass/fail lines); they were read live from the DB (system_identifier, WAL filename, timeline-history file) and are recorded VERBATIM in the companion failover-pg-identity.txt — captured in the SAME `docker compose up` cycle as the console log, so the two artifacts describe one run. They corroborate the leg's own IDENTIFY_SYSTEM assertions 5/6 from the database side, independently."
   },
   "reproduce": [
     "docker compose -f examples/live-capstone/docker-compose.failover.yml down -v",
@@ -24,8 +25,8 @@
     "LESTO_LIVE_PG_PRIMARY_URL=postgresql://postgres:postgres@localhost:55432/postgres LESTO_LIVE_PG_STANDBY_URL=postgresql://postgres:postgres@localhost:55433/postgres bun examples/live-capstone/test/failover.pg.ts"
   ],
   "premises": [
-    "The standby is a genuine physical streaming replica, not two unrelated primaries: leg assertion 1 fails CLOSED unless the standby shares the primary's systemId AND is in recovery (verified here: shared systemId 7658774196296511527, pg_is_in_recovery()=t, pg_stat_wal_receiver=streaming from pg-primary).",
-    "A promotion is IRREVERSIBLE — a re-run needs the standby rebuilt from a fresh basebackup (`down -v` then `up`), which is why this is a run-once evidence capture, not a CI job yet (CI wiring: L-c052144e).",
+    "The standby is a genuine physical streaming replica, not two unrelated primaries: leg assertion 1 fails CLOSED unless the standby shares the primary's systemId AND is in recovery. (That the standby was actively STREAMING — pg_stat_wal_receiver=streaming from pg-primary — is an additional pre-failover fact recorded in failover-pg-identity.txt; the leg's assertion 1 itself checks only shared systemId + pg_is_in_recovery, which is sufficient to prove a promotable physical replica.)",
+    "A promotion is IRREVERSIBLE — a re-run needs the standby rebuilt from a fresh basebackup (`down -v` then `up`), which is why this is a run-once evidence capture. It now also runs in a push/dispatch CI job (live-capstone-failover.yml, L-c052144e); promotion to a per-PR gate once a first GH-hosted run is green is tracked in L-34963d5f.",
     "Single-writer hazard respected: the pre-failover consumer's slot on the primary is dropped and its connection ended BEFORE promote, so no two consumers are ever alive on one slot across the failover (assertion 9 confirms both nodes' slots end at 0 — no orphaned WAL pin)."
   ]
 }

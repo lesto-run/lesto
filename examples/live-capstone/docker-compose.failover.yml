@@ -12,12 +12,14 @@
 #   # A promotion is IRREVERSIBLE. To re-run, rebuild the standby from a fresh basebackup:
 #   docker compose -f examples/live-capstone/docker-compose.failover.yml down -v   # then `up -d --wait`
 #
-# VERIFIED on the official `postgres:16` image (2026-07-04): booted this two-node stack, confirmed the
-# standby is a real physical replica (shares the primary's systemId, in recovery), ran the leg
-# end-to-end, and filed the console under `evidence/failover-pg.log`. This replaces the earlier
-# UNVERIFIED Bitnami compose — `bitnami/postgresql:16` was relocated to `bitnamilegacy` (Broadcom, late
-# 2025), so it can pull a stale/absent image; the official image + a `pg_basebackup -R` standby is the
-# least-surprise two-node recipe and needs no vendor-specific replication env contract.
+# VERIFIED LOCALLY on the official `postgres:16` image (Docker Desktop, macOS, 2026-07-04): booted this
+# two-node stack, confirmed the standby is a real physical replica (shares the primary's systemId, in
+# recovery, streaming), ran the leg end-to-end (9/9), and filed the console + a DB identity transcript
+# under `evidence/failover-pg.log` + `evidence/failover-pg-identity.txt`. (Verification on a native-Linux
+# GH-hosted runner is pending its first green run — `L-34963d5f`.) This replaces the earlier UNVERIFIED
+# Bitnami compose — `bitnami/postgresql:16` was relocated to `bitnamilegacy` (Broadcom, late 2025), so it
+# can pull a stale/absent image; the official image + a `pg_basebackup -R` standby is the least-surprise
+# two-node recipe and needs no vendor-specific replication env contract.
 #
 # Two nodes, official `postgres:16`:
 #   * pg-primary — `wal_level=logical`, replication room, and a pg_hba line (injected via the initdb.d
@@ -43,9 +45,11 @@ configs:
       #!/bin/sh
       set -e
       cat >> "$$PGDATA/pg_hba.conf" <<'HBA'
-      # lesto real-failover leg: allow the physical standby to stream + basebackup (trust: local test)
+      # lesto real-failover leg: allow the physical standby to stream + basebackup (trust: local test).
+      # Only the `replication` line is load-bearing — a `host all all` line does NOT match replication
+      # connections, and `POSTGRES_HOST_AUTH_METHOD=trust` already appends the non-replication `host all
+      # all all trust` line, so it need not be repeated here.
       host replication all all trust
-      host all all all trust
       HBA
 
 services:
@@ -104,8 +108,8 @@ services:
           rm -rf "$$PGDATA"/* "$$PGDATA"/.[!.]* 2>/dev/null || true
           pg_basebackup -h pg-primary -U postgres -D "$$PGDATA" -Fp -Xs -R -P
         fi
-        # PG refuses a data dir looser than 0700/0750; the mounted volume dir defaults to 0755 and
-        # pg_basebackup writes INTO it without tightening the top dir, so clamp it here.
+        # PG refuses a data dir looser than 0700/0750; the anonymous data volume's top dir can be
+        # looser than that, and pg_basebackup writes INTO it without tightening the top dir, so clamp it.
         chmod 0700 "$$PGDATA"
         exec postgres \
           -c listen_addresses='*' \

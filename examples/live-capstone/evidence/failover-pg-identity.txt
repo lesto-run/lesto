@@ -1,0 +1,23 @@
+Real pg_promote failover — live DB identity transcript
+Companion to failover-pg.log; BOTH captured in the SAME docker-compose up cycle (2026-07-04 UTC).
+Stack: examples/live-capstone/docker-compose.failover.yml — official postgres:16 @ postgres@sha256:fe03a7605299a34ddf5e4f285dff78c3d7190a576b3c6b46f2fcff69f4bffd54
+Queries run via: docker exec <node> psql -U postgres -tAc '<sql>'  (history via cat $PGDATA/pg_wal/*.history)
+
+=== PRE-FAILOVER (primary live; standby streaming, in recovery) ===
+primary  system_identifier : 7658875336691048487
+primary  wal_level         : logical
+primary  timeline_id       : 1
+standby  system_identifier : 7658875336691048487   (== primary — a byte-for-byte physical replica)
+standby  pg_is_in_recovery : t
+standby  wal_level         : logical
+standby  pg_stat_wal_receiver : streaming from pg-primary:5432
+
+=== POST-FAILOVER (standby pg_promote'd → new timeline; primary untouched) ===
+promoted system_identifier : 7658875336691048487   (UNCHANGED vs pre — same cluster; a systemId-only resume check would see NO change)
+promoted pg_is_in_recovery : f   (false — now a primary)
+promoted timeline_id       : 2   (INCREMENTED from 1 by pg_promote — the real mechanic the leg proves)
+promoted current WAL file  : 000000020000000000000003
+promoted timeline history  : 1 0/303E508 no recovery target specified
+primary  timeline_id       : 1   (still 1 — the old primary never advanced timeline)
+
+leg exit code: 0   (0 = all 9 assertions passed — see failover-pg.log)

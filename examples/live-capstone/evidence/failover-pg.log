@@ -1,19 +1,19 @@
   ok   1. the standby is a physical streaming replica in recovery, sharing the primary's systemId
-{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":14,"request_id":"b2cae243-9dc8-4831-acae-b148d5b52a71","active_streams":1}
-{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":8,"request_id":"ebc52bb0-9513-4171-b0db-e26b44b8c015"}
+{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":11,"request_id":"58284fe3-2e3e-4005-8108-35be71871b0a","active_streams":1}
+{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":6,"request_id":"a407b590-56ee-4e22-a200-347217770a16"}
   ok   2. booted a live consumer on the primary; captured its identity + a real v1 change cursor
   ok   3. the pre-failover cursor decodes to the primary's (systemId, timelineId) — a real position
   ok   4. pg_promote turned the standby into a primary (out of recovery)
   ok   5. the promoted node shares the systemId (same cluster) but its timelineId INCREMENTED (real pg_promote)
-{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":20,"request_id":"1411b1e2-399f-4b9b-a914-031dc7fc5712","active_streams":1}
-{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":8,"request_id":"d0cfb532-8111-4872-b489-9cf939515d5c"}
+{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":7,"request_id":"2f683ce6-c0db-4b8b-bad0-732b76dea278","active_streams":1}
+{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":3,"request_id":"68a14817-7109-46f1-95fe-cb2849423c7f"}
   ok   6. the promoted change cursor carries the incremented timelineId (constant systemId), matching IDENTIFY_SYSTEM
-{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":6,"request_id":"4205d4c3-4aa1-4440-b9a2-889b72d68518","active_streams":2}
+{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":2,"request_id":"d0c3db95-8c6e-48a2-a396-2ef30394138e","active_streams":2}
   ok   7. NEGATIVE ARM: a pre-failover cursor RE-SNAPSHOTS against the promoted timeline (real timelineId mismatch), never a false-continuity replay
-{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":4,"request_id":"6cdcfa68-d1c9-4234-badd-dea7c6dbacd1","active_streams":3}
-{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":7,"request_id":"136330d7-4c51-4a78-b4a1-f271e294a7c1"}
-{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":10,"request_id":"ecccb350-8c10-499b-8d55-4ba34fe3a832"}
-{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":5,"request_id":"8e0cc12d-9808-4eb5-bd45-a8c6e8c64672","active_streams":4}
+{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":2,"request_id":"07a74e2e-6765-46a3-a0e5-369c68bc2320","active_streams":3}
+{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":3,"request_id":"b29d978d-82ab-4ce9-9ccf-5abb114978f8"}
+{"level":"info","event":"http.access","method":"POST","path":"/messages","status":201,"ms":3,"request_id":"df382f1a-910d-4e09-a81f-b2d9ae0d7180"}
+{"level":"info","event":"http.access","method":"GET","path":"/__lesto/live-data","status":200,"ms":2,"request_id":"6cad2f7c-9d82-40d4-bae6-91bc03bdbc9f","active_streams":4}
   ok   8. POSITIVE CONTROL: a live post-failover cursor REPLAYS exactly the missed change on the promoted timeline, with no re-snapshot
   ok   9. both the primary's (pre-failover) and the promoted node's slots are dropped — no orphaned WAL pin
 
