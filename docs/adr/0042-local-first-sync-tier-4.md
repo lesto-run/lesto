@@ -408,7 +408,11 @@ in memory; see the 2026-07-02 cross-tab amendment.**
   stands up a real primary + physical streaming-replication standby and `pg_promote`s it so the WAL
   timeline increments for real (`systemId` held constant), asserting a reconnecting client with a
   pre-failover cursor re-snapshots — so the branch fires on the failover the real world produces, not
-  only a forged cursor. **This matrix is the gate.**
+  only a forged cursor. The two halves sit at different maturities: the *forged-branch* cover runs in
+  the **per-PR** acceptance gate (`ci.yml` `live-capstone-acceptance`), while the *real-mechanic* proof
+  runs **out-of-band** — executed once locally (evidence under `examples/live-capstone/evidence/`) and
+  in a `push`/dispatch job (`live-capstone-failover.yml`), NOT yet a per-PR gate (`L-34963d5f`). **This
+  matrix is the gate.**
 - **Sound resume:** a reconnect from a stale LSN replays exactly the missed changes, or re-snapshots
   when the LSN aged past slot retention — never silently misses a change (the Tier-4 analogue of ADR
   0040's missed-message guarantee, now LSN-exact).
