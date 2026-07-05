@@ -29,7 +29,21 @@ name: live-capstone-failover
 on:
   push:
     branches: [main]
+    # Only trigger on changes that can affect the failover leg. This two-node docker job is far heavier
+    # (~minutes) than the fast checks, and main is chatty (concurrent commits) — an UNFILTERED trigger
+    # plus the `cancel-in-progress` below would keep cancelling the run before it completes, so it would
+    # never actually validate. Scoped to the leg + the packages it exercises + this workflow itself.
+    paths:
+      - "examples/live-capstone/**"
+      - "packages/live-server/**"
+      - "packages/live-protocol/**"
+      - "packages/pg/**"
+      - ".github/workflows/live-capstone-failover.yml"
   workflow_dispatch:
+
+# Least privilege: this job only reads the repo (checkout + docker); it uses no token-scoped writes.
+permissions:
+  contents: read
 
 # A newer push to the same ref supersedes an in-flight run.
 concurrency:
