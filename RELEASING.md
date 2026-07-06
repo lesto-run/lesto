@@ -99,14 +99,15 @@ existence, and only then wired for OIDC:
 4. **Thereafter, releases go through CI/OIDC** like every other package.
 
 > ⚠️ **"Bump + install + dispatch the release workflow" is WRONG when a release introduces a NEW
-> package.** The dispatched OIDC run will 403 on the package that has no trusted publisher yet — and
-> because `scripts/publish.mjs` currently **continues past a failed package** (it collects failures
-> and exits non-zero at the end rather than stopping), that 403 does **not** halt the rest of the
-> run. The result is a **partial publish**: if the un-bootstrapped package is a dependency in a
-> scaffolded app's closure, `npm create lesto` then **404s** on it and the scaffold is broken for
-> outsiders. Bootstrap every new package first (steps 1–3), *then* run the normal release. (Fail-closed
-> publish hardening — stop the run on the first 403 — is tracked separately; until it lands, the
-> "continue past failure" behavior is why the bootstrap ordering is load-bearing, not cosmetic.)
+> package.** The dispatched OIDC run will 403 on the package that has no trusted publisher yet.
+> `scripts/publish.mjs` publishes **dependency-first and fail-closed** — it packs the whole set, then
+> uploads in topological order and **stops at the first failed package**, before any dependent (which
+> bun-pack exact-pins to it) can ship. So that 403 **halts the release** instead of leaving a partial
+> closure that makes a scaffold's `npm create lesto` **404** on a missing transitive dep. The fail-closed
+> stop is a safety net, **not** a substitute for bootstrapping: the run still fails, and any package
+> already uploaded *before* the 403 is live on the registry (a re-run skips it idempotently). So
+> bootstrap every new package first (steps 1–3), *then* run the normal release — the ordering is
+> load-bearing, and the fail-closed stop just guarantees a broken half-closure never ships.
 
 ### Metadata checklist when de-privatizing a package
 
