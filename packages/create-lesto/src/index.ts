@@ -45,6 +45,7 @@ export {
   routeLayout,
   routePage,
   SHADCN_DEPS,
+  skillMd,
   stylesApp,
   toPackageName,
   tsconfig,

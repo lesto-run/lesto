@@ -116,12 +116,17 @@ README hero + demo GIF (L-fd9bc030), finish the wedge screencast (L-62b22a91),
 draft the launch post (L-80ff5e22), open the community channel *quietly*
 (L-f99bdb0d) so it isn't empty on launch day.
 
-- **Agent on-ramp minimum:** `AGENTS.md` in every create-lesto template + a
-  first-party Claude Code skill covering scaffold→dev→first MCP operation,
-  published where agents discover it by L1 day (the scaffold ships none of this
-  today). Launch day *is* the agent-ecosystem distribution event; the Show HN
-  reader's first move is "Claude, try this framework." The heavier items
-  (registry listings, Cursor/Windsurf rules polish, plugin expansion) stay in L2.
+- **Agent on-ramp minimum:** *(correction 2026-07-05: 0.1.2 already ships
+  `AGENTS.md` + `CLAUDE.md` — the "ships none of this" premise was wrong; what
+  was missing is the MCP control-plane guidance and the skill.)* SHIPPED same
+  day: AGENTS.md gained a "Drive the app over MCP" section (banner, token
+  header, read-only governance, `describe_app`-first, Claude Code + raw
+  JSON-RPC recipes) and every scaffold now carries a first-party Claude Code
+  skill (`.claude/skills/lesto/SKILL.md`). **Reaches users only with the next
+  create-lesto release — cut it before L1 day.** Launch day *is* the
+  agent-ecosystem distribution event; the Show HN reader's first move is
+  "Claude, try this framework." The heavier items (registry listings,
+  Cursor/Windsurf rules polish, plugin expansion) stay in L2.
 - **Claims-source refresh (blocks L1 artifact drafting, not the launch gate):**
   `messaging.md` §5 is v0 (2026-06-21) and predates the shipped Tier-4 epic (its
   local-first row still describes the pre-replication `live()` v0), and

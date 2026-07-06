@@ -155,6 +155,8 @@ describe("create — scaffolding", () => {
     expect(result.files.some((p) => p.endsWith("app/routes/layout.tsx"))).toBe(true);
     expect(result.files.some((p) => p.endsWith("AGENTS.md"))).toBe(true);
     expect(result.files.some((p) => p.endsWith("CLAUDE.md"))).toBe(true);
+    // The Claude Code skill rides along under .claude/skills/ (the agent on-ramp).
+    expect(result.files.some((p) => p.includes(".claude") && p.endsWith("SKILL.md"))).toBe(true);
   });
 
   it("propagates the clobber refusal from scaffold (existing target)", async () => {

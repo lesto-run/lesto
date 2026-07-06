@@ -863,6 +863,44 @@ TypeScript framework (ESM, run directly — no build step for the source).
 - \`lesto deploy --cloudflare\` — prerender to \`out/\` and \`wrangler deploy\` the
   Worker (\`worker.ts\`).
 
+## Drive the app over MCP (the agent control plane)
+
+\`lesto dev\` also boots a Model Context Protocol server for THIS app, so an
+agent can operate the running app instead of only editing files. On boot, the
+dev output prints one line:
+
+\`\`\`
+lesto dev: MCP control plane on http://127.0.0.1:<port>/ (x-lesto-dev-token: <token>)
+\`\`\`
+
+- Streamable-HTTP MCP endpoint at that root URL. Loopback-only and dev-only
+  (\`lesto build\` output has no control plane). The port is ephemeral and the
+  token rotates on every \`lesto dev\` run — re-read the banner after a restart.
+- Every request must carry the banner's \`x-lesto-dev-token\` header (403 without).
+- The session is **read-only by default**: inspection tools (\`describe_app\`,
+  \`list_routes\`, \`query_content\`, \`get_dev_diagnostics\`, \`tail_logs\`, ...)
+  work; destructive tools refuse with \`MCP_OPERATOR_REQUIRED\` — that is the
+  governance working, not a bug. Enumerate the full set with \`tools/list\`.
+- Call \`describe_app\` first: one round-trip returns the routes, the OpenAPI
+  contract, the content collections, and the schema — prefer it over grepping.
+
+Claude Code (values from the banner; re-add after each dev restart):
+
+\`\`\`sh
+claude mcp add --transport http lesto-dev http://127.0.0.1:<port>/ \\
+  --header "x-lesto-dev-token: <token>"
+\`\`\`
+
+Any MCP client — or raw JSON-RPC — works the same way:
+
+\`\`\`sh
+curl -s http://127.0.0.1:<port>/ \\
+  -H 'content-type: application/json' \\
+  -H 'accept: application/json, text/event-stream' \\
+  -H 'x-lesto-dev-token: <token>' \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"describe_app","arguments":{}}}'
+\`\`\`
+
 ## Layout
 
 - \`lesto.app.ts\` — the app: tables (\`@lesto/db\`), migrations, and a code-first
@@ -904,6 +942,12 @@ TypeScript framework (ESM, run directly — no build step for the source).
 - An API route: chain \`.get(path, handler)\` / \`.post(...)\` in \`lesto.app.ts\`.
 - A table: \`defineTable(...)\` in \`lesto.app.ts\` plus a \`MigrationEntry\`.
 - An interactive widget: \`app/islands/<name>.tsx\` (default-export \`defineIsland\`).
+
+## Docs
+
+https://docs.lesto.run — written to be agent-readable: \`/llms.txt\` is the
+index, \`/llms-full.txt\` is the whole corpus in one file, and every page has a
+clean-Markdown twin at its path + \`.md\` (e.g. \`/quickstart.md\`).
 `;
 }
 
@@ -918,6 +962,78 @@ export function claudeMd(name: string): string {
 See [\`AGENTS.md\`](./AGENTS.md) for this project's commands, layout, and
 conventions — it is the single source of truth for working in this codebase, for
 Claude Code and any other coding agent alike.
+`;
+}
+
+/**
+ * `.claude/skills/lesto/SKILL.md` — the first-party Claude Code skill (the
+ * agent on-ramp, ATTACK-PLAN-2027 Phase L0). Claude Code auto-discovers
+ * project skills under `.claude/skills/`, so a fresh scaffold arrives with the
+ * boot-it → connect-to-its-MCP → operate-it procedure pre-installed and an
+ * agent's first session can one-shot the loop. `AGENTS.md` stays the
+ * cross-agent source of truth for layout/conventions; this file is the
+ * Claude-Code-specific *procedure* and defers to it.
+ */
+export function skillMd(): string {
+  return `---
+name: lesto
+description: Develop and operate this Lesto app — run the dev server, connect to its loopback MCP control plane, add routes/tables/islands, and verify changes. Use whenever working in this repository.
+---
+
+# Working on this Lesto app
+
+Layout and conventions live in [AGENTS.md](../../../AGENTS.md); this skill is
+the procedure.
+
+## Run it
+
+\`bun install\` once, then \`bun run dev\` (serves http://localhost:3000;
+\`--port N\` to move it). The dev output prints one banner line you need:
+
+\`\`\`
+lesto dev: MCP control plane on http://127.0.0.1:<port>/ (x-lesto-dev-token: <token>)
+\`\`\`
+
+## Operate it over MCP (do this before grepping)
+
+1. Register the control plane — port and token rotate on every \`lesto dev\`
+   run, so re-add after a restart:
+
+   \`\`\`sh
+   claude mcp add --transport http lesto-dev http://127.0.0.1:<port>/ \\
+     --header "x-lesto-dev-token: <token>"
+   \`\`\`
+
+2. Call \`describe_app\` — one round-trip returns the routes, the OpenAPI
+   contract, the content collections, and the schema.
+3. The session is read-only by default: \`list_routes\`, \`query_content\`,
+   \`get_dev_diagnostics\`, \`get_recent_requests\`, and \`tail_logs\` all work; a
+   destructive tool refusing with \`MCP_OPERATOR_REQUIRED\` is the governance
+   working, not a bug.
+
+## Verify by hand
+
+- Reads are plain: \`curl http://localhost:3000/posts\`.
+- State-changing requests are CSRF-guarded by default: a non-browser client
+  must send \`Sec-Fetch-Site: same-origin\` or it is refused with a 403.
+
+## Add things
+
+- A page: \`app/routes/<path>/page.tsx\` default-exporting a \`PageDef\` — the
+  file IS the route.
+- An API route: chain \`.get\`/\`.post\` in \`lesto.app.ts\`; validate bodies at the
+  boundary with \`c.valid(Schema)\`.
+- A table: \`defineTable\` plus a \`MigrationEntry\` in \`lesto.app.ts\`; migrations
+  run on the next dev boot.
+- An interactive island: \`app/islands/<name>.tsx\` default-exporting
+  \`defineIsland\`.
+- A shadcn component: \`lesto add <name>\` (installs into \`app/components/ui\`).
+
+## Docs / another app
+
+Docs are agent-readable at https://docs.lesto.run (\`/llms.txt\` is the index;
+any page's Markdown twin is its path + \`.md\`). Scaffold a fresh app with
+\`bunx create-lesto <name>\`.
 `;
 }
 
@@ -1147,6 +1263,14 @@ curl -X POST http://localhost:3000/posts \\
 A blank \`title\` or \`body\` is rejected at the boundary with a 422, never a
 crash — that is the Zod \`c.valid\` check in \`lesto.app.ts\`. Read the list again
 and your new post is there.
+
+## For agents
+
+\`AGENTS.md\` onboards any coding agent (\`CLAUDE.md\` defers to it, and a
+first-party Claude Code skill ships in \`.claude/skills/lesto\`). While
+\`bun run dev\` runs, the app also exposes a loopback **MCP control plane** —
+see the banner in the dev output and the "Drive the app over MCP" section of
+\`AGENTS.md\`.
 
 ## Deploy to Cloudflare
 

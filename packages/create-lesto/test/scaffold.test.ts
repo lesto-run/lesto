@@ -26,6 +26,7 @@ import {
   routeLayout,
   routePage,
   scaffold,
+  skillMd,
   toPackageName,
   tsconfig,
   worker,
@@ -83,6 +84,7 @@ describe("scaffold", () => {
       ".gitignore",
       "AGENTS.md",
       "CLAUDE.md",
+      ".claude/skills/lesto/SKILL.md",
       "README.md",
     ]
       .map((relative) => join(targetDir, relative))
@@ -297,6 +299,7 @@ describe("scaffold", () => {
     const layout = await readFile(join(targetDir, "app/routes/layout.tsx"), "utf8");
     const agents = await readFile(join(targetDir, "AGENTS.md"), "utf8");
     const claude = await readFile(join(targetDir, "CLAUDE.md"), "utf8");
+    const skill = await readFile(join(targetDir, ".claude/skills/lesto/SKILL.md"), "utf8");
 
     // The home page is a JSX PageDef (not createElement) registered at "/" by the
     // file convention, rendering the Counter island via PageProps inference.
@@ -310,10 +313,16 @@ describe("scaffold", () => {
     expect(layout).toContain("export default function RootLayout");
     expect(layout).toContain("children");
 
-    // The agent files: AGENTS.md is the source of truth, CLAUDE.md defers to it.
+    // The agent files: AGENTS.md is the source of truth, CLAUDE.md defers to it,
+    // and the Claude Code skill (auto-discovered under `.claude/skills/`) carries
+    // the dev→MCP procedure while pointing back at AGENTS.md.
     expect(agents).toContain("# routed — agent guide");
     expect(agents).toContain("app/routes/");
+    expect(agents).toContain("MCP control plane");
     expect(claude).toContain("AGENTS.md");
+    expect(skill).toContain("name: lesto");
+    expect(skill).toContain("x-lesto-dev-token");
+    expect(skill).toContain("AGENTS.md");
   });
 
   it("scaffolds the Cloudflare deploy files (worker.ts + wrangler.jsonc)", async () => {
@@ -586,6 +595,42 @@ describe("templates", () => {
     expect(out).toContain("AGENTS.md");
   });
 
+  it("agentsMd teaches the dev-MCP control plane: banner, token header, read-only default, describe_app first", () => {
+    const out = agentsMd("acme");
+
+    // The banner an agent must parse — the port is ephemeral, the token rotates.
+    expect(out).toContain("MCP control plane on http://127.0.0.1:<port>/");
+    expect(out).toContain("x-lesto-dev-token");
+    // Governance: read-only by default; a destructive refusal is expected behavior.
+    expect(out).toContain("read-only by default");
+    expect(out).toContain("MCP_OPERATOR_REQUIRED");
+    // The first call, and both connection paths (Claude Code + any raw JSON-RPC client).
+    expect(out).toContain("describe_app");
+    expect(out).toContain("claude mcp add --transport http");
+    expect(out).toContain('"method":"tools/call"');
+    // The agent-readable docs pointer (llms.txt + per-page .md twins).
+    expect(out).toContain("https://docs.lesto.run");
+    expect(out).toContain("/llms.txt");
+  });
+
+  it("skillMd is a Claude Code project skill covering the dev→MCP procedure and deferring to AGENTS.md", () => {
+    const out = skillMd();
+
+    // The frontmatter Claude Code discovers the skill by.
+    expect(out.startsWith("---\nname: lesto\n")).toBe(true);
+    expect(out).toContain("description:");
+    // The procedure: boot, parse the banner, register, describe_app first.
+    expect(out).toContain("bun run dev");
+    expect(out).toContain("MCP control plane on http://127.0.0.1:<port>/");
+    expect(out).toContain("claude mcp add --transport http lesto-dev");
+    expect(out).toContain("describe_app");
+    expect(out).toContain("MCP_OPERATOR_REQUIRED");
+    // The CSRF hand-testing gotcha, and the single source of truth deferred to.
+    expect(out).toContain("Sec-Fetch-Site: same-origin");
+    // The skill sits 3 directories deep, so the deference link must climb to the root.
+    expect(out).toContain("(../../../AGENTS.md)");
+  });
+
   it("lestoSites default-exports a Site[] with a dynamic root zone", () => {
     expect(lestoSites()).toContain("export default sites");
     expect(lestoSites()).toContain('render: "dynamic"');
@@ -666,6 +711,15 @@ describe("templates", () => {
     expect(out).toContain("## Try it");
     expect(out).toContain("curl http://localhost:3000/posts");
     expect(out).toContain("Sec-Fetch-Site: same-origin");
+  });
+
+  it("readme points humans at the agent surface (AGENTS.md + skill + MCP control plane)", () => {
+    const out = readme("acme");
+
+    expect(out).toContain("## For agents");
+    expect(out).toContain("AGENTS.md");
+    expect(out).toContain(".claude/skills/lesto");
+    expect(out).toContain("MCP control plane");
   });
 
   it("worker fronts the app with @lesto/cloudflare's toFetchHandler + withAssets", () => {

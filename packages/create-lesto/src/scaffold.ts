@@ -13,6 +13,7 @@ import { CreateLestoError } from "./errors";
 import {
   agentsMd,
   claudeMd,
+  skillMd,
   componentsJson,
   env,
   envClient,
@@ -115,7 +116,9 @@ export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promis
   // `app/routes/layout.tsx`, so the headline "drop a file → it routes" convention
   // is visible on day one. `worker.ts` + `wrangler.jsonc` are the scaffold→deploy
   // path: `lesto deploy --cloudflare` builds `out/` and `wrangler deploy`s the
-  // Worker that fronts the app. `AGENTS.md`/`CLAUDE.md` onboard a coding agent.
+  // Worker that fronts the app. `AGENTS.md`/`CLAUDE.md` onboard a coding agent,
+  // and `.claude/skills/lesto/SKILL.md` is the first-party Claude Code skill
+  // (auto-discovered under `.claude/skills/`) teaching the dev→MCP loop.
   // `components.json` + `app/lib/utils.ts` (`cn()`) make the app a generic shadcn
   // project (ADR 0037 Phase 2): `lesto add <name>` installs components into
   // `app/components/ui` via the `@/*` tsconfig path `components.json` resolves against.
@@ -137,6 +140,7 @@ export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promis
     [".gitignore", gitignore()],
     ["AGENTS.md", agentsMd(name)],
     ["CLAUDE.md", claudeMd(name)],
+    [".claude/skills/lesto/SKILL.md", skillMd()],
     ["README.md", readme(name)],
   ];
 
