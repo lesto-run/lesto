@@ -13,6 +13,15 @@
 // reads are shared; each caller derives its own view from `readTarballMeta` (publish builds a
 // name → {path, version} map; pack-and-boot builds the npm `overrides` + packed-version +
 // cross-reference tables), so that caller-specific derivation stays in the callers.
+//
+// TESTING: these three helpers are effectful (fs + child_process), so — like the inline blocks
+// they replaced — they are NOT unit-tested; only the PURE logic in `publish.mjs` is (see
+// `scripts/publish.test.mjs`). Their standing automated guard is the `install-proof` CI job
+// (`.github/workflows/ci.yml`, `bun run test:pack-boot`), which runs `scripts/pack-and-boot.mjs`
+// against every real package on every push/PR and so exercises all three end-to-end. If that job
+// is ever removed or de-blocked, these lose their only CI guard. (`publish.mjs` itself runs ONLY
+// on the release `workflow_dispatch`, never in CI — its use of these helpers is proven only
+// transitively, since they are the identical functions `install-proof` drives.)
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
