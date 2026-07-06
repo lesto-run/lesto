@@ -4,6 +4,7 @@
   "commit": false,
   "fixed": [["@lesto/*", "create-lesto"]],
   "linked": [],
+  "privatePackages": { "version": false, "tag": false },
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",

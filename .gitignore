@@ -27,6 +27,7 @@ var/
 # Leftover scratch tests from interactive debugging
 **/*_scratch.test.ts
 
-# Changeset-generated changelogs (the 0.1.x release convention commits zero CHANGELOGs;
-# `changeset version` would otherwise litter ~80 untracked CHANGELOG.md a daemon could sweep)
-**/CHANGELOG.md
+# Changeset-generated per-package changelogs (the 0.1.x release convention commits zero of these;
+# `changeset version` would otherwise litter untracked packages/*/CHANGELOG.md a daemon could sweep).
+# Scoped to packages/* on purpose — a broad **/CHANGELOG.md would also shadow the tracked root CHANGELOG.md.
+packages/*/CHANGELOG.md
