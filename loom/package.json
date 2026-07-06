@@ -1,6 +1,7 @@
 {
   "name": "loom",
   "version": "0.1.0",
+  "private": true,
   "description": "An AI-native React rendering engine. The AI emits a validated UI tree; Loom weaves it into React. Built on Vite 6.",
   "type": "module",
   "bin": {
