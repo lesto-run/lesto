@@ -103,8 +103,8 @@ test.beforeAll(async () => {
   viteDev = vite.child;
 
   await Promise.all([
-    waitForServer(`${BUN_URL}/`, 30_000, { output: bun.output, hasExited: bun.hasExited }),
-    waitForServer(`${VITE_URL}/`, 30_000, { output: vite.output, hasExited: vite.hasExited }),
+    waitForServer(`${BUN_URL}/`, 30_000, bun),
+    waitForServer(`${VITE_URL}/`, 30_000, vite),
   ]);
 });
 

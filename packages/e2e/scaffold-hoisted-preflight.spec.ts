@@ -91,10 +91,7 @@ test.describe("current-tree HOISTED dev-boot preflight — the L-513dd8a6 gate @
     dev = devProc.child;
 
     try {
-      await waitForServer(`http://127.0.0.1:${PORT}/`, 120_000, {
-        output: devProc.output,
-        hasExited: devProc.hasExited,
-      });
+      await waitForServer(`http://127.0.0.1:${PORT}/`, 120_000, devProc);
     } catch (cause) {
       throw new Error(
         "hoisted-tree `lesto dev` first GET failed — the current tree does not boot a reachable dev " +

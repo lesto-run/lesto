@@ -70,7 +70,7 @@ test.beforeAll(async () => {
   const devProc = await spawnDev(LESTO_BIN, appDir, PORT, BASE_URL);
   dev = devProc.child;
 
-  await waitForServer(`${BASE_URL}/`, 30_000, { output: devProc.output, hasExited: devProc.hasExited });
+  await waitForServer(`${BASE_URL}/`, 30_000, devProc);
 });
 
 test.afterAll(async () => {

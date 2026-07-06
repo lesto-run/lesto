@@ -157,8 +157,17 @@ export function run(command: string, args: string[], cwd: string): Promise<void>
   });
 }
 
-/** A spawned `lesto dev` child plus a reader for its captured (drained) stdout+stderr. */
-export interface DevProcess {
+/**
+ * A spawned `lesto dev` child plus a reader for its captured (drained) stdout+stderr.
+ *
+ * Extends {@link WaitForServerOptions} — it structurally supersets it: `output` and `hasExited` are
+ * exactly the two hooks {@link waitForServer} reads, so a `DevProcess` can be handed straight to it
+ * (`waitForServer(url, ms, devProc)`) instead of re-spelling `{ output: devProc.output, hasExited:
+ * devProc.hasExited }` at every call site. Declaring the `extends` makes that intent explicit and
+ * makes it structurally impossible to wire `output` but forget `hasExited`: both are REQUIRED here,
+ * narrowing the base interface's optionals.
+ */
+export interface DevProcess extends WaitForServerOptions {
   child: ChildProcess;
   output: () => string;
   /**
