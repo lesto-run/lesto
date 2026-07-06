@@ -36,13 +36,15 @@ jobs:
       - name: Assert isolated node_modules layout (no @lesto at root)
         run: bun scripts/assert-isolated-node-modules.mjs
 
-      # The drift guard's OWN unit suite, link-workspace's semver/store units, and the dev-harness
-      # fail-fast guard run nowhere else: `scripts/` is not a workspace package and `lesto-e2e`
-      # declares no `test:cov`, so the coverage gate never sweeps them. The dev-harness guard fires
-      # only on a boot failure the Playwright specs' happy path never provokes — run it here (it needs
-      # no server) so a regression goes red instead of shipping green.
-      - name: Unit-test the drift guard + link-workspace + dev-harness helpers
-        run: bunx vitest run scripts/assert-isolated-node-modules.test.mjs packages/e2e/link-workspace.test.ts packages/e2e/dev-harness.test.ts
+      # The drift guard's OWN unit suite, link-workspace's semver/store units, the dev-harness
+      # fail-fast guard, and publish.mjs's fail-closed ordering logic run nowhere else: `scripts/`
+      # is not a workspace package and `lesto-e2e` declares no `test:cov`, so the coverage gate never
+      # sweeps them. The dev-harness guard fires only on a boot failure the Playwright specs' happy
+      # path never provokes, and publish.test.mjs proves the topological/fail-fast ordering that keeps
+      # a release from shipping a dependent before a failed dep — run them here (no server needed) so a
+      # regression goes red instead of shipping green.
+      - name: Unit-test the drift guard + link-workspace + dev-harness + publish helpers
+        run: bunx vitest run scripts/assert-isolated-node-modules.test.mjs packages/e2e/link-workspace.test.ts packages/e2e/dev-harness.test.ts scripts/publish.test.mjs
 
       - name: Typecheck
         run: bun run ws:typecheck
