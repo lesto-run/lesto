@@ -32,8 +32,9 @@ const LESTO_BIN = join(REPO_ROOT, "packages", "cli", "src", "bin.ts");
 const FIXTURE = join(REPO_ROOT, "examples", "island-fast-refresh");
 
 // A port unique across the e2e specs (4188 scaffold-loop, 4189 island-fast-refresh,
-// 4194/4195 bundler-parity, 4196/4197 island-dev-concurrent, 4198 page-swap) so a
-// `fullyParallel` `playwright test` run never collides on the dev-server bind.
+// 4194/4195 bundler-parity, 4196/4197 island-dev-concurrent, 4198 page-swap,
+// 4200 agent-activation) so a `fullyParallel` `playwright test` run never collides
+// on the dev-server bind.
 const PORT = 4199;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 

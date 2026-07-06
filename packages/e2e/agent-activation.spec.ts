@@ -46,9 +46,14 @@ const CREATE_LESTO_VERSION = (
   ) as { version: string }
 ).version;
 
-// A fetchable fixed port (`spawnDev`'s `assertFetchablePort` enforces), clear of the fixture
-// webServer's 4180 and the other specs' 4188/4189/4191/4192/4193.
-const PORT = 4194;
+// A fetchable fixed port (`spawnDev`'s `assertFetchablePort` enforces), unique across ALL the
+// e2e specs — the full inventory, not just the scaffold family (a first draft picked 4194 and
+// collided with bundler-parity): 4180 fixture webServer, 4187 opfs, 4188 scaffold-loop,
+// 4189 island-hmr, 4190 BLOCKED (the L-513dd8a6 trap), 4191/4193 scaffold-real,
+// 4192 hoisted-preflight, 4194/4195 bundler-parity, 4196/4197 island-concurrent,
+// 4198/4199 page-swap. A `fullyParallel` bare `playwright test` runs every spec at once, so a
+// duplicate port false-reds on the pre-spawn availability probe.
+const PORT = 4200;
 
 // The one banner line `lesto dev` prints for the control plane — parsed here exactly the way
 // a real agent (or the scaffolded AGENTS.md recipe) parses it.
