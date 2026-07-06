@@ -657,3 +657,45 @@ evidence records: a *fully-offline reload* still needs the app shell cached (no 
 the examples — a follow-up), and OPFS's Worker-only sync handle means the durable engine has **no
 main-thread fallback** (so an OPFS-open failure should degrade loudly rather than wedge leadership —
 the filed `S2` decision).
+
+### 2026-07-04 — amendment: failover-resync — drop every shape on an identity change, revealed at every (re)connect so it engages before the first post-failover change (`L-f61264b0`, `L-2bd5c9f7`)
+
+Acceptance (e) and the resume contract (`resume.ts`) already guard the **client**: a reconnect whose
+stored `(systemId, timelineId)` differs from the live database's re-snapshots rather than replaying a
+false-continuity LSN. But the **server-side** shape engine held pre-failover state that neither the
+cursor guard nor `resumeFor` could see past, and that did not self-heal until the shape dropped — a
+promoted standby (or a PITR-rewound timeline) left the engine's OWN view stale. Two passes closed it,
+both load-bearing:
+
+- **Drop every shape when a CHANGE reveals a new `(systemId, timelineId)` (`ac638bd`, `L-f61264b0`).**
+  Inc1 stamps the live identity onto every change, so a change whose `(systemId, timelineId)` differs
+  from the last-seen `liveIdentity` **is** the failover signal. Before this fix two windows stayed
+  open past a promote: (i) **`resumeFor` stale-ring-replay** — the shape's replay ring still held
+  OLD-timeline entries, so a pre-failover reconnect presenting an old-timeline cursor matched that
+  ring and **replayed** it (both cursor and ring on the same dead timeline) instead of being forced to
+  re-snapshot against the promoted DB; and (ii) **stale-snapshot-rows** — `entry.rows` still held
+  pre-failover rows, including lost-on-promote writes the promoted node never received, so the next
+  snapshot payload served them. The engine now **drops every shape the moment a change crosses the
+  identity boundary, BEFORE applying that change**: each subscriber resyncs, and any re-subscribe
+  re-seeds `entry.rows` from the promoted DB and mints a fresh ring on the new identity. This
+  **subsumes** the prior `snapshotCursor` stale-identity guard (kept as belt-and-braces) — `resume.ts`
+  collapses to `latestLsnFor(identity)`, which returns a shape's latest LSN only when its ring is on
+  the live identity, else the `0/0` baseline, so a `v1:newId:newTl:<old-lsn>` mix can no longer be
+  minted. The FIRST change (`liveIdentity` still `undefined`) is initialization, not a failover, so
+  nothing drops.
+
+- **Reveal identity at every (re)connect so the resync is not change-gated (`8c2b47e`, `L-2bd5c9f7`).**
+  Pass 1 fires only when a change reaches `onSourceChange`, so between the `pg_promote`/PITR and the
+  first post-failover change the same two windows stay open — **indefinitely on a quiet promoted DB**,
+  and **forever on a stock `pg_promote` whose replication slot did not survive** (the tail error-loops;
+  no change ever arrives). A new **`onIdentity` hook** on the `ChangeSource` contract fires the
+  connection's `(systemId, timelineId)` at every (re)connect's `IDENTIFY_SYSTEM` — **before** the slot
+  is (re)created or any change is wired — and the engine's identity-capture + failover-drop block is
+  extracted into a single `revealIdentity()` driven from **both** the hook and `onSourceChange`. A
+  promote now drops every shape the moment the new timeline is **known**, independent of change flow.
+  The reveal is idempotent on a repeat of the same identity; a throwing handler is routed to the
+  source's error sink (never breaks the awaited `#openAndStart`); and the terminal `stop()` clears the
+  identity sink alongside the change sink, so a reconnect raced past stop fans to an empty set.
+
+Scope: the **v1** logical-replication path only — the v0 SQLite poll has no `(systemId, timelineId)`
+and resyncs on every reconnect already (Phasing), so it needs no failover signal.
