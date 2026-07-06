@@ -4,8 +4,11 @@ The single source of truth for how we talk about Lesto in public. Owned by DevRe
 Every launch surface — README, docs, landing page, social, talks — pulls from here
 so the story stays consistent and, above all, **honest**.
 
-> Status: v0, drafted 2026-06-21 from the codebase audit. Tagline finalists need a
-> gut-check before they're locked. The claims guardrail (below) is binding now.
+> Status: v1, refreshed 2026-07-05 (post-publish, post-Tier-4) — the v0 draft predated
+> the npm publish, the shipped Tier-4 sync epic, and the dev-MCP/agent-on-ramp work, and
+> its guardrail had gone stale in both directions. The tagline is LOCKED (§2 #1, shipped
+> on every surface). The claims guardrail (§5) is binding; every launch artifact is
+> claims-reviewed against THIS revision.
 
 ---
 
@@ -63,7 +66,9 @@ Pick one hero line and stick to it everywhere. Finalists, in recommended order:
 ## 5. The claims guardrail (binding)
 
 External copy must match shipped reality. Use this table; when in doubt, downgrade
-the claim. ARCHITECTURE.md is the internal source of truth for status.
+the claim. ARCHITECTURE.md §4 is the internal source of truth for status (its status
+column was refreshed 2026-07-05 — earlier revisions read "◻ build" on long-shipped
+batteries; if it ever contradicts `packages/*` reality again, fix it before writing copy).
 
 | Claim | How we may say it |
 |---|---|
@@ -74,9 +79,12 @@ the claim. ARCHITECTURE.md is the internal source of truth for status.
 | Content / CMS | "A content engine: schema-driven collections, markdown/MDX, store + CLI + MCP." Search/embeddings/prose/seo tooling and most components are **preview** — label them. **No** "visual CMS / Studio editor" claim; it isn't in the v1 surface. |
 | Plugins / themes / extensibility | **Do not claim.** Designed but deferred post-1.0 (ADR 0014). May say "an extensibility model is on the roadmap." |
 | Realtime / reactive live queries | **Shipped — claim precisely.** Server-pushed invalidation drives live `useQuery`: a write publishes an invalidation *topic* (a key string, **never row data**) over Postgres `LISTEN/NOTIFY`, fanned out to the browser over SSE; subscribers drop the key and refetch through the authorized endpoint. Say "reactive data / live queries." **Not** "we stream your data to the browser" (the wire carries topics, not rows) and **not** "local-first / offline" (that's the next row). DB-backed pub/sub also ships. |
-| Local-first / sync engine (`live()`) | **Preview — do NOT claim "local-first", "offline", or "we sync data to the client" yet.** The `live()` query builder exists and syncs single-table rows to the browser over SSE (v0), but it is online-only, simple eq/range filters, a SQLite full-table poll standing in for logical replication, an in-memory client store, and it does **not** yet enforce the per-row authorization matrix. The real product — Postgres logical replication, OPFS-SQLite durable store, offline writes, per-row authz — is the committed next epic (ADR 0042). May say "a local-first sync engine is in active development." |
+| Local-first / sync engine (`live()`) | **Tier-4 v1 shipped (ADR 0042) — claim it as "v1, in hardening", not as unqualified production offline sync.** Shipped and CI-gated end-to-end (the `examples/live-capstone` gate): Postgres **logical replication** (and a SQLite poll behind the same fail-closed `live()` seam), LSN-exact resume, a **durable OPFS-SQLite store** (Worker-hosted), an **offline write outbox**, and cross-tab leadership. May say: "local-first sync, v1: logical replication to a durable local store with offline writes — in active hardening," and may demo the capstone. **Upgrade to an unqualified "local-first / offline" headline only when ALL of:** (a) per-row sync authorization is enforced and tested, (b) the open hardening list (cross-tab + replica-identity tasks on the board) is closed, (c) the capstone is green across real browsers beyond the CI-gated path. Until then, no "production-ready offline sync" and no "we sync any query offline." |
 | "Lesto Cloud" / managed hosting | **Do not claim.** Future commercial layer, unscoped. |
-| Agent / MCP control plane | **The wedge — claim it confidently, but precisely.** Real MCP control-plane tools today: publish/edit content (`create_content_entry`/`update_content_entry`/`query_content`), generate UI (`generate_ui`), and inspect/drive the running app (`list_routes`/`handle_request`). **Schema migrations are NOT an MCP tool yet** (CLI/code only) — do not imply "migrate the schema from Claude." Say "operate your app — content, UI, requests — from Claude/ChatGPT." |
+| Agent / MCP control plane | **The wedge — claim it confidently, but precisely.** Shipped today: (1) the **governed app control plane** — content CRUD/query, `generate_ui`, `list_routes`/`handle_request`/`describe_app`, read-only by default with an audited operator mode; (2) the **dev-loop MCP** — every `lesto dev` boots a loopback, token-gated MCP server (`describe_app`, dev diagnostics, request/log tails — ADR 0032), proven nightly on the published closure by the agent-activation CI gate; (3) **app-defined domain tools** with per-tool policy floors (ADR 0043); (4) apps can ship an **authenticated production MCP server** (OAuth — interim issuer per ADR 0039; say "OAuth-protected", don't over-specify the issuer). **Schema migrations are still NOT an MCP tool** (CLI/code only) — do not imply "migrate the schema from Claude." The scaffold's agent on-ramp (AGENTS.md + Claude Code skill in every generated app) is on HEAD — **claimable only once the next create-lesto version publishes.** Say "operate your app — content, UI, requests, the dev loop — from Claude/ChatGPT." |
+| Tailwind / shadcn UI | **Shipped — safe to claim (ADR 0037).** Tailwind v4 is first-class (`@lesto/styles` compiles the app's CSS entry); every scaffold is a generic shadcn project (`components.json`, `cn()`, `@/*` alias) and `lesto add <component>` installs components. |
+| Dev loop / DX | **Shipped — safe to claim.** Dev error overlay, typed validated env (`@lesto/env`, server/client leak boundary), island Fast Refresh, Vite dev+prod as default. |
+| Agent-readable docs | **Shipped — safe to claim.** docs.lesto.run serves `llms.txt` + `llms-full.txt` and a Markdown twin of every page (path + `.md`). |
 
 Rule of thumb: if a docs page or package README doesn't tag something "preview", it's
 held to the full bar and you may claim it. If it's tagged preview or deferred, mark
@@ -108,9 +116,11 @@ it as such in public copy too.
 - ✅ "Lesto runs the same app on a Node server and the Cloudflare edge."
 - ✅ "No Redis — the queue, cache, and pub/sub live on the database."
 - ✅ "Operate it from Claude over MCP."
+- ✅ "Your dev server is an MCP server — `describe_app` from Claude Code, out of the box."
 - ✅ "Reactive live queries: a write invalidates a topic, subscribers refetch over SSE — no polling."
+- ✅ "Local-first sync, v1: Postgres logical replication to a durable local store, with offline writes — in active hardening."
 - ❌ "The fastest framework ever built." (unproven, and we don't talk like that)
-- ❌ "Local-first, offline-capable data sync." (preview — `live()` v0 is online-only and proves the API, not the replication/security story)
+- ❌ "Production-ready offline sync" / "sync any query offline." (Tier-4 v1 is shipped but in hardening — per-row sync authz + the hardening list gate the unqualified claim; see §5)
 - ❌ "A full visual CMS." (not shipped)
 - ❌ "Durable, crash-proof workflows." (post-1.0)
 - ❌ Any benchmark number we haven't actually measured and published.

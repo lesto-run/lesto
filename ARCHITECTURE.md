@@ -75,28 +75,35 @@ When built (post-1.0), this lives in-house on the one substrate and is exposed e
 
 Each capability = an in-house Lesto API on the one DB; thin drivers only at the edges.
 
+> **Status column refreshed 2026-07-05.** The earlier revision of this table was the
+> original plan (it still named pre-Lesto choices like better-auth and the Tracks/Docks
+> prototypes) and read "◻ build" long after the batteries shipped — which silently broke
+> `docs/brand/messaging.md`'s claims guardrail, whose source of truth this is. Live
+> inventory: `packages/*` and docs.lesto.run/batteries. ✅ = shipped to the full bar;
+> ◐ = shipped but preview-labeled (claim per the guardrail).
+
 | Capability | Substrate (default) | Lesto API | Status |
 |---|---|---|---|
-| DB / ORM / migrations | SQLite → **Postgres** | Tracks `Model`, migrations, query builder | ✅ built (SQLite) |
+| DB / ORM / migrations | SQLite → **Postgres** | `@lesto/db` (`defineTable`, typed queries, joins/FKs) + `@lesto/migrate` | ✅ shipped (SQLite + Postgres — ADR 0018; eager-loading `relations()` deferred, ADR 0019) |
 | Virtual tables / views | SQL views + computed fields | view-backed models, computed fields | ◻ build |
-| **Jobs / queue** | **Postgres `SKIP LOCKED`** (Solid-Queue-style); SQLite local; Redis driver optional | `defineJob` / enqueue / worker | ◻ build (next) |
-| Durable **workflows** | **Postgres** — in-house thin layer, or **DBOS** (PG-native) | `defineWorkflow` (`step`/`sleep`/`waitForEvent`) | ◻ build (engine on PG) — see §5 |
-| **Crons** / scheduled | repeatable jobs on the DB queue (or `pg_cron`) | `schedule.cron(...)` | ◻ build |
-| **Webhooks** | the DB queue (delivery + retries) | outbound HMAC + retries; inbound verify + event subs | ◻ build |
-| **Caching** | in-memory + **DB-backed** (Solid-Cache-style); Redis driver optional | `cache.fetch(key, ttl, fn)` | ◻ build |
-| **Pub/sub / realtime** | Postgres **`LISTEN/NOTIFY`** / logical replication (Supabase-style) | channels, subscriptions | ◻ build |
-| **Email** | in-house mailer + **react-email** templates; transport = **SES/Resend/SMTP** (edge driver) | `defineMailer` — React + typed props → HTML, queued | ◻ build |
-| **Mailing lists** | DB models + mailer + queue | Subscriber/List, double opt-in, segments, broadcasts | ◻ build (Ghost-style) |
-| **Users & auth** | **better-auth** over the DB (sessions, OAuth, 2FA, orgs) | scaffolded auth | ◻ build |
-| **Roles / perms / RBAC** | DB + better-auth plugins + policy layer | roles/permissions, `can?`, guards | ◻ build |
-| **Content management** | Docks + Studio, DB-backed via Tracks | content types, admin, search, MCP | ✅ exists, ◻ integrate |
-| **Search** | Postgres **FTS + `pgvector`** | full-text + semantic | ◻ (Docks has client vector search) |
-| **UI components** | **shadcn/ui** (Radix + Tailwind) | Loom registry = shadcn | ◻ re-base Loom |
-| **Forms** | shadcn + react-hook-form + zod | derive form from model/Zod → validate → action → ORM | ◻ build |
-| **Extensibility** | in-house (§3.5) | hooks/actions/filters, events, plugins, themes | ◻ build (core) |
-| **Observability** | **OpenTelemetry** + exporters | trace **UI → API → DB**, logs, profiling | ◻ build (differentiator) |
-| **Deploys** | rolling / zero-downtime; graceful drain | `lesto deploy` | ◻ build |
-| **Object storage** | local FS → **S3** (edge driver) | `storage.put/get` | ◻ build |
+| **Jobs / queue** | **Postgres `SKIP LOCKED`** (Solid-Queue-style); SQLite local | `@lesto/queue` — `define` / `enqueue` / `work` | ✅ shipped (the reference-implementation package) |
+| Durable **workflows** | in-house on the one DB | `@lesto/workflows` — steps with resumable memoization | ✅ shipped (step memoization; automatic crash-resume is post-1.0 — claim per the guardrail) |
+| **Crons** / scheduled | repeatable jobs on the DB queue | `@lesto/queue` scheduler | ✅ shipped |
+| **Webhooks** | the DB queue (delivery + retries) | `@lesto/webhooks` — outbound HMAC + retries; inbound verify | ✅ shipped |
+| **Caching** | in-memory + **DB-backed** (Solid-Cache-style) | `@lesto/cache` | ✅ shipped |
+| **Pub/sub / realtime** | Postgres **`LISTEN/NOTIFY`**; **logical replication** for sync | `@lesto/pubsub` + `@lesto/realtime` (topic invalidation → SSE, live `useQuery`); Tier-4 local-first sync in `@lesto/live*` (ADR 0042) | ✅ shipped (realtime); ◐ Tier-4 sync v1 shipped, hardening open — claim per the guardrail |
+| **Email** | in-house mailer; transport = **SMTP/provider** drivers | `@lesto/mail` — typed templates → HTML, queued sends | ✅ shipped |
+| **Mailing lists** | DB models + mailer + queue | `@lesto/mailing-lists` — subscribers, double opt-in, broadcasts | ✅ shipped |
+| **Users & auth** | in-house **`@lesto/identity`** over the DB | register / verify / login / reset, sessions | ✅ shipped (in-house — not better-auth; OAuth AS for MCP in `@lesto/oauth-server`, interim per ADR 0039) |
+| **Roles / perms / RBAC** | DB + policy layer | `@lesto/authz` — principals, roles, guards | ✅ shipped |
+| **Content management** | `@lesto/content-*`, DB-backed via `@lesto/db` | collections, markdown/MDX, store, admin, MCP | ✅ shipped (search/embeddings/prose components ◐ preview) |
+| **Search** | Postgres **FTS + `pgvector`** planned | `@lesto/content-search` / `-embeddings` | ◐ preview |
+| **UI components** | **Tailwind v4 + shadcn/ui**, first-class | scaffold is a generic shadcn project; `lesto add <component>` | ✅ shipped (ADR 0037) |
+| **Forms** | shadcn + zod | `@lesto/forms` | ✅ shipped |
+| **Extensibility** | in-house (§3.5) | hooks/actions/filters, events, plugins, themes | ◻ deferred post-1.0 (ADR 0014) |
+| **Observability** | in-house tracing, OTLP export | `@lesto/observability` — **one trace browser → API → DB**, RUM, `ai.*` agent spans (ADR 0031) | ✅ shipped (the differentiator — safe to claim) |
+| **Deploys** | static assets + Worker, one atomic step | `lesto deploy --cloudflare` | ✅ shipped (Cloudflare flagship; other targets via the deploy seam) |
+| **Object storage** | local FS → **S3-compatible** | `@lesto/storage` — `put`/`get`, S3 backend | ✅ shipped |
 
 ---
 
