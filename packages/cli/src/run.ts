@@ -450,14 +450,8 @@ export interface CliDeps {
    * error, not silently at hydration. Absent seam → no inlining (back-compat;
    * tests opt in by providing it).
    *
-   * ONE seam that bundles "exists? + import + compute map", NOT the probe+builder
-   * split the CSS path uses ({@link CliDeps.cssEntryExists} probe in the bin +
-   * {@link CliDeps.buildAppStyles} builder in the core). Intentional, and affirmed
-   * in wrap-up review (L-a779d2aa): this core already owns wrapping any throw from
-   * the resolver as `CLI_CLIENT_BUILD_FAILED` (see {@link buildClientIfPresent}),
-   * so a bad var and a missing export both fail loud the same way; splitting would
-   * only push a build-time `process.env` read down here and cost the resolver's
-   * testability. Do not refactor this into two seams.
+   * See {@link resolvePublicEnvDefine} in bin.ts for why this is ONE seam (not the
+   * probe+builder split the CSS path uses) — do not refactor it into two seams.
    */
   resolvePublicEnvDefine?: () => Promise<PublicEnvDefine | undefined>;
 
