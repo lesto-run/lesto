@@ -120,8 +120,9 @@ export async function scaffold(options: ScaffoldOptions, io: ScaffoldIO): Promis
   // and `.claude/skills/lesto/SKILL.md` is the first-party Claude Code skill
   // (auto-discovered under `.claude/skills/`) teaching the dev→MCP loop.
   // `components.json` + `app/lib/utils.ts` (`cn()`) make the app a generic shadcn
-  // project (ADR 0037 Phase 2): `lesto add <name>` installs components into
-  // `app/components/ui` via the `@/*` tsconfig path `components.json` resolves against.
+  // project (ADR 0037 Phase 2): `npx shadcn add <name>` installs components into
+  // `app/components/ui` via the `@/*` tsconfig path `components.json` resolves against
+  // (`lesto add` delegation is the deferred TW8; today `lesto add` takes integrations only).
   const files: ReadonlyArray<readonly [string, string]> = [
     ["package.json", packageJson(name, lestoDep)],
     ["env.ts", env()],

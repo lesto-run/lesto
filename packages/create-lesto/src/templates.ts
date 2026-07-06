@@ -1027,7 +1027,8 @@ lesto dev: MCP control plane on http://127.0.0.1:<port>/ (x-lesto-dev-token: <to
   run on the next dev boot.
 - An interactive island: \`app/islands/<name>.tsx\` default-exporting
   \`defineIsland\`.
-- A shadcn component: \`lesto add <name>\` (installs into \`app/components/ui\`).
+- A shadcn component: \`npx shadcn add <name>\` (this is a generic shadcn project —
+  \`components.json\` routes it into \`app/components/ui\`).
 
 ## Docs / another app
 
