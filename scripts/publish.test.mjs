@@ -7,8 +7,13 @@
 // NOTE (wiring gap): `scripts/` is NOT in the coverage gate — scripts/coverage-gate.ts sweeps
 // only packages/* members with a `test:cov` script. Run this file directly:
 //   bunx vitest run scripts/publish.test.mjs
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { readPublicPackageDirs } from "./lib/pack-public.mjs";
 import { lestoWorkspaceDeps, runPublish, topoSortPackages } from "./publish.mjs";
 
 describe("lestoWorkspaceDeps", () => {
@@ -152,5 +157,56 @@ describe("runPublish (fail-closed orchestration)", () => {
     expect(outcome.failed).toBe("@lesto/errors");
     expect(outcome.attempted).not.toContain("@lesto/seo");
     expect(outcome.attempted).not.toContain("@lesto/sites");
+  });
+});
+
+// The one helper in `scripts/lib/pack-public.mjs` that is fs-only (no subprocess), so it is
+// cheaply unit-testable against a hermetic temp dir. `packAllToVendor`/`readTarballMeta` need a
+// real bun/tar and are left to the `install-proof` CI job (see that module's header).
+describe("readPublicPackageDirs (fs filter — hermetic temp dir)", () => {
+  let dir;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "lesto-public-dirs-"));
+    // A public package (no `private` key) — included.
+    mkdirSync(join(dir, "alpha"));
+    writeFileSync(join(dir, "alpha", "package.json"), JSON.stringify({ name: "@lesto/alpha" }));
+    // An explicitly `private: false` package — included (`private !== true`).
+    mkdirSync(join(dir, "bravo"));
+    writeFileSync(
+      join(dir, "bravo", "package.json"),
+      JSON.stringify({ name: "@lesto/bravo", private: false }),
+    );
+    // A `private: true` package — EXCLUDED by the private filter.
+    mkdirSync(join(dir, "charlie"));
+    writeFileSync(
+      join(dir, "charlie", "package.json"),
+      JSON.stringify({ name: "@lesto/charlie", private: true }),
+    );
+    // A directory with NO package.json — EXCLUDED by the missing-manifest skip branch.
+    mkdirSync(join(dir, "no-manifest"));
+  });
+
+  afterAll(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Best-effort — a sandbox may block deletion; the temp dir is ephemeral anyway.
+    }
+  });
+
+  it("excludes `private: true` packages, keeps public and `private: false`", () => {
+    const dirs = readPublicPackageDirs(dir);
+    expect(dirs).toContain("alpha");
+    expect(dirs).toContain("bravo");
+    // RED canary: if the `private !== true` filter regressed (dropped, or flipped to `=== false`),
+    // the private package would leak into the release/boot closure — this catches it.
+    expect(dirs).not.toContain("charlie");
+  });
+
+  it("skips a directory that has no package.json (the missing-manifest branch)", () => {
+    // RED canary: dropping the `existsSync(pj)` guard would make `readFileSync` throw ENOENT on
+    // this dir (or, if flipped, include it) instead of silently skipping it.
+    expect(readPublicPackageDirs(dir)).not.toContain("no-manifest");
   });
 });

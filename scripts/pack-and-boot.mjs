@@ -47,8 +47,10 @@ mkdirSync(vendor);
 
 // 2. Pack each into the vendor dir and guard the count. `bun pm pack` rewrites `workspace:*`
 //    → the exact version in the emitted tarball, so each tarball is self-describing like a
-//    publish. Shared with the release (`scripts/lib/pack-public.mjs`) so both cover the same set.
-packAllToVendor(PACKAGES, publicDirs, vendor);
+//    publish. Capture the emitted `.tgz` filenames — listed ONCE here and handed to
+//    `readTarballMeta` below so the vendor dir is not re-read. Shared with the release
+//    (`scripts/lib/pack-public.mjs`) so both cover the same set.
+const tarballs = packAllToVendor(PACKAGES, publicDirs, vendor);
 
 // 3. Map every packaged name → its tarball (read via the shared tarball meta-reader,
 //    `scripts/lib/pack-public.mjs`, from each tarball's own package.json — robust to
@@ -57,7 +59,7 @@ packAllToVendor(PACKAGES, publicDirs, vendor);
 const overrides = {};
 const packedVersion = {};
 const crossRefs = [];
-for (const { path, meta } of readTarballMeta(vendor)) {
+for (const { path, meta } of readTarballMeta(vendor, tarballs)) {
   overrides[meta.name] = `file:${path}`;
   packedVersion[meta.name] = meta.version;
 

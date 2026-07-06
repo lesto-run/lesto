@@ -184,14 +184,16 @@ function main() {
   const vendor = join(mkdtempSync(join(tmpdir(), "lesto-publish-")), "vendor");
   mkdirSync(vendor);
 
-  // Pack every public package (rewriting workspace:* → exact versions) and guard the count.
-  // Shared with the boot-proof (`scripts/lib/pack-public.mjs`) so both cover the same closure.
-  packAllToVendor(PACKAGES, publicDirs, vendor);
+  // Pack every public package (rewriting workspace:* → exact versions), guard the count, and
+  // capture the emitted `.tgz` filenames — listed ONCE here and handed to `readTarballMeta`
+  // below so the vendor dir is not re-read. Shared with the boot-proof
+  // (`scripts/lib/pack-public.mjs`) so both cover the same closure.
+  const tarballs = packAllToVendor(PACKAGES, publicDirs, vendor);
 
   // Map every packaged name → { tarball path, packed version } from the tarball's OWN
   // package.json (robust to scope/filename mangling); the version is the published shape's.
   const tarballByName = new Map();
-  for (const { path, meta } of readTarballMeta(vendor)) {
+  for (const { path, meta } of readTarballMeta(vendor, tarballs)) {
     tarballByName.set(meta.name, { path, version: meta.version });
   }
 

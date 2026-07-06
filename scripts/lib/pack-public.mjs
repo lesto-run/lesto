@@ -14,13 +14,15 @@
 // name → {path, version} map; pack-and-boot builds the npm `overrides` + packed-version +
 // cross-reference tables), so that caller-specific derivation stays in the callers.
 //
-// TESTING: these three helpers are effectful (fs + child_process), so — like the inline blocks
-// they replaced — they are NOT unit-tested; only the PURE logic in `publish.mjs` is (see
-// `scripts/publish.test.mjs`). Their standing automated guard is the `install-proof` CI job
+// TESTING: `readPublicPackageDirs` is fs-only (readdir + read manifests, no subprocess), so it
+// IS unit-tested directly against a hermetic temp dir in `scripts/publish.test.mjs` (alongside
+// the PURE logic in `publish.mjs`). The other two — `packAllToVendor` (bun) and `readTarballMeta`
+// (tar) — spawn real subprocesses, so — like the inline blocks they replaced — they are NOT
+// unit-tested; their standing automated guard is the `install-proof` CI job
 // (`.github/workflows/ci.yml`, `bun run test:pack-boot`), which runs `scripts/pack-and-boot.mjs`
 // against every real package on every push/PR and so exercises all three end-to-end. If that job
-// is ever removed or de-blocked, these lose their only CI guard. (`publish.mjs` itself runs ONLY
-// on the release `workflow_dispatch`, never in CI — its use of these helpers is proven only
+// is ever removed or de-blocked, those two lose their only CI guard. (`publish.mjs` itself runs
+// ONLY on the release `workflow_dispatch`, never in CI — its use of these helpers is proven only
 // transitively, since they are the identical functions `install-proof` drives.)
 
 import { execFileSync } from "node:child_process";
@@ -53,7 +55,8 @@ export function readPublicPackageDirs(packagesDir) {
  * @param {string} packagesDir absolute path to `packages/`
  * @param {string[]} dirs directory names to pack (from {@link readPublicPackageDirs})
  * @param {string} vendor absolute path to the (already-created) vendor output dir
- * @returns {string[]} the emitted `.tgz` filenames in `vendor` (`readdirSync` order)
+ * @returns {string[]} the emitted `.tgz` filenames in `vendor` (`readdirSync` order) — pass to
+ *          {@link readTarballMeta} so the vendor dir is listed exactly once, not twice
  * @throws {Error} if any `bun pm pack` fails, or the emitted tarball count != `dirs.length`
  */
 export function packAllToVendor(packagesDir, dirs, vendor) {
@@ -76,21 +79,22 @@ export function packAllToVendor(packagesDir, dirs, vendor) {
 }
 
 /**
- * Read each `.tgz` in `vendor` and parse its OWN `package/package.json` (robust to
- * scope/filename mangling). Returns the raw path + parsed-meta pairs; each caller derives its
- * own view (publish → name → {path, version}; pack-and-boot → overrides/packedVersion/crossRefs).
+ * Parse each packed tarball's OWN `package/package.json` (robust to scope/filename mangling).
+ * Takes the `.tgz` filenames {@link packAllToVendor} already listed — so the vendor dir is read
+ * exactly once across the pack + meta step, not twice — and returns the raw path + parsed-meta
+ * pairs; each caller derives its own view (publish → name → {path, version}; pack-and-boot →
+ * overrides/packedVersion/crossRefs).
  *
  * @param {string} vendor absolute path to the vendor dir holding the packed tarballs
- * @returns {{path:string, meta:any}[]} one entry per `.tgz`, in `readdirSync` order
+ * @param {string[]} tarballs the `.tgz` filenames in `vendor` (from {@link packAllToVendor})
+ * @returns {{path:string, meta:any}[]} one entry per tarball, in the given order
  */
-export function readTarballMeta(vendor) {
-  return readdirSync(vendor)
-    .filter((file) => file.endsWith(".tgz"))
-    .map((tgz) => {
-      const path = join(vendor, tgz);
-      const meta = JSON.parse(
-        execFileSync("tar", ["-xzOf", path, "package/package.json"], { encoding: "utf8" }),
-      );
-      return { path, meta };
-    });
+export function readTarballMeta(vendor, tarballs) {
+  return tarballs.map((tgz) => {
+    const path = join(vendor, tgz);
+    const meta = JSON.parse(
+      execFileSync("tar", ["-xzOf", path, "package/package.json"], { encoding: "utf8" }),
+    );
+    return { path, meta };
+  });
 }
