@@ -442,11 +442,22 @@ export interface CliDeps {
    * The bin wires this to: read the convention `env.client.ts` (a client-safe
    * module exporting the `clientEnv` schema, importing only `@lesto/env/client`),
    * and compute the map from it against the build-time `process.env`. Absent
-   * module → `undefined` (no inlining). Threaded into {@link buildClientAssets}
-   * INSIDE the build try, so a malformed/missing required `PUBLIC_*` var fails the
-   * build with the same coded `CLI_CLIENT_BUILD_FAILED` as any bundler error —
-   * not silently at hydration. Absent seam → no inlining (back-compat; tests opt
-   * in by providing it).
+   * module → `undefined` (no inlining); a PRESENT module missing the `clientEnv`
+   * export → a coded throw (a misauthored client env fails the build, not
+   * hydration). Threaded into {@link buildClientAssets} INSIDE the build try, so a
+   * malformed/missing required `PUBLIC_*` var — or that missing-export throw —
+   * fails the build with the same coded `CLI_CLIENT_BUILD_FAILED` as any bundler
+   * error, not silently at hydration. Absent seam → no inlining (back-compat;
+   * tests opt in by providing it).
+   *
+   * ONE seam that bundles "exists? + import + compute map", NOT the probe+builder
+   * split the CSS path uses ({@link CliDeps.cssEntryExists} probe in the bin +
+   * {@link CliDeps.buildAppStyles} builder in the core). Intentional, and affirmed
+   * in wrap-up review (L-a779d2aa): this core already owns wrapping any throw from
+   * the resolver as `CLI_CLIENT_BUILD_FAILED` (see {@link buildClientIfPresent}),
+   * so a bad var and a missing export both fail loud the same way; splitting would
+   * only push a build-time `process.env` read down here and cost the resolver's
+   * testability. Do not refactor this into two seams.
    */
   resolvePublicEnvDefine?: () => Promise<PublicEnvDefine | undefined>;
 

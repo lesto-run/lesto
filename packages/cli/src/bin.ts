@@ -444,21 +444,62 @@ const buildClientAssets = async (options: {
 // from it, so the inlined bag and what the island reads share ONE source of truth.
 const ENV_CLIENT_PATH = join(projectRoot, "env.client.ts");
 
+// Turn an ALREADY-loaded `env.client.ts` module into the island bundle's PUBLIC_*
+// inject map — or throw a coded error when the file is present but exports no
+// `clientEnv`.
+//
+// The throw is the fix for a red-team P1 (L-a779d2aa): a MISAUTHORED `env.client.ts`
+// — the file exists (so the author plainly INTENDED public config) but forgot to
+// `export const clientEnv` — must fail LOUD and CODED right here. The old code
+// returned `undefined` in that case, silently skipping inlining, so the island
+// shipped unreplaced `PUBLIC_*` reads that only blew up (or read `{}`) at hydration:
+// a runtime mystery far from its cause. An ABSENT file is a different, valid case (an
+// app with no public config) — handled by the `dirExists` guard in the resolver, not
+// here, so it stays `undefined`.
+//
+// Kept a PURE, synchronous helper over the loaded module (no fs, no `import()`) so the
+// exists-vs-missing-export vs valid-schema DECISION is unit-testable without a bundler
+// or a real module on disk (see `test/env-client.test.ts`). This is NOT the CSS-style
+// probe+builder seam split (see `resolvePublicEnvDefine` below) — it is a private local
+// factor of one seam.
+export const clientDefineFromModule = (module: { clientEnv?: ClientSchema }): PublicEnvDefine => {
+  if (module.clientEnv === undefined) {
+    throw new CliError(
+      "CLI_ENV_CLIENT_NO_EXPORT",
+      "`env.client.ts` exists but exports no `clientEnv` — add `export const clientEnv = { … }` " +
+        "(fields from `@lesto/env/client`) so the CLI can inline your validated PUBLIC_* config; " +
+        "without it the island would ship unreplaced PUBLIC_* references.",
+      { path: ENV_CLIENT_PATH },
+    );
+  }
+
+  return clientDefineMap(module.clientEnv);
+};
+
 // Compute the island bundle's PUBLIC_* inject map. If the project declares
 // `env.client.ts`, import its `clientEnv` schema and turn it into the verified
 // `define`/replace map: `clientDefineMap` validates the PUBLIC_* values against the
 // build-time `process.env`, so a missing/malformed required PUBLIC_* var throws here
 // (surfaced by the CLI core as a coded build failure, not silently at hydration).
-// Absent module — or one with no `clientEnv` export — yields `undefined`, and the
-// bundler injects nothing (an app with no public config is unchanged).
-const resolvePublicEnvDefine = async (): Promise<PublicEnvDefine | undefined> => {
+//
+// An ABSENT `env.client.ts` yields `undefined`, and the bundler injects nothing (an
+// app with no public config is unchanged). A PRESENT file with no `clientEnv` export
+// throws a coded `CLI_ENV_CLIENT_NO_EXPORT` (via `clientDefineFromModule`) rather than
+// silently yielding `undefined` — a misauthored module fails the build, not hydration.
+//
+// This is deliberately ONE bin seam ("exists? + import + compute map"), NOT the
+// probe+builder split the CSS path uses (`cssEntryExists` in the bin + `buildAppStyles`
+// in the core). Keeping it whole was affirmed in wrap-up review (L-a779d2aa): the CLI
+// core (`run.ts`) already owns wrapping any throw from here as the coded
+// `CLI_CLIENT_BUILD_FAILED`, so a bad var OR a missing export fails the build the same
+// loud way; splitting it would only push a build-time `process.env` read down into the
+// core and cost testability, for no gain. Do not "fix" this into two seams.
+export const resolvePublicEnvDefine = async (): Promise<PublicEnvDefine | undefined> => {
   if (!(await dirExists(ENV_CLIENT_PATH))) return undefined;
 
   const module = (await import(ENV_CLIENT_PATH)) as { clientEnv?: ClientSchema };
 
-  if (module.clientEnv === undefined) return undefined;
-
-  return clientDefineMap(module.clientEnv);
+  return clientDefineFromModule(module);
 };
 
 // The island Fast Refresh ports (DX-parity R2): the loopback HTTP port the CLI proxies

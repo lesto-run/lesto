@@ -24,6 +24,8 @@ export type CliErrorCode =
   | "CLI_DEV_MCP_UNAVAILABLE"
   /** A dev-only surface (live reload, island Fast Refresh, or the loopback MCP plane) was wired on a non-`dev` command (ADR 0032 Inc 5). */
   | "CLI_DEV_SURFACE_IN_PRODUCTION"
+  /** The project's `env.client.ts` EXISTS but exports no `clientEnv` schema — a misauthored client-env module. Refused loud + coded here (not silently skipped) so a missing export never ships an island with unreplaced `PUBLIC_*` references. */
+  | "CLI_ENV_CLIENT_NO_EXPORT"
   /** PREVIEW `lesto eval` gate: one or more of the app's declared evals failed (`details` carries the failed/total counts). */
   | "CLI_EVAL_FAILED"
   | "CLI_GENERATE_BAD_FIELD"
