@@ -26,17 +26,66 @@ import { CloudflareStateStore } from "alchemy/state";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-/** Parse the JSONC `wrangler.jsonc` (line/block comments + trailing commas) into a plain object. */
+/**
+ * Parse the JSONC `wrangler.jsonc` (line/block comments + trailing commas) into a plain object.
+ *
+ * STRING-AWARE, single pass: comments and trailing commas are only stripped when OUTSIDE a string
+ * literal (respecting `\"` escapes). A `//`, `/* *​/`, or `,}` sequence *inside* a value — e.g. a
+ * protocol-relative or comment-shaped URL in `vars`, or a literal `,}` in a string — is preserved
+ * verbatim. The prior regex-based stripper was NOT string-aware: a `//`-containing URL blew up as
+ * `Unterminated string` and an in-string `/* *​/` / `,}` was silently mangled, so the Alchemy deploy
+ * (which reads this on EVERY run) and the local `wrangler dev` loop could parse `wrangler.jsonc`
+ * differently. No new dependency: `jsonc-parser` is not in the tree and adding it would rewrite the
+ * shared lockfile, so the tokenizer is inlined here.
+ */
 function parseJsonc(text: string): Record<string, unknown> {
-  const stripped = text
-    // Block comments.
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    // Line comments — the `[^:]` guard leaves `://` in any URL untouched (our config has none, but be safe).
-    .replace(/(^|[^:])\/\/.*$/gm, "$1")
-    // Trailing commas before a closing brace/bracket.
-    .replace(/,(\s*[}\]])/g, "$1");
+  const out: string[] = [];
+  let inString = false;
+  let escaped = false;
+  let pendingComma = -1; // index in `out` of a comma that may still turn out to be trailing, else -1
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      out.push(ch);
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    const next = text[i + 1];
+    if (ch === '"') {
+      inString = true;
+      pendingComma = -1;
+      out.push(ch);
+    } else if (ch === "/" && next === "/") {
+      // Line comment — skip to (but not past) the newline so line structure is preserved.
+      i += 2;
+      while (i < text.length && text[i] !== "\n") i++;
+      i -= 1; // let the loop's `i++` re-land on the newline (or run off EOF)
+    } else if (ch === "/" && next === "*") {
+      // Block comment — skip through the closing `*​/`.
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
+      i += 1; // land on the closing `/`; the loop's `i++` then steps past it
+    } else if (ch === ",") {
+      pendingComma = out.length;
+      out.push(ch);
+    } else if (ch === "}" || ch === "]") {
+      // The next significant token after a comma is a closer → that comma was trailing; drop it.
+      if (pendingComma !== -1) {
+        out[pendingComma] = "";
+        pendingComma = -1;
+      }
+      out.push(ch);
+    } else if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+      out.push(ch); // whitespace does not end a pending-comma run
+    } else {
+      pendingComma = -1; // a real value/key token followed the comma → it was NOT trailing
+      out.push(ch);
+    }
+  }
 
-  return JSON.parse(stripped) as Record<string, unknown>;
+  return JSON.parse(out.join("")) as Record<string, unknown>;
 }
 
 // The DRIFT GUARD: read name + compat date/flags + observability straight from `wrangler.jsonc`, so
