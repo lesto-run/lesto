@@ -283,6 +283,27 @@ list frozen. No P0 objection to the plan.
 - **2026-07-05 — Category bet:** agent-native is the category bet, the demo
   lead, and the distribution strategy; batteries-included remains the first half
   of the locked hero (messaging.md §2) and the conversion/retention story.
+- **2026-07-05 — Launch gate CLEARED (same day):** proof #1 was refuted as
+  unnecessary — the "published 0.1.2 undici-unreachable dev" was a test-harness
+  port bug (leg-a probed port 4190, on the WHATWG fetch restricted-ports list;
+  undici/browsers refuse it pre-connect), not a product defect. **There is no
+  defect; no 0.1.3 is required; the verdaccio harness is not needed for this.**
+  Root-cause + fix `b08c770` (independently verified: mechanism reproduced,
+  guard exercised at 13 ms vs the 5 s deadline). Proofs #2 and #3 then executed
+  green: dev-MCP loop proven on the real registry closure via a real
+  `@modelcontextprotocol/sdk` StreamableHTTPClientTransport under Node undici —
+  handshake + 13 tools + `describe_app` round-trip + 403 on a bad token
+  (L-e51c033d); real-Chromium hydration + dev-boot of the published scaffold
+  green on ubuntu-latest (run `28768162073`, 6 passed / 1 flaky-retried-green /
+  0 failed; leg-a hydration inherits the known click-race, filed). Evidence:
+  `docs/readiness/hoisted-dev-hang-L-513dd8a6.md` addendum. Per the ratified
+  "launch moves up if early" clause, **L1 detonation is now unblocked ~3 weeks
+  ahead of the 07-24 trigger** — remaining pre-launch work is the non-gating
+  L0-parallel list (brand, README hero, wedge screencast, launch post, quiet
+  community channel, agent on-ramp, claims refresh). The standing pre-publish
+  gate (L-e6a86c59) remains open and is now scoped to the REAL lesson: keep the
+  preflight + real-install smoke blocking in release.yml, ports guarded by
+  `assertFetchablePort`.
 - **2026-07-05 — 1.0 policy:** criteria-boxed (stability contract + deprecation
   policy, external audit, upgrade guides, LTS statement, readiness bar),
   targeted mid-2027, re-scoped at quarterly checkpoints rather than slipped

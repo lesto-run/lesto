@@ -1,3 +1,10 @@
+# ✅ RESOLVED (2026-07-05, b08c770, L-513dd8a6): the "defect" discussed below was REFUTED — the harness
+# probed port 4190 (WHATWG fetch restricted-ports list; undici AND browsers refuse it pre-connect with
+# "bad port"), never a product or closure issue. There was no hang, local packs were never "blind", and
+# no verdaccio harness is needed. Read the correction block and the narrative below as HISTORICAL record;
+# this workflow's standing value is install/build + hoisted-layout coverage of the CURRENT tree, with dev
+# ports guarded by assertFetchablePort (packages/e2e/dev-harness.ts).
+#
 # ⚠️ CORRECTION (2026-07-04, L-3daa1173): this preflight is STRUCTURALLY BLIND to the L-27285131 defect —
 # it would NOT have caught it. The defect only reproduces on the REAL npm-resolved published closure under
 # a Node undici `fetch()` client; this is a LOCAL PACK, and every local pack GREENS under undici (incl. of

@@ -221,3 +221,26 @@ Whichever lands, the acceptance is: **the preflight (`test:scaffold-hoisted-pref
 - **Acceptance #4 (bump 0.1.3 + un-skip leg a):** release-gated and out of scope for this run (also
   collides with a live edit of `scaffold-real-install.spec.ts`). Deferred; gated behind a green
   preflight per #3.
+
+## Addendum (2026-07-05) — follow-through proofs: CI acceptance + the dev-MCP dragon (L-e51c033d)
+
+The fix above was verified end-to-end after landing (`b08c770`, pushed in `373c234..4f4fe05`):
+
+- **CI acceptance on ubuntu-latest (the un-skip is proven, not assumed):** dispatched
+  `scaffold-real-install` run `28768162073` on `4f4fe05` → **SUCCESS: 6 passed, 1 flaky, 0 failed**.
+  Leg (a)'s published-0.1.2 hoisted dev-boot (undici `waitForServer` @4193) **passed outright** — the
+  first-ever green of the real-user path on CI Linux. The leg-(a) browser-hydration test failed once on
+  the known click-races-hydration race and passed on retry ("flaky") — the same class leg (b) hit
+  (L-d86ae3a1); the un-skipped leg-(a) test needs the same wait-for-hydration treatment (filed).
+  `scaffold-hoisted-preflight` run `28768162882` also green.
+- **The dev-MCP dragon (L-e51c033d) is slain — GREEN, premise refuted:** on the REAL registry closure
+  (`bunx create-lesto@0.1.2`, hoisted `bun install`, macOS), `lesto dev` @4300: undici `GET /` → 200 in
+  43 ms; a real `@modelcontextprotocol/sdk` `StreamableHTTPClientTransport` (Node 22 undici — the exact
+  client the dragon feared) completed the initialize handshake in 195 ms, `tools/list` → all 13 tools,
+  and a `describe_app` round-trip → `{routes, openapi, collections, schema}` in 4 ms. Negative control:
+  a wrong `x-lesto-dev-token` → **403** (the gate holds; the green is governed, not an open door).
+  Acceptance deviation, deliberate: the task text (pre-refutation) asked for the verdaccio harness —
+  the real registry closure is strictly MORE faithful for a published version; verdaccio is only needed
+  to test unpublished HEAD.
+- **Net:** all three launch-gate proofs (ATTACK-PLAN-2027 §6) are green; the launch push (L-714eb185)
+  is unblocked.
