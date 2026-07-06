@@ -16,6 +16,58 @@ import { once } from "node:events";
  * a dev server leaked by a prior crashed run can't be silently adopted as a false-green.
  */
 
+/**
+ * The ports a WHATWG-`fetch` client (Node/Bun's undici, AND Chromium's `page.goto`) refuses to
+ * connect to — the "bad port" / restricted-ports list (`fetch` spec §"port blocking").
+ *
+ * A `fetch()` at one of these throws `TypeError: fetch failed` with `cause: Error("bad port")`
+ * BEFORE any TCP connection, and a browser reports `ERR_UNSAFE_PORT`. curl and `node:http` do NOT
+ * implement the list, so they connect fine. That asymmetry cost this repo days: the scaffold-real
+ * leg-(a) harness booted `lesto dev` on **4190** (the ManageSieve port, on this list) and probed it
+ * with {@link waitForServer}'s undici `fetch()`, which can NEVER succeed there — every attempt
+ * rejected in ~3ms with "bad port", so the leg looked like a hoisted-Linux first-request HANG and was
+ * root-caused, at length, to a nonexistent HTTP response-framing defect (L-513dd8a6). The dev server
+ * was fine all along; the port was unfetchable. `curl`/`node:http` probes greened on the same server
+ * (they ignore the list) and read as FALSE ORACLES, while a sibling harness on 4192 greened under the
+ * SAME undici client — so the variable was never the linker or the closure, only the port.
+ *
+ * We guard against it at the source ({@link assertFetchablePort}, called by {@link spawnDev}) so a spec
+ * that picks a blocked dev port fails IMMEDIATELY with a precise message instead of a silent 60s+
+ * "never answered". The list is the fixed set from the fetch spec.
+ */
+export const FETCH_BLOCKED_PORTS: ReadonlySet<number> = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
+  103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465,
+  512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993,
+  995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668,
+  6669, 6697, 10080,
+]);
+
+/**
+ * Throw if `port` is one an undici `fetch()` / a browser will refuse to connect to (see
+ * {@link FETCH_BLOCKED_PORTS}) — a permanent, fail-fast condition, never "still booting".
+ *
+ * Called before spawn ({@link spawnDev}) so choosing a blocked dev port is a LOUD, immediate error
+ * naming the port and the list — not a mysterious full-deadline timeout that reads as a product hang.
+ */
+export function assertFetchablePort(port: number): void {
+  if (FETCH_BLOCKED_PORTS.has(port)) {
+    throw new Error(
+      `dev port ${port} is on the WHATWG fetch restricted-ports list, so an undici \`fetch()\` (and a ` +
+        `browser \`page.goto\`) will refuse it with "bad port" BEFORE connecting — the server can never ` +
+        `be reached by this harness. Choose a port NOT in FETCH_BLOCKED_PORTS (dev-harness.ts). ` +
+        `This is the L-513dd8a6 trap: port 4190 masqueraded as a hoisted-Linux dev hang for days.`,
+    );
+  }
+}
+
+/** True iff `error` is the undici "bad port" rejection (a fetch at a {@link FETCH_BLOCKED_PORTS} port). */
+function isBadPortError(error: unknown): boolean {
+  const cause = (error as { cause?: unknown } | undefined)?.cause;
+
+  return cause instanceof Error && cause.message === "bad port";
+}
+
 /** Optional hardening hooks for {@link waitForServer}; both independently optional. */
 export interface WaitForServerOptions {
   /** Fail fast if OUR OWN child died before answering (avoids adopting a stale/foreign server on a fixed port). */
@@ -51,8 +103,22 @@ export async function waitForServer(
       });
 
       return;
-    } catch {
-      // not up yet (connection refused / reset / per-attempt abort)
+    } catch (error) {
+      // A "bad port" reject is PERMANENT — the URL's port is on the fetch restricted-ports list, so
+      // no amount of retrying will ever connect (this is the L-513dd8a6 trap: port 4190 fetch loop
+      // ran 300 instant rejects and read as a 300s "hang"). Fail fast and loud instead of burning the
+      // whole deadline and blaming the server. Every OTHER reject (connection refused / reset /
+      // per-attempt abort) is "not up yet" — keep polling.
+      if (isBadPortError(error)) {
+        const port = new URL(url).port;
+
+        throw new Error(
+          `${url} uses port ${port}, which is on the WHATWG fetch restricted-ports list — an undici ` +
+            `\`fetch()\` refuses it with "bad port" before connecting, so the server can NEVER be ` +
+            `reached here regardless of whether it is up. Pick a port not in FETCH_BLOCKED_PORTS.`,
+          { cause: error },
+        );
+      }
     }
 
     if (Date.now() > deadline) {
@@ -192,8 +258,15 @@ export async function spawnDev(
   port: number,
   origin = `http://127.0.0.1:${port}`,
 ): Promise<DevProcess> {
-  // Close the live-squatter false-green (L-b5186728) at the source: if a dev server leaked by a prior
-  // crashed run is ALREADY answering this fixed port, waitForServer's first probe would adopt it and
+  // First: refuse a port an undici `fetch()` / browser can never reach (L-513dd8a6). A blocked port
+  // (e.g. 4190) makes `waitForServer` and `page.goto` fail with "bad port" — booting here would produce
+  // a full-deadline "never answered" that reads as a product hang. Fail LOUD at spawn instead. This runs
+  // before `assertPortAvailable` because that probe's own `fetch` misreads a "bad port" reject as a free
+  // port (it looks like a connection-refused reject), so it would wave a blocked port straight through.
+  assertFetchablePort(port);
+
+  // Then: close the live-squatter false-green (L-b5186728) at the source: if a dev server leaked by a
+  // prior crashed run is ALREADY answering this fixed port, waitForServer's first probe would adopt it and
   // return green against STALE code, well before our own child's EADDRINUSE death flips `hasExited`.
   // Probe BEFORE spawn so the boot fails loud instead of silently serving a prior run. See
   // {@link assertPortAvailable}.
@@ -212,9 +285,10 @@ export async function spawnDev(
   child.stdout?.on("data", capture);
   child.stderr?.on("data", capture);
   // Record the exit code/signal IF the child ever dies — otherwise invisible — and flip `exited` so
-  // callers can fail fast via `hasExited`. NOTE: published 0.1.1's dev does NOT exit; it stays alive
-  // but unreachable on CI (this listener never fired — the evidence that refuted a presumed death),
-  // so leg (a)'s dev boot is version-skipped. See scaffold-real-install.
+  // callers can fail fast via `hasExited`. NOTE: a live-but-"unreachable" dev on a fixed port is more
+  // often a HARNESS fault than a product one — the published-0.1.2 leg (a) "hang" was really the
+  // fetch-blocked port 4190 (`assertFetchablePort` now catches that class at spawn); this listener
+  // stays for the genuine case it covers: OUR OWN child dying at/after boot without ever answering.
   child.on("exit", (code, signal) => {
     exited = true;
     buffer += `\n[lesto dev exited code=${code ?? "null"} signal=${signal ?? "null"}]`;

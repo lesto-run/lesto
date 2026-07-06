@@ -17,45 +17,30 @@ import {
 } from "./scaffold-real-helpers";
 
 /**
- * The MUTABLE-TREE HOISTED dev-boot preflight (L-513dd8a6) — the pre-publish CANARY for the
- * L-27285131 hang class. Run BEFORE a publish (dispatch / nightly) it would have caught the hang;
- * it is NOT yet wired into `release.yml` as a blocking gate (a follow-up — and one that must land
- * only AFTER the fix, since a blocking gate on the still-hung tree would deadlock the 0.1.3 release
- * that ships the fix).
+ * The MUTABLE-TREE HOISTED dev-boot preflight (L-513dd8a6) — the pre-publish CANARY that boots the
+ * CURRENT tree under bun's standalone-scaffold DEFAULT linker (hoisted) and proves `lesto dev` answers
+ * an undici `fetch()` + a browser hydrates. This is the quadrant neither `scaffold-real-install` leg
+ * covers: leg (a) is the PUBLISHED closure hoisted (immutable — no repo-side fix if it regresses), and
+ * leg (b) is the current tree ISOLATED. A real `bun create lesto && cd app && bun install && lesto dev`
+ * user gets current-tree-equivalent code × hoisted, so this fills it against a FIXABLE tree.
  *
- * ⚠️ STRUCTURALLY BLIND to the L-27285131 defect (established 2026-07-04, L-3daa1173) — do NOT treat a
- * green here as "the published default path is fine." The defect only reproduces on the REAL npm-resolved
- * published closure under a Node undici `fetch()` client; this spec is a LOCAL PACK (`packLestoClosure`
- * pins the whole `@lesto/*` graph to `file:` tarballs via `overrides`), and every local pack GREENS under
- * undici — including of published-0.1.2's own byte-identical source (overlay bisect run 28719740861, all
- * SHAs green). So this leg CANNOT redden on that class (the `scaffold-e2e-masks-real-resolution` trap). It
- * still earns its keep as install/build + hoisted-layout coverage; the faithful published-closure dev-boot
- * check (verdaccio) is the re-scoped L-513dd8a6 deliverable. curl is likewise a FALSE ORACLE here.
+ * ✅ CONTEXT (2026-07-05, L-513dd8a6): the "L-27285131 hoisted-Linux first-request HANG" that motivated
+ * this preflight turned out to be a TEST-HARNESS PORT BUG, not a product defect — `scaffold-real` leg (a)
+ * booted on port **4190**, which an undici `fetch()` refuses with "bad port" (the WHATWG fetch restricted-
+ * ports list) before ever connecting. There is no dep-optimize / @prefresh / rolldown stall; the published
+ * dev answers undici fine on a reachable port. So this preflight is a genuine, non-blind gate: it uses the
+ * SAME undici `fetch()` a real user's tooling does, on a FETCHABLE port (4192), and reds on a REAL dev-boot
+ * regression (a genuinely-broken dev, a bad bundle, a bind failure) — NOT on the port artifact. (It greened
+ * throughout the investigation for the ordinary reason: the tree's dev works AND 4192 is reachable — see
+ * the `scaffold-e2e-masks-real-resolution` note, now corrected. `assertFetchablePort` in dev-harness.ts
+ * guarantees no spec can silently reintroduce a blocked port.)
  *
- * `scaffold-real-install.spec.ts` has two legs, and NEITHER boots `lesto dev` under the hoisted
- * linker against a FIXABLE tree:
- *   - leg (a) boots the PUBLISHED closure hoisted — but that closure is IMMUTABLE, so when its dev
- *     hangs (published 0.1.2 never answers the first `GET /` under hoisted-on-Linux — a true hang
- *     confirmed at 300s) there is no repo-side fix; the leg can only SKIP its dev boot until a
- *     republish. That is precisely why the hang was only discoverable POST-publish.
- *   - leg (b) boots the CURRENT tree — but under the ISOLATED linker, which does NOT reproduce the
- *     hang (the same dev code answers fine isolated on the same Linux runner).
- *
- * The uncovered quadrant — CURRENT tree × HOISTED linker — is the one a real `bun create lesto &&
- * cd app && bun install && lesto dev` user actually gets, because HOISTED is bun's standalone-scaffold
- * DEFAULT. This spec fills it: pack the current `@lesto/*` closure to tarballs, scaffold via the
- * in-repo `create-lesto`, pin onto the tarballs, then `bun install --linker=hoisted`, build, boot
- * `lesto dev`, and assert the FIRST `GET /` answers. Since the published dev code == the tree, this
- * SHOULD reproduce the L-27285131 hang on a FIXABLE target (see the ⚠️ above — unconfirmed on Linux)
- * — so a fix can be red/greened here on Linux CI instead of only against the immutable published
- * leg (a), and this becomes the standing pre-publish canary against a regression of the same class.
- *
- * On macOS (where the hang does NOT reproduce — hoisted dev answers in ~24ms) and once the Linux hang
- * is fixed, this passes fast. On the still-hung path the first-GET wait is BOUNDED (120s, well under
- * the 600s hook budget) so it fails FAST with a named message rather than hanging the whole job.
+ * The first-GET wait is BOUNDED (120s, well under the 600s hook budget) so a real regression reds FAST
+ * with a named message rather than hanging the whole job.
  */
 
-// A fresh fixed port, clear of the fixture webServer's 4180 and the other specs' 4188/4189/4190/4191.
+// A fetchable fixed port (NOT on the fetch restricted-ports list — `assertFetchablePort` enforces),
+// clear of the fixture webServer's 4180 and the other specs' 4188/4189/4191/4193.
 const PORT = 4192;
 
 // Retain a full Playwright trace + screenshot whenever a browser test FAILS, so a hoisted hang (or a
@@ -97,10 +82,11 @@ test.describe("current-tree HOISTED dev-boot preflight — the L-513dd8a6 gate @
     // Build the Preact island client via the app's OWN installed cli, under Bun.
     await run("bun", [lestoBin(appDir), "build"], appDir);
 
-    // Boot `lesto dev` and gate on the FIRST `GET /`. On the hung path the child stays ALIVE and bound
-    // (the listen callback fires; `hasExited` never trips), so `waitForServer` polls to its deadline —
-    // BOUND it to 120s so this reds FAST instead of eating the whole 600s hook. Re-throw with a named
-    // message so the artifact makes the failure legible as the L-513dd8a6 hang on a FIXABLE tree.
+    // Boot `lesto dev` on the fetchable port and gate on the FIRST `GET /`. BOUND the wait to 120s so a
+    // real regression (a dev that never binds, a broken bundle) reds FAST instead of eating the whole 600s
+    // hook. Re-throw with a named message so the artifact makes the failure legible as a genuine hoisted-
+    // tree dev-boot break — not the old port artifact (`assertFetchablePort` already rejects a blocked port
+    // at spawn, so a "never answered" here means the SERVER is at fault, not the port).
     const devProc = await spawnDev(lestoBin(appDir), appDir, PORT);
     dev = devProc.child;
 
@@ -111,10 +97,10 @@ test.describe("current-tree HOISTED dev-boot preflight — the L-513dd8a6 gate @
       });
     } catch (cause) {
       throw new Error(
-        "hoisted-tree `lesto dev` first GET timed out — the L-513dd8a6 hang, now on a FIXABLE tree " +
-          "(current-tree + hoisted linker on Linux). This is the pre-publish gate for L-27285131; " +
-          "root-cause + fix it in `@lesto/island-dev` (suspected first-request Vite/@prefresh/rolldown " +
-          "dep-optimize stall under flat node_modules), then this greens.",
+        "hoisted-tree `lesto dev` first GET failed — the current tree does not boot a reachable dev " +
+          "server under bun's hoisted (flat node_modules) linker, the real `bun create lesto` default. " +
+          "This is a genuine dev-boot regression (the port is already proven fetchable); triage the " +
+          "captured dev output above.",
         { cause },
       );
     }

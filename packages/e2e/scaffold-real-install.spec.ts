@@ -66,55 +66,35 @@ const CREATE_LESTO_VERSION = (
 ).version;
 
 /**
- * Leg (a) boots + hydrates the PUBLISHED scaffold — EXCEPT when the published version is the known-stall
- * pin below. Published 0.1.2's `lesto dev` under bun's HOISTED linker on CI Linux announces its port (the
- * listen callback fires; the child stays ALIVE — the exit-listener never trips) but does NOT answer the
- * first `GET /`, even under a 300s waitForServer budget (one dispatch, run 28714591201). That STRONGLY
- * indicates a hang over a slow cold start — but it is n=1, and that same run's leg-b hydration also failed
- * (the runner may have been degraded), so a true deadlock vs a >300s dep-optimize stall under CPU
- * contention is NOT conclusively separated. Either way `beforeAll`'s dev boot hangs past the deadline, so
- * we skip ONLY the dev-boot + the browser-hydration test it feeds. The describe stays REGISTERED and
- * `beforeAll` still scaffolds → installs → BUILDS, so the registry-install + Preact-bundle CANARY (proof
- * the published closure still installs and builds from the real registry) stays LIVE. An earlier
- * `test.describe.skip` of the WHOLE leg silenced that canary too; this finer split keeps it green.
+ * Leg (a) boots + hydrates the PUBLISHED scaffold under bun's HOISTED linker — the real `npm create lesto`
+ * default-path. It runs at EVERY version, unconditionally: the dev boot is no longer version-skipped.
  *
- * ⚠️ COVERAGE HOLE while skipped: leg (a) is the ONLY spec that boots `lesto dev` off a hoisted, real-
- * registry install — bun's standalone-scaffold DEFAULT, i.e. the real-user path. With it skipped, CI has
- * NO hoisted dev-boot coverage; the sole remaining dev-boot+hydrate signal is leg (b), which is isolated
- * (non-default) AND flaky (L-d86ae3a1). So a green nightly does NOT prove the hoisted default-path dev
- * works. L-513dd8a6 re-closes this on a FIXABLE target (a mutable-tree HOISTED preflight) + ships the fix.
+ * ✅ ROOT CAUSE FOUND + RESOLVED (2026-07-05, L-513dd8a6). The long-standing leg-(a) "hoisted-Linux first-
+ * request HANG" was a TEST-HARNESS PORT BUG, not a product defect. This leg booted `lesto dev` on port
+ * **4190**, which is the ManageSieve port on the WHATWG fetch RESTRICTED-PORTS list. `beforeAll`'s
+ * `waitForServer` probes with an undici `fetch()`, and undici (Node/Bun's default) — like a browser —
+ * REFUSES a blocked port with `TypeError: fetch failed` / `cause: Error("bad port")` in ~3ms, BEFORE any
+ * TCP connection. So every probe rejected instantly and forever; a 300s budget just ran ~300 instant
+ * rejects and read as a "true hang". curl and `node:http` do NOT implement the list, so they got `GET / →
+ * 200` on the SAME server — which is exactly why they read as FALSE ORACLES. A sibling harness
+ * (`scaffold-hoisted-preflight`) on port **4192** greened under the SAME undici client, and leg (b) on
+ * **4191** greened too — so the variable was never the linker (hoisted vs isolated) or the closure
+ * (published vs local-pack); it was purely the port. Proven four ways: a local macOS repro of the exact
+ * published-0.1.2 closure (fetch @4190 → "bad port"; the SAME dev @4300 → 200 for default/identity/
+ * keep-alive undici); a control that reproduces "bad port" @4190 with NOTHING listening; and the CI
+ * mechanism run (28763844099) capturing `cause: "bad port"` on ubuntu-latest. There is NO framing defect,
+ * NO dep-optimize stall, NO hoisted-Linux hang, and NO 0.1.3 fix needed — the published closure was always
+ * fine; the harness could not reach it. The fix is the fetchable port below + `assertFetchablePort` in
+ * dev-harness.ts, which fails LOUD at spawn if any spec ever picks a blocked port again.
  *
- * ⚠️ MECHANISM CORRECTED (2026-07-04, L-3daa1173) — the "dep-optimize / @prefresh rolldown stall" guess
- * below the fold is REFUTED. The real signature: `beforeAll`'s `waitForServer` fails because it uses Node's
- * undici `fetch()`, and undici `fetch()` fails outright (instant, persistent) against the published-0.1.2
- * hoisted dev — while curl and `node:http` (fresh socket, `Connection: close`) both get `GET / → 200` fast
- * (~55ms, so it is NOT a dep-optimize deadlock). It is undici-`fetch`-client-specific and REAL-PUBLISHED-
- * CLOSURE-specific: a LOCAL pack of the byte-identical 0.1.2 source answers undici fine (source-invisible +
- * local-pack-blind). So the skip is correct (leg-a's fetch harness genuinely reds on 0.1.2), and HEAD's
- * published-closure behavior is UNPROVEN. ⚠️ USER IMPACT NOT SETTLED: no real browser was tested against
- * the published dev (this leg's `page.goto` never ran — `beforeAll` threw), and undici `fetch()` is Node/
- * Bun's DEFAULT client (agents, SSR self-fetch, and Lesto's OWN dev-MCP plane use it) — do NOT read this as
- * "users fine"; browser + agent-native impact is OPEN (L-513dd8a6). The "isolated boots fine / hoisted-on-Linux only" framing still holds directionally
- * but the CAUSE is undici-fetch-vs-real-closure, not a Vite stall; do NOT reinstate the bind/poll wording
- * (reconcile L-2d87f1b5). Full evidence + the verdaccio "is HEAD fixed" follow-up: L-3daa1173 / L-513dd8a6.
- *
- * The gate is a SINGLE known-bad version pin, so it AUTO-LIFTS at the next bump — NOT a `<=` threshold
- * (which greens forever and defeats the auto-re-test that caught this at the 0.1.2 bump). Two follow-on
- * reds are EXPECTED, not flake: between a 0.1.3 bump and create-lesto@0.1.3 landing on npm the whole leg-a
- * `beforeAll` reds on `bunx create-lesto@0.1.3` (404); and if 0.1.3 un-skips onto a still-unfixed dev the
- * hydration test reds. The un-skip conditions + the isolated-install add-on live on L-513dd8a6 / L-9dc62468.
+ * Inherent (unchanged): between a version bump and `create-lesto@<new>` landing on npm, this leg's
+ * `bunx create-lesto@<CREATE_LESTO_VERSION>` 404s (registry lag) — leg (a) tests the IMMUTABLE published
+ * snapshot pinned to the in-tree version, so that window reds correctly until the publish completes.
  */
-// Force-lift hook (L-3daa1173 characterization): the `hoisted-hang-probe` workflow sets
-// `LESTO_FORCE_PUBLISHED_DEV_BOOT=1` to boot the published dev under THIS exact `waitForServer` (undici
-// `fetch`) harness. That run SETTLED it: undici `fetch()` reds the published-0.1.2 hoisted dev 3/3 while
-// curl greens 3/3 on the SAME server — a curl probe is a FALSE ORACLE, only the fetch harness sees the
-// real defect. UNSET on every normal path (the nightly, scaffold-real-install.yml, CI), so the
-// version-pinned skip is unchanged there; the hook exists only for the characterization sweep.
-const DEV_BOOT_SKIPPED =
-  CREATE_LESTO_VERSION === "0.1.2" && process.env.LESTO_FORCE_PUBLISHED_DEV_BOOT !== "1";
-
-// Distinct ports per leg (and clear of the fixture webServer's 4180 + the other specs' 4188/4189).
-const PORT_PUBLISHED = 4190;
+// Distinct ports per leg — all FETCHABLE (not on the fetch restricted-ports list; `assertFetchablePort`
+// enforces this at spawn). Clear of the fixture webServer's 4180 + the other specs' 4188/4189/4192.
+// 4190 was the trap (ManageSieve — fetch-blocked); leg (a) now uses 4193.
+const PORT_PUBLISHED = 4193;
 const PORT_TREE = 4191;
 
 // Each block is its OWN serial group (the `configure` lives INSIDE each describe, not here at
@@ -165,20 +145,17 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
     await run("bun", ["install", "--linker=hoisted"], appDir);
     await run("bun", [lestoBin(appDir), "build"], appDir);
 
-    // Boot `lesto dev` only when the published version is NOT the known-stall pin (see the gate above).
-    // Published 0.1.2's dev stays alive but HANGS the first request under the hoisted layout on CI Linux
-    // (confirmed a true hang at 300s), so booting it here would hang this hook for the full deadline. The
-    // hydration test below is `test.skip`-ped on the SAME gate, so the two move together and un-skip in
-    // lockstep at the 0.1.3 fix (L-513dd8a6).
-    if (!DEV_BOOT_SKIPPED) {
-      const devProc = await spawnDev(lestoBin(appDir), appDir, PORT_PUBLISHED);
-      dev = devProc.child;
+    // Boot `lesto dev` off the hoisted, real-registry install — bun's standalone-scaffold DEFAULT, the
+    // real-user path — on a FETCHABLE port (4193). Unconditional now that the leg-(a) "hang" is known to
+    // have been the fetch-blocked port 4190, not a product defect (L-513dd8a6): the published closure's
+    // dev answers undici (and a browser) fine on a reachable port, proven locally + on CI.
+    const devProc = await spawnDev(lestoBin(appDir), appDir, PORT_PUBLISHED);
+    dev = devProc.child;
 
-      await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 60_000, {
-        output: devProc.output,
-        hasExited: devProc.hasExited,
-      });
-    }
+    await waitForServer(`http://127.0.0.1:${PORT_PUBLISHED}/`, 60_000, {
+      output: devProc.output,
+      hasExited: devProc.hasExited,
+    });
   });
 
   test.afterAll(async () => {
@@ -194,14 +171,8 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
   });
 
   test("the deferred island hydrates in a real browser — the button goes live", async ({ page }) => {
-    // Skipped while the published version is the known-stall pin: published 0.1.2's `lesto dev` HANGS the
-    // first request under the hoisted layout on CI Linux (confirmed at 300s; the `beforeAll` above skips
-    // its boot to match), so there is no reachable server to hydrate against. Un-skips at the 0.1.3 fix.
-    test.skip(
-      DEV_BOOT_SKIPPED,
-      `published ${CREATE_LESTO_VERSION} dev hangs the first request under hoisted-on-Linux (L-513dd8a6)`,
-    );
-
+    // Runs unconditionally: the published-hoisted dev is reachable on a fetchable port (the old
+    // `DEV_BOOT_SKIPPED` gate was the fetch-blocked-port artifact, now removed — L-513dd8a6).
     await page.goto(`http://127.0.0.1:${PORT_PUBLISHED}/`);
 
     const counter = page.locator('[data-testid="counter"]');
@@ -210,8 +181,8 @@ test.describe(`real-registry install — published ${CREATE_LESTO_VERSION}, hois
 
     // A click increments only AFTER hydration — the visible proof the Preact client mounted the live
     // component over the server fallback, off a real registry install. Gate the click on hydration
-    // (L-d86ae3a1) so that when this un-skips at the 0.1.3 fix (L-513dd8a6) it does NOT re-inherit the
-    // click-races-hydration flake the isolated leg (b) hit.
+    // (L-d86ae3a1) so the published-hoisted leg does not inherit the click-races-hydration flake the
+    // isolated leg (b) hit.
     await expectIslandHydrated(counter);
     await counter.click();
 

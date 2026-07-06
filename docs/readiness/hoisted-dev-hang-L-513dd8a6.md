@@ -1,6 +1,52 @@
 # Hoisted-Linux `lesto dev` first-request hang — root-cause investigation (L-513dd8a6)
 
-> ## ⚠️ SUPERSEDED — the hypothesis below (Vite/@prefresh/rolldown dep-optimize stall) is REFUTED (2026-07-04, L-3daa1173)
+> ## ✅ RESOLVED (2026-07-05) — the real root cause was a TEST-HARNESS PORT BUG, not a product defect
+>
+> **There is no hoisted-Linux hang, no HTTP response-framing defect, and no dep-optimize stall. The
+> `scaffold-real` leg-(a) harness booted `lesto dev` on port `4190` — the ManageSieve port, which is on
+> the WHATWG fetch RESTRICTED-PORTS list.** `beforeAll`'s `waitForServer` probes with an undici `fetch()`,
+> and undici (Node/Bun's default HTTP client) — exactly like a browser's `page.goto` — REFUSES a blocked
+> port with `TypeError: fetch failed` / `cause: Error("bad port")` in ~3 ms, BEFORE any TCP connection. So
+> every probe rejected instantly and permanently; a 300 s budget just ran ~300 instant rejects and read as
+> a "true hang". `curl` and `node:http` do NOT implement the restricted-ports list, so they got `GET / →
+> 200` on the SAME server — which is why they read as "false oracles". The whole "curl < node:http <
+> undici oracle-fidelity ladder ⇒ undici sees a stricter-parser framing defect" reading was wrong: undici
+> differs from curl/node:http here because it enforces the fetch port block, not because the response was
+> mis-framed.
+>
+> **Why it looked linker- and closure-specific (both coincidences of port assignment):**
+> - leg (a) hoisted → `PORT_PUBLISHED = 4190` (blocked) + undici → RED "hang"
+> - leg (b) isolated → `PORT_TREE = 4191` (fetchable) + undici → GREEN
+> - `scaffold-hoisted-preflight` (a LOCAL PACK) → `PORT = 4192` (fetchable) + undici → GREEN
+> - the overlay bisect runs the preflight → 4192 → GREEN at every SHA
+>
+> The variable was NEVER the linker (hoisted vs isolated) or the closure (published vs local-pack); it was
+> only the port. The "source-invisible / local-pack-blind / only-the-real-published-closure-reproduces"
+> framing was an artifact of leg-a (4190) and the preflight (4192) being different harnesses that happened
+> to also differ in closure.
+>
+> **Proven four independent ways:**
+> 1. Local macOS repro of the exact `bunx create-lesto@0.1.2` hoisted closure: `fetch http://127.0.0.1:4190/`
+>    → `cause: bad port`; the SAME dev on `:4300` → `200` for default(gzip)/identity/keep-alive-pool undici.
+> 2. Control: `fetch` to `:4190` with NOTHING listening still → `bad port` (a pre-connect block, vs
+>    `ECONNREFUSED` on unblocked `:4191`/`:3000`) — the failure is independent of any Lesto server.
+> 3. CI mechanism run `28763844099` (ubuntu-latest, real published closure): `fetch-noabort` →
+>    `{"ok":false,"ms":3,"cause":"Error: bad port"}`; `fetch-waitforserver` → `300` attempts, `lastCause:
+>    "Error: bad port"`, no `http.access` line (the server was never reached).
+> 4. `page.goto` (Chromium) would fail identically — browsers report `ERR_UNSAFE_PORT` for 4190.
+>
+> **The fix (no product change, no 0.1.3 needed):** move leg (a) to a fetchable port (`4193`), un-skip its
+> dev-boot + browser hydration (`DEV_BOOT_SKIPPED` deleted — published 0.1.2's dev was always fine), and add
+> `assertFetchablePort` to `packages/e2e/dev-harness.ts` so any spec that ever picks a blocked dev port
+> fails LOUD at spawn with a named message instead of a silent full-deadline "never answered". The three
+> `hoisted-hang-*` dispatch-only diagnostic workflows (which named the byte) are removed. The verdaccio
+> "is HEAD fixed" harness is UNNECESSARY: there was never a closure-specific defect to verify.
+>
+> Everything below is the *original, now-refuted* investigation, kept for history. The Vite/@prefresh/
+> rolldown dep-optimize hypothesis AND the later "undici response-framing strictness" hypothesis were BOTH
+> wrong — read them as a record of two hypotheses the port evidence disproved, not as guidance.
+
+> ## ⚠️ SUPERSEDED (earlier interim, 2026-07-04, L-3daa1173) — kept for history below
 >
 > A characterization sweep (probe/bisect/mechanism runs on `hoisted-hang-{probe,bisect,mechanism}.yml`)
 > overturned the framing in the rest of this note. **What is now established:**
