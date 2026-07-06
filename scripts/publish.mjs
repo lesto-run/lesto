@@ -27,10 +27,12 @@
 // after a fixed cause is idempotent — versions already on the registry are skipped.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { packAllToVendor, readPublicPackageDirs, readTarballMeta } from "./lib/pack-public.mjs";
 
 // ---------------------------------------------------------------------------
 // Pure logic — exported and unit-tested by `scripts/publish.test.mjs`. These
@@ -153,22 +155,19 @@ function main() {
   const REPO = process.cwd();
   const PACKAGES = join(REPO, "packages");
 
-  // Every publishable package: de-privatized, version-agnostic (each package is its own source
-  // of truth for its version, so a coordinated bump needs no edit here). This must match the
-  // filter `scripts/pack-and-boot.mjs` uses, or the boot-proof and the publish cover different
-  // sets.
+  // Every publishable package: the de-privatized closure, version-agnostic (each package is its
+  // own source of truth for its version, so a coordinated bump needs no edit here). This is the
+  // SHARED filter (`scripts/lib/pack-public.mjs`) that `scripts/pack-and-boot.mjs` also uses, so
+  // the boot-proof and the publish provably cover the same set — no longer a hand-agreement
+  // between two inlined copies.
   //
-  // TODO(L-73e2141f): there is no reliable oracle for the release's INTENDED set independent of
+  // TODO(L-61c051a1): there is no reliable oracle for the release's INTENDED set independent of
   // this same "non-private packages/*" filter, so a package de-privatized between changeset-prep
   // and dispatch (thus lacking a trusted publisher → a 403) can't be caught by a preflight here
   // without a brittle assumption. It IS caught downstream: fail-closed topological ordering (below)
   // stops the run at that 403 before any dependent ships. If an explicit intended-set manifest is
   // introduced, assert `publicDirs` equals it here.
-  const publicDirs = readdirSync(PACKAGES).filter((name) => {
-    const pj = join(PACKAGES, name, "package.json");
-    if (!existsSync(pj)) return false;
-    return JSON.parse(readFileSync(pj, "utf8")).private !== true;
-  });
+  const publicDirs = readPublicPackageDirs(PACKAGES);
 
   // Source manifests → graph nodes. `topoSortPackages` orders them so every package's workspace
   // deps publish before it.
@@ -185,30 +184,15 @@ function main() {
   const vendor = join(mkdtempSync(join(tmpdir(), "lesto-publish-")), "vendor");
   mkdirSync(vendor);
 
-  for (const dir of publicDirs) {
-    try {
-      execFileSync("bun", ["pm", "pack", "--destination", vendor], {
-        cwd: join(PACKAGES, dir),
-        stdio: ["ignore", "ignore", "inherit"],
-      });
-    } catch (error) {
-      throw new Error(`bun pm pack failed for packages/${dir}`, { cause: error });
-    }
-  }
-
-  const tarballs = readdirSync(vendor).filter((file) => file.endsWith(".tgz"));
-  if (tarballs.length !== publicDirs.length) {
-    throw new Error(`packed ${tarballs.length} tarballs, expected ${publicDirs.length}`);
-  }
+  // Pack every public package (rewriting workspace:* → exact versions) and guard the count.
+  // Shared with the boot-proof (`scripts/lib/pack-public.mjs`) so both cover the same closure.
+  packAllToVendor(PACKAGES, publicDirs, vendor);
 
   // Map every packaged name → { tarball path, packed version } from the tarball's OWN
   // package.json (robust to scope/filename mangling); the version is the published shape's.
   const tarballByName = new Map();
-  for (const tgz of tarballs) {
-    const meta = JSON.parse(
-      execFileSync("tar", ["-xzOf", join(vendor, tgz), "package/package.json"], { encoding: "utf8" }),
-    );
-    tarballByName.set(meta.name, { path: join(vendor, tgz), version: meta.version });
+  for (const { path, meta } of readTarballMeta(vendor)) {
+    tarballByName.set(meta.name, { path, version: meta.version });
   }
 
   // Every ordered package must have a packed tarball — guards a name mismatch between a source

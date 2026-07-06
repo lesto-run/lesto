@@ -19,9 +19,11 @@
 // needs no database, server, or bun bundler.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { packAllToVendor, readPublicPackageDirs, readTarballMeta } from "./lib/pack-public.mjs";
 
 const REPO = process.cwd();
 const PACKAGES = join(REPO, "packages");
@@ -33,14 +35,9 @@ function run(cmd, args, opts = {}) {
 
 // 1. Every public package: the de-privatized closure plus `create-lesto`. Version-agnostic
 //    (each package's own version is the source of truth) so a coordinated bump needs no edit
-//    here — must match the same filter `scripts/publish.mjs` uses, or the proof and the
-//    publish would cover different sets.
-const publicDirs = readdirSync(PACKAGES).filter((name) => {
-  const pj = join(PACKAGES, name, "package.json");
-  if (!existsSync(pj)) return false;
-
-  return JSON.parse(readFileSync(pj, "utf8")).private !== true;
-});
+//    here. This is the SHARED filter (`scripts/lib/pack-public.mjs`) that `scripts/publish.mjs`
+//    also uses, so this proof and the publish provably cover the same set.
+const publicDirs = readPublicPackageDirs(PACKAGES);
 
 console.log(`[pack-and-boot] packing ${publicDirs.length} public packages…`);
 
@@ -48,37 +45,20 @@ const work = mkdtempSync(join(tmpdir(), "lesto-boot-"));
 const vendor = join(work, "vendor");
 mkdirSync(vendor);
 
-// 2. Pack each into the vendor dir. `bun pm pack` rewrites `workspace:*` → the exact
-//    version in the emitted tarball, so each tarball is self-describing like a publish.
-for (const dir of publicDirs) {
-  try {
-    // stdout quiet, but let bun's stderr through so a pack failure names the cause.
-    execFileSync("bun", ["pm", "pack", "--destination", vendor], {
-      cwd: join(PACKAGES, dir),
-      stdio: ["ignore", "ignore", "inherit"],
-    });
-  } catch (error) {
-    throw new Error(`bun pm pack failed for packages/${dir}`, { cause: error });
-  }
-}
+// 2. Pack each into the vendor dir and guard the count. `bun pm pack` rewrites `workspace:*`
+//    → the exact version in the emitted tarball, so each tarball is self-describing like a
+//    publish. Shared with the release (`scripts/lib/pack-public.mjs`) so both cover the same set.
+packAllToVendor(PACKAGES, publicDirs, vendor);
 
-const tarballs = readdirSync(vendor).filter((file) => file.endsWith(".tgz"));
-if (tarballs.length !== publicDirs.length) {
-  throw new Error(`packed ${tarballs.length} tarballs, expected ${publicDirs.length}`);
-}
-
-// 3. Map every packaged name → its tarball (read from the tarball's own package.json,
-//    robust to scope/filename mangling) to become the install `overrides`, while
-//    recording each packed version + every `@lesto/*` cross-reference for the check below.
+// 3. Map every packaged name → its tarball (read via the shared tarball meta-reader,
+//    `scripts/lib/pack-public.mjs`, from each tarball's own package.json — robust to
+//    scope/filename mangling) to become the install `overrides`, while recording each packed
+//    version + every `@lesto/*` cross-reference for the check below.
 const overrides = {};
 const packedVersion = {};
 const crossRefs = [];
-for (const tgz of tarballs) {
-  const meta = JSON.parse(
-    execFileSync("tar", ["-xzOf", join(vendor, tgz), "package/package.json"], { encoding: "utf8" }),
-  );
-
-  overrides[meta.name] = `file:${join(vendor, tgz)}`;
+for (const { path, meta } of readTarballMeta(vendor)) {
+  overrides[meta.name] = `file:${path}`;
   packedVersion[meta.name] = meta.version;
 
   // Collect every `@lesto/*` cross-reference, flagging OPTIONAL peers — those may
