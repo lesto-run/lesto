@@ -12,13 +12,15 @@ import { describe, expect, it } from "vitest";
 import { lestoWorkspaceDeps, runPublish, topoSortPackages } from "./publish.mjs";
 
 describe("lestoWorkspaceDeps", () => {
-  it("collects @lesto/* deps from BOTH dependencies and devDependencies, de-duplicated", () => {
+  it("collects @lesto/* runtime deps from `dependencies` ONLY — never devDependencies", () => {
     const deps = lestoWorkspaceDeps({
       dependencies: { "@lesto/errors": "workspace:*", jiti: "^2.7.0" },
-      devDependencies: { "@lesto/assets": "workspace:*", "@lesto/errors": "workspace:*" },
+      devDependencies: { "@lesto/assets": "workspace:*" },
     });
-    expect(new Set(deps)).toEqual(new Set(["@lesto/errors", "@lesto/assets"]));
-    expect(deps).toHaveLength(2); // de-duplicated across sections
+    // A consumer never installs a published package's devDependencies, so ordering them buys no
+    // install-safety; scanning them would also risk a false dev-only cycle aborting the release.
+    // This asserts the devDep (@lesto/assets) is EXCLUDED — it goes RED if devDeps are re-scanned.
+    expect(deps).toEqual(["@lesto/errors"]);
   });
 
   it("ignores third-party semver deps", () => {

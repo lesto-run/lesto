@@ -39,22 +39,26 @@ import { pathToFileURL } from "node:url";
 // ---------------------------------------------------------------------------
 
 /**
- * The in-repo `@lesto/*` (workspace) dependency names a manifest declares, across BOTH
- * `dependencies` and `devDependencies`. A workspace edge is any entry whose NAME is a
- * `@lesto/*` scope OR whose RANGE uses the `workspace:` protocol (catches an unscoped
- * sibling like `create-lesto` if one is ever depended on locally). Returned names may
- * point outside the publishable set — the topo sort ignores those (see below).
+ * The in-repo `@lesto/*` (workspace) RUNTIME dependency names a manifest declares — from
+ * `dependencies` ONLY, deliberately NOT `devDependencies`. The publish-ordering safety
+ * invariant is "a dependent (which bun-pack exact-pins its deps) must not ship after a dep
+ * failed": that only concerns deps a CONSUMER installs, and npm never installs a published
+ * package's devDependencies. So ordering devDeps buys no safety — and it would let a legitimate
+ * dev-only edge (package A test-depends on B while B runtime-depends on A) form a false
+ * `dependency cycle` that aborts the whole release. A workspace edge is any entry whose NAME is
+ * a `@lesto/*` scope OR whose RANGE uses the `workspace:` protocol (catches an unscoped sibling
+ * like `create-lesto` if ever depended on locally). Returned names may point outside the
+ * publishable set — the topo sort ignores those (see below). (Same reason `peerDependencies` are
+ * omitted: every `@lesto` peer in the public set is optional and resolves from the registry.)
  *
- * @param {{dependencies?:Record<string,string>, devDependencies?:Record<string,string>}} manifest
- * @returns {string[]} de-duplicated dependency package names
+ * @param {{dependencies?:Record<string,string>}} manifest
+ * @returns {string[]} de-duplicated runtime dependency package names
  */
 export function lestoWorkspaceDeps(manifest) {
   const deps = new Set();
-  for (const field of ["dependencies", "devDependencies"]) {
-    for (const [name, range] of Object.entries(manifest?.[field] ?? {})) {
-      if (name.startsWith("@lesto/") || String(range).startsWith("workspace:")) {
-        deps.add(name);
-      }
+  for (const [name, range] of Object.entries(manifest?.dependencies ?? {})) {
+    if (name.startsWith("@lesto/") || String(range).startsWith("workspace:")) {
+      deps.add(name);
     }
   }
   return [...deps];
