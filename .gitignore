@@ -26,3 +26,7 @@ var/
 
 # Leftover scratch tests from interactive debugging
 **/*_scratch.test.ts
+
+# Changeset-generated changelogs (the 0.1.x release convention commits zero CHANGELOGs;
+# `changeset version` would otherwise litter ~80 untracked CHANGELOG.md a daemon could sweep)
+**/CHANGELOG.md
