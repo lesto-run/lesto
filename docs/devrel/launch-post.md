@@ -12,6 +12,16 @@
 > 2. COMMUNITY-GATED: "GitHub Discussions are open" (L-f99bdb0d) and "`good-first-issue`
 >    is seeded" (L-d51a3369) are written as already true — make them true first.
 > 3. The screencast embed (L-62b22a91) is recorded and placed.
+> 4. **PUBLISH-GATED / STRATEGIC (L-<batteries-publish>): the "batteries half" below
+>    names batteries that are `private:true` and NOT on npm today** — mail, cache,
+>    workflows, webhooks, identity, forms, flags, admin, realtime, pubsub,
+>    mailing-lists, i18n, feeds. The 0.1.2 publish was the *scaffold closure* only.
+>    Before this posts, EITHER de-privatize + publish the battery set, OR scope the
+>    narrative to what `bunx create-lesto` actually installs (db, queue, authz,
+>    storage, seo, openapi, mcp + the runtime/frontend/deploy/observability stack).
+>    This is a decision, not a wording tweak — see the filed task. The draft below is
+>    written for the "publish the batteries" branch; if we scope instead, cut the
+>    unpublished bullets. Do NOT post with the current list while they're private.
 
 ---
 
@@ -60,6 +70,10 @@ tagline: **batteries-included, agent-native.**
 
 ## The batteries half
 
+> ⚠️ DRAFT NOTE (not for publication): the bullets marked ⧗ are built + 100%-covered
+> but `private:true` / not yet on npm (see header gate #4). Publish them or cut them
+> before this posts.
+
 Lesto gives TypeScript the in-house "hard parts" Rails and Laravel ship in the
 box — and puts them all on **one substrate: the SQL database.** SQLite for
 zero-config local, Postgres at scale, the same APIs over both:
@@ -67,23 +81,25 @@ zero-config local, Postgres at scale, the same APIs over both:
 - **`@lesto/db`** — typed schema, migrations, relational queries with joins.
 - **`@lesto/queue`** — durable jobs on the database (`SKIP LOCKED` on
   Postgres), plus scheduled/repeatable jobs. No Redis.
-- **`@lesto/workflows`** — multi-step work with resumable step memoization.
-- **`@lesto/cache`, `@lesto/pubsub`, `@lesto/realtime`** — DB-backed caching
+- **`@lesto/authz`** — roles, permissions, principals, guards.
+- **`@lesto/storage`** — object storage, local FS → S3-compatible.
+- **`@lesto/seo`, `@lesto/openapi`** — typed meta/sitemaps and a generated API contract.
+- ⧗ **`@lesto/workflows`** — multi-step work with resumable step memoization.
+- ⧗ **`@lesto/cache`, `@lesto/pubsub`, `@lesto/realtime`** — DB-backed caching
   and topic invalidation driving live `useQuery` over SSE: a write publishes a
   key, subscribers refetch through the authorized endpoint. No polling, and no
   row data on the wire.
-- **`@lesto/identity` + `@lesto/authz`** — in-house auth (register / verify /
-  login / reset, sessions) and roles/permissions.
-- **`@lesto/mail`, `@lesto/mailing-lists`, `@lesto/webhooks`, forms, flags,
-  storage (S3-compatible), i18n, feeds, SEO, OpenAPI, an admin surface** — in
-  the box, on the same database.
+- ⧗ **`@lesto/identity`** — in-house auth (register / verify / login / reset,
+  sessions).
+- ⧗ **`@lesto/mail`, `@lesto/mailing-lists`, `@lesto/webhooks`, forms, flags,
+  i18n, feeds, an admin surface** — in-house, on the same database.
 - **Observability that's actually a differentiator:** one trace from the
   browser, through the API, to the SQL — with agent operations (`ai.*` spans)
   on the same trace. No OpenTelemetry setup required; OTLP export when you
   want it.
 - **Frontend:** server-rendered React with islands (Preact-aliased to ~10 KB
   gzip client), file-based routing, Tailwind v4 + shadcn first-class
-  (`lesto add button`), Vite dev with Fast Refresh.
+  (`npx shadcn add button`), Vite dev with Fast Refresh.
 - **Deploy:** `lesto deploy --cloudflare` — prerendered assets + a Worker in
   one atomic, versioned step.
 
@@ -99,7 +115,8 @@ We'd rather you find this here than in the comments:
 
 | It | Status |
 |---|---|
-| Queue, cache, workflows, auth, RBAC, email, webhooks, content, admin, tracing | Shipped, 100% test coverage held per package |
+| db, queue, authz (RBAC), storage, seo, openapi, the agent/MCP plane, tracing | On npm today, 100% test coverage held per package |
+| cache, workflows, auth (identity), email, mailing-lists, webhooks, forms, flags, admin ⧗ | Built + 100%-covered; **publishing on the path to 1.0** (private in the 0.1.2 scaffold-closure release) — *(publish-or-scope before launch, header gate #4)* |
 | Local-first sync (`live()`) | **v1, in hardening** — replication + durable store + offline outbox are real and CI-gated end-to-end; per-row sync authorization and a hardening list stand between this and an unqualified "offline" claim |
 | Workflows | Resumable step memoization — **not** crash-safe durable execution yet |
 | Agent control plane | Content, UI generation, requests, inspection — **schema migrations are not an MCP tool yet** (CLI only) |
@@ -112,7 +129,9 @@ external security audit, upgrade guides), not date-boxed.
 
 ## Try it
 
-- `bunx create-lesto my-app` — 36 packages on npm, MIT.
+- `bunx create-lesto my-app` — a running full-stack app, MIT. *(package-count
+  claim deferred to the header-gate-#4 decision — don't put "N packages on npm"
+  next to the batteries list until the battery set is actually published.)*
 - No local setup? [Open in Codespaces](https://codespaces.new/lesto-run/lesto).
 - Docs: [docs.lesto.run](https://docs.lesto.run) — and they're agent-readable:
   [`/llms.txt`](https://docs.lesto.run/llms.txt), every page has a Markdown

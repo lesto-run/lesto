@@ -84,7 +84,7 @@ Each capability = an in-house Lesto API on the one DB; thin drivers only at the 
 
 | Capability | Substrate (default) | Lesto API | Status |
 |---|---|---|---|
-| DB / ORM / migrations | SQLite → **Postgres** | `@lesto/db` (`defineTable`, typed queries, joins/FKs) + `@lesto/migrate` | ✅ shipped (SQLite + Postgres — ADR 0018; eager-loading `relations()` deferred, ADR 0019) |
+| DB / ORM / migrations | SQLite → **Postgres** | `@lesto/db` (`defineTable`, typed queries, joins/FKs) + `@lesto/migrate` | ✅ shipped (SQLite + Postgres; joins/FKs — ADR 0018; eager-loading `relations()` deferred per ADR 0018) |
 | Virtual tables / views | SQL views + computed fields | view-backed models, computed fields | ◻ build |
 | **Jobs / queue** | **Postgres `SKIP LOCKED`** (Solid-Queue-style); SQLite local | `@lesto/queue` — `define` / `enqueue` / `work` | ✅ shipped (the reference-implementation package) |
 | Durable **workflows** | in-house on the one DB | `@lesto/workflows` — steps with resumable memoization | ✅ shipped (step memoization; automatic crash-resume is post-1.0 — claim per the guardrail) |
@@ -99,7 +99,7 @@ Each capability = an in-house Lesto API on the one DB; thin drivers only at the 
 | **Content management** | `@lesto/content-*`, DB-backed via `@lesto/db` | collections, markdown/MDX, store, admin, MCP | ✅ shipped (search/embeddings/prose components ◐ preview) |
 | **Search** | Postgres **FTS + `pgvector`** planned | `@lesto/content-search` / `-embeddings` | ◐ preview |
 | **UI components** | **Tailwind v4 + shadcn/ui**, first-class | scaffold is a generic shadcn project; `lesto add <component>` | ✅ shipped (ADR 0037) |
-| **Forms** | shadcn + zod | `@lesto/forms` | ✅ shipped |
+| **Forms** | over `@lesto/ui`, built-in validator | `@lesto/forms` — schema-driven forms, validate → action | ✅ shipped |
 | **Extensibility** | in-house (§3.5) | hooks/actions/filters, events, plugins, themes | ◻ deferred post-1.0 (ADR 0014) |
 | **Observability** | in-house tracing, OTLP export | `@lesto/observability` — **one trace browser → API → DB**, RUM, `ai.*` agent spans (ADR 0031) | ✅ shipped (the differentiator — safe to claim) |
 | **Deploys** | static assets + Worker, one atomic step | `lesto deploy --cloudflare` | ✅ shipped (Cloudflare flagship; other targets via the deploy seam) |
@@ -141,7 +141,7 @@ OpenTelemetry-first, auto-instrumented: **one trace spans UI → API/controller 
 
 1. ✅ **Queue + scheduler** (in-house, SQLite atomic-claim now / Postgres `SKIP LOCKED` next) with graceful-drain + reclaim — **built**; the reclaim mechanism (a worker that drops a job mid-flight releases it for another worker to claim and complete, no loss) is covered in `packages/queue/test/queue.test.ts`. Plus the DB lifecycle (§3.4): seeding, transactional testing, masking — all built & tested. *(Note: the **scheduler** dedupes cron firings in in-process memory — run exactly one scheduler instance per deployment; see `packages/queue/src/scheduler.ts`.)*
 2. **Hooks / events / plugins** extensibility core (§3.5) — everything else registers through it. ← **deferred post-1.0** (ADR 0014; the orphan prototypes were removed from the v1 surface).
-3. **Auth + users + RBAC** (better-auth over the DB).
+3. **Auth + users + RBAC** (in-house `@lesto/identity` + `@lesto/authz` over the DB — shipped; this §8 build-order note predates them).
 4. **Mailers** (react-email) **+ webhooks** — on the queue.
 5. **shadcn-based Loom registry + Forms.**
 6. **Cache · pub/sub (LISTEN/NOTIFY) · mailing lists · virtual tables.**
@@ -154,7 +154,7 @@ OpenTelemetry-first, auto-instrumented: **one trace spans UI → API/controller 
 
 - **Postgres vs SQLite default for `lesto new`** — SQLite for true zero-config (Rails-8 stance), Postgres the moment you need pub/sub-realtime, pgvector, or scale. Likely: SQLite local, Postgres prod, one API over both.
 - **In-house workflow layer vs DBOS** — decide at the workflow slice; both stay on the one DB.
-- **better-auth ↔ Tracks** — better-auth owns its schema; confirm the DB-adapter seam vs. Tracks migrations.
+- ~~**better-auth ↔ Tracks**~~ — RESOLVED: auth shipped in-house as `@lesto/identity` (not better-auth), owning its own schema via `@lesto/migrate`.
 - **Tailwind in Loom** — required for shadcn; confirm SSR + AI-tree registry still validate cleanly.
 - **Hook system shape** — sync actions/filters (WP) vs. async events/listeners (Laravel): ship both, clarify when each fires.
 - **Managed Lesto Cloud** — scope/timing of the commercial layer.

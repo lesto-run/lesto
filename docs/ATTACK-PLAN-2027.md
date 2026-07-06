@@ -56,7 +56,10 @@ checkpoint, not the effort doubled blindly.
 - The launch funnel was gated on publish day (L-b80af2e4, now DONE) and never
   fired: launch post, Show HN, multi-channel push, awesome-lists, community
   channel, newsletter, visual brand, README hero — all still backlog.
-- **P0 first-touch defect (L-513dd8a6):** published 0.1.2 `lesto dev` on the
+- **P0 first-touch defect (L-513dd8a6):** *(REFUTED 2026-07-05 — this was a
+  test-harness restricted-port bug, not a product defect; see the §6
+  gate-CLEARED entry. The bullet is retained as written for the record.)*
+  published 0.1.2 `lesto dev` on the
   default hoisted-Linux path is unreachable to a Node undici `fetch()` client.
   curl works; browsers untested; the dev-MCP loop unproven (L-e51c033d). The
   undici client *is our wedge audience* — every agent, every SSR tool, Claude
@@ -98,6 +101,11 @@ early, and then the names stick.
 ## 3. The campaign (five phases)
 
 ### Phase L0 — First-touch integrity (now → 2026-07-24, hard deadline)
+
+> **Status 2026-07-05: gate CLEARED — see the §6 decision log.** The three
+> proofs below are DONE (the "defect" was refuted as a harness port bug; no
+> 0.1.3 was needed for it). This section is retained as the original gate
+> definition; the *live* pre-launch work is the parallel list below it.
 
 The launch is gated on exactly three proofs, and nothing else — scope discipline
 here is what keeps the deadline honest:
@@ -165,12 +173,12 @@ Make "agent-native" mean Lesto, with a flywheel not a moment:
 - **Content cadence:** the 12-tutorial backlog (L-d9e934d0) at ~1/week, each a
   shipped battery + real example; the "build X *from your agent*" series
   (L-91628be4) is the differentiated half. 6-week calendar (L-4df00de3) runs it.
-- **Agent-ecosystem distribution (new work, filed under the epic):** a
-  first-party **Claude Code plugin/skill for Lesto** (scaffold, add-battery,
-  deploy — the agent's on-ramp), Cursor/Windsurf rules files in the scaffold,
-  registry listings for the MCP control plane, `AGENTS.md` in every template.
-  An agent that can *succeed* with Lesto in one shot is our highest-leverage
-  distribution artifact.
+- **Agent-ecosystem distribution:** the L0 on-ramp shipped the in-scaffold
+  skill + AGENTS.md; what remains here is the genuinely-deferred tier — a
+  Claude Code **plugin/marketplace entry** (discovery *before* you scaffold),
+  Cursor/Windsurf rules files in the scaffold, registry listings for the MCP
+  control plane. An agent that can *succeed* with Lesto in one shot is our
+  highest-leverage distribution artifact.
 - **Benchmarks with published numbers** (L-97e1bca5 + the harness tasks):
   cold-start, bundle size, realistic SSR throughput vs Next/SvelteKit/Astro/RR7
   — reproducible harness, honest error bars, publish the losses too. Credibility
@@ -308,7 +316,8 @@ list frozen. No P0 objection to the plan.
   community channel, agent on-ramp, claims refresh). The standing pre-publish
   gate (L-e6a86c59) remains open and is now scoped to the REAL lesson: keep the
   preflight + real-install smoke blocking in release.yml, ports guarded by
-  `assertFetchablePort`.
+  `assertFetchablePort` *(this supersedes the verdaccio-`needs:` framing in the
+  amended launch-gate entry above)*.
 - **2026-07-05 — 1.0 policy:** criteria-boxed (stability contract + deprecation
   policy, external audit, upgrade guides, LTS statement, readiness bar),
   targeted mid-2027, re-scoped at quarterly checkpoints rather than slipped
