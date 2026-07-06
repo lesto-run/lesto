@@ -15,6 +15,7 @@
     "test:page-swap": "playwright test page-swap.spec.ts",
     "test:page-swap-bun": "playwright test page-swap-bun.spec.ts",
     "test:bundler-parity": "playwright test island-bundler-parity.spec.ts",
+    "test:agent-activation": "playwright test agent-activation.spec.ts --workers=1",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -24,6 +25,7 @@
     "react-dom": "^19"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@playwright/test": "^1.49.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.515.0",

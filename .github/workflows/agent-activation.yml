@@ -1,0 +1,65 @@
+# The AGENT-ACTIVATION gate — the ATTACK-PLAN-2027 §0 "agent activation" launch metric,
+# automated: prove an agent can one-shot the published real-user loop — scaffold via the
+# PUBLISHED create-lesto off the real npm registry, `bun install` (hoisted default), boot
+# `lesto dev`, parse the MCP control-plane banner exactly as a real agent must, complete a
+# real `@modelcontextprotocol/sdk` Streamable-HTTP handshake (undici — the same stack Claude
+# Code uses) with a `describe_app` round-trip, and hold the token gate (bad token → 403).
+#
+# Nightly + on-demand ONLY, never a blocking PR gate: it resolves the published closure from
+# the live registry (network weather), like scaffold-real-install.yml. Its own workflow file +
+# concurrency group for the same reason as that file — ci.yml's shared group would let a
+# push-to-main cancel the nightly. Deliberately browser-free (the browser half of the
+# published-scaffold story lives in scaffold-real-install leg (a)), so no Playwright browser
+# install — the loop is pure MCP/HTTP and stays fast.
+name: Agent-activation gate
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly, 07:30 UTC — offset from scaffold-real-install's 07:00 so the two registry
+    # canaries never contend on the runner pool at the same minute.
+    - cron: "30 7 * * *"
+
+concurrency:
+  group: agent-activation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  agent-activation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+
+      # The app runs under bun/bunx; Node is here for the Playwright runner and the undici
+      # `fetch()` the MCP client rides. Pinned so a runner-image node bump can't drift the gate.
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Agent-activation loop (published scaffold → dev → MCP describe_app)
+        working-directory: packages/e2e
+        run: bun run test:agent-activation
+
+      # On failure, keep the error context (the dev server's captured boot output lands in the
+      # test's error message via spawnDev) so a registry-weather red is debuggable from the
+      # artifact without a re-run.
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-activation-results
+          path: packages/e2e/test-results/**
+          retention-days: 14
+          if-no-files-found: warn
