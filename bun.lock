@@ -121,6 +121,28 @@
         "@lesto/mcp": "workspace:*",
       },
     },
+    "examples/feeds": {
+      "name": "@lesto/example-feeds",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/feeds": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+      },
+    },
+    "examples/flags": {
+      "name": "@lesto/example-flags",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/flags": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+      },
+    },
     "examples/forms": {
       "name": "@lesto/example-forms",
       "version": "0.0.0",
@@ -129,6 +151,17 @@
         "@lesto/kernel": "workspace:*",
         "@lesto/runtime": "workspace:*",
         "@lesto/ui": "workspace:*",
+        "@lesto/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+      },
+    },
+    "examples/i18n": {
+      "name": "@lesto/example-i18n",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/i18n": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/runtime": "workspace:*",
         "@lesto/web": "workspace:*",
         "better-sqlite3": "^11.10.0",
       },
@@ -860,6 +893,8 @@
         "@lesto/errors": "workspace:*",
         "@lesto/ui": "workspace:*",
         "react": "^19",
+      },
+      "devDependencies": {
         "react-dom": "^19",
       },
     },
@@ -874,10 +909,15 @@
         "@lesto/auth": "workspace:*",
         "@lesto/db": "workspace:*",
         "@lesto/errors": "workspace:*",
-        "@lesto/mail": "workspace:*",
         "@lesto/migrate": "workspace:*",
         "@lesto/ratelimit": "workspace:*",
       },
+      "peerDependencies": {
+        "@lesto/mail": "workspace:^",
+      },
+      "optionalPeers": [
+        "@lesto/mail",
+      ],
     },
     "packages/integration": {
       "name": "@lesto/integration",
@@ -1628,7 +1668,13 @@
 
     "@lesto/example-estate": ["@lesto/example-estate@workspace:examples/estate"],
 
+    "@lesto/example-feeds": ["@lesto/example-feeds@workspace:examples/feeds"],
+
+    "@lesto/example-flags": ["@lesto/example-flags@workspace:examples/flags"],
+
     "@lesto/example-forms": ["@lesto/example-forms@workspace:examples/forms"],
+
+    "@lesto/example-i18n": ["@lesto/example-i18n@workspace:examples/i18n"],
 
     "@lesto/example-island-fast-refresh": ["@lesto/example-island-fast-refresh@workspace:examples/island-fast-refresh"],
 
