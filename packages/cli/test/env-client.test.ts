@@ -4,6 +4,8 @@ import { envField, PUBLIC_ENV_DEFINE_KEY } from "@lesto/env";
 import type { ClientSchema } from "@lesto/env";
 
 import { CliError } from "../src/errors";
+import type * as BinModule from "../src/bin";
+import type * as RunModule from "../src/run";
 
 /**
  * The bin's `env.client.ts` resolution seam (`resolvePublicEnvDefine` +
@@ -20,14 +22,14 @@ import { CliError } from "../src/errors";
  */
 
 vi.mock("../src/run", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/run")>();
+  const actual = await importOriginal<typeof RunModule>();
 
   return { ...actual, run: () => Promise.resolve(0) };
 });
 
 describe("env.client.ts resolution seam", () => {
-  let clientDefineFromModule: typeof import("../src/bin")["clientDefineFromModule"];
-  let resolvePublicEnvDefine: typeof import("../src/bin")["resolvePublicEnvDefine"];
+  let clientDefineFromModule: typeof BinModule["clientDefineFromModule"];
+  let resolvePublicEnvDefine: typeof BinModule["resolvePublicEnvDefine"];
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeAll(async () => {
