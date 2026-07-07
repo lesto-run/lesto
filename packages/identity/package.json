@@ -22,9 +22,16 @@
     "@lesto/auth": "workspace:*",
     "@lesto/db": "workspace:*",
     "@lesto/errors": "workspace:*",
-    "@lesto/mail": "workspace:*",
     "@lesto/migrate": "workspace:*",
     "@lesto/ratelimit": "workspace:*"
+  },
+  "peerDependencies": {
+    "@lesto/mail": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@lesto/mail": {
+      "optional": true
+    }
   },
   "publishConfig": {
     "access": "public"
