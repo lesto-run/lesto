@@ -1,0 +1,20 @@
+{
+  "name": "@lesto/example-i18n",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A runnable Lesto app: the @lesto/i18n journey behind real HTTP routes — one route rendered in multiple locales showing catalog lookup, {param} interpolation, and plural rules, with the locale chosen by path segment or Accept-Language header.",
+  "type": "module",
+  "scripts": {
+    "start": "bun run run.ts",
+    "serve": "bun run serve.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/i18n": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "better-sqlite3": "^11.10.0"
+  }
+}
