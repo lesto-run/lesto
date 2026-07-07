@@ -314,3 +314,47 @@ Full gate: `ws:typecheck` clean; serial coverage-gate **100%** across the 7 touc
 - **coverage-gate exclusion is implicit** — `scripts/coverage-gate.ts` globs `packages/*`;
   examples are excluded only by living under `examples/`. Examples ship no `test:cov`
   script. If the gate ever broadens its glob, these could be pulled into the 100% bar.
+
+**Second Opus review (2026-07-06) — framework changes.** Red-team + chief-architect
+reviewed the rawBody/verifyRequest/renderForm/ctx.runId commits: **no CRITICAL/HIGH/MEDIUM;
+verdict "production-quality."** Verified clean: rawBody leaks nowhere (not access logs,
+tracing spans, error paths, the kernel security-pipeline request, or any response); no
+security middleware reads the body; the new tests are non-vacuous; `hosted.test.ts` is a
+genuine edge→kernel proof (mutation-RED confirmed). ONE defect found + FIXED (`74046ca`):
+the `examples/webhooks` receiver did an unguarded `JSON.parse(rawBody)` + a misleading
+`?? parsed.event`, so a `SHARED_SECRET`-signed NON-object body (`null`/array) would 500 the
+live `serve.ts` receiver — now a clean 422, with a mutation-verified regression test.
+
+**New dragons from that review (for the next agent):**
+- **"Verify over `rawBody`, never `body`" is a SOFT invariant** — prose-only (type jsdoc +
+  `@lesto/webhooks` doc + example comments), NOT enforced by type or lint. Verifying a
+  signature over `c.req.body` (the decoded value, re-serialized) silently breaks the HMAC
+  (key-order/whitespace drift). Absent `rawBody` = "no body" → a receiver must fail closed.
+- **rawBody retains raw + parsed both** (~2× body memory for a JSON request, bounded by the
+  transport's size cap; non-JSON shares one string). Eager by design; now noted in the
+  `HandleOptions.rawBody` jsdoc.
+- **`hosted.test.ts` proves the EDGE path (`toFetchHandler`), NOT the node-socket path** —
+  node rawBody population is covered only by `@lesto/runtime`'s unit `server.test.ts`, never
+  end-to-end for an example. A node-socket regression wouldn't fail an example test.
+- **`verifyRequest` is @lesto-scheme-specific** (`x-lesto-signature`/`x-lesto-timestamp`,
+  `${ts}.${body}` HMAC-SHA256-hex) — it will NOT verify Stripe/GitHub/Slack webhooks. For
+  those, `rawBody` is the generic seam; the receiver brings its own scheme. Also: `verifyRequest`
+  assumes the receiver knows the secret out-of-band — **multi-tenant receive** (one endpoint,
+  many senders/secrets) has no resolver yet (a real future signature, not needed now).
+- **workflows `ctx.runId === input.orderId` is a COINCIDENCE of the demo** — the route posts
+  the orderId as the runId. `ctx.runId` is NOT a domain id in general; a real app with a UUID
+  runId + a separate orderId-in-input that reserved against `ctx.runId` would target the wrong id.
+
+**Refined next steps (post-second-review, highest-leverage first):**
+1. **Manual click-through of all 4 `serve.ts`** — the one verify between "typechecks" and
+   "known-runs" (sandbox can't boot servers). Then the hosted-UX leg is truly done.
+2. **Publish the batteries** — `@lesto/{cache,workflows,webhooks,forms}` are `private:true`
+   / not on npm, so `verifyRequest`/`renderForm`/`ctx.runId`/rawBody-verification are shipped
+   "to the bar" but **unreachable by any user**. Dominant user-facing gap. See [[batteries-built-not-published]].
+3. **CI smoke-boot the `serve.ts` legs** (spawn → curl one route → SIGTERM) to cover the
+   behavioral half `ws:typecheck` cannot — closes the serve.ts rot risk.
+4. **Fix the pre-existing `@lesto/cli` `env-client.test.ts` lint/format failure** (committed
+   `4f4fe05`, unrelated) so `ws:lint`/`ws:format:check` are green again — there is currently
+   no clean full-repo lint gate.
+5. **P3 backlog** (filed above) + a Stripe/GitHub-style "verify a third-party webhook over
+   `rawBody`" doc + multi-tenant `verifyRequest` secret resolution.
