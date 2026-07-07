@@ -13,12 +13,20 @@
  * behavior is verified by `test/tailwind.integration.test.ts`, which compiles a
  * real fixture against the installed engine.
  *
- * The engine `@tailwindcss/node`/`@tailwindcss/oxide` are pinned to one exact
- * version (deps of `@lesto/styles`); `tailwindcss` is a `peerDependency` resolved
- * from the app (the single instance the app's `@import "tailwindcss"` pulls, and
- * which shadcn Phase 2 expects resolvable). Everything sits behind the
- * `StyleCompiler` interface so a `@tailwindcss/cli` shell-out could replace this
- * file with no caller change if a 4.x bump breaks the programmatic API.
+ * The engine `@tailwindcss/node`/`@tailwindcss/oxide` are `dependencies` of
+ * `@lesto/styles` ranged `^4.3.0`, in lockstep with the `tailwindcss`
+ * `peerDependency` (also `^4.3.0`) that resolves from the app. Tailwind ships
+ * `@tailwindcss/node@X` with an *exact* hard-dep on `tailwindcss@X`, so engine and
+ * CSS package move as one triple — ranging the engine to match the peer lets a
+ * consumer's single `^4.3.0` resolution dedupe engine + peer to ONE `tailwindcss`
+ * instance (the one the app's `@import "tailwindcss"` pulls, which shadcn Phase 2
+ * expects resolvable), and keeps it deduped across every future 4.3.x patch.
+ * Pinning the engine exact while the peer floated would manufacture that skew —
+ * two copies on the next patch, in-repo (hidden by the lockfile) and in every
+ * downstream install. In-repo reproducibility is unaffected: `bun.lock` pins the
+ * resolved version regardless. Everything sits behind the `StyleCompiler`
+ * interface so a `@tailwindcss/cli` shell-out could replace this file with no
+ * caller change if a 4.x bump breaks the programmatic API.
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
