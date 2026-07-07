@@ -36,9 +36,9 @@ set (§3 proves this with the repo's own logic).
 | `@lesto/workflows` | errors | Headline battery: resumable step memoization (scope caveat is in its own description). |
 | `@lesto/webhooks` | errors, queue | Headline battery: signed outbound + inbound verify. |
 | `@lesto/admin` | authz, db, errors | Headline battery: admin CRUD over `@lesto/db`. |
-| `@lesto/mail` | errors, queue | Headline battery **and** required dep of `identity` + `mailing-lists`. |
+| `@lesto/mail` | errors, queue | Headline battery; required dep of `mailing-lists`; **optional peer** of `identity` (relaxed post-prep — see §7). |
 | `@lesto/mailing-lists` | db, errors, **mail**, migrate, queue | Headline battery: double opt-in + broadcasts. |
-| `@lesto/identity` | auth, db, errors, **mail**, migrate, ratelimit | Headline battery: batteries-included auth. |
+| `@lesto/identity` | auth, db, errors, migrate, ratelimit (**mail** = optional peer, caller-wired) | Headline battery: batteries-included auth. |
 | `@lesto/realtime` | **pubsub**, web | Headline battery: cross-process bus + SSE fan-out (ADR 0040). |
 
 All are `MIT`, `type:module`, TS-source-shipped (`exports → ./src/*.ts`,
@@ -68,11 +68,14 @@ Verified by running the repo's **own** logic (not the packer):
 
 - Public package count after de-privatizing: **36 → 49**.
 - **Closure blockers: NONE.** Every runtime `@lesto/*` dep of every public package
-  resolves within the public set. The only intra-new-set edges are
-  `identity → mail`, `mailing-lists → mail`, `realtime → pubsub` — all satisfied.
-- `peerDependencies` are (correctly) irrelevant to ordering: none of the 13 has a
-  `@lesto/*` peer, and `publish.mjs` omits peers by design (every `@lesto` peer in
-  the public set is optional and resolves from the registry).
+  resolves within the public set. The only hard intra-new-set edges are
+  `mailing-lists → mail`, `realtime → pubsub` — both satisfied. (`identity → mail`
+  was relaxed post-prep to an *optional* peer, so it's no longer a hard ordering
+  constraint — see §7.)
+- `peerDependencies` are (correctly) irrelevant to ordering: `publish.mjs` omits peers
+  by design, and every `@lesto/*` peer in the public set is optional and resolves from
+  the registry (post-prep, `identity` carries an optional `@lesto/mail` peer — still
+  irrelevant to ordering, still resolves from the set).
 
 **New-set relative publish order (dependency-first)** — the full-closure topo sort
 interleaves these with the already-published 36 (which publish idempotently as
@@ -137,14 +140,21 @@ bootstrap of all 13 must happen first.
   `workflows` (not crash-safe durable execution) and `realtime`/`pubsub` (v0) are the
   least-settled; their maturity caveats live in their own descriptions — keep them.
 - **`v0.0.0` (biggest risk).** Must be bumped (§5.1) before publish or they ship as
-  `0.0.0`. This is the single most likely foot-gun.
-- **`@lesto/forms` hard-depends on `react`/`react-dom` `^19`** as regular
-  `dependencies` (not peers), unlike the rest of the UI story (`@lesto/ui` takes
-  `preact-render-to-string` as a peer; edge aliases React→Preact). This can pull a
-  second React copy into a consumer. Converting `dependencies → peerDependencies` is a
-  restructure with test/build impact, so it was **flagged, not silently changed** —
-  the release owner should decide before the first publish (dep→peer is awkward to
-  change post-publish).
+  `0.0.0`. This is the single most likely foot-gun. **Post-prep:** `publish.mjs` now
+  has a fail-closed floor guard (`assertVersionsBumped`, commit `af1998b`) that refuses
+  to publish any package at `0.0.0` — so a naive `bun run release` aborts instead of
+  shipping placeholder versions. The bump is still required; the guard just makes
+  forgetting it safe.
+- **`@lesto/forms` react dep — CORRECTED post-prep.** The original flag ("forms is the
+  odd one out; make react a peer like the rest of the UI story") rested on a wrong
+  premise: `@lesto/ui` *and* `@lesto/web` (both already published) declare `react`/
+  `react-dom` as regular `dependencies`; the edge Preact win is a **build-time alias**
+  in `@lesto/assets`, not a peer. So forms-with-react-as-a-dep is *consistent* with the
+  published stack, and flipping forms alone would be inconsistent + pointless
+  (`forms → @lesto/ui → react` pulls react regardless). `react-dom` **was** a genuine
+  bug — test-only, so moved to `devDependencies` (`d8e1119`). Whether the *whole* UI
+  stack should move react→peer to avoid a double copy is a real but stack-wide question
+  (**L-863b3f6f**, low) — **not** a batteries-publish gate.
 - **`@lesto/identity` description** references `@lesto/csrf`, which is not in its
   `dependencies` (cosmetic doc drift, not a closure issue — left untouched, out of
   manifest-field scope).
@@ -160,3 +170,21 @@ bootstrap of all 13 must happen first.
   — removed `private`, added `publishConfig.access:"public"`, `files:["src"]`,
   `repository` (+`directory`), `homepage`, `bugs` to match the `@lesto/db` reference.
 - `docs/plans/batteries-publish.md` — this decision record.
+
+## 7. Post-prep updates (2026-07-07, wrap-up + follow-up)
+
+Landed after the initial prep (`43dc942`), clearing the pre-publish gate:
+
+- **`d8e1119`** — `@lesto/forms`: `react-dom` was test-only → moved to `devDependencies`
+  (phantom runtime dep removed). `react` stays a regular dep (consistent with published
+  `@lesto/ui`/`@lesto/web`; see §6). Stack-wide react→peer question deferred to L-863b3f6f.
+- **`af1998b`** — `scripts/publish.mjs` gained `assertVersionsBumped()`: a fail-closed
+  floor that lists every package still at `0.0.0` and aborts *before* any pack/publish.
+  (L-dbfcaed5.)
+- **`@lesto/identity`** — `@lesto/mail` demoted from a hard `dependency` to an **optional
+  peer** (identity never imports mail; the caller wires an adapter, `identity.ts:193`).
+  Removes an unused forced install; relaxes the `identity → mail` ordering edge. (L-6428ed83.)
+
+**Still gating the actual first publish (unchanged):** the version bump (§5.1 — target
+**only** the 13, not repo-wide), then the manual OTP bootstrap of all 13 NEW packages
+in §3 order, then per-package trusted-publisher config (L-518d4388). Tracked on L-fe189047.
