@@ -53,6 +53,33 @@ and asserts what only an end-to-end wiring can prove:
   from SQL without touching its own origin;
 - `sweep` reclaims two expired rows that were never re-read.
 
+## How to deploy / run the hosted leg
+
+```bash
+bun run examples/cache/serve.ts
+```
+
+`buildApp` returns a bare `@lesto/web` app, not a bootable one — `serve.ts` wraps
+it with `@lesto/kernel`'s `createApp` (installing the durable-store schema
+alongside the cache schema `buildApp` already installs) and serves THAT behind a
+real `node:http` server (`@lesto/runtime`'s `serveWithGracefulShutdown`), on a
+FILE-backed SQLite database (`DB_PATH`, defaults to `./cache.db`) rather than
+`run.ts`'s `:memory:` — so a warm key survives killing and restarting the
+**process itself**, not just a second `buildApp` call in the same run:
+
+```bash
+curl localhost:3000/reports/alpha    # miss
+curl localhost:3000/reports/alpha    # hit
+# kill the process, `bun run serve.ts` again, then — inside the 60s TTL:
+curl localhost:3000/reports/alpha    # still a hit, served from the SQL store
+```
+
+**Not run in this sandbox** — starting a server is blocked here. `serve.ts` is
+typechecked and oxlint/oxfmt-clean, and its wiring (`buildApp` → `createApp` →
+`serveWithGracefulShutdown`) mirrors the pattern every hosted `serve.ts` in the
+gallery uses (see `examples/mailing-lists/serve.ts`); running it and confirming
+the restart-persistence behavior above is a manual follow-up.
+
 ## DX findings
 
 Wiring this example surfaced no sharp edges: `openSqlite`'s handle satisfies

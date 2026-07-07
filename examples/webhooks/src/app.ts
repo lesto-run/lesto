@@ -9,16 +9,19 @@
  *   SSRF-guarded, and retried until the receiver returns 2xx. The raw secret never
  *   enters the queue — only a `secretId` reference, resolved at delivery time.
  *
- *   INBOUND (`POST /incoming`) — the receiver `verify()`s that signature over the
- *   RAW body (with the timestamp, so a stale replay is rejected) before recording
- *   the event. `GET /received` reads what was accepted.
+ *   INBOUND (`POST /incoming`) — the receiver `verifyRequest()`s that signature
+ *   over `c.req.rawBody` (with the timestamp, so a stale replay is rejected)
+ *   before recording the event. `GET /received` reads what was accepted.
  *
  * The delivery is dispatched IN-PROCESS by an injected `FetchLike` that hands the
- * exact signed bytes straight to `/incoming` — no network, no ports, and (this is
- * the point) the RAW body survives, which is what makes signature verification
- * possible. See the README DX finding: a hosted receiver behind `@lesto/runtime`
- * loses the raw bytes to JSON decoding, so this hosted leg waits on a `rawBody`
- * seam.
+ * exact signed bytes straight to `/incoming` as `rawBody` — no network, no ports.
+ * This is the SAME seam a hosted receiver rides: `c.req.rawBody` is populated by
+ * every transport (`@lesto/web`'s in-process `handle`, `@lesto/runtime`'s node
+ * server, `@lesto/cloudflare`'s edge decode) — see `serve.ts`, which serves this
+ * exact app over a real `node:http` server, and `test/hosted.test.ts`, which
+ * proves the seam survives the real edge→kernel→handle chain via
+ * `toFetchHandler`. Formerly this hosted leg was blocked on a `rawBody` seam
+ * (see the README's DX finding #1, now RESOLVED).
  *
  * The SSRF guard is the REAL default (`defaultUrlGuard`); only DNS is injected (a
  * deterministic resolver that maps the demo host to a public IP), so a subscriber
@@ -29,7 +32,7 @@ import { installSchema, Queue } from "@lesto/queue";
 import type { JsonValue, SqlDatabase } from "@lesto/queue";
 import { lesto } from "@lesto/web";
 import type { Lesto } from "@lesto/web";
-import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verify, Webhooks } from "@lesto/webhooks";
+import { verifyRequest, Webhooks } from "@lesto/webhooks";
 import type { FetchLike, Resolver, SecretSource } from "@lesto/webhooks";
 
 /** The customer's registered endpoint host — the happy-path delivery target. */
@@ -109,36 +112,33 @@ export function buildWebhooksApp(deps: {
       return c.json({ orderId: body.orderId, enqueued: jobId }, 202);
     })
     .post("/incoming", (c) => {
-      // The signature is over the RAW body bytes. The in-process transport hands
-      // us the exact string the deliverer signed; a `typeof !== "string"` body
-      // means the raw bytes were lost to decoding and verification is impossible.
-      const raw = c.req.body;
-      if (typeof raw !== "string") {
+      // Read the RAW bytes — `c.req.rawBody`, never the JSON-decoded `c.req.body`
+      // — so `verifyRequest` hashes exactly what the deliverer signed. Every
+      // transport (in-process `handle`, `@lesto/runtime`'s node server,
+      // `@lesto/cloudflare`'s edge decode) populates it; its absence means the
+      // request carried no body at all.
+      const rawBody = c.req.rawBody;
+      if (rawBody === undefined) {
         return c.json({ error: "raw body required to verify the signature." }, 400);
       }
 
-      const signature = c.req.headers[SIGNATURE_HEADER];
-      const timestampHeader = c.req.headers[TIMESTAMP_HEADER];
-      if (signature === undefined || timestampHeader === undefined) {
-        return c.json({ verified: false, reason: "missing signature or timestamp." }, 401);
+      // `verifyRequest` reads the signature/timestamp headers, does the
+      // constant-time HMAC + replay-window check, and tells apart WHY a request
+      // failed (missing/malformed/stale/mismatched) — see `@lesto/webhooks`.
+      const result = verifyRequest(
+        { body: rawBody, headers: c.req.headers },
+        { secret: receiverSecret },
+      );
+
+      if (!result.verified) {
+        return c.json({ verified: false, reason: result.reason }, 401);
       }
 
-      const timestamp = Number(timestampHeader);
-      if (Number.isNaN(timestamp)) {
-        return c.json({ verified: false, reason: "malformed timestamp." }, 401);
-      }
-
-      // Constant-time HMAC check over `${timestamp}.${raw}` AND a replay-window
-      // check on the timestamp — a captured request replayed past the tolerance
-      // fails even with an otherwise-valid signature.
-      if (!verify(raw, signature, receiverSecret, { timestamp })) {
-        return c.json({ verified: false, reason: "bad signature or stale timestamp." }, 401);
-      }
-
-      // Trust only the SIGNED payload for the event name — the `x-lesto-event`
-      // header is an unsigned routing hint. The body is `{ event, data }`.
-      const parsed = JSON.parse(raw) as { event: string; data: unknown };
-      received.push({ event: parsed.event, data: parsed.data });
+      // `result.event` already comes from the SIGNED body (never the unsigned
+      // `x-lesto-event` header) — re-parse only for `data`, which `verifyRequest`
+      // doesn't return.
+      const parsed = JSON.parse(rawBody) as { event: string; data: unknown };
+      received.push({ event: result.event ?? parsed.event, data: parsed.data });
 
       return c.json({ verified: true }, 200);
     })
@@ -185,9 +185,10 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
   const fetchAttempts: string[] = [];
 
   // The delivery fetch dispatches into THIS app's `/incoming` route in-process,
-  // passing the exact signed bytes as the request body (so the raw string — what
-  // the signature covers — survives). A holder breaks the cycle: the fetch is
-  // only ever called during a queue drain, long after `holder.app` is assigned.
+  // passing the exact signed bytes as `rawBody` — the field `/incoming` actually
+  // reads to verify the signature — so the raw string survives. A holder breaks
+  // the cycle: the fetch is only ever called during a queue drain, long after
+  // `holder.app` is assigned.
   const holder: { app?: Lesto } = {};
   const dispatchFetch: FetchLike = async (url, init) => {
     if (holder.app === undefined) throw new Error("receiver app is not ready yet");
@@ -198,7 +199,7 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
 
     const res = await holder.app.handle("POST", new URL(url).pathname, {
       headers: init.headers,
-      body: init.body,
+      rawBody: init.body,
     });
 
     return { ok: res.status >= 200 && res.status < 300, status: res.status };

@@ -6,11 +6,13 @@
   "type": "module",
   "scripts": {
     "start": "bun run run.ts",
+    "serve": "bun run serve.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@lesto/cache": "workspace:*",
+    "@lesto/kernel": "workspace:*",
     "@lesto/runtime": "workspace:*",
     "@lesto/web": "workspace:*",
     "better-sqlite3": "^11.10.0"

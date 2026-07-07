@@ -2,8 +2,12 @@
  * The example's QA gate: drive @lesto/webhooks through the REAL HTTP routes, both
  * directions. It proves what only an end-to-end wiring can: a sent webhook is
  * signed, delivered through the queue, and verified by the receiver; the SSRF
- * guard refuses a private/metadata destination; and the inbound `verify` accepts a
- * genuine request while rejecting a forged, replayed, or unsigned one.
+ * guard refuses a private/metadata destination; and the inbound `verifyRequest`
+ * accepts a genuine request while rejecting a forged, replayed, or unsigned one.
+ *
+ * See `test/hosted.test.ts` for the companion test that drives the SAME receiver
+ * through the real hosted edge→kernel pipeline (`toFetchHandler`), rather than
+ * this file's in-process `app.handle`.
  */
 
 import { describe, expect, it } from "vitest";
@@ -35,9 +39,13 @@ async function boot() {
     return JSON.parse(res.body as string) as ReceivedWebhook[];
   };
 
-  /** POST a raw body straight at the inbound receiver with the given headers. */
+  /**
+   * POST a raw body straight at the inbound receiver with the given headers.
+   * `rawBody`, not `body` — `/incoming` reads `c.req.rawBody` (see `src/app.ts`),
+   * the same field a real transport (node/edge) populates from the wire bytes.
+   */
   const postIncoming = (raw: string, headers: Record<string, string>) =>
-    booted.app.handle("POST", "/incoming", { headers, body: raw });
+    booted.app.handle("POST", "/incoming", { headers, rawBody: raw });
 
   return { ...booted, drain, received, postIncoming, close };
 }

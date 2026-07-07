@@ -76,6 +76,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@lesto/cache": "workspace:*",
+        "@lesto/kernel": "workspace:*",
         "@lesto/runtime": "workspace:*",
         "@lesto/web": "workspace:*",
         "better-sqlite3": "^11.10.0",
@@ -125,8 +126,11 @@
       "version": "0.0.0",
       "dependencies": {
         "@lesto/forms": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/runtime": "workspace:*",
         "@lesto/ui": "workspace:*",
         "@lesto/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
       },
     },
     "examples/island-fast-refresh": {
@@ -326,6 +330,8 @@
       "name": "@lesto/example-webhooks",
       "version": "0.0.0",
       "dependencies": {
+        "@lesto/cloudflare": "workspace:*",
+        "@lesto/kernel": "workspace:*",
         "@lesto/queue": "workspace:*",
         "@lesto/runtime": "workspace:*",
         "@lesto/web": "workspace:*",
@@ -337,6 +343,7 @@
       "name": "@lesto/example-workflows",
       "version": "0.0.0",
       "dependencies": {
+        "@lesto/kernel": "workspace:*",
         "@lesto/runtime": "workspace:*",
         "@lesto/web": "workspace:*",
         "@lesto/workflows": "workspace:*",

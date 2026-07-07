@@ -62,6 +62,38 @@ type errors (`must be a valid email` / `must be a number` / `must be one of the
 allowed options`); a real urlencoded body works; and an unsafe `action` is dropped
 with a coded `FORM_UNSAFE_ACTION` warning.
 
+## How to deploy / run the hosted leg
+
+```bash
+bun run examples/forms/serve.ts
+```
+
+Forms has **no database** — `buildApp()` is synchronous and returns a bare
+`@lesto/web` app — but `@lesto/kernel`'s `createApp` still requires a `db` handle
+to wrap it into a bootable kernel `App`. `serve.ts` opens a THROWAWAY in-memory
+SQLite handle purely to satisfy that contract, and passes `durable: false` (no
+session/rate-limit tables to install on a handle nothing else touches) and
+`secure: false` (no state-changing concern here beyond the form itself). It then
+serves the wrapped app behind a real `node:http` server (`@lesto/runtime`'s
+`serveWithGracefulShutdown`), so an ACTUAL browser can load `/signup`, submit the
+rendered `<form>`, and see the re-render — a real
+`application/x-www-form-urlencoded` POST, not a decoded object handed to
+`app.handle` directly:
+
+```bash
+open http://localhost:3000/signup   # submit it by hand in a browser
+
+# or from the command line (curl's -d defaults to urlencoded):
+curl -X POST localhost:3000/signup -d 'plan=enterprise'                          # 422
+curl -X POST localhost:3000/signup -d 'email=ada@example.com&plan=pro&terms=on'  # 201
+```
+
+**Not run in this sandbox** — starting a server is blocked here. `serve.ts` is
+typechecked and oxlint/oxfmt-clean, and its wiring (`buildApp` → `createApp` →
+`serveWithGracefulShutdown`) mirrors the pattern every hosted `serve.ts` in the
+gallery uses (see `examples/mailing-lists/serve.ts`); running it and submitting
+the form by hand is a manual follow-up.
+
 ## DX findings
 
 1. **~~Error display is entirely the host's job.~~ RESOLVED.** `@lesto/forms`'

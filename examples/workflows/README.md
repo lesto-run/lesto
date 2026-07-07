@@ -58,6 +58,44 @@ The journey test (`test/workflows.test.ts`) asserts, over HTTP:
 - the settlement `sleep` is awaited through the injected sleep (no real timer);
 - a malformed body is a clean `422`.
 
+## How to deploy / run the hosted leg
+
+```bash
+bun run examples/workflows/serve.ts
+```
+
+`buildApp` returns a bare `@lesto/web` app — `serve.ts` wraps it with
+`@lesto/kernel`'s `createApp` (installing the durable-store schema alongside the
+step-journal schema `buildApp` already installs) and serves THAT behind a real
+`node:http` server (`@lesto/runtime`'s `serveWithGracefulShutdown`). The receipt
+mailer is configured to fail exactly **once** across the whole process, and
+`sleep` is a real (short-capped) timer rather than the test's instant no-op, so
+the settlement pause and the fail-then-resume path are both genuinely observable
+over the wire:
+
+```bash
+# 1. First checkout hits the one-time mailer fault -> 502, resumable.
+curl -X POST localhost:3000/checkout/order-1 \
+  -H 'content-type: application/json' -d '{"card":"tok_ada","amountCents":4200}'
+
+# 2. Retry the SAME order: charge + reserve REPLAY, only receipt re-runs -> 200.
+curl -X POST localhost:3000/checkout/order-1 \
+  -H 'content-type: application/json' -d '{"card":"tok_ada","amountCents":4200}'
+
+# 3. Inspect which steps executed vs replayed.
+curl localhost:3000/checkout/order-1/trace
+
+# 4. A different order executes cleanly (the fault is already spent).
+curl -X POST localhost:3000/checkout/order-2 \
+  -H 'content-type: application/json' -d '{"card":"tok_grace","amountCents":9900}'
+```
+
+**Not run in this sandbox** — starting a server is blocked here. `serve.ts` is
+typechecked and oxlint/oxfmt-clean, and its wiring (`buildApp` → `createApp` →
+`serveWithGracefulShutdown`) mirrors the pattern every hosted `serve.ts` in the
+gallery uses (see `examples/mailing-lists/serve.ts`); running the runbook above
+is a manual follow-up.
+
 ## DX findings
 
 Two ergonomic notes surfaced while wiring this, both routed to the owning plan:
