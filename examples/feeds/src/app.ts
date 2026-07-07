@@ -22,11 +22,11 @@
  *
  * WHY A SQLITE TABLE (not an in-memory array): the feature on show is XML
  * generation, so the data source is deliberately small — but "a feed from your
- * posts table" is the honest, canonical use of `@lesto/feeds`, and backing the
- * routes with a real handle lets `serve.ts` use ONE database for both the posts
- * query and `@lesto/kernel`'s durable schema (no throwaway handle). The table is
- * a single `CREATE TABLE` seeded on boot; dates are stored as epoch-ms and handed
- * to the feed builders as `Date`s, which `@lesto/feeds` formats per dialect.
+ * posts table" is the honest, canonical use of `@lesto/feeds`, and mapping a
+ * `SELECT … ORDER BY published_at DESC` row straight onto a `FeedItem` is the
+ * genuinely useful thing to show a feeds-library user. The table is a single
+ * `CREATE TABLE` seeded on boot; dates are stored as epoch-ms and handed to the
+ * feed builders as `Date`s, which `@lesto/feeds` formats per dialect.
  *
  * Built as factories (the estate shape): the routes close over a `loadPosts`
  * reader rather than reaching for a module-scoped database.
@@ -188,8 +188,8 @@ function toFeedItem(post: Post): FeedItem {
 /**
  * Wrap a feed's XML string in a response tagged with its content type.
  *
- * `@lesto/web`'s `Context` has `json`/`html`/`text`/`bytes`, but no XML helper —
- * so a feed route returns the `LestoResponse` shape directly to set
+ * `@lesto/web`'s `Context` has `json`/`html`/`text`/`bytes`/`stream`, but no XML
+ * helper — so a feed route returns the `LestoResponse` shape directly to set
  * `application/rss+xml` / `application/atom+xml` (the one small wiring note this
  * example surfaces; see the README's DX findings).
  */

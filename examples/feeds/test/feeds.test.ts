@@ -13,12 +13,16 @@
  *
  * WELL-FORMEDNESS WITHOUT A PARSER: neither Node nor Bun ships a global
  * `DOMParser`, and this example takes no XML-parser dependency (the whole point of
- * `@lesto/feeds` is that it needs none). So "well-formed" is asserted structurally
- * plus with {@link BARE_AMPERSAND}: a well-formed XML document contains no bare
- * `&` — every one must open a predefined entity (`&amp;`/`&lt;`/…) or a numeric
- * character reference. A single unescaped ampersand fails the parse of any real
- * reader, so that regex is a faithful (and strict) well-formedness proxy — and it
- * is exactly the escaping-correctness check that must go RED if escaping regresses.
+ * `@lesto/feeds` is that it needs none). So well-formedness is asserted
+ * structurally (the XML prolog + the required elements) plus {@link BARE_AMPERSAND}:
+ * a well-formed document contains no bare `&` — every one must open a predefined
+ * entity (`&amp;`/`&lt;`/…) or a numeric character reference. This is a PROXY, not
+ * a full parse: a bare ampersand is the classic malforming leak, but the regex does
+ * not by itself catch a raw `<`/`>` in element text or a `"` in an attribute. That
+ * escaping coverage is {@link assertEscaped}'s job — its `&lt;`/`&gt;` positives and
+ * raw-title negative go RED on any `<`/`>` escaping regression, so the two together
+ * catch a total escaping regression at the HTTP boundary. A full spec-validity
+ * guarantee is `@lesto/feeds`' own, unit-tested there.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

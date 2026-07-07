@@ -26,17 +26,18 @@ Only `@lesto/feeds`' public API builds the feeds: `rss`, `atom`, `escapeXml`, an
 the `FeedMeta` / `FeedItem` types. The routes are plain `@lesto/web`; the database
 is `@lesto/runtime`'s `openSqlite`. `FeedMeta`/`FeedItem` require only `title` and
 `link` each — everything else (channel `<description>`, Atom `<id>`/`<updated>`,
-entry `<id>`/`<updated>`) is either supplied here or synthesized by the battery,
-so every emitted document is spec-valid.
+entry `<id>`/`<updated>`) is either supplied here or synthesized by the battery.
+Spec-validity is `@lesto/feeds`' own contract (unit-tested there); this example
+asserts the emitted documents are **well-formed + required-elements-present**.
 
 ### Why a SQLite table (data-source choice)
 
 The feature on show is XML generation, so the data source is kept deliberately
 small — but **"a feed from your posts table"** is the honest, canonical use of
 `@lesto/feeds`, so this backs the routes with a real `posts` table rather than an
-in-memory array. The payoff: `serve.ts` uses **one** database for both the posts
-query and `@lesto/kernel`'s durable schema — no throwaway handle. The table is a
-single `CREATE TABLE` seeded on boot; publish dates are stored as epoch-ms and
+in-memory array: mapping a `SELECT … ORDER BY published_at DESC` row straight onto
+a `FeedItem` is the genuinely useful thing to show a feeds-library user. The table
+is a single `CREATE TABLE` seeded on boot; publish dates are stored as epoch-ms and
 handed to the builders as `Date`s, which `@lesto/feeds` formats per dialect.
 
 ## How to run
