@@ -4,7 +4,6 @@
   "license": "MIT",
   "description": "Lesto's admin operations layer — CRUD over a @lesto/db Table with Zod-validated input, the backbone for a generic admin UI.",
   "type": "module",
-  "private": true,
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -24,5 +23,20 @@
     "@lesto/db": "workspace:*",
     "@lesto/errors": "workspace:*",
     "zod": "^4.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/admin"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }

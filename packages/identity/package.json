@@ -4,7 +4,6 @@
   "license": "MIT",
   "description": "Lesto's batteries-included auth: users on the SQL DB, register/verify/login/reset flows composed from @lesto/auth + @lesto/db + @lesto/migrate + @lesto/mail + @lesto/csrf.",
   "type": "module",
-  "private": true,
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -26,5 +25,20 @@
     "@lesto/mail": "workspace:*",
     "@lesto/migrate": "workspace:*",
     "@lesto/ratelimit": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/identity"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }

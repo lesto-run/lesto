@@ -4,16 +4,11 @@
   "license": "MIT",
   "description": "Lesto webhooks — HMAC-signed outbound delivery (retried on @lesto/queue) and inbound signature verification.",
   "type": "module",
-  "private": true,
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     }
-  },
-  "dependencies": {
-    "@lesto/errors": "workspace:*",
-    "@lesto/queue": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",
@@ -22,5 +17,24 @@
     "lint": "oxlint src test",
     "format": "oxfmt src test",
     "format:check": "oxfmt --check src test"
+  },
+  "dependencies": {
+    "@lesto/errors": "workspace:*",
+    "@lesto/queue": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lesto-run/lesto.git",
+    "directory": "packages/webhooks"
+  },
+  "homepage": "https://lesto.run",
+  "bugs": {
+    "url": "https://github.com/lesto-run/lesto/issues"
   }
 }
