@@ -60,7 +60,9 @@ is recorded with a confirmation; a missing/blank submission re-renders with
 `… is required` per field and records nothing; present-but-invalid values report
 type errors (`must be a valid email` / `must be a number` / `must be one of the
 allowed options`); a real urlencoded body works; and an unsafe `action` is dropped
-with a coded `FORM_UNSAFE_ACTION` warning.
+with a coded `FORM_UNSAFE_ACTION` warning. `test/serve.smoke.test.ts` adds the
+hosted leg — it boots `serve.ts` over a real socket and asserts `GET /signup`
+returns the rendered form (see the deploy section below).
 
 ## How to deploy / run the hosted leg
 
@@ -88,11 +90,14 @@ curl -X POST localhost:3000/signup -d 'plan=enterprise'                         
 curl -X POST localhost:3000/signup -d 'email=ada@example.com&plan=pro&terms=on'  # 201
 ```
 
-**Not run in this sandbox** — starting a server is blocked here. `serve.ts` is
-typechecked and oxlint/oxfmt-clean, and its wiring (`buildApp` → `createApp` →
-`serveWithGracefulShutdown`) mirrors the pattern every hosted `serve.ts` in the
-gallery uses (see `examples/mailing-lists/serve.ts`); running it and submitting
-the form by hand is a manual follow-up.
+**The boot is proven automatically.** `test/serve.smoke.test.ts` spawns `bun run
+serve.ts` on an ephemeral port, `fetch()`es `GET /signup` over a real socket,
+asserts the rendered `<form>` came back, then SIGTERMs and asserts a clean
+`exit(0)` — so the hosted boot (`buildApp` → `createApp` →
+`serveWithGracefulShutdown`) is exercised end-to-end, not merely typechecked. Its
+wiring mirrors the pattern every hosted `serve.ts` in the gallery uses (see
+`examples/mailing-lists/serve.ts`). Submitting the rendered form by hand in a
+browser is the only manual follow-up.
 
 ## DX findings
 
