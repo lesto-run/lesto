@@ -4,6 +4,14 @@ Wires **`@lesto/webhooks`** behind real HTTP routes, both directions: signed,
 queue-retried, **SSRF-guarded** outbound delivery, and inbound `verifyRequest()`
 over the raw body that rejects forged, replayed, and unsigned requests.
 
+> **The rule this example exists to enforce:** verify a webhook signature over
+> `c.req.rawBody` — the exact undecoded request bytes — **never** over
+> `c.req.body` (JSON-decoded; re-stringifying it doesn't reliably reproduce
+> what the sender signed). See
+> [`docs/guide/verifying-webhooks.md`](../../docs/guide/verifying-webhooks.md)
+> for the full rule plus worked **Stripe** and **GitHub** receiver examples
+> built on the same `rawBody` seam this example uses.
+
 ## What it shows
 
 One app plays both sides of a webhook exchange.
