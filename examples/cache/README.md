@@ -4,7 +4,8 @@ Wires **`@lesto/cache`** behind real HTTP routes to show every cache behavior th
 only shows up end-to-end: read-through misses, hits that never touch the origin,
 single-flight coalescing of a thundering herd, invalidation, TTL expiry, and the
 SQL store's `sweep` retention verb — all on a **persistent SQLite store** with an
-**injected clock**.
+**injected clock**. A second, shorter leg drives the other store `@lesto/cache`
+ships — the ephemeral in-memory **`MemoryStore`** — so both stores are shown.
 
 ## What it shows
 
@@ -21,9 +22,12 @@ The report carries a `generatedAt` stamp from the injected clock, so a hit is
 provable (identical stamp) and a recompute is provable (a fresh stamp once the
 clock has moved).
 
-Only `@lesto/cache`'s public API is used for caching: `Cache`, `sqlStore`,
-`installCacheSchema`, `systemClock`, and the `Clock` / `SqlCacheStore` types. The
-routes are plain `@lesto/web`; the database is `@lesto/runtime`'s `openSqlite`.
+Only `@lesto/cache`'s public API is used for caching: `Cache`, `MemoryStore`,
+`sqlStore`, `installCacheSchema`, `systemClock`, and the `Clock` / `SqlCacheStore`
+types. The routes are plain `@lesto/web`; the database is `@lesto/runtime`'s
+`openSqlite`. The two stores are interchangeable behind the same `Cache` API —
+swap `sqlStore(handle)` for `new MemoryStore()` and every behavior above still
+holds; only persistence and `sweep` (SQL-only) differ.
 
 ## How to run
 
@@ -34,7 +38,9 @@ bun run examples/cache/run.ts
 Boots on an in-memory SQLite database with the real system clock and a slow
 origin, then drives the journey through the HTTP routes — miss → hit → a burst of
 concurrent misses that collapse to one origin call → invalidate → miss → sweep —
-printing the origin's load count at each step so you can see the cache working.
+printing the origin's load count at each step so you can see the cache working. A
+final leg then drives the in-memory `MemoryStore` directly (miss → hit → TTL
+expiry, on a controllable clock) to show the same behaviors on the other store.
 
 ## How it's tested (the QA gate)
 
@@ -51,7 +57,9 @@ and asserts what only an end-to-end wiring can prove:
 - an entry one tick past its TTL is a miss again (fresh `generatedAt`);
 - a warm key survives a "restart" — a second app on the same database serves it
   from SQL without touching its own origin;
-- `sweep` reclaims two expired rows that were never re-read.
+- `sweep` reclaims two expired rows that were never re-read;
+- the in-memory `MemoryStore`, driven directly against the `Cache` API, shows the
+  same miss → hit → TTL-expiry read-through as the SQL store.
 
 ## How to deploy / run the hosted leg
 

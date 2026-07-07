@@ -8,12 +8,16 @@
  * routes so you can watch each miss pay the origin cost and each hit skip it:
  * miss → hit → a burst of concurrent misses that coalesce into ONE origin call →
  * invalidate → miss again → sweep.
+ *
+ * Then a second, shorter leg drives the OTHER store @lesto/cache ships — the
+ * in-memory `MemoryStore`, used directly against the `Cache` API (no SQLite, no
+ * HTTP) — through miss → hit → TTL expiry, so both stores are demonstrated.
  */
 
-import { systemClock } from "@lesto/cache";
+import { Cache, MemoryStore, systemClock } from "@lesto/cache";
 import { openSqlite } from "@lesto/runtime";
 
-import { buildApp } from "./src/app";
+import { buildApp, createReportsOrigin, type Report } from "./src/app";
 
 const TTL_MS = 60_000;
 const ORIGIN_DELAY_MS = 25;
@@ -65,6 +69,40 @@ async function main(): Promise<void> {
   console.log(`POST /cache/sweep -> ${sweep.body}`);
 
   close();
+
+  // 6. The OTHER store. Everything above rode @lesto/cache's SQL store (persistent,
+  //    behind HTTP). The in-memory `MemoryStore` is the zero-config default, used
+  //    DIRECTLY against the `Cache` API — no SQLite, no routes. Same read-through
+  //    beats (miss → hit → TTL expiry), but ephemeral: it lives and dies with the
+  //    process, so there is nothing to persist and nothing to sweep. A controllable
+  //    clock lets us watch the TTL lapse without waiting out a real 60s.
+  console.log("\n--- @lesto/cache in-memory store (MemoryStore, used directly) ---");
+
+  let memNow = systemClock();
+  const memClock = (): number => memNow;
+  const memOrigin = createReportsOrigin(memClock, ORIGIN_DELAY_MS);
+  const memCache = new Cache({ store: new MemoryStore(), clock: memClock });
+  const remember = (): Promise<Report> =>
+    memCache.remember("report:gamma", () => memOrigin.load("gamma"), { ttlMs: TTL_MS });
+
+  const cold = await remember();
+  console.log(`remember report:gamma -> generatedAt ${cold.generatedAt}   (miss)`);
+  console.log(`  origin loads so far: ${memOrigin.loads}\n`);
+
+  const warm = await remember();
+  console.log(
+    `remember report:gamma -> generatedAt ${warm.generatedAt}   (hit — origin untouched: ${memOrigin.loads === 1})`,
+  );
+  console.log(`  origin loads so far: ${memOrigin.loads}\n`);
+
+  // Advance past the TTL: the entry is expired, so the next remember is a miss and
+  // the origin re-runs with a fresh (later) stamp.
+  memNow += TTL_MS + 1;
+  const expired = await remember();
+  console.log(
+    `remember report:gamma (after TTL) -> generatedAt ${expired.generatedAt}   (miss — recomputed: ${expired.generatedAt > cold.generatedAt})`,
+  );
+  console.log(`  origin loads so far: ${memOrigin.loads}`);
 }
 
 await main();

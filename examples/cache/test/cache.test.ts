@@ -11,9 +11,10 @@
 
 import { describe, expect, it } from "vitest";
 
+import { Cache, MemoryStore } from "@lesto/cache";
 import { openSqlite } from "@lesto/runtime";
 
-import { buildApp } from "../src/app";
+import { buildApp, createReportsOrigin } from "../src/app";
 
 const TTL_MS = 60_000;
 
@@ -183,5 +184,34 @@ describe("@lesto/cache example — the read-through journey over HTTP", () => {
     } finally {
       close();
     }
+  });
+});
+
+describe("@lesto/cache example — the in-memory store, used directly", () => {
+  it("reads through on a miss, serves a hit without the origin, and expires on TTL", async () => {
+    // The other store @lesto/cache ships: a `MemoryStore` behind the same `Cache`
+    // API, no SQLite. `origin.loads` is the hit/miss proof (frozen clock keeps the
+    // stamp stable across a hit, so the count — not the stamp — proves the hit).
+    const time = frozenClock();
+    const origin = createReportsOrigin(time.clock);
+    const cache = new Cache({ store: new MemoryStore(), clock: time.clock });
+    const remember = (): Promise<{ value: number; generatedAt: number }> =>
+      cache.remember("report:gamma", () => origin.load("gamma"), { ttlMs: TTL_MS });
+
+    // Miss: the origin runs once and the value is cached.
+    const first = await remember();
+    expect(origin.loads).toBe(1);
+    expect(first.value).toBe(500); // "gamma".length * 100
+
+    // Hit inside the TTL: the origin is NOT touched and the stamp is stable.
+    const warm = await remember();
+    expect(origin.loads).toBe(1);
+    expect(warm.generatedAt).toBe(first.generatedAt);
+
+    // Past the TTL: a miss again — the origin re-runs with a later stamp.
+    time.advance(TTL_MS + 1);
+    const expired = await remember();
+    expect(origin.loads).toBe(2);
+    expect(expired.generatedAt).toBeGreaterThan(first.generatedAt);
   });
 });
