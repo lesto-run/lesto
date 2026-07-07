@@ -224,16 +224,36 @@ of `body` when verifying a signature.
 
 A single receiver route that serves many tenants or many upstream sources —
 each provisioned with its own signing secret — needs to resolve *which*
-secret to check against before it can call `verify`/`verifyRequest`. The
-principle: resolve the secret from something you already trust (a path
-segment, a subdomain, an API key on the connection) — **never** from the
-unverified payload itself, since at that point you haven't verified anything
-yet.
+secret to check against. Pass `verifyRequest` a **secret resolver** in place
+of a static string: a `(ctx) => string | Promise<string>` that returns the
+signing secret for this request. When `secret` is a resolver, `verifyRequest`
+is asynchronous (you `await` it):
 
-`@lesto/webhooks`' inbound API is expected to grow a secret-resolver form of
-this (mirroring the `SecretSource` resolver the outbound `Webhooks` sender
-already uses for `secretId` → secret lookups) so a single receiver can verify
-against many tenants' secrets without hand-rolling the lookup. Until that
-lands, resolve the secret yourself (e.g. `secretsByTenant.get(tenantId)`)
-ahead of the `verify`/`verifyRequest` call shown above — the verification
-step itself doesn't change.
+```ts
+const result = await verifyRequest(
+  { body: rawBody, headers: c.req.headers },
+  {
+    secret: async (ctx) => {
+      // ctx extends the verify input: { body, headers, signature, timestamp }.
+      // Pick the tenant from the request, then load that tenant's secret.
+      const tenantId = ctx.headers.get("x-tenant-id") ?? "";
+      const secret = await secretsByTenant.get(tenantId);
+      if (!secret) throw new Error(`no secret for tenant ${tenantId}`);
+      return secret;
+    },
+  },
+);
+```
+
+The resolver is **fail-closed**: if it throws *or* returns an empty secret,
+`verifyRequest` rejects with a `WebhookError` (`code: "WEBHOOK_SECRET_UNRESOLVED"`,
+the original error preserved on `cause`) — it never falls through to an
+unverified "pass". Malformed/stale requests are rejected *before* the resolver
+runs, so an obviously-bad request never triggers a secret lookup.
+
+It is safe to derive the tenant id from the still-unverified request (a header,
+a path segment, even a field in the body) **to select which secret to try** —
+because verification then runs with that secret, so a forger who names a tenant
+whose secret they don't hold still fails the HMAC. What you must never do is
+treat the payload's *contents* as authenticated, or skip verification, before
+the HMAC passes.
