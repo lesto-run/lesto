@@ -14,7 +14,13 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { readPublicPackageDirs } from "./lib/pack-public.mjs";
-import { lestoWorkspaceDeps, runPublish, topoSortPackages } from "./publish.mjs";
+import {
+  assertVersionsBumped,
+  lestoWorkspaceDeps,
+  PLACEHOLDER_VERSION,
+  runPublish,
+  topoSortPackages,
+} from "./publish.mjs";
 
 describe("lestoWorkspaceDeps", () => {
   it("collects @lesto/* runtime deps from `dependencies` ONLY — never devDependencies", () => {
@@ -157,6 +163,62 @@ describe("runPublish (fail-closed orchestration)", () => {
     expect(outcome.failed).toBe("@lesto/errors");
     expect(outcome.attempted).not.toContain("@lesto/seo");
     expect(outcome.attempted).not.toContain("@lesto/sites");
+  });
+});
+
+describe("assertVersionsBumped (version floor — fail-closed BEFORE any pack/publish)", () => {
+  it("REJECTS a set containing a 0.0.0 package, naming EVERY offender (not just the first)", () => {
+    // Two un-bumped packages plus a validly-versioned one. The guard must fire and list BOTH
+    // offenders. This `toThrow` is the non-vacuous canary: if the guard were a no-op (e.g. the
+    // filter dropped, or it stopped at the first offender and threw nothing), nothing throws and
+    // this assertion FAILS RED — the guard is the only reason it passes.
+    expect(() =>
+      assertVersionsBumped([
+        { name: "@lesto/mail", version: PLACEHOLDER_VERSION },
+        { name: "@lesto/errors", version: "0.1.3" },
+        { name: "@lesto/cache", version: PLACEHOLDER_VERSION },
+      ]),
+    ).toThrow(/0\.0\.0/);
+
+    let message = "";
+    try {
+      assertVersionsBumped([
+        { name: "@lesto/mail", version: PLACEHOLDER_VERSION },
+        { name: "@lesto/cache", version: PLACEHOLDER_VERSION },
+        { name: "@lesto/errors", version: "0.1.3" },
+      ]);
+    } catch (error) {
+      message = error.message;
+    }
+    // EVERY 0.0.0 package is named so one bump fixes them all…
+    expect(message).toContain("@lesto/mail");
+    expect(message).toContain("@lesto/cache");
+    // …and a validly-versioned package is NOT named as an offender (guards a naive "list all").
+    expect(message).not.toContain("@lesto/errors");
+    // …and the operator is pointed at the version bump.
+    expect(message).toMatch(/version/i);
+  });
+
+  it("does NOT throw when every package has a real (non-0.0.0) version", () => {
+    expect(() =>
+      assertVersionsBumped([
+        { name: "@lesto/errors", version: "0.1.3" },
+        { name: "@lesto/mail", version: "0.1.3" },
+        { name: "create-lesto", version: "0.1.3" },
+      ]),
+    ).not.toThrow();
+  });
+
+  it("does NOT refuse a 0.0.0-prefixed prerelease (only the bare placeholder is a floor breach)", () => {
+    // A changeset snapshot like `0.0.0-canary.1` is a legitimate publish — exact-match `0.0.0`
+    // only, so the prerelease is allowed through.
+    expect(() =>
+      assertVersionsBumped([{ name: "@lesto/mail", version: "0.0.0-canary.1" }]),
+    ).not.toThrow();
+  });
+
+  it("is a no-op for the empty set", () => {
+    expect(() => assertVersionsBumped([])).not.toThrow();
   });
 });
 

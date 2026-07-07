@@ -134,6 +134,40 @@ export function runPublish(order, publishOne) {
   return { attempted, published, skipped, failed: null, error: null };
 }
 
+/** The placeholder version a de-privatized package carries BEFORE its first coordinated bump. */
+export const PLACEHOLDER_VERSION = "0.0.0";
+
+/**
+ * Version FLOOR, fail-closed: refuse to publish any package still at the placeholder
+ * {@link PLACEHOLDER_VERSION} (`0.0.0`). A package is de-privatized at `0.0.0` and only leaves that
+ * value once `changeset version` bumps it onto the shared line; `scripts/publish.mjs` otherwise
+ * publishes whatever version the packed tarball carries with NO floor of its own. Without this
+ * check, running the release BEFORE the version bump ships every un-bumped package at `0.0.0` —
+ * which pins npm's `latest` to `0.0.0` and permanently desyncs the changeset `fixed` group.
+ *
+ * Called on the WHOLE publish set BEFORE any pack/publish, so nothing ships if ANY package is
+ * un-bumped; the error names EVERY offender (not just the first) so one run fixes them all. This
+ * is a generic floor — NOT a special-case of any particular package set — so it stays correct as
+ * the publishable closure grows. A prerelease like `0.0.0-canary.1` is intentionally NOT matched:
+ * only the bare placeholder is refused.
+ *
+ * @param {{name:string, version:string}[]} packages the publishable set (name + packed/source version)
+ * @throws {Error} listing every `0.0.0` package if any is present — telling the operator to run the
+ *         changeset version bump first
+ */
+export function assertVersionsBumped(packages) {
+  const unbumped = packages.filter((p) => p.version === PLACEHOLDER_VERSION).map((p) => p.name);
+  if (unbumped.length > 0) {
+    throw new Error(
+      `refusing to publish ${unbumped.length} package(s) still at the placeholder version ` +
+        `${PLACEHOLDER_VERSION}: ${unbumped.join(", ")}. Every publishable package must be bumped ` +
+        "onto the shared line first — run the changeset version bump (`bun run version`) and commit " +
+        `the result BEFORE releasing. Publishing ${PLACEHOLDER_VERSION} would set npm \`latest\` to ` +
+        `${PLACEHOLDER_VERSION} and permanently desync the changeset \`fixed\` group.`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Effectful CLI
 // ---------------------------------------------------------------------------
@@ -173,8 +207,20 @@ function main() {
   // deps publish before it.
   const nodes = publicDirs.map((dir) => {
     const manifest = JSON.parse(readFileSync(join(PACKAGES, dir, "package.json"), "utf8"));
-    return { dir, name: manifest.name, deps: lestoWorkspaceDeps(manifest) };
+    return {
+      dir,
+      name: manifest.name,
+      version: manifest.version,
+      deps: lestoWorkspaceDeps(manifest),
+    };
   });
+
+  // Version FLOOR, fail-closed, BEFORE any pack/publish: a de-privatized package sits at `0.0.0`
+  // until `changeset version` bumps it, and bun packs the SOURCE version verbatim — so releasing
+  // before the bump would ship the whole un-bumped set at 0.0.0 (pinning npm `latest` to 0.0.0 and
+  // desyncing the changeset `fixed` group). Refuse here, naming every offender, before packing.
+  assertVersionsBumped(nodes);
+
   const order = topoSortPackages(nodes.map(({ name, deps }) => ({ name, deps })));
 
   console.log(
