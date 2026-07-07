@@ -120,34 +120,58 @@ export const Form: ComponentDef = {
   },
 };
 
-/** The control for a field, chosen by its `type`. */
+/**
+ * The control for a field, chosen by its `type`.
+ *
+ * `value`/`checked` come from a threaded prior submission (`renderForm`'s
+ * `options`, or a direct caller). They use React's uncontrolled `default*`
+ * family — never `value`/`checked`/`selected` — because a *controlled* input
+ * needs an `onChange` this component never provides; under
+ * `renderToStaticMarkup` a controlled prop with no handler logs a console
+ * warning that would pollute (and can fail) tests.
+ */
 function fieldControl(
   name: string,
   type: string,
   required: boolean,
   options: string[],
+  value: string | undefined,
+  checked: boolean,
 ): ReactElement {
   if (type === "textarea") {
-    return createElement("textarea", { name, required });
+    return createElement("textarea", {
+      name,
+      required,
+      ...(value === undefined ? {} : { defaultValue: value }),
+    });
   }
 
   if (type === "select") {
     return createElement(
       "select",
-      { name, required },
+      { name, required, ...(value === undefined ? {} : { defaultValue: value }) },
       options.map((option) => createElement("option", { key: option, value: option }, option)),
     );
   }
 
   if (type === "checkbox") {
-    return createElement("input", { name, type: "checkbox", required });
+    return createElement("input", { name, type: "checkbox", required, defaultChecked: checked });
   }
 
   // text / email / number map straight onto a native input of that type.
-  return createElement("input", { name, type, required });
+  return createElement("input", {
+    name,
+    type,
+    required,
+    ...(value === undefined ? {} : { defaultValue: value }),
+  });
 }
 
-/** The Field component: a labelled control whose `type` picks the input. */
+/**
+ * The Field component: a labelled control whose `type` picks the input,
+ * optionally carrying a prior `value`/`checked` and a validation `error` — both
+ * threaded in by `renderForm`'s `options` on a failed-submission re-render.
+ */
 export const Field: ComponentDef = {
   name: "Field",
   description: "A single labelled form field.",
@@ -157,6 +181,9 @@ export const Field: ComponentDef = {
     label: { type: "string" },
     required: { type: "boolean", default: false },
     options: { type: "array" },
+    error: { type: "string" },
+    value: { type: "string" },
+    checked: { type: "boolean", default: false },
   },
   children: false,
   render: (props) => {
@@ -165,18 +192,33 @@ export const Field: ComponentDef = {
     const required = asBoolean(props.required);
     const options = asStringArray(props.options);
 
-    const control = fieldControl(name, type, required, options);
+    // A non-string `value` (including absent — the common case) means no prior
+    // value exists; `asString`'s "" fallback is wrong here, since `defaultValue=""`
+    // WOULD render a stray `value=""` attribute where today there is none.
+    const value = typeof props.value === "string" ? props.value : undefined;
+    const checked = asBoolean(props.checked);
+
+    const control = fieldControl(name, type, required, options, value, checked);
 
     // A label is optional; render the bare control when none was given.
     const label = props.label;
 
-    if (typeof label !== "string") {
-      return createElement("label", { "data-field": name }, control);
+    // A non-empty error renders as the LAST child inside the <label>, with
+    // `data-error` as the LAST attribute — the example's `errorsIn` regex
+    // (`data-error="…">…<`) depends on that attribute order.
+    const message = asString(props.error);
+
+    const children: ReactNode[] = [];
+
+    if (typeof label === "string") children.push(label);
+
+    children.push(control);
+
+    if (message !== "") {
+      children.push(createElement("span", { role: "alert", "data-error": name }, message));
     }
 
-    const caption: ReactNode = label;
-
-    return createElement("label", { "data-field": name }, caption, control);
+    return createElement("label", { "data-field": name }, ...children);
   },
 };
 

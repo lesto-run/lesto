@@ -172,6 +172,138 @@ describe("renderForm", () => {
 });
 
 // ---------------------------------------------------------------------------
+// renderForm(spec, { errors, values }) — the failed-submission re-render
+// ---------------------------------------------------------------------------
+
+describe("renderForm — errors and values (options)", () => {
+  it("renderForm(spec) and renderForm(spec, {}) render identical HTML (no accidental attrs)", () => {
+    const noArg = renderToStaticMarkup(
+      renderTree(createFormRegistry(), renderForm(fullSpec())).element,
+    );
+    const emptyOptions = renderToStaticMarkup(
+      renderTree(createFormRegistry(), renderForm(fullSpec(), {})).element,
+    );
+
+    expect(emptyOptions).toBe(noArg);
+    expect(noArg).not.toContain("data-error");
+    expect(noArg).not.toContain("checked=");
+  });
+
+  it("threads a per-field error into its Field, as the last child, without touching values", () => {
+    const { element, errors } = renderTree(
+      createFormRegistry(),
+      renderForm(fullSpec(), { errors: { email: "email must be a valid email" } }),
+    );
+
+    expect(errors).toEqual([]);
+
+    const html = renderToStaticMarkup(element);
+
+    expect(html).toContain(
+      '<span role="alert" data-error="email">email must be a valid email</span>',
+    );
+
+    // Exactly one field got an error span.
+    expect(html.match(/data-error/g)).toHaveLength(1);
+
+    // No prior value was given, so nothing is preserved on any field.
+    expect(html).not.toContain("checked=");
+    expect(html).not.toContain('name="username" value');
+  });
+
+  it("threads prior values into their Fields, routed by field type, without an error", () => {
+    const { element, errors } = renderTree(
+      createFormRegistry(),
+      renderForm(fullSpec(), {
+        values: {
+          username: "ada",
+          email: "ada@example.com",
+          age: 36,
+          agree: true,
+          bio: "hello",
+          plan: "pro",
+        },
+      }),
+    );
+
+    expect(errors).toEqual([]);
+
+    const html = renderToStaticMarkup(element);
+
+    expect(html).not.toContain("data-error");
+
+    // Text-ish fields (text/email/number) carry the value as an attribute.
+    expect(html).toContain('<input type="text" required="" name="username" value="ada"/>');
+    expect(html).toContain(
+      '<input type="email" required="" name="email" value="ada@example.com"/>',
+    );
+    expect(html).toContain('<input type="number" name="age" value="36"/>');
+
+    // A checkbox carries `checked`, never a `value` attribute.
+    expect(html).toContain('<input type="checkbox" required="" name="agree" checked=""/>');
+    expect(html).not.toContain('name="agree" value');
+
+    // A textarea's prior value is its text content, not an attribute.
+    expect(html).toContain('<textarea name="bio">hello</textarea>');
+
+    // A select's prior value marks the matching <option> selected; the other isn't.
+    expect(html).toContain('<option value="free">free</option>');
+    expect(html).toContain('<option value="pro" selected="">pro</option>');
+  });
+
+  it("threads both an error and a prior value onto the same field (the round-trip case)", () => {
+    const { element } = renderTree(
+      createFormRegistry(),
+      renderForm(
+        { action: "/x", fields: [{ name: "email", type: "email", required: true }] },
+        { errors: { email: "email must be a valid email" }, values: { email: "not-an-email" } },
+      ),
+    );
+
+    const html = renderToStaticMarkup(element);
+
+    expect(html).toContain('<input type="email" required="" name="email" value="not-an-email"/>');
+    expect(html).toContain(
+      '<span role="alert" data-error="email">email must be a valid email</span>',
+    );
+  });
+
+  it("routes a checkbox's prior value through JS truthiness (Boolean), not string coercion", () => {
+    // "false" is a non-empty string — truthy in JS — so a naive `checked: value`
+    // (skipping the `Boolean()` wrap) would land on the OPPOSITE boolean once the
+    // Field schema's own string->boolean coercion ran ("false" -> false).
+    const { element } = renderTree(
+      createFormRegistry(),
+      renderForm(
+        { action: "/x", fields: [{ name: "agree", type: "checkbox" }] },
+        { values: { agree: "false" } },
+      ),
+    );
+
+    const html = renderToStaticMarkup(element);
+
+    expect(html).toContain('<input type="checkbox" name="agree" checked=""/>');
+  });
+
+  it("escapes an error message that carries HTML-significant characters", () => {
+    const { element } = renderTree(
+      createFormRegistry(),
+      renderForm(
+        { action: "/x", fields: [{ name: "note", type: "text" }] },
+        { errors: { note: `<script>&"'</script>` } },
+      ),
+    );
+
+    const html = renderToStaticMarkup(element);
+
+    expect(html).toContain(
+      '<span role="alert" data-error="note">&lt;script&gt;&amp;&quot;&#x27;&lt;/script&gt;</span>',
+    );
+    expect(html).not.toContain("<script>");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Form action scheme guard (XSS in the AI tree)
 // ---------------------------------------------------------------------------
 
@@ -272,6 +404,33 @@ describe("form components", () => {
 
     expect(mixed).toContain('<option value="ok">ok</option>');
     expect(mixed.match(/<option/g)).toHaveLength(1);
+  });
+
+  it("renders a labelled Field's error as the LAST child, data-error as the LAST attribute", () => {
+    const html = renderToStaticMarkup(
+      Field.render({ name: "x", type: "text", label: "X", error: "X is required" }, null),
+    );
+
+    expect(html).toBe(
+      '<label data-field="x">X<input type="text" name="x"/>' +
+        '<span role="alert" data-error="x">X is required</span></label>',
+    );
+  });
+
+  it("renders no error span when `error` is absent or not a string", () => {
+    expect(renderToStaticMarkup(Field.render({ name: "x", type: "text" }, null))).not.toContain(
+      "data-error",
+    );
+
+    expect(
+      renderToStaticMarkup(Field.render({ name: "x", type: "text", error: 7 }, null)),
+    ).not.toContain("data-error");
+  });
+
+  it("ignores a non-string `value` as though no prior value existed", () => {
+    const html = renderToStaticMarkup(Field.render({ name: "x", type: "text", value: 7 }, null));
+
+    expect(html).toBe('<label data-field="x"><input type="text" name="x"/></label>');
   });
 
   it("renders the Form wrapper from raw props", () => {

@@ -21,7 +21,7 @@
  */
 
 import { createFormRegistry, renderForm, validateSubmission } from "@lesto/forms";
-import type { FormSpec } from "@lesto/forms";
+import type { FormSpec, RenderFormOptions } from "@lesto/forms";
 import { renderPage, renderPageMarkup } from "@lesto/ui/server";
 import { lesto } from "@lesto/web";
 import type { Lesto } from "@lesto/web";
@@ -58,9 +58,12 @@ function escapeHtml(value: string): string {
  * `renderForm` turns the spec into a `@lesto/ui` tree; `renderPage` +
  * `renderPageMarkup` (from `@lesto/ui/server`) serialize it. The Form component's
  * own `action` guard runs here, so an unsafe action never reaches the markup.
+ *
+ * `options` is optional and threads a failed submission's errors + prior values
+ * into the fields that need them (see `signupPage`) — omit it for a plain render.
  */
-export function renderFormMarkup(spec: FormSpec): string {
-  return renderPageMarkup(renderPage(formRegistry, renderForm(spec)));
+export function renderFormMarkup(spec: FormSpec, options?: RenderFormOptions): string {
+  return renderPageMarkup(renderPage(formRegistry, renderForm(spec, options)));
 }
 
 /** Wrap body HTML in a minimal document. */
@@ -71,21 +74,20 @@ function page(bodyHtml: string): string {
   );
 }
 
-/** The signup page: an optional error summary above the schema-driven form. */
-function signupPage(errors: Record<string, string> = {}): string {
-  const entries = Object.entries(errors);
-
-  const summary =
-    entries.length === 0
-      ? ""
-      : `<ul data-errors>${entries
-          .map(
-            ([field, message]) =>
-              `<li data-error="${escapeHtml(field)}">${escapeHtml(message)}</li>`,
-          )
-          .join("")}</ul>`;
-
-  return page(`${summary}${renderFormMarkup(signupSpec)}`);
+/**
+ * The signup page: the schema-driven form, with any failed submission's errors
+ * shown beside their field and prior values preserved — `renderForm`'s `options`
+ * does both, so there is no more hand-rolled `<ul data-errors>` summary above an
+ * emptied form.
+ */
+function signupPage(errors?: Record<string, string>, values?: Record<string, unknown>): string {
+  return page(
+    renderFormMarkup(signupSpec, {
+      // exactOptionalPropertyTypes: only attach a key when its value is set.
+      ...(errors === undefined ? {} : { errors }),
+      ...(values === undefined ? {} : { values }),
+    }),
+  );
 }
 
 /**
@@ -126,9 +128,11 @@ export function buildFormsApp(deps: { signups: Signup[] }): Lesto {
 
       const { valid, errors } = validateSubmission(signupSpec, values);
 
-      // Invalid: re-render the SAME form with the per-field error list. 422, so a
-      // client can tell a validation refusal from a success without scraping HTML.
-      if (!valid) return c.html(signupPage(errors), 422);
+      // Invalid: re-render the SAME form with per-field errors beside their
+      // fields AND the submitted values preserved, so the user doesn't retype
+      // everything. 422, so a client can tell a validation refusal from a
+      // success without scraping HTML.
+      if (!valid) return c.html(signupPage(errors, values), 422);
 
       const signup: Signup = { email: String(values.email), plan: String(values.plan) };
       signups.push(signup);

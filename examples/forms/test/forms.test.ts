@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp, renderFormMarkup } from "../src/app";
 
-/** Pull the `<li data-error>` messages out of a re-rendered form page. */
+/** Pull the `<span data-error>` messages out of a re-rendered form page. */
 function errorsIn(html: string): string[] {
   return [...html.matchAll(/data-error="[^"]*">([^<]*)</g)].map((m) => m[1] ?? "");
 }
@@ -83,6 +83,31 @@ describe("@lesto/forms example — the signup journey over HTTP", () => {
     expect(errors).toContain("email must be a valid email");
     expect(errors).toContain("age must be a number");
     expect(errors).toContain("plan must be one of the allowed options");
+  });
+
+  it("preserves what the user typed on a re-render, beside the per-field errors", async () => {
+    const { app } = buildApp();
+
+    // Only the email is invalid; everything else the user typed should survive
+    // the round-trip AND appear on its OWN field.
+    const res = await app.handle("POST", "/signup", {
+      body: { email: "not-an-email", age: "36", plan: "pro", bio: "Hi there", terms: "on" },
+    });
+    expect(res.status).toBe(422);
+
+    const html = res.body as string;
+    expect(errorsIn(html)).toEqual(["email must be a valid email"]);
+
+    // The invalid email itself is preserved on the email input specifically —
+    // a bare `value="…"` check would be vacuous (the GET test already matches
+    // `value="pro"` on the <option>), so this targets the email field's own
+    // attribute.
+    expect(html).toContain('<input type="email" required="" name="email" value="not-an-email"/>');
+
+    // The other fields' prior values are preserved too, each on its own control.
+    expect(html).toContain('<option value="pro" selected="">pro</option>');
+    expect(html).toContain('<textarea name="bio">Hi there</textarea>');
+    expect(html).toContain('<input type="checkbox" required="" name="terms" checked=""/>');
   });
 
   it("accepts a real urlencoded form body", async () => {

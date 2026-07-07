@@ -22,6 +22,7 @@ export { Field, Form, formComponents, Submit } from "./components";
 export { createFormRegistry } from "./registry";
 
 export { renderForm } from "./render";
+export type { RenderFormOptions } from "./render";
 
 export { validateSubmission } from "./validate";
 

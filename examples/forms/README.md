@@ -64,14 +64,15 @@ with a coded `FORM_UNSAFE_ACTION` warning.
 
 ## DX findings
 
-1. **Error display is entirely the host's job.** `@lesto/forms` renders the form
-   and validates a submission, but the two are disconnected at render time: the
-   `Field` components take no error/`value` props, so re-rendering a _failed_
-   submission can't show the message next to the field or preserve what the user
-   typed — this example lists errors in a separate `<ul>` and renders an empty
-   form beneath. An optional `renderForm(spec, { errors, values })` that threaded
-   messages + prior values into each `Field` would make the invalid-submission
-   round-trip (the common case) pleasant instead of hand-rolled. → `@lesto/forms`.
+1. **~~Error display is entirely the host's job.~~ RESOLVED.** `@lesto/forms`'
+   `renderForm(spec, { errors, values })` now threads a failed submission's
+   per-field messages and prior values straight into each `Field` — an error
+   renders as a `<span role="alert" data-error="…">` beside its field, and a
+   prior value round-trips onto the right control (`value`/`defaultValue` for
+   text-ish fields, `checked` for a checkbox, the matching `<option selected>`
+   for a select). This example no longer hand-rolls a `<ul data-errors>`
+   summary or loses what the user typed on a validation failure — see
+   `renderFormMarkup`/`signupPage` in `src/app.ts`.
 2. **`validateSubmission` gives one message per field, as prose.** Good for a
    simple form; a caller wanting machine-branchable codes (or multiple errors per
    field) has only the English string. A coded variant would help API clients. →
