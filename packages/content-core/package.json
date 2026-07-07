@@ -69,13 +69,9 @@
     "zod": "^4.1.13"
   },
   "peerDependencies": {
-    "@lesto/content-mdx": "workspace:*",
     "zod": "^4.0.0"
   },
   "peerDependenciesMeta": {
-    "@lesto/content-mdx": {
-      "optional": true
-    },
     "zod": {
       "optional": true
     }
