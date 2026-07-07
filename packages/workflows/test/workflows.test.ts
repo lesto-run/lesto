@@ -60,6 +60,10 @@ describe("Engine", () => {
     const engine = new Engine({ db }).define<{ amount: number }, { id: string; total: number }>(
       "checkout",
       async (input, ctx) => {
+        // The context carries its own identity — the same runId/name passed to run().
+        expect(ctx.runId).toBe("order-42");
+        expect(ctx.workflow).toBe("checkout");
+
         const charge = await ctx.step("charge", () => {
           charges += 1;
           return { id: "ch_1", total: input.amount };

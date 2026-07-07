@@ -204,16 +204,16 @@ export async function buildApp(options: BuildOptions): Promise<Booted> {
   engine.define<CheckoutInput, CheckoutReceipt>(CHECKOUT, async (input, ctx) => {
     // Each `step` memoizes: on a resume its result replays instead of re-running
     // the side effect. The charge is the irreversible one exactly-once protects.
+    // `ctx.runId` IS the order id (the route posts it as both) — the body reads
+    // its own identity off the context instead of threading it through `input`.
     const chargeId = await ctx.step("charge", () => services.chargeCard(input));
-    const reservationId = await ctx.step("reserve", () => services.reserveInventory(input.orderId));
+    const reservationId = await ctx.step("reserve", () => services.reserveInventory(ctx.runId));
 
     // A durable pause between reserving and receipting. `sleep` is not a step —
     // it just delays this pass; injected so the test resolves it instantly.
     await ctx.sleep(SETTLEMENT_MS);
 
-    const receiptId = await ctx.step("receipt", () =>
-      services.emailReceipt(input.orderId, chargeId),
-    );
+    const receiptId = await ctx.step("receipt", () => services.emailReceipt(ctx.runId, chargeId));
 
     return { chargeId, reservationId, receiptId };
   });

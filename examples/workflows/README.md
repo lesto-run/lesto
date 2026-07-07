@@ -62,10 +62,12 @@ The journey test (`test/workflows.test.ts`) asserts, over HTTP:
 
 Two ergonomic notes surfaced while wiring this, both routed to the owning plan:
 
-1. **The workflow body has no access to its own `runId`.** `WorkflowFn` receives
-   `(input, ctx)` only, so identity a step needs (here the order id, used to
-   reserve inventory) has to be threaded in through `input` even though it _is_
-   the runId. A `ctx.runId` (and `ctx.workflow`) would remove that duplication.
+1. **RESOLVED.** ~~The workflow body has no access to its own `runId`.~~
+   `WorkflowContext` now carries `runId` and `workflow` (`@lesto/workflows`
+   `packages/workflows/src/types.ts`, populated in `Engine#context`), so the
+   identity a step needs (here the order id, used to reserve inventory and
+   email the receipt) no longer has to be threaded in through `input` — the
+   checkout workflow body below reads `ctx.runId` directly.
 2. **There is no public read of the step journal.** Surfacing "which steps have
    completed for this run" over HTTP is only possible via the `onStep` sink
    (an in-memory trace here, lost on restart); a durable run/journal is

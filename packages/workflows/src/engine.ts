@@ -165,6 +165,9 @@ export class Engine {
   /** Build the durable context bound to one run id of a named workflow. */
   #context(workflow: string, runId: string): WorkflowContext {
     return {
+      runId,
+      workflow,
+
       step: async <T>(key: string, fn: () => T | Promise<T>): Promise<T> => {
         const start = performance.now();
 

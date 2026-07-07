@@ -71,6 +71,10 @@ export type Dialect = "sqlite" | "postgres";
  * `sleep` delegates to the injected sleep.
  */
 export interface WorkflowContext {
+  /** The run id this context is bound to — the same id passed to `engine.run(name, runId, input)`. */
+  readonly runId: string;
+  /** The name of the workflow being run — the same name passed to `engine.run(name, runId, input)`. */
+  readonly workflow: string;
   step<T>(key: string, fn: () => T | Promise<T>): Promise<T>;
   sleep(ms: number): Promise<void>;
 }
