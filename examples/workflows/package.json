@@ -1,0 +1,18 @@
+{
+  "name": "@lesto/example-workflows",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A runnable Lesto app: the @lesto/workflows step-memoization journey wired behind real HTTP routes — a checkout workflow whose steps run exactly once, replay on a re-post, and resume after a mid-run failure without re-charging — with an injected sleep and an onStep trace over HTTP.",
+  "type": "module",
+  "scripts": {
+    "start": "bun run run.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "@lesto/workflows": "workspace:*",
+    "better-sqlite3": "^11.10.0"
+  }
+}

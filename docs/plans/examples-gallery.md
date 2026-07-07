@@ -164,6 +164,45 @@ prove "hosted UX" as a Node `serve.ts` runbook rather than a Worker.
    `content-*` markdown pipeline, `observability`, `i18n`, `seo`, `feeds`, `cors`,
    `csrf`, `config`, `mcp`. Not a single batch — each is the QA gate for its battery.
 
+   **Status (2026-07-06): four private-battery examples — LOCAL-DX DONE, hosted-UX
+   (`serve.ts`) PENDING** — `examples/{cache,workflows,webhooks,forms}`, each wiring
+   ONLY its battery's public API behind real HTTP routes, with a `run.ts` local-DX
+   entry and an HTTP-boundary journey test (24 tests total, all green; `ws:typecheck`
+   + oxlint + oxfmt clean; excluded from the coverage gate like estate/blog). These
+   meet the **local-DX** half of the bar in full; **none ships the mandated hosted-UX
+   `serve.ts` leg yet** (cache/workflows/forms are trivially serve-able — a scope cut;
+   webhooks' hosted receiver is genuinely blocked on the `rawBody` dragon below). By
+   the bar's `Done = both checklists green`, these are **not yet "done"** — the hosted
+   leg is the remaining work. What each proves and the findings it fed back:
+   - **`examples/cache`** (6 tests) — read-through hit/miss, single-flight coalescing
+     of a concurrent herd, invalidation, TTL expiry (frozen clock), SQL-store
+     persistence across a "restart", and `sweep` retention. *Finding:* hit/miss is not
+     observable from `remember`'s return — a cache-level metrics hook would let a host
+     track hit-rate without instrumenting the origin. → `@lesto/cache`.
+   - **`examples/workflows`** (5 tests) — step memoization: execute-once, replay on
+     re-post (no double-charge), and resume after a mid-run failure with the charge
+     replayed not repeated; `sleep` injected; `onStep` trace over HTTP. *Findings:*
+     (a) `WorkflowFn` gets no `ctx.runId`, so run identity is threaded through `input`;
+     (b) no public read of the step journal (only the `onStep` sink). → `@lesto/workflows`.
+   - **`examples/webhooks`** (7 tests) — signed, queue-retried, SSRF-guarded outbound
+     delivery (secret held as a `secretId` reference) dispatched in-process to an
+     inbound `verify()` receiver; rejects forged/replayed/unsigned inbound. *Finding
+     (significant):* `@lesto/runtime`'s `toLestoRequest` JSON-decodes the body and
+     discards the raw bytes, and `LestoRequest` exposes no `rawBody` — so HMAC
+     verification of a JSON webhook is impossible on the deployed edge (re-stringify is
+     fragile). The in-process leg works because `handle` passes the body verbatim; the
+     **hosted-receiver leg is deferred** on a `rawBody` seam. → `core-runtime`/`@lesto/web`.
+   - **`examples/forms`** (6 tests, no DB) — one `FormSpec` renders an HTML form
+     (`@lesto/ui/server`) and validates the submission; re-renders per-field errors,
+     records a valid signup, parses a real urlencoded body, and drops an unsafe
+     `javascript:` action. *Finding:* `Field` takes no error/`value` props, so the
+     invalid-submission round-trip (show the message next to the field, preserve input)
+     is hand-rolled — a `renderForm(spec, { errors, values })` would fix it. → `@lesto/forms`.
+
+   These are the QA proof that the four batteries hold at the app boundary; they are
+   **built + covered but their packages remain `private:true`/unpublished** — the
+   examples do not change that (see the launch claims-guardrail).
+
 ---
 
 **Status (2026-06-16):** §7 reframed to this per-wave QA gate. **Increments 0, 1, 2
@@ -173,3 +212,77 @@ findings fixed in the framework (`768ba0d`, `aed3893`) and its workarounds dropp
 proves a battery and feeds findings back. Next executable step is increment 3
 (`examples/release-rollback`), then the increment 4 estate hosted-QA pass — plus
 triaging the four `@lesto/admin` findings above into their owning plans.
+
+**Update (2026-07-06):** increment 5 advanced — `examples/{cache,workflows,webhooks,
+forms}` local-DX shipped (24 HTTP-boundary tests, all green; typecheck/oxlint/oxfmt
+clean), each with DX findings routed to its owning package (see increment 5 above).
+The most consequential is the missing `rawBody` seam surfaced by `examples/webhooks`,
+which gates any hosted webhook receiver. Remaining long-tail batteries: `storage`,
+`pubsub`, `rbac`, `openapi`, `pg`, `content-*`, `observability`, `i18n`, `seo`,
+`feeds`, `cors`, `csrf`, `config`, `mcp` (plus `queue` — partially covered by
+`examples/queue-dashboard`).
+
+**Red-team + chief-architect review (2026-07-06, Opus):** one CRITICAL defect found
+and FIXED — the `examples/webhooks` SSRF test was *vacuous* (both `outcome:"failed"`
+and empty inbox held whether the guard blocked OR the dispatched fetch 404'd on a
+non-existent path, so it would have shipped a removed/bypassed SSRF guard green — the
+[[vacuous-negative-assertion-trap]] pattern). Fixed by recording every URL the
+deliverer actually tries to connect to (`Booted.fetchAttempts`), pointing the blocked
+URL at the *real* `/incoming` route, and asserting `fetchAttempts === []` (no
+connection attempted). **Verified RED** with the guard bypassed before trusting the
+green. The forms XSS test gained a positive control (a form *was* rendered). All other
+positive/negative assertions were checked and confirmed non-vacuous (cache single-flight
+is deterministic; workflows resume is proven by call-counts; the `rawBody` finding is
+accurate). Two doc corrections: the "DONE" label was downgraded to "local-DX done,
+hosted-`serve.ts` pending" (the bar requires both legs), and the `rawBody` blast radius
+was scoped (inbound body-signature receivers only — NOT the auth stack or MCP transport).
+
+**Next steps (sequenced, highest-leverage first):**
+1. **Commit the work** — the four dirs are currently UNTRACKED and this plan edit is
+   unstaged, so CI `examples:test` has not actually run them; the "24 green" is
+   local-only. Stage per explicit path (the Studio daemon commits to main
+   concurrently — never `git add -A`, see [[shared-worktree-commit-trap]]).
+2. **Land the `rawBody` seam** in `@lesto/runtime` + `@lesto/web` (P0) — a real
+   framework gap that blocks the entire inbound-webhook class (the canonical
+   batteries-included use case). Then add `examples/webhooks/serve.ts` and click the
+   hosted receiver leg. See [[rawbody-blocks-hosted-webhook-receiver]].
+3. **Add `serve.ts`** to cache / workflows / forms (mirror `mailing-lists/serve.ts`)
+   to close the mandated hosted-UX leg: cache on file-backed SQLite (restart
+   persistence is clickable), workflows with a curl execute→replay→resume runbook,
+   forms so a browser posts the real urlencoded body.
+4. **File findings as work items**: forms `renderForm(spec, {errors, values})` (P1,
+   highest user-facing DX), webhooks inbound `verifyRequest` helper (P1, ship WITH the
+   rawBody fix), workflows `ctx.runId` (P2); batch the P3s (cache metrics hook,
+   `Engine.stepsOf`, coded `validateSubmission`).
+
+**Hidden dragons / gotchas for the next agent:**
+- **rawBody decode trap** — `@lesto/runtime`'s `toLestoRequest`→`parseBody` `JSON.parse`s
+  an `application/json` body and DISCARDS the raw string; `LestoRequest.body` is decoded
+  and there is no `rawBody`. In-process `app.handle(...)` does NOT decode (`body:
+  options.body` verbatim), which is the ONLY reason the webhooks inbound test is green —
+  it bypasses the server decode path. **Do not read that green as "a hosted receiver
+  works."** Re-`JSON.stringify`ing the parsed body is NOT a fix (key order / whitespace /
+  number-format drift breaks the HMAC). See [[rawbody-blocks-hosted-webhook-receiver]].
+- **In-process signature verification is a false-green for deployment** — it validates
+  the `verify()` *algorithm*, not a deployable endpoint.
+- **`maxAttempts:1` in `examples/webhooks`** disables retries — do NOT cite this example
+  as proof of the queue's retry/backoff loop (that rests on `@lesto/queue`'s own tests).
+- **workflows `sleep` is not memoized** — on resume the body re-runs every pass before
+  the failed step, so a long pre-step sleep re-waits fully on each retry. Nothing
+  re-invokes after a crash; resume is caller-driven (durable scheduler deferred post-1.0).
+  There is also no public read of run-level progress (only `(runId,key)` step rows + the
+  in-memory `onStep` trace).
+- **`jsx: react-jsx` + DOM libs in tsconfig** — all four set it, but ONLY forms renders
+  JSX. cache/workflows/webhooks need `jsx` set purely because importing `@lesto/web`
+  transitively resolves `.tsx` modules; a bare `types:["node"]` tsconfig fails to
+  typecheck. Copy the template's tsconfig; don't "clean up" the jsx line.
+- **injected clock / sleep / resolver are load-bearing** — anyone "simplifying" cache
+  TTL/sweep or workflow sleep back to the system clock reintroduces test flakiness.
+- **private/unpublished + masked resolution** — these examples resolve on `bun install`
+  ONLY because the whole `@lesto` scope is linked in-tree; that does NOT prove a
+  standalone `npm i @lesto/cache` works (the four packages are `private:true`, not on
+  npm — see [[batteries-built-not-published]], [[scaffold-e2e-masks-real-resolution]]).
+  Examples do not change that; launch copy must not imply these are installable.
+- **coverage-gate exclusion is implicit** — `scripts/coverage-gate.ts` globs `packages/*`;
+  examples are excluded only by living under `examples/`. Examples ship no `test:cov`
+  script. If the gate ever broadens its glob, these could be pulled into the 100% bar.

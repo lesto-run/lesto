@@ -1,0 +1,17 @@
+{
+  "name": "@lesto/example-forms",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A runnable Lesto app: the @lesto/forms journey wired behind real HTTP routes — one FormSpec renders an HTML form on GET and validates the submission on POST, re-rendering with per-field errors or recording the signup, with the Form component's unsafe-action guard proven.",
+  "type": "module",
+  "scripts": {
+    "start": "bun run run.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/forms": "workspace:*",
+    "@lesto/ui": "workspace:*",
+    "@lesto/web": "workspace:*"
+  }
+}

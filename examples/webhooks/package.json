@@ -1,0 +1,19 @@
+{
+  "name": "@lesto/example-webhooks",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A runnable Lesto app: the @lesto/webhooks journey wired behind real HTTP routes — signed, queue-retried, SSRF-guarded outbound delivery with a secretId reference, plus inbound verify() over the raw body that rejects forged, replayed, and unsigned requests.",
+  "type": "module",
+  "scripts": {
+    "start": "bun run run.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/queue": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "@lesto/webhooks": "workspace:*",
+    "better-sqlite3": "^11.10.0"
+  }
+}
