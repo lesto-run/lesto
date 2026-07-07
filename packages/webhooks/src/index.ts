@@ -31,6 +31,8 @@ export {
 export type {
   FetchLike,
   Resolver,
+  SecretResolver,
+  SecretResolverContext,
   SecretSource,
   TraceparentSource,
   UrlGuard,

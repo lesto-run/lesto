@@ -78,6 +78,7 @@ export const DEFAULT_TOLERANCE_MS = 5 * 60 * 1000;
 export type WebhookErrorCode =
   | "WEBHOOK_DELIVERY_FAILED"
   | "WEBHOOK_SECRET_NOT_FOUND"
+  | "WEBHOOK_SECRET_UNRESOLVED"
   | "WEBHOOK_URL_BLOCKED";
 
 export class WebhookError extends LestoError<WebhookErrorCode> {
@@ -162,10 +163,49 @@ export interface VerifyRequestInput {
   readonly headers: Record<string, string | undefined>;
 }
 
+/**
+ * The material a {@link SecretResolver} sees to pick the per-request secret: the
+ * raw request (body + headers) plus the already-parsed signature and sender
+ * timestamp. A multi-tenant receiver reads a tenant/source identifier from the
+ * headers (or the body) and returns THAT tenant's signing secret.
+ *
+ * Reading the body here only SELECTS which secret to check against — the
+ * signature is still verified over the raw body under whatever secret the
+ * resolver returns, so a forger who names a tenant whose secret they do not hold
+ * simply fails the constant-time HMAC check. The identifier is untrusted until
+ * the HMAC passes.
+ */
+export interface SecretResolverContext extends VerifyRequestInput {
+  /** The `x-lesto-signature` the sender shipped. */
+  readonly signature: string;
+  /** The parsed `x-lesto-timestamp` (epoch ms), already inside the replay window. */
+  readonly timestamp: number;
+}
+
+/**
+ * Resolves the signing secret PER REQUEST, so ONE receiver can verify many
+ * tenants/sources each with a distinct secret. Return the secret as a `string`
+ * (sync) or a `Promise<string>` (an async lookup — a DB row, a vault fetch).
+ *
+ * Fails CLOSED: if the resolver throws OR yields a falsy secret, {@link
+ * verifyRequest} rejects with a `WEBHOOK_SECRET_UNRESOLVED` {@link WebhookError}
+ * — an unresolved secret is a hard error, NEVER a silent "skip verification".
+ */
+export type SecretResolver = (ctx: SecretResolverContext) => string | Promise<string>;
+
 /** Options for {@link verifyRequest}. */
 export interface VerifyRequestOptions {
-  /** The signing secret, known out-of-band by the receiver (the deliverer sends no endpoint id). */
-  readonly secret: string;
+  /**
+   * The signing secret, known out-of-band by the receiver (the deliverer sends
+   * no endpoint id). EITHER a static `string` — the single-secret receiver, the
+   * original behavior — OR a {@link SecretResolver} `(ctx) => string |
+   * Promise<string>` that picks the secret per request, so one endpoint can
+   * verify many tenants/sources each with its own secret.
+   *
+   * A static string keeps {@link verifyRequest} synchronous; a resolver makes it
+   * return a `Promise` (the resolver may be async).
+   */
+  readonly secret: string | SecretResolver;
   /** Replay tolerance in ms. Defaults to {@link DEFAULT_TOLERANCE_MS}. */
   readonly toleranceMs?: number;
   /** "Now" in epoch ms, injectable for tests. Defaults to `Date.now()`. */
@@ -181,37 +221,49 @@ export interface VerifyRequestResult {
   readonly reason?: VerifyFailureReason;
 }
 
+/** The validated request material {@link verifyRequest} carries past its pre-checks. */
+interface VerifyPrecheckOk {
+  readonly signature: string;
+  readonly timestamp: number;
+  readonly now: number;
+  readonly toleranceMs: number;
+}
+
 /**
- * Inbound counterpart to {@link Webhooks.send}: given the raw request body and
- * headers, checks the `x-lesto-signature`/`x-lesto-timestamp` pair and — on
- * success — extracts `event` from the signed `{event,data}` body (never the
- * unsigned `x-lesto-event` header, which a forger can set to anything).
- *
- * Delegates the actual HMAC/timing-safe comparison to {@link verify}; this
- * helper only resolves headers, distinguishes *why* a request failed (a bare
- * `false` from `verify` can't tell "stale" from "forged"), and safely parses
- * the body JSON.
+ * Either the secret-independent facts a verification needs (`ok: true`) or an
+ * early failure verdict — a discriminated result so the secret-dependent tail
+ * never runs against a request we already know is malformed or stale.
  */
-export function verifyRequest(
+type VerifyPrecheck =
+  | { readonly ok: false; readonly result: VerifyRequestResult }
+  | ({ readonly ok: true } & VerifyPrecheckOk);
+
+/**
+ * The cheap, secret-INDEPENDENT pre-checks: header presence, timestamp shape,
+ * and the replay window. Runs BEFORE any secret is resolved, so an obviously-bad
+ * request (missing header, malformed/stale timestamp) never invokes a
+ * {@link SecretResolver} — no wasted lookup, no resolver side effects on junk.
+ */
+function precheckVerifyRequest(
   input: VerifyRequestInput,
   options: VerifyRequestOptions,
-): VerifyRequestResult {
+): VerifyPrecheck {
   const signature = input.headers[SIGNATURE_HEADER];
 
   if (signature === undefined) {
-    return { verified: false, reason: "missing_signature" };
+    return { ok: false, result: { verified: false, reason: "missing_signature" } };
   }
 
   const timestampHeader = input.headers[TIMESTAMP_HEADER];
 
   if (timestampHeader === undefined) {
-    return { verified: false, reason: "missing_timestamp" };
+    return { ok: false, result: { verified: false, reason: "missing_timestamp" } };
   }
 
   const timestamp = Number(timestampHeader);
 
   if (Number.isNaN(timestamp) || !Number.isFinite(timestamp)) {
-    return { verified: false, reason: "malformed_timestamp" };
+    return { ok: false, result: { verified: false, reason: "malformed_timestamp" } };
   }
 
   const now = options.now ?? Date.now();
@@ -221,10 +273,29 @@ export function verifyRequest(
   // would be indistinguishable from a forged signature. Checking it here first
   // lets a caller tell replay-window expiry apart from tampering.
   if (Math.abs(now - timestamp) > toleranceMs) {
-    return { verified: false, reason: "stale_timestamp" };
+    return { ok: false, result: { verified: false, reason: "stale_timestamp" } };
   }
 
-  const ok = verify(input.body, signature, options.secret, { timestamp, toleranceMs, now });
+  return { ok: true, signature, timestamp, now, toleranceMs };
+}
+
+/**
+ * The secret-DEPENDENT tail: the constant-time HMAC check over the RAW body
+ * (never a re-serialized one), then — on success — `event` pulled from the
+ * SIGNED `{event,data}` body (never the unsigned `x-lesto-event` header, which a
+ * forger can set to anything). Shared verbatim by the static-secret and
+ * resolver paths so both verify identically.
+ */
+function completeVerifyRequest(
+  input: VerifyRequestInput,
+  pre: VerifyPrecheckOk,
+  secret: string,
+): VerifyRequestResult {
+  const ok = verify(input.body, pre.signature, secret, {
+    timestamp: pre.timestamp,
+    toleranceMs: pre.toleranceMs,
+    now: pre.now,
+  });
 
   if (!ok) {
     return { verified: false, reason: "signature_mismatch" };
@@ -249,6 +320,85 @@ export function verifyRequest(
   }
 
   return { verified: true, ...(event === undefined ? {} : { event }) };
+}
+
+/**
+ * Inbound counterpart to {@link Webhooks.send}: given the raw request body and
+ * headers, checks the `x-lesto-signature`/`x-lesto-timestamp` pair and — on
+ * success — extracts `event` from the signed `{event,data}` body (never the
+ * unsigned `x-lesto-event` header, which a forger can set to anything).
+ *
+ * Delegates the actual HMAC/timing-safe comparison to {@link verify}; this
+ * helper only resolves headers, distinguishes *why* a request failed (a bare
+ * `false` from `verify` can't tell "stale" from "forged"), and safely parses
+ * the body JSON.
+ *
+ * The signing secret is EITHER a static `string` — synchronous, the original
+ * single-secret behavior, unchanged — OR a {@link SecretResolver} for the
+ * multi-tenant case, where one receiver verifies many sources each with its own
+ * secret. A resolver makes this return a `Promise<VerifyRequestResult>` and
+ * fails CLOSED (`WEBHOOK_SECRET_UNRESOLVED`) if it throws or yields a falsy
+ * secret — an unresolved secret never quietly passes verification.
+ */
+export function verifyRequest(
+  input: VerifyRequestInput,
+  options: Omit<VerifyRequestOptions, "secret"> & { readonly secret: string },
+): VerifyRequestResult;
+export function verifyRequest(
+  input: VerifyRequestInput,
+  options: Omit<VerifyRequestOptions, "secret"> & { readonly secret: SecretResolver },
+): Promise<VerifyRequestResult>;
+export function verifyRequest(
+  input: VerifyRequestInput,
+  options: VerifyRequestOptions,
+): VerifyRequestResult | Promise<VerifyRequestResult> {
+  const pre = precheckVerifyRequest(input, options);
+
+  // Static secret: fully synchronous — byte-for-byte the original path, so every
+  // existing caller compiles and behaves identically.
+  if (typeof options.secret === "string") {
+    return pre.ok ? completeVerifyRequest(input, pre, options.secret) : pre.result;
+  }
+
+  // Per-request resolver (multi-tenant): async, because the resolver may be. The
+  // pre-checks already ran synchronously above; a resolver is invoked ONLY for a
+  // request that has cleared them, and the whole path fails CLOSED.
+  const resolveSecret = options.secret;
+
+  return (async (): Promise<VerifyRequestResult> => {
+    if (!pre.ok) return pre.result;
+
+    let secret: string;
+
+    try {
+      secret = await resolveSecret({
+        body: input.body,
+        headers: input.headers,
+        signature: pre.signature,
+        timestamp: pre.timestamp,
+      });
+    } catch (cause) {
+      // Fail CLOSED: a resolver that throws (bad tenant id, lookup failure) is a
+      // hard error, not a pass. Preserve the original in `cause` for debugging.
+      throw new WebhookError(
+        "WEBHOOK_SECRET_UNRESOLVED",
+        "The per-request secret resolver threw while resolving the signing secret.",
+        { cause },
+      );
+    }
+
+    // Fail CLOSED on an absent/empty secret. The resolver's type says `string`,
+    // but a JS caller can still hand back "" / undefined — treat any falsy value
+    // as "no secret for this tenant" rather than verifying against nothing.
+    if (typeof secret !== "string" || secret.length === 0) {
+      throw new WebhookError(
+        "WEBHOOK_SECRET_UNRESOLVED",
+        "The per-request secret resolver returned no signing secret.",
+      );
+    }
+
+    return completeVerifyRequest(input, pre, secret);
+  })();
 }
 
 export interface WebhookResponse {

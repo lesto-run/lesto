@@ -18,7 +18,27 @@ import {
 } from "../src/index";
 
 import type { SqlDatabase } from "@lesto/queue";
-import type { FetchLike, Resolver, SecretSource, WebhookResponse } from "../src/index";
+import type {
+  FetchLike,
+  Resolver,
+  SecretResolver,
+  SecretResolverContext,
+  SecretSource,
+  VerifyRequestInput,
+  WebhookResponse,
+} from "../src/index";
+
+// Await a promise expected to REJECT and return its rejection. Throws if it
+// resolves — so a "fails closed" assertion can never pass vacuously.
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+
+  throw new Error("expected the promise to reject, but it resolved.");
+}
 
 interface Call {
   url: string;
@@ -263,6 +283,181 @@ describe("verifyRequest", () => {
     const result = verifyRequest({ body, headers }, { secret });
 
     expect(result).toEqual({ verified: true, event: "ping" });
+  });
+});
+
+describe("verifyRequest — multi-tenant secret resolver", () => {
+  const TENANT_HEADER = "x-tenant-id";
+  const ts = 1_700_000_000_000;
+
+  // Two tenants, two DISTINCT signing secrets — the whole point of the resolver.
+  const secrets: Record<string, string> = { acme: "acme-secret", globex: "globex-secret" };
+
+  // A request for `tenant` whose body is signed under THAT tenant's secret, with
+  // the (untrusted-until-verified) tenant id in a header.
+  function tenantRequest(tenant: string, body: string): VerifyRequestInput {
+    return {
+      body,
+      headers: {
+        ...signedHeaders(ts, body, secrets[tenant] as string),
+        [TENANT_HEADER]: tenant,
+      },
+    };
+  }
+
+  // Picks the secret by the tenant header; an unknown tenant yields "" (fail closed).
+  const byTenantHeader: SecretResolver = (ctx) => secrets[ctx.headers[TENANT_HEADER] ?? ""] ?? "";
+
+  it("keeps the static-string path synchronous (returns a result, never a Promise)", () => {
+    const body = JSON.stringify({ event: "order.paid", data: {} });
+
+    const result = verifyRequest(
+      { body, headers: signedHeaders(ts, body, "shh") },
+      { secret: "shh", now: ts },
+    );
+
+    // Backward-compat lock: a static secret must NOT turn the call async.
+    expect(result).not.toBeInstanceOf(Promise);
+    expect(result).toEqual({ verified: true, event: "order.paid" });
+  });
+
+  it("verifies with a synchronous resolver (Promise-returning, resolves true)", async () => {
+    const body = JSON.stringify({ event: "acme.created", data: { id: 1 } });
+
+    const promise = verifyRequest(tenantRequest("acme", body), { secret: byTenantHeader, now: ts });
+
+    // A resolver makes the call async even when the resolver itself is sync.
+    expect(promise).toBeInstanceOf(Promise);
+    expect(await promise).toEqual({ verified: true, event: "acme.created" });
+  });
+
+  it("verifies with an async resolver (Promise<string>)", async () => {
+    const body = JSON.stringify({ event: "globex.paid", data: {} });
+    const asyncResolver: SecretResolver = async (ctx) => {
+      await Promise.resolve(); // a real lookup would await a DB/vault here
+      return secrets[ctx.headers[TENANT_HEADER] ?? ""] as string;
+    };
+
+    expect(await verifyRequest(tenantRequest("globex", body), { secret: asyncResolver, now: ts })).toEqual(
+      { verified: true, event: "globex.paid" },
+    );
+  });
+
+  it("resolves a DIFFERENT secret per tenant — both verify, a cross-signed body is rejected", async () => {
+    const acmeBody = JSON.stringify({ event: "acme.created", data: {} });
+    const globexBody = JSON.stringify({ event: "globex.created", data: {} });
+
+    // Two tenants, each signed under its OWN secret: both verify through one receiver.
+    expect(
+      await verifyRequest(tenantRequest("acme", acmeBody), { secret: byTenantHeader, now: ts }),
+    ).toEqual({ verified: true, event: "acme.created" });
+    expect(
+      await verifyRequest(tenantRequest("globex", globexBody), { secret: byTenantHeader, now: ts }),
+    ).toEqual({ verified: true, event: "globex.created" });
+
+    // A body that CLAIMS acme but was signed with globex's secret: the resolver
+    // hands back acme's secret, so the HMAC does NOT match. Proof the resolver
+    // truly selects per tenant — a single shared secret would wrongly accept this.
+    const crossSigned: VerifyRequestInput = {
+      body: acmeBody,
+      headers: {
+        ...signedHeaders(ts, acmeBody, secrets["globex"] as string),
+        [TENANT_HEADER]: "acme",
+      },
+    };
+
+    expect(await verifyRequest(crossSigned, { secret: byTenantHeader, now: ts })).toEqual({
+      verified: false,
+      reason: "signature_mismatch",
+    });
+  });
+
+  it("passes the raw body, headers, signature, and parsed timestamp to the resolver", async () => {
+    const body = JSON.stringify({ event: "ping", data: {} });
+    const headers: Record<string, string> = {
+      ...signedHeaders(ts, body, "shh"),
+      [TENANT_HEADER]: "acme",
+    };
+    let seen: SecretResolverContext | undefined;
+    const capturing: SecretResolver = (ctx) => {
+      seen = ctx;
+
+      return "shh";
+    };
+
+    expect(await verifyRequest({ body, headers }, { secret: capturing, now: ts })).toEqual({
+      verified: true,
+      event: "ping",
+    });
+    expect(seen?.body).toBe(body); // the RAW body, for tenant selection
+    expect(seen?.headers[TENANT_HEADER]).toBe("acme");
+    expect(seen?.signature).toBe(headers[SIGNATURE_HEADER]);
+    expect(seen?.timestamp).toBe(ts);
+  });
+
+  it("fails CLOSED (WEBHOOK_SECRET_UNRESOLVED) when the resolver throws, preserving the cause", async () => {
+    const body = JSON.stringify({ event: "ping", data: {} });
+    const boom = new Error("tenant lookup failed");
+    const throwing: SecretResolver = () => {
+      throw boom;
+    };
+
+    const error = await rejection(
+      verifyRequest({ body, headers: signedHeaders(ts, body, "shh") }, { secret: throwing, now: ts }),
+    );
+
+    expect(error).toBeInstanceOf(WebhookError);
+    expect((error as WebhookError).code).toBe("WEBHOOK_SECRET_UNRESOLVED");
+    expect((error as WebhookError).details["cause"]).toBe(boom); // original preserved for debugging
+  });
+
+  it("fails CLOSED when the resolver returns an empty secret (unknown tenant)", async () => {
+    const body = JSON.stringify({ event: "ping", data: {} });
+    // "nobody" is not in the map -> byTenantHeader returns "" -> reject, never pass.
+    const req: VerifyRequestInput = {
+      body,
+      headers: { ...signedHeaders(ts, body, "shh"), [TENANT_HEADER]: "nobody" },
+    };
+
+    const error = await rejection(verifyRequest(req, { secret: byTenantHeader, now: ts }));
+
+    expect(error).toBeInstanceOf(WebhookError);
+    expect((error as WebhookError).code).toBe("WEBHOOK_SECRET_UNRESOLVED");
+  });
+
+  it("fails CLOSED when a (mistyped) resolver hands back undefined", async () => {
+    const body = JSON.stringify({ event: "ping", data: {} });
+    // The type says `string`, but a JS caller can still return undefined; the
+    // runtime guard must catch it rather than verifying against nothing.
+    const returnsUndefined = (() => undefined) as unknown as SecretResolver;
+
+    const error = await rejection(
+      verifyRequest(
+        { body, headers: signedHeaders(ts, body, "shh") },
+        { secret: returnsUndefined, now: ts },
+      ),
+    );
+
+    expect(error).toBeInstanceOf(WebhookError);
+    expect((error as WebhookError).code).toBe("WEBHOOK_SECRET_UNRESOLVED");
+  });
+
+  it("returns the pre-check verdict WITHOUT invoking the resolver when a header is missing", async () => {
+    let called = false;
+    const resolver: SecretResolver = () => {
+      called = true;
+
+      return "shh";
+    };
+
+    // No signature header: the cheap pre-check short-circuits before any secret work.
+    const result = await verifyRequest(
+      { body: "{}", headers: { [TIMESTAMP_HEADER]: String(ts) } },
+      { secret: resolver, now: ts },
+    );
+
+    expect(result).toEqual({ verified: false, reason: "missing_signature" });
+    expect(called).toBe(false); // an obviously-bad request never triggers a lookup
   });
 });
 
