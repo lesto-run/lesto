@@ -642,6 +642,7 @@ export class Lesto {
       query: options?.query ?? {},
       headers: options?.headers ?? {},
       body: options?.body,
+      ...(options?.rawBody === undefined ? {} : { rawBody: options.rawBody }),
     };
 
     // A match runs its baked chain (middleware + handler/page); a miss still runs

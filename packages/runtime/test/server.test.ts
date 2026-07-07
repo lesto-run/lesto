@@ -358,6 +358,52 @@ describe("serve", () => {
     expect(JSON.parse(response.body)).toEqual({ received: { title: "Hello" } });
   });
 
+  it("forwards rawBody alongside the parsed body for a buffered POST", async () => {
+    const app: App = {
+      migrationsApplied: [],
+
+      handle: async (_method, _path, options) => ({
+        status: 201,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ body: options?.body, rawBody: options?.rawBody }),
+      }),
+    };
+
+    server = await serve(app, { port: 0 });
+
+    const response = await makeRequest(server.port, {
+      method: "POST",
+      path: "/posts",
+      contentType: "application/json",
+      body: '{"title":"Hello"}',
+    });
+
+    expect(response.status).toBe(201);
+    expect(JSON.parse(response.body)).toEqual({
+      body: { title: "Hello" },
+      rawBody: '{"title":"Hello"}',
+    });
+  });
+
+  it("carries no rawBody for a GET with no body", async () => {
+    const app: App = {
+      migrationsApplied: [],
+
+      handle: async (_method, _path, options) => ({
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ hasRawBody: "rawBody" in (options ?? {}) }),
+      }),
+    };
+
+    server = await serve(app, { port: 0 });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/posts" });
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ hasRawBody: false });
+  });
+
   it("defaults to an ephemeral port and the loopback host when no options are given", async () => {
     const app: App = {
       migrationsApplied: [],

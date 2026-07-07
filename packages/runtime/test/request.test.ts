@@ -125,4 +125,42 @@ describe("toLestoRequest", () => {
 
     expect(request.query).toEqual({});
   });
+
+  it("carries the raw JSON string alongside the parsed body", () => {
+    const raw = '{"title":"Hello"}';
+
+    const request = toLestoRequest({
+      method: "POST",
+      url: "/posts",
+      headers: { "content-type": "application/json" },
+      body: raw,
+    });
+
+    expect(request.rawBody).toBe(raw);
+    expect(request.body).toEqual({ title: "Hello" });
+  });
+
+  it("carries the raw string as rawBody for a non-JSON body", () => {
+    const request = toLestoRequest({
+      method: "POST",
+      url: "/posts",
+      headers: { "content-type": "text/plain" },
+      body: "just text",
+    });
+
+    expect(request.rawBody).toBe("just text");
+    expect(request.body).toBe("just text");
+  });
+
+  it("carries no rawBody when the body is empty", () => {
+    const request = toLestoRequest({
+      method: "GET",
+      url: "/posts",
+      headers: {},
+      body: "",
+    });
+
+    expect(request.rawBody).toBeUndefined();
+    expect("rawBody" in request).toBe(false);
+  });
 });

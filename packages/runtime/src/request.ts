@@ -121,5 +121,6 @@ export function toLestoRequest(input: RawRequest): LestoRequest {
     query: parseQuery(url.search),
     headers: parseHeaders(input.headers),
     body,
+    ...(input.body.length === 0 ? {} : { rawBody: input.body }),
   };
 }

@@ -39,6 +39,8 @@ export interface RequestOptions {
   readonly headers?: Record<string, string>;
 
   readonly body?: unknown;
+
+  readonly rawBody?: string;
 }
 
 /**

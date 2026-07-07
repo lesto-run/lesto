@@ -17,6 +17,18 @@ export interface HandleOptions {
   headers?: Record<string, string>;
 
   body?: unknown;
+
+  /**
+   * The exact undecoded request bytes, when the transport captured them.
+   *
+   * `body` may be JSON-decoded into an object; `rawBody` is always the raw
+   * string alongside it — needed to verify a signature (e.g. an inbound
+   * webhook's HMAC) over the bytes actually sent, not a re-serialization of
+   * the parsed value. Absent when the transport carried no body (an empty
+   * request) or never captured raw bytes (e.g. a hand-built `HandleOptions`
+   * in a test).
+   */
+  rawBody?: string;
 }
 
 /** A normalized inbound request: what the router matched, plus query and body. */
@@ -39,6 +51,12 @@ export interface LestoRequest {
 
   /** The decoded request body, shape unknown until a controller narrows it. */
   body: unknown;
+
+  /**
+   * The exact undecoded request bytes, when the transport captured them. See
+   * {@link HandleOptions.rawBody}.
+   */
+  rawBody?: string;
 }
 
 /**

@@ -163,6 +163,9 @@ describe("toFetchHandler", () => {
     expect(calls[0]?.options.query).toEqual({ sort: "price", beds: "4" });
     expect(calls[0]?.options.headers["x-test"]).toBe("1");
     expect(calls[0]?.options.body).toBeUndefined();
+    // An empty body carries no rawBody either — nothing was decoded.
+    expect(calls[0]?.options.rawBody).toBeUndefined();
+    expect(calls[0] !== undefined && "rawBody" in calls[0].options).toBe(false);
   });
 
   it("passes response headers through — a Set-Cookie survives to the browser", async () => {
@@ -184,15 +187,20 @@ describe("toFetchHandler", () => {
   it("parses a JSON body when the content-type says so", async () => {
     const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
 
+    const raw = JSON.stringify({ listing: "bel-air-glen" });
+
     await toFetchHandler(dispatch)(
       new Request("https://example.com/mls/api/save", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ listing: "bel-air-glen" }),
+        body: raw,
       }),
     );
 
     expect(calls[0]?.options.body).toEqual({ listing: "bel-air-glen" });
+    // The raw JSON string rides alongside the parsed body — needed to verify a
+    // signature computed over the exact bytes sent, not a re-serialization.
+    expect(calls[0]?.options.rawBody).toBe(raw);
   });
 
   it("answers a malformed JSON body with 400, before dispatch", async () => {
@@ -222,6 +230,8 @@ describe("toFetchHandler", () => {
     );
 
     expect(calls[0]?.options.body).toBe("hello");
+    // For a non-JSON body, rawBody is the same string as the decoded body.
+    expect(calls[0]?.options.rawBody).toBe("hello");
   });
 
   it("refuses a body over the cap with 413, before dispatch", async () => {

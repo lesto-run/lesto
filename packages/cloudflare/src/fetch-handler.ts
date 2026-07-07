@@ -41,6 +41,12 @@ export interface EdgeRequestOptions {
   readonly headers: Record<string, string>;
 
   readonly body: unknown;
+
+  /**
+   * The exact undecoded request bytes, when the transport captured them. See
+   * `@lesto/web`'s `HandleOptions.rawBody`.
+   */
+  readonly rawBody?: string;
 }
 
 /**
@@ -293,7 +299,7 @@ function headersFrom(headers: Headers): Record<string, string> {
  * the body exceeds the cap, 400 when a declared-JSON body did not parse.
  */
 type Decoded =
-  | { readonly ok: true; readonly body: unknown }
+  | { readonly ok: true; readonly body: unknown; readonly rawBody?: string }
   | { readonly ok: false; readonly status: 400 | 413 };
 
 /**
@@ -365,13 +371,13 @@ async function decodeBody(
 
   if (contentType !== undefined && contentType.startsWith("application/json")) {
     try {
-      return { ok: true, body: JSON.parse(text) as unknown };
+      return { ok: true, body: JSON.parse(text) as unknown, rawBody: text };
     } catch {
       return { ok: false, status: 400 };
     }
   }
 
-  return { ok: true, body: text };
+  return { ok: true, body: text, rawBody: text };
 }
 
 /**
@@ -660,6 +666,7 @@ async function dispatchHardened(
       query: queryFrom(url.searchParams),
       headers,
       body: decoded.body,
+      ...(decoded.rawBody === undefined ? {} : { rawBody: decoded.rawBody }),
     });
 
     // A configured `timeoutMs` races the dispatch: on overrun the race rejects

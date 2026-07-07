@@ -110,6 +110,25 @@ describe("lesto verbs + dispatch", () => {
     expect(JSON.parse(response.body)).toEqual({ q: "1", h: "yes", body: { n: 2 } });
   });
 
+  it("threads rawBody from the handle options onto c.req.rawBody", async () => {
+    const app = lesto().post("/echo", (c) => c.json({ rawBody: c.req.rawBody }));
+
+    const response = await app.handle("POST", "/echo", {
+      body: { n: 2 },
+      rawBody: '{"n":2}',
+    });
+
+    expect(JSON.parse(response.body)).toEqual({ rawBody: '{"n":2}' });
+  });
+
+  it("leaves c.req.rawBody undefined when the handle options omit it", async () => {
+    const app = lesto().post("/echo", (c) => c.json({ hasRawBody: "rawBody" in c.req }));
+
+    const response = await app.handle("POST", "/echo", { body: { n: 2 } });
+
+    expect(JSON.parse(response.body)).toEqual({ hasRawBody: false });
+  });
+
   it("returns 404 when no route matches", async () => {
     const app = lesto().get("/a", (c) => c.text("a"));
 

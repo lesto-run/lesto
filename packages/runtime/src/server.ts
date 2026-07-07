@@ -1740,6 +1740,7 @@ async function handleAdmitted(
             query: request.query,
             headers: request.headers,
             body: request.body,
+            ...(request.rawBody === undefined ? {} : { rawBody: request.rawBody }),
           }),
           deps.handlerTimeoutMs,
           cancellation.abortTimeout,

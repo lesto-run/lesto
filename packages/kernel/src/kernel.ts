@@ -231,7 +231,12 @@ export interface App {
   handle(
     method: string,
     path: string,
-    options?: { query?: Record<string, string>; headers?: Record<string, string>; body?: unknown },
+    options?: {
+      query?: Record<string, string>;
+      headers?: Record<string, string>;
+      body?: unknown;
+      rawBody?: string;
+    },
   ): Promise<LestoResponse>;
 
   /** The migration versions applied during boot, in the order they ran. */
