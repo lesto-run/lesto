@@ -13,8 +13,7 @@
   "dependencies": {
     "@lesto/errors": "workspace:*",
     "@lesto/ui": "workspace:*",
-    "react": "^19",
-    "react-dom": "^19"
+    "react": "^19"
   },
   "scripts": {
     "test": "vitest run",
@@ -38,5 +37,8 @@
   "homepage": "https://lesto.run",
   "bugs": {
     "url": "https://github.com/lesto-run/lesto/issues"
+  },
+  "devDependencies": {
+    "react-dom": "^19"
   }
 }
