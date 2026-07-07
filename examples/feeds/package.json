@@ -1,0 +1,20 @@
+{
+  "name": "@lesto/example-feeds",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A runnable Lesto app: the @lesto/feeds journey behind real HTTP routes — a posts source rendered as a valid RSS 2.0 /feed.xml and Atom 1.0 /atom.xml, XML-escaped and asserted well-formed.",
+  "type": "module",
+  "scripts": {
+    "start": "bun run run.ts",
+    "serve": "bun run serve.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/feeds": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "better-sqlite3": "^11.10.0"
+  }
+}
