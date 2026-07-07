@@ -12,6 +12,7 @@ import {
   TIMESTAMP_HEADER,
   TRACEPARENT_HEADER,
   verify,
+  verifyRequest,
   WebhookError,
   Webhooks,
 } from "../src/index";
@@ -53,6 +54,15 @@ const publicResolver: Resolver = resolverFor({ "example.com": [PUBLIC] });
 // A secrets source backed by an in-memory map, standing in for env/a vault.
 function secretsFrom(map: Record<string, string>): SecretSource {
   return (secretId) => map[secretId];
+}
+
+// The signature + timestamp headers a deliverer would send for `body`, signed
+// under `sec` — mirrors what `Webhooks`'s private `deliver` produces.
+function signedHeaders(ts: number, body: string, sec: string): Record<string, string> {
+  return {
+    [SIGNATURE_HEADER]: sign(`${ts}.${body}`, sec),
+    [TIMESTAMP_HEADER]: String(ts),
+  };
 }
 
 // Read the raw, persisted payload TEXT straight from the queue table.
@@ -111,6 +121,148 @@ describe("sign & verify", () => {
     expect(verify("body", sign(`${fresh}.body`, "secret"), "secret", { timestamp: fresh })).toBe(
       true,
     );
+  });
+});
+
+describe("verifyRequest", () => {
+  const secret = "shh";
+
+  it("fails with missing_signature when the signature header is absent", () => {
+    const result = verifyRequest(
+      { body: "{}", headers: { [TIMESTAMP_HEADER]: "123" } },
+      { secret },
+    );
+
+    expect(result).toEqual({ verified: false, reason: "missing_signature" });
+  });
+
+  it("fails with missing_timestamp when the timestamp header is absent", () => {
+    const result = verifyRequest(
+      { body: "{}", headers: { [SIGNATURE_HEADER]: "deadbeef" } },
+      { secret },
+    );
+
+    expect(result).toEqual({ verified: false, reason: "missing_timestamp" });
+  });
+
+  it("fails with malformed_timestamp when the timestamp header is not a finite number", () => {
+    const notANumber = verifyRequest(
+      {
+        body: "{}",
+        headers: { [SIGNATURE_HEADER]: "deadbeef", [TIMESTAMP_HEADER]: "not-a-number" },
+      },
+      { secret },
+    );
+    expect(notANumber).toEqual({ verified: false, reason: "malformed_timestamp" });
+
+    const infinite = verifyRequest(
+      {
+        body: "{}",
+        headers: { [SIGNATURE_HEADER]: "deadbeef", [TIMESTAMP_HEADER]: "Infinity" },
+      },
+      { secret },
+    );
+    expect(infinite).toEqual({ verified: false, reason: "malformed_timestamp" });
+  });
+
+  it("fails with stale_timestamp when outside the tolerance window (distinct from a bad signature)", () => {
+    const ts = 1_700_000_000_000;
+    const body = JSON.stringify({ event: "order.paid", data: {} });
+    const headers = signedHeaders(ts, body, secret); // a VALID signature, just old
+
+    const result = verifyRequest({ body, headers }, { secret, now: ts + DEFAULT_TOLERANCE_MS + 1 });
+
+    expect(result).toEqual({ verified: false, reason: "stale_timestamp" });
+  });
+
+  it("honors a custom toleranceMs for staleness", () => {
+    const ts = 1_700_000_000_000;
+    const body = JSON.stringify({ event: "order.paid", data: {} });
+    const headers = signedHeaders(ts, body, secret);
+
+    // Within the default tolerance, but past a tighter custom one.
+    const result = verifyRequest({ body, headers }, { secret, now: ts + 2000, toleranceMs: 1000 });
+
+    expect(result).toEqual({ verified: false, reason: "stale_timestamp" });
+  });
+
+  it("fails with signature_mismatch on a forged/tampered signature within tolerance", () => {
+    const ts = 1_700_000_000_000;
+    const body = JSON.stringify({ event: "order.paid", data: {} });
+    const headers = signedHeaders(ts, body, "wrong-secret");
+
+    const result = verifyRequest({ body, headers }, { secret, now: ts });
+
+    expect(result).toEqual({ verified: false, reason: "signature_mismatch" });
+  });
+
+  it("verifies and extracts the event from the SIGNED body (never the unsigned event header)", () => {
+    const ts = 1_700_000_000_000;
+    const body = JSON.stringify({ event: "order.paid", data: { id: 42 } });
+    const headers = {
+      ...signedHeaders(ts, body, secret),
+      [EVENT_HEADER]: "spoofed.event", // unsigned — must be ignored
+    };
+
+    const result = verifyRequest({ body, headers }, { secret, now: ts });
+
+    expect(result).toEqual({ verified: true, event: "order.paid" });
+  });
+
+  it("verifies a signed NON-JSON body without throwing, event undefined", () => {
+    const ts = 1_700_000_000_000;
+    const body = "not json at all";
+    const headers = signedHeaders(ts, body, secret);
+
+    const result = verifyRequest({ body, headers }, { secret, now: ts });
+
+    expect(result).toEqual({ verified: true });
+    expect(result.event).toBeUndefined();
+  });
+
+  it("verifies a signed JSON `null` body without throwing, event undefined", () => {
+    const ts = 1_700_000_000_000;
+    const body = "null";
+    const headers = signedHeaders(ts, body, secret);
+
+    const result = verifyRequest({ body, headers }, { secret, now: ts });
+
+    expect(result).toEqual({ verified: true });
+    expect(result.event).toBeUndefined();
+  });
+
+  it("verifies a signed JSON array body without throwing, event undefined (not an object)", () => {
+    const ts = 1_700_000_000_000;
+    const body = JSON.stringify([1, 2, 3]);
+    const headers = signedHeaders(ts, body, secret);
+
+    const result = verifyRequest({ body, headers }, { secret, now: ts });
+
+    expect(result).toEqual({ verified: true });
+    expect(result.event).toBeUndefined();
+  });
+
+  it("verifies a signed JSON object body with a non-string event, event undefined", () => {
+    const ts = 1_700_000_000_000;
+    const body = JSON.stringify({ event: 123, data: {} });
+    const headers = signedHeaders(ts, body, secret);
+
+    const result = verifyRequest({ body, headers }, { secret, now: ts });
+
+    expect(result).toEqual({ verified: true });
+    expect(result.event).toBeUndefined();
+  });
+
+  it("defaults now/toleranceMs to Date.now()/DEFAULT_TOLERANCE_MS when not provided", () => {
+    const ts = Date.now();
+    const body = JSON.stringify({ event: "ping", data: {} });
+    const headers = signedHeaders(ts, body, secret);
+
+    // No `now`/`toleranceMs` given: a just-signed request verifies against the
+    // real clock default.
+    const result = verifyRequest({ body, headers }, { secret });
+
+    expect(result).toEqual({ verified: true, event: "ping" });
   });
 });
 

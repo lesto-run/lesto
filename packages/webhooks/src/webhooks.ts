@@ -146,6 +146,111 @@ export function verify(
   return expected.length === provided.length && timingSafeEqual(expected, provided);
 }
 
+/** Why {@link verifyRequest} returned `verified: false`. */
+export type VerifyFailureReason =
+  | "missing_signature"
+  | "missing_timestamp"
+  | "malformed_timestamp"
+  | "stale_timestamp"
+  | "signature_mismatch";
+
+/** The inbound request material {@link verifyRequest} needs: raw body + headers. */
+export interface VerifyRequestInput {
+  /** The exact undecoded request bytes — verification hashes THIS, never a re-serialized body. */
+  readonly body: string;
+  /** Lowercase header map (as `@lesto/web`'s `c.req.headers` provides). */
+  readonly headers: Record<string, string | undefined>;
+}
+
+/** Options for {@link verifyRequest}. */
+export interface VerifyRequestOptions {
+  /** The signing secret, known out-of-band by the receiver (the deliverer sends no endpoint id). */
+  readonly secret: string;
+  /** Replay tolerance in ms. Defaults to {@link DEFAULT_TOLERANCE_MS}. */
+  readonly toleranceMs?: number;
+  /** "Now" in epoch ms, injectable for tests. Defaults to `Date.now()`. */
+  readonly now?: number;
+}
+
+/** The verdict from {@link verifyRequest}. */
+export interface VerifyRequestResult {
+  readonly verified: boolean;
+  /** The `event` from the SIGNED `{event,data}` body — present only when verified AND parseable. */
+  readonly event?: string;
+  /** Present only when `verified` is `false`. */
+  readonly reason?: VerifyFailureReason;
+}
+
+/**
+ * Inbound counterpart to {@link Webhooks.send}: given the raw request body and
+ * headers, checks the `x-lesto-signature`/`x-lesto-timestamp` pair and — on
+ * success — extracts `event` from the signed `{event,data}` body (never the
+ * unsigned `x-lesto-event` header, which a forger can set to anything).
+ *
+ * Delegates the actual HMAC/timing-safe comparison to {@link verify}; this
+ * helper only resolves headers, distinguishes *why* a request failed (a bare
+ * `false` from `verify` can't tell "stale" from "forged"), and safely parses
+ * the body JSON.
+ */
+export function verifyRequest(
+  input: VerifyRequestInput,
+  options: VerifyRequestOptions,
+): VerifyRequestResult {
+  const signature = input.headers[SIGNATURE_HEADER];
+
+  if (signature === undefined) {
+    return { verified: false, reason: "missing_signature" };
+  }
+
+  const timestampHeader = input.headers[TIMESTAMP_HEADER];
+
+  if (timestampHeader === undefined) {
+    return { verified: false, reason: "missing_timestamp" };
+  }
+
+  const timestamp = Number(timestampHeader);
+
+  if (Number.isNaN(timestamp) || !Number.isFinite(timestamp)) {
+    return { verified: false, reason: "malformed_timestamp" };
+  }
+
+  const now = options.now ?? Date.now();
+  const toleranceMs = options.toleranceMs ?? DEFAULT_TOLERANCE_MS;
+
+  // Explicit staleness check: `verify` folds "stale" into a bare `false`, which
+  // would be indistinguishable from a forged signature. Checking it here first
+  // lets a caller tell replay-window expiry apart from tampering.
+  if (Math.abs(now - timestamp) > toleranceMs) {
+    return { verified: false, reason: "stale_timestamp" };
+  }
+
+  const ok = verify(input.body, signature, options.secret, { timestamp, toleranceMs, now });
+
+  if (!ok) {
+    return { verified: false, reason: "signature_mismatch" };
+  }
+
+  let event: string | undefined;
+
+  try {
+    const parsed: unknown = JSON.parse(input.body);
+
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as { event?: unknown }).event === "string"
+    ) {
+      event = (parsed as { event: string }).event;
+    }
+  } catch {
+    // A signed body need not be JSON (or need not be `{event,...}`) — the
+    // signature already proved authenticity; a non-JSON/non-shaped body just
+    // means no `event` to report, not a verification failure.
+  }
+
+  return { verified: true, ...(event === undefined ? {} : { event }) };
+}
+
 export interface WebhookResponse {
   readonly ok: boolean;
   readonly status: number;

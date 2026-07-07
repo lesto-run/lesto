@@ -6,11 +6,11 @@
  *   const hooks = new Webhooks({ queue, secrets });
  *   hooks.send("https://example.com/hook", "order.paid", { id: 42 }, { secretId });
  *
- *   // receiving: the deliverer signs `${timestamp}.${body}`, so verify MUST be
- *   // given the timestamp — without it the signature check fails on every real
- *   // webhook. Read `x-lesto-timestamp` as a Number and pass `{ timestamp }`.
- *   const timestamp = Number(req.headers["x-lesto-timestamp"]);
- *   if (!verify(rawBody, req.headers["x-lesto-signature"], secret, { timestamp })) reject();
+ *   // receiving: verifyRequest reads the signature/timestamp headers, checks
+ *   // replay tolerance, and extracts `event` from the SIGNED body — pass it the
+ *   // exact raw request bytes (e.g. `c.req.rawBody`), never a re-serialized body.
+ *   const result = verifyRequest({ body: rawBody, headers: req.headers }, { secret });
+ *   if (!result.verified) reject(result.reason);
  */
 
 export {
@@ -24,6 +24,7 @@ export {
   TIMESTAMP_HEADER,
   TRACEPARENT_HEADER,
   verify,
+  verifyRequest,
   WebhookError,
   Webhooks,
 } from "./webhooks";
@@ -33,7 +34,11 @@ export type {
   SecretSource,
   TraceparentSource,
   UrlGuard,
+  VerifyFailureReason,
   VerifyOptions,
+  VerifyRequestInput,
+  VerifyRequestOptions,
+  VerifyRequestResult,
   WebhookErrorCode,
   WebhookResponse,
   WebhooksOptions,
