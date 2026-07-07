@@ -78,9 +78,12 @@ Verified by running the repo's **own** logic (not the packer):
   irrelevant to ordering, still resolves from the set).
 
 **New-set relative publish order (dependency-first)** — the full-closure topo sort
-interleaves these with the already-published 36 (which publish idempotently as
-"skipped"); the safety-relevant fact is that within the new set `mail` precedes
-`identity`/`mailing-lists` and `pubsub` precedes `realtime`:
+interleaves these with the other 48 `@lesto/*` packages. ⚠️ Because every `@lesto/*`
+is in one changeset `fixed` group (§5.1), the previously-published 36 do NOT "skip" —
+they re-version to the same new line (e.g. `0.1.3`) and **republish** alongside the 13.
+The safety-relevant intra-new-set constraints are `mailing-lists → mail` and
+`realtime → pubsub` (`identity`'s mail edge is now an optional peer — no longer an
+ordering constraint):
 
 ```
 admin → cache → feeds → flags → forms → i18n → mail → identity
@@ -109,14 +112,21 @@ bootstrap of all 13 must happen first.
 
 ## 5. EXACT remaining OTP-gated steps (for the release owner — NOT done here)
 
-1. **Bump versions first (REQUIRED).** All 13 are `v0.0.0`. Publishing as-is ships
-   `0.0.0` — below the `0.1.2` line and semantically pre-release. Run a changeset to
-   bring the 13 onto the current release line (e.g. `0.1.3`) before any publish.
-   *(Deliberately not done in this task: "do not bump versions / run changesets.")*
+1. **Bump versions first (REQUIRED).** All 13 are `v0.0.0`; publishing as-is is now
+   blocked by the `assertVersionsBumped` guard (§7). Run `bun run version`
+   (`changeset version`). ⚠️ **This repo puts every `@lesto/*` + `create-lesto` in ONE
+   changeset `fixed` group** (`.changeset/config.json`), so the bump moves the ENTIRE
+   public workspace — all 49 packages, the 36 already-published AND the 13 — to the same
+   next line (e.g. `0.1.3`). You **cannot** scope it to just the 13, and you **must not**
+   hand-edit the 36 back to `0.1.2` afterward — that desyncs the fixed group, the exact
+   harm the guard warns about. The batteries launch is inherently a coordinated `0.1.3`
+   release of the whole workspace. *(Deliberately not done in this prep task.)*
 2. **Manual first publish (creates the packages + is OTP-gated).** Recommended path
    is the repo's own release script, run locally with a maintainer `npm login` +
    OTP — it packs with bun (rewriting `workspace:*`), publishes **dependency-first,
-   fail-closed**, and **skips the 36 already-published** idempotently:
+   fail-closed**, over the full public closure. At the bumped `0.1.3` line the 36
+   previously-published packages **republish at `0.1.3`** (only a rerun at an
+   *unchanged* version skips); the 13 publish for the first time (OTP-gated):
    ```
    npm login                      # a @lesto-org maintainer account
    export NPM_CONFIG_OTP=<code>   # or answer the interactive OTP prompt
@@ -185,6 +195,7 @@ Landed after the initial prep (`43dc942`), clearing the pre-publish gate:
   peer** (identity never imports mail; the caller wires an adapter, `identity.ts:193`).
   Removes an unused forced install; relaxes the `identity → mail` ordering edge. (L-6428ed83.)
 
-**Still gating the actual first publish (unchanged):** the version bump (§5.1 — target
-**only** the 13, not repo-wide), then the manual OTP bootstrap of all 13 NEW packages
-in §3 order, then per-package trusted-publisher config (L-518d4388). Tracked on L-fe189047.
+**Still gating the actual first publish (unchanged):** the coordinated version bump
+(§5.1 — the `fixed` group bumps ALL 49 to the next line, e.g. `0.1.3`; it can NOT be
+scoped to the 13), then the manual OTP bootstrap of the 13 NEW packages in §3 order,
+then per-package trusted-publisher config (L-518d4388). Tracked on L-fe189047.
