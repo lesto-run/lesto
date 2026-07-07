@@ -35,9 +35,10 @@ holds; only persistence and `sweep` (SQL-only) differ.
 bun run examples/cache/run.ts
 ```
 
-Boots on an in-memory SQLite database with the real system clock and a slow
-origin, then drives the journey through the HTTP routes — miss → hit → a burst of
-concurrent misses that collapse to one origin call → invalidate → miss → sweep —
+Boots the SQL store on an ephemeral `:memory:` SQLite database with the real
+system clock and a slow origin, then drives the journey through the HTTP routes —
+miss → hit → a burst of concurrent misses that collapse to one origin call →
+invalidate → miss → sweep —
 printing the origin's load count at each step so you can see the cache working. A
 final leg then drives the in-memory `MemoryStore` directly (miss → hit → TTL
 expiry, on a controllable clock) to show the same behaviors on the other store.
