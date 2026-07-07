@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 import { Cache, MemoryStore } from "@lesto/cache";
 import { openSqlite } from "@lesto/runtime";
 
-import { buildApp, createReportsOrigin } from "../src/app";
+import { buildApp, createReportsOrigin, type Report } from "../src/app";
 
 const TTL_MS = 60_000;
 
@@ -195,7 +195,7 @@ describe("@lesto/cache example — the in-memory store, used directly", () => {
     const time = frozenClock();
     const origin = createReportsOrigin(time.clock);
     const cache = new Cache({ store: new MemoryStore(), clock: time.clock });
-    const remember = (): Promise<{ value: number; generatedAt: number }> =>
+    const remember = (): Promise<Report> =>
       cache.remember("report:gamma", () => origin.load("gamma"), { ttlMs: TTL_MS });
 
     // Miss: the origin runs once and the value is cached.
