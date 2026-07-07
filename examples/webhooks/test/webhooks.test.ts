@@ -204,6 +204,29 @@ describe("@lesto/webhooks example — outbound + inbound over HTTP", () => {
     }
   });
 
+  it("returns 422 (not 500) for a correctly-signed body that isn't an { event, data } envelope", async () => {
+    const { postIncoming, received, close } = await boot();
+
+    try {
+      // A genuinely-signed bare `null`: verifyRequest accepts the signature but
+      // extracts no event. The receiver must reject cleanly — an unguarded
+      // JSON.parse(rawBody).event would throw and 500 the endpoint.
+      const raw = "null";
+      const timestamp = Date.now();
+      const signature = sign(`${timestamp}.${raw}`, SHARED_SECRET);
+
+      const res = await postIncoming(raw, {
+        [SIGNATURE_HEADER]: signature,
+        [TIMESTAMP_HEADER]: String(timestamp),
+      });
+
+      expect(res.status).toBe(422);
+      expect(await received()).toHaveLength(0);
+    } finally {
+      close();
+    }
+  });
+
   it("rejects a malformed order with 422", async () => {
     const { app, close } = await boot();
 

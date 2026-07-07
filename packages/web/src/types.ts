@@ -27,6 +27,11 @@ export interface HandleOptions {
    * the parsed value. Absent when the transport carried no body (an empty
    * request) or never captured raw bytes (e.g. a hand-built `HandleOptions`
    * in a test).
+   *
+   * Cost: for a JSON body the raw string is retained ALONGSIDE the parsed
+   * `body` for the request's lifetime (~2× that body's memory); it is bounded
+   * by the transport's body-size cap, and for a non-JSON body `rawBody` and
+   * `body` are the same string (no extra cost).
    */
   rawBody?: string;
 }

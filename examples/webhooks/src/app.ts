@@ -134,11 +134,25 @@ export function buildWebhooksApp(deps: {
         return c.json({ verified: false, reason: result.reason }, 401);
       }
 
-      // `result.event` already comes from the SIGNED body (never the unsigned
-      // `x-lesto-event` header) — re-parse only for `data`, which `verifyRequest`
-      // doesn't return.
-      const parsed = JSON.parse(rawBody) as { event: string; data: unknown };
-      received.push({ event: result.event ?? parsed.event, data: parsed.data });
+      // The signature is valid — but a well-formed webhook must be a JSON
+      // `{ event, data }` envelope. `verifyRequest` sets `result.event` ONLY when
+      // the signed body is exactly that shape, so a verified-but-malformed body
+      // (a signed bare `null`, array, or number) is a clean 422 here —
+      // authenticated, but not a payload we accept — never an unguarded
+      // `JSON.parse` that would 500 the receiver.
+      if (result.event === undefined) {
+        return c.json(
+          { verified: true, error: "verified payload is not an { event, data } envelope." },
+          422,
+        );
+      }
+
+      // Safe: a set `result.event` means `verifyRequest` already parsed the body
+      // as an object, so this re-parse — only to pull `data`, which it does not
+      // return — cannot throw. The event comes from the SIGNED body, not the
+      // unsigned `x-lesto-event` header.
+      const parsed = JSON.parse(rawBody) as { data?: unknown };
+      received.push({ event: result.event, data: parsed.data });
 
       return c.json({ verified: true }, 200);
     })
