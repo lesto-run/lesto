@@ -255,16 +255,44 @@ was scoped (inbound body-signature receivers only — NOT the auth stack or MCP 
    rawBody fix), workflows `ctx.runId` (P2); batch the P3s (cache metrics hook,
    `Engine.stepsOf`, coded `validateSubmission`).
 
+**Update (2026-07-06, cont.) — all four next-steps DONE.** Executed via a plan →
+Opus red-team → Sonnet-implementers loop (plan: `docs/plans/gallery-serve-and-rawbody.md`):
+1. ✅ Examples committed (`3a15756`).
+2. ✅ **rawBody seam landed** (`5db59b6`) — `@lesto/web` `LestoRequest.rawBody`/`HandleOptions.rawBody`,
+   populated by `@lesto/runtime` (node `toLestoRequest`/`server.ts`) + `@lesto/cloudflare`
+   (edge `fetch-handler.ts`), typed on the kernel `App.handle`; additive, 100% coverage.
+   **The [[rawbody-blocks-hosted-webhook-receiver]] dragon is RESOLVED.** `examples/webhooks`
+   now verifies over `c.req.rawBody`, and `examples/webhooks/test/hosted.test.ts` proves the
+   real edge→kernel→handle chain via `toFetchHandler` — **mutation-verified RED** when the
+   seam is bypassed (not a false-green).
+3. ✅ **serve.ts hosted legs** added to all four examples (`833c1e4`), each `createApp`-wrapped
+   (forms is db-less → `secure:false, durable:false`). WRITTEN + typechecked + lint/format
+   clean; **NOT run here** (sandbox blocks server starts) — the browser/curl click-through is
+   the one remaining manual verify per example README.
+4. ✅ **P1/P2 findings implemented + dogfooded:** forms `renderForm(spec,{errors,values})`
+   (`0fbbb99`), webhooks `verifyRequest` (`704612d`), workflows `ctx.runId`/`workflow` (`1fc9db0`).
+Full gate: `ws:typecheck` clean; serial coverage-gate **100%** across the 7 touched packages;
+26 example tests green. (`ws:lint`/`ws:format:check` show a PRE-EXISTING `@lesto/cli`
+`env-client.test.ts` `import()`-type failure — committed in `4f4fe05`, unrelated to this work.)
+
+**P3 backlog (filed, not built):**
+- `@lesto/cache` — a hit/miss metrics hook so a host can track hit-rate without instrumenting
+  the origin (or `read`-before-`remember`, which loses single-flight).
+- `@lesto/workflows` — a read-only `Engine.stepsOf(runId)` for run-level progress
+  introspection; matters once a durable resume driver exists (deferred post-1.0).
+- `@lesto/forms` — a coded `validateSubmission` variant (machine-branchable codes / multiple
+  errors per field) for API clients.
+
 **Hidden dragons / gotchas for the next agent:**
-- **rawBody decode trap** — `@lesto/runtime`'s `toLestoRequest`→`parseBody` `JSON.parse`s
-  an `application/json` body and DISCARDS the raw string; `LestoRequest.body` is decoded
-  and there is no `rawBody`. In-process `app.handle(...)` does NOT decode (`body:
-  options.body` verbatim), which is the ONLY reason the webhooks inbound test is green —
-  it bypasses the server decode path. **Do not read that green as "a hosted receiver
-  works."** Re-`JSON.stringify`ing the parsed body is NOT a fix (key order / whitespace /
-  number-format drift breaks the HMAC). See [[rawbody-blocks-hosted-webhook-receiver]].
-- **In-process signature verification is a false-green for deployment** — it validates
-  the `verify()` *algorithm*, not a deployable endpoint.
+- **rawBody decode trap — RESOLVED 2026-07-06** (`5db59b6`). `toLestoRequest`→`parseBody`
+  still `JSON.parse`s an `application/json` body, BUT `LestoRequest.rawBody`/`HandleOptions.rawBody`
+  now carry the exact bytes (node + edge + in-process), so a hosted receiver verifies over
+  `c.req.rawBody`. Historical note for context: `c.req.body` is still the DECODED value —
+  never verify a signature over it (re-`JSON.stringify` drift breaks the HMAC); always use
+  `rawBody`. See [[rawbody-blocks-hosted-webhook-receiver]].
+- **In-process signature verification alone was a false-green for deployment** — now covered
+  by `examples/webhooks/test/hosted.test.ts` (real edge→kernel path via `toFetchHandler`).
+  Keep that test; it is the only guard against a rawBody-forwarding regression in-sandbox.
 - **`maxAttempts:1` in `examples/webhooks`** disables retries — do NOT cite this example
   as proof of the queue's retry/backoff loop (that rests on `@lesto/queue`'s own tests).
 - **workflows `sleep` is not memoized** — on resume the body re-runs every pass before
