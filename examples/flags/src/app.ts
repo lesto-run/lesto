@@ -108,7 +108,9 @@ function indexHtml(): string {
  *   GET /beta/*         .use(gate("beta"))          the whole subtree hidden when off
  *   GET /flags          flags.enabled(...) per flag  the resolution outcome, legible
  */
-export function buildFlagsApp(flags: Flags): Lesto {
+export function buildFlagsApp(deps: { flags: Flags }): Lesto {
+  const { flags } = deps;
+
   // The beta subtree: ONE `.use(flags.gate("beta"))` hides EVERY route mounted
   // beneath it — the whole feature area disappears when the flag is off, not just
   // a single endpoint.
@@ -163,5 +165,5 @@ export interface Booted {
 
 /** Boot the flags app. No database — a flag decision is pure computation over the request. */
 export function buildApp(): Booted {
-  return { app: buildFlagsApp(buildFlags()) };
+  return { app: buildFlagsApp({ flags: buildFlags() }) };
 }
