@@ -1,0 +1,20 @@
+{
+  "name": "@lesto/example-flags",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A runnable Lesto app: the @lesto/flags journey behind real HTTP routes — a flag gates a route (off = 404), dynamic-then-static resolution and per-request targeting via resolve(), showing the branch flip.",
+  "type": "module",
+  "scripts": {
+    "start": "bun run run.ts",
+    "serve": "bun run serve.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lesto/flags": "workspace:*",
+    "@lesto/kernel": "workspace:*",
+    "@lesto/runtime": "workspace:*",
+    "@lesto/web": "workspace:*",
+    "better-sqlite3": "^11.10.0"
+  }
+}
