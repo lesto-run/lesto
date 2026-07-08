@@ -39,31 +39,39 @@ bun run --filter '@lesto/example-pubsub' test
 
 - `test/pubsub.test.ts` drives `src/app.ts` in-process with fake sockets: fan-out
   to every subscriber, channel isolation, a closed subscriber stops receiving,
-  malformed `/publish` bodies are 400, upgrade handoff and routing.
-- `test/serve.smoke.test.ts` boots `serve.ts` under Bun on an ephemeral port,
-  opens a **real** WebSocket, publishes a random nonce over a **separate** HTTP
-  request, and asserts the subscriber receives it — then SIGTERMs and checks a
+  malformed `/publish` bodies are 400, the authz guard (missing / wrong-mode /
+  wrong-channel tokens are 401; a valid token is admitted), upgrade handoff, routing.
+- `test/serve.smoke.test.ts` boots `serve.ts` under Bun on an ephemeral port, opens a
+  **real** token-authenticated WebSocket, publishes a random nonce over a **separate**
+  HTTP request, and asserts the subscriber receives it — then SIGTERMs and checks a
   clean exit.
 
-The package core (`FanoutRoom`) is unit-tested to 100% inside `@lesto/pubsub`
-(`packages/pubsub/test/fanout.test.ts`), including the throwing-socket invariant.
+The package cores (`FanoutRoom` + the `channel-token` mint/verify) are unit-tested to
+100% inside `@lesto/pubsub`, including the throwing-socket and tampered-token invariants.
+
+> The Node app (`src/app.ts`) is covered above; **`worker.ts` — the edge authz +
+> per-channel-routing boundary — is exercised only by the live-CF deploy smoke**
+> (`alchemy.run.ts`), which proves the happy path + a tokenless-`401`. In-process
+> coverage of `worker.ts` is a tracked follow-up (see the design doc).
 
 ## Run it locally
 
 ```bash
-bun run examples/pubsub/serve.ts
+# serve.ts + mint.ts fail CLOSED on a missing secret; opt into the insecure dev key:
+PUBSUB_ALLOW_INSECURE=1 bun run examples/pubsub/serve.ts
 ```
 
 Bun's `serve` carries a native WebSocket server (no `ws` dependency; the same
 primitive `lesto dev`'s live-reload uses). One process means one `FanoutRoom` for
 every connection — this single node is the coordination point the edge needs a DO
-for. Both routes require a signed capability token; `mint.ts` is the local issuer
-(it uses the same insecure dev secret `serve.ts` falls back to). Drive it:
+for. Both routes require a signed capability token; `mint.ts` is the local issuer.
+Drive it:
 
 ```bash
-# mint the two capability tokens (valid 1h) — the edge does this on GET /:
-SUB=$(bun mint.ts news subscribe)
-PUB=$(bun mint.ts news publish)
+# mint the two capability tokens (subscribe token valid 1h locally) — the edge
+# does this on GET /. The dev key requires the explicit insecure opt-in:
+SUB=$(PUBSUB_ALLOW_INSECURE=1 bun mint.ts news subscribe)
+PUB=$(PUBSUB_ALLOW_INSECURE=1 bun mint.ts news publish)
 
 # terminal 1 — subscribe (wscat, or any WS client):
 wscat -c "ws://127.0.0.1:3000/subscribe?channel=news&token=$SUB"
@@ -73,8 +81,8 @@ curl -X POST 127.0.0.1:3000/publish -H 'content-type: application/json' \
   -d '{"channel":"news","message":"hello"}'
 ```
 
-Set `PUBSUB_SECRET` on both `serve.ts` and `mint.ts` to use a real key instead of
-the dev default.
+Set `PUBSUB_SECRET` (instead of `PUBSUB_ALLOW_INSECURE=1`) on both `serve.ts` and
+`mint.ts` to use a real key — they share `secret.ts`, so the two never drift.
 
 ## Deploy to Cloudflare (the edge leg) — LIVE
 
@@ -101,10 +109,15 @@ a publish token), and asserts the subscriber receives it. CI runs exactly this o
 every push to main (`.github/workflows/deploy-examples.yml`), so "it deploys AND
 authorized fan-out works on the edge" is machine-checked, not a manual click-through.
 
-**Honest claim:** a genuinely live Cloudflare deploy with a behavioral proof — a
-real WS subscriber, admitted only with a valid scoped token, receives a message
-published by a separate authorized request through the Durable Object: a true
-cross-connection, DO-mediated, authenticated fan-out. There is no manual hop.
+**Honest claim:** a genuinely live Cloudflare deploy with a behavioral proof — a real
+WS subscriber (admitted with a valid scoped token) receives a message published by a
+separate authorized request through the Durable Object, **and** a tokenless publish is
+refused with `401`: a true cross-connection, DO-mediated, authenticated fan-out, no
+manual hop. What the edge smoke does **not** yet cover: the exhaustive reject matrix
+(wrong-mode / wrong-channel / expired) and `GET /` minting — those are proven in the
+local suite against the Node twin (`src/app.ts`), a separate implementation of the same
+guard. Broader in-process coverage of `worker.ts` itself is a tracked follow-up
+(`docs/plans/pubsub-production-substrate.md`).
 
 ## Authz (the capability-token model)
 
@@ -113,7 +126,7 @@ token** (`@lesto/pubsub`'s `mintChannelToken` / `verifyChannelToken` — HMAC-SH
 over Web Crypto, dependency-free, no `nodejs_compat`). The wire format is
 `base64url(JSON({channel, mode, exp})) + "." + base64url(HMAC(payload, secret))`. A
 subscribe token cannot publish; a token for one channel cannot touch another; an
-expired token is refused — a leaked token is a scoped, seconds-long capability, not
+expired token is refused — a leaked token is a scoped, short-lived capability, not
 a master credential. The token rides the WS upgrade URL (a browser cannot set
 upgrade headers) or the publish `Authorization: Bearer` header; the Worker (and the
 Node app) verify it BEFORE forwarding.

@@ -10,15 +10,19 @@
  * so this single node IS the coordination point the edge needs a Durable Object
  * for (`room.ts`).
  *
- * Drive it:
+ * Both routes require a signed capability token (mint one with `mint.ts`). Drive it:
+ *   # mint tokens for the `news` channel (dev key needs PUBSUB_ALLOW_INSECURE=1):
+ *   SUB=$(PUBSUB_ALLOW_INSECURE=1 bun mint.ts news subscribe)
+ *   PUB=$(PUBSUB_ALLOW_INSECURE=1 bun mint.ts news publish)
  *   # terminal 1 — subscribe (any WebSocket client; wscat shown):
- *   wscat -c "ws://127.0.0.1:3000/subscribe?channel=news"
+ *   wscat -c "ws://127.0.0.1:3000/subscribe?channel=news&token=$SUB"
  *   # terminal 2 — publish; the subscriber above receives it:
  *   curl -X POST 127.0.0.1:3000/publish -H 'content-type: application/json' \
- *     -d '{"channel":"news","message":"hello"}'
+ *     -H "authorization: Bearer $PUB" -d '{"channel":"news","message":"hello"}'
  */
 
 import { buildFanoutServer } from "./src/app";
+import { resolveSecret } from "./secret";
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -38,19 +42,10 @@ if (bun === undefined) {
 }
 
 // Capability tokens are signed + verified with this secret; in production it is a
-// real secret shared with the app's token issuer. Locally we fall back to an
-// obviously-insecure default and say so loudly, so `bun run serve.ts` works out of
-// the box for a quick drive without silently pretending to be authenticated.
-const secret = process.env.PUBSUB_SECRET;
-if (secret === undefined || secret === "") {
-  console.warn(
-    "⚠️  PUBSUB_SECRET is unset — using an insecure dev default. Set PUBSUB_SECRET for anything real.",
-  );
-}
-
-const app = buildFanoutServer({
-  secret: secret === undefined || secret === "" ? "dev-insecure-secret" : secret,
-});
+// real secret shared with the app's token issuer. `resolveSecret` fails CLOSED — an
+// unset secret throws unless `PUBSUB_ALLOW_INSECURE=1` explicitly opts into the dev
+// key — so this server never silently authenticates with a publicly-known secret.
+const app = buildFanoutServer({ secret: resolveSecret() });
 
 const server = bun.serve({
   port: PORT,

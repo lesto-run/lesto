@@ -39,8 +39,13 @@ interface Env {
   PUBSUB_SECRET: string;
 }
 
-/** How long the demo page's minted tokens stay valid — long enough to click around. */
-const DEMO_TOKEN_TTL_MS = 60 * 60 * 1000;
+// The subscribe token rides the WS URL (`?token=`), so it is logged by every proxy
+// on the path — keep it short: it is only used once, at the handshake, moments after
+// GET / mints it. The publish token rides the `Authorization` header (not logged in
+// URLs) and drives the demo button repeatedly, so it can live long enough to click
+// around. Splitting the two costs nothing and shrinks the URL-borne token's window.
+const SUBSCRIBE_TOKEN_TTL_MS = 60 * 1000;
+const PUBLISH_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 /** Forward a request to the DO instance for `channel` (per-channel sharding). */
 function forwardToChannel(request: Request, env: Env, channel: string): Promise<Response> {
@@ -194,10 +199,16 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/") {
-      const exp = Date.now() + DEMO_TOKEN_TTL_MS;
+      const now = Date.now();
       const [subscribeToken, publishToken] = await Promise.all([
-        mintChannelToken({ channel: "demo", mode: "subscribe", exp }, env.PUBSUB_SECRET),
-        mintChannelToken({ channel: "demo", mode: "publish", exp }, env.PUBSUB_SECRET),
+        mintChannelToken(
+          { channel: "demo", mode: "subscribe", exp: now + SUBSCRIBE_TOKEN_TTL_MS },
+          env.PUBSUB_SECRET,
+        ),
+        mintChannelToken(
+          { channel: "demo", mode: "publish", exp: now + PUBLISH_TOKEN_TTL_MS },
+          env.PUBSUB_SECRET,
+        ),
       ]);
 
       return new Response(demoHtml(subscribeToken, publishToken), {

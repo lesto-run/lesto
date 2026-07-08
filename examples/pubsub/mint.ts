@@ -5,16 +5,18 @@
  *   bun mint.ts <channel> <subscribe|publish>
  *
  * On the edge the `GET /` page is the issuer; locally this tiny CLI plays that role.
- * It signs with `PUBSUB_SECRET`, falling back to the SAME insecure dev default
- * `serve.ts` uses when it is unset, so the token verifies against a `serve.ts`
- * started the same way. It prints just the token to stdout, so it drops straight
- * into a shell variable:
+ * It signs with the SAME `resolveSecret()` `serve.ts` uses (real `PUBSUB_SECRET`, or
+ * the dev key iff `PUBSUB_ALLOW_INSECURE=1`), so the token verifies against a
+ * `serve.ts` started the same way. It prints just the token to stdout, so it drops
+ * straight into a shell variable:
  *
- *   TOKEN=$(bun mint.ts news subscribe)
+ *   TOKEN=$(PUBSUB_ALLOW_INSECURE=1 bun mint.ts news subscribe)
  *   wscat -c "ws://127.0.0.1:3000/subscribe?channel=news&token=$TOKEN"
  */
 
 import { mintChannelToken } from "@lesto/pubsub";
+
+import { resolveSecret } from "./secret";
 
 const [channel, mode] = process.argv.slice(2);
 
@@ -23,7 +25,9 @@ if (channel === undefined || channel.length === 0 || (mode !== "subscribe" && mo
   process.exit(1);
 }
 
-const secret = process.env.PUBSUB_SECRET ?? "dev-insecure-secret";
-const token = await mintChannelToken({ channel, mode, exp: Date.now() + 3_600_000 }, secret);
+const token = await mintChannelToken(
+  { channel, mode, exp: Date.now() + 3_600_000 },
+  resolveSecret(),
+);
 
 console.log(token);

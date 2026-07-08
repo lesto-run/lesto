@@ -129,7 +129,24 @@ async function verifyLive(base: string, secret: string): Promise<void> {
 
   ws.close();
 
-  console.log(`smoke: DO-mediated fan-out — subscriber received nonce ${nonce} ✓`);
+  // Prove the REJECT path on the live edge too: a tokenless publish must be refused
+  // (401) BEFORE the DO is touched — so "admitted only with a valid token" is
+  // machine-checked, not merely asserted for the happy path.
+  const unauthorized = await fetch(`${base}/publish`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ channel, message: { nonce: "unauthorized" } }),
+  });
+
+  if (unauthorized.status !== 401) {
+    throw new Error(
+      `smoke: tokenless /publish returned ${unauthorized.status}, expected 401 → authz not enforced on the edge`,
+    );
+  }
+
+  console.log(
+    `smoke: DO-mediated fan-out — subscriber received nonce ${nonce} ✓; tokenless publish refused (401) ✓`,
+  );
 }
 
 /** Open a WebSocket, resolving when it opens and rejecting if it errors first. */
@@ -138,7 +155,10 @@ function openSocket(target: string): Promise<WebSocket> {
     const ws = new WebSocket(target);
 
     ws.addEventListener("open", () => resolve(ws));
-    ws.addEventListener("error", () => reject(new Error(`WebSocket connect to ${target} failed`)));
+    // Log the path only, never the full target — it carries the `?token=` capability.
+    ws.addEventListener("error", () =>
+      reject(new Error(`WebSocket connect to ${target.split("?")[0]} failed`)),
+    );
   });
 }
 
@@ -151,7 +171,7 @@ async function openWithRetry(target: string): Promise<WebSocket> {
       return await openSocket(target);
     } catch {
       console.log(
-        `smoke: WS ${target} not ready (attempt ${attempt + 1}); retrying in ${delayMs}ms`,
+        `smoke: WS ${target.split("?")[0]} not ready (attempt ${attempt + 1}); retrying in ${delayMs}ms`,
       );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }

@@ -144,14 +144,14 @@ two are added.
   `base64url(HMAC-SHA256(payload, secret))`. The app's authenticated backend mints
   it (it already has the session); the browser presents it on the WS URL / the
   publish `Authorization` header; the Worker *verifies* it before forwarding. A
-  leaked token is scoped to one channel + mode and expires in seconds. This is the
-  standard signed-WS-URL pattern.
+  leaked token is scoped to one channel + mode and is short-lived (a URL-borne
+  subscribe token especially so). This is the standard signed-WS-URL pattern.
 - **No new dependency, no `nodejs_compat`, stays in `@lesto/pubsub`.** Web Crypto
   `crypto.subtle` is a global on workerd, Bun, and Node ≥ 20. The repo already signs
   HMAC-SHA256 over `crypto.subtle` in dependency-free, edge-safe code:
   `packages/storage/src/sigv4.ts` ("*over Web Crypto … never `node:crypto` or
-  `Buffer`*", `crypto.subtle.digest`/`importKey`/`sign` at
-  `packages/storage/src/sigv4.ts:2,51,100-101`). That is the pattern to mirror.
+  `Buffer`*" at line 2; `crypto.subtle.digest` at :51, `importKey` at :174, `sign`
+  at :182). That is the pattern to mirror.
 - **Why not `@lesto/webhooks`** (it has `sign`/`verify`, `packages/webhooks/src/webhooks.ts:93,128`):
   it is **`node:crypto`-based** (`createHmac`/`timingSafeEqual`, line 1) and drags
   `@lesto/queue` + `@lesto/errors`. Reusing it would force `nodejs_compat` onto the

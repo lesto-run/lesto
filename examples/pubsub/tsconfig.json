@@ -7,5 +7,14 @@
     "types": ["node"]
   },
 
-  "include": ["src", "test", "mint.ts", "room.ts", "serve.ts", "worker.ts", "alchemy.run.ts"]
+  "include": [
+    "src",
+    "test",
+    "mint.ts",
+    "room.ts",
+    "secret.ts",
+    "serve.ts",
+    "worker.ts",
+    "alchemy.run.ts"
+  ]
 }
