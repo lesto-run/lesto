@@ -9,7 +9,7 @@
  * proxy; this module issues a **scoped capability** instead: the app's authenticated
  * backend mints a short-lived token for exactly one `(channel, mode)`, signed with a
  * server secret; the edge only ever *verifies* it before forwarding. A leaked token
- * grants one channel, one mode, for seconds — not the keys to the bus.
+ * grants one channel, one mode, for a short window — not the keys to the bus.
  *
  * Kept dependency-free and edge-shaped, like `packages/storage/src/sigv4.ts`: it
  * signs HMAC-SHA256 over `crypto.subtle` — a global on workerd, Bun, and Node ≥ 20 —
@@ -143,9 +143,10 @@ function decodeGrant(payloadPart: string): ChannelGrant | undefined {
     return undefined;
   }
 
-  // A number is the only exp shape reachable here: JSON has no Infinity/NaN, so a
-  // finite-check would be unreachable dead code under the 100% gate.
-  if (typeof exp !== "number") {
+  // `exp` must be a FINITE number. `decodeGrant` runs before the signature check, so
+  // a forged payload carrying `{"exp":1e400}` (→ Infinity via `JSON.parse`) reaches
+  // here; without the finite guard that would decode to a never-expiring grant.
+  if (typeof exp !== "number" || !Number.isFinite(exp)) {
     return undefined;
   }
 
@@ -178,20 +179,28 @@ async function verifySignature(
   signature: Uint8Array,
   secret: string,
 ): Promise<boolean> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    ENCODER.encode(secret) as Uint8Array<ArrayBuffer>,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["verify"],
-  );
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      ENCODER.encode(secret) as Uint8Array<ArrayBuffer>,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
 
-  return crypto.subtle.verify(
-    "HMAC",
-    key,
-    signature as Uint8Array<ArrayBuffer>,
-    ENCODER.encode(payload) as Uint8Array<ArrayBuffer>,
-  );
+    return await crypto.subtle.verify(
+      "HMAC",
+      key,
+      signature as Uint8Array<ArrayBuffer>,
+      ENCODER.encode(payload) as Uint8Array<ArrayBuffer>,
+    );
+  } catch {
+    // An empty or otherwise-unusable secret makes `importKey` throw (workerd, Bun,
+    // and Node all reject a zero-length HMAC key). Honor the "never throws" contract:
+    // a key we cannot verify under is a failed verification (→ `bad-signature`), not
+    // a crash the caller must guard against.
+    return false;
+  }
 }
 
 /** base64url (no padding) of a byte array — the URL-safe alphabet, `=` stripped. */

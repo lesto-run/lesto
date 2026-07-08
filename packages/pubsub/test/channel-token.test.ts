@@ -156,6 +156,20 @@ describe("channel-token — signature integrity", () => {
 
     expect(result).toEqual({ ok: false, reason: "bad-signature" });
   });
+
+  it("treats verification under an empty secret as a rejection, never throwing (contract)", async () => {
+    const token = await mintChannelToken({ channel: "a", mode: "subscribe", exp: 2_000 }, SECRET);
+
+    // An empty HMAC key makes `crypto.subtle.importKey` throw; the "never throws"
+    // contract turns that into a fail-closed `bad-signature`, not a 500.
+    const result = await verifyChannelToken(
+      token,
+      { channel: "a", mode: "subscribe", now: 1_000 },
+      "",
+    );
+
+    expect(result).toEqual({ ok: false, reason: "bad-signature" });
+  });
 });
 
 describe("channel-token — malformed tokens are data, not exceptions", () => {
@@ -259,6 +273,18 @@ describe("channel-token — malformed tokens are data, not exceptions", () => {
     expect(
       await verifyChannelToken(
         forge({ channel: "a", mode: "subscribe", exp: "soon" }),
+        { channel: "a", mode: "subscribe" },
+        SECRET,
+      ),
+    ).toEqual({ ok: false, reason: "malformed" });
+  });
+
+  it("rejects a grant with a non-finite exp (raw 1e400 → Infinity via JSON.parse)", async () => {
+    // A raw JSON payload (not via JSON.stringify, which would coerce Infinity → null),
+    // so exp decodes to Infinity — a would-be never-expiring grant, caught pre-verify.
+    expect(
+      await verifyChannelToken(
+        forge('{"channel":"a","mode":"subscribe","exp":1e400}'),
         { channel: "a", mode: "subscribe" },
         SECRET,
       ),
