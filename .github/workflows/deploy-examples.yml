@@ -125,5 +125,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           ALCHEMY_STATE_TOKEN: ${{ secrets.ALCHEMY_STATE_TOKEN }}
+          # The capability-token signing key the Worker verifies subscribe/publish with;
+          # the post-deploy smoke mints tokens with the SAME value to prove the authz path.
+          PUBSUB_SECRET: ${{ secrets.PUBSUB_SECRET }}
           ALCHEMY_STAGE: prod
         run: bun alchemy.run.ts

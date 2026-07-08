@@ -7,20 +7,25 @@
  *   bun alchemy.run.ts --destroy  # tear down
  *
  * A single Worker (`worker.ts`) bound to a Durable Object namespace whose class is
- * `PubSubRoom` (`room.ts`). The DO is the cross-isolate coordination point: both a
- * subscriber's WebSocket and a publisher's HTTP request are routed to ONE named
- * instance, so they share the same in-memory `FanoutRoom`.
+ * `PubSubRoom` (`room.ts`) plus a `PUBSUB_SECRET` (the HMAC key capability tokens are
+ * signed + verified with). Routing is PER CHANNEL: a subscriber's WebSocket and a
+ * publisher's HTTP request for channel `X` are both routed to `idFromName(X)`, so
+ * they share the same in-memory `FanoutRoom` (the cross-isolate proof) while
+ * different channels get different DOs.
  *
- * After `finalize()`, a post-deploy smoke opens a REAL WebSocket to the live url,
- * publishes a fresh random nonce over a SEPARATE HTTP request, and asserts the
- * subscriber receives it — a falsifiable, DO-mediated cross-connection proof. That
- * makes `bun alchemy.run.ts` the mechanical "it deploys AND fan-out works on the
- * edge" gate CI runs on every push to main.
+ * After `finalize()`, a post-deploy smoke opens a REAL WebSocket to the live url
+ * (presenting a minted subscribe token), publishes a fresh random nonce over a
+ * SEPARATE HTTP request (presenting a publish token), and asserts the subscriber
+ * receives it — a falsifiable, DO-mediated cross-connection proof that ALSO exercises
+ * the authz path. That makes `bun alchemy.run.ts` the mechanical "it deploys AND
+ * authorized fan-out works on the edge" gate CI runs on every push to main.
  *
  * `nodejs_compat` is intentionally omitted: `@lesto/pubsub` is dependency-free, the
- * `FanoutRoom` core is pure, and the DO uses only workerd globals — no node builtins.
+ * `FanoutRoom` core is pure, `channel-token` signs over Web Crypto (`crypto.subtle`,
+ * a workerd global), and the DO uses only workerd globals — no node builtins.
  */
 
+import { mintChannelToken } from "@lesto/pubsub";
 import alchemy from "alchemy";
 import { DurableObjectNamespace, Worker } from "alchemy/cloudflare";
 import { CloudflareStateStore } from "alchemy/state";
@@ -35,6 +40,15 @@ const app = await alchemy("lesto-example-pubsub", {
     }),
 });
 
+// The token signing key. Required — the Worker verifies every subscribe/publish
+// against it, so deploying without it would ship a bus that refuses everything.
+const pubsubSecret = process.env.PUBSUB_SECRET;
+if (pubsubSecret === undefined || pubsubSecret === "") {
+  throw new Error(
+    "PUBSUB_SECRET must be set to deploy the pubsub edge demo (the capability-token signing key)",
+  );
+}
+
 const worker = await Worker("pubsub-edge", {
   name: `${app.name}-${app.stage}`,
   entrypoint: "worker.ts",
@@ -42,6 +56,8 @@ const worker = await Worker("pubsub-edge", {
     // `sqlite: true` future-proofs a `state.storage`-backed ReplayRing; this demo
     // stores nothing (ephemeral in-memory fan-out), so it is harmless today.
     PUBSUB_ROOM: DurableObjectNamespace("pubsub-room", { className: "PubSubRoom", sqlite: true }),
+    // Encrypted at rest in Alchemy state; the Worker verifies capability tokens with it.
+    PUBSUB_SECRET: alchemy.secret(pubsubSecret),
   },
   url: true,
   compatibilityDate: "2025-06-01",
@@ -57,20 +73,25 @@ console.log("  POST ", `${url}/publish   {"channel":"<name>","message":<any>}`);
 
 await app.finalize();
 
-await verifyLive(url);
+await verifyLive(url, pubsubSecret);
 
 /**
  * Post-deploy smoke: a real WebSocket subscriber receives a fresh nonce published
  * by a separate HTTP request, through the DO. The nonce is random per run, so the
- * assertion can genuinely fail — it is not a tautology. The WS connect is retried
+ * assertion can genuinely fail — it is not a tautology. Both legs present a minted
+ * capability token (subscribe on the WS url, publish in the `Authorization` header),
+ * so this also proves the authz path admits a valid token. The WS connect is retried
  * with backoff to absorb cold start + the brief propagation window after a fresh
  * deploy; a persistent failure fails the deploy loudly rather than shipping a
  * broken Worker.
  */
-async function verifyLive(base: string): Promise<void> {
+async function verifyLive(base: string, secret: string): Promise<void> {
   const channel = "smoke";
   const nonce = crypto.randomUUID();
-  const wsUrl = `${base.replace(/^http/, "ws")}/subscribe?channel=${channel}`;
+  const exp = Date.now() + 60_000;
+  const subscribeToken = await mintChannelToken({ channel, mode: "subscribe", exp }, secret);
+  const publishToken = await mintChannelToken({ channel, mode: "publish", exp }, secret);
+  const wsUrl = `${base.replace(/^http/, "ws")}/subscribe?channel=${channel}&token=${encodeURIComponent(subscribeToken)}`;
 
   const ws = await openWithRetry(wsUrl);
 
@@ -96,7 +117,7 @@ async function verifyLive(base: string): Promise<void> {
 
   const publish = await fetch(`${base}/publish`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", authorization: `Bearer ${publishToken}` },
     body: JSON.stringify({ channel, message: { nonce } }),
   });
 

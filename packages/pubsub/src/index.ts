@@ -12,3 +12,11 @@ export type { Listener } from "./pubsub";
 
 export { FanoutRoom, encodeFrame, parsePublishBody } from "./fanout";
 export type { FanoutFrame, FanoutSocket, PublishRequest } from "./fanout";
+
+export { mintChannelToken, verifyChannelToken } from "./channel-token";
+export type {
+  ChannelGrant,
+  ChannelMode,
+  ChannelTokenFailure,
+  ChannelTokenResult,
+} from "./channel-token";

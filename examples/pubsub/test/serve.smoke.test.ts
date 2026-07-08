@@ -18,9 +18,14 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { mintChannelToken } from "@lesto/pubsub";
 import { afterAll, describe, expect, it } from "vitest";
 
 const exampleDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** The signing secret shared with the spawned server (via `PUBSUB_SECRET`) so the
+ * tokens this test mints verify against the server's guard. */
+const SECRET = "smoke-signing-secret";
 
 interface SpawnResult {
   code: number | null;
@@ -111,13 +116,20 @@ describe("@lesto/pubsub example — serve.ts fans out over a real WebSocket", ()
   it("delivers a published nonce to a live WS subscriber and exits 0 on SIGTERM", async () => {
     child = spawn("bun", ["run", "serve.ts"], {
       cwd: exampleDir,
-      env: { ...process.env, PORT: "0" },
+      env: { ...process.env, PORT: "0", PUBSUB_SECRET: SECRET },
       stdio: ["ignore", "pipe", "pipe"],
     });
     closed = collect(child);
 
     const base = await waitForListening(closed, child, 20_000);
-    const wsUrl = `${base.replace(/^http/, "ws")}/subscribe?channel=smoke`;
+    const exp = Date.now() + 60_000;
+    const subscribeToken = await mintChannelToken(
+      { channel: "smoke", mode: "subscribe", exp },
+      SECRET,
+    );
+    const publishToken = await mintChannelToken({ channel: "smoke", mode: "publish", exp }, SECRET);
+
+    const wsUrl = `${base.replace(/^http/, "ws")}/subscribe?channel=smoke&token=${encodeURIComponent(subscribeToken)}`;
     const nonce = randomUUID();
 
     const ws = new WebSocket(wsUrl);
@@ -143,7 +155,7 @@ describe("@lesto/pubsub example — serve.ts fans out over a real WebSocket", ()
 
     const res = await fetch(`${base}/publish`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${publishToken}` },
       body: JSON.stringify({ channel: "smoke", message: { nonce } }),
     });
 

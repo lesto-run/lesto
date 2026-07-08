@@ -1,25 +1,34 @@
 /**
  * The pubsub fan-out app as substrate-neutral Bun handlers, shared by `serve.ts`
  * (a live server) and `test/pubsub.test.ts` (in-process). `@lesto/pubsub`'s
- * {@link FanoutRoom} is the whole brain; this file is only the HTTP + WebSocket
- * plumbing around it:
+ * {@link FanoutRoom} is the fan-out brain; {@link verifyChannelToken} is the authz
+ * brain; this file is only the HTTP + WebSocket plumbing around them:
  *
- *   - `GET  /subscribe?channel=<name>` upgrades to a WebSocket and, on open,
- *     subscribes the socket to the channel; every publish to that channel
- *     arrives as one framed message.
- *   - `POST /publish  { "channel": <name>, "message": <any> }` fans the message
- *     out to that channel's subscribers and returns `{ delivered }`.
+ *   - `GET  /subscribe?channel=<name>&token=<t>` verifies a `subscribe`-mode token
+ *     scoped to `<name>`, then upgrades to a WebSocket subscribed to the channel;
+ *     every publish to that channel arrives as one framed message.
+ *   - `POST /publish  { "channel": <name>, "message": <any> }` (with a `publish`-mode
+ *     token in `Authorization: Bearer` or `?token=`) fans the message out to that
+ *     channel's subscribers and returns `{ delivered }`.
  *
- * On Node the single process IS the coordination point, so one `FanoutRoom`
- * serves every connection. On Cloudflare that role belongs to a Durable Object
- * (`room.ts`), because edge isolates share no memory — but the DO runs the SAME
- * `FanoutRoom`, so the fan-out semantics are identical across the two substrates.
+ * Authz is verified HERE, before any upgrade or publish, so the Node path is
+ * authenticated exactly like the edge Worker — and the guard gets real behavioral
+ * coverage from `serve.smoke.test.ts`. A browser cannot set headers on a WebSocket
+ * upgrade, so the subscribe token rides the query string (a short-lived, single-
+ * `(channel, mode)` capability, not a master credential — see `@lesto/pubsub`'s
+ * `channel-token.ts`).
+ *
+ * On Node the single process IS the coordination point, so one `FanoutRoom` serves
+ * every connection. On Cloudflare that role belongs to a Durable Object (`room.ts`),
+ * because edge isolates share no memory — but the DO runs the SAME `FanoutRoom` and
+ * the SAME `verifyChannelToken`, so the semantics are identical across substrates.
  *
  * Bun's `Server`/`ServerWebSocket` have no `@types/bun` in this tree, so the slim
  * slices this app uses are typed locally (the `packages/cli/src/bin.ts` approach).
  */
 
-import { FanoutRoom, parsePublishBody } from "@lesto/pubsub";
+import { FanoutRoom, parsePublishBody, verifyChannelToken } from "@lesto/pubsub";
+import type { ChannelMode } from "@lesto/pubsub";
 
 /** Per-connection data Bun carries from the upgrade into the socket handlers. */
 interface SocketData {
@@ -44,7 +53,7 @@ interface BunServer {
 /** What {@link buildFanoutServer} returns — the shape `Bun.serve` consumes, plus the room. */
 export interface FanoutServer {
   room: FanoutRoom;
-  fetch(request: Request, server: BunServer): Response | Promise<Response> | undefined;
+  fetch(request: Request, server: BunServer): Promise<Response | undefined>;
   websocket: {
     open(ws: BunSocket): void;
     message(ws: BunSocket, message: string): void;
@@ -52,28 +61,48 @@ export interface FanoutServer {
   };
 }
 
-/** Answer `POST /publish` — validate the body, fan it out, report how many it reached. */
-async function handlePublish(room: FanoutRoom, request: Request): Promise<Response> {
-  // A non-JSON body rejects `.json()`; treat it as malformed → 400, not a 500.
-  const body = parsePublishBody(await request.json().catch(() => undefined));
+/**
+ * Pull a capability token off a request: the `Authorization: Bearer <t>` header
+ * first (what an HTTP publisher uses), else the `?token=` query param (what a
+ * browser WebSocket upgrade must use — it cannot set headers). `""` when absent,
+ * which {@link verifyChannelToken} rejects as `malformed`.
+ */
+function readToken(request: Request, url: URL): string {
+  const authorization = request.headers.get("authorization");
 
-  if (body === undefined) {
-    return new Response('expected { "channel": string, "message": <any> }', { status: 400 });
+  if (authorization?.startsWith("Bearer ") === true) {
+    return authorization.slice("Bearer ".length);
   }
 
-  const delivered = await room.publish(body.channel, body.message);
-
-  return Response.json({ delivered });
+  return url.searchParams.get("token") ?? "";
 }
 
-/** Build the fan-out app over one {@link FanoutRoom}. Handlers close over the room, not `this`, so they detach cleanly for `Bun.serve`. */
-export function buildFanoutServer(): FanoutServer {
+/** Verify a `(channel, mode)` token; a `401` Response on failure, `undefined` when it passes. */
+async function guard(
+  request: Request,
+  url: URL,
+  channel: string,
+  mode: ChannelMode,
+  secret: string,
+): Promise<Response | undefined> {
+  const result = await verifyChannelToken(readToken(request, url), { channel, mode }, secret);
+
+  if (!result.ok) {
+    return new Response(`unauthorized: ${result.reason}`, { status: 401 });
+  }
+
+  return undefined;
+}
+
+/** Build the fan-out app over one {@link FanoutRoom}, verifying tokens signed with `secret`. */
+export function buildFanoutServer(opts: { secret: string }): FanoutServer {
   const room = new FanoutRoom();
+  const { secret } = opts;
 
   return {
     room,
 
-    fetch(request, server) {
+    async fetch(request, server) {
       const url = new URL(request.url);
 
       if (url.pathname === "/subscribe") {
@@ -81,6 +110,11 @@ export function buildFanoutServer(): FanoutServer {
 
         if (channel === null || channel.length === 0) {
           return new Response("missing ?channel", { status: 400 });
+        }
+
+        const denied = await guard(request, url, channel, "subscribe", secret);
+        if (denied !== undefined) {
+          return denied;
         }
 
         // Bun finishes the handshake and then fires `websocket.open`; returning
@@ -93,7 +127,21 @@ export function buildFanoutServer(): FanoutServer {
       }
 
       if (url.pathname === "/publish" && request.method === "POST") {
-        return handlePublish(room, request);
+        // A non-JSON body rejects `.json()`; treat it as malformed → 400, not a 500.
+        const body = parsePublishBody(await request.json().catch(() => undefined));
+
+        if (body === undefined) {
+          return new Response('expected { "channel": string, "message": <any> }', { status: 400 });
+        }
+
+        const denied = await guard(request, url, body.channel, "publish", secret);
+        if (denied !== undefined) {
+          return denied;
+        }
+
+        const delivered = await room.publish(body.channel, body.message);
+
+        return Response.json({ delivered });
       }
 
       return new Response("not found", { status: 404 });

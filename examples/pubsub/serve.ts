@@ -37,7 +37,20 @@ if (bun === undefined) {
   throw new Error("serve.ts must run under Bun — use `bun run serve.ts`");
 }
 
-const app = buildFanoutServer();
+// Capability tokens are signed + verified with this secret; in production it is a
+// real secret shared with the app's token issuer. Locally we fall back to an
+// obviously-insecure default and say so loudly, so `bun run serve.ts` works out of
+// the box for a quick drive without silently pretending to be authenticated.
+const secret = process.env.PUBSUB_SECRET;
+if (secret === undefined || secret === "") {
+  console.warn(
+    "⚠️  PUBSUB_SECRET is unset — using an insecure dev default. Set PUBSUB_SECRET for anything real.",
+  );
+}
+
+const app = buildFanoutServer({
+  secret: secret === undefined || secret === "" ? "dev-insecure-secret" : secret,
+});
 
 const server = bun.serve({
   port: PORT,
