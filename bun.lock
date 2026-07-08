@@ -76,10 +76,15 @@
       "version": "0.0.0",
       "dependencies": {
         "@lesto/cache": "workspace:*",
+        "@lesto/cloudflare": "workspace:*",
         "@lesto/kernel": "workspace:*",
         "@lesto/runtime": "workspace:*",
         "@lesto/web": "workspace:*",
         "better-sqlite3": "^11.10.0",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "^4.0.0",
+        "alchemy": "^0.93.12",
       },
     },
     "examples/estate": {
@@ -236,6 +241,23 @@
       },
       "devDependencies": {
         "vite": "^7.0.0",
+      },
+    },
+    "examples/mail": {
+      "name": "@lesto/example-mail",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/cloudflare": "workspace:*",
+        "@lesto/kernel": "workspace:*",
+        "@lesto/mail": "workspace:*",
+        "@lesto/queue": "workspace:*",
+        "@lesto/runtime": "workspace:*",
+        "@lesto/web": "workspace:*",
+        "better-sqlite3": "^11.10.0",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "^4.0.0",
+        "alchemy": "^0.93.12",
       },
     },
     "examples/mailing-lists": {
@@ -1683,6 +1705,8 @@
     "@lesto/example-live-capstone": ["@lesto/example-live-capstone@workspace:examples/live-capstone"],
 
     "@lesto/example-live-durable": ["@lesto/example-live-durable@workspace:examples/live-durable"],
+
+    "@lesto/example-mail": ["@lesto/example-mail@workspace:examples/mail"],
 
     "@lesto/example-mailing-lists": ["@lesto/example-mailing-lists@workspace:examples/mailing-lists"],
 

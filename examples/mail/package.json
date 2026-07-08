@@ -1,11 +1,10 @@
 {
-  "name": "@lesto/example-cache",
+  "name": "@lesto/example-mail",
   "version": "0.0.0",
   "private": true,
-  "description": "A runnable Lesto app: the @lesto/cache read-through journey wired behind real HTTP routes — cached GETs, single-flight on concurrent misses, invalidation, TTL expiry, and the SQL store's sweep — on a persistent SQLite store with an injected clock.",
+  "description": "A runnable Lesto app: @lesto/mail delivering through Cloudflare Email Sending's send_email binding on the edge (queue over D1, in-request drain), with a Node serve.ts leg over Resend/console and a fail-closed 'not onboarded' verdict.",
   "type": "module",
   "scripts": {
-    "start": "bun run run.ts",
     "serve": "bun run serve.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -13,9 +12,10 @@
     "destroy": "bun alchemy.run.ts --destroy"
   },
   "dependencies": {
-    "@lesto/cache": "workspace:*",
     "@lesto/cloudflare": "workspace:*",
     "@lesto/kernel": "workspace:*",
+    "@lesto/mail": "workspace:*",
+    "@lesto/queue": "workspace:*",
     "@lesto/runtime": "workspace:*",
     "@lesto/web": "workspace:*",
     "better-sqlite3": "^11.10.0"

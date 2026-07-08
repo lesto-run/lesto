@@ -1,8 +1,10 @@
 # Deploy the Alchemy-managed example graphs to Cloudflare (ADR 0044 Inc3).
 #
 # Makes gallery-as-QA-gate's "it deploys" leg MECHANICALLY CHECKABLE: instead of a human
-# running `bun alchemy.run.ts` by hand, this job deploys the migrated multi-resource examples
-# (the cooperating OpenAuth issuer + Lesto MCP Resource Server, ADR 0039) on every push to main.
+# running `bun alchemy.run.ts` by hand, this job deploys the Alchemy-managed example graphs on
+# every push to main — mcp-auth-openauth (OpenAuth issuer + Lesto MCP RS, ADR 0039),
+# mcp-ops-console, the benchmark edge worker, and the battery edge demos (example-cache,
+# example-mail). Each `alchemy.run.ts` folds in a post-deploy smoke, so a broken deploy fails loudly.
 #
 # Auth is the ADR 0044 D4 pair, from repo secrets — never an interactive `alchemy login`:
 #   - CLOUDFLARE_API_TOKEN — the account Alchemy deploys into (and where the D5 state DO lives);
@@ -81,6 +83,31 @@ jobs:
       - name: Deploy benchmark edge worker
         if: steps.guard.outputs.deploy == 'true'
         working-directory: benchmarks/apps/lesto
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ALCHEMY_STATE_TOKEN: ${{ secrets.ALCHEMY_STATE_TOKEN }}
+          ALCHEMY_STAGE: prod
+        run: bun alchemy.run.ts
+
+      # The cache battery on the edge (@lesto/cache over D1). `alchemy.run.ts`'s
+      # post-deploy smoke asserts a warm cache HIT through D1 on the live url, so
+      # this step is the mechanical "it deploys AND the cache works" gate.
+      - name: Deploy example-cache
+        if: steps.guard.outputs.deploy == 'true'
+        working-directory: examples/cache
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ALCHEMY_STATE_TOKEN: ${{ secrets.ALCHEMY_STATE_TOKEN }}
+          ALCHEMY_STAGE: prod
+        run: bun alchemy.run.ts
+
+      # The mail battery on the edge (@lesto/mail over Cloudflare Email Sending).
+      # The smoke asserts the Worker boots + the transport is wired (GET /health);
+      # a REAL send needs `wrangler email sending enable lesto.run` (the one manual
+      # hop), so this step deploys fine before the domain is onboarded.
+      - name: Deploy example-mail
+        if: steps.guard.outputs.deploy == 'true'
+        working-directory: examples/mail
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           ALCHEMY_STATE_TOKEN: ${{ secrets.ALCHEMY_STATE_TOKEN }}
