@@ -29,8 +29,9 @@ export interface FanoutSocket {
 
 /**
  * A framed message on the wire: JSON, self-describing (`type`), carrying the
- * `channel` it was published on, a per-room monotonic `seq` (a diagnostic — lets
- * a client spot a dropped frame), and the arbitrary `data` the publisher sent.
+ * `channel` it was published on, a per-room monotonic `seq` (an opaque ordering
+ * witness — NOT a per-channel gap detector, since one room multiplexes every
+ * channel through a single counter), and the arbitrary `data` the publisher sent.
  */
 export interface FanoutFrame {
   type: "message";

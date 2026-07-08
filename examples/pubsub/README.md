@@ -9,7 +9,7 @@ framed copy.
 `@lesto/pubsub`'s `PubSub` is an in-process hub, so on Node a single process is
 the coordination point. On Cloudflare there is no shared memory across isolates,
 so the same fan-out needs one coordination point — a **Durable Object**. This is
-the first DO substrate in the framework, and it runs the SAME transport-neutral
+the first WebSocket-terminating DO substrate in the framework, and it runs the SAME transport-neutral
 core (`FanoutRoom`, in `@lesto/pubsub`) as the Node path.
 
 ## What it shows
@@ -18,7 +18,7 @@ core (`FanoutRoom`, in `@lesto/pubsub`) as the Node path.
 | --------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `GET  /subscribe?channel=<name>`        | Upgrades to a WebSocket subscribed to `<name>`; receives one framed message per publish.    |
 | `POST /publish` `{channel, message}`    | Fans `message` out to that channel's subscribers; returns `{ delivered }` (see the caveat). |
-| `GET  /` (edge only)                    | A tiny browser demo: subscribes to `#demo` and publishes to it from a button.               |
+| `GET  /` (edge only)                    | A tiny browser demo: subscribes to the `demo` channel and publishes to it from a button.    |
 
 The fan-out core is `@lesto/pubsub`'s public API — `FanoutRoom`, `parsePublishBody`,
 `encodeFrame`. Everything else is thin plumbing: Bun's native WebSocket server on

@@ -72,7 +72,8 @@ export class PubSubRoom {
   }
 
   async #publish(request: Request): Promise<Response> {
-    const body = parsePublishBody(await request.json());
+    // A non-JSON body rejects `.json()`; treat it as malformed → 400, not a 500.
+    const body = parsePublishBody(await request.json().catch(() => undefined));
 
     if (body === undefined) {
       return new Response('expected { "channel": string, "message": <any> }', { status: 400 });

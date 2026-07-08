@@ -1,8 +1,9 @@
 # Plan: `@lesto/pubsub` live on Cloudflare via a Durable Object
 
 Wave 2 of the "batteries live on CF" initiative ([[batteries-edge-demos]], epic
-**L-d7c0841c**; this task **L-f69f0e56**). The FIRST Durable Object substrate in
-the framework. Ratified design, **adversarially reviewed + revised** (see the
+**L-d7c0841c**; this task **L-f69f0e56**). The first **WebSocket-terminating**
+Durable Object substrate in the framework (the `OpenAuthKeyStore` key-store DOs
+predate it — see the Risks note). Ratified design, **adversarially reviewed + revised** (see the
 red-team note below) — execute largely verbatim.
 
 Wave 1 precedent to match: `examples/cache` (edge over D1) + `examples/mail`

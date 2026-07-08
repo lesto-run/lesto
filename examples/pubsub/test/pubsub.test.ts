@@ -149,6 +149,21 @@ describe("examples/pubsub — buildFanoutServer", () => {
     expect((res as Response).status).toBe(400);
   });
 
+  it("rejects a non-JSON /publish body with 400 (not a 500)", async () => {
+    const app = buildFanoutServer();
+
+    const res = await app.fetch(
+      new Request("http://x/publish", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "not json{{",
+      }),
+      upgradeOk,
+    );
+
+    expect((res as Response).status).toBe(400);
+  });
+
   it("answers an unknown route with 404", () => {
     const app = buildFanoutServer();
 
