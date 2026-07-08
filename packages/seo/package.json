@@ -1,6 +1,6 @@
 {
   "name": "@lesto/seo",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "Lesto's SEO primitives — pure string builders for meta tags, sitemaps, robots.txt, and JSON-LD.",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@lesto/web",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "Lesto's MVC request-handling core — a Rails-style controller layer that weds @lesto/router and @lesto/ui.",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@lesto/cli",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "Lesto's `lesto` command-line tool — load a project's lesto.app.ts and run, serve, migrate, or inspect routes.",
   "bin": {

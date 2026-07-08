@@ -1,6 +1,6 @@
 {
   "name": "@lesto/content-umbra",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Fast frontmatter parsing for markdown files",
   "type": "module",
   "sideEffects": false,

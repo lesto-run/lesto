@@ -1,6 +1,6 @@
 {
   "name": "@lesto/pg",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "Lesto's Postgres driver — adapts a node-postgres Pool to the async @lesto/db SqlDatabase seam (ADR 0006).",
   "type": "module",

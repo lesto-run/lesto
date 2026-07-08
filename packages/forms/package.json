@@ -1,6 +1,6 @@
 {
   "name": "@lesto/forms",
-  "version": "0.0.0",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "Lesto's schema-driven forms — a form spec, a render to a @lesto/ui tree, and submission validation. Ships its own form components.",
   "type": "module",

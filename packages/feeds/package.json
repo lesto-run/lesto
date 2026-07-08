@@ -1,6 +1,6 @@
 {
   "name": "@lesto/feeds",
-  "version": "0.0.0",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "Lesto's RSS 2.0 and Atom 1.0 feed generation — pure XML string builders, no deps.",
   "type": "module",

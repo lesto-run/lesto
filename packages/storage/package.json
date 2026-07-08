@@ -1,6 +1,6 @@
 {
   "name": "@lesto/storage",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "Lesto's object storage — a pluggable backend (S3/R2 for production; in-memory and local filesystem for dev).",
   "type": "module",

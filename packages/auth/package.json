@@ -1,6 +1,6 @@
 {
   "name": "@lesto/auth",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "Lesto's in-house authentication primitives on node:crypto — password hashing, tokens, and sessions.",
   "type": "module",

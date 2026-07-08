@@ -1,6 +1,6 @@
 {
   "name": "@lesto/assets",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "Lesto's client-asset pipeline — synthesize the island hydration entry from an app/islands convention and bundle it (Vite/Rolldown for `lesto build`, sharing one bundler with the dev island server; Bun.build as the dev fallback; splitting + the opt-in preact dialect), so an app ships an optimized /client.js with no bespoke build script.",
   "type": "module",

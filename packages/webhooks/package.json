@@ -1,6 +1,6 @@
 {
   "name": "@lesto/webhooks",
-  "version": "0.0.0",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "Lesto webhooks — HMAC-signed outbound delivery (retried on @lesto/queue) and inbound signature verification.",
   "type": "module",

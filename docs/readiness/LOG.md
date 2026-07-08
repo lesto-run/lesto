@@ -15,6 +15,35 @@ the dated JSON beside this file.
 | 2026-06-19 (§C W3 landed) | 8.3/10 | +1.0 (from 7.3) | Adoption-blocked: all 60 pkgs `private:true@0.0.0`, unpublished, bus-factor-1, ~10-day history — structural (publish-day) | Delete empty `packages/rbac` shell + `config`/`hooks` placeholder dirs (S) |
 | 2026-06-19 (run 2, fruit + de-privatize) | 8.4/10 | +0.1 (from 8.3) | The `.ts` bin can't run under `npm create`/`npx` (no node TS loader) — the one hard launch blocker; + bus-factor-1, unpublished, zero external soak | Make the CLI/`create-lesto` bin node-runnable (compiled JS bin or `tsx` shebang), then prove `npx create-lesto` (M) |
 | 2026-06-19 (run 3, bin fix + fruit) | 7.8/10 | −0.6 (from 8.4) — **judge re-calibration, NOT a regression** | Never-published + never-soaked + bus-factor-1 (29 pkgs at unpublished 0.1.0, RELEASE_ENABLED dormant) — structural | Bounded `server.maxConnections` + in-flight 503 shed (`server.ts`, S) |
+| 2026-07-03 (post live/MCP-auth/TW epics + 0.1.1 publish) | 8.0/10 | +0.2 (from 7.8) | CI dormant: 279 unpushed commits (last origin run FAILED) + tree fails its own typecheck/lint/format gates; published 0.1.1 stale, @lesto/live\* still private | Green the 4 broken local gates — typecheck ×2, lint ×2, format ×2, all mechanical (S) |
+
+## 2026-07-03 — 8.0/10 (live data layer + MCP auth + TW/shadcn epics + 0.1.1 published; prev 7.8)
+
+Calibrated, not averaged (dimension mean ≈8.25: crash-safety **9**, security-wiring **9**,
+framework-correctness **9.5**, data-layer **8**, maturity/CI **7.5**, observability/deploy **6.5**).
+All three named blockers from the 7.8 verdict are retired and verified: connection-volume DoS
+(10k-conn/1k-in-flight shed + per-IP stream semaphores), browser-safe security default
+(`secure: { browser: true }` preset + scaffold ships `originCheck` ON), and never-published
+(0.1.1 live on npm with OIDC provenance, 2026-06-23).
+
+Why only +0.2: **the process layer regressed and it matters.** Verified red this run: the tree
+fails its own typecheck (2 pkgs), lint (2 errors), and format (2 files) gates; local main is
+**279 commits ahead of origin** whose last CI run FAILED (check, scaffold-loop,
+db-parity-postgres, bundle-size, deploy-cloudflare-dry) — ten days of security-critical
+hardening has never passed the 15-job blocking matrix; npm 0.1.1 predates all of it and the
+flagship `@lesto/live*`/`identity`/`client` packages are still `private:true@0.0.0`. New concrete
+defect: **`lesto deploy --cloudflare` auto-rolls-back healthy deploys** — the CLI defaults its
+health probe to `/readyz` (`run.ts:2300`) but the edge fetch handler serves no health route, so
+the 404 reads unhealthy unless `--health-url` is passed. Beneath it all the durable ceiling is
+unchanged: bus-factor-1 (720/720 commits), 24-day history, zero external soak, no metrics.
+
+Fruit ceiling: **~8.3**. Judge's call: do the first three fruit NOW as mandatory hygiene (green
+the four local gates ~half a day; push + drive the remote 15-job matrix green; fix the
+`--cloudflare` health probe), then **STOP picking fruit and pivot to the adoption phase** the
+last two judges already prescribed: cut 0.1.2 of the 279-commit-stale surface (+ decide the
+publish story for the private live packages), get a second human through the core, run a real
+external soak against live Postgres + CF, add minimal metrics. "The architecture is no longer
+the constraint."
 
 ## 2026-06-19 (run 3) — 7.8/10 (launch blocker fixed + run-2 fruit; prev 8.4)
 

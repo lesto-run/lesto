@@ -1,6 +1,6 @@
 {
   "name": "@lesto/queue",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "MIT",
   "description": "Lesto's in-house durable job queue — at-least-once delivery on the SQL database, no Redis.",
   "type": "module",
