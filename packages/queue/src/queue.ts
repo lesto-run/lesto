@@ -72,14 +72,22 @@ export async function installSchema(db: SqlDatabase, dialect: Dialect = "sqlite"
       ? "BIGINT  PRIMARY KEY GENERATED ALWAYS AS IDENTITY"
       : "INTEGER PRIMARY KEY AUTOINCREMENT";
 
+  // Each DDL statement is issued as its OWN `db.exec` — never one semicolon-joined
+  // blob. A single-statement driver adapter — Cloudflare D1's `exec`, which runs
+  // `prepare(sql).run()` — rejects a multi-statement string ("A prepared SQL
+  // statement must contain only one statement", D1 error 7500), so a combined
+  // `exec` would install fine on better-sqlite3/pg yet throw on the edge. One
+  // statement per call installs identically on every driver.
   await db.exec(`
     CREATE TABLE IF NOT EXISTS ${BATCHES_TABLE} (
       id            ${idColumn},
       name          TEXT    NOT NULL,
       total         INTEGER NOT NULL,
       created_at    TEXT    NOT NULL
-    );
+    )
+  `);
 
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS ${TABLE} (
       id            ${idColumn},
       queue         TEXT    NOT NULL DEFAULT 'default',
@@ -96,26 +104,34 @@ export async function installSchema(db: SqlDatabase, dialect: Dialect = "sqlite"
       created_at    TEXT    NOT NULL,
       updated_at    TEXT    NOT NULL,
       finished_at   TEXT
-    );
+    )
+  `);
 
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_${TABLE}_claim
-      ON ${TABLE} (status, queue, run_at);
+      ON ${TABLE} (status, queue, run_at)
+  `);
 
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_${TABLE}_batch
-      ON ${TABLE} (batch_id);
+      ON ${TABLE} (batch_id)
+  `);
 
-    -- The dependency edges. (job_id, depends_on_id) is the natural key; a job
-    -- with N prerequisites has N rows. Indexed BOTH ways: by job (read a job's
-    -- unmet deps when deciding whether to release it) and by prerequisite (find
-    -- the dependents of a just-finished job in the release sweep).
+  // The dependency edges. (job_id, depends_on_id) is the natural key; a job with N
+  // prerequisites has N rows. Indexed BOTH ways: by job (read a job's unmet deps
+  // when deciding whether to release it) and by prerequisite (find the dependents
+  // of a just-finished job in the release sweep).
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS ${DEPS_TABLE} (
       job_id         INTEGER NOT NULL,
       depends_on_id  INTEGER NOT NULL,
       PRIMARY KEY (job_id, depends_on_id)
-    );
+    )
+  `);
 
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_${DEPS_TABLE}_depends_on
-      ON ${DEPS_TABLE} (depends_on_id);
+      ON ${DEPS_TABLE} (depends_on_id)
   `);
 
   // A PARTIAL index over only the rows the claim subselect ever scans —
