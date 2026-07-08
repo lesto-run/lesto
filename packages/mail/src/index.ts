@@ -34,9 +34,11 @@
  *     exist on this deploy yet (the parked unknown-mailer path), so dynamic
  *     dispatch cannot be type-checked. Reach for `template` when you can.
  *
- * Two real transports ship:
+ * Three real transports ship:
  *   - `createSmtpTransport`  — Node-only (node:net/tls), STARTTLS + AUTH LOGIN.
  *   - `createFetchProviderTransport` — Workers-compatible (global fetch, no Node builtins).
+ *   - `createCloudflareEmailTransport` — Workers-only, drives the platform's
+ *     `send_email` binding (Cloudflare Email Sending; no API keys).
  *
  * Delivery is **at-least-once**; every `RenderedEmail` carries a stable,
  * job-derived `messageId` so an idempotent transport can dedupe retries.
@@ -96,3 +98,12 @@ export type {
 
 export { createFetchProviderTransport, FetchProviderError } from "./provider";
 export type { FetchProviderConfig, FetchProviderErrorCode, ProviderRequestBody } from "./provider";
+
+export { createCloudflareEmailTransport, CloudflareEmailError } from "./cloudflare";
+export type {
+  CloudflareEmailAddress,
+  CloudflareEmailBinding,
+  CloudflareEmailConfig,
+  CloudflareEmailErrorCode,
+  CloudflareEmailMessage,
+} from "./cloudflare";
