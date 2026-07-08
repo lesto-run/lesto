@@ -1,0 +1,21 @@
+{
+  "name": "@lesto/example-pubsub",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A runnable Lesto app: @lesto/pubsub fan-out over live WebSockets — a subscriber opens a socket, a separate HTTP request publishes to the channel, every subscriber receives it. Node serves it in one process; on Cloudflare a Durable Object is the cross-isolate coordination point.",
+  "type": "module",
+  "scripts": {
+    "serve": "bun run serve.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "deploy": "bun alchemy.run.ts",
+    "destroy": "bun alchemy.run.ts --destroy"
+  },
+  "dependencies": {
+    "@lesto/pubsub": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.0.0",
+    "alchemy": "^0.93.12"
+  }
+}

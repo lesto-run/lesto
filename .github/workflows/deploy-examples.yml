@@ -113,3 +113,17 @@ jobs:
           ALCHEMY_STATE_TOKEN: ${{ secrets.ALCHEMY_STATE_TOKEN }}
           ALCHEMY_STAGE: prod
         run: bun alchemy.run.ts
+
+      # The pubsub battery on the edge (@lesto/pubsub fan-out over a Durable
+      # Object — the first DO substrate). The post-deploy smoke opens a real
+      # WebSocket to the live url and asserts it receives a nonce published by a
+      # separate HTTP request through the DO, so this step is the mechanical
+      # "it deploys AND cross-connection fan-out works" gate.
+      - name: Deploy example-pubsub
+        if: steps.guard.outputs.deploy == 'true'
+        working-directory: examples/pubsub
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ALCHEMY_STATE_TOKEN: ${{ secrets.ALCHEMY_STATE_TOKEN }}
+          ALCHEMY_STAGE: prod
+        run: bun alchemy.run.ts

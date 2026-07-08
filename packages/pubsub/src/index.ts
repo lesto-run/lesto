@@ -9,3 +9,6 @@
 
 export { PubSub } from "./pubsub";
 export type { Listener } from "./pubsub";
+
+export { FanoutRoom, encodeFrame, parsePublishBody } from "./fanout";
+export type { FanoutFrame, FanoutSocket, PublishRequest } from "./fanout";

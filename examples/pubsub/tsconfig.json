@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+
+  "compilerOptions": {
+    "rootDir": ".",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+
+  "include": ["src", "test", "room.ts", "serve.ts", "worker.ts", "alchemy.run.ts"]
+}

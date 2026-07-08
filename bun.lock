@@ -334,6 +334,17 @@
         "jose": "^6.2.3",
       },
     },
+    "examples/pubsub": {
+      "name": "@lesto/example-pubsub",
+      "version": "0.0.0",
+      "dependencies": {
+        "@lesto/pubsub": "workspace:*",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "^4.0.0",
+        "alchemy": "^0.93.12",
+      },
+    },
     "examples/queue-dashboard": {
       "name": "@lesto/example-queue-dashboard",
       "version": "0.0.0",
@@ -1715,6 +1726,8 @@
     "@lesto/example-mcp-ops-console": ["@lesto/example-mcp-ops-console@workspace:examples/mcp-ops-console"],
 
     "@lesto/example-mcp-server": ["@lesto/example-mcp-server@workspace:examples/mcp-server"],
+
+    "@lesto/example-pubsub": ["@lesto/example-pubsub@workspace:examples/pubsub"],
 
     "@lesto/example-queue-dashboard": ["@lesto/example-queue-dashboard@workspace:examples/queue-dashboard"],
 
