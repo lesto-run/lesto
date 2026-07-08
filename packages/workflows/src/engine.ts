@@ -30,13 +30,17 @@ export async function installWorkflowSchema(
   // while keeping the installer's two-arg signature uniform across the repo.
   void dialect;
 
+  // One statement, no trailing `;` — so this installs cleanly if the workflows
+  // battery is ever deployed over Cloudflare D1, whose `exec` runs the string as
+  // a single `prepare(sql).run()` (a multi-statement / trailing-`;` string is
+  // rejected with D1 error 7500). Consistent with @lesto/queue's installSchema.
   await db.exec(`
     CREATE TABLE IF NOT EXISTS ${TABLE} (
       run_id    TEXT NOT NULL,
       step_key  TEXT NOT NULL,
       result    TEXT NOT NULL,
       PRIMARY KEY (run_id, step_key)
-    );
+    )
   `);
 }
 
