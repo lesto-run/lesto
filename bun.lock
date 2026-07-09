@@ -419,7 +419,7 @@
     },
     "packages/admin": {
       "name": "@lesto/admin",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/authz": "workspace:*",
         "@lesto/db": "workspace:*",
@@ -436,7 +436,7 @@
     },
     "packages/assets": {
       "name": "@lesto/assets",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/observability": "workspace:*",
@@ -452,14 +452,14 @@
     },
     "packages/auth": {
       "name": "@lesto/auth",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
       },
     },
     "packages/authz": {
       "name": "@lesto/authz",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/web": "workspace:*",
@@ -480,11 +480,11 @@
     },
     "packages/cache": {
       "name": "@lesto/cache",
-      "version": "0.1.5",
+      "version": "0.1.6",
     },
     "packages/cli": {
       "name": "@lesto/cli",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "bin": {
         "lesto": "./bin/lesto.mjs",
       },
@@ -532,7 +532,7 @@
     },
     "packages/cloudflare": {
       "name": "@lesto/cloudflare",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/db": "workspace:*",
         "@lesto/deploy": "workspace:*",
@@ -574,7 +574,7 @@
     },
     "packages/content-core": {
       "name": "@lesto/content-core",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/content-embeddings": "workspace:*",
         "@lesto/content-markdown": "workspace:*",
@@ -609,7 +609,7 @@
     },
     "packages/content-embeddings": {
       "name": "@lesto/content-embeddings",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@huggingface/transformers": "^3.3.3",
         "@lesto/content-shared": "workspace:*",
@@ -624,7 +624,7 @@
     },
     "packages/content-markdown": {
       "name": "@lesto/content-markdown",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/content-shared": "workspace:*",
         "@rehype-pretty/transformers": "^0.13.2",
@@ -729,7 +729,7 @@
     },
     "packages/content-search": {
       "name": "@lesto/content-search",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/content-shared": "workspace:*",
       },
@@ -757,7 +757,7 @@
     },
     "packages/content-shared": {
       "name": "@lesto/content-shared",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "dompurify": "^3.0.0",
         "github-slugger": "^2.0.0",
@@ -791,7 +791,7 @@
     },
     "packages/content-store": {
       "name": "@lesto/content-store",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/content-core": "workspace:*",
         "@lesto/db": "workspace:*",
@@ -804,7 +804,7 @@
     },
     "packages/content-umbra": {
       "name": "@lesto/content-umbra",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/content-shared": "workspace:*",
         "js-yaml": "^4.1.0",
@@ -833,7 +833,7 @@
     },
     "packages/cors": {
       "name": "@lesto/cors",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/web": "workspace:*",
@@ -841,7 +841,7 @@
     },
     "packages/create-lesto": {
       "name": "create-lesto",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "bin": {
         "create-lesto": "./bin/create-lesto.mjs",
       },
@@ -855,7 +855,7 @@
     },
     "packages/csrf": {
       "name": "@lesto/csrf",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/web": "workspace:*",
@@ -863,14 +863,14 @@
     },
     "packages/db": {
       "name": "@lesto/db",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
       },
     },
     "packages/deploy": {
       "name": "@lesto/deploy",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/sites": "workspace:*",
@@ -897,32 +897,32 @@
     },
     "packages/env": {
       "name": "@lesto/env",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
       },
     },
     "packages/errors": {
       "name": "@lesto/errors",
-      "version": "0.1.5",
+      "version": "0.1.6",
     },
     "packages/feeds": {
       "name": "@lesto/feeds",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
       },
     },
     "packages/flags": {
       "name": "@lesto/flags",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/web": "workspace:*",
       },
     },
     "packages/forms": {
       "name": "@lesto/forms",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/ui": "workspace:*",
@@ -934,11 +934,11 @@
     },
     "packages/i18n": {
       "name": "@lesto/i18n",
-      "version": "0.1.5",
+      "version": "0.1.6",
     },
     "packages/identity": {
       "name": "@lesto/identity",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/auth": "workspace:*",
         "@lesto/db": "workspace:*",
@@ -983,7 +983,7 @@
     },
     "packages/island-dev": {
       "name": "@lesto/island-dev",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/assets": "workspace:*",
         "@lesto/errors": "workspace:*",
@@ -995,7 +995,7 @@
     },
     "packages/kernel": {
       "name": "@lesto/kernel",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/auth": "workspace:*",
         "@lesto/cors": "workspace:*",
@@ -1054,7 +1054,7 @@
     },
     "packages/mail": {
       "name": "@lesto/mail",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/queue": "workspace:*",
@@ -1062,7 +1062,7 @@
     },
     "packages/mailing-lists": {
       "name": "@lesto/mailing-lists",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/db": "workspace:*",
         "@lesto/errors": "workspace:*",
@@ -1073,7 +1073,7 @@
     },
     "packages/mcp": {
       "name": "@lesto/mcp",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/authz": "workspace:*",
         "@lesto/db": "workspace:*",
@@ -1096,7 +1096,7 @@
     },
     "packages/migrate": {
       "name": "@lesto/migrate",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
       },
@@ -1114,15 +1114,15 @@
     },
     "packages/observability": {
       "name": "@lesto/observability",
-      "version": "0.1.5",
+      "version": "0.1.6",
     },
     "packages/openapi": {
       "name": "@lesto/openapi",
-      "version": "0.1.5",
+      "version": "0.1.6",
     },
     "packages/pg": {
       "name": "@lesto/pg",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/db": "workspace:*",
       },
@@ -1135,11 +1135,11 @@
     },
     "packages/pubsub": {
       "name": "@lesto/pubsub",
-      "version": "0.1.5",
+      "version": "0.1.6",
     },
     "packages/queue": {
       "name": "@lesto/queue",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/db": "workspace:*",
         "@lesto/errors": "workspace:*",
@@ -1147,7 +1147,7 @@
     },
     "packages/ratelimit": {
       "name": "@lesto/ratelimit",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/web": "workspace:*",
@@ -1155,7 +1155,7 @@
     },
     "packages/realtime": {
       "name": "@lesto/realtime",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/pubsub": "workspace:*",
         "@lesto/web": "workspace:*",
@@ -1163,14 +1163,14 @@
     },
     "packages/router": {
       "name": "@lesto/router",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
       },
     },
     "packages/runtime": {
       "name": "@lesto/runtime",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/csrf": "workspace:*",
         "@lesto/db": "workspace:*",
@@ -1187,14 +1187,14 @@
     },
     "packages/seo": {
       "name": "@lesto/seo",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
       },
     },
     "packages/sites": {
       "name": "@lesto/sites",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/seo": "workspace:*",
@@ -1202,14 +1202,14 @@
     },
     "packages/storage": {
       "name": "@lesto/storage",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
       },
     },
     "packages/styles": {
       "name": "@lesto/styles",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@tailwindcss/node": "^4.3.0",
@@ -1225,7 +1225,7 @@
     },
     "packages/ui": {
       "name": "@lesto/ui",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/router": "workspace:*",
@@ -1259,7 +1259,7 @@
     },
     "packages/web": {
       "name": "@lesto/web",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/observability": "workspace:*",
@@ -1272,7 +1272,7 @@
     },
     "packages/webhooks": {
       "name": "@lesto/webhooks",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/queue": "workspace:*",
@@ -1280,7 +1280,7 @@
     },
     "packages/workflows": {
       "name": "@lesto/workflows",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "dependencies": {
         "@lesto/errors": "workspace:*",
       },
@@ -1368,7 +1368,7 @@
 
     "@aws-sdk/credential-provider-web-identity": ["@aws-sdk/credential-provider-web-identity@3.972.63", "", { "dependencies": { "@aws-sdk/core": "^3.975.1", "@aws-sdk/nested-clients": "^3.997.31", "@aws-sdk/types": "^3.974.0", "@smithy/core": "^3.29.2", "@smithy/types": "^4.16.0", "tslib": "^2.6.2" } }, "sha512-8qZLFhM69eKcS37m459ctPR05Qimycm/74OPVioe6wNZabMT54GYhwBju0+J656RkMasNSawWQu+c8CmBe3TUQ=="],
 
-    "@aws-sdk/credential-providers": ["@aws-sdk/credential-providers@3.1083.0", "", { "dependencies": { "@aws-sdk/core": "^3.975.1", "@aws-sdk/credential-provider-cognito-identity": "^3.972.56", "@aws-sdk/credential-provider-env": "^3.972.57", "@aws-sdk/credential-provider-http": "^3.972.59", "@aws-sdk/credential-provider-ini": "^3.973.1", "@aws-sdk/credential-provider-login": "^3.972.63", "@aws-sdk/credential-provider-node": "^3.972.66", "@aws-sdk/credential-provider-process": "^3.972.57", "@aws-sdk/credential-provider-sso": "^3.973.1", "@aws-sdk/credential-provider-web-identity": "^3.972.63", "@aws-sdk/nested-clients": "^3.997.31", "@aws-sdk/types": "^3.974.0", "@smithy/core": "^3.29.2", "@smithy/credential-provider-imds": "^4.4.7", "@smithy/types": "^4.16.0", "tslib": "^2.6.2" } }, "sha512-i2q3Jgt365lZp7BSDqDSf283WvISrXob1zsql093LK3G2svYRHRvcNv995SsKtAzRENwHem2TC2vWeghrgBkxg=="],
+    "@aws-sdk/credential-providers": ["@aws-sdk/credential-providers@3.1084.0", "", { "dependencies": { "@aws-sdk/core": "^3.975.1", "@aws-sdk/credential-provider-cognito-identity": "^3.972.56", "@aws-sdk/credential-provider-env": "^3.972.57", "@aws-sdk/credential-provider-http": "^3.972.59", "@aws-sdk/credential-provider-ini": "^3.973.1", "@aws-sdk/credential-provider-login": "^3.972.63", "@aws-sdk/credential-provider-node": "^3.972.66", "@aws-sdk/credential-provider-process": "^3.972.57", "@aws-sdk/credential-provider-sso": "^3.973.1", "@aws-sdk/credential-provider-web-identity": "^3.972.63", "@aws-sdk/nested-clients": "^3.997.31", "@aws-sdk/types": "^3.974.0", "@smithy/core": "^3.29.2", "@smithy/credential-provider-imds": "^4.4.7", "@smithy/types": "^4.16.0", "tslib": "^2.6.2" } }, "sha512-6MT9xigrduBftpOEq2HKzGqp2Up0Jwe8dK5W3GyBpePywzgMK6029XEYXkCC5wRYwXwhSPzpjnjRlWUA7K/KNQ=="],
 
     "@aws-sdk/nested-clients": ["@aws-sdk/nested-clients@3.997.31", "", { "dependencies": { "@aws-sdk/core": "^3.975.1", "@aws-sdk/signature-v4-multi-region": "^3.996.39", "@aws-sdk/types": "^3.974.0", "@smithy/core": "^3.29.2", "@smithy/fetch-http-handler": "^5.6.4", "@smithy/node-http-handler": "^4.9.4", "@smithy/types": "^4.16.0", "tslib": "^2.6.2" } }, "sha512-BDHTpwcsZHEBNEJzOg/B1BkFYJxAXY50dau/NyVWs3d51F0WgIUGSWZot/Os+N3KpDhXeaXnz37mWffAvduREw=="],
 
@@ -1494,7 +1494,7 @@
 
     "@emnapi/core": ["@emnapi/core@1.11.1", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" } }, "sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ=="],
 
-    "@emnapi/runtime": ["@emnapi/runtime@1.11.1", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-vgj7R3y3Wgx24IQaGPA/R6YFXLHVMOZ0uVEyIQPaWs+rd1AzfEMXlAC22FYwO1XkKR6NPsq7mUandH8oIRdZFw=="],
+    "@emnapi/runtime": ["@emnapi/runtime@1.11.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-kyOl3X0DuTiT1h2ft8r2fYO8JYtU9a9Xis/zBSiGArNaagCOWx90N1k2wxp18czFDH+OgcWGb5ZP/XMt3dcyPA=="],
 
     "@emnapi/wasi-threads": ["@emnapi/wasi-threads@1.2.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA=="],
 
@@ -3686,7 +3686,7 @@
 
     "workerd": ["workerd@1.20260424.1", "", { "optionalDependencies": { "@cloudflare/workerd-darwin-64": "1.20260424.1", "@cloudflare/workerd-darwin-arm64": "1.20260424.1", "@cloudflare/workerd-linux-64": "1.20260424.1", "@cloudflare/workerd-linux-arm64": "1.20260424.1", "@cloudflare/workerd-windows-64": "1.20260424.1" }, "bin": { "workerd": "bin/workerd" } }, "sha512-oKsB0Xo/mfkYMdSACoS06XZg09VUK4rXwHfF/1t3P++sMbwzf4UHQvMO57+zxpEB2nVrY/ZkW0bYFGq4GdAFSQ=="],
 
-    "wrangler": ["wrangler@4.109.0", "", { "dependencies": { "@cloudflare/kv-asset-handler": "0.5.0", "@cloudflare/unenv-preset": "2.16.1", "blake3-wasm": "2.1.5", "esbuild": "0.28.1", "miniflare": "4.20260708.0", "path-to-regexp": "6.3.0", "unenv": "2.0.0-rc.24", "workerd": "1.20260708.1" }, "optionalDependencies": { "fsevents": "2.3.3" }, "peerDependencies": { "@cloudflare/workers-types": "^5.20260708.1" }, "optionalPeers": ["@cloudflare/workers-types"], "bin": { "cf-wrangler": "bin/cf-wrangler.js", "wrangler": "bin/wrangler.js", "wrangler2": "bin/wrangler.js" } }, "sha512-Ev6iIBNnRwvYeJv8B7377YsnY+PxEznHmz3r33cWgP+6A5HNqqqJhChBaVUWxxs0uQPKuYBy8tqrfyd7o8WmBg=="],
+    "wrangler": ["wrangler@4.110.0", "", { "dependencies": { "@cloudflare/kv-asset-handler": "0.5.0", "@cloudflare/unenv-preset": "2.16.1", "blake3-wasm": "2.1.5", "esbuild": "0.28.1", "miniflare": "4.20260708.1", "path-to-regexp": "6.3.0", "unenv": "2.0.0-rc.24", "workerd": "1.20260708.1" }, "optionalDependencies": { "fsevents": "2.3.3" }, "peerDependencies": { "@cloudflare/workers-types": "^5.20260708.1" }, "optionalPeers": ["@cloudflare/workers-types"], "bin": { "cf-wrangler": "bin/cf-wrangler.js", "wrangler": "bin/wrangler.js", "wrangler2": "bin/wrangler.js" } }, "sha512-xZeXKYi7hxQRF5anL+v77RkufJNpF9f3Eqeyqq2QBsETpLZgh0Agj0jJ6JPtkbgn6ukZdh8OK5egsGPWIditgg=="],
 
     "wrap-ansi": ["wrap-ansi@8.1.0", "", { "dependencies": { "ansi-styles": "^6.1.0", "string-width": "^5.0.1", "strip-ansi": "^7.0.1" } }, "sha512-si7QWI6zUMq56bESFvagtmzMdGOtoxfR+Sez11Mobfc7tm+VkUckk9bW2UeffTGVUbOksxmSw0AA2gs8g71NCQ=="],
 
@@ -3790,9 +3790,9 @@
 
     "@rollup/pluginutils/picomatch": ["picomatch@2.3.2", "", {}, "sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA=="],
 
-    "@tailwindcss/oxide-wasm32-wasi/@emnapi/core": ["@emnapi/core@1.11.1", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" }, "bundled": true }, "sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ=="],
+    "@tailwindcss/oxide-wasm32-wasi/@emnapi/core": ["@emnapi/core@1.11.2", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" }, "bundled": true }, "sha512-TC8MkTuZUtcTSiFeuC0ksCh9QIJ5+F21MvZ4Wn4ORfYaFJ/0dsiudv5tVkejgwZlwQ39jL9WWDe2lz8x0WglOA=="],
 
-    "@tailwindcss/oxide-wasm32-wasi/@emnapi/runtime": ["@emnapi/runtime@1.11.1", "", { "dependencies": { "tslib": "^2.4.0" }, "bundled": true }, "sha512-vgj7R3y3Wgx24IQaGPA/R6YFXLHVMOZ0uVEyIQPaWs+rd1AzfEMXlAC22FYwO1XkKR6NPsq7mUandH8oIRdZFw=="],
+    "@tailwindcss/oxide-wasm32-wasi/@emnapi/runtime": ["@emnapi/runtime@1.11.2", "", { "dependencies": { "tslib": "^2.4.0" }, "bundled": true }, "sha512-kyOl3X0DuTiT1h2ft8r2fYO8JYtU9a9Xis/zBSiGArNaagCOWx90N1k2wxp18czFDH+OgcWGb5ZP/XMt3dcyPA=="],
 
     "@tailwindcss/oxide-wasm32-wasi/@emnapi/wasi-threads": ["@emnapi/wasi-threads@1.2.2", "", { "dependencies": { "tslib": "^2.4.0" }, "bundled": true }, "sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA=="],
 
@@ -3884,7 +3884,7 @@
 
     "wrangler/esbuild": ["esbuild@0.28.1", "", { "optionalDependencies": { "@esbuild/aix-ppc64": "0.28.1", "@esbuild/android-arm": "0.28.1", "@esbuild/android-arm64": "0.28.1", "@esbuild/android-x64": "0.28.1", "@esbuild/darwin-arm64": "0.28.1", "@esbuild/darwin-x64": "0.28.1", "@esbuild/freebsd-arm64": "0.28.1", "@esbuild/freebsd-x64": "0.28.1", "@esbuild/linux-arm": "0.28.1", "@esbuild/linux-arm64": "0.28.1", "@esbuild/linux-ia32": "0.28.1", "@esbuild/linux-loong64": "0.28.1", "@esbuild/linux-mips64el": "0.28.1", "@esbuild/linux-ppc64": "0.28.1", "@esbuild/linux-riscv64": "0.28.1", "@esbuild/linux-s390x": "0.28.1", "@esbuild/linux-x64": "0.28.1", "@esbuild/netbsd-arm64": "0.28.1", "@esbuild/netbsd-x64": "0.28.1", "@esbuild/openbsd-arm64": "0.28.1", "@esbuild/openbsd-x64": "0.28.1", "@esbuild/openharmony-arm64": "0.28.1", "@esbuild/sunos-x64": "0.28.1", "@esbuild/win32-arm64": "0.28.1", "@esbuild/win32-ia32": "0.28.1", "@esbuild/win32-x64": "0.28.1" }, "bin": { "esbuild": "bin/esbuild" } }, "sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw=="],
 
-    "wrangler/miniflare": ["miniflare@4.20260708.0", "", { "dependencies": { "@cspotcode/source-map-support": "0.8.1", "sharp": "0.34.5", "undici": "7.28.0", "workerd": "1.20260708.1", "ws": "8.21.0", "youch": "4.1.0-beta.10" }, "bin": { "miniflare": "bootstrap.js" } }, "sha512-ut32kKKTyZIoXhbtteDAMOwTVx9aCeehMeKb1xmJs4RLdBrF5flSZD1MOpWqmJycIV7YBHjcaZcVHLMr/g5RZA=="],
+    "wrangler/miniflare": ["miniflare@4.20260708.1", "", { "dependencies": { "@cspotcode/source-map-support": "0.8.1", "sharp": "0.34.5", "undici": "7.28.0", "workerd": "1.20260708.1", "ws": "8.21.0", "youch": "4.1.0-beta.10" }, "bin": { "miniflare": "bootstrap.js" } }, "sha512-c94O9zRDISdqO18EHt6l0iF/fWgWt8p18PJvRsA/L/NJZ9Cfke3s/F5Blg1XXF7WDutVRzWVWy8Vy4LaT5ifsA=="],
 
     "wrangler/unenv": ["unenv@2.0.0-rc.24", "", { "dependencies": { "pathe": "^2.0.3" } }, "sha512-i7qRCmY42zmCwnYlh9H2SvLEypEFGye5iRmEMKjcGi7zk9UquigRjFtTLz0TYqr0ZGLZhaMHl/foy1bZR+Cwlw=="],
 
@@ -4291,6 +4291,10 @@
     "wrap-ansi-cjs/string-width/emoji-regex": ["emoji-regex@8.0.0", "", {}, "sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A=="],
 
     "wrap-ansi/strip-ansi/ansi-regex": ["ansi-regex@6.2.2", "", {}, "sha512-Bq3SmSpyFHaWjPk8If9yc6svM8c56dB5BAtW4Qbw5jHTwwXXcTLoRMkpDJp6VL0XzlWaCHTXrkFURMYmD0sLqg=="],
+
+    "@prefresh/rolldown/rolldown/@rolldown/binding-wasm32-wasi/@emnapi/runtime": ["@emnapi/runtime@1.11.1", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-vgj7R3y3Wgx24IQaGPA/R6YFXLHVMOZ0uVEyIQPaWs+rd1AzfEMXlAC22FYwO1XkKR6NPsq7mUandH8oIRdZFw=="],
+
+    "@prefresh/vite/rolldown/@rolldown/binding-wasm32-wasi/@emnapi/runtime": ["@emnapi/runtime@1.11.1", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-vgj7R3y3Wgx24IQaGPA/R6YFXLHVMOZ0uVEyIQPaWs+rd1AzfEMXlAC22FYwO1XkKR6NPsq7mUandH8oIRdZFw=="],
 
     "unrun/rolldown/@rolldown/binding-wasm32-wasi/@emnapi/core": ["@emnapi/core@1.10.0", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.1", "tslib": "^2.4.0" } }, "sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw=="],
 

@@ -1,6 +1,6 @@
 {
   "name": "@lesto/workflows",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "license": "MIT",
   "description": "Lesto's in-house resumable step memoization on a SQL database — completed steps replay on caller-driven re-invocation (not crash-safe durable execution; a run journal + resume driver is post-1.0).",
   "type": "module",

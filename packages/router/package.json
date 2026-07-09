@@ -1,6 +1,6 @@
 {
   "name": "@lesto/router",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "license": "MIT",
   "description": "Lesto's RESTful router — declare routes and named paths, resolve method+path to a controller#action.",
   "type": "module",

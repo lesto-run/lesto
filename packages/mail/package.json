@@ -1,6 +1,6 @@
 {
   "name": "@lesto/mail",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "license": "MIT",
   "description": "Lesto mailers — react-email templates, queued delivery on @lesto/queue, pluggable transport.",
   "type": "module",

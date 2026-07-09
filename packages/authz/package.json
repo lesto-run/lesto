@@ -1,6 +1,6 @@
 {
   "name": "@lesto/authz",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "license": "MIT",
   "description": "Lesto's first-class authorization — a declarative role/permission policy and the guard middleware that enforces it.",
   "type": "module",

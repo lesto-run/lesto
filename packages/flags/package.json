@@ -1,6 +1,6 @@
 {
   "name": "@lesto/flags",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "license": "MIT",
   "description": "Lesto's first-class feature flags — declare a flag on a route or page and the gate hides it when off.",
   "type": "module",

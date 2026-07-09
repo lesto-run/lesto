@@ -1,6 +1,6 @@
 {
   "name": "@lesto/content-embeddings",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "PREVIEW (not part of the supported v1 content seam) — build-time embedding generation for semantic search. A fresh build environment downloads the all-MiniLM-L6-v2 model (~25MB via @huggingface/transformers) on first run; cache the model dir in CI. Experimental, coverage-gate-exempt.",
   "type": "module",
   "sideEffects": false,
