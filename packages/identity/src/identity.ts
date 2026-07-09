@@ -407,7 +407,7 @@ export interface Identity {
   /**
    * Confirm enrollment with the first code from the authenticator, returning the
    * one-time-visible recovery codes. On success: mints + persists fresh
-   * scrypt-hashed recovery codes FIRST (the plaintext is returned once, never
+   * KDF-hashed recovery codes FIRST (the plaintext is returned once, never
    * stored), then stamps the factor confirmed LAST — so a crash between the two
    * leaves the factor unconfirmed and re-confirmable rather than stranding a
    * confirmed factor with no recovery codes. Throws `IDENTITY_INVALID_TOTP` on a
@@ -955,7 +955,7 @@ export function createIdentity(options: IdentityOptions): Identity {
       // LAST. A crash between the two now leaves the factor *unconfirmed* — so it
       // is re-confirmable and never strands the user with a confirmed factor but no
       // recovery codes (a lockout). The plaintext codes are returned for one-time
-      // display; only the scrypt hashes are persisted (ADR 0020).
+      // display; only the KDF hashes are persisted (ADR 0020).
       const recoveryCodes = generateRecoveryCodes();
       await totpRepo.replaceRecoveryCodes(
         db,

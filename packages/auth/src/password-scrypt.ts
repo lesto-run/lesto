@@ -82,8 +82,10 @@ const DEFAULT_P = 1;
  * scrypt needs roughly `128 · N · r` bytes of working memory; at the default
  * cost that is ~128 MiB, which exceeds Node's built-in 32 MiB `maxmem` default
  * and would make the derive throw. We set the ceiling to 256 MiB — double the
- * default-cost footprint — so today's parameters work and there is headroom for
- * a future bump without re-touching this constant.
+ * default-cost footprint — so today's parameters derive with margin. A future
+ * `N` bump raises this ceiling alongside `DEFAULT_N` (the next power of two,
+ * N=2^18, already needs ~256 MiB), and `parseStored` rejects any `N > DEFAULT_N`
+ * so a stored hash can never demand more memory than this constant allows.
  */
 const MAXMEM = 256 * 1024 * 1024;
 
@@ -144,6 +146,12 @@ function parseStored(
     // string we minted, so fail closed rather than hand garbage to the derive.
     if (!isPositiveInteger(N) || !isPositiveInteger(r) || !isPositiveInteger(p)) return undefined;
     if (!isPowerOfTwo(N)) return undefined;
+
+    // Reject a cost ABOVE what we mint today: we only ever raise `N`, never above
+    // the current default, so a larger `N` is not a hash this module produced — and
+    // deriving it would exceed `MAXMEM` and make `scryptAsync` THROW, breaking the
+    // "verifies to false, never rejects" contract. Fail closed here instead.
+    if (N > DEFAULT_N) return undefined;
 
     params = { N, r, p };
     saltHex = salt;

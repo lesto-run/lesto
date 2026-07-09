@@ -4,7 +4,8 @@
  *
  *   totp_factors   one enrolled TOTP secret per user (UNIQUE user_id), with the
  *                  `confirmed_at` instant set once the user proves the first code.
- *   recovery_codes N single-use, scrypt-hashed backup codes per user.
+ *   recovery_codes N single-use, KDF-hashed backup codes per user (scrypt on Node,
+ *                  PBKDF2 on the edge).
  *
  * Both are `@lesto/db` schema *values* (ADR 0004): the value backs the migration
  * DDL and the inferred row type, so the column list has one source of truth. They
@@ -56,7 +57,7 @@ export const totpFactors = defineTable("totp_factors", {
   updatedAt: timestamp("updated_at").notNull(),
 });
 
-/** One single-use recovery code, stored only as its scrypt hash; `usedAt` set on consumption. */
+/** One single-use recovery code, stored only as its KDF hash; `usedAt` set on consumption. */
 export const recoveryCodes = defineTable("recovery_codes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("user_id").notNull(),

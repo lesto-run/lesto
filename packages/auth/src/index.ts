@@ -21,8 +21,10 @@
 export { hashPassword, needsRehash, verifyPassword } from "./password";
 
 // The explicit per-algorithm backends, for callers that must pin one (e.g. minting
-// PBKDF2 from Node for a DB an edge app will read) rather than take the
-// runtime-selected default the facade above provides.
+// PBKDF2 from Node for a DB an edge app will read; see the cross-runtime caveat in
+// `./password`) rather than take the runtime-selected default the facade above
+// provides. Verification needs no such pin — `verifyPassword` already dispatches on
+// the stored hash's own prefix — but these shipped public in 0.1.4, so they stay.
 export { hashPasswordScrypt, needsRehashScrypt, verifyPasswordScrypt } from "./password-scrypt";
 export { hashPasswordWeb, needsRehashWeb, verifyPasswordWeb } from "./password-web";
 

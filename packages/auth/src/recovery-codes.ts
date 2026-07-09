@@ -2,14 +2,15 @@
  * Single-use recovery codes — the break-glass second-factor backup.
  *
  *   const codes = generateRecoveryCodes();          // 10 plaintext codes, shown ONCE
- *   const hashes = await hashRecoveryCodes(codes);  // scrypt digests, stored at rest
+ *   const hashes = await hashRecoveryCodes(codes);  // KDF digests, stored at rest
  *   await verifyRecoveryCode("a1b2-c3d4-e5", hash); // true iff it matches
  *
  * Recovery codes let a user who has lost their authenticator still prove the
- * second factor. They are **hashed at rest with the SAME scrypt primitive the
- * password path uses** ({@link hashPassword} / {@link verifyPassword}) — there is
- * deliberately no second hasher. A database snapshot therefore yields no usable
- * codes, exactly as it yields no usable passwords.
+ * second factor. They are **hashed at rest with the SAME primitive the password
+ * path uses** ({@link hashPassword} / {@link verifyPassword}) — the runtime-adaptive
+ * KDF (scrypt on Node, PBKDF2 on the edge), with deliberately no second hasher. A
+ * database snapshot therefore yields no usable codes, exactly as it yields no usable
+ * passwords.
  *
  * The plaintext codes are returned by {@link generateRecoveryCodes} once, at
  * generation, for the app to display to the user; only their digests are
@@ -79,11 +80,12 @@ export function generateRecoveryCodes(count: number = DEFAULT_COUNT): string[] {
 }
 
 /**
- * Hash a batch of plaintext codes with the password path's scrypt KDF.
+ * Hash a batch of plaintext codes with the password path's KDF.
  *
  * Reuses {@link hashPassword} verbatim — the same self-describing, re-hashable,
- * cost-parameterized format passwords use — so recovery codes are protected at
- * rest identically and there is one hashing implementation to audit, not two.
+ * cost-parameterized, runtime-adaptive format passwords use (scrypt on Node, PBKDF2
+ * on the edge) — so recovery codes are protected at rest identically and there is
+ * one hashing implementation to audit, not two.
  */
 export async function hashRecoveryCodes(codes: readonly string[]): Promise<string[]> {
   return await Promise.all(codes.map((code) => hashPassword(code)));

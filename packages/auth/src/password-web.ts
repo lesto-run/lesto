@@ -123,8 +123,12 @@ function parseStored(stored: string): Pbkdf2Parsed | undefined {
   if (prefix !== PBKDF2_PREFIX) return undefined;
 
   // Unknown digest tag: not one we mint, so not a string we could have produced.
-  const digest = DIGESTS[digestTag];
-  if (digest === undefined) return undefined;
+  // `Object.hasOwn`, not `DIGESTS[tag] === undefined` — a bare index resolves
+  // inherited `Object.prototype` members (`toString`, `constructor`, …) to real
+  // values, which would slip past the guard and hand `crypto.subtle` a function
+  // as the hash name, making it THROW rather than fail closed to `false`.
+  if (!Object.hasOwn(DIGESTS, digestTag)) return undefined;
+  const digest = DIGESTS[digestTag]!;
 
   const iterations = Number(iterRaw);
   if (!isPositiveInteger(iterations)) return undefined;

@@ -12,10 +12,18 @@
  * **mints** under the algorithm {@link selectPasswordAlgorithm} picks for the host —
  * scrypt on Node, PBKDF2 on Workers — while **verification** dispatches on the
  * stored hash's own prefix, so a hash always verifies under the algorithm that made
- * it, regardless of which runtime is verifying (PBKDF2 verifies on Node too; scrypt
- * cannot run on the edge, but an edge app only ever mints PBKDF2, so it only sees
- * PBKDF2 hashes). This is the drop-in default: `@lesto/identity`'s `productionHasher`
- * wraps these three functions, so wiring nothing gets you an edge-safe hasher.
+ * it (PBKDF2 verifies on Node too). This is the drop-in default: `@lesto/identity`'s
+ * `productionHasher` wraps these three functions, so a *greenfield* edge app — the
+ * edge being the only writer — mints and reads only PBKDF2 and is edge-safe with no
+ * wiring.
+ *
+ * ⚠️ CROSS-RUNTIME CAVEAT. scrypt cannot run on the edge (it OOMs). So a `scrypt$…`
+ * hash that reaches an edge verifier — a DB *migrated* from Node, or a *hybrid* app
+ * whose Node side minted the hash with the default `hashPassword` — cannot be
+ * verified there and does not self-heal (`needsRehash` is false at the current cost,
+ * so rehash-on-login never converts it). A hybrid/migrating deployment must mint
+ * every hash the edge will read with {@link hashPasswordWeb} (pin PBKDF2 everywhere),
+ * or re-hash the corpus to PBKDF2 before cutover. Tracked for a first-class path.
  *
  * `hashPassword` / `verifyPassword` / `needsRehash` keep the exact names and shapes
  * they had when scrypt was the only backend, so this change is transparent to every

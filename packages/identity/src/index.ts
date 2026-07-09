@@ -16,7 +16,7 @@
  *   const { session } = identity.login("ada@example.com", "correct horse battery staple");
  *
  * Composes:
- *   - `@lesto/auth`    — scrypt hashing, store-backed sessions, signed tokens
+ *   - `@lesto/auth`    — password hashing (scrypt on Node, PBKDF2 on edge), store-backed sessions, signed tokens
  *   - `@lesto/db`      — the `users` schema, typed queries, and DDL
  *   - `@lesto/migrate` — the `users` table migration shape
  *

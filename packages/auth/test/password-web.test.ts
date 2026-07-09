@@ -83,6 +83,8 @@ describe("hashPasswordWeb / verifyPasswordWeb", () => {
       `pbkdf2$sha256$600000$${VALID_SALT}$${VALID_KEY}$extra`, // too many
       `bcrypt$sha256$600000$${VALID_SALT}$${VALID_KEY}`, // wrong prefix
       `pbkdf2$sha512$600000$${VALID_SALT}$${VALID_KEY}`, // unknown digest tag
+      `pbkdf2$toString$600000$${VALID_SALT}$${VALID_KEY}`, // inherited-proto digest tag — must NOT throw
+      `pbkdf2$constructor$600000$${VALID_SALT}$${VALID_KEY}`, // ditto
       `pbkdf2$sha256$notanumber$${VALID_SALT}$${VALID_KEY}`, // non-numeric iterations
       `pbkdf2$sha256$0$${VALID_SALT}$${VALID_KEY}`, // zero iterations
       `pbkdf2$sha256$-5$${VALID_SALT}$${VALID_KEY}`, // negative iterations
@@ -197,5 +199,14 @@ describe("hashPassword facade — runtime-adaptive minting, prefix-dispatched ve
     const scryptStored = await hashPasswordScrypt("scrypt password");
     expect(await verifyPassword("scrypt password", scryptStored)).toBe(true);
     expect(needsRehash(scryptStored)).toBe(false);
+  });
+
+  it("fails closed (never throws) on a well-formed scrypt hash whose N is over-cost", async () => {
+    // N=2^19 is a valid power of two we never mint; deriving it would exceed MAXMEM
+    // and throw. parseStored must reject it up front so verify resolves false.
+    const overCost = `scrypt$${2 ** 19}$8$1$${hexOf(16)}$${hexOf(64)}`;
+
+    expect(await verifyPassword("anything", overCost)).toBe(false);
+    expect(needsRehash(overCost)).toBe(false);
   });
 });
