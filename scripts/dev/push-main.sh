@@ -61,10 +61,17 @@ notify() {
     printf '%s' "$now" >"$1" 2>/dev/null || true
 }
 
+# Pin the exact commit we scan == the commit we push (TOCTOU: a commit landing
+# between the scan and the push would otherwise ship UNSCANNED and never be
+# re-checked, since a successful push advances origin/main past it). Guard a
+# bad/empty rev-parse — `git push origin :refs/heads/main` would DELETE main.
+head=$(git rev-parse HEAD 2>/dev/null)
+case $head in '' | *[!0-9a-f]*) exit 0 ;; esac
+
 # SECRET GATE. Only a DEFINITE hit (rc=2) blocks; any other non-zero is a
 # scanner error → fail OPEN (a broken scanner must not wedge the push path into
 # re-creating L-f9ac64d8 drift), but log it so it's visible.
-scan_msg=$(sh "$script_dir/secret-scan.sh" 2>&1)
+scan_msg=$(sh "$script_dir/secret-scan.sh" "origin/main..$head" 2>&1)
 scan_rc=$?
 if [ "$scan_rc" -eq 2 ]; then
   printf '%s SECRET-BLOCK: refused to push — %s\n' "$ts" "$(printf '%s' "$scan_msg" | tr '\n' ' ')" >>"$log"
@@ -75,7 +82,7 @@ elif [ "$scan_rc" -ne 0 ]; then
   printf '%s scan-error rc=%s (failing open): %s\n' "$ts" "$scan_rc" "$(printf '%s' "$scan_msg" | tr '\n' ' ')" >>"$log"
 fi
 
-out=$(GIT_TERMINAL_PROMPT=0 git push origin main 2>&1)
+out=$(GIT_TERMINAL_PROMPT=0 git push origin "$head:refs/heads/main" 2>&1)
 rc=$?
 
 fails_file="$studio_dir/.push-main-fails"
