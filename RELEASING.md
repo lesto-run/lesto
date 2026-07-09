@@ -49,7 +49,10 @@ name* (below); everything already on npm publishes through CI.
    "successfully"). Then arm `RELEASE_ENABLED=true`, and `gh workflow run release.yml --ref
    <exact-sha>` (**not** `--ref main`). Read the run's publish summary: `0 published, N skipped`
    when you expected new publishes means CI built a stale tree — investigate, don't assume
-   success. Restore `RELEASE_ENABLED=false` after.
+   success. Restore `RELEASE_ENABLED=false` after. **GREEN-CI GATE (L-69e905de):** the workflow's
+   first step refuses to publish unless the `CI` workflow concluded `success` for the dispatched
+   commit — so confirm CI is green for that exact SHA before arming, or the run fails fast at
+   "Require green CI for this commit" without uploading anything.
 
 > ⚠️ **DRAGON 2 (provenance):** `.github/workflows/release.yml` pins `npm@11.5.1` on purpose —
 > `npm@latest` (now `12.0.0`) regressed provenance with `Cannot find module 'sigstore'`. Do not

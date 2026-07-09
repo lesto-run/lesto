@@ -18,6 +18,10 @@
 # publish window. Arm it, dispatch, then set it back to `false` (safe-at-rest). NOTE: the workflow
 # checks out ORIGIN at the given ref — confirm `git rev-list --count origin/main..HEAD == 0` and
 # dispatch with `--ref <exact-sha>` (not `--ref main`), or CI silently builds a stale tree.
+#
+# GREEN-CI GATE (L-69e905de): the first step below refuses to publish unless the `CI` workflow
+# concluded `success` for the exact dispatched commit — so a red or not-yet-built tree fails fast
+# without uploading a tarball. Dispatch only AFTER CI has gone green for the release commit.
 name: Release
 
 on:
@@ -30,6 +34,7 @@ concurrency:
 permissions:
   contents: read
   id-token: write # OIDC trusted publishing + provenance
+  actions: read # read the CI workflow's conclusion for the commit (green-CI gate below)
 
 jobs:
   release:
@@ -41,6 +46,39 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Green-CI precondition (L-69e905de). This workflow is dispatch-triggered and has NO
+      # inherent tie to CI, so without this gate it will publish from a RED tree just as
+      # readily as a green one — the 0.1.4 wave did (benignly: format drift in test files
+      # excluded from every tarball, but the MECHANISM would ship genuinely broken code).
+      # npm is immutable, so publishing is unrecoverable — require the `CI` workflow to have
+      # concluded `success` for the EXACT commit being published before any tarball uploads.
+      # Fail-CLOSED: no run found, still in progress, or any non-success conclusion all abort.
+      # GITHUB_SHA is the tip of the dispatched ref (we dispatch --ref main only after
+      # confirming origin==sha per RELEASING.md), and CI runs on push to main, so a green run
+      # for this SHA exists once CI has finished. Reads GITHUB_SHA (runner-set, not caller
+      # input) via env; needs the `actions: read` permission added above.
+      - name: Require green CI for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checking CI conclusion for $GITHUB_SHA…"
+          result="$(gh run list --workflow=ci.yml --commit "$GITHUB_SHA" --limit 1 \
+            --json status,conclusion,databaseId \
+            --jq 'if length == 0 then "none none 0" else "\(.[0].status) \(.[0].conclusion) \(.[0].databaseId)" end')"
+          status="$(printf '%s' "$result" | cut -d' ' -f1)"
+          conclusion="$(printf '%s' "$result" | cut -d' ' -f2)"
+          run_id="$(printf '%s' "$result" | cut -d' ' -f3)"
+          echo "Latest CI run for $GITHUB_SHA: status=$status conclusion=$conclusion (run $run_id)"
+          if [ "$status" = "none" ]; then
+            echo "::error::No CI run found for $GITHUB_SHA — refusing to publish an unverified commit. Push it, let CI run to green, then re-dispatch the release."
+            exit 1
+          fi
+          if [ "$status" != "completed" ] || [ "$conclusion" != "success" ]; then
+            echo "::error::CI for $GITHUB_SHA is not green (status=$status conclusion=$conclusion). Refusing to publish. Wait for CI to conclude success, then re-dispatch."
+            exit 1
+          fi
+          echo "CI is green for $GITHUB_SHA — proceeding to publish."
 
       - uses: actions/setup-node@v4
         with:
