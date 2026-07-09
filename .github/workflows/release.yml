@@ -12,10 +12,12 @@
 # `workspace:*` protocol (npm does not), then `npm publish` uploads each tarball over OIDC.
 #
 # Dormant until the RELEASE_ENABLED repo variable is `true`. Trigger EXPLICITLY from the Actions
-# tab ("Run workflow" → workflow_dispatch). There is deliberately NO `push` trigger: this repo's
-# Studio daemon auto-pushes to main, so an on-push release would let a stray daemon push publish
-# whatever is at HEAD the moment RELEASE_ENABLED is flipped on (ADR/L-c095f277). Dispatch is the
-# only path, so arming the variable never auto-fires a release.
+# tab ("Run workflow" → workflow_dispatch); there is deliberately NO `push` trigger. RELEASE_ENABLED
+# is now a DEFENSE-IN-DEPTH privilege gate: `workflow_dispatch` lets anyone with Actions-write fire a
+# run, but a repo *variable* is admin-gated — so nothing publishes unless an admin has opened the
+# publish window. Arm it, dispatch, then set it back to `false` (safe-at-rest). NOTE: the workflow
+# checks out ORIGIN at the given ref — confirm `git rev-list --count origin/main..HEAD == 0` and
+# dispatch with `--ref <exact-sha>` (not `--ref main`), or CI silently builds a stale tree.
 name: Release
 
 on:
