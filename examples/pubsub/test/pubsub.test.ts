@@ -1,8 +1,8 @@
 /**
  * The fan-out app driven in-process, over fake Bun sockets — no real server. This
  * proves the `src/app.ts` wiring (route matching, the authz guard, upgrade handoff,
- * open/close lifecycle, publish validation) around `@lesto/pubsub`'s `FanoutRoom` +
- * `verifyChannelToken`; the real socket path is proven by `serve.smoke.test.ts`.
+ * open/close lifecycle, publish validation) around `@lesto/pubsub`'s `fanout` +
+ * `FanoutRegistry` + `verifyChannelToken`; the real socket path is `serve.smoke.test.ts`.
  *
  * Sockets are opened by calling `app.websocket.open(...)` directly, so a subscriber
  * fixture needs no token; the authz guard is exercised through `app.fetch(...)` on

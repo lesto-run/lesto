@@ -1,8 +1,8 @@
 /**
  * The pubsub fan-out app as substrate-neutral Bun handlers, shared by `serve.ts`
  * (a live server) and `test/pubsub.test.ts` (in-process). `@lesto/pubsub`'s
- * {@link FanoutRoom} is the fan-out brain; {@link verifyChannelToken} is the authz
- * brain; this file is only the HTTP + WebSocket plumbing around them:
+ * {@link fanout} + {@link FanoutRegistry} are the fan-out brain; {@link verifyChannelToken}
+ * is the authz brain; this file is only the HTTP + WebSocket plumbing around them:
  *
  *   - `GET  /subscribe?channel=<name>&token=<t>` verifies a `subscribe`-mode token
  *     scoped to `<name>`, then upgrades to a WebSocket subscribed to the channel;
@@ -18,16 +18,18 @@
  * `(channel, mode)` capability, not a master credential — see `@lesto/pubsub`'s
  * `channel-token.ts`).
  *
- * On Node the single process IS the coordination point, so one `FanoutRoom` serves
- * every connection. On Cloudflare that role belongs to a Durable Object (`room.ts`),
- * because edge isolates share no memory — but the DO runs the SAME `FanoutRoom` and
- * the SAME `verifyChannelToken`, so the semantics are identical across substrates.
+ * On Node the single process IS the coordination point, so one `FanoutRegistry` (a
+ * plain in-memory `channel → sockets` map) plus an in-process `seq` serves every
+ * connection. On Cloudflare that role belongs to a hibernatable Durable Object
+ * (`room.ts`), whose registry is the workerd runtime (`state.getWebSockets`) and
+ * whose `seq` is durable — but both substrates share the SAME pure {@link fanout}
+ * send policy and the SAME {@link verifyChannelToken}, so the semantics are identical.
  *
  * Bun's `Server`/`ServerWebSocket` have no `@types/bun` in this tree, so the slim
  * slices this app uses are typed locally (the `packages/cli/src/bin.ts` approach).
  */
 
-import { FanoutRoom, parsePublishBody, verifyChannelToken } from "@lesto/pubsub";
+import { FanoutRegistry, fanout, parsePublishBody, verifyChannelToken } from "@lesto/pubsub";
 import type { ChannelMode } from "@lesto/pubsub";
 
 /** Per-connection data Bun carries from the upgrade into the socket handlers. */
@@ -50,9 +52,9 @@ interface BunServer {
   upgrade(request: Request, options: { data: SocketData }): boolean;
 }
 
-/** What {@link buildFanoutServer} returns — the shape `Bun.serve` consumes, plus the room. */
+/** What {@link buildFanoutServer} returns — the shape `Bun.serve` consumes, plus the registry. */
 export interface FanoutServer {
-  room: FanoutRoom;
+  registry: FanoutRegistry;
   fetch(request: Request, server: BunServer): Promise<Response | undefined>;
   websocket: {
     open(ws: BunSocket): void;
@@ -94,13 +96,17 @@ async function guard(
   return undefined;
 }
 
-/** Build the fan-out app over one {@link FanoutRoom}, verifying tokens signed with `secret`. */
+/** Build the fan-out app over one {@link FanoutRegistry}, verifying tokens signed with `secret`. */
 export function buildFanoutServer(opts: { secret: string }): FanoutServer {
-  const room = new FanoutRoom();
+  const registry = new FanoutRegistry();
   const { secret } = opts;
 
+  // The per-message sequence lives in this single process (the DO keeps a durable
+  // one — see room.ts). Monotonic across every publish on every channel.
+  let seq = 0;
+
   return {
-    room,
+    registry,
 
     async fetch(request, server) {
       const url = new URL(request.url);
@@ -139,7 +145,18 @@ export function buildFanoutServer(opts: { secret: string }): FanoutServer {
           return denied;
         }
 
-        const delivered = await room.publish(body.channel, body.message);
+        seq += 1;
+        const { delivered, failed } = fanout(registry.socketsFor(body.channel), {
+          type: "message",
+          channel: body.channel,
+          seq,
+          data: body.message,
+        });
+
+        // Reap any socket that died mid-send so it is gone from the next publish.
+        for (const socket of failed) {
+          registry.drop(body.channel, socket);
+        }
 
         return Response.json({ delivered });
       }
@@ -149,7 +166,7 @@ export function buildFanoutServer(opts: { secret: string }): FanoutServer {
 
     websocket: {
       open(ws) {
-        ws.data.off = room.add({ send: (data) => ws.send(data) }, ws.data.channel);
+        ws.data.off = registry.add(ws.data.channel, { send: (data) => ws.send(data) });
       },
 
       message() {

@@ -10,8 +10,8 @@
 export { PubSub } from "./pubsub";
 export type { Listener } from "./pubsub";
 
-export { FanoutRoom, encodeFrame, parsePublishBody } from "./fanout";
-export type { FanoutFrame, FanoutSocket, PublishRequest } from "./fanout";
+export { FanoutRegistry, encodeFrame, fanout, parsePublishBody } from "./fanout";
+export type { FanoutFrame, FanoutResult, FanoutSocket, PublishRequest } from "./fanout";
 
 export { mintChannelToken, verifyChannelToken } from "./channel-token";
 export type {

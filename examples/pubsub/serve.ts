@@ -6,9 +6,9 @@
  * Bun's `serve` carries a native WebSocket server (the same primitive
  * `packages/cli/src/bin.ts` uses for dev live-reload), so this needs no `ws`
  * dependency — and no `node:http`/`serveWithGracefulShutdown`, which cannot
- * terminate WebSockets. One process means one `FanoutRoom` for every connection,
- * so this single node IS the coordination point the edge needs a Durable Object
- * for (`room.ts`).
+ * terminate WebSockets. One process means one in-memory `FanoutRegistry` (+ one
+ * in-process `seq`) for every connection, so this single node IS the coordination
+ * point the edge needs a Durable Object for (`room.ts`).
  *
  * Both routes require a signed capability token (mint one with `mint.ts`). Drive it:
  *   # mint tokens for the `news` channel (dev key needs PUBSUB_ALLOW_INSECURE=1):

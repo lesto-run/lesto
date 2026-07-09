@@ -138,15 +138,16 @@ decides _who may subscribe to what_), signing with a secret the edge only verifi
 
 ## Caveats (what a production substrate would still add)
 
-This proves authenticated, per-channel fan-out — not yet a full production message
-bus. Remaining simplifications, each with its graduation path (tracked as follow-up
-tasks; see `docs/plans/pubsub-production-substrate.md`):
+This proves authenticated, per-channel, **hibernatable** fan-out — not yet a full
+production message bus. Remaining simplifications, each with its graduation path
+(tracked as follow-up tasks; see `docs/plans/pubsub-production-substrate.md`):
 
-- **Non-hibernating DO.** The DO keeps a live in-memory `FanoutRoom`, so it bills
-  wall-clock while any socket is open and loses its hub on eviction. **WebSocket
-  hibernation** (`state.acceptWebSocket()` + `state.getWebSockets()` +
-  `webSocketMessage/Close/Error` handlers + a durable seq) would make an idle room
-  cost nothing. (Per-channel sharding — `idFromName(channel)` — has shipped.)
+- ✅ **WebSocket hibernation — shipped.** The DO holds no in-memory hub: every
+  subscriber socket is handed to `state.acceptWebSocket(server, [channel])` (tagged
+  with its channel), and each publish fans out over `state.getWebSockets(channel)` —
+  so an idle room costs nothing and survives eviction. The per-channel `seq` lives in
+  `state.storage` (durable), never rewinding on eviction. Per-channel sharding
+  (`idFromName(channel)`) shipped in Task A.
 - **No missed-message resume.** Fan-out is ephemeral in-memory; a subscriber that
   connects after a publish never sees it. A `state.storage`-backed replay ring (the
   `sqlite: true` namespace already declared is the hook) plus `?since=<seq>` would

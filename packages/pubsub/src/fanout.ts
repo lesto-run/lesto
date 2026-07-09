@@ -3,35 +3,53 @@
  * neutral core that lets `@lesto/pubsub` back a live cross-process demo without
  * knowing anything about the socket underneath it.
  *
- * `PubSub` is a per-process hub (its listeners live in one isolate's memory). On
- * an edge runtime there is no shared memory across isolates, so a cross-isolate
- * demo needs ONE coordination point — a Cloudflare Durable Object — that
- * terminates every subscriber's WebSocket and fans published messages out to
- * them. `FanoutRoom` is the brain of that point: it wraps a `PubSub`, turns each
- * subscriber into a listener that writes a framed message to a socket, and stamps
- * a monotonic sequence on every frame. It carries ZERO Cloudflare specifics — the
- * DO (`examples/pubsub/room.ts`) and the Node `serve.ts` both satisfy
- * {@link FanoutSocket} structurally (a workerd `WebSocket` server end and a Bun
- * `ServerWebSocket` each expose `send(string)`), so the SAME core serves both.
+ * The core is deliberately split into two independent pieces, because the two
+ * substrates that use it own the "who is subscribed" question differently:
+ *
+ *   - {@link fanout} is the pure **send policy**: given a set of sockets and one
+ *     frame, write the frame to each, don't let a dead socket abort delivery to the
+ *     rest, and report which sockets failed. It holds no state and no registry.
+ *   - {@link FanoutRegistry} is a plain in-memory **registry** (channel → sockets)
+ *     for a single-process server (`examples/pubsub/serve.ts`): one process owns its
+ *     subscribers, so it keeps them in a `Map`.
+ *
+ * On a hibernatable Cloudflare Durable Object there is NO in-memory registry to
+ * keep — the runtime is evicted between events, so `state.getWebSockets(tag)` IS the
+ * registry. That DO therefore uses {@link fanout} directly over the runtime's socket
+ * list and never touches {@link FanoutRegistry}. The single genuinely-shared surface
+ * is "write this frame to these sockets, safely" — that is {@link fanout}, and both
+ * substrates satisfy {@link FanoutSocket} structurally (a workerd `WebSocket` and a
+ * Bun `ServerWebSocket` each expose `send(string)`).
+ *
+ * The per-message sequence number is NOT owned here: a single-process server keeps
+ * an in-process `let seq`, while a hibernatable DO must keep a DURABLE counter (an
+ * in-memory one would rewind on eviction). So the caller stamps `seq` into the
+ * {@link FanoutFrame} it hands to {@link fanout}.
  */
 
-import { PubSub } from "./pubsub";
-
 /**
- * The only thing {@link FanoutRoom} needs from a subscriber: somewhere to `send`
- * a framed string. A workerd `WebSocket` server end and a Bun `ServerWebSocket`
- * both satisfy this structurally, so neither the edge DO nor the Node server has
- * to adapt its socket to a foreign interface.
+ * The only things {@link fanout} needs from a subscriber: somewhere to `send` a
+ * framed string, and (optionally) how many bytes are queued but unsent. A workerd
+ * `WebSocket` server end and a Bun `ServerWebSocket` both satisfy this structurally,
+ * so neither substrate has to adapt its socket to a foreign interface.
  */
 export interface FanoutSocket {
   send(data: string): void;
+
+  /**
+   * Bytes queued for send but not yet flushed. workerd and Bun expose it;
+   * `undefined` means backpressure is simply not observable on this transport. Read
+   * by the backpressure bound (a later graduation) — {@link fanout} does not enforce
+   * a bound today.
+   */
+  readonly bufferedAmount?: number;
 }
 
 /**
  * A framed message on the wire: JSON, self-describing (`type`), carrying the
- * `channel` it was published on, a per-room monotonic `seq` (an opaque ordering
- * witness — NOT a per-channel gap detector, since one room multiplexes every
- * channel through a single counter), and the arbitrary `data` the publisher sent.
+ * `channel` it was published on, a monotonic `seq` (an opaque ordering witness,
+ * stamped by the caller — see the module doc on why `seq` is not owned here), and
+ * the arbitrary `data` the publisher sent.
  */
 export interface FanoutFrame {
   type: "message";
@@ -76,83 +94,101 @@ export function parsePublishBody(raw: unknown): PublishRequest | undefined {
   return { channel, message: record.message };
 }
 
-/** The envelope {@link FanoutRoom} publishes onto its hub — `seq` stamped, `data` verbatim. */
-interface FanoutEnvelope {
-  seq: number;
-  data: unknown;
+/** The outcome of a {@link fanout}: how many sockets received the frame, and which failed. */
+export interface FanoutResult {
+  /** Sockets the frame was successfully written to. */
+  readonly delivered: number;
+
+  /** Sockets whose `send` threw (a dead/closed connection) — the caller reaps them. */
+  readonly failed: readonly FanoutSocket[];
 }
 
 /**
- * A fan-out room: subscribers register a {@link FanoutSocket} on a channel, a
- * publisher sends an arbitrary message to a channel, and every socket subscribed
- * to that channel receives one framed copy.
+ * Write one `frame` to every socket in `sockets`, safely.
  *
- * Built on `PubSub`, but hardened for real sockets (two load-bearing invariants):
+ * Encodes the frame ONCE, then sends it to each socket in turn. A socket whose
+ * `send` throws (a closed/errored connection) is dropped into {@link FanoutResult.failed}
+ * and the loop continues — one dead socket never aborts delivery to the rest (the
+ * load-bearing invariant). `delivered` counts only the sockets the frame was
+ * *successfully written to*; a thrower is excluded and returned in `failed`, so the
+ * caller can reap it (a single-process server calls {@link FanoutRegistry.drop}; a
+ * hibernatable DO relies on the runtime evicting a closed socket from its tag set).
  *
- *   1. **A socket whose `send` throws is dropped, never rethrown.** `PubSub.publish`
- *      awaits its listeners in a loop with no try/catch, so a throwing listener
- *      would abort fan-out to every subscriber after it. {@link add}'s listener
- *      therefore wraps `send` in try/catch and self-unsubscribes on failure.
- *      Because `publish` snapshots its listeners before delivering, a listener
- *      removing itself mid-delivery cannot disturb the delivery in progress.
- *   2. **{@link add} registers synchronously.** A caller that registers the socket
- *      before returning its `101 Switching Protocols` upgrade response guarantees
- *      the socket is live before any post-`open` publish can arrive — closing the
- *      "publish races subscribe" gap (see `examples/pubsub/room.ts`).
+ * `fanout` holds no state and does not mutate `sockets`; the caller owns the
+ * registry and does any reaping after this returns.
  */
-export class FanoutRoom {
-  private readonly hub: PubSub;
+export function fanout(sockets: Iterable<FanoutSocket>, frame: FanoutFrame): FanoutResult {
+  const encoded = encodeFrame(frame);
 
-  /** Monotonic per-room sequence, stamped on every published frame. */
-  private seq = 0;
+  let delivered = 0;
+  const failed: FanoutSocket[] = [];
+
+  for (const socket of sockets) {
+    try {
+      socket.send(encoded);
+      delivered += 1;
+    } catch {
+      failed.push(socket);
+    }
+  }
+
+  return { delivered, failed };
+}
+
+/**
+ * A single-process channel → sockets registry, for a server that owns its
+ * subscribers in memory (`examples/pubsub/serve.ts`). A hibernatable Durable Object
+ * does NOT use this — the workerd runtime owns its sockets, enumerated by
+ * `state.getWebSockets(tag)`; only a long-lived single process keeps its own `Map`.
+ */
+export class FanoutRegistry {
+  /** Channel name → its subscribed sockets. Insertion-ordered, O(1) add/delete. */
+  private readonly channels = new Map<string, Set<FanoutSocket>>();
 
   /**
-   * `hub` is injectable so a caller can share ONE `PubSub` across rooms (or a
-   * test can observe delivery on the raw hub); omitted, each room owns a private
-   * hub.
+   * Subscribe `socket` to `channel`. Returns an idempotent drop thunk — call it from
+   * the socket's close/error handler (calling it more than once is harmless).
    */
-  constructor(opts?: { hub?: PubSub }) {
-    this.hub = opts?.hub ?? new PubSub();
+  add(channel: string, socket: FanoutSocket): () => void {
+    const sockets = this.channels.get(channel) ?? new Set<FanoutSocket>();
+
+    sockets.add(socket);
+
+    this.channels.set(channel, sockets);
+
+    return () => {
+      this.drop(channel, socket);
+    };
+  }
+
+  /** The sockets subscribed to `channel` — an empty iterable when there are none. */
+  socketsFor(channel: string): Iterable<FanoutSocket> {
+    return this.channels.get(channel) ?? EMPTY;
   }
 
   /**
-   * Subscribe `socket` to `channel`. Returns an idempotent close thunk that
-   * unsubscribes it — call it from the socket's close/error handler. The socket
-   * receives one {@link encodeFrame}'d {@link FanoutFrame} per published message.
+   * Remove `socket` from `channel`. A no-op if it was never subscribed. When the
+   * channel empties we drop it entirely so {@link subscriberCount} stays honest.
    */
-  add(socket: FanoutSocket, channel: string): () => void {
-    const off = this.hub.subscribe(channel, (message) => {
-      const { seq, data } = message as FanoutEnvelope;
+  drop(channel: string, socket: FanoutSocket): void {
+    const sockets = this.channels.get(channel);
 
-      try {
-        socket.send(encodeFrame({ type: "message", channel, seq, data }));
-      } catch {
-        // A dead socket (closed / errored mid-delivery) must not abort fan-out to
-        // everyone after it (invariant 1): drop it and swallow. `publish` took its
-        // snapshot before the loop, so removing ourselves here is safe.
-        off();
-      }
-    });
+    if (sockets === undefined) {
+      return;
+    }
 
-    return off;
-  }
+    sockets.delete(socket);
 
-  /**
-   * Fan `message` out to every socket subscribed to `channel`. Resolves with the
-   * number of subscribers the message was DISPATCHED to — the snapshot length at
-   * publish time. A socket that throws mid-send is dropped for future publishes
-   * but is still counted here (it was in the snapshot), so treat the return as a
-   * diagnostic and prove receipt on the socket itself, not by this count
-   * (invariant 3).
-   */
-  async publish(channel: string, message: unknown): Promise<number> {
-    const seq = ++this.seq;
-
-    return this.hub.publish(channel, { seq, data: message } satisfies FanoutEnvelope);
+    if (sockets.size === 0) {
+      this.channels.delete(channel);
+    }
   }
 
   /** How many sockets are currently subscribed to `channel`. */
   subscriberCount(channel: string): number {
-    return this.hub.subscriberCount(channel);
+    return this.channels.get(channel)?.size ?? 0;
   }
 }
+
+/** A shared frozen empty list, returned by {@link FanoutRegistry.socketsFor} for an unknown channel. */
+const EMPTY: readonly FanoutSocket[] = [];

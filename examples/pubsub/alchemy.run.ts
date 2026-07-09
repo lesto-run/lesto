@@ -10,7 +10,7 @@
  * `PubSubRoom` (`room.ts`) plus a `PUBSUB_SECRET` (the HMAC key capability tokens are
  * signed + verified with). Routing is PER CHANNEL: a subscriber's WebSocket and a
  * publisher's HTTP request for channel `X` are both routed to `idFromName(X)`, so
- * they share the same in-memory `FanoutRoom` (the cross-isolate proof) while
+ * they rendezvous at the same hibernatable DO (the cross-isolate proof) while
  * different channels get different DOs.
  *
  * After `finalize()`, a post-deploy smoke opens a REAL WebSocket to the live url
@@ -21,8 +21,8 @@
  * authorized fan-out works on the edge" gate CI runs on every push to main.
  *
  * `nodejs_compat` is intentionally omitted: `@lesto/pubsub` is dependency-free, the
- * `FanoutRoom` core is pure, `channel-token` signs over Web Crypto (`crypto.subtle`,
- * a workerd global), and the DO uses only workerd globals — no node builtins.
+ * `fanout` core is pure, `channel-token` signs over Web Crypto (`crypto.subtle`, a
+ * workerd global), and the DO uses only workerd globals — no node builtins.
  */
 
 import { mintChannelToken } from "@lesto/pubsub";

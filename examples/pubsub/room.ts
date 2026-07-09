@@ -1,35 +1,58 @@
 /**
  * The Cloudflare Durable Object that makes `@lesto/pubsub` fan-out work ACROSS
- * isolates — the first WebSocket-terminating DO in the framework.
+ * isolates — a HIBERNATABLE WebSocket-terminating DO.
  *
- * On the edge every request may land on a different isolate with its own memory,
- * so an in-process `PubSub` can never see a publisher and a subscriber that hit
- * different isolates. A single named DO (see `worker.ts`) is the rendezvous: both
- * the `/subscribe` socket and the `/publish` request are routed to the ONE
- * instance, whose in-memory {@link FanoutRoom} is the same hub for both. That is
- * the whole demo — a message published by one connection reaches a socket opened
- * by another, through the DO.
+ * On the edge every request may land on a different isolate with its own memory, so
+ * an in-process hub can never see a publisher and a subscriber that hit different
+ * isolates. With per-channel sharding (`worker.ts`), channel `X`'s subscribers and
+ * publishers all route to `idFromName(X)` — this one instance is their rendezvous.
  *
- * This is a NON-HIBERNATING DO on purpose: keeping the live `FanoutRoom` in memory
- * is the point of the demo. It holds no `state.storage` (ephemeral fan-out — a
- * missed-message `ReplayRing` is the documented graduation), so it needs no
- * constructor; workerd's `(state, env)` args to the default constructor are
- * ignored.
+ * This DO HIBERNATES: workerd may evict it from memory whenever no event is in
+ * flight, so it can hold no in-memory registry of sockets. Instead every subscriber
+ * socket is handed to `state.acceptWebSocket(server, [channel])`, which keeps it
+ * alive across eviction and TAGS it with its channel; `state.getWebSockets(channel)`
+ * is then the subscriber registry — enumerated fresh on each publish, even after the
+ * DO woke from nothing. That is why the fan-out core is a pure {@link fanout} over an
+ * injected socket list rather than a stateful hub: there is no surviving hub to hold.
  *
- * `WebSocketPair` is a workerd runtime global absent from the DOM lib this example
- * is typed against (see `tsconfig.json`), so its shape is declared locally rather
- * than dragging the full workerd global surface in (the `key-store.ts` lesson).
+ * The per-channel `seq` lives in `state.storage` (durable), not memory: an in-memory
+ * counter would rewind to 0 on every eviction, silently corrupting the ordering a
+ * missed-message resume relies on.
+ *
+ * `WebSocketPair` + the hibernation methods are workerd runtime globals absent from
+ * the DOM lib this example is typed against (see `tsconfig.json`), so their shapes
+ * are declared locally rather than dragging the full workerd global surface in (the
+ * `key-store.ts` lesson).
  */
 
-import { FanoutRoom, parsePublishBody } from "@lesto/pubsub";
+import { fanout, parsePublishBody } from "@lesto/pubsub";
 
-/** A WebSocket end from a {@link WebSocketPair} — a DOM `WebSocket` plus workerd's server-only `accept()`. */
-type ServerWebSocket = WebSocket & { accept(): void };
+/** A WebSocket end from a {@link WebSocketPair}; workerd adds `serializeAttachment`. */
+type ServerWebSocket = WebSocket & { serializeAttachment(value: unknown): void };
 
-declare const WebSocketPair: { new (): { 0: ServerWebSocket; 1: ServerWebSocket } };
+declare const WebSocketPair: { new (): { 0: WebSocket; 1: ServerWebSocket } };
+
+/** The slim slice of workerd's `DurableObjectStorage` this DO uses. */
+interface DurableObjectStorage {
+  get<T>(key: string): Promise<T | undefined>;
+  put(key: string, value: unknown): Promise<void>;
+}
+
+/** The slim slice of workerd's `DurableObjectState` this DO uses (hibernation + storage). */
+interface DurableObjectState {
+  /** Accept `ws` into the hibernatable set, tagged so `getWebSockets(tag)` can find it. */
+  acceptWebSocket(ws: WebSocket, tags?: string[]): void;
+  /** Every hibernatable socket, or only those carrying `tag`. */
+  getWebSockets(tag?: string): WebSocket[];
+  storage: DurableObjectStorage;
+}
 
 export class PubSubRoom {
-  readonly #room = new FanoutRoom();
+  readonly #state: DurableObjectState;
+
+  constructor(state: DurableObjectState) {
+    this.#state = state;
+  }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -54,20 +77,19 @@ export class PubSubRoom {
 
     const { 0: client, 1: server } = new WebSocketPair();
 
-    server.accept();
+    // INVARIANT 2: register the socket BEFORE returning the 101. Under hibernation we
+    // do NOT call `server.accept()` — `acceptWebSocket` puts the socket in workerd's
+    // hibernatable set, TAGGED with its channel so `getWebSockets(channel)` enumerates
+    // it after any eviction. The client's `open` fires only once it receives this 101,
+    // so the socket is guaranteed registered before any post-open publish. Do not reorder.
+    this.#state.acceptWebSocket(server, [channel]);
 
-    // INVARIANT 2: register the socket BEFORE returning the 101. The client's
-    // `open` fires only once it receives this response, so the socket is
-    // guaranteed subscribed before any post-open publish can arrive — no
-    // publish-races-subscribe gap. Do not reorder.
-    const off = this.#room.add({ send: (data) => server.send(data) }, channel);
-
-    server.addEventListener("close", off);
-    server.addEventListener("error", off);
+    // The channel survives eviction with the socket, so a woken DO still knows what
+    // each hibernated socket is subscribed to (and a future resume can read it back).
+    server.serializeAttachment({ channel });
 
     // `webSocket` on the response init is workerd-only (absent from the DOM
-    // `ResponseInit`); the assertion passes it through at runtime without pulling
-    // workerd globals into this DOM-typed file.
+    // `ResponseInit`); the assertion passes it through at runtime.
     return new Response(null, { status: 101, webSocket: client } as ResponseInit);
   }
 
@@ -79,8 +101,37 @@ export class PubSubRoom {
       return new Response('expected { "channel": string, "message": <any> }', { status: 400 });
     }
 
-    const delivered = await this.#room.publish(body.channel, body.message);
+    // DURABLE, monotonic, per-channel seq — an in-memory counter would rewind to 0
+    // every time workerd evicts this hibernated DO (invariant 4).
+    const key = `seq:${body.channel}`;
+    const seq = ((await this.#state.storage.get<number>(key)) ?? 0) + 1;
+    await this.#state.storage.put(key, seq);
+
+    // The registry is the runtime: enumerate this channel's live sockets and fan out
+    // over them with the pure core. workerd evicts a closed socket from the tag set,
+    // so the list is current even after the DO woke from nothing.
+    const { delivered } = fanout(this.#state.getWebSockets(body.channel), {
+      type: "message",
+      channel: body.channel,
+      seq,
+      data: body.message,
+    });
 
     return Response.json({ delivered });
+  }
+
+  /** Subscribers never publish over the socket; ignore anything they send. */
+  webSocketMessage(): void {
+    // no-op
+  }
+
+  /** The client closed; finish the server side (workerd has already untagged it). */
+  webSocketClose(ws: WebSocket): void {
+    ws.close();
+  }
+
+  /** A socket errored; close it so it leaves the tag set. */
+  webSocketError(ws: WebSocket): void {
+    ws.close();
   }
 }

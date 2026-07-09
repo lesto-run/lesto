@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { FanoutRoom, encodeFrame, parsePublishBody } from "../src/fanout";
+import { FanoutRegistry, encodeFrame, fanout, parsePublishBody } from "../src/fanout";
 import type { FanoutFrame, FanoutSocket } from "../src/fanout";
-import { PubSub } from "../src/pubsub";
 
 /** A socket that records every frame it is sent, for asserting receipt + order. */
 class RecordingSocket implements FanoutSocket {
@@ -29,20 +28,20 @@ class ThrowingSocket implements FanoutSocket {
   }
 }
 
-describe("FanoutRoom", () => {
-  it("fans a published message out to every subscriber on the channel", async () => {
-    const room = new FanoutRoom();
+/** A frame stamped with `seq` by the caller (the seq counter lives outside the core). */
+function frame(channel: string, seq: number, data: unknown): FanoutFrame {
+  return { type: "message", channel, seq, data };
+}
+
+describe("fanout", () => {
+  it("writes one frame to every socket and counts them delivered", () => {
     const a = new RecordingSocket();
     const b = new RecordingSocket();
     const c = new RecordingSocket();
 
-    room.add(a, "news");
-    room.add(b, "news");
-    room.add(c, "news");
+    const result = fanout([a, b, c], frame("news", 1, { headline: "hi" }));
 
-    const delivered = await room.publish("news", { headline: "hi" });
-
-    expect(delivered).toBe(3);
+    expect(result).toEqual({ delivered: 3, failed: [] });
 
     for (const socket of [a, b, c]) {
       expect(socket.frames).toEqual([
@@ -51,107 +50,99 @@ describe("FanoutRoom", () => {
     }
   });
 
-  it("isolates channels — a subscriber only receives its own channel's messages", async () => {
-    const room = new FanoutRoom();
-    const news = new RecordingSocket();
-    const sports = new RecordingSocket();
-
-    room.add(news, "news");
-    room.add(sports, "sports");
-
-    expect(await room.publish("news", "n1")).toBe(1);
-
-    expect(news.frames).toEqual([{ type: "message", channel: "news", seq: 1, data: "n1" }]);
-    expect(sports.sent).toHaveLength(0);
+  it("returns delivered 0 for an empty socket list", () => {
+    expect(fanout([], frame("news", 1, "x"))).toEqual({ delivered: 0, failed: [] });
   });
 
-  it("the close thunk unsubscribes the socket — no further delivery", async () => {
-    const room = new FanoutRoom();
-    const socket = new RecordingSocket();
-
-    const off = room.add(socket, "c");
-
-    expect(room.subscriberCount("c")).toBe(1);
-
-    off();
-
-    expect(room.subscriberCount("c")).toBe(0);
-    expect(await room.publish("c", "after-off")).toBe(0);
-    expect(socket.sent).toHaveLength(0);
-  });
-
-  it("drops a socket whose send throws and still delivers to the rest (invariant 1)", async () => {
-    const room = new FanoutRoom();
+  it("drops a socket whose send throws, still delivers to the rest, and reports it in failed (invariant 1)", () => {
     const dead = new ThrowingSocket();
     const alive = new RecordingSocket();
 
-    // `dead` is added FIRST, so if a throwing listener aborted the loop, `alive`
-    // would never be reached — the strongest shape for this invariant.
-    room.add(dead, "c");
-    room.add(alive, "c");
+    // `dead` is FIRST, so if a thrower aborted the loop, `alive` would never be
+    // reached — the strongest shape for the invariant.
+    const result = fanout([dead, alive], frame("c", 1, "one"));
 
-    // The snapshot length is 2 even though `dead` threw and was dropped (invariant 3).
-    expect(await room.publish("c", "one")).toBe(2);
-
+    // `delivered` counts successes ONLY; the thrower is excluded and returned in `failed`.
+    expect(result.delivered).toBe(1);
+    expect(result.failed).toEqual([dead]);
     expect(dead.calls).toBe(1);
     expect(alive.frames).toEqual([{ type: "message", channel: "c", seq: 1, data: "one" }]);
+  });
+});
 
-    // `dead` self-unsubscribed on its throw, so it is gone from the next publish.
-    expect(room.subscriberCount("c")).toBe(1);
+describe("FanoutRegistry", () => {
+  it("fans a frame out to every socket subscribed to a channel via socketsFor", () => {
+    const registry = new FanoutRegistry();
+    const a = new RecordingSocket();
+    const b = new RecordingSocket();
 
-    expect(await room.publish("c", "two")).toBe(1);
+    registry.add("news", a);
+    registry.add("news", b);
 
-    expect(dead.calls).toBe(1);
-    expect(alive.frames.map((f) => f.data)).toEqual(["one", "two"]);
+    const result = fanout(registry.socketsFor("news"), frame("news", 1, "n1"));
+
+    expect(result.delivered).toBe(2);
+    expect(a.frames).toEqual([{ type: "message", channel: "news", seq: 1, data: "n1" }]);
+    expect(b.sent).toHaveLength(1);
   });
 
-  it("publish returns the dispatched-subscriber count, 0 for an empty channel (invariant 3)", async () => {
-    const room = new FanoutRoom();
+  it("isolates channels — socketsFor returns only that channel's sockets", () => {
+    const registry = new FanoutRegistry();
+    const news = new RecordingSocket();
 
-    expect(await room.publish("empty", "x")).toBe(0);
+    registry.add("news", news);
 
-    room.add(new RecordingSocket(), "c");
-    room.add(new RecordingSocket(), "c");
+    expect(registry.subscriberCount("news")).toBe(1);
+    expect([...registry.socketsFor("sports")]).toEqual([]);
+    expect(registry.subscriberCount("sports")).toBe(0);
 
-    expect(await room.publish("c", "x")).toBe(2);
+    fanout(registry.socketsFor("sports"), frame("sports", 1, "goal"));
+
+    expect(news.sent).toHaveLength(0);
   });
 
-  it("stamps a monotonic seq on each frame across publishes", async () => {
-    const room = new FanoutRoom();
+  it("the add thunk drops the socket — socketsFor no longer yields it", () => {
+    const registry = new FanoutRegistry();
     const socket = new RecordingSocket();
 
-    room.add(socket, "c");
+    const off = registry.add("c", socket);
 
-    await room.publish("c", "a");
-    await room.publish("c", "b");
-    await room.publish("c", "c");
+    expect(registry.subscriberCount("c")).toBe(1);
 
-    expect(socket.frames.map((f) => f.seq)).toEqual([1, 2, 3]);
+    off();
+
+    expect(registry.subscriberCount("c")).toBe(0);
+    expect([...registry.socketsFor("c")]).toEqual([]);
   });
 
-  it("operates on an injected hub when one is supplied", async () => {
-    const hub = new PubSub();
-    const room = new FanoutRoom({ hub });
-    const socket = new RecordingSocket();
+  it("drop is idempotent and a no-op on an unknown channel", () => {
+    const registry = new FanoutRegistry();
+    const a = new RecordingSocket();
+    const b = new RecordingSocket();
 
-    room.add(socket, "shared");
+    registry.add("c", a);
+    registry.add("c", b);
 
-    // `add` subscribed on the INJECTED hub, observable directly on it.
-    expect(hub.subscriberCount("shared")).toBe(1);
+    // Dropping one leaves the other (channel not emptied).
+    registry.drop("c", a);
+    expect(registry.subscriberCount("c")).toBe(1);
 
-    await room.publish("shared", { ok: true });
+    // Dropping a socket that isn't there, and a channel that doesn't exist — both no-ops.
+    registry.drop("c", a);
+    registry.drop("nonexistent", a);
+    expect(registry.subscriberCount("c")).toBe(1);
 
-    expect(socket.frames).toEqual([
-      { type: "message", channel: "shared", seq: 1, data: { ok: true } },
-    ]);
+    // Dropping the last empties (and deletes) the channel.
+    registry.drop("c", b);
+    expect(registry.subscriberCount("c")).toBe(0);
   });
 });
 
 describe("encodeFrame", () => {
   it("round-trips a frame through JSON", () => {
-    const frame: FanoutFrame = { type: "message", channel: "c", seq: 7, data: { nested: [1, 2] } };
+    const f: FanoutFrame = { type: "message", channel: "c", seq: 7, data: { nested: [1, 2] } };
 
-    expect(JSON.parse(encodeFrame(frame))).toEqual(frame);
+    expect(JSON.parse(encodeFrame(f))).toEqual(f);
   });
 });
 
