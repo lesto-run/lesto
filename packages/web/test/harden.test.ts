@@ -133,12 +133,33 @@ describe("statusForError", () => {
     expect(statusForError(new LestoError("CLOUDFLARE_DISPATCH_TIMEOUT", "x"))).toBe(503);
   });
 
+  it("maps a foreign-copy coded error (branded, not instanceof) to its status", () => {
+    // Reproduces the router/ui 0.1.3 dep-dup: a LestoError thrown from a SECOND copy
+    // of @lesto/errors is NOT `instanceof` this copy's class, but carries the same
+    // process-global brand. The old `instanceof` gate silently downgraded this coded
+    // 400 to a 500; brand-based recognition maps it correctly.
+    const foreign: Record<PropertyKey, unknown> = {
+      name: "LestoError",
+      code: "ROUTER_MALFORMED_PARAM",
+      message: "x",
+    };
+
+    Object.defineProperty(foreign, Symbol.for("lesto.error"), { value: true });
+
+    expect(foreign instanceof LestoError).toBe(false);
+    expect(statusForError(foreign)).toBe(400);
+  });
+
   it("maps any other coded error to a 500", () => {
     expect(statusForError(new LestoError("SOME_OTHER_CODE", "x"))).toBe(500);
   });
 
   it("maps a non-LestoError throw to a 500", () => {
+    // No brand → not recognized → the safe default holds. A bare object shaped like
+    // an error (a `{ code }` with NO brand) must NOT be coerced into a coded status.
     expect(statusForError(new Error("plain"))).toBe(500);
+    expect(statusForError(new TypeError("nope"))).toBe(500);
+    expect(statusForError({ code: "ROUTER_MALFORMED_PARAM" })).toBe(500);
     expect(statusForError("a string thrown")).toBe(500);
   });
 });

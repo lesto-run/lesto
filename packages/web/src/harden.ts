@@ -16,7 +16,7 @@
  * so every branch is unit-testable without a socket or a `fetch` runtime.
  */
 
-import { LestoError } from "@lesto/errors";
+import { isLestoError } from "@lesto/errors";
 
 import type { AnyLestoResponse, HeaderMap } from "./types";
 
@@ -184,14 +184,19 @@ export function securityDefaults(
 /**
  * Map a thrown value to its HTTP status.
  *
- * Branches on the stable `code` of a {@link LestoError} (a `RuntimeError` is one),
- * never on a message or a concrete subclass — so this lives in `@lesto/web` without
- * importing the transport that raised it, and recognizes the same coded refusals
- * on either runtime. Anything else is a 500: an unexpected throw is ours to own
- * with a generic body, never a leak.
+ * Recognizes a coded error by BRAND — {@link isLestoError}, a duck-type on the
+ * process-global `@lesto/errors` brand — never by `instanceof`: a monorepo install
+ * can carry two copies of `@lesto/errors` (the router/ui 0.1.3 mispin did), and an
+ * error thrown from one copy is not `instanceof` the other's class, so an
+ * `instanceof` gate here silently downgraded a coded 400/422/413/503 to a 500.
+ * Then branches on the stable `code` (a `RuntimeError`'s, say), never on a message
+ * or a concrete subclass — so this lives in `@lesto/web` without importing the
+ * transport that raised it, and recognizes the same coded refusals on either
+ * runtime. Anything else is a 500: an unexpected throw is ours to own with a
+ * generic body, never a leak.
  */
 export function statusForError(error: unknown): number {
-  if (error instanceof LestoError) {
+  if (isLestoError(error)) {
     if (error.code === "RUNTIME_INVALID_JSON") return 400;
     if (error.code === "ROUTER_MALFORMED_PARAM") return 400;
     if (error.code === "WEB_VALIDATION_FAILED") return 422;
