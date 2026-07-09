@@ -4,7 +4,7 @@ Lesto publishes its public `@lesto/*` surface to npm with [Changesets](https://g
 This is the source of truth for **how a release happens** and **what gets published**.
 
 > **Status:** the surface is **published**. `0.1.1` (2026-06-23) → `0.1.2` (2026-07-04) →
-> `0.1.3` (2026-07-08) → **`0.1.4` is live on npm as of 2026-07-09** — **49 public packages**
+> `0.1.3` (2026-07-08) → `0.1.4` (2026-07-09) → **`0.1.5` is live on npm as of 2026-07-09** — **49 public packages**
 > (48 `@lesto/*` + `create-lesto`), **all provenance-signed**, including the **13 headline
 > batteries** (cache, workflows, identity, mail, mailing-lists, webhooks, forms, flags, admin,
 > realtime, pubsub, i18n, feeds). `0.1.4` was the coordinated re-release that corrected the
@@ -94,7 +94,7 @@ coordinated bump needs no edit to the publish scripts. A new package joins the s
 `create-lesto` lives at `packages/create-lesto`, so the same `packages/*` + `private !== true`
 filter picks it up alongside the `@lesto/*` packages.
 
-**Current count: 36 public packages** = 35 `@lesto/*` + `create-lesto`. To regenerate this list
+**Current count: 49 public packages** = 48 `@lesto/*` + `create-lesto`. To regenerate this list
 from the live tree rather than trusting the snapshot below, run:
 
 ```sh
@@ -102,19 +102,18 @@ from the live tree rather than trusting the snapshot below, run:
 for d in packages/*/; do node -e "const p=require('./$d/package.json'); if(p.private!==true) console.log(p.name)"; done | sort
 ```
 
-As of **0.1.2** the 35 public `@lesto/*` packages are (verified against the private flags in-tree):
+As of **0.1.5** the 48 public `@lesto/*` packages are (verified against the private flags in-tree):
 
 ```
-assets auth authz cli cloudflare content-core content-embeddings content-markdown
-content-search content-shared content-store content-umbra cors csrf db deploy env errors
-island-dev kernel mcp migrate observability openapi pg queue ratelimit router runtime seo
-sites storage styles ui web
+admin assets auth authz cache cli cloudflare content-core content-embeddings
+content-markdown content-search content-shared content-store content-umbra cors csrf
+db deploy env errors feeds flags forms i18n identity island-dev kernel mail
+mailing-lists mcp migrate observability openapi pg pubsub queue ratelimit realtime
+router runtime seo sites storage styles ui web webhooks workflows
 ```
 
-> **Newer than the old snapshot:** `authz`, `seo`, `styles`, and `island-dev` were
-> de-privatized after `0.1.1` (plus `cloudflare` and `pg`, which an earlier revision of this
-> doc also omitted). Do not maintain this block by hand — regenerate it from the command above
-> whenever a package flips non-private, and update the count.
+> Do not maintain this block by hand — regenerate it from the command above whenever a
+> package flips non-private, and update the count.
 
 **Required-to-install closure ⊆ publishable set.** A scaffolded `create-lesto` app installs only
 a *subset* of the surface (its `@lesto/*` deps and their transitive `@lesto/*` closure); the rest
