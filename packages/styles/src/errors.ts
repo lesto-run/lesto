@@ -2,9 +2,9 @@
  * Errors carry codes, not just prose — callers branch on the code.
  */
 
-import { LestoError } from "@lesto/errors";
+import { isLestoError, LestoError } from "@lesto/errors";
 
-export { LestoError };
+export { isLestoError, LestoError };
 
 export type StylesErrorCode =
   /**

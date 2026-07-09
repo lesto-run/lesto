@@ -9,7 +9,7 @@
  * — so the decision logic here is tested without Tailwind or a disk.
  */
 
-import { LestoError, StylesError } from "./errors";
+import { isLestoError, StylesError } from "./errors";
 
 /**
  * A development (unminified) or production (minified) build.
@@ -147,7 +147,11 @@ export async function buildStyles(
     // other `LestoError` the compiler chose to throw — is already branchable, so
     // propagate it with its code intact. Only a non-coded throw is wrapped, so the
     // caller never sees a raw bundler/Tailwind error but a coded code is never lost.
-    if (error instanceof LestoError) throw error;
+    // Recognized by BRAND (`isLestoError`), not `instanceof`: the `StyleCompiler` is
+    // an injected seam, so a duplicate `@lesto/errors` copy would make `instanceof`
+    // miss a cross-copy coded error and re-wrap it — the same dep-dup blind spot
+    // `@lesto/web`'s `statusForError` was hardened against.
+    if (isLestoError(error)) throw error;
 
     throw new StylesError(
       "STYLES_COMPILE_FAILED",
