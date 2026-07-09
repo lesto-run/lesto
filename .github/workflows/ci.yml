@@ -43,8 +43,8 @@ jobs:
       # path never provokes, and publish.test.mjs proves the topological/fail-fast ordering that keeps
       # a release from shipping a dependent before a failed dep — run them here (no server needed) so a
       # regression goes red instead of shipping green.
-      - name: Unit-test the drift guard + link-workspace + dev-harness + publish helpers
-        run: bunx vitest run scripts/assert-isolated-node-modules.test.mjs packages/e2e/link-workspace.test.ts packages/e2e/dev-harness.test.ts scripts/publish.test.mjs
+      - name: Unit-test the drift guard + link-workspace + dev-harness + publish/new-package helpers
+        run: bunx vitest run scripts/assert-isolated-node-modules.test.mjs packages/e2e/link-workspace.test.ts packages/e2e/dev-harness.test.ts scripts/publish.test.mjs scripts/new-package.test.mjs
 
       - name: Typecheck
         run: bun run ws:typecheck

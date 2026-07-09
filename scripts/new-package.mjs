@@ -17,20 +17,84 @@
 // only when invoked directly (the `import.meta` guard at the bottom), matching
 // scripts/publish.mjs.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { readPublicPackageDirs } from "./lib/pack-public.mjs";
+
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// The reference package whose static config we copy verbatim (CONTRIBUTING.md: "match
+// packages/queue"). Copying — rather than re-encoding — keeps the generated tsconfig /
+// vitest.config drift-free as the house shape evolves.
+const REFERENCE = "queue";
+
+// JS reserved words a short name could collide with — the export-name model can't
+// represent them (\`export function new()\` is a syntax error), so reject up front.
+const RESERVED = new Set([
+  "await",
+  "async",
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "debugger",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "enum",
+  "export",
+  "extends",
+  "false",
+  "finally",
+  "for",
+  "function",
+  "if",
+  "implements",
+  "import",
+  "in",
+  "instanceof",
+  "interface",
+  "let",
+  "new",
+  "null",
+  "of",
+  "package",
+  "private",
+  "protected",
+  "public",
+  "return",
+  "static",
+  "super",
+  "switch",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "typeof",
+  "var",
+  "void",
+  "while",
+  "with",
+  "yield",
+]);
 
 /** `foo` → `@lesto/foo`. */
 export function packageName(shortName) {
   return `@lesto/${shortName}`;
 }
 
-/** A short name is a valid npm scope segment: lowercase, digits, single hyphens. */
+/**
+ * A short name is a valid npm scope segment: lowercase, digits, single hyphens — and
+ * must START WITH A LETTER, so the derived export identifier is legal JS (a leading
+ * digit would emit \`export function 3d()\`, a hard syntax error that reds the repo gate).
+ */
 export function isValidShortName(shortName) {
-  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(shortName);
+  return /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(shortName);
 }
 
 /** `mailing-lists` → `mailingLists`, `i18n` → `i18n` — a JS identifier for the stub export. */
@@ -39,10 +103,18 @@ export function toIdentifier(shortName) {
   return head + rest.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join("");
 }
 
+/** Parse `x.y.z` to numeric segments; a non-numeric/prerelease segment (`0-canary`) → 0. */
+function parseVersion(v) {
+  return v.split(".").map((s) => {
+    const n = Number.parseInt(s, 10);
+    return Number.isNaN(n) ? 0 : n;
+  });
+}
+
 /** Compare two `x.y.z` versions; returns >0 if a is newer. */
 function compareVersions(a, b) {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
   for (let i = 0; i < 3; i += 1) {
     if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0);
   }
@@ -56,12 +128,13 @@ function compareVersions(a, b) {
  */
 export function currentLineVersion(packagesDir) {
   let max = "0.1.0";
-  for (const dir of readdirSync(packagesDir)) {
-    const pj = join(packagesDir, dir, "package.json");
-    if (!existsSync(pj)) continue;
-    const manifest = JSON.parse(readFileSync(pj, "utf8"));
-    if (manifest.private === true || typeof manifest.version !== "string") continue;
-    if (compareVersions(manifest.version, max) > 0) max = manifest.version;
+  // Reuse the ONE canonical public-set filter (shared with publish.mjs + pack-and-boot.mjs)
+  // rather than re-implementing `private !== true` a third time.
+  for (const dir of readPublicPackageDirs(packagesDir)) {
+    const manifest = JSON.parse(readFileSync(join(packagesDir, dir, "package.json"), "utf8"));
+    if (typeof manifest.version === "string" && compareVersions(manifest.version, max) > 0) {
+      max = manifest.version;
+    }
   }
   return max;
 }
@@ -108,41 +181,14 @@ export function renderPackageJson({ shortName, description, version }) {
   )}\n`;
 }
 
+/** Copy the reference package's tsconfig verbatim (it holds no package-specific names). */
 export function renderTsconfig() {
-  return `{
-  "extends": "../../tsconfig.base.json",
-
-  "compilerOptions": {
-    "rootDir": ".",
-    "types": ["node"]
-  },
-
-  "include": ["src", "test"]
-}
-`;
+  return readFileSync(join(REPO, "packages", REFERENCE, "tsconfig.json"), "utf8");
 }
 
+/** Copy the reference package's vitest config verbatim (uniform across the surface). */
 export function renderVitestConfig() {
-  return `import { defineConfig } from "vitest/config";
-
-// The bar is non-negotiable: 100% coverage, enforced in CI by these thresholds.
-// A line we cannot reach is a line we should not have written.
-export default defineConfig({
-  test: {
-    coverage: {
-      provider: "v8",
-      include: ["src/**/*.ts"],
-      exclude: ["src/index.ts"],
-      thresholds: {
-        lines: 100,
-        functions: 100,
-        branches: 100,
-        statements: 100,
-      },
-    },
-  },
-});
-`;
+  return readFileSync(join(REPO, "packages", REFERENCE, "vitest.config.ts"), "utf8");
 }
 
 export function renderIndex({ shortName, description, identifier }) {
@@ -204,7 +250,13 @@ TODO: a one-paragraph pitch + a minimal usage snippet before this package publis
 export function createPackage({ shortName, description, root = join(REPO, "packages") }) {
   if (!isValidShortName(shortName)) {
     throw new Error(
-      `invalid package short name "${shortName}": use lowercase letters, digits, and single hyphens (e.g. "mailing-lists").`,
+      `invalid package short name "${shortName}": must start with a lowercase letter, then lowercase letters, digits, and single hyphens (e.g. "mailing-lists").`,
+    );
+  }
+  const identifier = toIdentifier(shortName);
+  if (RESERVED.has(identifier)) {
+    throw new Error(
+      `"${shortName}" derives the reserved JS identifier "${identifier}" — pick another name, or a hyphenated one (e.g. "${shortName}-core").`,
     );
   }
   const pkgDir = join(root, shortName);
@@ -213,7 +265,6 @@ export function createPackage({ shortName, description, root = join(REPO, "packa
   }
 
   const version = currentLineVersion(join(REPO, "packages"));
-  const identifier = toIdentifier(shortName);
   const desc = description ?? `${packageName(shortName)} — TODO: describe this package.`;
 
   const files = {
