@@ -58,14 +58,17 @@ export async function hashPassword(password: string): Promise<string> {
 
 /**
  * Verify a candidate against a stored hash, dispatching on the hash's own prefix so
- * it is checked under whatever algorithm minted it. Resolves `false` (never rejects)
- * for a malformed or mismatched stored string; comparison is constant-time.
+ * it is checked under whatever algorithm minted it. A PBKDF2 hash verifies on every
+ * runtime, resolving `false` for a malformed or mismatched value.
  *
- * The one case it *rejects* rather than resolving: a `scrypt$…` hash on a runtime
- * that cannot run scrypt (the edge). Deriving it would need ~128 MiB and OOM-kill the
- * isolate — which no `try/catch` can rescue — so we refuse at dispatch with a coded
- * {@link AuthError} `AUTH_KDF_UNAVAILABLE`, never calling the KDF. PBKDF2 verifies on
- * every runtime; only scrypt-on-a-non-scrypt-host is refused.
+ * On a runtime that cannot run scrypt (the edge), a **non-PBKDF2** stored string is
+ * *rejected* rather than resolved: it routes to the scrypt backend, and deriving a
+ * real scrypt hash there would need ~128 MiB and OOM-kill the isolate — which no
+ * `try/catch` can rescue — so we refuse at dispatch with a coded {@link AuthError}
+ * `AUTH_KDF_UNAVAILABLE`, never calling the KDF. (In practice a stored value is always
+ * `scrypt$…` or `pbkdf2$…`; a corrupt non-PBKDF2 row is refused the same way rather
+ * than risk a derive.) On a scrypt-capable host (Node/Bun) scrypt hashes verify
+ * normally and malformed values resolve `false` as before.
  */
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   if (isPbkdf2(stored)) return await verifyPasswordWeb(password, stored);

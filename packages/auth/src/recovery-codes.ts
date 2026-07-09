@@ -94,10 +94,13 @@ export async function hashRecoveryCodes(codes: readonly string[]): Promise<strin
 /**
  * Verify a candidate recovery code against one stored hash, in constant time.
  *
- * A thin alias over {@link verifyPassword}: resolves `false` (never rejects) for a
- * malformed stored hash, and compares the derived key in constant time. Single-use
- * enforcement (marking the matched code consumed so a replay is refused) is the
- * caller's, after a `true`.
+ * A thin alias over {@link verifyPassword}: resolves `false` for a malformed or
+ * mismatched stored hash and compares the derived key in constant time. It inherits
+ * {@link verifyPassword}'s one rejection case — a `scrypt$…` (or otherwise
+ * non-PBKDF2) hash on a runtime that cannot run scrypt (the edge) throws a coded
+ * `AuthError` `AUTH_KDF_UNAVAILABLE` rather than deriving. Single-use enforcement
+ * (marking the matched code consumed so a replay is refused) is the caller's, after
+ * a `true`.
  */
 export async function verifyRecoveryCode(code: string, storedHash: string): Promise<boolean> {
   return await verifyPassword(code, storedHash);

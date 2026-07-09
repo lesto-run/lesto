@@ -126,7 +126,12 @@ export interface PasswordHasher {
   /** Hash a password / recovery code with a fresh salt under the current cost. */
   hashPassword(password: string): Promise<string>;
 
-  /** Verify a candidate against a stored hash in constant time; `false` (never throws) on a malformed hash. */
+  /**
+   * Verify a candidate against a stored hash in constant time; `false` on a malformed
+   * or mismatched hash. May reject with a coded `AuthError` `AUTH_KDF_UNAVAILABLE` when
+   * the stored hash names a KDF this runtime cannot run (scrypt on the edge) — `login`
+   * catches that and maps it via {@link IdentityOptions.onUnverifiableHash}.
+   */
   verifyPassword(password: string, stored: string): Promise<boolean>;
 
   /** True iff the stored hash was minted below today's cost — the rehash-on-login seam. */
@@ -167,6 +172,14 @@ const productionHasher: PasswordHasher = {
  * hashes are one-way, so this convert-on-login (or reset) is the ONLY way to migrate
  * a hash — there is no offline batch conversion. See the runbook in
  * `docs/guide/edge-password-migration.md`.
+ *
+ * ⚠️ TIMING CAVEAT (enumeration): this hasher MINTS PBKDF2 but VERIFIES a not-yet-
+ * converted row with scrypt, so the login timing-decoy (minted via `hashPassword` →
+ * PBKDF2) no longer costs the same as verifying an unconverted scrypt row. During the
+ * migration window an attacker can distinguish "real unconverted account" (scrypt-cost
+ * response) from "unknown/converted" (PBKDF2-cost) by wall-time, despite identical
+ * error codes — worst for legacy N=2^14 rows. Keep the window short, lean on the
+ * per-account `loginRateLimiter`, and monitor. Full fix tracked in L-3d530db0.
  */
 export const pbkdf2MigrationHasher: PasswordHasher = {
   hashPassword: hashPasswordWeb,
@@ -1118,7 +1131,9 @@ export function createIdentity(options: IdentityOptions): Identity {
           // (minted on Node) reaching the edge, where the derive would OOM
           // (`AUTH_KDF_UNAVAILABLE`). All of a user's codes share one algorithm, so
           // none can be checked here; fail closed to the same enumeration-quiet
-          // refusal as any miss (a reset re-mints break-glass codes as PBKDF2).
+          // refusal as any miss. Recovery codes are NOT healed by a password reset
+          // (that re-mints only the password hash); a migrated user re-enrolls TOTP
+          // to get PBKDF2 codes. See docs/guide/edge-password-migration.md.
           if (!hasCode(error, "AUTH_KDF_UNAVAILABLE")) throw error;
 
           break;

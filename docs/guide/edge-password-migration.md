@@ -56,6 +56,13 @@ due for rehash — so the built-in rehash-on-login seam converts each user on th
 sign-in, with **no forced reset**. Leave this running for a normal login cycle and the
 active-user corpus drains to PBKDF2 on its own.
 
+> ⚠️ **Timing/enumeration during the window.** While the corpus is mixed, this hasher
+> mints the login timing-decoy with PBKDF2 but verifies unconverted rows with scrypt,
+> so the two costs differ — an attacker can distinguish a real *unconverted* account
+> from an unknown/converted one by response time (identical error codes notwithstanding),
+> worst for legacy hashes. Keep the migration window short, keep a per-account
+> `loginRateLimiter` wired, and watch login latency by outcome.
+
 ## Step 2 — reset the dormant tail (covers everyone who didn't log in)
 
 Users who don't sign in during the window still hold `scrypt$…` hashes at cutover.
@@ -92,6 +99,11 @@ users reset), but choose it only when the UX outweighs the leak for your threat 
 - **Hybrid (Node writes, edge reads)?** Pin PBKDF2 on the Node writer so the edge never
   meets a scrypt hash: mint with `hashPasswordWeb` from `@lesto/auth`, or run the Node
   writer through `pbkdf2MigrationHasher`.
-- **Recovery codes** ride the same KDF. A scrypt-hashed recovery code can't be verified
-  on the edge either; it fails closed (treated as an invalid code). A password reset
-  re-mints the user's recovery codes as PBKDF2 too.
+- **Recovery codes (TOTP break-glass)** ride the same KDF. A scrypt-hashed recovery
+  code can't be verified on the edge; it fails closed (treated as an invalid code). A
+  password reset does **not** heal recovery codes — `resetPassword` re-mints only the
+  *password* hash, and recovery-code hashes are one-way (there is no plaintext to
+  re-hash). A migrated user whose recovery codes were minted on Node must
+  **re-enroll TOTP** (`confirmTotp`), which mints fresh PBKDF2 recovery codes. If your
+  migration window is long, prefer shrinking the scrypt recovery-code tail the same way
+  as passwords — keep users signing in / re-enrolling on the Node tier before cutover.
