@@ -76,8 +76,8 @@ That single filter is the source of truth in three places that must agree — `s
 (what actually publishes), `scripts/pack-and-boot.mjs` (what validates the packed shape), and this
 doc. It is **version-agnostic**: each package's own `version` is its source of truth, so a
 coordinated bump needs no edit to the publish scripts. A new package joins the surface simply by
-**becoming non-private** — and, if it has never been on the registry, by the one-time bootstrap in
-the next section.
+**becoming non-private** — and, if it has never been on the registry, by the one-time
+"First-publish bootstrap" below. (To scaffold one in the right shape: `bun run new-package`.)
 
 `create-lesto` lives at `packages/create-lesto`, so the same `packages/*` + `private !== true`
 filter picks it up alongside the `@lesto/*` packages.
@@ -134,9 +134,9 @@ coverage-excluded per the house config; replace the placeholder with the real th
 1. `bun install` — link the workspace **and refresh `bun.lock`** (see Dragon 1 above; a stale
    lockfile mispins deps at pack time).
 2. Build it, keep 100% coverage, `bun changeset` (the `fixed` group moves it with the line).
-3. **To publish it:** a brand-new name needs the **one-time first-publish bootstrap** (next
-   section) before the normal OIDC release can touch it — OIDC 403s on a name that doesn't
-   exist on the registry yet.
+3. **To publish it:** a brand-new name needs the **one-time first-publish bootstrap**
+   (the "First-publish bootstrap for a BRAND-NEW package" section below) before the normal
+   OIDC release can touch it — OIDC 403s on a name that doesn't exist on the registry yet.
 
 ## Day-to-day: record a changeset with every change
 

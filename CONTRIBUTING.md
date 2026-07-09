@@ -52,7 +52,10 @@ load-bearing rules:
 - **Code reads like poetry.** Generous vertical spacing, one idea per line, early
   returns over nesting, comments that explain *why*.
 
-`packages/queue` is the reference implementation — when in doubt, match it.
+`packages/queue` is the reference implementation — when in doubt, match it. To
+**start a new package**, don't hand-roll it: `bun run new-package <name> ["description"]`
+scaffolds `packages/<name>/` in the correct shape (green out of the box), copying
+`queue`'s config verbatim. See [RELEASING.md](./RELEASING.md) "Adding a new package".
 
 ## Running the gate
 
