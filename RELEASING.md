@@ -3,12 +3,59 @@
 Lesto publishes its public `@lesto/*` surface to npm with [Changesets](https://github.com/changesets/changesets).
 This is the source of truth for **how a release happens** and **what gets published**.
 
-> **Status:** the surface is **published**. `0.1.1` went live **2026-06-23**, and **`0.1.2`
-> is live on npm as of 2026-07-04** — **36 public packages** (35 `@lesto/*` + `create-lesto`),
-> published via **Trusted Publishing (OIDC)** from `github.com/lesto-run/lesto` with **no
-> `NPM_TOKEN`**. The workflow (`.github/workflows/release.yml`) stays gated behind the
+> **Status:** the surface is **published**. `0.1.1` (2026-06-23) → `0.1.2` (2026-07-04) →
+> **`0.1.3` is live on npm as of 2026-07-08** — **49 public packages** (48 `@lesto/*` +
+> `create-lesto`), including the **13 headline batteries** (cache, workflows, identity, mail,
+> mailing-lists, webhooks, forms, flags, admin, realtime, pubsub, i18n, feeds), first-published
+> this wave. Published via **Trusted Publishing (OIDC)** from `github.com/lesto-run/lesto` with
+> **no `NPM_TOKEN`**. The workflow (`.github/workflows/release.yml`) stays gated behind the
 > `RELEASE_ENABLED` repo variable and fires only on explicit `workflow_dispatch`. This doc is
 > now **"here's how we cut the next release,"** not "here's how we'd start."
+
+## How to cut a release — READ THIS FIRST
+
+Releases publish through **CI over OIDC trusted publishing** (`.github/workflows/release.yml`,
+`workflow_dispatch`). **You do not run `npm publish` locally, and you never enter an OTP
+per package. If you find yourself entering an OTP for each package — STOP, you are on the
+wrong path.** The one and only local publish is the one-time bootstrap of a *brand-new package
+name* (below); everything already on npm publishes through CI.
+
+1. **Record changesets** for your changes (`bun changeset`), commit them.
+2. **New package names?** For each publishable package, `npm view <name> version`. Any that
+   returns **E404** has never been on npm → it needs a **one-time manual bootstrap** (see
+   "First-publish bootstrap" — OIDC 403s on a package that doesn't exist yet). Bootstrap **only
+   those new names**, in one `bun pm pack` + `npm publish --access public` batch — a **single OTP
+   covers the whole rapid batch** (the 2FA prompt is time-boxed per session, *not* truly
+   per-package). Then set each new package's trusted publisher on npmjs.com (org `lesto-run`,
+   repo `lesto`, workflow `release.yml`, env blank). Every *already-published* package is
+   untouched here — it ships in step 5.
+3. **Version bump** — `bun run version` (`changeset version`). ⚠️ **DRAGON 1 (bun.lock):** this
+   bumps `package.json`s but does **NOT** regenerate `bun.lock`'s workspace `version` fields.
+   `bun pm pack` rewrites `workspace:*` deps from the *lockfile*, so a stale lockfile silently
+   mispins internal deps (e.g. `mailing-lists@0.1.3 → mail@0.0.0`, an E404). **`bun install
+   --force` does NOT re-sync it — you must `rm -f bun.lock && bun install`.** Commit the
+   regenerated lockfile. (Verified 2026-07-08; the `0.1.3` wave shipped `router`/`ui` mispinned
+   because they were bootstrapped before this was known.)
+4. **Preflight — MUST be green before any publish:** `bun run test:pack-boot`. This packs all 49,
+   installs + boots a scaffold, AND runs the cross-ref guard (`scripts/pack-and-boot.mjs`) that
+   catches exactly the Dragon-1 mispin. The manual bootstrap loop **bypasses** this guard, so run
+   it explicitly on the bumped tree.
+5. **Publish everything via CI.** ⚠️ **DRAGON 3 (stale origin):** CI checks out **origin**, not
+   your local tree. Before dispatching: `git fetch origin && [ "$(git rev-list --count
+   origin/main..HEAD)" = 0 ]` — origin/main must be at the exact SHA you intend to release (the
+   Studio daemon's auto-push has silently stalled before; a stale origin makes CI no-op
+   "successfully"). Then arm `RELEASE_ENABLED=true`, and `gh workflow run release.yml --ref
+   <exact-sha>` (**not** `--ref main`). Read the run's publish summary: `0 published, N skipped`
+   when you expected new publishes means CI built a stale tree — investigate, don't assume
+   success. Restore `RELEASE_ENABLED=false` after.
+
+> ⚠️ **DRAGON 2 (provenance):** `.github/workflows/release.yml` pins `npm@11.5.1` on purpose —
+> `npm@latest` (now `12.0.0`) regressed provenance with `Cannot find module 'sigstore'`. Do not
+> change it to `@latest` or a floating `^` range without confirming provenance still works.
+>
+> **NEVER publish already-existing packages one-at-a-time locally.** It is unsupported: it
+> produces packages with **no provenance** and, against a stale lockfile, **mispinned deps**. The
+> only correct local publish is the one-time bootstrap of a genuinely new name (step 2).
 
 ## 0. Names — claimed, no longer a gate — ✅ (historical)
 
@@ -182,9 +229,11 @@ later goes public needs the same fix. See `docs/plans/publish-day.md` for the ve
    >    `EUNSUPPORTEDPROTOCOL`. This bit the first `0.1.0` publish (2026-06-23, superseded by
    >    `0.1.1`). `bun pm pack` rewrites it; `scripts/publish.mjs` publishes the SAME tarball
    >    `scripts/pack-and-boot.mjs` validates. `release:changeset` is kept for reference only.
-   > 2. **Local/token publishing requires OTP per package** when the account 2FA is
-   >    "Authorization and writes" — and Classic Automation tokens (which bypassed it) are gone.
-   >    Trusted Publishing sidesteps tokens and 2FA entirely, which is why it's the supported
+   > 2. **Local/token publishing requires an OTP** when the account 2FA is "Authorization and
+   >    writes" — and Classic Automation tokens (which bypassed it) are gone. It is **not** truly
+   >    per-package: the 2FA code is time-boxed per session, so a **single OTP covers a rapid
+   >    `npm publish` batch** (verified 2026-07-08 — one code covered the 13-package bootstrap in
+   >    ~25s). Trusted Publishing sidesteps tokens and 2FA entirely, which is why it's the supported
    >    path (the token+OTP route survives only for the one-time new-package bootstrap). There is
    >    intentionally **no committed `.npmrc`**: an `${NPM_TOKEN}` authToken line expands empty
    >    under OIDC and shadows trusted-publishing auth.
