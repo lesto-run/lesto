@@ -37,17 +37,21 @@
  *   - **Verification replay**. Verification tokens are *not* user-bound
  *     this way: replay is harmless because `verifyEmail` is idempotent and
  *     has no side effect beyond a single boolean flip.
- *     Enumeration-safe by design: every credential-failure path routes through one
+ *   - **Login enumeration**. Every credential-failure path routes through one
  *     `failLogin` epilogue, so unknown-email, wrong-password, and unverifiable-hash
- *     all return the same coded error and the same userId-less event.
+ *     emit the same userId-less event and — in the DEFAULT posture — return the same
+ *     `IDENTITY_INVALID_CREDENTIALS`. The opt-in `onUnverifiableHash: "require_reset"`
+ *     deliberately returns a distinct `IDENTITY_PASSWORD_RESET_REQUIRED` (an
+ *     acknowledged trade — see {@link IdentityOptions.onUnverifiableHash}).
  *   - **Timing**. `login` spends one KDF derive on every failure path (a decoy verify
  *     against `dummyHash()` where no real verify ran) via the runtime-adaptive hasher.
  *     Costs are equal for a **single-KDF, single-cost corpus** — the steady state. A
  *     migration/legacy-rehash window has a mixed corpus, so a real row's verify cost
- *     can differ from the decoy's mint cost: a *transient, self-draining*
- *     (rehash-on-login) timing signal, bounded by `loginRateLimiter` and closed once
- *     the corpus is single-cost. Codes are always identical. See
- *     {@link pbkdf2MigrationHasher} and docs/guide/edge-password-migration.md.
+ *     can differ from the decoy's *verify* cost: a timing signal that self-drains for
+ *     accounts that sign in (rehash-on-login) but persists for the dormant never-login
+ *     tail until it is force-reset/expired at cutover, and is bounded by
+ *     `loginRateLimiter` only when one is wired. Codes stay identical (default
+ *     posture). See {@link pbkdf2MigrationHasher} and docs/guide/edge-password-migration.md.
  */
 
 import {
@@ -187,10 +191,11 @@ const productionHasher: PasswordHasher = {
  * migration window an attacker can distinguish "real unconverted account" (scrypt-cost
  * response) from "unknown/converted" (PBKDF2-cost) by wall-time, despite identical
  * error codes — worst for legacy N=2^14 rows. This is inherent to a mixed-KDF corpus
- * (a single decoy cannot match every per-row cost) and is transient + self-draining:
- * the window closes as rehash-on-login converts the corpus to single-cost PBKDF2.
- * Keep the window short, lean on the per-account `loginRateLimiter`, drain the corpus
- * before cutover (see the runbook), and monitor.
+ * (a single decoy cannot match every per-row cost). Rehash-on-login drains it for
+ * accounts that sign in, but the dormant never-login tail keeps its scrypt row until
+ * force-reset/expired — so it does NOT fully self-drain. MUST-DOs: wire a per-account
+ * `loginRateLimiter` (the residual is unbounded without it), keep the window short,
+ * drain the corpus before cutover (see the runbook), and monitor.
  */
 export const pbkdf2MigrationHasher: PasswordHasher = {
   hashPassword: hashPasswordWeb,
@@ -820,9 +825,10 @@ export function createIdentity(options: IdentityOptions): Identity {
       //
       // Timing caveat (documented, not fixed here): this equalizes a SINGLE-KDF,
       // single-cost corpus (the steady state). During a migration/legacy-rehash window a
-      // real row's verify cost can differ from the decoy's mint cost, a transient,
-      // self-draining (rehash-on-login) signal bounded by `loginRateLimiter`. See
-      // {@link pbkdf2MigrationHasher} and docs/guide/edge-password-migration.md.
+      // real row's verify cost can differ from the decoy's verify cost — a signal that
+      // self-drains (rehash-on-login) for accounts that sign in but persists for the
+      // dormant never-login tail, and is bounded only when `loginRateLimiter` is wired.
+      // See {@link pbkdf2MigrationHasher} and docs/guide/edge-password-migration.md.
       const failLogin = async (spendDecoy: boolean, error: IdentityError): Promise<never> => {
         const decoy = await dummyHash();
 
