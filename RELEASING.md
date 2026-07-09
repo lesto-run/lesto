@@ -114,6 +114,30 @@ does not pull them — they publish as opt-in add-ons (`npm i @lesto/content-cor
 
 Everything outside the non-private set stays `private` until it has a reason to publish.
 
+## Adding a new package — use the generator
+
+**Do not hand-roll a new package's `package.json`** — the publishable metadata (source
+`exports`, `files:["src"]`, `publishConfig.access`, `repository.directory`, and the
+current fixed-group version) is exactly the easy-to-get-wrong part, and a missing field
+either breaks `npm install` or ships a wrong shape. Instead:
+
+```sh
+bun run new-package <shortname> ["one-line description"]   # scripts/new-package.mjs
+```
+
+It scaffolds `packages/<shortname>/` with the correct publishable shape (matching every
+sibling), born **at the current line version** (not `0.0.0`, so it's lockstep-consistent
+and never trips the `assertVersionsBumped` guard) — plus a placeholder module + test so the
+package **passes typecheck + `vitest run` at 100% coverage out of the box** (`index.ts` is
+coverage-excluded per the house config; replace the placeholder with the real thing). Then:
+
+1. `bun install` — link the workspace **and refresh `bun.lock`** (see Dragon 1 above; a stale
+   lockfile mispins deps at pack time).
+2. Build it, keep 100% coverage, `bun changeset` (the `fixed` group moves it with the line).
+3. **To publish it:** a brand-new name needs the **one-time first-publish bootstrap** (next
+   section) before the normal OIDC release can touch it — OIDC 403s on a name that doesn't
+   exist on the registry yet.
+
 ## Day-to-day: record a changeset with every change
 
 Any change that affects a published package adds a changeset describing the bump:
