@@ -10,7 +10,16 @@ import { LestoError } from "@lesto/errors";
 
 export { LestoError };
 
-export type AuthErrorCode = "AUTH_INVALID_HASH" | "AUTH_WEAK_SECRET";
+export type AuthErrorCode =
+  | "AUTH_INVALID_HASH"
+  | "AUTH_WEAK_SECRET"
+  /**
+   * A stored hash names a KDF this runtime cannot execute — e.g. a `scrypt$…` hash
+   * reaching a Cloudflare Workers isolate, where the memory-hard derive would OOM.
+   * `verifyPassword` refuses (throws this) BEFORE calling the KDF rather than crash;
+   * the caller decides how to surface it (see `@lesto/identity` `onUnverifiableHash`).
+   */
+  | "AUTH_KDF_UNAVAILABLE";
 
 /** Anything authentication can refuse to do. */
 export class AuthError extends LestoError<AuthErrorCode> {

@@ -1,6 +1,9 @@
+import { randomBytes, scryptSync } from "node:crypto";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  AuthError,
   hashPassword,
   hashPasswordScrypt,
   hashPasswordWeb,
@@ -208,5 +211,44 @@ describe("hashPassword facade — runtime-adaptive minting, prefix-dispatched ve
 
     expect(await verifyPassword("anything", overCost)).toBe(false);
     expect(needsRehash(overCost)).toBe(false);
+  });
+});
+
+// A VALID cheap scrypt hash of a known password (N=2): if the guard failed to fire,
+// the scrypt backend would run and return `true` — so asserting a throw proves the
+// refusal happens BEFORE the KDF, not that the hash merely failed to verify.
+const scryptHashOf = (password: string): string => {
+  const salt = randomBytes(16);
+  const key = scryptSync(password, salt, 64, { N: 2, r: 8, p: 1 });
+
+  return `scrypt$2$8$1$${salt.toString("hex")}$${key.toString("hex")}`;
+};
+
+describe("verifyPassword — refuses scrypt on a runtime that cannot run it", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("throws AUTH_KDF_UNAVAILABLE for a scrypt hash on the edge, without running scrypt", async () => {
+    vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
+
+    const stored = scryptHashOf("correct password");
+
+    await expect(verifyPassword("correct password", stored)).rejects.toMatchObject({
+      name: "AuthError",
+      code: "AUTH_KDF_UNAVAILABLE",
+    });
+    // Belt: it is an AuthError, and it carries the offending algorithm for the caller.
+    await verifyPassword("correct password", stored).catch((error: unknown) => {
+      expect(error).toBeInstanceOf(AuthError);
+      expect((error as AuthError).details).toMatchObject({ algorithm: "scrypt" });
+    });
+  });
+
+  it("still verifies a scrypt hash on Node — the guard does not fire on a scrypt host", async () => {
+    const stored = scryptHashOf("correct password");
+
+    expect(await verifyPassword("correct password", stored)).toBe(true);
+    expect(await verifyPassword("wrong password", stored)).toBe(false);
   });
 });

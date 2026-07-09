@@ -19,6 +19,15 @@ export type IdentityErrorCode =
   | "IDENTITY_EMAIL_NOT_VERIFIED"
   | "IDENTITY_LOGIN_THROTTLED"
   | "IDENTITY_INVALID_TOKEN"
+  /**
+   * Login could not verify this account's stored password hash on this runtime —
+   * a `scrypt$…` hash reaching a Cloudflare Workers isolate, where the derive would
+   * OOM (a migrated / hybrid corpus). Only surfaced when the app opts into
+   * {@link IdentityOptions.onUnverifiableHash} `"require_reset"`; the default keeps the
+   * enumeration-safe `IDENTITY_INVALID_CREDENTIALS`. The fix is a password reset,
+   * which re-mints the hash as edge-safe PBKDF2.
+   */
+  | "IDENTITY_PASSWORD_RESET_REQUIRED"
   // --- second factor (TOTP, ADR 0020) ---
   /** No live session backed the call that must be made by a signed-in user. */
   | "IDENTITY_NOT_AUTHENTICATED"

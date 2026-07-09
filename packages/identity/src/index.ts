@@ -25,7 +25,7 @@
  * together at app boot.
  */
 
-export { createIdentity } from "./identity";
+export { createIdentity, pbkdf2MigrationHasher } from "./identity";
 export type {
   Identity,
   IdentityEvent,

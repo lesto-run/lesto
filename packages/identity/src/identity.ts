@@ -46,9 +46,11 @@ import {
   generateRecoveryCodes,
   generateTotpSecret,
   hashPassword,
+  hashPasswordWeb,
   hashRecoveryCodes,
   MemorySessionStore,
   needsRehash,
+  needsRehashWeb,
   Sessions,
   totpKeyUri,
   verifyPassword,
@@ -57,6 +59,7 @@ import {
 } from "@lesto/auth";
 import type { Clock, Session, SessionStore } from "@lesto/auth";
 import type { Db } from "@lesto/db";
+import { hasCode } from "@lesto/errors";
 import type { RateLimiter } from "@lesto/ratelimit";
 
 import { assertStrongSecret, IdentityError } from "./errors";
@@ -146,6 +149,32 @@ const productionHasher: PasswordHasher = {
   hashPassword,
   verifyPassword,
   needsRehash,
+  hashRecoveryCodes,
+  verifyRecoveryCode,
+};
+
+/**
+ * A migration preset for moving an existing password DB from Node to the edge
+ * (L-5ecfb54e). Wire it as {@link IdentityOptions.hasher} on the **still-live Node
+ * tier** before cutover: `createIdentity({ …, hasher: pbkdf2MigrationHasher })`.
+ *
+ * It verifies exactly as production does (Node runs scrypt fine, so existing
+ * `scrypt$…` rows still authenticate) but MINTS PBKDF2 even on Node and reports any
+ * non-PBKDF2 stored hash as due for rehash. So the existing rehash-on-login seam
+ * re-mints each user's proven plaintext as edge-safe PBKDF2 on their next sign-in —
+ * draining the corpus to PBKDF2 with no forced reset. Whatever tail has not signed
+ * in by cutover is handled by a password reset (which also mints PBKDF2). Password
+ * hashes are one-way, so this convert-on-login (or reset) is the ONLY way to migrate
+ * a hash — there is no offline batch conversion. See the runbook in
+ * `docs/guide/edge-password-migration.md`.
+ */
+export const pbkdf2MigrationHasher: PasswordHasher = {
+  hashPassword: hashPasswordWeb,
+  verifyPassword,
+  // A scrypt or legacy row is "stale" for migration → the login seam rehashes it to
+  // PBKDF2; a PBKDF2 row defers to the real per-cost check. `"pbkdf2$"` is the stable
+  // wire prefix `@lesto/auth` mints (see its `PBKDF2_PREFIX`).
+  needsRehash: (stored) => (stored.startsWith("pbkdf2$") ? needsRehashWeb(stored) : true),
   hashRecoveryCodes,
   verifyRecoveryCode,
 };
@@ -356,6 +385,29 @@ export interface IdentityOptions {
   readonly hasher?: PasswordHasher;
 
   /**
+   * What `login` does when it cannot VERIFY a user's stored hash on this runtime —
+   * i.e. a `scrypt$…` hash on the edge, where the derive would OOM the isolate, so
+   * `@lesto/auth` refuses with `AUTH_KDF_UNAVAILABLE` before touching the KDF. This
+   * is the migrated / hybrid-corpus case (see {@link pbkdf2MigrationHasher} and the
+   * `docs/guide/edge-password-migration.md` runbook).
+   *
+   *   - `"invalid_credentials"` (**default**) — refuse with `IDENTITY_INVALID_CREDENTIALS`,
+   *     byte- and timing-identical to a wrong password. **Enumeration-safe**: leaks
+   *     nothing about whether the account exists or which KDF minted its hash.
+   *     Migrated users recover out-of-band (email them a reset link).
+   *   - `"require_reset"` — refuse with the distinct `IDENTITY_PASSWORD_RESET_REQUIRED`
+   *     so the app can route the user straight to the reset screen in-band. **This
+   *     opens an unauthenticated account-existence oracle** (an attacker learns which
+   *     emails are registered-but-legacy without a correct password) — a strict
+   *     superset of the {@link IDENTITY_EMAIL_NOT_VERIFIED} leak. Bounded and
+   *     self-healing (it shrinks as users reset). Choose it only when the in-band UX
+   *     outweighs the leak for your threat model.
+   *
+   * Either way the fix is a password reset, which re-mints the hash as PBKDF2.
+   */
+  readonly onUnverifiableHash?: "invalid_credentials" | "require_reset";
+
+  /**
    * Optional observability hook fired on each identity lifecycle event —
    * `login_succeeded` / `login_failed` / `password_reset` / `email_verified` /
    * `session_revoked` (see {@link IdentityEvent}).
@@ -450,6 +502,7 @@ export function createIdentity(options: IdentityOptions): Identity {
 
   const db = options.db;
   const hasher = options.hasher ?? productionHasher;
+  const onUnverifiableHash = options.onUnverifiableHash ?? "invalid_credentials";
   const requireVerifiedEmail = options.requireVerifiedEmail ?? true;
   const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
   const verificationTtlMs = options.verificationTtlMs ?? DEFAULT_VERIFICATION_TTL_MS;
@@ -547,6 +600,18 @@ export function createIdentity(options: IdentityOptions): Identity {
   let dummyHashCache: Promise<string> | undefined;
   const dummyHash = (): Promise<string> =>
     (dummyHashCache ??= hasher.hashPassword("__lesto_identity_timing_decoy__"));
+
+  // The coded refusal for a hash `login` could not verify on this runtime (a
+  // `scrypt$…` row on the edge). The enumeration-safe default is byte-identical to a
+  // wrong password; `"require_reset"` trades that for an in-band reset signal. See
+  // {@link IdentityOptions.onUnverifiableHash}.
+  const unverifiableHashError = (): IdentityError =>
+    onUnverifiableHash === "require_reset"
+      ? new IdentityError(
+          "IDENTITY_PASSWORD_RESET_REQUIRED",
+          "Your password must be reset before you can sign in.",
+        )
+      : new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
 
   return {
     /**
@@ -728,7 +793,29 @@ export function createIdentity(options: IdentityOptions): Identity {
         throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
-      if (!(await hasher.verifyPassword(password, user.passwordHash))) {
+      let passwordOk: boolean;
+      try {
+        passwordOk = await hasher.verifyPassword(password, user.passwordHash);
+      } catch (error) {
+        // The hasher REFUSED to verify (it did not just return false): the stored
+        // hash names a KDF this runtime cannot run — a `scrypt$…` row on the edge,
+        // where the derive would OOM the isolate (`AUTH_KDF_UNAVAILABLE`). Matched by
+        // the process-global brand (dep-dup-safe), never `instanceof`.
+        if (!hasCode(error, "AUTH_KDF_UNAVAILABLE")) throw error;
+
+        // Keep this branch timing- AND shape-identical to a wrong password: the refuse
+        // path ran NO derive, so spend one decoy derive (always the runtime's native
+        // KDF via `dummyHash`, so it never itself refuses), burn the same penalty, and
+        // emit the same userId-less `login_failed`. Otherwise a migrated account would
+        // be faster-and-detectable even under the enumeration-safe default code.
+        await hasher.verifyPassword(password, await dummyHash());
+        await penalize();
+        await emit({ type: "login_failed", at: eventClock() });
+
+        throw unverifiableHashError();
+      }
+
+      if (!passwordOk) {
         await penalize();
 
         // A failed login. Even though we now hold a `user`, we omit its id to keep
@@ -1023,7 +1110,21 @@ export function createIdentity(options: IdentityOptions): Identity {
       // closing the check-then-mark TOCTOU. No factor / no unused codes / no match
       // all surface the same coded refusal.
       for (const candidate of candidates) {
-        if (await hasher.verifyRecoveryCode(code, candidate.codeHash)) {
+        let matched: boolean;
+        try {
+          matched = await hasher.verifyRecoveryCode(code, candidate.codeHash);
+        } catch (error) {
+          // The KDF is unavailable on this runtime — a `scrypt$…` recovery-code hash
+          // (minted on Node) reaching the edge, where the derive would OOM
+          // (`AUTH_KDF_UNAVAILABLE`). All of a user's codes share one algorithm, so
+          // none can be checked here; fail closed to the same enumeration-quiet
+          // refusal as any miss (a reset re-mints break-glass codes as PBKDF2).
+          if (!hasCode(error, "AUTH_KDF_UNAVAILABLE")) throw error;
+
+          break;
+        }
+
+        if (matched) {
           if (await totpRepo.markRecoveryCodeUsed(db, candidate.id)) return;
 
           // Lost the race: another request spent this code between our read and our
