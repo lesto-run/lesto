@@ -1,0 +1,6 @@
+---
+"@lesto/auth": patch
+"@lesto/identity": patch
+---
+
+Ship an edge-safe default password hasher so `@lesto/auth`/`@lesto/identity` no longer OOM-crash on Cloudflare Workers. The default scrypt cost (N=2^17) needs a ~128 MiB working set — at/over the 128 MB Workers isolate cap — so any edge app hashing a password on register/login/reset crashed the isolate (L-7735be80). `hashPassword` is now runtime-adaptive: it mints memory-hard scrypt on Node/Bun and CPU-hard PBKDF2 over `crypto.subtle` (OWASP-floor 600k SHA-256) on Workers, selected by a fail-safe runtime probe (`navigator.userAgent` + the ungated `WebSocketPair` global) that resolves every ambiguous runtime to PBKDF2 — a misdetected Node running PBKDF2 is still secure, a misdetected edge running scrypt crashes. Verification and `needsRehash` dispatch on the stored hash's own self-describing prefix (`scrypt$…` / `pbkdf2$…`), so a hash always verifies under the algorithm that minted it. `@lesto/identity`'s default `productionHasher` wraps these functions, so wiring nothing now yields full-strength, edge-safe hashing with no config change. New explicit exports `hashPasswordScrypt`/`hashPasswordWeb` (+ `verify*`/`needsRehash*` variants) and `selectPasswordAlgorithm` let a caller pin an algorithm. All existing Node behavior — the scrypt format, cost, and rehash-on-login — is unchanged.

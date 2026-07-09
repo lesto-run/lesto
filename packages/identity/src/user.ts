@@ -4,7 +4,7 @@
  *
  *   id              the surrogate primary key SQLite auto-assigns
  *   email           lower-cased, unique; the natural identifier the user types
- *   passwordHash    the scrypt hash from @lesto/auth's `hashPassword`
+ *   passwordHash    the hash from @lesto/auth's `hashPassword` (scrypt on Node, PBKDF2 on edge)
  *   emailVerifiedAt ISO timestamp; `null` until verification completes
  *   createdAt       ISO timestamp; stamped by `insertUser` (no DB trigger)
  *   updatedAt       ISO timestamp; stamped by every write helper

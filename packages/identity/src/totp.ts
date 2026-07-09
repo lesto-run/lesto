@@ -15,8 +15,9 @@
  * A TOTP *secret* is the one credential that cannot be one-way hashed: the
  * verifier must recompute the live code, so it holds the secret in recoverable
  * form (ADR 0020). At-rest protection of that secret column is the deployment's
- * encryption job. Recovery *codes*, by contrast, are stored only as their scrypt
- * `hashPassword` digests — a DB snapshot yields no usable codes.
+ * encryption job. Recovery *codes*, by contrast, are stored only as their
+ * `hashPassword` digests (scrypt on Node, PBKDF2 on the edge) — a DB snapshot
+ * yields no usable codes.
  *
  * The `user_id` columns are plain `integer` references for now; a real
  * `references(() => users.id)` foreign key lands when ADR 0018 Increment 2 ships

@@ -20,6 +20,15 @@
 
 export { hashPassword, needsRehash, verifyPassword } from "./password";
 
+// The explicit per-algorithm backends, for callers that must pin one (e.g. minting
+// PBKDF2 from Node for a DB an edge app will read) rather than take the
+// runtime-selected default the facade above provides.
+export { hashPasswordScrypt, needsRehashScrypt, verifyPasswordScrypt } from "./password-scrypt";
+export { hashPasswordWeb, needsRehashWeb, verifyPasswordWeb } from "./password-web";
+
+export { selectPasswordAlgorithm } from "./runtime";
+export type { PasswordAlgorithm } from "./runtime";
+
 export { sha256 } from "./hash";
 
 export { generateToken } from "./token";

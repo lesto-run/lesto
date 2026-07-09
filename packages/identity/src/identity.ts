@@ -99,21 +99,25 @@ const DEFAULT_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RESET_TTL_MS = 60 * 60 * 1000;
 
 /**
- * The scrypt password-hashing surface Identity leans on — an injectable seam over
+ * The password-hashing surface Identity leans on — an injectable seam over
  * `@lesto/auth`'s KDF (ADR 0020), bundled so a caller can substitute the whole
  * implementation as one unit.
  *
- * Every method delegates to the SAME self-describing scrypt format `@lesto/auth`
- * mints (`scrypt$N$r$p$salt$hash`); this seam exists to make the *cost* an
- * injection point, not to fork the algorithm. The production default —
- * {@link productionHasher} — runs the full cost (N=2^17, ~150 ms/derive), which is
- * right for a real deployment but far too slow to invoke the dozens of times a unit
- * suite does. A test passes a cheap-cost implementation of this same shape so the
- * password / recovery-code paths stay fast without weakening what ships.
+ * Every method delegates to `@lesto/auth`'s runtime-adaptive facade, which mints a
+ * self-describing hash under the KDF the host runtime can bear — memory-hard scrypt
+ * on Node, CPU-hard PBKDF2 on the edge, where scrypt's ~128 MiB working set would
+ * OOM-crash a Cloudflare Workers isolate (L-7735be80). This seam exists to make the
+ * *cost* an injection point, not to fork the algorithm. The production default —
+ * {@link productionHasher} — runs full strength (scrypt N=2^17 ~150 ms/derive on
+ * Node; OWASP-floor PBKDF2 on the edge), which is right for a real deployment but far
+ * too slow to invoke the dozens of times a unit suite does. A test passes a
+ * cheap-cost implementation of this same shape so the password / recovery-code paths
+ * stay fast without weakening what ships.
  *
  * The default MUST remain the production cost: {@link IdentityOptions.hasher} is
  * optional and falls back to {@link productionHasher}, so a caller that does not
- * wire it gets full-strength hashing with no way to accidentally under-cost it.
+ * wire it gets full-strength, edge-safe hashing with no way to accidentally
+ * under-cost it.
  */
 export interface PasswordHasher {
   /** Hash a password / recovery code with a fresh salt under the current cost. */
@@ -133,9 +137,10 @@ export interface PasswordHasher {
 }
 
 /**
- * The production password hasher — the full-cost `@lesto/auth` scrypt KDF, and the
- * default whenever {@link IdentityOptions.hasher} is not wired. Deployments get this
- * with no configuration; only tests substitute a cheaper cost.
+ * The production password hasher — the full-cost, runtime-adaptive `@lesto/auth` KDF
+ * (scrypt on Node, PBKDF2 on the edge), and the default whenever
+ * {@link IdentityOptions.hasher} is not wired. Deployments get this with no
+ * configuration; only tests substitute a cheaper cost.
  */
 const productionHasher: PasswordHasher = {
   hashPassword,
@@ -339,13 +344,14 @@ export interface IdentityOptions {
   readonly clock?: Clock;
 
   /**
-   * The scrypt hashing implementation (see {@link PasswordHasher}).
+   * The password-hashing implementation (see {@link PasswordHasher}).
    *
-   * Defaults to {@link productionHasher} — the full-cost `@lesto/auth` KDF — so a
-   * deployment gets full-strength hashing with no configuration. The seam exists
-   * for tests, which inject a cheap-cost implementation of the same shape to keep
-   * the password / recovery-code paths fast; production callers should leave it
-   * unset. Under-costing is opt-in and never the default.
+   * Defaults to {@link productionHasher} — the full-cost, runtime-adaptive
+   * `@lesto/auth` KDF (scrypt on Node, PBKDF2 on the edge) — so a deployment gets
+   * full-strength, edge-safe hashing with no configuration. The seam exists for
+   * tests, which inject a cheap-cost implementation of the same shape to keep the
+   * password / recovery-code paths fast; production callers should leave it unset.
+   * Under-costing is opt-in and never the default.
    */
   readonly hasher?: PasswordHasher;
 
