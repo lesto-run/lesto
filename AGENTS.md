@@ -105,11 +105,16 @@ The agent and its logic (`scripts/dev/push-main.sh`) are version-controlled;
 only the generated plist is machine-local (it bakes in this clone's path), so
 **re-run the installer after a fresh clone / on a second machine** or the
 backstop is silently absent. The push is fast-forward-only (never `--force`), so
-it cannot rewrite published history; a non-FF divergence (rebase / amend /
-force-pushed origin) is logged to `~/.studio/push-main.log` and raises a
-rate-limited desktop alert instead of stalling silently. **Before cutting a
-release, quiesce this agent** (`--uninstall`, or `launchctl bootout`) so it
-can't advance `main` mid-CI and cancel the release SHA's run — see RELEASING.md.
+it cannot rewrite published history; a push that fails 3× in a row — for ANY
+reason (expired credential / dead SSH key, a branch-protection reject, or a
+non-FF divergence) — is logged to `~/.studio/push-main.log` and raises a
+rate-limited desktop alert, and every success stamps
+`~/.studio/.push-main-last-success` for a dead-man check. It supersedes the
+interactive-only post-commit push hook (which can't see the daemon's
+`update-ref` commits — that hook block is now redundant). **Before cutting a
+release, quiesce it** — `touch ~/.studio/.push-main-paused` (lightest), or
+`--uninstall` / `launchctl bootout` — so it can't advance `main` mid-CI and
+cancel the release SHA's run (see RELEASING.md).
 
 ## Agent-facing surfaces (dogfood them)
 

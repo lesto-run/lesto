@@ -46,8 +46,9 @@ name* (below); everything already on npm publishes through CI.
    your local tree. Before dispatching: `git fetch origin && [ "$(git rev-list --count
    origin/main..HEAD)" = 0 ]` — origin/main must be at the exact SHA you intend to release (the
    Studio daemon's auto-push has silently stalled before; a stale origin makes CI no-op
-   "successfully"). **Quiesce main first (L-fc1a7a4f):** pause the Studio daemon and
-   `launchctl bootout gui/$(id -u)/run.lesto.push-main` so no new commit supersedes the release
+   "successfully"). **Quiesce main first (L-fc1a7a4f):** pause the Studio daemon and the push
+   agent — `touch ~/.studio/.push-main-paused` (lightest; `rm` it after the release) or
+   `launchctl bootout gui/$(id -u)/run.lesto.push-main` — so no new commit supersedes the release
    tip while CI runs — `ci.yml` has `cancel-in-progress: true`, so a push landing mid-run cancels
    the release SHA's CI run and the green-CI gate below then refuses that SHA forever. Then confirm
    CI is green for the release SHA, arm `RELEASE_ENABLED=true`, and `gh workflow run release.yml

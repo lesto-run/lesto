@@ -69,7 +69,7 @@ cat >"$plist" <<PLIST
   <key>StandardOutPath</key>
   <string>/dev/null</string>
   <key>StandardErrorPath</key>
-  <string>$HOME/.studio/push-main.launchd.log</string>
+  <string>/dev/null</string>
 </dict>
 </plist>
 PLIST
@@ -79,6 +79,10 @@ plutil -lint "$plist" >/dev/null || {
   exit 1
 }
 launchctl bootout "$domain/$label" 2>/dev/null || true
-launchctl bootstrap "$domain" "$plist"
-echo "Installed $label → FF-pushes $(cd "$script_dir/../.." && pwd) main to origin every 120s."
-echo "Push outcomes: \$HOME/.studio/push-main.log (rotated). Remove: $0 --uninstall"
+if ! launchctl bootstrap "$domain" "$plist"; then
+  echo "launchctl bootstrap failed — agent NOT loaded. Run from a logged-in desktop session (bootstrap into gui/\$(id -u) needs an active Aqua session), not bare SSH." >&2
+  exit 1
+fi
+repo=$(cd "$script_dir/../.." && pwd)
+echo "Installed $label → FF-pushes $repo main to origin every 120s."
+echo "Push outcomes: $HOME/.studio/push-main.log (rotated). Remove: $script_dir/install-push-agent.sh --uninstall"
