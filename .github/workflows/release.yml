@@ -45,7 +45,9 @@ jobs:
           node-version: "22"
 
       # Trusted publishing needs npm >= 11.5.1; the Node-22 bundled npm (~10.9) is too old.
-      - run: npm install -g npm@latest
+      # Pinned (not @latest): npm@latest regressed provenance with `Cannot find module 'sigstore'`
+      # (libnpmpublish/provenance.js) under NPM_CONFIG_PROVENANCE — 11.5.1 ships an intact sigstore.
+      - run: npm install -g npm@11.5.1
 
       - uses: oven-sh/setup-bun@v2
         with:
