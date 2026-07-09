@@ -58,7 +58,7 @@ const worker = await Worker("pubsub-edge", {
   bindings: {
     // `sqlite: true` is load-bearing: the hibernatable DO writes a durable per-channel
     // `seq:<channel>` to `state.storage` on every publish (so seq survives eviction),
-    // and it is the hook for a future `state.storage`-backed ReplayRing.
+    // and it backs the per-channel `state.storage` replay ring that `?since=` reads (room.ts).
     PUBSUB_ROOM: DurableObjectNamespace("pubsub-room", { className: "PubSubRoom", sqlite: true }),
     // Encrypted at rest in Alchemy state; the Worker verifies capability tokens with it.
     PUBSUB_SECRET: alchemy.secret(pubsubSecret),
@@ -101,24 +101,11 @@ async function verifyLive(base: string, secret: string): Promise<void> {
   const ws = await openWithRetry(wsUrl);
 
   // Attach the receipt listener BEFORE publishing so no frame can be missed.
-  const received = new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () =>
-        reject(new Error("smoke: subscriber never received the published nonce → fan-out broken")),
-      10_000,
-    );
-
-    ws.addEventListener("message", (event) => {
-      const frame = JSON.parse(String((event as MessageEvent).data)) as {
-        data?: { nonce?: string };
-      };
-
-      if (frame.data?.nonce === nonce) {
-        clearTimeout(timer);
-        resolve();
-      }
-    });
-  });
+  const received = awaitFrame(
+    ws,
+    (f) => f.data?.nonce === nonce,
+    "the published nonce → fan-out broken",
+  );
 
   const publish = await fetch(`${base}/publish`, {
     method: "POST",
@@ -210,7 +197,7 @@ async function verifyResume(base: string, secret: string): Promise<void> {
   const missedFrame = await awaitFrame(
     sub2,
     (f) => f.data?.nonce === offlineNonce,
-    "the missed nonce via ?since replay",
+    "the missed nonce via ?since replay → resume broken",
   );
   sub2.close();
 
@@ -231,10 +218,7 @@ function awaitFrame(
   label: string,
 ): Promise<SmokeFrame> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`resume smoke: never received ${label} → resume broken`)),
-      10_000,
-    );
+    const timer = setTimeout(() => reject(new Error(`smoke: never received ${label}`)), 10_000);
 
     ws.addEventListener("message", (event) => {
       const frame = JSON.parse(String((event as MessageEvent).data)) as SmokeFrame;

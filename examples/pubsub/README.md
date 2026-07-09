@@ -16,7 +16,7 @@ neutral send policy (`fanout()`, in `@lesto/pubsub`) as the Node path.
 
 | Route                                                              | Behavior                                                                                                                                                   |
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET  /subscribe?channel=<name>&token=<t>[&since=<seq>]`           | Verifies a `subscribe`-mode token for `<name>` (else `401`), then upgrades to a WebSocket subscribed to `<name>`; receives one framed message per publish. With `?since=<seq>`, the durable ring first replays every retained message newer than `<seq>` (missed-message resume). |
+| `GET  /subscribe?channel=<name>&token=<t>[&since=<seq>]`           | Verifies a `subscribe`-mode token for `<name>` (else `401`), then upgrades to a WebSocket subscribed to `<name>`; receives one framed message per publish. `?since=<seq>` (**edge only** — the Node twin ignores it) first replays every retained message newer than `<seq>` from the durable ring (missed-message resume). |
 | `POST /publish` `{channel, message}` + `Authorization: Bearer <t>` | Verifies a `publish`-mode token for the channel (else `401`), then fans `message` out; returns `{ delivered }` (see the caveat).                           |
 | `GET  /` (edge only)                                               | The token issuer: mints short-lived `demo`-channel subscribe + publish tokens and serves a tiny browser demo that uses them.                               |
 
@@ -162,16 +162,18 @@ production message bus. Remaining simplifications, each with its graduation path
   so an idle room costs nothing and survives eviction. The per-channel `seq` lives in
   `state.storage` (durable), never rewinding on eviction. Per-channel sharding
   (`idFromName(channel)`) shipped in Task A.
-- ✅ **Missed-message resume — shipped.** Every publish is appended to a bounded
-  per-channel `state.storage` sqlite ring `(seq, channel, data, at)`; a subscriber that
-  reconnects with `?since=<seq>` is replayed every retained row `seq > since` BEFORE any
-  live frame, so a briefly-disconnected client catches up. The ring is bounded by BOTH
-  count and age (its eviction arithmetic is `@lesto/pubsub`'s pure, 100%-covered
-  `replayEvictionBounds`). Because a live publish can interleave a replay, the contract
-  is a floor, not arithmetic: the **client dedups by monotonic seq** (ignore
-  `seq <= lastSeen`) — always correct. Below the retained window the missed rows are
-  gone; the client resumes from the live edge. The durable per-channel `seq` (Task B) is
-  the sole owner of the counter — the ring is a bounded copy, never the source, so an
-  evicted ring can never rewind the seq a resume trusts.
+- ✅ **Missed-message resume — shipped (server side).** Every publish is appended to a
+  bounded per-channel `state.storage` sqlite ring keyed `(channel, seq)`; a subscriber
+  that reconnects with `?since=<seq>` is replayed every retained row `seq > since` BEFORE
+  any live frame, so a briefly-disconnected client catches up. The ring is bounded by
+  BOTH count and age (its eviction arithmetic is `@lesto/pubsub`'s pure, 100%-covered
+  `replayEvictionBounds`). Because a live publish can interleave a replay, a **correct
+  client MUST dedup by monotonic seq** (ignore `seq <= lastSeen`) — the app owns this
+  contract; the browser demo does not implement it. Below the retained window the missed
+  rows are gone for good (this is a bounded buffer, not a durable log) and the server
+  sends **no** gap/resync marker, so a client that must not miss a message has to detect
+  the hole itself (its first replayed `seq > since + 1`) and recover. The durable
+  per-channel `seq` (Task B) is the sole owner of the counter — the ring is a bounded
+  copy, never the source, so an evicted ring can never rewind the seq a resume trusts.
 - **Unbounded outbound.** A slow socket's send queue is unbounded (workerd buffers
   `send`); `@lesto/realtime`'s SSE `maxQueue` is the model for backpressure.

@@ -21,15 +21,17 @@
  *
  * MISSED-MESSAGE RESUME: ephemeral fan-out drops any message a subscriber was offline
  * for, so each publish is also appended to a bounded per-channel `state.storage` sqlite
- * ring `(seq, channel, data, at)`. A subscriber that reconnects with `?since=<seq>` is
+ * ring `(channel, seq, data, at)`. A subscriber that reconnects with `?since=<seq>` is
  * replayed every retained row `seq > since` BEFORE any live frame. A publish that
- * interleaves the replay may double-send a seq, so the contract is a floor, not
- * arithmetic: the CLIENT dedups by monotonic seq (ignore `seq <= lastSeen`) — always
- * correct. Below the retained window (`since` older than the oldest retained row) the
- * missed rows are simply gone; the client resumes from the live edge and, for anything
- * it must not miss, treats the gap as it would a cold start. The ring's *storage* is
- * here (SQL); its *eviction arithmetic* is `@lesto/pubsub`'s pure, 100%-covered
- * {@link replayEvictionBounds}.
+ * interleaves the replay can double-send a seq, so a CORRECT CLIENT MUST dedup by
+ * monotonic seq (ignore `seq <= lastSeen`) — the app owns this floor; the demo's browser
+ * client does not. Below the retained window (`since` older than the oldest retained row)
+ * the missed rows are gone for good: this ring is a bounded per-channel-DO buffer, not a
+ * durable log, and — unlike `@lesto/realtime`, whose reconnect resyncs by refetching the
+ * source DB — there is no source to refetch and the server sends NO gap/resync marker. A
+ * client that must not miss a message therefore has to detect the hole itself (its first
+ * replayed `seq > since + 1`) and recover. The ring's *storage* is here (SQL); its
+ * *eviction arithmetic* is `@lesto/pubsub`'s pure, 100%-covered {@link replayEvictionBounds}.
  *
  * `WebSocketPair` + the hibernation methods are workerd runtime globals absent from
  * the DOM lib this example is typed against (see `tsconfig.json`), so their shapes
@@ -62,10 +64,9 @@ interface DurableObjectStorage {
   sql: SqlStorage;
 }
 
-/** A retained ring row — the columns replay reads to rebuild a frame identical to the live one. */
+/** A retained ring row as replay reads it — `seq` + the raw message; `channel` is the in-scope subscribe channel. */
 interface RingRow {
   seq: number;
-  channel: string;
   data: string;
 }
 
@@ -96,8 +97,15 @@ export class PubSubRoom {
     // time workerd rehydrates this hibernated DO) is simplest and always correct.
     // ONE statement per `exec` — multi-statement DDL passes locally (openSqlite) but
     // throws 7500 on remote DO-sqlite (the d1-single-statement-exec trap).
+    //
+    // Keyed on `(channel, seq)`, NOT a bare `seq`: seq is per-channel (`seq:<channel>`),
+    // so under this demo's one-channel-per-DO sharding each table holds a single channel
+    // — but if two channels ever share a DO (the tag-based fan-out stays correct if
+    // sharding is reverted, per Task B), a bare-`seq` PK would collide across channels
+    // (a publish 500) and the channel-less reads below would leak/evict across channels.
+    // Every ring statement is therefore channel-scoped, matching the per-channel seq.
     this.#state.storage.sql.exec(
-      "CREATE TABLE IF NOT EXISTS ring (seq INTEGER PRIMARY KEY, channel TEXT NOT NULL, data TEXT NOT NULL, at INTEGER NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS ring (channel TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (channel, seq))",
     );
   }
 
@@ -148,8 +156,11 @@ export class PubSubRoom {
     // so the socket is guaranteed registered before any post-open publish. Do not reorder.
     this.#state.acceptWebSocket(server, [channel]);
 
-    // The channel + resume cursor survive eviction with the socket, so a woken DO still
-    // knows what each hibernated socket is subscribed to and from where it resumed.
+    // Persist the channel + resume cursor WITH the socket (survives hibernation). Nothing
+    // reads it back today — fan-out enumerates by workerd tag and replay is a one-shot at
+    // connect — so this is a forward-looking hook for a future wake-time re-resume, not a
+    // capability in use now (re-replaying on wake would only re-send frames the client
+    // already deduped).
     server.serializeAttachment({ channel, sinceSeq });
 
     // Replay the missed window BEFORE returning the 101, so every retained `seq > since`
@@ -158,17 +169,16 @@ export class PubSubRoom {
     // replayed row rebuilds a frame byte-identical to what a live subscriber received.
     if (sinceSeq !== undefined) {
       const missed = this.#state.storage.sql
-        .exec<RingRow>("SELECT seq, channel, data FROM ring WHERE seq > ? ORDER BY seq", sinceSeq)
+        .exec<RingRow>(
+          "SELECT seq, data FROM ring WHERE channel = ? AND seq > ? ORDER BY seq",
+          channel,
+          sinceSeq,
+        )
         .toArray();
 
       for (const row of missed) {
         server.send(
-          encodeFrame({
-            type: "message",
-            channel: row.channel,
-            seq: row.seq,
-            data: JSON.parse(row.data),
-          }),
+          encodeFrame({ type: "message", channel, seq: row.seq, data: JSON.parse(row.data) }),
         );
       }
     }
@@ -207,8 +217,16 @@ export class PubSubRoom {
       at,
     );
     const bounds = replayEvictionBounds(seq, at, RING_RETENTION);
-    this.#state.storage.sql.exec("DELETE FROM ring WHERE seq <= ?", bounds.seqAtOrBelow);
-    this.#state.storage.sql.exec("DELETE FROM ring WHERE at < ?", bounds.agedOutBefore);
+    this.#state.storage.sql.exec(
+      "DELETE FROM ring WHERE channel = ? AND seq <= ?",
+      body.channel,
+      bounds.seqAtOrBelow,
+    );
+    this.#state.storage.sql.exec(
+      "DELETE FROM ring WHERE channel = ? AND at < ?",
+      body.channel,
+      bounds.agedOutBefore,
+    );
 
     // The registry is the runtime: enumerate this channel's live sockets and fan out
     // over them with the pure core. workerd evicts a closed socket from the tag set,

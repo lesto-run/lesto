@@ -3,22 +3,18 @@
  * "how much of a channel's recent history to keep" half of a bounded replay ring.
  *
  * The ring's STORAGE is substrate-specific: the hibernatable Durable Object in
- * `examples/pubsub/room.ts` keeps it in a `state.storage` sqlite table, because under
- * hibernation the DO has no surviving memory to hold a ring in. But *which rows have
- * fallen out of the window* is a pure function of the newest seq, the wall clock, and
- * the retention policy — so it lives here, dependency-free and 100%-covered, and the
- * example supplies only the SQL. Mirrors `packages/realtime/src/replay-ring.ts`, but
- * far simpler: one DO is the sole strongly-consistent owner of its channel's monotonic
- * seq, so there is no per-node `instanceId`/`generation` machinery — a resume is
- * provable within the retained window, and below it the client resumes fresh (deduping
- * by seq, `@lesto/realtime`'s "a reconnect that cannot prove continuity is always
- * correct to over-deliver" applied to general messages).
+ * `examples/pubsub/room.ts` keeps it in a `state.storage` sqlite table (under
+ * hibernation the DO has no surviving memory to hold a ring in) and supplies the SQL.
+ * But *which rows have fallen out of the window* is a pure function of the newest seq,
+ * the wall clock, and the retention policy — so it lives here, dependency-free and
+ * 100%-covered, where the example's coverage-exempt SQL cannot pin the off-by-one.
  *
  * A row is retained only while it is BOTH among the newest {@link ReplayRetention.maxEntries}
- * AND younger than {@link ReplayRetention.maxAgeMs}; it is evicted the moment it falls
- * out of EITHER window. The two bounds are therefore applied as two independent deletes
- * whose union is the eviction set — exactly as `@lesto/realtime`'s ring drops by age and
- * then by count.
+ * AND younger than {@link ReplayRetention.maxAgeMs}; it is evicted the moment it falls out
+ * of EITHER window. The two bounds are therefore applied as two independent deletes whose
+ * union is the eviction set. (The resume semantics this feeds — replay-before-live, the
+ * client-side seq dedup floor, and what "below the window" means — are documented where
+ * they live, on the DO in `examples/pubsub/room.ts`.)
  */
 
 /** How much recent history a channel's replay ring keeps — the two window halves. */
