@@ -4,11 +4,13 @@ Lesto publishes its public `@lesto/*` surface to npm with [Changesets](https://g
 This is the source of truth for **how a release happens** and **what gets published**.
 
 > **Status:** the surface is **published**. `0.1.1` (2026-06-23) → `0.1.2` (2026-07-04) →
-> **`0.1.3` is live on npm as of 2026-07-08** — **49 public packages** (48 `@lesto/*` +
-> `create-lesto`), including the **13 headline batteries** (cache, workflows, identity, mail,
-> mailing-lists, webhooks, forms, flags, admin, realtime, pubsub, i18n, feeds), first-published
-> this wave. Published via **Trusted Publishing (OIDC)** from `github.com/lesto-run/lesto` with
-> **no `NPM_TOKEN`**. The workflow (`.github/workflows/release.yml`) stays gated behind the
+> `0.1.3` (2026-07-08) → **`0.1.4` is live on npm as of 2026-07-09** — **49 public packages**
+> (48 `@lesto/*` + `create-lesto`), **all provenance-signed**, including the **13 headline
+> batteries** (cache, workflows, identity, mail, mailing-lists, webhooks, forms, flags, admin,
+> realtime, pubsub, i18n, feeds). `0.1.4` was the coordinated re-release that corrected the
+> `router`/`ui` stale-lockfile pins, first-published `@lesto/styles` (its first npm version —
+> no 0.1.1–0.1.3), and restored provenance across the whole surface. Published via **Trusted
+> Publishing (OIDC)** from `github.com/lesto-run/lesto` with **no `NPM_TOKEN`**. The workflow (`.github/workflows/release.yml`) stays gated behind the
 > `RELEASE_ENABLED` repo variable and fires only on explicit `workflow_dispatch`. This doc is
 > now **"here's how we cut the next release,"** not "here's how we'd start."
 
