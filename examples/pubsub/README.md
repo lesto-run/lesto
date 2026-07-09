@@ -16,7 +16,7 @@ neutral send policy (`fanout()`, in `@lesto/pubsub`) as the Node path.
 
 | Route                                                              | Behavior                                                                                                                                                   |
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET  /subscribe?channel=<name>&token=<t>`                         | Verifies a `subscribe`-mode token for `<name>` (else `401`), then upgrades to a WebSocket subscribed to `<name>`; receives one framed message per publish. |
+| `GET  /subscribe?channel=<name>&token=<t>[&since=<seq>]`           | Verifies a `subscribe`-mode token for `<name>` (else `401`), then upgrades to a WebSocket subscribed to `<name>`; receives one framed message per publish. With `?since=<seq>`, the durable ring first replays every retained message newer than `<seq>` (missed-message resume). |
 | `POST /publish` `{channel, message}` + `Authorization: Bearer <t>` | Verifies a `publish`-mode token for the channel (else `401`), then fans `message` out; returns `{ delivered }` (see the caveat).                           |
 | `GET  /` (edge only)                                               | The token issuer: mints short-lived `demo`-channel subscribe + publish tokens and serves a tiny browser demo that uses them.                               |
 
@@ -105,26 +105,33 @@ idle room costs nothing and survives eviction. `GET /` is the token issuer — i
 the demo page's tokens with `PUBSUB_SECRET`.
 
 `alchemy.run.ts` (ADR 0044 — Alchemy IaC, no `wrangler.toml`) declares the Worker,
-its DO namespace, and the `PUBSUB_SECRET` binding, and after `finalize()` runs a
-**post-deploy smoke**: it opens a real WebSocket to the live url (with a minted
-subscribe token), publishes a fresh random nonce over a separate HTTP request (with
-a publish token), and asserts the subscriber receives it. CI runs exactly this on
-every push to main (`.github/workflows/deploy-examples.yml`), so "it deploys AND
-authorized fan-out works on the edge" is machine-checked, not a manual click-through.
+its DO namespace, and the `PUBSUB_SECRET` binding, and after `finalize()` runs two
+**post-deploy smokes**. The first opens a real WebSocket to the live url (with a minted
+subscribe token), publishes a fresh random nonce over a separate HTTP request (with a
+publish token), and asserts the subscriber receives it. The second proves
+**missed-message resume**: a subscriber records a live message's seq, disconnects, a
+second message is published while it is offline, and a fresh connection with
+`?since=<seq>` receives that missed message — which (published before the second connect)
+can only have come from the durable ring. CI runs exactly this on every push to main
+(`.github/workflows/deploy-examples.yml`), so "it deploys AND authorized fan-out + resume
+work on the edge" is machine-checked, not a manual click-through.
 
 **Honest claim:** a genuinely live Cloudflare deploy with a behavioral proof — a real
 WS subscriber (admitted with a valid scoped token) receives a message published by a
-separate authorized request through the Durable Object, **and** a tokenless publish is
-refused with `401`: a true cross-connection, DO-mediated, authenticated fan-out, no
-manual hop. What the edge smoke does **not** cover: (1) the exhaustive reject matrix
+separate authorized request through the Durable Object; a subscriber that reconnects
+with `?since=<seq>` catches up on a message published while it was offline (from the
+durable ring); **and** a tokenless publish is refused with `401`: a true
+cross-connection, DO-mediated, authenticated fan-out with missed-message resume, no
+manual hop. What the edge smokes do **not** cover: (1) the exhaustive reject matrix
 (wrong-mode / wrong-channel / expired) and `GET /` minting — proven in the local suite
 against the Node twin (`src/app.ts`), a separate implementation of the same guard; and
-(2) **hibernation itself** — the smoke subscribes then publishes within milliseconds on
-a _warm_ DO, so it proves cross-connection fan-out but never forces an eviction, i.e. it
-does not machine-check that fan-out survives a cold wake. The DO's hibernation handshake
-is correct by construction (reviewed against the workerd API), but a real eviction test
-(via `vitest-pool-workers`) and broader `worker.ts`/`room.ts` coverage are tracked
-follow-ups (`docs/plans/pubsub-production-substrate.md`).
+(2) **hibernation itself** — both smokes act within seconds on a _warm_ DO, so they
+prove cross-connection fan-out and ring-backed resume but never force an eviction, i.e.
+they do not machine-check that fan-out or the durable `seq`/ring survive a cold wake.
+The DO's hibernation handshake is correct by construction (reviewed against the workerd
+API), but a real eviction test (via `vitest-pool-workers`) and broader
+`worker.ts`/`room.ts` coverage are tracked follow-ups
+(`docs/plans/pubsub-production-substrate.md`).
 
 ## Authz (the capability-token model)
 
@@ -155,9 +162,16 @@ production message bus. Remaining simplifications, each with its graduation path
   so an idle room costs nothing and survives eviction. The per-channel `seq` lives in
   `state.storage` (durable), never rewinding on eviction. Per-channel sharding
   (`idFromName(channel)`) shipped in Task A.
-- **No missed-message resume.** Fan-out is ephemeral in-memory; a subscriber that
-  connects after a publish never sees it. A `state.storage`-backed replay ring (the
-  `sqlite: true` namespace already declared is the hook) plus `?since=<seq>` would
-  let a reconnecting client catch up.
+- ✅ **Missed-message resume — shipped.** Every publish is appended to a bounded
+  per-channel `state.storage` sqlite ring `(seq, channel, data, at)`; a subscriber that
+  reconnects with `?since=<seq>` is replayed every retained row `seq > since` BEFORE any
+  live frame, so a briefly-disconnected client catches up. The ring is bounded by BOTH
+  count and age (its eviction arithmetic is `@lesto/pubsub`'s pure, 100%-covered
+  `replayEvictionBounds`). Because a live publish can interleave a replay, the contract
+  is a floor, not arithmetic: the **client dedups by monotonic seq** (ignore
+  `seq <= lastSeen`) — always correct. Below the retained window the missed rows are
+  gone; the client resumes from the live edge. The durable per-channel `seq` (Task B) is
+  the sole owner of the counter — the ring is a bounded copy, never the source, so an
+  evicted ring can never rewind the seq a resume trusts.
 - **Unbounded outbound.** A slow socket's send queue is unbounded (workerd buffers
   `send`); `@lesto/realtime`'s SSE `maxQueue` is the model for backpressure.

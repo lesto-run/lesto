@@ -13,6 +13,9 @@ export type { Listener } from "./pubsub";
 export { FanoutRegistry, encodeFrame, fanout, parsePublishBody } from "./fanout";
 export type { FanoutFrame, FanoutResult, FanoutSocket, PublishRequest } from "./fanout";
 
+export { replayEvictionBounds } from "./replay";
+export type { ReplayEvictionBounds, ReplayRetention } from "./replay";
+
 export { mintChannelToken, verifyChannelToken } from "./channel-token";
 export type {
   ChannelGrant,

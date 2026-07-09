@@ -13,12 +13,15 @@
  * they rendezvous at the same hibernatable DO (the cross-isolate proof) while
  * different channels get different DOs.
  *
- * After `finalize()`, a post-deploy smoke opens a REAL WebSocket to the live url
- * (presenting a minted subscribe token), publishes a fresh random nonce over a
- * SEPARATE HTTP request (presenting a publish token), and asserts the subscriber
- * receives it — a falsifiable, DO-mediated cross-connection proof that ALSO exercises
- * the authz path. That makes `bun alchemy.run.ts` the mechanical "it deploys AND
- * authorized fan-out works on the edge" gate CI runs on every push to main.
+ * After `finalize()`, two post-deploy smokes run against the live url. The first opens
+ * a REAL WebSocket (presenting a minted subscribe token), publishes a fresh random
+ * nonce over a SEPARATE HTTP request (presenting a publish token), and asserts the
+ * subscriber receives it — a falsifiable, DO-mediated cross-connection proof that ALSO
+ * exercises the authz path. The second proves MISSED-MESSAGE RESUME: a subscriber
+ * records a live message's seq, disconnects, a second message is published while it is
+ * offline, and a fresh connection with `?since=<seq>` receives that missed message from
+ * the durable replay ring. Together they make `bun alchemy.run.ts` the mechanical "it
+ * deploys AND authorized fan-out + resume work on the edge" gate CI runs on every push.
  *
  * `nodejs_compat` is intentionally omitted: `@lesto/pubsub` is dependency-free, the
  * `fanout` core is pure, `channel-token` signs over Web Crypto (`crypto.subtle`, a
@@ -75,6 +78,7 @@ console.log("  POST ", `${url}/publish   {"channel":"<name>","message":<any>}`);
 await app.finalize();
 
 await verifyLive(url, pubsubSecret);
+await verifyResume(url, pubsubSecret);
 
 /**
  * Post-deploy smoke: a real WebSocket subscriber receives a fresh nonce published
@@ -148,6 +152,99 @@ async function verifyLive(base: string, secret: string): Promise<void> {
   console.log(
     `smoke: DO-mediated fan-out — subscriber received nonce ${nonce} ✓; tokenless publish refused (401) ✓`,
   );
+}
+
+/** A framed pubsub message as it arrives on the wire (only the fields the smokes read). */
+interface SmokeFrame {
+  seq: number;
+  data?: { nonce?: string };
+}
+
+/**
+ * Post-deploy smoke for MISSED-MESSAGE RESUME (Task C). A subscriber connects, receives
+ * a live message, and records the seq it was assigned; it disconnects; a SECOND message
+ * is published while it is offline (so it can only ever reach the ring, never a live
+ * socket); a fresh connection presents `?since=<recorded seq>` and must receive the
+ * missed message from the durable replay ring. The nonces are random per run and each
+ * wait matches THIS run's nonce (ignoring any concurrent run on the shared channel), so
+ * it is genuinely falsifiable — a broken ring never replays the offline message and the
+ * deploy fails loudly rather than shipping a resume that silently drops history.
+ */
+async function verifyResume(base: string, secret: string): Promise<void> {
+  const channel = "resume-smoke";
+  const exp = Date.now() + 60_000;
+  const subscribeToken = await mintChannelToken({ channel, mode: "subscribe", exp }, secret);
+  const publishToken = await mintChannelToken({ channel, mode: "publish", exp }, secret);
+  const wsBase = base.replace(/^http/, "ws");
+
+  const subscribeUrl = (sinceSeq?: number): string => {
+    const query = new URLSearchParams({ channel, token: subscribeToken });
+    if (sinceSeq !== undefined) query.set("since", String(sinceSeq));
+    return `${wsBase}/subscribe?${query.toString()}`;
+  };
+  const publish = async (nonce: string): Promise<void> => {
+    const res = await fetch(`${base}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${publishToken}` },
+      body: JSON.stringify({ channel, message: { nonce } }),
+    });
+    if (!res.ok) throw new Error(`resume smoke: POST /publish returned ${res.status}`);
+  };
+
+  const onlineNonce = crypto.randomUUID();
+  const offlineNonce = crypto.randomUUID();
+
+  // 1) Subscribe live, publish the "online" nonce, and record the seq it was assigned.
+  const sub1 = await openWithRetry(subscribeUrl());
+  const onlineFrame = awaitFrame(sub1, (f) => f.data?.nonce === onlineNonce, "the live nonce");
+  await publish(onlineNonce);
+  const lastSeq = (await onlineFrame).seq;
+  sub1.close();
+
+  // 2) Publish the "offline" nonce with that subscriber gone → it lands ONLY in the ring.
+  await publish(offlineNonce);
+
+  // 3) Reconnect with `?since=<lastSeq>` — the ring must replay the message missed while
+  //    offline, and it can arrive by NO other path (it was published before this connect).
+  const sub2 = await openWithRetry(subscribeUrl(lastSeq));
+  const missedFrame = await awaitFrame(
+    sub2,
+    (f) => f.data?.nonce === offlineNonce,
+    "the missed nonce via ?since replay",
+  );
+  sub2.close();
+
+  console.log(
+    `resume smoke: message at seq ${missedFrame.seq}, published while offline, caught up via ?since=${lastSeq} ✓`,
+  );
+}
+
+/**
+ * Resolve with the first frame satisfying `match`, or reject after 10s. Frames that do
+ * not match (e.g. a concurrent run's nonce on the shared channel) are ignored, so the
+ * wait is specific to this run and still falsifiable — a path that never delivers the
+ * awaited frame times out and fails the deploy.
+ */
+function awaitFrame(
+  ws: WebSocket,
+  match: (frame: SmokeFrame) => boolean,
+  label: string,
+): Promise<SmokeFrame> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`resume smoke: never received ${label} → resume broken`)),
+      10_000,
+    );
+
+    ws.addEventListener("message", (event) => {
+      const frame = JSON.parse(String((event as MessageEvent).data)) as SmokeFrame;
+
+      if (match(frame)) {
+        clearTimeout(timer);
+        resolve(frame);
+      }
+    });
+  });
 }
 
 /** Open a WebSocket, resolving when it opens and rejecting if it errors first. */
