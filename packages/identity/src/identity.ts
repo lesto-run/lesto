@@ -37,9 +37,17 @@
  *   - **Verification replay**. Verification tokens are *not* user-bound
  *     this way: replay is harmless because `verifyEmail` is idempotent and
  *     has no side effect beyond a single boolean flip.
- *   - **Timing**. `login` always runs one `verifyPassword`, even on an
- *     unknown email, against a constant dummy hash (computed once on first
- *     use) — so missing-user and wrong-password paths spend the same scrypt cost.
+ *     Enumeration-safe by design: every credential-failure path routes through one
+ *     `failLogin` epilogue, so unknown-email, wrong-password, and unverifiable-hash
+ *     all return the same coded error and the same userId-less event.
+ *   - **Timing**. `login` spends one KDF derive on every failure path (a decoy verify
+ *     against `dummyHash()` where no real verify ran) via the runtime-adaptive hasher.
+ *     Costs are equal for a **single-KDF, single-cost corpus** — the steady state. A
+ *     migration/legacy-rehash window has a mixed corpus, so a real row's verify cost
+ *     can differ from the decoy's mint cost: a *transient, self-draining*
+ *     (rehash-on-login) timing signal, bounded by `loginRateLimiter` and closed once
+ *     the corpus is single-cost. Codes are always identical. See
+ *     {@link pbkdf2MigrationHasher} and docs/guide/edge-password-migration.md.
  */
 
 import {
@@ -89,7 +97,7 @@ const EMAIL_FORBIDDEN_CHARS = /[\s,;<>"'`\\()[\]{}]/;
 /** Length-only password policy, mirroring better-auth: 8–128 chars. */
 const MIN_PASSWORD_LENGTH = 8;
 
-/** Caps the input to keep scrypt's CPU cost bounded — no DoS via huge inputs. */
+/** Caps the input to keep the KDF's CPU cost bounded — no DoS via huge inputs. */
 const MAX_PASSWORD_LENGTH = 128;
 
 /** Default session lifetime — 7 days, matching better-auth. */
@@ -178,8 +186,11 @@ const productionHasher: PasswordHasher = {
  * PBKDF2) no longer costs the same as verifying an unconverted scrypt row. During the
  * migration window an attacker can distinguish "real unconverted account" (scrypt-cost
  * response) from "unknown/converted" (PBKDF2-cost) by wall-time, despite identical
- * error codes — worst for legacy N=2^14 rows. Keep the window short, lean on the
- * per-account `loginRateLimiter`, and monitor. Full fix tracked in L-3d530db0.
+ * error codes — worst for legacy N=2^14 rows. This is inherent to a mixed-KDF corpus
+ * (a single decoy cannot match every per-row cost) and is transient + self-draining:
+ * the window closes as rehash-on-login converts the corpus to single-cost PBKDF2.
+ * Keep the window short, lean on the per-account `loginRateLimiter`, drain the corpus
+ * before cutover (see the runbook), and monitor.
  */
 export const pbkdf2MigrationHasher: PasswordHasher = {
   hashPassword: hashPasswordWeb,
@@ -335,7 +346,7 @@ export interface IdentityOptions {
    *
    * Enumeration-safe: the key is `login:<email>` for *every* email, existing or
    * not, so the throttle reveals nothing about whether an account exists — the
-   * same posture `login` keeps elsewhere (one scrypt on every path,
+   * same posture `login` keeps elsewhere (one KDF derive on every failure path,
    * `IDENTITY_INVALID_CREDENTIALS` for both unknown-email and wrong-password).
    */
   readonly loginRateLimiter?: RateLimiter;
@@ -596,20 +607,18 @@ export function createIdentity(options: IdentityOptions): Identity {
     }
   };
 
-  // A *constant* decoy hash, computed lazily on first use and memoized as a promise
-  // (so racing first-callers share one derive). `login` runs
-  // `hasher.verifyPassword(candidate, await dummyHash())` whenever the email matches
-  // no user, so the no-user and wrong-password paths spend the same CPU. Deferred —
-  // NOT computed at construction — because `hashPassword` calls `randomBytes`, which
-  // a Cloudflare Worker forbids in global/module scope; a decoy built eagerly made
-  // `@lesto/identity` impossible to even *import* on the edge. The one-time cost
-  // lands on the first failed login, inside a request handler where randomness is
-  // allowed. It runs through the SAME injected `hasher` as every other path, so an
-  // injected cheap-cost hasher keeps this decoy cheap too. One honest seam: the
-  // timing-equalization holds for every miss AFTER the first per instance — a cold
-  // instance also computes the decoy on that first miss, so it is slower than a
-  // steady-state miss; once warmed, every miss spends exactly one derive and is
-  // indistinguishable from a wrong-password hit.
+  // A decoy hash, minted lazily on first use and memoized as a promise (so racing
+  // first-callers share one derive). Deferred — NOT computed at construction — because
+  // `hashPassword` calls `randomBytes`, which a Cloudflare Worker forbids in
+  // global/module scope; a decoy built eagerly made `@lesto/identity` impossible to
+  // even *import* on the edge. The one-time mint lands on the first failed login,
+  // inside a request handler where randomness is allowed. It runs through the SAME
+  // injected `hasher` as every other path, so an injected cheap-cost hasher keeps the
+  // decoy cheap too. `failLogin` awaits this on EVERY failure path (not just the
+  // no-user one), so the first-miss mint is amortized uniformly across failure types —
+  // a cold isolate's first failure costs one extra mint no matter WHICH failure it is,
+  // so the cold-vs-warm gap no longer correlates with account existence (workerd
+  // recycles isolates, so a per-existence cold gap would otherwise recur).
   let dummyHashCache: Promise<string> | undefined;
   const dummyHash = (): Promise<string> =>
     (dummyHashCache ??= hasher.hashPassword("__lesto_identity_timing_decoy__"));
@@ -722,9 +731,10 @@ export function createIdentity(options: IdentityOptions): Identity {
     /**
      * Verify credentials and mint a session.
      *
-     * Always spends one scrypt operation — on a missing user, we still call
-     * `verifyPassword(candidate, await dummyHash())` so missing-email and
-     * wrong-password are timing-indistinguishable.
+     * Always spends one KDF derive on every failure path (the runtime-adaptive
+     * hasher) — on a missing user or an unverifiable hash we still verify against
+     * `dummyHash()` so all failures are timing-indistinguishable on a single-cost
+     * corpus (see the module-level Timing note for the mixed-window caveat).
      *
      * `IDENTITY_INVALID_CREDENTIALS` covers both unknown-email and bad-
      * password. `IDENTITY_EMAIL_NOT_VERIFIED` is distinct (better-auth
@@ -735,14 +745,14 @@ export function createIdentity(options: IdentityOptions): Identity {
      * **Per-account throttle.** With a {@link IdentityOptions.loginRateLimiter}
      * wired, each *failed* attempt burns a token from a `login:<email>` bucket;
      * once it empties, `login` refuses with `IDENTITY_LOGIN_THROTTLED` before it
-     * touches the DB or scrypt. The bucket is keyed by email regardless of
+     * touches the DB or the KDF. The bucket is keyed by email regardless of
      * whether the account exists, so it never leaks existence, and a successful
      * login spends nothing — a real user is never throttled by their own
      * sign-in. Over `sqlRateLimitStore` the cap is fleet-correct. See the option.
      *
      * **Rehash-on-login.** After a password verifies, if the stored hash was
-     * minted under weaker scrypt parameters than today's default (a legacy or
-     * pre-bump hash), we re-hash the just-proven plaintext at the current cost
+     * minted under weaker KDF parameters than today's default (a legacy or
+     * pre-bump hash, either algorithm), we re-hash the just-proven plaintext at the current cost
      * and persist it. The whole user base walks up to the current cost as
      * people sign in — no forced reset. This runs only on the *success* path,
      * so it never adds work an attacker can trigger, and never on the
@@ -754,7 +764,7 @@ export function createIdentity(options: IdentityOptions): Identity {
       // Per-account throttle (the inner defense). The key is `login:<email>` for
       // EVERY email — existing or not — so the throttle leaks nothing about
       // whether an account exists. We peek with cost 0 (which never spends), and
-      // refuse before touching the DB or scrypt once the bucket is empty.
+      // refuse before touching the DB or the KDF once the bucket is empty.
       const throttleKey = `login:${normalized}`;
 
       if (options.loginRateLimiter !== undefined) {
@@ -791,19 +801,47 @@ export function createIdentity(options: IdentityOptions): Identity {
         }
       };
 
+      // The single epilogue for every POST-LOOKUP credential failure — unknown email,
+      // wrong password, and an unverifiable stored hash. Routing all three through one
+      // closure makes "every failure path is timing- and shape-identical" structural,
+      // not three hand-synced copies a future edit could drift apart.
+      //
+      // It ALWAYS awaits `dummyHash()` — even on the wrong-password path, which already
+      // spent a real verify — so the one-time-per-isolate decoy MINT is amortized on the
+      // FIRST failure of ANY kind. Without that, a cold isolate's first unknown-email
+      // (mint + verify) would out-cost its first wrong-password (verify only), and
+      // workerd recycles isolates, so that gap would recur and leak account existence.
+      // `spendDecoy` then adds the decoy VERIFY only where a real one did NOT run
+      // (unknown-email, unverifiable-hash), so in steady state every failure spends
+      // exactly one KDF derive. NOT used by the pre-lookup throttle short-circuit
+      // (deliberately cheap) nor the email-not-verified refusal (a distinct code, not a
+      // credential guess). The `userId` is never attached — a sink must not tell "wrong
+      // password for a real account" from "no such account".
+      //
+      // Timing caveat (documented, not fixed here): this equalizes a SINGLE-KDF,
+      // single-cost corpus (the steady state). During a migration/legacy-rehash window a
+      // real row's verify cost can differ from the decoy's mint cost, a transient,
+      // self-draining (rehash-on-login) signal bounded by `loginRateLimiter`. See
+      // {@link pbkdf2MigrationHasher} and docs/guide/edge-password-migration.md.
+      const failLogin = async (spendDecoy: boolean, error: IdentityError): Promise<never> => {
+        const decoy = await dummyHash();
+
+        if (spendDecoy) await hasher.verifyPassword(password, decoy);
+
+        await penalize();
+        await emit({ type: "login_failed", at: eventClock() });
+
+        throw error;
+      };
+
       const user = await userRepo.findUserByEmail(db, normalized);
 
       if (!user) {
-        // Equalize CPU so a missing user costs the same as a wrong password.
-        await hasher.verifyPassword(password, await dummyHash());
-
-        await penalize();
-
-        // A failed login — no `userId`, because there is no user, and because the
-        // unknown-email and wrong-password paths must stay indistinguishable.
-        await emit({ type: "login_failed", at: eventClock() });
-
-        throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
+        // No real verify to spend → the epilogue spends a decoy one.
+        return await failLogin(
+          true,
+          new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password."),
+        );
       }
 
       let passwordOk: boolean;
@@ -816,28 +854,19 @@ export function createIdentity(options: IdentityOptions): Identity {
         // the process-global brand (dep-dup-safe), never `instanceof`.
         if (!hasCode(error, "AUTH_KDF_UNAVAILABLE")) throw error;
 
-        // Keep this branch timing- AND shape-identical to a wrong password: the refuse
-        // path ran NO derive, so spend one decoy derive (always the runtime's native
-        // KDF via `dummyHash`, so it never itself refuses), burn the same penalty, and
-        // emit the same userId-less `login_failed`. Otherwise a migrated account would
-        // be faster-and-detectable even under the enumeration-safe default code.
-        await hasher.verifyPassword(password, await dummyHash());
-        await penalize();
-        await emit({ type: "login_failed", at: eventClock() });
-
-        throw unverifiableHashError();
+        // The refuse ran NO derive → spend a decoy one so this stays timing- and
+        // shape-identical to a wrong password (the decoy uses the runtime's native KDF
+        // via `dummyHash`, so it never itself refuses).
+        return await failLogin(true, unverifiableHashError());
       }
 
       if (!passwordOk) {
-        await penalize();
-
-        // A failed login. Even though we now hold a `user`, we omit its id to keep
-        // this branch byte-identical to the unknown-email one above — a sink must
-        // not be able to tell "wrong password for a real account" from "no such
-        // account", the same leak the coded error already avoids.
-        await emit({ type: "login_failed", at: eventClock() });
-
-        throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
+        // The real verify was already spent → no decoy verify, but the epilogue still
+        // touches `dummyHash()` so the first-failure mint is amortized on this path too.
+        return await failLogin(
+          false,
+          new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password."),
+        );
       }
 
       if (requireVerifiedEmail && !userRepo.isEmailVerified(user)) {
@@ -1134,6 +1163,13 @@ export function createIdentity(options: IdentityOptions): Identity {
           // refusal as any miss. Recovery codes are NOT healed by a password reset
           // (that re-mints only the password hash); a migrated user re-enrolls TOTP
           // to get PBKDF2 codes. See docs/guide/edge-password-migration.md.
+          //
+          // Accepted timing residual: this `break` returns after 0 derives, whereas a
+          // genuinely-wrong code loops all candidates — so the KDF-unavailable case is
+          // wall-time-distinguishable from a wrong code. Left as-is: it is post-auth
+          // (keyed on a resolved `userId`, not an email — not an existence oracle), is
+          // still fail-closed + `totpRateLimiter`-bounded, and only reveals migration
+          // state; and the loop is already data-dependent (an early match short-circuits).
           if (!hasCode(error, "AUTH_KDF_UNAVAILABLE")) throw error;
 
           break;

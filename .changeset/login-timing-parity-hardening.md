@@ -1,0 +1,7 @@
+---
+"@lesto/identity": patch
+---
+
+Harden `login`'s enumeration/timing equalization (L-3d530db0). The three credential-failure paths (unknown email, wrong password, unverifiable-hash) now route through a single `failLogin` epilogue, so "every failure is timing- and shape-identical" is structural rather than three hand-synced copies. `failLogin` awaits the memoized timing-decoy on **every** failure path — including wrong-password, which previously skipped it — so the one-time-per-isolate decoy mint is amortized uniformly; without that a cold Workers isolate's first wrong-password (verify only) out-cost its first unknown-email (mint + verify), a cold-vs-existence timing gap that recurred as isolates recycled.
+
+Also scopes the documented enumeration guarantee: cost equalization holds for a **single-KDF, single-cost corpus** (the steady state). During a migration/legacy-rehash window the corpus is mixed, so a real row's verify cost can differ from the decoy's mint cost — a transient, self-draining (rehash-on-login), `loginRateLimiter`-bounded signal, not a fixable property of a single decoy over a mixed corpus (the Django/better-auth posture). `verifyRecoveryCode`'s post-auth early-break on an unverifiable-KDF code is documented as an accepted residual (fail-closed, throttle-bounded, reveals only migration state on an already-resolved userId). No API change; the only behavioral delta is one amortized decoy mint on the cold-isolate wrong-password path.

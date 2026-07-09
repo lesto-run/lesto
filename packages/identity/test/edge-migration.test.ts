@@ -126,6 +126,23 @@ function edgeRefusingHasher(rejection: unknown) {
 const kdfUnavailable = (): AuthError =>
   new AuthError("AUTH_KDF_UNAVAILABLE", "scrypt cannot run here", { algorithm: "scrypt" });
 
+// A cheap, call-counting hasher whose verify always resolves `false` — for driving the
+// credential-failure epilogue and asserting DERIVE COUNTS (never wall-clock).
+function spyHasher() {
+  const hashPassword = vi
+    .fn<(password: string) => Promise<string>>()
+    .mockResolvedValue(DECOY_PBKDF2);
+  const verifyPassword = vi
+    .fn<(password: string, stored: string) => Promise<boolean>>()
+    .mockResolvedValue(false);
+
+  return {
+    hasher: { ...pbkdf2MigrationHasher, hashPassword, verifyPassword } satisfies PasswordHasher,
+    hashPassword,
+    verifyPassword,
+  };
+}
+
 beforeEach(async () => {
   raw = new Database(":memory:");
   db = createDb(adapt(raw));
@@ -261,5 +278,69 @@ describe("pbkdf2MigrationHasher", () => {
 
     const after = await findUserByEmail(db, email);
     expect(after?.passwordHash.startsWith("pbkdf2$sha256$600000$")).toBe(true);
+  });
+});
+
+describe("login failure epilogue — derive-count + shape parity (L-3d530db0)", () => {
+  it("a cold isolate's FIRST wrong-password login mints the decoy too", async () => {
+    await seedVerifiedUser("wrongpw@edge.test", DECOY_PBKDF2);
+    const { hasher, hashPassword, verifyPassword } = spyHasher();
+    const events: IdentityEvent[] = [];
+    const identity = createIdentity(
+      build({
+        hasher,
+        onEvent: (event) => {
+          events.push(event);
+        },
+      }),
+    );
+
+    await expect(identity.login("wrongpw@edge.test", "wrong")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_CREDENTIALS",
+    });
+
+    // The amortized first-failure mint. BEFORE this fix the wrong-password path never
+    // touched the decoy (`hashPassword` 0×), so a cold isolate's first wrong-password
+    // out-costed its first unknown-email — a recurring cold-vs-existence timing oracle.
+    // This assertion is 0 (RED) without the fix.
+    expect(hashPassword).toHaveBeenCalledTimes(1);
+    // One real verify, NO decoy verify (the real one already ran → spendDecoy=false).
+    expect(verifyPassword).toHaveBeenCalledTimes(1);
+    // Shape parity: exactly one login_failed, carrying NO userId.
+    expect(events).toEqual([{ type: "login_failed", at: expect.any(Number) }]);
+  });
+
+  it("a cold isolate's FIRST unknown-email login costs one mint + one decoy verify", async () => {
+    const { hasher, hashPassword, verifyPassword } = spyHasher();
+    const events: IdentityEvent[] = [];
+    const identity = createIdentity(
+      build({
+        hasher,
+        onEvent: (event) => {
+          events.push(event);
+        },
+      }),
+    );
+
+    await expect(identity.login("nobody@edge.test", "wrong")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_CREDENTIALS",
+    });
+
+    expect(hashPassword).toHaveBeenCalledTimes(1); // decoy mint
+    expect(verifyPassword).toHaveBeenCalledTimes(1); // decoy verify (no real user)
+    expect(events).toEqual([{ type: "login_failed", at: expect.any(Number) }]);
+  });
+
+  it("memoizes the decoy — a second failure (any type) does NOT re-mint", async () => {
+    await seedVerifiedUser("again@edge.test", DECOY_PBKDF2);
+    const { hasher, hashPassword } = spyHasher();
+    const identity = createIdentity(build({ hasher }));
+
+    await identity.login("again@edge.test", "wrong").catch(() => undefined);
+    await identity.login("stranger@edge.test", "wrong").catch(() => undefined);
+
+    // One mint total across two failures of DIFFERENT types (wrong-password, then
+    // unknown-email) — the decoy is cached for the isolate's lifetime.
+    expect(hashPassword).toHaveBeenCalledTimes(1);
   });
 });
