@@ -110,6 +110,7 @@ We'd rather you find this here than in the comments:
 | cache, workflows, auth (identity), email, mailing-lists, webhooks, forms, flags, admin, i18n, feeds, pubsub, realtime | **On npm today @ 0.1.3**, 100% test coverage held per package (published 2026-07-08 in the coordinated 0.1.3 workspace release) |
 | Local-first sync (`live()`) | **v1, in hardening** — replication + durable store + offline outbox are real and CI-gated end-to-end; per-row sync authorization and a hardening list stand between this and an unqualified "offline" claim |
 | Workflows | Resumable step memoization — **not** crash-safe durable execution yet |
+| Realtime / pub-sub | On npm @ 0.1.3, but **v0** — the cross-process topic bus + SSE fan-out are still evolving alongside live `useQuery` |
 | Agent control plane | Content, UI generation, requests, inspection — **schema migrations are not an MCP tool yet** (CLI only) |
 | Content components, search/embeddings | Preview-labeled |
 | Plugins/themes/extensibility | Designed, deferred post-1.0 |
@@ -120,9 +121,8 @@ external security audit, upgrade guides), not date-boxed.
 
 ## Try it
 
-- `bunx create-lesto my-app` — a running full-stack app, MIT. *(package-count
-  claim deferred to the header-gate-#4 decision — don't put "N packages on npm"
-  next to the batteries list until the battery set is actually published.)*
+- `bunx create-lesto my-app` — a running full-stack app, MIT — with the full
+  battery set installable from npm (published 2026-07-08 in the 0.1.3 release).
 - No local setup? [Open in Codespaces](https://codespaces.new/lesto-run/lesto).
 - Docs: [docs.lesto.run](https://docs.lesto.run) — and they're agent-readable:
   [`/llms.txt`](https://docs.lesto.run/llms.txt), every page has a Markdown
