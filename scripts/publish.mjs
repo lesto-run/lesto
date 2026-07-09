@@ -5,11 +5,14 @@
 // Why this exists instead of `changeset publish`: changesets shells out to
 // `npm publish`, and **npm does not understand the `workspace:` protocol** — it
 // uploads the literal `"@lesto/foo": "workspace:*"`, which makes every published
-// package fail to install with `EUNSUPPORTEDPROTOCOL`. `bun pm pack` DOES rewrite
-// `workspace:*` → the exact dependency version in the emitted tarball (the same
-// artifact `scripts/pack-and-boot.mjs` proves installs + boots), so we pack with
-// bun and hand the resulting tarball to `npm publish`. npm only uploads bytes — it
-// never re-reads the workspace spec — so the published shape is the validated one.
+// package fail to install with `EUNSUPPORTEDPROTOCOL`. `packAllBuiltToVendor`
+// (`scripts/lib/build-public.mjs`) builds each package to `dist/`, stages a
+// published-shape manifest with `exports`→dist and every `workspace:` range
+// rewritten to a concrete version (bun only rewrites the protocol from INSIDE the
+// workspace — we stage OUTSIDE it, so `rewriteManifestForPublish` owns that), then
+// `bun pm pack`s the staged dir. The same artifact `scripts/pack-and-boot.mjs`
+// proves installs + boots, and we hand it to `npm publish` — which only uploads
+// bytes, so the published shape is exactly the validated one.
 //
 // AUTH — OIDC trusted publishing, NOT a token. In CI (`.github/workflows/release.yml`)
 // there is **no `NPM_TOKEN` and no committed `.npmrc`**: `npm publish` authenticates
@@ -32,7 +35,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { packAllToVendor, readPublicPackageDirs, readTarballMeta } from "./lib/pack-public.mjs";
+import { packAllBuiltToVendor } from "./lib/build-public.mjs";
+import { readPublicPackageDirs, readTarballMeta } from "./lib/pack-public.mjs";
 
 // ---------------------------------------------------------------------------
 // Pure logic — exported and unit-tested by `scripts/publish.test.mjs`. These
@@ -224,17 +228,18 @@ function main() {
   const order = topoSortPackages(nodes.map(({ name, deps }) => ({ name, deps })));
 
   console.log(
-    `[publish] packing ${publicDirs.length} public packages with bun (rewrites workspace:*)…`,
+    `[publish] building + packing ${publicDirs.length} public packages (published dist shape)…`,
   );
 
   const vendor = join(mkdtempSync(join(tmpdir(), "lesto-publish-")), "vendor");
   mkdirSync(vendor);
 
-  // Pack every public package (rewriting workspace:* → exact versions), guard the count, and
-  // capture the emitted `.tgz` filenames — listed ONCE here and handed to `readTarballMeta`
-  // below so the vendor dir is not re-read. Shared with the boot-proof
-  // (`scripts/lib/pack-public.mjs`) so both cover the same closure.
-  const tarballs = packAllToVendor(PACKAGES, publicDirs, vendor);
+  // Build each package to `dist/`, stage its published-shape manifest (exports→dist, workspace:*
+  // ranges→exact versions — a rewrite we now own, since bun only does it from inside the workspace),
+  // and pack. Guard the count, and capture the emitted `.tgz` filenames — listed ONCE here and handed
+  // to `readTarballMeta` below so the vendor dir is not re-read. Shared with the boot-proof + the
+  // import gate (`scripts/lib/build-public.mjs`) so all three cover the same closure and shape.
+  const tarballs = packAllBuiltToVendor(PACKAGES, publicDirs, vendor);
 
   // Map every packaged name → { tarball path, packed version } from the tarball's OWN
   // package.json (robust to scope/filename mangling); the version is the published shape's.

@@ -223,8 +223,9 @@ describe("assertVersionsBumped (version floor — fail-closed BEFORE any pack/pu
 });
 
 // The one helper in `scripts/lib/pack-public.mjs` that is fs-only (no subprocess), so it is
-// cheaply unit-testable against a hermetic temp dir. `packAllToVendor`/`readTarballMeta` need a
-// real bun/tar and are left to the `install-proof` CI job (see that module's header).
+// cheaply unit-testable against a hermetic temp dir. `readTarballMeta` (tar) and the packer
+// (`packAllBuiltToVendor`, build-public.mjs) need real bun/tar and are left to the pack-boot +
+// pack-import CI jobs (see that module's header).
 describe("readPublicPackageDirs (fs filter — hermetic temp dir)", () => {
   let dir;
 

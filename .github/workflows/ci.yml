@@ -48,8 +48,8 @@ jobs:
       # path never provokes, and publish.test.mjs proves the topological/fail-fast ordering that keeps
       # a release from shipping a dependent before a failed dep — run them here (no server needed) so a
       # regression goes red instead of shipping green.
-      - name: Unit-test the drift guard + link-workspace + dev-harness + publish/new-package helpers
-        run: bunx vitest run scripts/assert-isolated-node-modules.test.mjs packages/e2e/link-workspace.test.ts packages/e2e/dev-harness.test.ts scripts/publish.test.mjs scripts/new-package.test.mjs
+      - name: Unit-test the drift guard + link-workspace + dev-harness + publish/new-package/build-shape helpers
+        run: bunx vitest run scripts/assert-isolated-node-modules.test.mjs packages/e2e/link-workspace.test.ts packages/e2e/dev-harness.test.ts scripts/publish.test.mjs scripts/new-package.test.mjs scripts/build-public.test.mjs
 
       - name: Typecheck
         run: bun run ws:typecheck
@@ -640,16 +640,15 @@ jobs:
         working-directory: cf-dry-app
         run: bunx wrangler@4 deploy --dry-run
 
-  # The install-and-boot proof (publish-day step 7): the ONLY gate that exercises the
-  # PACKAGED shape rather than workspace symlinks. `scripts/pack-and-boot.mjs` packs
-  # every public package with `bun pm pack` (rewriting `workspace:*` → `0.1.0`),
-  # scaffolds an app pinned at those tarballs via npm `overrides`, then `npm install`s
-  # and boots `lesto routes` UNDER NODE — the exact path `npx create-lesto` / `lesto`
-  # take for an outsider who never touches bun. Unlike `scaffold-loop` and
-  # `deploy-cloudflare-dry` (which symlink the workspace `node_modules`, so prove
-  # nothing about resolution), this catches a package missing from the publish closure,
-  # an undeclared dependency, or an eager import dragging an optional subsystem into the
-  # default install. Needs Bun (to pack) AND Node (the outsider's install + boot runtime).
+  # The install-and-boot proof (publish-day step 7): exercises the PACKAGED, PUBLISHED shape rather
+  # than workspace symlinks. `scripts/pack-and-boot.mjs` BUILDS every public package to `dist/`, packs
+  # the published shape (`exports`→dist, `workspace:*`→exact) via `packAllBuiltToVendor`, scaffolds an
+  # app pinned at those tarballs via npm `overrides`, then `npm install`s and boots `lesto routes`
+  # UNDER NODE — the exact path `npx create-lesto` / `lesto` take for an outsider who never touches bun
+  # (the CLI runs the user's TS through jiti). Unlike `scaffold-loop` and `deploy-cloudflare-dry` (which
+  # symlink the workspace `node_modules`, so prove nothing about resolution), this catches a package
+  # missing from the publish closure, an undeclared dependency, or an eager import dragging an optional
+  # subsystem into the default install. Needs Bun (to build/pack) AND Node (the outsider's runtime).
   install-proof:
     runs-on: ubuntu-latest
     steps:
@@ -670,3 +669,31 @@ jobs:
 
       - name: Pack → scaffold from tarballs → install + boot under node
         run: bun run test:pack-boot
+
+  # The plain-node IMPORT proof: complements install-proof by proving every published package can be
+  # `import`ed from a STANDARD consumer — plain node, no bun/jiti/bundler. `scripts/pack-and-import.mjs`
+  # builds each package to `dist/`, packs the published (dist-pointing) shape, asserts no export target
+  # is raw `.ts`/`.tsx` (Phase A), then `npm install`s + `import`s a node-safe subset under node (Phase
+  # B). This catches the class of bug where shipping `exports → ./src/*.ts` makes a consumer's
+  # `import "@lesto/x"` throw `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING` — which install-proof
+  # (booting the CLI through jiti) is a false oracle for. Needs Bun (to build/pack) AND Node (consumer).
+  import-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.5"
+
+      - name: Set up Node 22 (the consumer's runtime — install + import run under it)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build → pack (published shape) → import under plain node
+        run: bun run test:pack-import

@@ -23,7 +23,8 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { packAllToVendor, readPublicPackageDirs, readTarballMeta } from "./lib/pack-public.mjs";
+import { packAllBuiltToVendor } from "./lib/build-public.mjs";
+import { readPublicPackageDirs, readTarballMeta } from "./lib/pack-public.mjs";
 
 const REPO = process.cwd();
 const PACKAGES = join(REPO, "packages");
@@ -50,7 +51,7 @@ mkdirSync(vendor);
 //    publish. Capture the emitted `.tgz` filenames — listed ONCE here and handed to
 //    `readTarballMeta` below so the vendor dir is not re-read. Shared with the release
 //    (`scripts/lib/pack-public.mjs`) so both cover the same set.
-const tarballs = packAllToVendor(PACKAGES, publicDirs, vendor);
+const tarballs = packAllBuiltToVendor(PACKAGES, publicDirs, vendor);
 
 // 3. Map every packaged name → its tarball (read via the shared tarball meta-reader,
 //    `scripts/lib/pack-public.mjs`, from each tarball's own package.json — robust to

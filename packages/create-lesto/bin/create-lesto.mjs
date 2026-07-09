@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 // The `npm create lesto` / `npx create-lesto` entry, runnable under plain node.
 //
-// Lesto ships TypeScript (the real entry is ../src/bin.ts). `bun` runs it
-// natively, but `npm create` / `npx` invoke this bin under node, which cannot
-// load `.ts` without a loader. jiti registers that loader for the whole import
-// graph, then we run the TS entry — so an outsider with only node installed gets
-// a working scaffolder. Resolved relative to THIS file (not the user's cwd), so
-// jiti is found in the installed package regardless of where the command runs.
+// Loads its entry through jiti (which registers the TS loader for the scaffolder's graph): in-repo
+// the source `../src/bin.ts` (dev, no build); in a PUBLISHED install the source is stripped and the
+// built `../dist/bin.js` runs. jiti is a runtime dependency so an outsider with only node installed
+// gets a working scaffolder either way.
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { createJiti } from "jiti";
 
-await createJiti(import.meta.url).import("../src/bin.ts");
+const entry = existsSync(fileURLToPath(new URL("../src/bin.ts", import.meta.url)))
+  ? "../src/bin.ts"
+  : "../dist/bin.js";
+
+await createJiti(import.meta.url).import(entry);
