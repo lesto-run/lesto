@@ -1,5 +1,9 @@
 /**
- * @lesto/pubsub — an in-process publish/subscribe hub.
+ * @lesto/pubsub — an in-process pub/sub hub PLUS the transport-neutral WebSocket
+ * fan-out core behind the `examples/pubsub` substrates: the `fanout()` send policy
+ * (with backpressure) + `FanoutRegistry`, the bounded replay-ring eviction arithmetic
+ * (`replayEvictionBounds`), and signed per-channel capability tokens (`mintChannelToken`
+ * / `verifyChannelToken`). Dependency-free and 100%-covered.
  *
  *   const hub = new PubSub();
  *   const off = hub.subscribe("orders", (message, channel) => { ... });

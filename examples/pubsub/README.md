@@ -122,14 +122,18 @@ separate authorized request through the Durable Object; a subscriber that reconn
 with `?since=<seq>` catches up on a message published while it was offline (from the
 durable ring); **and** a tokenless publish is refused with `401`: a true
 cross-connection, DO-mediated, authenticated fan-out with missed-message resume, no
-manual hop. What the edge smokes do **not** cover: (1) the exhaustive reject matrix
-(wrong-mode / wrong-channel / expired) and `GET /` minting — proven in the local suite
-against the Node twin (`src/app.ts`), a separate implementation of the same guard; and
-(2) **hibernation itself** — both smokes act within seconds on a _warm_ DO, so they
-prove cross-connection fan-out and ring-backed resume but never force an eviction, i.e.
-they do not machine-check that fan-out or the durable `seq`/ring survive a cold wake.
-The DO's hibernation handshake is correct by construction (reviewed against the workerd
-API), but a real eviction test (via `vitest-pool-workers`) and broader
+manual hop. What the edge smokes do **not** cover: (1) the reject matrix `wrong-mode` /
+`wrong-channel` — proven against the Node twin (`src/app.ts`), a separate implementation
+of the same guard; `expired`-rejection is proven a layer down in the `channel-token` unit
+suite, and `GET /` minting is exercised only by this smoke's happy path (there is no
+`GET /` in the Node twin); (2) **hibernation itself** — both smokes act within seconds on
+a _warm_ DO, so they prove cross-connection fan-out and ring-backed resume but never force
+an eviction, i.e. they do not machine-check that fan-out or the durable `seq`/ring survive
+a cold wake; and (3) the **backpressure overflow-close** on the edge — the `1013` close is
+proven on the Node substrate + in the pure-core unit tests, but is by-construction-only on
+workerd (overflowing a real socket's queue over a fast network isn't deterministically
+forcible). The DO's handshake is correct by construction (reviewed against the workerd
+API); a real eviction/backpressure test (via `vitest-pool-workers`) and broader
 `worker.ts`/`room.ts` coverage are tracked follow-ups
 (`docs/plans/pubsub-production-substrate.md`).
 

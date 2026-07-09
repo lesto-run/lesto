@@ -2,7 +2,7 @@
  * A signed, per-channel capability token — the edge-safe authz primitive for
  * `@lesto/pubsub` fan-out over WebSockets.
  *
- * The demo lets anyone who can reach `/subscribe` or `/publish` read or write any
+ * Without it, anyone who could reach `/subscribe` or `/publish` would read or write any
  * channel. Production needs to answer "*may THIS principal subscribe to `org:42`?*",
  * and a browser cannot set headers on a WebSocket upgrade — so the answer rides the
  * URL. A shared secret in the URL would be a master credential logged by every

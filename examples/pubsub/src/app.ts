@@ -177,7 +177,14 @@ export function buildFanoutServer(opts: { secret: string }): FanoutServer {
         // Node substrate has no `?since=` resume, so it resubscribes fresh) and drop it
         // so the next publish skips it. Closing a dead socket is a harmless no-op.
         for (const socket of failed) {
-          socket.close();
+          // Closing an already-errored socket can throw; swallow it, but ALWAYS drop so
+          // a throwing close never leaves a dead socket in the registry.
+          try {
+            socket.close();
+          } catch {
+            // already gone
+          }
+
           registry.drop(body.channel, socket);
         }
 

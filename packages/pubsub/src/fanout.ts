@@ -154,19 +154,21 @@ export function fanout<S extends FanoutSocket>(
   const failed: S[] = [];
 
   for (const socket of sockets) {
-    // Backpressure: a socket whose queued-but-unsent bytes exceed the bound has fallen
-    // behind — skip the send and report it so the caller closes it (a socket that does
-    // not report `bufferedAmount` cannot be bounded, so it is always sent to).
-    if (
-      maxBufferedBytes !== undefined &&
-      socket.bufferedAmount !== undefined &&
-      socket.bufferedAmount > maxBufferedBytes
-    ) {
-      failed.push(socket);
-      continue;
-    }
-
+    // Everything that touches the socket — reading `bufferedAmount` AND `send` — is
+    // inside the try, so a socket that throws on EITHER never aborts delivery to the
+    // rest (invariant 1). This matters because `bufferedAmount` can be a getter into
+    // the runtime (Bun's adapter calls `getBufferedAmount()`), not a plain field.
     try {
+      // Backpressure: a socket whose queued-but-unsent bytes exceed the bound has fallen
+      // behind — skip the send and report it so the caller closes it (a socket that does
+      // not report `bufferedAmount` cannot be bounded, so it is always sent to).
+      const buffered = socket.bufferedAmount;
+
+      if (maxBufferedBytes !== undefined && buffered !== undefined && buffered > maxBufferedBytes) {
+        failed.push(socket);
+        continue;
+      }
+
       socket.send(encoded);
       delivered += 1;
     } catch {

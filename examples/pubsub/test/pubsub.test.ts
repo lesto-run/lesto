@@ -42,6 +42,10 @@ function fakeSocket(channel: string, bufferedAmount = 0) {
     },
     close(code?: number, reason?: string): void {
       this.closed = { code, reason };
+      // Drain on close so the "dropped from the registry" assertion is REAL: a slow
+      // socket that was NOT dropped would now be under the bound on the next publish and
+      // get delivered (delivered: 2), so `delivered: 1` genuinely proves it was dropped.
+      this.bufferedAmount = 0;
     },
     get frames(): FrameData[] {
       return this.sent.map((raw) => JSON.parse(raw) as FrameData);

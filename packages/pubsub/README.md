@@ -1,6 +1,8 @@
 # @lesto/pubsub
 
-> An in-process publish/subscribe hub — synchronous registration, awaited delivery.
+> Lesto's pub/sub + transport-neutral WebSocket fan-out core: an in-process hub, the
+> `fanout()` send policy (with backpressure), a bounded replay-ring eviction helper, and
+> signed per-channel capability tokens.
 
 Part of **[Lesto](https://lesto.run)**, the batteries-included, agent-native fullstack framework.
 

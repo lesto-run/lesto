@@ -270,10 +270,14 @@ assume sharding).
 Blocked-by **Task B** (needs the hibernating DO shape + the durable seq).
 1. `examples/pubsub/room.ts` — a `state.storage` sqlite ring, **one SQL statement
    per `db.exec()`** ([[d1-single-statement-exec-trap]] — multi-statement DDL throws
-   7500 on remote DO-sqlite): `CREATE TABLE IF NOT EXISTS ring (seq INTEGER PRIMARY
-   KEY, channel TEXT NOT NULL, data TEXT NOT NULL, at INTEGER NOT NULL)` (one exec);
-   `INSERT …` per publish (one exec); `DELETE FROM ring WHERE seq <= ?` for the count
-   bound and `… WHERE at < ?` for the age bound (separate execs); `SELECT … WHERE
+   7500 on remote DO-sqlite). ⚠️ Key on **`PRIMARY KEY (channel, seq)`**, NOT a bare
+   `seq`: `seq` is per-channel (`seq:<channel>`), so a bare-`seq` PK collides across
+   channels the moment one DO serves more than one (a publish 500 + cross-channel leak) —
+   as shipped in `0269030` and warned in `room.ts`. So: `CREATE TABLE IF NOT EXISTS ring
+   (channel TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, at INTEGER NOT NULL,
+   PRIMARY KEY (channel, seq))` (one exec); `INSERT …` per publish (one exec); `DELETE
+   FROM ring WHERE channel = ? AND seq <= ?` (count bound) and `… WHERE channel = ? AND
+   at < ?` (age bound) — separate, channel-scoped execs; `SELECT … WHERE channel = ? AND
    seq > ? ORDER BY seq` for replay (one exec). `/subscribe?...&since=<seq>` replays
    matching rows via `server.send(encodeFrame(...))` **before** live frames.
 2. **Ordering + the replay/live race:** capture `sinceSeq` at accept; replay rows

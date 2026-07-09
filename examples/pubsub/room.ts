@@ -175,6 +175,10 @@ export class PubSubRoom {
     // is buffered onto the socket ahead of any live frame (a live publish is a separate
     // request that can still interleave — hence the client-side seq dedup floor). Each
     // replayed row rebuilds a frame byte-identical to what a live subscriber received.
+    // NOTE: replay is bounded by COUNT (≤ the ring's retained rows), not by the outbound
+    // BYTE bound — a large backlog can transiently exceed `MAX_BUFFERED_BYTES`; the next
+    // `#publish` fan-out then reaps the socket (1013 → reconnect → resume), so it is
+    // self-correcting, not unbounded. Byte-bounding the replay itself is a future refinement.
     if (sinceSeq !== undefined) {
       const missed = this.#state.storage.sql
         .exec<RingRow>(
@@ -254,7 +258,13 @@ export class PubSubRoom {
     // resync, `@lesto/realtime`'s policy for a socket transport). Closing an already
     // dead socket is a harmless no-op.
     for (const socket of failed) {
-      socket.close(1013, "slow-consumer");
+      // Closing an already-errored socket can throw on some runtimes; swallow it so one
+      // bad close never aborts reaping the rest or 500s a fully-delivered publish.
+      try {
+        socket.close(1013, "slow-consumer");
+      } catch {
+        // already gone
+      }
     }
 
     return Response.json({ delivered });
