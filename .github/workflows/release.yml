@@ -53,6 +53,8 @@ jobs:
       # excluded from every tarball, but the MECHANISM would ship genuinely broken code).
       # npm is immutable, so publishing is unrecoverable — require the `CI` workflow to have
       # concluded `success` for the EXACT commit being published before any tarball uploads.
+      # `--event push` pins it to the push-to-main run (not a stale pull_request run that may
+      # share the head SHA), so the gate trusts exactly the run that gates main.
       # Fail-CLOSED: no run found, still in progress, or any non-success conclusion all abort.
       # GITHUB_SHA is the tip of the dispatched ref (we dispatch --ref main only after
       # confirming origin==sha per RELEASING.md), and CI runs on push to main, so a green run
@@ -63,7 +65,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Checking CI conclusion for $GITHUB_SHA…"
-          result="$(gh run list --workflow=ci.yml --commit "$GITHUB_SHA" --limit 1 \
+          result="$(gh run list --workflow=ci.yml --event push --commit "$GITHUB_SHA" --limit 1 \
             --json status,conclusion,databaseId \
             --jq 'if length == 0 then "none none 0" else "\(.[0].status) \(.[0].conclusion) \(.[0].databaseId)" end')"
           status="$(printf '%s' "$result" | cut -d' ' -f1)"

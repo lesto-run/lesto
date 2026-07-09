@@ -4,6 +4,11 @@ name: CI
 # 100%-coverage test gate, and formatting (the content-* formatting debt that
 # once kept the format step informational has been paid down — all 58 packages
 # check clean, so a format regression now fails the build).
+#
+# COUPLING: release.yml's green-CI gate matches this workflow by filename
+# (`gh run list --workflow=ci.yml --event push`). Renaming this file will make that
+# gate find no run and HARD-FAIL every release (fail-closed, never fail-open) — update
+# release.yml's `--workflow=` in the same commit if you rename it.
 
 on:
   push:

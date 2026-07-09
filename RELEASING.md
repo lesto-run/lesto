@@ -46,8 +46,14 @@ name* (below); everything already on npm publishes through CI.
    your local tree. Before dispatching: `git fetch origin && [ "$(git rev-list --count
    origin/main..HEAD)" = 0 ]` — origin/main must be at the exact SHA you intend to release (the
    Studio daemon's auto-push has silently stalled before; a stale origin makes CI no-op
-   "successfully"). Then arm `RELEASE_ENABLED=true`, and `gh workflow run release.yml --ref
-   <exact-sha>` (**not** `--ref main`). Read the run's publish summary: `0 published, N skipped`
+   "successfully"). **Quiesce main first (L-fc1a7a4f):** pause the Studio daemon and
+   `launchctl bootout gui/$(id -u)/run.lesto.push-main` so no new commit supersedes the release
+   tip while CI runs — `ci.yml` has `cancel-in-progress: true`, so a push landing mid-run cancels
+   the release SHA's CI run and the green-CI gate below then refuses that SHA forever. Then confirm
+   CI is green for the release SHA, arm `RELEASE_ENABLED=true`, and `gh workflow run release.yml
+   --ref main` — dispatch `--ref main` **only after** the `origin/main..HEAD == 0` check above
+   confirms origin's tip IS your release SHA (a raw `--ref <sha>` **422s**: `workflow_dispatch`
+   resolves named refs, not bare SHAs). Read the run's publish summary: `0 published, N skipped`
    when you expected new publishes means CI built a stale tree — investigate, don't assume
    success. Restore `RELEASE_ENABLED=false` after. **GREEN-CI GATE (L-69e905de):** the workflow's
    first step refuses to publish unless the `CI` workflow concluded `success` for the dispatched
