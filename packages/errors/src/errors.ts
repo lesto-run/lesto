@@ -36,11 +36,13 @@ export class LestoError<Code extends string = string> extends Error {
 
     // Stamp the cross-copy brand so recognition is by {@link isLestoError}, not
     // `instanceof` — a duplicate `@lesto/errors` copy breaks class identity but not
-    // this process-global symbol. Non-enumerable (the defineProperty default): an
-    // error's public shape is its `code`/`message`/`details`, and the marker must
-    // stay out of JSON, spreads, and `Object.keys`. Set in the constructor, not as
-    // a class field, because a computed `Symbol.for(...)` key is a plain `symbol`,
-    // not the `unique symbol` a class field's computed name requires.
+    // this process-global symbol. Non-enumerable (the defineProperty default): a
+    // symbol key is already invisible to `JSON.stringify`/`Object.keys`, and
+    // non-enumerability additionally keeps the marker out of `{ ...error }` spreads
+    // and `Object.assign`, so an error's public shape stays its `code`/`message`/
+    // `details`. Set in the constructor, not as a class field, because a computed
+    // `Symbol.for(...)` key is a plain `symbol`, not the `unique symbol` a class
+    // field's computed name requires.
     Object.defineProperty(this, LESTO_ERROR_BRAND, { value: true });
   }
 }
@@ -54,13 +56,17 @@ export class LestoError<Code extends string = string> extends Error {
  * version mispin, a dedupe miss) is still recognized: `instanceof` compares class
  * identity, which a duplicate copy breaks, but `Symbol.for` resolves the same
  * brand in every copy. A plain `{ code }` object carries no brand and so is NOT a
- * LestoError — callers that branch on `.code` after this guard stay honest.
+ * LestoError. The guard also requires a string `code` (which every `LestoError`
+ * ctor sets), so the `value is LestoError` assertion cannot lie to a caller that
+ * then reads `.code`/`.details` off a branded-but-shapeless object — a real copy,
+ * near or foreign, always went through the ctor and carries both.
  */
 export function isLestoError(value: unknown): value is LestoError {
   return (
     typeof value === "object" &&
     value !== null &&
-    (value as Record<PropertyKey, unknown>)[LESTO_ERROR_BRAND] === true
+    (value as Record<PropertyKey, unknown>)[LESTO_ERROR_BRAND] === true &&
+    typeof (value as Record<PropertyKey, unknown>).code === "string"
   );
 }
 

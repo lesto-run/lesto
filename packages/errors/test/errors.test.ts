@@ -45,6 +45,17 @@ describe("LestoError", () => {
     expect(error.name).toBe("FooError");
     expect(error.details).toEqual({ x: 1 });
   });
+
+  it("brands itself non-enumerably, so the marker never leaks into the public shape", () => {
+    const error = new LestoError("THING_BROKE", "the thing broke");
+    const brand = Symbol.for("lesto.error");
+
+    // The brand is load-bearing for cross-copy recognition, but it must stay out of
+    // an error's public shape: a later `{ enumerable: true }` would silently start
+    // copying it through `{ ...error }` / `Object.assign`, which nothing else catches.
+    expect(Object.getOwnPropertyDescriptor(error, brand)?.enumerable).toBe(false);
+    expect(Object.getOwnPropertySymbols({ ...error })).not.toContain(brand);
+  });
 });
 
 /**
@@ -85,6 +96,17 @@ describe("isLestoError", () => {
 
   it("is false for a non-error", () => {
     expect(isLestoError({ code: "X" })).toBe(false);
+  });
+
+  it("is false for a branded object with no string code", () => {
+    // A branded value that never went through the ctor, so it has no `code`. The
+    // guard must reject it — otherwise `value is LestoError` would lie to a caller
+    // that then reads `.code`/`.details` (e.g. `@lesto/cli`'s `unwrapCause`).
+    const brandedNoCode: Record<PropertyKey, unknown> = { message: "x" };
+
+    Object.defineProperty(brandedNoCode, Symbol.for("lesto.error"), { value: true });
+
+    expect(isLestoError(brandedNoCode)).toBe(false);
   });
 
   it("is false for null and non-object values", () => {
