@@ -428,7 +428,9 @@ describe("run serve / dev", () => {
     expect(stopInterval).toHaveBeenCalledTimes(1);
     // Order is load-bearing (run.ts): the final drain flush must run before the
     // cadence stops, or it is cut short. Assert it, not just the call counts.
-    expect(close.mock.invocationCallOrder[0]!).toBeLessThan(stopInterval.mock.invocationCallOrder[0]!);
+    expect(close.mock.invocationCallOrder[0]!).toBeLessThan(
+      stopInterval.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("wires /readyz to a real database ping that answers true when the DB is up", async () => {
@@ -3212,7 +3214,9 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
     // (unref'd) interval never leaks past a failed dev boot (L-fe2da7f5) — and it
     // closes the server (its final drain flush) BEFORE stopping the cadence.
     expect(stopInterval).toHaveBeenCalledTimes(1);
-    expect(serverClose.mock.invocationCallOrder[0]!).toBeLessThan(stopInterval.mock.invocationCallOrder[0]!);
+    expect(serverClose.mock.invocationCallOrder[0]!).toBeLessThan(
+      stopInterval.mock.invocationCallOrder[0]!,
+    );
 
     // The shutdown hook is never reached, since teardown already ran on the failure path.
     expect(installShutdown).not.toHaveBeenCalled();

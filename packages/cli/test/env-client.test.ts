@@ -28,8 +28,8 @@ vi.mock("../src/run", async (importOriginal) => {
 });
 
 describe("env.client.ts resolution seam", () => {
-  let clientDefineFromModule: typeof BinModule["clientDefineFromModule"];
-  let resolvePublicEnvDefine: typeof BinModule["resolvePublicEnvDefine"];
+  let clientDefineFromModule: (typeof BinModule)["clientDefineFromModule"];
+  let resolvePublicEnvDefine: (typeof BinModule)["resolvePublicEnvDefine"];
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeAll(async () => {

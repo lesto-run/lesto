@@ -338,9 +338,9 @@ describe("verifyRequest — multi-tenant secret resolver", () => {
       return secrets[ctx.headers[TENANT_HEADER] ?? ""] as string;
     };
 
-    expect(await verifyRequest(tenantRequest("globex", body), { secret: asyncResolver, now: ts })).toEqual(
-      { verified: true, event: "globex.paid" },
-    );
+    expect(
+      await verifyRequest(tenantRequest("globex", body), { secret: asyncResolver, now: ts }),
+    ).toEqual({ verified: true, event: "globex.paid" });
   });
 
   it("resolves a DIFFERENT secret per tenant — both verify, a cross-signed body is rejected", async () => {
@@ -403,7 +403,10 @@ describe("verifyRequest — multi-tenant secret resolver", () => {
     };
 
     const error = await rejection(
-      verifyRequest({ body, headers: signedHeaders(ts, body, "shh") }, { secret: throwing, now: ts }),
+      verifyRequest(
+        { body, headers: signedHeaders(ts, body, "shh") },
+        { secret: throwing, now: ts },
+      ),
     );
 
     expect(error).toBeInstanceOf(WebhookError);

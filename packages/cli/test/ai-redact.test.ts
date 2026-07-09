@@ -127,9 +127,7 @@ describe("stripSecretTokens", () => {
     expect(stripSecretTokens(`config error for ${AWS_ACCESS_KEY}`)).toBe(
       "config error for <redacted>",
     );
-    expect(stripSecretTokens(`temp creds ${AWS_TEMP_KEY} here`)).toBe(
-      "temp creds <redacted> here",
-    );
+    expect(stripSecretTokens(`temp creds ${AWS_TEMP_KEY} here`)).toBe("temp creds <redacted> here");
   });
 
   it("redacts a long high-entropy hex/base64 run", () => {
