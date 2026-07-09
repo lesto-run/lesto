@@ -12,6 +12,10 @@
 # published history. GIT_TERMINAL_PROMPT=0 stops a backgrounded run from ever
 # blocking on a credential prompt (the repo's undrained-child trap).
 #
+# SECRET GATE (L-e19bda73): before pushing to the PUBLIC origin, scan the
+# outgoing commits for likely secrets; refuse + alert on a definite hit (a
+# secret in public history is unrecoverable). Fail OPEN on scanner error.
+#
 # LOUD ON PERSISTENT FAILURE: a push that keeps failing — for ANY reason (a
 # non-FF divergence, but far more likely over weeks unattended: an expired
 # credential / dead SSH agent, or a branch-protection / push-protection reject)
@@ -44,10 +48,35 @@ if [ -f "$log" ]; then
   [ "${size:-0}" -gt 262144 ] && mv -f "$log" "$log.old" 2>/dev/null || true
 fi
 
+now=$(date +%s 2>/dev/null || echo 0)
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')
+
+# Rate-limited (1/hr) desktop alert; the throttle only advances if the banner
+# was actually delivered. $1 = stamp file, $2 = message (no embedded quotes).
+notify() {
+  _last=$(cat "$1" 2>/dev/null || echo 0)
+  case $_last in '' | *[!0-9]*) _last=0 ;; esac
+  [ "$((now - _last))" -ge 3600 ] || return 0
+  osascript -e "display notification \"$2\" with title \"Lesto: push-main\"" >/dev/null 2>&1 &&
+    printf '%s' "$now" >"$1" 2>/dev/null || true
+}
+
+# SECRET GATE. Only a DEFINITE hit (rc=2) blocks; any other non-zero is a
+# scanner error → fail OPEN (a broken scanner must not wedge the push path into
+# re-creating L-f9ac64d8 drift), but log it so it's visible.
+scan_msg=$(sh "$script_dir/secret-scan.sh" 2>&1)
+scan_rc=$?
+if [ "$scan_rc" -eq 2 ]; then
+  printf '%s SECRET-BLOCK: refused to push — %s\n' "$ts" "$(printf '%s' "$scan_msg" | tr '\n' ' ')" >>"$log"
+  notify "$studio_dir/.push-main-secret-alerted" \
+    "REFUSED to push origin/main — a likely SECRET is in the outgoing commits (L-e19bda73). Remove it from history before it can reach the public remote; see ~/.studio/push-main.log."
+  exit 0
+elif [ "$scan_rc" -ne 0 ]; then
+  printf '%s scan-error rc=%s (failing open): %s\n' "$ts" "$scan_rc" "$(printf '%s' "$scan_msg" | tr '\n' ' ')" >>"$log"
+fi
+
 out=$(GIT_TERMINAL_PROMPT=0 git push origin main 2>&1)
 rc=$?
-ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')
-now=$(date +%s 2>/dev/null || echo 0)
 
 fails_file="$studio_dir/.push-main-fails"
 
@@ -74,15 +103,9 @@ fails=$((fails + 1))
 printf '%s' "$fails" >"$fails_file" 2>/dev/null || true
 
 # Alert on a PERSISTENT failure (>=3 consecutive ~= 6 min): a transient network
-# blip self-heals in one cycle and never alerts. Throttle to 1/hr, and only
-# advance the throttle if the banner was actually delivered.
+# blip self-heals in one cycle and never alerts.
 if [ "$fails" -ge 3 ]; then
-  stamp="$studio_dir/.push-main-alerted"
-  last=$(cat "$stamp" 2>/dev/null || echo 0)
-  case $last in '' | *[!0-9]*) last=0 ;; esac
-  if [ "$((now - last))" -ge 3600 ]; then
-    osascript -e "display notification \"origin/main push has FAILED ${fails}x (rc=${rc}) — origin is drifting (L-f9ac64d8). Likely an expired credential/SSH key, a branch-protection reject, or a non-FF divergence; see ~/.studio/push-main.log.\" with title \"Lesto: push-main stalled\"" >/dev/null 2>&1 &&
-      printf '%s' "$now" >"$stamp" 2>/dev/null || true
-  fi
+  notify "$studio_dir/.push-main-alerted" \
+    "origin/main push has FAILED ${fails}x (rc=${rc}) — origin is drifting (L-f9ac64d8). Likely an expired credential/SSH key, a branch-protection reject, or a non-FF divergence; see ~/.studio/push-main.log."
 fi
 exit 0

@@ -105,10 +105,14 @@ The agent and its logic (`scripts/dev/push-main.sh`) are version-controlled;
 only the generated plist is machine-local (it bakes in this clone's path), so
 **re-run the installer after a fresh clone / on a second machine** or the
 backstop is silently absent. The push is fast-forward-only (never `--force`), so
-it cannot rewrite published history; a push that fails 3× in a row — for ANY
-reason (expired credential / dead SSH key, a branch-protection reject, or a
-non-FF divergence) — is logged to `~/.studio/push-main.log` and raises a
-rate-limited desktop alert, and every success stamps
+it cannot rewrite published history. Before each push it runs
+`scripts/dev/secret-scan.sh` over the outgoing commits (`origin/main..main`) and
+REFUSES to push — with an alert — if a likely secret would reach the public
+origin (gitleaks when installed, else high-signal credential patterns;
+L-e19bda73). A push that fails 3× in a row — for ANY reason (expired
+credential / dead SSH key, a branch-protection reject, or a non-FF divergence) —
+is logged to `~/.studio/push-main.log` and raises a rate-limited desktop alert,
+and every success stamps
 `~/.studio/.push-main-last-success` for a dead-man check. It supersedes the
 interactive-only post-commit push hook (which can't see the daemon's
 `update-ref` commits — that hook block is now redundant). **Before cutting a
