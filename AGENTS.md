@@ -88,6 +88,29 @@ whitespace.
 - **`rg` skips hidden directories** by default — audit `.github/` with
   `grep -r`.
 
+## Keeping origin/main current (local infra)
+
+The Studio daemon commits to `main` via `commit-tree` + `update-ref`, which does
+**not** fire git hooks — so a post-commit push hook can never cover
+daemon-authored commits, and origin/main once silently fell 51 commits behind
+(L-f9ac64d8). The backstop is a per-user launchd agent that fast-forward-pushes
+`main` every 120s regardless of author:
+
+```sh
+scripts/dev/install-push-agent.sh              # install / reinstall (idempotent)
+scripts/dev/install-push-agent.sh --uninstall  # remove
+```
+
+The agent and its logic (`scripts/dev/push-main.sh`) are version-controlled;
+only the generated plist is machine-local (it bakes in this clone's path), so
+**re-run the installer after a fresh clone / on a second machine** or the
+backstop is silently absent. The push is fast-forward-only (never `--force`), so
+it cannot rewrite published history; a non-FF divergence (rebase / amend /
+force-pushed origin) is logged to `~/.studio/push-main.log` and raises a
+rate-limited desktop alert instead of stalling silently. **Before cutting a
+release, quiesce this agent** (`--uninstall`, or `launchctl bootout`) so it
+can't advance `main` mid-CI and cancel the release SHA's run — see RELEASING.md.
+
 ## Agent-facing surfaces (dogfood them)
 
 - `lesto dev` boots a loopback **MCP control plane** — one stderr banner gives
