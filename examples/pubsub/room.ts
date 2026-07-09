@@ -75,6 +75,14 @@ export class PubSubRoom {
       return new Response("missing ?channel", { status: 400 });
     }
 
+    // A workerd WebSocket tag is capped at 256 chars; a longer channel would make
+    // `acceptWebSocket` throw (a 500 after the pair is created). Reject it as a 400 —
+    // cheap hardening for the reusable WS-DO pattern (unreachable via this demo's
+    // server-minted `demo`/`smoke` channels, but a real app mints arbitrary ones).
+    if (channel.length > 256) {
+      return new Response("channel too long (max 256)", { status: 400 });
+    }
+
     const { 0: client, 1: server } = new WebSocketPair();
 
     // INVARIANT 2: register the socket BEFORE returning the 101. Under hibernation we

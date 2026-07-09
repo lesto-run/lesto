@@ -53,8 +53,9 @@ const worker = await Worker("pubsub-edge", {
   name: `${app.name}-${app.stage}`,
   entrypoint: "worker.ts",
   bindings: {
-    // `sqlite: true` future-proofs a `state.storage`-backed ReplayRing; this demo
-    // stores nothing (ephemeral in-memory fan-out), so it is harmless today.
+    // `sqlite: true` is load-bearing: the hibernatable DO writes a durable per-channel
+    // `seq:<channel>` to `state.storage` on every publish (so seq survives eviction),
+    // and it is the hook for a future `state.storage`-backed ReplayRing.
     PUBSUB_ROOM: DurableObjectNamespace("pubsub-room", { className: "PubSubRoom", sqlite: true }),
     // Encrypted at rest in Alchemy state; the Worker verifies capability tokens with it.
     PUBSUB_SECRET: alchemy.secret(pubsubSecret),

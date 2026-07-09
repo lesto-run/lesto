@@ -52,9 +52,8 @@ interface BunServer {
   upgrade(request: Request, options: { data: SocketData }): boolean;
 }
 
-/** What {@link buildFanoutServer} returns — the shape `Bun.serve` consumes, plus the registry. */
+/** What {@link buildFanoutServer} returns — the shape `Bun.serve` consumes. */
 export interface FanoutServer {
-  registry: FanoutRegistry;
   fetch(request: Request, server: BunServer): Promise<Response | undefined>;
   websocket: {
     open(ws: BunSocket): void;
@@ -106,8 +105,6 @@ export function buildFanoutServer(opts: { secret: string }): FanoutServer {
   let seq = 0;
 
   return {
-    registry,
-
     async fetch(request, server) {
       const url = new URL(request.url);
 

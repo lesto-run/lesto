@@ -6,11 +6,11 @@ socket opened by **another**. A subscriber opens a WebSocket to a channel; a
 separate HTTP request publishes to that channel; every subscriber receives one
 framed copy.
 
-`@lesto/pubsub`'s `PubSub` is an in-process hub, so on Node a single process is
-the coordination point. On Cloudflare there is no shared memory across isolates,
-so the same fan-out needs one coordination point — a **Durable Object**. This is
-the first WebSocket-terminating DO substrate in the framework, and it runs the SAME transport-neutral
-core (`FanoutRoom`, in `@lesto/pubsub`) as the Node path.
+On Node a single process is the coordination point (an in-memory `FanoutRegistry`).
+On Cloudflare there is no shared memory across isolates, so the same fan-out needs
+one coordination point — a **hibernatable Durable Object**. This is the first
+WebSocket-terminating DO substrate in the framework, and it runs the SAME transport-
+neutral send policy (`fanout()`, in `@lesto/pubsub`) as the Node path.
 
 ## What it shows
 
@@ -20,16 +20,16 @@ core (`FanoutRoom`, in `@lesto/pubsub`) as the Node path.
 | `POST /publish` `{channel, message}` + `Authorization: Bearer <t>` | Verifies a `publish`-mode token for the channel (else `401`), then fans `message` out; returns `{ delivered }` (see the caveat).                           |
 | `GET  /` (edge only)                                               | The token issuer: mints short-lived `demo`-channel subscribe + publish tokens and serves a tiny browser demo that uses them.                               |
 
-The fan-out core is `@lesto/pubsub`'s public API — `FanoutRoom`, `parsePublishBody`,
-`encodeFrame` — and its authz core is `mintChannelToken` / `verifyChannelToken` (a
-signed per-channel capability token over Web Crypto). Everything else is thin
-plumbing: Bun's native WebSocket server on Node (`serve.ts` / `src/app.ts`), a
-Durable Object on the edge (`room.ts` + `worker.ts`).
+The fan-out core is `@lesto/pubsub`'s public API — `fanout()`, `FanoutRegistry`,
+`parsePublishBody`, `encodeFrame` — and its authz core is `mintChannelToken` /
+`verifyChannelToken` (a signed per-channel capability token over Web Crypto).
+Everything else is thin plumbing: Bun's native WebSocket server on Node (`serve.ts`
+/ `src/app.ts`), a Durable Object on the edge (`room.ts` + `worker.ts`).
 
-`delivered` is the number of subscribers the message was **dispatched** to at
-publish time — a diagnostic, not a delivery receipt. A socket that dies mid-send
-is dropped but still counted for that one call, so the tests assert **receipt on
-the socket**, never `delivered` alone.
+`delivered` is the number of subscribers the message was **successfully written to**
+— a diagnostic, not a delivery receipt. A socket that dies mid-send is excluded from
+`delivered` (returned in `fanout`'s `failed` and reaped), so the tests assert
+**receipt on the socket**, never `delivered` alone.
 
 ## How it's tested (the QA gate)
 
@@ -46,8 +46,9 @@ bun run --filter '@lesto/example-pubsub' test
   HTTP request, and asserts the subscriber receives it — then SIGTERMs and checks a
   clean exit.
 
-The package cores (`FanoutRoom` + the `channel-token` mint/verify) are unit-tested to
-100% inside `@lesto/pubsub`, including the throwing-socket and tampered-token invariants.
+The package cores (`fanout()` / `FanoutRegistry` + the `channel-token` mint/verify) are
+unit-tested to 100% inside `@lesto/pubsub`, including the throwing-socket and tampered-token
+invariants.
 
 > The Node app (`src/app.ts`) is covered above; **`worker.ts` — the edge authz +
 > per-channel-routing boundary — is exercised only by the live-CF deploy smoke**
@@ -62,9 +63,9 @@ PUBSUB_ALLOW_INSECURE=1 bun run examples/pubsub/serve.ts
 ```
 
 Bun's `serve` carries a native WebSocket server (no `ws` dependency; the same
-primitive `lesto dev`'s live-reload uses). One process means one `FanoutRoom` for
-every connection — this single node is the coordination point the edge needs a DO
-for. Both routes require a signed capability token; `mint.ts` is the local issuer.
+primitive `lesto dev`'s live-reload uses). One process means one `FanoutRegistry`
+for every connection — this single node is the coordination point the edge needs a
+DO for. Both routes require a signed capability token; `mint.ts` is the local issuer.
 Drive it:
 
 ```bash
@@ -90,16 +91,18 @@ Set `PUBSUB_SECRET` (instead of `PUBSUB_ALLOW_INSECURE=1`) on both `serve.ts` an
 bun run examples/pubsub/deploy   # bun alchemy.run.ts
 ```
 
-`worker.ts` runs the same fan-out on the edge, but the hub lives in a **Durable
-Object** (`room.ts`) instead of process memory, and the Worker is the **authz
+`worker.ts` runs the same fan-out on the edge, but the coordination point is a
+**hibernatable Durable Object** (`room.ts`), and the Worker is the **authz
 boundary**: it verifies the capability token before forwarding, so an unauthorized
 caller is `401`ed before the DO is touched. Routing is **per channel** —
 `/subscribe` and `/publish` for channel `X` are both routed to `idFromName(X)`, so a
 subscriber and a publisher that land on different isolates still rendezvous at the
-same in-memory `FanoutRoom` (the cross-isolate proof), while different channels get
-different DOs. The DO terminates the WebSocket itself and registers the socket
-**before** returning the `101`, so no publish can race a subscribe. `GET /` is the
-token issuer — it mints the demo page's tokens with `PUBSUB_SECRET`.
+same DO (the cross-isolate proof), while different channels get different DOs. The DO
+holds no in-memory hub: it hands each subscriber socket to
+`state.acceptWebSocket(server, [channel])` (**before** returning the `101`, so no
+publish can race a subscribe) and fans out over `state.getWebSockets(channel)`, so an
+idle room costs nothing and survives eviction. `GET /` is the token issuer — it mints
+the demo page's tokens with `PUBSUB_SECRET`.
 
 `alchemy.run.ts` (ADR 0044 — Alchemy IaC, no `wrangler.toml`) declares the Worker,
 its DO namespace, and the `PUBSUB_SECRET` binding, and after `finalize()` runs a
@@ -113,11 +116,15 @@ authorized fan-out works on the edge" is machine-checked, not a manual click-thr
 WS subscriber (admitted with a valid scoped token) receives a message published by a
 separate authorized request through the Durable Object, **and** a tokenless publish is
 refused with `401`: a true cross-connection, DO-mediated, authenticated fan-out, no
-manual hop. What the edge smoke does **not** yet cover: the exhaustive reject matrix
-(wrong-mode / wrong-channel / expired) and `GET /` minting — those are proven in the
-local suite against the Node twin (`src/app.ts`), a separate implementation of the same
-guard. Broader in-process coverage of `worker.ts` itself is a tracked follow-up
-(`docs/plans/pubsub-production-substrate.md`).
+manual hop. What the edge smoke does **not** cover: (1) the exhaustive reject matrix
+(wrong-mode / wrong-channel / expired) and `GET /` minting — proven in the local suite
+against the Node twin (`src/app.ts`), a separate implementation of the same guard; and
+(2) **hibernation itself** — the smoke subscribes then publishes within milliseconds on
+a _warm_ DO, so it proves cross-connection fan-out but never forces an eviction, i.e. it
+does not machine-check that fan-out survives a cold wake. The DO's hibernation handshake
+is correct by construction (reviewed against the workerd API), but a real eviction test
+(via `vitest-pool-workers`) and broader `worker.ts`/`room.ts` coverage are tracked
+follow-ups (`docs/plans/pubsub-production-substrate.md`).
 
 ## Authz (the capability-token model)
 
