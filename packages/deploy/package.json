@@ -1,6 +1,6 @@
 {
   "name": "@lesto/deploy",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "MIT",
   "description": "Lesto deploy adapters — turn a built site set into a concrete deploy plan and ship its static targets through an injected uploader.",
   "type": "module",

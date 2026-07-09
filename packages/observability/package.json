@@ -1,6 +1,6 @@
 {
   "name": "@lesto/observability",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "MIT",
   "description": "Lesto's in-house distributed-tracing core — OpenTelemetry-shaped, with no OpenTelemetry dependency.",
   "type": "module",

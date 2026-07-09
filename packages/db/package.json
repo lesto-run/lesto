@@ -1,6 +1,6 @@
 {
   "name": "@lesto/db",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "MIT",
   "description": "Lesto's schema-and-query layer — a Drizzle-shaped, typed query DSL over the minimal SQL surface, with the schema as the single source of truth for both DDL and query types.",
   "type": "module",

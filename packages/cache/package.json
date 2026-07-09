@@ -1,6 +1,6 @@
 {
   "name": "@lesto/cache",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "MIT",
   "description": "Lesto's TTL cache — pluggable stores, an injected clock, in-memory or SQL-backed.",
   "type": "module",

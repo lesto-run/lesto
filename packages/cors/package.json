@@ -1,6 +1,6 @@
 {
   "name": "@lesto/cors",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "MIT",
   "description": "Lesto's CORS header computation — pure, dependency-free Access-Control-* resolution.",
   "type": "module",

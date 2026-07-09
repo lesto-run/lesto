@@ -1,6 +1,6 @@
 {
   "name": "@lesto/ratelimit",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "MIT",
   "description": "Lesto's token-bucket rate limiter over a pluggable store and an injected clock.",
   "type": "module",

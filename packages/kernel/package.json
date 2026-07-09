@@ -1,6 +1,6 @@
 {
   "name": "@lesto/kernel",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "MIT",
   "description": "Lesto's application kernel — assembles the database, migrations, router, and controllers into one bootable app.",
   "type": "module",

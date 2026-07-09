@@ -1,6 +1,6 @@
 {
   "name": "@lesto/styles",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "MIT",
   "description": "Lesto's CSS build pipeline (ADR 0037) — a pure buildStyles() over an injected StyleCompiler seam, so an app compiles Tailwind v4 to a served stylesheet with no bespoke build script. The real @tailwindcss engine wiring lives in a separate coverage-excluded edge.",
   "type": "module",
