@@ -1,6 +1,6 @@
 {
   "name": "@lesto/mailing-lists",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "MIT",
   "description": "Ghost-style subscriber lists — double opt-in and broadcasts, composed on @lesto/db, @lesto/mail, and @lesto/queue.",
   "type": "module",

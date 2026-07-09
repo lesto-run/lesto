@@ -1,6 +1,6 @@
 {
   "name": "@lesto/pubsub",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "MIT",
   "description": "Lesto's pub/sub + transport-neutral WebSocket fan-out core: in-process hub, fanout() send policy with backpressure, bounded replay-ring arithmetic, and signed per-channel capability tokens.",
   "type": "module",

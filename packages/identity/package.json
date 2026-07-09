@@ -1,6 +1,6 @@
 {
   "name": "@lesto/identity",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "MIT",
   "description": "Lesto's batteries-included auth: users on the SQL DB, register/verify/login/reset flows composed from @lesto/auth + @lesto/db + @lesto/migrate + @lesto/mail + @lesto/csrf.",
   "type": "module",

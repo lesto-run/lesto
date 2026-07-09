@@ -1,6 +1,6 @@
 {
   "name": "@lesto/content-core",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "SUPPORTED (v1 content seam) — schema-driven content engine for markdown in TypeScript applications. The store/engine/CLI/MCP seam is the supported surface; sibling content-* packages (search, embeddings, prose, lint, seo, query, vite, components beyond HtmlContent) ship PREVIEW.",
   "type": "module",
   "sideEffects": false,

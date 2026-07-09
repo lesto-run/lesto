@@ -1,6 +1,6 @@
 {
   "name": "@lesto/sites",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "MIT",
   "description": "Lesto sites & targets — declare many sites over one app, and prerender static ones from the app's own request handler.",
   "type": "module",
