@@ -175,5 +175,15 @@ production message bus. Remaining simplifications, each with its graduation path
   the hole itself (its first replayed `seq > since + 1`) and recover. The durable
   per-channel `seq` (Task B) is the sole owner of the counter — the ring is a bounded
   copy, never the source, so an evicted ring can never rewind the seq a resume trusts.
-- **Unbounded outbound.** A slow socket's send queue is unbounded (workerd buffers
-  `send`); `@lesto/realtime`'s SSE `maxQueue` is the model for backpressure.
+- ✅ **Bounded outbound — shipped.** `fanout(..., { maxBufferedBytes })` polls each
+  socket's `bufferedAmount` at send time; a slow consumer over the bound (1 MiB here) is
+  never buffered without limit — it is skipped, returned in `failed`, and **closed with
+  `1013`** ("try again later"), so the client reconnects and (on the edge, with the ring)
+  resumes via `?since=`. This is `@lesto/realtime`'s drop-to-resync applied to a socket
+  transport. workerd exposes `bufferedAmount` as a property, Bun's `ServerWebSocket` via
+  `getBufferedAmount()`; a transport that reports neither leaves the bound unenforced
+  (honest — nothing to measure). The policy is unit-tested to 100% in `@lesto/pubsub` and
+  proven behaviorally on the Node substrate (a slow fake is closed with `1013` + dropped).
+  It is **not** in the edge deploy smoke: deterministically overflowing a real socket's
+  outbound queue over a fast network isn't feasible — a `vitest-pool-workers` test is the
+  tracked way to machine-check the bound live (see `docs/plans/pubsub-production-substrate.md`).

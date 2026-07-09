@@ -11,7 +11,13 @@ export { PubSub } from "./pubsub";
 export type { Listener } from "./pubsub";
 
 export { FanoutRegistry, encodeFrame, fanout, parsePublishBody } from "./fanout";
-export type { FanoutFrame, FanoutResult, FanoutSocket, PublishRequest } from "./fanout";
+export type {
+  FanoutFrame,
+  FanoutOptions,
+  FanoutResult,
+  FanoutSocket,
+  PublishRequest,
+} from "./fanout";
 
 export { replayEvictionBounds } from "./replay";
 export type { ReplayEvictionBounds, ReplayRetention } from "./replay";

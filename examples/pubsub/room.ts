@@ -77,6 +77,14 @@ interface RingRow {
  */
 const RING_RETENTION: ReplayRetention = { maxEntries: 256, maxAgeMs: 5 * 60_000 };
 
+/**
+ * The most bytes a subscriber may have queued-but-unsent before it is treated as a slow
+ * consumer and closed (backpressure). A healthy client drains far below this; a socket
+ * that lets 1 MiB pile up is stuck, so we close it rather than buffer without bound.
+ * Demo-scale; a production bus would tune it (or make it per-app).
+ */
+const MAX_BUFFERED_BYTES = 1024 * 1024;
+
 /** The slim slice of workerd's `DurableObjectState` this DO uses (hibernation + storage). */
 interface DurableObjectState {
   /** Accept `ws` into the hibernatable set, tagged so `getWebSockets(tag)` can find it. */
@@ -230,13 +238,24 @@ export class PubSubRoom {
 
     // The registry is the runtime: enumerate this channel's live sockets and fan out
     // over them with the pure core. workerd evicts a closed socket from the tag set,
-    // so the list is current even after the DO woke from nothing.
-    const { delivered } = fanout(this.#state.getWebSockets(body.channel), {
-      type: "message",
-      channel: body.channel,
-      seq,
-      data: body.message,
-    });
+    // so the list is current even after the DO woke from nothing. `maxBufferedBytes`
+    // bounds each socket's outbound queue: workerd exposes `bufferedAmount` but has no
+    // drain event, so backpressure is a poll at send time.
+    const { delivered, failed } = fanout(
+      this.#state.getWebSockets(body.channel),
+      { type: "message", channel: body.channel, seq, data: body.message },
+      { maxBufferedBytes: MAX_BUFFERED_BYTES },
+    );
+
+    // Close every socket the fan-out could not write to — a slow consumer over the
+    // buffer bound (never buffered without limit) or one whose send threw. `1013`
+    // ("try again later") tells the client to reconnect; with the replay ring it then
+    // resumes via `?since=` and misses nothing within the retained window (drop-to-
+    // resync, `@lesto/realtime`'s policy for a socket transport). Closing an already
+    // dead socket is a harmless no-op.
+    for (const socket of failed) {
+      socket.close(1013, "slow-consumer");
+    }
 
     return Response.json({ delivered });
   }

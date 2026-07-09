@@ -28,6 +28,25 @@ class ThrowingSocket implements FanoutSocket {
   }
 }
 
+/** A socket reporting a fixed `bufferedAmount` (or none) — models a slow/fast consumer for the bound. */
+class BufferedSocket implements FanoutSocket {
+  readonly sent: string[] = [];
+
+  // Only set when provided, so an unspecified `bufferedAmount` is genuinely absent (an
+  // opaque transport) rather than a present `undefined` (exactOptionalPropertyTypes).
+  readonly bufferedAmount?: number;
+
+  constructor(bufferedAmount?: number) {
+    if (bufferedAmount !== undefined) {
+      this.bufferedAmount = bufferedAmount;
+    }
+  }
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+}
+
 /** A frame stamped with `seq` by the caller (the seq counter lives outside the core). */
 function frame(channel: string, seq: number, data: unknown): FanoutFrame {
   return { type: "message", channel, seq, data };
@@ -67,6 +86,48 @@ describe("fanout", () => {
     expect(result.failed).toEqual([dead]);
     expect(dead.calls).toBe(1);
     expect(alive.frames).toEqual([{ type: "message", channel: "c", seq: 1, data: "one" }]);
+  });
+});
+
+describe("fanout — backpressure (maxBufferedBytes)", () => {
+  it("skips a socket over the buffer bound, reports it in failed, and never calls its send", () => {
+    const slow = new BufferedSocket(200);
+    const fast = new BufferedSocket(0);
+
+    // `slow` is FIRST, so the over-bound skip must not abort delivery to `fast`.
+    const result = fanout([slow, fast], frame("c", 1, "x"), { maxBufferedBytes: 100 });
+
+    expect(result.delivered).toBe(1);
+    expect(result.failed).toEqual([slow]);
+    expect(slow.sent).toEqual([]); // over the bound → skipped, not buffered further
+    expect(fast.sent).toHaveLength(1);
+  });
+
+  it("delivers to a socket AT the bound — the check is strictly greater-than", () => {
+    const atBound = new BufferedSocket(100);
+
+    const result = fanout([atBound], frame("c", 1, "x"), { maxBufferedBytes: 100 });
+
+    expect(result.delivered).toBe(1);
+    expect(result.failed).toEqual([]);
+  });
+
+  it("cannot bound a socket that does not report bufferedAmount — it is always sent to", () => {
+    const opaque = new BufferedSocket(undefined);
+
+    const result = fanout([opaque], frame("c", 1, "x"), { maxBufferedBytes: 100 });
+
+    expect(result.delivered).toBe(1);
+    expect(opaque.sent).toHaveLength(1);
+  });
+
+  it("enforces no bound when maxBufferedBytes is omitted, even for a high bufferedAmount", () => {
+    const wouldOverflow = new BufferedSocket(1_000_000);
+
+    const result = fanout([wouldOverflow], frame("c", 1, "x"));
+
+    expect(result.delivered).toBe(1);
+    expect(wouldOverflow.sent).toHaveLength(1);
   });
 });
 

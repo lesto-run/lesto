@@ -24,13 +24,24 @@ interface FrameData {
   data: unknown;
 }
 
-/** A fake Bun `ServerWebSocket`: records frames, carries the upgrade's `data`. */
-function fakeSocket(channel: string) {
+/**
+ * A fake Bun `ServerWebSocket`: records frames + close, reports a fixed
+ * `getBufferedAmount` (for the backpressure bound), carries the upgrade's `data`.
+ */
+function fakeSocket(channel: string, bufferedAmount = 0) {
   return {
     data: { channel } as { channel: string; off?: () => void },
     sent: [] as string[],
+    bufferedAmount,
+    closed: undefined as { code: number | undefined; reason: string | undefined } | undefined,
     send(raw: string): void {
       this.sent.push(raw);
+    },
+    getBufferedAmount(): number {
+      return this.bufferedAmount;
+    },
+    close(code?: number, reason?: string): void {
+      this.closed = { code, reason };
     },
     get frames(): FrameData[] {
       return this.sent.map((raw) => JSON.parse(raw) as FrameData);
@@ -110,6 +121,34 @@ describe("examples/pubsub — buildFanoutServer", () => {
 
     expect(await res?.json()).toEqual({ delivered: 0 });
     expect(socket.sent).toHaveLength(0);
+  });
+
+  it("closes a slow consumer over the buffer bound with 1013 and excludes it from delivered", async () => {
+    const app = buildFanoutServer({ secret: SECRET });
+    const slow = fakeSocket("news", 2 * 1024 * 1024); // 2 MiB queued — over the 1 MiB bound
+    const fast = fakeSocket("news", 0);
+
+    app.websocket.open(slow);
+    app.websocket.open(fast);
+
+    const res = await app.fetch(
+      publish("news", { hi: 1 }, await token("news", "publish")),
+      upgradeOk,
+    );
+
+    // Only the fast socket received it; the slow one was skipped (never buffered further)…
+    expect(await res?.json()).toEqual({ delivered: 1 });
+    expect(fast.sent).toHaveLength(1);
+    expect(slow.sent).toHaveLength(0);
+    // …and closed with 1013 so it reconnects (drop-to-resync).
+    expect(slow.closed).toEqual({ code: 1013, reason: "slow-consumer" });
+
+    // Dropped from the registry too — a second publish never touches it.
+    const res2 = await app.fetch(
+      publish("news", { hi: 2 }, await token("news", "publish")),
+      upgradeOk,
+    );
+    expect(await res2?.json()).toEqual({ delivered: 1 });
   });
 
   it("ignores anything a subscriber sends", () => {

@@ -30,7 +30,16 @@
  */
 
 import { FanoutRegistry, fanout, parsePublishBody, verifyChannelToken } from "@lesto/pubsub";
-import type { ChannelMode } from "@lesto/pubsub";
+import type { ChannelMode, FanoutSocket } from "@lesto/pubsub";
+
+/**
+ * The most bytes a subscriber may have queued-but-unsent before it is treated as a slow
+ * consumer and closed (backpressure). A healthy client drains far below this; a socket
+ * that lets 1 MiB pile up is stuck. Bun's `ServerWebSocket` reports the queue via
+ * `getBufferedAmount()`; where a transport reports nothing, `fanout` leaves the bound
+ * unenforced. Demo-scale; a production bus would tune it.
+ */
+const MAX_BUFFERED_BYTES = 1024 * 1024;
 
 /** Per-connection data Bun carries from the upgrade into the socket handlers. */
 interface SocketData {
@@ -45,6 +54,20 @@ interface SocketData {
 interface BunSocket {
   data: SocketData;
   send(data: string): void;
+  /** Bytes queued but unsent — Bun's backpressure signal (workerd exposes it as a property). */
+  getBufferedAmount(): number;
+  /** Close the socket; `1013` ("try again later") asks the client to reconnect. */
+  close(code?: number, reason?: string): void;
+}
+
+/**
+ * A subscriber as the fan-out core sees it: the pure {@link FanoutSocket} send/bound
+ * seam, plus a `close` so a slow or dead consumer can be reaped (drop-to-resync). The
+ * `bufferedAmount` getter reads Bun's `getBufferedAmount()` so the backpressure bound
+ * measures the real outbound queue.
+ */
+interface SubscriberSocket extends FanoutSocket {
+  close(): void;
 }
 
 /** The slice of Bun's `Server` this app's fetch handler uses. */
@@ -97,7 +120,7 @@ async function guard(
 
 /** Build the fan-out app over one {@link FanoutRegistry}, verifying tokens signed with `secret`. */
 export function buildFanoutServer(opts: { secret: string }): FanoutServer {
-  const registry = new FanoutRegistry();
+  const registry = new FanoutRegistry<SubscriberSocket>();
   const { secret } = opts;
 
   // The per-message sequence lives in this single process (the DO keeps a durable
@@ -143,15 +166,18 @@ export function buildFanoutServer(opts: { secret: string }): FanoutServer {
         }
 
         seq += 1;
-        const { delivered, failed } = fanout(registry.socketsFor(body.channel), {
-          type: "message",
-          channel: body.channel,
-          seq,
-          data: body.message,
-        });
+        const { delivered, failed } = fanout(
+          registry.socketsFor(body.channel),
+          { type: "message", channel: body.channel, seq, data: body.message },
+          { maxBufferedBytes: MAX_BUFFERED_BYTES },
+        );
 
-        // Reap any socket that died mid-send so it is gone from the next publish.
+        // Reap every socket the fan-out could not write to — a slow consumer over the
+        // buffer bound, or one whose send threw. Close it (the client reconnects; the
+        // Node substrate has no `?since=` resume, so it resubscribes fresh) and drop it
+        // so the next publish skips it. Closing a dead socket is a harmless no-op.
         for (const socket of failed) {
+          socket.close();
           registry.drop(body.channel, socket);
         }
 
@@ -163,7 +189,16 @@ export function buildFanoutServer(opts: { secret: string }): FanoutServer {
 
     websocket: {
       open(ws) {
-        ws.data.off = registry.add(ws.data.channel, { send: (data) => ws.send(data) });
+        // Adapt Bun's socket to the fan-out seam: `bufferedAmount` reads Bun's
+        // `getBufferedAmount()` (the backpressure signal); `close` sends `1013` so a
+        // reaped slow consumer reconnects.
+        ws.data.off = registry.add(ws.data.channel, {
+          send: (data) => ws.send(data),
+          get bufferedAmount() {
+            return ws.getBufferedAmount();
+          },
+          close: () => ws.close(1013, "slow-consumer"),
+        });
       },
 
       message() {

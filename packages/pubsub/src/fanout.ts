@@ -37,10 +37,11 @@ export interface FanoutSocket {
   send(data: string): void;
 
   /**
-   * Bytes queued for send but not yet flushed. workerd and Bun expose it;
-   * `undefined` means backpressure is simply not observable on this transport. Read
-   * by the backpressure bound (a later graduation) — {@link fanout} does not enforce
-   * a bound today.
+   * Bytes queued for send but not yet flushed. workerd exposes it as a property; Bun's
+   * `ServerWebSocket` behind a small adapter (`getBufferedAmount()`); `undefined` means
+   * backpressure is simply not observable on this transport. Read by {@link fanout}'s
+   * {@link FanoutOptions.maxBufferedBytes} bound — a socket over the bound is a slow
+   * consumer, reported in {@link FanoutResult.failed} and never buffered without limit.
    */
   readonly bufferedAmount?: number;
 }
@@ -94,36 +95,77 @@ export function parsePublishBody(raw: unknown): PublishRequest | undefined {
   return { channel, message: record.message };
 }
 
-/** The outcome of a {@link fanout}: how many sockets received the frame, and which failed. */
-export interface FanoutResult {
+/**
+ * Tuning for a {@link fanout}. Today just the backpressure bound; a struct so more can
+ * be added without breaking callers.
+ */
+export interface FanoutOptions {
+  /**
+   * The most bytes a socket may have queued-but-unsent (`bufferedAmount`) and still be
+   * written to. A socket over this bound is a SLOW CONSUMER: the frame is not sent to
+   * it and it is returned in {@link FanoutResult.failed} for the caller to close
+   * (drop-to-resync — workerd/Bun expose no drain event, so this is a poll at send
+   * time, then close). A socket that does not report `bufferedAmount` is never bounded
+   * here (the transport gives nothing to measure — honest). Omit to disable the bound.
+   */
+  readonly maxBufferedBytes?: number;
+}
+
+/**
+ * The outcome of a {@link fanout}: how many sockets received the frame, and which failed.
+ * Generic over the socket type so a caller that passed richer sockets (e.g. a workerd
+ * `WebSocket` with `close`) gets them back in `failed` with that type, ready to reap.
+ */
+export interface FanoutResult<S extends FanoutSocket = FanoutSocket> {
   /** Sockets the frame was successfully written to. */
   readonly delivered: number;
 
-  /** Sockets whose `send` threw (a dead/closed connection) — the caller reaps them. */
-  readonly failed: readonly FanoutSocket[];
+  /**
+   * Sockets NOT written to and left for the caller to reap: a `send` that threw (a
+   * dead/closed connection) OR a slow consumer over {@link FanoutOptions.maxBufferedBytes}.
+   */
+  readonly failed: readonly S[];
 }
 
 /**
  * Write one `frame` to every socket in `sockets`, safely.
  *
- * Encodes the frame ONCE, then sends it to each socket in turn. A socket whose
- * `send` throws (a closed/errored connection) is dropped into {@link FanoutResult.failed}
- * and the loop continues — one dead socket never aborts delivery to the rest (the
- * load-bearing invariant). `delivered` counts only the sockets the frame was
- * *successfully written to*; a thrower is excluded and returned in `failed`, so the
- * caller can reap it (a single-process server calls {@link FanoutRegistry.drop}; a
- * hibernatable DO relies on the runtime evicting a closed socket from its tag set).
+ * Encodes the frame ONCE, then sends it to each socket in turn. A socket is left unsent
+ * and dropped into {@link FanoutResult.failed} — never aborting delivery to the rest (the
+ * load-bearing invariant) — when either it is a slow consumer whose `bufferedAmount`
+ * exceeds {@link FanoutOptions.maxBufferedBytes}, or its `send` throws (a closed/errored
+ * connection). `delivered` counts only the sockets the frame was *successfully written
+ * to*; everything in `failed` is for the caller to reap (a single-process server calls
+ * {@link FanoutRegistry.drop} + closes; a hibernatable DO closes the socket, and the
+ * runtime evicts it from the tag set).
  *
- * `fanout` holds no state and does not mutate `sockets`; the caller owns the
- * registry and does any reaping after this returns.
+ * `fanout` holds no state and does not mutate `sockets`; the caller owns the registry
+ * and does any reaping after this returns.
  */
-export function fanout(sockets: Iterable<FanoutSocket>, frame: FanoutFrame): FanoutResult {
+export function fanout<S extends FanoutSocket>(
+  sockets: Iterable<S>,
+  frame: FanoutFrame,
+  opts?: FanoutOptions,
+): FanoutResult<S> {
   const encoded = encodeFrame(frame);
+  const maxBufferedBytes = opts?.maxBufferedBytes;
 
   let delivered = 0;
-  const failed: FanoutSocket[] = [];
+  const failed: S[] = [];
 
   for (const socket of sockets) {
+    // Backpressure: a socket whose queued-but-unsent bytes exceed the bound has fallen
+    // behind — skip the send and report it so the caller closes it (a socket that does
+    // not report `bufferedAmount` cannot be bounded, so it is always sent to).
+    if (
+      maxBufferedBytes !== undefined &&
+      socket.bufferedAmount !== undefined &&
+      socket.bufferedAmount > maxBufferedBytes
+    ) {
+      failed.push(socket);
+      continue;
+    }
+
     try {
       socket.send(encoded);
       delivered += 1;
@@ -141,16 +183,16 @@ export function fanout(sockets: Iterable<FanoutSocket>, frame: FanoutFrame): Fan
  * does NOT use this — the workerd runtime owns its sockets, enumerated by
  * `state.getWebSockets(tag)`; only a long-lived single process keeps its own `Map`.
  */
-export class FanoutRegistry {
+export class FanoutRegistry<S extends FanoutSocket = FanoutSocket> {
   /** Channel name → its subscribed sockets. Insertion-ordered, O(1) add/delete. */
-  private readonly channels = new Map<string, Set<FanoutSocket>>();
+  private readonly channels = new Map<string, Set<S>>();
 
   /**
    * Subscribe `socket` to `channel`. Returns an idempotent drop thunk — call it from
    * the socket's close/error handler (calling it more than once is harmless).
    */
-  add(channel: string, socket: FanoutSocket): () => void {
-    const sockets = this.channels.get(channel) ?? new Set<FanoutSocket>();
+  add(channel: string, socket: S): () => void {
+    const sockets = this.channels.get(channel) ?? new Set<S>();
 
     sockets.add(socket);
 
@@ -162,7 +204,7 @@ export class FanoutRegistry {
   }
 
   /** The sockets subscribed to `channel` — an empty iterable when there are none. */
-  socketsFor(channel: string): Iterable<FanoutSocket> {
+  socketsFor(channel: string): Iterable<S> {
     return this.channels.get(channel) ?? EMPTY;
   }
 
@@ -170,7 +212,7 @@ export class FanoutRegistry {
    * Remove `socket` from `channel`. A no-op if it was never subscribed. When the
    * channel empties we drop it entirely so {@link subscriberCount} stays honest.
    */
-  drop(channel: string, socket: FanoutSocket): void {
+  drop(channel: string, socket: S): void {
     const sockets = this.channels.get(channel);
 
     if (sockets === undefined) {
@@ -190,5 +232,5 @@ export class FanoutRegistry {
   }
 }
 
-/** A shared frozen empty list, returned by {@link FanoutRegistry.socketsFor} for an unknown channel. */
-const EMPTY: readonly FanoutSocket[] = [];
+/** A shared empty list, returned by {@link FanoutRegistry.socketsFor} for an unknown channel. */
+const EMPTY: readonly never[] = [];
