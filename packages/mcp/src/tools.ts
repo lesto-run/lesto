@@ -336,6 +336,9 @@ export interface LestoTool {
    * and refuses `MCP_FORBIDDEN` on denial — the belt-and-suspenders floor that also covers stdio
    * (which has no HTTP pre-dispatch floor). Absent → no dispatch floor (framework tools; ungoverned
    * domain tools), governed by the scope ceiling / operator gate alone.
+   *
+   * This is the ROLE/PERMISSION floor only — token scope is NOT threaded here (the scope ceiling is
+   * enforced pre-dispatch on HTTP; see the note at the {@link dispatch} floor check, L-21e31826).
    */
   requiresPermission?: string;
 
@@ -1214,6 +1217,14 @@ export async function dispatch(
   // checks the SAME single `principal` the handler receives (amendment (b)). Deny by default: an
   // unauthenticated dispatch has no principal → empty roles → denied; and a missing policy denies
   // too (a fail-closed backstop — a governed tool refuses to register without one, D2.4).
+  //
+  // SCOPE-BLIND BY DESIGN (L-21e31826): this floor enforces the policy floor by ROLE/PERMISSION
+  // only; token scope is deliberately NOT checked here. The scope CEILING is an HTTP-pre-dispatch
+  // concern (see http.ts `authorizeBearer` / `mcpModeForScopes`, which intersects the scope ceiling
+  // AND this policy floor before dispatch). stdio carries no OAuth scopes, so there is no exposure
+  // today. A future scoped NON-HTTP transport must thread token scopes into dispatch and check
+  // `requires.scope` here alongside `requiresPermission` (adaptDomainTool currently drops
+  // `requires.scope`).
   if (tool.requiresPermission !== undefined) {
     const permitted =
       context.policy?.allows(principal?.actorRoles, tool.requiresPermission) ?? false;
