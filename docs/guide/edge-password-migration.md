@@ -7,15 +7,21 @@ picks this automatically (see [`packages/auth/src/runtime.ts`](../../packages/au
 so a **greenfield** edge app — where the edge is the only thing that ever writes a
 hash — mints and reads only PBKDF2 and needs nothing from this guide.
 
-> **Edge PBKDF2 is pinned at 100,000 iterations.** Cloudflare Workers' WebCrypto
-> hard-rejects any PBKDF2 derive above 100k (`cloudflare/workerd#1346`, not raisable by
-> any compat flag), and that limit gates verifying as well as minting. So `@lesto/auth`
-> mints every `pbkdf2$…` hash at exactly 100k on **every** runtime — the format's whole
-> reason to exist is to run on the edge, so it stays edge-runnable by construction. 100k
-> SHA-256 is below OWASP-2023's 600k recommendation; it is the strongest PBKDF2 the edge
-> can run, and it sits behind a per-account `loginRateLimiter` and enumeration-safe login.
-> Node deployments get memory-hard **scrypt** via the default facade, so this floor
-> applies only to the edge-portable format, not to a Node-native deployment.
+> **Edge PBKDF2 is pinned at 100,000 iterations — an interim floor below the OWASP
+> recommendation.** Cloudflare Workers' WebCrypto hard-rejects any PBKDF2 derive above
+> 100k (`cloudflare/workerd#1346`, not raisable by any compat flag), and that limit gates
+> verifying as well as minting. So `@lesto/auth` mints every `pbkdf2$…` hash at exactly
+> 100k on **every** runtime — the format's whole reason to exist is to run on the edge, so
+> it stays edge-runnable by construction. **Be honest about the cost:** 100k
+> PBKDF2-HMAC-SHA256 is ~6× below OWASP-2023's 600k recommendation, so an *exfiltrated*
+> hash database is ~6× cheaper to crack offline than a 600k corpus (a per-account
+> `loginRateLimiter` bounds *online* guessing but does nothing for the offline threat a
+> KDF cost defends). The platform forces "not scrypt", **not** "PBKDF2" — a memory-hard
+> **argon2id** via WASM fits the 128 MB isolate and would restore the lost margin, so 100k
+> PBKDF2 is the current interim, not a hard ceiling on edge password security (tracked
+> follow-up: an ADR to move the edge KDF to argon2id-wasm). Node deployments get
+> memory-hard **scrypt** via the default facade, so this floor applies only to the
+> edge-portable format, not to a Node-native deployment.
 
 This guide is for the other two cases: you have **existing `scrypt$…` hashes** and
 you want to run auth **on the edge**.
@@ -80,14 +86,20 @@ Find them and send an out-of-band **password-reset** email — the reset flow ne
 verifies the old hash, so it works on the edge and mints PBKDF2:
 
 ```sql
--- the blast radius: accounts the edge cannot verify. Two shapes:
---   scrypt$…            — the classic Node-minted hash
---   pbkdf2$sha256$6…    — a legacy OVER-CEILING PBKDF2 row (>100k iterations), minted
---                         by a pre-fix build; also un-derivable on the edge and refused
---                         with the same AUTH_KDF_UNAVAILABLE.
+-- The blast radius: accounts the edge cannot verify. Two shapes:
+--   scrypt$…            — the classic Node-minted hash.
+--   pbkdf2$sha256$<n>$… — a legacy OVER-CEILING PBKDF2 row (n > 100000), minted by a
+--                         pre-fix build; also un-derivable on the edge and refused with
+--                         the same AUTH_KDF_UNAVAILABLE.
+-- Parse the iteration count NUMERICALLY — a `LIKE 'pbkdf2$sha256$6%'` prefix match is
+-- WRONG (it flags edge-fine sub-ceiling rows like 60000 and MISSES over-ceiling rows
+-- that don't start with 6, e.g. 150000 → a user silently stranded on the edge). Postgres:
 SELECT id, email FROM users
 WHERE password_hash LIKE 'scrypt$%'
-   OR password_hash LIKE 'pbkdf2$sha256$6%';
+   OR (
+     password_hash LIKE 'pbkdf2$sha256$%'
+     AND CAST(split_part(password_hash, '$', 3) AS INTEGER) > 100000
+   );
 ```
 
 A completed reset self-heals that account. A Node login through
@@ -95,6 +107,15 @@ A completed reset self-heals that account. A Node login through
 automatically (the rehash-on-login seam), so the active tail drains without a reset.
 Keep `onUnverifiableHash` at its safe default (`"invalid_credentials"`) so login stays
 enumeration-clean throughout.
+
+> ⚠️ **`pbkdf2MigrationHasher` is a migration tool — remove it after cutover.** Its
+> rehash seam re-mints any non-100k `pbkdf2$…` row to 100k on login, which means a
+> legacy 600k row is walked **down** to the weaker 100k cost. That is correct *during*
+> a migration (the goal is edge-runnable hashes), but if you leave this hasher wired on
+> a Node tier that is **not** migrating, every strong 600k login silently loses ~6× of
+> its cost for no platform reason, with no event to audit it. On the still-Node default
+> `productionHasher` this never happens (a 600k row upgrades to scrypt on Node). Wire
+> `pbkdf2MigrationHasher` only for the migration window, then revert to the default.
 
 ## Optional — an in-band reset prompt (a security trade-off)
 

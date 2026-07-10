@@ -70,8 +70,11 @@ describe("hashPasswordWeb / verifyPasswordWeb", () => {
     const stored = await hashPasswordWeb("edge password");
     const iterations = Number(stored.split("$")[2]);
 
+    // Exact-equality is the load-bearing pin: the mint target IS the ceiling, so a
+    // Node-green CI mints exactly what the edge can derive. (A bare `<= ceiling` would
+    // pass for any under-cost mint too — the divergence is "minted ABOVE the cap", and
+    // only `=== ceiling` catches a regression back toward 600k.)
     expect(iterations).toBe(EDGE_MAX_ITERATIONS);
-    expect(iterations).toBeLessThanOrEqual(EDGE_MAX_ITERATIONS);
   });
 
   it("mints at a lower cost through the real path when asked (options.iterations)", async () => {

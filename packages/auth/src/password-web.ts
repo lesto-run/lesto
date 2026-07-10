@@ -65,10 +65,17 @@ const DEFAULT_DIGEST_TAG = "sha256";
  * A `pbkdf2$…` hash exists precisely because scrypt OOM-crashes the edge (see the
  * module header and `./runtime`): its whole reason to be is to run on Workers. So
  * this ceiling is the format's defining invariant — every hash we mint stays at or
- * under it, on EVERY runtime, and is therefore edge-runnable by construction. 100k
- * SHA-256 is below OWASP-2023's 600k recommendation; it is the strongest PBKDF2 the
- * edge WebCrypto will run. (Node/Bun deployments get memory-hard scrypt via the
- * facade in `./password` — this floor applies only to the edge-portable format.)
+ * under it, on EVERY runtime, and is therefore edge-runnable by construction.
+ *
+ * ⚠️ 100k SHA-256 is ~6× below OWASP-2023's 600k recommendation — an honest strength
+ * regression for edge users against the *offline* crack of an exfiltrated hash DB (a
+ * rate limiter bounds only online guessing). It is the strongest PBKDF2 the edge
+ * WebCrypto will run, but the platform forces only "not scrypt", NOT "PBKDF2": a
+ * memory-hard argon2id via WASM fits the 128 MB isolate and would restore the margin.
+ * So this is an interim floor, not a hard ceiling on edge password security — the
+ * tracked follow-up is an ADR to move the edge KDF to argon2id-wasm. (Node/Bun
+ * deployments get memory-hard scrypt via the facade in `./password`; this floor
+ * applies only to the edge-portable format.)
  */
 export const EDGE_MAX_ITERATIONS = 100_000;
 
