@@ -62,6 +62,22 @@ import { linkWorkspaceInto } from "./link-workspace";
  * (`packages/island-dev/test/vite.optimize-deps.integration.test.ts`). The leg below is kept
  * single-LOAD (the reload crutch is gone) because that is the honest shape of the parity claim,
  * not because it reliably catches the race.
+ *
+ * DEAD END — do not re-add a browser-side 504/`full-reload` observer here (L-846d7d58). The
+ * obvious idea is `page.on("response", r => r.status()===504)` + watching the HMR socket for a
+ * `full-reload` frame, to catch a re-optimize regardless of whether the browser self-heals. It
+ * was BUILT and measured against a REINTRODUCED bug (revert L-90d2de01's `entries` seed, then
+ * both a late island import AND the faithful framework-dep case = drop `preact/compat/client`
+ * from `optimizeDeps.include`). The re-optimize provably fires every time (`optimizerRuns==2`
+ * at the config layer), yet across ~30 browser runs — single-app and under 2×-core CPU
+ * saturation — the browser saw ONLY 200s: no 504, no `full-reload` frame. On one small app the
+ * optimizer settles server-side within the `/client.js` round-trip, BEFORE the browser requests
+ * any optimized-dep URL, so there is no stale-hash request to 504 and no reload to send. The
+ * original L-89f8ca04 flake needed the two-servers-booting-CONCURRENTLY timing this spec no
+ * longer creates (both are fully booted before either test runs). So a browser-observable signal
+ * here is not just flaky — it is un-fireable on demand, which makes any such assertion a vacuous
+ * guard (see the repo's vacuous-negative-assertion rule). The deterministic detector lives at the
+ * layer where the re-optimize IS observable: the optimizer-pass-count integration test above.
  */
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
