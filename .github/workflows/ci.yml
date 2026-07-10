@@ -9,6 +9,16 @@ name: CI
 # (`gh run list --workflow=ci.yml --event push`). Renaming this file will make that
 # gate find no run and HARD-FAIL every release (fail-closed, never fail-open) — update
 # release.yml's `--workflow=` in the same commit if you rename it.
+#
+# RELEASE-GATE INVARIANT: the release gate (release.yml, and its fail-fast local mirror in
+# `scripts/dev/release.sh` / `bun run release:cut`) enforces the success of THIS workflow ONLY.
+# It does NOT wait on any other workflow. Other push-triggered workflows — live-capstone-e2e.yml,
+# deploy-examples.yml, benchmarks.yml, the scaffold preflights — run on push to main but are
+# INVISIBLE to the release gate: a release can publish while they are red or still running.
+# THEREFORE: any check that must block a release has to be a JOB IN THIS FILE (the cheapest
+# option). If a release-blocking gate genuinely cannot live here, the alternative is to extend
+# release.yml's gate query to also require that workflow's success for the SHA — but do not
+# assume a green main means those other workflows passed; the gate never looked at them.
 
 on:
   push:

@@ -42,24 +42,42 @@ name* (below); everything already on npm publishes through CI.
    installs + boots a scaffold, AND runs the cross-ref guard (`scripts/pack-and-boot.mjs`) that
    catches exactly the Dragon-1 mispin. The manual bootstrap loop **bypasses** this guard, so run
    it explicitly on the bumped tree.
-5. **Publish everything via CI.** ⚠️ **DRAGON 3 (stale origin):** CI checks out **origin**, not
-   your local tree. Before dispatching: `git fetch origin && [ "$(git rev-list --count
-   origin/main..HEAD)" = 0 ]` — origin/main must be at the exact SHA you intend to release (the
-   Studio daemon's auto-push has silently stalled before; a stale origin makes CI no-op
-   "successfully"). **Quiesce main first (L-fc1a7a4f):** pause the Studio daemon and the push
-   agent — `touch ~/.studio/.push-main-paused` (lightest; `rm` it after the release) or
-   `launchctl bootout gui/$(id -u)/run.lesto.push-main` — so no new commit supersedes the release
-   tip while CI runs — `ci.yml` has `cancel-in-progress: true`, so a push landing mid-run cancels
-   the release SHA's CI run and the green-CI gate below then refuses that SHA forever. Then confirm
-   CI is green for the release SHA, arm `RELEASE_ENABLED=true`, and `gh workflow run release.yml
-   --ref main` — dispatch `--ref main` **only after** the `origin/main..HEAD == 0` check above
-   confirms origin's tip IS your release SHA (a raw `--ref <sha>` **422s**: `workflow_dispatch`
-   resolves named refs, not bare SHAs). Read the run's publish summary: `0 published, N skipped`
-   when you expected new publishes means CI built a stale tree — investigate, don't assume
-   success. Restore `RELEASE_ENABLED=false` after. **GREEN-CI GATE (L-69e905de):** the workflow's
-   first step refuses to publish unless the `CI` workflow concluded `success` for the dispatched
-   commit — so confirm CI is green for that exact SHA before arming, or the run fails fast at
-   "Require green CI for this commit" without uploading anything.
+5. **Publish everything via CI — `bun run release:cut`.** This one command (`scripts/dev/release.sh`)
+   is the whole publish step: it runs fail-closed **preconditions**, then does an atomic
+   **quiesce → arm → dispatch → watch → cleanup**, and its cleanup ALWAYS fires (trap on
+   EXIT/INT/TERM), so a Ctrl-C, timeout, or failed dispatch can never leave `RELEASE_ENABLED`
+   armed or main quiesced. Do **not** hand-run the 5-step dance below — it is documented only so
+   you know what the script automates and can recover if `gh` is unavailable.
+
+   ```sh
+   bun run release:cut            # interactive: checks → confirm → arm+dispatch+watch → auto-disarm
+   bun run release:cut --dry-run  # run every precondition and STOP before arming (mutates nothing)
+   bun run release:cut --yes      # skip only the final confirm (still runs every precondition)
+   ```
+
+   The preconditions it refuses to proceed without (each a past foot-gun): **on main**; **clean
+   working tree**; **`origin/main == HEAD`** (⚠️ **DRAGON 3 (stale origin):** CI checks out
+   **origin**, not your local tree — the Studio daemon's auto-push has silently stalled before, and
+   a stale origin makes CI no-op "successfully"); **changesets consumed** (no `.changeset/*.md`
+   left — i.e. `bun run version` was run + committed); **no package still at `0.0.0`** (reuses
+   `publish.mjs`'s own `assertVersionsBumped`); and **PRECONDITION #1 — `ci.yml` concluded
+   `success` for THIS exact SHA** (the SAME query `release.yml`'s green-CI gate runs, lifted local
+   so you fail fast *before* arming). That last one is the fix for the 0.1.7 near-miss: it makes
+   the local readiness oracle **identical to the publish gate** — the full browser-e2e suite
+   included — so you can no longer arm on a red SHA by trusting the local fast-gate set
+   (typecheck/lint/unit/pack-boot, which OMITS the e2e).
+
+   Under the hood it: `touch ~/.studio/.push-main-paused` to **quiesce main** (so no push advances
+   the tip mid-run — `ci.yml` has `cancel-in-progress: true`, and a push landing mid-run would
+   cancel the release SHA's CI run and make the green-CI gate refuse that SHA); `gh variable set
+   RELEASE_ENABLED true` to **arm**; `gh workflow run release.yml --ref main` to **dispatch**
+   (`--ref main`, never a bare SHA — `workflow_dispatch` **422s** on a raw SHA; safe because the
+   `origin == HEAD` precondition guarantees `main` IS your release SHA); `gh run watch
+   --exit-status` to **watch**; then the trap **disarms `RELEASE_ENABLED=false` and removes the
+   pause flag** unconditionally. **GREEN-CI GATE (L-69e905de)** still runs server-side too: even if
+   you bypassed the local check, `release.yml`'s first step refuses to publish unless `CI` concluded
+   `success` for the dispatched commit. Read the run's publish summary: `0 published, N skipped`
+   when you expected new publishes means CI built a stale tree — investigate, don't assume success.
 
 > ⚠️ **DRAGON 2 (provenance):** `.github/workflows/release.yml` pins `npm@11.5.1` on purpose —
 > `npm@latest` (now `12.0.0`) regressed provenance with `Cannot find module 'sigstore'`. Do not

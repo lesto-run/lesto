@@ -22,6 +22,7 @@
     "changeset": "changeset",
     "version": "changeset version",
     "release": "node scripts/publish.mjs",
+    "release:cut": "bash scripts/dev/release.sh",
     "release:changeset": "changeset publish"
   },
   "license": "MIT",
