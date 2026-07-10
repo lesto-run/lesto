@@ -210,6 +210,33 @@
 .docs-article li {
   font-size: 1rem;
 }
+/* Block rhythm. Tailwind's preflight zeroes margins and strips list styling, and
+   `.docs-article` styles generated HTML no utility can reach — so the flow spacing
+   (paragraphs, lists, and the gap around code figures) must be restored by hand.
+   Paragraphs carry a bottom-only margin so the first one after a heading isn't
+   double-spaced; margins collapse with the code figure's own 1.5rem in normal flow. */
+.docs-article p {
+  margin: 0 0 1.15rem;
+}
+.docs-article ul,
+.docs-article ol {
+  margin: 1.15rem 0;
+  padding-left: 1.5rem;
+}
+.docs-article ul {
+  list-style: disc;
+}
+.docs-article ol {
+  list-style: decimal;
+}
+.docs-article li > ul,
+.docs-article li > ol {
+  margin: 0.4rem 0;
+}
+/* A paragraph wrapped inside a loose-list item stays compact, not full-block-spaced. */
+.docs-article li > p {
+  margin: 0.35rem 0;
+}
 .docs-article code {
   font-family: var(--mono);
   font-size: 0.88em;
