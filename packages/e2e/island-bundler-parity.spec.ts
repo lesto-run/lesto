@@ -41,9 +41,12 @@ import { linkWorkspaceInto } from "./link-workspace";
  * ports per `lesto dev` (no longer the old fixed 24677/24678), so it no longer collides
  * with the other island-dev specs on those ports. The Bun live-reload socket likewise binds
  * a FREE ephemeral port per `lesto dev` (no longer the fixed 35729, `buildLiveReload` in
- * `bin.ts`) — before that fix the two concurrently-booted apps here both dialed 35729, the
- * second was 403'd on a token mismatch against the first app's server, and the resulting
- * reconnect storm intermittently kept the island from hydrating (L-89f8ca04).
+ * `bin.ts`) — that removed a real cross-app 403 reconnect-storm, but it was NOT the cause of
+ * this spec's intermittent hydration flake (L-89f8ca04): captured console on a failing run
+ * showed the island's proxied module requests transiently 504 during Vite's concurrent
+ * cold-start dep pre-bundling, so the island missed first hydration. The Vite leg now
+ * reload-retries to recover (see that test); the underlying "proxy doesn't auto-recover from
+ * the cold-start 504" is tracked as a separate product follow-up.
  */
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -154,9 +157,21 @@ test("the Vite-served island (lesto dev path) hydrates the same source", async (
   expect(html).toContain('src="/@lesto-dev/client.js"');
   expect(html).not.toContain('src="/client.js"');
 
-  await page.goto(`${VITE_URL}/`);
   const counter = page.locator('[data-testid="counter"]');
-  await expect(counter).toHaveText("count: 0");
-  await counter.click();
-  await expect(counter).toHaveText("count: 1");
+
+  // Recover across a Vite cold-start hiccup (L-89f8ca04). Under the DOUBLED CPU of two dev
+  // servers booting at once, Vite's first-request dep pre-bundling can lag, and the island's
+  // proxied module requests transiently 504 ("Outdated Optimize Dep") — so the island misses
+  // its FIRST hydration (the counter never wires up; the click is a no-op; it stays "count: 0").
+  // A real browser recovers on the next load once the optimizer has settled; this test proves
+  // hydration PARITY, not cold-start recovery, so mirror that recovery by retrying the whole
+  // load+interact as a unit. (The reload-WS 403 that the task first blamed was a bystander —
+  // fixed by the ephemeral-port change in `bin.ts`, but it was never this flake's cause; the
+  // proxy not auto-recovering from the 504 is tracked separately as a product follow-up.)
+  await expect(async () => {
+    await page.goto(`${VITE_URL}/`);
+    await expect(counter).toHaveText("count: 0");
+    await counter.click();
+    await expect(counter).toHaveText("count: 1", { timeout: 4_000 });
+  }).toPass({ timeout: 30_000 });
 });
