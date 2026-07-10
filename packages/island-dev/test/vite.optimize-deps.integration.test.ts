@@ -11,9 +11,11 @@
  * on cold start — the island silently never hydrates on that load.
  *
  * HOW A PASS IS COUNTED. `optimizeDeps.esbuildOptions.plugins` are threaded into BOTH the
- * scanner's esbuild context and every optimizer run. The two are told apart by their
- * esbuild options: the scanner bundles from `stdin`, an optimizer run from `entryPoints`.
- * So a counting plugin gives an exact, public, non-timing-dependent count of each.
+ * scanner's esbuild context and every optimizer run. The two are told apart POSITIVELY by
+ * their esbuild options — the scanner bundles from `stdin`, an optimizer run from
+ * `entryPoints` — and {@link countingPlugin} THROWS if that (undocumented) split ever
+ * drifts, so the count can never go silently wrong. A counting plugin thus gives an exact,
+ * public, non-timing-dependent count of each.
  *
  * NON-VACUOUS BY CONSTRUCTION. The second test is the RED case: the identical server with
  * `optimizeDeps.entries` emptied — the state this package shipped before L-90d2de01 —
@@ -85,14 +87,38 @@ interface EsbuildRunCounts {
 }
 
 /**
- * An esbuild plugin that counts the runs it is spread into. The optimizer bundles a set of
- * `entryPoints` (one per dep); the scanner bundles a synthetic `stdin` module.
+ * An esbuild plugin that counts the runs `optimizeDeps.esbuildOptions.plugins` is spread
+ * into — the ONLY two are Vite's dep scanner and its dep-optimizer runs.
+ *
+ * Each run is keyed POSITIVELY, not by the absence of the other's marker: the scanner
+ * bundles a synthetic `stdin` module (`prepareEsbuildScanner`), an optimizer run bundles
+ * `entryPoints` (`prepareEsbuildOptimizerRun`). Keying the scanner on `entryPoints ===
+ * undefined` (its ABSENCE) would silently misclassify it as an optimizer run if a consumer
+ * ever set `esbuildOptions.entryPoints` (it spreads into the scanner context too) or if a
+ * future Vite added `entryPoints` to the scan build — turning a fail-loud guard vacuous. So
+ * the two markers are asserted mutually exclusive AND exhaustive, and a run that is neither
+ * or both THROWS: the discriminator couples to undocumented Vite internals, so it must fail
+ * LOUD (with a re-verify pointer) rather than miscount. Re-verify both markers when bumping
+ * Vite across a major (`vite: ^7` will not silently pull 8.x).
  */
 function countingPlugin(counts: EsbuildRunCounts): unknown {
   return {
     name: "lesto-test:count-esbuild-runs",
-    setup(build: { initialOptions: { entryPoints?: unknown } }) {
-      if (build.initialOptions.entryPoints === undefined) counts.scanner += 1;
+    setup(build: { initialOptions: { entryPoints?: unknown; stdin?: unknown } }) {
+      const isScanner = build.initialOptions.stdin !== undefined;
+      const isOptimizer = build.initialOptions.entryPoints !== undefined;
+
+      // Exactly one must hold. Neither/both ⇒ Vite's dep-optimizer esbuild wiring drifted
+      // out from under this oracle — fail loud, never silently miscount a pass.
+      if (isScanner === isOptimizer) {
+        throw new Error(
+          "lesto: the esbuild scanner/optimizer discriminator drifted — a dep-optimize run " +
+            "had neither a `stdin` (scanner) nor an `entryPoints` (optimizer) marker, or both. " +
+            "Re-verify against Vite's prepareEsbuildScanner / prepareEsbuildOptimizerRun.",
+        );
+      }
+
+      if (isScanner) counts.scanner += 1;
       else counts.optimizer += 1;
     },
   };
