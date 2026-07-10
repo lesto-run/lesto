@@ -67,8 +67,11 @@ export async function hashPassword(password: string): Promise<string> {
  * `try/catch` can rescue — so we refuse at dispatch with a coded {@link AuthError}
  * `AUTH_KDF_UNAVAILABLE`, never calling the KDF. (In practice a stored value is always
  * `scrypt$…` or `pbkdf2$…`; a corrupt non-PBKDF2 row is refused the same way rather
- * than risk a derive.) On a scrypt-capable host (Node/Bun) scrypt hashes verify
- * normally and malformed values resolve `false` as before.
+ * than risk a derive.) A **PBKDF2** hash whose iteration count exceeds what the edge
+ * WebCrypto can derive (a legacy/hybrid `pbkdf2$…` row minted above `EDGE_MAX_ITERATIONS`)
+ * is refused with the *same* coded `AUTH_KDF_UNAVAILABLE` for the same reason, so both
+ * un-derivable shapes flow through one migration path. On a scrypt-capable host
+ * (Node/Bun) scrypt hashes verify normally and malformed values resolve `false` as before.
  */
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   if (isPbkdf2(stored)) return await verifyPasswordWeb(password, stored);

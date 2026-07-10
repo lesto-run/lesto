@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   AuthError,
+  EDGE_MAX_ITERATIONS,
   hashPassword,
   hashPasswordScrypt,
   hashPasswordWeb,
@@ -23,9 +24,12 @@ const VALID_KEY = hexOf(32);
 const toHex = (bytes: Uint8Array): string =>
   [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
-// Mint a PBKDF2 hash directly with an arbitrary iteration count, mirroring the
-// module's own format — so we can exercise "verifies a hash minted under a lower
-// cost" and the rehash seam without waiting on the 600k-iteration production cost.
+// Mint a PBKDF2 hash directly with an ARBITRARY iteration count, mirroring the
+// module's own format. This is the only way to construct hashes the real minter now
+// refuses to produce — a legacy over-ceiling (`600000`) row, or a sub-ceiling aged
+// row — so we can drive the verify-guard, rehash-walk, and lower-cost-verify paths.
+// The real minter is exercised directly elsewhere (the `{ iterations }` override), so
+// this fixture is not the only witness to the wire format.
 async function pbkdf2Hash(password: string, iterations: number): Promise<string> {
   const encoder = new TextEncoder();
   const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -49,11 +53,54 @@ describe("hashPasswordWeb / verifyPasswordWeb", () => {
   it("mints a self-describing pbkdf2 hash that round-trips", async () => {
     const stored = await hashPasswordWeb("correct horse battery staple");
 
-    // pbkdf2$<digest>$<iterations>$<salt>$<key> — OWASP's 600k SHA-256 floor.
-    expect(stored.startsWith("pbkdf2$sha256$600000$")).toBe(true);
+    // pbkdf2$<digest>$<iterations>$<salt>$<key> — pinned to the edge ceiling (100k),
+    // the strongest PBKDF2 workerd's WebCrypto will derive (see EDGE_MAX_ITERATIONS).
+    expect(stored.startsWith("pbkdf2$sha256$100000$")).toBe(true);
     expect(stored.split("$")).toHaveLength(5);
 
     expect(await verifyPasswordWeb("correct horse battery staple", stored)).toBe(true);
+  });
+
+  it("mints at or below the edge ceiling on every runtime (the divergence guard)", async () => {
+    // The P0 was minting at 600k — over workerd's hard 100k PBKDF2 cap — so every
+    // deployed hash threw. The mint cost must be the ceiling and the ceiling must be
+    // 100k; both are pinned here so a Node-green CI can no longer hide an edge break.
+    expect(EDGE_MAX_ITERATIONS).toBe(100_000);
+
+    const stored = await hashPasswordWeb("edge password");
+    const iterations = Number(stored.split("$")[2]);
+
+    expect(iterations).toBe(EDGE_MAX_ITERATIONS);
+    expect(iterations).toBeLessThanOrEqual(EDGE_MAX_ITERATIONS);
+  });
+
+  it("mints at a lower cost through the real path when asked (options.iterations)", async () => {
+    const stored = await hashPasswordWeb("cheap", { iterations: 1000 });
+
+    expect(stored.startsWith("pbkdf2$sha256$1000$")).toBe(true);
+    expect(await verifyPasswordWeb("cheap", stored)).toBe(true);
+    expect(await verifyPasswordWeb("wrong", stored)).toBe(false);
+  });
+
+  it("refuses to mint an iteration count above the edge ceiling — loud, on Node too", async () => {
+    // The refusal fires on Node (no workerd stub): a >ceiling pbkdf2 hash can never run
+    // on the edge, so it is wrong wherever it is born. This is what makes the ceiling
+    // Node-testable — the same refusal the platform would give, without a real Worker.
+    await expect(
+      hashPasswordWeb("x", { iterations: EDGE_MAX_ITERATIONS + 1 }),
+    ).rejects.toMatchObject({ name: "AuthError", code: "AUTH_INVALID_ITERATIONS" });
+
+    await expect(hashPasswordWeb("x", { iterations: 600_000 })).rejects.toMatchObject({
+      code: "AUTH_INVALID_ITERATIONS",
+    });
+  });
+
+  it("refuses to mint a non-positive / non-integer iteration count", async () => {
+    for (const iterations of [0, -5, 1.5, Number.NaN]) {
+      await expect(hashPasswordWeb("x", { iterations })).rejects.toMatchObject({
+        code: "AUTH_INVALID_ITERATIONS",
+      });
+    }
   });
 
   it("rejects the wrong password", async () => {
@@ -107,6 +154,56 @@ describe("hashPasswordWeb / verifyPasswordWeb", () => {
   });
 });
 
+describe("verifyPasswordWeb — refuses an over-ceiling hash on the edge", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // A valid 600k hash — Node's WebCrypto has no cap, so we can mint one directly to
+  // stand in for a legacy / hybrid `pbkdf2$…$600000$…` row that reaches the edge.
+  it("throws AUTH_KDF_UNAVAILABLE for a >100k hash on workerd (navigator signal), before deriving", async () => {
+    const legacy = await pbkdf2Hash("legacy password", 600_000);
+
+    vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
+
+    await expect(verifyPasswordWeb("legacy password", legacy)).rejects.toMatchObject({
+      name: "AuthError",
+      code: "AUTH_KDF_UNAVAILABLE",
+    });
+    await verifyPasswordWeb("legacy password", legacy).catch((error: unknown) => {
+      expect(error).toBeInstanceOf(AuthError);
+      expect((error as AuthError).details).toMatchObject({ algorithm: "pbkdf2", max: 100_000 });
+    });
+  });
+
+  it("also refuses via the ungated WebSocketPair signal (older compat date, no navigator)", async () => {
+    const legacy = await pbkdf2Hash("legacy password", 600_000);
+
+    vi.stubGlobal("navigator", undefined);
+    vi.stubGlobal("WebSocketPair", {});
+
+    await expect(verifyPasswordWeb("legacy password", legacy)).rejects.toMatchObject({
+      code: "AUTH_KDF_UNAVAILABLE",
+    });
+  });
+
+  it("verifies that same >100k hash normally on Node — the guard is runtime-conditional", async () => {
+    // No stub: Node's WebCrypto has no cap, so the walk-down source still authenticates.
+    const legacy = await pbkdf2Hash("legacy password", 600_000);
+
+    expect(await verifyPasswordWeb("legacy password", legacy)).toBe(true);
+    expect(await verifyPasswordWeb("wrong password", legacy)).toBe(false);
+  });
+
+  it("does NOT refuse an at-ceiling (100k) hash on workerd — the boundary is strict", async () => {
+    const atCeiling = await pbkdf2Hash("edge password", EDGE_MAX_ITERATIONS);
+
+    vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
+
+    expect(await verifyPasswordWeb("edge password", atCeiling)).toBe(true);
+  });
+});
+
 describe("needsRehashWeb", () => {
   it("is false for a freshly minted hash (at the current cost)", async () => {
     expect(needsRehashWeb(await hashPasswordWeb("current"))).toBe(false);
@@ -114,6 +211,10 @@ describe("needsRehashWeb", () => {
 
   it("is true for a hash minted below the current iteration count", async () => {
     expect(needsRehashWeb(await pbkdf2Hash("aged", 1000))).toBe(true);
+  });
+
+  it("is true for a legacy hash minted ABOVE the ceiling — it walks down to 100k", async () => {
+    expect(needsRehashWeb(await pbkdf2Hash("legacy", 600_000))).toBe(true);
   });
 
   it("is false for a malformed string (nothing to re-derive)", () => {
@@ -196,7 +297,7 @@ describe("hashPassword facade — runtime-adaptive minting, prefix-dispatched ve
     // A pbkdf2 hash verifies on Node (no stub) — the edge-minted hash is portable.
     const web = await pbkdf2Hash("portable", 1000);
     expect(await verifyPassword("portable", web)).toBe(true);
-    expect(needsRehash(web)).toBe(true); // 1000 < 600000
+    expect(needsRehash(web)).toBe(true); // 1000 !== 100000 (the mint target)
 
     // A scrypt hash routes to the scrypt backend.
     const scryptStored = await hashPasswordScrypt("scrypt password");

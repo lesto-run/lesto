@@ -28,6 +28,9 @@
  * to `false` rather than throwing, and comparison is constant-time.
  */
 
+import { AuthError } from "./errors";
+import { isWorkerd } from "./runtime";
+
 /** The algorithm tag every PBKDF2 stored hash leads with. */
 export const PBKDF2_PREFIX = "pbkdf2";
 
@@ -49,11 +52,33 @@ const DIGESTS: Record<string, string> = { sha256: "SHA-256" };
 const DEFAULT_DIGEST_TAG = "sha256";
 
 /**
- * Iteration count for a freshly minted hash — OWASP's 2023 floor for
- * PBKDF2-HMAC-SHA256 (600,000). Read back per-hash on verify, so raising this
- * later leaves old hashes verifiable and flags them for rehash.
+ * The hard ceiling on PBKDF2 iterations, imposed by the runtime this format exists
+ * to serve.
+ *
+ * Cloudflare Workers' WebCrypto rejects any `deriveBits` above 100,000 iterations
+ * with `NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not
+ * supported` — a fixed workerd DoS guard, NOT raisable via a compat flag or
+ * `compatibility_date` (cloudflare/workerd#1346). It gates BOTH minting and
+ * verifying (both go through `deriveBits`), so a hash minted above it is unusable
+ * on the edge in either direction.
+ *
+ * A `pbkdf2$…` hash exists precisely because scrypt OOM-crashes the edge (see the
+ * module header and `./runtime`): its whole reason to be is to run on Workers. So
+ * this ceiling is the format's defining invariant — every hash we mint stays at or
+ * under it, on EVERY runtime, and is therefore edge-runnable by construction. 100k
+ * SHA-256 is below OWASP-2023's 600k recommendation; it is the strongest PBKDF2 the
+ * edge WebCrypto will run. (Node/Bun deployments get memory-hard scrypt via the
+ * facade in `./password` — this floor applies only to the edge-portable format.)
  */
-const DEFAULT_ITERATIONS = 600_000;
+export const EDGE_MAX_ITERATIONS = 100_000;
+
+/**
+ * Iteration count for a freshly minted hash. Pinned to {@link EDGE_MAX_ITERATIONS}
+ * so a minted hash runs on the edge unconditionally. Read back per-hash on verify,
+ * so a hash minted under a different cost still verifies and {@link needsRehashWeb}
+ * flags it for a rehash toward this target.
+ */
+const DEFAULT_ITERATIONS = EDGE_MAX_ITERATIONS;
 
 const ENCODER = new TextEncoder();
 
@@ -191,19 +216,63 @@ function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 /**
+ * Refuse — loudly, before any derive — an iteration count we must never mint.
+ *
+ * The guard runs on EVERY runtime, not just workerd: a `pbkdf2$…` hash above the
+ * {@link EDGE_MAX_ITERATIONS} ceiling can never fulfil the format's invariant (it
+ * cannot run on the edge), so it is semantically wrong wherever it is born. Throwing
+ * on Node too is what makes the ceiling Node-testable — a Node test passing
+ * `{ iterations: 600_000 }` gets the exact refusal the edge platform would give,
+ * without a real Worker. A silent clamp would hand the caller a false strength
+ * belief, so this is a thrown {@link AuthError}, not a `Math.min`.
+ */
+function assertMintableIterations(iterations: number): void {
+  if (!isPositiveInteger(iterations) || iterations > EDGE_MAX_ITERATIONS) {
+    throw new AuthError(
+      "AUTH_INVALID_ITERATIONS",
+      `PBKDF2 iterations must be a positive integer ≤ ${EDGE_MAX_ITERATIONS} (the edge ceiling); got ${iterations}.`,
+      { iterations, max: EDGE_MAX_ITERATIONS },
+    );
+  }
+}
+
+/** Tuning knobs for {@link hashPasswordWeb}. */
+export interface HashPasswordWebOptions {
+  /**
+   * Iterations to mint under, overriding the default ({@link EDGE_MAX_ITERATIONS}).
+   * Must be a positive integer at or below the edge ceiling or the call throws
+   * `AUTH_INVALID_ITERATIONS` — the edge cannot derive above it. Mostly for tests
+   * (mint a cheap hash through the real code path).
+   */
+  readonly iterations?: number;
+}
+
+/**
  * Hash a password with a fresh random salt under the current PBKDF2 cost.
  *
  * The returned string is self-describing — it carries the digest tag, the iteration
  * count, and the salt it was minted under — so {@link verifyPasswordWeb} needs only
  * the candidate and the stored value. Salt generation runs inside the call (request
  * scope), never at module load, because a Worker forbids randomness in global scope.
+ *
+ * The cost defaults to {@link EDGE_MAX_ITERATIONS} and can be lowered via
+ * `options.iterations`; it can never be raised above the edge ceiling — a request
+ * to do so throws `AUTH_INVALID_ITERATIONS` rather than mint a hash the edge cannot
+ * derive.
  */
-export async function hashPasswordWeb(password: string): Promise<string> {
+export async function hashPasswordWeb(
+  password: string,
+  options?: HashPasswordWebOptions,
+): Promise<string> {
+  const iterations = options?.iterations ?? DEFAULT_ITERATIONS;
+
+  assertMintableIterations(iterations);
+
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
 
-  const key = await deriveKey(password, salt, DEFAULT_ITERATIONS, DIGESTS[DEFAULT_DIGEST_TAG]!);
+  const key = await deriveKey(password, salt, iterations, DIGESTS[DEFAULT_DIGEST_TAG]!);
 
-  return `${PBKDF2_PREFIX}$${DEFAULT_DIGEST_TAG}$${DEFAULT_ITERATIONS}$${toHex(salt)}$${toHex(key)}`;
+  return `${PBKDF2_PREFIX}$${DEFAULT_DIGEST_TAG}$${iterations}$${toHex(salt)}$${toHex(key)}`;
 }
 
 /**
@@ -212,6 +281,15 @@ export async function hashPasswordWeb(password: string): Promise<string> {
  * Resolves `false` — never rejects — for a malformed stored string. The candidate
  * key is derived under the digest and iteration count read back from `stored`, so a
  * hash minted under an older cost still verifies. Comparison is constant-time.
+ *
+ * The one case this rejects rather than resolves: a well-formed hash whose iteration
+ * count exceeds {@link EDGE_MAX_ITERATIONS} *on workerd*. The derive would throw an
+ * uncatchable-contract-breaking `NotSupportedError` from inside `crypto.subtle`, so
+ * we refuse it first with a coded {@link AuthError} `AUTH_KDF_UNAVAILABLE` — exactly
+ * as the facade does for scrypt-on-edge — routing it through the same migration story
+ * (`@lesto/identity` `onUnverifiableHash`; the rehash seam walks it down on the next
+ * login on a runtime that CAN derive it). Off workerd (Node/Bun/Deno) there is no cap,
+ * so such a hash verifies normally — the guard is deliberately runtime-conditional.
  */
 export async function verifyPasswordWeb(password: string, stored: string): Promise<boolean> {
   const parsed = parseStored(stored);
@@ -220,20 +298,35 @@ export async function verifyPasswordWeb(password: string, stored: string): Promi
 
   const { digest, iterations, salt, expected } = parsed;
 
+  if (isWorkerd() && iterations > EDGE_MAX_ITERATIONS) {
+    throw new AuthError(
+      "AUTH_KDF_UNAVAILABLE",
+      `This PBKDF2 hash uses ${iterations} iterations, above the ${EDGE_MAX_ITERATIONS} this edge runtime can derive; re-hash it (e.g. via a password reset).`,
+      { algorithm: "pbkdf2", iterations, max: EDGE_MAX_ITERATIONS },
+    );
+  }
+
   const actual = await deriveKey(password, salt, iterations, digest);
 
   return timingSafeEqual(actual, expected);
 }
 
 /**
- * Report whether a stored PBKDF2 hash was minted below today's iteration count —
- * the rehash-on-login seam, matching {@link needsRehashScrypt}. A malformed string
- * reports `false`: it is not a hash we can re-derive.
+ * Report whether a stored PBKDF2 hash was minted at anything other than today's
+ * iteration count — the rehash-on-login seam, matching {@link needsRehashScrypt}.
+ *
+ * Stale means `iterations !== DEFAULT_ITERATIONS`, not merely below it: a hash under
+ * the target walks *up*, and a legacy over-ceiling hash (e.g. a `600000` row from a
+ * pre-fix build) walks *down* to the edge-runnable {@link EDGE_MAX_ITERATIONS} on the
+ * next login. Because the target equals the ceiling on every runtime, a freshly
+ * minted hash is never stale, so the seam converges in a single hop instead of
+ * re-minting on every login. A malformed string reports `false`: it is not a hash we
+ * can re-derive.
  */
 export function needsRehashWeb(stored: string): boolean {
   const parsed = parseStored(stored);
 
   if (parsed === undefined) return false;
 
-  return parsed.iterations < DEFAULT_ITERATIONS;
+  return parsed.iterations !== DEFAULT_ITERATIONS;
 }

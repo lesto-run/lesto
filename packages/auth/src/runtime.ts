@@ -19,6 +19,35 @@
 export type PasswordAlgorithm = "scrypt" | "pbkdf2";
 
 /**
+ * True iff this runtime is a Cloudflare Workers (workerd) isolate.
+ *
+ * Detected by two independent signals: the documented `navigator.userAgent`, and
+ * the `WebSocketPair` constructor. We check both because `navigator` is gated
+ * behind the `global_navigator` compat flag (only default on recent compat dates),
+ * whereas `WebSocketPair` is an ungated core Workers global that no Node/Bun/Deno
+ * runtime defines — so an older-compat-date Worker running `nodejs_compat` (which
+ * polyfills `process` and would otherwise look like Node in {@link selectPasswordAlgorithm},
+ * then OOM on scrypt) is still caught here.
+ *
+ * This is the single probe both the algorithm choice AND the PBKDF2 iteration
+ * ceiling read from — the edge is the runtime whose WebCrypto hard-caps PBKDF2
+ * iterations (see `./password-web` `EDGE_MAX_ITERATIONS`).
+ */
+export function isWorkerd(): boolean {
+  // Read the globals through a cast rather than the ambient `navigator` binding:
+  // this module compiles under `lib: ES2023` with only `@types/node`, and an edge
+  // runtime need not have either global at all — the optional chains are genuine.
+  const globals = globalThis as {
+    navigator?: { userAgent?: string };
+    WebSocketPair?: unknown;
+  };
+
+  return (
+    globals.navigator?.userAgent === "Cloudflare-Workers" || globals.WebSocketPair !== undefined
+  );
+}
+
+/**
  * Pick the KDF to mint new hashes under, based on the host runtime.
  *
  * Verification never calls this — a stored hash is self-describing and is verified
@@ -27,31 +56,13 @@ export type PasswordAlgorithm = "scrypt" | "pbkdf2";
  * Only *minting* is runtime-selected.
  */
 export function selectPasswordAlgorithm(): PasswordAlgorithm {
-  // Read the globals through a cast rather than the ambient `process`/`navigator`
-  // bindings: this module compiles under `lib: ES2023` with only `@types/node`, and
-  // an edge runtime need not have either global at all. The optional chains below
-  // are therefore all genuinely optional.
-  const globals = globalThis as {
-    navigator?: { userAgent?: string };
-    process?: { versions?: { node?: string } };
-    WebSocketPair?: unknown;
-  };
-
-  // workerd, by two independent signals: the documented `navigator.userAgent`, and
-  // the `WebSocketPair` constructor. We check both because `navigator` is gated
-  // behind the `global_navigator` compat flag (only default on recent compat
-  // dates), whereas `WebSocketPair` is an ungated core Workers global that no
-  // Node/Bun/Deno runtime defines — so an older-compat-date Worker running
-  // `nodejs_compat` (which polyfills `process` and would otherwise look like Node
-  // below, then OOM on scrypt) is still caught here and routed to PBKDF2.
-  if (
-    globals.navigator?.userAgent === "Cloudflare-Workers" ||
-    globals.WebSocketPair !== undefined
-  ) {
-    return "pbkdf2";
-  }
+  // workerd first: it must never run memory-hard scrypt (the derive OOM-kills the
+  // 128 MB isolate), so an ambiguous-but-workerd runtime is routed to PBKDF2 here.
+  if (isWorkerd()) return "pbkdf2";
 
   // A genuine Node/Bun host exposes `process.versions.node`; scrypt is safe there.
   // Anything else — an unknown edge, a stripped runtime — falls to PBKDF2.
+  const globals = globalThis as { process?: { versions?: { node?: string } } };
+
   return globals.process?.versions?.node !== undefined ? "scrypt" : "pbkdf2";
 }

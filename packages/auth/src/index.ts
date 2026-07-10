@@ -26,9 +26,15 @@ export { hashPassword, needsRehash, verifyPassword } from "./password";
 // provides. Verification needs no such pin — `verifyPassword` already dispatches on
 // the stored hash's own prefix — but these shipped public in 0.1.4, so they stay.
 export { hashPasswordScrypt, needsRehashScrypt, verifyPasswordScrypt } from "./password-scrypt";
-export { hashPasswordWeb, needsRehashWeb, verifyPasswordWeb } from "./password-web";
+export {
+  EDGE_MAX_ITERATIONS,
+  hashPasswordWeb,
+  needsRehashWeb,
+  verifyPasswordWeb,
+} from "./password-web";
+export type { HashPasswordWebOptions } from "./password-web";
 
-export { selectPasswordAlgorithm } from "./runtime";
+export { isWorkerd, selectPasswordAlgorithm } from "./runtime";
 export type { PasswordAlgorithm } from "./runtime";
 
 export { sha256 } from "./hash";

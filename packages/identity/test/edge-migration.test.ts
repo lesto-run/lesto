@@ -94,6 +94,30 @@ function cheapScryptHash(password: string): string {
   return `scrypt$2$8$1$${salt.toString("hex")}$${key.toString("hex")}`;
 }
 
+// A VALID PBKDF2 hash at an ARBITRARY iteration count, mirroring `@lesto/auth`'s wire
+// format — the only way to construct a legacy over-ceiling (`600000`) row, which the
+// real minter now refuses to produce. Node's WebCrypto has no cap, so it derives fine.
+const toHex = (bytes: Uint8Array): string =>
+  [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+async function pbkdf2HashAt(password: string, iterations: number): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password) as Uint8Array<ArrayBuffer>,
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt: salt as Uint8Array<ArrayBuffer>, iterations },
+    keyMaterial,
+    32 * 8,
+  );
+
+  return `pbkdf2$sha256$${iterations}$${toHex(salt)}$${toHex(new Uint8Array(bits))}`;
+}
+
 // A PBKDF2-shaped decoy the fake hasher mints for the timing decoy — its content is
 // irrelevant (the fake's verify returns false for any non-scrypt hash).
 const DECOY_PBKDF2 = `pbkdf2$sha256$1$${"00".repeat(16)}$${"00".repeat(32)}`;
@@ -260,24 +284,49 @@ describe("pbkdf2MigrationHasher", () => {
     // Non-PBKDF2 (a migration candidate) is always stale → the login seam converts it.
     expect(pbkdf2MigrationHasher.needsRehash(cheapScryptHash("x"))).toBe(true);
     expect(pbkdf2MigrationHasher.needsRehash("scrypt$aa$bb")).toBe(true); // legacy form
-    // A current-cost PBKDF2 hash is NOT stale.
-    const pbkdf2AtCost = `pbkdf2$sha256$600000$${"00".repeat(16)}$${"00".repeat(32)}`;
+    // A current-cost PBKDF2 hash (100k — the edge ceiling) is NOT stale.
+    const pbkdf2AtCost = `pbkdf2$sha256$100000$${"00".repeat(16)}$${"00".repeat(32)}`;
     expect(pbkdf2MigrationHasher.needsRehash(pbkdf2AtCost)).toBe(false);
   });
 
-  it("converts a user's scrypt hash to PBKDF2 on their next successful login (convert-on-login)", async () => {
+  it("converts a user's scrypt hash to edge-safe (100k) PBKDF2 on their next successful login", async () => {
     const email = "migrate@node.test";
     await seedVerifiedUser(email, cheapScryptHash("correct horse battery staple"));
 
     // On Node, the migration hasher verifies the existing scrypt hash fine and the
-    // rehash-on-login seam re-mints it as edge-safe PBKDF2.
+    // rehash-on-login seam re-mints it as edge-safe PBKDF2 — pinned to the 100k edge
+    // ceiling so the hash it produces actually runs at the destination it migrates to.
     const identity = createIdentity(build({ hasher: pbkdf2MigrationHasher }));
     const { session } = await identity.login(email, "correct horse battery staple");
 
     expect(session.token).toBeTruthy();
 
     const after = await findUserByEmail(db, email);
-    expect(after?.passwordHash.startsWith("pbkdf2$sha256$600000$")).toBe(true);
+    expect(after?.passwordHash.startsWith("pbkdf2$sha256$100000$")).toBe(true);
+
+    // Convergence: the re-minted 100k hash is at cost, so a SECOND login does not
+    // re-mint it — no re-hash-on-every-login loop (which a `< target` baseline would
+    // have caused on the edge, where 100k can never reach a 600k target).
+    expect(pbkdf2MigrationHasher.needsRehash(after!.passwordHash)).toBe(false);
+    await identity.login(email, "correct horse battery staple");
+    const settled = await findUserByEmail(db, email);
+    expect(settled?.passwordHash).toBe(after?.passwordHash);
+  });
+
+  it("walks a legacy over-ceiling (600k) PBKDF2 row down to 100k on a Node login", async () => {
+    // A hybrid app that ran a pre-fix build may hold `pbkdf2$…$600000$…` rows: Node can
+    // still verify them (no cap), but the edge cannot derive them. The migration hasher
+    // re-mints them to the edge-runnable ceiling on the next login, draining the tail.
+    const email = "overcost@node.test";
+    await seedVerifiedUser(email, await pbkdf2HashAt("correct horse battery staple", 600_000));
+
+    const identity = createIdentity(build({ hasher: pbkdf2MigrationHasher }));
+    const { session } = await identity.login(email, "correct horse battery staple");
+
+    expect(session.token).toBeTruthy();
+
+    const after = await findUserByEmail(db, email);
+    expect(after?.passwordHash.startsWith("pbkdf2$sha256$100000$")).toBe(true);
   });
 });
 

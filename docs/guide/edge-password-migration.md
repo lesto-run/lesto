@@ -7,6 +7,16 @@ picks this automatically (see [`packages/auth/src/runtime.ts`](../../packages/au
 so a **greenfield** edge app — where the edge is the only thing that ever writes a
 hash — mints and reads only PBKDF2 and needs nothing from this guide.
 
+> **Edge PBKDF2 is pinned at 100,000 iterations.** Cloudflare Workers' WebCrypto
+> hard-rejects any PBKDF2 derive above 100k (`cloudflare/workerd#1346`, not raisable by
+> any compat flag), and that limit gates verifying as well as minting. So `@lesto/auth`
+> mints every `pbkdf2$…` hash at exactly 100k on **every** runtime — the format's whole
+> reason to exist is to run on the edge, so it stays edge-runnable by construction. 100k
+> SHA-256 is below OWASP-2023's 600k recommendation; it is the strongest PBKDF2 the edge
+> can run, and it sits behind a per-account `loginRateLimiter` and enumeration-safe login.
+> Node deployments get memory-hard **scrypt** via the default facade, so this floor
+> applies only to the edge-portable format, not to a Node-native deployment.
+
 This guide is for the other two cases: you have **existing `scrypt$…` hashes** and
 you want to run auth **on the edge**.
 
@@ -70,12 +80,21 @@ Find them and send an out-of-band **password-reset** email — the reset flow ne
 verifies the old hash, so it works on the edge and mints PBKDF2:
 
 ```sql
--- the blast radius: accounts still on a scrypt hash
-SELECT id, email FROM users WHERE password_hash LIKE 'scrypt$%';
+-- the blast radius: accounts the edge cannot verify. Two shapes:
+--   scrypt$…            — the classic Node-minted hash
+--   pbkdf2$sha256$6…    — a legacy OVER-CEILING PBKDF2 row (>100k iterations), minted
+--                         by a pre-fix build; also un-derivable on the edge and refused
+--                         with the same AUTH_KDF_UNAVAILABLE.
+SELECT id, email FROM users
+WHERE password_hash LIKE 'scrypt$%'
+   OR password_hash LIKE 'pbkdf2$sha256$6%';
 ```
 
-A completed reset self-heals that account. Keep `onUnverifiableHash` at its safe
-default (`"invalid_credentials"`) so login stays enumeration-clean throughout.
+A completed reset self-heals that account. A Node login through
+`pbkdf2MigrationHasher` also walks an over-ceiling `pbkdf2$…` row **down** to 100k
+automatically (the rehash-on-login seam), so the active tail drains without a reset.
+Keep `onUnverifiableHash` at its safe default (`"invalid_credentials"`) so login stays
+enumeration-clean throughout.
 
 ## Optional — an in-band reset prompt (a security trade-off)
 

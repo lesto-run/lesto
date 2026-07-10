@@ -19,7 +19,16 @@ export type AuthErrorCode =
    * `verifyPassword` refuses (throws this) BEFORE calling the KDF rather than crash;
    * the caller decides how to surface it (see `@lesto/identity` `onUnverifiableHash`).
    */
-  | "AUTH_KDF_UNAVAILABLE";
+  | "AUTH_KDF_UNAVAILABLE"
+  /**
+   * A caller asked {@link hashPasswordWeb} to mint at an iteration count this framework
+   * refuses to produce — non-positive, non-integer, or above `EDGE_MAX_ITERATIONS`
+   * (workerd's hard PBKDF2 ceiling; a hash above it cannot run on the edge, the only
+   * reason PBKDF2 is minted at all). Thrown at the MINT boundary, before any derive —
+   * a programming error, NOT caught by `@lesto/identity`'s login epilogue, so it
+   * surfaces loud rather than masquerading as an invalid-credentials failure.
+   */
+  | "AUTH_INVALID_ITERATIONS";
 
 /** Anything authentication can refuse to do. */
 export class AuthError extends LestoError<AuthErrorCode> {
