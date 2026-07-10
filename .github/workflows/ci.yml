@@ -46,19 +46,49 @@ jobs:
       # not a fixed dir glob) so coverage grows with the repo; today that is the four scripts/dev/
       # scripts. NUL-delimited (`-z`/`-0`) to be filename-safe.
       #
-      #   - `bash -n` is the zero-install floor: a pure parse/syntax check over every script,
-      #     independent of any tool being present on the runner.
-      #   - `shellcheck` is the real lint (unquoted expansions, fail-open `$?` patterns, …).
-      #     It is PRE-INSTALLED on GitHub's `ubuntu-latest` image, so no install step is needed;
-      #     it reads each shebang (release.sh is bash, the rest are sh) and runs at its default
-      #     severity. Scripts verified clean at 0.11.0, so a new finding fails the build.
-      #     ⚠️ TRADE-OFF (accepted; pin follow-up L-fa5c444c): the shellcheck VERSION floats with
-      #     the runner image — a future image bump can promote a new default-severity check that
-      #     reds an UNRELATED PR, and since release.sh's PRECONDITION #1 gates on ci.yml green that
-      #     blocks releases until quieted. It fails CLOSED (never ships bad code); pin the tool to
-      #     remove the drift.
+      #   - `bash -n` is the zero-install floor: a pure parse/syntax check over every script. KEPT
+      #     because it runs FIRST and needs nothing installed — so even if the pinned-shellcheck
+      #     download below is unreachable (a GitHub-releases outage) you still get a syntax check.
+      #     Caveat: it parses the three `#!/bin/sh` scripts as bash, but bash is a near-superset for
+      #     PARSE purposes, so as a syntax smoke test that dialect gap is acceptable; shellcheck
+      #     (which reads each shebang) is the dialect-correct lint below.
+      #   - `shellcheck` is the real lint (unquoted expansions, fail-open `$?` patterns, …), run at
+      #     its DEFAULT severity — every default finding is BLOCKING, the correct strictness for the
+      #     publish-path scripts and deliberately NOT softened. The scripts are verified clean at
+      #     0.11.0, so a new finding fails the build.
+      #     PINNED + checksum-verified (L-fa5c444c): we do NOT use the `ubuntu-latest` bundled
+      #     shellcheck, whose version FLOATS with the runner image. A floating bump can promote a
+      #     new default-severity check that reds an UNRELATED PR, and since release.sh's
+      #     PRECONDITION #1 and release.yml's gate both refuse to publish unless ci.yml concluded
+      #     success, that would block ALL releases (and main) until someone quiets the finding — it
+      #     fails CLOSED (never ships bad code) but the blast radius is "no releases". Pinning makes
+      #     the lint result reproducible: it changes only when we change the two literals in the
+      #     install step, never under us. MECHANISM: we download the official release tarball
+      #     straight from koalaman/shellcheck and verify its sha256 BEFORE executing —
+      #     deliberately NOT a third-party marketplace action (e.g. ludeeus/action-shellcheck),
+      #     which would add someone else's code to the supply chain of a workflow that
+      #     provenance-signs releases and secret-scans outgoing commits. This is the smallest
+      #     trusted-computing-base that is still fully reproducible. TO BUMP: change
+      #     SHELLCHECK_VERSION + SHELLCHECK_SHA256 together (the sha256 is published as the asset
+      #     digest at github.com/koalaman/shellcheck/releases) and re-verify the scripts are clean.
       - name: Shell-syntax check (bash -n) over tracked *.sh
         run: git ls-files -z '*.sh' | xargs -0 -r -n1 bash -n
+
+      # Install the pinned shellcheck (rationale above): fetch the exact release tarball, verify its
+      # digest, then prepend it to PATH so the lint step below resolves THIS binary, not the runner
+      # image's. GitHub's default run shell is `bash -eo pipefail`, so a digest mismatch
+      # (`sha256sum -c`) or a failed download (`curl -f`) fails the job — fail-closed by design.
+      - name: Install pinned shellcheck
+        env:
+          SHELLCHECK_VERSION: "0.11.0"
+          SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+        run: |
+          url="https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/shellcheck.tar.xz" "$url"
+          echo "${SHELLCHECK_SHA256}  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" --version
+          echo "$RUNNER_TEMP/shellcheck-v${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
 
       - name: Shell lint (shellcheck) over tracked *.sh
         run: git ls-files -z '*.sh' | xargs -0 -r shellcheck
