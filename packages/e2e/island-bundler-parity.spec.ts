@@ -51,14 +51,17 @@ import { linkWorkspaceInto } from "./link-workspace";
  * racing browser request 504'd on the now-stale pre-bundle hash. Pre-declaring it collapses
  * THIS fixture's cold start to one optimizer pass, so its Vite leg no longer re-optimizes.
  *
- * SCOPE, honestly: that removes the re-optimize for the FRAMEWORK runtime graph, not for every
- * app — an island importing a node_modules package that is not pre-bundled is still discovered
- * mid-crawl and can still 504 on cold start (tracked as a follow-up). And this leg is only a
- * BEST-EFFORT smoke for that: the load-bearing, deterministic guard against the specific
- * regression is the unit assertion that every alias target is pre-bundled
- * (`packages/assets/test/vite-alias.test.ts`). The leg below is kept single-LOAD (the reload
- * crutch is gone) because that is the honest shape of the parity claim, not because it reliably
- * catches the race.
+ * SCOPE, honestly: that removed the re-optimize for the FRAMEWORK runtime graph only. The rest
+ * of it — an island (or the entry itself) importing an ordinary node_modules package, which the
+ * scanner never saw because `appType: "custom"` + a virtual entry left `optimizeDeps.entries`
+ * matching nothing — was closed separately by `@lesto/island-dev`'s `scanEntrySource`
+ * (L-90d2de01). This leg remains only a BEST-EFFORT smoke for either. The load-bearing,
+ * deterministic guards are unit/integration assertions: that every alias target is pre-bundled
+ * (`packages/assets/test/vite-alias.test.ts`) and that a cold start over an island graph reaching
+ * third-party npm packages settles in exactly ONE optimizer pass
+ * (`packages/island-dev/test/vite.optimize-deps.integration.test.ts`). The leg below is kept
+ * single-LOAD (the reload crutch is gone) because that is the honest shape of the parity claim,
+ * not because it reliably catches the race.
  */
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");

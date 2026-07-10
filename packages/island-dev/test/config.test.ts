@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { viteIslandConfig } from "../src/config";
+import { SCAN_ENTRY_PATH } from "../src/entry";
 
 const base = { root: "/proj", vitePort: 24677, hmrPort: 24678 } as const;
 
@@ -61,6 +62,19 @@ describe("viteIslandConfig", () => {
     expect(config.resolve.dedupe).toEqual(["preact"]);
     expect(config.optimizeDeps.include).toContain("preact/compat");
     expect(config.optimizeDeps.include).toContain("preact/compat/client");
+  });
+
+  it("seeds the dep scanner with the on-disk entry twin, for every dialect", () => {
+    // `appType: "custom"` + a virtual entry means Vite's default `optimizeDeps.entries`
+    // (`**\/*.html`) matches nothing, so the scanner never runs and every npm package the
+    // island graph reaches beyond `include` forces a second optimizer pass (L-90d2de01).
+    // The path is root-RELATIVE: Vite globs `entries` against `config.root`.
+    for (const dialect of ["react", "preact"] as const) {
+      const config = viteIslandConfig({ ...base, dialect });
+
+      expect(config.optimizeDeps.entries).toEqual([SCAN_ENTRY_PATH]);
+      expect(SCAN_ENTRY_PATH.startsWith("/")).toBe(false);
+    }
   });
 
   it("inlines the verified public-env define as a copy", () => {

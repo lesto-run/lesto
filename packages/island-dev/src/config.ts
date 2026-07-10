@@ -24,6 +24,7 @@ import { dialectRuntimeDeps, preactAliases } from "@lesto/assets";
 import type { PublicEnvDefine } from "@lesto/assets";
 
 import type { IslandDialect } from "./dialect";
+import { SCAN_ENTRY_PATH } from "./entry";
 import { VITE_BASE } from "./paths";
 
 /** One anchored module-resolution alias (the preact dialect's `react` → `preact/compat`). */
@@ -76,12 +77,22 @@ export interface ViteIslandConfig {
   readonly define: Record<string, string>;
 
   /**
-   * Pre-bundle the dialect's client runtime so Vite optimizes it ONCE rather than
-   * re-discovering it on the first island request. `include` is a plain `string[]`
-   * (not `readonly`) because Vite's `DepOptimizationOptions.include` is mutable — this
-   * narrow config spreads straight into the real `InlineConfig` ({@link viteIslandConfig}).
+   * How Vite pre-bundles the island graph's npm dependencies, on both of its levers:
+   *
+   *   - `include` names the dialect's client runtime, so Vite optimizes it ONCE rather
+   *     than re-discovering it on the first island request.
+   *   - `entries` points Vite's dep SCANNER at the on-disk twin of the synthesized entry
+   *     ({@link SCAN_ENTRY_PATH}). Without it the scanner's default (`**\/*.html`) matches
+   *     nothing — this server has no `index.html` — so the scanner never runs and EVERY
+   *     npm package beyond `include` is a mid-crawl discovery that forces a second
+   *     optimizer pass and can 504 a racing island request (L-90d2de01). With it, the
+   *     scan and the crawl see one graph and cold start settles in a single pass.
+   *
+   * Both are plain `string[]` (not `readonly`) because Vite's `DepOptimizationOptions`
+   * fields are mutable — this narrow config spreads straight into the real `InlineConfig`
+   * ({@link viteIslandConfig}).
    */
-  readonly optimizeDeps: { readonly include: string[] };
+  readonly optimizeDeps: { readonly include: string[]; readonly entries: string[] };
 
   /**
    * Module resolution. `alias` is empty for `react`, the anchored preact/compat map for
@@ -138,7 +149,7 @@ export function viteIslandConfig(options: ViteIslandConfigOptions): ViteIslandCo
       hmr: { port: options.hmrPort },
     },
     define: options.publicEnvDefine === undefined ? {} : { ...options.publicEnvDefine },
-    optimizeDeps: { include: runtime.include },
+    optimizeDeps: { include: runtime.include, entries: [SCAN_ENTRY_PATH] },
     resolve: {
       alias: options.dialect === "preact" ? preactAliases() : [],
       dedupe: runtime.dedupe,

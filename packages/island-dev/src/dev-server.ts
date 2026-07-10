@@ -25,7 +25,7 @@ import { viteIslandConfig } from "./config";
 import type { ViteIslandConfig } from "./config";
 import { dialectPluginSpec } from "./dialect";
 import type { DialectPluginSpec } from "./dialect";
-import { devEntrySource } from "./entry";
+import { devEntrySource, scanEntrySource } from "./entry";
 import { IslandDevError } from "./errors";
 import { isViteOwnedPath } from "./paths";
 
@@ -58,6 +58,13 @@ export interface CreateBackendRequest {
 
   /** The synthesized dev entry source Vite serves at `/client.js`. */
   readonly entrySource: string;
+
+  /**
+   * The same entry, specifier-rewritten for Vite's dep scanner. The backend writes it to
+   * `SCAN_ENTRY_PATH` before starting Vite, which reads it via `optimizeDeps.entries`
+   * (see `scanEntrySource` — it is never served).
+   */
+  readonly scanEntrySource: string;
 
   /** The matched-pair plugin the backend must instantiate (ADR 0008). */
   readonly pluginSpec: DialectPluginSpec;
@@ -145,6 +152,7 @@ export async function createIslandDevServer(
   const backend = await startBackend(deps, {
     config,
     entrySource: devEntrySource(islands),
+    scanEntrySource: scanEntrySource(options.root, islands),
     pluginSpec,
   });
 

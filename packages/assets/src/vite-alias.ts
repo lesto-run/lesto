@@ -95,10 +95,11 @@ export function preactAliases(): readonly DialectAlias[] {
  * ("Outdated Optimize Dep") on the now-stale hash — the island misses first hydration, and
  * Vite's recovery (an HMR full-reload) races the WS connect and can lose on cold start
  * (L-4027e1f0). Naming the FRAMEWORK runtime here removes that discovery for the runtime
- * half of every island graph. It does NOT close the class: an app island importing a
- * node_modules package that is not pre-bundled is still a mid-crawl discovery on cold
- * start, exactly as in stock Vite (tracked separately — see the `optimizeDeps.entries`
- * scanner-seeding follow-up; a naive `entries` glob was measured WORSE, so it needs care).
+ * half of every island graph. The other half — an app island (or the entry itself) importing
+ * an ordinary node_modules package — is closed by `@lesto/island-dev`'s `scanEntrySource`
+ * (L-90d2de01), which seeds Vite's dep SCANNER with an on-disk twin of the synthesized
+ * entry, so the scan and the crawl see one graph. `include` and that scan seed are the two
+ * halves of ONE guarantee: a cold `lesto dev` settles in a single optimizer pass.
  *
  * The preact `include` is DERIVED from {@link PREACT_ALIAS}'s targets rather than restated:
  * every alias target must be pre-bundled (`react-dom/client` → `preact/compat/client` is

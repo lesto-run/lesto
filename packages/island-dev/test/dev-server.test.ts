@@ -90,6 +90,14 @@ describe("createIslandDevServer", () => {
     expect(requests[0]?.config.server.port).toBe(24677);
     expect(requests[0]?.config.resolve.alias).toEqual([]);
 
+    // …and the scan-only twin the backend writes for Vite's dep scanner: the SAME island,
+    // reached by a RELATIVE specifier — an absolute one is invisible to the scanner, which
+    // externalizes any specifier that resolves to itself.
+    expect(requests[0]?.scanEntrySource).toMatch(
+      /import Island0 from "\.\.?\/[^"]*app\/islands\/counter\.tsx"/,
+    );
+    expect(requests[0]?.scanEntrySource).not.toContain('"/abs/app/islands/counter.tsx"');
+
     // ownsPath is the shared predicate (everything under the Vite base; not app routes).
     expect(server.ownsPath("/@lesto-dev/client.js")).toBe(true);
     expect(server.ownsPath("/about")).toBe(false);

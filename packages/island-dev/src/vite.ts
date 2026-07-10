@@ -16,22 +16,27 @@
  *
  * The synthesized entry is served at `/client.js` via a virtual-module plugin, so the
  * app's existing `<script src="/client.js">` is the Fast-Refresh-transformed entry
- * with no HTML change.
+ * with no HTML change. Before Vite starts, `writeScanEntry` lands that same entry on
+ * DISK for Vite's dep scanner to seed from (a virtual module is invisible to it) — the
+ * one thing here that must happen ahead of `createServer`.
  *
  * NOTE (un-runnable in the build sandbox): the live HMR round-trip — an island edit
  * preserving `useState` — needs a real `lesto dev` + browser, which cannot bind ports
- * here. The Vite TRANSFORM is verifiable in-process (see the integration test). Known
- * risks to validate in e2e: Vite's HMR-WS Origin check across ports, `optimizeDeps`
- * tuning for the workspace `@lesto/*` packages, and the `@prefresh/vite` preamble.
+ * here. The Vite TRANSFORM is verifiable in-process (see the integration test), as is
+ * the cold-start optimizer pass count (`vite.optimize-deps.integration.test.ts`, which
+ * drives `writeScanEntry` + `createServer` in `middlewareMode`). Known risks to validate
+ * in e2e: Vite's HMR-WS Origin check across ports and the `@prefresh/vite` preamble.
  */
 
 import { bunBuildClientDeps, resolveInstalledPackage } from "@lesto/assets";
 import type { HandleOptions, LestoResponse } from "@lesto/web";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createServer } from "vite";
 import type { InlineConfig, Plugin, PluginOption } from "vite";
 
 import type { CreateBackendRequest, IslandDevBackend, IslandDevDeps } from "./dev-server";
+import { SCAN_ENTRY_PATH } from "./entry";
 import { ENTRY_PATH } from "./paths";
 import { proxyHeaders, viteQuery } from "./proxy";
 
@@ -117,8 +122,29 @@ async function proxyToVite(
   };
 }
 
+/**
+ * Write the scan-only entry twin Vite's dep scanner reads (`optimizeDeps.entries`).
+ *
+ * It MUST land before `createServer`: the scanner globs `entries` during the optimizer's
+ * boot scan, and `computeEntries` silently drops any entry that does not yet `existsSync`
+ * — a missing file degrades to the very "scanner never runs" state this closes, without
+ * an error. Rewritten every boot, so a changed island set can never leave a stale graph.
+ *
+ * Exported (the only thing this coverage-excluded edge exports beyond the deps factory)
+ * so `vite.optimize-deps.integration.test.ts` seeds the scanner through the SAME code the
+ * dev boot runs — a test that computed the path itself could not catch it drifting here.
+ */
+export function writeScanEntry(root: string, source: string): void {
+  const file = join(root, SCAN_ENTRY_PATH);
+
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, source, "utf8");
+}
+
 /** Stand up the real Vite server and wrap it as an {@link IslandDevBackend}. */
 async function createViteBackend(request: CreateBackendRequest): Promise<IslandDevBackend> {
+  writeScanEntry(request.config.root, request.scanEntrySource);
+
   const server = await createServer(await inlineConfig(request));
 
   // `createServer` builds the server but does not bind; listen so the CLI proxy can
