@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import { PREACT_ALIAS } from "../src/preact-alias";
 import { dialectRuntimeDeps, preactAliases } from "../src/vite-alias";
 
 describe("preactAliases", () => {
@@ -76,13 +77,26 @@ describe("dialectRuntimeDeps", () => {
       dedupe: ["preact"],
       include: [
         "preact",
+        "preact/hooks",
         "preact/compat",
         // `preact/compat/client` is the `react-dom/client` alias target the dev entry
         // imports; without it the first island request re-optimizes and 504s (L-4027e1f0).
         "preact/compat/client",
-        "preact/hooks",
         "preact/jsx-runtime",
       ],
     });
+  });
+
+  // The PROPERTY the literal list above only incidentally encodes — and the one that
+  // actually broke (L-4027e1f0): an alias rewrites a specifier BEFORE optimization, so a
+  // target Vite never pre-bundles gets discovered mid-crawl → re-optimize → 504. This
+  // fails the moment someone adds a PREACT_ALIAS entry without pre-bundling its target,
+  // which a `toEqual` on the current list can never catch.
+  it("pre-bundles every react→preact alias target", () => {
+    const { include } = dialectRuntimeDeps("preact");
+
+    for (const target of Object.values(PREACT_ALIAS)) {
+      expect(include).toContain(target);
+    }
   });
 });

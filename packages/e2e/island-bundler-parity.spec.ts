@@ -49,9 +49,16 @@ import { linkWorkspaceInto } from "./link-workspace";
  * `preact/compat/client` (the `react-dom/client` alias target the dev hydration entry imports),
  * so the first island request discovered it mid-crawl, Vite re-ran the dep optimizer, and the
  * racing browser request 504'd on the now-stale pre-bundle hash. Pre-declaring it collapses
- * cold start to ONE optimizer pass (one uniform hash) — no re-optimize, so no "Outdated Optimize
- * Dep" 504 is possible. The Vite leg below therefore asserts single-LOAD hydration with no
- * recovery reload (the reload crutch that masked this is gone).
+ * THIS fixture's cold start to one optimizer pass, so its Vite leg no longer re-optimizes.
+ *
+ * SCOPE, honestly: that removes the re-optimize for the FRAMEWORK runtime graph, not for every
+ * app — an island importing a node_modules package that is not pre-bundled is still discovered
+ * mid-crawl and can still 504 on cold start (tracked as a follow-up). And this leg is only a
+ * BEST-EFFORT smoke for that: the load-bearing, deterministic guard against the specific
+ * regression is the unit assertion that every alias target is pre-bundled
+ * (`packages/assets/test/vite-alias.test.ts`). The leg below is kept single-LOAD (the reload
+ * crutch is gone) because that is the honest shape of the parity claim, not because it reliably
+ * catches the race.
  */
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -165,15 +172,16 @@ test("the Vite-served island (lesto dev path) hydrates the same source", async (
   const counter = page.locator('[data-testid="counter"]');
 
   await page.goto(`${VITE_URL}/`);
-  // The SSR fallback paints "count: 0" immediately; the island then hydrates on this SAME load
-  // (no recovery reload — L-4027e1f0 removed the cold-start 504 at the source, see file header).
+  // NB: the SSR FALLBACK also paints "count: 0", so this asserts the page rendered — it does
+  // NOT prove hydration. Only the click below can distinguish a hydrated island from a dead one.
   await expect(counter).toHaveText("count: 0");
 
   // Retry only the CLICK — never a page reload. Under two dev servers' doubled CPU the first
   // cold optimize still adds latency, so the island may not be interactive the instant the
-  // fallback paints; once it is, a click sticks and count → 1. Crucially, if it NEVER hydrates
-  // on this load (the bug), no amount of clicking reaches "count: 1" and this fails — the real
-  // single-load regression guard the reload crutch could not be.
+  // fallback paints; once it is, a click sticks and count → 1. This is a best-effort smoke, not
+  // a reliable race detector: if the cold-start 504 ever returns, Vite's own full-reload can
+  // still rescue the page mid-retry and this would pass anyway (which is why the deterministic
+  // guard lives in the unit tests — see the file header).
   await expect(async () => {
     await counter.click();
     await expect(counter).toHaveText("count: 1", { timeout: 1_000 });
