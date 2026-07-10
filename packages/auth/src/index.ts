@@ -32,7 +32,6 @@ export {
   needsRehashWeb,
   verifyPasswordWeb,
 } from "./password-web";
-export type { HashPasswordWebOptions } from "./password-web";
 
 export { isWorkerd, selectPasswordAlgorithm } from "./runtime";
 export type { PasswordAlgorithm } from "./runtime";

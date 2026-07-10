@@ -31,7 +31,19 @@ export type PasswordAlgorithm = "scrypt" | "pbkdf2";
  *
  * This is the single probe both the algorithm choice AND the PBKDF2 iteration
  * ceiling read from — the edge is the runtime whose WebCrypto hard-caps PBKDF2
- * iterations (see `./password-web` `EDGE_MAX_ITERATIONS`).
+ * iterations (see `./password-web` `EDGE_MAX_ITERATIONS`). That second role cuts
+ * BOTH ways: a false "workerd" on a real Node host is no longer merely suboptimal —
+ * it mints weaker 100k PBKDF2 AND makes `verifyPassword` REFUSE every scrypt row
+ * with `AUTH_KDF_UNAVAILABLE`, failing every existing login. So the probe is
+ * deliberately hardened against the inverse of the `nodejs_compat` trap: a
+ * Cloudflare polyfill/ponyfill/bundler shim leaking `WebSocketPair` into a NODE
+ * host's global scope.
+ *
+ * ⚠️ Deployment invariant: a Node deployment must NOT leak a Cloudflare shim's
+ * `WebSocketPair` into global scope. The brand check below defends modern hosts
+ * (Node ≥ 21 brands `navigator.userAgent` as `Node.js/NN`), but on an unbranded
+ * host (Node ≤ 20) a leaked global that is a real constructor is
+ * indistinguishable from workerd and will flip this probe.
  */
 export function isWorkerd(): boolean {
   // Read the globals through a cast rather than the ambient `navigator` binding:
@@ -42,9 +54,22 @@ export function isWorkerd(): boolean {
     WebSocketPair?: unknown;
   };
 
-  return (
-    globals.navigator?.userAgent === "Cloudflare-Workers" || globals.WebSocketPair !== undefined
-  );
+  const userAgent = globals.navigator?.userAgent;
+
+  // A branded runtime is authoritative in BOTH directions. workerd's brand is the
+  // documented "Cloudflare-Workers" and nothing else (substring-matched only to
+  // tolerate a hypothetical future version suffix), while Node ≥ 21, Bun, Deno,
+  // and browsers all brand themselves otherwise (`Node.js/22`, `Bun/1.x`, …) —
+  // none of which is workerd even if a Cloudflare shim planted `WebSocketPair`
+  // in global scope.
+  if (typeof userAgent === "string") return userAgent.includes("Cloudflare-Workers");
+
+  // Unbranded host (older-compat-date workerd has no `navigator`; neither does
+  // Node ≤ 20): probe the ungated core Workers global. Require a real CONSTRUCTOR
+  // — `typeof … === "function"`, not merely "defined" — so a types package or
+  // half-baked polyfill that plants a non-callable placeholder cannot flip a Node
+  // host into edge mode.
+  return typeof globals.WebSocketPair === "function";
 }
 
 /**

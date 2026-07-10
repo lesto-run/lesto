@@ -8,6 +8,7 @@ import {
   hashPassword,
   hashPasswordScrypt,
   hashPasswordWeb,
+  isWorkerd,
   needsRehash,
   needsRehashWeb,
   selectPasswordAlgorithm,
@@ -24,12 +25,19 @@ const VALID_KEY = hexOf(32);
 const toHex = (bytes: Uint8Array): string =>
   [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
+// A constructor-shaped WebSocketPair stub, matching the real workerd global — the
+// hardened probe requires `typeof === "function"`, not merely "defined".
+function WebSocketPairStub(): void {
+  // Intentionally empty: only the constructor SHAPE matters to the runtime probe.
+}
+
 // Mint a PBKDF2 hash directly with an ARBITRARY iteration count, mirroring the
-// module's own format. This is the only way to construct hashes the real minter now
-// refuses to produce — a legacy over-ceiling (`600000`) row, or a sub-ceiling aged
-// row — so we can drive the verify-guard, rehash-walk, and lower-cost-verify paths.
-// The real minter is exercised directly elsewhere (the `{ iterations }` override), so
-// this fixture is not the only witness to the wire format.
+// module's own format. The real minter is pinned to the edge ceiling (deliberately —
+// see hashPasswordWeb's JSDoc), so this is the only way to construct the fixtures the
+// verify-guard, rehash-walk, and lower-cost-verify paths need: a legacy over-ceiling
+// (`600000`) row, or a sub-ceiling aged row. Not a vacuous mirror: every fixture is
+// cross-checked against the REAL code path, because `verifyPasswordWeb` re-parses and
+// re-derives it — a fixture that drifted from the wire format would verify false.
 async function pbkdf2Hash(password: string, iterations: number): Promise<string> {
   const encoder = new TextEncoder();
   const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -75,35 +83,6 @@ describe("hashPasswordWeb / verifyPasswordWeb", () => {
     // pass for any under-cost mint too — the divergence is "minted ABOVE the cap", and
     // only `=== ceiling` catches a regression back toward 600k.)
     expect(iterations).toBe(EDGE_MAX_ITERATIONS);
-  });
-
-  it("mints at a lower cost through the real path when asked (options.iterations)", async () => {
-    const stored = await hashPasswordWeb("cheap", { iterations: 1000 });
-
-    expect(stored.startsWith("pbkdf2$sha256$1000$")).toBe(true);
-    expect(await verifyPasswordWeb("cheap", stored)).toBe(true);
-    expect(await verifyPasswordWeb("wrong", stored)).toBe(false);
-  });
-
-  it("refuses to mint an iteration count above the edge ceiling — loud, on Node too", async () => {
-    // The refusal fires on Node (no workerd stub): a >ceiling pbkdf2 hash can never run
-    // on the edge, so it is wrong wherever it is born. This is what makes the ceiling
-    // Node-testable — the same refusal the platform would give, without a real Worker.
-    await expect(
-      hashPasswordWeb("x", { iterations: EDGE_MAX_ITERATIONS + 1 }),
-    ).rejects.toMatchObject({ name: "AuthError", code: "AUTH_INVALID_ITERATIONS" });
-
-    await expect(hashPasswordWeb("x", { iterations: 600_000 })).rejects.toMatchObject({
-      code: "AUTH_INVALID_ITERATIONS",
-    });
-  });
-
-  it("refuses to mint a non-positive / non-integer iteration count", async () => {
-    for (const iterations of [0, -5, 1.5, Number.NaN]) {
-      await expect(hashPasswordWeb("x", { iterations })).rejects.toMatchObject({
-        code: "AUTH_INVALID_ITERATIONS",
-      });
-    }
   });
 
   it("rejects the wrong password", async () => {
@@ -183,11 +162,24 @@ describe("verifyPasswordWeb — refuses an over-ceiling hash on the edge", () =>
     const legacy = await pbkdf2Hash("legacy password", 600_000);
 
     vi.stubGlobal("navigator", undefined);
-    vi.stubGlobal("WebSocketPair", {});
+    // A real workerd exposes WebSocketPair as a CONSTRUCTOR — the probe requires it.
+    vi.stubGlobal("WebSocketPair", WebSocketPairStub);
 
     await expect(verifyPasswordWeb("legacy password", legacy)).rejects.toMatchObject({
       code: "AUTH_KDF_UNAVAILABLE",
     });
+  });
+
+  it("does NOT refuse on a host where WebSocketPair is defined but not callable", async () => {
+    // The inverse trap: a types package / half-baked Cloudflare shim planting a
+    // non-constructor `WebSocketPair` on a Node host must NOT flip the runtime probe —
+    // otherwise every over-ceiling row (and every scrypt row) starts failing logins.
+    const legacy = await pbkdf2Hash("legacy password", 600_000);
+
+    vi.stubGlobal("navigator", undefined);
+    vi.stubGlobal("WebSocketPair", {});
+
+    expect(await verifyPasswordWeb("legacy password", legacy)).toBe(true);
   });
 
   it("verifies that same >100k hash normally on Node — the guard is runtime-conditional", async () => {
@@ -238,11 +230,22 @@ describe("selectPasswordAlgorithm", () => {
   });
 
   it("picks pbkdf2 on workerd via WebSocketPair even with no navigator flag", () => {
-    // An older-compat-date Worker has no `navigator`, but always has `WebSocketPair`.
+    // An older-compat-date Worker has no `navigator`, but always has the
+    // `WebSocketPair` constructor.
     vi.stubGlobal("navigator", undefined);
-    vi.stubGlobal("WebSocketPair", {});
+    vi.stubGlobal("WebSocketPair", WebSocketPairStub);
 
     expect(selectPasswordAlgorithm()).toBe("pbkdf2");
+  });
+
+  it("picks scrypt on a branded Node host even when a Cloudflare shim leaked WebSocketPair", () => {
+    // The availability trap: a polyfill/bundler shim defining a REAL WebSocketPair
+    // constructor on Node ≥ 21. The runtime's own brand outranks the leaked global —
+    // otherwise Node would mint weaker PBKDF2 and refuse every scrypt row.
+    vi.stubGlobal("navigator", { userAgent: "Node.js/22" });
+    vi.stubGlobal("WebSocketPair", WebSocketPairStub);
+
+    expect(selectPasswordAlgorithm()).toBe("scrypt");
   });
 
   it("picks scrypt on a Node-like host with no navigator", () => {
@@ -270,6 +273,54 @@ describe("selectPasswordAlgorithm", () => {
     vi.stubGlobal("process", { versions: {} });
 
     expect(selectPasswordAlgorithm()).toBe("pbkdf2");
+  });
+});
+
+describe("isWorkerd — the hardened runtime probe", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("is true on a branded Worker (navigator.userAgent = Cloudflare-Workers)", () => {
+    vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
+
+    expect(isWorkerd()).toBe(true);
+  });
+
+  it("is true on an unbranded host exposing the WebSocketPair constructor", () => {
+    vi.stubGlobal("navigator", undefined);
+    vi.stubGlobal("WebSocketPair", WebSocketPairStub);
+
+    expect(isWorkerd()).toBe(true);
+  });
+
+  it("is false when WebSocketPair is defined but not a constructor (a leaked placeholder)", () => {
+    vi.stubGlobal("navigator", undefined);
+    vi.stubGlobal("WebSocketPair", {});
+
+    expect(isWorkerd()).toBe(false);
+  });
+
+  it("is false on a branded non-workerd host even with a real WebSocketPair constructor", () => {
+    // The brand is authoritative in both directions: Node ≥ 21 / Bun / Deno all set a
+    // non-Cloudflare userAgent, so a leaked shim constructor cannot flip the probe.
+    vi.stubGlobal("navigator", { userAgent: "Node.js/22" });
+    vi.stubGlobal("WebSocketPair", WebSocketPairStub);
+
+    expect(isWorkerd()).toBe(false);
+  });
+
+  it("still verifies a scrypt row on a shimmed Node host — logins keep working", async () => {
+    // End-to-end witness for the availability risk: before the hardening, this exact
+    // environment (Node + a Cloudflare shim's WebSocketPair in global scope) made
+    // verifyPassword throw AUTH_KDF_UNAVAILABLE for every scrypt row.
+    vi.stubGlobal("navigator", { userAgent: "Node.js/22" });
+    vi.stubGlobal("WebSocketPair", WebSocketPairStub);
+
+    const stored = scryptHashOf("still logs in");
+
+    expect(await verifyPassword("still logs in", stored)).toBe(true);
+    expect(await verifyPassword("wrong password", stored)).toBe(false);
   });
 });
 

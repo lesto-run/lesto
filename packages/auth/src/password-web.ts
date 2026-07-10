@@ -223,38 +223,6 @@ function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 /**
- * Refuse — loudly, before any derive — an iteration count we must never mint.
- *
- * The guard runs on EVERY runtime, not just workerd: a `pbkdf2$…` hash above the
- * {@link EDGE_MAX_ITERATIONS} ceiling can never fulfil the format's invariant (it
- * cannot run on the edge), so it is semantically wrong wherever it is born. Throwing
- * on Node too is what makes the ceiling Node-testable — a Node test passing
- * `{ iterations: 600_000 }` gets the exact refusal the edge platform would give,
- * without a real Worker. A silent clamp would hand the caller a false strength
- * belief, so this is a thrown {@link AuthError}, not a `Math.min`.
- */
-function assertMintableIterations(iterations: number): void {
-  if (!isPositiveInteger(iterations) || iterations > EDGE_MAX_ITERATIONS) {
-    throw new AuthError(
-      "AUTH_INVALID_ITERATIONS",
-      `PBKDF2 iterations must be a positive integer ≤ ${EDGE_MAX_ITERATIONS} (the edge ceiling); got ${iterations}.`,
-      { iterations, max: EDGE_MAX_ITERATIONS },
-    );
-  }
-}
-
-/** Tuning knobs for {@link hashPasswordWeb}. */
-export interface HashPasswordWebOptions {
-  /**
-   * Iterations to mint under, overriding the default ({@link EDGE_MAX_ITERATIONS}).
-   * Must be a positive integer at or below the edge ceiling or the call throws
-   * `AUTH_INVALID_ITERATIONS` — the edge cannot derive above it. Mostly for tests
-   * (mint a cheap hash through the real code path).
-   */
-  readonly iterations?: number;
-}
-
-/**
  * Hash a password with a fresh random salt under the current PBKDF2 cost.
  *
  * The returned string is self-describing — it carries the digest tag, the iteration
@@ -262,18 +230,19 @@ export interface HashPasswordWebOptions {
  * the candidate and the stored value. Salt generation runs inside the call (request
  * scope), never at module load, because a Worker forbids randomness in global scope.
  *
- * The cost defaults to {@link EDGE_MAX_ITERATIONS} and can be lowered via
- * `options.iterations`; it can never be raised above the edge ceiling — a request
- * to do so throws `AUTH_INVALID_ITERATIONS` rather than mint a hash the edge cannot
- * derive.
+ * The cost is pinned to {@link EDGE_MAX_ITERATIONS} and is deliberately NOT
+ * configurable. Upward is impossible — the edge cannot derive above the ceiling, and
+ * an over-ceiling `pbkdf2$…` hash violates the format's whole reason to exist.
+ * Downward is a footgun with no honest use: it is strictly weaker against an offline
+ * crack, and {@link needsRehashWeb}'s `!==` check silently walks any cheaper hash
+ * back up to the pinned target on the next login, so the "savings" self-revert on
+ * the very path a CPU-constrained caller was trying to protect. Tests that need a
+ * hash at a different cost mint one directly against the wire format (see the
+ * `pbkdf2Hash` fixture in `test/password-web.test.ts`), which `verifyPasswordWeb`
+ * round-trips cross-check against this real path.
  */
-export async function hashPasswordWeb(
-  password: string,
-  options?: HashPasswordWebOptions,
-): Promise<string> {
-  const iterations = options?.iterations ?? DEFAULT_ITERATIONS;
-
-  assertMintableIterations(iterations);
+export async function hashPasswordWeb(password: string): Promise<string> {
+  const iterations = DEFAULT_ITERATIONS;
 
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
 
