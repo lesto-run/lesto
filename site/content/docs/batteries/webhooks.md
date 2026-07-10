@@ -65,31 +65,52 @@ delivery goes out unsigned (no `x-lesto-signature` header).
 
 ## Verify an inbound webhook
 
-On the receiving side, `verify` recomputes the HMAC and compares in constant
-time. Because the deliverer signs `${timestamp}.${body}`, you **must** pass the
-timestamp from the `x-lesto-timestamp` header — without it the check fails on
-every real webhook. Passing it also enables replay protection:
+On the receiving side, `verifyRequest` does the whole check: it reads the
+`x-lesto-signature` / `x-lesto-timestamp` headers, enforces the replay window,
+recomputes the HMAC in constant time, and — on success — extracts `event` from
+the **signed** body (never the unsigned `x-lesto-event` header, which a forger
+can set to anything).
+
+Verify over the **raw bytes**: `c.req.rawBody` is the exact undecoded request
+body every Lesto transport captures. Never verify `c.req.body` — it is the
+decoded value, and re-stringifying it can change whitespace or key order and
+break the signature.
 
 ```ts
-import { verify, SIGNATURE_HEADER, TIMESTAMP_HEADER } from "@lesto/webhooks";
+import { verifyRequest } from "@lesto/webhooks";
 
-app.post("/hook", async (c) => {
-  const rawBody = await c.req.text(); // verify the EXACT bytes, not a re-serialization
-  const signature = c.req.header(SIGNATURE_HEADER) ?? "";
-  const timestamp = Number(c.req.header(TIMESTAMP_HEADER));
-
-  if (!verify(rawBody, signature, secret, { timestamp })) {
-    return c.text("bad signature", 401);
+app.post("/hook", (c) => {
+  const rawBody = c.req.rawBody; // the EXACT signed bytes, never c.req.body
+  if (rawBody === undefined) {
+    return c.json({ error: "raw body required" }, 400);
   }
-  // ...handle the verified payload
+
+  const result = verifyRequest({ body: rawBody, headers: c.req.headers }, { secret });
+
+  if (!result.verified) {
+    return c.json({ verified: false, reason: result.reason }, 401);
+  }
+
+  // result.event is set only when the signed body is an { event, data } envelope.
+  // ...handle the verified payload (JSON.parse(rawBody))
 });
 ```
 
-`verify` accepts the request only if the timestamp is within a tolerance of now —
-`DEFAULT_TOLERANCE_MS` is five minutes, overridable per call with `toleranceMs`,
-and `now` is injectable for tests. A captured request replayed past the window is
-rejected before any HMAC work runs. `sign(body, secret)` is exported too, if you
-need to produce a signature directly.
+A failed check carries a `reason` — `"missing_signature"`,
+`"missing_timestamp"`, `"malformed_timestamp"`, `"stale_timestamp"`, or
+`"signature_mismatch"` — so your receiver can tell a replayed request apart from
+a forged one. The replay window is `DEFAULT_TOLERANCE_MS` (five minutes),
+overridable with `toleranceMs`; `now` is injectable for tests.
+
+For a multi-tenant receiver, pass a `SecretResolver` instead of a string:
+`(ctx) => secretForTenant(ctx.headers["x-tenant"])`. It runs only after the
+cheap pre-checks pass, and it fails closed — a resolver that throws or returns
+no secret is a `WEBHOOK_SECRET_UNRESOLVED` error, never a silent skip.
+
+The lower-level pieces are exported too: `sign(body, secret)` produces a
+signature directly, and `verify(body, signature, secret, { timestamp })` is the
+bare constant-time check — if you use it, you must read and pass the timestamp
+yourself.
 
 ## Destination URLs are SSRF-guarded
 
@@ -135,13 +156,16 @@ stays the portable global `fetch` so the Workers edge build is unaffected.
 
 ## Notes and gotchas
 
-- **`verify` needs the timestamp.** The deliverer signs `${timestamp}.${body}`,
-  so `verify(body, sig, secret)` with no options checks a *body-only* signature
-  and will reject a real Lesto webhook. Always read `x-lesto-timestamp` as a
-  `Number` and pass `{ timestamp }`.
-- **Verify the raw bytes.** Recompute the HMAC over the exact request body you
-  received, before any JSON parse-and-re-stringify — re-serialization can change
+- **Verify the raw bytes.** Always hand `verifyRequest` the exact bytes from
+  `c.req.rawBody`, never the decoded `c.req.body` — re-serialization can change
   whitespace or key order and break the signature.
+- **Trust the signed body, not the headers.** `verifyRequest` reports `event`
+  from the signed `{ event, data }` payload; the `x-lesto-event` header is
+  unsigned convenience metadata. Branch on `result.event`.
+- **Low-level `verify` needs the timestamp.** The deliverer signs
+  `${timestamp}.${body}`, so `verify(body, sig, secret)` with no options checks a
+  *body-only* signature and will reject a real Lesto webhook. Prefer
+  `verifyRequest`, which reads the headers for you.
 - **Secrets never hit the queue.** Only `secretId` is persisted; the real secret
   is resolved at delivery time. A missing secret is a loud
   `WEBHOOK_SECRET_NOT_FOUND`, not a silent unsigned send.
@@ -151,11 +175,16 @@ stays the portable global `fetch` so the Workers edge build is unaffected.
   retired permanently after one attempt.
 - **Errors are coded.** Every failure is a `WebhookError` with a
   `WebhookErrorCode` (`WEBHOOK_DELIVERY_FAILED`, `WEBHOOK_SECRET_NOT_FOUND`,
-  `WEBHOOK_URL_BLOCKED`), so callers can branch on `instanceof WebhookError`.
+  `WEBHOOK_SECRET_UNRESOLVED`, `WEBHOOK_URL_BLOCKED`), so callers can branch on
+  `instanceof WebhookError`.
 - **Tracing is opt-in.** Pass a `traceparent` source and the captured W3C
   `traceparent` rides the queue payload and is emitted on the outbound POST, so
   the receiver joins the enqueuing request's trace. See
   [Observability](/batteries/observability).
 
-For the worker that actually drains deliveries, and how retries and `maxAttempts`
-behave, see [Background jobs & queues](/batteries/queue).
+See the runnable
+[`examples/webhooks`](https://github.com/lesto-run/lesto/tree/main/examples/webhooks)
+for both halves wired end to end — a signed send through the queue and a
+receiver that `verifyRequest`s it over `c.req.rawBody`. For the worker that
+actually drains deliveries, and how retries and `maxAttempts` behave, see
+[Background jobs & queues](/batteries/queue).

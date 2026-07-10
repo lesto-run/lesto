@@ -8,8 +8,9 @@ order: 3
 # Auth
 
 Lesto splits authentication across two packages. `@lesto/auth` owns the
-primitives — scrypt password hashing, TOTP one-time codes, recovery codes, and
-the session stores — each a small, dependency-free function over `node:crypto`.
+primitives — runtime-adaptive password hashing (scrypt on Node, PBKDF2 on the
+edge), TOTP one-time codes, recovery codes, and the session stores — each a
+small, dependency-free function over `node:crypto` or WebCrypto.
 `@lesto/identity` is the account lifecycle assembled on top of them: register,
 verify email, login, password reset, and TOTP enrollment, wired over your
 database and a mailer.
@@ -63,10 +64,15 @@ const { user, session } = await identity.login(
 ```
 
 `register` is enumeration-safe: a colliding email returns the same
-`{ status: "verification_sent" }` shape and spends the same scrypt cost, so an
+`{ status: "verification_sent" }` shape and spends the same hashing cost, so an
 attacker cannot probe which emails are registered. `login` returns
 `IDENTITY_INVALID_CREDENTIALS` for both an unknown email and a wrong password,
-and always runs one `verifyPassword` so the two paths are timing-equal.
+and always spends one KDF derive so the two paths are timing-equal. To bound
+credential stuffing, wire a `loginRateLimiter`: each failed attempt burns a
+token from a per-account `login:<email>` bucket, and a drained bucket refuses
+with `IDENTITY_LOGIN_THROTTLED` before the database or the KDF is touched. A
+successful login spends nothing, so a real user is never locked out by their
+own sign-in.
 
 To set the cookie from a handler, use the cookie helpers `@lesto/identity` ships:
 
@@ -106,7 +112,7 @@ first authenticator code and returns the one-time-visible recovery codes.
 const { secret, keyUri } = await identity.enrollTotp(sessionToken);
 // ...user scans keyUri, types the first code...
 const { recoveryCodes } = await identity.confirmTotp(sessionToken, code);
-// Show recoveryCodes once — only their scrypt hashes are stored.
+// Show recoveryCodes once — only their KDF hashes are stored.
 ```
 
 After a password login, run the second-factor challenge. These methods take the
@@ -148,8 +154,8 @@ before the secret is touched.
 Every failure throws an `IdentityError` carrying a stable `code` (e.g.
 `IDENTITY_INVALID_CREDENTIALS`, `IDENTITY_EMAIL_NOT_VERIFIED`,
 `IDENTITY_WEAK_SECRET`). Branch on the code, never the message. The lower-level
-primitives throw `AuthError` (`AUTH_INVALID_HASH`, `AUTH_WEAK_SECRET`) the same
-way.
+primitives throw `AuthError` (`AUTH_INVALID_HASH`, `AUTH_WEAK_SECRET`,
+`AUTH_KDF_UNAVAILABLE`) the same way.
 
 ## Sessions on both tiers
 
@@ -179,6 +185,50 @@ const claim = signed.verify(token); // { userId, expiresAt } | undefined
   store. The trade-off is that a signed token cannot be revoked before it expires
   — keep its TTL short.
 
+## Password hashing on the edge
+
+Password hashing is runtime-adaptive, and you configure nothing. `hashPassword`
+mints under the KDF the host can bear — memory-hard **scrypt** on Node/Bun,
+CPU-hard **PBKDF2** over `crypto.subtle` on Cloudflare Workers, where scrypt's
+~128 MiB working set would OOM-crash the isolate on the first hash. The
+selection (`selectPasswordAlgorithm`) is fail-safe: only a positively-identified
+Node host gets scrypt; every ambiguous runtime falls to PBKDF2, which is still
+fully secure and cannot crash.
+
+Hashes are self-describing (`scrypt$…` / `pbkdf2$…`), so `verifyPassword`
+dispatches on the stored prefix — a PBKDF2 hash verifies on every runtime. The
+one hard boundary: a **scrypt hash reaching the edge cannot be verified there**.
+`verifyPassword` refuses it *before* the derive with a coded `AuthError`
+`AUTH_KDF_UNAVAILABLE` (an OOM is not catchable, so the refusal must happen at
+dispatch). A greenfield edge app never sees this — the edge mints and reads only
+PBKDF2. It appears when a password database minted on Node moves to the edge.
+
+`login` catches that refusal and maps it via the `onUnverifiableHash` option:
+
+- `"invalid_credentials"` (the default) — refuse with
+  `IDENTITY_INVALID_CREDENTIALS`, byte- and timing-identical to a wrong
+  password. Enumeration-safe; migrated users recover via a reset link.
+- `"require_reset"` — refuse with the distinct
+  `IDENTITY_PASSWORD_RESET_REQUIRED` so your app can route the user straight to
+  the reset screen. This deliberately leaks which emails are
+  registered-but-legacy; opt in only when the UX outweighs that.
+
+To migrate a Node password DB ahead of an edge cutover, wire the
+`pbkdf2MigrationHasher` preset on the still-live Node tier:
+
+```ts
+import { createIdentity, pbkdf2MigrationHasher } from "@lesto/identity";
+
+const identity = createIdentity({ ...options, hasher: pbkdf2MigrationHasher });
+```
+
+It verifies existing scrypt rows as usual (Node runs scrypt fine) but mints
+PBKDF2 and marks every non-PBKDF2 row as due for rehash — so the existing
+rehash-on-login seam re-mints each user's proven plaintext as edge-safe PBKDF2
+on their next sign-in. Hashes are one-way, so convert-on-login (or a reset) is
+the only migration path; whatever tail has not signed in by cutover is handled
+by a password reset, which also mints PBKDF2.
+
 ## Notes & gotchas
 
 - **The secret guard fails closed at construction.** A secret under 32 bytes
@@ -188,10 +238,12 @@ const claim = signed.verify(token); // { userId, expiresAt } | undefined
 - **Signed sessions have no pre-expiry revocation.** There is nothing to delete,
   so a leaked signed token is valid until it ages out. Keep TTLs short (minutes,
   not days) and pair with the SQL store when instant revocation matters.
-- **Scrypt fails closed.** A malformed stored hash verifies to `false` rather
-  than throwing — a truncated hash can never make every password pass. Hashes are
-  self-describing, so `login` transparently upgrades a stale one on the next
-  successful sign-in.
+- **Verification fails closed.** A malformed stored hash verifies to `false`
+  rather than throwing — a truncated hash can never make every password pass.
+  Hashes are self-describing, so `login` transparently upgrades a stale one on
+  the next successful sign-in — and a scrypt hash on the edge is refused with
+  `AUTH_KDF_UNAVAILABLE` before the derive, never silently accepted or crashed
+  on.
 - **The `__Host-` cookie needs HTTPS.** The session cookie name carries the
   browser-enforced `__Host-` prefix, so it is dropped over plain
   `http://localhost`. Use a dev-mode cookie name there; never drop `Secure` on a

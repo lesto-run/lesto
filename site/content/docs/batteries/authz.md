@@ -74,7 +74,7 @@ const { can } = createGuard(policy, {
   // Replace the response — e.g. redirect a browser to a login page.
   onDeny: (c, permission) => ({ status: 302, headers: { location: "/login" }, body: "" }),
   // Observe every refusal (logging, metrics, OTLP) without changing the response.
-  onDenied: (kind, req) => log.warn({ kind, path: req.url }),
+  onDenied: (kind, req) => log.warn({ kind, path: req.path }), // kind === AUTHZ_DENIED_KIND
 });
 ```
 
@@ -141,6 +141,38 @@ context. Inheritance is cycle-safe — an `admin → staff → admin` loop termi
 rather than recursing — and each role's resolved grant set is computed once and
 memoized, so a check is a membership walk, not a fresh traversal per request.
 
+## The principal resolver
+
+The guard reads roles from context — something has to put them there. The
+principal resolver is that middleware: it turns the request's session into a
+`Principal` (`{ actor, actorRoles }`) once, at the edge of the chain, and
+stashes it for two consumers. It sets the `"roles"` context var, so every
+`can()` guard works with no extra wiring, and it exposes the full principal via
+`getPrincipal(c)` — which is what a governed [Admin](/batteries/admin) reads to
+attribute and authorize each verb.
+
+```ts
+import { createPrincipalResolver, getPrincipal } from "@lesto/authz";
+
+const principalResolver = createPrincipalResolver({
+  // Read your own cookie/header and return the session, or undefined.
+  verifySession: (c) => readSession(c), // -> { userId } | undefined
+  // Map a user id to the roles it holds.
+  rolesOf: (userId) => rolesFor(userId), // -> Iterable<string>
+});
+
+app.use(principalResolver);
+
+// Later, in any handler:
+const principal = getPrincipal(c); // { actor, actorRoles } | undefined
+```
+
+Both seams are injected, so `@lesto/authz` never reads a cookie and never
+couples to `@lesto/auth` or your user model. Deny-by-default is structural: an
+unauthenticated request resolves to empty roles and no principal, so guards
+refuse it — and a `verifySession` or `rolesOf` that throws aborts the chain
+rather than leaving a half-resolved principal behind.
+
 ## Notes & gotchas
 
 - **Deny by default.** A subject with no roles (or `undefined` roles) is refused,
@@ -151,6 +183,14 @@ memoized, so a check is a membership walk, not a fresh traversal per request.
   outdated roles denies rather than crashes.
 - **Typos fail fast.** A grant or `inherits` edge naming an undeclared role
   throws `AUTHZ_UNKNOWN_ROLE` at `definePolicy` time, not at request time.
-- **The guard does not authenticate.** It only reads roles from context. Put an
-  auth middleware *upstream* that sets `c.set("roles", …)`; see
-  **[Auth](/batteries/auth)** for establishing who the subject is.
+- **The guard does not authenticate.** It only reads roles from context. Put the
+  principal resolver (or your own auth middleware that sets `c.set("roles", …)`)
+  *upstream*; see **[Auth](/batteries/auth)** for establishing who the subject
+  is.
+
+## Where to go next
+
+- [Auth](/batteries/auth) — establish who the subject is before authorizing it.
+- [Admin](/batteries/admin) — the CRUD backbone governed by these policies.
+- [Routing & pages](/guides/routing) — how middleware and the request `Context`
+  work.

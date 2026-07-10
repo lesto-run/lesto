@@ -75,6 +75,11 @@ vocabulary with no extra wiring. `renderForm` only attaches the props a field
 actually set — an omitted `label`, `required`, or `options` is left off the node
 entirely rather than emitted as `undefined`.
 
+To re-render after a failed submission, pass the second argument:
+`renderForm(spec, { errors, values })` threads each field's error message and
+the value the user already typed back into its `Field` node — a message beside
+its field and a form that keeps what was entered, instead of an emptied one.
+
 ## Validate a submission
 
 `validateSubmission(spec, values)` reconciles the raw values a form posted

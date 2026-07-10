@@ -1,6 +1,6 @@
 ---
 title: Admin
-description: A typed CRUD backbone over your tables — list, get, create, update, destroy — with validation, field projection, and an audit hook.
+description: A typed CRUD backbone over your tables — list, get, create, update, destroy — policy-gated per verb, with validation, field projection, and an audit hook.
 section: Batteries
 order: 4
 ---
@@ -8,29 +8,43 @@ order: 4
 # Admin
 
 `@lesto/admin` is a typed CRUD backbone over your [`@lesto/db`](/batteries/data)
-tables. You declare resources — a name, a table, two Zod schemas, and a field
-allow-list — and it hands you `list` / `get` / `create` / `update` / `destroy`
-with validation, projection, pagination, and a mutation hook for auditing.
+tables. You declare resources — a name, a table, two Zod schemas, a field
+allow-list, and the permissions each verb requires — and it hands you `list` /
+`get` / `create` / `update` / `destroy` with authorization, validation,
+projection, pagination, and a mutation hook for auditing.
 
 It is the generic CRUD layer a WordPress-style admin UI sits on, but it is _not_
 an HTTP surface. The service is transport-agnostic: it returns plain objects and
 throws coded errors, and you decide how to expose it. Reads and writes go through
-`@lesto/db`; input validation goes through each resource's schemas (the same
-boundary discipline as [Validation](/guides/validation)); projection honors a
+`@lesto/db`; every verb is gated by a [`@lesto/authz`](/batteries/authz) policy;
+input validation goes through each resource's schemas (the same boundary
+discipline as [Validation](/guides/validation)); projection honors a
 per-resource `fields` allow-list, so an undeclared column never leaks out of a
 row.
 
 ## Define resources
 
-A resource binds a table to its validation and projection contract. Pass them to
-`createAdmin(db, resources, options)`, and inject an `onMutation` hook if you want
-an audit trail.
+A resource binds a table to its validation, projection, and permission contract.
+Pass them to `createAdmin(db, resources, options)`. The `policy` option is
+**required**: hand it a `@lesto/authz` policy to govern every verb, or the
+explicit `{ ungoverned: true }` to opt out loudly. There is no "absent policy
+means open" path — anything else throws `ADMIN_INVALID_POLICY` at construction,
+so an admin is never _silently_ fail-open.
 
 ```ts
 import { createAdmin } from "@lesto/admin";
+import { definePolicy } from "@lesto/authz";
 import { z } from "zod";
 
 import { products } from "./schema";
+
+const policy = definePolicy({
+  roles: ["viewer", "editor"],
+  can: {
+    "products:read": ["viewer", "editor"],
+    "products:write": ["editor"],
+  },
+});
 
 const productInsertSchema = z.object({
   name: z.string().min(1, "Name is required."),
@@ -51,9 +65,18 @@ const admin = createAdmin(
       insertSchema: productInsertSchema, // validated before create
       updateSchema: productUpdateSchema, // validated before update
       fields: ["name", "price", "stock"], // projection allow-list (+ the PK)
+      permissions: {
+        read: "products:read", // gates list + get
+        create: "products:write",
+        update: "products:write",
+        destroy: "products:write",
+      },
     },
   ],
-  { onMutation: makeAuditHook(db) }, // fires after every committed write
+  {
+    policy, // required: a @lesto/authz Policy, or { ungoverned: true }
+    onMutation: makeAuditHook(db), // fires after every committed write
+  },
 );
 ```
 
@@ -63,39 +86,51 @@ const admin = createAdmin(
 cosmetics. The primary key is resolved once at construction — a table with no
 primary key fails _then_, not on the first request.
 
+Governance is per-verb and fail-closed: `list` and `get` share the `read`
+permission, each write names its own. A verb the resource declares no permission
+for is **denied** under a governed policy — never open-by-omission.
+
 ## Use it in routes
 
-The service is just functions, so wire it into whatever router you like. Each
-handler maps an HTTP verb to an admin method and threads a `{ actor }` context
-through the writes. The admin _attributes_ — it never authenticates — so the
-actor is whatever your host supplies (read it off the session in a real app).
+Every verb takes an optional trailing context — the resolved principal
+`{ actor, actorRoles }`. Put `@lesto/authz`'s `createPrincipalResolver` upstream
+and read the principal off the request with `getPrincipal(c)`; the admin checks
+`actorRoles` against the resource's permission and attributes the write to
+`actor`. The admin _attributes and gates_ — it never authenticates — and the
+principal resolver is the sole actor source: a governed write with no resolved
+actor is refused before it commits.
 
 ```ts
+import { createPrincipalResolver, getPrincipal } from "@lesto/authz";
 import { lesto } from "@lesto/web";
 
+// Resolve who is calling, once, at the edge of the chain. You supply the two
+// seams: read your session, map a user id to roles.
+const principalResolver = createPrincipalResolver({
+  verifySession: (c) => readSession(c), // -> { userId } | undefined
+  rolesOf: (userId) => rolesFor(userId), // -> Iterable<string>
+});
+
 const app = lesto()
-  .get("/admin/products", async (c) => {
-    const rows = await admin.list("products", { limit: 20, offset: 0 });
-    return c.json({ rows });
-  })
-  .get("/admin/products/:id", (c) =>
-    respond(c, () => admin.get("products", Number(c.param("id")))),
+  .use(principalResolver)
+  .get("/admin/products", (c) =>
+    respond(c, () => admin.list("products", { limit: 20, offset: 0 }, getPrincipal(c))),
   )
-  .post("/admin/products", (c) => {
-    const actor = c.header("x-admin-actor") ?? "anonymous";
+  .get("/admin/products/:id", (c) =>
+    respond(c, () => admin.get("products", Number(c.param("id")), getPrincipal(c))),
+  )
+  .post("/admin/products", (c) =>
     // The raw body goes straight to the admin; it validates against insertSchema.
-    return respond(c, () => admin.create("products", c.req.body, { actor }), 201);
-  })
+    respond(c, () => admin.create("products", c.req.body, getPrincipal(c)), 201),
+  )
   .patch("/admin/products/:id", (c) => {
-    const actor = c.header("x-admin-actor") ?? "anonymous";
     const id = Number(c.param("id"));
-    return respond(c, () => admin.update("products", id, c.req.body, { actor }));
+    return respond(c, () => admin.update("products", id, c.req.body, getPrincipal(c)));
   })
   .delete("/admin/products/:id", (c) => {
-    const actor = c.header("x-admin-actor") ?? "anonymous";
     const id = Number(c.param("id"));
     return respond(c, async () => {
-      await admin.destroy("products", id, { actor });
+      await admin.destroy("products", id, getPrincipal(c));
       return { deleted: id };
     });
   });
@@ -105,6 +140,9 @@ Hand the admin the _raw_ body — don't re-validate at the edge. The resource ow
 one validation authority and one error vocabulary; duplicating the schema at the
 route just drifts.
 
+The authorization check runs _before_ validation or any database touch, so an
+unauthorized caller learns nothing about the input or whether the row exists.
+
 ## Methods
 
 `createAdmin` returns an `Admin` — an object of async functions.
@@ -113,29 +151,34 @@ route just drifts.
 | --- | --- | --- |
 | `resources` | `resources(): ResourceSummary[]` | `{ name, fields }` for every resource (schemas + tables stay server-side) |
 | `describe` | `describe(name): ResourceSummary` | The `{ name, fields }` summary for one resource |
-| `list` | `list(name, options?: ListOptions): Promise<Record[]>` | Projected rows `{ id, ...fields }`, ordered by PK, paginated |
-| `get` | `get(name, id): Promise<Record>` | One projected row, or throws `ADMIN_RECORD_NOT_FOUND` |
-| `create` | `create(name, attributes, context?: MutationContext): Promise<Record>` | The created row, projected; fires `onMutation` |
+| `list` | `list(name, options?: ListOptions, context?): Promise<Record[]>` | Projected rows `{ id, ...fields }`, ordered by PK, paginated |
+| `get` | `get(name, id, context?): Promise<Record>` | One projected row, or throws `ADMIN_RECORD_NOT_FOUND` |
+| `create` | `create(name, attributes, context?): Promise<Record>` | The created row, projected; fires `onMutation` |
 | `update` | `update(name, id, attributes, context?): Promise<Record>` | The merged row, re-read and projected; fires `onMutation` |
 | `destroy` | `destroy(name, id, context?): Promise<void>` | Nothing; fires `onMutation` |
 
 `ListOptions` is `{ limit?, offset? }` — `limit` defaults to a page size of `50`,
-`offset` to `0`. `MutationContext` is `{ actor? }`, passed straight onto the audit
-event. `update` re-reads the row after writing, so the returned object reflects
-merged state, not just the patch you sent.
+`offset` to `0`. `context` is a `MutationContext` — `{ actor?, actorRoles? }`,
+the principal from `getPrincipal(c)`: `actorRoles` feeds the policy check,
+`actor` is passed onto the audit event. `update` re-reads the row after writing,
+so the returned object reflects merged state, not just the patch you sent.
 
 ## Errors
 
 Every refusal is an `AdminError` carrying a stable `code` — branch on the code,
-never the message. The two you handle most often are `ADMIN_VALIDATION_FAILED`
-(a bad body, with the flattened Zod issues in `details`) and
-`ADMIN_RECORD_NOT_FOUND` (no row for that id). Map them to status at the boundary:
+never the message. The three you handle most often are `ADMIN_FORBIDDEN` (the
+policy denied the verb, or a governed write arrived with no resolved actor),
+`ADMIN_VALIDATION_FAILED` (a bad body, with the flattened Zod issues in
+`details`), and `ADMIN_RECORD_NOT_FOUND` (no row for that id). Map them to
+status at the boundary:
 
 ```ts
 import { AdminError } from "@lesto/admin";
 
 function statusForAdminError(error: AdminError): number {
   switch (error.code) {
+    case "ADMIN_FORBIDDEN":
+      return 403;
     case "ADMIN_UNKNOWN_RESOURCE":
     case "ADMIN_RECORD_NOT_FOUND":
       return 404;
@@ -143,7 +186,7 @@ function statusForAdminError(error: AdminError): number {
     case "ADMIN_EMPTY_UPDATE":
       return 422;
     default:
-      return 500; // e.g. ADMIN_NO_PRIMARY_KEY, a construction-time error
+      return 500; // construction-time codes: ADMIN_NO_PRIMARY_KEY, ADMIN_INVALID_POLICY
   }
 }
 
@@ -170,10 +213,12 @@ callers never see a leaked underlying code.
 
 If you injected an `onMutation` hook, it fires once _after_ each committed write
 with an `AuditEvent`: `{ action, actor, resource, id, patch }`. `action` is
-`"create" | "update" | "destroy"`; `patch` is the validated attributes for
-create/update and `undefined` for destroy. The admin doesn't own a sink — it
-hands you the event and lets you decide where it lands. A queryable trail is a
-few lines:
+`"create" | "update" | "destroy"`; `actor` is the resolver-sourced actor the
+caller threaded in through the context (under a governed policy an unattributed
+write is refused upstream, so it never reaches the hook un-actored); `patch` is
+the validated attributes for create/update and `undefined` for destroy. The admin doesn't own
+a sink — it hands you the event and lets you decide where it lands. A queryable
+trail is a few lines:
 
 ```ts
 import type { AuditEvent } from "@lesto/admin";
@@ -198,9 +243,18 @@ function makeAuditHook(db: Db): (event: AuditEvent) => void {
 The hook signature is synchronous (`(event) => void`), and a throw would
 propagate to the caller _after_ the write already committed — so keep it cheap
 and total, or swallow failures inside it, as above. The write succeeded; a broken
-audit sink shouldn't fail the request.
+audit sink shouldn't fail the request. Attribution is trustworthy-at-source, not
+tamper-evident: the actor is real, but a durable, append-only audit store is
+yours to provide.
 
 See the runnable
 [`examples/admin`](https://github.com/lesto-run/lesto/tree/main/examples/admin)
 for the full wiring — routes, the audit table, and the `GET /admin/audit` trail
 those writes produce.
+
+## Where to go next
+
+- [Authorization](/batteries/authz) — define the policy and principal resolver
+  the admin is governed by.
+- [Data](/batteries/data) — the tables the admin reads and writes.
+- [Validation](/guides/validation) — where the Zod boundary discipline comes from.
