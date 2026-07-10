@@ -39,11 +39,23 @@ export type PasswordAlgorithm = "scrypt" | "pbkdf2";
  * Cloudflare polyfill/ponyfill/bundler shim leaking `WebSocketPair` into a NODE
  * host's global scope.
  *
- * ⚠️ Deployment invariant: a Node deployment must NOT leak a Cloudflare shim's
- * `WebSocketPair` into global scope. The brand check below defends modern hosts
- * (Node ≥ 21 brands `navigator.userAgent` as `Node.js/NN`), but on an unbranded
- * host (Node ≤ 20) a leaked global that is a real constructor is
- * indistinguishable from workerd and will flip this probe.
+ * The detection is deliberately FAIL-SAFE (see the doctrine above): only a
+ * *recognized* brand is authoritative. A positive `Cloudflare-Workers` brand ⇒
+ * workerd; a recognized non-edge brand (Node ≥ 21 `Node.js/NN`, Bun, Deno) ⇒ not
+ * workerd, which vetoes a leaked `WebSocketPair` shim on a modern Node host. Any
+ * UNKNOWN or absent brand — an older-compat-date Worker with no `navigator`, or a
+ * real Worker onto which a library planted a non-edge `navigator` — falls through
+ * to the ungated `WebSocketPair` probe, so a genuine workerd is NEVER mis-routed
+ * to scrypt (which OOM-crashes the isolate). An earlier revision made *any* string
+ * brand authoritative-negative and skipped the fallback; that reopened the exact
+ * catastrophic direction this module exists to forbid.
+ *
+ * ⚠️ Residual invariant: on an UNBRANDED host (Node ≤ 20, no `navigator`) a leaked
+ * `WebSocketPair` *constructor* is indistinguishable from workerd and flips this
+ * probe to edge — minting weaker PBKDF2 + refusing scrypt rows (recoverable via a
+ * reset, never a crash). A Node deployment must not leak a Cloudflare shim's
+ * `WebSocketPair` into global scope; a workerd deployment must not overwrite
+ * `navigator.userAgent` with a non-edge brand.
  */
 export function isWorkerd(): boolean {
   // Read the globals through a cast rather than the ambient `navigator` binding:
@@ -56,19 +68,22 @@ export function isWorkerd(): boolean {
 
   const userAgent = globals.navigator?.userAgent;
 
-  // A branded runtime is authoritative in BOTH directions. workerd's brand is the
-  // documented "Cloudflare-Workers" and nothing else (substring-matched only to
-  // tolerate a hypothetical future version suffix), while Node ≥ 21, Bun, Deno,
-  // and browsers all brand themselves otherwise (`Node.js/22`, `Bun/1.x`, …) —
-  // none of which is workerd even if a Cloudflare shim planted `WebSocketPair`
-  // in global scope.
-  if (typeof userAgent === "string") return userAgent.includes("Cloudflare-Workers");
+  // A POSITIVE Cloudflare brand is authoritative ⇒ workerd. (Substring-matched
+  // only to tolerate a hypothetical future version suffix.)
+  if (userAgent?.includes("Cloudflare-Workers")) return true;
 
-  // Unbranded host (older-compat-date workerd has no `navigator`; neither does
-  // Node ≤ 20): probe the ungated core Workers global. Require a real CONSTRUCTOR
-  // — `typeof … === "function"`, not merely "defined" — so a types package or
-  // half-baked polyfill that plants a non-callable placeholder cannot flip a Node
-  // host into edge mode.
+  // A RECOGNIZED non-edge brand (Node ≥ 21 `Node.js/NN`, Bun, Deno) is
+  // authoritative the other way ⇒ NOT workerd, vetoing a leaked `WebSocketPair`
+  // shim on a modern Node host (which would otherwise mint weaker PBKDF2 and make
+  // verify REFUSE every scrypt row).
+  if (userAgent !== undefined && /Node\.js|Bun|Deno/.test(userAgent)) return false;
+
+  // Unknown or absent brand (older-compat-date workerd has no `navigator`; a lib
+  // may also plant a non-edge `navigator` on a real Worker): fall through to the
+  // ungated core Workers global. This preserves the FAIL-SAFE doctrine — a real
+  // workerd is never mis-routed to scrypt — while requiring a real CONSTRUCTOR
+  // (`typeof … === "function"`, not merely "defined") so a non-callable
+  // placeholder can't flip a Node host into edge mode.
   return typeof globals.WebSocketPair === "function";
 }
 

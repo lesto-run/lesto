@@ -261,6 +261,18 @@ describe("selectPasswordAlgorithm", () => {
     expect(selectPasswordAlgorithm()).toBe("scrypt");
   });
 
+  it("picks pbkdf2 on a real Worker whose navigator was overwritten by a non-edge lib", () => {
+    // Fail-safe regression guard: an older-compat-date Worker (nodejs_compat sets
+    // process.versions.node) onto which an isomorphic lib planted a non-Cloudflare
+    // `navigator`. An UNKNOWN brand must NOT short-circuit to the Node/scrypt path —
+    // scrypt OOM-kills the 128 MB isolate — so detection falls through to the
+    // ungated WebSocketPair constructor and stays on pbkdf2.
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0" });
+    vi.stubGlobal("WebSocketPair", WebSocketPairStub);
+
+    expect(selectPasswordAlgorithm()).toBe("pbkdf2");
+  });
+
   it("falls back to pbkdf2 on an unknown runtime (no navigator, no process)", () => {
     vi.stubGlobal("navigator", undefined);
     vi.stubGlobal("process", undefined);
@@ -302,12 +314,23 @@ describe("isWorkerd — the hardened runtime probe", () => {
   });
 
   it("is false on a branded non-workerd host even with a real WebSocketPair constructor", () => {
-    // The brand is authoritative in both directions: Node ≥ 21 / Bun / Deno all set a
-    // non-Cloudflare userAgent, so a leaked shim constructor cannot flip the probe.
+    // A RECOGNIZED non-edge brand vetoes a leaked shim: Node ≥ 21 / Bun / Deno all set
+    // a non-Cloudflare userAgent, so a leaked shim constructor cannot flip the probe.
     vi.stubGlobal("navigator", { userAgent: "Node.js/22" });
     vi.stubGlobal("WebSocketPair", WebSocketPairStub);
 
     expect(isWorkerd()).toBe(false);
+  });
+
+  it("is true on a Worker with an unknown navigator brand via the WebSocketPair fallthrough", () => {
+    // The fail-safe direction the earlier revision broke: a non-Cloudflare `navigator`
+    // (a planted shim) is an UNKNOWN brand, not a recognized non-edge one, so detection
+    // falls through to the ungated constructor rather than declaring "not workerd" and
+    // routing a real Worker to scrypt.
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0" });
+    vi.stubGlobal("WebSocketPair", WebSocketPairStub);
+
+    expect(isWorkerd()).toBe(true);
   });
 
   it("still verifies a scrypt row on a shimmed Node host — logins keep working", async () => {
