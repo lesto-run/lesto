@@ -516,10 +516,12 @@ export interface IdentityOptions {
    * `email_verified` / `session_revoked` (see {@link IdentityEvent}).
    *
    * Purely observational: it shapes nothing. The event's outcome (the session,
-   * the thrown error) is identical whether or not a hook is wired, so emitting is
-   * safe on every path. Wire it to a tracer/audit sink (the dogfood: estate
-   * forwards these to OTLP). Payloads carry only a `userId` and a timestamp — no
-   * tokens, no passwords, no cleartext emails — so a sink can log them freely.
+   * the thrown error) is identical whether or not a hook is wired, and a sink that
+   * throws is caught, so emitting is safe on every path. Wire it to a tracer/audit
+   * sink (the dogfood: estate forwards these to OTLP). Payloads carry a `userId`
+   * and a timestamp (plus, for `password_rehashed`, the secret-free old/new hash
+   * cost) — never tokens, passwords, or cleartext emails — so a sink can log them
+   * freely.
    *
    * A returned promise is awaited so a sink that flushes asynchronously is not
    * dropped mid-write; a synchronous hook (the common case) adds no latency.
@@ -628,14 +630,20 @@ export function createIdentity(options: IdentityOptions): Identity {
   // session/token TTLs it sits next to.
   const eventClock = options.clock ?? Date.now;
 
-  // Emit a lifecycle event to the optional sink. Fire-and-forget in spirit —
-  // never throws into the caller's path (a broken sink must not break auth) — but
-  // awaited so an async sink that flushes a span is not dropped mid-write. With no
-  // hook wired this is a single comparison and a return.
+  // Emit a lifecycle event to the optional sink. Fire-and-forget in spirit — a
+  // throwing or rejecting sink is caught here so it can NEVER break auth (the
+  // observational contract in `onEvent`'s doc) — but awaited so an async sink that
+  // flushes a span is not dropped mid-write. With no hook wired this is a single
+  // comparison and a return.
   const emit = async (event: IdentityEvent): Promise<void> => {
     if (options.onEvent === undefined) return;
 
-    await options.onEvent(event);
+    try {
+      await options.onEvent(event);
+    } catch {
+      // Purely observational: a broken sink must not deny a login/reset. The event
+      // is fire-and-forget for the caller, so its failure is intentionally dropped.
+    }
   };
 
   // Resolve a session token to its user, or refuse — the gate the TOTP
@@ -976,8 +984,7 @@ export function createIdentity(options: IdentityOptions): Identity {
         // Secret-free `from`/`to` let a monitor catch a strength REDUCTION — a
         // `pbkdf2MigrationHasher` on a non-migrating Node tier walks strong rows
         // DOWN to the 100k edge ceiling, and without this signal that ~6× drop is
-        // invisible. Emitted OUTSIDE the try (like `login_succeeded` below) so a
-        // broken sink is not silently swallowed as a rehash-persist failure.
+        // invisible. `emit` isolates sink failures, so this never affects the login.
         if (rehashed !== undefined) {
           await emit({
             type: "password_rehashed",

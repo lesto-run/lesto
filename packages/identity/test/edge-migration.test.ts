@@ -330,6 +330,16 @@ describe("pbkdf2MigrationHasher", () => {
   });
 });
 
+// A pure projector over the recorded events — module-scoped (it captures nothing)
+// per oxlint's consistent-function-scoping, shared by the assertions below.
+const findRehash = (
+  events: IdentityEvent[],
+): Extract<IdentityEvent, { type: "password_rehashed" }> | undefined =>
+  events.find(
+    (event): event is Extract<IdentityEvent, { type: "password_rehashed" }> =>
+      event.type === "password_rehashed",
+  );
+
 describe("password_rehashed event — the rehash-on-login cost transition (L-c6132828)", () => {
   // A migration-hasher identity with an event sink, so the rehash-on-login seam's
   // `password_rehashed` is actually captured.
@@ -349,14 +359,6 @@ describe("password_rehashed event — the rehash-on-login cost transition (L-c61
 
     return { identity, events };
   }
-
-  const findRehash = (
-    events: IdentityEvent[],
-  ): Extract<IdentityEvent, { type: "password_rehashed" }> | undefined =>
-    events.find(
-      (event): event is Extract<IdentityEvent, { type: "password_rehashed" }> =>
-        event.type === "password_rehashed",
-    );
 
   it("fires with a secret-free DOWN-rehash shape when a 600k PBKDF2 row is walked to 100k", async () => {
     // The footgun: `pbkdf2MigrationHasher` left wired on a non-migrating Node tier
