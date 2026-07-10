@@ -63,7 +63,8 @@ describe("scanEntrySource", () => {
     expect(SCAN_ENTRY_PATH).toContain("node_modules/");
     // Root-relative: Vite globs `optimizeDeps.entries` against `config.root`.
     expect(SCAN_ENTRY_PATH.startsWith("/")).toBe(false);
-    // A `.tsx` id, so `isScannable` accepts it and esbuild picks the JSX loader.
+    // A JS/TS extension `isScannable` accepts (its `.(j|t)sx?|.mjs` test); `.tsx` mirrors
+    // the served virtual entry id (`\0lesto-island-entry.tsx`) — the entry body has no JSX.
     expect(SCAN_ENTRY_PATH.endsWith(".tsx")).toBe(true);
   });
 

@@ -28,10 +28,11 @@
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import prefresh from "@prefresh/vite";
+import reactRefresh from "@vitejs/plugin-react";
 import { createServer } from "vite";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -40,12 +41,18 @@ import type { Server } from "node:http";
 import type { PluginOption, ViteDevServer } from "vite";
 
 import { viteIslandConfig } from "../src/config";
-import { devEntrySource, scanEntrySource } from "../src/entry";
+import { devEntrySource, SCAN_ENTRY_PATH, scanEntrySource } from "../src/entry";
 import { ENTRY_PATH, VITE_BASE } from "../src/paths";
 import { writeScanEntry } from "../src/vite";
 
 const ROOT = fileURLToPath(new URL("./fixtures/dep-app", import.meta.url));
 const STUB = fileURLToPath(new URL("./fixtures/dep-app/lesto-ui-stub.ts", import.meta.url));
+
+/** The dir `writeScanEntry` creates under the fixture — removed after each test. */
+const SCAN_DIR = dirname(join(ROOT, SCAN_ENTRY_PATH));
+
+/** The dialects `lesto dev` serves — both must cold-start in one optimizer pass. */
+type Dialect = "react" | "preact";
 
 const island = (name: string, file: string, lazy: boolean): IslandFile => ({
   name,
@@ -101,20 +108,29 @@ interface ColdServer {
 let current: ColdServer | undefined;
 
 afterEach(async () => {
-  if (current === undefined) return;
+  if (current !== undefined) {
+    await current.server.close();
+    current.httpServer.close();
+    rmSync(current.cacheDir, { recursive: true, force: true });
+    current = undefined;
+  }
 
-  await current.server.close();
-  current.httpServer.close();
-  rmSync(current.cacheDir, { recursive: true, force: true });
-  current = undefined;
+  // `writeScanEntry` lands a real file in the fixture's `node_modules`; drop it so a
+  // failing run leaves no stray twin behind (it is gitignored but pollutes the tree).
+  rmSync(SCAN_DIR, { recursive: true, force: true });
 });
+
+/** The dialect's served Fast-Refresh plugin — the SAME lazy choice `vite.ts` makes. */
+function fastRefreshPlugin(dialect: Dialect): PluginOption {
+  return (dialect === "react" ? reactRefresh() : prefresh()) as PluginOption;
+}
 
 /**
  * Stand up the SHIPPED island-dev Vite config over the fixture app on a COLD dep cache.
  * `seedScanner: false` reproduces the pre-fix state by emptying `optimizeDeps.entries`.
  */
-async function coldServer(seedScanner: boolean): Promise<ColdServer> {
-  const config = viteIslandConfig({ root: ROOT, vitePort: 0, hmrPort: 0, dialect: "preact" });
+async function coldServer(seedScanner: boolean, dialect: Dialect): Promise<ColdServer> {
+  const config = viteIslandConfig({ root: ROOT, vitePort: 0, hmrPort: 0, dialect });
 
   // The dev boot's own writer, at the path the shipped config points `entries` at.
   writeScanEntry(ROOT, scanEntrySource(ROOT, ISLANDS));
@@ -128,25 +144,34 @@ async function coldServer(seedScanner: boolean): Promise<ColdServer> {
   // rather than through `/@fs/`, which `server.fs.allow` would reject.
   const cacheDir = mkdtempSync(join(ROOT, "node_modules/.vite-cold-"));
 
-  const server = await createServer({
-    root: config.root,
-    base: config.base,
-    appType: config.appType,
-    configFile: config.configFile,
-    logLevel: "silent",
-    cacheDir,
-    server: { middlewareMode: true, hmr: { server: httpServer } },
-    plugins: [entryPlugin(), prefresh()] as PluginOption[],
-    optimizeDeps: {
-      include: config.optimizeDeps.include,
-      entries: seedScanner ? [...config.optimizeDeps.entries] : [],
-      esbuildOptions: { plugins: [countingPlugin(counts)] as never },
-    },
-    resolve: {
-      alias: [...config.resolve.alias, ...STUB_ALIASES],
-      dedupe: config.resolve.dedupe,
-    },
-  });
+  let server: ViteDevServer;
+  try {
+    server = await createServer({
+      root: config.root,
+      base: config.base,
+      appType: config.appType,
+      configFile: config.configFile,
+      logLevel: "silent",
+      cacheDir,
+      server: { middlewareMode: true, hmr: { server: httpServer } },
+      plugins: [entryPlugin(), fastRefreshPlugin(dialect)] as PluginOption[],
+      optimizeDeps: {
+        include: config.optimizeDeps.include,
+        entries: seedScanner ? [...config.optimizeDeps.entries] : [],
+        esbuildOptions: { plugins: [countingPlugin(counts)] as never },
+      },
+      resolve: {
+        alias: [...config.resolve.alias, ...STUB_ALIASES],
+        dedupe: config.resolve.dedupe,
+      },
+    });
+  } catch (error) {
+    // `current` is not set yet, so `afterEach` cannot reclaim these — do it here or the
+    // cold cacheDir leaks under the fixture on every createServer failure.
+    httpServer.close();
+    rmSync(cacheDir, { recursive: true, force: true });
+    throw error;
+  }
 
   current = { server, httpServer, cacheDir, counts };
 
@@ -212,8 +237,8 @@ function optimizedDeps(server: ViteDevServer): string[] {
   return Object.keys(server.environments.client.depsOptimizer?.metadata.optimized ?? {});
 }
 
-async function coldStart(seedScanner: boolean): Promise<ColdServer> {
-  const cold = await coldServer(seedScanner);
+async function coldStart(seedScanner: boolean, dialect: Dialect): Promise<ColdServer> {
+  const cold = await coldServer(seedScanner, dialect);
 
   await crawlStaticGraph(cold.server);
   await cold.server.environments.client.waitForRequestsIdle();
@@ -225,27 +250,41 @@ async function coldStart(seedScanner: boolean): Promise<ColdServer> {
 }
 
 describe("island dev cold start (optimizeDeps.entries seeds the dep scanner)", () => {
-  it("settles in ONE optimizer pass with every island dep pre-bundled", async () => {
-    const { server, counts } = await coldStart(true);
+  // BOTH shipped dialects, because their SERVED transform differs — `@vitejs/plugin-react`
+  // (babel, automatic runtime) vs `@prefresh/vite` — so the scanner (plain esbuild) sees a
+  // different graph in each, and the react path's one-pass guarantee is otherwise unguarded
+  // (it rests on `react/jsx-dev-runtime ∈ include` + the refresh runtime being virtual). A
+  // react-specific reopening of the 504 class fails SILENTLY, so it needs its own leg.
+  it.each(["preact", "react"] as const)(
+    "settles in ONE optimizer pass with every island dep pre-bundled (%s)",
+    async (dialect) => {
+      const { server, counts } = await coldStart(true, dialect);
 
-    // The scanner ran at all — without a seeded `entries` it short-circuits before esbuild.
-    expect(counts.scanner).toBe(1);
+      // The scanner ran at all — without a seeded `entries` it short-circuits before esbuild.
+      expect(counts.scanner).toBe(1);
 
-    // The crux: one pass. No cancelled optimize, no hash bump, no 504-able window.
-    expect(counts.optimizer).toBe(1);
+      // The crux: one pass. No cancelled optimize, no hash bump, no 504-able window.
+      expect(counts.optimizer).toBe(1);
 
-    const deps = optimizedDeps(server);
+      const deps = optimizedDeps(server);
 
-    // Reached through a relative hop from an eager island.
-    expect(deps).toContain("preact-render-to-string");
-    // Reached ONLY through the entry's dynamic `import()` of a lazy island — so the static
-    // crawl never saw it, and only the scanner could have pre-bundled it. Without this, the
-    // first mount of a lazy island re-optimizes and full-reloads the page.
-    expect(deps).toContain("zod");
-  }, 30_000);
+      // Reached through a relative hop from an eager island.
+      expect(deps).toContain("preact-render-to-string");
+      // Reached ONLY through the entry's dynamic `import()` of a lazy island — so the static
+      // crawl never saw it, and only the scanner could have pre-bundled it. Without this, the
+      // first mount of a lazy island re-optimizes and full-reloads the page.
+      expect(deps).toContain("zod");
+    },
+    30_000,
+  );
 
   it("runs the optimizer TWICE without the scan entry (the pre-fix state)", async () => {
-    const { server, counts } = await coldStart(false);
+    // `entries: []` reproduces the pre-fix scanner-blindness. NOTE it is not byte-identical
+    // to the shipped-before state, which left `entries` UNSET (→ Vite's `**/*.html` default);
+    // both resolve to zero scannable entries, so the scanner never runs either way — do not
+    // "correct" this to `undefined` thinking it is a bug. Dialect is irrelevant to the
+    // mechanism here, so this leg runs preact only.
+    const { server, counts } = await coldStart(false, "preact");
 
     // No entries → `computeEntries` finds nothing → the scanner never bundles.
     expect(counts.scanner).toBe(0);
