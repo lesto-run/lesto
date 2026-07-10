@@ -5,10 +5,11 @@
     "rootDir": ".",
     "types": ["node"],
 
-    // Importing `@lesto/ui` pulls its `src` (types → source under Bundler resolution), including the
-    // browser `data-client.ts` (`window`/`document`), so the DOM lib joins ES2023 as it does in
-    // `@lesto/ui` itself. (Previously satisfied only incidentally, via DOM globals leaked from
-    // `preact-render-to-string`'s types through `@lesto/ui/server` — no longer re-exported.)
+    // Importing `@lesto/ui` pulls its `src` (types → source under Bundler resolution), including
+    // barrel modules that reference DOM types — `live.ts` (`EventSource`) and `softnav-contract.ts`
+    // — so the DOM lib joins ES2023 as it does in `@lesto/ui` itself. (This was previously satisfied
+    // only incidentally, via DOM globals that leaked in through other type deps; making it explicit
+    // is the robust fix. In-repo-typecheck concern only — published consumers resolve `dist/*.d.ts`.)
     "lib": ["ES2023", "DOM"],
 
     "jsx": "react-jsx"
