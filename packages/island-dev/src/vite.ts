@@ -130,6 +130,17 @@ async function proxyToVite(
  * — a missing file degrades to the very "scanner never runs" state this closes, without
  * an error. Rewritten every boot, so a changed island set can never leave a stale graph.
  *
+ * BEST-EFFORT, never fatal. The twin only SEEDS the dep scanner to collapse a cold start to
+ * ONE optimizer pass; a failed write just leaves the pre-L-90d2de01 behavior (an occasional
+ * cold-start re-optimize that the browser recovers from). So a write error — read-only
+ * `node_modules`, `.lesto` shadowed by a real file (`ENOTDIR`), a torn concurrent-boot write
+ * — is warned (actionably: the path + the perf consequence) and SWALLOWED. It must NOT
+ * propagate: an unhandled throw here reaches {@link createViteBackend} → `startBackend` wraps
+ * it as `ISLAND_DEV_SERVER_FAILED` and kills `lesto dev` — trading a perf hint for a dead dev
+ * server. (Today Vite's default `cacheDir` also lives under `node_modules`, so a read-only
+ * tree already fails at `createServer`; this guard is the margin for the `ENOTDIR`/race edges
+ * and for any future out-of-`node_modules` `cacheDir`.)
+ *
  * Exported (the only thing this coverage-excluded edge exports beyond the deps factory)
  * so `vite.optimize-deps.integration.test.ts` seeds the scanner through the SAME code the
  * dev boot runs — a test that computed the path itself could not catch it drifting here.
@@ -137,8 +148,15 @@ async function proxyToVite(
 export function writeScanEntry(root: string, source: string): void {
   const file = join(root, SCAN_ENTRY_PATH);
 
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, source, "utf8");
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, source, "utf8");
+  } catch (cause) {
+    console.warn(
+      `lesto: could not write the island dep-scanner seed (${file}) — ${String(cause)}. ` +
+        `Dev still works; a cold start may re-optimize and reload the page once on first load.`,
+    );
+  }
 }
 
 /** Stand up the real Vite server and wrap it as an {@link IslandDevBackend}. */
