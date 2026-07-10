@@ -26,8 +26,8 @@
 # during a release, see RELEASING.md) to pause pushing without uninstalling.
 set -u
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 0
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd) || exit 0
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 0
+repo_root=$(CDPATH='' cd -- "$script_dir/../.." && pwd) || exit 0
 cd "$repo_root" || exit 0
 
 # Only ever push main.

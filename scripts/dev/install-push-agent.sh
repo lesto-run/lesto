@@ -32,7 +32,7 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 push_script="$script_dir/push-main.sh"
 [ -f "$push_script" ] || {
   echo "missing $push_script" >&2

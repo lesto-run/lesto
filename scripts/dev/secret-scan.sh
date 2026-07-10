@@ -19,14 +19,15 @@
 set -u
 
 range="${1:-origin/main..main}"
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd) || exit 0
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd) || exit 0
 cd "$repo_root" || exit 0
 
 # Distinguish "empty range" (clean → 0) from a FAILED rev-list (bad/missing ref)
 # → scanner error (3) so the caller fails OPEN *visibly* instead of silently
 # treating an un-scannable range as clean.
-revs=$(git rev-list "$range" 2>/dev/null)
-[ "$?" -eq 0 ] || exit 3
+if ! revs=$(git rev-list "$range" 2>/dev/null); then
+  exit 3
+fi
 [ -n "$revs" ] || exit 0
 
 if command -v gitleaks >/dev/null 2>&1; then
