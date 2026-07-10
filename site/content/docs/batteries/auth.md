@@ -19,6 +19,22 @@ Most apps talk to `@lesto/identity`. You reach for `@lesto/auth` when you want a
 piece on its own — a signed token on the edge, or a password hash outside the
 account flow.
 
+## What's supported
+
+"OAuth" means three different things, and it's easy to reach for the wrong one.
+Here is what Lesto ships today versus what is still on the design board.
+
+| Capability | Status | Where |
+| --- | --- | --- |
+| **Email/password + TOTP** two-factor, sessions on Node and the edge | **Supported today** | `@lesto/identity`, `@lesto/auth` (this page) |
+| **Authenticated MCP** server (bearer tokens for an agent surface) | **Interim** — OpenAuth issuer | [`examples/mcp-auth-openauth`](https://github.com/lesto-run/lesto/tree/main/examples/mcp-auth-openauth); model in [MCP governance](/batteries/mcp-governance) |
+| Your app as an **OAuth provider / token issuer** | Design/pending | ADR 0029 (deferred; OpenAuth is the interim issuer) |
+| **Social sign-in** — "Sign in with Google/GitHub" (OAuth *client*) | Design/pending | ADR 0030 (a separate, unbuilt battery) |
+| **Dynamic Client Registration** (RFC 7591 shape) | Design/pending | ADR 0041 (non-functional skeleton, `@lesto/oauth-server`) |
+
+If you asked for "OAuth" meaning social sign-in, that's ADR 0030 and is not built
+yet — the supported path today is email/password + TOTP, below.
+
 ## Wiring an identity service
 
 `createIdentity` is a closure factory: pass it a database handle, a signing
