@@ -175,6 +175,9 @@ fi
 # ---------------------------------------------------------------------------
 cleanup() {
   rc=$?
+  # Deregister first so the `exit` below (and any signal arriving mid-cleanup) can't re-enter
+  # this handler — the EXIT trap would otherwise fire a second time after an INT/TERM run.
+  trap - EXIT INT TERM
   echo
   step "cleanup: restoring safe-at-rest (disarm $RELEASE_VAR, remove pause flag)..."
   # Disarm is the load-bearing one — leaving RELEASE_ENABLED=true is the exact danger this
