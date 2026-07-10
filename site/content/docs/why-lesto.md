@@ -15,7 +15,7 @@ It is, here.
 
 The JavaScript ecosystem has a world-class frontend story and no backend story. Next.js, Remix, and Astro give you React, server rendering, file routing, and great DX — then hand you a blank page for the *hard parts*: the ORM, migrations, jobs, durable workflows, caching, pub/sub, email, mailing lists, auth, roles, webhooks, crons, content management, an admin UI, observability.
 
-Rails, Laravel, and WordPress solved this fifteen years ago — by *owning* those hard parts as first-party, in-house APIs. Lesto brings that bet to TypeScript, with one structural twist they predate: **one substrate.** Every battery — the queue, the cache, pub/sub, workflows, auth, search — is an in-house Lesto API built on **the SQL database itself** (SQLite for zero-config local, Postgres at scale). No Redis. No broker. No service zoo to provision, wire, and pay for. Thin drivers live only at the irreducible edges — email transport, object storage, OAuth.
+Rails, Laravel, and WordPress solved this fifteen years ago — by *owning* those hard parts as first-party, in-house APIs. Lesto brings that bet to TypeScript, with one structural twist they predate: **one substrate.** The stateful batteries — the queue, the cache, workflows, sessions, rate limiting — are in-house Lesto APIs built on **the SQL database itself** (SQLite for zero-config local, Postgres at scale). No Redis. No broker. No service zoo to provision, wire, and pay for. Thin drivers live only at the irreducible edges — email transport, object storage, OAuth.
 
 The result: `npm create lesto` runs on nothing, and the same app code that boots on your laptop's SQLite scales to Postgres and deploys to the Cloudflare edge — unchanged above the driver seam.
 
@@ -23,9 +23,9 @@ The result: `npm create lesto` runs on nothing, and the same app code that boots
 
 This is the part no incumbent has, because they all predate it.
 
-Every Lesto capability is an *operation* in a single core layer. The CLI, the UI, and the **Lesto MCP server** are three equal front-ends over that same layer. That means you can change your app's **content, UI, schema, and data — and ship it — from an MCP client inside Claude or ChatGPT**, not just from your editor.
+Every Lesto app carries its own agent surface. `lesto dev` boots a governed **MCP control plane** for the running app: one `describe_app` call returns the routes, the OpenAPI contract, the content collections, and the schema; content tools query, publish, and edit entries; `handle_request` exercises any route; diagnostics and logs stream on demand. It is read-only by default — destructive tools are gated behind an explicit operator mode, and every action is audited. See [Agent control plane](/batteries/mcp).
 
-Add a database table, write a migration, publish a blog post, render a new page — by asking your agent, with the framework's own operations doing the work safely. The CLI and the visual UI are alternative surfaces over the same operations; neither is required. "Agent-first, editor optional" is a real architectural stance here, not a marketing line.
+The framework meets the coding agent halfway, too: every scaffolded app ships an `AGENTS.md` and a first-party Claude Code skill, so an agent's first session already knows the boot-it → connect-to-MCP → operate-it loop, and the docs themselves publish `/llms.txt` plus a clean-Markdown twin of every page. "Agent-native" is an architectural stance here, not a marketing line.
 
 ## How Lesto compares
 
@@ -41,7 +41,7 @@ A framework is a set of trade-offs. Here is an honest one.
 | Content / CMS | In-house engine | Third-party (headless CMS) | Gems / packages | Bring your own |
 | One DB substrate | **Yes — SQLite → Postgres** | No | Mostly | **Yes — Postgres** |
 | Edge-deployable | **Yes — Cloudflare Workers** | Yes (Vercel) | No | N/A |
-| Agent / MCP control | **Yes — first-class** | No | No | No |
+| Agent / MCP control | **Yes — per-app, governed** | No first-party | No | Platform-level MCP |
 
 Reading the table:
 
@@ -65,7 +65,7 @@ Lesto shines when you're building a *real, full-stack application* — one with 
 
 Lesto holds a strict engineering bar — strict TypeScript, ESM, 100% test coverage on its supported surface, stable error codes — but it is young, and we'd rather you know exactly what's load-bearing versus preview:
 
-- **Shipped and supported:** the data layer + migrations, the DB-backed queue, cache, pub/sub, mail + mailing lists, webhooks, auth + RBAC, the router/controllers/kernel, React SSR + islands, the admin surface, observability (including browser→server trace stitching), the content store/engine/CLI/MCP seam, and Cloudflare + Node deployment.
+- **Shipped and supported:** the data layer + migrations, the DB-backed queue, the cache, pub/sub, mail + mailing lists, webhooks, auth + RBAC, the router/controllers/kernel, React SSR + islands, the admin surface, observability (including browser→server trace stitching), the content store/engine/CLI/MCP seam, and Cloudflare + Node deployment.
 - **Preview (experimental, may change):** parts of the content engine — search (brute-force, practical to ~10k docs), embeddings, prose/lint/seo tooling, and content components beyond `HtmlContent` — plus the AI primitives.
 - **Designed but deferred (post-1.0):** the WordPress-style plugin/theme **extensibility** model, crash-safe durable **workflows** (the step-memoization half ships today; the automatic resume-after-crash half does not), and a managed "Lesto Cloud."
 

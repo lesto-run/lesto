@@ -31,7 +31,12 @@ export const app = lesto()
   .page("/listings/:id", { load, component: ListingScene });
 ```
 
-Crucially, this is *just a value*. The builder owns no transport and opens no
+Pages can also be **file-routed**: drop a `page.tsx` under `app/routes/` and its
+directory's URL becomes a route, with `layout.tsx` wrapping everything at or
+below it. File routes compile onto the same router as hand-written ones — one
+engine, two authoring styles.
+
+Crucially, the app is *just a value*. The builder owns no transport and opens no
 ports — nothing runs until something boots it. That is what makes the same app
 testable, serveable, and prerenderable without change. See
 [Routing & pages](/guides/routing) for the full route surface.
@@ -84,10 +89,11 @@ grows one. How an island gets its data is the canonical rule (ADR 0012):
   needs per-request data is refused at build time. Static islands fetch on the
   client instead.
 
-This very site is all static pages plus a single deferred (`ssr: false`) island:
-the docs search box. The server renders a plain input as the fallback; the client
-mounts the real box, pulls the prerendered `/search-index.json`, and searches it
-entirely in the browser — no server, no model.
+This very site is all static pages plus a few small deferred (`ssr: false`)
+islands. The docs search box is one: the server renders a plain trigger as the
+fallback; the client mounts the real ⌘K palette, pulls the prerendered
+`/search-index.json`, and searches it entirely in the browser — no server, no
+model.
 
 ```ts
 export default defineIsland({
