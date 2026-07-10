@@ -1,20 +1,23 @@
 ---
 title: "Pub/sub"
-description: "@lesto/pubsub is a dependency-free in-process publish/subscribe hub: subscribe listeners to channels, publish messages, and await sequential, ordered delivery to sync and async listeners alike."
+description: "@lesto/pubsub is dependency-free publish/subscribe: an in-process hub with ordered, awaited delivery, plus a transport-neutral WebSocket fan-out core — send policy with backpressure, and signed per-channel capability tokens."
 section: Batteries
 order: 14
 ---
 
 # Pub/sub
 
-`@lesto/pubsub` is a single, dependency-free `PubSub` class: an in-process
-publish/subscribe hub for decoupling the code that emits an event from the code
-that reacts to it. One side calls `publish(channel, message)`; any number of
-listeners registered with `subscribe(channel, listener)` receive it. The whole
-design rests on one property: delivery is **in subscription order, and `publish`
-resolves only after every listener — sync and async — has settled**. State lives
-in process memory, so this is for in-process fan-out within one worker, not a
-cross-process message bus.
+`@lesto/pubsub` decouples the code that emits an event from the code that reacts
+to it. It ships two dependency-free layers: an in-process `PubSub` hub — one side
+calls `publish(channel, message)`, every listener registered with
+`subscribe(channel, listener)` receives it — and a transport-neutral core for
+[fanning a channel out over real WebSockets](#fan-out-over-websockets), with
+signed per-channel capability tokens for authorization.
+
+The hub's design rests on one property: delivery is **in subscription order, and
+`publish` resolves only after every listener — sync and async — has settled**.
+Its state lives in process memory, so the hub is for fan-out within one worker;
+the fan-out core is the cross-process building block.
 
 ## Create a hub and subscribe
 
@@ -107,13 +110,95 @@ hub.clear();                   // drop every channel
 or for every channel when called with no argument — handy for resetting a hub
 between tests or on teardown.
 
+## Fan out over WebSockets
+
+The hub stops at the process boundary. For a live, cross-process feed — a
+browser subscribing to a channel over a WebSocket — the package ships the
+transport-neutral core, and [`examples/pubsub`](https://github.com/lesto-run/lesto/tree/main/examples/pubsub)
+wires it to two real substrates: a single Bun process, and a
+WebSocket-terminating Cloudflare Durable Object.
+
+`fanout(sockets, frame, options?)` is the pure send policy: encode the frame
+once, write it to every socket, and never let a dead socket abort delivery to
+the rest. It returns `{ delivered, failed }` — a failed socket (a `send` that
+threw, or a slow consumer whose `bufferedAmount` exceeds `maxBufferedBytes`) is
+skipped and handed back for you to close. `FanoutRegistry` is the in-memory
+channel → sockets map for a single-process server; a hibernatable Durable Object
+skips it, because workerd's `state.getWebSockets(tag)` *is* the registry there.
+
+```ts
+import { FanoutRegistry, fanout, parsePublishBody } from "@lesto/pubsub";
+
+const registry = new FanoutRegistry();
+const drop = registry.add("orders", socket); // call from the socket's close handler
+
+const body = parsePublishBody(await request.json()); // undefined → answer 400
+if (body !== undefined) {
+  const { delivered, failed } = fanout(
+    registry.socketsFor(body.channel),
+    { type: "message", channel: body.channel, seq: nextSeq(), data: body.message },
+    { maxBufferedBytes: 1024 * 1024 },
+  );
+
+  for (const slow of failed) registry.drop(body.channel, slow); // then close it
+}
+```
+
+You stamp the monotonic `seq` yourself: a single process keeps it in a variable,
+a Durable Object keeps it durable — an in-memory counter would rewind when the
+runtime evicts the isolate.
+
+### Channel capability tokens
+
+Without authorization, anyone who can reach `/subscribe` or `/publish` can read
+or write any channel. A browser can't set headers on a WebSocket upgrade, so the
+answer rides the URL — as a **scoped capability**, not a shared secret. Your
+authenticated backend mints a short-lived token for exactly one
+`(channel, mode)`; the edge only ever verifies:
+
+```ts
+import { mintChannelToken, verifyChannelToken } from "@lesto/pubsub";
+
+// Server-side (holds the secret): grant one channel, one mode, for one minute.
+const token = await mintChannelToken(
+  { channel: "org:42", mode: "subscribe", exp: Date.now() + 60_000 },
+  env.PUBSUB_SECRET,
+);
+
+// At the edge, before upgrading or publishing:
+const result = await verifyChannelToken(
+  token,
+  { channel: "org:42", mode: "subscribe" },
+  env.PUBSUB_SECRET,
+);
+
+if (!result.ok) return new Response("unauthorized", { status: 401 });
+```
+
+Tokens are HMAC-SHA256 over `crypto.subtle` — no `node:crypto`, no
+`nodejs_compat` flag — and verification never throws: a malformed, forged,
+expired, or mis-scoped token is a tagged failure whose `reason` is one of
+`"malformed"`, `"bad-signature"`, `"expired"`, `"wrong-channel"`, or
+`"wrong-mode"`, so the caller answers 401 instead of 500. A leaked token grants
+one channel, one mode, for a short window — never the keys to the bus.
+
+### The runnable demo
+
+`examples/pubsub` runs the same protocol on both substrates: `serve.ts` is the
+single-process Bun server (one `FanoutRegistry`, one in-process `seq`), and
+`room.ts` is a hibernatable Cloudflare Durable Object that terminates the
+WebSockets — one DO per channel, a durable `seq`, and a bounded replay ring
+behind `?since=<seq>` whose eviction arithmetic is the exported
+`replayEvictionBounds`. Both verify the same tokens and share the same `fanout`
+policy, so semantics are identical from local dev to the edge.
+
 ## Notes and gotchas
 
-- **In-process only.** State is plain process memory in this one `PubSub`
-  instance. It does not span workers, requests, or machines, and nothing is
-  persisted — a restart starts empty. For cross-process or durable delivery,
-  reach for [the queue](/batteries/queue) instead; pub/sub is for fan-out inside
-  a single process.
+- **The `PubSub` hub is in-process only.** Its state is plain process memory in
+  one instance. It does not span workers, requests, or machines, and nothing is
+  persisted — a restart starts empty. For cross-process delivery over
+  WebSockets, use [the fan-out core](#fan-out-over-websockets); for durable,
+  retried work, reach for [the queue](/batteries/queue).
 - **`publish` is serial and awaited.** Listeners run one after another in
   subscription order, and each async listener is awaited before the next starts.
   A slow or hanging listener holds up the rest and delays the `publish` promise.

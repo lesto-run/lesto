@@ -9,14 +9,13 @@ order: 11
 
 `@lesto/mailing-lists` is a Ghost-style subscriber layer: named lists people join
 by double opt-in, and broadcasts that fan a templated email out to every
-confirmed recipient. It composes the other batteries rather than reinventing
-them — [`@lesto/db`](/batteries/data) holds the lists, subscribers, broadcasts,
-and per-recipient deliveries; [`@lesto/mail`](/batteries/email) renders and sends
-each message; and [`@lesto/queue`](/batteries/queue) is the durable enqueue
-beneath the mailer. The one core idea is a **per-recipient delivery ledger**:
-every intended recipient is written to the database before any email is enqueued,
-so a fan-out that crashes mid-flight resumes from exactly the rows it never
-finished, never double-sending.
+confirmed recipient. It composes the other batteries — [`@lesto/db`](/batteries/data)
+holds the rows, [`@lesto/mail`](/batteries/email) renders and sends,
+[`@lesto/queue`](/batteries/queue) is the durable enqueue beneath the mailer.
+The core idea is a **per-recipient delivery ledger**: every intended recipient
+is written to the database before any email is enqueued, so a fan-out that
+crashes mid-flight resumes from exactly the rows it never finished — never
+double-sending.
 
 The package opens no database and holds no request context. You hand
 `createMailingLists` a `Db` and a `Mailer`, and it returns a service.

@@ -13,9 +13,8 @@ a Lesto app — text generation, streaming, a bounded agent/tool loop, retrieval
 and evals.
 
 It is provider-agnostic and dependency-free. The whole package is the Anthropic
-Messages API behind a `LanguageModel` interface, sent over an **injected `fetch`
-transport** — the same call `@lesto/auth` makes doing TOTP over `node:crypto`
-instead of a library. Because the transport is a parameter, every layer is
+Messages API behind a `LanguageModel` interface, driven over an **injected
+`fetch` transport**. Because the transport is a parameter, every layer is
 unit-testable with a fake response and no network.
 
 > [!IMPORTANT]

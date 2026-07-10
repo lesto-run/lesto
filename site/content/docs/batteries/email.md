@@ -48,11 +48,15 @@ key — reach for it only when the template name is dynamic.
 
 ### Transports
 
-Two real transports ship; both implement the same `MailTransport` interface, so
-the same templates deliver through either:
+Three real transports ship; all implement the same `MailTransport` interface, so
+the same templates deliver through any of them:
 
 ```ts
-import { createSmtpTransport, createFetchProviderTransport } from "@lesto/mail";
+import {
+  createSmtpTransport,
+  createFetchProviderTransport,
+  createCloudflareEmailTransport,
+} from "@lesto/mail";
 
 // Node only — speaks raw TCP/TLS over node:net / node:tls.
 const smtp = createSmtpTransport({
@@ -67,12 +71,47 @@ const provider = createFetchProviderTransport({
   apiKey: process.env.RESEND_KEY!,
   defaultFrom: "hi@app.com",
 });
+
+// Workers only — drives Cloudflare Email Sending's `send_email` binding. No API keys.
+const cloudflare = createCloudflareEmailTransport({
+  binding: env.EMAIL,
+  defaultFrom: "hi@app.com",
+});
 ```
 
-Use `createSmtpTransport` on a Node server and `createFetchProviderTransport` on
-the edge. Delivery is **at-least-once**: every rendered email carries a stable,
+Use `createSmtpTransport` on a Node server. On the edge, pick
+`createFetchProviderTransport` for an HTTP provider (Resend, SES), or
+`createCloudflareEmailTransport` to send through the platform itself — it drives
+the Worker's `send_email` binding directly, so there is no API key to manage. The
+sender domain must be onboarded to Cloudflare Email Sending first
+(`wrangler email sending enable <domain>` plus the SPF/DKIM/DMARC DNS records);
+until then the binding rejects the send and the transport surfaces it as a coded
+`CloudflareEmailError`, so the queue retries instead of dropping the mail.
+
+Delivery is **at-least-once**: every rendered email carries a stable,
 job-derived `messageId` (sent as the SMTP `Message-ID` and the provider's
 `Idempotency-Key`) so an idempotent transport collapses retried sends into one.
+The Cloudflare binding exposes no idempotency key, so a retried job there can
+deliver twice — the accepted floor for transactional mail.
+
+### Delivery events
+
+Pass `onDelivered` / `onFailed` to the `Mailer` to watch deliveries without
+reading the queue. Both payloads are PII-free — mailer name, job id, attempt,
+and (on failure) a coded reason, never the recipient or body — so they are safe
+to forward to a log line or a span:
+
+```ts
+const mailer = new Mailer({
+  queue,
+  transport,
+  onDelivered: ({ mailerName, jobId, attempt }) => log.info("mail.sent", { mailerName, jobId, attempt }),
+  onFailed: ({ mailerName, code }) => log.warn("mail.failed", { mailerName, code }),
+});
+```
+
+A throw inside either hook is swallowed — a broken sink can neither fail nor
+retry a delivery.
 
 ## Mailing lists
 
@@ -156,6 +195,11 @@ not RFC 5322 — the real proof an address exists is the confirmation round-trip
   recipient, so the queue's concurrency and backoff give you rate-limited delivery
   for free, and `resumeBroadcast` rides the queue's at-least-once floor.
 
-See the runnable [`examples/mailing-lists`](https://github.com/lesto-run/lesto/tree/main/examples/mailing-lists),
-which exposes the whole journey as real HTTP routes over the service and pairs it
-with the **[Queue](/batteries/queue)** for delivery.
+## Where to go next
+
+- [Mailing lists](/batteries/mailing-lists) — the delivery ledger, the schema, and the model helpers in depth.
+- [Queue](/batteries/queue) — the durable enqueue every send rides on.
+- Runnable examples: [`examples/mailing-lists`](https://github.com/lesto-run/lesto/tree/main/examples/mailing-lists)
+  exposes the whole journey as real HTTP routes;
+  [`examples/mail`](https://github.com/lesto-run/lesto/tree/main/examples/mail)
+  runs the mailer on Cloudflare — a D1-backed queue delivering through Email Sending.

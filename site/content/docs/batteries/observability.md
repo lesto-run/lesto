@@ -177,12 +177,11 @@ collector, asserted end-to-end in `examples/estate/test/ai-trace.dogfood.test.ts
 > queryable span store; the spans ship to your OTLP collector like every other
 > span.
 
-The **MCP control plane** is a separate story. A governed tool action
-(`@lesto/mcp`) can emit its own `mcp.tool` span, but that span is **standalone** —
-the MCP server dispatches over stdio, outside any HTTP request, so there is no
-request span to parent on. Joining MCP activity onto a request trace needs a new
-span-minting seam that has **not** shipped, so Lesto does not claim MCP actions
-appear on your request trace today.
+The **MCP control plane** is a separate story. A governed tool dispatch
+(`@lesto/mcp`) offers an `onSpan` seam, and the `mcp.tool` span an app emits from
+it is **standalone** — MCP tool calls run outside your app's request handling
+(over stdio or the streamable-HTTP transport), so there is no request span to
+parent on. Lesto does not claim MCP actions appear on your request trace today.
 
 ## Notes and gotchas
 
