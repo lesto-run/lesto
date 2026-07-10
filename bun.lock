@@ -508,6 +508,8 @@
       "devDependencies": {
         "@lesto/ai": "workspace:*",
         "@lesto/db": "workspace:*",
+        "@lesto/ui-generate": "workspace:*",
+        "@lesto/ui-kit": "workspace:*",
       },
       "peerDependencies": {
         "@lesto/content-core": "workspace:*",

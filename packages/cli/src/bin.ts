@@ -1075,12 +1075,16 @@ const [command, ...commandArgs] = argv;
 // through a LAZY dynamic import so `@lesto/cli`'s eager graph never pulls in `@lesto/ui-generate`
 // (which carries `@anthropic-ai/sdk`) or `@lesto/ui-kit`. Both are OPTIONAL, unpublished peers — a
 // user who wants AI UI generation installs them in their project, mirroring how `@lesto/ai` backs
-// `eval` and `@lesto/content-*` back the content tools. The import specifiers are widened to
-// `string` so the CLI's OWN typecheck never binds to those unpublished packages (they are NOT
-// `@lesto/cli` dependencies; the covered `generate_ui` core in `mcp.ts` is proven against an
-// injected fake, so none is needed). GATED on a model key AND a resolvable registry: absent either,
-// the result is `undefined` and `runMcp` OMITS `generate_ui` — so a keyless boot never touches the
-// eager Anthropic client, and a missing peer degrades the same way (tool omitted, never a crash).
+// `@lesto/ui-kit`/`@lesto/ui-generate` back the `generate_ui` PREVIEW tool. They are `workspace:*`
+// devDependencies (like `@lesto/ai` behind `lesto eval`), so the import resolves in the monorepo and
+// dev; they are NOT part of the published wave, so for a published-app consumer the import misses and
+// the tool is cleanly OMITTED. The specifiers stay widened to `string` to keep the CLI typecheck
+// decoupled from those preview packages' churning internal types (re-typing them is tracked
+// separately). GATED on a model key AND a resolvable registry: absent either, the result is
+// `undefined` and `runMcp` OMITS `generate_ui` — so a keyless boot never touches the eager Anthropic
+// client, and an unpublished-peer install degrades the same way (tool omitted, never a crash). But a
+// FAILURE that is NOT the two peers missing (a syntax/transitive-dep error inside an installed peer)
+// is rethrown, not swallowed — a key-set operator is never silently downgraded with no diagnostic.
 const wireGenerateUi = async (): Promise<((prompt: string) => Promise<unknown>) | undefined> => {
   const apiKey = readEnv("ANTHROPIC_API_KEY");
 
@@ -1099,8 +1103,19 @@ const wireGenerateUi = async (): Promise<((prompt: string) => Promise<unknown>) 
   try {
     kit = (await import("@lesto/ui-kit" as string)) as typeof kit;
     generate = (await import("@lesto/ui-generate" as string)) as typeof generate;
-  } catch {
-    return undefined;
+  } catch (error) {
+    // Classify on the MISSING specifier (the `rethrowUnlessMissingContentPeer` idiom): only the two
+    // preview peers being absent is an expected "unpublished → omit" degrade. Anything else — a real
+    // bug inside an installed peer, or a missing transitive dep — is a loud failure, not a silent
+    // omission (which is exactly what masked this tool being unreachable before it was a devDep).
+    const missing = missingModuleSpecifier(error);
+    if (missing === "@lesto/ui-kit" || missing === "@lesto/ui-generate") {
+      console.error(
+        `lesto mcp: generate_ui omitted — ${missing} is not installed (preview tool; monorepo/dev only until the UI-kit publish wave).`,
+      );
+      return undefined;
+    }
+    throw error;
   }
 
   // createKit() mints a fresh component Registry (the vetted vocabulary the model composes

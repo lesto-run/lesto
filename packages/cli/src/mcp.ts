@@ -50,10 +50,10 @@ export interface McpDeps {
   /**
    * Generate a Lesto UI from a natural-language prompt — the implementation behind the
    * `generate_ui` MCP tool. A STRUCTURAL seam: no `@lesto/ui-generate` name enters this
-   * always-loaded module, so the published CLI (which ships `src`) never typechecks against
-   * that unpublished, `@anthropic-ai/sdk`-carrying package. The bin wires the real generator
-   * through a LAZY dynamic import, gated on a model key AND a component registry (see
-   * `bin.ts`, mirroring how `lesto eval` reaches `@lesto/ai`). ABSENT here → `runMcp` OMITS
+   * always-loaded module, so a plain `lesto mcp` boot never eagerly loads that heavy,
+   * `@anthropic-ai/sdk`-carrying generator. The bin wires the real generator through a LAZY
+   * dynamic import, gated on a model key AND a component registry (see `bin.ts`, mirroring
+   * how `lesto eval` reaches `@lesto/ai`). ABSENT here → `runMcp` OMITS
    * `generate_ui` from the surface, so the tool is cleanly missing rather than advertised
    * present-and-inert (the `MCP_GENERATE_UNAVAILABLE` throw an agent would otherwise hit).
    */
