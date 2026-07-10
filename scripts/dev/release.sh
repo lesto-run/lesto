@@ -21,9 +21,10 @@
 #      is now identical to the one that actually gates publish — the browser e2e is no longer
 #      skippable by trusting the fast-gate set. (The gate in release.yml still runs at publish
 #      time; this is the fail-fast copy so we never arm on a red SHA.)
-#   2. A trap on EXIT/INT/TERM that ALWAYS disarms RELEASE_ENABLED and removes the pause flag —
-#      a Ctrl-C, a timeout, or a failed dispatch can no longer leave the surface armed or main
-#      quiesced. Safe-at-rest (RELEASE_ENABLED=false, no pause flag) is restored unconditionally.
+#   2. A trap on EXIT/INT/TERM that ALWAYS RUNS on any exit (Ctrl-C, timeout, failed dispatch) and
+#      restores safe-at-rest: it RETRIES the RELEASE_ENABLED disarm, then removes the pause flag. The
+#      disarm is best-effort — if every retry fails (e.g. gh offline) it prints a LOUD manual-disarm
+#      instruction rather than silently leaving the surface armed.
 #
 # WHAT IT DOES NOT DO: it does not bump versions or record changesets — that is the operator's
 # job (`bun changeset` / `bun run version`, see RELEASING.md steps 1–4). This script is only the
@@ -36,7 +37,7 @@
 #
 # Usage:
 #   bun run release:cut            # interactive: run checks, confirm, then arm+dispatch+watch
-#   bun run release:cut --yes      # skip the final confirm (still runs every precondition)
+#   bun run release:cut --yes      # skip the final confirm (or set RELEASE_CUT_YES=1); still runs every precondition
 #   bun run release:cut --dry-run  # run every precondition and STOP before arming (mutates nothing)
 set -euo pipefail
 
@@ -74,12 +75,17 @@ step() { echo "release:cut: $*"; }
 command -v gh >/dev/null 2>&1 || fail "the GitHub CLI (gh) is not installed — it is required to arm/dispatch/disarm the release."
 gh auth status >/dev/null 2>&1 || fail "gh is not authenticated (run 'gh auth login'). Arming without being able to disarm is unsafe — refusing."
 
+# node runs the version-bump precondition below (it imports publish.mjs's assertVersionsBumped).
+command -v node >/dev/null 2>&1 || fail "node is not on PATH — required for the version-bump precondition."
+
 # On main. release.yml dispatches --ref main, so the tree we validate must BE main.
 branch="$(git symbolic-ref --quiet --short HEAD || echo DETACHED)"
 [ "$branch" = "main" ] || fail "not on main (on '$branch'). Releases cut from main only."
 
 # Clean working tree — no uncommitted change can sneak into (or be missing from) the release.
-[ -z "$(git status --porcelain)" ] || fail "working tree is not clean. Commit or stash first — CI publishes origin's tree, not your local edits."
+# Capture to a var first: `[ -z "$(git status)" ]` would fail-OPEN (pass) if git status itself errored.
+git_status="$(git status --porcelain)" || fail "git status failed."
+[ -z "$git_status" ] || fail "working tree is not clean. Commit or stash first — CI publishes origin's tree, not your local edits."
 
 # origin/main == HEAD. release.yml checks out ORIGIN at --ref main; if origin lags your HEAD, CI
 # silently builds a STALE tree and the green-CI gate then validates the wrong SHA. Fetch, then
@@ -93,7 +99,13 @@ origin_sha="$(git rev-parse FETCH_HEAD)"
 # Changesets consumed. After `bun run version` the per-change `.changeset/*.md` files are deleted,
 # leaving only README.md (and the non-.md config.json). A leftover .md means the bump was not run
 # (or not committed) — publishing now would ship un-versioned packages.
-leftover_changesets="$(find .changeset -maxdepth 1 -type f -name '*.md' ! -name 'README.md' 2>/dev/null || true)"
+# Guard `[ -d .changeset ]` explicitly: a bare `find … || true` on a MISSING dir would fail-OPEN
+# (empty result → "consumed" passes). A missing .changeset genuinely means no changesets, so that
+# is a correct pass — but make it explicit rather than relying on swallowing find's error.
+leftover_changesets=""
+if [ -d .changeset ]; then
+  leftover_changesets="$(find .changeset -maxdepth 1 -type f -name '*.md' ! -name 'README.md')"
+fi
 [ -z "$leftover_changesets" ] || fail $'unconsumed changesets remain — run `bun run version` and commit the result first:\n'"$leftover_changesets"
 
 # Versions bumped off the 0.0.0 placeholder. This reuses publish.mjs's OWN assertVersionsBumped and
@@ -124,10 +136,13 @@ fi
 # push` pins it to the push-to-main run (not a stale pull_request run sharing the head SHA).
 # Fail-CLOSED: no run / still running / any non-success all abort.
 step "checking $CI_WORKFLOW is green for $head_sha..."
+# NB: no `2>&1` — release.yml's mirrored query doesn't redirect stderr either, and folding gh's
+# stderr into the captured value could let a stray gh notice become the parsed first line (a false
+# "not green"). On failure the `if !` still aborts and gh's error is already on the terminal.
 if ! ci_result="$(gh run list --workflow="$CI_WORKFLOW" --event push --commit "$head_sha" --limit 1 \
   --json status,conclusion,databaseId \
-  --jq 'if length == 0 then "none none 0" else "\(.[0].status) \(.[0].conclusion) \(.[0].databaseId)" end' 2>&1)"; then
-  fail "could not query CI status via gh: $ci_result"
+  --jq 'if length == 0 then "none none 0" else "\(.[0].status) \(.[0].conclusion) \(.[0].databaseId)" end')"; then
+  fail "could not query CI status via gh (its error is above)."
 fi
 ci_status="$(printf '%s' "$ci_result" | cut -d' ' -f1)"
 ci_conclusion="$(printf '%s' "$ci_result" | cut -d' ' -f2)"
@@ -180,13 +195,22 @@ cleanup() {
   trap - EXIT INT TERM
   echo
   step "cleanup: restoring safe-at-rest (disarm $RELEASE_VAR, remove pause flag)..."
-  # Disarm is the load-bearing one — leaving RELEASE_ENABLED=true is the exact danger this
-  # script exists to prevent. Best-effort so cleanup can't itself abort, but LOUD on failure.
-  if ! gh variable set "$RELEASE_VAR" --body false >/dev/null 2>&1; then
-    echo "release:cut: ⚠️  FAILED to disarm $RELEASE_VAR — it may still be 'true'. Disarm it MANUALLY now:" >&2
-    echo "release:cut:     gh variable set $RELEASE_VAR --body false" >&2
-  else
+  # Disarm is the load-bearing one — leaving RELEASE_ENABLED=true is the exact danger this script
+  # exists to prevent. RETRY a few times so a transient gh/network blip can't leave the surface armed;
+  # only after every attempt fails do we fall through to a LOUD manual-disarm instruction.
+  disarmed=""
+  for _ in 1 2 3; do
+    if gh variable set "$RELEASE_VAR" --body false >/dev/null 2>&1; then
+      disarmed=1
+      break
+    fi
+    sleep 2
+  done
+  if [ -n "$disarmed" ]; then
     step "cleanup: $RELEASE_VAR disarmed (false)."
+  else
+    echo "release:cut: !! FAILED to disarm $RELEASE_VAR after 3 attempts — it may still be 'true'. Disarm it MANUALLY now:" >&2
+    echo "release:cut:     gh variable set $RELEASE_VAR --body false" >&2
   fi
   rm -f "$PAUSE_FLAG" 2>/dev/null || true
   step "cleanup: pause flag removed; push agent will resume."
@@ -201,6 +225,17 @@ trap cleanup EXIT INT TERM
 step "quiescing main: $PAUSE_FLAG"
 mkdir -p "$(dirname -- "$PAUSE_FLAG")" 2>/dev/null || true
 touch "$PAUSE_FLAG"
+
+# TOCTOU guard: re-assert the vetted SHA is STILL origin's tip now that pushes are frozen. origin was
+# NOT frozen between the origin==HEAD precondition and here — the confirm prompt can block for minutes,
+# and this repo's Studio daemon + push agent advance origin/main concurrently. If a superseding commit
+# landed in that gap, `gh workflow run --ref main` would dispatch (and release.yml could publish) a SHA
+# the operator never vetted or saw in the summary. Detect + abort; the trap then un-quiesces + disarms.
+# (Freezing first, then re-checking, collapses the window to the sub-second fetch→dispatch gap.)
+step "re-checking origin/main is still $head_sha after quiesce..."
+git fetch --quiet origin main || fail "git fetch after quiesce failed."
+frozen_sha="$(git rev-parse FETCH_HEAD)"
+[ "$frozen_sha" = "$head_sha" ] || fail "origin/main advanced ($head_sha -> $frozen_sha) after quiesce — the tree you vetted is no longer main's tip. Re-run to vet the new SHA."
 
 # Arm. RELEASE_ENABLED is admin-gated; release.yml's job is skipped unless it is 'true'.
 step "arming $RELEASE_VAR=true..."

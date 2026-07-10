@@ -12,9 +12,10 @@ name: CI
 #
 # RELEASE-GATE INVARIANT: the release gate (release.yml, and its fail-fast local mirror in
 # `scripts/dev/release.sh` / `bun run release:cut`) enforces the success of THIS workflow ONLY.
-# It does NOT wait on any other workflow. Other push-triggered workflows — live-capstone-e2e.yml,
-# deploy-examples.yml, benchmarks.yml, the scaffold preflights — run on push to main but are
-# INVISIBLE to the release gate: a release can publish while they are red or still running.
+# It does NOT wait on any other workflow. Some run on push to main (live-capstone-e2e.yml,
+# deploy-examples.yml); others only on workflow_dispatch/schedule (benchmarks.yml, the scaffold
+# preflights) — but EITHER WAY they are INVISIBLE to the release gate: a release can publish while
+# they are red, still running, or (for the dispatch-only ones) never triggered for this SHA at all.
 # THEREFORE: any check that must block a release has to be a JOB IN THIS FILE (the cheapest
 # option). If a release-blocking gate genuinely cannot live here, the alternative is to extend
 # release.yml's gate query to also require that workflow's success for the SHA — but do not

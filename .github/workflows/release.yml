@@ -11,13 +11,15 @@
 # Publishing runs `bun run release` (scripts/publish.mjs): `bun pm pack` rewrites the
 # `workspace:*` protocol (npm does not), then `npm publish` uploads each tarball over OIDC.
 #
-# Dormant until the RELEASE_ENABLED repo variable is `true`. Trigger EXPLICITLY from the Actions
-# tab ("Run workflow" → workflow_dispatch); there is deliberately NO `push` trigger. RELEASE_ENABLED
-# is now a DEFENSE-IN-DEPTH privilege gate: `workflow_dispatch` lets anyone with Actions-write fire a
-# run, but a repo *variable* is admin-gated — so nothing publishes unless an admin has opened the
-# publish window. Arm it, dispatch, then set it back to `false` (safe-at-rest). NOTE: the workflow
-# checks out ORIGIN at the given ref — confirm `git rev-list --count origin/main..HEAD == 0` and
-# dispatch with `--ref <exact-sha>` (not `--ref main`), or CI silently builds a stale tree.
+# Dormant until the RELEASE_ENABLED repo variable is `true`. The supported way to arm → dispatch →
+# watch → disarm is `bun run release:cut` (scripts/dev/release.sh) — do NOT arm the variable and click
+# "Run workflow" in the Actions tab by hand (the half-done-able manual dance it replaces). There is
+# deliberately NO `push` trigger. RELEASE_ENABLED is a DEFENSE-IN-DEPTH privilege gate: `workflow_dispatch`
+# lets anyone with Actions-write fire a run, but a repo *variable* is admin-gated — so nothing publishes
+# unless an admin has opened the publish window; release:cut sets it back to `false` (safe-at-rest) on exit.
+# NOTE: the workflow checks out ORIGIN at the given ref, so confirm origin/main IS the release SHA
+# (`git rev-list --count origin/main..HEAD == 0`) and dispatch `--ref main` — NOT a bare `--ref <sha>`,
+# which 422s (`workflow_dispatch` resolves named refs only, not raw SHAs).
 #
 # GREEN-CI GATE (L-69e905de): the first step below refuses to publish unless the `CI` workflow
 # concluded `success` for the exact dispatched commit — so a red or not-yet-built tree fails fast

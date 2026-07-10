@@ -45,9 +45,11 @@ name* (below); everything already on npm publishes through CI.
 5. **Publish everything via CI — `bun run release:cut`.** This one command (`scripts/dev/release.sh`)
    is the whole publish step: it runs fail-closed **preconditions**, then does an atomic
    **quiesce → arm → dispatch → watch → cleanup**, and its cleanup ALWAYS fires (trap on
-   EXIT/INT/TERM), so a Ctrl-C, timeout, or failed dispatch can never leave `RELEASE_ENABLED`
-   armed or main quiesced. Do **not** hand-run the 5-step dance below — it is documented only so
-   you know what the script automates and can recover if `gh` is unavailable.
+   EXIT/INT/TERM): a Ctrl-C, timeout, or failed dispatch triggers a disarm-with-retry of
+   `RELEASE_ENABLED` and removes the pause flag — and if every disarm retry fails (e.g. `gh`
+   offline) it prints a LOUD manual-disarm instruction rather than silently leaving the surface
+   armed. Do **not** hand-run the 5-step dance below — it is documented only so you know what the
+   script automates and can recover if `gh` is unavailable.
 
    ```sh
    bun run release:cut            # interactive: checks → confirm → arm+dispatch+watch → auto-disarm
@@ -73,8 +75,10 @@ name* (below); everything already on npm publishes through CI.
    RELEASE_ENABLED true` to **arm**; `gh workflow run release.yml --ref main` to **dispatch**
    (`--ref main`, never a bare SHA — `workflow_dispatch` **422s** on a raw SHA; safe because the
    `origin == HEAD` precondition guarantees `main` IS your release SHA); `gh run watch
-   --exit-status` to **watch**; then the trap **disarms `RELEASE_ENABLED=false` and removes the
-   pause flag** unconditionally. **GREEN-CI GATE (L-69e905de)** still runs server-side too: even if
+   --exit-status` to **watch**; then the trap **disarms `RELEASE_ENABLED=false` (with retry) and
+   removes the pause flag** on every exit path. It also **re-asserts `origin/main` is still your
+   vetted SHA after quiescing** (the confirm can block for minutes while the daemon pushes), aborting
+   rather than dispatching a superseded tree. **GREEN-CI GATE (L-69e905de)** still runs server-side too: even if
    you bypassed the local check, `release.yml`'s first step refuses to publish unless `CI` concluded
    `success` for the dispatched commit. Read the run's publish summary: `0 published, N skipped`
    when you expected new publishes means CI built a stale tree — investigate, don't assume success.
@@ -259,10 +263,13 @@ later goes public needs the same fix. See `docs/plans/publish-day.md` for the ve
 4. **Publish via Trusted Publishing (OIDC) in CI — the supported path.** Releases run from
    `.github/workflows/release.yml` on `github.com/lesto-run/lesto`, authenticated by GitHub's
    OIDC identity (**NO `NPM_TOKEN`**), matched against each package's **trusted publisher** config
-   on npmjs.com. Arm with the `RELEASE_ENABLED=true` repo variable, then trigger EXPLICITLY from the
-   Actions tab ("Run workflow" → `workflow_dispatch`). There is deliberately **no `push` trigger**:
-   this repo's Studio daemon auto-pushes to main, so an on-push release could let a stray push publish
-   whatever is at HEAD the moment `RELEASE_ENABLED` flips on. The job runs `bun run release`
+   on npmjs.com. **Dispatch it with `bun run release:cut`** (the scripted flow — step 5 of "How to
+   cut a release" at the top of this doc): it arms `RELEASE_ENABLED=true`, dispatches
+   `workflow_dispatch`, watches to completion, and disarms, all behind the fail-closed preconditions.
+   **Do NOT** arm the variable and click "Run workflow" in the Actions tab by hand — that manual dance
+   is the exact half-done-able ritual `release:cut` replaces. There is deliberately **no `push`
+   trigger**: this repo's Studio daemon auto-pushes to main, so an on-push release could let a stray
+   push publish whatever is at HEAD the moment `RELEASE_ENABLED` flips on. The job runs `bun run release`
    (**`node scripts/publish.mjs`**), which `bun pm pack`s each public package and hands the tarball to
    `npm publish`. It is **idempotent**: a version already on the registry is skipped, so a re-run after
    a partial failure only publishes what's missing. Provenance is automatic.
