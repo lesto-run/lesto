@@ -785,8 +785,7 @@ const buildLiveReload = (): {
   // concurrent apps never collide. Read back from `server.port` after the synchronous bind,
   // then threaded into BOTH the upgrade gate (the Host allowlist is port-specific) and the
   // injected client (which must dial the port we actually bound). Stays 0 only if the bind is
-  // skipped (no Bun) or fails — then reload is off and the client dials a dead port, exactly
-  // the harmless no-op the old fixed-port catch produced.
+  // skipped (no Bun) or fails — then reload is off and NO client is injected at all (below).
   let boundPort = 0;
 
   try {
@@ -856,9 +855,13 @@ const buildLiveReload = (): {
   // The injected client (see `dev-overlay.ts`): connect to the reload socket; on a
   // `reload` message (or a dropped connection) reload the page, on an `error` message
   // paint the overlay. Extracted to a pure builder so its DOM rendering is unit-tested
-  // against a fake socket — this bin injects exactly that tested output. `boundPort` is the
-  // port we actually bound (0 if the bind was skipped/failed → a dead, harmless channel).
-  const script = devReloadClientScript(boundPort, token);
+  // against a fake socket — this bin injects exactly that tested output. When `boundPort`
+  // is 0 the bind was skipped (a non-Bun runtime — e.g. the published node/jiti dev path —
+  // has no `Bun.serve`) or failed, so there is no reload server to reach: inject NOTHING
+  // rather than a client that endlessly dials a dead `ws://host:0` and logs a connect error
+  // on every page. Live reload is simply off there, as it was whenever the fixed-port bind
+  // failed — just without the stray client.
+  const script = boundPort === 0 ? "" : devReloadClientScript(boundPort, token);
 
   return {
     script,
