@@ -148,15 +148,30 @@ if ! version_info="$(node --input-type=module -e '
   }
   const depRange = rangeMatch[1];
 
+  // FAIL CLOSED on an unrecognized RANGE shape. The checker below models ONLY the simple `^X.Y.Z`
+  // caret LESTO_DEP_RANGE actually uses; a future `~0.1.0` / `>=0.1.0` / `0.1.x` / `||` / caret-with-
+  // prerelease is one we CANNOT verify here. Warning-and-proceeding on an unverifiable range would
+  // reopen the exact stale-pin hole this check exists to close (a `~0.1.0` resolves 0.1.x only, never
+  // 0.2.x, yet would sail through). So refuse and tell the operator to extend the checker. NB: this
+  // is about the RANGE shape; an individual prerelease VERSION is handled (warn, not fail) below.
+  if (!/^\^\d+\.\d+\.\d+$/.test(depRange.trim())) {
+    throw new Error(
+      `scaffold LESTO_DEP_RANGE "${depRange}" is not a simple ^X.Y.Z caret. The release:cut ` +
+        "satisfaction checker only models that shape, so it cannot verify this range covers the " +
+        "surface -- refusing rather than waving an unverifiable pin through. Extend the checker in " +
+        "scripts/dev/release.sh, or normalize LESTO_DEP_RANGE to a caret, before releasing.",
+    );
+  }
+
   // Correct caret-range membership WITHOUT a semver dep (semver is NOT resolvable from this repo --
-  // verified with require.resolve at authoring time, hence the hand-rolled check). We model ONLY the
-  // simple `^X.Y.Z` caret LESTO_DEP_RANGE actually uses, with full caret-on-zero semantics:
+  // verified with require.resolve at authoring time, hence the hand-rolled check). The range is
+  // guaranteed a simple `^X.Y.Z` caret by the fail-closed check above; caret-on-zero semantics:
   //   ^X.Y.Z (X>0) := >=X.Y.Z  <(X+1).0.0
   //   ^0.Y.Z (Y>0) := >=0.Y.Z  <0.(Y+1).0
   //   ^0.0.Z       := >=0.0.Z  <0.0.(Z+1)
-  // Anything more exotic (||, -, ~, >=, x-ranges, or a prerelease-tagged version) returns "unknown"
-  // so we WARN and surface the range for manual eyeballing rather than risk a WRONG hard-fail -- a
-  // false block of a valid release is worse than a warning here.
+  // A prerelease-tagged VERSION (e.g. 0.2.0-rc.1) is not bare X.Y.Z -> "unknown" -> WARN not fail:
+  // prereleases ship under a `next` dist-tag and a caret from `latest` never pulls them, so a
+  // range/prerelease mismatch is not a real stale-pin, and a false hard-fail there would be worse.
   const caretResult = (version, range) => {
     const cm = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(range.trim());
     const vm = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim()); // bare X.Y.Z only; a prerelease tag -> unknown
@@ -186,8 +201,10 @@ if ! version_info="$(node --input-type=module -e '
   }
 
   // Surface the range + verdict on the same line so the operator sees it in the preflight summary.
+  // (unknown here means a prerelease VERSION, not an unverified range -- the range shape is already
+  // fail-closed above, so this only fires when a published version carries a -prerelease tag.)
   const note = unknown.length > 0
-    ? `scaffold LESTO_DEP_RANGE "${depRange}" -- UNVERIFIED range shape, EYEBALL that it covers the surface`
+    ? `scaffold LESTO_DEP_RANGE "${depRange}" set, but prerelease version(s) present -- not caret-checkable, EYEBALL`
     : `scaffold LESTO_DEP_RANGE "${depRange}" satisfies the surface`;
   process.stdout.write(`${nodes.length} publishable packages @ ${versions.join(", ")} (${note})`);
 ' 2>&1)"; then
