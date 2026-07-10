@@ -71,10 +71,18 @@ describe("dialectRuntimeDeps", () => {
     });
   });
 
-  it("dedupes preact and pre-bundles its compat layer for preact", () => {
+  it("dedupes preact and pre-bundles its compat layer (incl. the client renderer) for preact", () => {
     expect(dialectRuntimeDeps("preact")).toEqual({
       dedupe: ["preact"],
-      include: ["preact", "preact/compat", "preact/hooks", "preact/jsx-runtime"],
+      include: [
+        "preact",
+        "preact/compat",
+        // `preact/compat/client` is the `react-dom/client` alias target the dev entry
+        // imports; without it the first island request re-optimizes and 504s (L-4027e1f0).
+        "preact/compat/client",
+        "preact/hooks",
+        "preact/jsx-runtime",
+      ],
     });
   });
 });

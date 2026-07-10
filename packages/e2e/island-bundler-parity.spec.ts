@@ -44,9 +44,14 @@ import { linkWorkspaceInto } from "./link-workspace";
  * `bin.ts`) — that removed a real cross-app 403 reconnect-storm, but it was NOT the cause of
  * this spec's intermittent hydration flake (L-89f8ca04): captured console on a failing run
  * showed the island's proxied module requests transiently 504 during Vite's concurrent
- * cold-start dep pre-bundling, so the island missed first hydration. The Vite leg now
- * reload-retries to recover (see that test); the underlying "proxy doesn't auto-recover from
- * the cold-start 504" is tracked as a separate product follow-up.
+ * cold-start dep pre-bundling, so the island missed first hydration. That was ROOT-CAUSED and
+ * fixed in L-4027e1f0: the preact dialect's `optimizeDeps.include` was missing
+ * `preact/compat/client` (the `react-dom/client` alias target the dev hydration entry imports),
+ * so the first island request discovered it mid-crawl, Vite re-ran the dep optimizer, and the
+ * racing browser request 504'd on the now-stale pre-bundle hash. Pre-declaring it collapses
+ * cold start to ONE optimizer pass (one uniform hash) — no re-optimize, so no "Outdated Optimize
+ * Dep" 504 is possible. The Vite leg below therefore asserts single-LOAD hydration with no
+ * recovery reload (the reload crutch that masked this is gone).
  */
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -159,19 +164,18 @@ test("the Vite-served island (lesto dev path) hydrates the same source", async (
 
   const counter = page.locator('[data-testid="counter"]');
 
-  // Recover across a Vite cold-start hiccup (L-89f8ca04). Under the DOUBLED CPU of two dev
-  // servers booting at once, Vite's first-request dep pre-bundling can lag, and the island's
-  // proxied module requests transiently 504 ("Outdated Optimize Dep") — so the island misses
-  // its FIRST hydration (the counter never wires up; the click is a no-op; it stays "count: 0").
-  // A real browser recovers on the next load once the optimizer has settled; this test proves
-  // hydration PARITY, not cold-start recovery, so mirror that recovery by retrying the whole
-  // load+interact as a unit. (The reload-WS 403 that the task first blamed was a bystander —
-  // fixed by the ephemeral-port change in `bin.ts`, but it was never this flake's cause; the
-  // proxy not auto-recovering from the 504 is tracked separately as a product follow-up.)
+  await page.goto(`${VITE_URL}/`);
+  // The SSR fallback paints "count: 0" immediately; the island then hydrates on this SAME load
+  // (no recovery reload — L-4027e1f0 removed the cold-start 504 at the source, see file header).
+  await expect(counter).toHaveText("count: 0");
+
+  // Retry only the CLICK — never a page reload. Under two dev servers' doubled CPU the first
+  // cold optimize still adds latency, so the island may not be interactive the instant the
+  // fallback paints; once it is, a click sticks and count → 1. Crucially, if it NEVER hydrates
+  // on this load (the bug), no amount of clicking reaches "count: 1" and this fails — the real
+  // single-load regression guard the reload crutch could not be.
   await expect(async () => {
-    await page.goto(`${VITE_URL}/`);
-    await expect(counter).toHaveText("count: 0");
     await counter.click();
-    await expect(counter).toHaveText("count: 1", { timeout: 4_000 });
-  }).toPass({ timeout: 30_000 });
+    await expect(counter).toHaveText("count: 1", { timeout: 1_000 });
+  }).toPass({ timeout: 20_000 });
 });

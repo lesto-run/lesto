@@ -90,6 +90,15 @@ export function preactAliases(): readonly DialectAlias[] {
  * is the automatic runtime Vite emits in DEV (`jsxDEV`) — without it the first island
  * request triggers a re-optimize.
  *
+ * Each dialect's `include` must name EVERY runtime entry point the dev island graph
+ * reaches, or the first request discovers the omitted one mid-crawl, Vite re-runs the
+ * optimizer, and the racing browser request 504s on the now-stale pre-bundle hash with
+ * no reliable in-browser recovery (L-4027e1f0). So `include` mirrors the aliased entry
+ * points on BOTH sides: react's `react-dom/client` (the `createRoot`/`hydrateRoot`
+ * renderer the dev entry imports) has its preact twin `preact/compat/client` — the
+ * `react-dom/client` → `preact/compat/client` alias target ({@link PREACT_ALIAS}).
+ * (`include` is a DEV-only optimizer hint; the prod build reads only `dedupe`.)
+ *
  * Both fields are plain (mutable) `string[]` because Vite's `dedupe` and
  * `DepOptimizationOptions.include` are mutable: the lists spread straight into the real
  * `InlineConfig` on both sides.
@@ -98,7 +107,16 @@ export function dialectRuntimeDeps(dialect: Dialect): DialectRuntimeDeps {
   return dialect === "preact"
     ? {
         dedupe: ["preact"],
-        include: ["preact", "preact/compat", "preact/hooks", "preact/jsx-runtime"],
+        include: [
+          "preact",
+          "preact/compat",
+          // The alias target of `react-dom/client` (createRoot/hydrateRoot) the dev entry
+          // imports — the preact twin of react's `react-dom/client`. Omitting it made the
+          // first island request discover it mid-crawl → re-optimize → 504 (L-4027e1f0).
+          "preact/compat/client",
+          "preact/hooks",
+          "preact/jsx-runtime",
+        ],
       }
     : {
         dedupe: ["react", "react-dom"],

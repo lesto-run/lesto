@@ -55,9 +55,12 @@ describe("viteIslandConfig", () => {
     expect(jsxAlias?.replacement).toBe("preact/jsx-runtime");
     expect(jsxAlias?.find.test("react/jsx-runtimeX")).toBe(false);
 
-    // The preact runtime is deduped to one copy; the aliased compat layer is pre-bundled.
+    // The preact runtime is deduped to one copy; the aliased compat layer — INCLUDING the
+    // `react-dom/client` → `preact/compat/client` hydration renderer — is pre-bundled, so the
+    // first island request doesn't discover it mid-crawl and 504 on the stale hash (L-4027e1f0).
     expect(config.resolve.dedupe).toEqual(["preact"]);
     expect(config.optimizeDeps.include).toContain("preact/compat");
+    expect(config.optimizeDeps.include).toContain("preact/compat/client");
   });
 
   it("inlines the verified public-env define as a copy", () => {
