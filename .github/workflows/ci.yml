@@ -37,25 +37,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Shell lint for the load-bearing dev scripts (L-539f5d80). `scripts/dev/release.sh`
-      # (`bun run release:cut`, ~250 lines) drives the publish path and has already shipped
+      # Shell lint for the repo's shell scripts (L-539f5d80). `scripts/dev/release.sh`
+      # (`bun run release:cut`, ~330 lines) drives the publish path and has already shipped
       # shell bugs (the set -u ellipsis-abutting-$var trap 571f657; a fail-open command-
       # substitution acebe88). There was NO shell lint anywhere in the repo; this is the
       # standing guard. It needs no project deps, so it runs FIRST — before the Bun setup and
-      # install — to fail fast and cheaply.
+      # install — to fail fast and cheaply. Scope is `git ls-files '*.sh'` (every TRACKED .sh,
+      # not a fixed dir glob) so coverage grows with the repo; today that is the four scripts/dev/
+      # scripts. NUL-delimited (`-z`/`-0`) to be filename-safe.
       #
       #   - `bash -n` is the zero-install floor: a pure parse/syntax check over every script,
       #     independent of any tool being present on the runner.
       #   - `shellcheck` is the real lint (unquoted expansions, fail-open `$?` patterns, …).
-      #     It is PRE-INSTALLED on GitHub's `ubuntu-latest` image, so no install step is
-      #     needed; it reads each shebang (release.sh is bash, the rest are sh) and runs at its
-      #     default severity. The four scripts are verified clean (shellcheck 0.11.0), so a new
-      #     finding fails the build — which is the point.
-      - name: Shell-syntax check (bash -n) over scripts/dev/*.sh
-        run: for f in scripts/dev/*.sh; do bash -n "$f"; done
+      #     It is PRE-INSTALLED on GitHub's `ubuntu-latest` image, so no install step is needed;
+      #     it reads each shebang (release.sh is bash, the rest are sh) and runs at its default
+      #     severity. Scripts verified clean at 0.11.0, so a new finding fails the build.
+      #     ⚠️ TRADE-OFF (accepted; pin follow-up L-fa5c444c): the shellcheck VERSION floats with
+      #     the runner image — a future image bump can promote a new default-severity check that
+      #     reds an UNRELATED PR, and since release.sh's PRECONDITION #1 gates on ci.yml green that
+      #     blocks releases until quieted. It fails CLOSED (never ships bad code); pin the tool to
+      #     remove the drift.
+      - name: Shell-syntax check (bash -n) over tracked *.sh
+        run: git ls-files -z '*.sh' | xargs -0 -r -n1 bash -n
 
-      - name: Shell lint (shellcheck) over scripts/dev/*.sh
-        run: shellcheck scripts/dev/*.sh
+      - name: Shell lint (shellcheck) over tracked *.sh
+        run: git ls-files -z '*.sh' | xargs -0 -r shellcheck
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
