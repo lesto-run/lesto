@@ -32,6 +32,7 @@ export type {
   IdentityMailer,
   IdentityOptions,
   PasswordHasher,
+  PasswordHashCost,
 } from "./identity";
 
 export {

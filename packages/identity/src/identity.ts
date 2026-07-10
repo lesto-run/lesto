@@ -265,6 +265,64 @@ export interface IdentityMailer {
 }
 
 /**
+ * A secret-free description of the KDF a stored password hash was minted under —
+ * the algorithm tag and its cost parameters, and NOTHING that could reconstruct
+ * the hash (never the salt, never the derived key). Carried on the
+ * {@link IdentityEvent} `password_rehashed` variant so a monitor can tell a cost
+ * UP-grade from a strength-reducing DOWN-grade (e.g. a migration hasher walking a
+ * 600k PBKDF2 row down to the 100k edge ceiling — a one-way ~6× reduction).
+ */
+export type PasswordHashCost =
+  | { readonly algorithm: "scrypt"; readonly n: number; readonly r: number; readonly p: number }
+  | { readonly algorithm: "pbkdf2"; readonly iterations: number }
+  | { readonly algorithm: "unknown" };
+
+/** True iff `value` is a finite integer strictly greater than zero. */
+const isPositiveInteger = (value: number): boolean => Number.isInteger(value) && value > 0;
+
+/**
+ * Describe the KDF cost a stored hash was minted under — algorithm tag + cost
+ * parameters ONLY. It NEVER reads back the salt or the derived key, so its output
+ * is safe to put on an event a sink logs freely. Total and non-throwing: an
+ * unrecognized or malformed string collapses to `{ algorithm: "unknown" }`, so it
+ * can run on the rehash success path without ever denying an otherwise-valid login.
+ *
+ * Kept in lockstep with the wire formats `@lesto/auth` mints (that package exports
+ * no parser — see its `password-scrypt.ts` / `password-web.ts`):
+ *   - scrypt current: `scrypt$N$r$p$salt$key`       (6 segments)
+ *   - scrypt legacy:  `scrypt$salt$key`             (3 segments → N=2^14, r=8, p=1)
+ *   - pbkdf2:         `pbkdf2$digest$iters$salt$key` (5 segments)
+ */
+const describeHashCost = (hash: string): PasswordHashCost => {
+  const parts = hash.split("$");
+
+  if (parts[0] === "scrypt") {
+    if (parts.length === 6) {
+      const n = Number(parts[1]);
+      const r = Number(parts[2]);
+      const p = Number(parts[3]);
+
+      if (isPositiveInteger(n) && isPositiveInteger(r) && isPositiveInteger(p)) {
+        return { algorithm: "scrypt", n, r, p };
+      }
+    } else if (parts.length === 3) {
+      // The pre-versioned parameterless form — read at the cost @lesto/auth assumes.
+      return { algorithm: "scrypt", n: 2 ** 14, r: 8, p: 1 };
+    }
+
+    return { algorithm: "unknown" };
+  }
+
+  if (parts[0] === "pbkdf2" && parts.length === 5) {
+    const iterations = Number(parts[2]);
+
+    if (isPositiveInteger(iterations)) return { algorithm: "pbkdf2", iterations };
+  }
+
+  return { algorithm: "unknown" };
+};
+
+/**
  * A coded identity lifecycle event — the observability seam {@link IdentityOptions.onEvent}
  * receives, owned here, consumed by OTLP wiring elsewhere (operability-dx item 3).
  *
@@ -280,11 +338,27 @@ export interface IdentityMailer {
  * have resolved a user (an unknown-email guess looks identical to a wrong
  * password, by design — the enumeration-safe posture `login` keeps everywhere),
  * and attaching one would both leak existence and lie on the unknown-email path.
+ * The `password_rehashed` variant carries {@link PasswordHashCost} `from`/`to`
+ * descriptors — algorithm + cost params only, never the salt or derived key.
  */
 export type IdentityEvent =
   | { readonly type: "login_succeeded"; readonly userId: string; readonly at: number }
   | { readonly type: "login_failed"; readonly at: number }
   | { readonly type: "password_reset"; readonly userId: string; readonly at: number }
+  | {
+      /**
+       * The rehash-on-login seam re-minted a stale hash and PERSISTED it. `from`/`to`
+       * describe the old and new KDF cost (secret-free) so a monitor can catch a
+       * strength REDUCTION — e.g. `pbkdf2MigrationHasher` walking a 600k row DOWN to
+       * the 100k edge ceiling — which is otherwise invisible. Rides an authenticated
+       * success path, so it names its subject with `userId`.
+       */
+      readonly type: "password_rehashed";
+      readonly userId: string;
+      readonly at: number;
+      readonly from: PasswordHashCost;
+      readonly to: PasswordHashCost;
+    }
   | { readonly type: "email_verified"; readonly userId: string; readonly at: number }
   | { readonly type: "session_revoked"; readonly userId: string; readonly at: number };
 
@@ -438,8 +512,8 @@ export interface IdentityOptions {
 
   /**
    * Optional observability hook fired on each identity lifecycle event —
-   * `login_succeeded` / `login_failed` / `password_reset` / `email_verified` /
-   * `session_revoked` (see {@link IdentityEvent}).
+   * `login_succeeded` / `login_failed` / `password_reset` / `password_rehashed` /
+   * `email_verified` / `session_revoked` (see {@link IdentityEvent}).
    *
    * Purely observational: it shapes nothing. The event's outcome (the session,
    * the thrown error) is identical whether or not a hook is wired, so emitting is
@@ -885,10 +959,33 @@ export function createIdentity(options: IdentityOptions): Identity {
       // valid) cost and the upgrade is retried on the next sign-in — swallowing
       // here is strictly safer than blocking auth on a transient write error.
       if (hasher.needsRehash(user.passwordHash)) {
+        const previousHash = user.passwordHash;
+        let rehashed: string | undefined;
+
         try {
-          await userRepo.setPasswordHash(db, user.id, await hasher.hashPassword(password));
+          rehashed = await hasher.hashPassword(password);
+          await userRepo.setPasswordHash(db, user.id, rehashed);
         } catch {
-          // The login succeeded; the cost upgrade can wait for the next login.
+          // The login succeeded; the cost upgrade can wait for the next login. A
+          // throw here (mint or persist) means nothing was written, so leave
+          // `rehashed` unset and emit nothing — the event rides a PERSISTED rehash.
+          rehashed = undefined;
+        }
+
+        // Announce the cost transition ONLY when the rehash actually persisted.
+        // Secret-free `from`/`to` let a monitor catch a strength REDUCTION — a
+        // `pbkdf2MigrationHasher` on a non-migrating Node tier walks strong rows
+        // DOWN to the 100k edge ceiling, and without this signal that ~6× drop is
+        // invisible. Emitted OUTSIDE the try (like `login_succeeded` below) so a
+        // broken sink is not silently swallowed as a rehash-persist failure.
+        if (rehashed !== undefined) {
+          await emit({
+            type: "password_rehashed",
+            userId: String(user.id),
+            at: eventClock(),
+            from: describeHashCost(previousHash),
+            to: describeHashCost(rehashed),
+          });
         }
       }
 

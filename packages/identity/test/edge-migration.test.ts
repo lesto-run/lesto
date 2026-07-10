@@ -330,6 +330,138 @@ describe("pbkdf2MigrationHasher", () => {
   });
 });
 
+describe("password_rehashed event — the rehash-on-login cost transition (L-c6132828)", () => {
+  // A migration-hasher identity with an event sink, so the rehash-on-login seam's
+  // `password_rehashed` is actually captured.
+  function eventfulMigration(): {
+    identity: ReturnType<typeof createIdentity>;
+    events: IdentityEvent[];
+  } {
+    const events: IdentityEvent[] = [];
+    const identity = createIdentity(
+      build({
+        hasher: pbkdf2MigrationHasher,
+        onEvent: (event) => {
+          events.push(event);
+        },
+      }),
+    );
+
+    return { identity, events };
+  }
+
+  const findRehash = (
+    events: IdentityEvent[],
+  ): Extract<IdentityEvent, { type: "password_rehashed" }> | undefined =>
+    events.find(
+      (event): event is Extract<IdentityEvent, { type: "password_rehashed" }> =>
+        event.type === "password_rehashed",
+    );
+
+  it("fires with a secret-free DOWN-rehash shape when a 600k PBKDF2 row is walked to 100k", async () => {
+    // The footgun: `pbkdf2MigrationHasher` left wired on a non-migrating Node tier
+    // walks a strong 600k row DOWN to the 100k edge ceiling on the next login — a
+    // one-way ~6× strength reduction that, without this event, no audit could see.
+    const email = "down@node.test";
+    const legacyHash = await pbkdf2HashAt("correct horse battery staple", 600_000);
+    const userId = await seedVerifiedUser(email, legacyHash);
+
+    const { identity, events } = eventfulMigration();
+    await identity.login(email, "correct horse battery staple");
+
+    const rehashed = findRehash(events);
+
+    // Full shape: names its subject (rides an authenticated success path), stamps a
+    // timestamp, and carries old + new cost.
+    expect(rehashed).toEqual({
+      type: "password_rehashed",
+      userId: String(userId),
+      at: expect.any(Number),
+      from: { algorithm: "pbkdf2", iterations: 600_000 },
+      to: { algorithm: "pbkdf2", iterations: 100_000 },
+    });
+
+    // Direction is legible from the payload alone: old cost > new cost == DOWN-rehash.
+    const from = rehashed!.from;
+    const to = rehashed!.to;
+    expect(
+      from.algorithm === "pbkdf2" && to.algorithm === "pbkdf2" && from.iterations > to.iterations,
+    ).toBe(true);
+
+    // No secret material rides the event: not the password, and neither the salt nor
+    // the derived key of the OLD or the freshly minted hash. (The iteration counts DO
+    // appear — they are the cost, not a secret — so we assert only salt/key absence.)
+    const after = await findUserByEmail(db, email);
+    const blob = JSON.stringify(rehashed);
+    expect(blob).not.toContain("correct horse battery staple");
+    for (const stored of [legacyHash, after!.passwordHash]) {
+      const [, , , salt, key] = stored.split("$") as [string, string, string, string, string];
+      expect(blob).not.toContain(salt);
+      expect(blob).not.toContain(key);
+    }
+  });
+
+  it("fires an UP-rehash (50k → 100k) — same shape, opposite direction to a DOWN-rehash", async () => {
+    const email = "up@node.test";
+    const userId = await seedVerifiedUser(email, await pbkdf2HashAt("hunter2hunter2", 50_000));
+
+    const { identity, events } = eventfulMigration();
+    await identity.login(email, "hunter2hunter2");
+
+    const rehashed = findRehash(events);
+
+    expect(rehashed).toEqual({
+      type: "password_rehashed",
+      userId: String(userId),
+      at: expect.any(Number),
+      from: { algorithm: "pbkdf2", iterations: 50_000 },
+      to: { algorithm: "pbkdf2", iterations: 100_000 },
+    });
+
+    // The distinguishing test: here old cost < new cost == UP, the mirror of the 600k
+    // case above. The payload alone tells the two apart — no side channel needed.
+    const from = rehashed!.from;
+    const to = rehashed!.to;
+    expect(
+      from.algorithm === "pbkdf2" && to.algorithm === "pbkdf2" && from.iterations < to.iterations,
+    ).toBe(true);
+  });
+
+  it("carries the algorithm CHANGE on the flagship scrypt → PBKDF2 migration", async () => {
+    // The primary migration: a Node scrypt row re-minted as edge-safe PBKDF2. `from`
+    // and `to` name different algorithms, so a cross-KDF move is legible even though
+    // it is not a single-scale up/down.
+    const email = "cross@node.test";
+    const userId = await seedVerifiedUser(email, cheapScryptHash("correct horse battery staple"));
+
+    const { identity, events } = eventfulMigration();
+    await identity.login(email, "correct horse battery staple");
+
+    expect(findRehash(events)).toEqual({
+      type: "password_rehashed",
+      userId: String(userId),
+      at: expect.any(Number),
+      // `cheapScryptHash` mints `scrypt$2$8$1$…` — read back verbatim (N=2, r=8, p=1).
+      from: { algorithm: "scrypt", n: 2, r: 8, p: 1 },
+      to: { algorithm: "pbkdf2", iterations: 100_000 },
+    });
+  });
+
+  it("does NOT fire when the stored hash is already at cost (no rehash persisted)", async () => {
+    // A row already at the 100k ceiling is not stale → the seam re-mints nothing → no
+    // event. The `login_succeeded` assertion proves the sink WAS wired and simply had
+    // no rehash to report — so the absence is real, not a dropped subscription.
+    const email = "stable@node.test";
+    await seedVerifiedUser(email, await pbkdf2HashAt("correct horse battery staple", 100_000));
+
+    const { identity, events } = eventfulMigration();
+    await identity.login(email, "correct horse battery staple");
+
+    expect(findRehash(events)).toBeUndefined();
+    expect(events.some((event) => event.type === "login_succeeded")).toBe(true);
+  });
+});
+
 describe("login failure epilogue — derive-count + shape parity (L-3d530db0)", () => {
   it("a cold isolate's FIRST wrong-password login mints the decoy too", async () => {
     await seedVerifiedUser("wrongpw@edge.test", DECOY_PBKDF2);
