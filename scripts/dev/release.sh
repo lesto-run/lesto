@@ -59,7 +59,7 @@ for arg in "$@"; do
 done
 
 # --- helpers ----------------------------------------------------------------
-repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+repo_root="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
 fail() { echo "release:cut: FAILED — $*" >&2; exit 1; }
@@ -108,11 +108,21 @@ if [ -d .changeset ]; then
 fi
 [ -z "$leftover_changesets" ] || fail $'unconsumed changesets remain — run `bun run version` and commit the result first:\n'"$leftover_changesets"
 
-# Versions bumped off the 0.0.0 placeholder. This reuses publish.mjs's OWN assertVersionsBumped and
-# the shared publishable-dir filter (pack-public.mjs), so the local check is identical to the one the
-# release enforces — no drift. A package sits at 0.0.0 until `changeset version` bumps it; publishing
-# an un-bumped package pins npm `latest` to 0.0.0 and desyncs the changeset `fixed` group.
-step "verifying every publishable package is bumped off 0.0.0..."
+# Versions bumped off the 0.0.0 placeholder AND the scaffold dep-range still fits the surface.
+# This reuses publish.mjs's OWN assertVersionsBumped and the shared publishable-dir filter
+# (pack-public.mjs), so the local check is identical to the one the release enforces — no drift. A
+# package sits at 0.0.0 until `changeset version` bumps it; publishing an un-bumped package pins npm
+# `latest` to 0.0.0 and desyncs the changeset `fixed` group.
+#
+# The SECOND assertion (folded into the same node call to reuse the machinery) closes a real hole:
+# packages/create-lesto/src/scaffold.ts hard-codes LESTO_DEP_RANGE (the `^0.x` range every
+# freshly-scaffolded `npm create lesto` app pins EVERY @lesto/* dep at). ci.yml's scaffold/install-
+# proof jobs pin to file:/overrides tarballs, NOT that published range, so a STALE range is invisible
+# to the green-CI precondition above: leave it at "^0.1.0" after the surface moves to 0.2.0 and CI is
+# still green, yet every new app resolves the OLD 0.1.x line and never sees the release. So we grep
+# the range out of scaffold.ts and assert the release version(s) satisfy it, failing closed if not.
+step "verifying every publishable package is bumped off 0.0.0 and the scaffold dep-range still fits..."
+# shellcheck disable=SC2016  # single-quoted ON PURPOSE — the `$`/`${...}` below are JS (node -e), not shell.
 if ! version_info="$(node --input-type=module -e '
   import { readPublicPackageDirs } from "./scripts/lib/pack-public.mjs";
   import { assertVersionsBumped } from "./scripts/publish.mjs";
@@ -125,7 +135,61 @@ if ! version_info="$(node --input-type=module -e '
   });
   assertVersionsBumped(nodes);
   const versions = [...new Set(nodes.map((n) => n.version))].sort();
-  process.stdout.write(`${nodes.length} publishable packages @ ${versions.join(", ")}`);
+
+  // Grep LESTO_DEP_RANGE straight out of the scaffold source (its single source of truth). If the
+  // constant was renamed/moved the regex misses -> fail closed rather than silently skip the check.
+  const scaffoldPath = join(P, "create-lesto", "src", "scaffold.ts");
+  const rangeMatch = /const\s+LESTO_DEP_RANGE\s*=\s*"([^"]+)"/.exec(readFileSync(scaffoldPath, "utf8"));
+  if (!rangeMatch) {
+    throw new Error(
+      `could not find LESTO_DEP_RANGE in ${scaffoldPath} -- the scaffold pin was renamed or moved. ` +
+        "Update this precondition regex in scripts/dev/release.sh to match the new declaration.",
+    );
+  }
+  const depRange = rangeMatch[1];
+
+  // Correct caret-range membership WITHOUT a semver dep (semver is NOT resolvable from this repo --
+  // verified with require.resolve at authoring time, hence the hand-rolled check). We model ONLY the
+  // simple `^X.Y.Z` caret LESTO_DEP_RANGE actually uses, with full caret-on-zero semantics:
+  //   ^X.Y.Z (X>0) := >=X.Y.Z  <(X+1).0.0
+  //   ^0.Y.Z (Y>0) := >=0.Y.Z  <0.(Y+1).0
+  //   ^0.0.Z       := >=0.0.Z  <0.0.(Z+1)
+  // Anything more exotic (||, -, ~, >=, x-ranges, or a prerelease-tagged version) returns "unknown"
+  // so we WARN and surface the range for manual eyeballing rather than risk a WRONG hard-fail -- a
+  // false block of a valid release is worse than a warning here.
+  const caretResult = (version, range) => {
+    const cm = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(range.trim());
+    const vm = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim()); // bare X.Y.Z only; a prerelease tag -> unknown
+    if (!cm || !vm) return "unknown";
+    const [rMaj, rMin, rPat] = cm.slice(1, 4).map(Number);
+    const [vMaj, vMin, vPat] = vm.slice(1, 4).map(Number);
+    const cmp = (a, b, c, d, e, f) => (a - d) || (b - e) || (c - f); // sign of the X.Y.Z tuple diff
+    const geLow = cmp(vMaj, vMin, vPat, rMaj, rMin, rPat) >= 0;
+    const hi = rMaj > 0 ? [rMaj + 1, 0, 0] : rMin > 0 ? [0, rMin + 1, 0] : [0, 0, rPat + 1];
+    const ltHigh = cmp(vMaj, vMin, vPat, hi[0], hi[1], hi[2]) < 0;
+    return geLow && ltHigh ? "satisfied" : "unsatisfied";
+  };
+
+  // The scaffold pins EVERY @lesto/* dep at this one range, so it must satisfy every published
+  // version. A coherent `fixed`-group release is one version; check each distinct one defensively.
+  const unsatisfied = versions.filter((v) => caretResult(v, depRange) === "unsatisfied");
+  const unknown = versions.filter((v) => caretResult(v, depRange) === "unknown");
+  if (unsatisfied.length > 0) {
+    throw new Error(
+      `scaffold LESTO_DEP_RANGE "${depRange}" does NOT satisfy release version(s) ` +
+        `${unsatisfied.join(", ")}. A freshly-scaffolded app pins every @lesto/* dep at that range, ` +
+        `so publishing this surface would leave new apps on the OLD line ("^0.1.0" resolves 0.1.x ` +
+        `only, never 0.2.x). Bump LESTO_DEP_RANGE in ${scaffoldPath} to match, commit, and re-run. ` +
+        "(ci.yml install-proof pins file:/overrides tarballs, not this published range, so it cannot " +
+        "catch a stale pin -- that is why this check lives here.)",
+    );
+  }
+
+  // Surface the range + verdict on the same line so the operator sees it in the preflight summary.
+  const note = unknown.length > 0
+    ? `scaffold LESTO_DEP_RANGE "${depRange}" -- UNVERIFIED range shape, EYEBALL that it covers the surface`
+    : `scaffold LESTO_DEP_RANGE "${depRange}" satisfies the surface`;
+  process.stdout.write(`${nodes.length} publishable packages @ ${versions.join(", ")} (${note})`);
 ' 2>&1)"; then
   fail "$version_info"
 fi
