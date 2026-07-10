@@ -12,18 +12,19 @@
   runbook `docs/guide/edge-password-migration.md`; ADR 0029's **Phase-0 hard-gate spike** precedent
   (crypto-on-workerd claims are verified on a *deployed* Worker before any flow code — the exact
   lesson `b932aa1` re-taught).
-- **Grounded in (seams audited 2026-07-10):** the runtime probe + mint selector
-  `packages/auth/src/runtime.ts` (`isWorkerd()` :36, `selectPasswordAlgorithm()` :58); the adaptive
-  facade `packages/auth/src/password.ts` (prefix dispatch `isPbkdf2` :44, the edge scrypt refusal
-  `AUTH_KDF_UNAVAILABLE` :82-88, `needsRehash` :98); the edge backend
-  `packages/auth/src/password-web.ts` (format :14, `EDGE_MAX_ITERATIONS` :80,
-  `assertMintableIterations` :236, the workerd over-ceiling verify refusal :308, the walk-up-AND-down
-  rehash oracle :333); the Node backend `packages/auth/src/password-scrypt.ts` (the
-  reject-hostile-cost precedent `N > DEFAULT_N` :154, `MAXMEM` :90); the identity seam
-  `packages/identity/src/identity.ts` (`PasswordHasher` :137, `productionHasher` :165,
-  `pbkdf2MigrationHasher` :200, length-only password policy :101-105, `onUnverifiableHash` :437, the
-  rehash-on-login seam :887-889, the timing-decoy epilogue :884-895); recovery codes riding the same
-  facade `packages/auth/src/recovery-codes.ts`.
+- **Grounded in (seams audited 2026-07-10; line numbers as of this commit — symbol names are the
+  durable anchor):** the runtime probe + mint selector `packages/auth/src/runtime.ts` (`isWorkerd()`
+  :60, `selectPasswordAlgorithm()` :98); the adaptive facade `packages/auth/src/password.ts` (prefix
+  dispatch `isPbkdf2` :44, the edge scrypt refusal `AUTH_KDF_UNAVAILABLE` :77-90, `needsRehash` :98);
+  the edge backend `packages/auth/src/password-web.ts` (format :14, `EDGE_MAX_ITERATIONS` :80, the
+  workerd over-ceiling verify refusal ~:264, the walk-up-AND-down rehash oracle `needsRehashWeb`
+  :302); the Node backend `packages/auth/src/password-scrypt.ts` (the reject-hostile-cost precedent
+  `N > DEFAULT_N` :154, `MAXMEM` :90); the identity seams `packages/identity/src/identity.ts`
+  (`PasswordHasher` :137, `productionHasher` :165, `pbkdf2MigrationHasher` :200, length-only password
+  policy :101-105, `onUnverifiableHash` :511, the rehash-on-login seam ~:961, the timing-decoy
+  epilogue ~:906, and `describeHashCost` :296 — the `password_rehashed` audit event's cost parser,
+  which will need an `argon2id$…` arm, see Integration design); recovery codes riding the same facade
+  `packages/auth/src/recovery-codes.ts`.
 
 ## Context
 
@@ -94,8 +95,11 @@ so this is a decision document with a hard verification gate, not an implementat
   alive*, never to *crashed*. argon2id at 19 MiB is safe to run anywhere — it actually *improves*
   the ambiguous-runtime fallback, which today gets weak PBKDF2.
 - **The `b932aa1` doctrine:** the edge-portable format must be mintable-everywhere and
-  edge-runnable-by-construction, with the ceiling enforced loudly on every runtime
-  (`assertMintableIterations` precedent) so Node tests exercise the edge's refusal.
+  edge-runnable-by-construction, with the ceiling enforced loudly on every runtime — the
+  parse/verify-side over-ceiling refusal (`AUTH_KDF_UNAVAILABLE`) fires on Node too, so Node tests
+  exercise the edge's refusal. (The mint-side `assertMintableIterations` guard was removed in this
+  same session — task `L-ecdeeeab` — as never-shipped surface, once the mint cost became a
+  non-configurable constant with no untrusted input to assert.)
 
 ## Options considered
 
@@ -207,12 +211,14 @@ minted again, verified forever, promoted to argon2id by the existing rehash-on-l
   converter if ever needed. A new `password-argon2.ts` mirrors `password-web.ts`'s shape:
   `parseStored` returns `undefined` for anything not ours (wrong arity, unknown version, non-integer
   params, mis-sized salt/key), verify is a constant-time compare, malformed input resolves `false`.
-- **Fail-closed parameter ceilings, on every runtime.** Mirror both precedents: an
-  `assertMintableArgon2Params` guard (the `assertMintableIterations` :236 pattern — throw a coded
-  `AuthError`, never clamp silently, so Node tests exercise the edge refusal), and a parse-side
-  reject of any stored `m` above the ceiling (the scrypt `N > DEFAULT_N` :154 pattern — a hostile or
-  corrupt row must not be able to command a 2 GiB derive and OOM the isolate). Ceiling starts equal
-  to the mint default (`EDGE_MAX_MEMORY_KIB = 19456`); raising it is a deliberate, reviewed act.
+- **Fail-closed parameter ceiling, on every runtime — parse-side.** The load-bearing OOM defense is
+  a parse-side reject of any stored `m` above the ceiling (the scrypt `N > DEFAULT_N` :154 pattern —
+  a hostile or corrupt row must not be able to command a 2 GiB derive and OOM the isolate). Ceiling
+  starts equal to the mint default (`EDGE_MAX_MEMORY_KIB = 19456`); raising it is a deliberate,
+  reviewed act. A *mint*-side parameter guard is deliberately NOT added: exactly as the `iterations`
+  override was trimmed in `L-ecdeeeab`, mint params are non-configurable constants with no untrusted
+  input to assert — the parse/verify-side ceiling is the real guard, and it already fires on every
+  runtime (so Node tests still exercise the edge refusal).
 - **Mint selection** (`runtime.ts`): `PasswordAlgorithm` gains `"argon2id"`.
   `selectPasswordAlgorithm()` returns `"argon2id"` for workerd **and** for the
   ambiguous/unknown-runtime fallthrough (strictly better than today's weak-PBKDF2 fallback, and
@@ -230,13 +236,16 @@ minted again, verified forever, promoted to argon2id by the existing rehash-on-l
   invariant: **no cross-promotion between scrypt and argon2id in either direction** — both are
   at-strength — so a hybrid deployment (Node mints scrypt, edge mints argon2id) can never thrash a
   row between algorithms on alternating logins.
-- **`@lesto/identity` needs no seam change.** `productionHasher` (:165) wraps the facade functions
-  and picks all of this up for free — passwords, the timing decoy (:884-895; minted via
-  `hashPassword`, so it automatically costs argon2id on the edge), and recovery codes
-  (`recovery-codes.ts` hashes with the same primitive by design). One addition, not a change: an
-  `argon2idMigrationHasher` preset succeeding `pbkdf2MigrationHasher` (:200) — mints argon2id even
-  on Node, reports every non-argon2id row stale — for hybrid/migrating Node tiers, inheriting the
-  same documented timing-enumeration caveat while the corpus is mixed.
+- **`@lesto/identity`'s hasher seam needs no change — but its audit parser does.** `productionHasher`
+  (:165) wraps the facade functions and picks the KDF up for free — passwords, the timing decoy
+  (~:906; minted via `hashPassword`, so it automatically costs argon2id on the edge), and recovery
+  codes (`recovery-codes.ts` hashes with the same primitive by design). Two additions, not changes:
+  (1) a fourth `argon2id` arm in `describeHashCost` (:296) — the `password_rehashed` audit event's
+  cost parser — or every `pbkdf2$100k → argon2id$…` promotion emits `to: { algorithm: "unknown" }`,
+  silently gutting the up-vs-down audit legibility that event exists to provide; (2) an
+  `argon2idMigrationHasher` preset succeeding `pbkdf2MigrationHasher` (:200) — mints argon2id even on
+  Node, reports every non-argon2id row stale — for hybrid/migrating Node tiers, inheriting the same
+  documented timing-enumeration caveat while the corpus is mixed.
 
 ### Migration / rollout
 
@@ -327,5 +336,8 @@ minted again, verified forever, promoted to argon2id by the existing rehash-on-l
 - The **GPU crack-rate arithmetic** (4090 ≈ 21.7 GH/s SHA-256; ≈ 108k vs 18k guesses/s; 30 vs 180
   GPU-days for ~41 bits) is carried over from the `b932aa1` review as order-of-magnitude framing,
   not re-benchmarked.
+- The **argon2 memory-hardness framing** — "≈ a thousand concurrent instances on a 24 GB GPU"
+  (§Context) and "`p=1` because wasm on workerd has no threads" (§Parameters) — is order-of-magnitude
+  platform reasoning, to be confirmed at the spike, not measured here.
 - Workers **paid-plan default CPU limit (~30 s, configurable)** and **bundle-size caps** — believed
   current, verify against Cloudflare limits docs at implementation.
