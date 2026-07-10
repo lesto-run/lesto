@@ -171,6 +171,32 @@ describe("createTraces seam hooks", () => {
     expect(span.attributes).not.toHaveProperty("identity.user_id");
   });
 
+  it("carries the secret-free rehash cost pair (JSON) on a password_rehashed event", () => {
+    const { tracer, exporter } = fixtureTracer();
+
+    const traces = createTraces({ tracer, flush: async () => {} });
+
+    // A real strength-REDUCING down-rehash (600k → 100k) — the exact case these fields
+    // exist to surface. Held in consts so the cost params ride the seam verbatim (the
+    // structural HashCostDescriptor type names only `algorithm`; JSON.stringify sees all).
+    const from = { algorithm: "pbkdf2", iterations: 600_000 };
+    const to = { algorithm: "pbkdf2", iterations: 100_000 };
+
+    traces.seams.onEvent({ type: "password_rehashed", userId: "u7", at: 11, from, to });
+
+    const span = exporter.spans[0] as SpanData;
+
+    expect(span.name).toBe("identity.password_rehashed");
+    // Exact match: proves both cost attrs are emitted as JSON AND nothing else leaks.
+    expect(span.attributes).toEqual({
+      "identity.event": "password_rehashed",
+      "identity.at": 11,
+      "identity.user_id": "u7",
+      "identity.rehash_from": JSON.stringify(from),
+      "identity.rehash_to": JSON.stringify(to),
+    });
+  });
+
   it("records a delivered mail span (ok) and a failed one (error, with code)", () => {
     const { tracer, exporter } = fixtureTracer();
 

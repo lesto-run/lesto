@@ -166,6 +166,15 @@ export interface Traces {
 }
 
 /**
+ * A secret-free KDF-cost descriptor as carried by `@lesto/identity`'s
+ * `password_rehashed` event (its `PasswordHashCost`). Structurally mirrored here —
+ * this package depends on no battery — and only JSON-encoded, never branched on, so
+ * the type names just the `algorithm` discriminant while every cost param (scrypt
+ * `n`/`r`/`p`, pbkdf2 `iterations`, …) rides along verbatim at runtime.
+ */
+export type HashCostDescriptor = { readonly algorithm: string };
+
+/**
  * The per-domain seam hooks, each shaped to slot straight into the battery that
  * raises it (see the Phase-1 signatures). Every one turns its event into a span:
  * a child of the in-flight request span when there is one, a root span when
@@ -185,8 +194,23 @@ export interface TraceSeams {
     readonly durationMs: number;
   }): void;
 
-  /** `@lesto/identity`'s `onEvent` — each lifecycle event becomes an `identity.<type>` span. */
-  onEvent(event: { readonly type: string; readonly userId?: string; readonly at: number }): void;
+  /**
+   * `@lesto/identity`'s `onEvent` — each lifecycle event becomes an `identity.<type>` span.
+   *
+   * `from`/`to` ride only on the `password_rehashed` event: the secret-free KDF-cost
+   * descriptors (`@lesto/identity`'s `PasswordHashCost` — an algorithm tag plus cost
+   * params, never the salt or derived key) that let a monitor tell a cost UP-grade from
+   * a strength-reducing DOWN-grade. Mirrored structurally, since this package keeps its
+   * event seams dependency-free; only ever JSON-encoded downstream, so every cost field
+   * rides along verbatim at runtime even though the type names just the discriminant.
+   */
+  onEvent(event: {
+    readonly type: string;
+    readonly userId?: string;
+    readonly at: number;
+    readonly from?: HashCostDescriptor;
+    readonly to?: HashCostDescriptor;
+  }): void;
 
   /** `@lesto/mail`'s `onDelivered` — a `mail.delivered` span per accepted email. */
   onDelivered(event: {
@@ -311,6 +335,13 @@ export function createTraces(options: TracesOptions): Traces {
           "identity.event": event.type,
           "identity.at": event.at,
           ...(event.userId === undefined ? {} : { "identity.user_id": event.userId }),
+          // The `password_rehashed` cost pair — JSON-encoded so a monitor can tell an
+          // up-rehash from a strength-reducing down-rehash. Secret-free by construction
+          // (algorithm + cost params only); absent on every other event.
+          ...(event.from === undefined
+            ? {}
+            : { "identity.rehash_from": JSON.stringify(event.from) }),
+          ...(event.to === undefined ? {} : { "identity.rehash_to": JSON.stringify(event.to) }),
         },
         "ok",
       ),
