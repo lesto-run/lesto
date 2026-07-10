@@ -48,8 +48,8 @@ describe("doc routes", () => {
   it("marks the current page active in the sidebar", async () => {
     const html = await text(await app.handle("GET", "/quickstart"));
 
-    // The active sidebar link is the only element styled `text-accent-fg` (utilities).
-    expect(html).toContain("text-accent-fg");
+    // The active sidebar link is the only element carrying `aria-current="page"`.
+    expect(html).toContain('aria-current="page"');
   });
 
   it("renders the search island fallback and the client module on every page", async () => {

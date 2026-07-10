@@ -3,10 +3,13 @@
  *
  * The chrome (sidebar nav, breadcrumbs, page actions, prev/next) is Tailwind
  * utilities compiled by `@lesto/styles`; the article body keeps the `.docs-article`
- * class (custom CSS in `app/styles/app.css`), since it styles the HTML
- * `@lesto/content-markdown` rendered + sanitized at build time and injected
- * directly. The sidebar is the whole-site nav with the current page highlighted;
- * the right rail is this page's heading outline.
+ * class (base CSS in `app/styles/app.css`, plus the shell's typographic pass in
+ * the layout's inline styles), since it styles the HTML `@lesto/content-markdown`
+ * rendered + sanitized at build time and injected directly. The sidebar is the
+ * whole-site nav with the current page highlighted; the right rail is this page's
+ * heading outline. The article column is capped near 70ch and centered in its
+ * grid track — the measure does the readability work, the accent stays reserved
+ * for links and the active nav item.
  *
  * `makeDocPage` closes a doc and the nav into a zero-prop component so the app
  * factory can register one static `.page()` per doc without a loader.
@@ -20,25 +23,26 @@ import { SITE_URL } from "../site";
 import { TableOfContents } from "./toc";
 
 const SIDEBAR_LINK =
-  "block px-[0.6rem] py-[0.3rem] rounded-md text-[0.92rem] no-underline hover:bg-surface hover:no-underline";
+  "block rounded-md px-2 py-[0.32rem] text-[0.875rem] leading-snug no-underline transition-colors hover:no-underline";
 
 function Sidebar({ nav, current }: { nav: readonly NavSection[]; current: string }): ReactElement {
   return (
-    <aside className="sticky top-[72px] self-start max-h-[calc(100vh-88px)] overflow-y-auto max-[720px]:static max-[720px]:max-h-none max-[720px]:border-b max-[720px]:border-border max-[720px]:pb-4">
+    <aside className="sticky top-[80px] self-start max-h-[calc(100vh-96px)] overflow-y-auto max-[720px]:static max-[720px]:max-h-none max-[720px]:border-b max-[720px]:border-border max-[720px]:pb-4">
       {nav.map((section) => (
-        <div className="mb-6" key={section.title}>
-          <p className="text-[0.72rem] font-bold uppercase tracking-[0.06em] text-muted mb-2">
+        <div className="mb-7" key={section.title}>
+          <p className="mb-2 px-2 text-[0.7rem] font-semibold uppercase tracking-[0.08em] text-muted">
             {section.title}
           </p>
-          <ul className="list-none m-0 p-0">
+          <ul className="m-0 flex list-none flex-col gap-[2px] p-0">
             {section.items.map((item) => (
               <li key={item.route}>
                 <a
                   href={item.route}
+                  aria-current={item.route === current ? "page" : undefined}
                   className={
                     item.route === current
-                      ? `${SIDEBAR_LINK} bg-accent text-accent-fg font-semibold`
-                      : `${SIDEBAR_LINK} text-fg`
+                      ? `${SIDEBAR_LINK} bg-accent/10 font-medium text-accent`
+                      : `${SIDEBAR_LINK} text-muted hover:bg-surface hover:text-fg`
                   }
                 >
                   {item.title}
@@ -55,12 +59,19 @@ function Sidebar({ nav, current }: { nav: readonly NavSection[]; current: string
 /** Breadcrumbs: the section this page sits in, then the page title. */
 function Breadcrumbs({ doc }: { doc: DocEntry }): ReactElement {
   return (
-    <nav className="text-[0.82rem] text-muted [&_a]:text-muted" aria-label="Breadcrumb">
+    <nav
+      className="text-[0.8rem] text-muted [&_a]:text-muted [&_a]:no-underline [&_a]:transition-colors [&_a:hover]:text-fg [&_a:hover]:no-underline"
+      aria-label="Breadcrumb"
+    >
       <a href="/">Docs</a>
-      <span aria-hidden="true"> / </span>
+      <span aria-hidden="true" className="mx-[0.2rem] text-muted/60">
+        /
+      </span>
       <span>{doc.section}</span>
-      <span aria-hidden="true"> / </span>
-      <span className="text-fg">{doc.title}</span>
+      <span aria-hidden="true" className="mx-[0.2rem] text-muted/60">
+        /
+      </span>
+      <span className="font-medium text-fg">{doc.title}</span>
     </nav>
   );
 }
@@ -77,7 +88,7 @@ function PageActions({ doc }: { doc: DocEntry }): ReactElement {
   const mdPath = `/${markdownTwinPath(doc.route)}`;
   const chatPrompt = `Read ${SITE_URL}${mdPath} and help me with it.`;
   const action =
-    "text-[0.78rem] text-muted bg-surface border border-border rounded-md px-[0.55rem] py-1 cursor-pointer no-underline hover:text-fg hover:border-accent hover:no-underline";
+    "cursor-pointer rounded-lg border border-border px-2.5 py-1 text-[0.75rem] font-medium text-muted no-underline transition-colors hover:bg-surface hover:text-fg hover:no-underline";
   return (
     <div className="flex items-center gap-[0.4rem]">
       <a className={action} href={mdPath}>
@@ -110,26 +121,24 @@ function PrevNext({
   const { prev, next } = adjacentDocs(nav, current);
   if (prev === undefined && next === undefined) return null;
   const link =
-    "flex flex-col gap-[0.2rem] px-4 py-3 border border-border rounded-[10px] max-w-[48%] no-underline hover:border-accent hover:no-underline";
+    "group flex max-w-[48%] flex-col gap-1 rounded-xl border border-border px-5 py-4 no-underline transition-colors hover:bg-surface hover:no-underline";
+  const title = "font-medium text-fg transition-colors group-hover:text-accent";
   return (
-    <nav
-      className="flex justify-between gap-4 mt-12 pt-6 border-t border-border"
-      aria-label="Pagination"
-    >
+    <nav className="mt-16 flex justify-between gap-4" aria-label="Pagination">
       {prev === undefined ? (
         <span />
       ) : (
         <a href={prev.route} className={link}>
-          <span className="text-[0.78rem] text-muted">← Previous</span>
-          <span className="font-semibold text-fg">{prev.title}</span>
+          <span className="text-[0.75rem] font-medium text-muted">← Previous</span>
+          <span className={title}>{prev.title}</span>
         </a>
       )}
       {next === undefined ? (
         <span />
       ) : (
-        <a href={next.route} className={`${link} text-right ml-auto`}>
-          <span className="text-[0.78rem] text-muted">Next →</span>
-          <span className="font-semibold text-fg">{next.title}</span>
+        <a href={next.route} className={`${link} ml-auto items-end text-right`}>
+          <span className="text-[0.75rem] font-medium text-muted">Next →</span>
+          <span className={title}>{next.title}</span>
         </a>
       )}
     </nav>
@@ -138,16 +147,19 @@ function PrevNext({
 
 export function DocPage({ doc, nav }: { doc: DocEntry; nav: readonly NavSection[] }): ReactElement {
   return (
-    <div className="grid grid-cols-[248px_minmax(0,1fr)_200px] gap-10 max-w-[1240px] mx-auto pt-8 px-5 pb-16 max-[1024px]:grid-cols-[248px_minmax(0,1fr)] max-[720px]:grid-cols-[minmax(0,1fr)] max-[720px]:gap-6">
+    <div className="mx-auto grid max-w-[1376px] grid-cols-[256px_minmax(0,1fr)_224px] gap-10 px-6 pt-10 pb-20 max-[1024px]:grid-cols-[256px_minmax(0,1fr)] max-[720px]:grid-cols-[minmax(0,1fr)] max-[720px]:gap-6 max-[720px]:pt-6">
       <Sidebar nav={nav} current={doc.route} />
       <main className="min-w-0">
-        <div className="flex items-center justify-between gap-4 flex-wrap mb-5">
-          <Breadcrumbs doc={doc} />
-          <PageActions doc={doc} />
+        {/* The reading column: capped near 70ch, centered in its grid track. */}
+        <div className="mx-auto w-full max-w-[44rem]">
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+            <Breadcrumbs doc={doc} />
+            <PageActions doc={doc} />
+          </div>
+          {/* doc.html is sanitized by the content-markdown render pass at build time. */}
+          <article className="docs-article" dangerouslySetInnerHTML={{ __html: doc.html }} />
+          <PrevNext nav={nav} current={doc.route} />
         </div>
-        {/* doc.html is sanitized by the content-markdown render pass at build time. */}
-        <article className="docs-article" dangerouslySetInnerHTML={{ __html: doc.html }} />
-        <PrevNext nav={nav} current={doc.route} />
       </main>
       <TableOfContents headings={doc.headings} />
     </div>
