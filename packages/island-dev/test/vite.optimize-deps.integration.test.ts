@@ -11,11 +11,10 @@
  * on cold start — the island silently never hydrates on that load.
  *
  * HOW A PASS IS COUNTED. `optimizeDeps.esbuildOptions.plugins` are threaded into BOTH the
- * scanner's esbuild context and every optimizer run. The two are told apart POSITIVELY by
- * their esbuild options — the scanner bundles from `stdin`, an optimizer run from
- * `entryPoints` — and {@link countingPlugin} THROWS if that (undocumented) split ever
- * drifts, so the count can never go silently wrong. A counting plugin thus gives an exact,
- * public, non-timing-dependent count of each.
+ * scanner's esbuild context and every optimizer run. The two are told apart by their esbuild
+ * options: the scanner bundles from `stdin`, an optimizer run from `entryPoints` (see
+ * {@link classifyEsbuildRun}). So a counting plugin gives an exact, public,
+ * non-timing-dependent count of each.
  *
  * NON-VACUOUS BY CONSTRUCTION. The second test is the RED case: the identical server with
  * `optimizeDeps.entries` emptied — the state this package shipped before L-90d2de01 —
@@ -84,42 +83,57 @@ const STUB_ALIASES = ["@lesto/ui", "@lesto/ui/client", "@lesto/observability/rum
 interface EsbuildRunCounts {
   scanner: number;
   optimizer: number;
+
+  /**
+   * Set (once) if an esbuild run under `optimizeDeps` matched NEITHER positive marker — i.e.
+   * the scanner/optimizer discriminator drifted. RECORDED here, deliberately not thrown: a
+   * throw inside plugin `setup()` is caught by Vite's own scan/optimize error handling and
+   * routed to a logger this test SILENCES (`logLevel: "silent"`; the scan catch is config.js
+   * ~34193, "Failed to run dependency scan"), so on drift the throw's re-verify message would
+   * reach nobody and the test would fail only as a bare count mismatch. The `counts` object is
+   * a channel Vite cannot swallow; the test body asserts this stays undefined.
+   */
+  drift?: string;
 }
 
+/** The re-verify pointer surfaced via {@link EsbuildRunCounts.drift} when the discriminator drifts. */
+const DRIFT_MESSAGE =
+  "esbuild run under optimizeDeps matched neither the `stdin` (scanner) nor the `entryPoints` " +
+  "(optimizer) marker — Vite's dep-optimizer wiring drifted; re-verify against " +
+  "prepareEsbuildScanner / prepareEsbuildOptimizerRun.";
+
 /**
- * An esbuild plugin that counts the runs `optimizeDeps.esbuildOptions.plugins` is spread
- * into — the ONLY two are Vite's dep scanner and its dep-optimizer runs.
+ * Classify one esbuild run by its POSITIVE marker — never by the ABSENCE of the other's, which
+ * would misclassify silently. The scanner bundles a synthetic `stdin` module
+ * (`prepareEsbuildScanner`); an optimizer run bundles `entryPoints` (`prepareEsbuildOptimizerRun`).
+ * `stdin` alone identifies the scanner (an optimizer run never sets it), so it is checked FIRST and
+ * wins even if `entryPoints` were also present. A run with NEITHER marker is `"drift"`: the
+ * discriminator couples to undocumented Vite internals and has moved.
  *
- * Each run is keyed POSITIVELY, not by the absence of the other's marker: the scanner
- * bundles a synthetic `stdin` module (`prepareEsbuildScanner`), an optimizer run bundles
- * `entryPoints` (`prepareEsbuildOptimizerRun`). Keying the scanner on `entryPoints ===
- * undefined` (its ABSENCE) would silently misclassify it as an optimizer run if a consumer
- * ever set `esbuildOptions.entryPoints` (it spreads into the scanner context too) or if a
- * future Vite added `entryPoints` to the scan build — turning a fail-loud guard vacuous. So
- * the two markers are asserted mutually exclusive AND exhaustive, and a run that is neither
- * or both THROWS: the discriminator couples to undocumented Vite internals, so it must fail
- * LOUD (with a re-verify pointer) rather than miscount. Re-verify both markers when bumping
- * Vite across a major (`vite: ^7` will not silently pull 8.x).
+ * SCOPED to `optimizeDeps.extensions` being unset — it is, both here and in the shipped
+ * `viteIslandConfig`. When set, `extractExportsData` (config.js ~32332) spreads these same plugins
+ * into a THIRD `entryPoints` build, which this would tally as an optimizer run; that is why the
+ * green legs assert an exact optimizer count rather than trusting exhaustiveness. Re-verify all of
+ * this on a Vite major bump (`vite: ^7` will not silently pull 8.x).
  */
+function classifyEsbuildRun(initialOptions: {
+  entryPoints?: unknown;
+  stdin?: unknown;
+}): "scanner" | "optimizer" | "drift" {
+  if (initialOptions.stdin !== undefined) return "scanner";
+  if (initialOptions.entryPoints !== undefined) return "optimizer";
+  return "drift";
+}
+
+/** An esbuild plugin that tallies each run Vite spreads it into, by {@link classifyEsbuildRun}. */
 function countingPlugin(counts: EsbuildRunCounts): unknown {
   return {
     name: "lesto-test:count-esbuild-runs",
     setup(build: { initialOptions: { entryPoints?: unknown; stdin?: unknown } }) {
-      const isScanner = build.initialOptions.stdin !== undefined;
-      const isOptimizer = build.initialOptions.entryPoints !== undefined;
-
-      // Exactly one must hold. Neither/both ⇒ Vite's dep-optimizer esbuild wiring drifted
-      // out from under this oracle — fail loud, never silently miscount a pass.
-      if (isScanner === isOptimizer) {
-        throw new Error(
-          "lesto: the esbuild scanner/optimizer discriminator drifted — a dep-optimize run " +
-            "had neither a `stdin` (scanner) nor an `entryPoints` (optimizer) marker, or both. " +
-            "Re-verify against Vite's prepareEsbuildScanner / prepareEsbuildOptimizerRun.",
-        );
-      }
-
-      if (isScanner) counts.scanner += 1;
-      else counts.optimizer += 1;
+      const kind = classifyEsbuildRun(build.initialOptions);
+      if (kind === "scanner") counts.scanner += 1;
+      else if (kind === "optimizer") counts.optimizer += 1;
+      else counts.drift ??= DRIFT_MESSAGE;
     },
   };
 }
@@ -276,6 +290,17 @@ async function coldStart(seedScanner: boolean, dialect: Dialect): Promise<ColdSe
 }
 
 describe("island dev cold start (optimizeDeps.entries seeds the dep scanner)", () => {
+  // The discriminator contract, tested directly so the `counts.drift` tripwire above is NOT a
+  // vacuous never-fires assertion (repo rule): drive all three arms, including the drift arm real
+  // Vite 7.x never reaches. `stdin` wins over `entryPoints` because the scanner spreads
+  // `esbuildOptions` AFTER its own `stdin`, so a run could legitimately carry both.
+  it("classifies an esbuild run by its positive marker (stdin→scanner, entryPoints→optimizer, neither→drift)", () => {
+    expect(classifyEsbuildRun({ stdin: {} })).toBe("scanner");
+    expect(classifyEsbuildRun({ entryPoints: [] })).toBe("optimizer");
+    expect(classifyEsbuildRun({ stdin: {}, entryPoints: [] })).toBe("scanner");
+    expect(classifyEsbuildRun({})).toBe("drift");
+  });
+
   // BOTH shipped dialects, because their SERVED transform differs — `@vitejs/plugin-react`
   // (babel, automatic runtime) vs `@prefresh/vite` — so the scanner (plain esbuild) sees a
   // different graph in each, and the react path's one-pass guarantee is otherwise unguarded
@@ -285,6 +310,12 @@ describe("island dev cold start (optimizeDeps.entries seeds the dep scanner)", (
     "settles in ONE optimizer pass with every island dep pre-bundled (%s)",
     async (dialect) => {
       const { server, counts } = await coldStart(true, dialect);
+
+      // Un-swallowable drift signal, asserted FIRST: if the scanner/optimizer discriminator ever
+      // drifts, this surfaces the re-verify pointer instead of a bare count mismatch (a throw
+      // could not — Vite catches it into a silenced logger). Non-vacuous: the classifier test
+      // below drives this arm RED directly.
+      expect(counts.drift).toBeUndefined();
 
       // The scanner ran at all — without a seeded `entries` it short-circuits before esbuild.
       expect(counts.scanner).toBe(1);
@@ -311,6 +342,9 @@ describe("island dev cold start (optimizeDeps.entries seeds the dep scanner)", (
     // "correct" this to `undefined` thinking it is a bug. Dialect is irrelevant to the
     // mechanism here, so this leg runs preact only.
     const { server, counts } = await coldStart(false, "preact");
+
+    // Still classified cleanly — an empty `entries` removes the scan pass, it does not drift.
+    expect(counts.drift).toBeUndefined();
 
     // No entries → `computeEntries` finds nothing → the scanner never bundles.
     expect(counts.scanner).toBe(0);
