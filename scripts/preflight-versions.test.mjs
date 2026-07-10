@@ -116,6 +116,22 @@ describe("extractDepRange (grep LESTO_DEP_RANGE out of scaffold source text)", (
   it("names a caller-supplied path in the not-found error", () => {
     expect(() => extractDepRange("nope", "/abs/scaffold.ts")).toThrow(/in \/abs\/scaffold\.ts/);
   });
+
+  it("ignores a commented-out decoy above the real declaration (no fail-open)", () => {
+    // RED canary for the comment-blind first-match hazard: an unanchored regex returns the FIRST
+    // `LESTO_DEP_RANGE = "..."` it sees, so a stale decoy in a comment ABOVE the real line would be
+    // validated instead of the real pin — silently passing while the pin is stale. The anchored
+    // regex must skip the `//` line and return the REAL range.
+    const source = [
+      '// const LESTO_DEP_RANGE = "^0.2.0"; // OLD — do not use',
+      'const LESTO_DEP_RANGE = "^0.1.0";',
+    ].join("\n");
+    expect(extractDepRange(source)).toBe("^0.1.0");
+  });
+
+  it("matches an `export const` declaration too", () => {
+    expect(extractDepRange('export const LESTO_DEP_RANGE = "^0.1.0";')).toBe("^0.1.0");
+  });
 });
 
 describe("buildPreflightSummary (the whole precondition, composed + fail-closed)", () => {

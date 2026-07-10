@@ -79,6 +79,11 @@ jobs:
       # image's. GitHub's default run shell is `bash -eo pipefail`, so a digest mismatch
       # (`sha256sum -c`) or a failed download (`curl -f`) fails the job — fail-closed by design.
       - name: Install pinned shellcheck
+        # ARCH ASSUMPTION: the download URL below hardcodes `linux.x86_64`, valid while this job runs
+        # on `ubuntu-latest` (x86_64 today). It fails CLOSED on a non-x86_64 runner (curl 404 / the
+        # `--version` self-check aborts under `bash -eo pipefail`), but a future migration to an
+        # `ubuntu-*-arm` image would then block ALL of CI/releases — so an arm64 runner needs the
+        # `.linux.aarch64` asset + ITS own SHELLCHECK_SHA256 here.
         env:
           SHELLCHECK_VERSION: "0.11.0"
           SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"

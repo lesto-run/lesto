@@ -1,9 +1,13 @@
 // The `release:cut` version-bump precondition, graduated OUT of an inline `node -e` heredoc in
-// `scripts/dev/release.sh` (L-ccd2d722) into committed, unit-tested helpers. That heredoc was the
-// ONE stretch of the release path that was untested, un-typechecked, and invisible to oxlint/oxfmt +
-// the 100%-coverage gate — bespoke caret-satisfaction math and a fail-closed range-shape guard
-// sitting right beside the helpers (`assertVersionsBumped`, `readPublicPackageDirs`) that ARE
-// covered. Splitting it here makes the same logic reviewable, testable, and gated like the rest.
+// `scripts/dev/release.sh` (L-ccd2d722) into committed, unit-tested helpers. In the heredoc this
+// logic — bespoke caret-satisfaction math and a fail-closed range-shape guard — had NO unit test at
+// all: it ran only at release time, so a typo or off-by-one surfaced only during an actual cut.
+// Splitting it here puts it under a truth-table unit test that runs in CI, beside the helpers
+// (`assertVersionsBumped`, `readPublicPackageDirs`) it reuses.
+// ⚠️ NB: `scripts/` is deliberately OUTSIDE the oxlint/oxfmt/typecheck/100%-coverage gates (they scan
+// `packages/` + `@lesto/*` only), so that unit test — registered in ci.yml's scripts-unit-test step —
+// is the ACTUAL guard on this release-critical logic. Do NOT assume the coverage/typecheck gate has
+// your back when editing here; add/extend the test.
 //
 // The precondition answers two questions before a release is armed:
 //   1. Is EVERY publishable package bumped off the `0.0.0` placeholder? (reuses publish.mjs's own
@@ -104,7 +108,12 @@ export function assertCaretRangeShape(range) {
  * @throws {Error} if no `LESTO_DEP_RANGE = "..."` declaration is present
  */
 export function extractDepRange(scaffoldSource, sourcePath = "packages/create-lesto/src/scaffold.ts") {
-  const rangeMatch = /const\s+LESTO_DEP_RANGE\s*=\s*"([^"]+)"/.exec(scaffoldSource);
+  // Anchor to the START of a line (`m` + `[ \t]*` indentation only, optional `export`) so a
+  // commented-out decoy — `// const LESTO_DEP_RANGE = "^0.2.0";` left above the real line — can NOT
+  // match: `.exec` returns the FIRST match, and a comment-blind regex would validate against the
+  // decoy's range and PASS while the real pin is stale (a fail-OPEN reopening the exact hole this
+  // guards). `//`/`*` before `const` fails the anchor; a genuine miss still throws (fail closed).
+  const rangeMatch = /^[ \t]*(?:export\s+)?const\s+LESTO_DEP_RANGE\s*=\s*"([^"]+)"/m.exec(scaffoldSource);
   if (!rangeMatch) {
     throw new Error(
       `could not find LESTO_DEP_RANGE in ${sourcePath} -- the scaffold pin was renamed or moved. ` +

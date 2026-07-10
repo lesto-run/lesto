@@ -123,11 +123,12 @@ fi
 # the range out of scaffold.ts and assert the release version(s) satisfy it, failing closed if not.
 step "verifying every publishable package is bumped off 0.0.0 and the scaffold dep-range still fits..."
 # The whole check now lives in a committed, unit-tested helper (scripts/lib/preflight-versions.mjs,
-# truth-table tested in scripts/preflight-versions.test.mjs) — so the caret math + fail-closed range
-# guard are typechecked, linted, and coverage-gated like the rest of the release path instead of
-# hiding in this heredoc. This block only wires fs → helper → stdout; the summary line it captures is
-# unchanged, and every fail-closed path (un-bumped 0.0.0, unverifiable range shape, unsatisfied
-# version) throws from the helper, is folded onto stdout by `2>&1`, and re-raised by `fail` below.
+# truth-table tested in scripts/preflight-versions.test.mjs — that test runs in ci.yml's scripts-unit
+# step, which is the ACTUAL guard: `scripts/` is OUTSIDE the lint/typecheck/coverage gates). So the
+# caret math + fail-closed range guard are unit-tested instead of hiding untested in this heredoc.
+# This block only wires fs → helper → stdout; the summary line it captures is unchanged, and every
+# fail-closed path (un-bumped 0.0.0, unverifiable range shape, unsatisfied version) throws from the
+# helper, is folded onto stdout by `2>&1`, and re-raised by `fail` below.
 # shellcheck disable=SC2016  # single-quoted ON PURPOSE — the `$`/`${...}` below are JS (node -e), not shell.
 if ! version_info="$(node --input-type=module -e '
   import { readFileSync } from "node:fs";
