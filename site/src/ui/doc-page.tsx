@@ -27,13 +27,11 @@ const SIDEBAR_LINK =
 
 function Sidebar({ nav, current }: { nav: readonly NavSection[]; current: string }): ReactElement {
   return (
-    <aside className="sticky top-[80px] self-start max-h-[calc(100vh-96px)] overflow-y-auto max-[720px]:static max-[720px]:max-h-none max-[720px]:border-b max-[720px]:border-border max-[720px]:pb-4">
+    <aside className="sticky top-[72px] self-start max-h-[calc(100vh-88px)] overflow-y-auto max-[720px]:static max-[720px]:max-h-none max-[720px]:border-b max-[720px]:border-border max-[720px]:pb-4">
       {nav.map((section) => (
         <div className="mb-7" key={section.title}>
-          <p className="mb-2 px-2 text-[0.7rem] font-semibold uppercase tracking-[0.08em] text-muted">
-            {section.title}
-          </p>
-          <ul className="m-0 flex list-none flex-col gap-[2px] p-0">
+          <p className="mb-2 px-2 text-[0.78rem] font-semibold text-fg/90">{section.title}</p>
+          <ul className="m-0 flex list-none flex-col gap-[1px] p-0">
             {section.items.map((item) => (
               <li key={item.route}>
                 <a
@@ -41,7 +39,7 @@ function Sidebar({ nav, current }: { nav: readonly NavSection[]; current: string
                   aria-current={item.route === current ? "page" : undefined}
                   className={
                     item.route === current
-                      ? `${SIDEBAR_LINK} bg-accent/10 font-medium text-accent`
+                      ? `${SIDEBAR_LINK} bg-surface font-semibold text-fg`
                       : `${SIDEBAR_LINK} text-muted hover:bg-surface hover:text-fg`
                   }
                 >
@@ -56,23 +54,22 @@ function Sidebar({ nav, current }: { nav: readonly NavSection[]; current: string
   );
 }
 
-/** Breadcrumbs: the section this page sits in, then the page title. */
-function Breadcrumbs({ doc }: { doc: DocEntry }): ReactElement {
+/**
+ * The Polar-style page header rendered from frontmatter — an eyebrow (the section),
+ * the large title, and the description as a lead. The content pipeline strips the
+ * body's leading `# H1`, so this is the page's only (and semantic) `<h1>`.
+ */
+function PageHeader({ doc }: { doc: DocEntry }): ReactElement {
   return (
-    <nav
-      className="text-[0.8rem] text-muted [&_a]:text-muted [&_a]:no-underline [&_a]:transition-colors [&_a:hover]:text-fg [&_a:hover]:no-underline"
-      aria-label="Breadcrumb"
-    >
-      <a href="/">Docs</a>
-      <span aria-hidden="true" className="mx-[0.2rem] text-muted/60">
-        /
-      </span>
-      <span>{doc.section}</span>
-      <span aria-hidden="true" className="mx-[0.2rem] text-muted/60">
-        /
-      </span>
-      <span className="font-medium text-fg">{doc.title}</span>
-    </nav>
+    <header className="mb-9">
+      <p className="mb-2.5 text-[0.8rem] font-medium text-muted">{doc.section}</p>
+      <h1 className="m-0 text-[2.5rem] font-bold leading-[1.1] tracking-[-0.03em] text-fg max-[720px]:text-[2rem]">
+        {doc.title}
+      </h1>
+      {doc.description !== undefined && doc.description !== "" ? (
+        <p className="mt-3.5 text-[1.075rem] leading-relaxed text-muted">{doc.description}</p>
+      ) : null}
+    </header>
   );
 }
 
@@ -121,8 +118,8 @@ function PrevNext({
   const { prev, next } = adjacentDocs(nav, current);
   if (prev === undefined && next === undefined) return null;
   const link =
-    "group flex max-w-[48%] flex-col gap-1 rounded-xl border border-border px-5 py-4 no-underline transition-colors hover:bg-surface hover:no-underline";
-  const title = "font-medium text-fg transition-colors group-hover:text-accent";
+    "group flex max-w-[48%] flex-col gap-1 rounded-xl border border-border px-5 py-4 no-underline transition-colors hover:border-fg/25 hover:bg-surface hover:no-underline";
+  const title = "font-medium text-fg";
   return (
     <nav className="mt-16 flex justify-between gap-4" aria-label="Pagination">
       {prev === undefined ? (
@@ -147,15 +144,15 @@ function PrevNext({
 
 export function DocPage({ doc, nav }: { doc: DocEntry; nav: readonly NavSection[] }): ReactElement {
   return (
-    <div className="mx-auto grid max-w-[1376px] grid-cols-[256px_minmax(0,1fr)_224px] gap-10 px-6 pt-10 pb-20 max-[1024px]:grid-cols-[256px_minmax(0,1fr)] max-[720px]:grid-cols-[minmax(0,1fr)] max-[720px]:gap-6 max-[720px]:pt-6">
+    <div className="mx-auto grid max-w-[1376px] grid-cols-[256px_minmax(0,1fr)_224px] gap-10 px-6 pt-9 pb-20 max-[1024px]:grid-cols-[256px_minmax(0,1fr)] max-[720px]:grid-cols-[minmax(0,1fr)] max-[720px]:gap-6 max-[720px]:pt-6">
       <Sidebar nav={nav} current={doc.route} />
       <main className="min-w-0">
         {/* The reading column: capped near 70ch, centered in its grid track. */}
         <div className="mx-auto w-full max-w-[44rem]">
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-            <Breadcrumbs doc={doc} />
+          <div className="mb-5 flex justify-end">
             <PageActions doc={doc} />
           </div>
+          <PageHeader doc={doc} />
           {/* doc.html is sanitized by the content-markdown render pass at build time. */}
           <article className="docs-article" dangerouslySetInnerHTML={{ __html: doc.html }} />
           <PrevNext nav={nav} current={doc.route} />

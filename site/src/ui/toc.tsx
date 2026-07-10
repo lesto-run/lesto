@@ -16,7 +16,7 @@ import type { ReactElement } from "react";
 import type { DocHeading } from "../content";
 
 const TOC_LINK =
-  "block py-[0.28rem] leading-snug text-muted no-underline transition-colors hover:text-fg hover:no-underline";
+  "block border-l border-transparent py-[0.28rem] leading-snug text-muted no-underline transition-colors hover:border-fg/40 hover:text-fg hover:no-underline";
 
 export function TableOfContents({
   headings,
@@ -28,16 +28,16 @@ export function TableOfContents({
 
   return (
     <nav
-      className="sticky top-[80px] max-h-[calc(100vh-96px)] self-start overflow-y-auto text-[0.8rem] max-[1024px]:hidden"
+      className="sticky top-[72px] max-h-[calc(100vh-88px)] self-start overflow-y-auto text-[0.8rem] max-[1024px]:hidden"
       aria-label="On this page"
     >
-      <p className="mb-3 text-[0.7rem] font-semibold uppercase tracking-[0.08em] text-muted">
-        On this page
-      </p>
-      <ul className="m-0 list-none p-0">
+      <p className="mb-3 text-[0.75rem] font-medium text-muted">On this page</p>
+      {/* A quiet left rail; each link's own left border lights up on hover (and is
+          the hook a future scroll-spy island flips to `border-fg` when active). */}
+      <ul className="m-0 list-none border-l border-border p-0">
         {shown.map((h) => (
-          <li key={h.slug} className={h.depth === 3 ? "pl-3" : undefined}>
-            <a className={TOC_LINK} href={`#${h.slug}`}>
+          <li key={h.slug}>
+            <a className={`${TOC_LINK} ${h.depth === 3 ? "pl-6" : "pl-4"}`} href={`#${h.slug}`}>
               {h.text}
             </a>
           </li>

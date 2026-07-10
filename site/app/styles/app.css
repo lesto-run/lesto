@@ -12,40 +12,40 @@
  * injected in the layout, not folded in here.
  */
 
-/* The palette: semantic vars swapped wholesale in dark mode (prefers-color-scheme),
-   mapped into Tailwind tokens via `@theme inline` so `bg-bg`/`text-fg`/`border-border`
-   resolve to the live var and auto-swap — no `dark:` variant. The raw vars stay in
-   `:root` too, so `.docs-article` (custom CSS) can read them directly. */
+/* The palette — a single dark theme (the docs are dark-only, matching the launch
+   reference). Semantic vars are mapped into Tailwind tokens via `@theme inline` so
+   `bg-bg`/`text-fg`/`border-border` resolve to the live var; the raw vars stay in
+   `:root` too, so `.docs-article` (custom CSS) can read them directly. Two text
+   weights on purpose: `--fg` is the bright near-white for headings, strong text,
+   and interactive/active chrome; `--body` is the calmer grey for running prose —
+   the hierarchy that reads as "refined dark docs". A future light theme would slot
+   in behind `:root[data-theme="light"]` without touching any component.
+   (Re-enabling an OS-driven light theme = restore a `prefers-color-scheme: light`
+   block here; nothing else references a light palette.) */
 :root {
-  --bg: #ffffff;
-  --fg: #1c1e21;
-  --muted: #6b7280;
-  --border: #e5e7eb;
-  --surface: #f9fafb;
-  --accent: #4f46e5;
-  --accent-fg: #ffffff;
-  --code-bg: #0d1117;
+  color-scheme: dark;
+  --bg: #0a0b0d;
+  --fg: #ededf0;
+  --body: #bcc0c7;
+  --muted: #7e828b;
+  --border: #1c1e25;
+  --surface: #15171d;
+  --panel: #0f1116;
+  --accent: #9b9cf6;
+  --accent-fg: #0a0b0d;
+  --code-bg: #0d0e13;
   --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1115;
-    --fg: #e6e8eb;
-    --muted: #9aa4b2;
-    --border: #232733;
-    --surface: #161922;
-    --accent: #8b8cf0;
-    --accent-fg: #0f1115;
-  }
 }
 
 @theme inline {
   --color-bg: var(--bg);
   --color-fg: var(--fg);
+  --color-body: var(--body);
   --color-muted: var(--muted);
   --color-border: var(--border);
   --color-surface: var(--surface);
+  --color-panel: var(--panel);
   --color-accent: var(--accent);
   --color-accent-fg: var(--accent-fg);
   --color-code-bg: var(--code-bg);
@@ -60,14 +60,14 @@
   }
   body {
     background: var(--bg);
-    color: var(--fg);
+    color: var(--body);
     line-height: 1.65;
     -webkit-font-smoothing: antialiased;
   }
-  /* Preflight resets links to inherit; the docs convention is accent links that
-     underline on hover. Chrome components override with utilities where needed. */
+  /* Preflight resets links to inherit; the docs convention is near-white links that
+     brighten on hover. Chrome components override with utilities where needed. */
   a {
-    color: var(--accent);
+    color: var(--fg);
   }
   a:hover {
     text-decoration: underline;
@@ -127,14 +127,14 @@
   font-family: var(--mono);
   font-size: 0.78rem;
   color: var(--muted);
-  background: #161b22;
+  background: var(--panel);
   border: 1px solid var(--border);
   border-bottom: none;
-  border-radius: 10px 10px 0 0;
-  padding: 0.5rem 1rem;
+  border-radius: 12px 12px 0 0;
+  padding: 0.55rem 1rem;
 }
 .docs-article [data-rehype-pretty-code-title] + pre {
-  border-radius: 0 0 10px 10px;
+  border-radius: 0 0 12px 12px;
 }
 .docs-article [data-rehype-pretty-code-figure] code {
   display: grid;
@@ -184,21 +184,27 @@
 .docs-article .lesto-pm-panel {
   position: relative;
 }
-.docs-article h1 {
-  font-size: 2.1rem;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
-  margin: 0 0 1rem;
+/* Prose hierarchy: bright headings + strong, calmer body. The page title (h1)
+   is rendered by the shell from frontmatter — the content pipeline strips the
+   body's leading `# H1` — so these rules only style h2+ inside the article. */
+.docs-article h2,
+.docs-article h3,
+.docs-article h4,
+.docs-article strong {
+  color: var(--fg);
 }
 .docs-article h2 {
-  font-size: 1.45rem;
-  margin: 2.5rem 0 0.75rem;
-  padding-top: 0.5rem;
-  letter-spacing: -0.01em;
+  font-size: 1.4rem;
+  margin: 2.75rem 0 0.85rem;
+  padding-top: 1.6rem;
+  border-top: 1px solid var(--border);
+  letter-spacing: -0.015em;
+  font-weight: 600;
 }
 .docs-article h3 {
-  font-size: 1.15rem;
-  margin: 1.75rem 0 0.5rem;
+  font-size: 1.12rem;
+  margin: 2rem 0 0.5rem;
+  font-weight: 600;
 }
 .docs-article p,
 .docs-article li {
@@ -207,14 +213,16 @@
 .docs-article code {
   font-family: var(--mono);
   font-size: 0.88em;
+  color: var(--fg);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 5px;
   padding: 0.1em 0.35em;
 }
 .docs-article pre {
   background: var(--code-bg);
-  border-radius: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
   padding: 1rem 1.15rem;
   overflow-x: auto;
   font-size: 0.85rem;
