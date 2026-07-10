@@ -39,7 +39,11 @@ import { linkWorkspaceInto } from "./link-workspace";
  * bun's isolated layout no longer hoists `@lesto/*` to the root; see `link-workspace.ts`).
  * The Vite leg's island-dev now picks FREE Vite/HMR
  * ports per `lesto dev` (no longer the old fixed 24677/24678), so it no longer collides
- * with the other island-dev specs on those ports.
+ * with the other island-dev specs on those ports. The Bun live-reload socket likewise binds
+ * a FREE ephemeral port per `lesto dev` (no longer the fixed 35729, `buildLiveReload` in
+ * `bin.ts`) — before that fix the two concurrently-booted apps here both dialed 35729, the
+ * second was 403'd on a token mismatch against the first app's server, and the resulting
+ * reconnect storm intermittently kept the island from hydrating (L-89f8ca04).
  */
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");

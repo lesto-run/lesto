@@ -37,8 +37,9 @@ import { killAndWait, spawnDev, waitForServer } from "./dev-harness";
  *
  * The app is an in-repo workspace member, so its `@lesto/*` deps already resolve — no
  * scaffold/symlink step. Both processes share one project dir read-only; only their app
- * ports differ. (The fixed live-reload socket on 35729 collides between the two — that is
- * the EXISTING graceful degradation, unrelated to island-dev, and does not affect Vite.)
+ * ports differ. (The live-reload socket now binds a FREE ephemeral port per `lesto dev`
+ * — `buildLiveReload` in `bin.ts`, L-89f8ca04 — so it no longer collides between the two
+ * either; it used to share the fixed 35729 and degrade the second app's reload channel.)
  */
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");

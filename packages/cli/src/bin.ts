@@ -512,11 +512,11 @@ interface IslandDevPorts {
 
 // Pick two DISTINCT free loopback TCP ports for island Fast Refresh. Both ephemeral
 // (`:0`) listeners are held open SIMULTANEOUSLY so the OS hands back distinct ports, then
-// released. Chosen per `lesto dev` (NOT fixed like `LIVE_RELOAD_PORT`) so a second
-// concurrent `lesto dev` claims its own pair instead of colliding on a shared constant —
-// the old fixed 24677/24678 made the second app's Vite bind fail (`strictPort`), silently
-// degrading it to full reload. A tiny TOCTOU window between release and Vite's bind
-// remains; `strictPort` + `buildIslandDev`'s wrap of this call into a coded
+// released. Chosen per `lesto dev` (like the reload socket in `buildLiveReload`, which binds
+// its own `:0`) so a second concurrent `lesto dev` claims its own pair instead of colliding
+// on a shared constant — the old fixed 24677/24678 made the second app's Vite bind fail
+// (`strictPort`), silently degrading it to full reload. A tiny TOCTOU window between release
+// and Vite's bind remains; `strictPort` + `buildIslandDev`'s wrap of this call into a coded
 // `ISLAND_DEV_SERVER_FAILED` (the one signal `resolveIslandDev` degrades) cover it (a
 // lost race → full reload, never a crash).
 const findIslandDevPorts = (): Promise<IslandDevPorts> =>
@@ -743,12 +743,6 @@ const watchIslands = (onChange: () => void): (() => void) => watchDir(islandsDir
 // `watchIslands` — a class edit anywhere triggers a CSS rebuild + stylesheet hot-swap.
 const watchStyleSources = (onChange: () => void): (() => void) => watchDir(appSrcDir, onChange);
 
-// The dev live-reload WebSocket port — fixed so the injected client script knows
-// where to connect (a separate port from the HTTP server keeps the reload channel
-// off the app's own request surface). The bin runs under Bun, whose built-in
-// `Bun.serve` carries a WebSocket server, so this needs no `ws` dependency.
-const LIVE_RELOAD_PORT = 35729;
-
 // Build the dev live-reload channel: a Bun WebSocket server, the client snippet to
 // inject into dev HTML, and the broadcast/close handles `run` orchestrates. The
 // client opens the socket and, per message, either RELOADS (a successful change, or a
@@ -779,11 +773,25 @@ const buildLiveReload = (): {
   // loosely here (no `@types/bun` in this package) — it is irreducible wiring.
   const bun = (globalThis as { Bun?: BunLike }).Bun;
 
-  let server: { stop?: () => void } | undefined;
+  let server: { stop?: () => void; port?: number } | undefined;
+
+  // The reload WS binds an EPHEMERAL loopback port (`:0`, read back after bind) chosen per
+  // `lesto dev` — NOT a fixed constant. A fixed port (the old 35729) collided whenever a
+  // second `lesto dev` ran concurrently: the second bind failed (EADDRINUSE, swallowed below
+  // → reload silently off) yet its injected client still connected to the FIRST app's reload
+  // server on that port and was 403'd on the token mismatch — a per-second reconnect storm
+  // that flaked the bundler-parity e2e (L-89f8ca04). A free port per dev — mirroring
+  // `findIslandDevPorts` for the Vite/HMR sockets — removes the shared constant, so two
+  // concurrent apps never collide. Read back from `server.port` after the synchronous bind,
+  // then threaded into BOTH the upgrade gate (the Host allowlist is port-specific) and the
+  // injected client (which must dial the port we actually bound). Stays 0 only if the bind is
+  // skipped (no Bun) or fails — then reload is off and the client dials a dead port, exactly
+  // the harmless no-op the old fixed-port catch produced.
+  let boundPort = 0;
 
   try {
     server = bun?.serve({
-      port: LIVE_RELOAD_PORT,
+      port: 0,
       // Bind loopback-only to MATCH the app server (`run.ts` listens on 127.0.0.1).
       // Bun's default is all interfaces (0.0.0.0); on shared Wi-Fi that would let any
       // LAN peer connect to the reload socket and observe reload + error-overlay
@@ -806,7 +814,7 @@ const buildLiveReload = (): {
           !isLiveReloadUpgradeAllowed({
             origin: request.headers.get("origin") ?? undefined,
             host: request.headers.get("host") ?? undefined,
-            port: LIVE_RELOAD_PORT,
+            port: boundPort,
             url: request.url,
             expectedToken: token,
           })
@@ -831,17 +839,26 @@ const buildLiveReload = (): {
         },
       },
     });
+
+    // The bind is synchronous, so `server.port` is the actual ephemeral port BEFORE any
+    // request can reach the `fetch` gate above (which reads `boundPort`) or the injected
+    // client dials it. With `:0` the OS effectively always grants a port, so this catch is
+    // now defensive (a pathological environment), not the concurrent-collision path it once
+    // absorbed on the fixed port.
+    boundPort = server?.port ?? 0;
   } catch {
-    // A busy reload port (a second dev server, a leftover socket) must not crash the
-    // dev boot — live reload just stays off; the HTTP server still serves.
+    // A failed reload-socket bind must not crash the dev boot — live reload just stays off;
+    // the HTTP server still serves. Left over from the fixed-port EADDRINUSE case; with an
+    // ephemeral port this is essentially unreachable but kept as a floor.
     server = undefined;
   }
 
   // The injected client (see `dev-overlay.ts`): connect to the reload socket; on a
   // `reload` message (or a dropped connection) reload the page, on an `error` message
   // paint the overlay. Extracted to a pure builder so its DOM rendering is unit-tested
-  // against a fake socket — this bin injects exactly that tested output.
-  const script = devReloadClientScript(LIVE_RELOAD_PORT, token);
+  // against a fake socket — this bin injects exactly that tested output. `boundPort` is the
+  // port we actually bound (0 if the bind was skipped/failed → a dead, harmless channel).
+  const script = devReloadClientScript(boundPort, token);
 
   return {
     script,
@@ -874,7 +891,7 @@ const buildLiveReload = (): {
 
 /** The slice of Bun's runtime API the live-reload server uses — typed loosely (irreducible wiring). */
 interface BunLike {
-  serve: (options: unknown) => { stop?: () => void } | undefined;
+  serve: (options: unknown) => { stop?: () => void; port?: number } | undefined;
 }
 
 // The content (CMS) packages are OPTIONAL PEERS: a default scaffold uses only
