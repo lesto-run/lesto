@@ -122,91 +122,26 @@ fi
 # still green, yet every new app resolves the OLD 0.1.x line and never sees the release. So we grep
 # the range out of scaffold.ts and assert the release version(s) satisfy it, failing closed if not.
 step "verifying every publishable package is bumped off 0.0.0 and the scaffold dep-range still fits..."
+# The whole check now lives in a committed, unit-tested helper (scripts/lib/preflight-versions.mjs,
+# truth-table tested in scripts/preflight-versions.test.mjs) — so the caret math + fail-closed range
+# guard are typechecked, linted, and coverage-gated like the rest of the release path instead of
+# hiding in this heredoc. This block only wires fs → helper → stdout; the summary line it captures is
+# unchanged, and every fail-closed path (un-bumped 0.0.0, unverifiable range shape, unsatisfied
+# version) throws from the helper, is folded onto stdout by `2>&1`, and re-raised by `fail` below.
 # shellcheck disable=SC2016  # single-quoted ON PURPOSE — the `$`/`${...}` below are JS (node -e), not shell.
 if ! version_info="$(node --input-type=module -e '
-  import { readPublicPackageDirs } from "./scripts/lib/pack-public.mjs";
-  import { assertVersionsBumped } from "./scripts/publish.mjs";
   import { readFileSync } from "node:fs";
   import { join } from "node:path";
+  import {
+    buildPreflightSummary,
+    extractDepRange,
+    readPublishableNodes,
+  } from "./scripts/lib/preflight-versions.mjs";
   const P = join(process.cwd(), "packages");
-  const nodes = readPublicPackageDirs(P).map((dir) => {
-    const m = JSON.parse(readFileSync(join(P, dir, "package.json"), "utf8"));
-    return { name: m.name, version: m.version };
-  });
-  assertVersionsBumped(nodes);
-  const versions = [...new Set(nodes.map((n) => n.version))].sort();
-
-  // Grep LESTO_DEP_RANGE straight out of the scaffold source (its single source of truth). If the
-  // constant was renamed/moved the regex misses -> fail closed rather than silently skip the check.
+  const nodes = readPublishableNodes(P);
   const scaffoldPath = join(P, "create-lesto", "src", "scaffold.ts");
-  const rangeMatch = /const\s+LESTO_DEP_RANGE\s*=\s*"([^"]+)"/.exec(readFileSync(scaffoldPath, "utf8"));
-  if (!rangeMatch) {
-    throw new Error(
-      `could not find LESTO_DEP_RANGE in ${scaffoldPath} -- the scaffold pin was renamed or moved. ` +
-        "Update this precondition regex in scripts/dev/release.sh to match the new declaration.",
-    );
-  }
-  const depRange = rangeMatch[1];
-
-  // FAIL CLOSED on an unrecognized RANGE shape. The checker below models ONLY the simple `^X.Y.Z`
-  // caret LESTO_DEP_RANGE actually uses; a future `~0.1.0` / `>=0.1.0` / `0.1.x` / `||` / caret-with-
-  // prerelease is one we CANNOT verify here. Warning-and-proceeding on an unverifiable range would
-  // reopen the exact stale-pin hole this check exists to close (a `~0.1.0` resolves 0.1.x only, never
-  // 0.2.x, yet would sail through). So refuse and tell the operator to extend the checker. NB: this
-  // is about the RANGE shape; an individual prerelease VERSION is handled (warn, not fail) below.
-  if (!/^\^\d+\.\d+\.\d+$/.test(depRange.trim())) {
-    throw new Error(
-      `scaffold LESTO_DEP_RANGE "${depRange}" is not a simple ^X.Y.Z caret. The release:cut ` +
-        "satisfaction checker only models that shape, so it cannot verify this range covers the " +
-        "surface -- refusing rather than waving an unverifiable pin through. Extend the checker in " +
-        "scripts/dev/release.sh, or normalize LESTO_DEP_RANGE to a caret, before releasing.",
-    );
-  }
-
-  // Correct caret-range membership WITHOUT a semver dep (semver is NOT resolvable from this repo --
-  // verified with require.resolve at authoring time, hence the hand-rolled check). The range is
-  // guaranteed a simple `^X.Y.Z` caret by the fail-closed check above; caret-on-zero semantics:
-  //   ^X.Y.Z (X>0) := >=X.Y.Z  <(X+1).0.0
-  //   ^0.Y.Z (Y>0) := >=0.Y.Z  <0.(Y+1).0
-  //   ^0.0.Z       := >=0.0.Z  <0.0.(Z+1)
-  // A prerelease-tagged VERSION (e.g. 0.2.0-rc.1) is not bare X.Y.Z -> "unknown" -> WARN not fail:
-  // prereleases ship under a `next` dist-tag and a caret from `latest` never pulls them, so a
-  // range/prerelease mismatch is not a real stale-pin, and a false hard-fail there would be worse.
-  const caretResult = (version, range) => {
-    const cm = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(range.trim());
-    const vm = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim()); // bare X.Y.Z only; a prerelease tag -> unknown
-    if (!cm || !vm) return "unknown";
-    const [rMaj, rMin, rPat] = cm.slice(1, 4).map(Number);
-    const [vMaj, vMin, vPat] = vm.slice(1, 4).map(Number);
-    const cmp = (a, b, c, d, e, f) => (a - d) || (b - e) || (c - f); // sign of the X.Y.Z tuple diff
-    const geLow = cmp(vMaj, vMin, vPat, rMaj, rMin, rPat) >= 0;
-    const hi = rMaj > 0 ? [rMaj + 1, 0, 0] : rMin > 0 ? [0, rMin + 1, 0] : [0, 0, rPat + 1];
-    const ltHigh = cmp(vMaj, vMin, vPat, hi[0], hi[1], hi[2]) < 0;
-    return geLow && ltHigh ? "satisfied" : "unsatisfied";
-  };
-
-  // The scaffold pins EVERY @lesto/* dep at this one range, so it must satisfy every published
-  // version. A coherent `fixed`-group release is one version; check each distinct one defensively.
-  const unsatisfied = versions.filter((v) => caretResult(v, depRange) === "unsatisfied");
-  const unknown = versions.filter((v) => caretResult(v, depRange) === "unknown");
-  if (unsatisfied.length > 0) {
-    throw new Error(
-      `scaffold LESTO_DEP_RANGE "${depRange}" does NOT satisfy release version(s) ` +
-        `${unsatisfied.join(", ")}. A freshly-scaffolded app pins every @lesto/* dep at that range, ` +
-        `so publishing this surface would leave new apps on the OLD line ("^0.1.0" resolves 0.1.x ` +
-        `only, never 0.2.x). Bump LESTO_DEP_RANGE in ${scaffoldPath} to match, commit, and re-run. ` +
-        "(ci.yml install-proof pins file:/overrides tarballs, not this published range, so it cannot " +
-        "catch a stale pin -- that is why this check lives here.)",
-    );
-  }
-
-  // Surface the range + verdict on the same line so the operator sees it in the preflight summary.
-  // (unknown here means a prerelease VERSION, not an unverified range -- the range shape is already
-  // fail-closed above, so this only fires when a published version carries a -prerelease tag.)
-  const note = unknown.length > 0
-    ? `scaffold LESTO_DEP_RANGE "${depRange}" set, but prerelease version(s) present -- not caret-checkable, EYEBALL`
-    : `scaffold LESTO_DEP_RANGE "${depRange}" satisfies the surface`;
-  process.stdout.write(`${nodes.length} publishable packages @ ${versions.join(", ")} (${note})`);
+  const depRange = extractDepRange(readFileSync(scaffoldPath, "utf8"), scaffoldPath);
+  process.stdout.write(buildPreflightSummary({ nodes, depRange }));
 ' 2>&1)"; then
   fail "$version_info"
 fi
