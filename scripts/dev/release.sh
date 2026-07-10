@@ -84,7 +84,7 @@ branch="$(git symbolic-ref --quiet --short HEAD || echo DETACHED)"
 # origin/main == HEAD. release.yml checks out ORIGIN at --ref main; if origin lags your HEAD, CI
 # silently builds a STALE tree and the green-CI gate then validates the wrong SHA. Fetch, then
 # compare HEAD to the fetched main tip (FETCH_HEAD is unambiguous — the exact ref we just fetched).
-step "fetching origin/main…"
+step "fetching origin/main..."
 git fetch --quiet origin main || fail "git fetch origin main failed."
 head_sha="$(git rev-parse HEAD)"
 origin_sha="$(git rev-parse FETCH_HEAD)"
@@ -100,7 +100,7 @@ leftover_changesets="$(find .changeset -maxdepth 1 -type f -name '*.md' ! -name 
 # the shared publishable-dir filter (pack-public.mjs), so the local check is identical to the one the
 # release enforces — no drift. A package sits at 0.0.0 until `changeset version` bumps it; publishing
 # an un-bumped package pins npm `latest` to 0.0.0 and desyncs the changeset `fixed` group.
-step "verifying every publishable package is bumped off 0.0.0…"
+step "verifying every publishable package is bumped off 0.0.0..."
 if ! version_info="$(node --input-type=module -e '
   import { readPublicPackageDirs } from "./scripts/lib/pack-public.mjs";
   import { assertVersionsBumped } from "./scripts/publish.mjs";
@@ -123,7 +123,7 @@ fi
 # lifted here so we fail fast BEFORE arming rather than after burning a dispatched run. `--event
 # push` pins it to the push-to-main run (not a stale pull_request run sharing the head SHA).
 # Fail-CLOSED: no run / still running / any non-success all abort.
-step "checking $CI_WORKFLOW is green for $head_sha…"
+step "checking $CI_WORKFLOW is green for $head_sha..."
 if ! ci_result="$(gh run list --workflow="$CI_WORKFLOW" --event push --commit "$head_sha" --limit 1 \
   --json status,conclusion,databaseId \
   --jq 'if length == 0 then "none none 0" else "\(.[0].status) \(.[0].conclusion) \(.[0].databaseId)" end' 2>&1)"; then
@@ -176,7 +176,7 @@ fi
 cleanup() {
   rc=$?
   echo
-  step "cleanup: restoring safe-at-rest (disarm $RELEASE_VAR, remove pause flag)…"
+  step "cleanup: restoring safe-at-rest (disarm $RELEASE_VAR, remove pause flag)..."
   # Disarm is the load-bearing one — leaving RELEASE_ENABLED=true is the exact danger this
   # script exists to prevent. Best-effort so cleanup can't itself abort, but LOUD on failure.
   if ! gh variable set "$RELEASE_VAR" --body false >/dev/null 2>&1; then
@@ -200,7 +200,7 @@ mkdir -p "$(dirname -- "$PAUSE_FLAG")" 2>/dev/null || true
 touch "$PAUSE_FLAG"
 
 # Arm. RELEASE_ENABLED is admin-gated; release.yml's job is skipped unless it is 'true'.
-step "arming $RELEASE_VAR=true…"
+step "arming $RELEASE_VAR=true..."
 gh variable set "$RELEASE_VAR" --body true || fail "could not arm $RELEASE_VAR (the trap will still attempt to disarm on exit)."
 
 # Snapshot the newest release.yml run id BEFORE dispatch so we can identify OUR run afterward
@@ -209,11 +209,11 @@ before_run="$(gh run list --workflow="$WORKFLOW" --limit 1 --json databaseId --j
 
 # Dispatch. --ref main (NOT a bare SHA — workflow_dispatch resolves named refs only; a raw SHA 422s).
 # Safe because we asserted origin/main == HEAD above, so 'main' IS the release SHA.
-step "dispatching $WORKFLOW --ref main…"
+step "dispatching $WORKFLOW --ref main..."
 gh workflow run "$WORKFLOW" --ref main || fail "gh workflow run $WORKFLOW failed to dispatch."
 
 # Find the run our dispatch created. databaseId is monotonic, so the first id != the snapshot is ours.
-step "waiting for the dispatched run to register…"
+step "waiting for the dispatched run to register..."
 run_id=""
 for _ in $(seq 1 30); do
   candidate="$(gh run list --workflow="$WORKFLOW" --limit 1 --json databaseId --jq '.[0].databaseId // 0' 2>/dev/null || echo 0)"
@@ -227,7 +227,7 @@ done
 
 # Watch to completion. --exit-status makes gh exit non-zero if the run fails, so `set -e` propagates
 # that here → the trap fires → we disarm + un-quiesce even on a failed publish.
-step "watching run $run_id (Ctrl-C is safe — cleanup still disarms + un-quiesces)…"
+step "watching run $run_id (Ctrl-C is safe — cleanup still disarms + un-quiesces)..."
 gh run watch "$run_id" --exit-status
 
 step "release run $run_id concluded SUCCESS. Read its publish summary — '0 published, N skipped' when you expected new publishes means CI built a stale tree; investigate, don't assume success."
