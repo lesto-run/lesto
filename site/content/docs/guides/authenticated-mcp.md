@@ -1,5 +1,6 @@
 ---
 title: Build an authenticated MCP server
+navLabel: Authenticated MCP
 description: Expose a Lesto app to AI agents over remote HTTP behind OAuth — validate a bearer token via any issuer's JWKS, gate writes on scope, and audit every call. Grounded in the mcp-auth-openauth example.
 section: Guides
 order: 3

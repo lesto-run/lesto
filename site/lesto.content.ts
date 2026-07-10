@@ -19,9 +19,12 @@ import { z } from "zod";
 
 /** The frontmatter every doc declares — drives the title, ordering, and nav grouping. */
 export const docFrontmatter = z.object({
-  /** The page's `<title>` and its sidebar/heading label. */
+  /** The page's `<title>` and page heading. */
   title: z.string(),
-  /** A one-line summary used for the page's meta description. */
+  /** A shorter sidebar label; falls back to `title` when omitted. Set it when the
+   *  title is a full descriptive phrase that would wrap or crowd the nav rail. */
+  navLabel: z.string().optional(),
+  /** A one-line summary used for the page's meta description and header subtitle. */
   description: z.string().optional(),
   /** The sidebar group this page belongs to (e.g. "Getting started"). */
   section: z.string(),

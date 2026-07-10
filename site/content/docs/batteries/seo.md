@@ -1,6 +1,6 @@
 ---
-title: "SEO — meta tags, sitemap, robots, JSON-LD, and OG image builders"
-description: "@lesto/seo is a set of zero-dependency, pure string builders for the SEO artifacts a page needs — the &lt;head&gt; meta block, sitemap.xml, robots.txt, a JSON-LD &lt;script&gt;, and an Open Graph card — each escaping or refusing untrusted input before it reaches the output."
+title: SEO
+description: "Zero-dependency string builders for a page's SEO artifacts — meta tags, sitemap.xml, robots.txt, JSON-LD, and Open Graph cards — each escaping untrusted input before it reaches the output."
 section: Batteries
 order: 18
 ---

@@ -254,6 +254,10 @@
   overflow-x: auto;
   font-size: 0.85rem;
   line-height: 1.55;
+  /* Plain (no-language) fences aren't wrapped in a `[data-rehype-pretty-code-figure]`,
+     so they don't get the figure's margin below — without this they jam against the
+     next paragraph. Figure-wrapped pres reset this to 0 (the figure carries the gap). */
+  margin: 1.5rem 0;
 }
 .docs-article pre code {
   background: none;

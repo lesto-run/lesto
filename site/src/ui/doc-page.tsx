@@ -25,32 +25,56 @@ import { TableOfContents } from "./toc";
 const SIDEBAR_LINK =
   "block rounded-md px-2 py-[0.32rem] text-[0.875rem] leading-snug no-underline transition-colors hover:no-underline";
 
+/**
+ * Center the active sidebar link inside the sidebar's own scroll box on load.
+ *
+ * The docs are a multi-page app — every navigation is a full document load, which
+ * resets the sidebar's scroll to the top and can leave the current page off-screen.
+ * This runs as a plain inline script placed right after the `<aside>`: at that point
+ * the nav is fully parsed, so it can set `scrollTop` synchronously *before first
+ * paint* — the active item is already in view, with no post-hydration jump. It only
+ * moves the sidebar's internal scroll (never the window), and no-ops on mobile where
+ * the aside isn't a scroll container.
+ */
+const SIDEBAR_SCROLL_SCRIPT =
+  "(function(){var s=document.getElementById('docs-sidebar');if(!s)return;" +
+  "var a=s.querySelector('[aria-current=\"page\"]');if(!a)return;" +
+  "var t=a.offsetTop-(s.clientHeight-a.offsetHeight)/2;s.scrollTop=t>0?t:0;})();";
+
 function Sidebar({ nav, current }: { nav: readonly NavSection[]; current: string }): ReactElement {
   return (
-    <aside className="sticky top-[72px] self-start max-h-[calc(100vh-88px)] overflow-y-auto max-[720px]:static max-[720px]:max-h-none max-[720px]:border-b max-[720px]:border-border max-[720px]:pb-4">
-      {nav.map((section) => (
-        <div className="mb-7" key={section.title}>
-          <p className="mb-2 px-2 text-[0.78rem] font-semibold text-fg/90">{section.title}</p>
-          <ul className="m-0 flex list-none flex-col gap-[1px] p-0">
-            {section.items.map((item) => (
-              <li key={item.route}>
-                <a
-                  href={item.route}
-                  aria-current={item.route === current ? "page" : undefined}
-                  className={
-                    item.route === current
-                      ? `${SIDEBAR_LINK} bg-surface font-semibold text-fg`
-                      : `${SIDEBAR_LINK} text-muted hover:bg-surface hover:text-fg`
-                  }
-                >
-                  {item.title}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
-    </aside>
+    <>
+      <aside
+        id="docs-sidebar"
+        className="sticky top-[72px] self-start max-h-[calc(100vh-88px)] overflow-y-auto max-[720px]:static max-[720px]:max-h-none max-[720px]:overflow-visible max-[720px]:border-b max-[720px]:border-border max-[720px]:pb-4"
+      >
+        {nav.map((section) => (
+          <div className="mb-7" key={section.title}>
+            <p className="mb-2 px-2 text-[0.78rem] font-semibold text-fg/90">{section.title}</p>
+            <ul className="m-0 flex list-none flex-col gap-[1px] p-0">
+              {section.items.map((item) => (
+                <li key={item.route}>
+                  <a
+                    href={item.route}
+                    aria-current={item.route === current ? "page" : undefined}
+                    className={
+                      item.route === current
+                        ? `${SIDEBAR_LINK} bg-surface font-semibold text-fg`
+                        : `${SIDEBAR_LINK} text-muted hover:bg-surface hover:text-fg`
+                    }
+                  >
+                    {item.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </aside>
+      {/* eslint-disable-next-line react/no-danger — a static, self-authored pre-paint
+          script (no user input); must run inline to avoid a scroll flash. */}
+      <script dangerouslySetInnerHTML={{ __html: SIDEBAR_SCROLL_SCRIPT }} />
+    </>
   );
 }
 

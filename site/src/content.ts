@@ -29,6 +29,8 @@ export interface DocEntry {
   /** The URL the page is served at, derived from its path under `content/docs/`. */
   readonly route: string;
   readonly title: string;
+  /** A shorter sidebar label; `undefined` falls back to {@link title}. */
+  readonly navLabel: string | undefined;
   readonly description: string | undefined;
   readonly section: string;
   readonly order: number;
@@ -43,7 +45,13 @@ export interface DocEntry {
 /** A sidebar group: a section title and the pages within it, in order. */
 export interface NavSection {
   readonly title: string;
-  readonly items: readonly { readonly route: string; readonly title: string }[];
+  readonly items: readonly {
+    readonly route: string;
+    /** The full page title (used by prev/next). */
+    readonly title: string;
+    /** The sidebar label — the page's `navLabel` if set, else its `title`. */
+    readonly label: string;
+  }[];
 }
 
 /** The repo root of this site — the cwd the content pipeline globs from. */
@@ -73,6 +81,7 @@ function toDocEntry(entry: RawDoc): DocEntry {
   return {
     route: routeOf(entry.file.pathSegments),
     title: entry.title,
+    navLabel: entry.navLabel,
     description: entry.description,
     section: entry.section,
     order: entry.order,
@@ -117,11 +126,11 @@ function sectionRank(title: string): number {
  * pages keep the `order`/title sort `loadDocs` already applied.
  */
 export function buildNav(docs: readonly DocEntry[]): NavSection[] {
-  const groups = new Map<string, { route: string; title: string }[]>();
+  const groups = new Map<string, { route: string; title: string; label: string }[]>();
 
   for (const doc of docs) {
     const items = groups.get(doc.section) ?? [];
-    items.push({ route: doc.route, title: doc.title });
+    items.push({ route: doc.route, title: doc.title, label: doc.navLabel ?? doc.title });
     groups.set(doc.section, items);
   }
 

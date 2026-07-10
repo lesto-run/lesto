@@ -78,6 +78,25 @@ describe("buildNav", () => {
       "Concepts",
     ]);
   });
+
+  it("uses a page's `navLabel` for its sidebar label, falling back to the title", async () => {
+    const items = buildNav(await loadDocs()).flatMap((section) => section.items);
+
+    // The authenticated-MCP guide keeps its descriptive title but shows a short nav label.
+    const authMcp = items.find((item) => item.route === "/guides/authenticated-mcp");
+    expect(authMcp?.title).toBe("Build an authenticated MCP server");
+    expect(authMcp?.label).toBe("Authenticated MCP");
+
+    // A page with no `navLabel` labels the sidebar with its title verbatim.
+    const data = items.find((item) => item.route === "/batteries/data");
+    expect(data?.label).toBe(data?.title);
+
+    // No sidebar label is long enough to wrap the rail — titles that are really
+    // one-line descriptions (the SEO page's old 66-char title) must not creep back.
+    for (const item of items) {
+      expect(item.label.length, `${item.route} nav label too long`).toBeLessThanOrEqual(28);
+    }
+  });
 });
 
 describe("adjacentDocs", () => {

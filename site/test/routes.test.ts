@@ -52,6 +52,15 @@ describe("doc routes", () => {
     expect(html).toContain('aria-current="page"');
   });
 
+  it("emits the pre-paint script that scrolls the active sidebar item into view", async () => {
+    // A deep page (Sites sits far down the Batteries group) proves the mechanism ships
+    // on every page: an inline script + the `#docs-sidebar` scroll box it targets.
+    const html = await text(await app.handle("GET", "/batteries/sites"));
+
+    expect(html).toContain('id="docs-sidebar"');
+    expect(html).toContain("getElementById('docs-sidebar')");
+  });
+
   it("renders the search island fallback and the client module on every page", async () => {
     const html = await text(await app.handle("GET", "/"));
 
