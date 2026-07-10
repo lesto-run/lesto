@@ -46,6 +46,18 @@ export interface McpDeps {
 
   /** Where the startup banner goes — stderr in the bin, for the same reason. */
   log: (line: string) => void;
+
+  /**
+   * Generate a Lesto UI from a natural-language prompt — the implementation behind the
+   * `generate_ui` MCP tool. A STRUCTURAL seam: no `@lesto/ui-generate` name enters this
+   * always-loaded module, so the published CLI (which ships `src`) never typechecks against
+   * that unpublished, `@anthropic-ai/sdk`-carrying package. The bin wires the real generator
+   * through a LAZY dynamic import, gated on a model key AND a component registry (see
+   * `bin.ts`, mirroring how `lesto eval` reaches `@lesto/ai`). ABSENT here → `runMcp` OMITS
+   * `generate_ui` from the surface, so the tool is cleanly missing rather than advertised
+   * present-and-inert (the `MCP_GENERATE_UNAVAILABLE` throw an agent would otherwise hit).
+   */
+  generateUi?: (prompt: string) => Promise<unknown>;
 }
 
 /**
@@ -108,6 +120,15 @@ export async function runMcp(args: readonly string[], deps: McpDeps): Promise<nu
     // The app's own database is the content store the write tools mutate; in
     // read-only mode they are gated before they ever reach it.
     contentDb: config.db,
+
+    // `generate_ui` is opt-in. The bin injects `generateUi` only when a model key AND a
+    // component registry are both present. WIRED → advertise the tool and run the injected
+    // generator. UNWIRED → OMIT `generate_ui` (rather than leave it present-and-inert), so an
+    // agent's tool list tells the truth: no generator, no tool. `exactOptionalPropertyTypes`
+    // is why this is a conditional spread, not an `undefined` assignment.
+    ...(deps.generateUi === undefined
+      ? { omitTools: ["generate_ui"] }
+      : { generateUi: deps.generateUi }),
   };
 
   deps.log(`lesto mcp: serving over stdio in ${mode} mode`);

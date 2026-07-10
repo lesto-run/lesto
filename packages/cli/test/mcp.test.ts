@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { lesto } from "@lesto/web";
 import type { App, LestoAppConfig, KernelDatabase } from "@lesto/kernel";
+import { buildTools } from "@lesto/mcp";
 import type { LestoMcpContext, McpAuditRecord } from "@lesto/mcp";
 
 import { runMcp } from "../src/mcp";
@@ -124,6 +125,44 @@ describe("runMcp", () => {
     await runMcp([], depsWith());
 
     expect(captured?.schema).toEqual({ migrations: [], tables: [] });
+  });
+
+  it("advertises generate_ui and runs the injected generator when generateUi is wired", async () => {
+    // The bin injects this only past its key + registry gate (see bin.ts); the core just
+    // threads it onto the context so the tool's handler reaches it.
+    const generateUi = vi.fn((prompt: string) =>
+      Promise.resolve({ tree: prompt, valid: true, errors: [] }),
+    );
+
+    await runMcp([], depsWith({ generateUi }));
+
+    // Wired: the context carries the generator and omits nothing, so the tool is advertised.
+    expect(captured?.generateUi).toBe(generateUi);
+    expect(captured?.omitTools).toBeUndefined();
+
+    const tool = buildTools(captured!).find((entry) => entry.name === "generate_ui");
+
+    expect(tool).toBeDefined();
+
+    // Invoking the advertised tool runs the injected generator with the prompt — no longer the
+    // inert MCP_GENERATE_UNAVAILABLE throw.
+    const result = await tool!.handler({ prompt: "a sign-up form" });
+
+    expect(generateUi).toHaveBeenCalledWith("a sign-up form");
+    expect(result).toEqual({ tree: "a sign-up form", valid: true, errors: [] });
+  });
+
+  it("omits generate_ui from the surface when no generator is injected", async () => {
+    await runMcp([], depsWith());
+
+    // Unwired: no generator on the context, and generate_ui is named in omitTools so the
+    // surface is honest — the tool is absent, not present-and-inert.
+    expect(captured?.generateUi).toBeUndefined();
+    expect(captured?.omitTools).toEqual(["generate_ui"]);
+
+    const toolNames = buildTools(captured!).map((entry) => entry.name);
+
+    expect(toolNames).not.toContain("generate_ui");
   });
 
   it("boots the app before standing up the server", async () => {

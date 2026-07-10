@@ -1071,18 +1071,64 @@ const cleanDir = (dir: string): Promise<void> =>
 
 const [command, ...commandArgs] = argv;
 
+// The `generate_ui` MCP tool's implementation, wired exactly like `lesto eval`'s judge below:
+// through a LAZY dynamic import so `@lesto/cli`'s eager graph never pulls in `@lesto/ui-generate`
+// (which carries `@anthropic-ai/sdk`) or `@lesto/ui-kit`. Both are OPTIONAL, unpublished peers — a
+// user who wants AI UI generation installs them in their project, mirroring how `@lesto/ai` backs
+// `eval` and `@lesto/content-*` back the content tools. The import specifiers are widened to
+// `string` so the CLI's OWN typecheck never binds to those unpublished packages (they are NOT
+// `@lesto/cli` dependencies; the covered `generate_ui` core in `mcp.ts` is proven against an
+// injected fake, so none is needed). GATED on a model key AND a resolvable registry: absent either,
+// the result is `undefined` and `runMcp` OMITS `generate_ui` — so a keyless boot never touches the
+// eager Anthropic client, and a missing peer degrades the same way (tool omitted, never a crash).
+const wireGenerateUi = async (): Promise<((prompt: string) => Promise<unknown>) | undefined> => {
+  const apiKey = readEnv("ANTHROPIC_API_KEY");
+
+  if (apiKey === undefined || apiKey === "") return undefined;
+
+  let kit: { createKit: () => unknown };
+  let generate: {
+    generateUi: (options: {
+      registry: unknown;
+      prompt: string;
+      complete: unknown;
+    }) => Promise<unknown>;
+    anthropicComplete: (options?: { apiKey?: string }) => unknown;
+  };
+
+  try {
+    kit = (await import("@lesto/ui-kit" as string)) as typeof kit;
+    generate = (await import("@lesto/ui-generate" as string)) as typeof generate;
+  } catch {
+    return undefined;
+  }
+
+  // createKit() mints a fresh component Registry (the vetted vocabulary the model composes
+  // against); anthropicComplete constructs the Anthropic client — EAGER, hence reached only past
+  // the key gate above. Both are captured once, so a multi-call session builds them a single time.
+  const registry = kit.createKit();
+  const complete = generate.anthropicComplete({ apiKey });
+
+  return (prompt) => generate.generateUi({ registry, prompt, complete });
+};
+
 // `mcp` and `openapi` live in their own command files (operability-dx #4/#5);
 // the bin dispatches them here, before the shared `run` core, because they bring
 // dependencies (`@lesto/mcp`, `@lesto/openapi`) the rest of the CLI does not. The
 // MCP protocol owns stdout (it is the transport), so its logs and audit trail go
 // to stderr.
 if (command === "mcp") {
+  // Resolve the opt-in `generate_ui` implementation before standing up the server, because
+  // `runMcp` needs to know at build time whether to advertise the tool or omit it.
+  const generateUi = await wireGenerateUi();
+
   await runMcp(commandArgs, {
     loadApp,
     createApp,
     startMcpServer,
     audit: console.error,
     log: console.error,
+    ...(generateUi === undefined ? {} : { generateUi }),
   });
 
   // The MCP server runs until its stdio transport closes; `runMcp` resolves then.
