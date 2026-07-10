@@ -15,8 +15,9 @@
 1. **Which clients need DCR (the matrix's bottom line):** **Claude Code** (the Anthropic
    CLI agent) is **DCR-only with no fallback** — if the authorization server does not
    expose an RFC 7591 `registration_endpoint`, it hard-fails (`does not support dynamic
-   client registration`). **Cursor** is effectively DCR-in-practice today (CIMD not
-   shipped as of early 2026). Every *other* major client (Claude.ai / Desktop, ChatGPT,
+   client registration`). **Cursor**'s automatic path is DCR-only today (CIMD not
+   shipped as of early 2026), though a qualified manual `mcp.json` escape hatch
+   exists. Every *other* major client (Claude.ai / Desktop, ChatGPT,
    VS Code, MCP Inspector) **also speaks DCR** but additionally has a CIMD and/or
    manual-`client_id` escape hatch. So **DCR is the interop floor**; the only client that
    *cannot* be served any other way is Claude Code.
@@ -26,11 +27,12 @@
    discovers the AS metadata, finds *neither* CIMD nor DCR, and falls through to
    "prompt the user for a client_id." That path only exists on some clients, and even
    then OpenAuth's `aud = client_id` / no‑RFC‑8707 model breaks the audience guard for an
-   unknown client. **DCR-only clients (Claude Code, today's Cursor) fail outright.**
+   unknown client. **Claude Code fails outright** (DCR-only, no fallback); **Cursor**'s
+   automatic DCR path fails too, leaving only its qualified manual `mcp.json` escape hatch.
 3. **Launch recommendation:** ship the scaffold with **DCR enabled at launch** (rate-limited,
    optional attested) **and** the **CIMD resolver**, with pre-registration as the third
    option — DCR is non-negotiable for the installed base, CIMD is the spec's forward path
-   already usable by VS Code / ChatGPT / Claude.ai / Inspector. **The single most important
+   already usable by VS Code / ChatGPT / Inspector (and, reportedly, Claude.ai). **The single most important
    client to be connectable with is Claude Code**, because it is (a) the on-brand agent
    client for an "agent-native" framework and (b) the *only* client with **no** non-DCR
    path — it is the forcing function that makes DCR mandatory, not optional, for launch.
@@ -50,9 +52,9 @@ Documents (`client_id` is an HTTPS URL); **Manual** = user pastes a pre-register
 
 | Client | DCR (RFC 7591) | CIMD | Manual pre-reg | Default / notes |
 | --- | --- | --- | --- | --- |
-| **Claude.ai + Claude Desktop** (custom connectors; also Cowork/mobile) | ✅ Yes | ✅ Yes (URL `client_id`) | ✅ Yes (client_id + optional secret in Settings; also "Anthropic-held credentials" via `mcp-review@anthropic.com`) | Tries CIMD/DCR first; manual added ~Jul 2025. Supports 3/26 **and** 6/18 auth spec. The **broadest** support of any client. |
+| **Claude.ai + Claude Desktop** (custom connectors; also Cowork/mobile) | ✅ Yes | ⚠️ Reported (URL `client_id`) — re-verify against current Anthropic docs | ✅ Yes (client_id + optional secret in Settings; also "Anthropic-held credentials" via `mcp-review@anthropic.com`) | Tries CIMD/DCR first; manual added ~Jul 2025. Supports 3/26 **and** 6/18 auth spec. The **broadest** support of any client. |
 | **Claude Code** (CLI agent) | ✅ **Only** DCR | ❌ Not yet | ❌ Not yet (open feature request) | **DCR-only, no fallback.** Fails with `Incompatible auth server: does not support dynamic client registration` if the AS lacks `/register`. Static-`client_id` + pre-registration are open GitHub issues (#52638, #38102). **The strictest client.** |
-| **Cursor** | ✅ Yes (primary path) | ❌ Not shipped (requested, forum #148096, early 2026) | ~ Via `mcp.json` config; ships **pre-registered** `client_id`s with some big providers (e.g. Slack) | DCR-in-practice today. CIMD "on the roadmap," not available. |
+| **Cursor** | ✅ Yes (primary path) | ❌ Not shipped (requested, forum #148096, early 2026) | ~ Via `mcp.json` config; ships **pre-registered** `client_id`s with some big providers (e.g. Slack) | Automatic path is DCR-only; a qualified manual `mcp.json` escape hatch exists. CIMD "on the roadmap," not available. |
 | **VS Code** (Copilot / MCP) | ✅ Yes (fallback) | ✅ **Yes — first client to ship CIMD**, stable ~Nov 2025 | ✅ Yes | Publishes its CIMD doc at `https://vscode.dev/oauth/client-metadata.json`. Prefers CIMD, falls back to DCR. |
 | **ChatGPT** (Apps SDK / "apps", née connectors; renamed 2025-12-17) | ✅ Yes | ✅ Yes (**prioritized** when AS advertises it) | ✅ Yes ("predefined OAuth clients") | Priority: CIMD → DCR (app-creator can force DCR) → predefined. PKCE **S256 required**; `resource` param required. |
 | **MCP Inspector** | ✅ Yes (official Inspector, via the MCP SDK auth) | ✅ In the MCPJam Inspector / OAuth Debugger variant | ✅ Yes (debugger lets you set client info) | A **debugging tool**: the popular MCPJam OAuth Debugger explicitly tests all three (pre-reg, DCR, CIMD). Treat as "supports whatever you point it at." |
@@ -75,8 +77,8 @@ AS with no `registration_endpoint`.
   **downgraded SHOULD → MAY** ("**MAY** support ... included for backwards compatibility").
   DCR is **de-emphasized, not deprecated** — exactly the wording ADR 0039/0041 already use.
 - **CIMD is the forward direction and it is real, not vaporware:** VS Code shipped it in
-  stable (first mover, even ahead of the spec), ChatGPT prioritizes it, Claude.ai supports
-  it, the MCPJam Inspector tests it. It removes the write endpoint, the unbounded client
+  stable (first mover, even ahead of the spec), ChatGPT prioritizes it, Claude.ai reportedly
+  supports it, the MCPJam Inspector tests it. It removes the write endpoint, the unbounded client
   table, and the registration-spam surface — the structural win ADR 0041 D2 is built on.
 - **But DCR is still the installed-base floor in mid-2026.** Server-side CIMD support lags
   badly: one survey found **only 3 of 78** tested MCP authorization servers supported CIMD
@@ -139,7 +141,7 @@ off-by-default afterthought for the scaffold.** Ordering by *connectability impo
    DCR, redirect_uris stored-verbatim-never-dereferenced, exact match at `/authorize`).
 2. **CIMD resolver — shipped alongside, advertised via `client_id_metadata_document_supported`.**
    It is the spec's SHOULD, structurally safest (no write endpoint), and **already works
-   today** for VS Code, ChatGPT, Claude.ai, and the Inspector. Advertising it lets those
+   today** for VS Code, ChatGPT, and the Inspector (and, reportedly, Claude.ai). Advertising it lets those
    clients skip `/register` entirely — the best outcome per client, per the spec priority.
 3. **Pre-registration — always available**, locked-down option for a known/fixed client.
 

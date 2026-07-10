@@ -41,27 +41,37 @@ the VO, or a very low ambient pad.
    `examples/blog` — it has no `lesto.app.ts`, so `lesto mcp` won't boot there.
    estate ships no content collection out of the box, so the content beats
    (`create_content_entry` / `query_content`, beat 2 + the GIF cut) need a stage
-   with the content peers (`@lesto/content-core`, `@lesto/content-store`) installed
-   and a collection declared — set that up first, or cut those beats and drive the
-   app through `handle_request` instead.
+   with the content peers (`@lesto/content-core`, `@lesto/content-store`) installed,
+   a collection declared, AND a route that renders it — estate has none, so the
+   browser-refresh payoff needs this stage work. Set that up first, or cut those
+   beats and drive the app through `handle_request` instead.
 2. The `@lesto/mcp` control plane served over stdio and connected to Claude
    Desktop (or any MCP client). **Start it in operator mode** — `lesto mcp
    --operator` — because the demo drives destructive tools (`create_content_entry`,
    `handle_request`). Read-only is the safe default: without `--operator` those
    calls refuse with `MCP_OPERATOR_REQUIRED`, so you opt *in* to writes on camera.
-   Confirm the tools resolve: in Claude, the Lesto server should list `list_routes`,
-   `describe_app`, and `handle_request`; the content tools
+   Confirm readiness by *calling* a tool, not by reading the panel. `buildTools`
+   unconditionally advertises all ten framework tools — `list_routes`,
+   `describe_app`, `handle_request`, and the content tools
    (`list_content_collections`, `query_content`, `create_content_entry`,
-   `update_content_entry`, `delete_content_entry`) appear only when the content
-   peers are installed; and `generate_ui` appears **only when** an Anthropic key +
-   a component registry are configured (it's a preview generator, omitted
-   otherwise).
+   `update_content_entry`, `delete_content_entry`) are listed whether or not the
+   content peers are installed; a missing peer surfaces only *at call time* as
+   `MCP_CONTENT_PACKAGES_MISSING`. So in the dry run, actually call
+   `list_content_collections` — a clean result (not that error) is your proof the
+   content stage is wired. Only `generate_ui` is conditionally *omitted* from the
+   list: it appears **only when** an Anthropic key + a component registry are
+   configured (it's a preview generator, omitted otherwise).
 3. Two windows tiled: **left** = Claude; **right** = the browser on the app.
    Terminal in a third space for the final ship beat.
 4. Pre-seed nothing you'll create on camera. Clear the post you're about to add so
    the "before" is honestly empty.
 5. Font scale up in both Claude and the browser (recording reads small).
 6. Do one dry run end-to-end — MCP tool latency varies; you want the beats tight.
+7. For the ship beat (beat 5), estate deploys with its own runbook `bun run deploy`
+   (`routes:gen` → `build.ts` → `wrangler deploy`) — **not** `lesto deploy
+   --cloudflare`, which would mismatch estate's Preact-SSR worker. Run `wrangler
+   login` once, and **`wrangler secret put SESSION_SECRET`** before deploying —
+   without it the deployed Worker fail-closes on the first request.
 
 ---
 
@@ -72,9 +82,9 @@ the VO, or a very low ambient pad.
 | 0 | 0:00–0:07 | Title card → cut to the live app in the browser | **VO:** "This is a real Lesto app, running right now." On-screen text: *Lesto — the framework you can drive from Claude.* | — |
 | 1 | 0:07–0:18 | Cut to Claude; the Lesto MCP tools panel visible | **VO:** "Lesto exposes its operations as MCP tools — so Claude can see the app, not just talk about it." | Type: *"What routes does this app serve?"* → Claude calls **`list_routes`**, lists them. |
 | 2 | 0:18–0:42 | Claude (left), browser (right) | **VO:** "Let me add a blog post — in plain English." | Type: *"Publish a post titled 'Shipping from Claude' — a short note that our launch is live."* → Claude calls **`create_content_entry`**. Cut to browser, refresh → **the post is live.** |
-| 3 | 0:42–1:02 | Claude → browser | **VO:** "Now build some UI — from a sentence." | Type: *"Generate a hero section: a headline 'Batteries-included. Agent-native.' and a 'Get started' button."* → Claude calls **`generate_ui`** — a **preview** generator backed by `@lesto/ai`, present only when an Anthropic key + a component registry are configured — which returns a validated UI tree; show it rendered. On-screen text: *preview — validated against the component registry.* Only film this beat if the key + registry are wired; otherwise cut it. |
+| 3 | 0:42–1:02 | Claude → browser | **VO:** "Now build some UI — from a sentence." | Type: *"Generate a hero section: a headline 'Batteries-included. Agent-native.' and a 'Get started' button."* → Claude calls **`generate_ui`** — a **preview** generator backed by `@lesto/ui-generate`, present only when an Anthropic key + a component registry are configured — which returns a validated UI tree; show it rendered. On-screen text: *preview — validated against the component registry.* Only film this beat if the key + registry are wired; otherwise cut it. |
 | 4 | 1:02–1:18 | Claude | **VO:** "And it's the real running app — here's the live API." | Type: *"Fetch a live JSON route and show me the response."* → Claude calls **`handle_request`** against a route the stage actually serves (on estate, e.g. `GET /lab/api/listings/:id`) → real JSON straight from the running app. |
-| 5 | 1:18–1:30 | Terminal → browser at the deployed URL | **VO:** "Then ship it — one command to the edge." | Run `lesto deploy --cloudflare`. Cut to the live `*.workers.dev` URL showing the change. |
+| 5 | 1:18–1:30 | Terminal → browser at the deployed URL | **VO:** "Then ship it — one command to the edge." | Run `bun run deploy` (estate's runbook). Cut to the live `*.workers.dev` URL — the app, live at the edge. |
 | 6 | 1:30–1:38 | Title card | On-screen text: **Batteries-included. Agent-native.** / `lesto.run` | **VO:** "Lesto. The batteries are in the box — and an agent can drive them." | — |
 
 ---
@@ -102,6 +112,11 @@ Claude"* → the `create_content_entry` call → hard cut to the browser refresh
 the post live. End on the tagline frame. This is the single most shareable moment;
 it earns the click to the full video.
 
+> **Blocked on the beat-2 stage work.** The "refresh → the post is live" payoff
+> needs a content collection *and a route that renders it* — estate ships neither
+> (see prep item 1). This cut cannot be filmed against bare estate; build that
+> content stage first, then record it.
+
 ---
 
 ## Claims guardrail (do not break these on camera)
@@ -120,8 +135,8 @@ The wedge is real — keep it real. Per [`docs/brand/messaging.md`](../brand/mes
   migration tool ships, add a beat — not before.)
 - **Deploy is the CLI step**, narrated as "ship it." The agent makes the changes;
   `lesto deploy` ships them. Don't imply the agent deploys.
-- **`generate_ui` is a preview generator** (backed by `@lesto/ai`) — present only
-  when an Anthropic key + a component registry are configured, omitted otherwise.
+- **`generate_ui` is a preview generator** (backed by `@lesto/ui-generate`) — present
+  only when an Anthropic key + a component registry are configured, omitted otherwise.
   It returns a validated UI tree rendered to React; show that, not a fully
   auto-published homepage redesign unless you've actually wired the render. If the
   key/registry aren't set for the recording, cut the beat — don't fake it.
@@ -130,7 +145,7 @@ The wedge is real — keep it real. Per [`docs/brand/messaging.md`](../brand/mes
 
 ## Distribution (after the cut is approved)
 
-- README hero (GIF) + the [launch post](../../) (full video) — the launch post is
+- README hero (GIF) + the launch post (full video) — the launch post is
   blocked on publish day; this asset unblocks its hero.
 - Native upload to X/Bluesky/LinkedIn (don't just link YouTube).
 - A 3–4 tweet thread: hook (GIF) → "how it works" (MCP tools) → "try it" (link).

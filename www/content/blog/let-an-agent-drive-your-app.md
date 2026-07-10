@@ -15,11 +15,11 @@ Lesto takes the opposite stance. The agent surface is a first-class, *governed* 
 
 The reason this works is structural. In Lesto, every capability is an *operation* in one core layer; the CLI, the UI, and the **MCP server** are three thin front-ends over that same layer (this is a founding principle, not a feature). So "operate your app from Claude" isn't a special AI integration — it's the MCP surface calling the exact operations the CLI already calls. An agent can't do anything you couldn't do from the command line; it's the same operations, a different caller.
 
-Today the MCP server (`@lesto/mcp`) exposes nine operations:
+Today the MCP server (`@lesto/mcp`) exposes ten operations:
 
-- **Inspect:** `list_routes` (what the app answers), `query_content` / `list_content_collections` / `get_content_entry` (read the content).
+- **Inspect:** `list_routes` (what the app answers), `describe_app` (the app's read-only contract — route map, OpenAPI document, collections, declared schema — in one payload), `query_content` / `list_content_collections` / `get_content_entry` (read the content).
 - **Change content:** `create_content_entry`, `update_content_entry`, `delete_content_entry`.
-- **Generate UI:** `generate_ui` (a Lesto UI tree from a prompt) — a **preview** tool, backed by `@lesto/ai`, present only when an Anthropic key and a component registry are configured, and omitted otherwise.
+- **Generate UI:** `generate_ui` (a Lesto UI tree from a prompt) — a **preview** tool, backed by `@lesto/ui-generate`, present only when an Anthropic key and a component registry are configured, and omitted otherwise (its generation packages ship with the upcoming UI-kit wave — not yet on npm; today it's the monorepo/dev demo).
 - **Drive the app:** `handle_request` (dispatch a real request through the running app and get its response).
 
 So an agent can read your routes, publish and edit content, and exercise your live endpoints — in plain language, from the client you already use. (Note the honest boundary: schema migrations are *not* on this surface — those stay in code and the CLI.)

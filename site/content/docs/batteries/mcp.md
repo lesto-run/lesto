@@ -43,8 +43,10 @@ Ten framework operations:
 - **Change content** — `create_content_entry`, `update_content_entry`,
   `delete_content_entry`.
 - **Generate UI** — `generate_ui` (a Lesto UI tree from a natural-language prompt)
-  — **preview**: backed by `@lesto/ai`, it's present only when an Anthropic key and
-  a component registry are configured, and is omitted otherwise.
+  — **preview**: backed by `@lesto/ui-generate`, it's present only when an Anthropic
+  key and a component registry are configured, and is omitted otherwise (its
+  generation packages ship with the upcoming UI-kit wave — not yet on npm; today
+  it's the monorepo/dev demo).
 - **Drive the app** — `handle_request` (dispatch a real request through the running
   app and return its response).
 

@@ -27,7 +27,7 @@ Here is what Lesto ships today versus what is still on the design board.
 | Capability | Status | Where |
 | --- | --- | --- |
 | **Email/password + TOTP** two-factor, sessions on Node and the edge | **Supported today** | `@lesto/identity`, `@lesto/auth` (this page) |
-| **Authenticated MCP** server (bearer tokens for an agent surface) | **Interim** — OpenAuth issuer | [`examples/mcp-auth-openauth`](https://github.com/lesto-run/lesto/tree/main/examples/mcp-auth-openauth); model in [MCP governance](/batteries/mcp-governance) |
+| **Authenticated MCP** server (bearer tokens for an agent surface) | **Interim** — OpenAuth issuer (pre-wired/known clients; public MCP clients need dynamic registration — in design, ADR 0041) | [`examples/mcp-auth-openauth`](https://github.com/lesto-run/lesto/tree/main/examples/mcp-auth-openauth); model in [MCP governance](/batteries/mcp-governance) |
 | Your app as an **OAuth provider / token issuer** | Design/pending | ADR 0029 (deferred; OpenAuth is the interim issuer) |
 | **Social sign-in** — "Sign in with Google/GitHub" (OAuth *client*) | Design/pending | ADR 0030 (a separate, unbuilt battery) |
 | **Dynamic Client Registration** (RFC 7591 shape) | Design/pending | ADR 0041 (non-functional skeleton, `@lesto/oauth-server`) |

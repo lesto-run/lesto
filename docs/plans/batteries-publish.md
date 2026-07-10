@@ -54,7 +54,7 @@ excluding them ships nothing broken. Each is deferrable to a later coordinated w
 | `lesto-e2e` | Internal E2E harness; no `exports`. Never a user install. |
 | `@lesto/integration` | Internal cross-package integration test harness; no `exports`. |
 | `@lesto/bench` | Internal benchmark harness. Not a user-facing battery. |
-| `@lesto/oauth-server` | **INTERIM** issuer; a from-scratch `@lesto` AS is reopened (L-7e67b9e6). Publishing an interim = support-forever burden on something slated for replacement. Defer. Non-functional ADR-0041 skeleton — see `packages/oauth-server/README.md` for why it stays private. |
+| `@lesto/oauth-server` | **eventual AS home** (ADR 0029 Ph3); a from-scratch `@lesto` AS is reopened (L-7e67b9e6). Publishing an interim = support-forever burden on something slated for replacement. Defer. Non-functional ADR-0041 skeleton — see `packages/oauth-server/README.md` for why it stays private. |
 | `@lesto/ai` | Not a named battery; ADR 0033 Phase-1 maturity; agent-native redaction residual still open pre-launch (L-570cf908). Defer to the agent-native wave. |
 | `@lesto/client` | Contract-typed fetch client — genuinely user-facing, but not a named battery and still `v0.0.0`. Strong candidate for the **next** wave, not this one. |
 | `@lesto/ui-kit`, `@lesto/ui-generate` | UI kit / generation atop published `@lesto/ui`; belongs to the Tailwind/shadcn epic (TW8 in flight), not the batteries launch. |

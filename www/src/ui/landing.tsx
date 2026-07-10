@@ -488,7 +488,8 @@ function AgentNative(): ReactElement {
           <p className="text-muted text-[1.02rem] leading-[1.6] mb-4 tracking-[-0.01em]">
             Every capability is an operation in one core layer, and the CLI, the visual UI, and the{" "}
             <strong>Lesto MCP server</strong> are three equal front-ends over it. From Claude or
-            ChatGPT you publish and edit content, generate UI, and inspect and drive the live app —
+            ChatGPT you publish and edit content, generate UI (preview), and inspect and drive the
+            live app —
             read-only by default, destructive actions gated, every action audited.
           </p>
           <p className="text-[0.86rem] text-faint">
@@ -504,7 +505,7 @@ function AgentNative(): ReactElement {
                 <i />
               </span>
               <span className="panel-tab">
-                claude <span className="accent">· lesto-mcp --operator</span>
+                claude <span className="accent">· lesto mcp --operator</span>
               </span>
             </div>
             <pre>
@@ -519,7 +520,7 @@ function AgentNative(): ReactElement {
                 <span className="c-ok">✓ rendered</span> <span className="c-com">preview</span>
                 {"\n"}
                 <span className="c-fn">handle_request</span>{" "}
-                <span className="c-mut">GET /pricing</span> <span className="c-num">200</span>{" "}
+                <span className="c-mut">GET /posts</span> <span className="c-num">200</span>{" "}
                 <span className="c-ok">✓ verified</span>
                 {"\n"}
                 <span className="c-fn">list_routes</span> <span className="c-mut">42 routes</span>{" "}
