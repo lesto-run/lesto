@@ -2,7 +2,7 @@
 title: Styling
 description: First-class Tailwind v4 — a CSS build that compiles app/styles/app.css to a served, hot-swapping stylesheet, with no bespoke build script.
 section: Batteries
-order: 25
+order: 26
 ---
 
 # Styling
@@ -23,9 +23,13 @@ Three pieces, all conventions you can see in a scaffolded app:
 
 1. **The CSS entry** — a Tailwind v4 stylesheet at `app/styles/app.css`. It begins
    with `@import "tailwindcss"` and holds your `@theme` tokens and any custom CSS.
-2. **The `ui.css` config key** — names that entry in `lesto.app.ts`. Its presence is
-   what enables the CSS build; with no `ui.css`, nothing compiles (Tailwind is opt-in,
-   exactly as islands are opt-in on the presence of `app/islands/`).
+   The **file's presence** is what enables the CSS build: no entry file, nothing
+   compiles (Tailwind is opt-in, exactly as islands are opt-in on the presence of
+   `app/islands/`).
+2. **The `ui.css` config key** — optional. It renames the entry when yours lives
+   somewhere other than the `app/styles/app.css` default. Its sibling
+   `ui.cssScanRoot` points the class scanner somewhere other than `app/` when your
+   markup lives elsewhere.
 3. **The `.styles()` builder call** — links the compiled stylesheet into every page's
    `<head>`, the matched sibling of `.client()`.
 
@@ -35,7 +39,7 @@ const config: LestoAppConfig = {
   app: lesto()
     .client("/client.js") // the island runtime
     .styles("/styles.css"), // the compiled stylesheet — this page's subject
-  // `ui.css` is the Tailwind entry the build compiles; `dialect` picks the island runtime.
+  // `css` defaults to "app/styles/app.css"; set it only to move the entry.
   ui: { dialect: "preact", css: "app/styles/app.css" },
 };
 ```
@@ -49,12 +53,12 @@ survives the change.
 
 > [!NOTE]
 > `@lesto/styles` is an *optional peer dependency* of the CLI, imported lazily only
-> when a `ui.css` entry exists. An app that ships no Tailwind never pulls the native
-> `@tailwindcss/*` engine — the heavy binaries stay out of the install.
+> when the CSS entry file exists. An app that ships no Tailwind never pulls the
+> native `@tailwindcss/*` engine — the heavy binaries stay out of the install.
 
 ## Adding it to an existing app
 
-Install the package and the Tailwind peer, then wire the three pieces above:
+Install the package and the Tailwind peer, then wire the pieces above:
 
 ```package-install
 npm install @lesto/styles tailwindcss
@@ -70,8 +74,8 @@ Create the entry:
 }
 ```
 
-Add `ui.css` and `.styles("/styles.css")` to `lesto.app.ts` (as shown above), and you
-are done — `lesto dev` now serves `/styles.css` and your `className`s resolve.
+Add `.styles("/styles.css")` to `lesto.app.ts` (as shown above), and you are done —
+`lesto dev` now serves `/styles.css` and your `className`s resolve.
 
 ## The theme
 
@@ -154,15 +158,17 @@ Lightning CSS; no serving change is needed (`.css` is already a passthrough asse
 a Cloudflare deploy serves `out/` from Workers Assets).
 
 > [!TIP]
-> Keep the stylesheet honest about its size. `buildStyles` accepts an optional
-> `budgetBytes`; exceed it and the build fails with `STYLES_BUDGET_EXCEEDED` rather
-> than silently shipping a bloated stylesheet — the same fail-loud discipline the
-> island bundle uses.
+> Keep the stylesheet honest about its size. If you drive the build yourself,
+> `buildStyles` (the `@lesto/styles` API) accepts an optional `budgetBytes` —
+> exceed it (measured gzipped) and the build fails with `STYLES_BUDGET_EXCEEDED`
+> rather than silently shipping a bloated stylesheet. Without a budget it still
+> reports the gzip size on every build.
 
 ## Opting out
 
-Styling is opt-in. To ship no stylesheet, remove the `ui.css` key (and delete
-`app/styles/app.css`) — the CSS build is skipped entirely and no `<link>` is injected.
+Styling is opt-in. To ship no stylesheet, delete `app/styles/app.css` (and drop the
+`.styles()` call) — with no entry file the CSS build is skipped entirely and no
+`<link>` is injected.
 
 ## See also
 

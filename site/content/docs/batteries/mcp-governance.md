@@ -20,7 +20,7 @@ This is the conceptual model. For the tool set and the stdio transport, see
 
 ## Two checks, in tension
 
-A complete authorization decision for an agent has two independent ceilings, and
+A complete authorization decision for an agent has two independent checks, and
 both must hold. They answer different questions:
 
 - **Scope** — *what was this token granted?* A scope is a property of the
@@ -46,15 +46,10 @@ authorizeBearer({ scopes, requiredScope, roles, policy, permission })
 The ceiling is checked first, so a scope-insufficient call never consults the
 policy.
 
-> **What is wired today.** On the remote MCP dispatch path, Lesto enforces the
-> **scope ceiling**, the audience and origin guards, the audit (below), **and the
-> per-tool role policy floor** — `authorizeBearer`, the scope∩role intersection.
-> The floor is **opt-in**: pass a `policy` (your `@lesto/authz` policy) and a
-> `toolPermissions` map (tool → permission) to `createMcpHttpHandlers`, and a
-> destructive tool is reachable only by a subject whose roles the policy grants —
-> even within `operator` mode. Omit them and the scope ceiling is the sole gate
-> (the back-compatible default). (The stdio control plane gates on the
-> scope-derived mode only; the role floor is a remote-RS feature.)
+> **What is wired today.** Every gate on this page is enforced on the dispatch
+> path: the scope ceiling, the audience and origin guards, the mandatory audit,
+> and the per-tool role floor (opt-in for the framework tools, declaration-owned
+> for domain tools — see below).
 
 ## The scope ceiling, expressed as a mode
 
@@ -78,6 +73,57 @@ A scope-short write is refused at the **HTTP layer** with a `403 insufficient_sc
 inside a `200`. The same refusal is enforced in depth by `dispatch`'s own
 operator gate, so a call that slips the HTTP-layer peek is still refused — just as
 a coded error rather than a clean `403`.
+
+## The role floor, per tool
+
+The floor half of the intersection is wired per tool, at two levels.
+
+**Framework tools** are mapped by the deployment. Hand `createMcpHttpHandlers` a
+compiled `policy` plus a `toolPermissions` map:
+
+```ts
+createMcpHttpHandlers({
+  // …
+  policy,
+  toolPermissions: { create_content_entry: "content:write" },
+});
+```
+
+A mapped tool is refused with a `403` *before dispatch* unless the subject's roles
+hold its permission — even in `operator` mode, so "any write-scoped bearer can
+drive any write" is closed. A tool absent from the map carries no floor (the scope
+ceiling governs it), and a map entry naming no built tool is refused at
+construction (`MCP_UNKNOWN_TOOL_FLOOR`) — a typo can never ship its intended
+target floorless.
+
+**Domain tools** own their floor in their own declaration —
+`requires: { permission, scope? }` on `defineDomainTool` (see the
+[control plane](/batteries/mcp)). That floor is enforced inside `dispatch` itself
+(`MCP_FORBIDDEN`), so it holds on **every** transport — the remote RS *and* the
+stdio server, which has no HTTP gate in front of it.
+
+Registration fails closed, by rule:
+
+- A **destructive tool with no floor** refuses to register
+  (`MCP_DOMAIN_TOOL_UNGOVERNED`) — shipping an ungoverned write takes a loud,
+  greppable `ungoverned: true`.
+- A **governed tool on a context with no `policy`** refuses
+  (`MCP_DOMAIN_TOOL_POLICY_REQUIRED`) — nothing could adjudicate its permission.
+- A **non-destructive governed tool must name its `scope` explicitly**
+  (`MCP_DOMAIN_TOOL_SCOPE_REQUIRED`) — a destructive tool's scope defaults to the
+  write scope, but defaulting a *read* to the write scope would wrongly demand
+  write.
+- A **name collision** with a framework tool or another domain tool refuses
+  (`MCP_DOMAIN_TOOL_NAME_CONFLICT`).
+- A **destructive domain tool on a server with no principal resolver is absent**
+  — never present-and-open, since its write could not be attributed.
+
+Ownership is disjoint: `toolPermissions` may not name a domain tool
+(`MCP_DOMAIN_TOOL_FLOOR_CONFLICT`) — the declaration is the single owner of that
+tool's floor, so the two maps can never disagree. And once domain tools cover the
+surface, drop the generic driver with `omitTools: ["handle_request"]`; an omit
+naming no known tool is refused too (`MCP_UNKNOWN_OMIT_TOOL`), because a typo'd
+omit would silently leave the intended tool exposed.
 
 ## Audience binding: the confused-deputy guard
 
@@ -109,7 +155,7 @@ issuer, carries no `jose`/JWKS code, and verifies nothing directly. Instead you
 inject one seam:
 
 ```ts
-type VerifyAccessToken = (token: string) => AccessTokenClaims | undefined;
+type VerifyAccessToken = (token: string) => MaybePromise<AccessTokenClaims | undefined>;
 //   AccessTokenClaims = { subject, audience, scopes }
 ```
 
@@ -185,9 +231,9 @@ you need full-fidelity replay, log it deliberately inside your own sink.
 A remote MCP request is governed by, in order: an **origin guard** (no DNS
 rebinding), **bearer authentication** through your injected verifier, an
 **audience guard** (no replayed tokens), a **scope ceiling** (a read token can't
-write), and a **mandatory audit** (who ran what). The design's full authorization
-decision is the intersection of that scope ceiling with a per-subject **role
-floor**; the ceiling, audience guard, origin guard, and audit are enforced on the
-dispatch path today, and the per-tool role floor is the next gate to land. The
-whole point: the agent gets the *safe* surface by default, and every escalation is
-a deliberate, audited, standards-shaped grant.
+write), a per-tool **role floor** (a write-scoped bearer still needs the role the
+policy grants), and a **mandatory audit** (who ran what). The full authorization
+decision is the intersection of the ceiling and the floor, and every gate is
+enforced on the dispatch path today. The whole point: the agent gets the *safe*
+surface by default, and every escalation is a deliberate, audited,
+standards-shaped grant.

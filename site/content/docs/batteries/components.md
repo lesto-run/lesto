@@ -2,7 +2,7 @@
 title: UI components
 description: A scaffolded Lesto app is a generic shadcn/ui project — components.json, path aliases, cn(), and the v4 OKLCH theme are wired, so npx shadcn add just works.
 section: Batteries
-order: 26
+order: 27
 ---
 
 # UI components
@@ -74,7 +74,7 @@ function ConfirmDialog(): JSX.Element {
   return (
     <Dialog>
       <DialogTrigger className="underline">Open</DialogTrigger>
-      <DialogContent data-slot="dialog-content">Are you sure?</DialogContent>
+      <DialogContent>Are you sure?</DialogContent>
     </Dialog>
   );
 }
@@ -82,15 +82,7 @@ function ConfirmDialog(): JSX.Element {
 export default defineIsland({ name: "ConfirmDialog", component: ConfirmDialog });
 ```
 
-Preserve each primitive's `data-slot` attribute when you wrap it — shadcn's styles key
-off it. The static primitives need no wrapper; only the interactive ones do.
-
-> [!NOTE]
-> Two conveniences are on the way and **not shipped yet**: a `lesto add` command that
-> delegates to `shadcn add` and **auto-wraps** the interactive primitives as islands
-> for you, and a hosted **`@lesto` registry** of island-aware, Workers-safe components
-> installable through the shadcn MCP server. Until then, use `npx shadcn add` and wrap
-> interactive primitives by hand as shown above.
+The static primitives need no wrapper; only the interactive ones do.
 
 ## Theming
 

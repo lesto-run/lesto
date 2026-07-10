@@ -1,19 +1,20 @@
 ---
-title: "SEO — meta tags, sitemap, robots, and JSON-LD builders"
-description: "@lesto/seo is a set of zero-dependency, pure string builders for the four SEO artifacts a page needs — the &lt;head&gt; meta block, sitemap.xml, robots.txt, and a JSON-LD &lt;script&gt; — each escaping or refusing untrusted input before it reaches the output."
+title: "SEO — meta tags, sitemap, robots, JSON-LD, and OG image builders"
+description: "@lesto/seo is a set of zero-dependency, pure string builders for the SEO artifacts a page needs — the &lt;head&gt; meta block, sitemap.xml, robots.txt, a JSON-LD &lt;script&gt;, and an Open Graph card — each escaping or refusing untrusted input before it reaches the output."
 section: Batteries
 order: 18
 ---
 
 # SEO
 
-`@lesto/seo` is a set of pure string builders for the four SEO artifacts a page
-needs: the `<head>` meta block, `sitemap.xml`, `robots.txt`, and a JSON-LD
-`<script>`. It has no framework dependency and no runtime state — each function
-takes plain data and returns a string. The one idea that runs through all four:
-every value you pass is untrusted text, so it is escaped (HTML/XML) or refused
-(line- and URL-injection) before it reaches the output. You decide where the
-strings go — a [route](/guides/routing) handler, a build step, a layout `<head>`.
+`@lesto/seo` is a set of pure string builders for the five SEO artifacts a page
+needs: the `<head>` meta block, `sitemap.xml`, `robots.txt`, a JSON-LD
+`<script>`, and an Open Graph preview card. It has no framework dependency and no
+runtime state — each function takes plain data and returns a string. The one idea
+that runs through all five: every value you pass is untrusted text, so it is
+escaped (HTML/XML) or refused (line- and URL-injection) before it reaches the
+output. You decide where the strings go — a [route](/guides/routing) handler, a
+build step, a layout `<head>`.
 
 ## Meta tags
 
@@ -117,9 +118,36 @@ const script = jsonLd("Article", {
 //   "@type":"Article","headline":"How we ship", ...}</script>
 ```
 
-Every `<` in the serialized JSON is rewritten to `<`, so a value containing
-the literal `</script>` cannot break out of the surrounding element — the
-standard hardening for inline JSON in HTML.
+Every `<` in the serialized JSON is rewritten to the Unicode escape `\u003c`,
+so a value containing the literal `</script>` cannot break out of the
+surrounding element — the standard hardening for inline JSON in HTML.
+
+## Open Graph image
+
+`ogImage` renders a branded 1200×630 social-preview card as a **self-contained SVG
+string** — no raster pipeline, no font loading, no headless browser. Only `title`
+is required; a string is one hero line, an array renders one line per entry (lines
+after the first take the accent color).
+
+```ts
+import { ogImage } from "@lesto/seo";
+
+const svg = ogImage({
+  title: ["Batteries included.", "Agent-native."],
+  description: "The fullstack framework that ships whole.",
+  wordmark: "Lesto",
+  footer: "lesto.run",
+  colors: { gradientFrom: "#3730a3", gradientTo: "#4f46e5" },
+});
+```
+
+Serve it from a route or write it to a file, and point `metaTags`' `image` at it.
+Every caller-supplied string is HTML-escaped before it reaches the SVG — titles
+and descriptions are routinely attacker-influenced. An all-empty `title` is
+refused with `SEO_EMPTY_OG_TITLE`. All colors are optional (`OgImageColors`);
+omitted fields fall back to the Lesto defaults, so a bare `{ title }` still yields
+a complete card. SVG cards render in most modern unfurlers; if you need a raster
+everywhere, rasterize this same markup out of band.
 
 ## Escaping directly
 
@@ -160,4 +188,7 @@ escape(`Tom & "Jerry" <best>`); // Tom &amp; &quot;Jerry&quot; &lt;best&gt;
   that's between you and the spec.
 
 New here? Start with the [quickstart](/quickstart); for where these strings live
-in a request, see [routing & pages](/guides/routing).
+in a request, see [routing & pages](/guides/routing). For a fully prerendered
+site, [`@lesto/sites`](/batteries/sites)' `defineStaticSite` derives the sitemap
+from your route list and emits `sitemap.xml`, `robots.txt`, and the OG card
+through these same builders.

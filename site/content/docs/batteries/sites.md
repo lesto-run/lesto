@@ -32,11 +32,13 @@ const sites = defineSites([
 ```
 
 Validation happens at config time, not serve time: a site needs a non-empty
-name, names must be unique, every `basePath` must start with `/`, and no two
-sites may mount at the same `basePath`. A duplicate mount would make request
-selection ambiguous, so it throws a `SitesError` (`SITES_DUPLICATE_BASE_PATH`)
-instead of producing a confusing `404` later. `defineSites` returns the sites
-unchanged and fully typed for the runtime and the build to consume.
+name, a name must be a plain slug (lowercase letters, digits, `-`, `_` — it
+becomes a path segment, so nothing that could escape the output tree), names
+must be unique, every `basePath` must start with `/`, and no two sites may mount
+at the same `basePath`. A duplicate mount would make request selection
+ambiguous, so it throws a `SitesError` (`SITES_DUPLICATE_BASE_PATH`) instead of
+producing a confusing `404` later. `defineSites` returns the sites unchanged and
+fully typed for the runtime and the build to consume.
 
 ## Static pages, fixed or derived
 
@@ -128,6 +130,31 @@ any page the app answered with a non-2xx status; if **any** page failed, it
 throws `SitesError` (`SITES_PAGE_FAILED`) — naming each failing path and status —
 before a single file is written. On success it writes every page and returns one
 `SiteManifest` per site, listing each page's `path`, `outputPath`, and `status`.
+
+## Sitemap, robots, and the OG card
+
+A fully prerendered site also ships its discoverability files, and
+`defineStaticSite` owns that emit so your build script doesn't. Give it the
+site's origin and route list; it derives the sitemap (priority `1` for `/`,
+`0.7` elsewhere — override with `priority`) and returns an `emit(sink)` that
+writes `sitemap.xml`, `robots.txt`, and — when given — an `og.svg` and
+`favicon.svg` through the same `OutputSink` the pages use:
+
+```ts
+import { defineStaticSite, nodeSink } from "@lesto/sites";
+import { ogImage } from "@lesto/seo";
+
+const site = defineStaticSite({
+  siteUrl: "https://example.com",
+  routes: ["/", "/about", "/pricing"],
+  og: ogImage({ title: "Example", footer: "example.com" }),
+});
+
+await site.emit(nodeSink("out"));
+```
+
+The strings come from [`@lesto/seo`](/batteries/seo)'s pure builders, so
+everything on this path stays substrate-agnostic — a sink, not a filesystem.
 
 ## Notes and gotchas
 
