@@ -1,6 +1,6 @@
 {
   "name": "@lesto/island-dev",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "MIT",
   "description": "Lesto's dev-only island bundler (DX-parity R2, ADR 0011) — a loopback Vite dev server (CLI-proxied) with React/Preact Fast Refresh, wrapped behind a pure seam so `lesto dev` preserves island state on edit. The real Vite + plugin wiring lives in a separate coverage-excluded edge; the orchestration is covered with fakes.",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@lesto/content-shared",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "MIT",
   "description": "Shared utilities for the Docks monorepo",
   "type": "module",

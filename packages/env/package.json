@@ -1,6 +1,6 @@
 {
   "name": "@lesto/env",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "MIT",
   "description": "Lesto's typed, validated environment — a defineEnv schema that fails fast at boot and hands back frozen, fully-typed values.",
   "type": "module",

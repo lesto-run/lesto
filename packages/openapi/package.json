@@ -1,6 +1,6 @@
 {
   "name": "@lesto/openapi",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "MIT",
   "description": "Lesto's OpenAPI generator — turn a Lesto app's route list into an OpenAPI 3.1 document.",
   "type": "module",

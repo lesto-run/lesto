@@ -1,6 +1,6 @@
 {
   "name": "@lesto/runtime",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "MIT",
   "description": "Lesto's transport tier — the node:http server that serves a Lesto app, plus a queue-worker runner.",
   "type": "module",
