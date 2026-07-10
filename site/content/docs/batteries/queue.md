@@ -24,10 +24,11 @@ semantics end to end. The guarantee is proven against real Postgres in CI.
 
 ## Install and enqueue
 
-Create the tables once (idempotent — run it from a migration or at boot), then
-construct a `Queue` over your database handle. Pass `dialect: "postgres"` to
-**both** `installSchema` and `new Queue` on Postgres; they must agree, or the
-locking clause is silently dropped.
+Create the tables once (idempotent — run it from a migration or at boot; in a
+kernel app, pass it as `createApp({ schemas: [installSchema] })` so the table
+exists before the first request), then construct a `Queue` over your database
+handle. Pass `dialect: "postgres"` to **both** `installSchema` and `new Queue`
+on Postgres; they must agree, or the locking clause is silently dropped.
 
 ```ts
 import { Queue, installSchema } from "@lesto/queue";

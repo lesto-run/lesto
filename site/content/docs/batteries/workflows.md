@@ -75,11 +75,13 @@ safe to retry — but, per the boundary above, **you** decide when to re-invoke
 ## Observe step execution
 
 Pass a `StepObserver` to see which steps executed versus replayed — useful for
-logs, metrics, or asserting replay in a test. Each `StepEvent` carries the step
-name and a `replayed` flag (executed `fn` vs. returned a memoized result):
+logs, metrics, or asserting replay in a test. Each `StepEvent` carries the
+`workflow`, `runId`, `step`, a `replayed` flag (executed `fn` vs. returned a
+memoized result), and `durationMs`. No step *result* is carried, so a sink can
+never leak step output into a log or span:
 
 ```ts
-const engine = new Engine({ db, onStep: (e) => log(`${e.name} ${e.replayed ? "replayed" : "ran"}`) });
+const engine = new Engine({ db, onStep: (e) => log(`${e.step} ${e.replayed ? "replayed" : "ran"}`) });
 ```
 
 ## Notes and gotchas
@@ -101,9 +103,12 @@ const engine = new Engine({ db, onStep: (e) => log(`${e.name} ${e.replayed ? "re
 - **`sleep` is in-process, not durable.** `ctx.sleep(ms)` waits within the running
   call; it does not survive the process exiting and resume later. A durable,
   cross-process `sleep`/`waitForEvent` is part of the deferred post-1.0 work.
-- **Branch on `code`, never the message.** Failures are a `WorkflowError` carrying
-  a stable `WorkflowErrorCode`.
+- **Branch on `code`, never the message.** Engine refusals are a `WorkflowError`
+  carrying a stable `WorkflowErrorCode` — running a name that was never
+  `define`d throws `WORKFLOW_UNKNOWN`.
 
 For the at-least-once primitive workflows are often paired with, see
 [Queue](/batteries/queue); for the schema the journal lives on, see
-[Data](/batteries/data).
+[Data](/batteries/data). A runnable engine — steps, replay, and the observer —
+lives in
+[`examples/workflows`](https://github.com/lesto-run/lesto/tree/main/examples/workflows).

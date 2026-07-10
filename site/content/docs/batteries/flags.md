@@ -91,11 +91,11 @@ code path. Use `flags.enabled(name, c)`, which returns a plain boolean using the
 same dynamic-then-static resolution as the gate:
 
 ```ts
-app.get("/listings", (c) => {
+app.get("/api/listings", (c) => {
   if (flags.enabled("new-listing-ui", c)) {
-    return c.render(<NewListings />);
+    return c.json({ layout: "new", listings });
   }
-  return c.render(<Listings />);
+  return c.json({ layout: "classic", listings });
 });
 ```
 
@@ -117,4 +117,6 @@ c)` plus "and if not, return the disabled response."
   off, so a typo in a flag name fails closed rather than silently opening a route.
 
 For how `.use`, route mounting, and the request `Context` work, see
-[Routing & pages](/guides/routing).
+[Routing & pages](/guides/routing). A complete, runnable app — gated routes, a
+hidden subtree, and a per-request diagnostic — lives in
+[`examples/flags`](https://github.com/lesto-run/lesto/tree/main/examples/flags).

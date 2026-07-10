@@ -90,7 +90,8 @@ app:
 ```ts
 import { createApp } from "@lesto/kernel";
 
-const app = await createApp({ db, app: handler, migrations });
+// `web` is your composed lesto() app; `db` the driver handle it queries through.
+const app = await createApp({ db, app: web, migrations });
 
 app.migrationsApplied; // ["001_create_products", "002_index_products_name"]
 ```
@@ -100,7 +101,7 @@ Postgres DDL (and engage the advisory-lock guard that keeps a fleet from
 migrating the same database twice):
 
 ```ts
-await createApp({ db, app: handler, migrations, dialect: "postgres" });
+await createApp({ db, app: web, migrations, dialect: "postgres" });
 ```
 
 Pass the literal `"skip"` instead of an array for a fleet member that must not
@@ -152,6 +153,16 @@ the parity is verified in CI against both engines.
 - **Thread `schema.dialect`.** Forgetting it on a Postgres deploy emits
   SQLite-only DDL that Postgres rejects. When in doubt, always render with
   `createTableSql(table, schema.dialect)`.
+- **One statement per `execute`.** `schema.execute(sql)` sends the string to the
+  driver's `exec` verbatim. Cloudflare D1 rejects multi-statement strings, so
+  issue each statement as its own `execute` call rather than joining them with
+  semicolons.
+- **Failure rollback differs by engine.** Each migration's DDL and its
+  bookkeeping insert commit as one atomic unit. On SQLite each migration commits
+  independently, so a failure keeps the earlier ones applied (Rails-style). On
+  Postgres the advisory-locked run is a single transaction — a failure rolls
+  back every migration in that run, and the fixed set re-applies cleanly on the
+  next boot.
 
 A complete, runnable migrations array — two tables migrated through
 `createApp({ migrations })` — lives in the

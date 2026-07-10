@@ -136,16 +136,68 @@ echo 'SESSION_SECRET=local-dev-value' >> .dev.vars   # local `wrangler dev`
 The default source is edge-safe (`globalThis.process?.env ?? {}`), so importing
 `@lesto/env` never throws a `ReferenceError` where there is no `process`.
 
-## Server-only — keep secrets out of the browser
+## Split server and client halves
 
-`@lesto/env` is a **server** module. Do not import an `env` schema into an
-`app/islands/*` component: islands are bundled to the browser, where there is no
-`process.env`, so a required variable would throw at hydration — and a secret has
-no business in client code at all. When an island needs a value, pass it down as
-a prop from a server page or loader (a public API base URL, a feature flag),
-never by importing the server environment into the bundle.
+`defineEnv` also takes a two-sided schema — `server` for secrets, `client` for
+public config — and enforces the boundary structurally, not by convention. The
+scaffold ships this layout: a browser-safe `env.client.ts` declaring the
+`PUBLIC_*` schema, imported by the full `env.ts`:
 
-> [!IMPORTANT]
-> Today this is a convention, not an enforced boundary — Lesto does not yet split
-> a schema into server/client halves or refuse a client import at build time (the
-> way t3-env or Astro's `astro:env` do). Treat `env.ts` as server-only by hand.
+```ts
+// env.client.ts — the PUBLIC_* schema, shared with islands and the bundler.
+import { envField } from "@lesto/env/client";
+import type { ClientSchema } from "@lesto/env/client";
+
+export const clientEnv = {
+  PUBLIC_APP_NAME: envField.string().default("My app"),
+} satisfies ClientSchema;
+```
+
+```ts
+// env.ts — the full schema. Server keys are leak-guarded.
+import { defineEnv, envField } from "@lesto/env";
+import { clientEnv } from "./env.client";
+
+export const env = defineEnv({
+  server: { SESSION_SECRET: envField.string() },
+  client: clientEnv,
+});
+```
+
+Two guarantees, both loud and early:
+
+- **Client keys must be named `PUBLIC_*`.** A misnamed one throws
+  `ENV_CLIENT_NOT_PUBLIC` as the schema is built — the prefix is the leak
+  contract the bundler keys off.
+- **Server keys never reach the browser.** Reading a server key from a browser
+  context throws `ENV_SERVER_LEAK` naming the variable, instead of silently
+  bundling `undefined` — or the secret itself.
+
+In an island, read public config through `@lesto/env/client`, a surface that by
+construction imports no server schema:
+
+```ts
+// app/islands/hello.tsx
+import { defineClientEnv } from "@lesto/env/client";
+import { clientEnv } from "../../env.client";
+
+const publicEnv = defineClientEnv(clientEnv);
+publicEnv.PUBLIC_APP_NAME; // string — inlined into the bundle at build time
+```
+
+A browser has no `process.env`, so `lesto dev` and `lesto build` read
+`env.client.ts` and inline the validated `PUBLIC_*` values into the island
+bundle; a missing or malformed required `PUBLIC_*` variable fails the *build*,
+not hydration. On the server the same `defineClientEnv` call falls back to
+`process.env`, so it works in both places.
+
+Secrets still have no business in client code: when an island needs a
+server-derived value, pass it down as a prop from a server page or loader.
+
+## Where to go next
+
+- [Data](/batteries/data) — point `DATABASE_URL` at the typed data layer.
+- [Deploy to Cloudflare](/deploy/cloudflare) — Worker bindings, secrets, and
+  `.dev.vars` in full.
+- [Quickstart](/quickstart) — the scaffold that ships `env.ts` and
+  `env.client.ts` wired up.
