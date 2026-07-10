@@ -86,15 +86,15 @@ process.on("SIGTERM", () => void worker.stop());
 ```
 
 That's the whole integration. No Redis, no broker, no schema you maintain by
-hand — the jobs live in a table next to your data, so you can query them, and a
-transaction that enqueues a job commits atomically with the rest of your write.
+hand — the jobs live in a table next to your data, so you can inspect and query
+them with plain SQL.
 
 ## The same shape for other batteries
 
 Every battery is adopted the same way — give it a handle or a transport, not your
 framework:
 
-- **`@lesto/cache`** — `cache.fetch(key, ttl, fn)` over the same `db` (or in-memory).
+- **`@lesto/cache`** — `cache.fetch(key, produce, { ttlMs })` over the same `db` (or in-memory).
 - **`@lesto/mail`** — react-email templates with queued delivery on `@lesto/queue`.
 - **`@lesto/auth`** — password hashing, tokens, and sessions on `node:crypto`.
 - **`@lesto/webhooks`** — HMAC-signed outbound delivery, retried on the queue.

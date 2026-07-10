@@ -17,8 +17,9 @@ layouts compose.
 ## Code-first
 
 Declare routes on the `lesto()` builder. The builder is chainable: `.get` /
-`.post` / `.patch` / `.delete` register API handlers, and `.page` registers a
-page with a `component`, an optional server `load`, and optional `metadata`.
+`.post` / `.put` / `.patch` / `.delete` register API handlers, and `.page`
+registers a page with a `component`, an optional server `load`, and optional
+`metadata`.
 
 ```ts
 import { lesto } from "@lesto/web";
@@ -45,17 +46,16 @@ what `component` receives.
 
 A page may declare a `params` schema (a Zod type) that validates the **query
 string** at the boundary. A malformed query is a `400` before `load` ever runs;
-on success the parsed value is stashed for the handler to read.
+on success the parsed value arrives as `load`'s second argument, typed straight
+off the schema — no cast, no codegen:
 
 ```ts
 import { z } from "zod";
 
 app.page("/search", {
   params: z.object({ q: z.string().min(1), page: z.coerce.number().default(1) }),
-  load: (c) => {
-    const { q, page } = c.get("params") as { q: string; page: number };
-    return { results: search(q, page) };
-  },
+  // `params` is `{ q: string; page: number }`, inferred from the schema.
+  load: (c, params) => ({ results: search(params.q, params.page) }),
   component: SearchPage,
 });
 ```
@@ -85,16 +85,20 @@ page is already cacheable, so `cache` is moot there.
 ## File-based
 
 Drop files under `app/routes/` and they become routes. `page.tsx` makes a
-directory a route, `layout.tsx` wraps every route at or below it, and a `[id]`
-segment is a typed param that compiles to the router's `:id`:
+directory a route, `layout.tsx` wraps every route at or below it,
+`middleware.ts` guards every route at or below it, and a `[id]` segment is a
+typed param that compiles to the router's `:id`:
 
 ```
 app/routes/
   layout.tsx            → wraps every route below
+  middleware.ts         → guards every route below (runs before each page's load)
   page.tsx              → /
   posts/
     page.tsx            → /posts
-    [id]/page.tsx       → /posts/:id   (typed param `id`)
+    [id]/page.tsx       → /posts/:id       (typed param `id`)
+  docs/
+    [...slug]/page.tsx  → /docs/*slug      (catch-all, `slug: string[]`)
 ```
 
 Each `page.tsx` default-exports a `PageDef` — the **same shape** as a code-first
@@ -124,14 +128,46 @@ file routes and code routes share one router. The estate example wires both side
 by side: see
 [examples/estate](https://github.com/lesto-run/lesto/tree/main/examples/estate).
 
+### Per-route middleware
+
+A `middleware.ts` default-exports a guard that runs **before the loader** of
+every page at or below its directory — every `middleware.ts` above a page
+composes, outermost first, with no `.use()` call and no per-page wiring. The
+guard makes one of two moves:
+
+- **Redirect or short-circuit before load** — return a response
+  (`c.redirect("/login")`, a 403) and the page's `load` and render never run.
+- **Augment the loader context** — call `c.set(key, value)` and return nothing;
+  the chain falls through, and the page's `load` reads it back with `c.get(key)`.
+
+```ts
+// app/routes/account/middleware.ts
+import type { RouteMiddleware } from "@lesto/web";
+
+const requireUser: RouteMiddleware = async (c) => {
+  const user = await userFromSession(c);
+  if (user === undefined) return c.redirect("/login"); // load never runs
+
+  c.set("user", user); // fall through; `load` reads c.get("user")
+};
+
+export default requireUser;
+```
+
+A `middleware.ts` guards the page **document** only. A page's island data
+endpoints register as their own routes, so pass the same guard chain to
+`.data(source, loader, [guard])` — the framework refuses a `scope: "private"`
+data source with no guards at boot rather than let the bypass ship by omission.
+
 ## Page loaders & metadata
 
 `load` runs **on the server**. It receives the request context (`c.param`,
-`c.query`, headers, the validated `params`) and returns the props the component
-renders with — the data fetch happens before the component, so there's no
-client-side loading waterfall. Authorization and feature gating sit in front as
-middleware (`.use(...)`), guarding a page and its whole subtree exactly as they
-guard API routes.
+`c.query`, headers) plus the validated `params` as a typed second argument, and
+returns the props the component renders with — the data fetch happens before the
+component, so there's no client-side loading waterfall. Authorization and
+feature gating sit in front as middleware (`.use(...)` on a code-first chain, a
+`middleware.ts` in the file tree), guarding a page and its whole subtree exactly
+as they guard API routes.
 
 `metadata` turns the loaded props into the document `<head>`. It returns a
 `title`, a `description`, and optional `meta` / `links` arrays; the framework
@@ -179,3 +215,9 @@ that must re-run the document, such as a logout that clears client state. And if
 fetch or swap throws, the default recovery is a real navigation to the
 destination, so a soft-nav failure degrades to exactly the navigation the link
 would have done with no JavaScript at all.
+
+## Where to go next
+
+- [Validation](/guides/validation) — the full boundary story: bodies, params, admin.
+- [Testing](/guides/testing) — drive these routes in-process, no server.
+- [Concepts](/concepts) — how routes, middleware, and layouts compose.

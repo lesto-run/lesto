@@ -68,7 +68,7 @@ app
 | `app/api/posts/[id]/route.ts` | `.get("/api/posts/:id", (c) => c.param("id"))` |
 | `new URL(req.url).searchParams.get("q")` | `c.query("q")` |
 | `NextResponse.json(x, { status })` | `return c.json(x, status)` |
-| `middleware.ts` | `.use((c, next) => …)` middleware, or `.use(can(...))` / `.use(gate(...))` |
+| `middleware.ts` | `.use((c, next) => …)` on a chain, or a file-routed `middleware.ts` under `app/routes/` |
 
 ## Pages → file-based routing
 
@@ -110,7 +110,8 @@ batteries are first-party and run on the same database:
 
 - **Typed schema + migrations** — `@lesto/db` (a query builder, not an ORM) + `@lesto/migrate`, no Prisma/Drizzle to wire.
 - **Durable jobs** — `@lesto/queue` on the DB, no Redis or hosted queue.
-- **Auth + RBAC** — `@lesto/auth` + `@lesto/authz`, not a third-party provider.
+- **Auth + RBAC** — `@lesto/identity` (accounts, sessions) + `@lesto/authz`
+  (roles), not a third-party provider.
 - **Transactional email + mailing lists** — `@lesto/mail`, queued, react-email.
 - **An admin surface** — `@lesto/admin`, CRUD with pagination and audit hooks.
 - **Observability** — one trace spans browser → API → DB, no OpenTelemetry dep.

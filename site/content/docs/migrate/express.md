@@ -85,18 +85,22 @@ const config: LestoAppConfig = {
   db: handle,
   app: buildApp(createDb(handle)),
   migrations: [createPosts],
-  secure: { originCheck: {} }, // CSRF + rate-limiting on by default
+  secure: { originCheck: {} }, // CSRF origin check, over the always-on rate-limit baseline
 };
 
 export default config;
 ```
 
-Run it with `lesto dev` (hot reload) or stand a real `node:http` server in front
-of it:
+Run it with `lesto dev` (hot reload) or `lesto serve`, or stand the hardened
+`node:http` server in front of it yourself — boot the config through
+`createApp` (which runs the migrations) and serve the booted app:
 
 ```ts
-import { openSqlite, serve } from "@lesto/runtime";
-const server = await serve(config.app, { port: 3000 });
+import { createApp } from "@lesto/kernel";
+import { serve } from "@lesto/runtime";
+
+const app = await createApp(config);
+const server = await serve(app, { port: 3000 });
 ```
 
 ## Concept map
@@ -124,7 +128,9 @@ same SQL substrate:
 - **Your ORM + migration tool** (Knex, Prisma, raw SQL) → `@lesto/db` + `@lesto/migrate`.
 - **A job queue + Redis** (BullMQ) → `@lesto/queue`, durable on the DB. See
   [Adopt one battery](/migrate/adopt-a-battery).
-- **Auth boilerplate** (Passport, sessions, bcrypt) → `@lesto/auth` + `@lesto/authz`.
+- **Auth boilerplate** (Passport, sessions, bcrypt) → `@lesto/identity`
+  (register/login/verify/reset) on `@lesto/auth` (hashing, sessions) +
+  `@lesto/authz` (roles and permissions).
 - **A transactional-email service wiring** → `@lesto/mail` (queued, react-email).
 - **An admin panel** you hand-rolled → `@lesto/admin`.
 

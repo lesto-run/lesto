@@ -73,7 +73,8 @@ directly, returning `parsed.error.flatten()` — see ADR 0005.)
 A page validates its query string by declaring a `params` Zod schema on its
 `PageDef`. The renderer parses `c.req.query` against it **before any work runs**;
 a malformed query is answered with a **400** before `load` is ever called, and the
-parsed value is stashed for the loader to read with `c.get("params")`:
+parsed value arrives as `load`'s second argument, typed by inference from the
+schema:
 
 ```ts
 import { lesto } from "@lesto/web";
@@ -86,11 +87,8 @@ const ListParams = z.object({
 
 export const app = lesto().page("/posts", {
   params: ListParams,
-  load: (c) => {
-    // Already validated + coerced: `page` is a number, never the raw string.
-    const { page, tag } = c.get<z.infer<typeof ListParams>>("params");
-    return { posts: listPosts(db, { page, tag }) };
-  },
+  // Already validated + coerced: `params.page` is a number, never the raw string.
+  load: (c, params) => ({ posts: listPosts(db, { page: params.page, tag: params.tag }) }),
   component: PostsScene,
 });
 ```
@@ -169,4 +167,9 @@ for these schemas wired end to end.
   surface that owns it — `@lesto/web` for HTTP, `@lesto/admin` for the admin
   resource — so swapping a rule (or, someday, Zod itself) is a per-package change
   with no thread running through the data layer.
-</content>
+
+## Where to go next
+
+- [Routing & pages](/guides/routing) — how `params` fits the page contract.
+- [Testing](/guides/testing) — prove the boundary holds with one in-process test.
+- [Admin](/batteries/admin) — the per-resource schemas wired into a full panel.

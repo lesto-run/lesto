@@ -7,7 +7,7 @@ order: 2
 
 # Testing
 
-Lesto apps are fast and honest to test because of two things the framework already gives you: an app is a **pure request handler** (`app.handle(method, path)` returns a response — no socket required), and the database driver runs **in memory** with zero config. So a test boots the *real* app against a throwaable database and calls it directly. No running server, no HTTP client, no mocking layer.
+Lesto apps are fast and honest to test because of two things the framework already gives you: an app is a **pure request handler** (`app.handle(method, path)` returns a response — no socket required), and the database driver runs **in memory** with zero config. So a test boots the *real* app against a throwaway database and calls it directly. No running server, no HTTP client, no mocking layer.
 
 The test runner is [vitest](https://vitest.dev) — the same runner every `@lesto/*` package uses.
 
@@ -31,6 +31,7 @@ beforeEach(async () => {
     db: handle,
     app: buildApp(createDb(handle)),
     migrations,
+    secure: { originCheck: {} }, // the scaffold's default — test what you ship
   });
 });
 ```

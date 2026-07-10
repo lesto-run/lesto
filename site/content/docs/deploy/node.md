@@ -34,8 +34,8 @@ treatment whether it lands on a Worker or this process:
 - **Per-request context** — each request mints its own context (and, when
   tracing is on, its own span), so nothing leaks between concurrent requests.
 - **Body caps** — request bodies over `1 MiB` are refused with `413` before they
-  are read, with a tighter cap for `application/json` so a single payload can't
-  blow up `JSON.parse`.
+  are read, with a separate, independently tunable cap for `application/json` so
+  raising the upload limit never grows the `JSON.parse` blast radius.
 - **Handler-timeout abort** — a handler that runs past its deadline (default
   `30s`) is aborted with a `503` instead of pinning a socket open.
 - **Slow-loris limits** — header-block timeout, per-request socket deadline,

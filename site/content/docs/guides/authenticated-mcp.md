@@ -26,6 +26,12 @@ audience guard, the audit trail — see
 [MCP governance](/batteries/mcp-governance). For the battery as a whole (the tool
 set, the stdio transport), see [Agent control plane](/batteries/mcp).
 
+Don't want to write the wiring by hand? `lesto add mcp-auth` scaffolds this
+guide's exact shape into your app — `app/mcp/config.ts` (the holes you fill:
+issuer, resource, scopes), `app/mcp/verify.ts` (the issuer adapter), and
+`app/mcp/governance.ts` (the battery wiring) — plus the one-line mount. The
+steps below explain what that scaffold builds.
+
 ## The shape: one issuer, one Resource Server
 
 OAuth splits the work in two. An **Authorization Server** (the issuer) logs the
@@ -136,8 +142,8 @@ const handlers = createMcpHttpHandlers({
 
 app
   .get("/.well-known/oauth-protected-resource", handlers.metadata) // RFC 9728 PRM (GET)
-  .post("/mcp", handlers.rpc)                                        // the MCP endpoint (POST)
-  .get("/mcp", () => ({ status: 405, headers: { allow: "POST" }, body: "" }));
+  .post("/mcp", handlers.rpc)                                      // the MCP endpoint (POST)
+  .get("/mcp", handlers.noStream); // 405 + Allow: POST — "no SSE here", read cleanly by clients
 ```
 
 `context` carries everything connection-constant; the per-request `mode` and
@@ -216,7 +222,7 @@ You can drive the running server from the **MCP Inspector** (or any client that
 takes a manual bearer) — no code. First mint a token; the example ships a helper:
 
 ```sh
-bun run token.ts operator   # prints a bearer (use `viewer` for a read-only one)
+bun run examples/mcp-auth-openauth/token.ts operator   # prints a bearer (`viewer` for read-only)
 ```
 
 Then launch the Inspector and point it at the server:
@@ -245,9 +251,9 @@ curl -s "$RS/mcp" -H "authorization: Bearer $TOKEN" \
 > automatic OAuth flow (Claude Desktop / Cursor "connect and authorize") expects the
 > issuer to support **Dynamic Client Registration** so the client can self-register.
 > The demo issuer doesn't advertise a `registration_endpoint` yet (that's
-> [ADR 0040](https://github.com/lesto-run/lesto/blob/main/docs/adr)), and its demo
-> providers have no login UI — so auto-connect won't complete. Supplying a bearer
-> (above) sidesteps that; a refusal now carries a JSON body naming the missing
+> [ADR 0041](https://github.com/lesto-run/lesto/blob/main/docs/adr/0041-open-mcp-client-registration.md)),
+> and its demo providers have no login UI — so auto-connect won't complete. Supplying
+> a bearer (above) sidesteps that; a refusal carries a JSON body naming the missing
 > `scope`/permission, so the client surfaces *why*, not an opaque error.
 
 **Local dev (stdio).** For the loopback dev-loop, `lesto mcp` serves the control

@@ -39,7 +39,7 @@ that depends only on the secret, so don't rebuild it per request), then wrap it:
 ```ts
 // worker.ts
 import { toFetchHandler, withAssets } from "@lesto/cloudflare";
-import type { AssetFetcher } from "@lesto/cloudflare";
+import type { AssetExecutionContext, AssetFetcher } from "@lesto/cloudflare";
 import { buildApp } from "./src/app";
 
 interface Env {
@@ -47,10 +47,10 @@ interface Env {
   readonly SESSION_SECRET?: string;
 }
 
-let handler: ((request: Request, ctx?: ExecutionContext) => Promise<Response>) | undefined;
+let handler: ((request: Request, ctx?: AssetExecutionContext) => Promise<Response>) | undefined;
 
 export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  fetch(request: Request, env: Env, ctx: AssetExecutionContext): Promise<Response> {
     handler ??= toFetchHandler(buildApp(env).handle);
 
     // `env.ASSETS` is per-request, so rewrap the cached handler each time.
@@ -139,11 +139,20 @@ query builder runs unchanged against either of two:
   In the Worker, `d1ToSqlDatabase(env.DB)` adapts the binding to the `SqlDatabase`
   surface `@lesto/db` consumes.
 
+  One trap worth knowing before your first deploy: **remote D1 runs exactly one
+  statement per `db.exec()`**. A semicolon-joined, multi-statement DDL string
+  installs fine on local SQLite (and even on `wrangler dev`'s local D1), then
+  throws on the deployed database (D1 error 7500) — green tests, edge 500s at
+  boot. Issue each `CREATE TABLE` / `CREATE INDEX` as its own `db.exec()` call
+  in your migrations and installers.
+
 - **Hyperdrive** — pooled Postgres with edge-side connection caching, for the
   "SQLite locally → Postgres at scale" path. Add a `hyperdrive` binding, open its
   `connectionString` with a Workers-compatible postgres client, and pass it to
-  `hyperdriveToSqlDatabase`. When a Hyperdrive binding is present it **takes
-  precedence** over D1.
+  `hyperdriveToSqlDatabase`. When both are bound, prefer Hyperdrive in your
+  Worker's wiring — the pattern
+  [`examples/estate`](https://github.com/lesto-run/lesto/tree/main/examples/estate)
+  ships.
 
 Either way the page runs the *identical* query path; only the driver and SQL
 dialect differ.
@@ -167,7 +176,7 @@ binds the docs output as static assets — no secret, no database.
 
 ```bash
 cd site
-bun run build.ts     # prerender every Markdown page
+bun run build        # `lesto build` — prerender every Markdown page
 npx wrangler deploy  # serve them from Cloudflare's edge
 ```
 
