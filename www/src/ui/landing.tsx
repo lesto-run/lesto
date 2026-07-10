@@ -504,7 +504,7 @@ function AgentNative(): ReactElement {
                 <i />
               </span>
               <span className="panel-tab">
-                claude <span className="accent">· lesto-mcp</span>
+                claude <span className="accent">· lesto-mcp --operator</span>
               </span>
             </div>
             <pre>
@@ -516,7 +516,7 @@ function AgentNative(): ReactElement {
                 <span className="c-ok">✓ created</span>
                 {"\n"}
                 <span className="c-fn">generate_ui</span> <span className="c-mut">/pricing</span>{" "}
-                <span className="c-ok">✓ rendered</span>
+                <span className="c-ok">✓ rendered</span> <span className="c-com">preview</span>
                 {"\n"}
                 <span className="c-fn">handle_request</span>{" "}
                 <span className="c-mut">GET /pricing</span> <span className="c-num">200</span>{" "}

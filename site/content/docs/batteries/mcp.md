@@ -42,7 +42,9 @@ Ten framework operations:
   `get_content_entry` (read the content).
 - **Change content** — `create_content_entry`, `update_content_entry`,
   `delete_content_entry`.
-- **Generate UI** — `generate_ui` (a Lesto UI tree from a natural-language prompt).
+- **Generate UI** — `generate_ui` (a Lesto UI tree from a natural-language prompt)
+  — **preview**: backed by `@lesto/ai`, it's present only when an Anthropic key and
+  a component registry are configured, and is omitted otherwise.
 - **Drive the app** — `handle_request` (dispatch a real request through the running
   app and return its response).
 

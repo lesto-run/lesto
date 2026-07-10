@@ -19,7 +19,7 @@ Today the MCP server (`@lesto/mcp`) exposes nine operations:
 
 - **Inspect:** `list_routes` (what the app answers), `query_content` / `list_content_collections` / `get_content_entry` (read the content).
 - **Change content:** `create_content_entry`, `update_content_entry`, `delete_content_entry`.
-- **Generate UI:** `generate_ui` (a Lesto UI tree from a prompt).
+- **Generate UI:** `generate_ui` (a Lesto UI tree from a prompt) — a **preview** tool, backed by `@lesto/ai`, present only when an Anthropic key and a component registry are configured, and omitted otherwise.
 - **Drive the app:** `handle_request` (dispatch a real request through the running app and get its response).
 
 So an agent can read your routes, publish and edit content, and exercise your live endpoints — in plain language, from the client you already use. (Note the honest boundary: schema migrations are *not* on this surface — those stay in code and the CLI.)

@@ -33,14 +33,29 @@ the VO, or a very low ambient pad.
 
 ## Prep checklist (before you hit record)
 
-1. A running Lesto app with content + the MCP server attached. The
-   [`examples/blog`](../../examples/blog) app plus the docs content collection is
-   the cleanest stage; `examples/estate` if you want a richer-looking page.
+1. A running Lesto app the MCP server can boot. `lesto mcp` loads `./lesto.app.ts`
+   from the working directory, so the stage **must** ship one —
+   [`examples/estate`](../../examples/estate) is the pick: it has a `lesto.app.ts`,
+   a rich two-zone marketing + app UI, and live JSON routes (great for
+   `list_routes`, `handle_request`, and `generate_ui`). Do **not** use
+   `examples/blog` — it has no `lesto.app.ts`, so `lesto mcp` won't boot there.
+   estate ships no content collection out of the box, so the content beats
+   (`create_content_entry` / `query_content`, beat 2 + the GIF cut) need a stage
+   with the content peers (`@lesto/content-core`, `@lesto/content-store`) installed
+   and a collection declared — set that up first, or cut those beats and drive the
+   app through `handle_request` instead.
 2. The `@lesto/mcp` control plane served over stdio and connected to Claude
-   Desktop (or any MCP client). Confirm the tools resolve: in Claude, the Lesto
-   server should list `list_routes`, `handle_request`, `generate_ui`,
-   `list_content_collections`, `query_content`, `create_content_entry`,
-   `update_content_entry`, `delete_content_entry`.
+   Desktop (or any MCP client). **Start it in operator mode** — `lesto mcp
+   --operator` — because the demo drives destructive tools (`create_content_entry`,
+   `handle_request`). Read-only is the safe default: without `--operator` those
+   calls refuse with `MCP_OPERATOR_REQUIRED`, so you opt *in* to writes on camera.
+   Confirm the tools resolve: in Claude, the Lesto server should list `list_routes`,
+   `describe_app`, and `handle_request`; the content tools
+   (`list_content_collections`, `query_content`, `create_content_entry`,
+   `update_content_entry`, `delete_content_entry`) appear only when the content
+   peers are installed; and `generate_ui` appears **only when** an Anthropic key +
+   a component registry are configured (it's a preview generator, omitted
+   otherwise).
 3. Two windows tiled: **left** = Claude; **right** = the browser on the app.
    Terminal in a third space for the final ship beat.
 4. Pre-seed nothing you'll create on camera. Clear the post you're about to add so
@@ -57,8 +72,8 @@ the VO, or a very low ambient pad.
 | 0 | 0:00–0:07 | Title card → cut to the live app in the browser | **VO:** "This is a real Lesto app, running right now." On-screen text: *Lesto — the framework you can drive from Claude.* | — |
 | 1 | 0:07–0:18 | Cut to Claude; the Lesto MCP tools panel visible | **VO:** "Lesto exposes its operations as MCP tools — so Claude can see the app, not just talk about it." | Type: *"What routes does this app serve?"* → Claude calls **`list_routes`**, lists them. |
 | 2 | 0:18–0:42 | Claude (left), browser (right) | **VO:** "Let me add a blog post — in plain English." | Type: *"Publish a post titled 'Shipping from Claude' — a short note that our launch is live."* → Claude calls **`create_content_entry`**. Cut to browser, refresh → **the post is live.** |
-| 3 | 0:42–1:02 | Claude → browser | **VO:** "Now build some UI — from a sentence." | Type: *"Generate a hero section: a headline 'Batteries-included. Agent-native.' and a 'Get started' button."* → Claude calls **`generate_ui`**, returns a validated UI tree; show it rendered. On-screen text: *validated against the component registry.* |
-| 4 | 1:02–1:18 | Claude | **VO:** "And it's the real running app — here's the live API." | Type: *"Fetch the posts from the API."* → Claude calls **`handle_request`** (`GET /api/posts`) → real JSON response including the new post. |
+| 3 | 0:42–1:02 | Claude → browser | **VO:** "Now build some UI — from a sentence." | Type: *"Generate a hero section: a headline 'Batteries-included. Agent-native.' and a 'Get started' button."* → Claude calls **`generate_ui`** — a **preview** generator backed by `@lesto/ai`, present only when an Anthropic key + a component registry are configured — which returns a validated UI tree; show it rendered. On-screen text: *preview — validated against the component registry.* Only film this beat if the key + registry are wired; otherwise cut it. |
+| 4 | 1:02–1:18 | Claude | **VO:** "And it's the real running app — here's the live API." | Type: *"Fetch a live JSON route and show me the response."* → Claude calls **`handle_request`** against a route the stage actually serves (on estate, e.g. `GET /lab/api/listings/:id`) → real JSON straight from the running app. |
 | 5 | 1:18–1:30 | Terminal → browser at the deployed URL | **VO:** "Then ship it — one command to the edge." | Run `lesto deploy --cloudflare`. Cut to the live `*.workers.dev` URL showing the change. |
 | 6 | 1:30–1:38 | Title card | On-screen text: **Batteries-included. Agent-native.** / `lesto.run` | **VO:** "Lesto. The batteries are in the box — and an agent can drive them." | — |
 
@@ -69,11 +84,14 @@ the VO, or a very low ambient pad.
 1. `What routes does this app serve?`
 2. `Publish a post in the "blog" collection titled "Shipping from Claude" — a short note that our launch is live.`
 3. `Generate a hero section for the homepage: a headline "Batteries-included. Agent-native." and a "Get started" button.`
-4. `Fetch the posts from the JSON API and show me the response.`
+4. `Fetch a live JSON route from the running app and show me the response.` *(point it at a route your stage serves — e.g. estate's `GET /lab/api/listings/:id`.)*
 
-Each maps to a real tool (beats 1–4). If a call needs an argument Claude doesn't
-infer (e.g. a slug), let it ask and answer naturally on camera — the back-and-forth
-*is* the proof it's a real control plane, not a canned script.
+Each maps to a real tool (beats 1–4). Prompt 2 (`create_content_entry`) needs the
+content-collection stage from the Prep checklist, and prompt 3 (`generate_ui`)
+needs the Anthropic key + registry — cut whichever isn't wired. If a call needs an
+argument Claude doesn't infer (e.g. a slug), let it ask and answer naturally on
+camera — the back-and-forth *is* the proof it's a real control plane, not a canned
+script.
 
 ---
 
@@ -90,16 +108,23 @@ it earns the click to the full video.
 
 The wedge is real — keep it real. Per [`docs/brand/messaging.md`](../brand/messaging.md):
 
-- **Show only tools that exist.** The control plane today is `list_routes`,
-  `handle_request`, `generate_ui`, and content CRUD. Film those.
+- **Show only tools that exist — on the stage you're filming.** The always-on
+  control plane is `list_routes`, `describe_app`, and `handle_request`.
+  `generate_ui` is a **preview** tool (present only with an Anthropic key +
+  component registry); the content CRUD tools resolve only when the content peers
+  are installed and a collection is declared. Film only what your stage actually
+  advertises.
 - **Do NOT stage a "migrate the schema from Claude" beat.** There is no
   schema/migration MCP tool yet — schema changes go through the CLI or code.
   Implying otherwise is the kind of overclaim that sinks credibility. (If/when a
   migration tool ships, add a beat — not before.)
 - **Deploy is the CLI step**, narrated as "ship it." The agent makes the changes;
   `lesto deploy` ships them. Don't imply the agent deploys.
-- **`generate_ui` returns a validated UI tree** rendered to React — show that, not
-  a fully auto-published homepage redesign unless you've actually wired the render.
+- **`generate_ui` is a preview generator** (backed by `@lesto/ai`) — present only
+  when an Anthropic key + a component registry are configured, omitted otherwise.
+  It returns a validated UI tree rendered to React; show that, not a fully
+  auto-published homepage redesign unless you've actually wired the render. If the
+  key/registry aren't set for the recording, cut the beat — don't fake it.
 - No fake latency edits that imply it's faster than it is. Tight is fine; dishonest
   is not.
 
