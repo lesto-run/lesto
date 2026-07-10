@@ -38,8 +38,9 @@ import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ISLAND_ATTR } from "../src/index";
-import { preactServerRenderer, renderPageMarkup } from "../src/server";
+import { renderPageMarkup } from "../src/server";
 import type { Page, ServerRenderer } from "../src/server";
+import { preactServerRenderer } from "../src/server-preact";
 
 // The element factory under test: each dialect's `createElement`, narrowed to the
 // `(type, props, ...children) => element` shape this test uses. The two libraries'

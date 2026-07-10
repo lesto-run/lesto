@@ -17,6 +17,10 @@
     "./server": {
       "types": "./src/server.ts",
       "import": "./src/server.ts"
+    },
+    "./server-preact": {
+      "types": "./src/server-preact.ts",
+      "import": "./src/server-preact.ts"
     }
   },
   "dependencies": {

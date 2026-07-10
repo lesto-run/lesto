@@ -29,7 +29,7 @@ import { RouteTable } from "@lesto/router";
 import type { Match } from "@lesto/router";
 import { createSourceResolver, dataSourceHref } from "@lesto/ui";
 import type { DataSource } from "@lesto/ui";
-import { preactServerRenderer, reactServerRenderer } from "@lesto/ui/server";
+import { reactServerRenderer } from "@lesto/ui/server";
 import type { ServerRenderer } from "@lesto/ui/server";
 
 import { BROWSER_SPANS_ROUTE, browserSpansHandler, defaultBrowserSpanSink } from "./browser-spans";
@@ -436,7 +436,7 @@ export class Lesto {
   /**
    * Select the server-render dialect (ADR 0008's matched pair).
    *
-   * Pass the Preact `ServerRenderer` (`@lesto/ui/server`'s `preactServerRenderer`)
+   * Pass the Preact `ServerRenderer` (`@lesto/ui/server-preact`'s `preactServerRenderer`)
    * when this app's client bundle is built under the `react`→`preact/compat`
    * alias, so an `ssr: true` island's SERVER markup is the dialect its client
    * hydrates against — mismatch the two and every `ssr: true` island re-renders
@@ -801,12 +801,6 @@ export function lesto(): Lesto {
  */
 export type UiDialect = "react" | "preact";
 
-/** The server renderer each dialect maps to — the matched pair's server half. */
-const RENDERER_FOR_DIALECT: Record<UiDialect, ServerRenderer> = {
-  react: reactServerRenderer,
-  preact: preactServerRenderer,
-};
-
 /**
  * Wire a single `ui.dialect` key onto a `lesto()` app as ADR 0008's matched pair,
  * returning the dialect the caller must ALSO build the client bundle for.
@@ -821,9 +815,22 @@ const RENDERER_FOR_DIALECT: Record<UiDialect, ServerRenderer> = {
  * If the app ALREADY selected a different dialect (a bespoke `.renderer()` call),
  * `app.renderer` refuses with a coded `WEB_DIALECT_MISMATCH` — the matched pair
  * cannot be ambiguous. Returns the wired dialect for the client build.
+ *
+ * ASYNC because the Preact server renderer is loaded LAZILY: `preactServerRenderer`
+ * lives behind `@lesto/ui/server-preact`, whose only runtime import is the OPTIONAL
+ * `preact-render-to-string` peer. Importing it eagerly (a static import here, or a
+ * module-scope renderer map) would drag that peer into every React consumer's graph
+ * and crash a React-only app on bare import (L-863b3f6f). So the peer is resolved
+ * once, here, ONLY on the `"preact"` branch — the per-request render path
+ * (`renderPageMarkup`) stays synchronous, holding the already-resolved renderer.
  */
-export function applyUiDialect(app: Lesto, dialect: UiDialect): UiDialect {
-  app.renderer(RENDERER_FOR_DIALECT[dialect]);
+export async function applyUiDialect(app: Lesto, dialect: UiDialect): Promise<UiDialect> {
+  const renderer =
+    dialect === "preact"
+      ? (await import("@lesto/ui/server-preact")).preactServerRenderer
+      : reactServerRenderer;
+
+  app.renderer(renderer);
 
   return dialect;
 }

@@ -21,7 +21,7 @@
 //      consumer (catches the type-stripping error directly). Runs only if A is clean.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -155,4 +155,63 @@ for (const name of NODE_SAFE) {
   console.log(`  ✓ import "${name}"`);
 }
 
-console.log(`\n[pack-and-import] OK — ${publicDirs.length} packages ship built artifacts and import under node.`);
+// ── Phase C: RUNTIME import of the React FLAGSHIP path (no optional peers) ────────────────────
+// The mainstream consumer Phase B's NODE_SAFE subset deliberately SKIPPED: `npm i @lesto/web react
+// react-dom` and `import "@lesto/web"` under plain node — WITHOUT the OPTIONAL `preact-render-to-string`
+// peer. That omission is exactly why the eager Preact re-export crash (L-863b3f6f) shipped unseen:
+// `web` statically pulled `@lesto/ui/server` → `./server-preact` → `preact-render-to-string`, so a
+// React-only app crashed on bare import for a Preact renderer it never asked for. This phase is the
+// standing guard: react/react-dom come from the registry (as a real consumer installs them); the
+// Preact peer is asserted ABSENT so the proof can never silently pass by resolving a hoisted or
+// auto-installed peer — the false-oracle family of [[scaffold-e2e-masks-real-resolution]], now on the
+// peer-dependency axis.
+// `@lesto/ui-kit` is intentionally omitted: it is `private: true` (never published), so it is not
+// part of the consumer-facing contract this gate protects and is not in the packed set.
+const REACT_FLAGSHIP = ["@lesto/web", "@lesto/ui", "@lesto/router", "@lesto/forms", "@lesto/cloudflare"];
+// Also exercise the server subpath directly: it legitimately needs `react-dom` (a real dep, present)
+// but MUST NOT need the Preact peer once the adapter is lazy.
+const REACT_IMPORTS = [...REACT_FLAGSHIP, "@lesto/ui/server"];
+
+console.log(
+  `[pack-and-import] Phase C — importing the React flagship (${REACT_FLAGSHIP.join(", ")}) under plain node, no preact peer…`,
+);
+const missingFlagship = REACT_FLAGSHIP.filter((name) => !(name in overrides));
+if (missingFlagship.length > 0) {
+  throw new Error(
+    `REACT_FLAGSHIP names not in the packed set (renamed or removed? update the list): ${missingFlagship.join(", ")}`,
+  );
+}
+
+const reactApp = join(work, "react-consumer");
+mkdirSync(reactApp);
+const reactDeps = {
+  react: "^19",
+  "react-dom": "^19",
+  ...Object.fromEntries(REACT_FLAGSHIP.map((name) => [name, overrides[name]])),
+};
+writeFileSync(
+  join(reactApp, "package.json"),
+  `${JSON.stringify({ name: "import-proof-react", private: true, type: "module", dependencies: reactDeps, overrides }, null, 2)}\n`,
+);
+execFileSync("npm", ["install", "--no-audit", "--no-fund", "--loglevel", "error"], { cwd: reactApp, stdio: "inherit" });
+
+// Anti-vacuous guard: if the OPTIONAL Preact peer resolved anyway (npm auto-installing an optional
+// peer, a hoist, a stray dep edge), the imports below would prove nothing. Fail LOUD, not green.
+if (existsSync(join(reactApp, "node_modules", "preact-render-to-string"))) {
+  throw new Error(
+    "React-consumer fixture resolved `preact-render-to-string` (an OPTIONAL peer it MUST NOT have) — " +
+      "the import proof below would be vacuous. The React flagship path must never require the Preact peer.",
+  );
+}
+
+for (const name of REACT_IMPORTS) {
+  execFileSync("node", ["--input-type=module", "-e", `await import(${JSON.stringify(name)})`], {
+    cwd: reactApp,
+    stdio: "inherit",
+  });
+  console.log(`  ✓ import "${name}" (react, no preact peer)`);
+}
+
+console.log(
+  `\n[pack-and-import] OK — ${publicDirs.length} packages ship built artifacts; node-safe + React-flagship import paths load under plain node.`,
+);

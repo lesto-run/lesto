@@ -38,11 +38,19 @@ export type {
   StreamOptions,
 } from "./stream";
 
-// The Preact server-render dialect — the matched pair (ADR 0008) for a client
-// bundle built under the `react`→`preact/compat` alias. An OPTIONAL peer
-// (`preact-render-to-string`), present only when an adopter chooses Preact, so a
-// default React server never drags Preact's renderer into its build.
-export { preactServerRenderer } from "./server-preact";
+// The Preact server-render dialect (`preactServerRenderer`) is DELIBERATELY NOT
+// re-exported here — reach it via the dedicated `@lesto/ui/server-preact` subpath.
+//
+// Do NOT `export { preactServerRenderer } from "./server-preact"` from this module.
+// `./server-preact` statically imports `preact-render-to-string` (an OPTIONAL peer,
+// present only when an adopter chooses the `react`→`preact/compat` alias, ADR 0008).
+// Re-exporting it here would drag that peer into the STATIC import graph of every
+// server that touches `@lesto/ui/server` (the default React path), so a React-only
+// consumer crashes on bare import with `Cannot find package 'preact-render-to-string'`
+// (L-863b3f6f). The matched-pair Preact server is therefore its own subpath: a React
+// consumer never resolves the peer, and a Preact adopter imports it explicitly
+// (`import { preactServerRenderer } from "@lesto/ui/server-preact"`). The
+// `pack-and-import` gate's React-flagship phase is the standing guard for this.
 
 // Resource hints + LCP/modulepreload conventions over React 19's native APIs.
 // These import the resource functions from bare `react-dom` and only emit markup

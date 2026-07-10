@@ -15,6 +15,7 @@ import { basename, dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 
 import type { BunPlugin } from "bun";
+import { createJiti } from "jiti";
 
 import type { BuildClientDeps, BundleArtifact, BundleRequest } from "./build-client";
 import { AssetsError } from "./errors";
@@ -46,14 +47,27 @@ function preactAliasPlugin(appRoot: string): BunPlugin {
   };
 }
 
+// The island module is loaded through jiti, NOT a bare `await import()`. This path
+// is reused by the Vite PROD build (`viteBuildClientDeps` spreads `bunBuildClientDeps`),
+// so it runs under plain NODE as well as Bun — and node's ESM loader cannot load a
+// user `.tsx` island (native type-stripping refuses JSX with ERR_UNKNOWN_FILE_EXTENSION,
+// and the compiled `lesto` bin does not register jiti as a global loader, so a bare
+// dynamic `import()` bypasses it). jiti transpiles the `.tsx`/`.ts` on the way in.
+// The jsx config mirrors `packages/cli/bin/lesto.mjs` so an island's JSX resolves the
+// same automatic `react/jsx-runtime` (reading its declaration never renders, so the
+// dialect alias is irrelevant here). Regression guard: L-c2ef4bec.
+const islandLoader = createJiti(import.meta.url, {
+  jsx: { runtime: "automatic", importSource: "react" },
+});
+
 /**
  * Read one island module's declaration, classifying it eager/lazy by its hydrate
  * strategy. The classification + the malformed-module refusal
  * (`ASSETS_BAD_ISLAND_MODULE`) live in the pure {@link islandFileFromModule} so
- * they are unit-tested; this only performs the Bun-only dynamic `import`.
+ * they are unit-tested; this only performs the jiti-transpiled dynamic import.
  */
 async function readIsland(path: string): Promise<IslandFile> {
-  return islandFileFromModule(path, await import(path));
+  return islandFileFromModule(path, await islandLoader.import(path));
 }
 
 /** Whether a directory entry is an island module (by extension), ignoring synthesized/hidden files. */

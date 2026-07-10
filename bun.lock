@@ -440,6 +440,7 @@
       "dependencies": {
         "@lesto/errors": "workspace:*",
         "@lesto/observability": "workspace:*",
+        "jiti": "^2.7.0",
         "preact": "^10.29.2",
         "vite": "^7.0.0",
       },

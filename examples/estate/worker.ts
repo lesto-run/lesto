@@ -35,7 +35,7 @@ import { currentRequestSpan } from "@lesto/web";
 // that bundle, every element @lesto/ui builds is a Preact vnode, which is exactly
 // what preact-render-to-string consumes. The matched pair — Preact server markup
 // + the Preact client bundle `build.ts` ships — is ADR 0008's invariant.
-import { preactServerRenderer } from "@lesto/ui/server";
+import { preactServerRenderer } from "@lesto/ui/server-preact";
 
 import { buildEdgeApp, edgeSecret, isDemoMode } from "./src/edge";
 import { d1ContentStore, hyperdriveContentStore } from "./src/content";

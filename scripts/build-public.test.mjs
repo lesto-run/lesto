@@ -8,7 +8,7 @@
 //   bunx vitest run scripts/build-public.test.mjs
 import { describe, expect, it } from "vitest";
 
-import { deriveEntries } from "./lib/build-public.mjs";
+import { deriveEntries, restoreNodeProtocol } from "./lib/build-public.mjs";
 import { rewriteManifestForPublish, srcTargetToDist } from "./lib/pack-public.mjs";
 
 describe("deriveEntries", () => {
@@ -72,6 +72,55 @@ describe("srcTargetToDist", () => {
 
   it("fails closed on a non-src target", () => {
     expect(() => srcTargetToDist("./dist/index.js")).toThrow(/cannot map/);
+  });
+});
+
+describe("restoreNodeProtocol", () => {
+  it("re-prefixes a static from-clause builtin (the tsup-stripped shape)", () => {
+    expect(restoreNodeProtocol('import { randomUUID } from "crypto";')).toBe(
+      'import { randomUUID } from "node:crypto";',
+    );
+    expect(restoreNodeProtocol("export { x } from 'util';")).toBe("export { x } from 'node:util';");
+  });
+
+  it("re-prefixes builtin SUBPATHS (fs/promises, stream/web)", () => {
+    expect(restoreNodeProtocol('import { readFile } from "fs/promises";')).toBe(
+      'import { readFile } from "node:fs/promises";',
+    );
+    expect(restoreNodeProtocol('import { ReadableStream } from "stream/web";')).toBe(
+      'import { ReadableStream } from "node:stream/web";',
+    );
+  });
+
+  it("re-prefixes a side-effect import, a dynamic import(), and a require()", () => {
+    expect(restoreNodeProtocol('import "async_hooks";')).toBe('import "node:async_hooks";');
+    expect(restoreNodeProtocol('const m = await import("async_hooks");')).toBe(
+      'const m = await import("node:async_hooks");',
+    );
+    expect(restoreNodeProtocol('const p = require("path");')).toBe('const p = require("node:path");');
+  });
+
+  it("is idempotent — an already-node: specifier is left alone", () => {
+    const already = 'import { createHash } from "node:crypto";';
+    expect(restoreNodeProtocol(already)).toBe(already);
+  });
+
+  it("leaves non-builtin specifiers untouched (packages, scoped, relative, near-misses)", () => {
+    const src = [
+      'import { render } from "react-dom/server";',
+      'import { z } from "zod";',
+      'import { ui } from "@lesto/ui";',
+      'import x from "./local.js";',
+      'import y from "cryptography";', // near-miss: NOT a builtin
+    ].join("\n");
+    expect(restoreNodeProtocol(src)).toBe(src);
+  });
+
+  it("rewrites every occurrence across a multi-import module", () => {
+    const src = 'import "os";\nimport { join } from "path";\nimport { x } from "./x.js";';
+    expect(restoreNodeProtocol(src)).toBe(
+      'import "node:os";\nimport { join } from "node:path";\nimport { x } from "./x.js";',
+    );
   });
 });
 

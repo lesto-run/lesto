@@ -152,6 +152,17 @@ run("npm", ["install", "--no-audit", "--no-fund", "--loglevel", "error"], { cwd:
 console.log("[pack-and-boot] booting `lesto routes` under node…");
 run("node", [join(appDir, "node_modules", ".bin", "lesto"), "routes"], { cwd: appDir });
 
+// 7. Build the client assets UNDER NODE — the island-bundle path `lesto routes` never exercises.
+//    The scaffold ships `app/islands/counter.tsx`, so `lesto build` drives `@lesto/assets`'
+//    `readIsland` into a dynamic `import()` of a user `.tsx` through the INSTALLED (dist) package
+//    under node. That is the mainstream `npm run build` onboarding path, and it regressed when the
+//    package moved src→dist (0.1.6): a bare `import()` of `.tsx` hits node's ESM loader, which
+//    refuses JSX with ERR_UNKNOWN_FILE_EXTENSION, wrapped as CLI_CLIENT_BUILD_FAILED. `readIsland`
+//    now routes it through jiti. This step is the standing guard (L-c2ef4bec) — `pack-and-boot`
+//    force-runs under node and previously stopped at `routes`, so the build path shipped unproven.
+console.log("[pack-and-boot] building client assets (`lesto build`, island .tsx) under node…");
+run("node", [join(appDir, "node_modules", ".bin", "lesto"), "build"], { cwd: appDir });
+
 console.log(
-  `\n[pack-and-boot] OK — ${publicDirs.length} packages packed, scaffolded, installed, and booted under node.`,
+  `\n[pack-and-boot] OK — ${publicDirs.length} packages packed, scaffolded, installed, booted, and BUILT under node.`,
 );

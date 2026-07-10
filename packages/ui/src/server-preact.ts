@@ -1,6 +1,7 @@
 /**
- * The Preact server-render dialect — re-exported from the `@lesto/ui/server`
- * subpath as `preactServerRenderer`.
+ * The Preact server-render dialect — reached via its own `@lesto/ui/server-preact`
+ * subpath as `preactServerRenderer` (deliberately NOT re-exported from
+ * `@lesto/ui/server`; see that file for why this peer stays off the React graph).
  *
  * This is the adapter half of the {@link ServerRenderer} seam (declared in
  * `render.tsx`). It backs the two functions {@link renderPageMarkup} needs with
@@ -24,8 +25,8 @@
  * must never drag Preact's renderer into its build. So `preact-render-to-string` is
  * an OPTIONAL peer dependency — present only when an adopter chooses the Preact
  * client alias — and this module is the only place that imports it. Reach for it
- * explicitly (`import { preactServerRenderer } from "@lesto/ui/server"`) and pass it
- * to {@link renderPageMarkup}; the default React path never loads this file.
+ * explicitly (`import { preactServerRenderer } from "@lesto/ui/server-preact"`) and
+ * pass it to {@link renderPageMarkup}; the default React path never loads this file.
  *
  * The `as` cast at the call boundary is the honest cost of bridging two element
  * factories: `@lesto/ui` builds its tree with React's `createElement`, and under

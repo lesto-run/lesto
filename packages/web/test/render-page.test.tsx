@@ -4,8 +4,9 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "zod";
 
 import { defineDataSource, defineIsland } from "@lesto/ui";
-import { preactServerRenderer, reactServerRenderer } from "@lesto/ui/server";
+import { reactServerRenderer } from "@lesto/ui/server";
 import * as uiServer from "@lesto/ui/server";
+import { preactServerRenderer } from "@lesto/ui/server-preact";
 
 import { DEFAULT_RENDER_DEADLINE_MS } from "../src/render-page";
 
@@ -778,17 +779,17 @@ describe("the server-render dialect (the matched pair)", () => {
     expect(await drain(response)).toContain("<main>react</main>");
   });
 
-  it("applyUiDialect returns the wired dialect for the client build", () => {
+  it("applyUiDialect returns the wired dialect for the client build", async () => {
     const app = lesto();
 
-    expect(applyUiDialect(app, "preact")).toBe("preact");
+    expect(await applyUiDialect(app, "preact")).toBe("preact");
     expect(app.serverDialect).toBe("preact");
   });
 
-  it("a react app reports a react server dialect", () => {
+  it("a react app reports a react server dialect", async () => {
     const app = lesto();
 
-    expect(applyUiDialect(app, "react")).toBe("react");
+    expect(await applyUiDialect(app, "react")).toBe("react");
     expect(app.serverDialect).toBe("react");
   });
 
@@ -803,14 +804,13 @@ describe("the server-render dialect (the matched pair)", () => {
     expect(app.serverDialect).toBe("preact");
   });
 
-  it("refuses a mismatched pair (client preact + server react) with a coded error", () => {
+  it("refuses a mismatched pair (client preact + server react) with a coded error", async () => {
     const app = lesto().renderer(reactServerRenderer);
 
-    try {
-      applyUiDialect(app, "preact");
-      expect.unreachable();
-    } catch (error) {
-      expect((error as { code?: string }).code).toBe("WEB_DIALECT_MISMATCH");
-    }
+    // `applyUiDialect` is async (it lazily imports the Preact renderer), so the
+    // matched-pair refusal now surfaces as a rejected promise, not a sync throw.
+    await expect(applyUiDialect(app, "preact")).rejects.toMatchObject({
+      code: "WEB_DIALECT_MISMATCH",
+    });
   });
 });

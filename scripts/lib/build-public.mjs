@@ -11,9 +11,42 @@
 
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { builtinModules } from "node:module";
 import { basename, dirname, join } from "node:path";
 
 import { rewriteManifestForPublish, srcTargetToDist } from "./pack-public.mjs";
+
+// Every Node built-in module name (crypto, fs/promises, stream/web, ...).
+const NODE_BUILTINS = new Set(builtinModules);
+
+// Matches an import specifier in a static from-clause, a side-effect import, or a dynamic
+// import()/require(): capture 1 = the leading keyword+punctuation, capture 2 = the quote,
+// capture 3 = the specifier, backref \2 = the matching close quote. Built via new RegExp (not a
+// literal) so the embedded quote chars can't be mis-lexed by a source scanner.
+const IMPORT_SPECIFIER =
+  '(\\bfrom\\s*|\\bimport\\s*\\(?\\s*|\\brequire\\s*\\(\\s*)(["\'])([^"\'\\n]+)\\2';
+
+/**
+ * Re-add the "node:" prefix to bare built-in import specifiers in one built module's source.
+ *
+ * tsup 8.x (esbuild under the hood) STRIPS the "node:" prefix from built-in specifiers: a source
+ * import from "node:crypto" emits `from "crypto"` (verified against the 0.1.6 dist). The framework
+ * uses the "node:" prefix deliberately for EDGE safety: a Cloudflare Worker on older nodejs_compat
+ * (compat date before 2024-09-23) won't resolve a bare async_hooks/crypto, and a browser-targeting
+ * bundler can silently resolve bare "crypto" to the deprecated npm shim instead of the built-in.
+ * The build must not undo that. Framework source imports builtins ONLY via "node:" (asserted: zero
+ * bare-builtin imports across every packages/<pkg>/src tree), so any bare specifier in dist that
+ * names a built-in is a stripped "node:" -- re-prefix it. Idempotent: an already-prefixed is not in
+ * NODE_BUILTINS, so it is left alone. Pure -- unit-tested. (L-2c592379.)
+ *
+ * @param {string} source one dist ".js" file's contents
+ * @returns {string} the same source with "node:" restored on bare built-in specifiers
+ */
+export function restoreNodeProtocol(source) {
+  return source.replace(new RegExp(IMPORT_SPECIFIER, "g"), (match, prefix, quote, spec) =>
+    NODE_BUILTINS.has(spec) ? `${prefix}${quote}node:${spec}${quote}` : match,
+  );
+}
 
 /**
  * The `src` entry files tsup must build for a package, derived from its manifest so the build and
@@ -77,6 +110,15 @@ export function buildAll(packagesDir, dirs) {
           throw new Error(`tsup did not emit ${out} for ${manifest.name} (entry ${basename(entry)})`);
         }
       }
+    }
+
+    // Undo tsup's `node:`-prefix stripping across EVERY emitted module (entries AND split chunks),
+    // in place, before this dist is staged + packed. See {@link restoreNodeProtocol}. (L-2c592379.)
+    const distDir = join(pkgDir, "dist");
+    for (const file of readdirSync(distDir)) {
+      if (!/\.[mc]?js$/.test(file)) continue;
+      const abs = join(distDir, file);
+      writeFileSync(abs, restoreNodeProtocol(readFileSync(abs, "utf8")));
     }
   }
 }
