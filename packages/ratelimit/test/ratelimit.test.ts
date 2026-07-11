@@ -462,6 +462,33 @@ describe("MemoryRateLimitStore hard cap (maxBuckets)", () => {
     expect(bounded.size).toBe(3); // bounded by stored-token rank
     expect((await limiter.check("login:victim")).allowed).toBe(false); // victim protected
   });
+
+  it("breaks a closest-to-full tie toward the LATER-inserted key, protecting the earlier target", async () => {
+    // Two buckets end up equally full; the eviction must drop the one inserted
+    // LATER (a flood newcomer), never the earlier one (a target throttled first).
+    const bounded = new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, maxBuckets: 2 });
+    const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
+
+    // Insertion order a, b, c with the clock frozen (no refill), so fullness ==
+    // stored tokens throughout: a=4 (full-ish, earliest), b=2 (the *least* full,
+    // in the middle → exercises the victim scan's "not a new max" path), then c=4
+    // ties a. `maxBuckets: 2` makes c's insert overflow.
+    await limiter.check("a", 1); // 5 -> 4
+    await limiter.check("b", 3); // 5 -> 2
+    expect(bounded.size).toBe(2);
+
+    await limiter.check("c", 1); // 5 -> 4; now over cap → evict
+
+    // c (4) ties a (4) for closest-to-full; `>=` drops the LATER insertion, c. With
+    // a strict `>` tie-break this would evict a (the earlier key) instead — so this
+    // assertion goes RED under the unsafe FIFO tie-break.
+    expect(bounded.size).toBe(2);
+    // a survives full-ish, b survives throttled, c (the newcomer) is gone.
+    expect((await limiter.check("a", 0)).remaining).toBe(4);
+    expect((await limiter.check("b", 0)).remaining).toBe(2);
+    // c was evicted, so it re-materializes as a fresh, full bucket.
+    expect((await limiter.check("c", 0)).remaining).toBe(5);
+  });
 });
 
 // ---------------------------------------------------------------------------

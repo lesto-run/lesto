@@ -160,12 +160,14 @@ const DEFAULT_THROTTLE_WINDOW_MS = 15 * 60 * 1000;
  * The MEMORY this store holds is itself bounded (L-976b4302), which matters most
  * on the long-lived Node process where the floor is strongest. Its `login:<email>`
  * / `totp:<userId>` keys are attacker-chosen, so an unbounded Map would be a
- * memory-exhaustion DoS. Two mechanisms prevent that: a bucket evicts the instant
- * it refills to full (lossless — a full bucket is byte-identical to a first-seen
- * key), and a hard cap sheds the bucket CLOSEST TO FULL first once the Map is over
- * budget. So a flood of distinct emails — each a failed attempt whose bucket sits
- * below the ceiling — is capped, and the closest-to-full order keeps a targeted,
- * actively-throttled account the LAST thing evicted, never pushed out by the flood.
+ * memory-exhaustion DoS. Two mechanisms prevent that: a bucket is evicted once it
+ * has refilled to full (lossless — a full bucket is byte-identical to a first-seen
+ * key — either the moment such a bucket is written, or lazily on the next overflow
+ * sweep for one that refilled while idle), and a hard cap sheds the bucket CLOSEST
+ * TO FULL first once the Map is over budget. So a flood of distinct emails — each a
+ * failed attempt whose bucket sits below the ceiling — is capped, and the
+ * closest-to-full order keeps a targeted, actively-throttled account the LAST thing
+ * evicted, never pushed out by the flood.
  *
  * What in-memory CANNOT give is durability or fleet reach: it is a per-process
  * floor a fresh serverless/edge isolate resets and each node holds separately. For

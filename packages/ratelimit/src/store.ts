@@ -58,8 +58,13 @@ const DEFAULT_MAX_BUCKETS = 10_000;
  * deliberately **not** an LRU / oldest-first eviction: dropping the least-recently
  * touched bucket would let an attacker flood distinct keys to push a *targeted*
  * account's still-draining (but idle) bucket out of the Map, resetting its count —
- * a limiter bypass. Ranking by fullness can never do that, because a flood's
- * fresh near-full buckets are always fuller than the account being throttled.
+ * a limiter bypass. Ranking by fullness will not do that for any victim more
+ * throttled than a flood's entry-fullness (`capacity - cost`): a flood's fresh
+ * newcomers enter at `capacity - cost` and a genuinely-throttled account sits
+ * strictly below that, so the newcomer is always the fuller — hence the evicted —
+ * one. A victim within `cost` tokens of full could *tie* the newcomers, but the
+ * tie-break drops the later insertion (the flood key), never the earlier target
+ * (see `evictToBound`), and such a victim is barely throttled anyway.
  *
  * ## The store↔limiter pairing
  *
@@ -130,13 +135,29 @@ export class MemoryRateLimitStore implements RateLimitStore {
   /**
    * How many buckets are held right now — the Map's live size. Read-only, and the
    * observable proof that the store stays bounded: never above {@link maxBuckets},
-   * and in ordinary use bounded by the count of *actively-throttled* keys rather
-   * than the count of keys ever seen.
+   * and in ordinary use bounded by the count of keys *not yet refilled to full*
+   * (a bucket persists until it refills to the ceiling, whether or not its owner
+   * is currently being denied) rather than the count of keys ever seen.
    */
   get size(): number {
     return this.buckets.size;
   }
 
+  /**
+   * Atomically read-modify-write one bucket, then enforce the bounds.
+   *
+   * ⚠️ **Clock contract.** When a `capacity`/`refillPerSecond` are wired, the
+   * overflow eviction ages *every other* bucket against the just-written
+   * `next.updatedAt` (see below) — it is the reference "now". A `RateLimiter`
+   * satisfies this for free: it stamps every write with a single, real,
+   * monotonic `clock()`. A caller driving this store directly MUST do the same —
+   * a `next.updatedAt` set far in the *future* (attacker-derived, or a second
+   * limiter writing into a shared store under a different/faster clock) would
+   * make the sweep read every throttled bucket as fully refilled and evict them
+   * all, discarding live throttle state. Do not derive `updatedAt` from
+   * untrusted input, and do not share one store across limiters with different
+   * clocks. (Hardening this into an enforced contract is tracked separately.)
+   */
   async update(
     key: string,
     mutate: (current: BucketState | undefined) => BucketState,
@@ -176,9 +197,15 @@ export class MemoryRateLimitStore implements RateLimitStore {
    * it (the common case) pays nothing beyond the `set` that was already happening.
    * Each `update` inserts at most one new key, so the Map exceeds the cap by at
    * most one: the full-refill sweep may reclaim several at once, and if that alone
-   * does not restore the bound a single closest-to-full eviction does. One O(n)
-   * pass over a bounded Map, the same cost profile as `@lesto/cache`'s overflow
-   * eviction.
+   * does not restore the bound a single closest-to-full eviction does.
+   *
+   * Cost is up to *two* O(n) passes over the (bounded) Map — the refill sweep, then
+   * the closest-to-full victim scan. That is dearer than `@lesto/cache`'s overflow
+   * eviction (one O(n) expiry sweep + an O(1) front-pop, since its insertion order
+   * *is* its LRU order), because fullness is not encoded in Map order and must be
+   * searched. It only fires while the Map is pinned at `maxBuckets` under a
+   * sustained distinct-key flood; a coarser batch-shed to amortize it is a tracked
+   * follow-up, not needed at the shipped defaults.
    */
   private evictToBound(now: number): void {
     const capacity = this.capacity;
@@ -209,6 +236,14 @@ export class MemoryRateLimitStore implements RateLimitStore {
     // clock to age buckets, so it ranks by stored tokens — a coarser but still
     // monotone proxy. The Map is non-empty here (`size > maxBuckets >= 1`), so the
     // first bucket seeds the victim and `chosen` is always resolved to a real key.
+    //
+    // Ties break toward the LATER-inserted key (`>=`, not `>`): among buckets of
+    // equal fullness the newest wins the victim slot, so a flood's fresh entries
+    // absorb every tie and a target that was already throttled *before* the flood
+    // (an earlier insertion) is never the one dropped. It only matters in the
+    // degenerate all-equally-full case — with cost ≥ 1 a flood newcomer enters
+    // strictly below the ceiling and a genuinely-throttled victim is strictly less
+    // full, so no tie arises — but `>=` makes the safe choice free.
     let victimKey = "";
     let victimFullness = 0;
     let chosen = false;
@@ -218,7 +253,7 @@ export class MemoryRateLimitStore implements RateLimitStore {
         ? refilledTokens(state, now, capacity, refillPerSecond)
         : state.tokens;
 
-      if (!chosen || fullness > victimFullness) {
+      if (!chosen || fullness >= victimFullness) {
         chosen = true;
         victimFullness = fullness;
         victimKey = key;
