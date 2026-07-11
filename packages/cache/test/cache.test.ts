@@ -449,6 +449,53 @@ describe("default clock", () => {
   });
 });
 
+describe("MemoryStore bounded eviction", () => {
+  it("evicts the least-recently-used entry once the cap is exceeded", async () => {
+    let clockNow = 0;
+    const store = new MemoryStore({ maxEntries: 2, clock: () => clockNow });
+
+    await store.set("a", { value: 1, expiresAt: null });
+    await store.set("b", { value: 2, expiresAt: null });
+
+    // Touch "a" so "b" — not "a" — becomes the least-recently-used entry.
+    await store.get("a");
+
+    // A third write exceeds the cap: the LRU entry ("b") is evicted, never "a".
+    await store.set("c", { value: 3, expiresAt: null });
+
+    expect(await store.get("b")).toBeUndefined();
+    expect(await store.get("a")).toEqual({ value: 1, expiresAt: null });
+    expect(await store.get("c")).toEqual({ value: 3, expiresAt: null });
+  });
+
+  it("sweeps expired entries before evicting a live entry that is merely LRU-oldest", async () => {
+    let clockNow = 0;
+    const store = new MemoryStore({ maxEntries: 3, clock: () => clockNow });
+
+    // "a" never expires and — since it is never touched again — is the
+    // LRU-oldest entry by the time the cap is exceeded below.
+    await store.set("a", { value: "a", expiresAt: null });
+    // "b" will have expired by the time we exceed the cap.
+    await store.set("b", { value: "b", expiresAt: 10 });
+    // "d" carries a deadline too, but one still in the future — it must
+    // survive the sweep untouched.
+    await store.set("d", { value: "d", expiresAt: 10_000 });
+
+    clockNow = 20; // "b" (deadline 10) is now strictly past; "d" (10_000) is not.
+
+    // A fourth write exceeds the cap. A naive "evict the LRU-oldest" would
+    // drop "a" — the true LRU-oldest, since it was never touched again — even
+    // though it is still live. The correct behavior sweeps the already-dead
+    // "b" first, so eviction never has to reach for a live entry at all.
+    await store.set("c", { value: "c", expiresAt: null });
+
+    expect(await store.get("b")).toBeUndefined();
+    expect(await store.get("a")).toEqual({ value: "a", expiresAt: null });
+    expect(await store.get("d")).toEqual({ value: "d", expiresAt: 10_000 });
+    expect(await store.get("c")).toEqual({ value: "c", expiresAt: null });
+  });
+});
+
 describe("sqlStore.sweep", () => {
   it("deletes only entries whose deadline has passed, never NULL or future ones", async () => {
     const db = makeSqlDatabase();

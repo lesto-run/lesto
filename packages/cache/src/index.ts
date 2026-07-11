@@ -13,6 +13,7 @@ export { Cache } from "./cache";
 export type { CacheOptions, WriteOptions } from "./cache";
 
 export { MemoryStore } from "./memory-store";
+export type { MemoryStoreOptions } from "./memory-store";
 
 export { installCacheSchema, sqlStore } from "./sql-store";
 export type { SqlCacheStore } from "./sql-store";
