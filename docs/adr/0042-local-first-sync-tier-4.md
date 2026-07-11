@@ -100,6 +100,15 @@ const messages = db.select().from(messagesTable).where(eq(messagesTable.roomId, 
 //    ^ a LiveQuery<Message[]> — reads from the local store, stays in sync, writable offline
 ```
 
+**⚠️ As-built (2026-07-10 erratum, see *Reviews*): the shipped surface is the free function
+`live(table).where(col, "eq", value).orderBy(col, "asc").query()`, NOT a `.live()` method chained on
+`db.select()...`.** A true `.live()` method is blocked on `@lesto/db` AST unification (its `eq()`
+returns an opaque compiled `{sql, params}` Condition, not the serializable `{column, op, value}` a shape
+needs) and a dependency-cycle inversion — filed as vNext. The moat claim is undiminished and holds
+verbatim over the as-built surface: `live(table)` is a builder over the **same typed `Table`/`Column`
+schema values** the app writes with — one query language, one AST, one row type across both runtimes
+(`packages/live/src/builder.ts:1-17`). Read this heading and the sample above as that surface.
+
 `live()` does not execute a one-shot `SELECT`; it **registers a shape** with the server's shape
 engine and returns a reactive handle backed by the **local store**. The same SQL the builder would
 have sent is the shape's definition — so the shape's `WHERE` is the *sync filter* (which rows stream),
@@ -699,3 +708,41 @@ both load-bearing:
 
 Scope: the **v1** logical-replication path only — the v0 SQLite poll has no `(systemId, timelineId)`
 and resyncs on every reconnect already (Phasing), so it needs no failover signal.
+
+### 2026-07-10 — erratum: three claims-integrity corrections ahead of the GA-claim review (the "next big feature" two-lens pass)
+
+A pre-GA two-lens review (opus chief-architect + fable red-team) of the "publish + document + claim
+`lesto.live`" wave found three places where this ADR's ratified text drifted from as-built reality.
+None changes a decision; each is a bounded correction so a public claim never rests on a false line.
+
+- **The `live()` surface is a free function, not a `.live()` method (folded inline at the Decision above).**
+  As-built the shipped surface is `live(table).where(col, "eq", value).orderBy(col, "asc").query()`
+  (`packages/live/src/builder.ts:130`), not the `db.select()...where(eq(...)).live()` method-chain the
+  moat paragraph (`:80`), the Decision heading (`:93`), and its code sample (`:99`) advertise. **No code
+  chains `.live()` anywhere in the tree** — so the method-chain form was aspirational, never shipped. A
+  true `.live()` method is not a doc edit but engine R&D: `@lesto/db`'s `eq()` compiles column+op+value
+  into an opaque `{sql, params}` Condition (`packages/db/src/conditions.ts:48`), from which the
+  serializable `{column, op, value}` a `ShapeDefinition` requires cannot be recovered, and `@lesto/db`
+  cannot import `@lesto/live` (a dependency cycle). Decision: **keep `live(table)`** (whose own docstring,
+  `builder.ts:1-17`, already states the honest "one query language, one AST, one row type across both
+  runtimes" reading); the true-method AST unification is **vNext**. The moat claim is undiminished.
+
+- **The wired authorization seam is app-supplied, not `@lesto/authz`.** The *Touches* line (`:36-37`)
+  cites `@lesto/authz`'s `getPrincipal` / `can()` as the shape-authz seam. As-built, `@lesto/live-server`
+  carries **no `@lesto/authz` dependency**; a shape is authorized through an **app-supplied
+  `authorizeShape` / `resolvePrincipal` seam** (`packages/live-server/src/http-handlers.ts`). The engine
+  guarantees the seam is *always invoked* and cannot fail-open by omission — but it **cannot verify the
+  app author authorizes the bound parameter** (`may this principal open room_id = 999?`) rather than the
+  template. That makes the parameter-vs-template distinction (this ADR's sharpest leak vector,
+  `:178-185`) an **app-author responsibility with no framework paved road today** — so a parameter-level
+  authz helper is a **publish blocker**, not polish (tracked GA-3, `L-6a58325b`).
+
+- **The headless-browser OPFS gate IS built (the 2026-07-03 errata's "not yet built" is stale).** The
+  `L-2e410682` browser regression gate exists and runs (`.github/workflows/live-capstone-e2e.yml`) — it
+  boots the real built bundle in real Chromium and asserts durable first paint + offline drain +
+  cross-tab failover. The 2026-07-03 errata's "a **FILED replacement gate not yet built**" and
+  `ci.yml`'s "proven by … the README's manual checklist" are both stale. The *remaining* work is
+  narrower and tracked at GA-2 (`L-cc849577`): the gate lives in a standalone workflow **invisible to the
+  release gate** (which only sees `ci.yml` jobs), and the real-**failover** proof
+  (`live-capstone-failover.yml`) is still push/dispatch-only, not a per-PR gate (`L-34963d5f`). Browser
+  breadth is also still Chromium-only — webkit/firefox are unrun (GA-4, `L-d88fd01c`).

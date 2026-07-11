@@ -496,7 +496,10 @@ jobs:
   # drop. Same `postgres:16` + `wal_level=logical` service and `bun add pg` peer install as the
   # shakeout; a `bun`-run script (not vitest — vitest hangs on the long-lived COPY stream), in its own
   # job so the container is off the coverage gate. The browser-only guarantees (OPFS durability,
-  # cross-tab relay) are proven by @lesto/live's seam unit tests + the README's manual checklist.
+  # cross-tab relay) are proven by @lesto/live's seam unit tests + the real-Chromium regression gate
+  # (`live-capstone-e2e.yml`, `L-2e410682`) — NOT a manual checklist. NOTE: that gate is a standalone
+  # workflow, so the release gate (which sees only ci.yml jobs) cannot see it yet — folding it in is
+  # GA-2 (`L-cc849577`), a publish blocker for the Tier-4 packages.
   live-capstone-acceptance:
     runs-on: ubuntu-latest
     services:
